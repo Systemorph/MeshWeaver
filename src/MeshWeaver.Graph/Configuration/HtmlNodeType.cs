@@ -1,4 +1,4 @@
-using MeshWeaver.Data;
+﻿using MeshWeaver.Data;
 using MeshWeaver.Mesh;
 
 namespace MeshWeaver.Graph.Configuration;
@@ -32,7 +32,6 @@ public static class HtmlNodeType
     {
         Name = "Html",
         Icon = "/static/NodeTypeIcons/code.svg",
-        AssemblyLocation = typeof(HtmlNodeType).Assembly.Location,
         HubConfiguration = config => config
             .AddHtmlViews()
             .AddMeshDataSource()

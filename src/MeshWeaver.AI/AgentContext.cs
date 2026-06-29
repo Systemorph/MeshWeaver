@@ -41,6 +41,14 @@ public record AgentContext
     public string? Path { get; init; }
 
     /// <summary>
+    /// Optional navigation query parameters as key/value pairs (the <c>?k=v&amp;…</c> on the URL,
+    /// e.g. <c>from=5</c>, <c>to=8</c> on a VersionDiff area). Carried verbatim from
+    /// <see cref="MeshWeaver.Mesh.Services.NavigationContext.Args"/> so the agent knows the exact
+    /// view the user is looking at. Reference only — the agent loads node content via its Get tool.
+    /// </summary>
+    public IReadOnlyDictionary<string, string>? Parameters { get; init; }
+
+    /// <summary>
     /// Available agents for this context (pre-loaded during navigation).
     /// Used to avoid re-querying agents on each message.
     /// </summary>

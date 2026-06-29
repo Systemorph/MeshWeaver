@@ -1,9 +1,8 @@
 using System;
-using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.Linq;
-using System.Threading.Tasks;
+using System.Runtime.CompilerServices;
 using System.Reactive.Linq;
-using FluentAssertions;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
@@ -18,292 +17,234 @@ namespace MeshWeaver.Query.Test;
 /// </summary>
 public class ObservableQueryIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
+    // Shared mesh: each [Fact] uses a per-method partition prefix derived from the
+    // caller's name, so node creates/deletes never collide across tests.
+    protected override bool ShareMeshAcrossTests => true;
+
+    private static readonly TimeSpan WaitTimeout = TimeSpan.FromSeconds(10);
+
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => base.ConfigureMesh(builder);
 
     private IMeshService Query => MeshQuery;
 
+    /// <summary>Returns the calling test method's name — used as a partition prefix.</summary>
+    private static string P([CallerMemberName] string name = "") => name;
+
+    private IObservable<ImmutableList<QueryResultChange<MeshNode>>> ObserveAccumulated(string queryText)
+        => Query
+            .Query<MeshNode>(MeshQueryRequest.FromQuery(queryText))
+            .Scan(ImmutableList<QueryResultChange<MeshNode>>.Empty, (acc, c) => acc.Add(c));
+
     [Fact]
     public async Task MultipleConcurrentSubscriptions_EachReceivesCorrectChanges()
     {
-        // Arrange
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("ACME/Project1") with { Name = "Project 1", NodeType = "Markdown" });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("ACME/Task1") with { Name = "Task 1", NodeType = "Code" });
+        var p = P();
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Project1") with { Name = "Project 1", NodeType = "Markdown" }).Should().Emit();
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Task1") with { Name = "Task 1", NodeType = "Code" }).Should().Emit();
 
-        var projectChanges = new List<QueryResultChange<MeshNode>>();
-        var taskChanges = new List<QueryResultChange<MeshNode>>();
+        var projects = new System.Reactive.Subjects.BehaviorSubject<ImmutableList<QueryResultChange<MeshNode>>>(
+            ImmutableList<QueryResultChange<MeshNode>>.Empty);
+        var tasks = new System.Reactive.Subjects.BehaviorSubject<ImmutableList<QueryResultChange<MeshNode>>>(
+            ImmutableList<QueryResultChange<MeshNode>>.Empty);
 
-        // Subscribe to two different queries concurrently
-        var projectSubscription = Query
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("path:ACME nodeType:Markdown scope:descendants"))
-            .Subscribe(change => projectChanges.Add(change));
+        using var projectSub = ObserveAccumulated($"path:{p} nodeType:Markdown scope:descendants").Subscribe(projects);
+        using var taskSub = ObserveAccumulated($"path:{p} nodeType:Code scope:descendants").Subscribe(tasks);
 
-        var taskSubscription = Query
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("path:ACME nodeType:Code scope:descendants"))
-            .Subscribe(change => taskChanges.Add(change));
+        await projects.Should(WaitTimeout).Match(acc => acc.Count >= 1 && acc[0].Items.Count >= 1);
+        await tasks.Should(WaitTimeout).Match(acc => acc.Count >= 1 && acc[0].Items.Count >= 1);
 
-        await Task.Delay(200, TestContext.Current.CancellationToken);
-
-        // Initial emissions
-        projectChanges.Should().HaveCount(1);
-        projectChanges[0].Items.Should().HaveCount(1);
-
-        taskChanges.Should().HaveCount(1);
-        taskChanges[0].Items.Should().HaveCount(1);
-
-        // Act - Add a new project (should only affect project subscription)
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("ACME/Project2") with { Name = "Project 2", NodeType = "Markdown" });
-        await Task.Delay(300, TestContext.Current.CancellationToken);
-
-        projectChanges.Should().HaveCount(2);
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Project2") with { Name = "Project 2", NodeType = "Markdown" }).Should().Emit();
+        var projectChanges = await projects.Should(WaitTimeout).Match(acc => acc.Count >= 2);
         projectChanges[1].ChangeType.Should().Be(QueryChangeType.Added);
 
-        taskChanges.Should().HaveCount(1); // No change for task query
-
-        // Act - Add a new task (should only affect task subscription)
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("ACME/Task2") with { Name = "Task 2", NodeType = "Code" });
-        await Task.Delay(300, TestContext.Current.CancellationToken);
-
-        projectChanges.Should().HaveCount(2); // No change for project query
-        taskChanges.Should().HaveCount(2);
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Task2") with { Name = "Task 2", NodeType = "Code" }).Should().Emit();
+        var taskChanges = await tasks.Should(WaitTimeout).Match(acc => acc.Count >= 2);
         taskChanges[1].ChangeType.Should().Be(QueryChangeType.Added);
 
-        projectSubscription.Dispose();
-        taskSubscription.Dispose();
+        projects.Value.Should().HaveCount(2, "project subscription must not see task changes");
+        tasks.Value.Should().HaveCount(2, "task subscription must not see project changes");
     }
 
     [Fact]
     public async Task ScopeExact_OnlyNotifiesOnExactPathChanges()
     {
-        // Arrange
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("ExactOrg") with { Name = "ExactOrg", NodeType = "Group" });
+        var p = P();
+        await SeedTopLevel(MeshNode.FromPath(p) with { Name = "ExactOrg", NodeType = "Group" }); // top-level partition root → System
 
-        var changes = new List<QueryResultChange<MeshNode>>();
+        var accumulated = ObserveAccumulated($"path:{p}").Replay();
+        using var connection = accumulated.Connect();
 
-        var subscription = Query
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("path:ExactOrg"))
-            .Subscribe(change => changes.Add(change));
+        await accumulated.Should(WaitTimeout).Match(acc => acc.Count >= 1);
 
-        await Task.Delay(200, TestContext.Current.CancellationToken);
-        changes.Should().HaveCount(1); // Initial
+        await NodeFactory.UpdateNode(MeshNode.FromPath(p) with { Name = "ExactOrg Updated", NodeType = "Group" }).Should().Emit();
+        var afterUpdate = await accumulated.Should(WaitTimeout).Match(acc => acc.Count >= 2);
+        afterUpdate[1].ChangeType.Should().Be(QueryChangeType.Updated);
 
-        // Act - Update exact path
-        await NodeFactory.UpdateNodeAsync(MeshNode.FromPath("ExactOrg") with { Name = "ExactOrg Updated", NodeType = "Group" });
-        await Task.Delay(300, TestContext.Current.CancellationToken);
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Project") with { Name = "Project", NodeType = "Markdown" }).Should().Emit();
+        await NodeFactory.UpdateNode(MeshNode.FromPath(p) with { Name = "ExactOrg Updated 2", NodeType = "Group" }).Should().Emit();
 
-        changes.Should().HaveCount(2);
-        changes[1].ChangeType.Should().Be(QueryChangeType.Updated);
+        var changes = await accumulated.Should(WaitTimeout).Match(acc => acc.Count >= 3);
 
-        // Act - Add child (should NOT trigger)
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("ExactOrg/Project") with { Name = "Project", NodeType = "Markdown" });
-        await Task.Delay(300, TestContext.Current.CancellationToken);
-
-        changes.Should().HaveCount(2); // No change
-
-        subscription.Dispose();
+        changes[2].ChangeType.Should().Be(QueryChangeType.Updated);
+        changes.Should().HaveCount(3, "child create must not produce an emission for exact-path query");
     }
 
     [Fact]
     public async Task ScopeChildren_OnlyNotifiesOnDirectChildChanges()
     {
-        // Arrange
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("ACME/Project1") with { Name = "Project 1", NodeType = "Markdown" });
+        var p = P();
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Project1") with { Name = "Project 1", NodeType = "Markdown" }).Should().Emit();
 
-        var changes = new List<QueryResultChange<MeshNode>>();
+        var accumulated = ObserveAccumulated($"namespace:{p}").Replay();
+        using var connection = accumulated.Connect();
 
-        var subscription = Query
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("namespace:ACME"))
-            .Subscribe(change => changes.Add(change));
+        await accumulated.Should(WaitTimeout).Match(acc => acc.Count >= 1);
 
-        await Task.Delay(200, TestContext.Current.CancellationToken);
-        changes.Should().HaveCount(1); // Initial
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Project2") with { Name = "Project 2", NodeType = "Markdown" }).Should().Emit();
+        var afterChild = await accumulated.Should(WaitTimeout).Match(acc => acc.Count >= 2);
+        afterChild[1].ChangeType.Should().Be(QueryChangeType.Added);
 
-        // Act - Add direct child
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("ACME/Project2") with { Name = "Project 2", NodeType = "Markdown" });
-        await Task.Delay(300, TestContext.Current.CancellationToken);
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Project1/Task") with { Name = "Task", NodeType = "Code" }).Should().Emit();
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Project3") with { Name = "Project 3", NodeType = "Markdown" }).Should().Emit();
 
-        changes.Should().HaveCount(2);
-        changes[1].ChangeType.Should().Be(QueryChangeType.Added);
+        var changes = await accumulated.Should(WaitTimeout).Match(acc => acc.Count >= 3);
 
-        // Act - Add grandchild (should NOT trigger for children scope)
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("ACME/Project1/Task") with { Name = "Task", NodeType = "Code" });
-        await Task.Delay(300, TestContext.Current.CancellationToken);
-
-        changes.Should().HaveCount(2); // No change
-
-        subscription.Dispose();
+        var addedNames = changes.Skip(1)
+            .Where(c => c.ChangeType == QueryChangeType.Added)
+            .SelectMany(c => c.Items.Select(i => i.Name))
+            .ToList();
+        addedNames.Should().NotContain("Task", "grandchild must not emit for namespace: query");
+        addedNames.Should().Contain("Project 3");
     }
 
     [Fact]
     public async Task ScopeDescendants_NotifiesOnAllDescendantChanges()
     {
-        // Arrange
-        var changes = new List<QueryResultChange<MeshNode>>();
+        var p = P();
+        var accumulated = ObserveAccumulated($"path:{p} scope:descendants").Replay();
+        using var connection = accumulated.Connect();
 
-        var subscription = Query
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("path:ACME scope:descendants"))
-            .Subscribe(change => changes.Add(change));
-
-        await Task.Delay(500, TestContext.Current.CancellationToken);
-        var initialCount = changes.Count;
+        await accumulated.Should(WaitTimeout).Match(acc => acc.Count >= 1);
+        var initial = await accumulated.Should(WaitTimeout).Emit();
+        var initialCount = initial.Count;
         initialCount.Should().BeGreaterThanOrEqualTo(1, "Should have at least one initial emission");
 
-        // Act - Add child
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("ACME/Project") with { Name = "Project", NodeType = "Markdown" });
-        await Task.Delay(500, TestContext.Current.CancellationToken);
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Project") with { Name = "Project", NodeType = "Markdown" }).Should().Emit();
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Project/Task") with { Name = "Task", NodeType = "Code" }).Should().Emit();
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Project/Task/Subtask") with { Name = "Subtask", NodeType = "Code" }).Should().Emit();
 
-        // Act - Add grandchild
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("ACME/Project/Task") with { Name = "Task", NodeType = "Code" });
-        await Task.Delay(500, TestContext.Current.CancellationToken);
+        var changes = await accumulated.Should(WaitTimeout).Match(acc => acc.Skip(initialCount)
+            .Where(c => c.ChangeType == QueryChangeType.Added)
+            .SelectMany(c => c.Items)
+            .Select(n => n.Path)
+            .Distinct()
+            .Count() >= 3);
 
-        // Act - Add great-grandchild
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("ACME/Project/Task/Subtask") with { Name = "Subtask", NodeType = "Code" });
-        await Task.Delay(500, TestContext.Current.CancellationToken);
-
-        // Should have at least 3 additional emissions (one per create)
         var addedItems = changes.Skip(initialCount)
             .Where(c => c.ChangeType == QueryChangeType.Added)
             .SelectMany(c => c.Items)
             .DistinctBy(n => n.Path)
             .ToList();
         addedItems.Should().HaveCount(3, "Each created descendant should emit an Added change");
-
-        subscription.Dispose();
     }
 
     [Fact]
     public async Task ScopeAncestors_NotifiesOnAncestorChanges()
     {
-        // Arrange
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("AncOrg") with { Name = "AncOrg", NodeType = "Group" });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("AncOrg/Project") with { Name = "Project", NodeType = "Markdown" });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("AncOrg/Project/Task") with { Name = "Task", NodeType = "Code" });
+        var p = P();
+        await SeedTopLevel(MeshNode.FromPath(p) with { Name = "AncOrg", NodeType = "Group" }); // top-level partition root → System
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Project") with { Name = "Project", NodeType = "Markdown" }).Should().Emit();
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Project/Task") with { Name = "Task", NodeType = "Code" }).Should().Emit();
 
-        var changes = new List<QueryResultChange<MeshNode>>();
+        var accumulated = ObserveAccumulated($"path:{p}/Project/Task scope:ancestors").Replay();
+        using var connection = accumulated.Connect();
 
-        // Subscribe from the deepest path looking at ancestors
-        var subscription = Query
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("path:AncOrg/Project/Task scope:ancestors"))
-            .Subscribe(change => changes.Add(change));
+        await accumulated.Should(WaitTimeout).Match(acc => acc.Count >= 1);
 
-        await Task.Delay(200, TestContext.Current.CancellationToken);
-        changes.Should().HaveCount(1); // Initial with AncOrg and AncOrg/Project
+        await NodeFactory.UpdateNode(MeshNode.FromPath(p) with { Name = "AncOrg Updated", NodeType = "Group" }).Should().Emit();
+        var afterAncestorUpdate = await accumulated.Should(WaitTimeout).Match(acc => acc.Count >= 2);
+        afterAncestorUpdate[1].ChangeType.Should().Be(QueryChangeType.Updated);
 
-        // Act - Update an ancestor
-        await NodeFactory.UpdateNodeAsync(MeshNode.FromPath("AncOrg") with { Name = "AncOrg Updated", NodeType = "Group" });
-        await Task.Delay(300, TestContext.Current.CancellationToken);
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Project/Task2") with { Name = "Task 2", NodeType = "Code" }).Should().Emit();
+        await NodeFactory.UpdateNode(MeshNode.FromPath(p) with { Name = "AncOrg Updated 2", NodeType = "Group" }).Should().Emit();
 
-        changes.Should().HaveCount(2);
-        changes[1].ChangeType.Should().Be(QueryChangeType.Updated);
+        var changes = await accumulated.Should(WaitTimeout).Match(acc => acc.Count >= 3);
 
-        // Act - Add a sibling of Task (should NOT trigger for ancestors scope)
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("AncOrg/Project/Task2") with { Name = "Task 2", NodeType = "Code" });
-        await Task.Delay(300, TestContext.Current.CancellationToken);
-
-        changes.Should().HaveCount(2); // No change
-
-        subscription.Dispose();
+        changes.Should().HaveCount(3, "sibling create must not emit for ancestors scope");
+        changes[2].ChangeType.Should().Be(QueryChangeType.Updated);
     }
 
     [Fact]
     public async Task ScopeSubtree_NotifiesOnSelfAndDescendantChanges()
     {
-        // Arrange
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("SubOrg") with { Name = "SubOrg", NodeType = "Group" });
+        var p = P();
+        await SeedTopLevel(MeshNode.FromPath(p) with { Name = "SubOrg", NodeType = "Group" }); // top-level partition root → System
 
-        var changes = new List<QueryResultChange<MeshNode>>();
+        var accumulated = ObserveAccumulated($"path:{p} scope:subtree").Replay();
+        using var connection = accumulated.Connect();
 
-        var subscription = Query
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("path:SubOrg scope:subtree"))
-            .Subscribe(change => changes.Add(change));
+        await accumulated.Should(WaitTimeout).Match(acc => acc.Count >= 1);
 
-        await Task.Delay(200, TestContext.Current.CancellationToken);
-        changes.Should().HaveCount(1); // Initial with SubOrg
+        await NodeFactory.UpdateNode(MeshNode.FromPath(p) with { Name = "SubOrg Updated", NodeType = "Group" }).Should().Emit();
+        await accumulated.Should(WaitTimeout).Match(acc => acc.Count >= 2);
 
-        // Act - Update self
-        await NodeFactory.UpdateNodeAsync(MeshNode.FromPath("SubOrg") with { Name = "SubOrg Updated", NodeType = "Group" });
-        await Task.Delay(300, TestContext.Current.CancellationToken);
-
-        changes.Should().HaveCount(2);
-
-        // Act - Add descendant
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("SubOrg/Project") with { Name = "Project", NodeType = "Markdown" });
-        await Task.Delay(300, TestContext.Current.CancellationToken);
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Project") with { Name = "Project", NodeType = "Markdown" }).Should().Emit();
+        var changes = await accumulated.Should(WaitTimeout).Match(acc => acc.Count >= 3);
 
         changes.Should().HaveCount(3);
-
-        subscription.Dispose();
     }
 
     [Fact]
     public async Task ScopeHierarchy_NotifiesOnAncestorsSelfAndDescendantChanges()
     {
-        // Arrange
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("HRoot") with { Name = "HRoot", NodeType = "Group" });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("HRoot/HCo") with { Name = "HCo", NodeType = "Code" });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("HRoot/HCo/Project") with { Name = "Project", NodeType = "Markdown" });
+        var p = P();
+        await SeedTopLevel(MeshNode.FromPath(p) with { Name = "HRoot", NodeType = "Group" }); // top-level partition root → System
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/HCo") with { Name = "HCo", NodeType = "Code" }).Should().Emit();
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/HCo/Project") with { Name = "Project", NodeType = "Markdown" }).Should().Emit();
 
-        var changes = new List<QueryResultChange<MeshNode>>();
+        var accumulated = ObserveAccumulated($"path:{p}/HCo scope:hierarchy").Replay();
+        using var connection = accumulated.Connect();
 
-        // Subscribe from the middle of the hierarchy
-        var subscription = Query
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("path:HRoot/HCo scope:hierarchy"))
-            .Subscribe(change => changes.Add(change));
+        await accumulated.Should(WaitTimeout).Match(acc => acc.Count >= 1);
 
-        await Task.Delay(200, TestContext.Current.CancellationToken);
-        changes.Should().HaveCount(1); // Initial with HRoot, HCo, and Project
+        await NodeFactory.UpdateNode(MeshNode.FromPath(p) with { Name = "HRoot Updated", NodeType = "Group" }).Should().Emit();
+        await accumulated.Should(WaitTimeout).Match(acc => acc.Count >= 2);
 
-        // Act - Update ancestor
-        await NodeFactory.UpdateNodeAsync(MeshNode.FromPath("HRoot") with { Name = "HRoot Updated", NodeType = "Group" });
-        await Task.Delay(300, TestContext.Current.CancellationToken);
+        await NodeFactory.UpdateNode(MeshNode.FromPath($"{p}/HCo") with { Name = "HCo Updated", NodeType = "Code" }).Should().Emit();
+        await accumulated.Should(WaitTimeout).Match(acc => acc.Count >= 3);
 
-        changes.Should().HaveCount(2);
+        await NodeFactory.UpdateNode(MeshNode.FromPath($"{p}/HCo/Project") with { Name = "Project Updated", NodeType = "Markdown" }).Should().Emit();
+        await accumulated.Should(WaitTimeout).Match(acc => acc.Count >= 4);
 
-        // Act - Update self
-        await NodeFactory.UpdateNodeAsync(MeshNode.FromPath("HRoot/HCo") with { Name = "HCo Updated", NodeType = "Code" });
-        await Task.Delay(300, TestContext.Current.CancellationToken);
-
-        changes.Should().HaveCount(3);
-
-        // Act - Update descendant
-        await NodeFactory.UpdateNodeAsync(MeshNode.FromPath("HRoot/HCo/Project") with { Name = "Project Updated", NodeType = "Markdown" });
-        await Task.Delay(300, TestContext.Current.CancellationToken);
-
-        changes.Should().HaveCount(4);
-
-        // Act - Add new descendant
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("HRoot/HCo/Project/Task") with { Name = "Task", NodeType = "Code" });
-        await Task.Delay(300, TestContext.Current.CancellationToken);
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/HCo/Project/Task") with { Name = "Task", NodeType = "Code" }).Should().Emit();
+        var changes = await accumulated.Should(WaitTimeout).Match(acc => acc.Count >= 5);
 
         changes.Should().HaveCount(5);
-
-        subscription.Dispose();
     }
 
     [Fact]
     public async Task RecursiveDelete_EmitsRemovedForAllDeletedNodes()
     {
-        // Arrange
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("DelOrg") with { Name = "DelOrg", NodeType = "Group" });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("DelOrg/Project") with { Name = "Project", NodeType = "Markdown" });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("DelOrg/Project/Task") with { Name = "Task", NodeType = "Code" });
+        var p = P();
+        await SeedTopLevel(MeshNode.FromPath(p) with { Name = "DelOrg", NodeType = "Group" }); // top-level partition root → System
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Project") with { Name = "Project", NodeType = "Markdown" }).Should().Emit();
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Project/Task") with { Name = "Task", NodeType = "Code" }).Should().Emit();
 
-        var changes = new List<QueryResultChange<MeshNode>>();
+        var accumulated = ObserveAccumulated($"path:{p} scope:subtree").Replay();
+        using var connection = accumulated.Connect();
 
-        var subscription = Query
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("path:DelOrg scope:subtree"))
-            .Subscribe(change => changes.Add(change));
+        await accumulated.Should(WaitTimeout).Match(acc => acc.SelectMany(c => c.Items).Select(n => n.Path).Distinct().Count() >= 2);
 
-        await Task.Delay(500, TestContext.Current.CancellationToken);
-        // Initial emission(s) should contain all 3 items total
-        var totalInitialItems = changes.SelectMany(c => c.Items).DistinctBy(n => n.Path).Count();
-        totalInitialItems.Should().BeGreaterThanOrEqualTo(2, "Should find at least the parent and child nodes");
+        await NodeFactory.DeleteNode(p).Should().Emit();
 
-        // Act - Recursive delete
-        await NodeFactory.DeleteNodeAsync("DelOrg");
-        await Task.Delay(500, TestContext.Current.CancellationToken);
+        var changes = await accumulated.Should(WaitTimeout).Match(acc => acc
+            .Where(c => c.ChangeType == QueryChangeType.Removed)
+            .SelectMany(c => c.Items)
+            .Select(n => n.Path)
+            .Distinct()
+            .Count() >= 2);
 
-        // Assert - Should have removal for all 3 items
         var allRemovedItems = changes
             .Where(c => c.ChangeType == QueryChangeType.Removed)
             .SelectMany(c => c.Items)
@@ -311,38 +252,32 @@ public class ObservableQueryIntegrationTests(ITestOutputHelper output) : Monolit
             .ToList();
 
         allRemovedItems.Should().HaveCountGreaterThanOrEqualTo(2, "Should emit Removed for at least parent and child");
-
-        subscription.Dispose();
     }
 
     [Fact]
     public async Task QueryWithFilter_OnlyEmitsMatchingChanges()
     {
-        // Arrange
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("ACME/Project1") with { Name = "Project 1", NodeType = "Markdown" });
+        var p = P();
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Project1") with { Name = "Project 1", NodeType = "Markdown" }).Should().Emit();
 
-        var changes = new List<QueryResultChange<MeshNode>>();
+        var accumulated = ObserveAccumulated($"path:{p} nodeType:Markdown scope:descendants").Replay();
+        using var connection = accumulated.Connect();
 
-        var subscription = Query
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("path:ACME nodeType:Markdown scope:descendants"))
-            .Subscribe(change => changes.Add(change));
+        await accumulated.Should(WaitTimeout).Match(acc => acc.Count >= 1);
 
-        await Task.Delay(200, TestContext.Current.CancellationToken);
-        changes.Should().HaveCount(1);
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Project2") with { Name = "Project 2", NodeType = "Markdown" }).Should().Emit();
+        await accumulated.Should(WaitTimeout).Match(acc => acc.Count >= 2);
 
-        // Act - Add matching node
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("ACME/Project2") with { Name = "Project 2", NodeType = "Markdown" });
-        await Task.Delay(300, TestContext.Current.CancellationToken);
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Task1") with { Name = "Task 1", NodeType = "Code" }).Should().Emit();
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Project3") with { Name = "Project 3", NodeType = "Markdown" }).Should().Emit();
 
-        changes.Should().HaveCount(2);
+        var changes = await accumulated.Should(WaitTimeout).Match(acc => acc.Count >= 3);
 
-        // Act - Add non-matching node (different nodeType)
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("ACME/Task1") with { Name = "Task 1", NodeType = "Code" });
-        await Task.Delay(300, TestContext.Current.CancellationToken);
-
-        // Should still be 2 (Task doesn't match nodeType:Markdown filter)
-        changes.Should().HaveCount(2);
-
-        subscription.Dispose();
+        var addedNames = changes.Skip(1)
+            .Where(c => c.ChangeType == QueryChangeType.Added)
+            .SelectMany(c => c.Items.Select(i => i.Name))
+            .ToList();
+        addedNames.Should().NotContain("Task 1", "filter-mismatched creates must not emit");
+        addedNames.Should().Contain("Project 3");
     }
 }

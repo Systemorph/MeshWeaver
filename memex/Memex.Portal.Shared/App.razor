@@ -4,7 +4,13 @@
 @inject IConfiguration Configuration
 
 @{
-    var aiConnectionString = Configuration["APPLICATIONINSIGHTS_CONNECTION_STRING"];
+    // Instance identity: when Portal:InstanceName is set (e.g. "Local"), the tab
+    // title becomes that name and the favicon becomes a distinct colored badge so
+    // each environment is recognisable at a glance. Unset (prod) → default branding.
+    var instanceName = Configuration["Portal:InstanceName"];
+    var hasInstance = !string.IsNullOrWhiteSpace(instanceName);
+    var instanceColor = Configuration["Portal:InstanceColor"];
+    if (string.IsNullOrWhiteSpace(instanceColor)) instanceColor = "#f59e0b";
 }
 
 <!DOCTYPE html>
@@ -19,14 +25,50 @@
     <link href="_content/MeshWeaver.Blazor/standard-page-layout.css" rel="stylesheet" />
     <link href="_content/Radzen.Blazor/css/material-base.css" rel="stylesheet" />
     <ImportMap />
-    <link rel="icon" type="image/png" href="favicon.ico" />
+    @if (hasInstance)
+    {
+        <link rel="icon" type="image/svg+xml" href="@InstanceFavicon(instanceName!, instanceColor!)" />
+    }
+    else
+    {
+        <link rel="icon" type="image/png" href="favicon.ico" />
+    }
     <script src="_content/Radzen.Blazor/Radzen.Blazor.js"></script>
+
+    @*
+        Load Monaco early, in parallel with HTML parsing, and expose a readiness
+        Promise that Blazor.start() awaits below. BlazorMonaco 3.4 ships Monaco
+        0.54 whose `editor/editor.main.js` is a tiny AMD stub — the real 3.6MB
+        bundle (editor.api-*.js) is fetched asynchronously by the AMD loader.
+        If Blazor activates a circuit and renders a <StandaloneCodeEditor>
+        before that async load finishes, BlazorMonaco's jsInterop calls
+        `monaco.editor.create(...)` while `monaco` is undefined, the circuit
+        crashes, and the user sees a broken page. Using require([...], cb) to
+        gate Blazor.start removes the race.
+    *@
+    <script src="_content/BlazorMonaco/jsInterop.js"></script>
+    <script src="_content/BlazorMonaco/lib/monaco-editor/min/vs/loader.js"></script>
+    <script>
+        window.monacoReady = new Promise(function (resolve, reject) {
+            require(['vs/editor/editor.main'], resolve, reject);
+        });
+    </script>
+
     <HeadOutlet @rendermode="RenderMode.InteractiveServer" />
     <PageTitle>Memex Portal</PageTitle>
-    @if (!string.IsNullOrEmpty(aiConnectionString))
+    @if (hasInstance)
     {
-        <script type="text/javascript">
-            !(function (cfg){function e(){cfg.onInit&&cfg.onInit(n)}var S,u,D,t,n,C,i,o,s,a,f,m,v,g=window,T=document,b=g.location,w="script",I="ingestionendpoint",E="disableExceptionTracking",A="ai.device.";"instrumentationKey"in cfg||(cfg.instrumentationKey="");S=cfg.name||"appInsights",cfg.name=S,[g[S]=g[S]||function(){(g[S].q=g[S].q||[]).push(arguments)}][0].l=+new Date,u="https://js.monitor.azure.com/scripts/b/ai.",D=".min.js",t=cfg.sv||"3",n=u+t+D;try{if(g.location&&g.location.protocol&&"file:"===g.location.protocol)return}catch(e){}m=(cfg.dle||cfg.url||n).toLowerCase(),v=T.createElement(w),v.src=m,v.onload=e,T.getElementsByTagName(w)[0].parentNode.appendChild(v)}({connectionString:"@aiConnectionString"}));
+        @* Force the tab title to the instance name, overriding per-node titles set
+           dynamically by ApplicationPage. The observer re-applies it whenever Blazor
+           updates <title>; the equality guard stops it from looping. *@
+        <script>
+            (function () {
+                var label = @((Microsoft.AspNetCore.Components.MarkupString)System.Text.Json.JsonSerializer.Serialize(instanceName));
+                function apply() { if (document.title !== label) document.title = label; }
+                apply();
+                document.addEventListener('DOMContentLoaded', apply);
+                new MutationObserver(apply).observe(document.head, { childList: true, subtree: true, characterData: true });
+            })();
         </script>
     }
 </head>
@@ -36,15 +78,172 @@
         <ThemeSync @bind-Mode="@Mode" @rendermode="RenderMode.InteractiveServer" />
         <Routes @rendermode="RenderMode.InteractiveServer" />
     </CascadingValue>
-    <script src="_content/BlazorMonaco/jsInterop.js"></script>
-    <script src="_content/BlazorMonaco/lib/monaco-editor/min/vs/loader.js"></script>
-    <script src="_content/BlazorMonaco/lib/monaco-editor/min/vs/editor/editor.main.js"></script>
+
+    @*
+        Custom Blazor Server reconnect UI. Blazor adds one of these classes to
+        the container while handling a lost circuit:
+        - components-reconnect-show      → attempting to reconnect
+        - components-reconnect-hide      → hidden (reconnected)
+        - components-reconnect-retrying  → retry in flight
+        - components-reconnect-failed    → retries exhausted
+        - components-reconnect-rejected  → server doesn't know this circuit (redeploy)
+        A deploy invalidates every circuit on the server, so stale clients hit
+        `rejected` (404 on reconnect). Instead of keeping the user stuck on a
+        generic "Reconnecting…" modal for minutes, auto-reload on the terminal
+        states so the user is back on a fresh circuit within a few seconds.
+    *@
+    <div id="components-reconnect-modal" class="reconnect-modal">
+        <div class="reconnect-card">
+            <div class="reconnect-spinner"></div>
+            <div class="reconnect-title">Reconnecting…</div>
+            <div class="reconnect-detail">The server was updated. Reloading the page to pick up the latest version.</div>
+        </div>
+    </div>
+    <style>
+        #components-reconnect-modal { display: none; }
+        #components-reconnect-modal.components-reconnect-show,
+        #components-reconnect-modal.components-reconnect-retrying,
+        #components-reconnect-modal.components-reconnect-failed,
+        #components-reconnect-modal.components-reconnect-rejected {
+            display: flex;
+            position: fixed; inset: 0;
+            align-items: center; justify-content: center;
+            background: rgba(0,0,0,0.35); z-index: 10000;
+        }
+        .reconnect-card {
+            background: var(--neutral-layer-1, #fff);
+            color: var(--neutral-foreground-rest, #222);
+            padding: 24px 32px; border-radius: 8px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.25);
+            display: flex; flex-direction: column; align-items: center; gap: 12px;
+            min-width: 280px; text-align: center;
+        }
+        .reconnect-spinner {
+            width: 32px; height: 32px; border-radius: 50%;
+            border: 3px solid #ccc; border-top-color: #2b6cb0;
+            animation: reconnect-spin 1s linear infinite;
+        }
+        .reconnect-title { font-size: 1.1rem; font-weight: 600; }
+        .reconnect-detail { font-size: 0.9rem; opacity: 0.8; }
+        @@keyframes reconnect-spin { to { transform: rotate(360deg); } }
+    </style>
+    <script>
+        (function () {
+            // Fast-fail reconnect after a deploy.
+            //
+            // When the server pod holding a Blazor Server circuit dies, the
+            // browser keeps retrying the old SignalR connection id through
+            // every transport fallback (WebSocket → LongPolling → WebSocket)
+            // before Blazor's reconnectionOptions.maxRetries counts it as a
+            // single failure. In production that adds up to 2–4 minutes of a
+            // stale "Reconnecting…" modal for every user whose tab was open
+            // during the deploy.
+            //
+            // Two independent signals trigger a reload:
+            //   1) The Blazor reconnect modal enters its terminal state
+            //      (`rejected` = server forgot the circuit, `failed` =
+            //      retries exhausted). Caught via MutationObserver.
+            //   2) A /_blazor?id=<stale> fetch returns 404. That's the
+            //      unambiguous "this circuit is gone" signal — reload now
+            //      without waiting for Blazor's retry schedule.
+            var reloaded = false;
+            function reloadOnce(reason) {
+                if (reloaded) return;
+                reloaded = true;
+                console.info('[blazor-reconnect] reloading: ' + reason);
+                setTimeout(function () { location.reload(); }, 800);
+            }
+
+            // (0) Safari back/forward cache (bfcache) restore. Safari aggressively snapshots
+            //     a page on navigation-away and restores it on Back/Forward WITHOUT re-running
+            //     scripts or re-establishing the Blazor Server circuit — so the restored DOM is
+            //     a live-looking but DEAD circuit (often blank, never interactive). Chrome/Firefox
+            //     decline to bfcache a page with an open WebSocket; Safari suspends and restores
+            //     it. event.persisted === true means the page came from bfcache: reload now to get
+            //     a fresh circuit. This is the classic "blank page on Back in Safari" fix.
+            window.addEventListener('pageshow', function (e) {
+                if (e.persisted) location.reload();
+            });
+
+            // (1) Terminal reconnect state via CSS class changes on the modal.
+            document.addEventListener('DOMContentLoaded', function () {
+                var modal = document.getElementById('components-reconnect-modal');
+                if (!modal) return;
+                new MutationObserver(function () {
+                    var cls = modal.classList;
+                    if (cls.contains('components-reconnect-rejected') ||
+                        cls.contains('components-reconnect-failed')) {
+                        reloadOnce('modal=' + modal.className);
+                    }
+                }).observe(modal, { attributes: true, attributeFilter: ['class'] });
+            });
+
+            // (2) 404 from /_blazor?id=<id> — the Long Polling transport's
+            //     request against a dead circuit. The initial /_blazor/negotiate
+            //     has no `id=` query param, so this only fires for an already
+            //     established connection that the server has since forgotten.
+            var origFetch = window.fetch;
+            if (typeof origFetch === 'function') {
+                window.fetch = function (input, init) {
+                    var url = typeof input === 'string' ? input : (input && input.url) || '';
+                    var p = origFetch.apply(this, arguments);
+                    if (/\/_blazor\?id=/.test(url)) {
+                        p.then(function (res) {
+                            if (res && res.status === 404) reloadOnce('signalr 404');
+                        }).catch(function () { /* network errors: let Blazor retry handle */ });
+                    }
+                    return p;
+                };
+            }
+        })();
+    </script>
+
     <script src="_content/MeshWeaver.Blazor.Portal/Layout/PortalLayoutBase.razor.js" type="module"></script>
-    <script src="_framework/blazor.web.js"></script>
+    <script src="_framework/blazor.web.js" autostart="false"></script>
+    <script>
+        // Start the Blazor circuit IMMEDIATELY — do NOT gate it on Monaco.
+        //
+        // Previously this awaited window.monacoReady before calling Blazor.start(), so the
+        // whole circuit was hostage to a 3.6MB async AMD bundle. If that load was slow or
+        // stalled (common in Safari — ITP, stricter resource scheduling, background
+        // throttling) the page sat on its prerendered shell with no interactive circuit:
+        // the "empty page in Safari" symptom. The editor component (MonacoEditorView) now
+        // waits for window.monacoReady itself before rendering <StandaloneCodeEditor>, so
+        // the BlazorMonaco-before-Monaco race is handled per-editor and the circuit no
+        // longer blocks on it. Worst case a code editor shows a placeholder for a moment;
+        // the rest of the page is interactive at once.
+        Blazor.start({
+            circuit: {
+                // Short, bounded retries so the "rejected/failed" state arrives in seconds
+                // rather than minutes when a deploy invalidates the circuit. On terminal
+                // failure, the mutation observer above reloads the page to pick up a fresh
+                // circuit on the new server.
+                reconnectionOptions: {
+                    maxRetries: 3,
+                    retryIntervalMilliseconds: 2000
+                }
+            }
+        });
+    </script>
 </body>
 
 </html>
 
 @code {
     private DesignThemeModes Mode;
+
+    // Per-instance favicon: a colored rounded-square badge with the instance's
+    // initial, so each environment (Local / Test / …) is distinguishable in the
+    // browser tab. Emitted as an inline SVG data URI — no binary asset needed.
+    private static string InstanceFavicon(string name, string color)
+    {
+        var letter = char.ToUpperInvariant(name.Trim()[0]).ToString();
+        var svg =
+            "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'>" +
+            $"<rect width='100' height='100' rx='22' fill='{color}'/>" +
+            "<text x='50' y='55' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' " +
+            $"font-size='66' font-weight='700' fill='#ffffff' text-anchor='middle' dominant-baseline='central'>{letter}</text>" +
+            "</svg>";
+        return "data:image/svg+xml," + Uri.EscapeDataString(svg);
+    }
 }

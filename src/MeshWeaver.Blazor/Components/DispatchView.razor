@@ -12,18 +12,35 @@
 else if(ViewDescriptor != null)
 {
     <CascadingValue Value=@ViewModelDataContext Name="DataContext">
-        @((RenderFragment)(builder =>
-        {
-            builder.OpenComponent(0, ViewDescriptor.Type);
-            var index = 0;
+        @* Every UiControl is rendered through here, so this is the ONE place to contain a
+           render-time exception. A control that throws inside BuildRenderTime (e.g. an enum
+           property bound to an unparseable literal in DataGridView.RenderPropertyColumn) would
+           otherwise escape the render, tear down the whole Blazor circuit, and hang the page
+           with no feedback (atioz 2026-06-21). The ErrorBoundary catches it, SURFACES the
+           message in the control's own slot, and lets the rest of the page render. *@
+        <ErrorBoundary>
+            <ChildContent>
+                @((RenderFragment)(builder =>
+                {
+                    builder.OpenComponent(0, ViewDescriptor.Type);
+                    var index = 0;
 
-            foreach (var parameter in ViewDescriptor.Parameters)
-            {
-                builder.AddAttribute(++index, parameter.Key, parameter.Value);
-            }
+                    foreach (var parameter in ViewDescriptor.Parameters)
+                    {
+                        builder.AddAttribute(++index, parameter.Key, parameter.Value);
+                    }
 
-            builder.CloseComponent();
-        }))
+                    builder.CloseComponent();
+                }))
+            </ChildContent>
+            <ErrorContent Context="renderError">
+                <div class="meshweaver-render-error"
+                     style="padding:0.75rem;border:1px solid var(--error,#d13438);border-radius:4px;background:rgba(209,52,56,0.08);color:var(--error,#d13438);font-size:0.875rem">
+                    <strong>This view failed to render.</strong>
+                    <div style="margin-top:0.25rem;white-space:pre-wrap;font-family:monospace">@renderError.Message</div>
+                </div>
+            </ErrorContent>
+        </ErrorBoundary>
     </CascadingValue>
 }
 

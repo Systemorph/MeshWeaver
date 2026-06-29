@@ -1,7 +1,8 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using System.IO;
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
-using FluentAssertions;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting;
@@ -18,12 +19,15 @@ namespace MeshWeaver.Persistence.Test;
 
 /// <summary>
 /// Reproduces the ApplicationPage behavior:
-/// NavigationService.ProcessLocationChangeAsync calls IPathResolver.ResolvePathAsync(path)
+/// NavigationService.ProcessLocationChangeAsync calls IPathResolver.ResolvePath(path).FirstAsync().ToTask()
 /// to resolve the URL path to an address. When this returns null, the page shows "Page Not Found".
 /// These tests verify that FutuRe paths resolve correctly.
 /// </summary>
 public class ApplicationPageResolutionTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
+    /// <summary>Share Mesh/SP across [Fact]s — see MonolithMeshTestBase.ShareMeshAcrossTests.</summary>
+    protected override bool ShareMeshAcrossTests => true;
+
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
         var graphPath = TestPaths.SamplesGraph;
@@ -53,16 +57,16 @@ public class ApplicationPageResolutionTest(ITestOutputHelper output) : MonolithM
     /// <summary>
     /// Emulates ApplicationPage navigating to "FutuRe".
     /// This is the exact flow: NavigationService.InitializeAsync() -> ProcessLocationChangeAsync("FutuRe")
-    /// -> _meshCatalog.ResolvePathAsync("FutuRe").
+    /// -> _meshCatalog.ResolvePath("FutuRe").FirstAsync().ToTask().
     /// When this returns null, the page shows "Page Not Found".
     /// </summary>
     [Fact(Timeout = 10000)]
     public async Task ResolvePathAsync_FutuRe_ShouldNotReturnNull()
     {
-        var resolution = await PathResolver.ResolvePathAsync("FutuRe");
+        var resolution = await PathResolver.ResolvePath("FutuRe").Should().Emit();
 
         Output.WriteLine($"Resolution: {resolution?.Prefix ?? "NULL"}, Remainder: {resolution?.Remainder ?? "NULL"}");
-        resolution.Should().NotBeNull("FutuRe should resolve — it has an index.md in the data directory");
+        resolution.Should().NotBeNull("FutuRe should resolve â€” it has an index.md in the data directory");
         resolution!.Prefix.Should().Be("FutuRe");
         resolution.Remainder.Should().BeNull();
     }
@@ -78,7 +82,7 @@ public class ApplicationPageResolutionTest(ITestOutputHelper output) : MonolithM
     public async Task ResolvePathAsync_FutuReSubPaths_ShouldResolve(
         string path, string expectedPrefix, string? expectedRemainder)
     {
-        var resolution = await PathResolver.ResolvePathAsync(path);
+        var resolution = await PathResolver.ResolvePath(path).Should().Emit();
 
         Output.WriteLine($"Path: {path} => Prefix: {resolution?.Prefix ?? "NULL"}, Remainder: {resolution?.Remainder ?? "NULL"}");
         resolution.Should().NotBeNull($"'{path}' should resolve to a valid address");
@@ -87,13 +91,18 @@ public class ApplicationPageResolutionTest(ITestOutputHelper output) : MonolithM
     }
 
     /// <summary>
-    /// Verifies that truly unknown paths still return null (error case is correct).
+    /// Verifies that truly unknown DEEP paths (more than one segment, no
+    /// matching ancestor anywhere) still return null. Single-segment unknown
+    /// paths now synthesize a partition-root placeholder (e8c08ce42) so the
+    /// home-page activation for a not-yet-onboarded org/user does not hang
+    /// — covered by PartitionRootActivationTest in the Orleans suite.
     /// </summary>
     [Fact(Timeout = 10000)]
-    public async Task ResolvePathAsync_UnknownPath_ShouldReturnNull()
+    public async Task ResolvePathAsync_UnknownDeepPath_ShouldReturnNull()
     {
-        var resolution = await PathResolver.ResolvePathAsync("CompletelyUnknownPath");
+        var resolution = await PathResolver.ResolvePath("CompletelyUnknown/Subpath").Should().Emit();
 
-        resolution.Should().BeNull("unknown paths should return null");
+        resolution.Should().BeNull("multi-segment paths with no known ancestor should not synthesize a partition root");
     }
 }
+

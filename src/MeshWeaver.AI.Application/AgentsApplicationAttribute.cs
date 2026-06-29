@@ -10,6 +10,9 @@ namespace MeshWeaver.AI.Application;
 /// </summary>
 public class AgentsApplicationAttribute : MeshNodeProviderAttribute
 {
+    /// <summary>
+    /// The mesh nodes contributed by the Agents application, built from its hub configuration.
+    /// </summary>
     public override IEnumerable<MeshNode> Nodes =>
     [
         CreateFromHubConfiguration(

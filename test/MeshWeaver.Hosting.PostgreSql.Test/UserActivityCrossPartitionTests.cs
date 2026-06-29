@@ -4,19 +4,19 @@ using System.Linq;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
-using FluentAssertions;
 using MeshWeaver.Data;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using Npgsql;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.PostgreSql.Test;
 
 /// <summary>
 /// Tests that UserActivity dashboard queries return results across partitions.
-/// Covers: Latest Threads, Activity Feed, Recently Viewed — all of which use
+/// Covers: Latest Threads, Activity Feed, Recently Viewed â€” all of which use
 /// satellite tables (threads, activities, user_activities) that require
 /// per-partition fan-out instead of the cross-schema stored proc.
 /// </summary>
@@ -38,7 +38,7 @@ public class UserActivityCrossPartitionTests
 
         var partitionDef = new PartitionDefinition
         {
-            TableMappings = PartitionDefinition.StandardTableMappings
+            TableMappings = PartitionDefinition.DefaultSegmentTableMappings(), NodeTypeTableMappings = PartitionDefinition.DefaultNodeTypeTableMappings()
         };
 
         var orgNames = new[] { "OrgA", "OrgB" };
@@ -49,15 +49,14 @@ public class UserActivityCrossPartitionTests
             var schemaName = org.ToLowerInvariant();
             var (ds, adapter) = await _fixture.CreateSchemaAdapterAsync(
                 schemaName,
-                partitionDef with { Namespace = org, Schema = schemaName },
-                ct);
+                partitionDef with { Namespace = org, Schema = schemaName });
             partitions[org] = (ds, adapter);
 
             // Root org node
             await adapter.WriteAsync(new MeshNode(org)
             {
                 Name = $"{org} Corp",
-                NodeType = "Organization",
+                NodeType = "Space",
                 State = MeshNodeState.Active,
             }, _options, ct);
 
@@ -93,7 +92,7 @@ public class UserActivityCrossPartitionTests
             var ac = new PostgreSqlAccessControl(ds);
             await ac.GrantAsync(org, "testuser", "Read", isAllow: true, ct);
             await ac.SyncNodeTypePermissionsAsync(
-                [new NodeTypePermission("Organization", PublicRead: true),
+                [new NodeTypePermission("Space", PublicRead: true),
                  new NodeTypePermission("Markdown", PublicRead: true)], ct);
         }
 
@@ -102,11 +101,24 @@ public class UserActivityCrossPartitionTests
         return partitions;
     }
 
+    private Task<Dictionary<string, (NpgsqlDataSource Ds, PostgreSqlStorageAdapter Adapter)>>
+        SetupMultiOrgWithThreads(CancellationToken ct)
+        => SetupMultiOrgWithThreadsAsync(ct).Run().Should().Within(90.Seconds()).Emit();
+
+    private Task<List<MeshNode>> QueryAdapter(PostgreSqlStorageAdapter adapter, ParsedQuery query, CancellationToken ct)
+        => adapter.QueryNodesAsync(query, _options, ct: ct)
+            .Collect(ct).Should().Within(30.Seconds()).Emit();
+
+    private Task<List<MeshNode>> CallSearchAcrossSchemas(
+        string whereClause, string? userId, string orderBy, int limit, CancellationToken ct)
+        => CallSearchAcrossSchemasAsync(whereClause, userId, orderBy, limit, ct)
+            .Run().Should().Within(30.Seconds()).Emit();
+
     [Fact(Timeout = 60000)]
     public async Task LatestThreads_FoundInEachPartition()
     {
         var ct = TestContext.Current.CancellationToken;
-        var partitions = await SetupMultiOrgWithThreadsAsync(ct);
+        var partitions = await SetupMultiOrgWithThreads(ct);
 
         // The Latest Threads query: nodeType:Thread content.CreatedBy:testuser scope:descendants
         // This should find threads in satellite tables per partition
@@ -114,9 +126,7 @@ public class UserActivityCrossPartitionTests
         {
             var query = new QueryParser().Parse(
                 $"nodeType:Thread scope:descendants");
-            var results = new List<MeshNode>();
-            await foreach (var node in adapter.QueryNodesAsync(query, _options, ct: ct))
-                results.Add(node);
+            var results = await QueryAdapter(adapter, query, ct);
 
             results.Should().NotBeEmpty($"{org} should have threads in satellite table");
             results.Should().Contain(n => n.NodeType == "Thread",
@@ -128,16 +138,14 @@ public class UserActivityCrossPartitionTests
     public async Task LatestThreads_FilterByCreatedBy()
     {
         var ct = TestContext.Current.CancellationToken;
-        var partitions = await SetupMultiOrgWithThreadsAsync(ct);
+        var partitions = await SetupMultiOrgWithThreads(ct);
 
         // Verify content.CreatedBy filter works per partition
         foreach (var (org, (_, adapter)) in partitions)
         {
             var query = new QueryParser().Parse(
                 "nodeType:Thread content.createdBy:testuser scope:descendants");
-            var results = new List<MeshNode>();
-            await foreach (var node in adapter.QueryNodesAsync(query, _options, ct: ct))
-                results.Add(node);
+            var results = await QueryAdapter(adapter, query, ct);
 
             results.Should().NotBeEmpty($"{org} should find threads by testuser");
         }
@@ -147,7 +155,7 @@ public class UserActivityCrossPartitionTests
     public async Task ActivityFeed_FoundInEachPartition()
     {
         var ct = TestContext.Current.CancellationToken;
-        var partitions = await SetupMultiOrgWithThreadsAsync(ct);
+        var partitions = await SetupMultiOrgWithThreads(ct);
 
         // The Activity Feed query: source:activity scope:subtree is:main
         // source:activity JOINs with activities satellite table
@@ -155,9 +163,7 @@ public class UserActivityCrossPartitionTests
         {
             var query = new QueryParser().Parse(
                 "source:activity scope:subtree is:main sort:LastModified-desc");
-            var results = new List<MeshNode>();
-            await foreach (var node in adapter.QueryNodesAsync(query, _options, ct: ct))
-                results.Add(node);
+            var results = await QueryAdapter(adapter, query, ct);
 
             results.Should().NotBeEmpty($"{org} should have nodes with activity");
             results.Should().OnlyContain(n => n.MainNode == n.Path,
@@ -169,11 +175,11 @@ public class UserActivityCrossPartitionTests
     public async Task Threads_NotInCrossSchemaStoredProc()
     {
         var ct = TestContext.Current.CancellationToken;
-        var partitions = await SetupMultiOrgWithThreadsAsync(ct);
+        var partitions = await SetupMultiOrgWithThreads(ct);
 
         // Cross-schema stored proc only searches mesh_nodes with main_node = path.
         // Threads are in satellite tables with main_node != path, so they should NOT appear.
-        var results = await CallSearchAcrossSchemasAsync(
+        var results = await CallSearchAcrossSchemas(
             "LOWER(n.node_type) = 'thread'", "testuser", "last_modified DESC", 50, ct);
 
         results.Should().BeEmpty(
@@ -184,7 +190,7 @@ public class UserActivityCrossPartitionTests
     public async Task Threads_FoundViaCrossSchemaUnionOnSatelliteTable()
     {
         var ct = TestContext.Current.CancellationToken;
-        await SetupMultiOrgWithThreadsAsync(ct);
+        await SetupMultiOrgWithThreads(ct);
 
         // First verify without access control (no userId) — confirms data is there
         var schemas = new List<string> { "orga", "orgb" };
@@ -193,23 +199,8 @@ public class UserActivityCrossPartitionTests
         var (sqlNoAc, paramsNoAc) = generator.GenerateCrossSchemaSelectQuery(
             query, schemas, userId: null, tableName: "threads");
 
-        var noAcResults = new List<MeshNode>();
-        await using (var cmd = _fixture.DataSource.CreateCommand(sqlNoAc))
-        {
-            foreach (var (name, value) in paramsNoAc)
-                cmd.Parameters.Add(new NpgsqlParameter(name, value ?? DBNull.Value));
-            await using var reader = await cmd.ExecuteReaderAsync(ct);
-            while (await reader.ReadAsync(ct))
-            {
-                var id = reader.GetString(0);
-                var ns = reader.IsDBNull(1) ? null : reader.GetString(1);
-                noAcResults.Add(new MeshNode(id, string.IsNullOrEmpty(ns) ? null : ns)
-                {
-                    Name = reader.IsDBNull(2) ? null : reader.GetString(2),
-                    NodeType = reader.IsDBNull(3) ? null : reader.GetString(3),
-                });
-            }
-        }
+        var noAcResults = await ReadMeshNodesAsync(sqlNoAc, paramsNoAc, ct)
+            .Run().Should().Within(30.Seconds()).Emit();
         noAcResults.Should().HaveCount(2, "data should exist in both schemas (no access control)");
 
         // Now with access control — testuser should see threads via partition_access + UEP
@@ -217,23 +208,8 @@ public class UserActivityCrossPartitionTests
         var (sql, parameters) = generator2.GenerateCrossSchemaSelectQuery(
             query, schemas, userId: "testuser", tableName: "threads");
 
-        var results = new List<MeshNode>();
-        await using (var cmd = _fixture.DataSource.CreateCommand(sql))
-        {
-            foreach (var (name, value) in parameters)
-                cmd.Parameters.Add(new NpgsqlParameter(name, value ?? DBNull.Value));
-            await using var reader = await cmd.ExecuteReaderAsync(ct);
-            while (await reader.ReadAsync(ct))
-            {
-                var id = reader.GetString(0);
-                var ns = reader.IsDBNull(1) ? null : reader.GetString(1);
-                results.Add(new MeshNode(id, string.IsNullOrEmpty(ns) ? null : ns)
-                {
-                    Name = reader.IsDBNull(2) ? null : reader.GetString(2),
-                    NodeType = reader.IsDBNull(3) ? null : reader.GetString(3),
-                });
-            }
-        }
+        var results = await ReadMeshNodesAsync(sql, parameters, ct)
+            .Run().Should().Within(30.Seconds()).Emit();
 
         results.Should().HaveCount(2, "should find threads from both orgs via UNION ALL on threads table");
         results.Should().Contain(n => n.Name == "Discussion in OrgA");
@@ -244,10 +220,10 @@ public class UserActivityCrossPartitionTests
     public async Task MainNodes_VisibleInCrossSchemaStoredProc()
     {
         var ct = TestContext.Current.CancellationToken;
-        var partitions = await SetupMultiOrgWithThreadsAsync(ct);
+        var partitions = await SetupMultiOrgWithThreads(ct);
 
-        // Main content nodes (Organization, Markdown) should be found
-        var results = await CallSearchAcrossSchemasAsync(
+        // Main content nodes (Space, Markdown) should be found
+        var results = await CallSearchAcrossSchemas(
             "", "testuser", "last_modified DESC", 50, ct);
 
         results.Should().NotBeEmpty("Main nodes should be visible");
@@ -258,7 +234,30 @@ public class UserActivityCrossPartitionTests
             "Threads should not appear in cross-schema results");
     }
 
-    // ── Helpers ──────────────────────────────────────────────────────
+    // Raw cross-schema SELECT (built by PostgreSqlSqlGenerator) → MeshNode list.
+    // Low-level reader loop stays async inside; the test asserts reactively via .Run().
+    private async Task<List<MeshNode>> ReadMeshNodesAsync(
+        string sql, Dictionary<string, object> parameters, CancellationToken ct)
+    {
+        var results = new List<MeshNode>();
+        await using var cmd = _fixture.DataSource.CreateCommand(sql);
+        foreach (var (name, value) in parameters)
+            cmd.Parameters.Add(new NpgsqlParameter(name, value ?? DBNull.Value));
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            var id = reader.GetString(0);
+            var ns = reader.IsDBNull(1) ? null : reader.GetString(1);
+            results.Add(new MeshNode(id, string.IsNullOrEmpty(ns) ? null : ns)
+            {
+                Name = reader.IsDBNull(2) ? null : reader.GetString(2),
+                NodeType = reader.IsDBNull(3) ? null : reader.GetString(3),
+            });
+        }
+        return results;
+    }
+
+    // â”€â”€ Helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     private async Task PopulateSearchableSchemasAsync(IEnumerable<string> schemas, CancellationToken ct)
     {

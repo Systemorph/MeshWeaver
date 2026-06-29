@@ -1,7 +1,6 @@
 using System;
 using System.IO;
 using System.Threading.Tasks;
-using FluentAssertions;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Fixture;
 using MeshWeaver.Hosting.Persistence.Parsers;
@@ -110,7 +109,7 @@ public class MarkdownParsingTest(ITestOutputHelper output) : HubTestBase(output)
             var content = await File.ReadAllTextAsync(file);
             var relativePath = Path.GetRelativePath(baseDir, file);
 
-            var node = await parser.ParseAsync(file, content, relativePath);
+            var node = parser.Parse(file, content, relativePath);
 
             node.Should().NotBeNull();
             node!.Id.Should().Be("Overview");

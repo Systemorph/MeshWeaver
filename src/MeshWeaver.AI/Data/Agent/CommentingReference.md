@@ -23,10 +23,10 @@ User says: "Add a comment on 'quarterly results' saying 'needs updated figures'"
 
 ### How It Works
 
-Comments are stored as satellite entities in the `_Comment` partition. The tool:
-1. Finds the selected text in the document's markdown content
-2. Inserts inline markers: `<!--comment:id-->selected text<!--/comment:id-->`
-3. Creates a Comment entity with the marker ID linking it to the text range
+Comments are satellite entities in the `_Comment` partition — the document text is **never modified**. The tool:
+1. Finds the selected text in the document's clean content
+2. Creates a Comment entity that captures the character range (`Start`/`Length`), the document `Version`, and the text at that version (`AnchorText`)
+3. The highlight is re-derived at render time from the satellite — and follows its text when the document is edited above it (the range is recomputed via the version delta), so a comment never needs write access to the document
 
 ## Suggesting Edits (Track Changes)
 
@@ -44,11 +44,7 @@ Use the **SuggestEdit** tool to propose text changes without directly editing th
 
 ### How It Works
 
-Track changes use inline markers in the markdown:
-- **Insertions**: `<!--insert:id:Author:Date-->new text<!--/insert:id-->`
-- **Deletions**: `<!--delete:id:Author:Date-->deleted text<!--/delete:id-->`
-
-The markers are visible to other collaborators who can accept or reject the changes.
+A tracked change is a satellite entity in the `_Tracking` partition — like a comment, it does **not** alter the document. It captures the affected range plus the suggested text (`Insertion`, `Deletion`, or `Replacement`), and the document shows an inline **diff** re-derived from the satellite. Other collaborators accept or reject it: **accepting** applies the suggested text to the document, **rejecting** drops the satellite and leaves the document unchanged.
 
 ## Important Notes
 

@@ -1,0 +1,86 @@
+# =============================================================================
+# memex-local — local Helm overlay for Colima k3s (Mac)
+# =============================================================================
+# This file is the LOCAL OVERLAY layered on top of the neutral chart defaults
+# (deploy/helm/values.yaml). It is the 1:1 automation of the overlay shown in
+# LocalColimaMac.md §4. `memex-local up` copies this template to
+#   ~/.memex-local/values.local.yaml
+# on first run, substituting freshly generated secrets for the __TOKENS__ below.
+# Edit ~/.memex-local/values.local.yaml (NOT this template) to fill in your
+# Entra OAuth values; re-run `memex-local up` to apply.
+#
+# Helm invocation (see `memex-local up`, maps to LocalColimaMac.md §4):
+#   helm upgrade --install memex deploy/helm \
+#     -f deploy/helm/values.yaml \
+#     -f ~/.memex-local/values.local.yaml \
+#     -n memex --create-namespace
+#
+# NOTE on logging: the chart's portal ConfigMap is a fixed allow-list and the
+# chart templates are source-of-truth (we never edit them), so the verbose log
+# level declared here under config.memex_portal.Logging__LogLevel__Default is
+# ALSO applied by `memex-local up` as a deployment-config override via
+# `kubectl set env` (the override wins over envFrom). We never touch any
+# committed appsettings*.json. See deploy/homebrew/README.md → "Full logging".
+# =============================================================================
+
+# ---- Postgres (in-cluster StatefulSet on a 10Gi PVC — pgvector/pgvector:pg17)
+# The password is generated once by `memex-local up` and reused across the three
+# secret groups. The chart's secrets templates BUILD the connection strings from
+# memex_postgres_password, so only the password is strictly required here.
+secrets:
+  memex_postgres:
+    memex_postgres_password: "__PG_PASSWORD__"
+  memex_migration:
+    memex_postgres_password: "__PG_PASSWORD__"
+    ConnectionStrings__memex: "Host=memex-postgres-service;Port=5432;Database=memex;Username=postgres;Password=__PG_PASSWORD__"
+  memex_portal:
+    memex_postgres_password: "__PG_PASSWORD__"
+    ConnectionStrings__memex: "Host=memex-postgres-service;Port=5432;Database=memex;Username=postgres;Password=__PG_PASSWORD__"
+    # AI key-protection master key (encrypts stored provider keys). Generated once.
+    Ai__KeyProtection__MasterKey: "__AI_MASTER_KEY__"
+    # Microsoft Entra client secret — see LocalColimaMac.md §9. Fill this in.
+    Authentication__Microsoft__ClientSecret: "<entra-client-secret>"
+    # OpenAI-compatible (Ollama) API key — any non-empty token; "ollama" per doc §10.
+    OpenAICompatible__ApiKey: "ollama"
+
+config:
+  memex_portal:
+    # ---- Auth: Microsoft Entra OAuth (LocalColimaMac.md §9) ------------------
+    # Fill ClientId / TenantId from your dedicated local-dev app registration.
+    # Register redirect URIs: https://memex.localhost:8443/signin-microsoft
+    #                     and https://memex.localhost/signin-microsoft
+    Authentication__Provider: "Microsoft"
+    Authentication__Microsoft__ClientId: "<entra-client-id>"
+    Authentication__Microsoft__TenantId: "<entra-tenant-id>"
+    # ---- No-Azure fallback ---------------------------------------------------
+    # If you have no Entra app yet, comment out the three Microsoft lines above
+    # and uncomment the next line to log in via the built-in dev login instead.
+    # Authentication__EnableDevLogin: "true"
+
+    # ---- Instance identity (tab title + favicon badge — LocalColimaMac.md §12)
+    Portal__InstanceName: "Local"
+    Portal__InstanceColor: "#f59e0b"
+
+    # ---- Local LLM via host-native Ollama (LocalColimaMac.md §10) ------------
+    OpenAICompatible__Endpoint: "http://ollama:11434/v1"
+    OpenAICompatible__Models__0: "qwen3.6-code"
+
+    # ---- Full logging (verbose) — see header note. Declared here for
+    # visibility; ALSO applied by `memex-local up` via `kubectl set env`
+    # because the chart's ConfigMap is a fixed allow-list. Set to Trace for
+    # maximum verbosity. We never edit committed appsettings*.json.
+    Logging__LogLevel__Default: "Debug"
+
+# ---- Portal Ingress (TLS via ingress-nginx — LocalColimaMac.md §5/§6) -------
+ingress:
+  enabled: true
+  host: "memex.localhost"
+  tlsSecret: "memex-portal-tls"
+
+# ---- External Ollama, fronted by an in-cluster Service (LocalColimaMac.md §10)
+# host = Colima's host-gateway IP (the host where `ollama serve` runs).
+ollama:
+  external:
+    enabled: true
+    host: "192.168.5.2"
+    port: 11434

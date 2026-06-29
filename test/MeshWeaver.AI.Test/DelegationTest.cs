@@ -1,4 +1,4 @@
-#pragma warning disable CS1591 // Missing XML comment for publicly visible type or member
+﻿#pragma warning disable CS1591 // Missing XML comment for publicly visible type or member
 
 using System;
 using System.Collections.Generic;
@@ -7,7 +7,6 @@ using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
-using FluentAssertions;
 using MeshWeaver.AI.Plugins;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
@@ -30,12 +29,15 @@ public class DelegationTest
     /// yielding the final string as a single chunk. Lets tests keep their existing
     /// Task-based delegation logic while the production tool signature is streaming.
     /// </summary>
-    private static async IAsyncEnumerable<string> ToStream(
+    /// <summary>
+    /// Wraps a Task-returning body into an IObservable&lt;string&gt; that emits
+    /// the result once and completes. Matches the new DelegationTool signature
+    /// (IObservable&lt;string&gt;) while letting tests keep Task-based logic.
+    /// </summary>
+    private static IObservable<string> ToStream(
         Func<CancellationToken, Task<string>> body,
-        [EnumeratorCancellation] CancellationToken ct = default)
-    {
-        yield return await body(ct);
-    }
+        CancellationToken ct = default)
+        => MeshWeaver.Mesh.Threading.IoPool.Unbounded.Invoke(_ => body(ct));
 
     #region Fake Chat Client Infrastructure
 
@@ -252,7 +254,7 @@ public class DelegationTest
 
         // Assert: Sessions are isolated (different instances)
         childSession.Should().NotBeSameAs(parentSession,
-            "child session should be isolated from parent — B runs in its own namespace within A's execution");
+            "child session should be isolated from parent â€” B runs in its own namespace within A's execution");
 
         // Assert: Delegation was executed with correct parameters
         capturedAgentName.Should().Be("AgentB");
@@ -269,7 +271,7 @@ public class DelegationTest
 
         responseTexts.Should().NotBeEmpty("parent agent A should produce a response after delegation");
 
-        // The parent's final text should contain B's response (relayed via tool result → summary)
+        // The parent's final text should contain B's response (relayed via tool result â†’ summary)
         var fullResponse = string.Join(" ", responseTexts);
         fullResponse.Should().Contain(AgentBResponseText,
             "A's response should include B's delegation result");

@@ -5,7 +5,6 @@ using System.Linq;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Threading.Tasks;
-using FluentAssertions;
 using MeshWeaver.Domain;
 using MeshWeaver.Fixture;
 using MeshWeaver.Messaging;
@@ -124,7 +123,7 @@ public class VirtualDataSourceTest(ITestOutputHelper output) : HubTestBase(outpu
 
         // Act
         var stream = workspace.GetStream(typeof(ProductSummary));
-        var data = await stream.Take(1).Timeout(TimeSpan.FromSeconds(5));
+        var data = await stream.Should().Within(TimeSpan.FromSeconds(5)).Emit();
 
         // Assert
         var summaries = data.Value!.GetData<ProductSummary>().ToArray();
@@ -145,7 +144,7 @@ public class VirtualDataSourceTest(ITestOutputHelper output) : HubTestBase(outpu
 
         // Act
         var stream = workspace.GetStream(typeof(ProductSummary));
-        var data = await stream.Take(1).Timeout(TimeSpan.FromSeconds(5));
+        var data = await stream.Should().Within(TimeSpan.FromSeconds(5)).Emit();
 
         // Assert
         var summary = data.Value!.GetData<ProductSummary>().First(s => s.ProductId == 1);
@@ -165,7 +164,7 @@ public class VirtualDataSourceTest(ITestOutputHelper output) : HubTestBase(outpu
 
         // Act
         var stream = workspace.GetStream(typeof(ProductSummary));
-        var data = await stream.Take(1).Timeout(TimeSpan.FromSeconds(5));
+        var data = await stream.Should().Within(TimeSpan.FromSeconds(5)).Emit();
 
         // Assert
         var summaries = data.Value!.GetData<ProductSummary>().ToArray();
@@ -192,7 +191,7 @@ public class VirtualDataSourceTest(ITestOutputHelper output) : HubTestBase(outpu
 
         // Act
         var stream = workspace.GetStream(typeof(ProductSummary));
-        var data = await stream.Take(1).Timeout(TimeSpan.FromSeconds(5));
+        var data = await stream.Should().Within(TimeSpan.FromSeconds(5)).Emit();
 
         // Assert
         var summaries = data.Value!.GetData<ProductSummary>().ToArray();
@@ -201,6 +200,6 @@ public class VirtualDataSourceTest(ITestOutputHelper output) : HubTestBase(outpu
         summaries.Select(s => s.ProductId).Should().OnlyHaveUniqueItems();
 
         // Product IDs should match the original products
-        summaries.Select(s => s.ProductId).Should().BeEquivalentTo([1, 2, 3]);
+        summaries.Select(s => s.ProductId).Should().BeEquivalentTo(new[] { 1, 2, 3 }, System.Text.Json.JsonSerializerOptions.Default);
     }
 }

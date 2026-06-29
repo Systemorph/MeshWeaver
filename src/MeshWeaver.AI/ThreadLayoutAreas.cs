@@ -1,4 +1,4 @@
-﻿using System.Collections.Immutable;
+using System.Collections.Immutable;
 using System.Reactive.Linq;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
@@ -7,7 +7,9 @@ using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
+using System.Text.Json;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
@@ -33,11 +35,13 @@ public static class ThreadLayoutAreas
     /// </summary>
     public static MessageHubConfiguration AddThreadLayoutAreas(this MessageHubConfiguration configuration)
         => configuration
-            .WithHandler<ResubmitMessageRequest>(ThreadMessageHandlers.HandleResubmitMessage)
-            .WithHandler<DeleteFromMessageRequest>(ThreadMessageHandlers.HandleDeleteFromMessage)
+            // Legacy ThreadSubmission.ApplyResubmit / ThreadSubmission.ApplyDeleteFromMessage handlers
+            // removed — click actions now call ThreadSubmission.ApplyResubmit /
+            // ApplyDeleteFromMessage directly. See RequestViaStreamUpdate.md.
             .AddDefaultMeshMenu()
             .AddNodeMenuItems("SidePanel", SidePanelMenuProvider)
             .AddNodeMenuItems(DelegationsMenuProvider)
+            .AddNodeMenuItems(ChangesMenuProvider)
             .AddLayout(layout => layout
                 .WithDefaultArea(ThreadNodeType.ThreadArea)
                 .WithView(ThreadNodeType.ThreadArea, ThreadView)
@@ -46,31 +50,51 @@ public static class ThreadLayoutAreas
                 .WithView(ThreadNodeType.StreamingArea, StreamingView)
                 .WithView(ThreadNodeType.HistoryArea, HistoryView)
                 .WithView(ThreadNodeType.HeaderArea, HeaderView)
+                .WithView(ThreadNodeType.ChangesArea, ChangesAreaView)
+                // The thread's own composer selectors — binds Thread.Composer (the composer
+                // copied onto the thread at creation), same wiring as the composer node's area.
+                .WithView(ThreadComposerView.SelectorsArea, ThreadComposerView.ComposerSelectors)
                 .WithView(MeshNodeLayoutAreas.ThumbnailArea, Thumbnail)
                 .WithView(MeshNodeLayoutAreas.ThreadsArea, ThreadsCatalog));
 
     /// <summary>
-    /// Side panel menu items (New Chat, History, Full Screen).
+    /// Side panel menu items (New Chat, History, Full Screen). Static set — emitted once.
     /// </summary>
-    private static async IAsyncEnumerable<NodeMenuItemDefinition> SidePanelMenuProvider(
+    private static IObservable<IReadOnlyCollection<NodeMenuItemDefinition>> SidePanelMenuProvider(
         LayoutAreaHost host, RenderingContext ctx)
-    {
-        await Task.CompletedTask;
-        yield return new("New Chat", "new-chat", Order: 0);
-        yield return new("History", "history", Order: 10);
-        yield return new("Full Screen", "fullscreen", Order: 20);
-    }
+        => Observable.Return<IReadOnlyCollection<NodeMenuItemDefinition>>(
+        [
+            new("New Chat", "new-chat", Order: 0),
+            new("History", "history", Order: 10),
+            new("Full Screen", "fullscreen", Order: 20),
+        ]);
 
     /// <summary>
     /// Main menu item: Delegations (sub-thread history).
     /// </summary>
-    private static async IAsyncEnumerable<NodeMenuItemDefinition> DelegationsMenuProvider(
+    private static IObservable<IReadOnlyCollection<NodeMenuItemDefinition>> DelegationsMenuProvider(
         LayoutAreaHost host, RenderingContext ctx)
     {
-        await Task.CompletedTask;
         var hubPath = host.Hub.Address.ToString();
-        yield return new("Delegations", ThreadNodeType.HistoryArea, Order: 12,
-            Href: MeshNodeLayoutAreas.BuildUrl(hubPath, ThreadNodeType.HistoryArea));
+        return Observable.Return<IReadOnlyCollection<NodeMenuItemDefinition>>(
+        [
+            new("Delegations", ThreadNodeType.HistoryArea, Order: 12,
+                Href: MeshNodeLayoutAreas.BuildUrl(hubPath, ThreadNodeType.HistoryArea)),
+        ]);
+    }
+
+    /// <summary>
+    /// Main menu item: Changes (aggregated node modifications + bulk revert).
+    /// </summary>
+    private static IObservable<IReadOnlyCollection<NodeMenuItemDefinition>> ChangesMenuProvider(
+        LayoutAreaHost host, RenderingContext ctx)
+    {
+        var hubPath = host.Hub.Address.ToString();
+        return Observable.Return<IReadOnlyCollection<NodeMenuItemDefinition>>(
+        [
+            new("Changes", ThreadNodeType.ChangesArea, Order: 13,
+                Href: MeshNodeLayoutAreas.BuildUrl(hubPath, ThreadNodeType.ChangesArea)),
+        ]);
     }
 
     private static string GetContextDisplayName(string path)
@@ -100,7 +124,9 @@ public static class ThreadLayoutAreas
                     .WithIconStart(FluentIcons.Add())
                     .WithNavigateToHref(createUrl)))
             .WithView(Controls.MeshSearch
-                .WithHiddenQuery($"namespace:{hubPath}/{ThreadNodeType.ThreadPartition} nodeType:{ThreadNodeType.NodeType} sort:lastModified-desc")
+                // -content.status:Done hides finished threads from the catalog;
+                // user can type `content.status:Done` in the search box to surface them.
+                .WithHiddenQuery($"namespace:{hubPath}/{ThreadNodeType.ThreadPartition} nodeType:{ThreadNodeType.NodeType} -content.status:Done sort:lastModified-desc")
                 .WithPlaceholder("Search threads...")
                 .WithRenderMode(MeshSearchRenderMode.Flat)
                 .WithMaxColumns(3));
@@ -114,8 +140,14 @@ public static class ThreadLayoutAreas
 
     /// <summary>
     /// Renders the Thread area — the default view for threads.
-    /// Shows the thread title (observable, bound to meshNode.Name) and a
-    /// ThreadChatControl with data-bound Thread content.
+    /// Emits a ThreadChatControl with data-bound Thread content. The hero header
+    /// (context chip, inline-editable title + description, Mark Done) is rendered
+    /// NATIVELY by the Blazor chat view as the first item INSIDE its scrollable
+    /// message area (gated by <c>WithShowFullHeader()</c>) so it scrolls away with
+    /// the conversation — the title/description bind directly to the data-bound
+    /// <see cref="ThreadViewModel.Name"/> / <see cref="ThreadViewModel.Description"/>
+    /// and write back through the node stream. Hence <c>WithShowFullHeader()</c>
+    /// rather than a sibling header above the chat.
     ///
     /// IMPORTANT: The ThreadChatControl is emitted ONCE. Thread content is pushed
     /// separately via host.UpdateData() and data-bound on the control to avoid
@@ -125,76 +157,56 @@ public static class ThreadLayoutAreas
     {
         var hubPath = host.Hub.Address.ToString();
 
-        // Node stream — drives the observable title and chat control context
-        var stream = host.Workspace.GetStream<MeshNode>();
-
-        // Push ThreadViewModel to data section — contains all thread state for the Blazor view.
-        var vmStream = stream!.Select(nodes =>
-        {
-            var node = nodes!.First(n => n.Path == hubPath);
-            var threadContent = node?.Content as MeshThread;
-            var contextPath = node?.MainNode != node?.Path ? node?.MainNode : hubPath;
-            var contextDisplayName = node?.MainNode != node?.Path
-                ? GetContextDisplayName(node!.MainNode) : GetThreadTitle(node);
-            return new ThreadViewModel
-            {
-                Messages = threadContent?.Messages ?? [],
-                ThreadPath = hubPath,
-                InitialContext = contextPath,
-                InitialContextDisplayName = contextDisplayName,
-                IsExecuting = threadContent?.IsExecuting ?? false,
-                ExecutionStatus = threadContent?.ExecutionStatus,
-                StreamingText = threadContent?.StreamingText,
-                StreamingToolCalls = threadContent?.StreamingToolCalls,
-                TokensUsed = threadContent?.TokensUsed ?? 0,
-                ExecutionStartedAt = threadContent?.ExecutionStartedAt,
-            };
-        });
+        // OWN MeshNode stream — push ThreadViewModel to data section; contains all
+        // thread state for the Blazor view.
+        var vmStream = host.Workspace.GetMeshNodeStream().Select(node => BuildThreadViewModel(node, hubPath, host.Hub.JsonSerializerOptions));
         host.RegisterForDisposal(vmStream.DistinctUntilChanged().Subscribe(vm => host.UpdateData(ThreadDataKey, vm)));
-
-        // Push title to data section — data-bound, no observable control rebuild
-        var titleStream = stream!.Select(nodes =>
-        {
-            var node = nodes!.First(n => n.Path == hubPath);
-            return GetThreadTitle(node);
-        }).DistinctUntilChanged();
-        host.RegisterForDisposal(titleStream.Subscribe(title => host.UpdateData("title", title)));
-
-        // Push context link HTML to data section
-        host.RegisterForDisposal(vmStream.DistinctUntilChanged().Subscribe(vm =>
-        {
-            if (!string.IsNullOrEmpty(vm.InitialContext))
-            {
-                var displayName = System.Web.HttpUtility.HtmlEncode(vm.InitialContextDisplayName ?? vm.InitialContext);
-                host.UpdateData("contextLink",
-                    $"<a href=\"/{vm.InitialContext}\" style=\"font-size: 0.85rem; color: var(--accent-fill-rest); " +
-                    $"text-decoration: none; display: inline-flex; align-items: center; gap: 4px;\">" +
-                    $"<span style=\"font-size: 12px;\">&larr;</span> {displayName}</a>");
-            }
-        }));
-
-        // Header: chat icon + context link + h1 title (hidden in side panel via CSS)
-        var header = Controls.Stack
-            .WithClass("thread-full-header")
-            .WithWidth("100%")
-            .WithStyle("padding: 16px 24px 24px 24px; margin-bottom: 24px; border-bottom: 1px solid var(--neutral-stroke-rest);")
-            .WithView(Controls.Html(new JsonPointerReference(LayoutAreaReference.GetDataPointer("contextLink"))))
-            .WithView(Controls.Stack
-                .WithOrientation(Orientation.Horizontal)
-                .WithStyle("align-items: center; gap: 16px;")
-                .WithView(Controls.Html(
-                    "<img src=\"/static/NodeTypeIcons/chat.svg\" alt=\"\" style=\"width: 48px; height: 48px; border-radius: 8px; object-fit: contain;\" />"))
-                .WithView(Controls.Html(new JsonPointerReference(LayoutAreaReference.GetDataPointer("title")))
-                    .WithStyle("margin: 0; font-size: 2rem; font-weight: bold;")));
 
         // Static container — never rebuilt
         return Controls.Stack
             .WithWidth("100%")
             .WithStyle("flex: 1; min-height: 0; display: flex; flex-direction: column;")
-            .WithView(header)
             .WithView(new ThreadChatControl()
                 .WithThreadViewModel(new JsonPointerReference(LayoutAreaReference.GetDataPointer(ThreadDataKey)))
+                .WithShowFullHeader()
                 .WithStyle("flex: 1; min-height: 0; overflow: hidden;"));
+    }
+
+    /// <summary>
+    /// Builds the <see cref="ThreadViewModel"/> snapshot pushed to the data section
+    /// from the thread's own MeshNode. Shared by <see cref="ThreadView"/> and
+    /// <see cref="ThreadChatView"/> (the latter in its <c>WithShowFullHeader()</c> mode).
+    /// </summary>
+    internal static ThreadViewModel BuildThreadViewModel(MeshNode? node, string hubPath, JsonSerializerOptions options)
+    {
+        // 🚨 ContentAs (DESERIALIZE), never `as MeshThread`. The node stream alternates between the
+        // typed MeshThread (the owning hub's own write) and a JsonElement (the cache / cross-hub-sync
+        // / change-feed representation — "content is normally a JsonElement"). `as MeshThread` is NULL
+        // for the JsonElement form, so this produced a DEFAULT viewmodel that ALTERNATED with the real
+        // one → vmStream.DistinctUntilChanged never deduped → UpdateData fired on every emission → the
+        // 931× FullHeader render storm that saturated the circuit and vanished the chat. Deserializing
+        // yields the SAME viewmodel for both representations, so the dedup actually fires.
+        var threadContent = node.ContentAs<MeshThread>(options);
+        var contextPath = node?.MainNode != node?.Path ? node?.MainNode : hubPath;
+        var contextDisplayName = node?.MainNode != node?.Path
+            ? GetContextDisplayName(node!.MainNode) : GetThreadTitle(node);
+        return new ThreadViewModel
+        {
+            Messages = threadContent?.Messages ?? [],
+            ThreadPath = hubPath,
+            Name = node?.Name,
+            Description = node?.Description,
+            InitialContext = contextPath,
+            InitialContextDisplayName = contextDisplayName,
+            IsExecuting = threadContent?.IsExecuting ?? false,
+            IsDone = threadContent?.Status == ThreadExecutionStatus.Done,
+            ExecutionStatus = threadContent?.ExecutionStatus,
+            StreamingText = threadContent?.StreamingText,
+            StreamingToolCalls = threadContent?.StreamingToolCalls,
+            PendingMessageTexts = ExtractPendingTexts(threadContent),
+            ExecutionStartedAt = threadContent?.ExecutionStartedAt,
+            CreatedBy = node?.CreatedBy,
+        };
     }
 
     /// <summary>
@@ -205,37 +217,15 @@ public static class ThreadLayoutAreas
     public static UiControl? ThreadChatView(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
-        var stream = host.Workspace.GetStream<MeshNode>();
+        var ownNodeStream = host.Workspace.GetMeshNodeStream();
 
-        var vmStream = stream!.Select(nodes =>
-        {
-            var node = nodes!.First(n => n.Path == hubPath);
-            var threadContent = node?.Content as MeshThread;
-            var contextPath = node?.MainNode != node?.Path ? node?.MainNode : hubPath;
-            var contextDisplayName = node?.MainNode != node?.Path
-                ? GetContextDisplayName(node!.MainNode) : GetThreadTitle(node);
-            return new ThreadViewModel
-            {
-                Messages = threadContent?.Messages ?? [],
-                ThreadPath = hubPath,
-                InitialContext = contextPath,
-                InitialContextDisplayName = contextDisplayName,
-                IsExecuting = threadContent?.IsExecuting ?? false,
-                ExecutionStatus = threadContent?.ExecutionStatus,
-                StreamingText = threadContent?.StreamingText,
-                StreamingToolCalls = threadContent?.StreamingToolCalls,
-                TokensUsed = threadContent?.TokensUsed ?? 0,
-                ExecutionStartedAt = threadContent?.ExecutionStartedAt,
-            };
-        });
+        var vmStream = ownNodeStream.Select(node => BuildThreadViewModel(node, hubPath, host.Hub.JsonSerializerOptions));
         host.RegisterForDisposal(vmStream.DistinctUntilChanged().Subscribe(vm => host.UpdateData(ThreadDataKey, vm)));
 
-        // Push title to data section so the side panel header can read it
-        var titleStream = stream!.Select(nodes =>
-        {
-            var node = nodes!.First(n => n.Path == hubPath);
-            return GetThreadTitle(node);
-        }).DistinctUntilChanged();
+        // Push title to data section so the side panel header can read it.
+        var titleStream = ownNodeStream
+            .Select(GetThreadTitle)
+            .DistinctUntilChanged();
         host.RegisterForDisposal(titleStream.Subscribe(title => host.UpdateData("title", title)));
 
         return new ThreadChatControl()
@@ -252,13 +242,10 @@ public static class ThreadLayoutAreas
     public static IObservable<UiControl?> ThreadProgressView(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
-        var stream = host.Workspace.GetStream<MeshNode>();
-
-        return stream!
-            .Select(nodes =>
+        return host.Workspace.GetMeshNodeStream()
+            .Select(node =>
             {
-                var node = nodes!.FirstOrDefault(n => n.Path == hubPath);
-                var thread = node?.Content as MeshThread;
+                var thread = node.ContentAs<MeshThread>(host.Hub.JsonSerializerOptions);
                 if (thread == null) return (UiControl?)null;
 
                 // Find which message to show
@@ -286,22 +273,29 @@ public static class ThreadLayoutAreas
     public static IObservable<UiControl?> StreamingView(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
-        var stream = host.Workspace.GetStream<MeshNode>();
+        var logger = host.Hub.ServiceProvider.GetService<ILoggerFactory>()
+            ?.CreateLogger("MeshWeaver.AI.StreamingView");
+        logger?.LogDebug("[StreamingView] SUBSCRIBE hub={Hub}", hubPath);
 
-        return stream!
-            .Select(nodes =>
+        return host.Workspace.GetMeshNodeStream()
+            .Select(node =>
             {
-                var node = nodes!.FirstOrDefault(n => n.Path == hubPath);
-                var thread = node?.Content as MeshThread;
+                var thread = node.ContentAs<MeshThread>(host.Hub.JsonSerializerOptions);
                 return (IsExecuting: thread?.IsExecuting ?? false, thread?.ActiveMessageId);
             })
             .DistinctUntilChanged()
             .Select(state =>
             {
                 if (!state.IsExecuting || string.IsNullOrEmpty(state.ActiveMessageId))
+                {
+                    logger?.LogDebug("[StreamingView] EMIT_NULL hub={Hub} isExec={IsExec} activeMsg={Msg}",
+                        hubPath, state.IsExecuting, state.ActiveMessageId);
                     return (UiControl?)null;
+                }
 
                 var responsePath = $"{hubPath}/{state.ActiveMessageId}";
+                logger?.LogDebug("[StreamingView] EMIT_CONTROL hub={Hub} responsePath={Path}",
+                    hubPath, responsePath);
                 return (UiControl?)new LayoutAreaControl(responsePath,
                     new LayoutAreaReference(ThreadMessageNodeType.OverviewArea));
             });
@@ -320,28 +314,15 @@ public static class ThreadLayoutAreas
             return Observable.Return<UiControl?>(Controls.Html("<p style=\"color: var(--neutral-foreground-hint);\">Query service not available.</p>"));
         }
 
-        // Get the node from the workspace stream
-        var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
-            ?? Observable.Return<MeshNode[]>(Array.Empty<MeshNode>());
+        // Live observable of child Thread nodes (delegations) — auto-updates on add/remove.
+        var childrenStream = meshQuery.Query<MeshNode>(
+                MeshQueryRequest.FromQuery($"namespace:{hubPath} nodeType:{ThreadNodeType.NodeType}"))
+            .Select(change => (IReadOnlyList<MeshNode>)change.Items)
+            .Catch<IReadOnlyList<MeshNode>, Exception>(_ => Observable.Return((IReadOnlyList<MeshNode>)Array.Empty<MeshNode>()));
 
-        // Query for child Thread nodes (delegations)
-        var childrenStream = Observable.FromAsync(async () =>
-        {
-            try
-            {
-                return await meshQuery.QueryAsync<MeshNode>($"namespace:{hubPath} nodeType:{ThreadNodeType.NodeType}").ToListAsync() as IReadOnlyList<MeshNode>;
-            }
-            catch
-            {
-                return Array.Empty<MeshNode>() as IReadOnlyList<MeshNode>;
-            }
-        });
-
-        return nodeStream.CombineLatest(childrenStream, (nodes, children) =>
-        {
-            var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-            return BuildHistoryView(host, node, hubPath, children ?? Array.Empty<MeshNode>());
-        });
+        return host.Workspace.GetMeshNodeStream()
+            .CombineLatest(childrenStream, (node, children) =>
+                BuildHistoryView(host, node, hubPath, children ?? Array.Empty<MeshNode>()));
     }
 
     private static UiControl BuildHistoryView(LayoutAreaHost _, MeshNode? node, string threadPath, IReadOnlyList<MeshNode> delegations)
@@ -411,67 +392,47 @@ public static class ThreadLayoutAreas
 
     /// <summary>
     /// Renders a compact thumbnail for thread nodes in catalogs.
-    /// Shows title, last activity time, and message preview.
-    /// Queries child ThreadMessage nodes for message count and preview.
+    /// Shows title, last activity, and message count synchronously from the
+    /// thread node alone — does NOT subscribe to any cell streams. The text
+    /// preview is delegated to a <see cref="LayoutAreaControl"/> pointing at
+    /// the last cell's "Streaming" area, so the cell hub streams its own
+    /// few-lines preview lazily on the Blazor side. Catalog rendering with N
+    /// threads no longer pays N × M cell-load round-trips.
     /// </summary>
     public static IObservable<UiControl?> Thumbnail(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
-        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshService>();
-
-        var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
-            ?? Observable.Return<MeshNode[]>(Array.Empty<MeshNode>());
-
-        // Query for child ThreadMessage nodes
-        var messagesStream = Observable.FromAsync(async () =>
-        {
-            if (meshQuery == null)
-                return Array.Empty<MeshNode>() as IReadOnlyList<MeshNode>;
-
-            try
-            {
-                return await meshQuery.QueryAsync<MeshNode>(
-                    $"namespace:{hubPath} nodeType:{ThreadMessageNodeType.NodeType} sort:Timestamp-asc"
-                ).ToListAsync() as IReadOnlyList<MeshNode>;
-            }
-            catch
-            {
-                return Array.Empty<MeshNode>() as IReadOnlyList<MeshNode>;
-            }
-        });
-
-        return nodeStream.CombineLatest(messagesStream, (nodes, messageNodes) =>
-        {
-            var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-            return BuildThumbnail(node, hubPath, messageNodes ?? Array.Empty<MeshNode>());
-        });
+        return host.Workspace.GetMeshNodeStream()
+            .Select(node => BuildThumbnail(node, hubPath, host.Hub.JsonSerializerOptions));
     }
 
-    private static UiControl BuildThumbnail(MeshNode? node, string hubPath, IReadOnlyList<MeshNode> messageNodes)
+    private static UiControl BuildThumbnail(MeshNode? node, string hubPath, JsonSerializerOptions options)
     {
-        var content = node?.Content as MeshThread;
+        var thread = node.ContentAs<MeshThread>(options);
+        var cellIds = thread?.Messages ?? ImmutableList<string>.Empty;
         var title = node?.Name ?? "Thread";
         var lastActivity = node?.LastModified.ToString("g") ?? "";
 
-        // Extract messages from child nodes
-        var messages = messageNodes
-            .Select(n => n.Content as ThreadMessage)
-            .Where(m => m != null && m.Type != ThreadMessageType.EditingPrompt)
-            .OrderBy(m => m!.Timestamp)
-            .ToList();
+        // Preview is a lazy embedded layout area pointing at the last cell's
+        // compact Streaming view (last 3 lines + tool-call chips). The cell
+        // hub only activates when the catalog tile becomes visible. When the
+        // thread has no cells, fall back to a static "No messages yet" line.
+        UiControl previewView = cellIds.Count > 0
+            ? new LayoutAreaControl(
+                    $"{hubPath}/{cellIds[^1]}",
+                    new LayoutAreaReference("Streaming"))
+                .WithSpinnerType(SpinnerType.Skeleton)
+                .WithStyle("margin: 8px 0 0 0; max-height: 60px; overflow: hidden;")
+            : Controls.Html(
+                "<p style=\"margin: 8px 0 0 0; font-size: 0.9rem; " +
+                "color: var(--neutral-foreground-hint);\">No messages yet.</p>");
 
-        // Fall back to legacy inline messages
-        var messageCount = messages.Count;
-
-        // Get preview from last message
-        var preview = "";
-        var lastMessage = messages.LastOrDefault();
-        if (lastMessage != null)
+        var countLabel = cellIds.Count switch
         {
-            preview = lastMessage.Text.Length > 60
-                ? lastMessage.Text[..57] + "..."
-                : lastMessage.Text;
-        }
+            0 => "",
+            1 => "1 message",
+            _ => $"{cellIds.Count} messages"
+        };
 
         return Controls.Stack
             .WithStyle("padding: 16px; background: var(--neutral-layer-card-container); border: 1px solid var(--neutral-stroke-rest); border-radius: 8px;")
@@ -481,13 +442,14 @@ public static class ThreadLayoutAreas
                 .WithView(Controls.Icon(FluentIcons.Chat(IconSize.Size24)).WithStyle("color: var(--accent-fill-rest);"))
                 .WithView(Controls.Stack
                     .WithView(Controls.Html($"<strong style=\"display: block;\">{System.Web.HttpUtility.HtmlEncode(title)}</strong>"))
-                    .WithView(Controls.Html($"<span style=\"font-size: 0.85rem; color: var(--neutral-foreground-hint);\">{lastActivity}</span>"))))
-            .WithView(!string.IsNullOrEmpty(preview)
-                ? Controls.Html($"<p style=\"margin: 8px 0 0 0; font-size: 0.9rem; color: var(--neutral-foreground-hint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;\">{System.Web.HttpUtility.HtmlEncode(preview)}</p>")
-                : Controls.Html($"<p style=\"margin: 8px 0 0 0; font-size: 0.9rem; color: var(--neutral-foreground-hint);\">{messageCount} messages</p>"))
+                    .WithView(Controls.Html(
+                        $"<span style=\"font-size: 0.85rem; color: var(--neutral-foreground-hint);\">" +
+                        $"{lastActivity}" +
+                        (string.IsNullOrEmpty(countLabel) ? "" : $" &middot; {countLabel}") +
+                        "</span>"))))
+            .WithView(previewView)
             .WithView(new NavLinkControl("", null, $"/{hubPath}/{ThreadNodeType.ThreadArea}"));
     }
-
 
     /// <summary>
     /// Gets the thread title from node name or falls back to default.
@@ -514,7 +476,8 @@ public static class ThreadLayoutAreas
     {
         var nodePath = host.Hub.Address.ToString();
         return Controls.MeshSearch
-            .WithHiddenQuery($"nodeType:Thread namespace:{nodePath}/{ThreadNodeType.ThreadPartition}")
+            // -content.status:Done hides finished threads from the node-scoped Threads view.
+            .WithHiddenQuery($"nodeType:Thread namespace:{nodePath}/{ThreadNodeType.ThreadPartition} -content.status:Done")
             .WithNamespace(nodePath)
             .WithRenderMode(MeshSearchRenderMode.Flat)
             .WithCreateNodeType("Thread");
@@ -545,7 +508,7 @@ public static class ThreadLayoutAreas
         var initial = Observable.Return<UiControl?>(BuildHeader(parentLink, ImmutableList<NodeChangeEntry>.Empty, threadPath));
 
         var aggregated = stream
-            .Select(change => (change.Value?.Content as MeshThread)?.Messages ?? ImmutableList<string>.Empty)
+            .Select(change => (change.Value.ContentAs<MeshThread>(host.Hub.JsonSerializerOptions))?.Messages ?? ImmutableList<string>.Empty)
             .Where(ids => ids.Count > 0)
             .Select(ids => (ids, key: string.Join("|", ids)))
             .DistinctUntilChanged(p => p.key)
@@ -554,6 +517,95 @@ public static class ThreadLayoutAreas
             .Select(updates => BuildHeader(parentLink, updates, threadPath));
 
         return initial.Concat(aggregated);
+    }
+
+    /// <summary>
+    /// Full-page Changes view. Reuses the header's <see cref="CollectUpdatedNodes"/>
+    /// aggregation + <see cref="BuildModifiedNodesHtml"/> grid, plus a
+    /// "Revert All" bulk action that posts one
+    /// <c>RollbackNodeRequest</c> per entry sequentially (order-sensitive to
+    /// avoid parent-deleted-before-child issues).
+    /// </summary>
+    public static IObservable<UiControl?> ChangesAreaView(LayoutAreaHost host, RenderingContext _)
+    {
+        var threadPath = host.Hub.Address.ToString();
+        var stream = host.Workspace.GetStream(new MeshNodeReference());
+        if (stream is null)
+            return Observable.Return<UiControl?>(BuildChangesEmpty());
+
+        var aggregated = stream
+            .Select(change => (change.Value.ContentAs<MeshThread>(host.Hub.JsonSerializerOptions))?.Messages ?? ImmutableList<string>.Empty)
+            .DistinctUntilChanged(ids => string.Join("|", ids))
+            .Select(ids => ids.IsEmpty
+                ? Observable.Return(ImmutableList<NodeChangeEntry>.Empty)
+                : CollectUpdatedNodes(host.Hub, threadPath, ids))
+            .Switch();
+
+        return aggregated.Select(updates => BuildChangesPage(host.Hub, threadPath, updates));
+    }
+
+    private static UiControl BuildChangesEmpty()
+        => Controls.Html(
+            "<div style=\"padding:24px; color:var(--neutral-foreground-hint); text-align:center;\">" +
+            "<p style=\"margin:0;\">No node changes recorded for this thread.</p></div>");
+
+    private static UiControl BuildChangesPage(
+        IMessageHub hub, string threadPath, ImmutableList<NodeChangeEntry> updates)
+    {
+        var container = Controls.Stack
+            .WithWidth("100%")
+            .WithStyle("padding:24px; gap:16px;");
+
+        // Header row: title + count + Revert All button.
+        var headerStyle = "display:flex; align-items:center; gap:12px;";
+        var titleHtml =
+            "<h2 style=\"margin:0; font-size:1.5rem; font-weight:600;\">Changes</h2>" +
+            $"<span style=\"color:var(--neutral-foreground-hint); font-size:0.9rem;\">" +
+            $"{updates.Count} node{(updates.Count == 1 ? "" : "s")} modified</span>";
+
+        var headerRow = Controls.Stack
+            .WithOrientation(Orientation.Horizontal)
+            .WithStyle(headerStyle)
+            .WithView(Controls.Html(
+                $"<div style=\"display:flex; align-items:center; gap:12px; flex:1;\">{titleHtml}</div>"));
+
+        // Revert All button — only enabled when there's something to revert.
+        var revertable = updates.Where(e => e.VersionBefore.HasValue).ToImmutableList();
+        if (revertable.Count > 0)
+        {
+            headerRow = headerRow.WithView(Controls.Button($"Revert all ({revertable.Count})")
+                .WithAppearance(Appearance.Neutral)
+                .WithIconStart(FluentIcons.ArrowUndo(IconSize.Size16))
+                .WithClickAction(_ => RevertAllChanges(hub, revertable)));
+        }
+        container = container.WithView(headerRow);
+
+        if (updates.IsEmpty)
+        {
+            container = container.WithView(BuildChangesEmpty());
+            return container;
+        }
+
+        // Reuse the same git-like grid as the header summary — single source of truth
+        // for path / version chips / Diff / per-row Restore links.
+        container = container.WithView(Controls.Html(BuildModifiedNodesHtml(updates, threadPath)));
+        return container;
+    }
+
+    /// <summary>
+    /// Posts <see cref="RollbackNodeRequest"/> for every entry with a
+    /// <see cref="NodeChangeEntry.VersionBefore"/>, in sequence. Sequential
+    /// (not parallel) so dependent ordering (parent-before-child for creates,
+    /// child-before-parent for deletes) stays predictable. Fire-and-forget per
+    /// request; failures are independent.
+    /// </summary>
+    private static void RevertAllChanges(IMessageHub hub, ImmutableList<NodeChangeEntry> entries)
+    {
+        foreach (var entry in entries)
+        {
+            if (!entry.VersionBefore.HasValue) continue;
+            hub.Post(new RollbackNodeRequest(entry.Path, entry.VersionBefore.Value));
+        }
     }
 
     /// <summary>
@@ -578,15 +630,21 @@ public static class ThreadLayoutAreas
             }
             else
             {
-                hub.RegisterCallback((IMessageDelivery)del, resp =>
-                {
-                    var msg = resp is IMessageDelivery<GetDataResponse> gdr
-                        ? (gdr.Message.Data as MeshNode)?.Content as ThreadMessage
-                        : null;
-                    subject.OnNext(msg?.UpdatedNodes ?? ImmutableList<NodeChangeEntry>.Empty);
-                    subject.OnCompleted();
-                    return resp;
-                });
+                hub.Observe((IMessageDelivery)del)
+                    .Subscribe(
+                        resp =>
+                        {
+                            var msg = resp.Message is GetDataResponse gdr
+                                ? (gdr.Data as MeshNode)?.ContentAs<ThreadMessage>(hub.JsonSerializerOptions)
+                                : null;
+                            subject.OnNext(msg?.UpdatedNodes ?? ImmutableList<NodeChangeEntry>.Empty);
+                            subject.OnCompleted();
+                        },
+                        _ =>
+                        {
+                            subject.OnNext(ImmutableList<NodeChangeEntry>.Empty);
+                            subject.OnCompleted();
+                        });
             }
             return subject.AsObservable();
         }).ToList();
@@ -815,5 +873,32 @@ public static class ThreadLayoutAreas
         sb.Append("</div>");
         sb.Append("</details>");
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// Reads the still-pending user-message texts from <paramref name="thread"/>.
+    /// Pending = id is in <see cref="Thread.UserMessageIds"/> AND in
+    /// <see cref="Thread.PendingUserMessages"/>. The <c>check_inbox</c> tool
+    /// drains this queue mid-stream — once drained, the texts disappear from
+    /// this list (they remain visible as user cells in the conversation).
+    /// </summary>
+    internal static IReadOnlyList<string> ExtractPendingTexts(MeshThread? thread)
+    {
+        if (thread is null || thread.PendingUserMessages.IsEmpty)
+            return Array.Empty<string>();
+
+        var result = new List<string>(thread.PendingUserMessages.Count);
+        foreach (var id in thread.UserMessageIds)
+        {
+            if (thread.PendingUserMessages.TryGetValue(id, out var msg))
+                result.Add(msg.Text);
+        }
+        // Catch any pending entries not in UserMessageIds (defensive — shouldn't
+        // happen via the normal AppendUserInput path, but don't silently drop).
+        foreach (var (id, msg) in thread.PendingUserMessages)
+            if (!thread.UserMessageIds.Contains(id))
+                result.Add(msg.Text);
+
+        return result;
     }
 }

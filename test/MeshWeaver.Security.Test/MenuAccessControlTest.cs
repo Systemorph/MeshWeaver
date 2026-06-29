@@ -1,11 +1,10 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
-using FluentAssertions;
-using FluentAssertions.Extensions;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
@@ -20,11 +19,22 @@ using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
+using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Security.Test;
 
 /// <summary>
 /// Tests that menu items are filtered server-side by the provider/permission system.
 /// Renders a layout area for the target node and reads MenuControl from the $Menu slot.
+/// <para>
+/// 🚨 The menu is <b>reactive</b> (see <see cref="NodeMenuItemsExtensions"/>): the renderer seeds
+/// each provider with <c>StartWith(empty)</c> and re-emits the merged <see cref="MenuControl"/>
+/// whenever the viewer's effective permissions enrich (a runtime <c>AccessAssignment</c> only
+/// reaches the menu on the <c>enriched</c> permission stream — after the synced query catches up).
+/// So a test must NOT grab the first non-null menu (that's the empty/pre-propagation render) — it
+/// waits on the stream until the menu reaches the expected state via <c>.Where(predicate)</c>. A
+/// timeout (never a wrong snapshot) is the failure signal. This is the fix for the old
+/// <c>Menu_Editor_ShowsCreateItems</c> flake, which raced role propagation.
+/// </para>
 /// </summary>
 public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
@@ -47,7 +57,7 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
     /// <summary>
     /// Creates a client hub with an AccessContext for the test user.
     /// The AccessContext flows through the message delivery pipeline to the node hub,
-    /// enabling server-side permission checks via ISecurityService.
+    /// enabling server-side permission checks via SecurityService.
     /// </summary>
     private IMessageHub GetClientWithUser(string userId = TestUserId)
     {
@@ -57,37 +67,53 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
         return client;
     }
 
-    private async Task<IReadOnlyList<NodeMenuItemDefinition>> FetchMenuItemsAsync(
+    /// <summary>
+    /// Live stream of a single menu context's items, projected from the node's Overview layout
+    /// stream. Re-emits on every menu re-render (e.g. when permissions enrich).
+    /// </summary>
+    private static IObservable<IReadOnlyList<NodeMenuItemDefinition>> MenuStream(
         IMessageHub client, Address nodeAddress, string menuContext)
     {
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference(MeshNodeLayoutAreas.OverviewArea);
-
-        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
-            nodeAddress,
-            reference);
-
-        // Read the $Menu:{context} control from the layout stream
-        var menuControl = await stream.GetControlStream(MenuControl.GetMenuArea(menuContext))
-            .Timeout(10.Seconds())
-            .FirstAsync(x => x != null);
-
-        var menu = menuControl.Should().BeOfType<MenuControl>().Which;
-        return menu.Items;
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(nodeAddress, reference);
+        return stream.GetControlStream(MenuControl.GetMenuArea(menuContext))
+            .Where(x => x is MenuControl)
+            .Select(x => (IReadOnlyList<NodeMenuItemDefinition>)((MenuControl)x!).Items);
     }
 
     /// <summary>
-    /// Fetches both Node and Mesh menus in parallel and returns their items merged and sorted by Order.
-    /// Running in parallel keeps total elapsed time inside the per-fetch timeout budget.
+    /// Waits until a single context's menu satisfies <paramref name="until"/>, then returns it.
+    /// Times out (failing the test) if the menu never reaches the expected state — that's the
+    /// signal a permission never propagated, not a wrong snapshot grabbed too early.
     /// </summary>
-    private async Task<IReadOnlyList<NodeMenuItemDefinition>> FetchAllMenuItemsAsync(
-        IMessageHub client, Address nodeAddress)
+    private async Task<IReadOnlyList<NodeMenuItemDefinition>> FetchMenuItems(
+        IMessageHub client, Address nodeAddress, string menuContext,
+        Func<IReadOnlyList<NodeMenuItemDefinition>, bool> until)
+        => await MenuStream(client, nodeAddress, menuContext)
+            .Should().Within(20.Seconds()).Match(until);
+
+    /// <summary>
+    /// Combines the Node and Mesh menu streams and waits until their merged, flattened, sorted set
+    /// satisfies <paramref name="until"/>. <c>StartWith([])</c> on each so the merge fires before
+    /// both contexts have rendered.
+    /// </summary>
+    private async Task<IReadOnlyList<NodeMenuItemDefinition>> FetchAllMenuItems(
+        IMessageHub client, Address nodeAddress,
+        Func<IReadOnlyList<NodeMenuItemDefinition>, bool> until)
     {
-        var nodeTask = FetchMenuItemsAsync(client, nodeAddress, NodeMenuItemsExtensions.NodeMenuContext);
-        var meshTask = FetchMenuItemsAsync(client, nodeAddress, NodeMenuItemsExtensions.MeshMenuContext);
-        await Task.WhenAll(nodeTask, meshTask);
-        return FlattenMenuItems([.. nodeTask.Result, .. meshTask.Result]);
+        var node = MenuStream(client, nodeAddress, NodeMenuItemsExtensions.NodeMenuContext)
+            .StartWith((IReadOnlyList<NodeMenuItemDefinition>)[]);
+        var mesh = MenuStream(client, nodeAddress, NodeMenuItemsExtensions.MeshMenuContext)
+            .StartWith((IReadOnlyList<NodeMenuItemDefinition>)[]);
+        return await node
+            .CombineLatest(mesh, (n, m) => FlattenMenuItems([.. n, .. m]))
+            .Should().Within(20.Seconds()).Match(until);
     }
+
+    /// <summary>Predicate: the menu's label set equals <paramref name="expected"/> exactly.</summary>
+    private static Func<IReadOnlyList<NodeMenuItemDefinition>, bool> LabelsAre(params string[] expected)
+        => items => items.Select(i => i.Label).ToHashSet().SetEquals(expected);
 
     /// <summary>
     /// Flattens menu items by expanding group items into their children, sorted by Order.
@@ -115,15 +141,16 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
         var client = GetClientWithUser();
         var nodeAddress = new Address(NodePath);
 
-        using var pingCts = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
-        pingCts.CancelAfter(15.Seconds());
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(nodeAddress),
-            pingCts.Token);
+        await client.Observe(new PingRequest(), o => o.WithTarget(nodeAddress)).Should().Within(15.Seconds()).Emit();
 
-        var act = () => FetchAllMenuItemsAsync(client, nodeAddress);
-        var ex = await Assert.ThrowsAsync<DeliveryFailureException>(act);
+        // Subscribe to the RAW menu stream (no StartWith seed) so the denied SubscribeRequest
+        // surfaces as an error instead of being masked by a seeded empty emission. The positive
+        // tests seed StartWith([]) to wait for population; the negative test must not.
+        Func<Task> act = () => MenuStream(client, nodeAddress, NodeMenuItemsExtensions.NodeMenuContext)
+            .FirstAsync()
+            .Timeout(15.Seconds())
+            .ToTask();
+        var ex = (await act.Should().ThrowAsync<DeliveryFailureException>()).Which;
         ex.Message.Should().Contain("Access denied",
             "user with no roles should be denied Read access on the hub");
     }
@@ -132,111 +159,105 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
     public async Task Menu_ReadOnlyUser_ShowsOnlyUnrestrictedItems()
     {
         // Viewer role: Read only → no Create, Update, or Delete
-        var svc = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
-        await svc.AddUserRoleAsync(TestUserId, "Viewer", NodePath, "system",
-            TestContext.Current.CancellationToken);
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        await meshService.CreateNode(AssignmentNodeFactory.UserRole(TestUserId, "Viewer", NodePath))
+            .Should().Emit();
 
         var client = GetClientWithUser();
         var nodeAddress = new Address(NodePath);
 
-        using var pingCts = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
-        pingCts.CancelAfter(15.Seconds());
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(nodeAddress),
-            pingCts.Token);
+        await client.Observe(new PingRequest(), o => o.WithTarget(nodeAddress)).Should().Within(15.Seconds()).Emit();
 
-        var items = await FetchAllMenuItemsAsync(client, nodeAddress);
+        // Wait until the reactive menu settles on exactly the Viewer set.
+        var items = await FetchAllMenuItems(client, nodeAddress,
+            LabelsAre("Files", "Versions", "Pin"));
 
         Output.WriteLine($"Menu items for Viewer: {items.Count}");
         foreach (var item in items)
             Output.WriteLine($"  {item.Label} (Area={item.Area})");
 
         items.Select(i => i.Label).Should().BeEquivalentTo(
-            ["Files", "Threads", "Versions", "Pin"],
-            "Viewer has only Read — no Create, Update, Delete, or Export items (Pin requires no permission; Settings is a dedicated header button)");
+            new[] { "Files", "Versions", "Pin" },
+            JsonSerializerOptions.Default,
+            because: "Viewer has only Read — no Create, Update, Delete, or Export items (Pin requires no permission; Settings is a dedicated header button; Threads moved to the AI menu slot)");
     }
 
     [Fact(Timeout = 30000)]
     public async Task Menu_Editor_ShowsCreateItems()
     {
         // Editor role: Read|Create|Update|Comment → has Create but not Delete
-        var svc = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
-        await svc.AddUserRoleAsync(TestUserId, "Editor", NodePath, "system",
-            TestContext.Current.CancellationToken);
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        await meshService.CreateNode(AssignmentNodeFactory.UserRole(TestUserId, "Editor", NodePath)).Should().Emit();
 
         var client = GetClientWithUser();
         var nodeAddress = new Address(NodePath);
 
-        using var pingCts = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
-        pingCts.CancelAfter(15.Seconds());
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(nodeAddress),
-            pingCts.Token);
+        await client.Observe(new PingRequest(), o => o.WithTarget(nodeAddress)).Should().Within(15.Seconds()).Emit();
 
-        var items = await FetchAllMenuItemsAsync(client, nodeAddress);
+        // Editor gets Edit, Create, Copy, Import, Export, Recycle (Update), Pin (None), plus
+        // always-visible items. Wait until the reactive menu reaches exactly that set — this is the
+        // fix for the old flake, where the menu was read before the Editor role propagated.
+        var expected = new[]
+        {
+            "Edit", "Create", "Copy", "Import", "Files", "Export", "Versions", "Pin", "Recycle",
+            "Stop synchronization"
+        };
+        var items = await FetchAllMenuItems(client, nodeAddress, LabelsAre(expected));
 
         Output.WriteLine($"Menu items for Editor: {items.Count}");
         foreach (var item in items)
             Output.WriteLine($"  {item.Label} (Area={item.Area})");
 
-        // Editor gets Edit, Create, Copy, Import, Export, Recycle (Update), Pin (None), plus always-visible items
-        items.Select(i => i.Label).Should().BeEquivalentTo(
-            ["Edit", "Create", "Copy", "Import", "Files", "Export", "Threads", "Versions", "Pin", "Recycle"],
-            "Editor has Read|Create|Update|Comment|Export — Edit/Create/Copy/Import/Export/Recycle plus always-visible items and Pin (Settings is a dedicated header button)");
+        items.Select(i => i.Label).Should().BeEquivalentTo(expected,
+            JsonSerializerOptions.Default,
+            because: "Editor has Read|Create|Update|Comment|Export — Edit/Create/Copy/Import/Export/Recycle plus always-visible items, Pin, and Stop synchronization (requires Update; Settings is a dedicated header button; Threads moved to the AI menu slot)");
     }
 
     [Fact(Timeout = 30000)]
     public async Task Menu_Admin_ShowsAllItems()
     {
         // Admin role: All permissions
-        var svc = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
-        await svc.AddUserRoleAsync(TestUserId, "Admin", NodePath, "system",
-            TestContext.Current.CancellationToken);
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        await meshService.CreateNode(AssignmentNodeFactory.UserRole(TestUserId, "Admin", NodePath)).Should().Emit();
 
         var client = GetClientWithUser();
         var nodeAddress = new Address(NodePath);
 
-        using var pingCts = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
-        pingCts.CancelAfter(15.Seconds());
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(nodeAddress),
-            pingCts.Token);
+        await client.Observe(new PingRequest(), o => o.WithTarget(nodeAddress)).Should().Within(15.Seconds()).Emit();
 
-        var items = await FetchAllMenuItemsAsync(client, nodeAddress);
+        var expected = new[]
+        {
+            "Edit", "Create", "Copy", "Move", "Import", "Files", "Export", "Versions", "Delete", "Pin", "Recycle",
+            "Stop synchronization"
+        };
+        var items = await FetchAllMenuItems(client, nodeAddress, LabelsAre(expected));
 
         Output.WriteLine($"Menu items for Admin: {items.Count}");
         foreach (var item in items)
             Output.WriteLine($"  {item.Label} (Area={item.Area})");
 
-        items.Should().HaveCount(12, "Admin should see all default menu items across Node and Mesh contexts (Settings is a dedicated header button)");
-        items.Select(i => i.Label).Should().BeEquivalentTo(
-            ["Edit", "Create", "Copy", "Move", "Import", "Files", "Export", "Threads", "Versions", "Delete", "Pin", "Recycle"]);
+        items.Should().HaveCount(12, "Admin should see all default menu items across Node and Mesh contexts plus Stop synchronization (Settings is a dedicated header button; Threads moved to the AI menu slot)");
+        items.Select(i => i.Label).Should().BeEquivalentTo(expected, JsonSerializerOptions.Default);
     }
 
     [Fact(Timeout = 30000)]
     public async Task Menu_ItemsAreSortedByOrder()
     {
         // Seed Admin so we get all items for sorting verification
-        var svc = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
-        await svc.AddUserRoleAsync(TestUserId, "Admin", NodePath, "system",
-            TestContext.Current.CancellationToken);
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        await meshService.CreateNode(AssignmentNodeFactory.UserRole(TestUserId, "Admin", NodePath)).Should().Emit();
 
         var client = GetClientWithUser();
         var nodeAddress = new Address(NodePath);
 
-        using var pingCts = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
-        pingCts.CancelAfter(15.Seconds());
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(nodeAddress),
-            pingCts.Token);
+        await client.Observe(new PingRequest(), o => o.WithTarget(nodeAddress)).Should().Within(15.Seconds()).Emit();
 
-        // Each menu context is sorted independently by Order — verify both
-        var nodeItems = await FetchMenuItemsAsync(client, nodeAddress, NodeMenuItemsExtensions.NodeMenuContext);
-        var meshItems = await FetchMenuItemsAsync(client, nodeAddress, NodeMenuItemsExtensions.MeshMenuContext);
+        // Each menu context is sorted independently by Order — verify both. Wait for each context to
+        // reach its Admin-complete state (Delete = Node-only Admin item; Create = Mesh Admin item).
+        var nodeItems = await FetchMenuItems(client, nodeAddress, NodeMenuItemsExtensions.NodeMenuContext,
+            items => items.Any(i => i.Label == "Delete"));
+        var meshItems = await FetchMenuItems(client, nodeAddress, NodeMenuItemsExtensions.MeshMenuContext,
+            items => items.Any(i => i.Label == "Create"));
 
         nodeItems.Should().BeInAscendingOrder(i => i.Order, "Node menu items should be sorted by Order");
         meshItems.Should().BeInAscendingOrder(i => i.Order, "Mesh menu items should be sorted by Order");
@@ -246,22 +267,17 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
     public async Task Menu_ImportAreaIsImportMeshNodes()
     {
         // Seed Editor to get Import item (requires Create permission)
-        var svc = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
-        await svc.AddUserRoleAsync(TestUserId, "Editor", NodePath, "system",
-            TestContext.Current.CancellationToken);
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        await meshService.CreateNode(AssignmentNodeFactory.UserRole(TestUserId, "Editor", NodePath)).Should().Emit();
 
         var client = GetClientWithUser();
         var nodeAddress = new Address(NodePath);
 
-        using var pingCts = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
-        pingCts.CancelAfter(15.Seconds());
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(nodeAddress),
-            pingCts.Token);
+        await client.Observe(new PingRequest(), o => o.WithTarget(nodeAddress)).Should().Within(15.Seconds()).Emit();
 
-        // Import lives in the Mesh menu
-        var meshItems = await FetchMenuItemsAsync(client, nodeAddress, NodeMenuItemsExtensions.MeshMenuContext);
+        // Import lives in the Mesh menu — wait until it appears (Editor role propagated).
+        var meshItems = await FetchMenuItems(client, nodeAddress, NodeMenuItemsExtensions.MeshMenuContext,
+            items => items.Any(i => i.Label == "Import"));
 
         var importItem = meshItems.FirstOrDefault(i => i.Label == "Import");
         importItem.Should().NotBeNull("Import menu item should exist in the Mesh menu for Editor");
@@ -275,9 +291,9 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
         // Static built-in roles should appear when querying namespace:Role with nodeType:Role
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
-        var roles = await meshQuery
-            .QueryAsync<MeshNode>("namespace:Role nodeType:Role")
-            .ToListAsync(TestContext.Current.CancellationToken);
+        var roles = (await meshQuery
+            .Query<MeshNode>(MeshQueryRequest.FromQuery("namespace:Role nodeType:Role"))
+            .Should().Match(c => c.ChangeType == QueryChangeType.Initial && c.Items.Count >= 4)).Items;
 
         Output.WriteLine($"Roles returned: {roles.Count}");
         foreach (var r in roles)
@@ -295,9 +311,9 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
         // Static roles should NOT appear in unfiltered children queries
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
-        var children = await meshQuery
-            .QueryAsync<MeshNode>($"namespace:{NodePath}")
-            .ToListAsync(TestContext.Current.CancellationToken);
+        var children = (await meshQuery
+            .Query<MeshNode>(MeshQueryRequest.FromQuery($"namespace:{NodePath}"))
+            .Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items;
 
         Output.WriteLine($"Children returned: {children.Count}");
         foreach (var c in children)

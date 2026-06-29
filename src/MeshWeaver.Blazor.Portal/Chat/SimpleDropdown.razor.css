@@ -62,7 +62,10 @@
     border: 1px solid var(--neutral-stroke-rest);
     border-radius: 4px;
     box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.15);
-    z-index: 1000;
+    /* Floating-popup tier (matches Monaco's overflow widgets in standard-page-layout.css) so the
+       chat agent/model/harness dropdown opens ABOVE the menu bar (z-index 1100 in
+       PortalLayoutBase) instead of being covered by it. */
+    z-index: 10000;
     max-height: 320px;
     display: flex;
     flex-direction: column;

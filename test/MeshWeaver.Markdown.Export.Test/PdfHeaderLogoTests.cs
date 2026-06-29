@@ -1,7 +1,6 @@
 using System;
 using System.IO;
 using System.Linq;
-using FluentAssertions;
 using MeshWeaver.Markdown.Export.Ast;
 using MeshWeaver.Markdown.Export.Branding;
 using MeshWeaver.Markdown.Export.Configuration;

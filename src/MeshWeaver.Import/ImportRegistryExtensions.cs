@@ -10,11 +10,27 @@ using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Import;
 
+/// <summary>
+/// Registration and data-source extensions for wiring the import plugin into a message hub
+/// and sourcing data contexts from embedded resources.
+/// </summary>
 public static class ImportExtensions
 {
+    /// <summary>
+    /// Adds the import plugin to the hub with default configuration.
+    /// </summary>
+    /// <param name="configuration">The hub configuration to extend.</param>
+    /// <returns>The extended hub configuration.</returns>
     public static MessageHubConfiguration AddImport(this MessageHubConfiguration configuration) =>
         configuration.AddImport(x => x);
 
+    /// <summary>
+    /// Adds the import plugin to the hub, registering services, handlers and types on first call
+    /// and appending the supplied import configuration.
+    /// </summary>
+    /// <param name="configuration">The hub configuration to extend.</param>
+    /// <param name="importConfiguration">Configures the import builder (formats, readers, validations).</param>
+    /// <returns>The extended hub configuration.</returns>
     public static MessageHubConfiguration AddImport(
         this MessageHubConfiguration configuration,
         Func<ImportBuilder, ImportBuilder> importConfiguration
@@ -47,7 +63,7 @@ public static class ImportExtensions
     {
         return configuration
             .WithHandler<ImportRequest>(
-                (h, d, ct) =>
+                (h, d) =>
                 {
                     var logger = h.ServiceProvider.GetRequiredService<ILogger<ImportManager>>();
                     logger.LogDebug("ImportRequest handler called for message {MessageId} on hub {HubAddress}", d.Id, h.Address);
@@ -56,7 +72,7 @@ public static class ImportExtensions
                     {
                         var importManager = h.ServiceProvider.GetRequiredService<ImportManager>();
                         logger.LogDebug("ImportManager resolved successfully for message {MessageId}", d.Id);
-                        return importManager.HandleImportRequest(d, ct);
+                        return importManager.HandleImportRequest(d, CancellationToken.None);
                     }
                     catch (Exception ex)
                     {
@@ -85,6 +101,13 @@ public static class ImportExtensions
         return dataContext.WithDataSource(_ => ConfigureDataSource(configuration ?? (x => x), dataContext.Workspace, source).WithType<T>());
     }
 
+    /// <summary>
+    /// Adds a data source that imports from a pre-built <see cref="EmbeddedResource"/> descriptor.
+    /// </summary>
+    /// <param name="dataContext">The data context to add the source to.</param>
+    /// <param name="resource">The embedded resource to import.</param>
+    /// <param name="configuration">Configures the resulting import data source.</param>
+    /// <returns>The data context with the data source added.</returns>
     public static DataContext FromEmbeddedResource(
         this DataContext dataContext,
         EmbeddedResource resource,
@@ -122,4 +145,9 @@ public static class ImportExtensions
         config.Get<ImmutableList<Func<ImportBuilder, ImportBuilder>>>() ?? [];
 }
 
+/// <summary>
+/// An import <see cref="Source"/> identifying a resource embedded in an assembly.
+/// </summary>
+/// <param name="Assembly">The assembly that contains the embedded resource.</param>
+/// <param name="Resource">The resource path within the assembly (without the assembly-name prefix).</param>
 public record EmbeddedResource(Assembly Assembly, string Resource) : Source;

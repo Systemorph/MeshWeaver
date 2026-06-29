@@ -1,4 +1,5 @@
 ﻿using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Json.Patch;
@@ -11,8 +12,25 @@ using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Layout.Client;
 
+/// <summary>
+/// Extension methods for layout-client data binding and model synchronization.
+/// Provides helpers for writing values back to a synchronization stream via JSON Patch,
+/// reading data-bound values (synchronous and reactive), and converting raw objects to
+/// typed values for the Blazor rendering pipeline.
+/// </summary>
 public static class LayoutClientExtensions
 {
+    /// <summary>
+    /// Writes <paramref name="value"/> to the location in <paramref name="stream"/> identified by
+    /// <paramref name="reference"/>. When <paramref name="model"/> is provided the patch is
+    /// applied to the model parameter directly; otherwise it is applied to the stream's current
+    /// state and propagated as an update.
+    /// </summary>
+    /// <param name="stream">The synchronization stream to update.</param>
+    /// <param name="value">The new value to write at the pointer location.</param>
+    /// <param name="dataContext">The JSON Pointer prefix for relative pointer resolution.</param>
+    /// <param name="reference">Identifies the JSON Pointer location to update; no-op when <c>null</c>.</param>
+    /// <param name="model">Optional model parameter to update directly instead of the stream.</param>
     public static void UpdatePointer(this ISynchronizationStream<JsonElement> stream,
         object? value,
         string? dataContext,
@@ -39,7 +57,6 @@ public static class LayoutClientExtensions
                     {
                         stream.Hub.ServiceProvider.GetRequiredService<ILoggerFactory>()
                             .CreateLogger(typeof(LayoutClientExtensions)).LogWarning(ex, "Cannot update layout");
-                        return Task.CompletedTask;
                     });
 
         }
@@ -67,6 +84,18 @@ public static class LayoutClientExtensions
             ;
     }
 
+    /// <summary>
+    /// Returns an observable that emits the value at <paramref name="reference"/> within
+    /// <paramref name="stream"/> each time it changes, converted to <typeparamref name="T"/>.
+    /// Distinct-until-changed; null emissions are filtered out.
+    /// </summary>
+    /// <typeparam name="T">The target value type to deserialize to.</typeparam>
+    /// <param name="stream">The synchronization stream to bind against.</param>
+    /// <param name="reference">JSON Pointer reference identifying the value's location.</param>
+    /// <param name="dataContext">Optional prefix for relative pointer resolution.</param>
+    /// <param name="conversion">Optional custom conversion function applied after deserialization.</param>
+    /// <param name="defaultValue">Default value used when the conversion returns <c>null</c>.</param>
+    /// <returns>An observable sequence of <typeparamref name="T"/> values as the stream changes.</returns>
     public static IObservable<T> DataBind<T>(this ISynchronizationStream<JsonElement> stream,
         JsonPointerReference reference,
         string? dataContext = null,
@@ -82,12 +111,30 @@ public static class LayoutClientExtensions
             .DistinctUntilChanged();
 
 
+    /// <summary>
+    /// Evaluates <paramref name="reference"/> against the current element of <paramref name="model"/>.
+    /// </summary>
+    /// <param name="model">The model parameter whose current element is evaluated.</param>
+    /// <param name="reference">JSON Pointer reference identifying the value location.</param>
+    /// <returns>The <see cref="JsonElement"/> at the pointer, or <c>null</c> if not present.</returns>
     public static JsonElement? GetValueFromModel(this ModelParameter<JsonElement> model, JsonPointerReference reference)
     {
         var pointer = JsonPointer.Parse($"/{reference.Pointer}");
         return pointer.Evaluate(model.Element);
     }
 
+    /// <summary>
+    /// Synchronously reads the value of <paramref name="value"/> from the stream's current state,
+    /// converting the result to <typeparamref name="T"/>. When <paramref name="value"/> is a
+    /// <c>JsonPointerReference</c> the pointer is resolved against the stream;
+    /// otherwise the value is converted directly. Enums are parsed case-insensitively; numeric
+    /// conversions are defensive (no render-crashing exceptions).
+    /// </summary>
+    /// <typeparam name="T">The target type to produce.</typeparam>
+    /// <param name="stream">The synchronization stream whose current state is read.</param>
+    /// <param name="value">The raw value or pointer reference to resolve.</param>
+    /// <param name="dataContext">The JSON Pointer prefix for relative pointer resolution.</param>
+    /// <returns>The resolved and converted value, or <c>default</c> on failure.</returns>
     public static T? GetDataBoundValue<T>(this ISynchronizationStream<JsonElement> stream, object? value, string? dataContext)
     {
         if (value is JsonPointerReference reference)
@@ -96,7 +143,16 @@ public static class LayoutClientExtensions
                 : stream.GetDataBoundValue<T>($"{dataContext}/{reference.Pointer}");
 
         if (value is string stringValue && typeof(T).IsEnum)
-            return (T)Enum.Parse(typeof(T), stringValue);
+            // Case-INSENSITIVE + non-throwing: a control property bound to an enum may carry a
+            // mis-cased (e.g. "center" vs Center) or unknown literal from a node's Source. A bare
+            // Enum.Parse is case-sensitive and THROWS on a miss — and this runs inside a Blazor
+            // BuildRenderTree (DataGridView.RenderPropertyColumn), so the throw escapes the render,
+            // kills the circuit, and hangs the whole page (atioz 2026-06-21: HorizontalAlignment
+            // "center"). TryParse(ignoreCase) resolves the common mis-cased case and falls back to
+            // default for a genuinely unknown literal — never crash a render over one bad value.
+            return Enum.TryParse(typeof(T), stringValue, ignoreCase: true, out var parsed)
+                ? (T)parsed!
+                : default;
 
         if (value is null)
             return default;
@@ -104,18 +160,34 @@ public static class LayoutClientExtensions
         // Handle nullable value types
         var targetType = Nullable.GetUnderlyingType(typeof(T)) ?? typeof(T);
 
-        // Use Convert.ChangeType for flexible conversion
-        if (typeof(T).IsValueType)
+        // 🚨 This runs inside a Blazor BuildRenderTree (DataGridView.RenderPropertyColumn). A
+        // Convert.ChangeType / direct unbox cast THROWS on an unexpected runtime type
+        // (InvalidCastException / FormatException / OverflowException) — and a throw here escapes
+        // the render, tears down the Blazor circuit and BLANKS the page (the same failure class as
+        // the case-sensitive Enum.Parse crash fixed in the enum branch above). A bound column value
+        // that arrives as a different shape after a parameter switch (year/PK) must NEVER crash the
+        // render: convert defensively and fall back to default, logging the offending value at
+        // Debug for diagnosis. stream may be null on the pure unit-test path — log null-safely.
+        try
         {
-            // For nullable value types, convert to underlying type first
-            if (targetType != typeof(T))
+            if (typeof(T).IsValueType)
             {
-                var converted = Convert.ChangeType(value, targetType);
-                return (T?)converted;
+                // For nullable value types, convert to the underlying type first.
+                if (targetType != typeof(T))
+                    return (T?)Convert.ChangeType(value, targetType);
+                // Non-nullable value type: use the value directly when it is already T,
+                // otherwise coerce via ChangeType (a bare (T)value unbox throws on a mismatch).
+                return value is T typed ? typed : (T?)Convert.ChangeType(value, targetType);
             }
-            return (T?)value;
+            return (T?)Convert.ChangeType(value, targetType);
         }
-        return (T?)Convert.ChangeType(value, targetType);
+        catch (Exception ex)
+        {
+            stream?.Hub?.ServiceProvider?.GetService<ILoggerFactory>()
+                ?.CreateLogger("MeshWeaver.Layout.GetDataBoundValue")
+                .LogDebug(ex, "GetDataBoundValue<{Type}> could not convert value '{Value}' — using default", typeof(T).Name, value);
+            return default;
+        }
     }
     private static T? GetDataBoundValue<T>(this ISynchronizationStream<JsonElement> stream, string pointer, string? dataContext = null)
     {
@@ -129,6 +201,15 @@ public static class LayoutClientExtensions
         return ret.Value.Deserialize<T>(stream.Hub.JsonSerializerOptions);
     }
 
+    /// <summary>
+    /// Returns an observable that emits the deserialized value at <paramref name="reference"/>
+    /// each time <paramref name="stream"/> emits. Null values are filtered out.
+    /// </summary>
+    /// <typeparam name="T">The target type to deserialize to.</typeparam>
+    /// <param name="stream">The synchronization stream to observe.</param>
+    /// <param name="reference">JSON Pointer reference identifying the value location.</param>
+    /// <param name="dataContext">Optional prefix for relative pointer resolution.</param>
+    /// <returns>An observable sequence of <typeparamref name="T"/> values.</returns>
     public static IObservable<T> GetDataBoundObservable<T>(this ISynchronizationStream<JsonElement> stream,
         JsonPointerReference reference, string? dataContext = null)
     {
@@ -155,6 +236,18 @@ public static class LayoutClientExtensions
         return $"{dataContext}/{pointer.TrimEnd('/')}";
     }
 
+    /// <summary>
+    /// Converts a single raw <paramref name="value"/> to <typeparamref name="T"/> using
+    /// <paramref name="conversion"/> when provided, or the hub's JSON serializer and built-in
+    /// type coercion otherwise. Handles <see cref="System.Text.Json.JsonElement"/>,
+    /// <see cref="System.Text.Json.Nodes.JsonObject"/>, strings, and numeric types.
+    /// </summary>
+    /// <typeparam name="T">The target type to produce.</typeparam>
+    /// <param name="hub">The hub whose JSON serializer options are used for deserialization.</param>
+    /// <param name="value">The raw value to convert; may be <c>null</c>.</param>
+    /// <param name="conversion">Optional custom converter; when non-null it overrides built-in coercion.</param>
+    /// <param name="defaultValue">Returned when <paramref name="value"/> is <c>null</c>.</param>
+    /// <returns>The converted value, or <paramref name="defaultValue"/> for <c>null</c> input.</returns>
     public static T? ConvertSingle<T>(this IMessageHub hub, object? value, Func<object?, T?, T?>? conversion, T? defaultValue = default(T))
     {
         conversion ??= null;
@@ -330,6 +423,18 @@ public static class LayoutClientExtensions
     {
         if (value == null)
             return default;
+
+        // A string-typed control bound to a JSON array/object must DISPLAY it, not crash. The generic
+        // property form (EditorExtensions) has no control for an arbitrary IEnumerable<T> property, so it
+        // falls back to a string-bound LabelControl/TextFieldControl; deserializing "[...]"/"{...}" to
+        // string throws JsonException — which spammed the log 30x and left the field blank for the atioz
+        // Anthropic `models` array (["claude-opus-4-8",...]). Render a readable text form instead — a
+        // sensible, non-fatal display for a collection in a scalar slot. Genuine scalar-conversion
+        // failures (a malformed number/bool/date) still fall through to the catch below and are logged.
+        if (conversion == null && typeof(T) == typeof(string)
+            && value.Value.ValueKind is JsonValueKind.Array or JsonValueKind.Object)
+            return (T)(object)JsonElementToDisplayString(value.Value);
+
         try
         {
             if (conversion != null)
@@ -362,33 +467,75 @@ public static class LayoutClientExtensions
             return defaultValue;
         }
     }
-    public static async Task<ActivityLog> SubmitModel(this ISynchronizationStream stream, ModelParameter<JsonElement> data)
+
+    /// <summary>
+    /// Renders a JSON array/object as readable text for a string-typed (read-only) control: a scalar
+    /// array becomes "a, b, c"; anything containing nested objects/arrays falls back to the raw JSON.
+    /// Lets a collection property that the generic form bound to a Label/TextField DISPLAY rather than
+    /// throw a string-conversion JsonException (the atioz `models` array crash).
+    /// </summary>
+    private static string JsonElementToDisplayString(JsonElement element)
     {
-        try
+        if (element.ValueKind != JsonValueKind.Array)
+            return element.GetRawText();
+
+        var result = string.Empty;
+        var first = true;
+        foreach (var item in element.EnumerateArray())
         {
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-            var delivery = stream.Hub.Post(
-                new DataChangeRequest { Updates = [data.Submit()] },
-                o => o.WithTarget(stream.Owner))!;
-            var callbackResponse = await stream.Hub.RegisterCallback(delivery, (d, _) => Task.FromResult(d), cts.Token);
-            var responseMsg = ((IMessageDelivery<DataChangeResponse>)callbackResponse).Message;
-            if (responseMsg.Status == DataChangeStatus.Committed)
-            {
-                data.Confirm();
-                return responseMsg.Log;
-            }
-            else
-                return responseMsg.Log;
+            if (item.ValueKind is JsonValueKind.Object or JsonValueKind.Array)
+                return element.GetRawText(); // complex items — show raw JSON rather than a lossy join
+            if (!first)
+                result += ", ";
+            result += item.ValueKind == JsonValueKind.String ? item.GetString() ?? string.Empty : item.GetRawText();
+            first = false;
         }
-        catch (Exception e)
+        return result;
+    }
+    /// <summary>
+    /// Submits a model parameter through the synchronization stream's owning hub.
+    /// Returns <c>IObservable&lt;ActivityLog&gt;</c> — never <c>Task</c> — to keep the
+    /// hub round-trip composable end-to-end (see <c>Doc/Architecture/AsynchronousCalls.md</c>).
+    /// Subscribe to receive the activity log; do not bridge with <c>.ToTask()</c>.
+    /// </summary>
+    public static IObservable<ActivityLog> SubmitModel(this ISynchronizationStream stream, ModelParameter<JsonElement> data)
+    {
+        var delivery = stream.Hub.Post(
+            new DataChangeRequest { Updates = [data.Submit()] },
+            o => o.WithTarget(stream.Owner));
+
+        if (delivery is null)
         {
-            return new ActivityLog(ActivityCategory.DataUpdate)
+            return Observable.Return(new ActivityLog(ActivityCategory.DataUpdate)
+            {
+                End = DateTime.UtcNow,
+                Messages = [new("Failed to post DataChangeRequest (no route).", LogLevel.Error)]
+            });
+        }
+
+        return stream.Hub.Observe(delivery)
+            .FirstAsync()
+            .Select(callbackResponse =>
+            {
+                if (callbackResponse.Message is not DataChangeResponse responseMsg)
+                {
+                    return new ActivityLog(ActivityCategory.DataUpdate)
+                    {
+                        End = DateTime.UtcNow,
+                        Messages = [new($"Unexpected response shape '{callbackResponse.Message?.GetType().Name ?? "null"}'.", LogLevel.Error)]
+                    };
+                }
+
+                if (responseMsg.Status == DataChangeStatus.Committed)
+                    data.Confirm();
+
+                return responseMsg.Log;
+            })
+            .Catch<ActivityLog, Exception>(e => Observable.Return(new ActivityLog(ActivityCategory.DataUpdate)
             {
                 End = DateTime.UtcNow,
                 Messages = [new(e.Message, LogLevel.Error)]
-            };
-        }
-
+            }));
     }
 }
 

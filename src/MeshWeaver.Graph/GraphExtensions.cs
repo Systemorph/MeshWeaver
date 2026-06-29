@@ -1,4 +1,5 @@
 ﻿using MeshWeaver.Data.Completion;
+using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Completion;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
@@ -38,7 +39,6 @@ public static class GraphExtensions
                 if (services.All(d => d.ServiceType != typeof(UnifiedReferenceAutocompleteProvider)))
                 {
                     services.AddScoped(sp => new UnifiedReferenceAutocompleteProvider(
-                        sp.GetService<IMeshCatalog>(),
                         sp.GetService<IMeshService>(),
                         sp.GetService<INavigationService>(),
                         sp.GetRequiredService<IMessageHub>(),

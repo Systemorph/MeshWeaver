@@ -8,18 +8,29 @@ namespace MeshWeaver.Blazor.Components;
 /// </summary>
 public class ChatSubmissionHandler : IDisposable
 {
+    /// <summary>
+    /// Tracks the current phase of a chat submission cycle so that the UI can
+    /// block duplicate submissions and disable the input field at the right times.
+    /// </summary>
     public enum SubmissionState
     {
+        /// <summary>
+        /// No submission in progress; the input field is enabled and ready to accept text.
+        /// </summary>
         Idle,
+        /// <summary>
+        /// A message has been accepted and is being posted to the thread — the input field is disabled.
+        /// </summary>
         Submitting,
+        /// <summary>
+        /// The message has been posted and the handler is waiting for the user message
+        /// to appear in the thread display before re-enabling input.
+        /// </summary>
         WaitingForResponse
     }
 
-    private readonly TimeSpan _timeout;
     private readonly TimeSpan _dedupWindow;
     private readonly Func<DateTime> _now;
-    private readonly Func<TimeSpan, Action, IDisposable> _scheduleTimeout;
-    private IDisposable? _timeoutDisposable;
     private bool _disposed;
     private DateTime? _lastAcceptedAt;
 
@@ -44,18 +55,20 @@ public class ChatSubmissionHandler : IDisposable
     public int SubmissionCount { get; private set; }
 
     /// <summary>
-    /// Creates a ChatSubmissionHandler with a configurable timeout.
+    /// Creates a new <c>ChatSubmissionHandler</c>.
     /// </summary>
-    /// <param name="timeout">Timeout after which a stuck submission auto-releases. Default 30s.</param>
-    /// <param name="scheduleTimeout">Optional scheduler for testing. If null, uses Task.Delay.</param>
+    /// <param name="dedupWindow">
+    /// How long after an accepted submission the same text is silently rejected to guard
+    /// against accidental double-clicks. Defaults to 500 ms.
+    /// </param>
+    /// <param name="now">
+    /// Clock factory used to determine whether the dedup window has elapsed.
+    /// Defaults to <c>DateTime.UtcNow</c>. Override in unit tests for deterministic timing.
+    /// </param>
     public ChatSubmissionHandler(
-        TimeSpan? timeout = null,
-        Func<TimeSpan, Action, IDisposable>? scheduleTimeout = null,
         TimeSpan? dedupWindow = null,
         Func<DateTime>? now = null)
     {
-        _timeout = timeout ?? TimeSpan.FromSeconds(30);
-        _scheduleTimeout = scheduleTimeout ?? DefaultScheduleTimeout;
         _dedupWindow = dedupWindow ?? TimeSpan.FromMilliseconds(500);
         _now = now ?? (() => DateTime.UtcNow);
     }
@@ -100,7 +113,6 @@ public class ChatSubmissionHandler : IDisposable
 
     /// <summary>
     /// Transitions from Submitting to WaitingForResponse after the message has been posted.
-    /// Starts the timeout timer.
     /// </summary>
     public void OnMessagePosted()
     {
@@ -108,7 +120,6 @@ public class ChatSubmissionHandler : IDisposable
             return;
 
         State = SubmissionState.WaitingForResponse;
-        StartTimeout();
     }
 
     /// <summary>
@@ -117,7 +128,6 @@ public class ChatSubmissionHandler : IDisposable
     /// </summary>
     public void OnResponseAppeared()
     {
-        CancelTimeout();
         State = SubmissionState.Idle;
     }
 
@@ -126,47 +136,15 @@ public class ChatSubmissionHandler : IDisposable
     /// </summary>
     public void ForceRelease()
     {
-        CancelTimeout();
         State = SubmissionState.Idle;
     }
 
-    private void StartTimeout()
-    {
-        CancelTimeout();
-        _timeoutDisposable = _scheduleTimeout(_timeout, OnTimeout);
-    }
-
-    private void OnTimeout()
-    {
-        if (State != SubmissionState.Idle)
-        {
-            State = SubmissionState.Idle;
-        }
-    }
-
-    private void CancelTimeout()
-    {
-        _timeoutDisposable?.Dispose();
-        _timeoutDisposable = null;
-    }
-
-    private static IDisposable DefaultScheduleTimeout(TimeSpan delay, Action callback)
-    {
-        var cts = new CancellationTokenSource();
-        _ = Task.Delay(delay, cts.Token).ContinueWith(t =>
-        {
-            if (!t.IsCanceled)
-                callback();
-        }, TaskScheduler.Default);
-        return cts;
-    }
-
+    /// <summary>
+    /// Marks the handler as disposed so that subsequent <c>TryBeginSubmit</c> calls
+    /// return <c>false</c> without side effects.
+    /// </summary>
     public void Dispose()
     {
-        if (_disposed)
-            return;
-
         _disposed = true;
-        CancelTimeout();
     }
 }

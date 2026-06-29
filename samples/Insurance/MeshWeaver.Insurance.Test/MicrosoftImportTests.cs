@@ -1,6 +1,4 @@
 ﻿using System.Reactive.Linq;
-using FluentAssertions;
-using FluentAssertions.Extensions;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
 using MeshWeaver.Import;
@@ -8,6 +6,7 @@ using MeshWeaver.Import.Configuration;
 using MeshWeaver.Insurance.Domain;
 using MeshWeaver.Insurance.Domain.Services;
 using MeshWeaver.Mesh;
+using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
@@ -100,11 +99,10 @@ public class MicrosoftImportTests(ITestOutputHelper output) : InsuranceTestBase(
             Configuration = Config
         };
 
-        var importResponse = await Mesh.AwaitResponse(
-            importRequest,
-            o => o.WithTarget(Mesh.Address),
-            TestContext.Current.CancellationToken
-        );
+        var importResponse = await Mesh.Observe(
+                importRequest,
+                o => o.WithTarget(Mesh.Address))
+            .Should().Within(20.Seconds()).Emit();
 
         // Assert
         importResponse.Should().NotBeNull();
@@ -114,8 +112,7 @@ public class MicrosoftImportTests(ITestOutputHelper output) : InsuranceTestBase(
         // Verify data was imported by querying the workspace
         var workspace = Mesh.ServiceProvider.GetRequiredService<IWorkspace>();
         var risks = await workspace.GetObservable<PropertyRisk>()
-            .Timeout(10.Seconds())
-            .FirstAsync(x => x.Count > 0);
+            .Should().Within(10.Seconds()).Match(x => x.Count > 0);
 
         risks.Should().NotBeEmpty("import should return at least one risk");
         risks.All(r => r.PricingId == MicrosoftPricingId).Should().BeTrue("all risks should have PricingId set to Microsoft/2026");
@@ -148,11 +145,10 @@ public class MicrosoftImportTests(ITestOutputHelper output) : InsuranceTestBase(
             Configuration = Config
         };
 
-        var importResponse = await Mesh.AwaitResponse(
-            importRequest,
-            o => o.WithTarget(Mesh.Address),
-            TestContext.Current.CancellationToken
-        );
+        var importResponse = await Mesh.Observe(
+                importRequest,
+                o => o.WithTarget(Mesh.Address))
+            .Should().Within(20.Seconds()).Emit();
 
         // Assert
         importResponse.Should().NotBeNull();
@@ -161,8 +157,7 @@ public class MicrosoftImportTests(ITestOutputHelper output) : InsuranceTestBase(
         // Verify data was imported
         var workspace = Mesh.ServiceProvider.GetRequiredService<IWorkspace>();
         var risks = await workspace.GetObservable<PropertyRisk>()
-            .Timeout(10.Seconds())
-            .FirstAsync(x => x.Count > 0);
+            .Should().Within(10.Seconds()).Match(x => x.Count > 0);
         risks.Should().NotBeEmpty();
 
         // Verify allocation worked - sum of allocated TsiBi should equal proportional distribution
@@ -203,11 +198,10 @@ public class MicrosoftImportTests(ITestOutputHelper output) : InsuranceTestBase(
             Configuration = Config
         };
 
-        var importResponse = await Mesh.AwaitResponse(
-            importRequest,
-            o => o.WithTarget(Mesh.Address),
-            TestContext.Current.CancellationToken
-        );
+        var importResponse = await Mesh.Observe(
+                importRequest,
+                o => o.WithTarget(Mesh.Address))
+            .Should().Within(20.Seconds()).Emit();
 
         // Assert
         importResponse.Should().NotBeNull();
@@ -216,8 +210,7 @@ public class MicrosoftImportTests(ITestOutputHelper output) : InsuranceTestBase(
         // Verify data was imported
         var workspace = Mesh.ServiceProvider.GetRequiredService<IWorkspace>();
         var risks = await workspace.GetObservable<PropertyRisk>()
-            .Timeout(10.Seconds())
-            .FirstAsync(x => x.Count > 0);
+            .Should().Within(10.Seconds()).Match(x => x.Count > 0);
         risks.Should().NotBeEmpty();
         Output.WriteLine($"Imported {risks.Count} risks using direct mapping");
     }

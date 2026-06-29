@@ -5,8 +5,20 @@ using System.Collections.ObjectModel;
 
 namespace MeshWeaver.Utils;
 
+/// <summary>
+/// Extension helpers for working with sequences and dictionaries.
+/// </summary>
 public static class EnumerableExtensions
 {
+    /// <summary>
+    /// Splits a sequence into consecutive chunks of at most <paramref name="chunkSize"/> elements.
+    /// The final chunk may contain fewer elements. Streams lazily.
+    /// </summary>
+    /// <typeparam name="T">The element type.</typeparam>
+    /// <param name="items">The source sequence; a <c>null</c> sequence yields no chunks.</param>
+    /// <param name="chunkSize">The maximum number of elements per chunk. Must be positive.</param>
+    /// <returns>A sequence of lists, each holding up to <paramref name="chunkSize"/> elements.</returns>
+    /// <exception cref="ArgumentException">Thrown when <paramref name="chunkSize"/> is not positive.</exception>
     public static IEnumerable<List<T>> ToChunks<T>(this IEnumerable<T> items, int chunkSize)
     {
         if (chunkSize <= 0)
@@ -30,6 +42,17 @@ public static class EnumerableExtensions
             yield return chunk;
     }
 
+    /// <summary>
+    /// Returns the value for <paramref name="key"/>, adding one produced by <paramref name="factory"/> if absent.
+    /// Dispatches to the thread-safe path when the dictionary is a <see cref="ThreadSafeDictionary{TKey,TValue}"/> or <see cref="ConcurrentDictionary{TKey,TValue}"/>.
+    /// </summary>
+    /// <typeparam name="TKey">The key type. Must be non-nullable.</typeparam>
+    /// <typeparam name="TValue">The value type.</typeparam>
+    /// <param name="dictionary">The dictionary to read from or add to.</param>
+    /// <param name="key">The key to look up.</param>
+    /// <param name="factory">Factory invoked with the key to produce a value when absent.</param>
+    /// <returns>The existing or newly added value.</returns>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="dictionary"/> is <c>null</c>.</exception>
     public static TValue GetOrAdd<TKey, TValue>(this IDictionary<TKey, TValue> dictionary, TKey key, Func<TKey, TValue> factory)
         where TKey : notnull
     {
@@ -75,6 +98,12 @@ public static class EnumerableExtensions
         return comparer.Equals(enumerable, other);
     }
 
+    /// <summary>
+    /// Returns an equality comparer that treats two sequences as equal when they contain the same elements with the same multiplicity, regardless of order.
+    /// </summary>
+    /// <typeparam name="T">The element type.</typeparam>
+    /// <param name="instanceComparer">Comparer used to compare individual elements, or <c>null</c> for the default comparer.</param>
+    /// <returns>A multiset (order-insensitive) equality comparer for sequences of <typeparamref name="T"/>.</returns>
     public static IEqualityComparer<IEnumerable<T>> GetEnumerableComparer<T>(IEqualityComparer<T>? instanceComparer = null)
     {
         return new MultiSetComparer<T>(instanceComparer);
@@ -206,6 +235,14 @@ public static class EnumerableExtensions
         return new ReadOnlyDictionary<TKey, TValue>(dictionary);
     }
 
+    /// <summary>
+    /// Filters a non-generic sequence to elements whose runtime type is exactly <typeparamref name="T"/>,
+    /// excluding subclasses (unlike <c>OfType</c> which includes assignable types).
+    /// </summary>
+    /// <typeparam name="T">The exact element type to keep.</typeparam>
+    /// <param name="enumerable">The source sequence.</param>
+    /// <returns>The elements whose runtime type equals <typeparamref name="T"/>.</returns>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="enumerable"/> is <c>null</c>.</exception>
     public static IEnumerable<T> OfTypeOnly<T>(this IEnumerable enumerable)
     {
         if (enumerable == null)
@@ -236,6 +273,12 @@ public static class EnumerableExtensions
         yield return instance;
     }
 
+    /// <summary>
+    /// Wraps a single object as an <see cref="IAsyncEnumerable{T}"/> that yields it exactly once.
+    /// </summary>
+    /// <typeparam name="T">The type of the instance.</typeparam>
+    /// <param name="instance">The single element to yield.</param>
+    /// <returns>An async sequence containing the one element.</returns>
     public static IAsyncEnumerable<T> RepeatOnceAsync<T>(this T instance)
     {
         return AsyncEnumerable.Repeat(instance, 1);

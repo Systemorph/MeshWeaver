@@ -2,9 +2,11 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Reactive;
+using System.Reactive.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using FluentAssertions;
+using MeshWeaver.Reactive;
 using Memex.Portal.Shared;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
@@ -39,19 +41,23 @@ namespace MeshWeaver.Autocomplete.Test;
 [Collection("AutocompleteMultiSourceTest")]
 public class AutocompleteMultiSourceTest : MonolithMeshTestBase
 {
-    private readonly string _contentDir;
-    private readonly string _cacheDir;
-
-    public AutocompleteMultiSourceTest(ITestOutputHelper output) : base(output)
+    private static readonly string _contentDir =
+        Path.Combine(Path.GetTempPath(), "MeshWeaverMultiSrcContent", Guid.NewGuid().ToString());
+    private static readonly string _cacheDir =
+        Path.Combine(Path.GetTempPath(), "MeshWeaverMultiSrc", Guid.NewGuid().ToString());
+    static AutocompleteMultiSourceTest()
     {
-        _cacheDir = Path.Combine(Path.GetTempPath(), "MeshWeaverMultiSrc", Guid.NewGuid().ToString());
         Directory.CreateDirectory(_cacheDir);
-
-        _contentDir = Path.Combine(Path.GetTempPath(), "MeshWeaverMultiSrcContent", Guid.NewGuid().ToString());
         CreateContentFiles();
     }
 
-    private void CreateContentFiles()
+    protected override bool ShareMeshAcrossTests => true;
+
+    public AutocompleteMultiSourceTest(ITestOutputHelper output) : base(output)
+    {
+    }
+
+    private static void CreateContentFiles()
     {
         // Create content files for ACME/ProductLaunch
         var prodLaunchContent = Path.Combine(_contentDir, "ACME", "ProductLaunch");
@@ -94,7 +100,8 @@ public class AutocompleteMultiSourceTest : MonolithMeshTestBase
         {
             Name = "storage",
             SourceType = "FileSystem",
-            BasePath = contentDir
+            BasePath = contentDir,
+            ExposeInChildren = true
         };
 
         return builder
@@ -124,12 +131,7 @@ public class AutocompleteMultiSourceTest : MonolithMeshTestBase
             .ConfigureHub(hub => hub.AddMeshNavigation());
     }
 
-    public override async ValueTask DisposeAsync()
-    {
-        await base.DisposeAsync();
-        try { if (Directory.Exists(_contentDir)) Directory.Delete(_contentDir, true); } catch { }
-        try { if (Directory.Exists(_cacheDir)) Directory.Delete(_cacheDir, true); } catch { }
-    }
+    // Cache + content dirs are class-static + shared SP — never deleted between tests.
 
     private new IMeshService MeshQuery => Mesh.ServiceProvider.GetRequiredService<IMeshService>();
     private IChatCompletionOrchestrator Orchestrator => Mesh.ServiceProvider.GetRequiredService<IChatCompletionOrchestrator>();
@@ -150,30 +152,42 @@ public class AutocompleteMultiSourceTest : MonolithMeshTestBase
         }
 
         // Bound the collection enumeration — in the test harness the BasePath may not resolve,
-        // which either throws (.NET 10: "The value cannot be an empty string. (Parameter 'path')")
-        // or hangs the enumeration. Either outcome is acceptable here — the production flow
-        // under Aspire/portal always has a real BasePath.
-        using var opCts = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
-        opCts.CancelAfter(TimeSpan.FromSeconds(5));
-        try
-        {
-            var items = await contentProvider
-                .GetItemsAsync("@Annual", "ACME/ProductLaunch", opCts.Token)
-                .ToListAsync(opCts.Token);
+        // which either errors (.NET 10: "The value cannot be an empty string. (Parameter 'path')")
+        // or never completes. Either outcome is acceptable here — the production flow under
+        // Aspire/portal always has a real BasePath. Materialize folds the terminal signal
+        // (OnNext-list, OnError, or a 5s Timeout's OnError) into a value we inspect reactively,
+        // awaited once at the test edge via the async ObservableAssertions terminal.
+        var notification = await contentProvider
+            .GetItems("@Annual", "ACME/ProductLaunch")
+            .TakeLast(1)
+            .Timeout(TimeSpan.FromSeconds(5))
+            .Materialize()
+            .Where(n => n.Kind != NotificationKind.OnCompleted)
+            .Should().Within(10.Seconds()).Emit();
 
+        if (notification.Kind == NotificationKind.OnNext)
+        {
+            var items = notification.Value;
             Output.WriteLine($"Direct content provider items for '@Annual':");
             foreach (var item in items.Take(10))
                 Output.WriteLine($"  '{item.Label}' => '{item.InsertText}' (pri={item.Priority})");
 
             items.Should().NotBeNull();
         }
-        catch (ArgumentException ex) when (ex.ParamName == "path" || ex.Message.Contains("empty"))
-        {
-            Output.WriteLine($"Content collection BasePath not resolvable in test harness: {ex.Message}");
-        }
-        catch (OperationCanceledException)
+        else if (notification.Exception is TimeoutException)
         {
             Output.WriteLine("Content provider enumeration did not complete within 5s — acceptable in test harness.");
+        }
+        else if (notification.Exception is ArgumentException argEx &&
+                 (argEx.ParamName == "path" || argEx.Message.Contains("empty")))
+        {
+            Output.WriteLine($"Content collection BasePath not resolvable in test harness: {argEx.Message}");
+        }
+        else
+        {
+            // Any other error is a genuine failure — surface it.
+            notification.Exception.Should().BeNull(
+                $"unexpected error from content provider enumeration: {notification.Exception}");
         }
     }
 
@@ -214,7 +228,7 @@ public class AutocompleteMultiSourceTest : MonolithMeshTestBase
 
     /// <summary>
     /// Per user requirement: a file "one two three.docx" must appear when typing "one", "two", or "thr".
-    /// Tests fuzzy word-boundary matching using the same FuzzyScorer used in InMemoryMeshQuery.
+    /// Tests fuzzy word-boundary matching using the same FuzzyScorer used in MeshQueryEngine.
     /// Case-insensitive.
     /// </summary>
     [Theory]
@@ -259,8 +273,8 @@ public class AutocompleteMultiSourceTest : MonolithMeshTestBase
     public async Task TypingFirstChars_OfDocumentWithSpaces_AppearsInResults_RankedHigh()
     {
         var batches = await Orchestrator
-            .GetCompletionsAsync("@Round", "ACME/ProductLaunch")
-            .ToListAsync(TestContext.Current.CancellationToken);
+            .GetCompletions("@Round", "ACME/ProductLaunch")
+            .ToList().Should().Within(30.Seconds()).Emit();
 
         var merged = batches
             .SelectMany(b => b.Items.Select(i => (Item: i, b.CategoryPriority)))
@@ -298,8 +312,8 @@ public class AutocompleteMultiSourceTest : MonolithMeshTestBase
         // a clean quoted RELATIVE insert text — not nested or absolute-prepended.
         // E.g., "@content/My Annual Report.md" — NOT @/User/rbuergi/"@content/My Annual Report.md"
         var batches = await Orchestrator
-            .GetCompletionsAsync("@content/", "ACME/ProductLaunch")
-            .ToListAsync(TestContext.Current.CancellationToken);
+            .GetCompletions("@content/", "ACME/ProductLaunch")
+            .ToList().Should().Within(30.Seconds()).Emit();
 
         var allItems = batches.SelectMany(b => b.Items).ToList();
 
@@ -357,8 +371,8 @@ public class AutocompleteMultiSourceTest : MonolithMeshTestBase
     {
         // Typing "@" from ACME/ProductLaunch context
         var batches = await Orchestrator
-            .GetCompletionsAsync("@", "ACME/ProductLaunch")
-            .ToListAsync(TestContext.Current.CancellationToken);
+            .GetCompletions("@", "ACME/ProductLaunch")
+            .ToList().Should().Within(30.Seconds()).Emit();
 
         var allItems = batches.SelectMany(b => b.Items).ToList();
 
@@ -378,8 +392,8 @@ public class AutocompleteMultiSourceTest : MonolithMeshTestBase
     {
         // Typing "@conte" from ACME/ProductLaunch context
         var batches = await Orchestrator
-            .GetCompletionsAsync("@conte", "ACME/ProductLaunch")
-            .ToListAsync(TestContext.Current.CancellationToken);
+            .GetCompletions("@conte", "ACME/ProductLaunch")
+            .ToList().Should().Within(30.Seconds()).Emit();
 
         var allItems = batches.SelectMany(b => b.Items).ToList();
 
@@ -401,8 +415,8 @@ public class AutocompleteMultiSourceTest : MonolithMeshTestBase
         // (those come from UnifiedReferenceAutocompleteProvider/MeshNodeAutocompleteProvider
         // which should skip UCR prefix queries).
         var batches = await Orchestrator
-            .GetCompletionsAsync("@content/", "ACME/ProductLaunch")
-            .ToListAsync(TestContext.Current.CancellationToken);
+            .GetCompletions("@content/", "ACME/ProductLaunch")
+            .ToList().Should().Within(30.Seconds()).Emit();
 
         var allItems = batches.SelectMany(b => b.Items).ToList();
 
@@ -426,8 +440,8 @@ public class AutocompleteMultiSourceTest : MonolithMeshTestBase
         // The orchestrator sends AutocompleteRequest — even if the hub doesn't
         // return content items, the batch should be "Content" category.
         var batches = await Orchestrator
-            .GetCompletionsAsync("@content/", "ACME/ProductLaunch")
-            .ToListAsync(TestContext.Current.CancellationToken);
+            .GetCompletions("@content/", "ACME/ProductLaunch")
+            .ToList().Should().Within(30.Seconds()).Emit();
 
         Output.WriteLine($"'@content/' from ACME/ProductLaunch: {batches.Count} batches");
         foreach (var batch in batches)
@@ -448,33 +462,62 @@ public class AutocompleteMultiSourceTest : MonolithMeshTestBase
 
     #region 2. Local First
 
+    /// <summary>
+    /// Blended @-ranking (commit b36661860): local sources — Source A ("Nearby", relevance rank 8)
+    /// and Source B ("Subtree", rank 9) — carry a higher relevance rank than cross-partition
+    /// broadening (Source C, "Partition", rank 2). All three emit under one uniform category band, so
+    /// "local first" is the per-item <see cref="AutocompleteRelevance"/> relevance tiebreaker: when a
+    /// broadening batch is produced, its items rank at or below the local items by item Priority.
+    /// <para>This asserts that item-level contract on the FULL awaited result — no race gate. (Was a
+    /// stale assertion that the Nearby BATCH outranked the Partition batch by CategoryPriority — false
+    /// under the blend's uniform band, and gated on the racy arrival of ≥2 batches, so it fired only
+    /// when broadening happened to run on CI and then failed "0 > 0".)</para>
+    /// </summary>
     [Fact(Timeout = 30000)]
-    public async Task LocalFirst_NearbyBatchHigherPriorityThanGlobal()
+    public async Task LocalFirst_LocalItemsOutrankBroadeningItems()
     {
         var batches = await Orchestrator
-            .GetCompletionsAsync("@", "ACME/ProductLaunch")
-            .ToListAsync(TestContext.Current.CancellationToken);
+            .GetCompletions("@", "ACME/ProductLaunch")
+            .ToList().Should().Within(30.Seconds()).Emit();
 
-        Output.WriteLine($"Batches by priority:");
         foreach (var batch in batches.OrderByDescending(b => b.CategoryPriority))
             Output.WriteLine($"  [{batch.CategoryPriority}] {batch.Category}: {batch.Items.Count} items");
 
-        if (batches.Count >= 2)
-        {
-            var maxPriority = batches.Max(b => b.CategoryPriority);
-            var minPriority = batches.Min(b => b.CategoryPriority);
-            maxPriority.Should().BeGreaterThan(minPriority,
-                "local batches should have higher priority than remote");
-        }
+        // Group each item by the source that produced it (the batch category):
+        // Source A "Nearby" + Source B "Subtree" are local; Source C "Partition" is broadening.
+        var perItem = batches
+            .SelectMany(b => b.Items.Select(i => (i.Priority, Source: b.Category)))
+            .ToList();
+
+        perItem.Should().Contain(x => x.Source is "Nearby" or "Subtree",
+            "@ from a node context always yields local (Nearby/Subtree) suggestions");
+
+        // DefaultIfEmpty keeps the assertion gate-free: when broadening did not run there is no
+        // Partition item and the inequality holds trivially (int.MinValue ≤ localMin); when it DID run
+        // (the CI condition) the local-first ordering is genuinely enforced. No silent skip.
+        var localMin = perItem
+            .Where(x => x.Source is "Nearby" or "Subtree")
+            .Select(x => x.Priority)
+            .DefaultIfEmpty(int.MaxValue)
+            .Min();
+        var broadeningMax = perItem
+            .Where(x => x.Source == "Partition")
+            .Select(x => x.Priority)
+            .DefaultIfEmpty(int.MinValue)
+            .Max();
+
+        broadeningMax.Should().BeLessThanOrEqualTo(localMin,
+            "blended @-ranking ranks local items (Nearby/Subtree, higher relevance rank) at or above "
+            + "cross-partition broadening items (Partition) by the per-item AutocompleteRelevance score");
     }
 
     [Fact(Timeout = 30000)]
     public async Task LocalFirst_ChildrenOfContextScoreHigherThanDistant()
     {
         // AutocompleteAsync with context should boost nearby items
-        var suggestions = await MeshQuery
-            .AutocompleteAsync("ACME", "", AutocompleteMode.RelevanceFirst, 30, "ACME/ProductLaunch", ct: TestContext.Current.CancellationToken)
-            .ToArrayAsync(TestContext.Current.CancellationToken);
+        var suggestions = (await MeshQuery
+            .AutocompleteAsync("ACME", "", AutocompleteMode.RelevanceFirst, 30, "ACME/ProductLaunch")
+            .ToObservableSequence().ToList().Should().Within(30.Seconds()).Emit()).ToArray();
 
         Output.WriteLine($"ACME autocomplete with context ACME/ProductLaunch:");
         foreach (var s in suggestions.Take(10))
@@ -504,9 +547,9 @@ public class AutocompleteMultiSourceTest : MonolithMeshTestBase
     [Fact(Timeout = 30000)]
     public async Task ShorterPathsWin_WithinSameScoreTier()
     {
-        var suggestions = await MeshQuery
-            .AutocompleteAsync("ACME", "", 30, TestContext.Current.CancellationToken)
-            .ToArrayAsync(TestContext.Current.CancellationToken);
+        var suggestions = (await MeshQuery
+            .AutocompleteAsync("ACME", "", 30)
+            .ToObservableSequence().ToList().Should().Within(30.Seconds()).Emit()).ToArray();
 
         Output.WriteLine($"ACME children by score then length:");
         foreach (var s in suggestions)
@@ -528,9 +571,9 @@ public class AutocompleteMultiSourceTest : MonolithMeshTestBase
     [Fact(Timeout = 30000)]
     public async Task ShorterPathsWin_ParentBeforeGrandchild()
     {
-        var suggestions = await MeshQuery
-            .AutocompleteAsync("ACME", "", AutocompleteMode.RelevanceFirst, 30, ct: TestContext.Current.CancellationToken)
-            .ToArrayAsync(TestContext.Current.CancellationToken);
+        var suggestions = (await MeshQuery
+            .AutocompleteAsync("ACME", "", AutocompleteMode.RelevanceFirst, 30)
+            .ToObservableSequence().ToList().Should().Within(30.Seconds()).Emit()).ToArray();
 
         var productLaunch = suggestions.FirstOrDefault(s => s.Path == "ACME/ProductLaunch");
         var todo = suggestions.FirstOrDefault(s => s.Path.StartsWith("ACME/ProductLaunch/Todo/"));
@@ -553,8 +596,8 @@ public class AutocompleteMultiSourceTest : MonolithMeshTestBase
     {
         // Use absolute path @/Systemorph/ to drill into another partition
         var batches = await Orchestrator
-            .GetCompletionsAsync("@/Systemorph/", null)
-            .ToListAsync(TestContext.Current.CancellationToken);
+            .GetCompletions("@/Systemorph/", null)
+            .ToList().Should().Within(30.Seconds()).Emit();
 
         var allItems = batches.SelectMany(b => b.Items).ToList();
 
@@ -576,9 +619,9 @@ public class AutocompleteMultiSourceTest : MonolithMeshTestBase
     [Fact(Timeout = 30000)]
     public async Task CrossPartition_GlobalAutocomplete_ReturnsMultiplePartitions()
     {
-        var suggestions = await MeshQuery
-            .AutocompleteAsync("", "", 30, TestContext.Current.CancellationToken)
-            .ToArrayAsync(TestContext.Current.CancellationToken);
+        var suggestions = (await MeshQuery
+            .AutocompleteAsync("", "", 30)
+            .ToObservableSequence().ToList().Should().Within(30.Seconds()).Emit()).ToArray();
 
         var partitions = suggestions
             .Select(s => s.Path.Split('/')[0])
@@ -599,8 +642,8 @@ public class AutocompleteMultiSourceTest : MonolithMeshTestBase
     public async Task InsertTextFormat_KeywordsUseSlash()
     {
         var batches = await Orchestrator
-            .GetCompletionsAsync("@/ACME/ProductLaunch/", null)
-            .ToListAsync(TestContext.Current.CancellationToken);
+            .GetCompletions("@/ACME/ProductLaunch/", null)
+            .ToList().Should().Within(30.Seconds()).Emit();
 
         var allItems = batches.SelectMany(b => b.Items).ToList();
         var keywords = allItems.Where(i => i.Category == "Keywords").ToList();
@@ -621,8 +664,8 @@ public class AutocompleteMultiSourceTest : MonolithMeshTestBase
     {
         // Partition list items should have trailing / for drill-down
         var batches = await Orchestrator
-            .GetCompletionsAsync("@/", null)
-            .ToListAsync(TestContext.Current.CancellationToken);
+            .GetCompletions("@/", null)
+            .ToList().Should().Within(30.Seconds()).Emit();
 
         var partitionItems = batches.SelectMany(b => b.Items)
             .Where(i => !string.IsNullOrEmpty(i.Path))
@@ -647,8 +690,8 @@ public class AutocompleteMultiSourceTest : MonolithMeshTestBase
     public async Task ScoreOrdering_MergedResults_SortableByPriority()
     {
         var batches = await Orchestrator
-            .GetCompletionsAsync("@", "ACME/ProductLaunch")
-            .ToListAsync(TestContext.Current.CancellationToken);
+            .GetCompletions("@", "ACME/ProductLaunch")
+            .ToList().Should().Within(30.Seconds()).Emit();
 
         // The client merges all batches and sorts by CategoryPriority then item Priority
         var merged = batches
@@ -676,24 +719,29 @@ public class AutocompleteMultiSourceTest : MonolithMeshTestBase
         }
     }
 
+    /// <summary>
+    /// Blended @-ranking (commit b36661860): Sources A ("Nearby"), B ("Subtree") and C ("Partition"/
+    /// broadening) all emit under ONE uniform category band (<c>BlendedBatchPriority = 0</c>), so the
+    /// SOLE ranking key is the per-item <see cref="AutocompleteRelevance"/> score (path &gt; title &gt;
+    /// relevance). This pins that batch-level contract deterministically — every CurrentNodeAndGlobal
+    /// batch carries the same band regardless of how many producers emit. (Was a stale assertion that
+    /// distinct batches had distinct CategoryPriority, gated on the racy arrival of ≥2 blended-0
+    /// batches, so it failed "0 &gt; 0" whenever broadening happened to race in on CI.)
+    /// </summary>
     [Fact(Timeout = 30000)]
-    public async Task ScoreOrdering_BatchesOrderedByPriority()
+    public async Task ScoreOrdering_AllBlendedBatchesShareUniformBand()
     {
         var batches = await Orchestrator
-            .GetCompletionsAsync("@", "ACME/ProductLaunch")
-            .ToListAsync(TestContext.Current.CancellationToken);
+            .GetCompletions("@", "ACME/ProductLaunch")
+            .ToList().Should().Within(30.Seconds()).Emit();
 
-        if (batches.Count >= 2)
-        {
-            // Batches arrive in any order (async), but CategoryPriority indicates intended sort
-            var sorted = batches.OrderByDescending(b => b.CategoryPriority).ToList();
-            Output.WriteLine("Batch priority order:");
-            foreach (var b in sorted)
-                Output.WriteLine($"  [{b.CategoryPriority}] {b.Category}");
+        foreach (var b in batches)
+            Output.WriteLine($"  [{b.CategoryPriority}] {b.Category}: {b.Items.Count} items");
 
-            sorted[0].CategoryPriority.Should().BeGreaterThan(sorted[^1].CategoryPriority,
-                "highest priority batch should outrank lowest");
-        }
+        batches.Should().NotBeEmpty("@ from a node context yields at least the Nearby batch");
+        batches.Should().OnlyContain(b => b.CategoryPriority == 0,
+            "the blended @-design emits every source (Nearby/Subtree/Partition) under one uniform "
+            + "category band so the per-item AutocompleteRelevance score is the sole ranking key");
     }
 
     #endregion
@@ -706,7 +754,7 @@ public class AutocompleteMultiSourceTest : MonolithMeshTestBase
         // MeshOperations.Get with "ACME/ProductLaunch/content/report.md"
         // should recognize content/ as UCR prefix, not treat it as a node path
         var ops = new AI.MeshOperations(Mesh);
-        var result = await ops.Get("@ACME/ProductLaunch/content/report.md");
+        var result = await ops.Get("@ACME/ProductLaunch/content/report.md").Should().Within(30.Seconds()).Emit();
         Output.WriteLine($"Get('@ACME/ProductLaunch/content/report.md'): {result[..Math.Min(200, result.Length)]}");
 
         // Should NOT be "Not found: ACME/ProductLaunch/content/report.md" (node lookup)
@@ -720,7 +768,7 @@ public class AutocompleteMultiSourceTest : MonolithMeshTestBase
     {
         // Legacy colon format should also work
         var ops = new AI.MeshOperations(Mesh);
-        var result = await ops.Get("@ACME/ProductLaunch/content:report.md");
+        var result = await ops.Get("@ACME/ProductLaunch/content:report.md").Should().Within(30.Seconds()).Emit();
         Output.WriteLine($"Get('@ACME/ProductLaunch/content:report.md'): {result[..Math.Min(200, result.Length)]}");
 
         result.Should().NotStartWith("Not found:",
@@ -777,9 +825,12 @@ public class AutocompleteMultiSourceTest : MonolithMeshTestBase
     [Fact(Timeout = 30000)]
     public async Task Streaming_ResultsArriveProgressively()
     {
-        var batchOrder = new List<(string Category, int Priority, int Count)>();
+        var batches = await Orchestrator
+            .GetCompletions("@", "ACME/ProductLaunch")
+            .ToList().Should().Within(30.Seconds()).Emit();
 
-        await foreach (var batch in Orchestrator.GetCompletionsAsync("@", "ACME/ProductLaunch"))
+        var batchOrder = new List<(string Category, int Priority, int Count)>();
+        foreach (var batch in batches)
         {
             batchOrder.Add((batch.Category, batch.CategoryPriority, batch.Items.Count));
             Output.WriteLine($"Received batch: [{batch.CategoryPriority}] {batch.Category} ({batch.Items.Count} items)");

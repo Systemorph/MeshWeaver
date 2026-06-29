@@ -81,6 +81,32 @@
     color: var(--neutral-foreground-hint, #666);
 }
 
+/* Path shown small + muted beneath the name (the "nice mesh node display"). Truncates with
+   an ellipsis so a long space-scoped path (AgenticPension/Agent/Datenextraktion) never blows
+   out the picker width; the full path is available on hover via the title attribute. */
+.mesh-node-picker-path,
+.mesh-node-picker-item-path {
+    font-size: 11px;
+    color: var(--neutral-foreground-hint, #666);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* Category/group chip, right-aligned in the row. */
+.mesh-node-picker-category,
+.mesh-node-picker-item-category {
+    margin-left: auto;
+    align-self: center;
+    flex-shrink: 0;
+    font-size: 10px;
+    line-height: 1;
+    color: var(--neutral-foreground-hint, #666);
+    background: var(--neutral-layer-3, #f0f0f0);
+    border-radius: 8px;
+    padding: 3px 8px;
+}
+
 .mesh-node-picker-clear {
     background: none;
     border: none;
@@ -169,6 +195,13 @@
     background: var(--neutral-layer-2);
 }
 
+/* Keyboard-highlighted row (↑/↓). A clear accent box so the Enter target is obvious — stronger than
+   hover, distinct from the persisted selection tint. */
+.mesh-node-picker-item-highlighted {
+    background: var(--accent-fill-subtle-rest, rgba(0, 120, 212, 0.12));
+    box-shadow: inset 0 0 0 1px var(--accent-fill-rest, #0078d4);
+}
+
 .mesh-node-picker-item-selected {
     background: var(--accent-fill-subtle-rest, rgba(0, 120, 212, 0.08));
 }
@@ -191,4 +224,58 @@
 .mesh-node-picker-item-type {
     font-size: 11px;
     color: var(--neutral-foreground-hint, #666);
+}
+
+/* Open-upward dropdown — for bottom-anchored fields (e.g. the chat composer). Bound the height to
+   the space available ABOVE the field so it doesn't grow up over the panel header (the chat-composer
+   overlap). Whichever is smaller wins: the 300px cap or ~half the viewport. */
+.mesh-node-picker-dropdown--top {
+    top: auto;
+    bottom: 100%;
+    margin-top: 0;
+    margin-bottom: 2px;
+    max-height: min(300px, 45vh);
+}
+
+/* Thin / compact variant — small icon, name only, minimal vertical footprint. */
+.mesh-node-picker--thin .mesh-node-picker-selected {
+    min-height: 28px;
+    padding: 2px 6px;
+}
+
+.mesh-node-picker--thin .mesh-node-picker-input {
+    min-height: 28px;
+    padding: 4px 8px;
+    font-size: 13px;
+}
+
+.mesh-node-picker--thin .mesh-node-picker-avatar {
+    width: 18px;
+    height: 18px;
+    min-width: 18px;
+    font-size: 10px;
+}
+
+.mesh-node-picker--thin ::deep .mesh-node-picker-avatar-img,
+.mesh-node-picker--thin ::deep .mesh-node-picker-avatar-icon {
+    width: 18px;
+    height: 18px;
+    min-width: 18px;
+}
+
+.mesh-node-picker--thin .mesh-node-picker-selected-card {
+    gap: 6px;
+}
+
+.mesh-node-picker--thin .mesh-node-picker-name {
+    font-size: 12px;
+}
+
+/* Hide the secondary node-type line to save vertical space. */
+.mesh-node-picker--thin .mesh-node-picker-type {
+    display: none;
+}
+
+.mesh-node-picker--thin .mesh-node-picker-clear {
+    padding: 2px;
 }

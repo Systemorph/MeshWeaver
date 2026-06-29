@@ -1,12 +1,13 @@
-#pragma warning disable CS1591 // Missing XML comment for publicly visible type or member
+﻿#pragma warning disable CS1591 // Missing XML comment for publicly visible type or member
 
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using FluentAssertions;
 using MeshWeaver.AI;
 using MeshWeaver.AI.Persistence;
 using MeshWeaver.ContentCollections;
@@ -34,6 +35,9 @@ namespace MeshWeaver.AI.Test;
 /// </summary>
 public class MeshPluginContentAccessTest : MonolithMeshTestBase
 {
+    /// <summary>Share Mesh/SP across [Fact]s â€” see MonolithMeshTestBase.ShareMeshAcrossTests.</summary>
+    protected override bool ShareMeshAcrossTests => true;
+
     private static readonly string TestDataPath = Path.Combine(AppContext.BaseDirectory, "TestData");
     private static readonly string ContentBasePath = Path.Combine(Path.GetTempPath(), "MeshPluginContentAccessTest_" + Guid.NewGuid().ToString("N"));
     private readonly string _testId = Guid.NewGuid().ToString("N")[..8];
@@ -61,11 +65,9 @@ public class MeshPluginContentAccessTest : MonolithMeshTestBase
                     Name = "content",
                     SourceType = "FileSystem",
                     IsEditable = true,
+                    ExposeInChildren = true,
                     BasePath = contentDir,
-                    Settings = new Dictionary<string, string>
-                    {
-                        ["BasePath"] = contentDir
-                    }
+                    Settings = new Dictionary<string, string> { ["BasePath"] = contentDir }
                 };
                 config = config.AddContentCollection(_ => nodeContentConfig);
                 return config.AddDefaultLayoutAreas();
@@ -84,8 +86,8 @@ public class MeshPluginContentAccessTest : MonolithMeshTestBase
         Directory.CreateDirectory(contentDir);
         await File.WriteAllTextAsync(Path.Combine(contentDir, "Input_Markus.txt"), "Hello from Markus", TestContext.Current.CancellationToken);
 
-        await NodeFactory.CreateNodeAsync(
-            new MeshNode(nodePath) { Name = "Test Org", NodeType = "Markdown" }, TestContext.Current.CancellationToken);
+        await NodeFactory.CreateNode(
+            new MeshNode(nodePath) { Name = "Test Org", NodeType = "Markdown" });
 
         var plugin = new MeshPlugin(Mesh, new MockAgentChat());
         var result = await plugin.Get($"{nodePath}/content:Input_Markus.txt");
@@ -111,8 +113,8 @@ public class MeshPluginContentAccessTest : MonolithMeshTestBase
         await File.WriteAllTextAsync(Path.Combine(contentDir, "Input_Markus.txt"),
             "Interview notes for Markus about AI Consulting", TestContext.Current.CancellationToken);
 
-        await NodeFactory.CreateNodeAsync(
-            new MeshNode(nodePath) { Name = "Interviews", NodeType = "Markdown" }, TestContext.Current.CancellationToken);
+        await NodeFactory.CreateNode(
+            new MeshNode(nodePath) { Name = "Interviews", NodeType = "Markdown" });
 
         var plugin = new MeshPlugin(Mesh, new MockAgentChat());
         var result = await plugin.Get($"{nodePath}/content:Input_Markus.txt");
@@ -125,7 +127,7 @@ public class MeshPluginContentAccessTest : MonolithMeshTestBase
     }
 
     /// <summary>
-    /// Tests content:collectionName/filename.txt (with slash) — explicit collection name.
+    /// Tests content:collectionName/filename.txt (with slash) Ã¢â‚¬â€ explicit collection name.
     /// </summary>
     [Fact]
     public async Task Get_ContentReference_WithExplicitCollection_ReturnsFileContent()
@@ -135,8 +137,8 @@ public class MeshPluginContentAccessTest : MonolithMeshTestBase
         Directory.CreateDirectory(contentDir);
         await File.WriteAllTextAsync(Path.Combine(contentDir, "report.md"), "# Report Content", TestContext.Current.CancellationToken);
 
-        await NodeFactory.CreateNodeAsync(
-            new MeshNode(nodePath) { Name = "Test Org 2", NodeType = "Markdown" }, TestContext.Current.CancellationToken);
+        await NodeFactory.CreateNode(
+            new MeshNode(nodePath) { Name = "Test Org 2", NodeType = "Markdown" });
 
         var plugin = new MeshPlugin(Mesh, new MockAgentChat());
         var result = await plugin.Get($"{nodePath}/content:content/report.md");
@@ -159,14 +161,15 @@ public class MeshPluginContentAccessTest : MonolithMeshTestBase
         Directory.CreateDirectory(contentDir);
         await File.WriteAllTextAsync(Path.Combine(contentDir, "data.txt"), "Direct access content", TestContext.Current.CancellationToken);
 
-        await NodeFactory.CreateNodeAsync(
-            new MeshNode(nodePath) { Name = "Direct Test", NodeType = "Markdown" }, TestContext.Current.CancellationToken);
+        await NodeFactory.CreateNode(
+            new MeshNode(nodePath) { Name = "Direct Test", NodeType = "Markdown" });
 
         var client = GetClient();
-        var response = await client.AwaitResponse(
-            new GetDataRequest(new UnifiedReference("content:data.txt")),
-            o => o.WithTarget(new Address(nodePath)),
-            new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);
+        // Genuine-async round-trip against a live Monolith node hub: the awaits
+        // hand the thread back to the in-process message pump so the node hub can
+        // activate and deliver. A blocking reactive .Should() holds the thread and
+        // starves that delivery — so this stays async with the Task bridge.
+        var response = await client.Observe(new GetDataRequest(new UnifiedReference("content:data.txt")), o => o.WithTarget(new Address(nodePath))).FirstAsync().ToTask(new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);
 
         Output.WriteLine($"Response error: {response.Message.Error}");
         Output.WriteLine($"Response data: {response.Message.Data}");
@@ -187,14 +190,13 @@ public class MeshPluginContentAccessTest : MonolithMeshTestBase
         var contentDir = Path.Combine(ContentBasePath, nodePath);
         Directory.CreateDirectory(contentDir);
 
-        await NodeFactory.CreateNodeAsync(
-            new MeshNode(nodePath) { Name = "Collection Test", NodeType = "Markdown" }, TestContext.Current.CancellationToken);
+        await NodeFactory.CreateNode(
+            new MeshNode(nodePath) { Name = "Collection Test", NodeType = "Markdown" });
 
         var client = GetClient();
-        var response = await client.AwaitResponse(
-            new GetDataRequest(new UnifiedReference("collection:")),
-            o => o.WithTarget(new Address(nodePath)),
-            new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);
+        // Stays async (Task bridge) — see GetDataRequest_ContentReference_DirectToNodeHub:
+        // a blocking reactive .Should() round-trip starves the in-process pump.
+        var response = await client.Observe(new GetDataRequest(new UnifiedReference("collection:")), o => o.WithTarget(new Address(nodePath))).FirstAsync().ToTask(new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);
 
         Output.WriteLine($"Response error: {response.Message.Error}");
         Output.WriteLine($"Response data type: {response.Message.Data?.GetType().Name}");
@@ -220,9 +222,8 @@ public class MeshPluginContentAccessTest : MonolithMeshTestBase
         await File.WriteAllTextAsync(Path.Combine(contentDir, SpacedFile),
             "the actual report content", TestContext.Current.CancellationToken);
 
-        await NodeFactory.CreateNodeAsync(
-            new MeshNode(nodePath) { Name = "Quoted Test", NodeType = "Markdown" },
-            TestContext.Current.CancellationToken);
+        await NodeFactory.CreateNode(
+            new MeshNode(nodePath) { Name = "Quoted Test", NodeType = "Markdown" });
 
         var plugin = new MeshPlugin(Mesh, new MockAgentChat());
 
@@ -239,8 +240,8 @@ public class MeshPluginContentAccessTest : MonolithMeshTestBase
     }
 
     /// <summary>
-    /// Same as above but quotes wrap the WHOLE relative portion after content/ —
-    /// i.e. content/"name" vs "content/name" — both shapes appear in agent output.
+    /// Same as above but quotes wrap the WHOLE relative portion after content/ Ã¢â‚¬â€
+    /// i.e. content/"name" vs "content/name" Ã¢â‚¬â€ both shapes appear in agent output.
     /// </summary>
     [Fact]
     public async Task Get_AbsolutePath_QuotesAroundContentSegment_ReturnsFileContent()
@@ -252,9 +253,8 @@ public class MeshPluginContentAccessTest : MonolithMeshTestBase
         await File.WriteAllTextAsync(Path.Combine(contentDir, SpacedFile),
             "markus input notes", TestContext.Current.CancellationToken);
 
-        await NodeFactory.CreateNodeAsync(
-            new MeshNode(nodePath) { Name = "Markus Test", NodeType = "Markdown" },
-            TestContext.Current.CancellationToken);
+        await NodeFactory.CreateNode(
+            new MeshNode(nodePath) { Name = "Markus Test", NodeType = "Markdown" });
 
         var plugin = new MeshPlugin(Mesh, new MockAgentChat());
 
@@ -271,7 +271,7 @@ public class MeshPluginContentAccessTest : MonolithMeshTestBase
     }
 
     /// <summary>
-    /// Tolerance matrix — every shape we've actually observed an agent or autocomplete
+    /// Tolerance matrix Ã¢â‚¬â€ every shape we've actually observed an agent or autocomplete
     /// emit for the SAME spaced file. They must all return the file content. Keep this
     /// table extended with new shapes the agents come up with in the wild.
     /// {NODE} is replaced with the per-test node path so the parameterization stays
@@ -294,12 +294,10 @@ public class MeshPluginContentAccessTest : MonolithMeshTestBase
         Directory.CreateDirectory(contentDir);
         const string SpacedFile = "Diskussion Thomas Final Report.txt";
         const string Body = "agent-shape tolerance body";
-        await File.WriteAllTextAsync(Path.Combine(contentDir, SpacedFile), Body,
-            TestContext.Current.CancellationToken);
+        await File.WriteAllTextAsync(Path.Combine(contentDir, SpacedFile), Body, TestContext.Current.CancellationToken);
 
-        await NodeFactory.CreateNodeAsync(
-            new MeshNode(nodePath) { Name = "Tolerance", NodeType = "Markdown" },
-            TestContext.Current.CancellationToken);
+        await NodeFactory.CreateNode(
+            new MeshNode(nodePath) { Name = "Tolerance", NodeType = "Markdown" });
 
         var path = template.Replace("{NODE}", nodePath).Replace("{FILE}", SpacedFile);
         Output.WriteLine($"[{description}] path: {path}");
@@ -312,7 +310,7 @@ public class MeshPluginContentAccessTest : MonolithMeshTestBase
     }
 
     /// <summary>
-    /// Yet another shape an agent (or model) sometimes emits: @"content/some path" — the
+    /// Yet another shape an agent (or model) sometimes emits: @"content/some path" Ã¢â‚¬â€ the
     /// quote sits right after @ and wraps everything that follows. Same fix applies
     /// (strip every quote), this just nails the regression.
     /// </summary>
@@ -326,9 +324,8 @@ public class MeshPluginContentAccessTest : MonolithMeshTestBase
         await File.WriteAllTextAsync(Path.Combine(contentDir, SpacedFile),
             "the contents", TestContext.Current.CancellationToken);
 
-        await NodeFactory.CreateNodeAsync(
-            new MeshNode(nodePath) { Name = "QAfterAt", NodeType = "Markdown" },
-            TestContext.Current.CancellationToken);
+        await NodeFactory.CreateNode(
+            new MeshNode(nodePath) { Name = "QAfterAt", NodeType = "Markdown" });
 
         var plugin = new MeshPlugin(Mesh, new MockAgentChat());
         var path = $"@\"/{nodePath}/content/{SpacedFile}\"";
@@ -347,7 +344,7 @@ public class MeshPluginContentAccessTest : MonolithMeshTestBase
     /// must return the spaced file "Input Markus Apr 15.txt", and the InsertText that
     /// the autocomplete suggests must round-trip through MeshPlugin.Get and return the
     /// file content. This exercises the full chat pipeline: case-insensitive fuzzy
-    /// match → quoted-reference InsertText → ResolvePath → file lookup.
+    /// match Ã¢â€ â€™ quoted-reference InsertText Ã¢â€ â€™ ResolvePath Ã¢â€ â€™ file lookup.
     /// </summary>
     [Fact]
     public async Task Autocomplete_RoundTrip_LowercaseQuery_QuotedInsertText_GetsContent()
@@ -357,22 +354,17 @@ public class MeshPluginContentAccessTest : MonolithMeshTestBase
         Directory.CreateDirectory(contentDir);
         const string SpacedFile = "Input Markus Apr 15.txt";
         const string FileContent = "the input markus body";
-        await File.WriteAllTextAsync(Path.Combine(contentDir, SpacedFile), FileContent,
-            TestContext.Current.CancellationToken);
+        await File.WriteAllTextAsync(Path.Combine(contentDir, SpacedFile), FileContent, TestContext.Current.CancellationToken);
 
-        await NodeFactory.CreateNodeAsync(
-            new MeshNode(nodePath) { Name = "Round Trip", NodeType = "Markdown" },
-            TestContext.Current.CancellationToken);
+        await NodeFactory.CreateNode(
+            new MeshNode(nodePath) { Name = "Round Trip", NodeType = "Markdown" });
 
         var client = GetClient();
 
-        // Step 1 — autocomplete, lowercase, treats node as the chat context.
+        // Step 1 Ã¢â‚¬â€ autocomplete, lowercase, treats node as the chat context.
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
         cts.CancelAfter(TimeSpan.FromSeconds(10));
-        var acResponse = await client.AwaitResponse(
-            new AutocompleteRequest("@markus", nodePath),
-            o => o.WithTarget(new Address(nodePath)),
-            cts.Token);
+        var acResponse = await client.Observe(new AutocompleteRequest("@markus", nodePath), o => o.WithTarget(new Address(nodePath))).FirstAsync().ToTask(cts.Token);
 
         Output.WriteLine($"Autocomplete items: {acResponse.Message.Items.Count}");
         foreach (var item in acResponse.Message.Items)
@@ -386,7 +378,7 @@ public class MeshPluginContentAccessTest : MonolithMeshTestBase
         // The InsertText for a spaced filename is wrapped in quotes by FormatInsertText.
         match.InsertText.Should().Contain("\"", "spaced filenames are quoted in the InsertText");
 
-        // Step 2 — feed the InsertText (verbatim, including quotes) into MeshPlugin.Get,
+        // Step 2 Ã¢â‚¬â€ feed the InsertText (verbatim, including quotes) into MeshPlugin.Get,
         // pretending the agent received it via attachment. Strip trailing whitespace the
         // way the chat input would when treating it as an @reference.
         var insertedRef = match.InsertText.TrimEnd();

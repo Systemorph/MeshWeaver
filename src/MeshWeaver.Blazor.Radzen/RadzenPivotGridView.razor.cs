@@ -4,14 +4,23 @@ using Microsoft.AspNetCore.Components;
 
 namespace MeshWeaver.Blazor.Radzen;
 
+/// <summary>
+/// Blazor view that renders a <c>PivotGridControl</c> using the Radzen pivot data grid.
+/// </summary>
 public partial class RadzenPivotGridView : RadzenViewBase<PivotGridControl, RadzenPivotGridView>
 {
+    [Inject] private DynamicTypeGenerator TypeGenerator { get; set; } = null!;
+
     private PivotConfiguration? Configuration { get; set; }
     private object? RawData { get; set; }
     private Type? DataItemType { get; set; }
     private bool ShowPager { get; set; }
     private int PageSize { get; set; }
 
+    /// <summary>
+    /// Initializes the view and refreshes the rendered output if the Radzen theme changed during base initialization.
+    /// </summary>
+    /// <returns>A task that completes when initialization is finished.</returns>
     protected override async Task OnInitializedAsync()
     {
         var oldTheme = themeService.Theme;
@@ -24,6 +33,9 @@ public partial class RadzenPivotGridView : RadzenViewBase<PivotGridControl, Radz
     }
 
 
+    /// <summary>
+    /// Binds the pivot configuration and data from the view model, generating a runtime row type and projecting the data into a queryable for the Radzen pivot grid.
+    /// </summary>
     protected override void BindData()
     {
         base.BindData();
@@ -38,7 +50,7 @@ public partial class RadzenPivotGridView : RadzenViewBase<PivotGridControl, Radz
 
             // Generate a type based on the configuration using DynamicTypeGenerator
             var properties = GetPropertiesFromConfiguration(Configuration);
-            DataItemType = DynamicTypeGenerator.GenerateType(properties);
+            DataItemType = TypeGenerator.GenerateType(properties);
 
             // Deserialize to the generated type
             var listType = typeof(List<>).MakeGenericType(DataItemType);

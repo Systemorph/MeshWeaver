@@ -1,4 +1,4 @@
-using MeshWeaver.Data;
+﻿using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
 
@@ -50,7 +50,6 @@ public static class GlobalSettingsNodeType
         Icon = "/static/NodeTypeIcons/settings.svg",
         IsSatelliteType = false,
         ExcludeFromContext = new HashSet<string> { "search", "create" },
-        AssemblyLocation = typeof(GlobalSettingsNodeType).Assembly.Location,
         HubConfiguration = config => config
             .AddDefaultGlobalSettingsMenuItems()
             .AddLayout(layout => layout

@@ -3,7 +3,9 @@ using MeshWeaver.Mesh.Security;
 using MeshWeaver.Messaging;
 
 [assembly: InternalsVisibleTo("MeshWeaver.Connection.Orleans")]
+[assembly: InternalsVisibleTo("MeshWeaver.Hosting")]
 [assembly: InternalsVisibleTo("MeshWeaver.Hosting.Monolith")]
+[assembly: InternalsVisibleTo("MeshWeaver.Hosting.Orleans")]
 
 namespace MeshWeaver.Mesh;
 
@@ -12,17 +14,61 @@ namespace MeshWeaver.Mesh;
 /// Types are treated as mesh nodes with nodeType="NodeType".
 /// </summary>
 public class MeshConfiguration(
-    IReadOnlyDictionary<string, MeshNode> meshNodes,
+    IReadOnlyList<MeshNode> meshNodes,
     Func<MessageHubConfiguration, MessageHubConfiguration>? defaultNodeHubConfiguration = null,
     IReadOnlyList<string>? globalCreatableTypes = null,
     IReadOnlySet<string>? autocompleteExcludedNodeTypes = null,
     IReadOnlyList<NodeTypePermission>? nodeTypePermissions = null,
-    IReadOnlyList<QueryRoutingRule>? queryRoutingRules = null)
+    IReadOnlyList<QueryRoutingRule>? queryRoutingRules = null,
+    IReadOnlySet<string>? streamRoutedAddressTypes = null)
 {
     /// <summary>
-    /// Registered mesh nodes by their key/path.
+    /// Address-type prefixes that route via the cluster-wide Orleans memory
+    /// stream rather than grain activation. Populated by modules at startup
+    /// via <c>MeshBuilderExtensions.AddStreamRoutedAddressType</c>.
+    /// Defaults to <c>portal</c> + <c>client</c>; <c>MeshWeaver.Hosting</c>'s
+    /// MeshNodeStreamCache adds <c>cache</c> when its hub is wired.
+    ///
+    /// <para>The silo's <c>RoutingGrain.RouteMessage</c> consults this set
+    /// instead of hard-coding string literals — see
+    /// <c>Doc/Architecture/OrleansTestRoutingPattern.md</c>. Hubs at these
+    /// addresses must call <c>IRoutingService.RegisterStream(IMessageHub)</c>
+    /// in their <c>WithInitialization</c> so the cluster-wide memory stream
+    /// dispatch reaches them.</para>
     /// </summary>
-    public IReadOnlyDictionary<string, MeshNode> Nodes { get; } = meshNodes;
+    public IReadOnlySet<string> StreamRoutedAddressTypes { get; } =
+        streamRoutedAddressTypes ?? DefaultStreamRoutedAddressTypes;
+
+    /// <summary>
+    /// Static initialisation-time defaults — declared here rather than via
+    /// runtime <c>MeshBuilder.AddStreamRoutedAddressType</c> so initialisation
+    /// order can never make a builtin host-hub type "go missing" (no flakes
+    /// from a configurator running before the cache hub's module registers
+    /// itself).
+    /// <list type="bullet">
+    ///   <item><c>portal</c> — Blazor user circuits (PortalApplication).</item>
+    ///   <item><c>client</c> — test client hubs / SDK clients.</item>
+    ///   <item><c>cache</c> — MeshNodeStreamCache's mesh-node-cache hub.</item>
+    /// </list>
+    /// Module-owned host-hub types register themselves via
+    /// <c>MeshBuilder.AddStreamRoutedAddressType</c> (e.g. Graph registers <c>import</c>
+    /// for the static-repo import hub in <c>AddGraph</c>) — they are NOT hard-coded here,
+    /// so this core list stays free of higher-layer knowledge.
+    /// </summary>
+    public static readonly IReadOnlySet<string> DefaultStreamRoutedAddressTypes =
+        new HashSet<string>(StringComparer.Ordinal) { "portal", "client", "cache" };
+
+    // No public Nodes / MeshNodes property. Static nodes registered via
+    // MeshBuilder.AddMeshNodes(...) flow through StaticMeshNodeListProvider
+    // (registered as an IStaticNodeProvider). Application code reads them via
+    // serviceProvider.EnumerateStaticNodes() / FindStaticNode(path).
+    //
+    // The internal AddMeshNodesList is exposed only for framework-internal
+    // consumers in MeshWeaver.Hosting that need to distinguish
+    // AddMeshNodes-seed nodes from other IStaticNodeProvider implementations
+    // (e.g., StaticNodeQueryProvider applies search-context exclusion to
+    // these specifically). Application code MUST use IStaticNodeProvider.
+    internal IReadOnlyList<MeshNode> AddMeshNodesList { get; } = meshNodes;
 
     /// <summary>
     /// Default configuration applied to all node hubs.
@@ -90,7 +136,7 @@ public class MeshConfiguration(
     private readonly Lazy<Dictionary<string, HashSet<string>>> _contextExcludedTypes = new(() =>
     {
         var map = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
-        foreach (var node in meshNodes.Values)
+        foreach (var node in meshNodes)
         {
             if (node.ExcludeFromContext == null || node.ExcludeFromContext.Count == 0)
                 continue;
@@ -134,7 +180,7 @@ public class MeshConfiguration(
     /// Used to determine whether to set MainNode on new instances.
     /// </summary>
     private readonly Lazy<HashSet<string>> _satelliteNodeTypes = new(() =>
-        meshNodes.Values
+        meshNodes
             .Where(n => n.IsSatelliteType)
             .Select(n => n.Path)
             .ToHashSet(StringComparer.OrdinalIgnoreCase));

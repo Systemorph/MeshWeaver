@@ -1,14 +1,10 @@
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Runtime.CompilerServices;
-using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
-using FluentAssertions;
-using FluentAssertions.Extensions;
 using MeshWeaver.AI;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
@@ -25,115 +21,73 @@ using MeshThread = MeshWeaver.AI.Thread;
 namespace MeshWeaver.Threading.Test;
 
 /// <summary>
-/// Tests that delegation failures are properly propagated:
-/// - When sub-thread creation fails, the delegation returns an error result
-/// - When CancellationToken fires, the delegation completes with failure
-/// - The parent thread doesn't hang forever on broken delegations
+/// Verifies that a delegation that cannot complete (broken target) doesn't
+/// trap the parent thread when the user cancels. Submission goes through
+/// <see cref="ThreadSubmission.Submit"/>; cancel flips
+/// <c>RequestedCancellationAt</c> via the thread's MeshNode stream â€” same
+/// pattern the GUI's Stop button uses.
 /// </summary>
 public class DelegationFailureTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
     private const string ContextPath = "User/Roland";
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
-    {
-        return base.ConfigureMesh(builder)
+        => base.ConfigureMesh(builder)
             .ConfigureServices(services =>
             {
-                // Use a slow agent that delegates — the delegation target won't exist
                 services.AddSingleton<IChatClientFactory>(new DelegatingFakeChatClientFactory());
                 return services;
             })
             .AddAI()
             .AddSampleUsers();
-    }
 
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
     {
         configuration.TypeRegistry.AddAITypes();
-        return base.ConfigureClient(configuration)
-            .AddLayoutClient();
-    }
-
-    private async Task<string> CreateThreadAsync(IMessageHub client, string text, CancellationToken ct)
-    {
-        var threadNode = ThreadNodeType.BuildThreadNode(ContextPath, text, "Roland");
-        var delivery = client.Post(new CreateNodeRequest(threadNode),
-            o => o.WithTarget(Mesh.Address))!;
-        var response = await client.RegisterCallback(delivery, (d, _) => Task.FromResult(d), ct);
-        var createResponse = ((IMessageDelivery<CreateNodeResponse>)response).Message;
-        createResponse.Success.Should().BeTrue(createResponse.Error);
-        return createResponse.Node!.Path!;
+        return base.ConfigureClient(configuration).AddLayoutClient();
     }
 
     [Fact]
     public async Task SubmitMessage_WithCancellation_DoesNotHangForever()
     {
-        // This test verifies that when a thread is cancelled, the delegation
-        // doesn't hang indefinitely waiting for a sub-thread response.
-        var ct = new CancellationTokenSource(15.Seconds()).Token;
         var client = GetClient();
-
-        var threadPath = await CreateThreadAsync(client, "Cancellation test", ct);
-
-        // Create cells before submitting (GUI flow)
-        var userMsgId = Guid.NewGuid().ToString("N")[..8];
-        var responseMsgId = Guid.NewGuid().ToString("N")[..8];
-
-        await client.AwaitResponse(new CreateNodeRequest(new MeshNode(userMsgId, threadPath)
-        {
-            NodeType = ThreadMessageNodeType.NodeType, MainNode = ContextPath,
-            Content = new ThreadMessage { Role = "user", Text = "Do something that delegates", Timestamp = DateTime.UtcNow, Type = ThreadMessageType.ExecutedInput }
-        }), o => o.WithTarget(new Address(threadPath)), ct);
-
-        await client.AwaitResponse(new CreateNodeRequest(new MeshNode(responseMsgId, threadPath)
-        {
-            NodeType = ThreadMessageNodeType.NodeType, MainNode = ContextPath,
-            Content = new ThreadMessage { Role = "assistant", Text = "", Timestamp = DateTime.UtcNow, Type = ThreadMessageType.AgentResponse }
-        }), o => o.WithTarget(new Address(threadPath)), ct);
-
-        // Submit a message — the fake agent will try to delegate
-        var submitResponse = await client.AwaitResponse(
-            new SubmitMessageRequest
-            {
-                ThreadPath = threadPath, UserMessageText = "Do something that delegates",
-                UserMessageId = userMsgId, ResponseMessageId = responseMsgId
-            },
-            o => o.WithTarget(new Address(threadPath)), ct);
-        submitResponse.Message.Success.Should().BeTrue(submitResponse.Message.Error);
-
-        // Wait a bit for delegation to start
-        await Task.Delay(1000, ct);
-
-        // Cancel the execution
-        client.Post(new CancelThreadStreamRequest { ThreadPath = threadPath },
-            o => o.WithTarget(new Address(threadPath)));
-
-        // Wait for execution to stop — should not hang
         var workspace = client.GetWorkspace();
-        var messagesStream = workspace.GetRemoteStream<MeshNode>(new Address(threadPath))!
-            .Select(nodes =>
-            {
-                var node = nodes?.FirstOrDefault(n => n.Path == threadPath);
-                return node?.Content as MeshThread;
-            });
 
-        // The thread should eventually have 2 messages (user + response)
-        // and the response should be marked as not executing
-        var thread = await messagesStream
-            .Where(t => t?.Messages.Count >= 2)
-            .Timeout(10.Seconds())
-            .FirstAsync();
+        var threadNode = ThreadNodeType.BuildThreadNode(ContextPath, "Cancellation test", "Roland");
+        var createResp = await client.Observe(new CreateNodeRequest(threadNode),
+            o => o.WithTarget(Mesh.Address)).Should().Within(15.Seconds()).Emit();
+        createResp.Message.Success.Should().BeTrue(createResp.Message.Error ?? "");
+        var threadPath = createResp.Message.Node!.Path!;
+
+        client.SubmitMessage(
+            threadPath,
+            "Do something that delegates",
+            contextPath: ContextPath);
+
+        // Wait until the thread actually starts executing before cancelling â€”
+        // replaces a fixed Task.Delay(1000); cancelling before the CTS is armed
+        // would be a no-op.
+        await workspace.GetMeshNodeStream(threadPath)
+            .Select(n => n.Content as MeshThread)
+            .Should().Within(15.Seconds()).Match(t => t is { IsExecuting: true });
+
+        var cancelled = await workspace.GetMeshNodeStream(threadPath)
+            .Update(curr => curr?.Content is MeshThread t
+                ? curr with { Content = t with { RequestedStatus = ThreadExecutionStatus.Cancelled } }
+                : curr!)
+            .Should().Emit();
+        (cancelled.Content as MeshThread)?.RequestedStatus.Should().Be(ThreadExecutionStatus.Cancelled);
+
+        var thread = await ThreadFlow.ReadThread(client, threadPath,
+            t => t.Messages.Count >= 2,
+            timeout: 10.Seconds()).Should().Within(10.Seconds()).Emit();
 
         thread.Should().NotBeNull();
-        Output.WriteLine($"Thread has {thread!.Messages.Count} messages");
+        Output.WriteLine($"Thread has {thread.Messages.Count} messages");
     }
 
     #region Fake delegating agent
 
-    /// <summary>
-    /// Agent that always tries to delegate to a non-existent "Worker" agent.
-    /// This simulates the failure case where delegation routing fails.
-    /// </summary>
     private class DelegatingFakeChatClient : IChatClient
     {
         public ChatClientMetadata Metadata => new("DelegatingFake");
@@ -147,12 +101,10 @@ public class DelegationFailureTest(ITestOutputHelper output) : MonolithMeshTestB
             IEnumerable<ChatMessage> messages, ChatOptions? options = null,
             [EnumeratorCancellation] CancellationToken cancellationToken = default)
         {
-            // Yield a function call to delegate_to_Worker
             yield return new ChatResponseUpdate(ChatRole.Assistant,
                 [new FunctionCallContent("call1", "delegate_to_Worker",
                     new Dictionary<string, object?> { ["task"] = "Do some work" })]);
 
-            // Wait for the tool result (the framework will invoke the delegation)
             await Task.Delay(100, cancellationToken);
             yield return new ChatResponseUpdate(ChatRole.Assistant, "Delegation completed.");
         }

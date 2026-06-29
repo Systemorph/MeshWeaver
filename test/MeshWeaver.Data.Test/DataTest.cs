@@ -8,13 +8,12 @@ using System.Reactive.Linq;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
-using FluentAssertions;
-using FluentAssertions.Extensions;
 using MeshWeaver.Fixture;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Logging;
 using Xunit;
 
+using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Data.Test;
 
 /// <summary>
@@ -84,9 +83,9 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
         var workspace = GetHost().GetWorkspace();
         var response = await workspace
             .GetObservable<MyData>()
-            .Timeout(10.Seconds())
-            .FirstOrDefaultAsync();
-        response.Should().BeEquivalentTo(MyData.InitialData);
+            .Should().Within(10.Seconds())
+            .Emit();
+        response.Should().BeEquivalentTo(MyData.InitialData, GetHost().JsonSerializerOptions);
     }
 
 
@@ -103,53 +102,41 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
         var clientWorkspace = client.GetWorkspace();
         var data = (await clientWorkspace
                 .GetObservable<MyData>()
-                .Timeout(10.Seconds())
-                .FirstOrDefaultAsync())!
+                .Should().Within(10.Seconds())
+                .Emit())!
             .OrderBy(a => a.Id)
             .ToArray();
 
         data.Should().HaveCount(2);
 
         // act
-        var updateResponse = await client.AwaitResponse(
-            DataChangeRequest.Update(updateItems),
-            o => o.WithTarget(CreateClientAddress()),
-            CancellationTokenSource.CreateLinkedTokenSource(
-                TestContext.Current.CancellationToken,
-                new CancellationTokenSource(3.Seconds()).Token
-            ).Token
-        );
+        var updateResponse = await client.Observe(DataChangeRequest.Update(updateItems), o => o.WithTarget(CreateClientAddress()))
+            .Should().Within(3.Seconds()).Emit();
 
         // asserts
         updateResponse.Message.Should().BeOfType<DataChangeResponse>();
         var expectedItems = new MyData[] { new("1", "AAA"), new("2", "B"), new("3", "CCC") };
 
-        data = (
-            await clientWorkspace
+        data = (await clientWorkspace
                 .GetObservable<MyData>()
-                .Timeout(10.Seconds())
-                .FirstOrDefaultAsync(x => x.Count == 3)
-        )!
+                .Should().Within(10.Seconds())
+                .Match(x => x.Count == 3))!
             .OrderBy(a => a.Id)
             .ToArray();
 
-        data.ToArray().Should().BeEquivalentTo(expectedItems);
-        data = (
-            await GetHost()
+        data.ToArray().Should().BeEquivalentTo(expectedItems, GetHost().JsonSerializerOptions);
+        data = (await GetHost()
                 .GetWorkspace()
                 .GetObservable<MyData>()
-                .Timeout(10.Seconds())
-                .FirstOrDefaultAsync(x => x.Count == 3)
-        )!
+                .Should().Within(10.Seconds())
+                .Match(x => x.Count == 3))!
             .OrderBy(a => a.Id)
             .ToArray();
 
-        data.ToArray().Should().BeEquivalentTo(expectedItems);
-        await Task.Delay(200, CancellationTokenSource.CreateLinkedTokenSource(
-            TestContext.Current.CancellationToken,
-            new CancellationTokenSource(5.Seconds()).Token
-        ).Token);
-        storage.Values.Cast<MyData>().OrderBy(x => x.Id).Should().BeEquivalentTo(expectedItems);
+        data.ToArray().Should().BeEquivalentTo(expectedItems, GetHost().JsonSerializerOptions);
+        // The host workspace surfacing count == 3 means the committed update
+        // (which runs SaveMyData → storage) has already landed — no Task.Delay needed.
+        storage.Values.Cast<MyData>().OrderBy(x => x.Id).Should().BeEquivalentTo(expectedItems, GetHost().JsonSerializerOptions);
     }
 
     /// <summary>
@@ -164,32 +151,26 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
         var data = await GetHost()
             .GetWorkspace()
             .GetObservable<MyData>()
-            .Timeout(10.Seconds())
-            .FirstOrDefaultAsync();
-        data.Should().BeEquivalentTo(MyData.InitialData);
+            .Should().Within(10.Seconds())
+            .Emit();
+        data.Should().BeEquivalentTo(MyData.InitialData, GetHost().JsonSerializerOptions);
 
         var toBeDeleted = data.Take(1).ToArray();
         var expectedItems = data.Skip(1).ToArray();
         // act
-        var deleteResponse = await client.AwaitResponse(
-            DataChangeRequest.Delete(toBeDeleted, "TestUser"),
-            o => o.WithTarget(CreateClientAddress()),
-            CancellationTokenSource.CreateLinkedTokenSource(
-                TestContext.Current.CancellationToken,
-                new CancellationTokenSource(10.Seconds()).Token
-            ).Token
-        );
+        var deleteResponse = await client.Observe(DataChangeRequest.Delete(toBeDeleted, "TestUser"), o => o.WithTarget(CreateClientAddress()))
+            .Should().Within(10.Seconds()).Emit();
         deleteResponse.Message.Status.Should().Be(DataChangeStatus.Committed);
 
         // asserts — verify through host workspace (client filters out own changes via echo prevention)
         data = await GetHost()
             .GetWorkspace()
             .GetObservable<MyData>()
-            .Timeout(10.Seconds())
-            .FirstOrDefaultAsync(i => i.Count == 1);
-        data.Should().BeEquivalentTo(expectedItems);
-        await Task.Delay(100, TestContext.Current.CancellationToken);
-        storage.Values.Should().BeEquivalentTo(expectedItems);
+            .Should().Within(10.Seconds())
+            .Match(i => i.Count == 1);
+        data.Should().BeEquivalentTo(expectedItems, GetHost().JsonSerializerOptions);
+        // count == 1 surfacing means the commit (SaveMyData → storage) already ran.
+        storage.Values.Should().BeEquivalentTo(expectedItems, GetHost().JsonSerializerOptions);
     }
 
     /// <summary>
@@ -212,8 +193,8 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
         var workspace = client.GetWorkspace();
         var myInstance = await workspace
             .GetObservable<MyData>("1")
-            .Timeout(10.Seconds())
-            .FirstAsync();
+            .Should().Within(10.Seconds())
+            .Match(i => i is not null);
         myInstance!.Text.Should().NotBe(TextChange);
 
         // act
@@ -221,39 +202,28 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
         {
             Text = TextChange
         };
-        await client.AwaitResponse(
-            DataChangeRequest.Update([myInstance]),
-            o => o.WithTarget(CreateClientAddress()),
-            CancellationTokenSource.CreateLinkedTokenSource(
-                TestContext.Current.CancellationToken,
-                new CancellationTokenSource(10.Seconds()).Token
-            ).Token
-        );
+        await client.Observe(DataChangeRequest.Update([myInstance]), o => o.WithTarget(CreateClientAddress()))
+            .Should().Within(10.Seconds()).Emit();
 
         var hostWorkspace = GetHost().GetWorkspace();
 
         var instance = await hostWorkspace
             .GetObservable<MyData>("1")
-            .Timeout(10.Seconds())
-            .FirstAsync(i => i?.Text == TextChange);
+            .Should().Within(10.Seconds())
+            .Match(i => i?.Text == TextChange);
         instance.Should().NotBeNull();
-        await Task.Delay(100,
-            CancellationTokenSource.CreateLinkedTokenSource(
-                TestContext.Current.CancellationToken,
-                new CancellationTokenSource(5.Seconds()).Token
-            ).Token);
+        // host observing the changed text means the commit (SaveMyData → storage) already ran.
         storage.Values.Should().Contain(i => ((MyData)i).Text == TextChange);
     }
 
     /// <summary>
     /// Initializes test data for MyData type
     /// </summary>
-    /// <param name="cancellationToken">Cancellation token for the operation</param>
-    /// <returns>A task that represents the asynchronous operation, containing the initialized data</returns>
-    private Task<IEnumerable<MyData>> InitializeMyData(CancellationToken cancellationToken)
+    /// <returns>An observable yielding the initialized MyData instances</returns>
+    private IObservable<IEnumerable<MyData>> InitializeMyData()
     {
         storage = MyData.InitialData.ToImmutableDictionary(x => (object)x.Id, x => (object)x);
-        return Task.FromResult<IEnumerable<MyData>>(MyData.InitialData);
+        return Observable.Return<IEnumerable<MyData>>(MyData.InitialData);
     }
 
     /// <summary>
@@ -282,14 +252,8 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
         var updateItems = new object[] { new MyData("5", null!) };
 
         // act
-        var updateResponse = await client.AwaitResponse(
-            DataChangeRequest.Update(updateItems),
-            o => o.WithTarget(CreateClientAddress()),
-            CancellationTokenSource.CreateLinkedTokenSource(
-                TestContext.Current.CancellationToken,
-                new CancellationTokenSource(3.Seconds()).Token
-            ).Token
-        );
+        var updateResponse = await client.Observe(DataChangeRequest.Update(updateItems), o => o.WithTarget(CreateClientAddress()))
+            .Should().Within(3.Seconds()).Emit();
 
         // asserts
         var response = updateResponse.Message.Should().BeOfType<DataChangeResponse>().Which;
@@ -314,9 +278,9 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
         var host = GetHost();
         var collection = await host.GetWorkspace().GetStream(new CollectionReference(nameof(MyData)))!
             .Select(c => c.Value!.Instances.Values)
-            .FirstAsync();
+            .Should().Emit();
 
-        collection.Should().BeEquivalentTo(MyData.InitialData);
+        collection.Should().BeEquivalentTo(MyData.InitialData, GetHost().JsonSerializerOptions);
     }
 
     [Fact]
@@ -326,8 +290,8 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
         var result = await host.GetWorkspace()
             .GetStream(new SchemaReference(nameof(MyData)))!
             .Select(c => c.Value)
-            .Timeout(10.Seconds())
-            .FirstAsync();
+            .Should().Within(10.Seconds())
+            .Emit();
 
         var schemaInfo = result.Should().BeOfType<SchemaInfo>().Which;
         schemaInfo.Type.Should().Be(nameof(MyData));
@@ -345,8 +309,8 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
         var result = await host.GetWorkspace()
             .GetStream(new SchemaReference(null))!
             .Select(c => c.Value)
-            .Timeout(10.Seconds())
-            .FirstAsync();
+            .Should().Within(10.Seconds())
+            .Emit();
 
         var schemaInfo = result.Should().BeOfType<SchemaInfo>().Which;
         schemaInfo.Type.Should().NotBeNullOrEmpty();
@@ -361,8 +325,8 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
         var result = await host.GetWorkspace()
             .GetStream(new SchemaReference("NonExistentType"))!
             .Select(c => c.Value)
-            .Timeout(10.Seconds())
-            .FirstAsync();
+            .Should().Within(10.Seconds())
+            .Emit();
 
         var schemaInfo = result.Should().BeOfType<SchemaInfo>().Which;
         schemaInfo.Type.Should().Be("NonExistentType");
@@ -376,21 +340,22 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
         var result = await host.GetWorkspace()
             .GetStream(new DataModelReference())!
             .Select(c => c.Value)
-            .Timeout(10.Seconds())
-            .FirstAsync();
+            .Should().Within(10.Seconds())
+            .Emit();
 
-        var types = result.Should().BeAssignableTo<IEnumerable<TypeDescription>>().Which.ToArray();
+        result.Should().BeAssignableTo<IEnumerable<TypeDescription>>();
+        var types = ((IEnumerable<TypeDescription>)result!).ToArray();
         types.Should().NotBeEmpty();
         types.Should().Contain(t => t.Name.Contains("MyData"));
     }
 
     [Fact]
-    public async Task ReduceNodeTypeReference()
+    public void ReduceNodeTypeReference()
     {
         var host = GetHost();
         var stream = host.GetWorkspace()
             .GetStream(new NodeTypeReference(), x => x.ReturnNullWhenNotPresent());
-        stream.Should().NotBeNull();
+        ((object?)stream).Should().NotBeNull();
     }
 
     /// <summary>
@@ -404,14 +369,8 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
         var typeName = typeof(MyData).FullName!;
 
         // act
-        var response = await client.AwaitResponse(
-            new GetDataRequest(new SchemaReference(typeName)),
-            o => o.WithTarget(CreateClientAddress()),
-            CancellationTokenSource.CreateLinkedTokenSource(
-                TestContext.Current.CancellationToken,
-                new CancellationTokenSource(10.Seconds()).Token
-            ).Token
-        );
+        var response = await client.Observe(new GetDataRequest(new SchemaReference(typeName)), o => o.WithTarget(CreateClientAddress()))
+            .Should().Within(10.Seconds()).Emit();
 
         // assert
         response.Message.Should().BeOfType<GetDataResponse>();
@@ -442,14 +401,8 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
         var unknownTypeName = "UnknownType";
 
         // act
-        var response = await client.AwaitResponse(
-            new GetDataRequest(new SchemaReference(unknownTypeName)),
-            o => o.WithTarget(CreateClientAddress()),
-            CancellationTokenSource.CreateLinkedTokenSource(
-                TestContext.Current.CancellationToken,
-                new CancellationTokenSource(10.Seconds()).Token
-            ).Token
-        );
+        var response = await client.Observe(new GetDataRequest(new SchemaReference(unknownTypeName)), o => o.WithTarget(CreateClientAddress()))
+            .Should().Within(10.Seconds()).Emit();
 
         // assert
         response.Message.Should().BeOfType<GetDataResponse>();
@@ -468,14 +421,8 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
         var client = GetClient();
 
         // act
-        var response = await client.AwaitResponse(
-            new GetDomainTypesRequest(),
-            o => o.WithTarget(CreateClientAddress()),
-            CancellationTokenSource.CreateLinkedTokenSource(
-                TestContext.Current.CancellationToken,
-                new CancellationTokenSource(10.Seconds()).Token
-            ).Token
-        );
+        var response = await client.Observe(new GetDomainTypesRequest(), o => o.WithTarget(CreateClientAddress()))
+            .Should().Within(10.Seconds()).Emit();
 
         // assert
         var typesResponse = response.Message.Should().BeOfType<DomainTypesResponse>().Which;
@@ -484,7 +431,7 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
         // Should contain our test type
         var myDataType = typesResponse.Types.FirstOrDefault(t => t.Name.Contains("MyData"));
         myDataType.Should().NotBeNull();
-        myDataType.DisplayName.Should().NotBeNullOrEmpty();
+        myDataType!.DisplayName.Should().NotBeNullOrEmpty();
         myDataType.Description.Should().NotBeNullOrEmpty();
     }
 
@@ -498,21 +445,15 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
         var client = GetClient();
 
         // act
-        var response = await client.AwaitResponse(
-            new GetDomainTypesRequest(),
-            o => o.WithTarget(CreateClientAddress()),
-            CancellationTokenSource.CreateLinkedTokenSource(
-                TestContext.Current.CancellationToken,
-                new CancellationTokenSource(10.Seconds()).Token
-            ).Token
-        );
+        var response = await client.Observe(new GetDomainTypesRequest(), o => o.WithTarget(CreateClientAddress()))
+            .Should().Within(10.Seconds()).Emit();
         // assert
         var typesResponse = response.Message.Should().BeOfType<DomainTypesResponse>().Which;
         var types = typesResponse.Types.ToArray();
 
         // Verify types are sorted by display name
         var sortedTypes = types.OrderBy(t => t.DisplayName).ToArray();
-        types.Should().Equal(sortedTypes, (t1, t2) => (t1.DisplayName).Equals(t2.DisplayName));
+        types.Select(t => t.DisplayName).Should().Equal(sortedTypes.Select(t => t.DisplayName));
     }
 
     /// <summary>
@@ -530,14 +471,8 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
         };
 
         // act
-        var updateResponse = await client.AwaitResponse(
-            DataChangeRequest.Update(invalidItems),
-            o => o.WithTarget(CreateClientAddress()),
-            CancellationTokenSource.CreateLinkedTokenSource(
-                TestContext.Current.CancellationToken,
-                new CancellationTokenSource(10.Seconds()).Token
-            ).Token
-        );
+        var updateResponse = await client.Observe(DataChangeRequest.Update(invalidItems), o => o.WithTarget(CreateClientAddress()))
+            .Should().Within(10.Seconds()).Emit();
 
         // assert
         var response = updateResponse.Message.Should().BeOfType<DataChangeResponse>().Which;
@@ -560,27 +495,21 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
         var initialData = await GetHost()
             .GetWorkspace()
             .GetObservable<MyData>()
-            .Timeout(10.Seconds())
-            .FirstOrDefaultAsync();
+            .Should().Within(10.Seconds())
+            .Emit();
         initialData.Should().NotContain(x => x.Id == "999");
 
         // act
-        var updateResponse = await client.AwaitResponse(
-            DataChangeRequest.Update(new object[] { newItem }),
-            o => o.WithTarget(CreateClientAddress()),
-            CancellationTokenSource.CreateLinkedTokenSource(
-                TestContext.Current.CancellationToken,
-                new CancellationTokenSource(10.Seconds()).Token
-            ).Token
-        );
+        var updateResponse = await client.Observe(DataChangeRequest.Update(new object[] { newItem }), o => o.WithTarget(CreateClientAddress()))
+            .Should().Within(10.Seconds()).Emit();
 
         // assert
         updateResponse.Message.Should().BeOfType<DataChangeResponse>();
         var updatedData = await GetHost()
             .GetWorkspace()
             .GetObservable<MyData>()
-            .Timeout(10.Seconds())
-            .FirstOrDefaultAsync(x => x.Any(item => item.Id == "999"));
+            .Should().Within(10.Seconds())
+            .Match(x => x.Any(item => item.Id == "999"));
         updatedData.Should().Contain(x => x.Id == "999" && x.Text == "New Item");
     }
 
@@ -596,36 +525,15 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
         var updates2 = new object[] { new MyData("11", "Update 2") };
         var updates3 = new object[] { new MyData("12", "Update 3") };
 
-        // act - send multiple updates simultaneously
-        var tasks = new[]
-        {
-            client.AwaitResponse(
-                DataChangeRequest.Update(updates1),
-                o => o.WithTarget(CreateClientAddress()),
-                CancellationTokenSource.CreateLinkedTokenSource(
-                    TestContext.Current.CancellationToken,
-                    new CancellationTokenSource(10.Seconds()).Token
-                ).Token
-            ),
-            client.AwaitResponse(
-                DataChangeRequest.Update(updates2),
-                o => o.WithTarget(CreateClientAddress()),
-                CancellationTokenSource.CreateLinkedTokenSource(
-                    TestContext.Current.CancellationToken,
-                    new CancellationTokenSource(10.Seconds()).Token
-                ).Token
-            ),
-            client.AwaitResponse(
-                DataChangeRequest.Update(updates3),
-                o => o.WithTarget(CreateClientAddress()),
-                CancellationTokenSource.CreateLinkedTokenSource(
-                    TestContext.Current.CancellationToken,
-                    new CancellationTokenSource(10.Seconds()).Token
-                ).Token
-            )
-        };
-
-        var responses = await Task.WhenAll(tasks);
+        // act - send multiple updates simultaneously (merged so all three
+        // subscriptions fire concurrently; buffer until all three responses land)
+        var responses = await Observable.Merge(
+                client.Observe(DataChangeRequest.Update(updates1), o => o.WithTarget(CreateClientAddress())),
+                client.Observe(DataChangeRequest.Update(updates2), o => o.WithTarget(CreateClientAddress())),
+                client.Observe(DataChangeRequest.Update(updates3), o => o.WithTarget(CreateClientAddress())))
+            .Take(3)
+            .ToList()
+            .Should().Within(10.Seconds()).Emit();
 
         // assert
         responses.Should().AllSatisfy(response =>
@@ -634,8 +542,8 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
         var finalData = await GetHost()
             .GetWorkspace()
             .GetObservable<MyData>()
-            .Timeout(10.Seconds())
-            .FirstOrDefaultAsync(x => x.Count >= 5); // Initial 2 + 3 new items
+            .Should().Within(10.Seconds())
+            .Match(x => x.Count >= 5); // Initial 2 + 3 new items
 
         finalData.Should().Contain(x => x.Id == "10" && x.Text == "Update 1");
         finalData.Should().Contain(x => x.Id == "11" && x.Text == "Update 2");
@@ -652,28 +560,16 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
         var client = GetClient();
 
         // act & assert for null - with new implementation, null type returns the first registered type's schema
-        var responseNull = await client.AwaitResponse(
-            new GetDataRequest(new SchemaReference(null)),
-            o => o.WithTarget(CreateClientAddress()),
-            CancellationTokenSource.CreateLinkedTokenSource(
-                TestContext.Current.CancellationToken,
-                new CancellationTokenSource(10.Seconds()).Token
-            ).Token
-        );
+        var responseNull = await client.Observe(new GetDataRequest(new SchemaReference(null)), o => o.WithTarget(CreateClientAddress()))
+            .Should().Within(10.Seconds()).Emit();
 
         responseNull.Message.Should().BeOfType<GetDataResponse>();
         var schemaInfoNull = responseNull.Message.Data.Should().BeOfType<SchemaInfo>().Which;
         schemaInfoNull.Schema.Should().NotBeNullOrEmpty();
 
         // act & assert for empty string
-        var responseEmpty = await client.AwaitResponse(
-            new GetDataRequest(new SchemaReference("")),
-            o => o.WithTarget(CreateClientAddress()),
-            CancellationTokenSource.CreateLinkedTokenSource(
-                TestContext.Current.CancellationToken,
-                new CancellationTokenSource(10.Seconds()).Token
-            ).Token
-        );
+        var responseEmpty = await client.Observe(new GetDataRequest(new SchemaReference("")), o => o.WithTarget(CreateClientAddress()))
+            .Should().Within(10.Seconds()).Emit();
 
         responseEmpty.Message.Should().BeOfType<GetDataResponse>();
         var schemaInfoEmpty = responseEmpty.Message.Data.Should().BeOfType<SchemaInfo>().Which;
@@ -695,41 +591,35 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
         var initialClientData = await client
             .GetWorkspace()
             .GetObservable<MyData>()
-            .Timeout(10.Seconds())
-            .FirstOrDefaultAsync();
+            .Should().Within(10.Seconds())
+            .Emit();
 
         var initialHostData = await host
             .GetWorkspace()
             .GetObservable<MyData>()
-            .Timeout(10.Seconds())
-            .FirstOrDefaultAsync();
+            .Should().Within(10.Seconds())
+            .Emit();
 
-        initialClientData.Should().BeEquivalentTo(initialHostData);
+        initialClientData.Should().BeEquivalentTo(initialHostData, GetHost().JsonSerializerOptions);
 
         // act - update from client
-        await client.AwaitResponse(
-            DataChangeRequest.Update([updateItem]),
-            o => o.WithTarget(CreateClientAddress()),
-            CancellationTokenSource.CreateLinkedTokenSource(
-                TestContext.Current.CancellationToken,
-                new CancellationTokenSource(10.Seconds()).Token
-            ).Token
-        );
+        await client.Observe(DataChangeRequest.Update([updateItem]), o => o.WithTarget(CreateClientAddress()))
+            .Should().Within(10.Seconds()).Emit();
 
         // assert - both client and host should have the same updated data
         var updatedClientData = await client
             .GetWorkspace()
             .GetObservable<MyData>()
-            .Timeout(10.Seconds())
-            .FirstOrDefaultAsync(x => x.Any(item => item.Text == "Updated Text"));
+            .Should().Within(10.Seconds())
+            .Match(x => x.Any(item => item.Text == "Updated Text"));
 
         var updatedHostData = await host
             .GetWorkspace()
             .GetObservable<MyData>()
-            .Timeout(10.Seconds())
-            .FirstOrDefaultAsync(x => x.Any(item => item.Text == "Updated Text"));
+            .Should().Within(10.Seconds())
+            .Match(x => x.Any(item => item.Text == "Updated Text"));
 
-        updatedClientData.Should().BeEquivalentTo(updatedHostData);
+        updatedClientData.Should().BeEquivalentTo(updatedHostData, GetHost().JsonSerializerOptions);
         updatedClientData.Should().Contain(x => x.Id == "1" && x.Text == "Updated Text");
     }
 
@@ -747,11 +637,11 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
         var stream = host.GetWorkspace().GetStream(collectionRef);
         var collection = await stream!
             .Select(c => c.Value!.Instances.Values.Cast<MyData>().ToArray())
-            .Timeout(10.Seconds())
-            .FirstAsync();
+            .Should().Within(10.Seconds())
+            .Emit();
 
         // assert
-        collection.Should().BeEquivalentTo(MyData.InitialData);
+        collection.Should().BeEquivalentTo(MyData.InitialData, GetHost().JsonSerializerOptions);
         collection.Should().AllBeOfType<MyData>();
     }
 
@@ -766,14 +656,8 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
         var collectionRef = new CollectionReference(nameof(MyData));
 
         // act
-        var response = await client.AwaitResponse(
-            new GetDataRequest(collectionRef),
-            o => o.WithTarget(CreateHostAddress()),
-            CancellationTokenSource.CreateLinkedTokenSource(
-                TestContext.Current.CancellationToken,
-                new CancellationTokenSource(10.Seconds()).Token
-            ).Token
-        );
+        var response = await client.Observe(new GetDataRequest(collectionRef), o => o.WithTarget(CreateHostAddress()))
+            .Should().Within(10.Seconds()).Emit();
 
         // assert
         var dataResponse = response.Message.Should().BeOfType<GetDataResponse>().Which;
@@ -794,14 +678,8 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
         var entityRef = new EntityReference(nameof(MyData), "1");
 
         // act
-        var response = await client.AwaitResponse(
-            new GetDataRequest(entityRef),
-            o => o.WithTarget(CreateClientAddress()),
-            CancellationTokenSource.CreateLinkedTokenSource(
-                TestContext.Current.CancellationToken,
-                new CancellationTokenSource(10.Seconds()).Token
-            ).Token
-        );
+        var response = await client.Observe(new GetDataRequest(entityRef), o => o.WithTarget(CreateClientAddress()))
+            .Should().Within(10.Seconds()).Emit();
 
         // assert
         var dataResponse = response.Message.Should().BeOfType<GetDataResponse>().Which;
@@ -822,14 +700,8 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
 
         // act & assert - this might throw or return null/empty, depending on implementation
         // The exact behavior should be consistent with the stream-based approach
-        var response = await client.AwaitResponse(
-            new GetDataRequest(entityRef),
-            o => o.WithTarget(CreateClientAddress()),
-            CancellationTokenSource.CreateLinkedTokenSource(
-                TestContext.Current.CancellationToken
-                , new CancellationTokenSource(10.Seconds()).Token
-            ).Token
-        );
+        var response = await client.Observe(new GetDataRequest(entityRef), o => o.WithTarget(CreateClientAddress()))
+            .Should().Within(10.Seconds()).Emit();
 
         var dataResponse = response.Message.Should().BeOfType<GetDataResponse>().Which;
         dataResponse.Should().NotBeNull();

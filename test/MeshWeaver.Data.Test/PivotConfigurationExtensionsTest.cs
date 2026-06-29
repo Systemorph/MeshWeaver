@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
 using System.Linq;
-using FluentAssertions;
 using MeshWeaver.Domain;
 using MeshWeaver.Layout.Pivot;
 using Xunit;
@@ -223,7 +222,7 @@ public class PivotConfigurationExtensionsTest
         var data = pivotGrid.Data as SalesData[];
         data.Should().NotBeNull();
         data.Should().HaveCount(4);
-        data.Should().BeEquivalentTo(TestData);
+        data.Should().BeEquivalentTo(TestData, System.Text.Json.JsonSerializerOptions.Default);
     }
 
     [Fact]

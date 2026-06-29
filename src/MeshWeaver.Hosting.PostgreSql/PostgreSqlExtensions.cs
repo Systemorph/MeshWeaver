@@ -1,8 +1,10 @@
 using MeshWeaver.Hosting.Persistence;
+using MeshWeaver.Hosting.Persistence.Query;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Activity;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -19,10 +21,12 @@ namespace MeshWeaver.Hosting.PostgreSql;
 public class PostgreSqlStorageAdapterFactory(
     IOptions<PostgreSqlStorageOptions> options) : IStorageAdapterFactory
 {
+    /// <summary>The storage-type key under which this factory is registered.</summary>
     public const string StorageType = "PostgreSql";
 
     private NpgsqlDataSource? _cachedDataSource;
 
+    /// <inheritdoc />
     public IStorageAdapter Create(GraphStorageConfig config, IServiceProvider serviceProvider)
     {
         // Try to use an Aspire-injected or externally-registered NpgsqlDataSource first
@@ -62,20 +66,47 @@ public class PostgreSqlStorageAdapterFactory(
 public static class PostgreSqlExtensions
 {
     /// <summary>
-    /// Registers the Azure Foundry embedding provider from an <see cref="EmbeddingOptions"/> instance.
+    /// Registers an embedding provider from an <see cref="EmbeddingOptions"/> instance,
+    /// selecting the backend by <see cref="EmbeddingOptions.Provider"/>:
+    /// <list type="bullet">
+    /// <item>"Ollama" / "OpenAICompatible" → <see cref="OllamaEmbeddingProvider"/> (local, on-host).</item>
+    /// <item>anything else (default) → <see cref="AzureFoundryEmbeddingProvider"/> (cloud; requires an API key).</item>
+    /// </list>
+    /// No <see cref="EmbeddingOptions.Endpoint"/> ⇒ no provider registered, so the query path
+    /// falls back to the ILIKE text search via <see cref="NullEmbeddingProvider"/>.
     /// </summary>
-    public static IServiceCollection AddAzureFoundryEmbeddings(
+    public static IServiceCollection AddEmbeddings(
         this IServiceCollection services, EmbeddingOptions options)
     {
-        if (string.IsNullOrEmpty(options.Endpoint) || string.IsNullOrEmpty(options.ApiKey))
+        if (string.IsNullOrEmpty(options.Endpoint))
             return services;
 
-        services.AddSingleton<IEmbeddingProvider>(
-            new AzureFoundryEmbeddingProvider(options.Endpoint, options.ApiKey,
-                options.Model, options.Dimensions));
+        IEmbeddingProvider? provider = options.Provider?.Trim().ToLowerInvariant() switch
+        {
+            "ollama" or "openaicompatible" => new OllamaEmbeddingProvider(
+                options.Endpoint, options.Model, options.Dimensions, options.ApiKey,
+                TimeSpan.FromSeconds(options.TimeoutSeconds)),
+            // Azure Foundry (default) needs a key; without one there is nothing to register.
+            _ => string.IsNullOrEmpty(options.ApiKey)
+                ? null
+                : new AzureFoundryEmbeddingProvider(options.Endpoint, options.ApiKey,
+                    options.Model, options.Dimensions),
+        };
+        if (provider is null)
+            return services;
+
+        services.AddSingleton(provider);
         services.Configure<PostgreSqlStorageOptions>(o => o.VectorDimensions = options.Dimensions);
         return services;
     }
+
+    /// <summary>
+    /// Registers the Azure Foundry embedding provider from an <see cref="EmbeddingOptions"/> instance.
+    /// Back-compat shim — prefer <see cref="AddEmbeddings"/>, which also handles the local Ollama path.
+    /// </summary>
+    public static IServiceCollection AddAzureFoundryEmbeddings(
+        this IServiceCollection services, EmbeddingOptions options)
+        => services.AddEmbeddings(options);
 
     /// <summary>
     /// Registers the PostgreSQL storage adapter factory for use with AddPersistenceFromConfig.
@@ -89,16 +120,24 @@ public static class PostgreSqlExtensions
         services.AddKeyedSingleton<IStorageAdapterFactory, PostgreSqlStorageAdapterFactory>(
             PostgreSqlStorageAdapterFactory.StorageType);
 
-        // Register PostgreSqlMeshQuery so it takes priority over InMemoryMeshQuery
-        services.AddSingleton<IMeshQueryProvider>(sp =>
+        // Register PostgreSqlMeshQuery so it takes priority over StorageAdapterMeshQueryProvider.
+        // The same instance is registered under IVectorSearchProvider so the search box /
+        // MCP find / agent tools resolve vector-search via the contract.
+        services.AddSingleton<PostgreSqlMeshQuery>(sp =>
         {
             var adapter = sp.GetRequiredService<IStorageAdapter>() as PostgreSqlStorageAdapter
                 ?? throw new InvalidOperationException(
                     "PostgreSqlMeshQuery requires PostgreSqlStorageAdapter.");
-            var changeNotifier = sp.GetService<IDataChangeNotifier>();
-            var accessService = sp.GetService<AccessService>();
-            return new PostgreSqlMeshQuery(adapter, changeNotifier, accessService);
+            return new PostgreSqlMeshQuery(
+                adapter,
+                sp.GetService<AccessService>(),
+                meshConfiguration: null,
+                excludedNamespaces: null,
+                embeddingProvider: sp.GetService<IEmbeddingProvider>(),
+                ioPoolRegistry: sp.GetService<IoPoolRegistry>());
         });
+        services.AddSingleton<IMeshQueryProvider>(sp => sp.GetRequiredService<PostgreSqlMeshQuery>());
+        services.AddSingleton<IVectorSearchProvider>(sp => sp.GetRequiredService<PostgreSqlMeshQuery>());
 
         return services;
     }
@@ -122,9 +161,19 @@ public static class PostgreSqlExtensions
         var embeddingProvider = services.BuildServiceProvider().GetService<IEmbeddingProvider>();
         var storageAdapter = new PostgreSqlStorageAdapter(dataSource, embeddingProvider);
 
-        // Register PostgreSqlMeshQuery BEFORE AddPersistence so TryAddSingleton picks it up
-        services.AddSingleton<IMeshQueryProvider>(sp =>
-            new PostgreSqlMeshQuery(storageAdapter, sp.GetService<IDataChangeNotifier>(), sp.GetService<AccessService>()));
+        // Register PostgreSqlMeshQuery BEFORE AddPersistence so TryAddSingleton picks it up.
+        // Same instance under IVectorSearchProvider so the search box / MCP find / agent
+        // tools route through HNSW cosine similarity when bare-text tokens are present.
+        services.AddSingleton<PostgreSqlMeshQuery>(sp =>
+            new PostgreSqlMeshQuery(
+                storageAdapter,
+                sp.GetService<AccessService>(),
+                meshConfiguration: null,
+                excludedNamespaces: null,
+                embeddingProvider: embeddingProvider,
+                ioPoolRegistry: sp.GetService<IoPoolRegistry>()));
+        services.AddSingleton<IMeshQueryProvider>(sp => sp.GetRequiredService<PostgreSqlMeshQuery>());
+        services.AddSingleton<IVectorSearchProvider>(sp => sp.GetRequiredService<PostgreSqlMeshQuery>());
 
         services.AddPersistence(storageAdapter);
 
@@ -156,22 +205,26 @@ public static class PostgreSqlExtensions
         // Register concrete adapter type for change listener
         services.AddSingleton(storageAdapter);
 
-        // Register PostgreSqlMeshQuery BEFORE AddPersistence so TryAddSingleton doesn't override it
-        services.AddSingleton<IMeshQueryProvider>(sp =>
+        // PostgreSqlMeshQuery + IVectorSearchProvider — same instance.
+        services.AddSingleton<PostgreSqlMeshQuery>(sp =>
             new PostgreSqlMeshQuery(
                 storageAdapter,
-                sp.GetService<IDataChangeNotifier>(),
-                sp.GetService<AccessService>()));
+                sp.GetService<AccessService>(),
+                meshConfiguration: null,
+                excludedNamespaces: null,
+                embeddingProvider: embeddingProvider,
+                ioPoolRegistry: sp.GetService<IoPoolRegistry>()));
+        services.AddSingleton<IMeshQueryProvider>(sp => sp.GetRequiredService<PostgreSqlMeshQuery>());
+        services.AddSingleton<IVectorSearchProvider>(sp => sp.GetRequiredService<PostgreSqlMeshQuery>());
 
         // Register core persistence services (IStorageAdapter, IStorageService, etc.)
         services.AddPersistence(storageAdapter);
 
-        // Register the Change Listener
+        // Register the Change Listener — feeds the adapter's Changes feed.
         services.AddSingleton(sp =>
         {
-            var notifier = sp.GetRequiredService<IDataChangeNotifier>();
             var logger = sp.GetService<ILogger<PostgreSqlChangeListener>>();
-            return new PostgreSqlChangeListener(dataSource, notifier, logger);
+            return new PostgreSqlChangeListener(dataSource, storageAdapter.ChangeObserver, logger);
         });
 
         // Register access control and activity store
@@ -197,7 +250,7 @@ public static class PostgreSqlExtensions
         var options = serviceProvider.GetService<IOptions<PostgreSqlStorageOptions>>()?.Value
             ?? new PostgreSqlStorageOptions();
 
-        await PostgreSqlSchemaInitializer.InitializeAsync(dataSource, options, ct);
+        await PostgreSqlSchemaInitializer.InitializeAsync(dataSource, options, ct).ConfigureAwait(false);
 
         // Sync node type permissions from MeshConfiguration to the database
         var meshConfig = serviceProvider.GetService<MeshConfiguration>();
@@ -205,7 +258,7 @@ public static class PostgreSqlExtensions
         {
             var ac = serviceProvider.GetService<PostgreSqlAccessControl>()
                 ?? new PostgreSqlAccessControl(dataSource);
-            await ac.SyncNodeTypePermissionsAsync(permissions, ct);
+            await ac.SyncNodeTypePermissionsAsync(permissions, ct).ConfigureAwait(false);
         }
     }
 
@@ -216,6 +269,7 @@ public static class PostgreSqlExtensions
     /// <param name="services">The service collection</param>
     /// <param name="connectionString">PostgreSQL connection string</param>
     /// <param name="configure">Optional configuration for PostgreSqlStorageOptions</param>
+    /// <param name="configureDataSource">Optional hook to further configure the <see cref="NpgsqlDataSourceBuilder"/> before the data source is built.</param>
     /// <returns>The service collection for chaining</returns>
     public static IServiceCollection AddPartitionedPostgreSqlPersistence(
         this IServiceCollection services,
@@ -226,27 +280,101 @@ public static class PostgreSqlExtensions
         var opts = new PostgreSqlStorageOptions { ConnectionString = connectionString };
         configure?.Invoke(opts);
 
-        var dataSourceBuilder = new NpgsqlDataSourceBuilder(connectionString);
-        dataSourceBuilder.UseVector();
-        configureDataSource?.Invoke(dataSourceBuilder);
-        var baseDataSource = dataSourceBuilder.Build();
+        // 🚨 Leak fix: the base NpgsqlDataSource (and its connection pool) used to be
+        // built here as a captured local and handed to the singleton factories below.
+        // A pool built outside the container is never tracked for disposal — DI only
+        // disposes IDisposables IT creates (type/factory registrations, NOT externally
+        // built instances passed to AddSingleton(instance)). So every mesh that ran
+        // this overload leaked a full connection pool on disposal; across a test
+        // project's many meshes the open server connections accumulated until Postgres
+        // rejected new ones ("53300: sorry, too many clients already"). Registering the
+        // data source via a factory makes the container its creator → it is disposed
+        // (pool closed) when the mesh's ServiceProvider is disposed. This also unifies
+        // both overloads on a single DI-resolved NpgsqlDataSource (the Aspire overload
+        // already resolves it from DI).
+        services.AddSingleton<NpgsqlDataSource>(_ =>
+        {
+            var dataSourceBuilder = new NpgsqlDataSourceBuilder(connectionString);
+            dataSourceBuilder.UseVector();
+            configureDataSource?.Invoke(dataSourceBuilder);
+            return dataSourceBuilder.Build();
+        });
 
-        services.TryAddSingleton<IDataChangeNotifier, DataChangeNotifier>();
+        // No need to remove a pre-registered InMemory wildcard: PersistenceService
+        // orders wildcards by IPartitionStorageProvider.Priority desc, and
+        // PostgreSqlPartitionStorageProvider returns 100 (schema-aware) vs.
+        // InMemory's default 0 (catch-all). Postgres claims rbuergi (schema
+        // exists) before InMemory is asked; for paths Postgres doesn't own
+        // (Matches emits false), InMemory's catch-all wins.
 
-        services.AddSingleton<IPartitionedStoreFactory>(sp =>
-            new PostgreSqlPartitionedStoreFactory(
-                baseDataSource,
+        services.AddSingleton<PostgreSqlPartitionStorageProvider>(sp =>
+            new PostgreSqlPartitionStorageProvider(
+                sp.GetRequiredService<NpgsqlDataSource>(),
                 connectionString,
                 opts,
-                sp.GetService<IDataChangeNotifier>(),
+                partitions: null,
                 sp.GetService<IEmbeddingProvider>(),
+                configureDataSource,
+                contexts: null,
+                sp.GetService<ILogger<PostgreSqlPartitionStorageProvider>>(),
+                sp.GetService<MeshWeaver.Mesh.Threading.IoPoolRegistry>()));
+        services.AddSingleton<IPartitionStorageProvider>(sp =>
+            sp.GetRequiredService<PostgreSqlPartitionStorageProvider>());
+
+        // Cross-schema query provider — UNION fan-out over searchable partitions.
+        services.AddSingleton<ICrossSchemaQueryProvider>(sp =>
+            new PostgreSqlCrossSchemaQueryProvider(
+                sp.GetRequiredService<NpgsqlDataSource>(),
+                sp.GetService<ILoggerFactory>()?.CreateLogger<PostgreSqlCrossSchemaQueryProvider>()));
+
+        // Fan-out IMeshQueryProvider — picks up unscoped + wildcard-namespace
+        // queries (Activity Feed, Latest Threads, Recently Viewed) and routes
+        // them through the cross-schema UNION. Scoped queries fall through to
+        // the per-schema StorageAdapterMeshQueryProvider unchanged.
+        services.AddSingleton<IMeshQueryProvider>(sp =>
+            new PostgreSqlPartitionedMeshQuery(
+                sp.GetRequiredService<ICrossSchemaQueryProvider>(),
                 sp.GetService<AccessService>(),
-                sp.GetService<MeshConfiguration>()?.NodeTypePermissions,
-                configureDataSource));
+                sp.GetService<ILogger<PostgreSqlPartitionedMeshQuery>>(),
+                sp.GetRequiredService<PostgreSqlPartitionStorageProvider>(),
+                sp.GetService<IoPoolRegistry>(),
+                sp.GetService<MeshConfiguration>()));
 
-        services.AddSingleton<IPartitionAccessProvider>(
-            new PostgreSqlPartitionAccessProvider(baseDataSource));
+        // pg_notify listener: register both the singleton and an IHostedService
+        // wrapper so the LISTEN session opens at host startup. Without the
+        // hosted-service wrapper the listener never starts and every synced
+        // query's Replay(1) cache freezes at its Initial value (writes propagate
+        // to the table but the cached observable never re-emits).
+        // TODO partitioned-pg change feed: in the partitioned setup the
+        // listener pump-notifications across many per-partition adapters.
+        // For now this PG listener wiring is disabled — each
+        // PostgreSqlStorageAdapter publishes from its own Write/Delete (no
+        // cross-process LISTEN) which is enough for the in-process test
+        // scenarios. A follow-up will route LISTEN events to the right
+        // partition adapter's ChangeObserver via the partition registry.
+        // services.AddSingleton(sp => new PostgreSqlChangeListener(baseDataSource, ..., ...));
+        // services.AddHostedService<PostgreSqlChangeListenerHostedService>();
+        // Boot-time seed: CREATE SCHEMA + table init for every framework
+        // partition advertised by a static node provider. No enumeration —
+        // only what's explicitly registered.
+        services.AddHostedService<PostgreSqlPartitionSubscriptionHostedService>();
+        // #15: the cross-silo partition-state invalidation listener
+        // (PgPartitionNotifyListener / LISTEN partition_changes) is gone. The
+        // router no longer caches/probes schema existence — it maps the first
+        // path segment to a schema synchronously and reads tolerate an absent
+        // schema (42P01 → empty). A partition created on another silo therefore
+        // becomes routable immediately, with no invalidation round-trip.
 
+        // #20: PostgreSqlPartitionedMeshQuery serves unscoped + satellite queries via
+        // fast SQL fan-out, so tell the pedestrian StorageAdapterMeshQueryProvider to
+        // DEFER those (walk only scoped mesh_nodes). This removes the pedestrian's
+        // redundant ListChildPaths walk from those merges — the walk that gated the
+        // 60-70s cross-schema ResolvePath/onboarding stall — without dropping rows
+        // (the pedestrian never visited satellite tables anyway).
+        services.AddSingleton(new StorageAdapterQueryProviderOptions
+        {
+            DeferToNativeProvider = true
+        });
         services.AddPartitionedCoreAndWrapperServices();
 
         return services;
@@ -260,25 +388,20 @@ public static class PostgreSqlExtensions
     /// </summary>
     /// <param name="services">The service collection</param>
     /// <param name="configure">Optional configuration for PostgreSqlStorageOptions</param>
+    /// <param name="configureDataSource">Optional hook to further configure the <see cref="NpgsqlDataSourceBuilder"/> before the data source is built.</param>
     /// <returns>The service collection for chaining</returns>
     public static IServiceCollection AddPartitionedPostgreSqlPersistence(
         this IServiceCollection services,
         Action<PostgreSqlStorageOptions>? configure = null,
         Action<NpgsqlDataSourceBuilder>? configureDataSource = null)
     {
-        services.TryAddSingleton<IDataChangeNotifier, DataChangeNotifier>();
-
-        services.AddSingleton<IPartitionedStoreFactory>(sp =>
+        services.AddSingleton<PostgreSqlPartitionStorageProvider>(sp =>
         {
             var baseDataSource = sp.GetRequiredService<NpgsqlDataSource>();
-            // Resolve connection string from IConfiguration (Aspire-injected) rather than
-            // NpgsqlDataSource.ConnectionString which strips the password (PersistSecurityInfo=false).
             var config = sp.GetService<IConfiguration>();
             var connectionString = config?.GetConnectionString("memex")
                                    ?? baseDataSource.ConnectionString;
 
-            // Ensure username from the Aspire-configured data source is included
-            // (Azure PostgreSQL AAD auth requires the managed identity name as username)
             var baseCsb = new NpgsqlConnectionStringBuilder(baseDataSource.ConnectionString);
             if (!string.IsNullOrEmpty(baseCsb.Username))
             {
@@ -292,30 +415,55 @@ public static class PostgreSqlExtensions
             var opts = new PostgreSqlStorageOptions { ConnectionString = connectionString };
             configure?.Invoke(opts);
 
-            return new PostgreSqlPartitionedStoreFactory(
+            return new PostgreSqlPartitionStorageProvider(
                 baseDataSource,
                 connectionString,
                 opts,
-                sp.GetService<IDataChangeNotifier>(),
+                partitions: null,
                 sp.GetService<IEmbeddingProvider>(),
-                sp.GetService<AccessService>(),
-                sp.GetService<MeshConfiguration>()?.NodeTypePermissions,
-                configureDataSource);
+                configureDataSource,
+                contexts: null,
+                sp.GetService<ILogger<PostgreSqlPartitionStorageProvider>>(),
+                sp.GetService<MeshWeaver.Mesh.Threading.IoPoolRegistry>());
         });
+        services.AddSingleton<IPartitionStorageProvider>(sp =>
+            sp.GetRequiredService<PostgreSqlPartitionStorageProvider>());
 
-        services.AddSingleton<IPartitionAccessProvider>(sp =>
-            new PostgreSqlPartitionAccessProvider(sp.GetRequiredService<NpgsqlDataSource>()));
-
-        // Register cross-schema query provider — uses stored procedure for single-query fan-out
+        // Cross-schema query provider — uses stored procedure for single-query fan-out.
+        // Self-contained discovery via information_schema; no provider/factory dependency.
         services.AddSingleton<ICrossSchemaQueryProvider>(sp =>
-        {
-            var factory = sp.GetRequiredService<IPartitionedStoreFactory>() as PostgreSqlPartitionedStoreFactory
-                ?? throw new InvalidOperationException("Cross-schema queries require PostgreSqlPartitionedStoreFactory");
-            return new PostgreSqlCrossSchemaQueryProvider(
-                sp.GetRequiredService<NpgsqlDataSource>(), factory,
-                sp.GetService<ILoggerFactory>()?.CreateLogger<PostgreSqlCrossSchemaQueryProvider>());
-        });
+            new PostgreSqlCrossSchemaQueryProvider(
+                sp.GetRequiredService<NpgsqlDataSource>(),
+                sp.GetService<ILoggerFactory>()?.CreateLogger<PostgreSqlCrossSchemaQueryProvider>()));
 
+        // Fan-out IMeshQueryProvider — picks up unscoped + wildcard-namespace
+        // queries (Activity Feed, Latest Threads, Recently Viewed) and routes
+        // them through the cross-schema UNION. Scoped queries fall through to
+        // the per-schema StorageAdapterMeshQueryProvider unchanged.
+        services.AddSingleton<IMeshQueryProvider>(sp =>
+            new PostgreSqlPartitionedMeshQuery(
+                sp.GetRequiredService<ICrossSchemaQueryProvider>(),
+                sp.GetService<AccessService>(),
+                sp.GetService<ILogger<PostgreSqlPartitionedMeshQuery>>(),
+                sp.GetRequiredService<PostgreSqlPartitionStorageProvider>(),
+                sp.GetService<IoPoolRegistry>(),
+                sp.GetService<MeshConfiguration>()));
+
+        // Start the Admin/Partition/* subscription so writes can route — see
+        // the longer comment on the same registration in the connection-string
+        // overload above.
+        services.AddHostedService<PostgreSqlPartitionSubscriptionHostedService>();
+
+        // #20: PostgreSqlPartitionedMeshQuery serves unscoped + satellite queries via
+        // fast SQL fan-out, so tell the pedestrian StorageAdapterMeshQueryProvider to
+        // DEFER those (walk only scoped mesh_nodes). This removes the pedestrian's
+        // redundant ListChildPaths walk from those merges — the walk that gated the
+        // 60-70s cross-schema ResolvePath/onboarding stall — without dropping rows
+        // (the pedestrian never visited satellite tables anyway).
+        services.AddSingleton(new StorageAdapterQueryProviderOptions
+        {
+            DeferToNativeProvider = true
+        });
         services.AddPartitionedCoreAndWrapperServices();
 
         return services;

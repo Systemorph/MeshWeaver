@@ -1,5 +1,17 @@
-# This workflow will build a .NET project
-# For more information see: https://docs.github.com/en/actions/automating-builds-and-tests/building-and-testing-net
+# This workflow builds the solution ONCE, then runs the test suite across
+# parallel shards that consume the prebuilt output, and finally consolidates
+# every shard's results in a single collector job.
+#
+#   build ──▶ test (matrix shard 0..3) ──▶ collect-results
+#
+# Why this shape (vs. the old "every shard restores+builds the whole solution"):
+#   * The 50+ project solution was compiled 4× — once per shard. Building once
+#     and shipping the output to the shards removes 3 redundant full builds.
+#   * Shards run `dotnet test --no-build --no-restore` against the extracted
+#     output — they START FROM ARTIFACTS, never recompile, so a shard can only
+#     fail for a real test reason (or genuine infra failure), not a flaky build.
+#   * Results are published from ONE collector job → a single "Test Results"
+#     check is the pass/fail gate, instead of 4 separate per-shard checks.
 
 name: MeshWeaver Build and Test
 
@@ -10,14 +22,52 @@ on:
     branches: [ "main" ]
   workflow_dispatch:
 
-jobs:
-  build:
-    name: Build and Run Unit tests
-    timeout-minutes: 30
-    runs-on: ubuntu-latest
+# Pin the NuGet global-packages folder INSIDE the workspace so the build job's
+# restore output travels in the same artifact as bin/obj. ${{ github.workspace }}
+# is identical across jobs on ubuntu-latest (/home/runner/work/<repo>/<repo>),
+# so the absolute paths baked into project.assets.json / *.nuget.g.props stay
+# valid after the shards extract the tarball — that's what makes
+# `dotnet test --no-build --no-restore` resolve packages offline.
+env:
+  NUGET_PACKAGES: ${{ github.workspace }}/.nuget/packages
 
+# publish-unit-test-result-action runs per shard AND in the collector — both need
+# checks: write to create check-runs and pull-requests: write to comment.
+permissions:
+  contents: read
+  checks: write
+  pull-requests: write
+
+jobs:
+  # ───────────────────────────── BUILD ─────────────────────────────
+  # Compile the whole solution exactly once and package the compiled output
+  # (every project's bin + obj) together with the NuGet global-packages folder
+  # into a single self-contained tarball the shards consume.
+  build:
+    name: "Build solution (once)"
+    timeout-minutes: 25
+    runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v6
+    # The build job packages bin+obj of all 50+ projects PLUS the whole
+    # .nuget/packages folder into a zstd tarball — that's a multi-GB copy on top
+    # of the originals, which overflowed the default ~14 GB ("No space left on
+    # device" in the runner Worker, mid-package). Reclaim the ~25 GB of
+    # preinstalled tooling a .NET build never touches (Android SDK, Haskell/GHC,
+    # preloaded Docker images, big apt packages) — identical to what the test
+    # shards already do. NOT a band-aid for a leak: the build output is a
+    # legitimate, bounded artifact; this just removes genuinely-unused runner
+    # bloat so it fits. Keep .NET + the hosted tool cache (setup-dotnet uses them).
+    - name: Free disk space
+      uses: jlumbroso/free-disk-space@main
+      with:
+        tool-cache: false
+        dotnet: false
+        android: true
+        haskell: true
+        large-packages: true
+        docker-images: true
+        swap-storage: true
     - name: Setup .NET
       uses: actions/setup-dotnet@v5
       with:
@@ -27,44 +77,396 @@ jobs:
     - name: Restore dependencies
       run: dotnet restore
     - name: Build
-      run: dotnet build --no-restore -p:CIRun=true
+      # Merge precondition (a): build green with warnings-as-errors (ReleaseStrategy.md → "Merge
+      # preconditions"). The compiler-warning burn-down (release-governance step A2) is DONE and
+      # TreatWarningsAsErrors=true is set centrally in Directory.Build.props; -warnaserror here makes
+      # the gate explicit at the CI build step. NuGet restore advisories (NU19xx vulnerabilities) stay
+      # warnings (WarningsNotAsErrors in Directory.Build.props) — handled via dependency overrides.
+      run: dotnet build --no-restore -c Release -p:CIRun=true -warnaserror
+    # Node Source can pull MeshWeaver libraries in via a version-LESS `#r "nuget:MeshWeaver.X"`
+    # (e.g. the BusinessRules scope generator the PensionFund sample uses). Tests resolve those
+    # from the mesh-local feed (nuget.config → dist/packages), which is git-ignored — so the
+    # build job must produce them. Pack the just-built RELEASE output at the dev-feed $(Version);
+    # dist/packages travels in the build artifact below, so the --no-build/--no-restore
+    # shards (and the runtime #r resolver inside them) can resolve them offline. These are the
+    # same Release nupkgs you'd publish directly. Self-contained: BusinessRules depends only on
+    # framework packages (already in the restored .nuget cache).
+    - name: Pack mesh-local #r packages
+      run: |
+        set -euo pipefail
+        # -c Release matches the Release build above. NO -p:PackageVersion override: pack at the
+        # repo's continuous dev-feed $(Version) from Directory.Build.props (= 3.0.0-rc1.ci.0 here),
+        # exactly as the portal image's BakeMeshLocalFeed target and the test's documented local
+        # repro do.
+        #
+        # 🚨 Do NOT pin -p:PackageVersion=3.0.0-preview1. nuget.org carries a STALE
+        # MeshWeaver.BusinessRules.Generator 3.0.0-preview1 (published 2026-04-16, before the
+        # generator shipped its lib/<tfm> asset) that has analyzers/dotnet/cs ONLY — no lib/. NuGet's
+        # global-packages cache is keyed solely by (id, version), so once that lib-less copy lands
+        # under .nuget/packages/meshweaver.businessrules.generator/3.0.0-preview1 the runtime #r
+        # resolver's install short-circuit reuses it and NEVER surfaces the lib/ assembly — scope
+        # nodes compile but generate nothing (PensionFund balance sheet renders empty;
+        # NuGetAssemblyResolverTest fails at the lib/ assertion). packageSourceMapping pins resolution
+        # to this feed, but it can't un-poison a colliding cache key. rc1.ci.N is never published on
+        # nuget.org, so the cache key can ONLY ever be this lib-containing local package.
+        dotnet pack src/MeshWeaver.BusinessRules/MeshWeaver.BusinessRules.csproj \
+          -c Release --no-build --no-restore -o dist/packages --nologo
+        dotnet pack src/MeshWeaver.BusinessRules.Generator/MeshWeaver.BusinessRules.Generator.csproj \
+          -c Release --no-build --no-restore -o dist/packages --nologo
+        ls -lh dist/packages
+    - name: Package build output
+      run: |
+        set -euo pipefail
+        # Collect every project's compiled output (bin) + restore graph (obj),
+        # plus the workspace-local NuGet packages folder. -prune stops find from
+        # descending once a bin/obj matches, so nested matches aren't tarred
+        # twice. .git and the packages tree are excluded from the bin/obj scan;
+        # the packages folder is appended explicitly (added whole below).
+        find . -type d \( -name bin -o -name obj \) \
+          -not -path './.git/*' -not -path './.nuget/*' -prune -print > .build-paths.txt
+        echo "./.nuget/packages" >> .build-paths.txt
+        # The mesh-local #r feed packed above — the test shards' runtime #r resolver reads it.
+        echo "./dist/packages" >> .build-paths.txt
+        # One zstd tarball (-T0 = all cores) moves through upload/download-artifact
+        # FAR faster than the millions of loose bin/obj/packages files would.
+        tar -I 'zstd -T0' -cf build-output.tar.zst -T .build-paths.txt
+        echo "Packaged build output:"
+        ls -lh build-output.tar.zst
+    - name: "Upload artifact: build output"
+      uses: actions/upload-artifact@v6
+      with:
+        name: build-output
+        path: build-output.tar.zst
+        # Intermediate, consumed within this run only.
+        retention-days: 1
+        # Already zstd-compressed — skip the redundant zip pass.
+        compression-level: 0
+
+  # ───────────────────────────── TEST ──────────────────────────────
+  # Matrix-sharded: the ~45 test projects are split across SHARD_TOTAL parallel
+  # runners (each runs a disjoint subset). Each shard downloads the prebuilt
+  # output and runs `dotnet test --no-build --no-restore` — NO restore, NO
+  # build. It cuts the per-runner project count (and the leftover-state / memory
+  # accumulation that made late projects flake under the old single-runner
+  # sequential loop) by ~SHARD_TOTAL×.
+  # 30 min: a single shard's ~10 projects run in ~15-20 min; headroom for one
+  # hung project burning its 6m wall-clock cap.
+  test:
+    name: "Run tests (shard ${{ matrix.shard }})"
+    needs: build
+    timeout-minutes: 30
+    runs-on: ubuntu-latest
+    strategy:
+      # Don't cancel sibling shards when one fails — we want every shard's
+      # results so the PR shows the full failure picture, not just the first.
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+
+    steps:
+    - uses: actions/checkout@v6
+    # The ~14 GB free on a GitHub-hosted runner does not fit the extracted 50-project
+    # build output + the pgvector Testcontainers image + per-project test outputs/blame
+    # dumps + runner _diag logs — shards were dying with "No space left on device" (the
+    # runner Worker itself, mid-run). Reclaim the ~25 GB of preinstalled tooling a
+    # .NET+Postgres test run never touches (Android SDK, Haskell/GHC, preloaded Docker
+    # images, big apt packages). NOT a band-aid for a code leak — it removes genuinely
+    # unused runner bloat so the legitimate test workload fits. Keep .NET + the hosted
+    # tool cache (setup-dotnet uses them).
+    - name: Free disk space
+      uses: jlumbroso/free-disk-space@main
+      with:
+        tool-cache: false
+        dotnet: false
+        android: true
+        haskell: true
+        large-packages: true
+        docker-images: true
+        swap-storage: true
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v5
+      with:
+        dotnet-version: 10.0.x
+    # Workloads (e.g. aspire) live in the SDK, not in the build artifact — they
+    # are needed for MSBuild to evaluate workload-referencing projects even under
+    # --no-build. This installs SDK packs only; it does NOT recompile the solution.
+    - name: Restore workloads
+      run: dotnet workload restore
+    - name: "Download artifact: build output"
+      uses: actions/download-artifact@v6
+      with:
+        name: build-output
+    - name: Extract build output
+      run: |
+        set -euo pipefail
+        tar -I zstd -xf build-output.tar.zst
+        rm -f build-output.tar.zst
     - name: Run Tests
-      continue-on-error: true
       env:
         DOTNET_ENVIRONMENT: Development
         Logging__LogLevel__Default: Warning
+        SHARD_INDEX: ${{ matrix.shard }}
+        SHARD_TOTAL: 4
       run: |
-        find test -name '*.csproj' \
-          ! -path '*PostgreSql*' \
-          ! -path '*Cosmos*' \
-          ! -path '*Orleans*' \
-          ! -path '*Acme*' \
-          ! -path '*FutuRe*' \
-          -exec dotnet test {} --no-build --verbosity normal -l:trx \
-                --blame-hang-timeout 3m --blame-hang-dump-type mini \; 2>&1 | tee test/test-results.log
+        # Only Cosmos is excluded — needs the Cosmos emulator which is heavy to
+        # set up on a runner. Everything else runs (PostgreSql via Testcontainers
+        # using pre-installed Docker, Orleans via in-proc TestCluster, Acme/FutuRe
+        # via dynamic Code-piece compilation).
+        #
+        # set +e so a hung/aborted test host (non-zero exit) doesn't terminate
+        # the loop — we want EVERY csproj to attempt to run, then surface what
+        # broke after the loop completes. The collect-results job is the gate;
+        # this step always exits 0 so per-project failures don't mask sibling
+        # projects that still need to run.
+        #
+        # Disk hygiene: `--verbosity minimal`, no tee — trx files capture full
+        # per-test results; only the per-project exit markers are persisted to
+        # test/test-results.log.
+        set +e
+        : > test/test-results.log
+        echo "::group::Per-project test runs (shard $SHARD_INDEX/$SHARD_TOTAL)"
+        # `! -path '*/bin/*'`: the build copies sample csproj fixtures into test
+        # bin dirs (e.g. MeshWeaver.Samples.Graph.csproj under
+        # test/MeshWeaver.Acme.Test/bin/Debug/net10.0/SamplesGraph/). They match
+        # the *.csproj pattern but aren't test projects — invoking dotnet test on
+        # each wastes ~1 s × N entries per run.
+        #
+        # Shard selection (weighted): the ~7 dynamic-compilation / collectible-ALC
+        # heavyweights (Acme, AI, Content, FutuRe, Graph, Hosting.Monolith,
+        # Hosting.Orleans) dominate BOTH wall-clock AND the per-runner memory
+        # accumulation (leaked NodeType ALCs) that makes a late project GC-stall and
+        # time out. A plain `idx % SHARD_TOTAL` over the *alphabetical* list happened
+        # to drop the three worst — AI + FutuRe + Orleans — all onto shard 2, which
+        # then memory-pressured and timed out the Orleans Resubmit test at 45 s +
+        # crashed teardown. Fix: round-robin the heavies on their OWN counter so
+        # consecutive heavies always land on different shards (AI/FutuRe/Orleans →
+        # distinct shards), and round-robin the light projects on a separate counter.
+        # Net: no shard carries more than two heavies, never the three ALC-heaviest
+        # together. AI.Test.FakeCli is a helper exe, not a heavy test → stays light.
+        heavy_idx=0
+        light_idx=0
+        for csproj in $(find test -name '*.csproj' \
+            ! -path '*Cosmos*' \
+            ! -path '*/bin/*' \
+            | sort); do
+          name=$(basename "$csproj" .csproj)
+          case "$name" in
+            MeshWeaver.Acme.Test|MeshWeaver.AI.Test|MeshWeaver.Content.Test|MeshWeaver.FutuRe.Test|MeshWeaver.Graph.Test|MeshWeaver.Hosting.Monolith.Test|MeshWeaver.Hosting.Orleans.Test)
+              assigned=$(( heavy_idx % SHARD_TOTAL ))
+              heavy_idx=$(( heavy_idx + 1 ))
+              ;;
+            *)
+              assigned=$(( light_idx % SHARD_TOTAL ))
+              light_idx=$(( light_idx + 1 ))
+              ;;
+          esac
+          if [ "$assigned" -ne "$SHARD_INDEX" ]; then
+            continue
+          fi
+          echo "::endgroup::"
+          echo "::group::$name"
+          # `timeout 6m`: per-project wall-clock cap. blame-hang-timeout 90s only
+          # fires when xUnit considers a *test* to have stalled — fixture-init
+          # and between-class hangs slip past it. 6 min covers the slowest
+          # legitimate project today (FutuRe ~5 min) with headroom; defense-in-
+          # depth backstop in case any of the skipped Linux-hang projects gets
+          # re-enabled or another regresses to the same pattern.
+          # blame-hang-timeout: 90 s of test-runner inactivity before blame
+          # collects a hang dump and aborts the test host. 90 s gives genuine
+          # teardown room (hosted-hub / static-cache dispose) without masking real
+          # hangs (the per-project 6 m wall-clock cap is the hard backstop).
+          # --no-build --no-restore: run STRICTLY against the extracted build
+          # output — never recompile or hit the network on a test runner.
+          timeout --signal=TERM --kill-after=30s 6m \
+            dotnet test "$csproj" -c Release --no-build --no-restore --verbosity minimal -l:trx \
+              --blame-hang-timeout 90s --blame-hang-dump-type mini
+          rc=$?
+          if [ "$rc" = "124" ] || [ "$rc" = "137" ]; then
+            marker="[CI] $name exit=$rc TIMEOUT (6m wall-clock cap hit — likely fixture/init hang)"
+          else
+            marker="[CI] $name exit=$rc"
+          fi
+          echo "$marker"
+          echo "$marker" >> test/test-results.log
+        done
+        echo "::endgroup::"
+        exit 0
     - name: Collect test logs for artifact
       if: always()
       run: |
         mkdir -p collected-logs
         # Find all test-logs directories and collect their contents without renaming
         find . -path "*/bin/*/test-logs/*.log" -type f -exec cp {} collected-logs/ \; 2>/dev/null || true
-    - name: Publish Test Results
-#      uses: EnricoMi/publish-unit-test-result-action/composite@v2
-      uses: EnricoMi/publish-unit-test-result-action@v2.12.0
-      if: always()
-      with:
-        action_fail: true
-        # File patterns of test result files. Relative paths are known to work best, while the composite action also works with absolute paths. Supports "*", "**", "?", and "[]" character ranges. Use multiline string for multiple patterns. Patterns starting with "!" exclude the matching files. There have to be at least one pattern starting without a "!". 
-        files: |
-          test/**/*.trx
-    - name: "Upload artifact: Test Results"
+        # The MonolithMeshTestBase phase trace + dispose trace live in the
+        # process tempdir (Path.GetTempPath() == /tmp on the runner). They
+        # carry the per-class INIT_MEM / DISPOSE_MEM lines that pinpoint
+        # which test class drives the AI.Test / Autocomplete.Test / Content.Test
+        # / Hosting.Monolith.Test OOM. Copy with rename so they don't collide.
+        if [ -f /tmp/meshweaver-test-trace.log ]; then
+          cp /tmp/meshweaver-test-trace.log collected-logs/_meshweaver-test-trace.log
+        fi
+        if [ -f /tmp/meshweaver-dispose-trace.log ]; then
+          cp /tmp/meshweaver-dispose-trace.log collected-logs/_meshweaver-dispose-trace.log
+        fi
+        # Per-class INIT → DISPOSE memory delta summary (one line per test instance):
+        # managed=… rss=… rssAnon=… unmanaged=… shared=0|1
+        # rssAnon (Linux only) is where the Autofac Reflection.Emit factory pin lives;
+        # unmanaged = rss − managed is the portable approximation. Grep this file to
+        # find the worst leakers without wading through the full per-event trace.
+        if [ -f /tmp/meshweaver-memory-delta.log ]; then
+          cp /tmp/meshweaver-memory-delta.log collected-logs/_meshweaver-memory-delta.log
+        fi
+    - name: "Upload artifact: shard test results"
       uses: actions/upload-artifact@v6
       if: always()
       with:
-        name: testResults
+        # Unique per shard so the 4 parallel matrix legs don't clobber each
+        # other; collect-results downloads them all by the testResults-shard* glob.
+        name: testResults-shard${{ matrix.shard }}
         path: |
           test/**/*.trx
           test/test-results.log
+          test/**/blame-*.dmp
           collected-logs/
         compression-level: 9
         retention-days: 15
+    # ── Per-shard surfacing: publish THIS shard's results as soon as it
+    #    finishes, so you don't wait for the slowest sibling + the collector to
+    #    see shard 0's outcome. The collect-results job re-consolidates all
+    #    shards into one check at the end.
+    - name: Summarize test failures (this shard)
+      if: always()
+      run: |
+        echo "### Failed tests — shard ${{ matrix.shard }}" >> "$GITHUB_STEP_SUMMARY"
+        any=0
+        for trx in $(find test -name '*.trx' 2>/dev/null | sort); do
+          fails=$(grep -oE '<UnitTestResult[^>]*outcome="Failed"[^>]*>' "$trx" \
+                  | grep -oE 'testName="[^"]*"' \
+                  | sed -E 's/testName="([^"]*)"/\1/' | sort -u)
+          if [ -n "$fails" ]; then
+            any=1
+            while IFS= read -r t; do
+              [ -z "$t" ] && continue
+              echo "::error title=Test failed (shard ${{ matrix.shard }})::$t"
+              echo "- \`$t\`" >> "$GITHUB_STEP_SUMMARY"
+            done <<< "$fails"
+          fi
+        done
+        if [ "$any" = "0" ]; then
+          echo "_No failed tests in trx for shard ${{ matrix.shard }} (a hang/crash would show below)._" >> "$GITHUB_STEP_SUMMARY"
+        else
+          # 🚨 GATE (TRX-based, reporter-independent): fail the shard on any test
+          # failure recorded in the trx. The Publish step below is a best-effort
+          # reporter whose GitHub-API call can be rate-limited (429 when 4 shards
+          # publish concurrently); a throttled reporter must NEVER be the pass/fail
+          # gate. This trx grep + the hang-dump check below own the gate now.
+          echo "::error::Shard ${{ matrix.shard }}: failing tests in trx — failing the shard."
+          exit 1
+        fi
+    - name: Publish Test Results (this shard)
+      uses: EnricoMi/publish-unit-test-result-action@v2.12.0
+      if: always()
+      # Best-effort reporter ONLY — the TRX-summarize step above is the gate.
+      # action_fail removed + continue-on-error so a GitHub-API 429 (concurrent
+      # shard publishes) can't fail the build; test failures fail via the trx gate.
+      continue-on-error: true
+      with:
+        # Per-shard check so the 4 matrix legs don't clobber each other's
+        # check-run; distinct from the collector's "Test Results" check.
+        check_name: "Test Results (shard ${{ matrix.shard }})"
+        files: |
+          test/**/*.trx
+    - name: Fail on hang / aborted test run (this shard)
+      # A hang aborts the test host and writes blame-*.dmp; fail the shard loudly
+      # so it isn't masked behind a green "results published" check. Last step so
+      # the artifact upload + per-shard publish above already ran.
+      if: always()
+      run: |
+        hang_dumps=$(find test -name 'blame-*.dmp' 2>/dev/null | wc -l)
+        if [ "$hang_dumps" -gt 0 ]; then
+          echo "::error::Shard ${{ matrix.shard }}: a test process hung — blame-*.dmp written."
+          find test -name 'blame-*.dmp' 2>/dev/null
+          cat test/test-results.log
+          exit 1
+        fi
+
+  # ──────────────────────── COLLECT RESULTS ────────────────────────
+  # Single fan-in: pull every shard's results and produce ONE consolidated
+  # "Test Results" check plus a combined step summary. This job is the run's
+  # pass/fail gate for tests + hangs. (A shard job that infra-fails reds the run
+  # on its own — GitHub's run conclusion is failure if ANY job fails, regardless
+  # of this always() collector's own conclusion.)
+  collect-results:
+    name: "Consolidate test results"
+    needs: test
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+    - name: Download all shard results
+      uses: actions/download-artifact@v6
+      with:
+        # No merge-multiple: keep each shard under its own dir so same-named
+        # files (test-results.log) from different shards don't overwrite.
+        pattern: testResults-shard*
+        path: all-results
+    - name: Summarize test failures
+      # Parse every shard's trx and echo each failed test as an ::error::
+      # annotation + into the job step summary, so failing tests are visible
+      # directly on THIS job without opening the published check.
+      if: always()
+      run: |
+        echo "### Failed tests (all shards)" >> "$GITHUB_STEP_SUMMARY"
+        any=0
+        for trx in $(find all-results -name '*.trx' 2>/dev/null | sort); do
+          # testName on each UnitTestResult element whose outcome is Failed.
+          fails=$(grep -oE '<UnitTestResult[^>]*outcome="Failed"[^>]*>' "$trx" \
+                  | grep -oE 'testName="[^"]*"' \
+                  | sed -E 's/testName="([^"]*)"/\1/' | sort -u)
+          if [ -n "$fails" ]; then
+            any=1
+            while IFS= read -r t; do
+              [ -z "$t" ] && continue
+              echo "::error title=Test failed::$t"
+              echo "- \`$t\`" >> "$GITHUB_STEP_SUMMARY"
+            done <<< "$fails"
+          fi
+        done
+        if [ "$any" = "0" ]; then
+          echo "_No failed tests in trx (a hang/crash would show below)._" >> "$GITHUB_STEP_SUMMARY"
+          echo "No failed tests found in trx across all shards."
+        else
+          # 🚨 GATE (TRX-based, reporter-independent): the consolidated run pass/fail
+          # gate. Fail on any test failure across shards, independent of the Publish
+          # step's GitHub-API health (429-immune). Hangs are gated by the dump check.
+          echo "::error::Failing tests in trx across shards — failing the run."
+          exit 1
+        fi
+    - name: Publish Test Results
+      uses: EnricoMi/publish-unit-test-result-action@v2.12.0
+      if: always()
+      # Best-effort reporter ONLY (reporting, not gating) — the TRX-summarize step
+      # above is the gate. action_fail removed + continue-on-error so a throttled
+      # GitHub-API publish (429) can't fail the run; failures fail via the trx gate.
+      continue-on-error: true
+      with:
+        # One consolidated check across all shards (reporting only now).
+        check_name: "Test Results"
+        files: |
+          all-results/**/*.trx
+    - name: Fail on hang / aborted test run
+      # blame-hang aborts the test host and writes a minidump (blame-*.dmp).
+      # Test *failures* are surfaced by Publish Test Results above; this step's
+      # only job is to fail loudly on a HANG so it doesn't get masked behind a
+      # "test results published" green checkmark when a trx contains only what
+      # completed before the abort. Runs even if Publish failed (if: always).
+      if: always()
+      run: |
+        hang_dumps=$(find all-results -name 'blame-*.dmp' 2>/dev/null | wc -l)
+        if [ "$hang_dumps" -gt 0 ]; then
+          echo "::error::A test process hung — blame-*.dmp files were written."
+          echo "--- Hang dumps ---"
+          find all-results -name 'blame-*.dmp' 2>/dev/null
+          echo "--- Per-project exit codes (non-zero indicates the hung project) ---"
+          find all-results -name 'test-results.log' -exec cat {} \;
+          exit 1
+        fi

@@ -3,7 +3,6 @@
     <Nullable>enable</Nullable>
 </PropertyGroup>
     <ItemGroup>
-        <EmbeddedResource Include="Commands\Help\*.md" />
         <EmbeddedResource Include="Data\**\*.md" />
     </ItemGroup>
     <ItemGroup>
@@ -26,6 +25,7 @@
     <ItemGroup>
       <ProjectReference Include="..\MeshWeaver.Application.Styles\MeshWeaver.Application.Styles.csproj" />
       <ProjectReference Include="..\MeshWeaver.ContentCollections\MeshWeaver.ContentCollections.csproj" />
+      <ProjectReference Include="..\MeshWeaver.ContentCollections.Indexing\MeshWeaver.ContentCollections.Indexing.csproj" />
       <ProjectReference Include="..\MeshWeaver.Data.Contract\MeshWeaver.Data.Contract.csproj" />
       <ProjectReference Include="..\MeshWeaver.Data\MeshWeaver.Data.csproj" />
       <ProjectReference Include="..\MeshWeaver.Graph\MeshWeaver.Graph.csproj" />
@@ -37,5 +37,6 @@
 
     <ItemGroup>
         <InternalsVisibleTo Include="MeshWeaver.AI.Test" />
+        <InternalsVisibleTo Include="MeshWeaver.Threading.Test" />
     </ItemGroup>
 </Project>

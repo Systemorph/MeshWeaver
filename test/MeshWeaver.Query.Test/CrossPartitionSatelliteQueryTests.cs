@@ -2,8 +2,8 @@ using System;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using FluentAssertions;
-using FluentAssertions.Extensions;
+using System.Reactive.Threading.Tasks;
+using System.Reactive.Linq;
 using MeshWeaver.AI;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
@@ -40,37 +40,31 @@ public class CrossPartitionSatelliteQueryTests(ITestOutputHelper output) : Monol
         return base.ConfigureClient(configuration);
     }
 
-    // ── Thread fan-out ──────────────────────────────────────────────────
+    // â”€â”€ Thread fan-out â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     [Fact(Timeout = 30000)]
     public async Task NodeTypeThread_FansOutAcrossAllPartitions()
     {
-        // Arrange: create two partitions with threads in each
-        await NodeFactory.CreateNodeAsync(
-            new MeshNode("PartitionA") { Name = "Partition A", NodeType = "Markdown" }, TestTimeout);
-        await NodeFactory.CreateNodeAsync(
-            new MeshNode("PartitionB") { Name = "Partition B", NodeType = "Markdown" }, TestTimeout);
+        // Arrange: create two partitions with threads in each. Top-level partition roots are
+        // seeded under System (only the partition provisioner may create a non-partition type
+        // at the root); the threads beneath them belong to the test (Admin).
+        await SeedTopLevel(new MeshNode("PartitionA") { Name = "Partition A", NodeType = "Markdown" });
+        await SeedTopLevel(new MeshNode("PartitionB") { Name = "Partition B", NodeType = "Markdown" });
 
         var client = GetClient();
 
-        var resp1 = await client.AwaitResponse(
-            new CreateNodeRequest(ThreadNodeType.BuildThreadNode("PartitionA", "Thread in A", AdminUserId)),
-            o => o.WithTarget(new Address("PartitionA")), TestTimeout);
-        resp1.Message.Success.Should().BeTrue(resp1.Message.Error);
+        var resp1 = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode("PartitionA", "Thread in A", AdminUserId)), o => o.WithTarget(new Address("PartitionA"))).Should().Within(TimeSpan.FromSeconds(25)).Emit();
+        resp1.Message.Success.Should().BeTrue(resp1.Message.Error ?? "");
         var threadA = resp1.Message.Node!.Path!;
         Output.WriteLine($"Thread A: {threadA}");
 
-        var resp2 = await client.AwaitResponse(
-            new CreateNodeRequest(ThreadNodeType.BuildThreadNode("PartitionB", "Thread in B", AdminUserId)),
-            o => o.WithTarget(new Address("PartitionB")), TestTimeout);
-        resp2.Message.Success.Should().BeTrue(resp2.Message.Error);
+        var resp2 = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode("PartitionB", "Thread in B", AdminUserId)), o => o.WithTarget(new Address("PartitionB"))).Should().Within(TimeSpan.FromSeconds(25)).Emit();
+        resp2.Message.Success.Should().BeTrue(resp2.Message.Error ?? "");
         var threadB = resp2.Message.Node!.Path!;
         Output.WriteLine($"Thread B: {threadB}");
 
-        // Act: query nodeType:Thread without namespace — should fan out to all _Thread tables
-        var results = await MeshQuery
-            .QueryAsync<MeshNode>("nodeType:Thread sort:LastModified-desc")
-            .ToListAsync();
+        // Act: query nodeType:Thread without namespace â€” should fan out to all _Thread tables
+        var results = (await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("nodeType:Thread sort:LastModified-desc")).Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items;
 
         Output.WriteLine($"nodeType:Thread => {results.Count} results: [{string.Join(", ", results.Select(r => r.Path))}]");
 
@@ -83,28 +77,20 @@ public class CrossPartitionSatelliteQueryTests(ITestOutputHelper output) : Monol
     [Fact(Timeout = 30000)]
     public async Task NodeTypeThread_WithNamespace_SearchesSinglePartition()
     {
-        // Arrange: threads in two partitions
-        await NodeFactory.CreateNodeAsync(
-            new MeshNode("NsX") { Name = "Namespace X", NodeType = "Markdown" }, TestTimeout);
-        await NodeFactory.CreateNodeAsync(
-            new MeshNode("NsY") { Name = "Namespace Y", NodeType = "Markdown" }, TestTimeout);
+        // Arrange: threads in two partitions (top-level partition roots → seed under System).
+        await SeedTopLevel(new MeshNode("NsX") { Name = "Namespace X", NodeType = "Markdown" });
+        await SeedTopLevel(new MeshNode("NsY") { Name = "Namespace Y", NodeType = "Markdown" });
 
         var client = GetClient();
 
-        var resp1 = await client.AwaitResponse(
-            new CreateNodeRequest(ThreadNodeType.BuildThreadNode("NsX", "X thread", AdminUserId)),
-            o => o.WithTarget(new Address("NsX")), TestTimeout);
-        resp1.Message.Success.Should().BeTrue(resp1.Message.Error);
+        var resp1 = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode("NsX", "X thread", AdminUserId)), o => o.WithTarget(new Address("NsX"))).Should().Within(TimeSpan.FromSeconds(25)).Emit();
+        resp1.Message.Success.Should().BeTrue(resp1.Message.Error ?? "");
 
-        var resp2 = await client.AwaitResponse(
-            new CreateNodeRequest(ThreadNodeType.BuildThreadNode("NsY", "Y thread", AdminUserId)),
-            o => o.WithTarget(new Address("NsY")), TestTimeout);
-        resp2.Message.Success.Should().BeTrue(resp2.Message.Error);
+        var resp2 = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode("NsY", "Y thread", AdminUserId)), o => o.WithTarget(new Address("NsY"))).Should().Within(TimeSpan.FromSeconds(25)).Emit();
+        resp2.Message.Success.Should().BeTrue(resp2.Message.Error ?? "");
 
-        // Act: query with explicit namespace — should only return threads from NsX
-        var results = await MeshQuery
-            .QueryAsync<MeshNode>("namespace:NsX nodeType:Thread sort:LastModified-desc")
-            .ToListAsync();
+        // Act: query with explicit namespace â€” should only return threads from NsX
+        var results = (await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("namespace:NsX nodeType:Thread sort:LastModified-desc")).Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items;
 
         Output.WriteLine($"namespace:NsX nodeType:Thread => {results.Count} results");
 
@@ -113,25 +99,24 @@ public class CrossPartitionSatelliteQueryTests(ITestOutputHelper output) : Monol
             "namespace-scoped query should only return threads from that namespace");
     }
 
-    // ── Comment fan-out ─────────────────────────────────────────────────
+    // â”€â”€ Comment fan-out â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     [Fact(Timeout = 30000)]
     public async Task NodeTypeComment_FansOutAcrossAllPartitions()
     {
-        // Arrange: create nodes with comments in different partitions
-        await NodeFactory.CreateNodeAsync(
-            new MeshNode("CmtOrgA") { Name = "Org A", NodeType = "Markdown" }, TestTimeout);
-        await NodeFactory.CreateNodeAsync(
-            new MeshNode("CmtOrgB") { Name = "Org B", NodeType = "Markdown" }, TestTimeout);
+        // Arrange: create nodes with comments in different partitions (top-level partition
+        // roots → seed under System).
+        await SeedTopLevel(new MeshNode("CmtOrgA") { Name = "Org A", NodeType = "Markdown" });
+        await SeedTopLevel(new MeshNode("CmtOrgB") { Name = "Org B", NodeType = "Markdown" });
 
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("CmtOrgA/doc1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("CmtOrgA/doc1") with
         {
             Name = "Doc A", NodeType = "Markdown"
-        }, TestTimeout);
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("CmtOrgB/doc2") with
+        }).Should().Emit();
+        await NodeFactory.CreateNode(MeshNode.FromPath("CmtOrgB/doc2") with
         {
             Name = "Doc B", NodeType = "Markdown"
-        }, TestTimeout);
+        }).Should().Emit();
 
         // Create comments as satellite nodes
         var commentA = MeshNode.FromPath($"CmtOrgA/doc1/_Comment/cmt-{Guid.NewGuid():N}") with
@@ -147,13 +132,11 @@ public class CrossPartitionSatelliteQueryTests(ITestOutputHelper output) : Monol
             MainNode = "CmtOrgB/doc2"
         };
 
-        await NodeFactory.CreateNodeAsync(commentA, TestTimeout);
-        await NodeFactory.CreateNodeAsync(commentB, TestTimeout);
+        await NodeFactory.CreateNode(commentA).Should().Emit();
+        await NodeFactory.CreateNode(commentB).Should().Emit();
 
         // Act: query nodeType:Comment without namespace
-        var results = await MeshQuery
-            .QueryAsync<MeshNode>("nodeType:Comment sort:LastModified-desc")
-            .ToListAsync();
+        var results = (await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("nodeType:Comment sort:LastModified-desc")).Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items;
 
         Output.WriteLine($"nodeType:Comment => {results.Count} results: [{string.Join(", ", results.Select(r => r.Path))}]");
 

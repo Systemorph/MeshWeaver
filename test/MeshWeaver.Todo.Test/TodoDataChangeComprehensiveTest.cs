@@ -1,7 +1,4 @@
-﻿using System.Threading;
 using System.Reactive.Linq;
-using FluentAssertions;
-using FluentAssertions.Extensions;
 using MeshWeaver.Data;
 using MeshWeaver.Messaging;
 using MeshWeaver.Todo.Domain;
@@ -14,7 +11,7 @@ namespace MeshWeaver.Todo.Test;
 /// Comprehensive test for the Todo module that verifies the DataChangeRequest update issue
 /// This test follows the exact steps requested by the user:
 /// 1. Set up data context with TodoItems
-/// 2. Register TODO views (via ConfigureTodoApplication)  
+/// 2. Register TODO views (via ConfigureTodoApplication)
 /// 3. Create a subscription on AllItems layout area (simulated with data stream)
 /// 4. Wait for layout area to be rendered (simulated with data availability)
 /// 5. Get the first button and click it (simulated with DataChangeRequest)
@@ -38,14 +35,12 @@ public class TodoDataChangeTest(ITestOutputHelper output) : TodoDataTestBase(out
 
         var todoData = (await workspace
             .GetRemoteStream<TodoItem>(TodoApplicationAttribute.Address)!
-            .Timeout(10.Seconds())
-            .FirstOrDefaultAsync())
-            ?.ToArray();
+            .Should().Within(10.Seconds()).Match(items => items != null))
+            .ToArray();
 
-        todoData.Should().NotBeNull();
         todoData.Should().NotBeEmpty();
 
-        Output.WriteLine($"✅ Step 1 PASSED: Data context initialized with {todoData!.Length} todo items");
+        Output.WriteLine($"✅ Step 1 PASSED: Data context initialized with {todoData.Length} todo items");
 
         // Verify sample data is properly loaded
         var sampleTodos = TodoSampleData.GetSampleTodos().ToList();
@@ -60,7 +55,7 @@ public class TodoDataChangeTest(ITestOutputHelper output) : TodoDataTestBase(out
 
     /// <summary>
     /// Steps 2-4: Register TODO views (done via ConfigureTodoApplication) and simulate layout area rendering
-    /// Step 5: Simulate button click with DataChangeRequest 
+    /// Step 5: Simulate button click with DataChangeRequest
     /// Step 6: Wait for data update
     /// </summary>
     [Fact]
@@ -78,21 +73,19 @@ public class TodoDataChangeTest(ITestOutputHelper output) : TodoDataTestBase(out
 
         // Step 4: Wait for data to be available (simulating layout area rendering)
         var initialTodos = (await dataStream!
-            .Timeout(10.Seconds())
-            .FirstOrDefaultAsync())
-            ?.ToArray();
+            .Should().Within(10.Seconds()).Match(items => items != null))
+            .ToArray();
 
-        initialTodos.Should().NotBeNull();
         Output.WriteLine("✅ Step 4 PASSED: Initial data available (simulating layout area rendered)");
 
         // Find a pending todo to update (simulating finding a button to click)
-        var pendingTodo = initialTodos!.FirstOrDefault(t => t.Status == TodoStatus.Pending);
+        var pendingTodo = initialTodos.FirstOrDefault(t => t.Status == TodoStatus.Pending);
         pendingTodo.Should().NotBeNull("Need a pending todo for testing button click");
 
         Output.WriteLine($"Found todo to update: '{pendingTodo!.Title}' (Status: {pendingTodo.Status})");
 
         // Step 5: Simulate button click by creating and sending DataChangeRequest
-        var updatedTodo = pendingTodo! with
+        var updatedTodo = pendingTodo with
         {
             Status = TodoStatus.InProgress,
             UpdatedAt = DateTime.UtcNow
@@ -107,50 +100,22 @@ public class TodoDataChangeTest(ITestOutputHelper output) : TodoDataTestBase(out
         // Step 6: Wait for data stream to update using Observable pattern
         Output.WriteLine("🔍 Step 6: Subscribing to data stream to wait for changes...");
 
-        try
-        {
-            // Create a fresh subscription to get updated data and wait for the specific change
-            var updatedDataStream = workspace.GetRemoteStream<TodoItem>(TodoApplicationAttribute.Address);
-            
-            // Use Observable pattern to wait for the todo status to change to InProgress
-            var changedTodo = await updatedDataStream!
-                .Select(todos => todos?.ToArray())
-                .Where(todos => todos != null)
-                .Select(todos => todos!.FirstOrDefault(t => t.Id == pendingTodo.Id))
-                .Where(todo => todo != null && todo.Status == TodoStatus.InProgress)
-                .Timeout(10.Seconds())
-                .FirstAsync();
+        // Create a fresh subscription to get updated data and wait for the specific change
+        var updatedDataStream = workspace.GetRemoteStream<TodoItem>(TodoApplicationAttribute.Address);
 
-            changedTodo.Should().NotBeNull();
-            changedTodo!.Status.Should().Be(TodoStatus.InProgress);
+        // Wait for the todo status to change to InProgress
+        var changedTodo = await updatedDataStream!
+            .Select(todos => todos?.ToArray())
+            .Select(todos => todos?.FirstOrDefault(t => t.Id == pendingTodo.Id))
+            .Should().Within(10.Seconds())
+            .Match(todo => todo != null && todo.Status == TodoStatus.InProgress);
 
-            Output.WriteLine("✅ Step 6 PASSED: Data stream shows updated data!");
-            Output.WriteLine($"✅ Todo '{changedTodo.Title}' status changed: {pendingTodo.Status} → {changedTodo.Status}");
-            Output.WriteLine("✅ CONCLUSION: DataChangeRequest is working correctly!");
-            Output.WriteLine("✅ SOLUTION: Layout areas need to re-subscribe or use reactive data binding to get updates");
-        }
-        catch (TimeoutException)
-        {
-            Output.WriteLine("❌ Step 6 FAILED: Timeout waiting for data change");
-            
-            // Try to get current state for debugging
-            try
-            {
-                var currentDataStream = workspace.GetRemoteStream<TodoItem>(TodoApplicationAttribute.Address);
-                var currentTodos = (await currentDataStream!
-                    .Timeout(2.Seconds())
-                    .FirstOrDefaultAsync())?.ToArray();
-                
-                var currentTodo = currentTodos?.FirstOrDefault(t => t.Id == pendingTodo.Id);
-                Output.WriteLine($"Current todo status: {currentTodo?.Status} (expected: InProgress)");
-            }
-            catch (Exception debugEx)
-            {
-                Output.WriteLine($"Could not get current data for debugging: {debugEx.Message}");
-            }
-            
-            Assert.Fail("Timeout waiting for todo status to change to InProgress after DataChangeRequest");
-        }
+        changedTodo!.Status.Should().Be(TodoStatus.InProgress);
+
+        Output.WriteLine("✅ Step 6 PASSED: Data stream shows updated data!");
+        Output.WriteLine($"✅ Todo '{changedTodo.Title}' status changed: {pendingTodo.Status} → {changedTodo.Status}");
+        Output.WriteLine("✅ CONCLUSION: DataChangeRequest is working correctly!");
+        Output.WriteLine("✅ SOLUTION: Layout areas need to re-subscribe or use reactive data binding to get updates");
     }
 
     /// <summary>
@@ -165,19 +130,17 @@ public class TodoDataChangeTest(ITestOutputHelper output) : TodoDataTestBase(out
         var meshWorkspace = client.GetWorkspace();
         var meshData = (await meshWorkspace
             .GetRemoteStream<TodoItem>(TodoApplicationAttribute.Address)!
-            .FirstOrDefaultAsync())
-            ?.ToArray();
-        meshData.Should().NotBeNull("Mesh should have todo data");
-        Output.WriteLine($"✅ Mesh has {meshData!.Length} todo items");
+            .Should().Match(items => items != null))
+            .ToArray();
+        Output.WriteLine($"✅ Mesh has {meshData.Length} todo items");
 
         // Verify client can access the data
         var clientWorkspace = client.GetWorkspace();
         var clientData = (await clientWorkspace
             .GetRemoteStream<TodoItem>(TodoApplicationAttribute.Address)!
-            .Timeout(5.Seconds())
-            .FirstOrDefaultAsync())?.ToList();
-        clientData.Should().NotBeNull("Client should be able to access todo data");
-        Output.WriteLine($"✅ Client can access {clientData!.Count} todo items");
+            .Should().Within(5.Seconds()).Match(items => items != null))
+            .ToList();
+        Output.WriteLine($"✅ Client can access {clientData.Count} todo items");
 
         // Verify the Todo application address is configured
         Output.WriteLine($"✅ Todo application address: {TodoApplicationAttribute.Address}");

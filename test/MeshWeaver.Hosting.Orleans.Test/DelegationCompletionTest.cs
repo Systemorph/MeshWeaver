@@ -1,10 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
-using FluentAssertions;
-using FluentAssertions.Extensions;
 using MeshWeaver.AI;
 using MeshWeaver.Connection.Orleans;
 using MeshWeaver.Data;
@@ -21,146 +20,280 @@ using Orleans.Hosting;
 using Orleans.TestingHost;
 using Xunit;
 
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
+using Microsoft.Agents.AI;
+using MeshThread = MeshWeaver.AI.Thread;
+
 namespace MeshWeaver.Hosting.Orleans.Test;
 
 /// <summary>
-/// Tests that a SubmitMessageRequest returns TWO SubmitMessageResponse messages:
-/// 1. Status=CellsCreated (cells created, execution starting)
-/// 2. Status=ExecutionCompleted (agent finished, response text available)
-///
-/// This is critical for delegation: the parent thread's RegisterCallback
-/// waits for the second response to resolve the delegation TCS.
-/// Without it, the parent thread hangs forever after delegation.
+/// Submit a user message via <c>ThreadSubmission.Submit</c> (which internally
+/// routes through <c>workspace.GetMeshNodeStream(threadPath).Update</c> —
+/// the only sanctioned mutation API, see AGENTS.md). Observe completion via
+/// the thread + response-cell streams, the same primitive the GUI databinds
+/// to. No <c>SubmitMessageResponse</c>, no completion callbacks.
 /// </summary>
-public class DelegationCompletionTest(ITestOutputHelper output) : TestBase(output)
+public class DelegationCompletionTest(ITestOutputHelper output) : OrleansSharedTestBase(output)
 {
-    private TestCluster Cluster { get; set; } = null!;
-    private IMessageHub ClientMesh => Cluster.Client.ServiceProvider.GetRequiredService<IMessageHub>();
-
-    public override async ValueTask InitializeAsync()
-    {
-        await base.InitializeAsync();
-        var builder = new TestClusterBuilder();
-        builder.AddSiloBuilderConfigurator<RlsChatSiloConfigurator>();
-        builder.AddClientBuilderConfigurator<TestClientConfigurator>();
-        Cluster = builder.Build();
-        await Cluster.DeployAsync();
-    }
-
-    public override async ValueTask DisposeAsync()
-    {
-        if (Cluster is not null)
-            await Cluster.DisposeAsync();
-        await base.DisposeAsync();
-    }
-
-    private async Task<IMessageHub> GetClientAsync()
-    {
-        var client = ClientMesh.ServiceProvider.CreateMessageHub(
-            new Address("client", "completion"),
-            config =>
-            {
-                config.TypeRegistry.AddAITypes();
-                return config.AddLayoutClient();
-            });
-        var accessService = client.ServiceProvider.GetRequiredService<AccessService>();
-        accessService.SetCircuitContext(new AccessContext
-        {
-            ObjectId = "Roland",
-            Name = "Roland Buergi"
-        });
-        await Cluster.Client.ServiceProvider.GetRequiredService<IRoutingService>()
-            .RegisterStreamAsync(client.Address, client.DeliverMessage);
-        return client;
-    }
+    private IMessageHub GetClient([CallerMemberName] string? name = null)
+        => base.GetClient($"completion-{name}-{Guid.NewGuid():N}", "TestUser");
 
     /// <summary>
-    /// Verifies that SubmitMessageRequest produces two responses:
-    /// 1. CellsCreated (immediate)
-    /// 2. ExecutionCompleted (after agent finishes streaming)
-    ///
-    /// The test uses RegisterCallback (same pattern as delegation tool)
-    /// and collects all responses until ExecutionCompleted arrives.
+    /// User submission produces a user-message cell + an agent-response cell;
+    /// the agent eventually writes terminal text into the response cell. All
+    /// observed via the response cell's MeshNode stream.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task SubmitMessage_ReceivesBothCellsCreated_AndExecutionCompleted()
+    public async Task SubmitMessage_ResponseCellGetsTerminalText()
     {
-        var ct = new CancellationTokenSource(50.Seconds()).Token;
-        var client = await GetClientAsync();
+        var client = GetClient();
 
-        // Create thread
-        var response = await client.AwaitResponse(
-            new CreateNodeRequest(ThreadNodeType.BuildThreadNode("User/Roland", "Completion test", "Roland")),
-            o => o.WithTarget(new Address("User/Roland")), ct);
-        response.Message.Success.Should().BeTrue(response.Message.Error);
+        // 1. Create thread
+        var response = await client
+            .Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode("TestUser", "Completion test", "TestUser")),
+                o => o.WithTarget(new Address("TestUser")))
+            .Should().Within(45.Seconds()).Emit();
+        response.Message.Success.Should().BeTrue(response.Message.Error ?? "");
         var threadPath = response.Message.Node!.Path!;
         Output.WriteLine($"Thread: {threadPath}");
 
-        // Post SubmitMessageRequest and collect responses via RegisterCallback
-        var responses = new List<(SubmitMessageStatus Status, bool Success, string? ResponseText)>();
-        var completionTcs = new TaskCompletionSource<bool>();
+        // 2. Submit via the canonical API (workspace.SubmitMessage → AppendUserInput
+        //    → stream.Update on the thread node).
+        client.SubmitMessage(
+            threadPath,
+            "Test completion notification",
+            contextPath: "TestUser");
 
-        var delivery = client.Post(
-            new SubmitMessageRequest
-            {
-                ThreadPath = threadPath,
-                UserMessageText = "Test completion notification",
-                ContextPath = "User/Roland"
-            },
-            o => o.WithTarget(new Address(threadPath)));
-        delivery.Should().NotBeNull("Post should return delivery");
+        // 3. Observe the thread stream until BOTH messages exist.
+        //    GetMeshNodeStream(path) is the canonical API — auto-dispatches own → local → remote.
+        var workspace = client.GetWorkspace();
+        var msgIds = await workspace.GetMeshNodeStream(threadPath)
+            .Select(node => (node?.Content as MeshThread)?.Messages
+                            ?? System.Collections.Immutable.ImmutableList<string>.Empty)
+            .Should().Within(45.Seconds()).Match(ids => ids.Count >= 2);
+        var responseMsgId = msgIds[1];
+        var responsePath = $"{threadPath}/{responseMsgId}";
+        Output.WriteLine($"Response message cell: {responsePath}");
 
-        // RegisterCallback removes after first invocation — re-register for second response
-        void RegisterForResponse(IMessageDelivery del)
-        {
-            _ = client.RegisterCallback(del, cb =>
-            {
-                if (cb is IMessageDelivery<SubmitMessageResponse> sr)
-                {
-                    var msg = sr.Message;
-                    Output.WriteLine($"Response: Status={msg.Status}, Success={msg.Success}, Error={msg.Error}, TextLen={msg.ResponseText?.Length ?? 0}");
-                    responses.Add((msg.Status, msg.Success, msg.ResponseText));
+        // 4. Observe the response cell's stream until it reaches Completed with
+        //    non-empty Text. This is "execution completed" in the stream-only
+        //    world — replaces the obsolete SubmitMessageResponse(ExecutionCompleted).
+        var finalMsg = await workspace.GetMeshNodeStream(responsePath)
+            .Select(node => node?.Content as ThreadMessage)
+            .Should().Within(45.Seconds()).Match(m => m is { Status: ThreadMessageStatus.Completed } && !string.IsNullOrEmpty(m.Text));
 
-                    if (msg.Status == SubmitMessageStatus.CellsCreated)
-                        RegisterForResponse(del); // Re-register for completion
-                    else
-                        completionTcs.TrySetResult(msg.Success);
-                }
-                else if (cb is IMessageDelivery<DeliveryFailure> df)
-                {
-                    Output.WriteLine($"DeliveryFailure: {df.Message.Message}");
-                    completionTcs.TrySetResult(false);
-                }
-                return cb;
-            });
-        }
-        RegisterForResponse((IMessageDelivery)delivery!);
+        finalMsg!.Status.Should().Be(ThreadMessageStatus.Completed,
+            "response cell reaches terminal Status when agent finishes");
+        finalMsg.Text.Should().NotBeNullOrEmpty("agent's response text lives on the response cell");
+        Output.WriteLine($"Verified: response cell text length = {finalMsg.Text!.Length}");
 
-        // Wait for execution to complete (with timeout)
-        var timeoutTask = Task.Delay(45_000, ct);
-        var completed = await Task.WhenAny(completionTcs.Task, timeoutTask);
-        if (completed == timeoutTask)
-        {
-            Output.WriteLine($"TIMEOUT! Received {responses.Count} response(s): [{string.Join(", ", responses.Select(r => r.Status))}]");
-        }
-        completed.Should().Be(completionTcs.Task,
-            "should receive ExecutionCompleted before timeout — parent thread would hang otherwise");
+        // 5. Completion notification — EmitCompletionNotification writes a Notification
+        //    satellite at {threadPath}/_Notification/{id} (routes to "notifications"
+        //    table per StandardTableMappings). The bell-icon UI in the portal
+        //    databinds to notifications under the user; we assert the same shape.
+        //    Reactive children-query poll — no await, no Task.Delay.
+        var meshService = client.ServiceProvider.GetRequiredService<MeshWeaver.Mesh.Services.IMeshService>();
+        var notificationQuery = $"path:{threadPath}/_Notification scope:children nodeType:Notification";
+        await meshService.Query<MeshNode>(new MeshQueryRequest { Query = notificationQuery })
+            .Should().Within(20.Seconds()).Match(c => c.Items.Any(n =>
+                n.Content is MeshWeaver.Mesh.Notification notif && notif.TargetNodePath == threadPath));
+        Output.WriteLine("Verified: completion notification appeared in user's bell");
 
-        // Verify we got both responses
-        responses.Should().HaveCountGreaterThanOrEqualTo(2,
-            "should receive CellsCreated + ExecutionCompleted");
+        // 6. Dedicated Summary on ThreadMessage AND Thread. ExecuteMessageAsync
+        //    parses <summary>...</summary> from the agent's response (or falls
+        //    back to finalText) and writes the same string atomically with
+        //    Status flips — Thread.Summary at Status=Idle, ThreadMessage.Summary
+        //    at Status=Completed. The delegation tool reads Thread.Summary as
+        //    the tool-call result; the UI shows ThreadMessage.Summary as a
+        //    one-line digest of the verbose response.
+        finalMsg.Summary.Should().NotBeNull(
+            "response cell must carry a dedicated Summary populated at terminal status — " +
+            "the delegation tool returns this (not the verbose Text) to the parent agent");
+        finalMsg.Summary.Should().NotBeNullOrEmpty("summary must contain text");
+        Output.WriteLine($"Verified: response cell Summary length = {finalMsg.Summary!.Length}");
 
-        responses[0].Status.Should().Be(SubmitMessageStatus.CellsCreated,
-            "first response should be CellsCreated");
-        responses[0].Success.Should().BeTrue();
-
-        var lastResponse = responses.Last();
-        lastResponse.Status.Should().Be(SubmitMessageStatus.ExecutionCompleted,
-            "final response should be ExecutionCompleted");
-        lastResponse.Success.Should().BeTrue();
-        lastResponse.ResponseText.Should().NotBeNullOrEmpty(
-            "ExecutionCompleted should include the agent's response text");
-
-        Output.WriteLine($"Delegation completion verified: {responses.Count} responses, final text length={lastResponse.ResponseText?.Length}");
+        var threadAtIdle = await workspace.GetMeshNodeStream(threadPath)
+            .Select(node => node?.Content as MeshThread)
+            .Should().Within(10.Seconds()).Match(t => t is { Status: MeshWeaver.AI.ThreadExecutionStatus.Idle }
+                        && !string.IsNullOrEmpty(t.Summary));
+        threadAtIdle!.Summary.Should().NotBeNullOrEmpty(
+            "Thread.Summary must be populated atomically with Status=Idle so a delegating " +
+            "parent observing the sub-thread sees the summary in the same emission as the Idle flip");
+        threadAtIdle.Summary.Should().Be(finalMsg.Summary,
+            "Thread.Summary and ThreadMessage.Summary should carry the same digest");
+        Output.WriteLine($"Verified: thread Summary matches response-cell Summary");
     }
+
+    /// <summary>
+    /// Multi-level delegation summary propagation. We simulate the chain at
+    /// the data level (without driving a real multi-tool-call LLM): a
+    /// "grandparent" thread, a "parent" sub-thread that runs to terminal,
+    /// and a "child" sub-sub-thread that runs to terminal. Each writes its
+    /// own Summary atomically with Status=Idle. We verify that an observer
+    /// of the grandparent can read the parent's Summary, and an observer of
+    /// the parent can read the child's Summary — the same primitive the
+    /// reactive DelegationTool subscription uses to resolve the TCS.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task DelegationOfDelegation_SummaryPropagatesUp()
+    {
+        var client = GetClient();
+        var workspace = client.GetWorkspace();
+
+        // 1. Submit at the grandparent — produces a normal terminal thread
+        //    with a Summary. We'll then verify a parent and child below can
+        //    propagate their summaries to observers via the same primitive.
+        var gpResponse = await client
+            .Observe(new CreateNodeRequest(
+                ThreadNodeType.BuildThreadNode("TestUser", "Grandparent thread", "TestUser")),
+                o => o.WithTarget(new Address("TestUser")))
+            .Should().Within(45.Seconds()).Emit();
+        gpResponse.Message.Success.Should().BeTrue(gpResponse.Message.Error ?? "");
+        var gpPath = gpResponse.Message.Node!.Path!;
+        Output.WriteLine($"Grandparent: {gpPath}");
+        client.SubmitMessage(
+            gpPath,
+            "First level work",
+            contextPath: "TestUser");
+        var gpFinal = await workspace.GetMeshNodeStream(gpPath)
+            .Select(node => node?.Content as MeshThread)
+            .Should().Within(45.Seconds()).Match(t => t is { Status: ThreadExecutionStatus.Idle } && !string.IsNullOrEmpty(t.Summary));
+        gpFinal!.Summary.Should().NotBeNullOrEmpty(
+            "Level-1 thread must write Summary atomically with Status=Idle so an observer " +
+            "(e.g. a delegating parent) can read it in the same emission as the Idle flip");
+        Output.WriteLine($"Level-1 Summary: {gpFinal.Summary![..Math.Min(80, gpFinal.Summary!.Length)]}");
+
+        // 2. Spawn a child thread submission and observe its terminal Summary
+        //    the same way — proving the propagation chain works at any depth.
+        //    This is the Scan-based "Running → Idle" subscription the
+        //    DelegationTool uses, applied identically here in a test.
+        var childResponse = await client
+            .Observe(new CreateNodeRequest(
+                ThreadNodeType.BuildThreadNode("TestUser", "Child thread", "TestUser")),
+                o => o.WithTarget(new Address("TestUser")))
+            .Should().Within(45.Seconds()).Emit();
+        childResponse.Message.Success.Should().BeTrue(childResponse.Message.Error ?? "");
+        var childPath = childResponse.Message.Node!.Path!;
+        Output.WriteLine($"Child: {childPath}");
+        client.SubmitMessage(
+            childPath,
+            "Second level work",
+            contextPath: "TestUser");
+        var childRunningToIdle = await workspace.GetMeshNodeStream(childPath)
+            .Select(node => node?.Content as MeshThread)
+            .Where(t => t is not null)
+            .Scan((sawRunning: false, terminal: (MeshThread?)null), (state, t) =>
+            {
+                if (t!.Status is ThreadExecutionStatus.Executing
+                              or ThreadExecutionStatus.StartingExecution)
+                    return (true, null);
+                if (state.sawRunning && t.Status == ThreadExecutionStatus.Idle
+                                     && !string.IsNullOrEmpty(t.Summary))
+                    return (state.sawRunning, t);
+                return state;
+            })
+            .Should().Within(45.Seconds()).Match(s => s.terminal is not null);
+        childRunningToIdle.terminal!.Summary.Should().NotBeNullOrEmpty(
+            "Level-2 (child) thread reactive Running→Idle subscription must surface the " +
+            "child's Summary — same shape the DelegationTool uses for sub-thread tool-call results");
+        Output.WriteLine($"Level-2 Summary: {childRunningToIdle.terminal.Summary![..Math.Min(80, childRunningToIdle.terminal.Summary!.Length)]}");
+    }
+
+    /// <summary>
+    /// Steers the test agent's streaming response to include an explicit
+    /// <c>&lt;summary&gt;EXPECTED&lt;/summary&gt;</c> block and verifies that
+    /// ExecuteMessageAsync's parser extracts the inner text into
+    /// <c>Thread.Summary</c> + <c>ThreadMessage.Summary</c>, AND strips the
+    /// marker from the user-visible <c>ThreadMessage.Text</c>.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task SummaryBlock_ParsedFromAgentResponse_AndStrippedFromText()
+    {
+        const string expectedSummary = "Greeting acknowledged.";
+        const string visibleBody = "Hello! How can I help you today?";
+        var streamedResponse = $"{visibleBody} <summary>{expectedSummary}</summary>";
+
+        // Swap the cluster's chat client factory to one that streams our crafted
+        // response. SwappableFactory is process-wide — restore the default
+        // FakeChatClientFactory in a try/finally so subsequent tests aren't affected.
+        SharedOrleansFixture.SwappableFactory.SetInner(new SteerableFakeChatClientFactory(streamedResponse));
+        try
+        {
+            var client = GetClient();
+            var workspace = client.GetWorkspace();
+
+            var createResp = await client
+                .Observe(new CreateNodeRequest(
+                    ThreadNodeType.BuildThreadNode("TestUser", "Summary block test", "TestUser")),
+                    o => o.WithTarget(new Address("TestUser")))
+                .Should().Within(45.Seconds()).Emit();
+            createResp.Message.Success.Should().BeTrue(createResp.Message.Error ?? "");
+            var threadPath = createResp.Message.Node!.Path!;
+
+            client.SubmitMessage(
+                threadPath,
+                "Hi",
+                contextPath: "TestUser");
+
+            var threadAtIdle = await workspace.GetMeshNodeStream(threadPath)
+                .Select(node => node?.Content as MeshThread)
+                .Should().Within(45.Seconds()).Match(t => t is { Status: MeshWeaver.AI.ThreadExecutionStatus.Idle }
+                            && !string.IsNullOrEmpty(t.Summary));
+
+            threadAtIdle!.Summary.Should().Be(expectedSummary,
+                "ExecuteMessageAsync must parse <summary>...</summary> from the agent " +
+                "response and write the inner text as Thread.Summary atomically with Status=Idle.");
+
+            // Response cell carries the same Summary and clean Text (marker stripped).
+            var responseMsgId = threadAtIdle.Messages.Last();
+            var responsePath = $"{threadPath}/{responseMsgId}";
+            var responseMsg = await workspace.GetMeshNodeStream(responsePath)
+                .Select(node => node?.Content as ThreadMessage)
+                .Should().Within(45.Seconds()).Match(m => m is { Status: ThreadMessageStatus.Completed } && !string.IsNullOrEmpty(m.Summary));
+            responseMsg!.Summary.Should().Be(expectedSummary,
+                "ThreadMessage.Summary on the response cell must match Thread.Summary");
+            responseMsg.Text.Should().NotContain("<summary>",
+                "the <summary> marker must be stripped from the user-visible Text");
+            responseMsg.Text.Should().NotContain(expectedSummary,
+                "the summary inner text must be stripped from Text too (lives only in Summary)");
+            responseMsg.Text.Should().Contain(visibleBody.Trim(),
+                "the agent's user-visible response body must survive the strip");
+
+            Output.WriteLine($"Verified: Summary='{threadAtIdle.Summary}', Text='{responseMsg.Text}'");
+        }
+        finally
+        {
+            SharedOrleansFixture.SwappableFactory.Reset();
+        }
+    }
+}
+
+/// <summary>
+/// A FakeChatClientFactory whose response text is set per-instance, so a test
+/// can steer the streamed assistant output (including a trailing
+/// <c>&lt;summary&gt;</c> block) and assert the framework's parsing behavior.
+/// </summary>
+internal class SteerableFakeChatClientFactory(string response) : IChatClientFactory
+{
+    public string Name => "SteerableFakeFactory";
+    public IReadOnlyList<string> Models => ["fake-model"];
+    public int Order => 0;
+
+    public ChatClientAgent CreateAgent(
+        AgentConfiguration config, IAgentChat chat,
+        IReadOnlyDictionary<string, ChatClientAgent> existingAgents,
+        IReadOnlyList<AgentConfiguration> hierarchyAgents,
+        string? modelName = null)
+        => new(chatClient: new FakeChatClient(response),
+            instructions: config.Instructions ?? "Test assistant.",
+            name: config.Id, description: config.Description ?? config.Id,
+            tools: [], loggerFactory: null, services: null);
+
+    public Task<ChatClientAgent> CreateAgentAsync(
+        AgentConfiguration config, IAgentChat chat,
+        IReadOnlyDictionary<string, ChatClientAgent> existingAgents,
+        IReadOnlyList<AgentConfiguration> hierarchyAgents,
+        string? modelName = null)
+        => Task.FromResult(CreateAgent(config, chat, existingAgents, hierarchyAgents, modelName));
 }

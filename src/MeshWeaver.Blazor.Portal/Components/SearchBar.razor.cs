@@ -1,33 +1,54 @@
+using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.Web;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.FluentUI.AspNetCore.Components;
 using Microsoft.JSInterop;
 
 namespace MeshWeaver.Blazor.Portal.Components;
 
-public partial class SearchBar : IAsyncDisposable
+/// <summary>
+/// Global mesh search bar for the portal shell. Debounces keystrokes through a reactive
+/// pipeline, renders progressive suggestions, and routes plain queries, <c>@path</c>
+/// navigation, and <c>@path query</c> scoped searches. Activated by the <c>/</c> shortcut.
+/// </summary>
+public partial class SearchBar : IDisposable
 {
     private const string SearchPlaceholder = "Search the mesh... (e.g. nodeType:Story status:Open)";
     private const int MaxResults = 10;
 
+    /// <summary>Navigation manager used to route to nodes and the search results page.</summary>
     [Inject]
     public required NavigationManager NavigationManager { get; set; }
 
+    /// <summary>Global key-code service; the bar registers a <c>/</c> listener to grab focus.</summary>
     [Inject]
     public required IKeyCodeService KeyCodeService { get; set; }
 
+    /// <summary>Message hub used to resolve the mesh service that backs suggestions.</summary>
     [Inject]
     public required IMessageHub Hub { get; set; }
 
+    /// <summary>Optional navigation service supplying the current namespace to scope suggestions.</summary>
     [Inject]
     public INavigationService? NavigationService { get; set; }
 
+    /// <summary>JS runtime used to detect whether an editor/input is focused before grabbing focus.</summary>
     [Inject]
     public required IJSRuntime JSRuntime { get; set; }
 
-    private SearchHub? _searchHub;
+    private IMeshService _meshService = default!;
+
+    // Typed search terms flow through this subject; the reactive pipeline in
+    // OnInitialized debounces, switches to the latest term's suggestion stream,
+    // and binds the WHOLE collection per emission. No channels, no await foreach.
+    private readonly Subject<string> _terms = new();
+    private IDisposable? _searchSubscription;
+    private IDisposable? _defaultsSubscription;
+
     private ElementReference inputRef;
     private int _inputKey;
     private string? searchTerm;
@@ -35,16 +56,63 @@ public partial class SearchBar : IAsyncDisposable
     private bool showDropdown;
     private int highlightedIndex = -1;
     private bool isLoading;
-    private string? _lastSearchedTerm;
-    private bool _isFirstKeystroke = true;
-    private CancellationTokenSource? debounceCts;
 
+    /// <summary>One progressive snapshot of the suggestion set; <see cref="Settled"/>
+    /// marks the frame after the source has quieted (drops the progress bar).</summary>
+    private readonly record struct SearchFrame(IReadOnlyList<QuerySuggestion> Suggestions, bool Settled);
+
+    /// <summary>
+    /// Registers the <c>/</c> key listener and wires the reactive suggestion pipeline:
+    /// keystrokes are throttled, switched to the latest term's live suggestion stream,
+    /// and bound progressively until the source settles.
+    /// </summary>
     protected override void OnInitialized()
     {
         KeyCodeService.RegisterListener(OnKeyDownAsync);
-        _searchHub = new SearchHub(Hub);
+        _meshService = Hub.ServiceProvider.GetRequiredService<IMeshService>();
+
+        // Debounce keystrokes, switch to the latest term's live suggestion stream,
+        // and bind the entire collection on every emission. MeshSearch.Suggestions
+        // re-emits as each source converges (progressive CombineLatest inside the
+        // mesh query surface), so partial results render immediately and re-order
+        // by score as more sources return. Switch() cancels the prior search.
+        _searchSubscription = _terms
+            .Throttle(TimeSpan.FromMilliseconds(250))
+            .DistinctUntilChanged()
+            .Select(term => MeshSearch
+                .Suggestions(_meshService, term, NavigationService?.CurrentNamespace, MaxResults)
+                // Run the search once and derive two signals from it:
+                //  • progressive — bind each NON-EMPTY snapshot as sources converge
+                //    (Settled:false keeps the progress bar on). Skipping the leading
+                //    all-empty frame means a refinement search doesn't blank the
+                //    current results before the new ones land.
+                //  • settle — a 700ms-quiet throttle binds the final snapshot and
+                //    drops the progress bar, including the genuinely-empty (no
+                //    results) case so the dropdown clears instead of spinning forever.
+                .Publish(shared => shared
+                    .Where(list => list.Count > 0)
+                    .Select(list => new SearchFrame(list, Settled: false))
+                    .Merge(shared
+                        .Throttle(TimeSpan.FromMilliseconds(700))
+                        .Select(list => new SearchFrame(list, Settled: true)))))
+            .Switch()
+            .Subscribe(OnFrame);
     }
 
+    private void OnFrame(SearchFrame frame) => InvokeAsync(() =>
+    {
+        suggestions = frame.Suggestions.ToArray();
+        if (frame.Settled)
+            isLoading = false;
+        StateHasChanged();
+    });
+
+    /// <summary>
+    /// Global key handler: when <c>/</c> is pressed outside a text field, editor, or
+    /// content-editable element, moves focus into the search input.
+    /// </summary>
+    /// <param name="args">The key-code event, or <c>null</c> when no key is available.</param>
+    /// <returns>A task that completes once the focus check (and any focus shift) is done.</returns>
     public async Task OnKeyDownAsync(FluentKeyCodeEventArgs? args)
     {
         if (args is not null && args.Key == KeyCode.Slash)
@@ -59,115 +127,27 @@ public partial class SearchBar : IAsyncDisposable
     }
 
     /// <summary>
-    /// Captures input value and fires search — completely decoupled from rendering.
-    /// The native input is uncontrolled (no value binding), so Blazor never
-    /// pushes values back to the DOM. Re-renders from search results cannot
-    /// interfere with typing.
+    /// Captures input value and feeds the reactive pipeline — decoupled from
+    /// rendering. The native input is uncontrolled (no value binding), so Blazor
+    /// never pushes values back to the DOM and re-renders from search results
+    /// cannot interfere with typing.
     /// </summary>
     private void OnInput(ChangeEventArgs e)
     {
         searchTerm = e.Value?.ToString();
         highlightedIndex = -1;
 
-        debounceCts?.Cancel();
-
         if (string.IsNullOrWhiteSpace(searchTerm))
         {
             suggestions = [];
             showDropdown = false;
             isLoading = false;
-            _isFirstKeystroke = true;
             return;
         }
 
         isLoading = true;
         showDropdown = true;
-
-        // Clear stale results when the query diverges (e.g. start changed)
-        if (!IsRefinement(searchTerm.Trim(), _lastSearchedTerm))
-            suggestions = [];
-
-        var cts = new CancellationTokenSource();
-        debounceCts = cts;
-        _ = DebounceAndSearchAsync(searchTerm.Trim(), cts.Token);
-    }
-
-    private async Task DebounceAndSearchAsync(string input, CancellationToken ct)
-    {
-        try
-        {
-            // Show loading dropdown immediately
-            await InvokeAsync(StateHasChanged);
-
-            if (!_isFirstKeystroke)
-            {
-                await Task.Delay(300, ct);
-                if (ct.IsCancellationRequested) return;
-            }
-            _isFirstKeystroke = false;
-
-            await StreamSearchResultsAsync(input, ct);
-        }
-        catch (OperationCanceledException)
-        {
-            // Expected when debounce cancels
-        }
-    }
-
-    private async Task StreamSearchResultsAsync(string input, CancellationToken ct)
-    {
-        if (_searchHub == null)
-        {
-            isLoading = false;
-            return;
-        }
-
-        try
-        {
-            var results = new List<QuerySuggestion>();
-            var contextPath = NavigationService?.CurrentNamespace;
-            var firstBatchRendered = false;
-
-            await foreach (var suggestion in _searchHub.SearchAsync(input, contextPath, MaxResults, ct))
-            {
-                if (ct.IsCancellationRequested) break;
-
-                var idx = results.FindIndex(s => s.Score < suggestion.Score);
-                if (idx < 0)
-                    results.Add(suggestion);
-                else
-                    results.Insert(idx, suggestion);
-
-                if (results.Count > MaxResults)
-                    results.RemoveAt(results.Count - 1);
-
-                // Render once when the first results arrive so the user sees
-                // suggestions + progress bar (isLoading is still true).
-                if (!firstBatchRendered)
-                {
-                    firstBatchRendered = true;
-                    suggestions = results.ToArray();
-                    await InvokeAsync(StateHasChanged);
-                }
-            }
-
-            if (!ct.IsCancellationRequested)
-            {
-                _lastSearchedTerm = input;
-                suggestions = results.ToArray();
-                isLoading = false;
-                await InvokeAsync(StateHasChanged);
-            }
-        }
-        catch (OperationCanceledException)
-        {
-            // Expected
-        }
-        catch
-        {
-            isLoading = false;
-            suggestions = [];
-        }
+        _terms.OnNext(searchTerm.Trim());
     }
 
     private void HandleKeyDown(KeyboardEventArgs e)
@@ -262,28 +242,11 @@ public partial class SearchBar : IAsyncDisposable
     private void ClearSearch()
     {
         searchTerm = null;
-        _lastSearchedTerm = null;
         suggestions = [];
         showDropdown = false;
         highlightedIndex = -1;
         isLoading = false;
-        _isFirstKeystroke = true;
-        debounceCts?.Cancel();
         _inputKey++; // forces Blazor to recreate the <input>, clearing its DOM value
-    }
-
-    /// <summary>
-    /// Returns true if the new query is a refinement of the previous one
-    /// (i.e. starts with the same prefix). Stale results are kept visible
-    /// while the refined search runs. Returns false when the start diverges,
-    /// triggering an immediate clear of the dropdown.
-    /// </summary>
-    private static bool IsRefinement(string current, string? previous)
-    {
-        if (string.IsNullOrEmpty(previous))
-            return false;
-        return current.StartsWith(previous, StringComparison.OrdinalIgnoreCase)
-            || previous.StartsWith(current, StringComparison.OrdinalIgnoreCase);
     }
 
     private void OnFocus()
@@ -294,30 +257,22 @@ public partial class SearchBar : IAsyncDisposable
             return;
         }
 
-        if (string.IsNullOrWhiteSpace(searchTerm) && _searchHub != null)
+        if (string.IsNullOrWhiteSpace(searchTerm))
         {
             isLoading = true;
             showDropdown = true;
-            _ = LoadDefaultSuggestionsAsync();
-        }
-    }
-
-    private async Task LoadDefaultSuggestionsAsync()
-    {
-        try
-        {
-            var contextPath = NavigationService?.CurrentNamespace;
-            var results = new List<QuerySuggestion>();
-            await foreach (var s in _searchHub!.SearchAsync(null, contextPath, MaxResults, CancellationToken.None))
-                results.Add(s);
-            suggestions = results.ToArray();
-            isLoading = false;
-            await InvokeAsync(StateHasChanged);
-        }
-        catch
-        {
-            isLoading = false;
-            suggestions = [];
+            _defaultsSubscription?.Dispose();
+            // Empty box on focus: bind the recently-accessed default set (whole
+            // collection per emission, same progressive surface).
+            _defaultsSubscription = MeshSearch
+                .Suggestions(_meshService, null, NavigationService?.CurrentNamespace, MaxResults)
+                .Subscribe(list => InvokeAsync(() =>
+                {
+                    suggestions = list.ToArray();
+                    if (list.Count > 0)
+                        isLoading = false;
+                    StateHasChanged();
+                }));
         }
     }
 
@@ -344,11 +299,15 @@ public partial class SearchBar : IAsyncDisposable
         return lastSlash >= 0 ? nodeType[(lastSlash + 1)..] : nodeType;
     }
 
-    public ValueTask DisposeAsync()
+    /// <summary>
+    /// Unregisters the key listener and disposes the search/defaults subscriptions and the
+    /// terms subject.
+    /// </summary>
+    public void Dispose()
     {
         KeyCodeService.UnregisterListener(OnKeyDownAsync, OnKeyDownAsync);
-        debounceCts?.Cancel();
-        debounceCts?.Dispose();
-        return ValueTask.CompletedTask;
+        _searchSubscription?.Dispose();
+        _defaultsSubscription?.Dispose();
+        _terms.Dispose();
     }
 }

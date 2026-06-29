@@ -1,12 +1,12 @@
-using System;
+﻿using System;
 using System.Text.Json;
 using System.Threading.Tasks;
-using FluentAssertions;
 using MeshWeaver.Hosting.PostgreSql;
 using MeshWeaver.Mesh;
 using Npgsql;
 using Testcontainers.PostgreSql;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.PostgreSql.Test;
 
@@ -59,11 +59,11 @@ public class VectorEmbeddingTests : IAsyncLifetime
             NodeType = "Document"
         };
 
-        var act = () => _adapter.WriteAsync(node, new JsonSerializerOptions(), TestContext.Current.CancellationToken);
+        // Emit() blocks for the write and rethrows any upstream error, so a
+        // clean emission IS the must-not-throw assertion.
+        await _adapter.Write(node, new JsonSerializerOptions()).Should().Within(30.Seconds()).Emit();
 
-        await act.Should().NotThrowAsync();
-
-        var result = await _adapter.ReadAsync("test/vec1", new JsonSerializerOptions(), TestContext.Current.CancellationToken);
+        var result = await _adapter.Read("test/vec1", new JsonSerializerOptions()).Should().Within(30.Seconds()).Emit();
         result.Should().NotBeNull();
         result!.Name.Should().Be("Vector Node");
     }
@@ -80,9 +80,8 @@ public class VectorEmbeddingTests : IAsyncLifetime
             NodeType = "Note"
         };
 
-        var act = () => adapterNoEmbed.WriteAsync(node, new JsonSerializerOptions(), TestContext.Current.CancellationToken);
-
-        await act.Should().NotThrowAsync();
+        // Clean emission == must-not-throw.
+        await adapterNoEmbed.Write(node, new JsonSerializerOptions()).Should().Within(30.Seconds()).Emit();
     }
 
     private class FakeEmbeddingProvider(int dimensions) : IEmbeddingProvider

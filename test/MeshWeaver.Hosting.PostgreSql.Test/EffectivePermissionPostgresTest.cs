@@ -1,9 +1,11 @@
 using System;
 using System.Threading;
 using System.Threading.Tasks;
-using FluentAssertions;
-using FluentAssertions.Extensions;
-using Memex.Portal.Shared;
+using System.Reactive.Threading.Tasks;
+using System.Reactive.Linq;
+using MeshWeaver.Graph;
+using MeshWeaver.Blazor.Portal;
+using MeshWeaver.Data;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith;
 using MeshWeaver.Hosting.Monolith.TestBase;
@@ -22,58 +24,275 @@ namespace MeshWeaver.Hosting.PostgreSql.Test;
 /// Protocol:
 /// 1) Install OrganizationNodeType
 /// 2) Create Organization "Systemorph"
-/// 3) Ask ISecurityService.HasPermission → should NOT return None
+/// 3) Ask SecurityService.HasPermission → should NOT return None
 /// </summary>
 [Collection("PostgreSql")]
 public class EffectivePermissionPostgresTest(PostgreSqlFixture fixture, ITestOutputHelper output)
     : MonolithMeshTestBase(output)
 {
-    private CancellationToken TestTimeout => new CancellationTokenSource(90.Seconds()).Token;
-
     /// <summary>
     /// Wire up PostgreSQL partitioned persistence instead of in-memory.
     /// No PublicAdminAccess — permissions must come from persisted AccessAssignment nodes.
     /// </summary>
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
-        => builder
+    {
+        // Per-test pool cap. Tests run sequentially (xunit.runner.json:
+        // parallelizeAssembly=false, maxParallelThreads=1) so only one mesh's
+        // pool is live at a time — comfortably under the shared container's
+        // max_connections=100. Sized for the SHARED-pool architecture: since the
+        // connection-leak fix, the per-(schema,table) storage adapters reuse this
+        // single base pool (no more per-table MaxPoolSize=1 pools) and one slot is
+        // held by the PgPartitionNotifyListener LISTEN session — so 4 starved the
+        // setup's GetMeshNodeStream subscription against the synced-query reads a
+        // permission check fans out. 16 gives that headroom. (Bounding concurrency
+        // to a small pool without starvation is what the DB IO-pool gate buys us
+        // in prod — see the ~5-connections/silo work.)
+        var csb = new Npgsql.NpgsqlConnectionStringBuilder(fixture.ConnectionString)
+        {
+            MaxPoolSize = 16,
+            ConnectionIdleLifetime = 10
+        };
+        return builder
             .UseMonolithMesh()
             .ConfigureServices(services =>
-                services.AddPartitionedPostgreSqlPersistence(fixture.ConnectionString))
+                services.AddPartitionedPostgreSqlPersistence(csb.ConnectionString))
             .AddRowLevelSecurity()
             .AddGraph()
-            .AddOrganizationType();
-
-    protected override async Task SetupAccessRightsAsync()
-    {
-        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
-        await securityService.AddUserRoleAsync(TestUsers.Admin.ObjectId, "Admin", null, "system", TestTimeout);
+            .AddSpaceType();
     }
 
-    [Fact(Timeout = 120000)]
+    /// <summary>
+    /// Seeds the runtime Admin grant and waits for it to be visible in the
+    /// workspace before completing. The post-create
+    /// <see cref="MeshWeaver.Data.IWorkspace.GetMeshNodeStream"/> probe
+    /// with <c>Where(n => n != null).Take(1)</c> is the deterministic
+    /// "wait until visible" primitive recommended by
+    /// <c>Doc/Architecture/CqrsAndContentAccess.md</c>; without it the
+    /// validator's per-scope synced query races the workspace update from
+    /// the pg_notify pipeline and the Admin grant is invisible on the
+    /// initial subscription.
+    /// </summary>
+    protected override async Task SetupAccessRightsAsync()
+    {
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        var adminGrant = AssignmentNodeFactory.UserRole(TestUsers.Admin.ObjectId, "Admin", null);
+        var workspace = Mesh.GetWorkspace();
+
+        // CreateNode throws if the node already exists. The Postgres fixture is
+        // shared across all tests in the [Collection("PostgreSql")] so a prior
+        // test's setup may have persisted the same `_Access/Roland_Access` row.
+        // Probe with the queryable index (CqrsAndContentAccess.md: query is the
+        // right primitive for existence checks; GetMeshNodeStream throws
+        // DeliveryFailureException on a 404 in distributed setups). The
+        // index lag is unimportant here — a missed hit just means we attempt
+        // CreateNode and swallow the "already exists" race. The "already exists"
+        // OnError is folded back into a benign emission via Catch so the
+        // blocking .Emit() doesn't surface it (this override stays Task-shaped
+        // but its body is fully reactive — no await, §2a).
+        await meshService.CreateNode(adminGrant)
+            .SelectMany(_ => workspace
+                .GetMeshNodeStream(adminGrant.Path)
+                .Where(n => n != null)
+                .Take(1))
+            .Timeout(TimeSpan.FromSeconds(10))
+            .Catch<MeshNode, InvalidOperationException>(ex =>
+                ex.Message.Contains("already exists", StringComparison.OrdinalIgnoreCase)
+                    ? Observable.Return<MeshNode>(null!)
+                    : Observable.Throw<MeshNode>(ex))
+            .Should().Within(90.Seconds()).Emit();
+    }
+
+    [Fact(Timeout = 60000)]
     public async Task CreateOrganization_HasPermission_ReturnsAdmin()
     {
         // 1) OrganizationNodeType is installed via ConfigureMesh above
+        const string orgId = "Systemorph";
 
-        // 2) Create Organization "Systemorph"
-        var orgNode = MeshNode.FromPath("Systemorph") with
+        // 2) Register the Admin/Partition/Systemorph MeshNode FIRST. The
+        //    Postgres partition provider routes by partition-table state
+        //    (see PartitionRoutingTests) — Matches returns false for
+        //    unknown first segments. OrganizationNodeType.GetAdditionalNodes
+        //    yields the partition AFTER the org create, but the main
+        //    `Systemorph` write itself is what fails-to-route without a
+        //    pre-existing partition. In prod, the Organization-create flow
+        //    needs to provision the partition before the main node — this
+        //    test pre-arranges the partition to exercise just the
+        //    Organization handler's grant logic.
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        var pgProvider = Mesh.ServiceProvider.GetRequiredService<PostgreSqlPartitionStorageProvider>();
+        var partitionDef = new PartitionDefinition
         {
-            Name = "Systemorph",
-            NodeType = OrganizationNodeType.NodeType,
-            Content = new Organization { Name = "Systemorph" }
+            Namespace = orgId,
+            DataSource = "default",
+            Schema = orgId.ToLowerInvariant(),
+            Table = "mesh_nodes",
+            TableMappings = PartitionDefinition.DefaultSegmentTableMappings(), NodeTypeTableMappings = PartitionDefinition.DefaultNodeTypeTableMappings(),
+            Versioned = true,
         };
-        await NodeFactory.CreateNodeAsync(orgNode, TestTimeout);
+        var partitionNode = new MeshNode(orgId, "Admin/Partition")
+        {
+            NodeType = "Partition",
+            Name = orgId,
+            State = MeshNodeState.Active,
+            Content = partitionDef
+        };
+        // Register directly with the provider so Matches returns true
+        // immediately — the SubscribeToWorkspace pipeline's CREATE SCHEMA
+        // step is async and races the org create otherwise. Also persist
+        // the Admin/Partition MeshNode so subsequent reads via the workspace
+        // see the partition's catalog entry.
+        await pgProvider.EnsureSchemaForPartitionAsync(partitionDef, TestContext.Current.CancellationToken)
+            .ToObservable().Should().Within(60.Seconds()).Emit();
+        pgProvider.RegisterPartition(partitionDef);
+        await meshService.CreateNode(partitionNode)
+            .Should().Within(90.Seconds()).Emit();
 
-        // 3) Ask ISecurityService.HasPermission for this node
-        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
-        var permissions = await securityService.GetEffectivePermissionsAsync(
-            "Systemorph", TestUsers.Admin.ObjectId, TestTimeout);
+        // 3) Create Organization "Systemorph"
+        var orgNode = MeshNode.FromPath(orgId) with
+        {
+            Name = orgId,
+            NodeType = SpaceNodeType.NodeType,
+            Content = new Space { Name = orgId }
+        };
+        await NodeFactory.CreateNode(orgNode).Should().Within(90.Seconds()).Emit();
 
-        // The post-creation handler granted Admin to Roland via persisted AccessAssignment.
+        // 4) Ask SecurityService.HasPermission for this node — wait for the
+        // synced AccessAssignment query to surface the post-create Admin grant.
+        // The post-creation handler granted Admin to Roland via persisted
+        // AccessAssignment.
         // Without fix: returns Permission.None (GetChildrenAsync filters satellite nodes)
-        // With fix: returns Permission.All (GetAllChildrenAsync includes satellites)
+        // With fix: returns Permission.All | Compile (GetAllChildrenAsync includes satellites).
+        // The Admin role grants Permission.All PLUS the privileged Compile bit, which is
+        // deliberately excluded from Permission.All and added explicitly to the built-in roles
+        // (see Role.cs / Permission.Compile) — so the effective set is All | Compile, not All.
+        var permissions = await Mesh.GetEffectivePermissions("Systemorph", TestUsers.Admin.ObjectId)
+            .Should().Within(90.Seconds()).Match(p => p == (Permission.All | Permission.Compile));
         permissions.Should().NotBe(Permission.None,
             "Creator should have permissions from persisted AccessAssignment on the Organization");
-        permissions.Should().Be(Permission.All,
-            "Admin role grants all permissions");
+        permissions.Should().Be(Permission.All | Permission.Compile,
+            "Admin role grants all permissions plus the explicit Compile grant");
     }
+
+    /// <summary>
+    /// Postgres-backed regression for the 2026-05-01 cleanup-session bug:
+    /// runtime AccessAssignment created via the proper write path
+    /// (<see cref="IMeshService.CreateNode"/>) must propagate to permission
+    /// checks within the synced-query settle window. This is the PG analogue of
+    /// the in-memory <c>RuntimeCreateNode_AccessAssignment_GrantsPermission</c>
+    /// — the in-memory path passes; this test confirms the same end-to-end
+    /// against Postgres-backed persistence with pg_notify-driven change feed.
+    ///
+    /// If it fails: the synced query's Postgres path has a bug specific to
+    /// distributed mode that the in-memory test cannot catch.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task RuntimeCreateNode_AccessAssignment_PgBacked_GrantsPermission()
+    {
+        var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        var savedContext = accessService.CircuitContext;
+
+        const string userId = "pg-runtime-assignee";
+        const string scope = "PgRuntimeOrg";
+
+        try
+        {
+            var before = await Mesh.GetEffectivePermissions(scope, userId)
+                .Should().Within(90.Seconds()).Emit();
+            before.Should().Be(Permission.None);
+
+            // Admin authorises the assignment-create. Use TestUsers.Admin
+            // directly so its Roles=["Admin"] claim is preserved — claim-based
+            // role resolution takes the fast path in SecurityService.ComputeRoleState
+            // (no synced-query round-trip for the AUTHORISING user). The
+            // RUNTIME AccessAssignment being created here is what the test
+            // actually exercises further down via the `after` permission
+            // check on `pg-runtime-assignee`.
+            accessService.SetCircuitContext(TestUsers.Admin);
+
+            var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+
+            // Same routing prep as CreateOrganization_HasPermission_ReturnsAdmin:
+            // register the scope's partition directly with the provider so
+            // Matches({scope}/…) returns true before the AccessAssignment write,
+            // then persist the Admin/Partition catalog entry. The PG provider
+            // is strict — Matches reflects partition-table state, not a
+            // wildcard (pinned by PartitionRoutingTests).
+            var pgProvider = Mesh.ServiceProvider.GetRequiredService<PostgreSqlPartitionStorageProvider>();
+            var partitionDef = new PartitionDefinition
+            {
+                Namespace = scope,
+                DataSource = "default",
+                Schema = scope.ToLowerInvariant(),
+                Table = "mesh_nodes",
+                TableMappings = PartitionDefinition.DefaultSegmentTableMappings(), NodeTypeTableMappings = PartitionDefinition.DefaultNodeTypeTableMappings(),
+                Versioned = true,
+            };
+            await pgProvider.EnsureSchemaForPartitionAsync(partitionDef, TestContext.Current.CancellationToken)
+                .ToObservable().Should().Within(60.Seconds()).Emit();
+            pgProvider.RegisterPartition(partitionDef);
+            var partitionNode = new MeshNode(scope, "Admin/Partition")
+            {
+                NodeType = "Partition",
+                Name = scope,
+                State = MeshNodeState.Active,
+                Content = partitionDef
+            };
+            await meshService.CreateNode(partitionNode).Should().Within(90.Seconds()).Emit();
+
+            var assignment = AssignmentNodeFactory.UserRole(userId, "Admin", scope);
+            await meshService.CreateNode(assignment).Should().Within(90.Seconds()).Emit();
+
+            var after = await Mesh.GetEffectivePermissions(scope, userId)
+                .Should().Within(90.Seconds()).Match(p => p.HasFlag(Permission.Read));
+            after.Should().Be(Permission.All | Permission.Compile);
+        }
+        finally
+        {
+            accessService.SetCircuitContext(savedContext);
+        }
+    }
+
+    /// <summary>
+    /// Regression for the atioz first-user bug: the platform-admin grant
+    /// (<c>UserOnboardingService.GrantPlatformAdmin</c>) must produce a ROOT-scope
+    /// AccessAssignment — namespace <c>_Access</c>, <c>MainNode=""</c> — so the first user
+    /// passes <c>AdminMenuGate</c>'s root check (<c>GetEffectivePermissions("").HasFlag(All)</c>,
+    /// which queries <c>namespace:_Access</c>) and the Invitations tab appears. The historical
+    /// bug wrote the grant at <c>Admin/_Access</c> (scope "Admin"), which the root synced query
+    /// never matched. This asserts the canonical <c>UserRole(userId,"Admin",null)</c> shape — the
+    /// exact shape the fixed <c>GrantPlatformAdmin</c> emits — yields <see cref="Permission.All"/>
+    /// at the ROOT path "" (and still covers the <c>Admin/Invitation</c> subtree the tab manages).
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task RootScopeAdminGrant_PassesRootAdminGate()
+    {
+        const string userId = "pg-platform-admin";
+        var rootGrant = AssignmentNodeFactory.UserRole(userId, "Admin", scope: null);
+        // Document the shape the root check depends on (namespace "_Access", root prefix).
+        rootGrant.Path.Should().Be($"_Access/{userId}_Access");
+
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        var workspace = Mesh.GetWorkspace();
+        await meshService.CreateNode(rootGrant)
+            .SelectMany(_ => workspace
+                .GetMeshNodeStream(rootGrant.Path)
+                .Where(n => n != null)
+                .Take(1))
+            .Timeout(TimeSpan.FromSeconds(10))
+            .Catch<MeshNode, InvalidOperationException>(ex =>
+                ex.Message.Contains("already exists", StringComparison.OrdinalIgnoreCase)
+                    ? Observable.Return<MeshNode>(null!)
+                    : Observable.Throw<MeshNode>(ex))
+            .Should().Within(90.Seconds()).Emit();
+
+        // AdminMenuGate's exact check is the ROOT path "" (HasFlag(All)). The Admin role's
+        // effective set is All | Compile (Compile is granted explicitly on the role, excluded
+        // from Permission.All — see Role.cs / Permission.Compile).
+        await Mesh.GetEffectivePermissions("", userId)
+            .Should().Within(90.Seconds()).Match(p => p == (Permission.All | Permission.Compile));
+        // And the root grant must still cover the Admin/Invitation subtree the tab manages.
+        await Mesh.GetEffectivePermissions("Admin/Invitation", userId)
+            .Should().Within(90.Seconds()).Match(p => p == (Permission.All | Permission.Compile));
+    }
+
 }

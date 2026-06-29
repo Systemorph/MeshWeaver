@@ -10,8 +10,20 @@ using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Hosting.Orleans;
 
+/// <summary>
+/// Host-builder extension methods that configure a host as a MeshWeaver Orleans silo server,
+/// wiring the Orleans silo, mesh services, streams and grain call filters.
+/// </summary>
 public static class OrleansServerRegistryExtensions
 {
+    /// <summary>
+    /// Configures the application host as a MeshWeaver Orleans mesh server at the given address,
+    /// applying the standard silo configuration and any caller-supplied Orleans customisation.
+    /// </summary>
+    /// <param name="hostBuilder">The application host builder to configure.</param>
+    /// <param name="address">The mesh address this server hosts.</param>
+    /// <param name="orleansConfiguration">Optional additional Orleans silo configuration applied after the standard setup.</param>
+    /// <returns>The configured mesh host application builder for further chaining.</returns>
     public static MeshHostApplicationBuilder UseOrleansMeshServer(
         this IHostApplicationBuilder hostBuilder,
         Address address,
@@ -27,6 +39,12 @@ public static class OrleansServerRegistryExtensions
         });
         return meshBuilder.UseOrleansMeshServer();
     }
+    /// <summary>
+    /// Configures the host as a MeshWeaver Orleans mesh server using a generated mesh address
+    /// and the standard silo configuration.
+    /// </summary>
+    /// <param name="hostBuilder">The host builder to configure.</param>
+    /// <returns>The configured mesh host builder for further chaining.</returns>
     public static MeshHostBuilder UseOrleansMeshServer(this IHostBuilder hostBuilder)
     {
         var meshBuilder = hostBuilder.CreateOrleansConnectionBuilder();
@@ -49,6 +67,12 @@ public static class OrleansServerRegistryExtensions
         return builder;
     }
 
+    /// <summary>
+    /// Applies the standard MeshWeaver silo configuration: memory streams, the PubSub store
+    /// grain storage, and the access-context incoming grain call filter.
+    /// </summary>
+    /// <param name="silo">The Orleans silo builder to configure.</param>
+    /// <returns>The same silo builder for further chaining.</returns>
     public static ISiloBuilder ConfigureMeshWeaverServer(this ISiloBuilder silo)
     {
         return silo.AddMemoryStreams(StreamProviders.Memory)
@@ -77,10 +101,18 @@ public static class OrleansServerRegistryExtensions
         return builder;
     }
 
+    /// <summary>
+    /// Registers the default Orleans mesh services — partitioned in-memory persistence, the
+    /// Orleans routing service, the Orleans-distributed change feed and the mesh catalog —
+    /// using try-add semantics so a caller may register replacements first.
+    /// </summary>
+    /// <param name="services">The service collection to add the mesh services to.</param>
+    /// <returns>The same service collection for further chaining.</returns>
     public static IServiceCollection AddOrleansMeshServices(this IServiceCollection services)
     {
-        // Register defaults if not already registered - user can register their own first
-        services.AddInMemoryPersistence();
+        // Register defaults if not already registered - user can register their own first.
+        // Partition routing is the default (see OrleansConnectionExtensions for rationale).
+        services.AddPartitionedInMemoryPersistence();
         services.TryAddSingleton<IRoutingService, OrleansRoutingService>();
 
         // Register Orleans-distributed change feed (wraps local feed + Orleans streams)

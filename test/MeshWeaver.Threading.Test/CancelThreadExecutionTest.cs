@@ -4,11 +4,8 @@ using System.Linq;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Runtime.CompilerServices;
-using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
-using FluentAssertions;
-using FluentAssertions.Extensions;
 using MeshWeaver.AI;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
@@ -25,17 +22,18 @@ using MeshThread = MeshWeaver.AI.Thread;
 namespace MeshWeaver.Threading.Test;
 
 /// <summary>
-/// Tests for chat cancellation:
-/// - Cancel stops streaming and marks message as cancelled
-/// - Cancel propagates to sub-threads before cancelling own thread
+/// Cancellation through the canonical path: <see cref="ThreadSubmission.Submit"/>
+/// dispatches the round; the cancel trigger is a stream.Update on the thread's
+/// own MeshNode (flipping <c>RequestedCancellationAt</c>) â€” same pattern the
+/// Stop button uses in the GUI. State is observed via
+/// <c>client.GetWorkspace().GetMeshNodeStream(path)</c>.
 /// </summary>
 public class CancelThreadExecutionTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
     private const string ContextPath = "User/Roland";
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
-    {
-        return base.ConfigureMesh(builder)
+        => base.ConfigureMesh(builder)
             .ConfigureServices(services =>
             {
                 services.AddSingleton<IChatClientFactory>(new SlowChatClientFactory());
@@ -43,131 +41,131 @@ public class CancelThreadExecutionTest(ITestOutputHelper output) : MonolithMeshT
             })
             .AddAI()
             .AddSampleUsers();
-    }
 
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
     {
         configuration.TypeRegistry.AddAITypes();
-        return base.ConfigureClient(configuration)
-            .AddLayoutClient();
-    }
-
-    private async Task<string> CreateThreadAsync(IMessageHub client, string text, CancellationToken ct)
-    {
-        var threadNode = ThreadNodeType.BuildThreadNode(ContextPath, text, "Roland");
-        var delivery = client.Post(new CreateNodeRequest(threadNode),
-            o => o.WithTarget(Mesh.Address))!;
-        var response = await client.RegisterCallback(delivery, (d, _) => Task.FromResult(d), ct);
-        var createResponse = ((IMessageDelivery<CreateNodeResponse>)response).Message;
-        createResponse.Success.Should().BeTrue(createResponse.Error);
-        return createResponse.Node!.Path!;
-    }
-
-    private IObservable<IReadOnlyList<string>> ObserveMessages(IMessageHub client, string threadPath)
-    {
-        var workspace = client.GetWorkspace();
-        return workspace.GetRemoteStream<MeshNode>(new Address(threadPath))!
-            .Select(nodes =>
-            {
-                var node = nodes?.FirstOrDefault(n => n.Path == threadPath);
-                var content = node?.Content as MeshThread;
-                return (IReadOnlyList<string>)(content?.Messages ?? []);
-            });
-    }
-
-    private async Task<T?> GetHubContentAsync<T>(IMessageHub client, string path, CancellationToken ct) where T : class
-    {
-        var nodeId = path.Contains('/') ? path[(path.LastIndexOf('/') + 1)..] : path;
-        var response = await client.AwaitResponse(
-            new GetDataRequest(new EntityReference(nameof(MeshNode), nodeId)),
-            o => o.WithTarget(new Address(path)), ct);
-        var node = response.Message.Data as MeshNode;
-        if (node == null && response.Message.Data is JsonElement je)
-            node = je.Deserialize<MeshNode>(Mesh.JsonSerializerOptions);
-        if (node?.Content is T typed) return typed;
-        if (node?.Content is JsonElement contentJe)
-            return contentJe.Deserialize<T>(Mesh.JsonSerializerOptions);
-        return null;
+        return base.ConfigureClient(configuration).AddLayoutClient();
     }
 
     [Fact]
     public async Task CancelStream_StopsExecutionAndMarksAsCancelled()
     {
-        var ct = new CancellationTokenSource(15.Seconds()).Token;
         var client = GetClient();
+        var workspace = client.GetWorkspace();
 
-        // 1. Create thread and submit (slow client will stream for ~5 seconds)
-        var threadPath = await CreateThreadAsync(client, "Cancel test", ct);
-        var twoMessages = ObserveMessages(client, threadPath)
-            .Where(ids => ids.Count >= 2).FirstAsync().ToTask(ct);
+        var threadNode = ThreadNodeType.BuildThreadNode(ContextPath, "Cancel test", "Roland");
+        var createResp = await client.Observe(new CreateNodeRequest(threadNode),
+            o => o.WithTarget(Mesh.Address)).Should().Within(30.Seconds()).Emit();
+        createResp.Message.Success.Should().BeTrue(createResp.Message.Error ?? "");
+        var threadPath = createResp.Message.Node!.Path!;
 
-        var userMsgId = Guid.NewGuid().ToString("N")[..8];
-        var responseMsgId = Guid.NewGuid().ToString("N")[..8];
+        // Warm up the remote stream subscription BEFORE submit so the
+        // IsExecuting=trueâ†’false transition is captured. Same pattern
+        // IsExecutingLifecycleTest uses. Without this warm-up, the test races
+        // the first cache.GetStream call (opened by _Exec's round watcher)
+        // against the submission watcher's claim emission, and the chain
+        // can stall at Status=StartingExecution.
+        var baselineThread = await workspace.GetMeshNodeStream(threadPath)
+            .Select(n => n.Content as MeshThread)
+            .Should().Within(10.Seconds()).Match(t => t != null);
+        baselineThread!.IsExecuting.Should().BeFalse("thread should not be executing yet");
 
-        await client.AwaitResponse(new CreateNodeRequest(new MeshNode(userMsgId, threadPath)
+        // Submit via GUI handler â€” server generates message ids.
+        client.SubmitMessage(
+            threadPath,
+            "Tell me a long story",
+            contextPath: ContextPath);
+
+        // Wait for ActiveMessageId so we know which response cell to watch.
+        var executing = await workspace.GetMeshNodeStream(threadPath)
+            .Select(n => n.Content as MeshThread)
+            .Should().Within(15.Seconds()).Match(t => t is { IsExecuting: true, ActiveMessageId: { Length: > 0 } });
+        var responseMsgId = executing!.ActiveMessageId!;
+
+        // Wait until the response cell shows "Generating response..." â€” the
+        // deterministic "streaming-loop-is-armed" signal: ExecuteMessageAsync
+        // emits this AFTER setting the CTS and immediately before starting the
+        // streaming task. Cancelling earlier finds a null CTS â†’ no-op.
+        //
+        // The server-flow path creates the response cell asynchronously after
+        // flipping IsExecuting=true, so a fresh subscribe may race against the
+        // CreateNode and hit a routing NotFound. RetryWhen with a short delay
+        // covers that gap (same pattern the per-node hub's UpdateRemote uses
+        // internally â€” wait for the cell to materialise).
+        await Observable.Defer(() => workspace.GetMeshNodeStream($"{threadPath}/{responseMsgId}"))
+            .Select(n => (n.Content as ThreadMessage)?.Text ?? "")
+            .Where(t => t.StartsWith("Generating response", StringComparison.Ordinal))
+            .Take(1)
+            .RetryWhen(errors => errors
+                .Select((ex, i) => i)
+                .TakeWhile(i => i < 50)
+                .SelectMany(_ => Observable.Timer(TimeSpan.FromMilliseconds(100))))
+            .Should().Within(15.Seconds()).Emit();
+        var responseStream = workspace.GetMeshNodeStream($"{threadPath}/{responseMsgId}");
+        Output.WriteLine("Streaming confirmed armed (response cell shows 'Generating response...')");
+
+        // Cancel via stream.Update â€” same path the Stop button uses (see
+        // RequestViaStreamUpdate.md). Set RequestedStatus = Cancelled; the
+        // owning hub's cancel watcher reacts. Awaiting the post-update emission
+        // asserts the write actually landed on the per-thread hub.
+        var cancelled = await workspace.GetMeshNodeStream(threadPath)
+            .Update(curr => curr?.Content is MeshThread t
+                ? curr with { Content = t with { RequestedStatus = ThreadExecutionStatus.Cancelled } }
+                : curr!)
+            .Should().Emit();
+        (cancelled.Content as MeshThread)?.RequestedStatus.Should().Be(ThreadExecutionStatus.Cancelled,
+            "stream.Update should have stamped RequestedStatus = Cancelled on the thread node");
+
+        // Wait for execution to settle. Cancel drives the thread to the terminal
+        // Cancelled status (IsExecuting=false).
+        var settled = await workspace.GetMeshNodeStream(threadPath)
+            .Select(n => n.Content as MeshThread)
+            .Should().Within(15.Seconds()).Match(t => t is { IsExecuting: false });
+        settled.Should().NotBeNull();
+        settled!.Status.Should().Be(ThreadExecutionStatus.Cancelled,
+            "a stopped round lands on the terminal Cancelled status");
+        Output.WriteLine($"Settled: Thread.Status={settled.Status}, IsExecuting={settled.IsExecuting}");
+
+        // Best-effort check: response cell SHOULD have partial streaming text
+        // by now. The monotonic-text guard in PushToResponseMessage can keep
+        // the placeholder when cancel happens before ~500ms of streaming
+        // (snapshot lengths stay below the placeholder's 22 chars), so we
+        // tolerate missing partial text â€” the core cancel guarantee is the
+        // Settled check above. If we DO see partial text, confirm it didn't
+        // emit the FULL Long response (cancel must have stopped streaming).
+        var partial = await responseStream
+            .Select(n => n.Content as ThreadMessage)
+            .Where(m => m?.Text is { Length: > 0 } txt
+                && !txt.StartsWith("Allocating agent", StringComparison.Ordinal)
+                && !txt.StartsWith("Generating response", StringComparison.Ordinal)
+                && !txt.StartsWith("Loading conversation history", StringComparison.Ordinal))
+            .Take(1)
+            .Timeout(3.Seconds())
+            .Materialize()
+            .Should().Emit();
+
+        if (partial.Kind == System.Reactive.NotificationKind.OnNext && partial.Value is { } finalContent)
         {
-            NodeType = ThreadMessageNodeType.NodeType, MainNode = ContextPath,
-            Content = new ThreadMessage { Role = "user", Text = "Tell me a long story", Timestamp = DateTime.UtcNow, Type = ThreadMessageType.ExecutedInput }
-        }), o => o.WithTarget(new Address(threadPath)), ct);
-
-        await client.AwaitResponse(new CreateNodeRequest(new MeshNode(responseMsgId, threadPath)
-        {
-            NodeType = ThreadMessageNodeType.NodeType, MainNode = ContextPath,
-            Content = new ThreadMessage { Role = "assistant", Text = "", Timestamp = DateTime.UtcNow, Type = ThreadMessageType.AgentResponse }
-        }), o => o.WithTarget(new Address(threadPath)), ct);
-
-        var submitResponse = await client.AwaitResponse(
-            new SubmitMessageRequest { ThreadPath = threadPath, UserMessageText = "Tell me a long story", UserMessageId = userMsgId, ResponseMessageId = responseMsgId },
-            o => o.WithTarget(new Address(threadPath)), ct);
-        submitResponse.Message.Success.Should().BeTrue(submitResponse.Message.Error);
-
-        var msgIds = await twoMessages;
-        msgIds.Should().HaveCount(2);
-        Output.WriteLine($"Messages: [{string.Join(", ", msgIds)}]");
-
-        // 2. Wait briefly for streaming to start
-        await Task.Delay(500, ct);
-
-        // Verify execution is in progress (check Thread.IsExecuting, not ThreadMessage)
-        var midThread = await GetHubContentAsync<MeshThread>(client, threadPath, ct);
-        midThread.Should().NotBeNull();
-        midThread!.IsExecuting.Should().BeTrue("streaming should still be in progress");
-        Output.WriteLine($"Mid-stream: Thread.IsExecuting={midThread.IsExecuting}");
-
-        // 3. Cancel the stream
-        Output.WriteLine("Sending CancelThreadStreamRequest...");
-        client.Post(new CancelThreadStreamRequest { ThreadPath = threadPath },
-            o => o.WithTarget(new Address(threadPath)));
-
-        // 4. Wait for execution to stop (poll Thread.IsExecuting)
-        MeshThread? finalThread = null;
-        for (var i = 0; i < 30; i++)
-        {
-            await Task.Delay(200, ct);
-            finalThread = await GetHubContentAsync<MeshThread>(client, threadPath, ct);
-            if (finalThread is { IsExecuting: false })
-                break;
+            Output.WriteLine($"Final response text: '{finalContent.Text}'");
+            var wordCount = finalContent.Text?.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length ?? 0;
+            wordCount.Should().BeLessThan(50,
+                "cancellation should have stopped streaming before all words were emitted");
+            Output.WriteLine($"Word count: {wordCount} (expected < 50)");
         }
-
-        // 5. Assert cancellation took effect
-        finalThread.Should().NotBeNull();
-        finalThread!.IsExecuting.Should().BeFalse("execution should be stopped after cancel");
-        var finalContent = await GetHubContentAsync<ThreadMessage>(client, $"{threadPath}/{msgIds[1]}", ct);
-        finalContent.Should().NotBeNull();
-        finalContent!.Text.Should().Contain("Cancelled", "response should be marked as cancelled");
-        Output.WriteLine($"Final: Thread.IsExecuting={finalThread.IsExecuting}, text='{finalContent.Text}'");
-
-        // 6. Verify the fake client was actually interrupted (didn't stream all 50 words)
-        var wordCount = finalContent.Text?.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length ?? 0;
-        wordCount.Should().BeLessThan(50, "cancellation should have stopped streaming before all words were emitted");
-        Output.WriteLine($"Word count: {wordCount} (expected < 50)");
+        else
+        {
+            Output.WriteLine("Response cell stayed on placeholder â€” cancel preempted streaming before " +
+                             "snapshot length exceeded the monotonic guard threshold. Cancel still worked " +
+                             "(Settled=true above).");
+        }
     }
 
     #region Fake slow chat client
 
     /// <summary>
-    /// Slow chat client that streams one word every 100ms, taking ~5 seconds total.
-    /// Properly respects CancellationToken.
+    /// Streams one word every 100ms, taking ~5 seconds total. Respects the
+    /// CancellationToken so cancel-mid-streaming is observable in word count.
     /// </summary>
     private class SlowChatClient : IChatClient
     {
@@ -213,14 +211,10 @@ public class CancelThreadExecutionTest(ITestOutputHelper output) : MonolithMeshT
             IReadOnlyDictionary<string, ChatClientAgent> existingAgents,
             IReadOnlyList<AgentConfiguration> hierarchyAgents,
             string? modelName = null)
-        {
-            var agent = new ChatClientAgent(
-                chatClient: new SlowChatClient(),
+            => new(chatClient: new SlowChatClient(),
                 instructions: config.Instructions ?? "You are a slow test assistant.",
                 name: config.Id, description: config.Description ?? config.Id,
                 tools: [], loggerFactory: null, services: null);
-            return agent;
-        }
 
         public Task<ChatClientAgent> CreateAgentAsync(
             AgentConfiguration config, IAgentChat chat,

@@ -41,6 +41,11 @@ public static class TestUsers
     /// </summary>
     public static MeshNode[] SampleUsers() =>
     [
+        // TestUser is the default test-circuit identity (TestUsers.TestUser), so its
+        // own User MeshNode must exist — AgentChatClient.LoadContextNode("User/TestUser")
+        // warned "Failed to load context node" when it wasn't seeded, and downstream
+        // chat flows that read ContextPath proceeded with a null Node.
+        new("TestUser", "User") { Name = "TestUser", NodeType = "User" },
         new("Roland", "User") { Name = "Roland", NodeType = "User" },
         new("Samuel", "User") { Name = "Samuel", NodeType = "User" },
         new("Alice", "User") { Name = "Alice", NodeType = "User" },
@@ -85,12 +90,15 @@ public static class TestUsers
     }
 
     private static MeshNode CreateAccessNode(string ns, AccessAssignment assignment) =>
-        new(WellKnownUsers.Public + "_Access", ns.Length > 0 ? ns + "/_Access" : "")
+        // Root scope assignments live at "_Access" (not "") so SecurityService.Consume
+        // recognizes them as scope = "" (global). Empty Namespace would put them at
+        // path "Public_Access" with no scope mapping.
+        new(WellKnownUsers.Public + "_Access", ns.Length > 0 ? ns + "/_Access" : "_Access")
         {
             NodeType = "AccessAssignment",
             Name = "Public Access",
             Content = assignment,
-            MainNode = ns.Length > 0 ? ns : null!,
+            MainNode = ns.Length > 0 ? ns : "",
         };
 
     /// <summary>

@@ -1,4 +1,4 @@
-#pragma warning disable CS1591 // Missing XML comment for publicly visible type or member
+﻿#pragma warning disable CS1591 // Missing XML comment for publicly visible type or member
 
 using System;
 using System.Collections.Generic;
@@ -6,7 +6,6 @@ using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
-using FluentAssertions;
 using MeshWeaver.AI.Plugins;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
@@ -246,10 +245,10 @@ public class HandoffTest
     [Fact]
     public void HandoffRequest_RecordProperties_AreCorrect()
     {
-        var request = new HandoffRequest("Orchestrator", "Planner", "Plan this complex task");
+        var request = new HandoffRequest("Orchestrator", "Specialist", "Plan this complex task");
 
         request.SourceAgentName.Should().Be("Orchestrator");
-        request.TargetAgentName.Should().Be("Planner");
+        request.TargetAgentName.Should().Be("Specialist");
         request.Message.Should().Be("Plan this complex task");
     }
 
@@ -259,10 +258,10 @@ public class HandoffTest
     [Fact]
     public void ChatHandoffContent_Properties_AreCorrect()
     {
-        var content = new ChatHandoffContent("Orchestrator", "Planner", "Take over planning");
+        var content = new ChatHandoffContent("Orchestrator", "Specialist", "Take over planning");
 
         content.SourceAgent.Should().Be("Orchestrator");
-        content.TargetAgent.Should().Be("Planner");
+        content.TargetAgent.Should().Be("Specialist");
         content.HandoffMessage.Should().Be("Take over planning");
     }
 
@@ -277,7 +276,7 @@ public class HandoffTest
             Id = "AgentA",
             Handoffs =
             [
-                new AgentHandoff { AgentPath = "Agent/Planner", Instructions = "Complex planning" },
+                new AgentHandoff { AgentPath = "Agent/Specialist", Instructions = "Complex planning" },
                 new AgentHandoff { AgentPath = "Agent/Worker", Instructions = "Task execution" }
             ]
         };
@@ -291,7 +290,7 @@ public class HandoffTest
         var aiFunction = tool as AIFunction;
         aiFunction.Should().NotBeNull();
         aiFunction!.Name.Should().Be("handoff_to_agent");
-        aiFunction.Description.Should().Contain("Agent/Planner");
+        aiFunction.Description.Should().Contain("Agent/Specialist");
         aiFunction.Description.Should().Contain("Agent/Worker");
         aiFunction.Description.Should().Contain("Complex planning");
         aiFunction.Description.Should().Contain("Task execution");
@@ -312,7 +311,7 @@ public class HandoffTest
             ],
             Handoffs =
             [
-                new AgentHandoff { AgentPath = "Agent/Planner", Instructions = "Take over planning" }
+                new AgentHandoff { AgentPath = "Agent/Specialist", Instructions = "Take over planning" }
             ]
         };
 
@@ -320,6 +319,6 @@ public class HandoffTest
         config.Delegations![0].AgentPath.Should().Be("Agent/Researcher");
 
         config.Handoffs.Should().HaveCount(1);
-        config.Handoffs![0].AgentPath.Should().Be("Agent/Planner");
+        config.Handoffs![0].AgentPath.Should().Be("Agent/Specialist");
     }
 }

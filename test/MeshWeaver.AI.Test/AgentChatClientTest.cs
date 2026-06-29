@@ -1,10 +1,11 @@
-#pragma warning disable CS1591
+﻿#pragma warning disable CS1591
 
 using System;
 using System.IO;
 using System.Linq;
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
-using FluentAssertions;
 using MeshWeaver.AI;
 using MeshWeaver.AI.Persistence;
 using MeshWeaver.Graph;
@@ -34,113 +35,113 @@ public class AgentChatClientTest : MonolithMeshTestBase
     {
     }
 
+    // Share Mesh/SP across [Fact]s.
+    protected override bool ShareMeshAcrossTests => true;
+
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
         return builder
             .UseMonolithMesh()
             .AddFileSystemPersistence(TestDataPath)
-            .ConfigureServices(services =>
-            {
-                return services;
-            })
             .AddGraph()
+            // AddAI registers Agent NodeType + AgentConfiguration content type so
+            // .md files with `nodeType: Agent` deserialise into AgentConfiguration â€”
+            // without this AgentPickerProjection.ProjectAgents filters them all out.
+            .AddAI()
             .ConfigureDefaultNodeHub(config => config.AddDefaultLayoutAreas());
     }
 
     /// <summary>
-    /// Tests that AgentChatClient finds TodoAgent from ACME/Project namespace
-    /// when navigating to ACME/ProductLaunch (which has NodeType="ACME/Project").
-    ///
-    /// Critical path verification:
-    /// - ACME/ProductLaunch.json has nodeType="ACME/Project"
-    /// - TodoAgent.md is located at ACME/Project/TodoAgent
-    /// - Therefore TodoAgent should be found via the NodeType path, not via ancestors
+    /// Per-partition agent registry (refactor 4f44ec3c6): agents are surfaced by EXACT
+    /// membership of the well-known /Agent sub-namespaces (platform "Agent", the space's
+    /// "{space}/Agent", and the user's "{user}/Agent") - NOT by a NodeType/ancestor graph
+    /// walk. So an agent OUTSIDE those namespaces (TodoAgent at ACME/Project/TodoAgent) is
+    /// no longer surfaced for an ACME context, while the platform registry agents are. The
+    /// query shape itself is unit-tested in AgentPickerQueriesTest; this pins the
+    /// AgentChatClient wiring to the new model.
     /// </summary>
     [Fact]
-    public async Task AgentChatClient_InitializeAsync_FindsTodoAgentFromNodeTypeNamespace()
+    public async Task AgentChatClient_Initialize_SurfacesPartitionAgents_NotNodeTypeNamespaceAgents()
     {
         // Arrange - ACME/ProductLaunch has NodeType="ACME/Project", TodoAgent is at ACME/Project/TodoAgent
         var contextPath = "ACME/ProductLaunch";
         var expectedNodeType = "ACME/Project";
         var expectedTodoAgentPath = "ACME/Project/TodoAgent";
 
-        // Load the actual node from the file system
-        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-        MeshNode? productLaunchNode = null;
-        await foreach (var node in meshQuery.QueryAsync<MeshNode>($"path:{contextPath}", null, TestContext.Current.CancellationToken))
-        {
-            productLaunchNode = node;
-            break;
-        }
+        // Static node read â€” no write before, catalog read is correct (no CQRS lag).
+        var productLaunchNode = await MeshQuery.QueryAsync<MeshNode>($"path:{contextPath}", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
         productLaunchNode.Should().NotBeNull("ProductLaunch node should exist in test data");
 
-        // CRITICAL: Verify the node has the expected NodeType
+        // ProductLaunch is an ACME/Project instance — test-data sanity check. Under the new
+        // registry its NodeType no longer drives agent discovery (that was the removed model).
         productLaunchNode!.NodeType.Should().Be(expectedNodeType,
-            "ProductLaunch node should have NodeType=ACME/Project to trigger NodeType-based agent search");
+            "ProductLaunch should be an ACME/Project instance in the test data");
 
         // Act - Create AgentChatClient using the mesh's service provider
         var chatClient = new AgentChatClient(Mesh.ServiceProvider);
 
-        // 1. Initialize - this should load agents including TodoAgent from NodeType namespace
-        await chatClient.InitializeAsync(contextPath);
-
-        // 2. Set context with the actual node from file system
-        var context = new AgentContext
+        // 1. Initialize then SetContext â€” SetContext re-inits the subscription with
+        //    the context node's space partition, which is what brings in that space's
+        //    own agents at namespace:{space}/Agent (exact membership, no scope walk).
+        chatClient.Initialize(contextPath);
+        chatClient.SetContext(new AgentContext
         {
             Address = new Address("ACME", "ProductLaunch"),
             Node = productLaunchNode
-        };
-        chatClient.SetContext(context);
+        });
 
-        // 3. Get ordered agents - this should return TodoAgent
-        var orderedAgents = await chatClient.GetOrderedAgentsAsync();
+        // Wait until the registry surfaces agents (the platform /Agent defaults). FromAsync keeps
+        // the read non-blocking and yields the loaded set straight off the pipeline (the cold
+        // synced query can take a few seconds to populate).
+        var orderedAgents = await chatClient.WhenInitialized
+            .SelectMany(_ => Observable.FromAsync(chatClient.GetOrderedAgentsAsync))
+            .Where(a => a.Count > 0)
+            .Timeout(TimeSpan.FromSeconds(30))
+            .FirstAsync().ToTask(TestContext.Current.CancellationToken);
 
-        // Assert
-        orderedAgents.Should().NotBeEmpty("Agents should be found from the mesh");
+        // Assert: the platform /Agent registry agents are surfaced.
+        orderedAgents.Should().NotBeEmpty("platform /Agent registry agents are always surfaced");
 
-        // CRITICAL: TodoAgent should be FIRST because it has order: -10
-        // (lower order = higher priority)
-        var firstAgent = orderedAgents.First();
-        firstAgent.Name.Should().Be("TodoAgent",
-            "TodoAgent should be FIRST agent because it has order: -10 (lowest)");
-        firstAgent.Path.Should().Be(expectedTodoAgentPath,
-            "TodoAgent should come from the NodeType path (ACME/Project)");
+        // TodoAgent lives at ACME/Project/TodoAgent, OUTSIDE the /Agent registry namespaces,
+        // so exact-membership discovery (namespace:ACME/Agent|Agent) does NOT surface it. The
+        // pre-refactor NodeType-scoped scope:selfAndAncestors lookup that found it was removed
+        // in 4f44ec3c6.
+        orderedAgents.Any(a => a.Path == expectedTodoAgentPath).Should().BeFalse(
+            "agents are surfaced by exact /Agent-namespace membership, not NodeType-ancestor discovery");
     }
 
     /// <summary>
-    /// Tests that when at a node with generic NodeType (Markdown),
-    /// agents are still found from the path hierarchy.
+    /// Per-partition registry: for ANY context the platform "Agent" defaults are surfaced
+    /// (plus the context's space/user /Agent agents when present). There is no path-hierarchy
+    /// / ancestor walk - discovery is exact /Agent-namespace membership.
     /// </summary>
     [Fact]
-    public async Task AgentChatClient_InitializeAsync_FindsAgentsFromPathHierarchy()
+    public async Task AgentChatClient_Initialize_SurfacesPlatformAgentsForAnyContext()
     {
         // Arrange - Use a path that should have agents in hierarchy
         var contextPath = "ACME";
 
-        // Load the actual node from the file system
-        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-        MeshNode? acmeNode = null;
-        await foreach (var node in meshQuery.QueryAsync<MeshNode>($"path:{contextPath}", null, TestContext.Current.CancellationToken))
-        {
-            acmeNode = node;
-            break;
-        }
+        // Static node read â€” no write before, catalog read is correct (no CQRS lag).
+        var acmeNode = await MeshQuery.QueryAsync<MeshNode>($"path:{contextPath}", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
         acmeNode.Should().NotBeNull("ACME node should exist in test data");
 
         // Act
         var chatClient = new AgentChatClient(Mesh.ServiceProvider);
-        await chatClient.InitializeAsync(contextPath);
-
-        var context = new AgentContext
+        chatClient.Initialize(contextPath);
+        chatClient.SetContext(new AgentContext
         {
             Address = new Address("ACME"),
             Node = acmeNode
-        };
-        chatClient.SetContext(context);
+        });
 
-        var orderedAgents = await chatClient.GetOrderedAgentsAsync();
+        // Wait for the synced query to emit a non-empty agent set (non-blocking read).
+        var orderedAgents = await chatClient.WhenInitialized
+            .SelectMany(_ => Observable.FromAsync(chatClient.GetOrderedAgentsAsync))
+            .Where(a => a.Count > 0)
+            .Timeout(TimeSpan.FromSeconds(30))
+            .FirstAsync().ToTask(TestContext.Current.CancellationToken);
 
-        // Assert - Should find agents from ACME hierarchy or root
-        orderedAgents.Should().NotBeEmpty("Agents should be found from path hierarchy");
+        // Assert: the platform /Agent registry agents are surfaced for any context.
+        orderedAgents.Should().NotBeEmpty("platform /Agent registry agents should be surfaced for any context");
     }
 }

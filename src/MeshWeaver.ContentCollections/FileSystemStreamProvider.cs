@@ -1,4 +1,5 @@
 ﻿using System.Collections.Immutable;
+using System.Runtime.CompilerServices;
 using System.Text.Json;
 using MeshWeaver.Mesh.Services;
 
@@ -9,12 +10,15 @@ namespace MeshWeaver.ContentCollections;
 /// </summary>
 public class FileSystemStreamProvider(string basePath) : IStreamProvider
 {
+    /// <summary>The source-type discriminator for file-system collections.</summary>
     public const string SourceType = "FileSystem";
 
     private FileSystemWatcher? watcher;
 
+    /// <inheritdoc />
     public string ProviderType => SourceType;
 
+    /// <inheritdoc />
     public Task<Stream?> GetStreamAsync(string reference, CancellationToken cancellationToken = default)
     {
         var fullPath = Path.Combine(basePath, reference.TrimStart('/'));
@@ -34,6 +38,7 @@ public class FileSystemStreamProvider(string basePath) : IStreamProvider
         return Task.FromResult<Stream?>(stream);
     }
 
+    /// <inheritdoc />
     public Task<(Stream? Stream, string Path, DateTime LastModified)> GetStreamWithMetadataAsync(string path, CancellationToken cancellationToken = default)
     {
         var fullPath = Path.Combine(basePath, path.TrimStart('/'));
@@ -46,6 +51,7 @@ public class FileSystemStreamProvider(string basePath) : IStreamProvider
             (stream, path, File.GetLastWriteTime(fullPath)));
     }
 
+    /// <inheritdoc />
     public async Task WriteStreamAsync(string reference, Stream content, CancellationToken cancellationToken = default)
     {
         var fullPath = Path.IsPathRooted(reference) ? reference : Path.Combine(basePath, reference.TrimStart('/'));
@@ -66,8 +72,15 @@ public class FileSystemStreamProvider(string basePath) : IStreamProvider
         await content.CopyToAsync(fileStream, cancellationToken);
     }
 
+    /// <inheritdoc />
     public IAsyncEnumerable<(Stream? Stream, string Path, DateTime LastModified)> GetStreamsAsync(Func<string, bool> filter, CancellationToken cancellationToken = default)
     {
+        // A brand-new collection (e.g. a freshly-created Space) has no backing directory
+        // yet. Enumerating it would throw DirectoryNotFoundException and break collection
+        // init — and thus the FIRST upload (SaveFileAsync below creates the dir on write,
+        // but GetCollectionAsync enumerates first). Treat "no dir" as "no files".
+        if (!Directory.Exists(basePath))
+            return AsyncEnumerable.Empty<(Stream? Stream, string Path, DateTime LastModified)>();
         var files = filter.Method.Name.Contains("MarkdownFilter")
             ? Directory.GetFiles(basePath, "*.md", SearchOption.AllDirectories)
             : Directory.GetFiles(basePath, "*", SearchOption.AllDirectories).Where(f => filter(f));
@@ -80,41 +93,59 @@ public class FileSystemStreamProvider(string basePath) : IStreamProvider
         return items.ToAsyncEnumerable();
     }
 
-    public Task<IReadOnlyCollection<FolderItem>> GetFoldersAsync(string path)
+    /// <inheritdoc />
+    public async IAsyncEnumerable<FolderItem> GetFolders(
+        string path,
+        [EnumeratorCancellation] CancellationToken ct = default)
     {
         var fullPath = Path.Combine(basePath, path.TrimStart('/'));
-
-        return Task.FromResult<IReadOnlyCollection<FolderItem>>(Directory.GetDirectories(fullPath)
-            .Select(dirPath =>
-            {
-                var itemCount = Directory.GetFileSystemEntries(dirPath).Length;
-                return new FolderItem(
-                    '/' + Path.GetRelativePath(basePath, dirPath),
-                    Path.GetFileName(dirPath),
-                    itemCount
-                );
-            })
-            .ToArray());
+        if (!Directory.Exists(fullPath))
+        {
+            // The collection root not existing = a not-yet-created collection (brand-new Space):
+            // list empty so the first upload works. But a missing SUBPATH under an existing
+            // collection is a genuine not-found — surface it so callers (e.g. the content
+            // file→folder fallback in HandleContentPath) don't mistake it for an empty folder.
+            if (!Directory.Exists(basePath))
+                yield break;
+            throw new DirectoryNotFoundException($"Folder not found: {path}");
+        }
+        foreach (var dirPath in Directory.EnumerateDirectories(fullPath))
+        {
+            ct.ThrowIfCancellationRequested();
+            var itemCount = Directory.GetFileSystemEntries(dirPath).Length;
+            yield return new FolderItem(
+                '/' + Path.GetRelativePath(basePath, dirPath),
+                Path.GetFileName(dirPath),
+                itemCount);
+        }
     }
 
-    public Task<IReadOnlyCollection<FileItem>> GetFilesAsync(string path)
+    /// <inheritdoc />
+    public async IAsyncEnumerable<FileItem> GetFiles(
+        string path,
+        [EnumeratorCancellation] CancellationToken ct = default)
     {
         var fullPath = Path.Combine(basePath, path.TrimStart('/'));
-
-        return Task.FromResult<IReadOnlyCollection<FileItem>>(Directory.GetFiles(fullPath)
-            .Select(filePath =>
-            {
-                var fileInfo = new FileInfo(filePath);
-
-                return new FileItem(
-                    '/' + Path.GetRelativePath(basePath, filePath),
-                    Path.GetFileName(filePath),
-                    fileInfo.LastWriteTime
-                );
-            })
-            .ToArray());
+        if (!Directory.Exists(fullPath))
+        {
+            // See GetFolders: brand-new collection (root missing) → empty; a missing subpath under
+            // an existing collection is a genuine not-found and must surface, not look like empty.
+            if (!Directory.Exists(basePath))
+                yield break;
+            throw new DirectoryNotFoundException($"Folder not found: {path}");
+        }
+        foreach (var filePath in Directory.EnumerateFiles(fullPath))
+        {
+            ct.ThrowIfCancellationRequested();
+            var fileInfo = new FileInfo(filePath);
+            yield return new FileItem(
+                '/' + Path.GetRelativePath(basePath, filePath),
+                Path.GetFileName(filePath),
+                fileInfo.LastWriteTime);
+        }
     }
 
+    /// <inheritdoc />
     public async Task SaveFileAsync(string path, string fileName, Stream content, CancellationToken cancellationToken = default)
     {
         var fullPath = Path.Combine(basePath, path.TrimStart('/'), fileName);
@@ -127,6 +158,7 @@ public class FileSystemStreamProvider(string basePath) : IStreamProvider
         await content.CopyToAsync(fileStream, cancellationToken);
     }
 
+    /// <inheritdoc />
     public Task CreateFolderAsync(string folderPath)
     {
         var fullPath = Path.Combine(basePath, folderPath.TrimStart('/'));
@@ -137,6 +169,7 @@ public class FileSystemStreamProvider(string basePath) : IStreamProvider
         return Task.CompletedTask;
     }
 
+    /// <inheritdoc />
     public Task DeleteFolderAsync(string folderPath)
     {
         var fullPath = Path.Combine(basePath, folderPath.TrimStart('/'));
@@ -164,6 +197,7 @@ public class FileSystemStreamProvider(string basePath) : IStreamProvider
         return Task.CompletedTask;
     }
 
+    /// <inheritdoc />
     public Task DeleteFileAsync(string filePath)
     {
         var fullPath = Path.Combine(basePath, filePath.TrimStart('/'));
@@ -191,86 +225,108 @@ public class FileSystemStreamProvider(string basePath) : IStreamProvider
         return Task.CompletedTask;
     }
 
+    /// <inheritdoc />
     public IDisposable? AttachMonitor(Action<string> onChanged)
     {
-        watcher = new FileSystemWatcher(basePath)
+        // A brand-new collection (freshly-created Space) has no backing dir yet, and
+        // FileSystemWatcher's ctor throws ArgumentException("directory ... does not exist") on a
+        // missing path — which broke the FIRST upload at collection-init (before SaveFileAsync,
+        // which creates the dir on write, ever runs). Ensure it exists (idempotent).
+        Directory.CreateDirectory(basePath);
+        var w = new FileSystemWatcher(basePath)
         {
             IncludeSubdirectories = true,
             NotifyFilter = NotifyFilters.FileName | NotifyFilters.LastWrite
         };
+        watcher = w;
 
-        watcher.Changed += (sender, e) =>
+        // The returned handle stops the watcher AND flips a flag that in-flight callbacks observe.
+        // FileSystemWatcher events dispatch on threadpool threads, so an event can already be
+        // queued when teardown disposes the watcher — without the flag that late callback would
+        // drive stream.Update into a disposed hub. See Doc/Architecture/HubDisposalModel.
+        var handle = new WatcherHandle(w);
+
+        w.Changed += (sender, e) =>
         {
+            if (handle.Stopped) return;
             if (Path.GetExtension(e.FullPath) == ".md")
-            {
                 onChanged(Path.GetRelativePath(basePath, e.FullPath));
-            }
         };
 
-        watcher.Renamed += (sender, e) =>
+        w.Renamed += (sender, e) =>
         {
+            if (handle.Stopped) return;
             if (Path.GetExtension(e.FullPath) == ".md")
-            {
                 onChanged(Path.GetRelativePath(basePath, e.FullPath));
-            }
         };
 
-        watcher.EnableRaisingEvents = true;
-        return watcher;
+        w.EnableRaisingEvents = true;
+        return handle;
     }
 
     /// <summary>
-    /// Attaches a file system monitor that publishes changes to an IDataChangeNotifier.
-    /// Watches all file types (not just .md).
+    /// Attaches a file system monitor that publishes changes via
+    /// <paramref name="onChange"/>. Watches all file types (not just .md).
     /// </summary>
-    /// <param name="notifier">The data change notifier to publish changes to.</param>
+    /// <param name="onChange">Callback invoked for every Created/Updated/Deleted event.</param>
     /// <param name="filter">Optional file extension filter (e.g., ".json"). If null, watches all files.</param>
     /// <returns>A disposable that stops the watcher when disposed.</returns>
-    public IDisposable? AttachMonitor(IDataChangeNotifier notifier, string? filter = null)
+    public IDisposable? AttachMonitor(Action<DataChangeNotification> onChange, string? filter = null)
     {
+        // See the other AttachMonitor overload: FileSystemWatcher throws on a missing dir, which
+        // broke the first upload to a brand-new collection. Ensure the dir exists (idempotent).
+        Directory.CreateDirectory(basePath);
         var watcherInstance = new FileSystemWatcher(basePath)
         {
             IncludeSubdirectories = true,
             NotifyFilter = NotifyFilters.FileName | NotifyFilters.LastWrite | NotifyFilters.DirectoryName
         };
 
+        // See the first overload: the handle's flag makes in-flight callbacks no-op after teardown
+        // disposes the watcher, so a late event can't drive a write into a disposed hub.
+        var handle = new WatcherHandle(watcherInstance);
+
         void OnChanged(object sender, FileSystemEventArgs e)
         {
+            if (handle.Stopped) return;
             if (filter != null && Path.GetExtension(e.FullPath) != filter)
                 return;
 
             var relativePath = Path.GetRelativePath(basePath, e.FullPath).Replace('\\', '/');
-            notifier.NotifyChange(DataChangeNotification.Updated(relativePath, null));
+            onChange(DataChangeNotification.Updated(relativePath, null));
         }
 
         void OnCreated(object sender, FileSystemEventArgs e)
         {
+            if (handle.Stopped) return;
             if (filter != null && Path.GetExtension(e.FullPath) != filter)
                 return;
 
             var relativePath = Path.GetRelativePath(basePath, e.FullPath).Replace('\\', '/');
-            notifier.NotifyChange(DataChangeNotification.Created(relativePath, null));
+            onChange(DataChangeNotification.Created(relativePath, null));
         }
 
         void OnDeleted(object sender, FileSystemEventArgs e)
         {
+            if (handle.Stopped) return;
             if (filter != null && Path.GetExtension(e.FullPath) != filter)
                 return;
 
             var relativePath = Path.GetRelativePath(basePath, e.FullPath).Replace('\\', '/');
-            notifier.NotifyChange(DataChangeNotification.Deleted(relativePath, null));
+            onChange(DataChangeNotification.Deleted(relativePath, null));
         }
 
         void OnRenamed(object sender, RenamedEventArgs e)
         {
+            if (handle.Stopped) return;
             if (filter != null && Path.GetExtension(e.FullPath) != filter)
                 return;
 
             var oldRelativePath = Path.GetRelativePath(basePath, e.OldFullPath).Replace('\\', '/');
             var newRelativePath = Path.GetRelativePath(basePath, e.FullPath).Replace('\\', '/');
 
-            notifier.NotifyChange(DataChangeNotification.Deleted(oldRelativePath, null));
-            notifier.NotifyChange(DataChangeNotification.Created(newRelativePath, null));
+            onChange(DataChangeNotification.Deleted(oldRelativePath, null));
+            onChange(DataChangeNotification.Created(newRelativePath, null));
         }
 
         watcherInstance.Changed += OnChanged;
@@ -279,9 +335,30 @@ public class FileSystemStreamProvider(string basePath) : IStreamProvider
         watcherInstance.Renamed += OnRenamed;
 
         watcherInstance.EnableRaisingEvents = true;
-        return watcherInstance;
+        return handle;
     }
 
+    /// <summary>
+    /// Disposable wrapper over a <see cref="FileSystemWatcher"/> that makes teardown race-safe.
+    /// <see cref="Dispose"/> flips <see cref="Stopped"/> (a volatile flag the event callbacks check)
+    /// BEFORE stopping and disposing the watcher — so a callback already dispatched on a threadpool
+    /// thread observes the stop and no-ops instead of driving a write into a disposed hub.
+    /// </summary>
+    private sealed class WatcherHandle(FileSystemWatcher watcher) : IDisposable
+    {
+        private volatile bool stopped;
+        public bool Stopped => stopped;
+
+        public void Dispose()
+        {
+            stopped = true;
+            try { watcher.EnableRaisingEvents = false; }
+            catch (ObjectDisposedException) { /* already gone — fine */ }
+            watcher.Dispose();
+        }
+    }
+
+    /// <inheritdoc />
     public async Task<ImmutableDictionary<string, Author>> LoadAuthorsAsync(CancellationToken cancellationToken = default)
     {
         try

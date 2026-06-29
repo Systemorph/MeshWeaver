@@ -3,13 +3,12 @@ using System.Linq;
 using System.Reactive.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using FluentAssertions;
-using FluentAssertions.Extensions;
 using MeshWeaver.Fixture;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Logging;
 using Xunit;
 
+using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Data.Test;
 
 /// <summary>
@@ -50,7 +49,7 @@ public class WorkspaceDataTest(ITestOutputHelper output) : HubTestBase(output)
                 data.AddSource(dataSource =>
                     dataSource.WithType<WorkspaceTestData>(type =>
                         type.WithKey(instance => instance.Id)
-                            .WithInitialData(_ => Task.FromResult(WorkspaceTestData.TestData.AsEnumerable()))
+                            .WithInitialData(_ => Observable.Return(WorkspaceTestData.TestData.AsEnumerable()))
                     )
                 )
             );
@@ -80,13 +79,13 @@ public class WorkspaceDataTest(ITestOutputHelper output) : HubTestBase(output)
         // act
         var data = await workspace
             .GetObservable<WorkspaceTestData>()
-            .Timeout(10.Seconds())
-            .FirstOrDefaultAsync();
+            .Should().Within(10.Seconds())
+            .Emit();
 
         // assert
         data.Should().NotBeNull();
         data.Should().HaveCount(3);
-        data.Should().BeEquivalentTo(WorkspaceTestData.TestData);
+        data.Should().BeEquivalentTo(WorkspaceTestData.TestData, GetHost().JsonSerializerOptions);
     }
 
     /// <summary>
@@ -102,11 +101,11 @@ public class WorkspaceDataTest(ITestOutputHelper output) : HubTestBase(output)
         // act
         var item = await workspace
             .GetObservable<WorkspaceTestData>("2")
-            .Timeout(10.Seconds())
-            .FirstAsync();
+            .Should().Within(10.Seconds())
+            .Match(x => x is not null);
 
         // assert
-        item.Should().BeEquivalentTo(expectedItem);
+        item.Should().BeEquivalentTo(expectedItem, GetHost().JsonSerializerOptions);
     }
 
     /// <summary>
@@ -121,8 +120,8 @@ public class WorkspaceDataTest(ITestOutputHelper output) : HubTestBase(output)
         // act
         var item = await workspace
             .GetObservable<WorkspaceTestData>("999")
-            .Timeout(5.Seconds())
-            .FirstOrDefaultAsync();
+            .Should().Within(5.Seconds())
+            .Emit();
 
         // assert
         item.Should().BeNull();
@@ -141,8 +140,8 @@ public class WorkspaceDataTest(ITestOutputHelper output) : HubTestBase(output)
         var activeItems = await workspace
             .GetObservable<WorkspaceTestData>()
             .Select(collection => collection.Where(x => x.IsActive).ToArray())
-            .Timeout(10.Seconds())
-            .FirstAsync();
+            .Should().Within(10.Seconds())
+            .Match(items => items.Length == 2);
 
         // assert
         activeItems.Should().HaveCount(2);
@@ -158,44 +157,31 @@ public class WorkspaceDataTest(ITestOutputHelper output) : HubTestBase(output)
         var workspace = client.GetWorkspace();
         var updatedItem = new WorkspaceTestData("1", "Updated First Item", DateTime.UtcNow);
 
-        // Create observable to monitor changes
-        var changeCount = 0;
+        // Count emissions reactively. Scan turns the change feed into a running
+        // count; ReplaySubject buffers so the assertion below sees every tick even
+        // if it subscribes after the emission. Asserting on this same signal (not a
+        // captured int read out-of-band) removes the cross-subscription race.
+        var changeCounts = new System.Reactive.Subjects.ReplaySubject<int>();
         var subscription = workspace
             .GetObservable<WorkspaceTestData>()
-            .Subscribe(_ => changeCount++);
+            .Scan(0, (count, _) => count + 1)
+            .Subscribe(changeCounts.OnNext);
 
-        // Wait for initial data
-        await workspace
-            .GetObservable<WorkspaceTestData>()
-            .Timeout(10.Seconds())
-            .FirstAsync();
-
-        var initialChangeCount = changeCount;
+        // Wait for initial data — the first emission is change #1.
+        var initialChangeCount = await changeCounts.Should().Within(10.Seconds()).Match(c => c >= 1);
 
         // act
-        await client.AwaitResponse(
-            DataChangeRequest.Update(new object[] { updatedItem }),
-            o => o.WithTarget(CreateClientAddress()),
-            CancellationTokenSource.CreateLinkedTokenSource(
-                TestContext.Current.CancellationToken,
-                new CancellationTokenSource(10.Seconds()).Token
-            ).Token
-        );
+        await client.Observe(DataChangeRequest.Update(new object[] { updatedItem }), o => o.WithTarget(CreateClientAddress()))
+            .Should().Within(10.Seconds()).Emit();
 
-        // Wait a bit for the change to propagate
-        await Task.Delay(100, CancellationTokenSource.CreateLinkedTokenSource(
-            TestContext.Current.CancellationToken,
-            new CancellationTokenSource(5.Seconds()).Token
-        ).Token);
+        // assert — the update produces a further change event (count strictly grows).
+        await changeCounts.Should().Within(10.Seconds()).Match(c => c > initialChangeCount);
 
-        // assert
-        changeCount.Should().BeGreaterThan(initialChangeCount);
-
+        // and the new value is present in the workspace.
         var currentData = await workspace
             .GetObservable<WorkspaceTestData>()
-            .Timeout(10.Seconds())
-            .FirstAsync();
-
+            .Should().Within(10.Seconds())
+            .Match(x => x.Any(item => item.Id == "1" && item.Name == "Updated First Item"));
         currentData.Should().Contain(x => x.Id == "1" && x.Name == "Updated First Item");
 
         subscription.Dispose();
@@ -211,26 +197,20 @@ public class WorkspaceDataTest(ITestOutputHelper output) : HubTestBase(output)
 
         var initialData = await workspace
             .GetObservable<WorkspaceTestData>()
-            .Timeout(10.Seconds())
-            .FirstAsync();
+            .Should().Within(10.Seconds())
+            .Emit();
 
         var itemToDelete = initialData.First(x => x.Id == "3");
 
         // act
-        await client.AwaitResponse(
-            DataChangeRequest.Delete(new object[] { itemToDelete }, "TestUser"),
-            o => o.WithTarget(CreateClientAddress()),
-            CancellationTokenSource.CreateLinkedTokenSource(
-                TestContext.Current.CancellationToken,
-                new CancellationTokenSource(10.Seconds()).Token
-            ).Token
-        );
+        await client.Observe(DataChangeRequest.Delete(new object[] { itemToDelete }, "TestUser"), o => o.WithTarget(CreateClientAddress()))
+            .Should().Within(10.Seconds()).Emit();
 
         // assert
         var updatedData = await workspace
             .GetObservable<WorkspaceTestData>()
-            .Timeout(10.Seconds())
-            .FirstOrDefaultAsync(x => x.Count == 2);
+            .Should().Within(10.Seconds())
+            .Match(x => x.Count == 2);
 
         updatedData.Should().HaveCount(2);
         updatedData.Should().NotContain(x => x.Id == "3");
@@ -246,14 +226,8 @@ public class WorkspaceDataTest(ITestOutputHelper output) : HubTestBase(output)
         var updateItem = new WorkspaceTestData("1", "Logged Update", DateTime.UtcNow);
 
         // act
-        var response = await client.AwaitResponse(
-            DataChangeRequest.Update(new object[] { updateItem }),
-            o => o.WithTarget(CreateClientAddress()),
-            CancellationTokenSource.CreateLinkedTokenSource(
-                TestContext.Current.CancellationToken,
-                new CancellationTokenSource(10.Seconds()).Token
-            ).Token
-        );
+        var response = await client.Observe(DataChangeRequest.Update(new object[] { updateItem }), o => o.WithTarget(CreateClientAddress()))
+            .Should().Within(10.Seconds()).Emit();
 
         // assert
         var dataChangeResponse = response.Message.Should().BeOfType<DataChangeResponse>().Which;
@@ -273,16 +247,16 @@ public class WorkspaceDataTest(ITestOutputHelper output) : HubTestBase(output)
 
         // act
         var stream = workspace.GetStream(collectionRef);
-        stream.Should().NotBeNull();
+        ((object?)stream).Should().NotBeNull();
         var collection = await stream!
             .Where(c => c.Value != null)
             .Select(c => c.Value!.Instances.Values.Cast<WorkspaceTestData>().ToArray())
-            .Timeout(10.Seconds())
-            .FirstAsync();
+            .Should().Within(10.Seconds())
+            .Emit();
 
         // assert
         collection.Should().HaveCount(3);
-        collection.Should().BeEquivalentTo(WorkspaceTestData.TestData);
+        collection.Should().BeEquivalentTo(WorkspaceTestData.TestData, GetHost().JsonSerializerOptions);
     }
 
     /// <summary>
@@ -297,16 +271,16 @@ public class WorkspaceDataTest(ITestOutputHelper output) : HubTestBase(output)
 
         // act
         var stream = workspace.GetStream(entityRef);
-        stream.Should().NotBeNull();
+        ((object?)stream).Should().NotBeNull();
         var item = await stream!
             .Where(c => c.Value != null)
             .Select(c => c.Value as WorkspaceTestData)
-            .Timeout(10.Seconds())
-            .FirstAsync();
+            .Should().Within(10.Seconds())
+            .Emit();
 
         // assert
         item.Should().NotBeNull();
-        item.Id.Should().Be("2");
+        item!.Id.Should().Be("2");
         item.Name.Should().Be("Second Item");
     }    /// <summary>
          /// Tests that multiple clients can synchronize data changes across the workspace
@@ -320,14 +294,8 @@ public class WorkspaceDataTest(ITestOutputHelper output) : HubTestBase(output)
         var updateItem = new WorkspaceTestData("1", "Multi-Client Update", DateTime.UtcNow);
 
         // act - update from client1
-        var response = await client1.AwaitResponse(
-            DataChangeRequest.Update([updateItem]),
-            o => o.WithTarget(CreateClientAddress()),
-            CancellationTokenSource.CreateLinkedTokenSource(
-                TestContext.Current.CancellationToken,
-                new CancellationTokenSource(10.Seconds()).Token
-            ).Token
-        );
+        var response = await client1.Observe(DataChangeRequest.Update([updateItem]), o => o.WithTarget(CreateClientAddress()))
+            .Should().Within(10.Seconds()).Emit();
 
         response.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
         Logger.LogInformation("*** Data Change Finished");
@@ -335,8 +303,8 @@ public class WorkspaceDataTest(ITestOutputHelper output) : HubTestBase(output)
         var client2Data = await client2
             .GetWorkspace()
             .GetObservable<WorkspaceTestData>()
-            .Timeout(10.Seconds())
-            .FirstOrDefaultAsync(x => x.Any(item => item.Name == "Multi-Client Update") == true);
+            .Should().Within(10.Seconds())
+            .Match(x => x.Any(item => item.Name == "Multi-Client Update") == true);
 
         client2Data.Should().Contain(x => x.Id == "1" && x.Name == "Multi-Client Update");
     }

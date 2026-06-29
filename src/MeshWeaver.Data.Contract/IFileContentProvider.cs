@@ -3,58 +3,53 @@ namespace MeshWeaver.Data;
 /// <summary>
 /// Interface for providing file content from content collections.
 /// This abstraction allows MeshWeaver.Data to access file content without
-/// directly referencing MeshWeaver.ContentCollections.
+/// directly referencing MeshWeaver.ContentCollections. All operations expose
+/// <see cref="IObservable{T}"/> so callers compose reactively end-to-end —
+/// the implementation is the innermost async edge that bridges to filesystem I/O.
 /// </summary>
 public interface IFileContentProvider
 {
     /// <summary>
-    /// Gets the content of a file as a string.
+    /// Gets the content of a file as a string. Emits a single result
+    /// when the underlying I/O completes.
     /// </summary>
     /// <param name="collectionName">The name of the content collection</param>
     /// <param name="filePath">The path to the file within the collection</param>
     /// <param name="numberOfRows">Optional: number of lines to read for text files</param>
-    /// <param name="ct">Cancellation token</param>
-    /// <returns>The file content as a string, or null if not found</returns>
-    Task<FileContentResult> GetFileContentAsync(
+    IObservable<FileContentResult> GetFileContent(
         string collectionName,
         string filePath,
-        int? numberOfRows = null,
-        CancellationToken ct = default);
+        int? numberOfRows = null);
 
     /// <summary>
-    /// Saves content to a file.
+    /// Saves content to a file. Emits a single result when the underlying I/O completes.
     /// </summary>
     /// <param name="collectionName">The name of the content collection</param>
     /// <param name="filePath">The path to the file within the collection</param>
     /// <param name="content">The content to save</param>
-    /// <param name="ct">Cancellation token</param>
-    Task<FileOperationResult> SaveFileContentAsync(
+    IObservable<FileOperationResult> SaveFileContent(
         string collectionName,
         string filePath,
-        Stream content,
-        CancellationToken ct = default);
+        Stream content);
 
     /// <summary>
-    /// Deletes a file.
+    /// Deletes a file. Emits a single result when the underlying I/O completes.
     /// </summary>
     /// <param name="collectionName">The name of the content collection</param>
     /// <param name="filePath">The path to the file within the collection</param>
-    /// <param name="ct">Cancellation token</param>
-    Task<FileOperationResult> DeleteFileAsync(
+    IObservable<FileOperationResult> DeleteFile(
         string collectionName,
-        string filePath,
-        CancellationToken ct = default);
+        string filePath);
 
     /// <summary>
-    /// Lists files and folders in a content collection path.
+    /// Lists files and folders in a content collection path. Emits a single result
+    /// when the listing completes.
     /// </summary>
     /// <param name="collectionName">The name of the content collection</param>
     /// <param name="path">The path within the collection (use "/" for root)</param>
-    /// <param name="ct">Cancellation token</param>
-    Task<CollectionListingResult> ListCollectionItemsAsync(
+    IObservable<CollectionListingResult> ListCollectionItems(
         string collectionName,
-        string path,
-        CancellationToken ct = default);
+        string path);
 }
 
 /// <summary>
@@ -82,7 +77,13 @@ public record CollectionListingResult
     /// </summary>
     public bool Success => Error == null && Items != null;
 
+    /// <summary>Creates a successful listing result containing the given items.</summary>
+    /// <param name="items">The items found in the collection path.</param>
+    /// <returns>A successful result.</returns>
     public static CollectionListingResult Ok(IReadOnlyCollection<CollectionItemInfo> items) => new() { Items = items };
+    /// <summary>Creates a failed listing result with the given error message.</summary>
+    /// <param name="error">The error message.</param>
+    /// <returns>A failed result.</returns>
     public static CollectionListingResult Fail(string error) => new() { Error = error };
 }
 

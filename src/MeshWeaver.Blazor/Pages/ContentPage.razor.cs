@@ -1,6 +1,9 @@
-﻿using MeshWeaver.Blazor.Infrastructure;
+﻿using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
+using MeshWeaver.Blazor.Infrastructure;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.DependencyInjection;
@@ -33,21 +36,38 @@ public partial class ContentPage : ComponentBase, IDisposable
     /// </summary>
     public Address? TargetAddress { get; set; }
 
+    /// <summary>The raw content stream loaded from the resolved collection; null until the content is fetched.</summary>
     public Stream? Content { get; set; }
+    /// <summary>MIME type of the loaded content (e.g. <c>text/markdown</c>, <c>text/csv</c>, <c>image/png</c>).</summary>
     public string? ContentType { get; set; }
+    /// <summary>User-facing error message when path resolution or content loading fails; null on success.</summary>
     public string? ErrorMessage { get; set; }
 
     // CSV support
+    /// <summary>Column headers parsed from the first row of a CSV file; null for non-CSV content.</summary>
     public string[]? CsvHeaders { get; set; }
+    /// <summary>All data rows parsed from a CSV file; null for non-CSV content.</summary>
     public List<string[]>? CsvRows { get; set; }
+    /// <summary>Number of CSV rows currently shown; starts at 50 and increases as the user requests more.</summary>
     public int CsvVisibleRows { get; set; } = 50;
 
+    /// <summary>The per-circuit portal application injected by DI; supplies the portal hub used to access the content service.</summary>
     [Inject] public PortalApplication PortalApplication { get; set; } = null!;
     private IContentService ContentService => PortalApplication.Hub.ServiceProvider.GetRequiredService<IContentService>();
 
-    protected override async Task OnInitializedAsync()
+    [Inject] private IoPoolRegistry? IoPoolRegistry { get; set; }
+
+    // FileSystem I/O pool — keeps the genuine file/content I/O off the Blazor circuit
+    // thread. Property named Pool (not IoPool) to avoid clashing with the IoPool type.
+    private IIoPool Pool => IoPoolRegistry?.Get(IoPoolNames.FileSystem) ?? global::MeshWeaver.Mesh.Threading.IoPool.Unbounded;
+
+    /// <summary>
+    /// Parses the <c>FullPath</c> route parameter and initiates content loading by resolving the
+    /// collection name and file path, then subscribing to the content service via the I/O pool.
+    /// </summary>
+    protected override void OnInitialized()
     {
-        await base.OnInitializedAsync();
+        base.OnInitialized();
 
         if (string.IsNullOrEmpty(FullPath))
         {
@@ -63,11 +83,7 @@ public partial class ContentPage : ComponentBase, IDisposable
         }
 
         var firstSegment = pathParts[0];
-
-        // Decode collection name: '~' is used as escape for '/' in collection names
         var decodedFirstSegment = DecodeCollectionName(firstSegment);
-
-        // Check if first segment is a known collection name (global content)
         var knownCollection = ContentService.GetCollectionConfig(decodedFirstSegment);
 
         if (knownCollection != null)
@@ -76,41 +92,45 @@ public partial class ContentPage : ComponentBase, IDisposable
             ResolvedCollection = decodedFirstSegment;
             ResolvedPath = string.Join("/", pathParts.Skip(1));
             TargetAddress = PortalApplication.Hub.Address;
+            ContinueAfterResolve();
+            return;
         }
-        else
-        {
-            // Pattern 2: /content/{address}/{collection}/{path} - address-scoped content
-            // Use IPathResolver to resolve the address from the path
-            var pathResolver = PortalApplication.Hub.ServiceProvider.GetRequiredService<IPathResolver>();
-            var resolution = await pathResolver.ResolvePathAsync(FullPath);
 
+        // Pattern 2: /content/{address}/{collection}/{path} — reactive path resolver.
+        // Subscribe (no await on the resolver chain — deadlock surface; see
+        // Doc/Architecture/AsynchronousCalls.md). Continuation runs in the Subscribe
+        // callback on whichever scheduler the resolver completes.
+        var pathResolver = PortalApplication.Hub.ServiceProvider.GetRequiredService<IPathResolver>();
+        pathResolver.ResolvePath(FullPath).Subscribe(resolution =>
+        {
             if (resolution == null)
             {
                 ErrorMessage = $"No matching address found for path '{FullPath}'";
+                InvokeAsync(StateHasChanged);
                 return;
             }
-
-            // Parse remainder: first segment is collection (with ~ encoding), rest is file path
             if (string.IsNullOrEmpty(resolution.Remainder))
             {
                 ErrorMessage = "Collection and file path are required";
+                InvokeAsync(StateHasChanged);
                 return;
             }
-
             var remainderParts = resolution.Remainder.Split('/');
-            if (remainderParts.Length < 1)
-            {
-                ErrorMessage = "Invalid path format. Expected: /content/{address}/{collection}/{path}";
-                return;
-            }
-
-            // Decode collection name: '~' is used as escape for '/' (e.g., "Submissions@Microsoft~2026")
             ResolvedCollection = DecodeCollectionName(remainderParts[0]);
             ResolvedPath = remainderParts.Length > 1 ? string.Join("/", remainderParts.Skip(1)) : null;
             TargetAddress = (Address)resolution.Prefix;
-        }
+            ContinueAfterResolve();
+        },
+        // A faulted resolver used to be unobserved, leaving the page on its spinner. Surface inline.
+        ex =>
+        {
+            ErrorMessage = $"Failed to resolve '{FullPath}': {ex.Message}";
+            InvokeAsync(StateHasChanged);
+        });
+    }
 
-        // Add configuration for address-scoped content collections
+    private void ContinueAfterResolve()
+    {
         if (TargetAddress != null && !string.IsNullOrEmpty(ResolvedCollection))
         {
             ContentService.AddConfiguration(new ContentCollectionConfig
@@ -121,33 +141,51 @@ public partial class ContentPage : ComponentBase, IDisposable
             });
         }
 
-        var collection = await ContentService.GetCollectionAsync(ResolvedCollection!);
-        if (collection is null)
-        {
-            ErrorMessage = $"Collection '{ResolvedCollection}' not found at address '{TargetAddress}'";
-            return;
-        }
+        // ContentService.GetCollectionAsync is a content-I/O leaf; run it on the
+        // FileSystem I/O pool so it never executes on the Blazor circuit thread.
+        Pool.Run(ct => ContentService.GetCollectionAsync(ResolvedCollection!, ct))
+            .Subscribe(collection =>
+            {
+                if (collection is null)
+                {
+                    ErrorMessage = $"Collection '{ResolvedCollection}' not found at address '{TargetAddress}'";
+                    InvokeAsync(StateHasChanged);
+                    return;
+                }
 
-        if (string.IsNullOrEmpty(ResolvedPath))
-            return;
+                if (string.IsNullOrEmpty(ResolvedPath))
+                {
+                    InvokeAsync(StateHasChanged);
+                    return;
+                }
 
-        ContentType = collection.GetContentType(ResolvedPath!);
-        // Document types with converter support are rendered as markdown
-        if (IsConvertibleDocument(ResolvedPath!))
-        {
-            ContentType = "text/markdown";
-        }
-        else if (ContentType != "text/markdown")
-        {
-            Content = await collection.GetContentAsync(ResolvedPath!);
-        }
-
-        if (ContentType == "text/csv" && Content != null)
-        {
-            ParseCsv(Content);
-        }
+                ContentType = collection.GetContentType(ResolvedPath!);
+                if (IsConvertibleDocument(ResolvedPath!))
+                {
+                    ContentType = "text/markdown";
+                    InvokeAsync(StateHasChanged);
+                }
+                else if (ContentType != "text/markdown")
+                {
+                    Pool.Run(ct => collection.GetContentAsync(ResolvedPath!, ct))
+                        .Subscribe(content =>
+                        {
+                            Content = content;
+                            if (ContentType == "text/csv" && Content != null)
+                                ParseCsv(Content);
+                            InvokeAsync(StateHasChanged);
+                        });
+                }
+                else
+                {
+                    InvokeAsync(StateHasChanged);
+                }
+            });
     }
 
+    /// <summary>Reads all bytes from the given stream into a byte array.</summary>
+    /// <param name="stream">The stream to read.</param>
+    /// <returns>All bytes from the stream.</returns>
     public byte[] ReadStream(Stream stream)
     {
         using var memoryStream = new MemoryStream();
@@ -155,12 +193,16 @@ public partial class ContentPage : ComponentBase, IDisposable
         return memoryStream.ToArray();
     }
 
+    /// <summary>Reads the entire content of the given stream as a UTF-8 string.</summary>
+    /// <param name="stream">The stream to read.</param>
+    /// <returns>The stream's content as a string.</returns>
     public string ReadStreamAsString(Stream stream)
     {
         using var reader = new StreamReader(stream);
         return reader.ReadToEnd();
     }
 
+    /// <summary>Disposes the loaded content stream if one was opened.</summary>
     public void Dispose()
     {
         Content?.Dispose();
@@ -251,3 +293,4 @@ public partial class ContentPage : ComponentBase, IDisposable
     /// </summary>
     private static string DecodeCollectionName(string encodedName) => encodedName.Replace("~", "/");
 }
+

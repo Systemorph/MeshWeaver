@@ -1,10 +1,13 @@
+using System.Reactive.Linq;
 using MeshWeaver.AI.Application.Layout;
 using MeshWeaver.AI.Completion;
 using MeshWeaver.Data.Completion;
 using MeshWeaver.Mesh.Completion;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using MeshWeaver.Reactive;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.AI.Application;
 
@@ -22,49 +25,62 @@ public static class AgentsApplicationExtensions
         => application
             .AddAIViews()
             .WithServices(services => services
-                // Model provider - uses chat client factory if available
-                .AddScoped<IAutocompleteProvider>(sp =>
-                {
-                    var chatClientFactory = sp.GetService<IChatClientFactory>();
-                    if (chatClientFactory != null)
-                        return new ModelAutocompleteProvider(chatClientFactory);
-                    return new ModelAutocompleteProvider();
-                })
-                // Mesh catalog provider
+                // Mesh catalog provider — @-references autocomplete from the mesh node
+                // catalog (agents, models, and every other node). The old factory-based
+                // ModelAutocompleteProvider was deleted: models are mesh nodes now, so it
+                // only duplicated what this provider already lists.
                 .AddScoped<IAutocompleteProvider>(sp =>
                     new MeshCatalogAutocompleteProvider(sp)
                 )
-                // Command provider
-                .AddScoped<IAutocompleteProvider, CommandAutocompleteProvider>())
+                // Skill provider — slash skills (/agent, /model, /harness, …) from the nodeType:Skill catalog.
+                .AddScoped<IAutocompleteProvider, SkillAutocompleteProvider>())
             .WithHandler<AutocompleteRequest>(HandleAutocompleteRequest);
 
-    private static async Task<IMessageDelivery> HandleAutocompleteRequest(
+    private const int AutocompleteTopN = 50;
+
+    private static IMessageDelivery HandleAutocompleteRequest(
         IMessageHub hub,
-        IMessageDelivery<AutocompleteRequest> request,
-        CancellationToken ct)
+        IMessageDelivery<AutocompleteRequest> request)
     {
         var providers = hub.ServiceProvider.GetServices<IAutocompleteProvider>();
         var query = request.Message.Query;
         var contextPath = request.Message.Context;
 
-        var allItems = new List<AutocompleteItem>();
-        foreach (var provider in providers)
-        {
-            try
-            {
-                await foreach (var item in provider.GetItemsAsync(query, contextPath, ct))
+        // One-shot request/response back-compat: CombineLatest the providers' snapshot streams,
+        // merge+score-sort into one snapshot per advance, and post the SETTLED snapshot once every
+        // provider has completed (LastAsync). The progressive/streaming consumers use the
+        // AutocompleteReference workspace stream instead. Catch → empty so one bad provider can't
+        // stall the CombineLatest (it must still complete).
+        AutocompleteSnapshots.Combine(
+                providers.Select(p => p.GetItems(query, contextPath)
+                    // Collapse to empty so one bad provider can't stall the
+                    // CombineLatest — Debug-logged so the fault stays greppable.
+                    .Catch((Exception ex) =>
+                    {
+                        hub.ServiceProvider.GetService<ILoggerFactory>()
+                            ?.CreateLogger(typeof(AgentsApplicationExtensions))
+                            .LogDebug(ex, "Autocomplete provider {Provider} faulted — returning empty",
+                                p.GetType().Name);
+                        return Observable.Return(AutocompleteSnapshots.Empty);
+                    })),
+                AutocompleteTopN)
+            .LastAsync()
+            .Subscribe(
+                snapshot => hub.Post(
+                    new AutocompleteResponse(snapshot.ToList()),
+                    o => o.ResponseFor(request)),
+                ex =>
                 {
-                    allItems.Add(item);
-                }
-            }
-            catch
-            {
-                // Skip providers that fail
-            }
-        }
+                    // The caller is waiting on a response — answer empty rather
+                    // than letting it time out, and log the combine fault.
+                    hub.ServiceProvider.GetService<ILoggerFactory>()
+                        ?.CreateLogger(typeof(AgentsApplicationExtensions))
+                        .LogWarning(ex, "Autocomplete combine faulted for query '{Query}'", query);
+                    hub.Post(
+                        new AutocompleteResponse([]),
+                        o => o.ResponseFor(request));
+                });
 
-        var response = new AutocompleteResponse(allItems);
-        hub.Post(response, o => o.ResponseFor(request));
         return request.Processed();
     }
 }

@@ -11,6 +11,14 @@ public record ModelInfo
     public required string Name { get; init; }
 
     /// <summary>
+    /// The model MeshNode PATH (e.g. <c>Provider/Anthropic/claude-…</c>). This is what a
+    /// selection persists onto the composer's <see cref="ThreadComposer.ModelName"/> — the
+    /// node-picker identity, exactly like <c>AgentDisplayInfo.Path</c>. Null for a model that
+    /// has no backing node (legacy factory entries — being eliminated).
+    /// </summary>
+    public string? Path { get; init; }
+
+    /// <summary>
     /// The provider/factory name (e.g., "Azure OpenAI", "GitHub Copilot").
     /// </summary>
     public required string Provider { get; init; }
@@ -25,5 +33,10 @@ public record ModelInfo
     /// </summary>
     public string DisplayName => $"{Provider}: {Name}";
 
+    /// <summary>
+    /// Returns the bare model <see cref="Name"/> (not the provider-qualified
+    /// <see cref="DisplayName"/>).
+    /// </summary>
+    /// <returns>The model name/identifier.</returns>
     public override string ToString() => Name;
 }

@@ -1,6 +1,5 @@
 ﻿using System.Collections.Generic;
 using System.Text.Json;
-using FluentAssertions;
 using MeshWeaver.Domain;
 using MeshWeaver.Fixture;
 using MeshWeaver.Messaging;
@@ -39,7 +38,7 @@ public class OptionPolymorphismTest(ITestOutputHelper output) : HubTestBase(outp
         var deserialized = JsonSerializer.Deserialize<Option>(json, serializerOptions);
         deserialized.Should().NotBeNull();
         deserialized.Should().BeOfType<Option<string>>();
-        ((Option<string>)deserialized).Text.Should().Be("Test Text");
+        ((Option<string>)deserialized!).Text.Should().Be("Test Text");
     }
 
     [Fact]
@@ -66,7 +65,7 @@ public class OptionPolymorphismTest(ITestOutputHelper output) : HubTestBase(outp
         var deserialized = JsonSerializer.Deserialize<Option[]>(json, serializerOptions);
         deserialized.Should().NotBeNull();
         deserialized.Should().HaveCount(2);
-        deserialized[0].Should().BeOfType<Option<string>>();
+        deserialized![0].Should().BeOfType<Option<string>>();
         deserialized[1].Should().BeOfType<Option<string>>();
     }
 }

@@ -7,8 +7,6 @@ using System.Reactive.Linq;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
-using FluentAssertions;
-using FluentAssertions.Extensions;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
@@ -31,6 +29,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
+using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Content.Test;
 
 /// <summary>
@@ -40,6 +39,9 @@ namespace MeshWeaver.Content.Test;
 [Collection("MarkdownNodeTests")]
 public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
+    /// <summary>Share Mesh/SP across [Fact]s — see MonolithMeshTestBase.ShareMeshAcrossTests.</summary>
+    protected override bool ShareMeshAcrossTests => true;
+
 
     private static readonly string SharedCacheDirectory = Path.Combine(
         Path.GetTempPath(),
@@ -105,7 +107,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     [Fact(Timeout = 20000)]
     public async Task CollaborativeEditing_NodeExists_InMeshWeaverNamespace()
     {
-        var node = await MeshQuery.QueryAsync<MeshNode>("path:Doc/DataMesh/CollaborativeEditing").FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+        var node = await Mesh.GetMeshNode("Doc/DataMesh/CollaborativeEditing", ReadNodeTimeout).Should().Emit();
 
         node.Should().NotBeNull("CollaborativeEditing node should exist");
         node!.Path.Should().Be("Doc/DataMesh/CollaborativeEditing");
@@ -119,7 +121,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     [Fact(Timeout = 20000)]
     public async Task CollaborativeEditing_HasMarkdownDocumentContent()
     {
-        var node = await MeshQuery.QueryAsync<MeshNode>("path:Doc/DataMesh/CollaborativeEditing").FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+        var node = await Mesh.GetMeshNode("Doc/DataMesh/CollaborativeEditing", ReadNodeTimeout).Should().Emit();
 
         node.Should().NotBeNull();
         node!.Content.Should().NotBeNull("Node should have content");
@@ -139,7 +141,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     [Fact(Timeout = 20000)]
     public async Task CollaborativeEditing_ContentContainsDocumentation()
     {
-        var node = await MeshQuery.QueryAsync<MeshNode>("path:Doc/DataMesh/CollaborativeEditing").FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+        var node = await Mesh.GetMeshNode("Doc/DataMesh/CollaborativeEditing", ReadNodeTimeout).Should().Emit();
 
         node.Should().NotBeNull();
 
@@ -150,9 +152,12 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
             var markdownContent = contentProp.GetString();
             markdownContent.Should().NotBeNullOrEmpty();
             markdownContent.Should().Contain("Adding Comments");
-            markdownContent.Should().Contain("comment:c1");
-            markdownContent.Should().Contain("insert:i1");
-            markdownContent.Should().Contain("delete:d1");
+            markdownContent.Should().Contain("powerful platform");
+            // The example is kept CLEAN — comments and tracked changes are satellites now, not
+            // embedded markers in the document text.
+            markdownContent.Should().NotContain("<!--comment:");
+            markdownContent.Should().NotContain("<!--insert:");
+            markdownContent.Should().NotContain("<!--delete:");
         }
     }
 
@@ -478,8 +483,8 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     [Fact(Timeout = 20000)]
     public async Task MeshWeaver_HasChildren()
     {
-        var children = await MeshQuery.QueryAsync<MeshNode>("namespace:MeshWeaver", ct: TestContext.Current.CancellationToken)
-            .ToListAsync(TestContext.Current.CancellationToken);
+        var children = (await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("namespace:MeshWeaver"))
+            .Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items;
 
         children.Should().NotBeEmpty("MeshWeaver should have children");
         // MeshWeaver has Documentation and Platform as direct children
@@ -492,8 +497,8 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     [Fact(Timeout = 20000)]
     public async Task MeshWeaver_MarkdownNodes_HaveCorrectNodeType()
     {
-        var collaborativeEditing = await MeshQuery.QueryAsync<MeshNode>("path:Doc/DataMesh/CollaborativeEditing").FirstOrDefaultAsync(TestContext.Current.CancellationToken);
-        var nodeTypeConfig = await MeshQuery.QueryAsync<MeshNode>("path:Doc/DataMesh/NodeTypeConfiguration").FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+        var collaborativeEditing = await Mesh.GetMeshNode("Doc/DataMesh/CollaborativeEditing", ReadNodeTimeout).Should().Emit();
+        var nodeTypeConfig = await Mesh.GetMeshNode("Doc/DataMesh/NodeTypeConfiguration", ReadNodeTimeout).Should().Emit();
 
         collaborativeEditing.Should().NotBeNull();
         collaborativeEditing!.NodeType.Should().Be("Markdown");
@@ -516,16 +521,13 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
         var nodeAddress = new Address("Doc/DataMesh/CollaborativeEditing");
 
         var client = GetClient(c => c
-            .WithInitialization((h, _) => RoutingService.RegisterStreamAsync(h))
+            .WithInitialization(h => h.RegisterForDisposal(RoutingService.RegisterStream(h)))
             .AddLayoutClient(cc => cc)
             .AddData(data => data));
 
         // First verify we can ping the hub
         Output.WriteLine("Pinging CollaborativeEditing hub...");
-        var pingResponse = await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(nodeAddress),
-            TestContext.Current.CancellationToken);
+        var pingResponse = await client.Observe(new PingRequest(), o => o.WithTarget(nodeAddress)).Should().Emit();
 
         Output.WriteLine($"Ping response: {pingResponse.Message}");
         pingResponse.Message.Should().NotBeNull("Hub should respond to ping");
@@ -537,7 +539,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
         Output.WriteLine("Getting default layout for CollaborativeEditing...");
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(nodeAddress, reference);
 
-        var changeItem = await stream.Timeout(30.Seconds()).FirstAsync();
+        var changeItem = await stream.Should().Within(30.Seconds()).Emit();
         var value = changeItem.Value;
 
         Output.WriteLine($"Received layout ValueKind: {value.ValueKind}");
@@ -576,12 +578,12 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
 
     /// <summary>
     /// Test that data:TypeName parses correctly for data type references.
-    /// Example: @Systemorph/data:Organization should reference Organization type.
+    /// Example: @Systemorph/data:Space should reference Space type.
     /// </summary>
     [Fact(Timeout = 20000)]
     public void DataTypeReference_ParsesCorrectly()
     {
-        var markdown = "@Systemorph/data:Organization";
+        var markdown = "@Systemorph/data:Space";
         var extension = new LayoutAreaMarkdownExtension();
         var pipeline = new Markdig.MarkdownPipelineBuilder().Use(extension).Build();
         var document = Markdig.Markdown.Parse(markdown, pipeline);
@@ -589,7 +591,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
         var layoutArea = document.Descendants<LayoutAreaComponentInfo>().Single();
         layoutArea.Address.Should().Be("Systemorph");
         layoutArea.Area.Should().Be(LayoutAreaMarkdownParser.DataAreaName);
-        layoutArea.Id.Should().Be("Organization");
+        layoutArea.Id.Should().Be("Space");
         layoutArea.IsInline.Should().BeFalse();
     }
 
@@ -612,12 +614,12 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     }
 
     /// <summary>
-    /// Test that keyword without colon with path parses correctly (e.g., @Systemorph/data/Organization).
+    /// Test that keyword without colon with path parses correctly (e.g., @Systemorph/data/Space).
     /// </summary>
     [Fact(Timeout = 20000)]
     public void KeywordWithoutColon_DataWithPath_ParsesCorrectly()
     {
-        var markdown = "@Systemorph/data/Organization";
+        var markdown = "@Systemorph/data/Space";
         var extension = new LayoutAreaMarkdownExtension();
         var pipeline = new MarkdownPipelineBuilder().Use(extension).Build();
         var document = Markdig.Markdown.Parse(markdown, pipeline);
@@ -625,7 +627,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
         var layoutArea = document.Descendants<LayoutAreaComponentInfo>().Single();
         layoutArea.Address.Should().Be("Systemorph");
         layoutArea.Area.Should().Be(LayoutAreaMarkdownParser.DataAreaName);
-        layoutArea.Id.Should().Be("Organization");
+        layoutArea.Id.Should().Be("Space");
         layoutArea.IsInline.Should().BeFalse();
     }
 
@@ -675,7 +677,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
         var nodeAddress = new Address("Doc/DataMesh/CollaborativeEditing");
 
         var client = GetClient(c => c
-            .WithInitialization((h, _) => RoutingService.RegisterStreamAsync(h))
+            .WithInitialization(h => h.RegisterForDisposal(RoutingService.RegisterStream(h)))
             .AddLayoutClient(cc => cc)
             .AddData(data => data));
 
@@ -686,7 +688,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
         Output.WriteLine($"Getting {MeshNodeLayoutAreas.DataArea} layout for Doc/DataMesh/CollaborativeEditing...");
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(nodeAddress, reference);
 
-        var changeItem = await stream.Timeout(30.Seconds()).FirstAsync();
+        var changeItem = await stream.Should().Within(30.Seconds()).Emit();
         var value = changeItem.Value;
 
         Output.WriteLine($"Received layout ValueKind: {value.ValueKind}");
@@ -709,7 +711,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
         var nodeAddress = new Address("Doc/DataMesh/CollaborativeEditing");
 
         var client = GetClient(c => c
-            .WithInitialization((h, _) => RoutingService.RegisterStreamAsync(h))
+            .WithInitialization(h => h.RegisterForDisposal(RoutingService.RegisterStream(h)))
             .AddLayoutClient(cc => cc)
             .AddData(data => data));
 
@@ -720,7 +722,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
         Output.WriteLine($"Getting {MeshNodeLayoutAreas.SchemaArea} layout for Doc/DataMesh/CollaborativeEditing...");
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(nodeAddress, reference);
 
-        var changeItem = await stream.Timeout(30.Seconds()).FirstAsync();
+        var changeItem = await stream.Should().Within(30.Seconds()).Emit();
         var value = changeItem.Value;
 
         Output.WriteLine($"Received layout ValueKind: {value.ValueKind}");
@@ -743,7 +745,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
         var nodeAddress = new Address("Doc/DataMesh/CollaborativeEditing");
 
         var client = GetClient(c => c
-            .WithInitialization((h, _) => RoutingService.RegisterStreamAsync(h))
+            .WithInitialization(h => h.RegisterForDisposal(RoutingService.RegisterStream(h)))
             .AddLayoutClient(cc => cc)
             .AddData(data => data));
 
@@ -754,7 +756,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
         Output.WriteLine($"Getting {MeshNodeLayoutAreas.ModelArea} layout for Doc/DataMesh/CollaborativeEditing...");
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(nodeAddress, reference);
 
-        var changeItem = await stream.Timeout(30.Seconds()).FirstAsync();
+        var changeItem = await stream.Should().Within(30.Seconds()).Emit();
         var value = changeItem.Value;
 
         Output.WriteLine($"Received layout ValueKind: {value.ValueKind}");
@@ -777,7 +779,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
         var nodeAddress = new Address("Doc/DataMesh/CollaborativeEditing");
 
         var client = GetClient(c => c
-            .WithInitialization((h, _) => RoutingService.RegisterStreamAsync(h))
+            .WithInitialization(h => h.RegisterForDisposal(RoutingService.RegisterStream(h)))
             .AddLayoutClient(cc => cc)
             .AddData(data => data));
 
@@ -788,7 +790,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
         Output.WriteLine($"Getting {MeshNodeLayoutAreas.ContentArea} layout for Doc/DataMesh/CollaborativeEditing...");
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(nodeAddress, reference);
 
-        var changeItem = await stream.Timeout(30.Seconds()).FirstAsync();
+        var changeItem = await stream.Should().Within(30.Seconds()).Emit();
         var value = changeItem.Value;
 
         Output.WriteLine($"Received layout ValueKind: {value.ValueKind}");
@@ -880,6 +882,118 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
 
     #endregion
 
+    #region UCR Slash-Form (migrated) Tests
+
+    // These lock in the migrated {prefix}/{path} slash form (replacing the legacy
+    // {prefix}:{path} colon form) for every prefix used in the shipped docs/samples.
+    // The slash form is the preferred Unified Path syntax (Doc/DataMesh/UnifiedPath).
+
+    [Fact(Timeout = 20000)]
+    public void ContentSlashReference_WithPath_ParsesCorrectly()
+    {
+        var markdown = "@@Doc/DataMesh/UnifiedPath/content/logo.svg";
+        var pipeline = new MarkdownPipelineBuilder().Use(new LayoutAreaMarkdownExtension()).Build();
+        var document = Markdig.Markdown.Parse(markdown, pipeline);
+
+        var layoutArea = document.Descendants<LayoutAreaComponentInfo>().Single();
+        layoutArea.Address.Should().Be("Doc/DataMesh/UnifiedPath");
+        layoutArea.Area.Should().Be(LayoutAreaMarkdownParser.ContentAreaName);
+        layoutArea.Id.Should().Be("logo.svg");
+        layoutArea.IsInline.Should().BeTrue();
+    }
+
+    [Fact(Timeout = 20000)]
+    public void ContentSlashReference_DeepPath_ParsesCorrectly()
+    {
+        // Mirrors samples/Graph/Data/Cornerstone/.../UnifiedReferences.md
+        var markdown = "@@Cornerstone/Microsoft/2026/content/Submissions/Slip.md";
+        var pipeline = new MarkdownPipelineBuilder().Use(new LayoutAreaMarkdownExtension()).Build();
+        var document = Markdig.Markdown.Parse(markdown, pipeline);
+
+        var layoutArea = document.Descendants<LayoutAreaComponentInfo>().Single();
+        layoutArea.Address.Should().Be("Cornerstone/Microsoft/2026");
+        layoutArea.Area.Should().Be(LayoutAreaMarkdownParser.ContentAreaName);
+        layoutArea.Id.Should().Be("Submissions/Slip.md");
+        layoutArea.IsInline.Should().BeTrue();
+    }
+
+    [Fact(Timeout = 20000)]
+    public void DataSlashReference_WithType_ParsesCorrectly()
+    {
+        // Mirrors samples/Graph/Data/Northwind/.../UnifiedReferences.md (@Northwind/data/Order)
+        var markdown = "@Northwind/data/Order";
+        var pipeline = new MarkdownPipelineBuilder().Use(new LayoutAreaMarkdownExtension()).Build();
+        var document = Markdig.Markdown.Parse(markdown, pipeline);
+
+        var layoutArea = document.Descendants<LayoutAreaComponentInfo>().Single();
+        layoutArea.Address.Should().Be("Northwind");
+        layoutArea.Area.Should().Be(LayoutAreaMarkdownParser.DataAreaName);
+        layoutArea.Id.Should().Be("Order");
+        layoutArea.IsInline.Should().BeFalse();
+    }
+
+    [Fact(Timeout = 20000)]
+    public void SchemaSlashReference_WithType_ParsesCorrectly()
+    {
+        var markdown = "@@Doc/DataMesh/UnifiedPath/schema/MeshNode";
+        var pipeline = new MarkdownPipelineBuilder().Use(new LayoutAreaMarkdownExtension()).Build();
+        var document = Markdig.Markdown.Parse(markdown, pipeline);
+
+        var layoutArea = document.Descendants<LayoutAreaComponentInfo>().Single();
+        layoutArea.Address.Should().Be("Doc/DataMesh/UnifiedPath");
+        layoutArea.Area.Should().Be(LayoutAreaMarkdownParser.SchemaAreaName);
+        layoutArea.Id.Should().Be("MeshNode");
+        layoutArea.IsInline.Should().BeTrue();
+    }
+
+    [Fact(Timeout = 20000)]
+    public void DataSlashReference_DeepPath_ParsesCorrectly()
+    {
+        var markdown = "@@Cornerstone/Microsoft/2026/data/PropertyRisk";
+        var pipeline = new MarkdownPipelineBuilder().Use(new LayoutAreaMarkdownExtension()).Build();
+        var document = Markdig.Markdown.Parse(markdown, pipeline);
+
+        var layoutArea = document.Descendants<LayoutAreaComponentInfo>().Single();
+        layoutArea.Address.Should().Be("Cornerstone/Microsoft/2026");
+        layoutArea.Area.Should().Be(LayoutAreaMarkdownParser.DataAreaName);
+        layoutArea.Id.Should().Be("PropertyRisk");
+        layoutArea.IsInline.Should().BeTrue();
+    }
+
+    // Self-reference slash forms (@@data/, @@schema/) — what the Unified Path page's "Quick
+    // Examples" #4/#5 use. They resolve against the current node (no explicit address), so they
+    // need a currentNodePath on the pipeline. Regression guard for "@@data/ and @@schema/ don't work".
+
+    [Fact(Timeout = 20000)]
+    public void DataSlashSelfReference_WithCurrentNode_ParsesToSelf()
+    {
+        var pipeline = new MarkdownPipelineBuilder()
+            .Use(new LayoutAreaMarkdownExtension("Doc/DataMesh/UnifiedPath")).Build();
+        var document = Markdig.Markdown.Parse("@@data/", pipeline);
+
+        var layoutArea = document.Descendants<LayoutAreaComponentInfo>().Single();
+        layoutArea.Address.Should().Be("Doc/DataMesh/UnifiedPath");
+        layoutArea.Area.Should().Be(LayoutAreaMarkdownParser.DataAreaName);
+        string.IsNullOrEmpty(layoutArea.Id as string).Should().BeTrue("@@data/ is a self-reference (no type/path)");
+        layoutArea.IsInline.Should().BeTrue();
+    }
+
+    [Fact(Timeout = 20000)]
+    public void SchemaSlashSelfReference_WithCurrentNode_ParsesToSelf()
+    {
+        var pipeline = new MarkdownPipelineBuilder()
+            .Use(new LayoutAreaMarkdownExtension("Doc/DataMesh/UnifiedPath")).Build();
+        var document = Markdig.Markdown.Parse("@@schema/", pipeline);
+
+        var layoutArea = document.Descendants<LayoutAreaComponentInfo>().Single();
+        layoutArea.Address.Should().Be("Doc/DataMesh/UnifiedPath");
+        layoutArea.Area.Should().Be(LayoutAreaMarkdownParser.SchemaAreaName);
+        string.IsNullOrEmpty(layoutArea.Id as string).Should().BeTrue("@@schema/ is a self-reference (no type/path)");
+        layoutArea.IsInline.Should().BeTrue();
+    }
+
+    #endregion
+
     #region Interactive Markdown Tests
 
     /// <summary>
@@ -888,7 +1002,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     [Fact(Timeout = 20000)]
     public async Task InteractiveMarkdown_NodeExists_WithExecutableCodeBlocks()
     {
-        var node = await MeshQuery.QueryAsync<MeshNode>("path:Doc/DataMesh/InteractiveMarkdown").FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+        var node = await Mesh.GetMeshNode("Doc/DataMesh/InteractiveMarkdown", ReadNodeTimeout).Should().Emit();
 
         node.Should().NotBeNull("InteractiveMarkdown node should exist at Doc/DataMesh/InteractiveMarkdown");
         node!.Path.Should().Be("Doc/DataMesh/InteractiveMarkdown");
@@ -901,7 +1015,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     [Fact(Timeout = 20000)]
     public async Task InteractiveMarkdown_ContentContainsRenderFlags()
     {
-        var node = await MeshQuery.QueryAsync<MeshNode>("path:Doc/DataMesh/InteractiveMarkdown").FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+        var node = await Mesh.GetMeshNode("Doc/DataMesh/InteractiveMarkdown", ReadNodeTimeout).Should().Emit();
 
         node.Should().NotBeNull();
 
@@ -921,7 +1035,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     [Fact(Timeout = 20000)]
     public async Task InteractiveMarkdown_ParsesExecutableCodeBlocks()
     {
-        var node = await MeshQuery.QueryAsync<MeshNode>("path:Doc/DataMesh/InteractiveMarkdown").FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+        var node = await Mesh.GetMeshNode("Doc/DataMesh/InteractiveMarkdown", ReadNodeTimeout).Should().Emit();
         node.Should().NotBeNull();
 
         // Extract markdown content from node
@@ -983,7 +1097,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     [Fact(Timeout = 20000)]
     public async Task InteractiveMarkdown_PrerenderedHtml_ContainsKernelPlaceholder()
     {
-        var node = await MeshQuery.QueryAsync<MeshNode>("path:Doc/DataMesh/InteractiveMarkdown").FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+        var node = await Mesh.GetMeshNode("Doc/DataMesh/InteractiveMarkdown", ReadNodeTimeout).Should().Emit();
         node.Should().NotBeNull();
 
         // Extract markdown content from node
@@ -1014,7 +1128,8 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
         // Count how many layout-area divs are present
         var layoutAreaCount = System.Text.RegularExpressions.Regex.Matches(html, @"class='layout-area'").Count;
         Output.WriteLine($"Found {layoutAreaCount} layout-area divs in rendered HTML");
-        layoutAreaCount.Should().Be(2, "There should be exactly 2 layout-area divs for the two code blocks");
+        layoutAreaCount.Should().Be(3, "one layout-area div per --render block — the doc has three " +
+            "(HelloWorld, HelloWorld2, InteractiveMdDemo); the mermaid block yields none");
     }
 
     /// <summary>
@@ -1035,7 +1150,7 @@ DateTime.Now.ToString()
         // Parse to get MarkdownContent with CodeSubmissions and PrerenderedHtml
         var content = MarkdownContent.Parse(markdown);
 
-        content.CodeSubmissions.Should().NotBeNullOrEmpty(
+        content.CodeSubmissions.Should().NotBeEmpty(
             "Parsing markdown with --render code block should produce CodeSubmissions");
         content.PrerenderedHtml.Should().Contain(ExecutableCodeBlockRenderer.KernelAddressPlaceholder,
             "PrerenderedHtml should contain __KERNEL_ADDRESS__ placeholder");
@@ -1058,13 +1173,13 @@ DateTime.Now.ToString()
         var roundTripped = (MarkdownContent)deserialized!;
         roundTripped.Content.Should().Be(content.Content);
         roundTripped.PrerenderedHtml.Should().Contain(ExecutableCodeBlockRenderer.KernelAddressPlaceholder);
-        roundTripped.CodeSubmissions.Should().NotBeNullOrEmpty(
+        roundTripped.CodeSubmissions.Should().NotBeEmpty(
             "CodeSubmissions must survive the JSON round-trip so interactive markdown can replace __KERNEL_ADDRESS__");
         roundTripped.CodeSubmissions!.Count.Should().Be(content.CodeSubmissions!.Count);
         roundTripped.CodeSubmissions![0].Code.Should().Be(content.CodeSubmissions[0].Code);
     }
 
-    // RepairMarkdownContent_* tests removed — the MarkdownNodeType.RepairMarkdownContent hook
+    // RepairMarkdownContent_* tests removed â€” the MarkdownNodeType.RepairMarkdownContent hook
     // and MeshDataSource.WithNodeConverter pipeline they covered no longer exist in the codebase.
 
     #endregion

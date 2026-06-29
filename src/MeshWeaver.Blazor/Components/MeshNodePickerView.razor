@@ -2,7 +2,7 @@
 @using MeshWeaver.Mesh
 @inherits FormComponentBase<MeshNodePickerControl, MeshNodePickerView, string>
 
-<div class="mesh-node-picker">
+<div class="mesh-node-picker@(IsThin ? " mesh-node-picker--thin" : "")">
     @if (Label != null)
     {
         <FluentLabel Weight="Microsoft.FluentUI.AspNetCore.Components.FontWeight.Bold" Style="margin-bottom: 4px;">@Label</FluentLabel>
@@ -15,9 +15,12 @@
                 @{ var selInitial = GetInitial(_selectedNode); }
                 @RenderAvatar(_selectedNode, selInitial)
                 <div class="mesh-node-picker-info">
-                    <div class="mesh-node-picker-name">@(_selectedNode.Name ?? _selectedNode.Id)</div>
-                    <div class="mesh-node-picker-type">@(_selectedNode.NodeType ?? "")</div>
+                    <div class="mesh-node-picker-name" title="@_selectedNode.Path">@(_selectedNode.Name ?? _selectedNode.Id)</div>
                 </div>
+                @if (!string.IsNullOrEmpty(_selectedNode.Category))
+                {
+                    <span class="mesh-node-picker-category">@_selectedNode.Category</span>
+                }
             </div>
             <button type="button" class="mesh-node-picker-clear" @onclick="ClearSelection" @onclick:stopPropagation="true">
                 <FluentIcon Value="@(new Icons.Regular.Size16.Dismiss())" />
@@ -31,6 +34,8 @@
                type="text"
                class="mesh-node-picker-input"
                @oninput="OnSearchInput"
+               @onkeydown="OnKeyDown"
+               @onkeydown:stopPropagation="true"
                placeholder="@(Placeholder ?? "Search...")"
                disabled="@Disabled"
                autocomplete="off"
@@ -40,7 +45,7 @@
     @if (_isSearchOpen)
     {
         <div class="mesh-node-picker-overlay" @onclick="CloseSearch"></div>
-        <div class="mesh-node-picker-dropdown">
+        <div class="mesh-node-picker-dropdown@(OpensUp ? " mesh-node-picker-dropdown--top" : "")">
             @if (_isLoading)
             {
                 <FluentProgressRing Style="margin: 16px auto; display: block;" />
@@ -65,18 +70,22 @@
                         </div>
                     </div>
                 }
-                @foreach (var node in _results)
+                @for (var i = 0; i < _results.Count; i++)
                 {
+                    var node = _results[i];
                     var isSelected = node.Path == Value;
+                    var isHighlighted = i == _highlightedIndex;
                     var initial = GetInitial(node);
-                    var imageUrl = GetImageUrl(node);
-                    <div class="mesh-node-picker-item @(isSelected ? "mesh-node-picker-item-selected" : "")"
+                    <div class="mesh-node-picker-item @(isSelected ? "mesh-node-picker-item-selected" : "") @(isHighlighted ? "mesh-node-picker-item-highlighted" : "")"
                          @onclick="() => SelectNode(node)">
                         @RenderAvatar(node, initial)
                         <div class="mesh-node-picker-item-info">
-                            <div class="mesh-node-picker-item-name">@(node.Name ?? node.Id)</div>
-                            <div class="mesh-node-picker-item-type">@(node.NodeType ?? "")</div>
+                            <div class="mesh-node-picker-item-name" title="@node.Path">@(node.Name ?? node.Id)</div>
                         </div>
+                        @if (!string.IsNullOrEmpty(node.Category))
+                        {
+                            <span class="mesh-node-picker-item-category">@node.Category</span>
+                        }
                     </div>
                 }
             }

@@ -3,9 +3,12 @@
     <ProjectGuid>{5c446c1c-a8d8-4c9f-9b48-830f18858704}</ProjectGuid>
   </PropertyGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="MeshWeaver.Hosting.Orleans.Test" />
+  </ItemGroup>
+
     <ItemGroup>
     <PackageReference Include="Azure.Data.Tables" />
-    <PackageReference Include="Microsoft.DotNet.Interactive.CSharp" />
     <PackageReference Include="Microsoft.Orleans.Core" />
     <PackageReference Include="Microsoft.Orleans.Runtime" />
     <PackageReference Include="Microsoft.Orleans.Sdk" />

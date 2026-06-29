@@ -1,6 +1,10 @@
 using System.Collections.Immutable;
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
+using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Text;
+using MeshWeaver.AI.Attributes;
 using MeshWeaver.AI.Plugins;
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
@@ -24,7 +28,9 @@ namespace MeshWeaver.AI;
 /// </summary>
 public abstract class ChatClientAgentFactory : IChatClientFactory
 {
+    /// <summary>The owning message hub — source of the service provider, workspace, and mesh services this factory uses to build agents.</summary>
     protected readonly IMessageHub Hub;
+    /// <summary>Logger for this factory instance, categorised to the concrete factory type.</summary>
     protected readonly ILogger Logger;
 
     /// <summary>
@@ -32,6 +38,10 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
     /// </summary>
     protected string? CurrentModelName { get; private set; }
 
+    /// <summary>
+    /// Initialises the factory with its owning hub and resolves a type-categorised logger from it.
+    /// </summary>
+    /// <param name="hub">The message hub that owns this factory; supplies the service provider, workspace, and mesh services.</param>
     protected ChatClientAgentFactory(IMessageHub hub)
     {
         Hub = hub;
@@ -53,6 +63,50 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
     /// </summary>
     public abstract int Order { get; }
 
+    /// <inheritdoc />
+    /// <remarks>
+    /// Default implementation delegates to <see cref="Models"/> for backward compatibility.
+    /// Concrete factories with shape-aware routing (e.g. "claude-*" prefix) should override.
+    /// </remarks>
+    public virtual bool Supports(string modelName) =>
+        !string.IsNullOrEmpty(modelName) && Models.Any(m =>
+            string.Equals(m, modelName, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>
+    /// Resolves the agent's <see cref="AgentConfiguration.ModelTier"/> ("heavy" / "standard" /
+    /// "light" / "utility") to a concrete model via the <c>ModelTier:*</c> config section.
+    /// Returns null when the agent declares no tier, the tier isn't configured, or this
+    /// factory doesn't serve the resolved model (so the caller falls back to its provider
+    /// default instead of creating a client for a model another factory owns).
+    /// Precedence in concrete factories: composer selection (<see cref="CurrentModelName"/>)
+    /// → agent tier → provider default.
+    /// </summary>
+    protected string? ResolveTierModel(AgentConfiguration agentConfig)
+    {
+        if (string.IsNullOrEmpty(agentConfig.ModelTier))
+            return null;
+
+        var configuration = Hub.ServiceProvider.GetService<Microsoft.Extensions.Configuration.IConfiguration>();
+        if (configuration == null)
+            return null;
+
+        var tiers = new ModelTierConfiguration
+        {
+            Heavy = configuration["ModelTier:Heavy"],
+            Standard = configuration["ModelTier:Standard"],
+            Light = configuration["ModelTier:Light"],
+            Utility = configuration["ModelTier:Utility"]
+        };
+
+        var resolved = tiers.Resolve(agentConfig.ModelTier);
+        if (string.IsNullOrEmpty(resolved) || !Supports(resolved))
+            return null;
+
+        Logger.LogDebug("[AgentFactory] Agent {Agent} tier '{Tier}' resolved to model {Model}",
+            agentConfig.Id, agentConfig.ModelTier, resolved);
+        return resolved;
+    }
+
     /// <summary>
     /// Creates a ChatClientAgent for the given configuration.
     /// </summary>
@@ -70,19 +124,27 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
     {
         CurrentModelName = modelName;
 
-        if (string.IsNullOrEmpty(config.PreferredModel) && !string.IsNullOrEmpty(config.ModelTier))
-        {
-            var tierConfig = Hub.ServiceProvider.GetService<IOptions<ModelTierConfiguration>>()?.Value;
-            var resolvedModel = tierConfig?.Resolve(config.ModelTier);
-            if (!string.IsNullOrEmpty(resolvedModel))
-                config = config with { PreferredModel = resolvedModel };
-        }
+        // The composer selection (ThreadComposer.ModelName → modelName / CurrentModelName) always
+        // wins. When nothing was selected (headless flows: email routing, notification triage,
+        // delegated sub-threads), concrete factories fall back to the agent's ModelTier via
+        // ResolveTierModel, then to their provider default.
 
         // Sync: use raw instructions, skip @@reference resolution (resolved lazily)
         var instructions = GetAgentInstructions(config, hierarchyAgents, chat);
         return CreateAgentCore(config, chat, existingAgents, hierarchyAgents, instructions, modelName);
     }
 
+    /// <summary>
+    /// Obsolete async agent creation — resolves @@references in instructions before building the
+    /// agent. Deadlocks under Orleans (the await captures the grain scheduler); use <c>CreateAgent</c>
+    /// instead, which builds synchronously and resolves references lazily at runtime.
+    /// </summary>
+    /// <param name="config">The agent configuration to build the chat client agent from.</param>
+    /// <param name="chat">The chat session the agent participates in (supplies execution context and tool callbacks).</param>
+    /// <param name="existingAgents">Already-built agents in the hierarchy, keyed by id, available for delegation wiring.</param>
+    /// <param name="hierarchyAgents">All agent configurations in the hierarchy, used to build delegation/handoff tools and instructions.</param>
+    /// <param name="modelName">The composer-selected model to use, or <c>null</c> to fall back to the agent's tier then the provider default.</param>
+    /// <returns>The constructed <c>ChatClientAgent</c>.</returns>
     [Obsolete("Use CreateAgent — CreateAgentAsync deadlocks in Orleans")]
     public async Task<ChatClientAgent> CreateAgentAsync(
         AgentConfiguration config,
@@ -93,13 +155,10 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
     {
         CurrentModelName = modelName;
 
-        if (string.IsNullOrEmpty(config.PreferredModel) && !string.IsNullOrEmpty(config.ModelTier))
-        {
-            var tierConfig = Hub.ServiceProvider.GetService<IOptions<ModelTierConfiguration>>()?.Value;
-            var resolvedModel = tierConfig?.Resolve(config.ModelTier);
-            if (!string.IsNullOrEmpty(resolvedModel))
-                config = config with { PreferredModel = resolvedModel };
-        }
+        // The composer selection (ThreadComposer.ModelName → modelName / CurrentModelName) always
+        // wins. When nothing was selected (headless flows: email routing, notification triage,
+        // delegated sub-threads), concrete factories fall back to the agent's ModelTier via
+        // ResolveTierModel, then to their provider default.
 
         var instructions = await GetAgentInstructionsAsync(config, hierarchyAgents, chat);
         return CreateAgentCore(config, chat, existingAgents, hierarchyAgents, instructions, modelName);
@@ -131,14 +190,20 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
         }
         else
         {
+            // No plugins declared → READ-ONLY Mesh tools. Write capability is an explicit
+            // grant: declare `plugins: [Mesh]` in the agent definition to get
+            // Create/Update/Patch/EditContent/Delete/Move/Copy/Recycle. (This replaces the
+            // old description-keyword gating — "description contains create/update/delete" —
+            // where rewording an agent's description silently granted or revoked write
+            // access. Capability must never hinge on prose.)
             var meshPlugin = new MeshPlugin(Hub, chat);
-            var needsWriteTools = description.Contains("create", StringComparison.OrdinalIgnoreCase)
-                || description.Contains("update", StringComparison.OrdinalIgnoreCase)
-                || description.Contains("delete", StringComparison.OrdinalIgnoreCase);
-            tools = tools.Concat(needsWriteTools ? meshPlugin.CreateAllTools() : meshPlugin.CreateTools());
+            tools = tools.Concat(meshPlugin.CreateTools());
         }
 
         tools = tools.Append(PlanStorageTool.Create(Hub, chat));
+        // load_skill: inject a nodeType:Skill node's instructions on demand (found via search nodeType:Skill);
+        // a LaunchesSubThread skill runs in its own sub-thread via the generic StartThread launcher.
+        tools = tools.Append(SkillTool.Create(Hub, chat));
 
         // Wrap all tools to restore user access context before invocation.
         // AsyncLocal doesn't flow through the AI framework's streaming + tool invocation,
@@ -165,6 +230,16 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
         // real-time visibility into tool calls. FunctionInvokingChatClient
         // consumes FunctionCallContent internally; without this middleware,
         // the outer stream never sees tool invocations.
+        //
+        // ⚠️  Note: this middleware fires only when callers route through the
+        // agent's RunStreamingAsync / RunAsync. `AgentChatClient` currently
+        // calls `agent.ChatClient.GetStreamingResponseAsync` directly (faster
+        // path that bypasses Microsoft.Agents.AI's wrapping), so the
+        // function-invocation middleware here is effectively unused for the
+        // main streaming flow. Result-population of ToolCallEntry happens
+        // instead via `FunctionResultContent` in the outer streaming loop
+        // (ThreadExecution.cs) when the underlying chat client emits FRC, or
+        // via `UpdateDelegationStatus` on the delegation terminal.
         return agent.AsBuilder()
             .Use((AIAgent _, FunctionInvocationContext ctx, Func<FunctionInvocationContext, CancellationToken, ValueTask<object?>> next, CancellationToken ct) =>
             {
@@ -227,6 +302,12 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
             nTools);
     }
 
+    /// <summary>
+    /// Standard tools made available to every agent regardless of configuration. The base
+    /// implementation returns none; concrete factories override to inject provider-wide tools.
+    /// </summary>
+    /// <param name="chat">The chat session the tools will operate within.</param>
+    /// <returns>The standard tools to add to the agent; empty by default.</returns>
     protected virtual IEnumerable<AITool> GetStandardTools(IAgentChat chat)
     {
         return [];
@@ -253,17 +334,36 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
 
         if (hasDelegations || hasHierarchyAgents || agentConfig.IsDefault)
         {
-            var delegationTool = DelegationTool.CreateUnifiedDelegationTool(
-                agentConfig,
-                hierarchyAgents,
-                executeAsync: (agentName, task, context, ct) =>
-                    ExecuteDelegationAsync(agentConfig, allAgents, chat, agentName, task, context, ct),
-                Logger);
+            // list_sub_threads: snapshot of this chat's active delegation paths.
+            // Only AgentChatClient maintains ActiveDelegationPaths; if the chat
+            // is some other IAgentChat (e.g. test stub), skip the optional tool.
+            Func<IReadOnlyList<MeshWeaver.AI.Plugins.SubThreadInfo>>? listSubThreads = null;
+            Action<string, string>? sendToSubThread = null;
+            if (chat is AgentChatClient acc)
+            {
+                var workspace = Hub.GetWorkspace();
+                listSubThreads = () => SnapshotActiveSubThreads(acc, workspace);
+                sendToSubThread = (threadPath, message) =>
+                    PushMessageToSubThread(workspace, threadPath, message);
+            }
 
-            Logger.LogInformation("Created unified delegation tool for agent {AgentName} with {HierarchyCount} hierarchy agents",
-                agentConfig.Id, hierarchyAgents.Count);
+            foreach (var tool in DelegationTool.CreateDelegationTools(
+                         agentConfig,
+                         hierarchyAgents,
+                         executeAsync: (agentName, task, context, ct) =>
+                             ExecuteDelegationAsync(agentConfig, allAgents, chat, agentName, task, context, ct),
+                         listSubThreads: listSubThreads,
+                         sendToSubThread: sendToSubThread,
+                         delegationEvents: chat.Delegations,
+                         workspace: Hub.GetWorkspace(),
+                         logger: Logger))
+            {
+                yield return tool;
+            }
 
-            yield return delegationTool;
+            Logger.LogInformation(
+                "Created delegation tools for agent {AgentName} with {HierarchyCount} hierarchy agents (list={List}, send={Send})",
+                agentConfig.Id, hierarchyAgents.Count, listSubThreads is not null, sendToSubThread is not null);
         }
 
         // Create handoff tool when agent has explicit handoffs
@@ -283,166 +383,259 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
     }
 
     /// <summary>
-    /// Dispatches a sub-thread and yields its streaming text deltas as <see cref="IAsyncEnumerable{string}"/>.
+    /// Dispatches a sub-thread and yields its final accumulated text when the
+    /// sub-thread reaches a terminal state. While the sub-thread streams, the
+    /// PARENT projects each child emission onto its OWN response cell's
+    /// matching <see cref="ToolCallEntry"/> — <c>Result</c> carries the last
+    /// 10 lines of sub-agent output, <c>Status</c> tracks the lifecycle.
+    /// GUIs databind to that tool call for the live progress view.
     ///
-    /// The sub-thread is created fire-and-forget via <c>IMeshService.CreateNode</c> (no await on
-    /// completion). Its response-message cell is observed through a workspace remote stream; each
-    /// incremental delta is yielded up to the <see cref="FunctionInvokingChatClient"/>, and via
-    /// that — through the parent agent's streaming response — into the parent's response bubble.
+    /// <para><b>Direction is parent-observes-child.</b> Sub-thread code is
+    /// oblivious — it streams exactly as if it were a top-level thread. The
+    /// parent owns the remote subscriptions on the sub-thread's node + response
+    /// cell, computes a projection on each emission, and writes that projection
+    /// onto its OWN response cell via <c>parentWorkspace.GetMeshNodeStream(parentResponsePath).Update(...)</c>.
+    /// The parent owns <c>parentResponsePath</c>, so the write serialises on its
+    /// own data-source action block — no cross-hub race.</para>
     ///
-    /// No <see cref="Task{string}"/>, no <see cref="TaskCompletionSource{T}"/>, no
-    /// <c>ObserveQuery</c>. The only awaits here are on the channel reader which drains on
-    /// cancellation or on the sub-thread's CompletedAt flip — neither touches the hub scheduler
-    /// (both run on the Task.Run thread pool).
+    /// <para><b>Yield contract.</b> Returns an <see cref="IAsyncEnumerable{T}"/>
+    /// of <see cref="string"/>, but only yields ONCE at terminal — with the
+    /// sub-thread's full accumulated text. <see cref="Plugins.DelegationTool"/>
+    /// drains the enumerable and gives the accumulation back to FCC as the
+    /// <c>FunctionResultContent</c>; the per-tick deltas are not needed there
+    /// because the live progress has already landed on the parent's tool call.</para>
+    ///
+    /// <para><b>Watchdog stays.</b> 5-minute timeout → propagate
+    /// <c>RequestedStatus = Cancelled</c> to the sub-thread + flip our tool call
+    /// to <see cref="ToolCallStatus.Cancelled"/>, then yield the partial text
+    /// so FCC can carry on.</para>
     /// </summary>
-    private async IAsyncEnumerable<string> ExecuteDelegationAsync(
+    /// <summary>
+    /// Snapshot accessor for the <c>list_sub_threads</c> tool. Reads the
+    /// AgentChatClient's <c>ActiveDelegationPaths</c> set (maintained by
+    /// EmitDelegationEvent) and enriches each path with a best-effort
+    /// status / preview from the workspace cache (synchronous; no awaits).
+    /// </summary>
+    private static IReadOnlyList<MeshWeaver.AI.Plugins.SubThreadInfo> SnapshotActiveSubThreads(
+        AgentChatClient chat, MeshWeaver.Data.IWorkspace workspace)
+    {
+        var paths = chat.ActiveDelegationPaths;
+        if (paths.IsEmpty)
+            return Array.Empty<MeshWeaver.AI.Plugins.SubThreadInfo>();
+
+        var result = new List<MeshWeaver.AI.Plugins.SubThreadInfo>(paths.Count);
+        foreach (var path in paths)
+        {
+            // Best-effort agent name extraction from the path tail. The full
+            // status / preview / activity enrichment will land in the next
+            // refactor pass when the subscriber on the sub-thread node also
+            // pushes a snapshot into AgentChatClient for instant tool access.
+            // For now: the tool exposes the in-flight list with paths +
+            // agent-name parsed from the path slug, which already lets the
+            // parent agent decide whether to wait or send a follow-up.
+            var lastSegment = path.Split('/').LastOrDefault() ?? path;
+            var agentNameGuess = lastSegment.Split('-').FirstOrDefault() ?? "unknown";
+            result.Add(new MeshWeaver.AI.Plugins.SubThreadInfo(
+                ThreadPath: path,
+                AgentName: agentNameGuess,
+                Status: "Executing",
+                PreviewText: null,
+                LastActivity: null));
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// Handler for the <c>send_to_sub_thread</c> tool. Writes a follow-up user
+    /// message into the sub-thread's pending-messages queue via stream.Update;
+    /// the sub-thread's submission watcher picks it up and dispatches a new
+    /// round (or the agent's inbox-drain tool absorbs it mid-stream).
+    /// </summary>
+    private static void PushMessageToSubThread(
+        MeshWeaver.Data.IWorkspace workspace, string subThreadPath, string message)
+    {
+        var userMessage = ThreadInput.CreateUserMessage(
+            message,
+            createdBy: "parent-agent",
+            agentName: null,
+            modelName: null,
+            contextPath: null,
+            attachments: null);
+        ThreadInput.AppendUserInput(workspace, subThreadPath, userMessage);
+    }
+
+    /// <summary>
+    /// Pure reactive sub-thread spawn. No async, no await, no .ToTask().
+    /// Returns an IObservable&lt;string&gt; that completes when the sub-thread
+    /// has been created. The actual sub-agent execution is driven by the
+    /// sub-thread's own submission watcher (it sees PendingUserMessages and
+    /// runs the round); the parent's tool-call TCS resolution is handled by
+    /// <see cref="MeshWeaver.AI.Plugins.DelegationTool"/>'s reactive Idle
+    /// subscription, which reads <c>Thread.Summary</c> when the sub-thread
+    /// returns to Idle. No chunk drain, no Channel bridge, no await foreach.
+    /// </summary>
+    private IObservable<string> ExecuteDelegationAsync(
         AgentConfiguration agentConfig,
         IReadOnlyDictionary<string, ChatClientAgent> allAgents,
         IAgentChat chat,
         string agentName,
         string task,
         string? context,
-        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
-    {
-        // Resolve target agent (strip path prefix if present).
-        var targetId = agentName.Split('/').Last();
-        if (!allAgents.TryGetValue(targetId, out _))
+        CancellationToken cancellationToken)
+        => System.Reactive.Linq.Observable.Defer(() =>
         {
-            yield return $"Agent '{agentName}' not found";
-            yield break;
-        }
+            // Resolve target agent (strip path prefix if present).
+            var targetId = agentName.Split('/').Last();
+            if (!allAgents.TryGetValue(targetId, out _))
+                return System.Reactive.Linq.Observable.Return($"Agent '{agentName}' not found");
 
-        var execCtx = chat.ExecutionContext;
-        if (execCtx == null)
-        {
-            yield return "No execution context available for delegation";
-            yield break;
-        }
+            var execCtx = chat.ExecutionContext;
+            if (execCtx is null)
+                return System.Reactive.Linq.Observable.Return("No execution context available for delegation");
 
-        // Guard: limit delegation depth. See comment on original version for segment math.
-        var threadPath = execCtx.ThreadPath;
-        var threadIdx = threadPath.IndexOf("/_Thread/", StringComparison.Ordinal);
-        var depth = 0;
-        if (threadIdx >= 0)
-        {
-            var afterThread = threadPath[(threadIdx + "/_Thread/".Length)..];
-            var segments = afterThread.Split('/').Length;
-            depth = (segments - 1) / 2;
-        }
-        if (depth >= 2)
-        {
-            Logger.LogWarning("[Delegation] Max depth reached at {ThreadPath}: {Source} → {Target}",
-                threadPath, agentConfig.Id, targetId);
-            yield return $"Maximum delegation depth reached ({depth}). Handle this task directly.";
-            yield break;
-        }
-
-        Logger.LogInformation("[Delegation] {Source} → {Target}, depth={Depth}, task={Task}",
-            agentConfig.Id, targetId, depth, task.Length > 100 ? task[..97] + "..." : task);
-
-        var meshService = Hub.ServiceProvider.GetRequiredService<IMeshService>();
-        var parentMsgPath = $"{threadPath}/{execCtx.ResponseMessageId}";
-        var mainEntityPath = execCtx.ContextPath ?? context ?? threadPath;
-
-        // Build the sub-thread with IsExecuting=true + PendingUserMessage so its hub's
-        // WatchForExecution starts streaming on activation.
-        var (subThreadNode, userMsgId, responseMsgId) = ThreadNodeType.BuildThreadWithMessages(
-            parentMsgPath, task,
-            createdBy: execCtx.UserAccessContext?.ObjectId,
-            agentName: targetId);
-        subThreadNode = subThreadNode with { MainNode = mainEntityPath };
-        var subThreadPath = subThreadNode.Path!;
-        var responsePath = $"{subThreadPath}/{responseMsgId}";
-
-        // Stamp the delegation path so the parent's bubble can render the inline link.
-        var delegationDisplayName = $"Delegating to {targetId}...";
-        chat.DelegationPaths[delegationDisplayName] = subThreadPath;
-        chat.LastDelegationPath = subThreadPath;
-        chat.UpdateDelegationStatus?.Invoke(delegationDisplayName);
-
-        Logger.LogInformation("[Delegation] Dispatch sub-thread {Path}: user={UserMsgId}, response={ResponseMsgId}",
-            subThreadPath, userMsgId, responseMsgId);
-
-        // Create satellite cells + thread node reactively (no await).
-        meshService.CreateNode(new MeshNode(userMsgId, subThreadPath)
-        {
-            NodeType = ThreadMessageNodeType.NodeType,
-            MainNode = mainEntityPath,
-            Content = new ThreadMessage
+            // Depth guard.
+            var threadPath = execCtx.ThreadPath;
+            var threadIdx = threadPath.IndexOf("/_Thread/", StringComparison.Ordinal);
+            var depth = 0;
+            if (threadIdx >= 0)
             {
-                Role = "user", Text = task, Timestamp = DateTime.UtcNow,
-                Type = ThreadMessageType.ExecutedInput,
-                CreatedBy = execCtx.UserAccessContext?.ObjectId
+                var afterThread = threadPath[(threadIdx + "/_Thread/".Length)..];
+                var segments = afterThread.Split('/').Length;
+                depth = (segments - 1) / 2;
             }
-        }).Subscribe(_ => { },
-            error => Logger.LogDebug(error, "[Delegation] User cell create for {Path} returned error", subThreadPath));
-
-        meshService.CreateNode(new MeshNode(responseMsgId, subThreadPath)
-        {
-            NodeType = ThreadMessageNodeType.NodeType,
-            MainNode = mainEntityPath,
-            Content = new ThreadMessage
+            if (depth >= 2)
             {
-                Role = "assistant", Text = "", Timestamp = DateTime.UtcNow,
-                Type = ThreadMessageType.AgentResponse, AgentName = targetId
+                Logger.LogWarning("[Delegation] Max depth reached at {ThreadPath}: {Source} → {Target}",
+                    threadPath, agentConfig.Id, targetId);
+                return System.Reactive.Linq.Observable.Return(
+                    $"Maximum delegation depth reached ({depth}). Handle this task directly.");
             }
-        }).Subscribe(_ => { },
-            error => Logger.LogDebug(error, "[Delegation] Response cell create for {Path} returned error", subThreadPath));
 
-        meshService.CreateNode(subThreadNode).Subscribe(
-            _ => Logger.LogInformation("[Delegation] Sub-thread created at {Path}", subThreadPath),
-            error => Logger.LogWarning(error, "[Delegation] Sub-thread create failed at {Path}", subThreadPath));
+            Logger.LogInformation("[Delegation] {Source} → {Target}, depth={Depth}, task={Task}",
+                agentConfig.Id, targetId, depth, task.Length > 100 ? task[..97] + "..." : task);
 
-        yield return $"\n\n**Delegating to {targetId}…**\n\n";
+            var parentMsgPath = $"{threadPath}/{execCtx.ResponseMessageId}";
+            var mainEntityPath = execCtx.ContextPath ?? context ?? threadPath;
 
-        // Open a channel fed by the sub-thread's response-cell remote stream. We yield
-        // each text delta as it arrives (computed against lastText so we never double-emit).
-        var channel = System.Threading.Channels.Channel.CreateUnbounded<string>(
-            new System.Threading.Channels.UnboundedChannelOptions
+            // Build the full sub-thread node + ids ONCE. GenerateSpeakingId appends
+            // a random suffix, so calling BuildThreadWithMessages twice produces
+            // DIFFERENT paths. Single source of truth.
+            var (preSubThreadNode, userMsgId, responseMsgId) =
+                MeshWeaver.AI.ThreadNodeType.BuildThreadWithMessages(
+                    parentMsgPath, task,
+                    createdBy: execCtx.UserAccessContext?.ObjectId,
+                    agentName: targetId);
+            var subThreadNode = preSubThreadNode with { MainNode = mainEntityPath };
+            var subThreadPath = subThreadNode.Path!;
+            var callId = Guid.NewGuid().ToString("N")[..8];
+
+            Logger.LogInformation(
+                "[Delegation:{CallId}] ENTER sub={SubPath} target={Target} parentResp={ParentResp}",
+                callId, subThreadPath, targetId, parentMsgPath);
+
+            var meshService = Hub.ServiceProvider.GetRequiredService<IMeshService>();
+
+            // Pure nested-Subscribe pattern (per CLAUDE.md AsynchronousCalls.md):
+            // CreateNode → on emission, subscribe to sub-thread stream for the
+            // Running→Idle transition → on Idle, emit Terminal event so the
+            // parent's tool-call TCS (in DelegationTool's reactive subscription)
+            // resolves with Thread.Summary. No await, no .ToTask(), no SelectMany
+            // chain that could capture the grain scheduler — Subscribe is the
+            // continuation primitive.
+            return System.Reactive.Linq.Observable.Create<string>(observer =>
             {
-                SingleReader = true,
-                SingleWriter = false
-            });
+                var workspace = Hub.GetWorkspace();
+                var sawRunning = false;
 
-        var workspace = Hub.GetWorkspace();
-        var lastText = "";
-        var subscription = workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
-                new Address(responsePath), new MeshNodeReference())
-            ?.Subscribe(
-                change =>
-                {
-                    var msg = change.Value?.Content as ThreadMessage;
-                    if (msg == null) return;
-                    var current = msg.Text ?? "";
-                    if (current.Length > lastText.Length)
+                meshService.CreateNode(subThreadNode).Subscribe(
+                    _ =>
                     {
-                        var delta = current[lastText.Length..];
-                        lastText = current;
-                        channel.Writer.TryWrite(delta);
-                    }
-                    if (msg.CompletedAt is not null)
-                        channel.Writer.TryComplete();
-                },
-                ex => channel.Writer.TryComplete(ex),
-                () => channel.Writer.TryComplete());
+                        Logger.LogInformation(
+                            "[Delegation:{CallId}] CREATE_OK sub={Path}", callId, subThreadPath);
 
-        // Safety timeout so a never-completing sub-thread can't pin this iterator forever.
-        using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(5));
-        using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeout.Token);
+                        if (chat is AgentChatClient agentChat)
+                        {
+                            Logger.LogInformation(
+                                "[Delegation:{CallId}] EMIT_DISPATCHED sub={Path}", callId, subThreadPath);
+                            agentChat.EmitDelegationEvent(
+                                new MeshWeaver.AI.Delegation.DelegationEvent(callId, subThreadPath,
+                                    MeshWeaver.AI.Delegation.DelegationLifecycle.Dispatched));
 
-        try
-        {
-            await foreach (var delta in channel.Reader.ReadAllAsync(linked.Token))
-            {
-                yield return delta;
-            }
-        }
-        finally
-        {
-            subscription?.Dispose();
-            Logger.LogInformation("[Delegation] Stream closed for sub-thread {Path}", subThreadPath);
-        }
-    }
+                            // Watch sub-thread for Running→Idle. Same Scan-based
+                            // pattern DelegationTool uses for the parent's
+                            // TCS resolution — emit Terminal here so the
+                            // cancel-watcher + tool-call stamper drop the entry.
+                            // Self-disposing watch: the sub-thread sync subscription is released
+                            // the moment the sub-thread reaches a terminal state. Without this it
+                            // stays subscribed for the life of the PROCESS — one leaked sync/ hub
+                            // per delegation, which accumulates until the portal wedges (the atioz
+                            // 2026-06-25 wedge: ~1778 leaked sync hubs). See the /storm skill.
+                            IDisposable? subThreadWatch = null;
+                            subThreadWatch = workspace.GetMeshNodeStream(subThreadPath).Subscribe(
+                                node =>
+                                {
+                                    if (node?.Content is not MeshThread t) return;
+                                    if (t.Status is ThreadExecutionStatus.Executing
+                                                 or ThreadExecutionStatus.StartingExecution)
+                                    {
+                                        sawRunning = true;
+                                    }
+                                    else if (sawRunning && t.Status is ThreadExecutionStatus.Idle
+                                                 or ThreadExecutionStatus.Cancelled
+                                                 or ThreadExecutionStatus.Done)
+                                    {
+                                        Logger.LogInformation(
+                                            "[Delegation:{CallId}] TERMINAL sub={Path} (Running→Idle)",
+                                            callId, subThreadPath);
+                                        agentChat.EmitDelegationEvent(
+                                            new MeshWeaver.AI.Delegation.DelegationEvent(callId, subThreadPath,
+                                                MeshWeaver.AI.Delegation.DelegationLifecycle.Terminal));
+                                        // Done watching — release the sync subscription (no leak).
+                                        subThreadWatch?.Dispose();
+                                    }
+                                },
+                                ex => Logger.LogWarning(ex,
+                                    "[Delegation:{CallId}] sub-thread stream errored", callId));
+                        }
+
+                        // No chunks emitted — DelegationTool's reactive
+                        // completion path reads Thread.Summary directly on Idle.
+                        observer.OnCompleted();
+                    },
+                    ex =>
+                    {
+                        Logger.LogWarning(ex, "[Delegation:{CallId}] CREATE_FAIL sub={Path}",
+                            callId, subThreadPath);
+                        // 🚨 Surface the create failure so the parent's tool call resolves IMMEDIATELY
+                        // as an "Error: …" result instead of hanging. Two surfaces for the two waits:
+                        //  • production (delegationEvents+workspace wired): emit a Failed lifecycle
+                        //    event — the wait gates on Dispatched (never emitted on create-fail) and the
+                        //    chunk-aggregate OnCompleted returns EARLY in that path, so without this the
+                        //    delegate_to_agent call never resolves (apparent wedge).
+                        //  • legacy (no delegationEvents): the OnCompleted chunk-aggregate fallback
+                        //    resolves the TCS — prefix "Error:" so ExtractToolResult keys IsSuccess=false.
+                        if (chat is AgentChatClient agentChat)
+                            agentChat.EmitDelegationEvent(
+                                new MeshWeaver.AI.Delegation.DelegationEvent(callId, subThreadPath,
+                                    MeshWeaver.AI.Delegation.DelegationLifecycle.Failed, ex.Message));
+                        observer.OnNext($"Error: delegation to {targetId} failed to start — {ex.Message}");
+                        observer.OnCompleted();
+                    });
+
+                return System.Reactive.Disposables.Disposable.Empty;
+            });
+        });
+
+    private readonly record struct DelegationObservation(
+        MeshThread? Thread,
+        ThreadMessage? Cell,
+        string? Error);
+
+    /// <summary>
+    /// Distinguishes which subscription signalled terminal — purely for
+    /// diagnostic logging; both signals map to the same finalisation path.
+    /// </summary>
+    private enum TerminalSignal { ThreadIdle, CellCompleted }
 
     /// <summary>
     /// Resolves a plugin reference to AITool instances.
@@ -460,6 +653,7 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
             "Version" => new VersionPlugin(Hub).CreateTools(),
             "Collaboration" => new CollaborationPlugin(Hub, chat).CreateTools(),
             "ContentCollection" => new ContentCollectionPlugin(Hub, chat).CreateTools(),
+            "Lsp" => new LspPlugin(Hub, chat).CreateTools(),
             _ => Hub.ServiceProvider.GetServices<IAgentPlugin>()
                     .FirstOrDefault(p => string.Equals(p.Name, pluginRef.Name, StringComparison.OrdinalIgnoreCase))
                     ?.CreateTools()
@@ -488,6 +682,14 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
         return BuildInstructionsWithDelegations(baseInstructions, agentConfig, hierarchyAgents, chat);
     }
 
+    /// <summary>
+    /// Builds the agent's full instruction text with @@references resolved (the async path), then
+    /// appends the delegation, handoff, and thread-inspection/summary guidance for the hierarchy.
+    /// </summary>
+    /// <param name="agentConfig">The agent whose base instructions are resolved and augmented.</param>
+    /// <param name="hierarchyAgents">All agents in the hierarchy, used to render the available-delegation/handoff lists.</param>
+    /// <param name="chat">The chat session, used to resolve @@references against the live workspace.</param>
+    /// <returns>The composed instruction string for the agent.</returns>
     protected async Task<string> GetAgentInstructionsAsync(AgentConfiguration agentConfig, IReadOnlyList<AgentConfiguration> hierarchyAgents, IAgentChat chat)
     {
         var baseInstructions = agentConfig.Instructions ?? string.Empty;
@@ -501,9 +703,37 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
         var hasHandoffs = agentConfig.Handoffs is { Count: > 0 };
         var hasHierarchyAgents = hierarchyAgents.Count > 1;
 
+        // Thread-message inspection + summary contract — appended for every
+        // agent so delegation-incapable agents still know how to discover
+        // prior responses and how their own response gets stored as a summary.
+        var threadInspectionAndSummary =
+            """
+
+            **Reading prior thread messages:**
+            Use the `search` tool with `nodeType:ThreadMessage` to find conversation cells.
+              - One thread: `search "path:{threadPath} scope:descendants nodeType:ThreadMessage"`
+              - One sub-thread (delegation child): same shape with the sub-thread's path.
+              - Project only the fields you need with `select:` — e.g.
+                `search "path:{threadPath} scope:descendants nodeType:ThreadMessage select:text,summary,role,timestamp"`.
+              - To read the dedicated summary of a completed sub-thread directly,
+                `get "{subThreadPath}"` and read `content.summary` (filled atomically
+                with `content.status=Idle`).
+            Use `select:summary` when scanning many cells — it returns the one-line
+            digest without the verbose `text`, so you can survey a deep thread cheaply.
+
+            **End every response with a <summary> block:**
+            At the very end of your response, on its own line, emit:
+              `<summary>One- or two-sentence distillation of what you did or decided.</summary>`
+            The framework strips this from what the user sees and stores it as the
+            dedicated summary on both the response message and the thread. When a
+            parent agent delegated to you, this summary IS the tool-call result it
+            receives back — not your verbose response. Be tight and outcome-focused.
+
+            """;
+
         if (!hasDelegations && !hasHandoffs && !hasHierarchyAgents && !agentConfig.IsDefault)
         {
-            return baseInstructions;
+            return baseInstructions + threadInspectionAndSummary;
         }
 
         var result = baseInstructions;
@@ -553,6 +783,8 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
                    """;
         }
 
+        result += threadInspectionAndSummary;
+
         // Handoff guidelines
         if (hasHandoffs)
         {
@@ -588,27 +820,81 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
 }
 
 /// <summary>
-/// AIFunction wrapper that restores the user's access context before each invocation.
-/// This is the single injection point for ALL tool calls — delegation, MeshPlugin, etc.
+/// AIFunction wrapper that restores the user's access context before each invocation
+/// AND enforces a per-tool execution timeout (via <see cref="ToolTimeoutAttribute"/>;
+/// default 30 s). This is the single injection point for ALL tool calls — delegation,
+/// MeshPlugin, etc.
+///
+/// <para>The timeout is read once at wrap time from the inner function's underlying
+/// method. On expiry the linked CTS cancels the tool invocation and the agent receives
+/// the synthetic "timed out" message as the tool result — never a hung promise.
+/// <c>delegate_to_agent</c> is exempt (lifecycle-managed by the thread-hub heartbeat,
+/// not a tool in the timeout-attribute sense).</para>
 /// </summary>
 internal sealed class AccessContextAIFunction : DelegatingAIFunction
 {
+    /// <summary>
+    /// Default timeout when no <see cref="ToolTimeoutAttribute"/> is present on the
+    /// underlying tool method. 30 s — long enough for any reasonable tool, short
+    /// enough that a hung tool surfaces fast in the chat UI.
+    /// </summary>
+    private static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// Tools that opt out of the timeout because their lifecycle is managed by the
+    /// thread hub itself (currently just <c>delegate_to_agent</c>). They have their
+    /// own heartbeat-based hang detection on <c>MeshThread.LastActivityAt</c>.
+    /// </summary>
+    private static readonly HashSet<string> TimeoutExemptTools = new(StringComparer.Ordinal)
+    {
+        "delegate_to_agent",
+    };
+
     private readonly IAgentChat _chat;
     private readonly AccessService _accessService;
+    private readonly TimeSpan? _timeout;
 
     public AccessContextAIFunction(AIFunction inner, IAgentChat chat, AccessService accessService)
         : base(inner)
     {
         _chat = chat;
         _accessService = accessService;
+        _timeout = TimeoutExemptTools.Contains(inner.Name)
+            ? null
+            : (inner.UnderlyingMethod?.GetCustomAttribute<ToolTimeoutAttribute>()?.Timeout
+                ?? DefaultTimeout);
     }
 
-    protected override ValueTask<object?> InvokeCoreAsync(
+    protected override async ValueTask<object?> InvokeCoreAsync(
         AIFunctionArguments arguments, CancellationToken cancellationToken)
     {
         var userCtx = _chat.ExecutionContext?.UserAccessContext;
         if (userCtx != null)
             _accessService.SetContext(userCtx);
-        return base.InvokeCoreAsync(arguments, cancellationToken);
+
+        if (_timeout is null)
+            return await base.InvokeCoreAsync(arguments, cancellationToken);
+
+        // Bound the wait via Task.WaitAsync — covers both well-behaved tools
+        // (which observe cts.Token and unwind via OCE) AND ill-behaved tools
+        // (which ignore the token and would otherwise pin the agent loop until
+        // their intrinsic delay finishes). On timeout, the inner Task becomes
+        // orphaned (still runs to completion in the background) but the agent
+        // never waits — it gets a deterministic synthetic FunctionResultContent.
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var invocation = base.InvokeCoreAsync(arguments, cts.Token).AsTask();
+        try
+        {
+            return await invocation.WaitAsync(_timeout.Value, cancellationToken);
+        }
+        catch (TimeoutException)
+        {
+            // Our timer fired. Signal cooperative cancellation so well-behaved
+            // tools wind down even though we've stopped waiting; ill-behaved
+            // tools continue but the wrapper is no longer blocked on them.
+            cts.Cancel();
+            return $"Tool '{Name}' timed out after {_timeout.Value.TotalSeconds:F0}s. " +
+                   $"Add [ToolTimeout(N)] to allow longer.";
+        }
     }
 }

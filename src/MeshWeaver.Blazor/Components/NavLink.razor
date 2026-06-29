@@ -2,7 +2,7 @@
 
 @if (IsInMenuContext)
 {
-    <a href="@Href" class="menu-item-link" @onclick="OnClick">
+    <a href="@Href" class="menu-item-link@(IsActive ? " active" : "")" @onclick="OnClick">
         @if (Icon != null)
         {
             <FluentIcon Value="@Icon.ToFluentIcon()" Width="20px" Style="fill: var(--accent-fill-rest); flex-shrink: 0;" />
@@ -12,6 +12,7 @@
 }
 else
 {
-    <FluentNavLink Href="@Href" Icon="@Icon?.ToFluentIcon()" OnClick="@OnClick">@Title</FluentNavLink>
+    <FluentNavLink Href="@Href" Icon="@Icon?.ToFluentIcon()" OnClick="@OnClick"
+                   Class="@(IsActive ? "active" : null)">@Title</FluentNavLink>
 }
 

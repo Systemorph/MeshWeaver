@@ -1,3 +1,4 @@
+using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -6,14 +7,14 @@ using MeshWeaver.Messaging;
 namespace MeshWeaver.Hosting.Persistence;
 
 /// <summary>
-/// Watches a directory for file system changes and publishes notifications to IDataChangeNotifier.
+/// Watches a directory for file system changes and publishes notifications to <see cref="IObserver{T}"/> of <see cref="DataChangeNotification"/>.
 /// This enables reactive updates when files are modified externally (e.g., by another process or editor).
 /// </summary>
 public class FileSystemChangeWatcher : IDisposable
 {
     private readonly string _baseDirectory;
     private readonly IStorageAdapter _storageAdapter;
-    private readonly IDataChangeNotifier _changeNotifier;
+    private readonly IObserver<DataChangeNotification> _changeNotifier;
     private readonly IMessageHub? _hub;
     private readonly JsonSerializerOptions? _jsonOptions;
     private readonly FileSystemWatcher _watcher;
@@ -40,7 +41,7 @@ public class FileSystemChangeWatcher : IDisposable
     public FileSystemChangeWatcher(
         string baseDirectory,
         IStorageAdapter storageAdapter,
-        IDataChangeNotifier changeNotifier,
+        IObserver<DataChangeNotification> changeNotifier,
         IMessageHub hub)
         : this(baseDirectory, storageAdapter, changeNotifier)
     {
@@ -53,7 +54,7 @@ public class FileSystemChangeWatcher : IDisposable
     public FileSystemChangeWatcher(
         string baseDirectory,
         IStorageAdapter storageAdapter,
-        IDataChangeNotifier changeNotifier,
+        IObserver<DataChangeNotification> changeNotifier,
         JsonSerializerOptions jsonOptions)
         : this(baseDirectory, storageAdapter, changeNotifier)
     {
@@ -63,7 +64,7 @@ public class FileSystemChangeWatcher : IDisposable
     private FileSystemChangeWatcher(
         string baseDirectory,
         IStorageAdapter storageAdapter,
-        IDataChangeNotifier changeNotifier)
+        IObserver<DataChangeNotification> changeNotifier)
     {
         _baseDirectory = baseDirectory;
         _storageAdapter = storageAdapter;
@@ -155,7 +156,11 @@ public class FileSystemChangeWatcher : IDisposable
         // In production, consider implementing retry logic
     }
 
-    private async void ProcessPendingChanges(object? state)
+    // Sync timer callback — no async void, no await on a hub round-trip. Each
+    // change dispatches via Subscribe; the adapter's Read (the innermost bit
+    // that genuinely needs async I/O) stays IObservable end-to-end and the
+    // notification fires from the Subscribe callback.
+    private void ProcessPendingChanges(object? state)
     {
         Dictionary<string, WatcherChangeTypes> changesToProcess;
 
@@ -172,42 +177,34 @@ public class FileSystemChangeWatcher : IDisposable
         }
 
         foreach (var (path, changeType) in changesToProcess)
-        {
-            try
-            {
-                await ProcessChangeAsync(path, changeType);
-            }
-            catch
-            {
-                // Swallow exceptions to prevent crashes in the timer callback
-            }
-        }
+            ProcessChange(path, changeType);
     }
 
-    private async Task ProcessChangeAsync(string path, WatcherChangeTypes changeType)
+    private void ProcessChange(string path, WatcherChangeTypes changeType)
     {
         var normalizedPath = NormalizePath(path);
 
         switch (changeType)
         {
             case WatcherChangeTypes.Created:
-                var createdNode = await _storageAdapter.ReadAsync(path, JsonOptions);
-                if (createdNode != null)
-                {
-                    _changeNotifier.NotifyChange(DataChangeNotification.Created(normalizedPath, createdNode));
-                }
-                break;
-
             case WatcherChangeTypes.Changed:
-                var updatedNode = await _storageAdapter.ReadAsync(path, JsonOptions);
-                if (updatedNode != null)
-                {
-                    _changeNotifier.NotifyChange(DataChangeNotification.Updated(normalizedPath, updatedNode));
-                }
+                // Read returns IObservable<MeshNode?> — the actual file I/O is the
+                // innermost async bit, hidden inside the adapter. We Subscribe and
+                // fire the notification on the success leg; exceptions are
+                // swallowed (consistent with prior catch-and-ignore behaviour).
+                _storageAdapter.Read(path, JsonOptions)
+                    .Take(1)
+                    .Where(node => node is not null)
+                    .Subscribe(
+                        node => _changeNotifier.OnNext(
+                            changeType == WatcherChangeTypes.Created
+                                ? DataChangeNotification.Created(normalizedPath, node!)
+                                : DataChangeNotification.Updated(normalizedPath, node!)),
+                        _ => { /* swallow — file may have been moved/deleted between event and read */ });
                 break;
 
             case WatcherChangeTypes.Deleted:
-                _changeNotifier.NotifyChange(DataChangeNotification.Deleted(normalizedPath));
+                _changeNotifier.OnNext(DataChangeNotification.Deleted(normalizedPath));
                 break;
         }
     }
@@ -244,6 +241,7 @@ public class FileSystemChangeWatcher : IDisposable
     private static string NormalizePath(string? path) =>
         path?.Trim('/') ?? "";
 
+    /// <inheritdoc />
     public void Dispose()
     {
         if (_disposed)

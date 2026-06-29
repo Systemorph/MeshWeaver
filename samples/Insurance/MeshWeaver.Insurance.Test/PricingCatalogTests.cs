@@ -1,7 +1,5 @@
 ﻿using System.Reactive.Linq;
 using System.Text.Json;
-using FluentAssertions;
-using FluentAssertions.Extensions;
 using MeshWeaver.Data;
 using MeshWeaver.Insurance.Domain;
 using MeshWeaver.Insurance.Domain.Services;
@@ -31,7 +29,7 @@ public class PricingCatalogTests(ITestOutputHelper output) : InsuranceTestBase(o
     public async Task GetPricingCatalog_ShouldReturnPricings()
     {
         // Act - Get the pricing catalog from the Insurance hub
-        var pricings = await GetPricingsAsync();
+        var pricings = await GetPricings().Should().Match(p => p.Count > 0, "catalog should contain sample pricings");
 
         // Assert - Verify that the catalog contains pricings
         pricings.Should().NotBeNull("catalog should not be null");
@@ -54,7 +52,7 @@ public class PricingCatalogTests(ITestOutputHelper output) : InsuranceTestBase(o
     public async Task GetPricingCatalog_ShouldHaveValidDimensions()
     {
         // Act
-        var pricings = await GetPricingsAsync();
+        var pricings = await GetPricings().Should().Match(p => p.Count > 0);
 
         // Assert - Verify dimension fields are populated
         pricings.Should().NotBeEmpty();
@@ -74,7 +72,7 @@ public class PricingCatalogTests(ITestOutputHelper output) : InsuranceTestBase(o
     public async Task GetPricingCatalog_ShouldHaveValidDates()
     {
         // Act
-        var pricings = await GetPricingsAsync();
+        var pricings = await GetPricings().Should().Match(p => p.Count > 0);
 
         // Assert
         pricings.Should().NotBeEmpty();
@@ -94,7 +92,7 @@ public class PricingCatalogTests(ITestOutputHelper output) : InsuranceTestBase(o
 
             pricing.UnderwritingYear.Should().NotBeNull(
                 $"pricing {pricing.Id} should have an underwriting year");
-            pricing.UnderwritingYear.Should().BeGreaterThan(2000,
+            pricing.UnderwritingYear!.Value.Should().BeGreaterThan(2000,
                 $"pricing {pricing.Id} should have a valid underwriting year");
         }
 
@@ -108,7 +106,7 @@ public class PricingCatalogTests(ITestOutputHelper output) : InsuranceTestBase(o
         // by successfully retrieving the catalog without errors
 
         // Act
-        var pricings = await GetPricingsAsync();
+        var pricings = await GetPricings().Should().Match(p => p.Count > 0, "hub should start and return catalog");
 
         // Assert - Hub started if we can get data
         pricings.Should().NotBeNull("hub should start and return catalog");
@@ -137,9 +135,8 @@ public class PricingCatalogTests(ITestOutputHelper output) : InsuranceTestBase(o
         );
 
         // Get the control from the stream
-        var control = await stream.GetControlStream(reference.Area!)
-            .Timeout(10.Seconds())
-            .FirstAsync(x => x != null);
+        var control = (await stream.GetControlStream(reference.Area!)
+            .Should().Within(10.Seconds()).Match(x => x != null))!;
 
         // Assert
         control.Should().NotBeNull("layout area should return a control");

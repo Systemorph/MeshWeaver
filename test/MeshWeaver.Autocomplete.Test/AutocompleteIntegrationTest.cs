@@ -2,8 +2,10 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Reactive.Linq;
+using System.Threading;
 using System.Threading.Tasks;
-using FluentAssertions;
+using MeshWeaver.Reactive;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Data.Completion;
 using MeshWeaver.Graph;
@@ -33,12 +35,14 @@ namespace MeshWeaver.Autocomplete.Test;
 [Collection("AutocompleteIntegrationTest")]
 public class AutocompleteIntegrationTest : MonolithMeshTestBase
 {
-    private readonly string _cacheDirectory;
+    private static readonly string _cacheDirectory =
+        Path.Combine(Path.GetTempPath(), "MeshWeaverAutoIntTests", Guid.NewGuid().ToString());
+    static AutocompleteIntegrationTest() => Directory.CreateDirectory(_cacheDirectory);
+
+    protected override bool ShareMeshAcrossTests => true;
 
     public AutocompleteIntegrationTest(ITestOutputHelper output) : base(output)
     {
-        _cacheDirectory = Path.Combine(Path.GetTempPath(), "MeshWeaverAutoIntTests", Guid.NewGuid().ToString());
-        Directory.CreateDirectory(_cacheDirectory);
     }
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
@@ -58,7 +62,11 @@ public class AutocompleteIntegrationTest : MonolithMeshTestBase
         {
             Name = "storage",
             SourceType = "FileSystem",
-            BasePath = graphPath
+            BasePath = graphPath,
+            // Per-node MapContentCollection wrappers inherit ExposeInChildren
+            // from the source; storage defaults to false since the wire-default
+            // flip (95f840f34), so set it explicitly here.
+            ExposeInChildren = true
         };
 
         return builder
@@ -88,15 +96,7 @@ public class AutocompleteIntegrationTest : MonolithMeshTestBase
             .ConfigureHub(hub => hub.AddMeshNavigation());
     }
 
-    public override async ValueTask DisposeAsync()
-    {
-        await base.DisposeAsync();
-        if (Directory.Exists(_cacheDirectory))
-        {
-            try { Directory.Delete(_cacheDirectory, recursive: true); }
-            catch { /* Ignore cleanup errors */ }
-        }
-    }
+    // Cache dir is class-static + shared SP — never deleted between tests.
 
     private new IMeshService MeshQuery => Mesh.ServiceProvider.GetRequiredService<IMeshService>();
     private IChatCompletionOrchestrator Orchestrator => Mesh.ServiceProvider.GetRequiredService<IChatCompletionOrchestrator>();
@@ -111,8 +111,8 @@ public class AutocompleteIntegrationTest : MonolithMeshTestBase
         // Source B: Subtree query
         // Source C: Cross-partition broadening
         var batches = await Orchestrator
-            .GetCompletionsAsync("@Sys", "Systemorph")
-            .ToListAsync(TestContext.Current.CancellationToken);
+            .GetCompletions("@Sys", "Systemorph")
+            .ToList().Should().Within(30.Seconds()).Emit();
 
         var allItems = batches.SelectMany(b => b.Items).ToList();
 
@@ -134,8 +134,8 @@ public class AutocompleteIntegrationTest : MonolithMeshTestBase
     {
         // Typing "@/ACME/" — should show children of ACME partition AND keyword suggestions
         var batches = await Orchestrator
-            .GetCompletionsAsync("@/ACME/", null)
-            .ToListAsync(TestContext.Current.CancellationToken);
+            .GetCompletions("@/ACME/", null)
+            .ToList().Should().Within(30.Seconds()).Emit();
 
         var allItems = batches.SelectMany(b => b.Items).ToList();
 
@@ -163,8 +163,8 @@ public class AutocompleteIntegrationTest : MonolithMeshTestBase
         // When typing in the context of "Systemorph/Marketing", local results
         // should have higher priority than cross-partition results
         var batches = await Orchestrator
-            .GetCompletionsAsync("@", "Systemorph/Marketing")
-            .ToListAsync(TestContext.Current.CancellationToken);
+            .GetCompletions("@", "Systemorph/Marketing")
+            .ToList().Should().Within(30.Seconds()).Emit();
 
         Output.WriteLine($"Batches for '@' with context 'Systemorph/Marketing':");
         foreach (var batch in batches)
@@ -193,9 +193,9 @@ public class AutocompleteIntegrationTest : MonolithMeshTestBase
     public async Task AutocompleteAsync_ScoreFirstOrdering_HigherScoresFirst()
     {
         // AutocompleteAsync should now order by score descending, then path length
-        var suggestions = await MeshQuery
-            .AutocompleteAsync("", "", 20, TestContext.Current.CancellationToken)
-            .ToArrayAsync(TestContext.Current.CancellationToken);
+        var suggestions = (await MeshQuery
+            .AutocompleteAsync("", "", 20)
+            .ToObservableSequence().ToList().Should().Within(30.Seconds()).Emit()).ToArray();
 
         Output.WriteLine($"Top-level suggestions ({suggestions.Length}):");
         foreach (var s in suggestions)
@@ -215,13 +215,13 @@ public class AutocompleteIntegrationTest : MonolithMeshTestBase
     public async Task AutocompleteAsync_WithContext_ProximityBoostApplied()
     {
         // Items closer to contextPath should get boosted scores
-        var withContext = await MeshQuery
-            .AutocompleteAsync("ACME", "", AutocompleteMode.RelevanceFirst, 20, "ACME", ct: TestContext.Current.CancellationToken)
-            .ToArrayAsync(TestContext.Current.CancellationToken);
+        var withContext = (await MeshQuery
+            .AutocompleteAsync("ACME", "", AutocompleteMode.RelevanceFirst, 20, "ACME")
+            .ToObservableSequence().ToList().Should().Within(30.Seconds()).Emit()).ToArray();
 
-        var withoutContext = await MeshQuery
-            .AutocompleteAsync("ACME", "", 20, TestContext.Current.CancellationToken)
-            .ToArrayAsync(TestContext.Current.CancellationToken);
+        var withoutContext = (await MeshQuery
+            .AutocompleteAsync("ACME", "", 20)
+            .ToObservableSequence().ToList().Should().Within(30.Seconds()).Emit()).ToArray();
 
         Output.WriteLine($"With context 'ACME': {withContext.Length} items");
         foreach (var s in withContext.Take(5))
@@ -245,9 +245,9 @@ public class AutocompleteIntegrationTest : MonolithMeshTestBase
     public async Task AutocompleteAsync_ShorterPathsPreferred_WhenScoresEqual()
     {
         // When scores are the same, shorter paths should come first
-        var suggestions = await MeshQuery
-            .AutocompleteAsync("ACME", "", 30, TestContext.Current.CancellationToken)
-            .ToArrayAsync(TestContext.Current.CancellationToken);
+        var suggestions = (await MeshQuery
+            .AutocompleteAsync("ACME", "", 30)
+            .ToObservableSequence().ToList().Should().Within(30.Seconds()).Emit()).ToArray();
 
         Output.WriteLine($"ACME children ({suggestions.Length}):");
         foreach (var s in suggestions)
@@ -284,10 +284,10 @@ public class AutocompleteIntegrationTest : MonolithMeshTestBase
             return;
         }
 
-        var items = await contentProvider
-            .GetItemsAsync("@", null, TestContext.Current.CancellationToken)
-            .Take(10)
-            .ToArrayAsync(TestContext.Current.CancellationToken);
+        // Universal format check over the settled snapshot (the final, complete item set).
+        var items = (await contentProvider
+            .GetItems("@", null)
+            .TakeLast(1).Should().Within(30.Seconds()).Emit()).ToArray();
 
         Output.WriteLine($"Content items: {items.Length}");
         foreach (var item in items)
@@ -317,10 +317,12 @@ public class AutocompleteIntegrationTest : MonolithMeshTestBase
             .FirstOrDefault(p => p.GetType().Name.Contains("UnifiedReference"));
         unifiedProvider.Should().NotBeNull();
 
-        // Type @/ACME/ProductLaunch/ to get keyword suggestions (needs 2+ completed segments)
-        var items = await unifiedProvider!
-            .GetItemsAsync("@/ACME/ProductLaunch/", null, TestContext.Current.CancellationToken)
-            .ToArrayAsync(TestContext.Current.CancellationToken);
+        // Type @/ACME/ProductLaunch/ to get keyword suggestions (needs 2+ completed segments).
+        // Reactive: wait for the first snapshot that actually carries the keyword category.
+        var items = (await unifiedProvider!
+            .GetItems("@/ACME/ProductLaunch/", null)
+            .Should().Within(30.Seconds())
+            .Match(snap => snap.Any(i => i.Category == "Keywords"))).ToArray();
 
         var keywords = items.Where(i => i.Category == "Keywords").ToArray();
 
@@ -372,9 +374,9 @@ public class AutocompleteIntegrationTest : MonolithMeshTestBase
     public async Task AutocompleteAsync_CrossPartition_ReturnsFromMultiplePartitions()
     {
         // Global autocomplete (empty basePath) should return nodes from multiple partitions
-        var suggestions = await MeshQuery
-            .AutocompleteAsync("", "", 30, TestContext.Current.CancellationToken)
-            .ToArrayAsync(TestContext.Current.CancellationToken);
+        var suggestions = (await MeshQuery
+            .AutocompleteAsync("", "", 30)
+            .ToObservableSequence().ToList().Should().Within(30.Seconds()).Emit()).ToArray();
 
         Output.WriteLine($"Global suggestions ({suggestions.Length}):");
         foreach (var s in suggestions)
@@ -394,24 +396,90 @@ public class AutocompleteIntegrationTest : MonolithMeshTestBase
     [Fact(Timeout = 30000)]
     public async Task ChatAutocomplete_GlobalFanOut_ReachesOtherPartitions()
     {
-        // When typing "@ACM" from Systemorph context, broadening should find ACME
-        var batches = await Orchestrator
-            .GetCompletionsAsync("@ACM", "Systemorph")
-            .ToListAsync(TestContext.Current.CancellationToken);
+        // When typing "@ACM" from Systemorph context, broadening should find ACME.
+        // Reactive: wait for the FIRST batch whose items contain ACME — we bring results
+        // when they come, never block on the slowest cross-partition fan-out completing.
+        var acmeBatch = await Orchestrator
+            .GetCompletions("@ACM", "Systemorph")
+            .Should().Within(30.Seconds())
+            .Match(batch => batch.Items.Any(i =>
+                i.InsertText.Contains("ACME", StringComparison.OrdinalIgnoreCase)),
+                "broadening should find ACME from Systemorph context");
 
-        var allItems = batches.SelectMany(b => b.Items).ToList();
+        Output.WriteLine($"First ACME-bearing batch '{acmeBatch.Category}': {acmeBatch.Items.Count} items");
+        foreach (var item in acmeBatch.Items.Where(i =>
+            i.InsertText.Contains("ACME", StringComparison.OrdinalIgnoreCase)).Take(3))
+            Output.WriteLine($"    [{item.Priority}] {item.Label} => {item.InsertText}");
+    }
 
-        Output.WriteLine($"Items for '@ACM' from Systemorph context:");
-        foreach (var batch in batches)
+    #endregion
+
+    #region Timing Analysis
+
+    /// <summary>
+    /// Stopwatch-based latency analysis for the orchestrator. For each scenario,
+    /// records: time from subscribe → first batch (per category), time from subscribe →
+    /// OnCompleted. Prints a tab-separated table to test output so the user can compare
+    /// "partition itself appearing" vs "items inside partition appearing" vs static-vs-Postgres.
+    /// Not a pass/fail check — just timing diagnostics.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public void TimingAnalysis_OrchestratorScenarios_RecordsLatencies()
+    {
+        var scenarios = new (string Label, string Query, string? Context)[]
         {
-            Output.WriteLine($"  Batch '{batch.Category}': {batch.Items.Count} items");
-            foreach (var item in batch.Items.Take(3))
-                Output.WriteLine($"    [{item.Priority}] {item.Label} => {item.InsertText}");
+            ("@/ → all partitions",            "@/",                null),
+            ("@/Sys → filtered partitions",    "@/Sys",             null),
+            ("@/ACME/ → drill down (items)",   "@/ACME/",           null),
+            ("@/Doc/ → drill down (static)",   "@/Doc/",            null),
+            ("@Mark → in-partition broaden",   "@Mark",             "Systemorph"),
+            ("@ACM → cross-partition broaden", "@ACM",              "Systemorph"),
+            ("@/ACME/Project → deep path",     "@/ACME/Project",    null),
+        };
+
+        Output.WriteLine($"{"Scenario",-38} {"FirstBatch",10} {"BatchTimes (ms by category)",-50} {"Completed",10}");
+        Output.WriteLine(new string('-', 120));
+
+        foreach (var (label, query, context) in scenarios)
+        {
+            var (firstBatchMs, perCategoryMs, completedMs) =
+                MeasureCompletionTimings(query, context);
+
+            var perCategory = string.Join(", ",
+                perCategoryMs.Select(kv => $"{kv.Key}={kv.Value:F0}"));
+
+            Output.WriteLine(
+                $"{label,-38} {firstBatchMs,9:F0}ms {perCategory,-50} {completedMs,9:F0}ms");
+        }
+    }
+
+    private (double FirstBatchMs, IDictionary<string, double> PerCategoryMs, double CompletedMs)
+        MeasureCompletionTimings(string query, string? context)
+    {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var firstBatchMs = -1.0;
+        var completedMs = -1.0;
+        var perCategory = new Dictionary<string, double>();
+
+        // Pure synchronous Subscribe + gate — measures the live observable's batch
+        // timings without bridging through a Task ("nothing async ever"). The gate
+        // releases on OnCompleted/OnError; a 15s cap matches the previous WaitAsync.
+        using var gate = new System.Threading.ManualResetEventSlim(false);
+        using (Orchestrator.GetCompletions(query, context).Subscribe(
+            batch =>
+            {
+                var t = sw.Elapsed.TotalMilliseconds;
+                if (firstBatchMs < 0) firstBatchMs = t;
+                if (!perCategory.ContainsKey(batch.Category))
+                    perCategory[batch.Category] = t;
+            },
+            _ => { completedMs = sw.Elapsed.TotalMilliseconds; gate.Set(); },
+            () => { completedMs = sw.Elapsed.TotalMilliseconds; gate.Set(); }))
+        {
+            gate.Wait(TimeSpan.FromSeconds(15));
         }
 
-        allItems.Should().Contain(i =>
-            i.InsertText.Contains("ACME", StringComparison.OrdinalIgnoreCase),
-            "broadening should find ACME from Systemorph context");
+        return (firstBatchMs, perCategory, completedMs);
     }
 
     #endregion

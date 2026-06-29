@@ -1,0 +1,17 @@
+# Keep the Docker build context small. The portal Dockerfile builds from the repo root,
+# so it needs source, *.csproj, *.slnx, Directory.*.props AND embedded content
+# (e.g. MeshWeaver.Documentation/Data/**/*.md, samples/Graph/Data) — those must NOT be
+# excluded. Only build artifacts, VCS, IDE, and local runtime state are dropped.
+**/bin/
+**/obj/
+**/.vs/
+**/.vscode/
+**/.idea/
+**/*.user
+.git/
+.github/
+artifacts/
+Azurite/
+**/TestResults/
+**/node_modules/
+deploy/compose/data/

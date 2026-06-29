@@ -6,6 +6,11 @@ using HorizontalPosition = Microsoft.FluentUI.AspNetCore.Components.HorizontalPo
 
 namespace MeshWeaver.Blazor.Components;
 
+/// <summary>
+/// Blazor view for the date/time picker control. Binds appearance, calendar view mode,
+/// locale, day format, min/max date constraints, and an optional custom disabled-date
+/// predicate from the layout view-model.
+/// </summary>
 public partial class DateTimeView
 {
     private FluentInputAppearance Appearance { get; set; } = FluentInputAppearance.Outline;
@@ -25,6 +30,11 @@ public partial class DateTimeView
     private string? DisabledDateExpression { get; set; }
     private string? AriaLabel { get; set; }
 
+    /// <summary>
+    /// Binds all date/time picker properties from the view-model, including appearance,
+    /// calendar view, culture, day format, min/max dates, aria label, and the combined
+    /// disabled-date function derived from min, max, and any custom expression.
+    /// </summary>
     protected override void BindData()
     {
         base.BindData();

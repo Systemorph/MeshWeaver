@@ -1,66 +1,99 @@
 @using Microsoft.FluentUI.AspNetCore.Components.Icons.Regular
+@using MeshWeaver.Mesh
+@using MeshWeaver.Mesh.Services
+@using MeshWeaver.Messaging
 @implements IDisposable
 @inject IDialogService DialogService
-@inject IMessageService MessageService
+@inject IMessageHub Hub
 
-<FluentButton BackgroundColor="transparent" OnClick="OpenNotificationCenterAsync" Title="Notification center">
-    @if (MessageService.Count(PortalConstants.MessagesNotificationCenter) > 0)
-{
-        <FluentCounterBadge Count="@MessageService.Count(PortalConstants.MessagesNotificationCenter)"
-                        Max="9"
-                        ShowOverflow="true"
-                        BackgroundColor="@Color.Error"
-                        Color="Color.Fill"
-                        Appearance="Appearance.Accent">
-        <ChildContent>
-            @NotificationIcon()
-        </ChildContent>
-    </FluentCounterBadge>
-}
-else
-{
-    @NotificationIcon()
-}
+<FluentButton BackgroundColor="transparent" OnClick="ToggleNotificationCenterAsync" Title="Notifications">
+    @if (unreadCount > 0)
+    {
+        <FluentCounterBadge Count="@unreadCount"
+                            Max="99"
+                            ShowOverflow="true"
+                            BackgroundColor="@Color.Error"
+                            Color="Color.Fill"
+                            Appearance="Appearance.Accent">
+            <ChildContent>
+                @NotificationIcon()
+            </ChildContent>
+        </FluentCounterBadge>
+    }
+    else
+    {
+        @NotificationIcon()
+    }
 </FluentButton>
 
 @code {
     private IDialogReference? Dialog;
+    private int unreadCount;
+    private IDisposable? subscription;
+
+    [Inject] private IMeshService MeshQuery { get; set; } = null!;
 
     protected override void OnInitialized()
     {
-        MessageService.OnMessageItemsUpdated += UpdateCount;
-    }
-
-    private void UpdateCount()
-    {
-        InvokeAsync(StateHasChanged);
+        // Live count of unread notifications visible to this user. RLS gates
+        // which notifications are returned — the user sees notifications
+        // whose main entity (thread, approval, doc) they can read. Notification
+        // node type routes to the `notifications` table via the satellite
+        // mapping; the query hits that table directly.
+        subscription = MeshQuery.Query<MeshNode>(
+                MeshQueryRequest.FromQuery("nodeType:Notification sort:CreatedAt-desc"))
+            .Subscribe(change =>
+            {
+                var items = change.Items ?? Array.Empty<MeshNode>();
+                var newCount = items.Count(n =>
+                    n.ContentAs<Notification>(Hub.JsonSerializerOptions)?.IsRead == false);
+                if (newCount != unreadCount)
+                {
+                    unreadCount = newCount;
+                    InvokeAsync(StateHasChanged);
+                }
+            });
     }
 
     private RenderFragment NotificationIcon() =>
-        @<FluentIcon Value="@(new Size20.Alert())" Color="Color.Neutral"  Title="Notification center" />;
+        @<FluentIcon Value="@(new Size20.Alert())" Color="Color.Neutral" Title="Notifications" />;
 
-    private async Task OpenNotificationCenterAsync()
+    private async Task ToggleNotificationCenterAsync()
     {
+        // Toggle: a second click on the bell while the panel is open closes it
+        // (previously each click opened another panel — the "stays open" bug).
+        if (Dialog is not null)
+        {
+            var open = Dialog;
+            Dialog = null;
+            await open.CloseAsync();
+            return;
+        }
 
-        Dialog = await DialogService.ShowPanelAsync<NotificationCenterPanel>(new DialogParameters<GlobalState>()
-            {
-                Alignment = HorizontalAlignment.Right,
-                Title = $"Notifications",
-                PrimaryAction = null,
-                SecondaryAction = null,
-                ShowDismiss = true
-            });
-        DialogResult result = await Dialog.Result;
-        HandlePanel(result);
+        // Opening acknowledges the notifications — clear the badge immediately.
+        // The panel persists IsRead durably; this is the optimistic UX so the
+        // count doesn't linger while the writes propagate.
+        if (unreadCount != 0)
+        {
+            unreadCount = 0;
+            StateHasChanged();
+        }
+
+        var dialog = await DialogService.ShowPanelAsync<NotificationCenterPanel>(new DialogParameters<GlobalState>()
+        {
+            Alignment = HorizontalAlignment.Right,
+            Title = "Notifications",
+            Width = "min(420px, 100vw)",
+            PrimaryAction = null,
+            SecondaryAction = null,
+            ShowDismiss = true
+        });
+        Dialog = dialog;
+        await dialog.Result;
+        // Cleared either by the toggle-close branch above or by an explicit dismiss.
+        if (ReferenceEquals(Dialog, dialog))
+            Dialog = null;
     }
 
-    private static void HandlePanel(DialogResult result)
-    {
-    }
-
-    public void Dispose()
-    {
-        MessageService.OnMessageItemsUpdated -= UpdateCount;
-    }
-
+    public void Dispose() => subscription?.Dispose();
 }

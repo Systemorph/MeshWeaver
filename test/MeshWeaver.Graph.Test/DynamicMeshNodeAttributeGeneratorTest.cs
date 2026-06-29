@@ -1,6 +1,5 @@
 ﻿using System;
 using System.Collections.Generic;
-using FluentAssertions;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
@@ -229,28 +228,12 @@ public class DynamicMeshNodeAttributeGeneratorTest
         source.Should().Contain("// Generated at:");
     }
 
-    [Fact]
-    public void GenerateAttributeSource_IncludesAssemblyLocation()
-    {
-        // Arrange
-        var node = new MeshNode("test")
-        {
-            NodeType = "test",
-            LastModified = DateTimeOffset.UtcNow
-        };
-
-        var codeConfig = new CodeConfiguration
-        {
-            Code = "public record TestType { }"
-        };
-
-        // Act
-        var source = _generator.GenerateAttributeSource(node, codeConfig, null);
-
-        // Assert
-        source.Should().Contain("AssemblyLocation = typeof(");
-        source.Should().Contain(").Assembly.Location");
-    }
+    // GenerateAttributeSource_IncludesAssemblyLocation deleted — MeshNode.AssemblyLocation
+    // was removed (see Doc/Architecture/Postmortems/NodeTypeReleaseRedesign.md); the
+    // cross-silo durable reference is now NodeTypeRelease.AssemblyContentPath +
+    // NodeTypeDefinition.LatestAssemblyPath, both populated at compile time by the
+    // IAssemblyStore upload. The generator no longer emits an AssemblyLocation field
+    // because the attribute consumer doesn't need it either.
 
     [Fact]
     public void GenerateAttributeSource_IncludesDefaultViews_ForNonNodeTypeNodes()

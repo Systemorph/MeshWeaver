@@ -1,11 +1,10 @@
-#pragma warning disable CS1591 // Missing XML comment for publicly visible type or member
+﻿#pragma warning disable CS1591 // Missing XML comment for publicly visible type or member
 
 using System;
 using System.Collections.Generic;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
-using FluentAssertions;
 using MeshWeaver.AI;
 using MeshWeaver.AI.Persistence;
 using MeshWeaver.Layout;
@@ -18,7 +17,7 @@ namespace MeshWeaver.AI.Test;
 
 public class PersistentThreadTest
 {
-    #region Thread Record — PersistentThreadId & ProviderType
+    #region Thread Record â€” PersistentThreadId & ProviderType
 
     [Fact]
     public void Thread_PersistentThreadId_DefaultIsNull()

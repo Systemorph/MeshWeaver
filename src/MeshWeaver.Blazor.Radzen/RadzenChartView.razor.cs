@@ -5,6 +5,9 @@ using Microsoft.AspNetCore.Components;
 
 namespace MeshWeaver.Blazor.Radzen;
 
+/// <summary>
+/// Blazor view that renders a <c>ChartControl</c> using Radzen chart components.
+/// </summary>
 public partial class RadzenChartView : RadzenViewBase<ChartControl, RadzenChartView>
 {
     private object? Series { get; set; }
@@ -19,6 +22,9 @@ public partial class RadzenChartView : RadzenViewBase<ChartControl, RadzenChartV
     private object? Height { get; set; }
     private object? CategoryAxisLabelAngle { get; set; }
 
+    /// <summary>
+    /// Binds the chart control's properties (series, labels, titles, legend and layout) from the view model to this view.
+    /// </summary>
     protected override void BindData()
     {
         base.BindData();

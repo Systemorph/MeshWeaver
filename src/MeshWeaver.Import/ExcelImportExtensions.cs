@@ -2,6 +2,10 @@ using MeshWeaver.Import.Configuration;
 
 namespace MeshWeaver.Import;
 
+/// <summary>
+/// Convenience extensions on <see cref="ImportBuilder"/> for importing typed entities
+/// directly from an Excel stream or file via an <see cref="ExcelImportConfiguration"/>.
+/// </summary>
 public static class ExcelImportExtensions
 {
     /// <summary>

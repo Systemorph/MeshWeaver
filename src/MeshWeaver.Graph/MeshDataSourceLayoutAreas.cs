@@ -304,108 +304,18 @@ public static class MeshDataSourceLayoutAreas
             DataContext = dataContext
         });
 
-        // Action button
-        content = content.WithView(Controls.Button("Execute")
-            .WithAppearance(Appearance.Accent)
-            .WithClickAction(async ctx =>
-            {
-                await ExecuteCopyInstall(ctx, host, formId, sourceNode, config);
-            }));
+        // Copy/Install button removed in the persistence-cull (2026-05-12).
+        // High-level copy operations belong on a per-source-node CreateNodeRequest
+        // fan-out, not at the low-level storage layer. To reintroduce: enumerate
+        // source nodes via the appropriate IMeshQueryProvider (or workspace.GetQuery
+        // for synced view), then post one CreateNodeRequest per node to the mesh hub
+        // with re-rooted paths under the target namespace.
 
         var dialog = Controls.Dialog(content, $"Copy / Install: {sourceNode?.Name ?? "Data Source"}")
             .WithSize("L")
             .WithClosable(true);
 
         return dialog;
-    }
-
-    private static async Task ExecuteCopyInstall(
-        UiActionContext ctx,
-        LayoutAreaHost host,
-        string formId,
-        MeshNode? sourceNode,
-        MeshDataSourceConfiguration? config)
-    {
-        var logger = host.Hub.ServiceProvider.GetService<ILogger<LayoutAreaHost>>();
-
-        var formValues = await ctx.Host.Stream
-            .GetDataStream<Dictionary<string, object?>>(formId).FirstAsync();
-
-        var sourceType = formValues?.GetValueOrDefault("sourceType")?.ToString() ?? "dataSource";
-        var mode = formValues?.GetValueOrDefault("mode")?.ToString() ?? "copy";
-        var targetNamespace = formValues?.GetValueOrDefault("targetNamespace")?.ToString()?.Trim() ?? "";
-        var force = formValues?.GetValueOrDefault("force") is true or "True" or "true";
-        var isInstall = mode == "install";
-
-        // Only handle dataSource mode here; file/folder is handled by NodeImportControl
-        if (sourceType != "dataSource")
-        {
-            ShowDialog(ctx, "Info", "File and folder uploads are handled by the upload control above.");
-            return;
-        }
-
-        if (config?.StorageConfig?.BasePath == null)
-        {
-            ShowDialog(ctx, "Error", "Source data source has no storage configuration or base path.");
-            return;
-        }
-
-        try
-        {
-            var importService = host.Hub.ServiceProvider.GetRequiredService<IMeshImportService>();
-
-            logger?.LogInformation(
-                "Copy/Install from {Source} to namespace {Target}, mode={Mode}, force={Force}",
-                sourceNode?.Name, targetNamespace, mode, force);
-
-            var result = await importService.ImportNodesAsync(
-                config.StorageConfig.BasePath,
-                targetRootPath: string.IsNullOrEmpty(targetNamespace) ? null : targetNamespace,
-                force: force,
-                removeMissing: isInstall);
-
-            logger?.LogInformation("Copy/Install complete: {Nodes} nodes, {Partitions} partitions",
-                result.NodesImported, result.PartitionsImported);
-
-            // On Install mode, mark source as disabled
-            if (isInstall && sourceNode != null)
-            {
-                var persistence = host.Hub.ServiceProvider.GetRequiredService<IMeshStorage>();
-                var updatedConfig = config with
-                {
-                    Enabled = false,
-                    InstalledTo = string.IsNullOrEmpty(targetNamespace) ? "(root)" : targetNamespace,
-                    LastSyncedAt = DateTimeOffset.UtcNow
-                };
-                var updatedNode = sourceNode with { Content = updatedConfig };
-                persistence.SaveNode(updatedNode).Subscribe(
-                    saved => logger?.LogInformation(
-                        "Marked data source {Path} as installed to {Target}",
-                        saved.Path, updatedConfig.InstalledTo),
-                    ex => logger?.LogError(ex,
-                        "Failed to mark data source {Path} as installed",
-                        updatedNode.Path));
-            }
-
-            var resultDialog = Controls.Dialog(
-                Controls.Markdown(
-                    $"**{(isInstall ? "Install" : "Copy")} Complete**\n\n" +
-                    $"- Nodes: **{result.NodesImported}** imported, **{result.NodesSkipped}** skipped" +
-                    (isInstall ? $", **{result.NodesRemoved}** removed" : "") +
-                    $"\n- Partitions: **{result.PartitionsImported}** imported" +
-                    $"\n- Duration: {result.Elapsed.TotalSeconds:F1}s"),
-                $"{(isInstall ? "Install" : "Copy")} Complete"
-            ).WithSize("M").WithClosable(true);
-            ctx.Host.UpdateArea(DialogControl.DialogArea, resultDialog);
-        }
-        catch (Exception ex)
-        {
-            logger?.LogError(ex, "Copy/Install failed");
-            ShowDialog(ctx, "Error",
-                ex.Message.Contains("Access denied") || ex.Message.Contains("Unauthorized")
-                    ? "You do not have permission to perform this operation."
-                    : $"Operation failed: {ex.Message}");
-        }
     }
 
     private static MeshDataSourceConfiguration? GetConfiguration(MeshNode? node)

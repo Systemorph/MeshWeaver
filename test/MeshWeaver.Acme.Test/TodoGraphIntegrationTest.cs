@@ -1,11 +1,10 @@
-using Memex.Portal.Shared;
+using MeshWeaver.Blazor.Portal;
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reactive.Linq;
 using System.Threading.Tasks;
-using FluentAssertions;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
@@ -20,6 +19,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
+using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Acme.Test;
 
 /// <summary>
@@ -30,7 +30,8 @@ namespace MeshWeaver.Acme.Test;
 /// </summary>
 public class TodoGraphIntegrationTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-    // Shared cache directory for all tests - compiled assemblies are reused
+    // Stable cache directory — the timestamped-subdir cache (a3ab9909e)
+    // gives each compile its own subdir so prior-process DLLs aren't touched.
     private static readonly string SharedCacheDirectory = Path.Combine(
         Path.GetTempPath(),
         "MeshWeaverTodoGraphTests",
@@ -58,7 +59,7 @@ public class TodoGraphIntegrationTest(ITestOutputHelper output) : MonolithMeshTe
             .UseMonolithMesh()
             .AddPartitionedFileSystemPersistence(dataDirectory)
             .AddAcme()
-            .AddOrganizationType()
+            .AddSpaceType()
             .ConfigureServices(services =>
             {
                 // Use shared disk cache - first test compiles, subsequent tests reuse
@@ -76,17 +77,14 @@ public class TodoGraphIntegrationTest(ITestOutputHelper output) : MonolithMeshTe
     /// <summary>
     /// Test that ACME organization hub can be initialized.
     /// </summary>
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 60000)]
     public async Task ACME_Organization_CanBeInitialized()
     {
         var acmeAddress = new Address("ACME");
 
         var client = GetClient(c => c.AddData(data => data));
 
-        var response = await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(acmeAddress),
-            TestContext.Current.CancellationToken);
+        var response = await client.Observe(new PingRequest(), o => o.WithTarget(acmeAddress)).Should().Emit();
 
         response.Should().NotBeNull();
     }
@@ -101,10 +99,7 @@ public class TodoGraphIntegrationTest(ITestOutputHelper output) : MonolithMeshTe
 
         var client = GetClient(c => c.AddData(data => data));
 
-        var response = await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(projectTypeAddress),
-            TestContext.Current.CancellationToken);
+        var response = await client.Observe(new PingRequest(), o => o.WithTarget(projectTypeAddress)).Should().Emit();
 
         response.Should().NotBeNull();
     }
@@ -119,10 +114,7 @@ public class TodoGraphIntegrationTest(ITestOutputHelper output) : MonolithMeshTe
 
         var client = GetClient(c => c.AddData(data => data));
 
-        var response = await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(todoTypeAddress),
-            TestContext.Current.CancellationToken);
+        var response = await client.Observe(new PingRequest(), o => o.WithTarget(todoTypeAddress)).Should().Emit();
 
         response.Should().NotBeNull();
     }
@@ -137,10 +129,7 @@ public class TodoGraphIntegrationTest(ITestOutputHelper output) : MonolithMeshTe
 
         var client = GetClient(c => c.AddData(data => data));
 
-        var response = await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(productLaunchAddress),
-            TestContext.Current.CancellationToken);
+        var response = await client.Observe(new PingRequest(), o => o.WithTarget(productLaunchAddress)).Should().Emit();
 
         response.Should().NotBeNull();
     }
@@ -155,10 +144,7 @@ public class TodoGraphIntegrationTest(ITestOutputHelper output) : MonolithMeshTe
 
         var client = GetClient(c => c.AddData(data => data));
 
-        var response = await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(taskAddress),
-            TestContext.Current.CancellationToken);
+        var response = await client.Observe(new PingRequest(), o => o.WithTarget(taskAddress)).Should().Emit();
 
         response.Should().NotBeNull();
     }
@@ -169,10 +155,9 @@ public class TodoGraphIntegrationTest(ITestOutputHelper output) : MonolithMeshTe
     [Fact(Timeout = 60000)]
     public async Task ProductLaunch_HasTaskChildren()
     {
-        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-
-        var children = await meshQuery.QueryAsync<MeshNode>("namespace:ACME/ProductLaunch/Todo", null, TestContext.Current.CancellationToken)
-            .ToListAsync(TestContext.Current.CancellationToken);
+        var children = (await MeshQuery
+            .Query<MeshNode>(MeshQueryRequest.FromQuery("namespace:ACME/ProductLaunch/Todo"))
+            .Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items;
 
         children.Should().NotBeEmpty("ProductLaunch should have task children");
         children.Should().HaveCountGreaterThan(10, "ProductLaunch should have at least 10 tasks");
@@ -185,7 +170,8 @@ public class TodoGraphIntegrationTest(ITestOutputHelper output) : MonolithMeshTe
     [Fact(Timeout = 60000)]
     public async Task Task_Instances_HaveCorrectNodeType()
     {
-        var task = await MeshQuery.QueryAsync<MeshNode>("path:ACME/ProductLaunch/Todo/DefinePersona").FirstOrDefaultAsync();
+        var task = await ReadNode("ACME/ProductLaunch/Todo/DefinePersona")
+            .Should().Within(60.Seconds()).Match(n => n is not null);
 
         task.Should().NotBeNull();
         task!.NodeType.Should().Be("ACME/Project/Todo");

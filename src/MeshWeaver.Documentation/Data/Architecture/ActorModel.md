@@ -1,15 +1,82 @@
 ---
 Name: Actor Model Architecture
 Category: Architecture
-Description: Understanding single-threaded message processing and avoiding deadlocks with AwaitResponse vs callbacks
+Description: How single-threaded message processing eliminates race conditions, why blocking the hub thread deadlocks, and the reactive patterns that avoid it
 Icon: Lock
 ---
 
-MeshWeaver's MessageHub architecture follows the **Actor Model** pattern, where each hub processes messages single-threaded through a queue. This design provides important benefits but also requires understanding potential deadlock scenarios.
+MeshWeaver's `MessageHub` is built on the **Actor Model**: every hub owns a private, single-threaded action block, and messages are processed one at a time in arrival order. That guarantee eliminates races and removes the need for locks on hub-local state — but it comes with a non-negotiable rule: **never block the hub thread**.
 
-# Single-Threaded Processing
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 280" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;">
+  <defs>
+    <marker id="arr" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#90caf9"/>
+    </marker>
+    <marker id="arr2" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#a5d6a7"/>
+    </marker>
+    <marker id="arr3" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#ffcc80"/>
+    </marker>
+  </defs>
+  <rect x="20" y="30" width="200" height="210" rx="12" fill="none" stroke="#1e88e5" stroke-opacity=".5" stroke-width="1.5"/>
+  <text x="120" y="55" text-anchor="middle" fill="#90caf9" font-family="sans-serif" font-size="13" font-weight="700">Hub A</text>
+  <rect x="40" y="65" width="160" height="22" rx="6" fill="#1e3a5f"/>
+  <text x="120" y="80" text-anchor="middle" fill="#90caf9" font-family="sans-serif" font-size="11">msg 1</text>
+  <rect x="40" y="92" width="160" height="22" rx="6" fill="#1e3a5f"/>
+  <text x="120" y="107" text-anchor="middle" fill="#90caf9" font-family="sans-serif" font-size="11">msg 2</text>
+  <rect x="40" y="119" width="160" height="22" rx="6" fill="#1e3a5f"/>
+  <text x="120" y="134" text-anchor="middle" fill="#90caf9" font-family="sans-serif" font-size="11">msg 3</text>
+  <line x1="120" y1="148" x2="120" y2="156" stroke="#90caf9" stroke-opacity=".4" stroke-width="1.5" stroke-dasharray="3 2"/>
+  <rect x="40" y="163" width="160" height="34" rx="8" fill="#1e88e5"/>
+  <text x="120" y="178" text-anchor="middle" fill="#fff" font-family="sans-serif" font-size="11" font-weight="600">Action Block</text>
+  <text x="120" y="193" text-anchor="middle" fill="#fff" font-family="sans-serif" font-size="10">(single thread)</text>
+  <rect x="40" y="205" width="160" height="22" rx="6" fill="#1a3050"/>
+  <text x="120" y="220" text-anchor="middle" fill="#90caf9" font-family="sans-serif" font-size="10">private state (no locks)</text>
+  <rect x="280" y="30" width="200" height="210" rx="12" fill="none" stroke="#43a047" stroke-opacity=".5" stroke-width="1.5"/>
+  <text x="380" y="55" text-anchor="middle" fill="#a5d6a7" font-family="sans-serif" font-size="13" font-weight="700">Hub B</text>
+  <rect x="300" y="65" width="160" height="22" rx="6" fill="#1a3320"/>
+  <text x="380" y="80" text-anchor="middle" fill="#a5d6a7" font-family="sans-serif" font-size="11">msg 1</text>
+  <rect x="300" y="92" width="160" height="22" rx="6" fill="#1a3320"/>
+  <text x="380" y="107" text-anchor="middle" fill="#a5d6a7" font-family="sans-serif" font-size="11">msg 2</text>
+  <rect x="300" y="119" width="160" height="22" rx="6" fill="#1a3320"/>
+  <text x="380" y="134" text-anchor="middle" fill="#a5d6a7" font-family="sans-serif" font-size="11">msg 3</text>
+  <line x1="380" y1="148" x2="380" y2="156" stroke="#a5d6a7" stroke-opacity=".4" stroke-width="1.5" stroke-dasharray="3 2"/>
+  <rect x="300" y="163" width="160" height="34" rx="8" fill="#43a047"/>
+  <text x="380" y="178" text-anchor="middle" fill="#fff" font-family="sans-serif" font-size="11" font-weight="600">Action Block</text>
+  <text x="380" y="193" text-anchor="middle" fill="#fff" font-family="sans-serif" font-size="10">(single thread)</text>
+  <rect x="300" y="205" width="160" height="22" rx="6" fill="#132b13"/>
+  <text x="380" y="220" text-anchor="middle" fill="#a5d6a7" font-family="sans-serif" font-size="10">private state (no locks)</text>
+  <rect x="540" y="30" width="200" height="210" rx="12" fill="none" stroke="#f57c00" stroke-opacity=".5" stroke-width="1.5"/>
+  <text x="640" y="55" text-anchor="middle" fill="#ffcc80" font-family="sans-serif" font-size="13" font-weight="700">Hub C</text>
+  <rect x="560" y="65" width="160" height="22" rx="6" fill="#2d1b00"/>
+  <text x="640" y="80" text-anchor="middle" fill="#ffcc80" font-family="sans-serif" font-size="11">msg 1</text>
+  <rect x="560" y="92" width="160" height="22" rx="6" fill="#2d1b00"/>
+  <text x="640" y="107" text-anchor="middle" fill="#ffcc80" font-family="sans-serif" font-size="11">msg 2</text>
+  <rect x="560" y="119" width="160" height="22" rx="6" fill="#2d1b00"/>
+  <text x="640" y="134" text-anchor="middle" fill="#ffcc80" font-family="sans-serif" font-size="11">msg 3</text>
+  <line x1="640" y1="148" x2="640" y2="156" stroke="#ffcc80" stroke-opacity=".4" stroke-width="1.5" stroke-dasharray="3 2"/>
+  <rect x="560" y="163" width="160" height="34" rx="8" fill="#f57c00"/>
+  <text x="640" y="178" text-anchor="middle" fill="#fff" font-family="sans-serif" font-size="11" font-weight="600">Action Block</text>
+  <text x="640" y="193" text-anchor="middle" fill="#fff" font-family="sans-serif" font-size="10">(single thread)</text>
+  <rect x="560" y="205" width="160" height="22" rx="6" fill="#2b1500"/>
+  <text x="640" y="220" text-anchor="middle" fill="#ffcc80" font-family="sans-serif" font-size="10">private state (no locks)</text>
+  <path d="M220,100 C250,100 250,100 280,100" stroke="#90caf9" stroke-width="1.5" fill="none" marker-end="url(#arr)"/>
+  <text x="250" y="93" text-anchor="middle" fill="#90caf9" font-family="sans-serif" font-size="9">Observe</text>
+  <path d="M480,130 C510,130 510,130 540,130" stroke="#a5d6a7" stroke-width="1.5" fill="none" marker-end="url(#arr2)"/>
+  <text x="510" y="123" text-anchor="middle" fill="#a5d6a7" font-family="sans-serif" font-size="9">Observe</text>
+  <path d="M540,100 C510,100 510,100 480,100" stroke="#ffcc80" stroke-width="1.5" fill="none" marker-end="url(#arr3)"/>
+  <text x="510" y="93" text-anchor="middle" fill="#ffcc80" font-family="sans-serif" font-size="9">response</text>
+  <text x="380" y="260" text-anchor="middle" fill="currentColor" fill-opacity=".5" font-family="sans-serif" font-size="12">Each hub drains its queue on one thread — cross-hub calls are async messages, never blocking calls.</text>
+</svg>
 
-Each MessageHub processes messages **one at a time** through its internal queue:
+*Each `MessageHub` is an isolated actor: one thread, one queue, private state. Inter-hub calls are non-blocking message passes.*
+
+---
+
+## Single-Threaded Processing
+
+Each hub drains its internal queue sequentially. No two handlers run concurrently inside one hub.
 
 ```mermaid
 flowchart LR
@@ -20,35 +87,34 @@ flowchart LR
         Q3[Message 3] --> P
     end
     P --> H[Handler]
-    H --> R[Response]
+    H --> R[Response / Side-effect]
 ```
 
-**Benefits:**
-- No race conditions within a hub
-- Predictable execution order
-- Simplified state management
-- No need for locks on hub-local state
+The benefits fall out naturally:
 
-# The Deadlock Problem
+| Guarantee | What it means in practice |
+|---|---|
+| No intra-hub races | State mutations inside a hub need no locks |
+| Predictable order | Messages arrive and execute in FIFO order |
+| Simple state management | Immutable record updates are enough |
+| Safe reactive composition | `IObservable<T>` chains run in the same serialised block |
 
-## Understanding AwaitResponse
+---
 
-`AwaitResponse` is a convenient method that sends a request and waits for the response:
+## The Deadlock Trap
+
+### Why `AwaitResponse` to Self Deadlocks
+
+`AwaitResponse` (now **obsolete** — see below) posts a request and synchronously blocks the calling thread until the reply arrives:
 
 ```csharp
+// ⚠️ Obsolete API — do not use in new code
 var response = await hub.AwaitResponse(
     new CreateNodeRequest(node),
     o => o.WithTarget(hub.Address));
 ```
 
-**What happens internally:**
-1. Message is posted to the target hub's queue
-2. Current thread blocks waiting for the response
-3. When response arrives, the await completes
-
-## When Deadlock Occurs
-
-A deadlock occurs when a hub sends a message **to itself** using `AwaitResponse`:
+When the caller *is* the hub's own handler, every step of that sequence fights itself:
 
 ```mermaid
 sequenceDiagram
@@ -57,179 +123,124 @@ sequenceDiagram
     participant Target as Target Handler
 
     Handler->>Queue: Post CreateNodeRequest
-    Handler->>Handler: Block waiting for response...
-    Note over Queue: CreateNodeRequest waiting in queue
-    Note over Handler: Handler blocking the processor
-    Note over Queue,Handler: DEADLOCK!
+    Handler->>Handler: Block — waiting for response…
+    Note over Queue: CreateNodeRequest sits in queue
+    Note over Handler: Handler holds the one thread
+    Note over Queue,Handler: DEADLOCK — neither can proceed
 ```
 
-**The problem:**
-1. Handler A is processing a message (e.g., a click event)
-2. Handler A calls `AwaitResponse` targeting the same hub
-3. Handler A blocks the hub's single thread, waiting for the response
-4. The CreateNodeRequest sits in the queue, waiting to be processed
-5. But the processor is blocked by Handler A
-6. **Deadlock**: Both are waiting for each other
+1. Handler A is running (it owns the single thread).
+2. Handler A posts a `CreateNodeRequest` targeting the same hub.
+3. Handler A blocks, waiting for the response.
+4. The request sits in the queue — but the queue's thread is blocked by Handler A.
+5. Neither side can proceed. The hub is permanently wedged.
 
-## Real-World Example
+This is not a timing edge case — it is a structural certainty whenever a handler awaits a response from its own hub.
 
-Consider a Create button click handler that confirms a transient node:
+---
 
-```csharp
-// BAD - This causes deadlock when targeting the same hub
-.WithClickAction(async ctx =>
-{
-    var response = await host.Hub.AwaitResponse(
-        new CreateNodeRequest(updatedNode),
-        o => o.WithTarget(host.Hub.Address));  // Same hub!
+## The Fix: Reactive Streams (the Modern API)
 
-    // This line is never reached - deadlock
-    ctx.NavigateTo(overviewUrl);
-});
-```
+> **The `AwaitResponse` and `RegisterCallback` APIs are `[Obsolete]`.** All hub-reachable code must use `IObservable<T>` end-to-end — no `await`, no `Task<T>`, no `TaskCompletionSource`. Tests may use `.FirstAsync().ToTask()` at the boundary; production code never does.
 
-# The Solution: Callbacks
-
-Use `Post` + `RegisterCallback` instead of `AwaitResponse`:
+The correct pattern for any write that produces a side effect is `stream.Update(...)`, which returns a cold `IObservable<T>`. Subscribe in the handler; the framework serialises the write through the owning hub's action block without blocking anything.
 
 ```csharp
-// GOOD - Non-blocking with callback
+// CORRECT — reactive, non-blocking
 .WithClickAction(ctx =>
 {
-    // Post without blocking
-    var delivery = host.Hub.Post(
-        new CreateNodeRequest(updatedNode),
-        o => o.WithTarget(host.Hub.Address));
-
-    if (delivery != null)
-    {
-        // Register callback to handle response asynchronously
-        host.Hub.RegisterCallback(delivery, d =>
-        {
-            if (d.Message is CreateNodeResponse response)
-            {
-                if (response.Success)
-                    ctx.NavigateTo(overviewUrl);
-                else
-                    ShowErrorDialog(ctx, "Failed", response.Error);
-            }
-            return d;
-        });
-    }
+    workspace.GetMeshNodeStream(nodePath)
+        .Update(node => node with { Content = updatedContent })
+        .Subscribe(
+            _ => ctx.NavigateTo(overviewUrl),
+            ex => logger.LogWarning(ex, "Update failed for {Path}", nodePath));
+    // Returns immediately; the subscribe callback fires when the update lands
+    return Task.CompletedTask;
 });
 ```
 
-**How it works:**
-1. Click handler posts the message and returns immediately
-2. Hub processes CreateNodeRequest when it reaches the front of the queue
-3. Response is generated and delivered
-4. Callback executes with the response
+**How this resolves the deadlock problem:**
 
-```mermaid
-sequenceDiagram
-    participant Handler as Click Handler
-    participant Queue as Hub Queue
-    participant Create as CreateNode Handler
-    participant Callback as Response Callback
+1. The click handler builds the observable chain and subscribes — then returns immediately.
+2. The hub's action block is free to process the next message.
+3. When the `Update` reaches the owning hub (which may be the same hub), it runs as an ordinary queued message — no thread blocked, no deadlock possible.
 
-    Handler->>Queue: Post CreateNodeRequest
-    Handler->>Handler: Register callback, return
-    Queue->>Create: Process CreateNodeRequest
-    Create->>Queue: Post CreateNodeResponse
-    Queue->>Callback: Execute callback
-    Callback->>Callback: Navigate or show error
-```
-
-# When to Use Each Approach
-
-## Use `AwaitResponse` when:
-- Targeting a **different** hub (different address)
-- The target hub won't need to call back to the source
-- During initialization (before the hub starts processing messages)
-- In test code where simplicity is more important
-
-## Use `Post` + `RegisterCallback` when:
-- Targeting the **same** hub
-- In UI event handlers (clicks, input changes)
-- Any time you're unsure about potential circular dependencies
-- Performance is critical (non-blocking is faster)
-
-# Best Practices
-
-## 1. Always Add Exception Logging in Callbacks
+For waiting on work completion, observe the resulting node state rather than blocking:
 
 ```csharp
-host.Hub.RegisterCallback(delivery, d =>
-{
-    try
-    {
-        // Handle response
-    }
-    catch (Exception ex)
-    {
-        logger?.LogError(ex, "Error processing response for {Path}", nodePath);
-        ShowErrorDialog(ctx, "Error", ex.Message);
-    }
-    return d;
-});
+// Wait for a node to reach a target state — no blocking
+workspace.GetMeshNodeStream(nodePath)
+    .Where(node => node.Content is MyContent c && c.Status == MyStatus.Done)
+    .Take(1)
+    .Timeout(TimeSpan.FromSeconds(30))
+    .Subscribe(
+        node => HandleCompletion(node),
+        ex => logger.LogWarning(ex, "Timed out waiting for {Path}", nodePath));
 ```
 
-## 2. Consider Using Reactive Streams
+---
 
-For data that will be updated through the workspace, use reactive queries instead:
+## Cross-Hub Calls
+
+When calling a *different* hub, there is no single-thread conflict. Use `hub.Observe(request, o => o.WithTarget(otherAddress))`:
 
 ```csharp
-// Instead of AwaitResponse for data changes
-workspace.RequestChange(DataChangeRequest.Update([node]), null, null);
-
-// Wait for the change to be reflected in the stream
-await workspace.GetStream<MeshNode>()
-    .Where(nodes => nodes.Any(n => n.Path == path && n.State == MeshNodeState.Active))
-    .Timeout(5.Seconds())
-    .FirstAsync();
+// Safe — different hub address, no shared single thread
+hub.Observe<CreateNodeResponse>(
+    new CreateNodeRequest(node),
+    o => o.WithTarget(otherHubAddress))
+.Subscribe(
+    response => HandleResponse(response),
+    ex => logger.LogError(ex, "Cross-hub call failed"));
 ```
 
-## 3. Use InvokeAsync for Exception Safety
+The response arrives as an observable emission; the subscriber runs inside the *receiving* hub's action block, not the caller's — so neither side blocks.
 
-For operations that need proper exception handling on the hub thread:
+---
+
+## Decision Guide
+
+| Scenario | Correct pattern |
+|---|---|
+| Mutate a node on this hub | `workspace.GetMeshNodeStream(path).Update(n => n with {...}).Subscribe(...)` |
+| Mutate a node on a different hub | Same API — `GetMeshNodeStream` auto-dispatches cross-hub |
+| Wait for a state change | `GetMeshNodeStream(path).Where(predicate).Take(1).Timeout(...).Subscribe(...)` |
+| Call a different hub and handle the reply | `hub.Observe<TResponse>(request, o => o.WithTarget(addr)).Subscribe(...)` |
+| Test boundary only | `await stream.FirstAsync().ToTask()` is acceptable |
+
+---
+
+## Debugging a Wedged Hub
+
+### Symptoms
+
+- The application silently hangs on a specific action (button click, form submit).
+- No exception is thrown; execution simply stops.
+- Logs show a message was posted but no handler fired.
+
+### Finding the Cause
+
+Search for patterns that block the hub thread:
 
 ```csharp
-hub.InvokeAsync(
-    async ct => { /* async operation */ },
-    ex => {
-        logger.LogError(ex, "Operation failed");
-        return Task.CompletedTask;
-    });
+// Red flags — search for these in hub-reachable code
+await hub.AwaitResponse(...)           // Obsolete + deadlock risk
+hub.AwaitResponse(...).Result          // Even worse — sync-over-async
+Task.Result / Task.Wait()              // Blocks the action block
 ```
 
-# Debugging Deadlocks
+Check [DebuggingMessageFlow.md](/Doc/Architecture/DebuggingMessageFlow) for trace tags that reveal where a message stopped flowing.
 
-## Symptoms
-- Application hangs on a specific action
-- No error messages (the code simply stops)
-- Typically occurs on button clicks or form submissions
+### Prevention
 
-## Finding the Cause
-1. Look for `AwaitResponse` calls in event handlers
-2. Check if the target address is the same hub (`host.Hub.Address`)
-3. Search for patterns like:
-   ```csharp
-   await hub.AwaitResponse(..., o => o.WithTarget(hub.Address))
-   ```
+- **No `async`/`await` in hub handlers** — return `IObservable<T>`, not `Task<T>`.
+- **No `TaskCompletionSource` in hub code** — if you find one, replace it with an observable chain.
+- **Subscribe immediately in the handler body** — cold observables silently do nothing if not subscribed (the framework logs a `MeshWeaver.Mesh.RequireSubscribe` warning at GC time).
 
-## Prevention
-- Code review for `AwaitResponse` targeting same hub
-- Use static analysis to flag potential deadlock patterns
-- Default to callbacks in UI handlers
+> Full patterns and the mistake ledger live in [AsynchronousCalls.md](/Doc/Architecture/AsynchronousCalls).
 
-# Summary
+---
 
-| Aspect | AwaitResponse | Post + RegisterCallback |
-|--------|---------------|------------------------|
-| Blocking | Yes | No |
-| Same-hub safe | No (deadlock risk) | Yes |
-| Code simplicity | Simpler | More verbose |
-| Error handling | Try/catch | Callback try/catch |
-| Use case | Cross-hub calls | Same-hub or UI handlers |
+## Summary
 
-The Actor Model provides excellent guarantees about state consistency and execution order. Understanding the single-threaded nature and avoiding `AwaitResponse` on self-targeting requests ensures your application remains responsive and deadlock-free.
+The Actor Model gives MeshWeaver hubs thread-safety and predictable ordering for free — as long as handlers never block the single thread. The rule is simple: **return `IObservable<T>`, subscribe, and let the framework serialise writes**. Every deadlock in this codebase traces back to a handler that broke that rule.

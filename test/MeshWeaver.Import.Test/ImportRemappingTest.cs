@@ -2,9 +2,6 @@
 using System.Reactive.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using FluentAssertions;
-using FluentAssertions.Execution;
-using FluentAssertions.Extensions;
 using MeshWeaver.Data;
 using MeshWeaver.Data.TestDomain;
 using MeshWeaver.DataStructures;
@@ -12,6 +9,7 @@ using MeshWeaver.Fixture;
 using MeshWeaver.Messaging;
 using Xunit;
 
+using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Import.Test;
 
 public class ImportRemappingTest(ITestOutputHelper output) : HubTestBase(output)
@@ -95,16 +93,14 @@ public class ImportRemappingTest(ITestOutputHelper output) : HubTestBase(output)
         var importRequest = new ImportRequest(content) { Format = RemappingTestFormat, };
 
         // act
-        var importResponse = await client.AwaitResponse(
-            importRequest,
-            o => o.WithTarget(CreateHostAddress())
-            , new CancellationTokenSource(10.Seconds()).Token
-        );
+        var importResponse = await client.Observe(importRequest, o => o.WithTarget(CreateHostAddress()))
+            .Should().Within(10.Seconds()).Emit();
 
         // assert
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
         var host = GetHost();
-        var ret = await host.GetWorkspace().GetObservable<MyRecord>().FirstAsync(x => x.Any());
+        var ret = await host.GetWorkspace().GetObservable<MyRecord>()
+            .Should().Match(x => x.Any());
 
         var resRecord = ret.Should().ContainSingle().Which;
         resRecord.Should().NotBeNull();

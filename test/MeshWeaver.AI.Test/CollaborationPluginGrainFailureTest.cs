@@ -2,8 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
-using FluentAssertions;
-using FluentAssertions.Extensions;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Markdown.Collaboration;
@@ -11,6 +9,9 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Xunit;
 
+using System.Reactive;
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.AI.Test;
 
 /// <summary>
@@ -24,17 +25,20 @@ namespace MeshWeaver.AI.Test;
 /// truly-async Post + RegisterCallback + TCS pattern (see
 /// <c>Doc/Architecture/AsynchronousCalls</c>). Routing failures propagate back through
 /// the callback as a <c>DeliveryFailure</c> and the plugin returns a user-actionable
-/// error string — never <c>hub.AwaitResponse</c>, which would deadlock the hub.
+/// error string â€” never <c>hub.AwaitResponse</c>, which would deadlock the hub.
 /// </summary>
 public class CollaborationPluginGrainFailureTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
+    /// <summary>Share Mesh/SP across [Fact]s for faster suite startup.</summary>
+    protected override bool ShareMeshAcrossTests => true;
+
     private CancellationToken TestTimeout => new CancellationTokenSource(15.Seconds()).Token;
 
     /// <summary>
     /// Foundational contract: posting a <see cref="CreateSuggestedEditRequest"/> to an
     /// address with no registered hub must raise <see cref="DeliveryFailureException"/>
-    /// when using <c>AwaitResponse</c> — this test uses the test-only await style that
-    /// CLAUDE.md permits in test code. Production plugin code must NOT use
+    /// when using <c>AwaitResponse</c> â€” this test uses the test-only await style that
+    /// AGENTS.md permits in test code. Production plugin code must NOT use
     /// <c>AwaitResponse</c>; it uses Post + RegisterCallback + TCS instead (exercised
     /// by the plugin-level tests below). This test locks the routing contract that
     /// the plugin callback's <c>DeliveryFailure</c> branch depends on.
@@ -44,18 +48,20 @@ public class CollaborationPluginGrainFailureTest(ITestOutputHelper output) : Mon
     {
         var nonExistent = new Address("NonExistent", "Document/definitely-not-here");
 
-        var ex = await Assert.ThrowsAnyAsync<Exception>(async () =>
-            await Mesh.AwaitResponse(
-                new CreateSuggestedEditRequest
+        // The observable must ERROR (routing fails fast). Materialize folds the
+        // OnError into a value so we assert it reactively — no await, no ThrowAsync.
+        var notification = await Mesh.Observe(new CreateSuggestedEditRequest
                 {
                     DocumentId = "NonExistent/Document/definitely-not-here",
                     Position = 0,
                     InsertedText = "test",
                     Author = "test"
-                },
-                o => o.WithTarget(nonExistent),
-                TestTimeout));
+                }, o => o.WithTarget(nonExistent))
+            .Take(1)
+            .Materialize()
+            .Should().Within(15.Seconds()).Match(n => n.Kind == NotificationKind.OnError);
 
+        var ex = notification.Exception!;
         ex.Should().NotBeOfType<OperationCanceledException>(
             "the routing layer should fail fast, not time out");
         ex.Should().NotBeOfType<TaskCanceledException>();
@@ -70,18 +76,20 @@ public class CollaborationPluginGrainFailureTest(ITestOutputHelper output) : Mon
     {
         var nonExistent = new Address("NonExistent", "Document/definitely-not-here");
 
-        var ex = await Assert.ThrowsAnyAsync<Exception>(async () =>
-            await Mesh.AwaitResponse(
-                new CreateCommentRequest
+        // The observable must ERROR (routing fails fast). Materialize folds the
+        // OnError into a value so we assert it reactively — no await, no ThrowAsync.
+        var notification = await Mesh.Observe(new CreateCommentRequest
                 {
                     DocumentId = "NonExistent/Document/definitely-not-here",
                     SelectedText = "foo",
                     CommentText = "bar",
                     Author = "test"
-                },
-                o => o.WithTarget(nonExistent),
-                TestTimeout));
+                }, o => o.WithTarget(nonExistent))
+            .Take(1)
+            .Materialize()
+            .Should().Within(15.Seconds()).Match(n => n.Kind == NotificationKind.OnError);
 
+        var ex = notification.Exception!;
         ex.Should().NotBeOfType<OperationCanceledException>();
         ex.Should().NotBeOfType<TaskCanceledException>();
         ex.GetBaseException().Should().BeOfType<DeliveryFailureException>();
@@ -100,17 +108,18 @@ public class CollaborationPluginGrainFailureTest(ITestOutputHelper output) : Mon
         var plugin = new MeshWeaver.AI.Plugins.CollaborationPlugin(Mesh, chat);
 
         var result = await plugin.SuggestEdit(
-            documentPath: "@/NonExistent/Document/definitely-not-here",
-            originalText: "old",
-            newText: "new",
-            cancellationToken: TestTimeout);
+                documentPath: "@/NonExistent/Document/definitely-not-here",
+                originalText: "old",
+                newText: "new",
+                cancellationToken: TestTimeout)
+            .ToObservable().Should().Within(18.Seconds()).Emit();
 
         result.Should().StartWith("Document not found",
             "an unresolvable path must short-circuit before posting to the mesh");
     }
 
     /// <summary>
-    /// Plugin-level coverage for <c>AddComment</c> — same early-exit contract as
+    /// Plugin-level coverage for <c>AddComment</c> â€” same early-exit contract as
     /// <see cref="SuggestEdit_NonResolvablePath_ReturnsDocumentNotFound"/>.
     /// </summary>
     [Fact(Timeout = 20000)]
@@ -120,16 +129,17 @@ public class CollaborationPluginGrainFailureTest(ITestOutputHelper output) : Mon
         var plugin = new MeshWeaver.AI.Plugins.CollaborationPlugin(Mesh, chat);
 
         var result = await plugin.AddComment(
-            documentPath: "@/NonExistent/Document/definitely-not-here",
-            selectedText: "foo",
-            commentText: "bar",
-            cancellationToken: TestTimeout);
+                documentPath: "@/NonExistent/Document/definitely-not-here",
+                selectedText: "foo",
+                commentText: "bar",
+                cancellationToken: TestTimeout)
+            .ToObservable().Should().Within(18.Seconds()).Emit();
 
         result.Should().StartWith("Document not found");
     }
 
     /// <summary>
-    /// Minimal <see cref="IAgentChat"/> stub — <c>CollaborationPlugin</c> only reads
+    /// Minimal <see cref="IAgentChat"/> stub â€” <c>CollaborationPlugin</c> only reads
     /// <c>Context</c> (possibly null) and <c>Context.Path</c> for the author field.
     /// All other members throw.
     /// </summary>

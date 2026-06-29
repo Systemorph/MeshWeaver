@@ -13,6 +13,11 @@ public class PostgreSqlAccessControl
     private readonly NpgsqlDataSource _dataSource;
     private readonly string? _schemaName;
 
+    /// <summary>
+    /// Initializes the access-control helper over a data source, optionally scoped to a schema.
+    /// </summary>
+    /// <param name="dataSource">The PostgreSQL data source used for all permission queries and rebuilds.</param>
+    /// <param name="schemaName">Optional schema name; when set, all table and function references are schema-qualified for cross-schema queries.</param>
     public PostgreSqlAccessControl(NpgsqlDataSource dataSource, string? schemaName = null)
     {
         _dataSource = dataSource;
@@ -33,7 +38,7 @@ public class PostgreSqlAccessControl
     public async Task RebuildDenormalizedTableAsync(CancellationToken ct = default)
     {
         await using var cmd = _dataSource.CreateCommand($"SELECT {QFunc("rebuild_user_effective_permissions()")}");
-        await cmd.ExecuteNonQueryAsync(ct);
+        await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -57,7 +62,7 @@ public class PostgreSqlAccessControl
         cmd.Parameters.AddWithValue(permission);
         cmd.Parameters.AddWithValue(nodePath);
 
-        var result = await cmd.ExecuteScalarAsync(ct);
+        var result = await cmd.ExecuteScalarAsync(ct).ConfigureAwait(false);
         return result is true;
     }
 
@@ -83,8 +88,8 @@ public class PostgreSqlAccessControl
         cmd.Parameters.AddWithValue(nodePath);
 
         var permissions = new List<string>();
-        await using var reader = await cmd.ExecuteReaderAsync(ct);
-        while (await reader.ReadAsync(ct))
+        await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        while (await reader.ReadAsync(ct).ConfigureAwait(false))
         {
             permissions.Add(reader.GetString(0));
         }
@@ -109,9 +114,9 @@ public class PostgreSqlAccessControl
         cmd.Parameters.AddWithValue(subject);
         cmd.Parameters.AddWithValue(permission);
         cmd.Parameters.AddWithValue(isAllow);
-        await cmd.ExecuteNonQueryAsync(ct);
+        await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
 
-        await RebuildDenormalizedTableAsync(ct);
+        await RebuildDenormalizedTableAsync(ct).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -128,9 +133,9 @@ public class PostgreSqlAccessControl
         cmd.Parameters.AddWithValue(nodePath);
         cmd.Parameters.AddWithValue(subject);
         cmd.Parameters.AddWithValue(permission);
-        await cmd.ExecuteNonQueryAsync(ct);
+        await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
 
-        await RebuildDenormalizedTableAsync(ct);
+        await RebuildDenormalizedTableAsync(ct).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -147,9 +152,9 @@ public class PostgreSqlAccessControl
             """);
         cmd.Parameters.AddWithValue(groupName);
         cmd.Parameters.AddWithValue(memberId);
-        await cmd.ExecuteNonQueryAsync(ct);
+        await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
 
-        await RebuildDenormalizedTableAsync(ct);
+        await RebuildDenormalizedTableAsync(ct).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -165,9 +170,9 @@ public class PostgreSqlAccessControl
             """);
         cmd.Parameters.AddWithValue(groupName);
         cmd.Parameters.AddWithValue(memberId);
-        await cmd.ExecuteNonQueryAsync(ct);
+        await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
 
-        await RebuildDenormalizedTableAsync(ct);
+        await RebuildDenormalizedTableAsync(ct).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -206,9 +211,9 @@ public class PostgreSqlAccessControl
             """);
         cmd.Parameters.AddWithValue(ns);
         cmd.Parameters.AddWithValue(mainNode);
-        await cmd.ExecuteNonQueryAsync(ct);
+        await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
 
-        await RebuildDenormalizedTableAsync(ct);
+        await RebuildDenormalizedTableAsync(ct).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -224,9 +229,9 @@ public class PostgreSqlAccessControl
             WHERE namespace = $1 AND id = '_Policy' AND node_type = 'PartitionAccessPolicy'
             """);
         cmd.Parameters.AddWithValue(ns);
-        await cmd.ExecuteNonQueryAsync(ct);
+        await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
 
-        await RebuildDenormalizedTableAsync(ct);
+        await RebuildDenormalizedTableAsync(ct).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -249,7 +254,7 @@ public class PostgreSqlAccessControl
                 """);
             cmd.Parameters.AddWithValue(p.NodeType);
             cmd.Parameters.AddWithValue(p.PublicRead);
-            await cmd.ExecuteNonQueryAsync(ct);
+            await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         }
     }
 }

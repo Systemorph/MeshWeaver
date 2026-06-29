@@ -1,9 +1,11 @@
+﻿using System.Reactive.Linq;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Graph.Configuration;
@@ -14,9 +16,19 @@ namespace MeshWeaver.Graph.Configuration;
 /// </summary>
 public static class PartitionNodeType
 {
+    /// <summary>The node-type identifier string for Partition nodes.</summary>
     public const string NodeType = "Partition";
+
+    /// <summary>The namespace under which Partition nodes live (Admin/Partition).</summary>
     public const string Namespace = "Admin/Partition";
 
+    /// <summary>
+    /// Registers the Partition node type on the mesh builder: adds the MeshNode definition,
+    /// wires the static node providers and the partition access rule, and grants public read.
+    /// </summary>
+    /// <typeparam name="TBuilder">The mesh builder type.</typeparam>
+    /// <param name="builder">The mesh builder to configure.</param>
+    /// <returns>The same builder, to allow fluent chaining.</returns>
     public static TBuilder AddPartitionType<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
     {
         builder.AddMeshNodes(CreateMeshNode());
@@ -25,7 +37,7 @@ public static class PartitionNodeType
             services.AddSingleton<IStaticNodeProvider, PartitionNodeProvider>();
             services.AddSingleton<IStaticNodeProvider, DefaultPartitionProvider>();
             services.AddSingleton<INodeTypeAccessRule>(sp =>
-                new PartitionAccessRule(sp.GetService<ISecurityService>() ?? new NullSecurityService()));
+                new PartitionAccessRule(sp.GetRequiredService<IMessageHub>()));
             return services;
         });
         builder.ConfigureNodeTypeAccess(a => a.WithPublicRead(NodeType));
@@ -40,12 +52,17 @@ public static class PartitionNodeType
         }
     }
 
+    /// <summary>
+    /// Builds the MeshNode definition for the Partition node type, including its default
+    /// namespace, excluded contexts, and hub configuration (data source, default layout
+    /// areas, the Partitions global-settings menu item, and the search default area).
+    /// </summary>
+    /// <returns>The Partition MeshNode definition.</returns>
     public static MeshNode CreateMeshNode() => new(NodeType)
     {
         Name = "Partition",
         NodeType = NodeType,
         Icon = "/static/NodeTypeIcons/database.svg",
-        AssemblyLocation = typeof(PartitionNodeType).Assembly.Location,
         ExcludeFromContext = new HashSet<string> { "create", "search" },
         Content = new NodeTypeDefinition { DefaultNamespace = Namespace },
         HubConfiguration = config => config
@@ -66,24 +83,23 @@ public static class PartitionNodeType
     /// <summary>
     /// Access rule: Read for all authenticated users, Create/Update/Delete for Admin only.
     /// </summary>
-    private class PartitionAccessRule(ISecurityService securityService) : INodeTypeAccessRule
+    private class PartitionAccessRule(IMessageHub hub) : INodeTypeAccessRule
     {
         public string NodeType => PartitionNodeType.NodeType;
 
         public IReadOnlyCollection<NodeOperation> SupportedOperations =>
             [NodeOperation.Read, NodeOperation.Create, NodeOperation.Update, NodeOperation.Delete];
 
-        public async Task<bool> HasAccessAsync(NodeValidationContext context, string? userId, CancellationToken ct = default)
+        public IObservable<bool> HasAccess(NodeValidationContext context, string? userId)
         {
             if (context.Operation == NodeOperation.Read)
-                return !string.IsNullOrEmpty(userId);
+                return Observable.Return(!string.IsNullOrEmpty(userId));
 
             if (string.IsNullOrEmpty(userId))
-                return false;
+                return Observable.Return(false);
 
             // Only admins can create/update/delete partitions
-            return await securityService.HasPermissionAsync(
-                context.Node.Path, userId, Permission.Update, ct);
+            return hub.CheckPermission(context.Node.Path, userId, Permission.Update);
         }
     }
 }

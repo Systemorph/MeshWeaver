@@ -12,6 +12,11 @@ public class FileFormatParserRegistry
     private readonly Dictionary<string, List<IFileFormatParser>> _parsersByExtension;
     private readonly List<IFileFormatParser> _parsers;
 
+    /// <summary>
+    /// Builds the registry with the built-in parsers (agent, markdown, C#) in priority order,
+    /// adding a JSON parser only when serializer options are supplied.
+    /// </summary>
+    /// <param name="jsonOptions">Serializer options used to construct the JSON parser; when null, no JSON parser is registered.</param>
     public FileFormatParserRegistry(JsonSerializerOptions? jsonOptions = null)
     {
         // Parsers are listed in priority order for each extension
@@ -41,7 +46,7 @@ public class FileFormatParserRegistry
 
     /// <summary>
     /// Gets the first parser for the given file extension.
-    /// For parsing with fallback support, use TryParseAsync instead.
+    /// For parsing with fallback support, use TryParse instead.
     /// </summary>
     /// <param name="extension">File extension including the dot (e.g., ".md").</param>
     /// <returns>First parser for the extension, or null if no parser handles it.</returns>
@@ -73,21 +78,19 @@ public class FileFormatParserRegistry
     /// <param name="filePath">Full path to the file.</param>
     /// <param name="content">File content.</param>
     /// <param name="relativePath">Path relative to the data root.</param>
-    /// <param name="ct">Cancellation token.</param>
     /// <returns>Parsed MeshNode or null if no parser can handle the content.</returns>
-    public async Task<MeshNode?> TryParseAsync(
+    public MeshNode? TryParse(
         string extension,
         string filePath,
         string content,
-        string relativePath,
-        CancellationToken ct = default)
+        string relativePath)
     {
         var parsers = GetParsers(extension);
         foreach (var parser in parsers)
         {
             try
             {
-                var node = await parser.ParseAsync(filePath, content, relativePath, ct);
+                var node = parser.Parse(filePath, content, relativePath);
                 if (node != null)
                     return node;
             }

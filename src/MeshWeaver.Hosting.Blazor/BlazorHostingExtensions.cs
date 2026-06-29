@@ -1,4 +1,6 @@
-﻿using System.Text.Json;
+﻿using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
+using System.Text.Json;
 using MeshWeaver.Blazor;
 using MeshWeaver.Blazor.AI;
 using MeshWeaver.Blazor.Infrastructure;
@@ -6,6 +8,7 @@ using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
 using MeshWeaver.Layout.Client;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Blazor.Services;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
@@ -18,14 +21,29 @@ using Microsoft.FluentUI.AspNetCore.Components;
 
 namespace MeshWeaver.Hosting.Blazor;
 
+/// <summary>
+/// Extension methods that wire the Blazor portal into a <c>MeshBuilder</c> and map the
+/// MeshWeaver HTTP endpoints (static content, layout previews) onto a <c>WebApplication</c>.
+/// </summary>
 public static class BlazorHostingExtensions
 {
+    /// <summary>
+    /// Registers the Blazor portal services (content service, FluentUI components, circuit
+    /// access handling, navigation and menu providers) and configures the hub's Blazor layout
+    /// client.
+    /// </summary>
+    /// <param name="builder">The mesh builder to add the Blazor portal to.</param>
+    /// <param name="clientConfig">Optional callback to customize the layout client configuration.</param>
+    /// <returns>The same <paramref name="builder"/> instance for chaining.</returns>
     public static MeshBuilder AddBlazor(this MeshBuilder builder, Func<LayoutClientConfiguration, LayoutClientConfiguration>? clientConfig = null) =>
         builder
             .ConfigureServices(services => services
                 .AddContentService()
                 .AddFluentUIComponents()
+                .AddSingleton<UserIdentityCache>()
+                .AddScoped<ICircuitContextAccessor, CircuitContextAccessor>()
                 .AddScoped<PortalApplication>()
+                .AddScoped<PortalErrorSink>()
                 .AddScoped<INavigationService, NavigationService>()
                 .AddScoped<IMenuItemsProvider, MenuItemsProvider>()
                 .AddScoped<CircuitAccessHandler>()
@@ -34,6 +52,11 @@ public static class BlazorHostingExtensions
             )
             .ConfigureHub(hub => hub.AddBlazor(clientConfig));
 
+    /// <summary>
+    /// Maps the MeshWeaver HTTP endpoints onto the application: the static content endpoint
+    /// and the layout preview stub.
+    /// </summary>
+    /// <param name="app">The web application to map the endpoints onto.</param>
     public static void MapMeshWeaver(this WebApplication app)
     {
         app.MapStaticContent(app.Services);
@@ -113,138 +136,122 @@ public static class BlazorHostingExtensions
         IMessageHub? mainHub = null;
 
         app.MapGet("/static/{**path}",
-            async (HttpContext context, string path) =>
+            (HttpContext context, string path) =>
         {
             // Resolve hub on first request
             mainHub ??= services.GetRequiredService<IMessageHub>();
 
             if (string.IsNullOrEmpty(path))
-            {
-                return Results.NotFound("Path is required");
-            }
+                return Task.FromResult(Results.NotFound("Path is required"));
 
-            try
-            {
-                var pathParts = path.Split('/');
-                if (pathParts.Length < 2)
-                {
-                    return Results.NotFound("Invalid path format. Expected: /static/{collection}/{filePath} or /static/{address}/{collection}/{filePath}");
-                }
+            // Compose the entire endpoint as IObservable<IResult>; the HTTP framework
+            // boundary mandates Task<IResult>, so we ToTask once at the very end.
+            // No await on hub round-trips — chain via SelectMany; deadlock surface
+            // (await pathResolver.ResolvePath / hub.Observe) eliminated.
+            return ResolveStatic(context, mainHub, path, collectionCache)
+                .Catch<IResult, Exception>(ex =>
+                    Observable.Return(Results.Problem($"Error retrieving static content: {ex.Message}")))
+                .FirstAsync()
+                .ToTask(context.RequestAborted);
+        });
+    }
 
-                var firstSegment = pathParts[0];
+    private static IObservable<IResult> ResolveStatic(
+        HttpContext context,
+        IMessageHub mainHub,
+        string path,
+        System.Collections.Concurrent.ConcurrentDictionary<string, ContentCollectionConfig> collectionCache)
+    {
+        var pathParts = path.Split('/');
+        if (pathParts.Length < 2)
+            return Observable.Return(Results.NotFound(
+                "Invalid path format. Expected: /static/{collection}/{filePath} or /static/{address}/{collection}/{filePath}"));
 
-                // Decode collection name: '~' is used as escape for '/' in collection names
-                var decodedFirstSegment = DecodeCollectionName(firstSegment);
+        var firstSegment = pathParts[0];
+        var decodedFirstSegment = DecodeCollectionName(firstSegment);
+        var contentService = mainHub.ServiceProvider.GetService<IContentService>();
+        var knownCollection = contentService?.GetCollectionConfig(decodedFirstSegment);
 
-                // Check if first segment is a known collection name
-                var contentService = mainHub.ServiceProvider.GetService<IContentService>();
-                var knownCollection = contentService?.GetCollectionConfig(decodedFirstSegment);
+        if (knownCollection != null)
+        {
+            // Pattern 1: /static/{collection}/{filePath}
+            var collectionName = decodedFirstSegment;
+            var filePath = string.Join("/", pathParts.Skip(1));
+            return (mainHub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.FileSystem) ?? IoPool.Unbounded)
+                .Run(_ => ServeFromCollection(context, mainHub, collectionName, filePath, collectionCache));
+        }
 
-                if (knownCollection != null)
-                {
-                    // Pattern 1: /static/{collection}/{filePath}
-                    var collectionName = decodedFirstSegment;
-                    var filePath = string.Join("/", pathParts.Skip(1));
+        // Pattern 2: /static/{address}/{collection}/{filePath} — observable chain.
+        var pathResolver = mainHub.ServiceProvider.GetRequiredService<IPathResolver>();
+        return pathResolver.ResolvePath(path).SelectMany(resolution =>
+        {
+            if (resolution == null)
+                return Observable.Return(Results.NotFound("No matching address found for path"));
+            if (string.IsNullOrEmpty(resolution.Remainder))
+                return Observable.Return(Results.NotFound("Collection and file path are required"));
 
-                    return await ServeFromCollection(context, mainHub, collectionName, filePath, collectionCache);
-                }
+            var remainderParts = resolution.Remainder.Split('/');
+            if (remainderParts.Length < 2)
+                return Observable.Return(Results.NotFound(
+                    "Invalid path format. Expected: /static/{address}/{collection}/{filePath}"));
 
-                // Pattern 2: /static/{address}/{collection}/{filePath}
-                // Resolve address from path using score-based matching
-                var pathResolver = mainHub.ServiceProvider.GetRequiredService<IPathResolver>();
-                var resolution = await pathResolver.ResolvePathAsync(path);
+            var addressCollectionName = DecodeCollectionName(remainderParts[0]);
+            var addressFilePath = string.Join("/", remainderParts.Skip(1));
+            if (string.IsNullOrEmpty(addressFilePath))
+                return Observable.Return(Results.NotFound("File path is required"));
 
-                if (resolution == null)
-                {
-                    return Results.NotFound("No matching address found for path");
-                }
+            var targetAddress = (Address)resolution.Prefix;
+            var qualifiedCollectionName = $"{resolution.Prefix}/{addressCollectionName}";
 
-                // Parse remainder: first segment is collection, rest is file path
-                if (string.IsNullOrEmpty(resolution.Remainder))
-                {
-                    return Results.NotFound("Collection and file path are required");
-                }
-
-                var remainderParts = resolution.Remainder.Split('/');
-                if (remainderParts.Length < 2)
-                {
-                    return Results.NotFound("Invalid path format. Expected: /static/{address}/{collection}/{filePath}");
-                }
-
-                // Decode collection name: '~' is used as escape for '/' (e.g., "Submissions@Microsoft~2026")
-                var addressCollectionName = DecodeCollectionName(remainderParts[0]);
-                var addressFilePath = string.Join("/", remainderParts.Skip(1));
-
-                if (string.IsNullOrEmpty(addressFilePath))
-                {
-                    return Results.NotFound("File path is required");
-                }
-
-                var targetAddress = (Address)resolution.Prefix;
-                var qualifiedCollectionName = $"{resolution.Prefix}/{addressCollectionName}";
-
-                // Get or fetch collection configuration from target hub
-                if (!collectionCache.TryGetValue(qualifiedCollectionName, out var collectionConfig))
-                {
-                    var collectionResponse = await mainHub.AwaitResponse(
+            // Cached collection config — short-circuit; otherwise compose hub.Observe.
+            IObservable<ContentCollectionConfig?> configObs = collectionCache.TryGetValue(qualifiedCollectionName, out var cached)
+                ? Observable.Return<ContentCollectionConfig?>(cached)
+                : mainHub.Observe(
                         new GetDataRequest(new ContentCollectionReference([addressCollectionName])),
-                        o => o.WithTarget(targetAddress),
-                        context.RequestAborted);
-
-                    IReadOnlyCollection<ContentCollectionConfig>? configs;
-                    if (collectionResponse?.Message?.Data is JsonElement jsonElement)
+                        o => o.WithTarget(targetAddress))
+                    .Select<IMessageDelivery, ContentCollectionConfig?>(collectionResponse =>
                     {
-                        configs = jsonElement.EnumerateArray()
-                            .Select(e => new ContentCollectionConfig
-                            {
-                                Name = e.TryGetProperty("name", out var nameProp) ? nameProp.GetString() ?? "" : "",
-                                SourceType = e.TryGetProperty("sourceType", out var typeProp) ? typeProp.GetString() ?? "" : "",
-                                BasePath = e.TryGetProperty("basePath", out var pathProp) ? pathProp.GetString() : null
-                            })
-                            .ToArray();
-                    }
-                    else
-                    {
-                        configs = collectionResponse?.Message?.Data as IReadOnlyCollection<ContentCollectionConfig>;
-                    }
-                    var sourceConfig = configs?.FirstOrDefault(c => c.Name == addressCollectionName);
+                        IReadOnlyCollection<ContentCollectionConfig>? configs = collectionResponse?.Message switch
+                        {
+                            GetDataResponse { Data: JsonElement je } => je.EnumerateArray()
+                                .Select(e => new ContentCollectionConfig
+                                {
+                                    Name = e.TryGetProperty("name", out var nameProp) ? nameProp.GetString() ?? "" : "",
+                                    SourceType = e.TryGetProperty("sourceType", out var typeProp) ? typeProp.GetString() ?? "" : "",
+                                    BasePath = e.TryGetProperty("basePath", out var pathProp) ? pathProp.GetString() : null
+                                })
+                                .ToArray(),
+                            GetDataResponse { Data: IReadOnlyCollection<ContentCollectionConfig> direct } => direct,
+                            _ => null
+                        };
+                        var sourceConfig = configs?.FirstOrDefault(c => c.Name == addressCollectionName);
+                        if (sourceConfig == null) return null;
+                        var built = sourceConfig with { Name = qualifiedCollectionName, Address = targetAddress };
+                        collectionCache.TryAdd(qualifiedCollectionName, built);
+                        return built;
+                    });
 
-                    if (sourceConfig == null)
-                    {
-                        return Results.NotFound($"Content collection '{addressCollectionName}' not found at {resolution.Prefix}");
-                    }
+            return configObs.SelectMany(collectionConfig =>
+            {
+                if (collectionConfig == null)
+                    return Observable.Return(Results.NotFound(
+                        $"Content collection '{addressCollectionName}' not found at {resolution.Prefix}"));
 
-                    collectionConfig = sourceConfig with
-                    {
-                        Name = qualifiedCollectionName,
-                        Address = targetAddress
-                    };
-
-                    collectionCache.TryAdd(qualifiedCollectionName, collectionConfig);
-                }
-
-                // Get content service from portal
                 var portal = mainHub.ServiceProvider.GetRequiredService<PortalApplication>().Hub;
                 var portalContentService = portal.ServiceProvider.GetService<IContentService>();
                 if (portalContentService is null)
-                {
-                    return Results.NotFound("Content service not configured");
-                }
+                    return Observable.Return(Results.NotFound("Content service not configured"));
 
                 portalContentService.AddConfiguration(collectionConfig);
-
-                var contentCollection = await portalContentService.GetCollectionAsync(qualifiedCollectionName, context.RequestAborted);
-                if (contentCollection == null)
-                {
-                    return Results.NotFound($"Content collection '{addressCollectionName}' not found");
-                }
-
-                return await ServeFile(context, contentCollection, addressFilePath);
-            }
-            catch (Exception ex)
-            {
-                return Results.Problem($"Error retrieving static content: {ex.Message}");
-            }
+                return (mainHub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.FileSystem) ?? IoPool.Unbounded)
+                    .Run(async ct =>
+                    {
+                        var contentCollection = await portalContentService.GetCollectionAsync(qualifiedCollectionName, context.RequestAborted).ConfigureAwait(false);
+                        if (contentCollection == null)
+                            return Results.NotFound($"Content collection '{addressCollectionName}' not found");
+                        return await ServeFile(context, contentCollection, addressFilePath).ConfigureAwait(false);
+                    });
+            });
         });
     }
 
@@ -331,3 +338,4 @@ public static class BlazorHostingExtensions
     private static string DecodeCollectionName(string encodedName) => encodedName.Replace("~", "/");
 
 }
+

@@ -1,17 +1,27 @@
-﻿using MeshWeaver.AI.Persistence;
+﻿using MeshWeaver.AI.Delegation;
+using MeshWeaver.AI.Persistence;
 using MeshWeaver.Layout;
 using Microsoft.Extensions.AI;
 
 namespace MeshWeaver.AI;
 
+/// <summary>
+/// A single agent chat session — selects an agent, sends/streams messages, and tracks
+/// the application context and execution context for one conversation thread.
+/// </summary>
 public interface IAgentChat
 {
+    /// <summary>Sets the application context (the node the conversation is anchored to), used to rank and pick relevant agents.</summary>
+    /// <param name="applicationContext">The context to apply, or <c>null</c> to clear it.</param>
     void SetContext(AgentContext? applicationContext);
 
     /// <summary>Sets the currently selected agent by name.</summary>
     /// <param name="agentName">The name/ID of the agent to use</param>
     void SetSelectedAgent(string? agentName);
 
+    /// <summary>Reloads a previously persisted conversation so the session can continue it.</summary>
+    /// <param name="conversation">The stored conversation to resume from.</param>
+    /// <returns>A task that completes once the conversation history has been restored.</returns>
     Task ResumeAsync(ChatConversation conversation);
 
     /// <summary>
@@ -66,6 +76,7 @@ public interface IAgentChat
     /// </summary>
     void RequestHandoff(HandoffRequest request) { }
 
+    /// <summary>The application context currently set on this session; <c>null</c> when none.</summary>
     AgentContext? Context { get; }
 
     /// <summary>
@@ -75,24 +86,15 @@ public interface IAgentChat
     ThreadExecutionContext? ExecutionContext => null;
 
     /// <summary>
-    /// Path of the last delegation sub-thread created. Consumed by ThreadExecution
-    /// after each delegation tool call completes.
-    /// Deprecated: use DelegationPaths dictionary for parallel-safe delegation tracking.
+    /// Live stream of delegation lifecycle events
+    /// (Dispatched → Active → Terminal). Single source of truth for
+    /// "which sub-threads is this chat session waiting on?" The cancel
+    /// watcher subscribes here and maintains its own active-set; the
+    /// tool-call stamper writes the path onto the parent's tool-call entry
+    /// on the Dispatched event.
     /// </summary>
-    string? LastDelegationPath { get => null; set { } }
-
-    /// <summary>
-    /// Thread-safe mapping of delegation display name to sub-thread path.
-    /// Supports parallel delegations without race conditions.
-    /// </summary>
-    System.Collections.Concurrent.ConcurrentDictionary<string, string> DelegationPaths
-        => new();
-
-    /// <summary>
-    /// Callback to update delegation status on the parent execution context.
-    /// Set by ThreadExecution, called by delegation tools to forward sub-agent progress.
-    /// </summary>
-    Action<string>? UpdateDelegationStatus { get => null; set { } }
+    IObservable<DelegationEvent> Delegations
+        => System.Reactive.Linq.Observable.Empty<DelegationEvent>();
 
     /// <summary>
     /// Callback to forward tool call entries from sub-threads to the parent's tool call log.

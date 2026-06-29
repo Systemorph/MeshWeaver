@@ -8,8 +8,12 @@ using MeshWeaver.Data;
 
 namespace MeshWeaver.Blazor;
 
+/// <summary>Extension methods for converting MeshWeaver view-model types to their Fluent UI equivalents.</summary>
 public static class ViewModelExtensions
 {
+    /// <summary>Converts a MeshWeaver <c>Icon</c> to its Fluent UI <c>Icon</c> equivalent, or null when the provider is unsupported.</summary>
+    /// <param name="icon">The domain icon to convert.</param>
+    /// <returns>A Fluent UI icon instance, or null when the icon provider is not recognized.</returns>
     public static Microsoft.FluentUI.AspNetCore.Components.Icon? ToFluentIcon(this Icon icon) =>
         icon.Provider switch
         {

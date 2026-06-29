@@ -4,8 +4,6 @@ using System.Linq;
 using System.Reactive.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using FluentAssertions;
-using FluentAssertions.Extensions;
 using MeshWeaver.Data;
 using MeshWeaver.Data.TestDomain;
 using MeshWeaver.Fixture;
@@ -15,6 +13,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Xunit;
 
+using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Import.Test;
 
 public class ImportMappingTest(ITestOutputHelper output) : HubTestBase(output)
@@ -65,14 +64,8 @@ public class ImportMappingTest(ITestOutputHelper output) : HubTestBase(output)
     private async Task<ActivityLog> DoImport(string content, string format = ImportFormat.Default)
     {
         var importRequest = new ImportRequest(content) { Format = format };
-        var importResponse = await GetClient().AwaitResponse(
-            importRequest,
-            o => o.WithTarget(TestDomain.TestImportAddress.Create()),
-            CancellationTokenSource.CreateLinkedTokenSource(
-                TestContext.Current.CancellationToken
-            , new CancellationTokenSource(10.Seconds()).Token
-            ).Token
-        );
+        var importResponse = await GetClient().Observe(importRequest, o => o.WithTarget(TestDomain.TestImportAddress.Create()))
+            .Should().Within(10.Seconds()).Emit();
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
         return importResponse.Message.Log;
     }
@@ -80,7 +73,7 @@ public class ImportMappingTest(ITestOutputHelper output) : HubTestBase(output)
     [Fact]
     public async Task DefaultMappingsTest()
     {
-        // Test debug message for MeshWeaver.Import namespace 
+        // Test debug message for MeshWeaver.Import namespace
         Logger.LogDebug("This is a debug message from MeshWeaver.Import.Test - should appear if Debug config works");
 
         const string content =
@@ -92,11 +85,11 @@ SystemName,DisplayName,2,null,,"""",null,,"""",1,,"""",1,,""""";
         log.Status.Should().Be(ActivityStatus.Succeeded);
         Logger.LogInformation("*** Import Finished ***");
 
-        var ret2 = await GetDataAsync<MyRecord2>(ImportAddress, x => true);
+        var ret2 = await GetData<MyRecord2>(ImportAddress, x => true);
 
         ret2.Should().BeEmpty();
 
-        var ret = await GetDataAsync<MyRecord>(ImportAddress, x => x.Count > 0);
+        var ret = await GetData<MyRecord>(ImportAddress, x => x.Count > 0);
 
         ret.Should().HaveCount(1);
 
@@ -121,7 +114,7 @@ SystemName,DisplayName,2,null,,"""",null,,"""",1,,"""",1,,""""";
     {
         _ = await DoImport(string.Empty);
 
-        var ret = await GetDataAsync<MyRecord>(ImportAddress, x => true);
+        var ret = await GetData<MyRecord>(ImportAddress, x => true);
 
         ret.Should().BeEmpty();
     }
@@ -159,7 +152,7 @@ Record3SystemName,Record3DisplayName";
 
         Logger.LogInformation("*** Import Finished ***");
 
-        var ret = await GetDataAsync<MyRecord>(ImportAddress, x => x.Count > 0);
+        var ret = await GetData<MyRecord>(ImportAddress, x => x.Count > 0);
 
         ret.Should().HaveCount(1);
 
@@ -196,14 +189,14 @@ Record3SystemName,Record3DisplayName";
 
         Logger.LogInformation("*** Import Finished ***");
         var address = TestDomain.TestImportAddress.Create();
-        var ret2 = await GetDataAsync<MyRecord2>(address, x => x.Count > 0);
+        var ret2 = await GetData<MyRecord2>(address, x => x.Count > 0);
 
         ret2.Should().HaveCount(1);
-        var ret = await GetDataAsync<MyRecord>(address, x => x.Count > 1);
+        var ret = await GetData<MyRecord>(address, x => x.Count > 1);
 
         ret.Should().HaveCount(2);
 
-        var resRecord = ret.First(x => x.DisplayName == "test");
+        var resRecord = ret!.First(x => x.DisplayName == "test");
 
         resRecord.Should().NotBeNull();
         resRecord.DisplayName.Should().Contain("test");
@@ -215,7 +208,7 @@ Record3SystemName,Record3DisplayName";
         resRecord.Number.Should().Be(0);
     }
 
-    private async Task<IReadOnlyCollection<TData>?> GetDataAsync<TData>(
+    private async Task<IReadOnlyCollection<TData>> GetData<TData>(
         Address address,
         System.Func<IReadOnlyCollection<TData>, bool> predicate,
         TimeSpan? timeout = null)
@@ -225,8 +218,6 @@ Record3SystemName,Record3DisplayName";
         var workspace = hub.ServiceProvider.GetRequiredService<IWorkspace>();
         return await workspace
             .GetObservable<TData>()
-            .Where(predicate)
-            .Timeout(timeout.Value)
-            .FirstAsync();
+            .Should().Within(timeout.Value).Match(predicate);
     }
 }

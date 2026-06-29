@@ -1,0 +1,72 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "resourceGroupName": {
+      "value": "memex-aks-rg"
+    },
+    "location": {
+      "value": "swedencentral"
+    },
+    "namePrefix": {
+      "value": "memexaks"
+    },
+    "acrSku": {
+      "value": "Premium"
+    },
+    "kubernetesVersion": {
+      "value": ""
+    },
+    "systemNodeVmSize": {
+      "value": "Standard_D4s_v3"
+    },
+    "systemNodeCount": {
+      "value": 2
+    },
+    "enableAutoScaling": {
+      "value": false
+    },
+    "minNodeCount": {
+      "value": 2
+    },
+    "maxNodeCount": {
+      "value": 2
+    },
+    "availabilityZones": {
+      "value": []
+    },
+    "vnetAddressSpace": {
+      "value": "10.42.0.0/16"
+    },
+    "deployVpnGateway": {
+      "value": true
+    },
+    "vpnClientAddressPool": {
+      "value": "172.16.201.0/24"
+    },
+    "vpnClientRootCertData": {
+      "value": ""
+    },
+    "gatewaySku": {
+      "value": "VpnGw1AZ"
+    },
+    "deployBackupStorage": {
+      "value": false
+    },
+    "pgBackRestServiceAccountSubject": {
+      "value": "system:serviceaccount:memex:pgbackrest-sa"
+    },
+    "deployContentFileShares": {
+      "value": true
+    },
+    "deployPostgresFlexible": {
+      "value": true
+    },
+    "postgresSkuName": {
+      "value": "Standard_D2ds_v5"
+    },
+    "postgresHighAvailability": {
+      "value": false
+    }
+  }
+}

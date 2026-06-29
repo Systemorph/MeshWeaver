@@ -13,11 +13,24 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Import.Configuration;
 
+/// <summary>
+/// Mutable-by-<c>with</c> configuration accumulator for the import pipeline: registers
+/// import formats, data-set readers (CSV/Excel), source stream providers and validation
+/// functions. <c>ImportManager</c> folds the configured lambdas into one instance.
+/// </summary>
 public record ImportBuilder
 {
+    /// <summary>The workspace whose mapped types and data context drive import and validation.</summary>
     public IWorkspace Workspace { get; }
+    /// <summary>Optional service provider used to resolve services (e.g. content access) for stream providers; may be <c>null</c>.</summary>
     public IServiceProvider? ServiceProvider { get; init; }
 
+    /// <summary>
+    /// Initializes the builder with the default readers, stream providers and the standard
+    /// validation functions, plus auto-mappings for the workspace's mapped types.
+    /// </summary>
+    /// <param name="workspace">The workspace to import into.</param>
+    /// <param name="serviceProvider">Optional service provider for resolving runtime dependencies.</param>
     public ImportBuilder(
         IWorkspace workspace,
         IServiceProvider? serviceProvider = null
@@ -39,6 +52,13 @@ public record ImportBuilder
 
     private readonly ConcurrentDictionary<string, ImportFormat> ImportFormats = new();
 
+    /// <summary>
+    /// Registers (or appends to) a builder for the named import format. The configuration
+    /// lambda is applied lazily when the format is first resolved via <see cref="GetFormat"/>.
+    /// </summary>
+    /// <param name="format">The format key (e.g. <see cref="ImportFormat.Default"/>).</param>
+    /// <param name="configuration">Transforms the format, e.g. adding mappings or validations.</param>
+    /// <returns>A new builder with the format configuration recorded.</returns>
     public ImportBuilder WithFormat(
         string format,
         Func<ImportFormat, ImportFormat> configuration
@@ -60,6 +80,11 @@ public record ImportBuilder
     > ImportFormatBuilders { get; init; } =
         ImmutableDictionary<string, ImmutableList<Func<ImportFormat, ImportFormat>>>.Empty;
 
+    /// <summary>
+    /// Resolves the configured import format, building and caching it on first request.
+    /// </summary>
+    /// <param name="format">The format key to resolve.</param>
+    /// <returns>The built <see cref="ImportFormat"/>, or <c>null</c> if no builder was registered for the key.</returns>
     public ImportFormat? GetFormat(string format)
     {
         if (ImportFormats.TryGetValue(format, out var ret))
@@ -90,6 +115,12 @@ public record ImportBuilder
             )
             .Add(MimeTypes.xls, new ExcelDataSetReaderOld().ReadAsync);
 
+    /// <summary>
+    /// Registers a data-set reader for a MIME/file type, replacing any existing reader for it.
+    /// </summary>
+    /// <param name="fileType">The MIME type / file type key (e.g. <c>MimeTypes.csv</c>).</param>
+    /// <param name="dataSetReader">Delegate that reads a stream into an <c>IDataSet</c>.</param>
+    /// <returns>A new builder with the reader registered.</returns>
     public ImportBuilder WithDataSetReader(string fileType, ReadDataSet dataSetReader) =>
         this with
         {
@@ -146,6 +177,12 @@ public record ImportBuilder
         return stream;
     }
 
+    /// <summary>
+    /// Registers a provider that opens the import stream for a given <see cref="Source"/> type.
+    /// </summary>
+    /// <param name="sourceType">The concrete <see cref="Source"/> subtype the provider handles.</param>
+    /// <param name="reader">Delegate that opens a readable stream for a request of that source type.</param>
+    /// <returns>A new builder with the stream provider registered.</returns>
     public ImportBuilder WithStreamReader(
         Type sourceType,
         Func<ImportRequest, Task<Stream>> reader
@@ -153,6 +190,11 @@ public record ImportBuilder
 
     internal ImmutableList<ValidationFunction> Validations { get; init; }
 
+    /// <summary>
+    /// Adds a validation function applied to every imported instance before it is saved.
+    /// </summary>
+    /// <param name="validation">The validation to add.</param>
+    /// <returns>A new builder with the validation appended.</returns>
     public ImportBuilder WithValidation(ValidationFunction validation) =>
         this with
         {
@@ -173,6 +215,10 @@ public record ImportBuilder
         return ret;
     }
 
+    /// <summary>
+    /// Format string (<c>{0}</c> = category type) logged when an entity references a
+    /// dimension/category whose data source is not registered in the workspace.
+    /// </summary>
     public static string MissingCategoryErrorMessage = "Category with name {0} was not found.";
 
     private static readonly ConcurrentDictionary<

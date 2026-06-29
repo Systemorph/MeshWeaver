@@ -24,6 +24,10 @@ public static class SampleDataExtensions
     public static TBuilder AddAcme<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
         => builder.IncludePartition("ACME");
 
+    /// <summary>Includes the PensionFund balance-sheet data-cube sample data.</summary>
+    public static TBuilder AddPensionFund<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
+        => builder.IncludePartition("PensionFund");
+
     /// <summary>Includes the Cornerstone insurance sample data.</summary>
     public static TBuilder AddCornerstone<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
         => builder.IncludePartition("Cornerstone");
@@ -31,6 +35,11 @@ public static class SampleDataExtensions
     /// <summary>Includes the Systemorph sample data.</summary>
     public static TBuilder AddSystemorph<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
         => builder.IncludePartition("Systemorph");
+
+    /// <summary>Includes the TestSpace sandbox — a tiny space (a few Markdown pages) for exercising
+    /// the chat / thread UX: navigate to it, attach it as context, and start threads against it.</summary>
+    public static TBuilder AddTestSpace<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
+        => builder.IncludePartition("TestSpace");
 
     /// <summary>Includes the MeshWeaver documentation data.</summary>
     public static TBuilder AddMeshWeaverDocs<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
@@ -58,9 +67,13 @@ public static class SampleDataExtensions
     public static TBuilder AddTypeData<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
         => builder.IncludePartition("Type");
 
-    /// <summary>Includes the User data partition.</summary>
+    /// <summary>
+    /// Includes the central Auth data partition (formerly "User"; renamed in
+    /// V27 / DefaultPartitionProvider to reflect its broader scope as the
+    /// User / Group / Role / VUser / ApiToken mirror).
+    /// </summary>
     public static TBuilder AddUserData<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
-        => builder.IncludePartition("User");
+        => builder.IncludePartition("Auth");
 
     /// <summary>Includes the VUser (virtual user) data partition.</summary>
     public static TBuilder AddVUser<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
@@ -85,8 +98,10 @@ public static class SampleDataExtensions
             .AddNorthwind()
             .AddFutuRe()
             .AddAcme()
+            .AddPensionFund()
             .AddCornerstone()
             .AddSystemorph()
+            .AddTestSpace()
             .AddMeshWeaverDocs()
             .AddDoc()
             .AddAdmin()

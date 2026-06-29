@@ -4,8 +4,6 @@ using System.Linq;
 using System.Reactive.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using FluentAssertions;
-using FluentAssertions.Extensions;
 using MeshWeaver.Data;
 using MeshWeaver.Data.TestDomain;
 using MeshWeaver.Fixture;
@@ -13,6 +11,7 @@ using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
+using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Import.Test;
 
 public class SnapshotImportTest(ITestOutputHelper output) : HubTestBase(output)
@@ -60,17 +59,11 @@ B4,B,4
 
         var client = GetClient();
         var importRequest = new ImportRequest(content);
-        var importResponse = await client.AwaitResponse(
-            importRequest,
-            o => o.WithTarget(TestDomain.TestImportAddress.Create()),
-            CancellationTokenSource.CreateLinkedTokenSource(
-                TestContext.Current.CancellationToken
-                , new CancellationTokenSource(10.Seconds()).Token
-            ).Token
-        );
+        var importResponse = await client.Observe(importRequest, o => o.WithTarget(TestDomain.TestImportAddress.Create()))
+            .Should().Within(10.Seconds()).Emit();
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
 
-        var ret = await GetDataAsync<MyRecord>(ImportAddress, x => x.Count >= 4);
+        var ret = await GetData<MyRecord>(ImportAddress, x => x.Count >= 4);
 
         ret.Should().HaveCount(4);
 
@@ -83,23 +76,17 @@ SystemName,DisplayName
 ";
 
         importRequest = new ImportRequest(content2) { UpdateOptions = new() { Snapshot = true } };
-        importResponse = await client.AwaitResponse(
-            importRequest,
-            o => o.WithTarget(TestDomain.TestImportAddress.Create()),
-            CancellationTokenSource.CreateLinkedTokenSource(
-                TestContext.Current.CancellationToken,
-                new CancellationTokenSource(10.Seconds()).Token
-            ).Token
-        );
+        importResponse = await client.Observe(importRequest, o => o.WithTarget(TestDomain.TestImportAddress.Create()))
+            .Should().Within(10.Seconds()).Emit();
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
 
 
-        ret = await GetDataAsync<MyRecord>(ImportAddress, x => x.Count == 1);
+        ret = await GetData<MyRecord>(ImportAddress, x => x.Count == 1);
 
         ret.Should().HaveCount(1);
         ret.Should().ContainSingle().Which.Number.Should().Be(5);
 
-        var ret2 = await GetDataAsync<MyRecord>(CreateHostAddress(), x => x.Count == 1);
+        var ret2 = await GetData<MyRecord>(CreateHostAddress(), x => x.Count == 1);
         ret2.Should().HaveCount(1);
         ret2.Should().ContainSingle().Which.Number.Should().Be(5);
     }
@@ -118,16 +105,10 @@ B4,B,4
 
         var client = GetClient();
         var importRequest = new ImportRequest(content1);
-        var importResponse = await client.AwaitResponse(
-            importRequest,
-            o => o.WithTarget(TestDomain.TestImportAddress.Create()),
-            CancellationTokenSource.CreateLinkedTokenSource(
-                TestContext.Current.CancellationToken
-                //, new CancellationTokenSource(10.Seconds()).Token
-            ).Token
-        );
+        var importResponse = await client.Observe(importRequest, o => o.WithTarget(TestDomain.TestImportAddress.Create()))
+            .Should().Within(10.Seconds()).Emit();
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
-        var ret = await GetDataAsync<MyRecord>(ImportAddress, x => x.Count >= 4);
+        var ret = await GetData<MyRecord>(ImportAddress, x => x.Count >= 4);
 
         ret.Should().HaveCount(4);
 
@@ -141,22 +122,11 @@ SystemName,DisplayName
 
         //snapshot
         importRequest = new ImportRequest(content2) { UpdateOptions = new() { Snapshot = true } };
-        importResponse = await client.AwaitResponse(
-            importRequest,
-            o => o.WithTarget(TestDomain.TestImportAddress.Create()),
-            CancellationTokenSource.CreateLinkedTokenSource(
-                TestContext.Current.CancellationToken,
-                new CancellationTokenSource(10.Seconds()).Token
-            ).Token
-        );
+        importResponse = await client.Observe(importRequest, o => o.WithTarget(TestDomain.TestImportAddress.Create()))
+            .Should().Within(10.Seconds()).Emit();
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
 
-        await Task.Delay(100, CancellationTokenSource.CreateLinkedTokenSource(
-            TestContext.Current.CancellationToken,
-            new CancellationTokenSource(5.Seconds()).Token
-        ).Token);
-
-        ret = await GetDataAsync<MyRecord>(ImportAddress, x => x.Count == 1);
+        ret = await GetData<MyRecord>(ImportAddress, x => x.Count == 1);
 
         ret.Should().HaveCount(1);
         ret.Should().ContainSingle().Which.Number.Equals(5);
@@ -171,80 +141,16 @@ SystemName2,DisplayName2
 
         //not snapshot
         importRequest = new ImportRequest(content3);
-        importResponse = await client.AwaitResponse(
-            importRequest,
-            o => o.WithTarget(TestDomain.TestImportAddress.Create()),
-            CancellationTokenSource.CreateLinkedTokenSource(
-                TestContext.Current.CancellationToken,
-                new CancellationTokenSource(10.Seconds()).Token
-            ).Token
-        );
+        importResponse = await client.Observe(importRequest, o => o.WithTarget(TestDomain.TestImportAddress.Create()))
+            .Should().Within(10.Seconds()).Emit();
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
 
-        await Task.Delay(100, CancellationTokenSource.CreateLinkedTokenSource(
-            TestContext.Current.CancellationToken,
-            new CancellationTokenSource(5.Seconds()).Token
-        ).Token);
-        ret = await GetDataAsync<MyRecord>(ImportAddress, x => x.Count >= 2);
+        ret = await GetData<MyRecord>(ImportAddress, x => x.Count >= 2);
 
         ret.Should().HaveCount(2);
     }
 
-    [Fact(Skip = "Illegal case in current implementation")]
-    public async Task SnapshotImport_ZeroInstancesTest()
-    {
-        const string content =
-            @"@@MyRecord
-SystemName,DisplayName,Number
-A1,A,1
-A2,A,2
-B3,B,3
-B4,B,4
-";
-
-        var client = GetClient();
-        var importRequest = new ImportRequest(content);
-        var importResponse = await client.AwaitResponse(
-            importRequest,
-            o => o.WithTarget(TestDomain.TestImportAddress.Create()),
-            CancellationTokenSource.CreateLinkedTokenSource(
-                TestContext.Current.CancellationToken,
-                new CancellationTokenSource(10.Seconds()).Token
-            ).Token
-        );
-        importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
-
-        var ret = await GetDataAsync<MyRecord>(CreateHostAddress(), x => x.Count >= 4);
-
-        ret.Should().HaveCount(4);
-
-        const string content2 =
-            @"@@MyRecord
-SystemName,DisplayName,Number
-";
-
-        importRequest = new ImportRequest(content2) { UpdateOptions = new() { Snapshot = true } };
-        importResponse = await client.AwaitResponse(
-            importRequest,
-            o => o.WithTarget(TestDomain.TestImportAddress.Create()),
-            CancellationTokenSource.CreateLinkedTokenSource(
-                TestContext.Current.CancellationToken,
-                new CancellationTokenSource(10.Seconds()).Token
-            ).Token
-        );
-        importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
-
-        await Task.Delay(100, CancellationTokenSource.CreateLinkedTokenSource(
-            TestContext.Current.CancellationToken,
-            new CancellationTokenSource(5.Seconds()).Token
-        ).Token);
-
-        ret = await GetDataAsync<MyRecord>(CreateHostAddress(), x => x.Count == 0);
-
-        ret.Should().BeEmpty();
-    }
-
-    private async Task<IReadOnlyCollection<TData>?> GetDataAsync<TData>(
+    private async Task<IReadOnlyCollection<TData>> GetData<TData>(
         Address address,
         System.Func<IReadOnlyCollection<TData>, bool> predicate,
         TimeSpan? timeout = null)
@@ -254,9 +160,7 @@ SystemName,DisplayName,Number
         var workspace = hub.ServiceProvider.GetRequiredService<IWorkspace>();
         return await workspace
             .GetObservable<TData>()
-            .Where(predicate)
-            .Timeout(timeout.Value)
-            .FirstAsync();
+            .Should().Within(timeout.Value).Match(predicate);
     }
 
 }

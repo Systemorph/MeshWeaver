@@ -3,6 +3,7 @@ using System.Text.Json;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.OAuth;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
+using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -36,6 +37,16 @@ public static class AuthenticationBuilderExtensions
             options.Authority = $"https://login.microsoftonline.com/{tenantId}/v2.0";
             options.CallbackPath = "/signin-microsoft";
             options.ResponseType = "code";
+            // The correlation + nonce cookies are SameSite=None (the OIDC callback is a
+            // cross-site redirect), and browsers DROP a SameSite=None cookie that isn't
+            // also Secure. The default SecurePolicy=SameAsRequest leaves them non-Secure
+            // over plain HTTP (e.g. a local http://localhost port-forward), so the cookie
+            // is never stored and the callback fails with "Correlation failed". Force
+            // Secure: browsers make a localhost exception (Secure cookies are accepted over
+            // http://localhost), and in prod the request is already HTTPS — so this is a
+            // no-op there and the security-correct setting everywhere.
+            options.CorrelationCookie.SecurePolicy = CookieSecurePolicy.Always;
+            options.NonceCookie.SecurePolicy = CookieSecurePolicy.Always;
             options.Scope.Add("openid");
             options.Scope.Add("profile");
             options.Scope.Add("email");

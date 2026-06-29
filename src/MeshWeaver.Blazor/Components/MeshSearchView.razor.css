@@ -73,6 +73,104 @@
     background: var(--neutral-fill-hover, #f0f0f0);
 }
 
+/* ----- Discreet view-options bar (group-by combobox + display menu) ----- */
+.mesh-search-viewbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 12px;
+    min-height: 28px;
+}
+
+.mesh-search-viewbar-spacer {
+    flex: 1;
+}
+
+.mesh-search-viewbar-field {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.mesh-search-viewbar-label {
+    font-size: 12px;
+    color: var(--neutral-foreground-hint, #666);
+}
+
+.mesh-search-groupby {
+    font-size: 13px;
+    padding: 3px 24px 3px 8px;
+    height: 28px;
+    border: 1px solid var(--neutral-stroke-rest, #d1d1d1);
+    border-radius: 4px;
+    background: var(--neutral-layer-1, #fff);
+    color: var(--neutral-foreground-rest);
+    cursor: pointer;
+}
+
+.mesh-search-groupby:hover {
+    border-color: var(--accent-fill-rest, #0078d4);
+}
+
+.mesh-search-viewbar-menu-wrap {
+    position: relative;
+}
+
+.mesh-search-viewbar-menu-btn {
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    height: 28px;
+    width: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    color: var(--neutral-foreground-rest);
+    opacity: 0.6;
+}
+
+.mesh-search-viewbar-menu-btn:hover {
+    opacity: 1;
+    background: var(--neutral-fill-hover, #f0f0f0);
+    border-color: var(--neutral-stroke-rest, #d1d1d1);
+}
+
+.mesh-search-viewbar-menu {
+    position: absolute;
+    top: 32px;
+    right: 0;
+    z-index: 20;
+    min-width: 160px;
+    padding: 6px;
+    background: var(--neutral-layer-1, #fff);
+    border: 1px solid var(--neutral-stroke-rest, #d1d1d1);
+    border-radius: 6px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.mesh-search-viewbar-toggle {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px;
+    border-radius: 4px;
+    font-size: 13px;
+    color: var(--neutral-foreground-rest);
+    cursor: pointer;
+}
+
+.mesh-search-viewbar-toggle:hover {
+    background: var(--neutral-fill-hover, #f0f0f0);
+}
+
+.mesh-search-viewbar-toggle input {
+    cursor: pointer;
+}
+
 .mesh-search-options-panel {
     margin-bottom: 12px;
     padding: 10px 14px;
@@ -269,12 +367,17 @@
 }
 
 
-/* CSS grid for all card layouts — container-responsive via auto-fill */
+/* CSS grid for all card layouts — container-responsive via auto-FIT: each card has a fixed
+   ~220px min width and the row fits as many as fit (e.g. 4 @ ~960px, 6 @ ~1400px, 8 @ ~1850px),
+   the 1fr absorbing the remainder so cards stay uniform width. auto-fit (not auto-fill) collapses
+   empty trailing tracks, so when there are only a FEW items they stretch to fill the whole row
+   instead of leaving empty space on the right. Fewer per row as the container narrows; never
+   different sizes (every track is 1fr). */
 .mesh-search-area-grid {
     display: grid;
     gap: 8px;
     width: 100%;
-    grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
 }
 
 /* Ensure cards stretch to equal height within rows */
@@ -325,6 +428,451 @@
 
 .mesh-search-empty-hint {
     font-size: 0.85rem;
+}
+
+/* Card wrapper hosting the absolute "Drill down" affordance (top-right).
+   display:flex + column makes the IN-FLOW card (the <a> for a default fluent-card, OR the
+   LayoutAreaView host for an ItemArea card like the pinned/thumbnail cards) a flex item, so the
+   GLOBAL `.mesh-search-area-grid > * > * { flex:1 1 auto }` rule (standard-page-layout.css) can
+   actually stretch it to the full equal-width cell. Without flex here that rule was inert and
+   ItemArea cards (pinned / My Items / Latest Threads) rendered at content width — unequal. The
+   absolutely-positioned affordances (drill-down / delete) are out of flow, so they are NOT flex
+   items and are never stretched. */
+.mesh-search-card-wrap {
+    position: relative;
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+}
+
+/* Secondary "Drill down" / "Search this node" affordance — subtle until hover. */
+.mesh-search-drilldown {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    z-index: 2;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    border-radius: 6px;
+    color: var(--neutral-foreground-hint, #888);
+    background: var(--neutral-layer-2, rgba(0, 0, 0, 0.04));
+    border: 1px solid transparent;
+    text-decoration: none;
+    opacity: 0;
+    transition: opacity 0.15s, color 0.15s, background 0.15s, border-color 0.15s;
+}
+
+.mesh-search-card-wrap:hover .mesh-search-drilldown,
+.mesh-search-drilldown:focus-visible {
+    opacity: 1;
+}
+
+.mesh-search-drilldown:hover {
+    color: var(--accent-foreground-rest, #0078d4);
+    background: var(--neutral-layer-1, #fff);
+    border-color: var(--neutral-stroke-rest, #d1d1d1);
+}
+
+/* Keyboard focus on the result list — the highlight lives on the card, so suppress the
+   browser's default focus ring on the container itself. */
+.mesh-search-results:focus,
+.mesh-search-results:focus-visible {
+    outline: none;
+}
+
+/* Delete affordance — trash overlay on the card icon (top-left), mirroring the drill affordance
+   on the right. Subtle until card hover / keyboard selection; the inline confirm stays visible. */
+.mesh-search-delete,
+.mesh-search-delete-confirm {
+    position: absolute;
+    top: 6px;
+    left: 6px;
+    z-index: 3;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.mesh-search-delete {
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    border-radius: 6px;
+    border: 1px solid transparent;
+    background: var(--neutral-layer-2, rgba(0, 0, 0, 0.04));
+    color: var(--neutral-foreground-hint, #888);
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.15s, color 0.15s, background 0.15s, border-color 0.15s;
+}
+
+.mesh-search-card-wrap:hover .mesh-search-delete,
+.mesh-search-card-selected .mesh-search-delete,
+.mesh-search-delete:focus-visible {
+    opacity: 1;
+}
+
+.mesh-search-delete:hover {
+    color: var(--error, #d32f2f);
+    background: var(--neutral-layer-1, #fff);
+    border-color: var(--error, #d32f2f);
+}
+
+/* Two-step confirm pair (check / dismiss) — always visible while armed. */
+.mesh-search-delete-confirm {
+    gap: 4px;
+    opacity: 1;
+}
+
+.mesh-search-delete-confirm button {
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    border-radius: 6px;
+    border: 1px solid var(--neutral-stroke-rest, #d1d1d1);
+    background: var(--neutral-layer-1, #fff);
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.mesh-search-delete-yes {
+    color: var(--error, #d32f2f);
+    border-color: var(--error, #d32f2f) !important;
+}
+
+.mesh-search-delete-no {
+    color: var(--neutral-foreground-hint, #666);
+}
+
+/* Modern folder TILE for namespace sub-folders (browse mode). The outer element
+   only positions the secondary drill-down anchor; the link is the clickable body. */
+.mesh-search-folder-tile {
+    position: relative;
+    width: 100%;
+}
+
+.mesh-search-folder-tile-link {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    box-sizing: border-box;
+    padding: 12px 14px;
+    min-height: 60px;
+    border-radius: 10px;
+    background: var(--neutral-layer-1, #fff);
+    border: 1px solid var(--neutral-stroke-rest, #e0e0e0);
+    color: var(--neutral-foreground-rest);
+    text-decoration: none;
+    cursor: pointer;
+    transition: box-shadow 0.15s, border-color 0.15s, transform 0.15s, background 0.15s;
+}
+
+.mesh-search-folder-tile-link:hover {
+    border-color: var(--accent-fill-rest, #0078d4);
+    box-shadow: var(--elevation-shadow-card-active);
+    transform: translateY(-1px);
+    background: var(--neutral-layer-2, #fafafa);
+}
+
+.mesh-search-folder-tile-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 40px;
+    height: 40px;
+    min-width: 40px;
+    border-radius: 8px;
+    background: var(--neutral-fill-secondary-rest, #f0f0f0);
+    color: var(--accent-foreground-rest, #0078d4);
+    flex-shrink: 0;
+}
+
+.mesh-search-folder-tile-text {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    flex: 1;
+}
+
+.mesh-search-folder-tile-name {
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.mesh-search-folder-tile-count {
+    font-size: 0.75rem;
+    font-weight: 600;
+    line-height: 1;
+    padding: 3px 8px;
+    border-radius: 10px;
+    background: var(--neutral-fill-secondary-rest, #e8e8e8);
+    color: var(--neutral-foreground-hint, #666);
+    flex-shrink: 0;
+}
+
+/* The drill-down anchor sitting on a folder tile reveals on tile hover. */
+.mesh-search-folder-tile:hover .mesh-search-folder-drilldown,
+.mesh-search-folder-drilldown:focus-visible {
+    opacity: 1;
+}
+
+/* Namespace tree (MeshSearchRenderMode.NamespaceTree) */
+.mesh-search-tree-section {
+    margin-bottom: 12px;
+}
+
+.mesh-search-tree-folder-glyph {
+    display: flex;
+    align-items: center;
+    color: var(--accent-foreground-rest, #0078d4);
+}
+
+.mesh-search-tree-count {
+    font-size: 0.75rem;
+    font-weight: 600;
+    line-height: 1;
+    padding: 3px 8px;
+    border-radius: 10px;
+    background: var(--neutral-fill-secondary-rest, #e8e8e8);
+    color: var(--neutral-foreground-hint, #666);
+}
+
+.mesh-search-tree-open {
+    margin-left: auto;
+    color: var(--neutral-foreground-hint, #666);
+    text-decoration: none;
+    font-size: 0.9rem;
+    padding: 0 4px;
+    border-radius: 4px;
+    opacity: 0.5;
+    transition: opacity 0.15s, color 0.15s;
+}
+
+.mesh-search-section-header:hover .mesh-search-tree-open {
+    opacity: 1;
+}
+
+.mesh-search-tree-open:hover {
+    color: var(--accent-foreground-rest, #0078d4);
+}
+
+.mesh-search-tree-children {
+    margin: 4px 0 8px 11px;
+    padding: 4px 0 4px 16px;
+    border-left: 2px solid var(--neutral-stroke-rest, #e0e0e0);
+}
+
+.mesh-search-tree-empty {
+    color: var(--neutral-foreground-hint, #888);
+    font-size: 0.85rem;
+    font-style: italic;
+    padding: 4px 0;
+}
+
+.mesh-search-tree-loading {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 8px 0;
+    max-width: 480px;
+}
+
+/* ===== Graph navigator (MeshSearchRenderMode.GraphNavigator) ===== */
+.mesh-nav {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    width: 100%;
+}
+
+/* Above: ancestor breadcrumb rail (root-most → current). */
+.mesh-nav-rail {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 4px;
+    padding: 8px 12px;
+    border-radius: 10px;
+    background: var(--neutral-layer-2, rgba(0, 0, 0, 0.03));
+    font-size: 0.9rem;
+}
+
+.mesh-nav-crumb {
+    color: var(--accent-foreground-rest, #0078d4);
+    text-decoration: none;
+    padding: 3px 8px;
+    border-radius: 6px;
+    white-space: nowrap;
+    transition: background 0.15s, color 0.15s;
+}
+
+.mesh-nav-crumb:hover {
+    background: var(--neutral-layer-1, #fff);
+}
+
+.mesh-nav-crumb-current {
+    font-weight: 600;
+    color: var(--neutral-foreground-rest);
+    cursor: default;
+}
+
+.mesh-nav-sep {
+    color: var(--neutral-foreground-hint, #999);
+    user-select: none;
+}
+
+.mesh-nav-open {
+    display: inline-flex;
+    align-items: center;
+    margin-left: 2px;
+    color: var(--neutral-foreground-hint, #888);
+    text-decoration: none;
+    padding: 2px;
+    border-radius: 4px;
+    opacity: 0.6;
+    transition: opacity 0.15s, color 0.15s;
+}
+
+.mesh-nav-open:hover {
+    opacity: 1;
+    color: var(--accent-foreground-rest, #0078d4);
+}
+
+/* Include-documents toggle (node Search area only). */
+.mesh-nav-doctoggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.85rem;
+    color: var(--neutral-foreground-hint, #777);
+    cursor: pointer;
+    user-select: none;
+    width: fit-content;
+}
+
+.mesh-nav-doctoggle input {
+    cursor: pointer;
+    margin: 0;
+}
+
+/* A section (Nodes on top, Namespaces at the bottom). */
+.mesh-nav-section {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    width: 100%;
+}
+
+.mesh-nav-section-label {
+    font-size: 0.78rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--neutral-foreground-hint, #777);
+}
+
+.mesh-nav-empty {
+    padding: 24px 0;
+}
+
+/* TOP: a node card. The body opens the node; a drill symbol (containers only) re-roots here.
+   flex column (same reason as .mesh-search-card-wrap) so the in-flow card stretches to the full
+   equal-width cell via the global fill rule, while the absolute drill affordance stays put. */
+.mesh-nav-card-wrap {
+    position: relative;
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+}
+
+.mesh-nav-card-link {
+    display: block;
+    width: 100%;
+    text-decoration: none;
+    color: inherit;
+    border-radius: 10px;
+    transition: transform 0.15s, box-shadow 0.15s;
+}
+
+.mesh-nav-card-link:hover {
+    transform: translateY(-1px);
+    box-shadow: var(--elevation-shadow-card-active);
+}
+
+/* "Drill in" symbol on a node that also contains content — reuses .mesh-search-drilldown base. */
+.mesh-nav-card-wrap:hover .mesh-nav-card-drill,
+.mesh-nav-card-drill:focus-visible {
+    opacity: 1;
+}
+
+/* BOTTOM: sub-namespaces as drill-down LINKS — deliberately NOT card-styled, to read as "navigate".
+   Responsive grid that caps at 3 columns: 1 on narrow, 2 on medium, 3 on wide (each column ≥240px,
+   and ≥1/3 width so it never exceeds three). Same column-capping trick as the node card grid. */
+.mesh-nav-namespaces {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(max(33.333% - 6px, 240px), 1fr));
+    gap: 4px 8px;
+    width: 100%;
+}
+
+.mesh-nav-namespace {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 10px;
+    border-radius: 8px;
+    text-decoration: none;
+    color: var(--neutral-foreground-rest);
+    border: 1px solid transparent;
+    transition: background 0.15s, border-color 0.15s;
+}
+
+.mesh-nav-namespace:hover {
+    background: var(--neutral-layer-2, rgba(0, 0, 0, 0.04));
+    border-color: var(--neutral-stroke-rest, #e0e0e0);
+}
+
+.mesh-nav-namespace-icon {
+    display: inline-flex;
+    align-items: center;
+    color: var(--accent-foreground-rest, #0078d4);
+    flex-shrink: 0;
+}
+
+.mesh-nav-namespace-name {
+    flex: 1;
+    min-width: 0;
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.mesh-nav-namespace-count {
+    font-size: 0.75rem;
+    font-weight: 600;
+    line-height: 1;
+    padding: 3px 8px;
+    border-radius: 10px;
+    background: var(--neutral-fill-secondary-rest, #e8e8e8);
+    color: var(--neutral-foreground-hint, #666);
+    flex-shrink: 0;
+}
+
+.mesh-nav-namespace-chevron {
+    color: var(--neutral-foreground-hint, #999);
+    font-size: 1.1rem;
+    line-height: 1;
+    flex-shrink: 0;
 }
 
 /* Skeleton loading placeholders */

@@ -14,11 +14,21 @@ namespace MeshWeaver.Graph;
 /// </summary>
 public static class MarkdownLayoutAreas
 {
+    /// <summary>Area name for the Overview layout area.</summary>
     public const string OverviewArea = "Overview";
+    /// <summary>Area name for the Edit layout area.</summary>
     public const string EditArea = "Edit";
+    /// <summary>Area name for the Suggest layout area.</summary>
     public const string SuggestArea = "Suggest";
+    /// <summary>Area name for the Notebook layout area.</summary>
     public const string NotebookArea = "Notebook";
 
+    /// <summary>
+    /// Registers the Markdown node views (Overview, Edit, Suggest, Notebook, Thumbnail,
+    /// and the standard create/delete/children areas) on the hub configuration.
+    /// </summary>
+    /// <param name="configuration">The message hub configuration to register on.</param>
+    /// <returns>The configuration with the Markdown views registered.</returns>
     public static MessageHubConfiguration AddMarkdownViews(this MessageHubConfiguration configuration)
         => configuration
             .AddDefaultLayoutAreas()
@@ -31,6 +41,5 @@ public static class MarkdownLayoutAreas
                 .WithView(NotebookArea, MarkdownNotebookLayoutArea.Notebook)
                 .WithView(MeshNodeLayoutAreas.ThumbnailArea, MarkdownOverviewLayoutArea.Thumbnail)
             .WithView(MeshNodeLayoutAreas.CreateNodeArea, CreateLayoutArea.Create)
-            .WithView(MeshNodeLayoutAreas.DeleteArea, DeleteLayoutArea.Delete)
-            .WithView(MeshNodeLayoutAreas.ChildrenArea, MeshNodeLayoutAreas.Children));
+            .WithView(MeshNodeLayoutAreas.DeleteArea, DeleteLayoutArea.Delete));
 }

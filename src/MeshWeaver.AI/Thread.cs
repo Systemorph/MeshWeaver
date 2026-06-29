@@ -1,4 +1,4 @@
-﻿using System.Collections.Immutable;
+using System.Collections.Immutable;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using MeshWeaver.Layout;
@@ -32,6 +32,107 @@ public record ThreadExecutionContext
     /// Used to propagate user identity through delegation chains.
     /// </summary>
     public AccessContext? UserAccessContext { get; init; }
+}
+
+// ResubmitIntent and FailureRecord records deleted 2026-05-27. The corresponding
+// thread mutations now happen INLINE inside HubThreadExtensions.ResubmitMessage /
+// RecordSubmissionFailure via a single stream.Update on the thread node — no
+// intent-payload + per-operation watcher indirection.
+
+/// <summary>
+/// Explicit lifecycle state for a thread's overall execution round. Replaces
+/// the binary <see cref="Thread.IsExecuting"/> flag with named states so the
+/// GUI can render distinct progress indicators and so test assertions can
+/// pin the transition graph.
+///
+/// <para>State graph (one execution round):
+/// <c>Idle → StartingExecution → Executing → Idle</c>, with a
+/// <c>Executing → Cancelled</c> branch when execution is stopped. The thread
+/// re-enters <see cref="StartingExecution"/> from either <see cref="Idle"/>
+/// or <see cref="Cancelled"/> (a cancelled thread re-dispatches like Idle when
+/// pending input remains). Error doesn't fork the graph — the error status
+/// lands on the response cell (<see cref="ThreadMessageStatus"/>) and the
+/// thread returns to <see cref="Idle"/>. There is no transient "completing"
+/// state: terminal writes are atomic.</para>
+///
+/// <para><b>Wake-up.</b> On hub activation <c>InitializeThreadLifecycle</c>
+/// reads the own-node stream's first emission and drives any non-terminal
+/// state to a valid one once: a pending <see cref="Cancelled"/> request is
+/// honored, an interrupted <see cref="Executing"/> round resumes its existing
+/// response cell (re-entering <see cref="StartingExecution"/>), and
+/// <see cref="Idle"/>/<see cref="Cancelled"/> with pending input is left for
+/// the submission watcher to claim.</para>
+/// </summary>
+public enum ThreadExecutionStatus
+{
+    /// <summary>No round in flight. PendingUserMessages may still hold queued input —
+    /// the submission watcher will dispatch a new round when it observes this state.</summary>
+    Idle = 0,
+
+    /// <summary>The <c>_Exec</c> hub claimed the round: draining
+    /// <see cref="Thread.PendingUserMessages"/> into <see cref="Thread.Messages"/>,
+    /// materialising user satellite cells, allocating the response cell. No
+    /// agent tokens yet.</summary>
+    StartingExecution,
+
+    /// <summary>Agent is streaming into the active response cell. The
+    /// <c>check_inbox</c> tool may drain newly-arrived pending entries: it
+    /// freezes the current response cell, inserts the new user cells after it,
+    /// and switches streaming to a fresh response cell.</summary>
+    Executing,
+
+    /// <summary>Execution was stopped (user pressed Stop, or a parent cancelled a
+    /// sub-thread). Distinct, visible terminal-ish state: the response cell is
+    /// marked <see cref="ThreadMessageStatus.Cancelled"/>, but the thread behaves
+    /// like <see cref="Idle"/> for re-dispatch — if <c>PendingUserMessages</c>
+    /// still holds input, the submission watcher starts a fresh round. Occupies
+    /// the int slot the removed transient "completing" state used to hold.</summary>
+    Cancelled = 3,
+
+    /// <summary>User-marked terminal state — the thread is finished and
+    /// hidden from default catalogs (queries default to
+    /// <c>-content.status:Done</c>). A new submission implicitly transitions
+    /// back to <see cref="Idle"/> so the user can reopen a conversation by typing.</summary>
+    Done = 4
+}
+
+/// <summary>
+/// Lifecycle state of a single ThreadMessage cell. Replaces magic-string text
+/// markers like trailing "*Cancelled*" / "*Error: ...*" with an explicit
+/// per-cell state machine.
+///
+/// User cells: created at <see cref="Submitted"/> on dispatch (the queued period
+/// lives at the thread level via <see cref="Thread.PendingUserMessages"/> —
+/// the cell doesn't exist until ingestion).
+///
+/// Assistant cells: created at <see cref="Streaming"/> on round start, transition
+/// to one of <see cref="Completed"/>, <see cref="Cancelled"/>, or <see cref="Error"/>
+/// when the streaming loop exits.
+///
+/// Pre-existing persisted cells without a Status field default to <see cref="Completed"/>
+/// (treated as stable history).
+/// </summary>
+public enum ThreadMessageStatus
+{
+    /// <summary>User cell appended to the thread queue, satellite not yet materialized.
+    /// In practice cells almost never carry this value (the queue lives on the thread,
+    /// not the cell) — included for completeness so external materializers can use it.</summary>
+    Queued,
+
+    /// <summary>User cell materialized into a round (the round may be running or done).</summary>
+    Submitted,
+
+    /// <summary>Assistant cell currently being generated — streaming loop active.</summary>
+    Streaming,
+
+    /// <summary>Cell's turn finished successfully.</summary>
+    Completed,
+
+    /// <summary>Cell's turn was cancelled mid-stream (ESC / Stop). Partial text preserved.</summary>
+    Cancelled,
+
+    /// <summary>Cell's turn failed with an error. Error message in <see cref="ThreadMessage.Text"/>.</summary>
+    Error
 }
 
 /// <summary>
@@ -109,10 +210,54 @@ public record Thread
     public string? CreatedBy { get; init; }
 
     /// <summary>
-    /// Whether any execution is currently active on this thread.
-    /// Set to true when a message is submitted, false when execution completes/cancels/errors.
+    /// The thread's own composer — the data-bound chat-input state INSIDE this thread
+    /// (draft + harness/agent/model selection as picked node paths + attachments). Copied
+    /// from the user's out-of-thread composer (<c>{user}/_Thread/ThreadComposer</c>) when
+    /// the thread is created (<c>HubThreadExtensions.StartThread</c>), with the draft
+    /// emptied (the draft became the first message).
+    ///
+    /// <para>Embedded ON the thread content — deliberately NOT a separate satellite node —
+    /// so reads can never hit a missing node (no NotFound storm, no lazy-create/stamp
+    /// machinery) and submission drains it atomically: <c>hub.SubmitComposer</c> moves
+    /// <see cref="ThreadComposer.MessageContent"/> into <see cref="PendingUserMessages"/>
+    /// and empties the composer in ONE <c>stream.Update</c>. Null on legacy threads —
+    /// readers treat null as an empty composer.</para>
     /// </summary>
-    public bool IsExecuting { get; init; }
+    public ThreadComposer? Composer { get; init; }
+
+    /// <summary>
+    /// The thread's main output — the dedicated summary the agent produces at
+    /// the end of execution before returning. For sub-threads spawned via
+    /// <c>delegate_to_agent</c>, this is the value returned to the parent
+    /// agent as the tool-call result. Written by <c>ExecuteMessageAsync</c> at
+    /// the Completed terminal state (copies the last assistant message's text),
+    /// and the agent itself may overwrite it via a dedicated tool to provide
+    /// a tighter summary than the verbose chat response.
+    /// </summary>
+    public string? Summary { get; init; }
+
+    /// <summary>
+    /// Explicit state machine for the round currently in flight. See
+    /// <see cref="ThreadExecutionStatus"/> for the transition graph. The
+    /// submission watcher fires when <see cref="Status"/> is
+    /// <see cref="ThreadExecutionStatus.Idle"/> and
+    /// <see cref="PendingUserMessages"/> is non-empty.
+    /// </summary>
+    public ThreadExecutionStatus Status { get; init; } = ThreadExecutionStatus.Idle;
+
+    /// <summary>
+    /// Backwards-compatible boolean shorthand for "round in flight". True for
+    /// <see cref="ThreadExecutionStatus.StartingExecution"/> and
+    /// <see cref="ThreadExecutionStatus.Executing"/>. Idle, Cancelled, and Done
+    /// are not executing — Cancelled is a stopped round (re-dispatchable like
+    /// Idle), Done is the user-marked terminal state.
+    /// New callsites should read <see cref="Status"/> directly to pick a
+    /// specific transition.
+    /// </summary>
+    [JsonIgnore]
+    public bool IsExecuting
+        => Status is ThreadExecutionStatus.StartingExecution
+                  or ThreadExecutionStatus.Executing;
 
     /// <summary>
     /// Current execution activity description (e.g., "Calling search_nodes...", "Delegating to Navigator...").
@@ -121,14 +266,18 @@ public record Thread
     public string? ExecutionStatus { get; init; }
 
     /// <summary>
-    /// The ID of the response message currently being generated.
+    /// The ID of the response message currently being generated. The full
+    /// response path is always <c>{threadPath}/{ActiveMessageId}</c> — every
+    /// downstream actor (_Exec streaming loop, parent's delegation watcher,
+    /// cancellation watcher, GUI status bar) derives the path that way.
+    /// Single source of truth for "where is the agent streaming right now";
+    /// no separate path-property to keep in sync with the id.
     /// </summary>
     public string? ActiveMessageId { get; init; }
 
-    /// <summary>
-    /// Total tokens used in the current execution (input + output).
-    /// </summary>
-    public int TokensUsed { get; init; }
+    // Token usage is NOT stored on the thread. It lives on per-model TokenUsage satellites at
+    // {threadPath}/_Usage/{model} (see TokenUsageNodeType) — all cost tracking is outside the Thread.
+    // Per-message counts still live on each response cell (ThreadMessage.Input/Output/TotalTokens).
 
     /// <summary>
     /// When the current execution started. Used to show elapsed time.
@@ -136,13 +285,46 @@ public record Thread
     public DateTime? ExecutionStartedAt { get; init; }
 
     /// <summary>
-    /// Pending user message text — set at thread creation to auto-start execution.
-    /// When the thread grain activates and sees this, it immediately starts streaming.
-    /// Cleared after execution starts.
-    /// Legacy: still used by the auto-execute-on-creation path. New submissions
-    /// from the GUI populate <see cref="PendingUserMessages"/> instead.
+    /// Wall clock of the most recent "the agent is still making progress"
+    /// signal — streaming text deltas, tool-call activity, status changes.
+    /// Written atomically with those events in the OWNING thread hub's
+    /// action block (no extra writes, no race). Read by the parent thread
+    /// hub's heartbeat watcher: if <c>IsExecuting=true</c> AND
+    /// <c>(now - LastActivityAt) &gt; HeartbeatTimeout</c> (with a 60 s
+    /// cold-start grace measured from <see cref="ExecutionStartedAt"/>),
+    /// the watcher sets <see cref="RequestedStatus"/> = <c>Cancelled</c> on this
+    /// sub-thread — the same primitive the GUI Stop button uses. Replaces
+    /// the hard 5-minute watchdog in <c>ExecuteDelegationAsync</c>.
     /// </summary>
-    public string? PendingUserMessage { get; init; }
+    public DateTime? LastActivityAt { get; init; }
+
+    /// <summary>
+    /// Per-thread override of the framework-default heartbeat timeout
+    /// (30 s). Set by an agent that legitimately makes slow progress
+    /// (e.g. non-streaming chat client with long single-shot completions).
+    /// Null → use default. The 60 s cold-start grace is applied
+    /// regardless, so the value can be aggressive without false-positives
+    /// on cold start.
+    /// </summary>
+    public TimeSpan? HeartbeatTimeout { get; init; }
+
+    /// <summary>
+    /// Control-plane request for a status transition the owning thread hub
+    /// should achieve — the request half of the Activity-Control-Plane
+    /// (<c>RequestedStatus</c> requests, <see cref="Status"/> achieves) pattern.
+    /// Today the only requested transition is <see cref="ThreadExecutionStatus.Cancelled"/>:
+    /// the GUI Stop button and a parent cancelling a sub-thread write
+    /// <c>RequestedStatus = Cancelled</c>; the cancel watcher observes its own
+    /// thread node, cancels the stored CTS, and propagates the same request onto
+    /// every active delegation sub-thread. The owning hub clears it back to
+    /// <c>null</c> once the achieved <see cref="Status"/> reaches the requested
+    /// value (or on wake-up while honoring a pending request).
+    ///
+    /// <para><b>Stream-update only.</b> The owning thread hub serialises writes on
+    /// its action block, so racing requests collapse into one observed
+    /// transition. See [RequestViaStreamUpdate.md] for the rule.</para>
+    /// </summary>
+    public ThreadExecutionStatus? RequestedStatus { get; init; }
 
     /// <summary>
     /// User messages submitted by the client but not yet ingested into a round.
@@ -150,29 +332,59 @@ public record Thread
     /// satellite ThreadMessage cells from these entries and clears them once
     /// the round is dispatched. Lets us do the entire submission as a single
     /// atomic <c>stream.Update</c> on this thread node — no separate
-    /// CreateNodeRequest, no AppendUserMessageRequest.
+    /// CreateNodeRequest, no ThreadInput.AppendUserInput.
+    ///
+    /// <para>Each entry is a <see cref="ThreadMessage"/> carrying the per-message context +
+    /// attachments (and a historical stamp of the agent/model/harness that submitted it). The
+    /// round's STICKY selection (agent / model / harness) is NOT read from here — it lives on
+    /// <see cref="Composer"/>, the single data-bound source of truth. There is no thread-level
+    /// selection mirror to drift out of sync.</para>
     /// </summary>
     public ImmutableDictionary<string, ThreadMessage> PendingUserMessages { get; init; }
         = ImmutableDictionary<string, ThreadMessage>.Empty;
 
-    /// <summary>Agent name for pending execution.</summary>
-    public string? PendingAgentName { get; init; }
-
-    /// <summary>Model name for pending execution.</summary>
-    public string? PendingModelName { get; init; }
-
-    /// <summary>Context path for pending execution.</summary>
-    public string? PendingContextPath { get; init; }
-
-    /// <summary>Attachments for pending execution.</summary>
-    public IReadOnlyList<string>? PendingAttachments { get; init; }
-
+    /// <summary>
+    /// Transient buffer of the active response's streaming text, throttled onto the
+    /// thread node so the GUI can render partial output live. Not persisted
+    /// (<c>JsonIgnore</c>); cleared by <see cref="ResetExecution"/>.
+    /// </summary>
     [JsonIgnore]
     public string? StreamingText { get; init; }
 
+    /// <summary>
+    /// Transient buffer of the active response's in-flight tool calls, mirrored onto
+    /// the thread node for live GUI rendering. Not persisted (<c>JsonIgnore</c>);
+    /// cleared by <see cref="ResetExecution"/>.
+    /// </summary>
     [JsonIgnore]
     public ImmutableList<ToolCallEntry>? StreamingToolCalls { get; init; }
 
+    /// <summary>
+    /// Brings the thread to REST — the single canonical reset of transient execution state. Sets
+    /// <c>Status = Idle</c> and clears the active-round handle, streaming buffers, and the
+    /// control-plane request, while PRESERVING the conversation
+    /// (<c>Messages</c>, <c>UserMessageIds</c>, <c>IngestedMessageIds</c>) and the inbox queue
+    /// (<c>PendingUserMessages</c> — a fresh round drains whatever is still queued, each entry
+    /// carrying its own agent/model/harness/context/attachments selection).
+    /// <para>Call it at EVERY terminal point — round Completed/Cancelled/Error and inbox drain — so the
+    /// thread can never linger in a stale <c>Executing</c>/<c>StartingExecution</c> state. A stale state
+    /// is what lets the submission watcher try to RESUME a dead round, which re-blocks and wedges the
+    /// hub (the recurring chat-start wedge). Compose with <c>with { Summary = … }</c> at the call site
+    /// when a terminal summary is also being written.</para>
+    /// </summary>
+    public Thread ResetExecution() => this with
+    {
+        Status = ThreadExecutionStatus.Idle,
+        ExecutionStatus = null,
+        RequestedStatus = null,
+        ActiveMessageId = null,
+        ExecutionStartedAt = null,
+        StreamingText = null,
+        StreamingToolCalls = null,
+        // Preserved: Messages / UserMessageIds / IngestedMessageIds (the conversation) and
+        // PendingUserMessages (the inbox queue — the next round drains anything still pending,
+        // each entry carrying its own agent/model/harness/context/attachments selection).
+    };
 }
 
 /// <summary>
@@ -218,6 +430,17 @@ public record ThreadMessage
     public required string Text { get; init; }
 
     /// <summary>
+    /// Dedicated summary the agent produces at end-of-stream — a tighter
+    /// one-or-two-sentence distillation of <see cref="Text"/>. Written by
+    /// <c>ExecuteMessageAsync</c> in the same stream.Update cycle as the
+    /// final <see cref="ThreadMessageStatus.Completed"/> + thread-level
+    /// <see cref="Thread.Summary"/> flip. For sub-threads spawned via
+    /// <c>delegate_to_agent</c>, this is what the parent's tool-call result
+    /// resolves to — never the raw verbose <see cref="Text"/>.
+    /// </summary>
+    public string? Summary { get; init; }
+
+    /// <summary>
     /// When the message was created.
     /// </summary>
     public DateTime Timestamp { get; init; } = DateTime.UtcNow;
@@ -227,6 +450,14 @@ public record ThreadMessage
     /// Defaults to ExecutedInput for backward compatibility.
     /// </summary>
     public ThreadMessageType Type { get; init; } = ThreadMessageType.ExecutedInput;
+
+    /// <summary>
+    /// Lifecycle state of this cell. Default <see cref="ThreadMessageStatus.Completed"/>
+    /// keeps pre-existing persisted cells (loaded without a Status field) treated as
+    /// stable history. New cells set Status explicitly on creation:
+    /// user → Submitted, assistant → Streaming.
+    /// </summary>
+    public ThreadMessageStatus Status { get; init; } = ThreadMessageStatus.Completed;
 
     /// <summary>
     /// The name of the agent that generated this response (for AgentResponse messages).
@@ -239,9 +470,42 @@ public record ThreadMessage
     public string? ModelName { get; init; }
 
     /// <summary>
+    /// The harness (<see cref="Harnesses"/>) this round ran under. Stamped onto
+    /// the assistant cell so the output cell can show the harness alongside
+    /// time + tokens.
+    /// </summary>
+    public string? Harness { get; init; }
+
+    /// <summary>
     /// The user who created this message. Set from the delivery's AccessContext.
     /// </summary>
     public string? CreatedBy { get; init; }
+
+    /// <summary>
+    /// The submitter's <see cref="AccessContext.ObjectId"/>, captured at submit time
+    /// (in <c>hub.SubmitMessage</c>/<c>StartThread</c>/<c>SubmitComposer</c>, where the
+    /// handler still carries the live identity) and PERSISTED on the pending user message.
+    ///
+    /// <para><b>Why this exists separately from <see cref="CreatedBy"/>.</b> <see cref="CreatedBy"/>
+    /// is the OPTIONAL <c>createdBy</c> argument the caller may pass — it is frequently null on
+    /// programmatic / test submits. <see cref="SubmitterObjectId"/> is ALWAYS captured from the
+    /// ambient <c>AccessService.Context</c> (or <c>CircuitContext</c>) at the submit boundary, so
+    /// the round's true identity rides on the DATA and survives every later async boundary (the
+    /// submission watcher's <c>.Subscribe</c> continuation + the AI streaming continuations) where
+    /// the AsyncLocal <c>AccessContext</c> is wiped. The round-dispatch watcher reconstructs
+    /// <c>userCtx</c> from this field when the AsyncLocal is gone — so the cross-hub cell/state
+    /// writes never post with a null context and fail closed (the stuck "Generating response…"
+    /// cell / never-settling watcher wedge under CI's 2-core contention).
+    /// See AccessContextPropagation.md.</para>
+    /// </summary>
+    public string? SubmitterObjectId { get; init; }
+
+    /// <summary>
+    /// The submitter's <see cref="AccessContext.Name"/>, captured alongside
+    /// <see cref="SubmitterObjectId"/> at submit time. Used to rebuild the submitter's
+    /// <see cref="AccessContext"/> in the round-dispatch watcher.
+    /// </summary>
+    public string? SubmitterName { get; init; }
 
     /// <summary>
     /// Completed tool calls from this message's execution.
@@ -282,7 +546,9 @@ public record ThreadMessage
     /// provider includes cached / reasoning tokens.
     /// </summary>
     public int? InputTokens { get; init; }
+    /// <summary>Output (completion) tokens the provider reported for this response. Null while streaming or when usage is unavailable.</summary>
     public int? OutputTokens { get; init; }
+    /// <summary>Total tokens the provider billed for this response. May exceed <see cref="InputTokens"/> + <see cref="OutputTokens"/> when cached / reasoning tokens are included.</summary>
     public int? TotalTokens { get; init; }
 
     /// <summary>

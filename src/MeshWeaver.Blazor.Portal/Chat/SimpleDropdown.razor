@@ -90,7 +90,7 @@
     public IEnumerable<TOption>? Items { get; set; }
 
     [Parameter]
-    public Func<string, Task<IEnumerable<TOption>>>? OnSearch { get; set; }
+    public Func<string, IObservable<IReadOnlyList<TOption>>>? OnSearch { get; set; }
 
     [Parameter]
     public Func<TOption, string>? GetDisplayText { get; set; }
@@ -223,37 +223,57 @@
         }
     }
 
-    private async Task Toggle()
+    private void Toggle()
     {
         isOpen = !isOpen;
         if (isOpen)
         {
             searchText = "";
             highlightedIndex = 0;
-            await LoadItems();
+            LoadItems();
         }
     }
 
-    private async Task LoadItems()
+    private IDisposable? _searchSub;
+
+    private void LoadItems()
     {
         if (OnSearch != null)
         {
-            // Async search mode
+            // Reactive search mode: subscribe to OnSearch's observable,
+            // update displayItems on every emission. No await, no Task —
+            // per Doc/Architecture/BlazorDataBinding.md.
+            _searchSub?.Dispose();
             isLoading = true;
+            displayItems = new List<TOption>();
+            highlightedIndex = 0;
             StateHasChanged();
 
             try
             {
-                var items = await OnSearch(searchText);
-                displayItems = items.Take(20).ToList();
-                highlightedIndex = 0;
+                _searchSub = OnSearch(searchText).Subscribe(
+                    items =>
+                    {
+                        displayItems = items.Take(20).ToList();
+                        highlightedIndex = 0;
+                        isLoading = false;
+                        InvokeAsync(StateHasChanged);
+                    },
+                    _ =>
+                    {
+                        displayItems = new List<TOption>();
+                        isLoading = false;
+                        InvokeAsync(StateHasChanged);
+                    },
+                    () =>
+                    {
+                        isLoading = false;
+                        InvokeAsync(StateHasChanged);
+                    });
             }
             catch
             {
                 displayItems = new List<TOption>();
-            }
-            finally
-            {
                 isLoading = false;
             }
         }
@@ -264,9 +284,9 @@
         }
     }
 
-    private async Task OnSearchChanged()
+    private void OnSearchChanged()
     {
-        await LoadItems();
+        LoadItems();
     }
 
     private async Task OnKeyDown(KeyboardEventArgs e)
@@ -312,6 +332,8 @@
 
     public void Dispose()
     {
+        _searchSub?.Dispose();
+
         try
         {
             JS.InvokeVoidAsync("eval", $"window['dropdown_{componentId}_cleanup']?.();");

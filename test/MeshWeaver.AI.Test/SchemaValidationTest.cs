@@ -1,13 +1,14 @@
-#pragma warning disable CS1591 // Missing XML comment for publicly visible type or member
+﻿#pragma warning disable CS1591 // Missing XML comment for publicly visible type or member
 
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Text.Json.Schema;
 using System.Threading;
 using System.Threading.Tasks;
-using FluentAssertions;
 using MeshWeaver.AI;
 using MeshWeaver.AI.Persistence;
 using MeshWeaver.Data;
@@ -48,6 +49,9 @@ public class SchemaValidationTest : MonolithMeshTestBase
 
     public SchemaValidationTest(ITestOutputHelper output) : base(output) { }
 
+    // Share Mesh/SP across [Fact]s.
+    protected override bool ShareMeshAcrossTests => true;
+
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
         return builder
@@ -58,7 +62,6 @@ public class SchemaValidationTest : MonolithMeshTestBase
             .AddMeshNodes(new MeshNode(TestNodeType)
             {
                 Name = "Test Product",
-                AssemblyLocation = typeof(SchemaValidationTest).Assembly.Location,
                 HubConfiguration = config => config
                     .AddMeshDataSource(source => source.WithContentType<TestProduct>())
                     .AddDefaultLayoutAreas()
@@ -72,9 +75,11 @@ public class SchemaValidationTest : MonolithMeshTestBase
     [Fact]
     public void SchemaGeneration_ForTestProduct_ReturnsValidSchema()
     {
-        // Use the NodeType's hub config to create a temporary hub and generate the schema
-        var nodeTypeService = Mesh.ServiceProvider.GetRequiredService<INodeTypeService>();
-        var hubConfig = nodeTypeService.GetCachedHubConfiguration(TestNodeType);
+        // Use the NodeType's hub config to create a temporary hub and generate the schema.
+        // MeshConfiguration.Nodes was removed — use FindStaticNode over the
+        // registered IStaticNodeProvider chain instead.
+        var typeNode = Mesh.ServiceProvider.FindStaticNode(TestNodeType);
+        var hubConfig = typeNode?.HubConfiguration;
         hubConfig.Should().NotBeNull("TestProduct should have a cached hub configuration");
 
         var tempHub = Mesh.GetHostedHub(new Address("_schema_test"), hubConfig!);
@@ -101,8 +106,8 @@ public class SchemaValidationTest : MonolithMeshTestBase
     [Fact]
     public void SchemaGeneration_ContainsExpectedProperties()
     {
-        var nodeTypeService = Mesh.ServiceProvider.GetRequiredService<INodeTypeService>();
-        var hubConfig = nodeTypeService.GetCachedHubConfiguration(TestNodeType);
+        var typeNode = Mesh.ServiceProvider.FindStaticNode(TestNodeType);
+        var hubConfig = typeNode?.HubConfiguration;
         var tempHub = Mesh.GetHostedHub(new Address("_schema_test2"), hubConfig!);
 
         try
@@ -124,7 +129,7 @@ public class SchemaValidationTest : MonolithMeshTestBase
 
     #endregion
 
-    #region Content Validation — Valid Content
+    #region Content Validation â€” Valid Content
 
     [Fact]
     public async Task Create_WithValidContent_Succeeds()
@@ -168,7 +173,7 @@ public class SchemaValidationTest : MonolithMeshTestBase
 
     #endregion
 
-    #region Update — Null Content Rejection
+    #region Update â€” Null Content Rejection
 
     [Fact]
     public async Task Update_WithNullContent_ReturnsValidationErrorAndSchema()
@@ -187,7 +192,7 @@ public class SchemaValidationTest : MonolithMeshTestBase
         });
         (await plugin.Create(createJson)).Should().StartWith("Created:");
 
-        // Update with content explicitly set to null — should be rejected
+        // Update with content explicitly set to null â€” should be rejected
         var updateJson = JsonSerializer.Serialize(new object[]
         {
             new
@@ -232,7 +237,7 @@ public class SchemaValidationTest : MonolithMeshTestBase
         });
         (await plugin.Create(createJson)).Should().StartWith("Created:");
 
-        // Update without including the content key at all — also rejected
+        // Update without including the content key at all â€” also rejected
         var updateJson = JsonSerializer.Serialize(new object[]
         {
             new
@@ -315,12 +320,13 @@ public class SchemaValidationTest : MonolithMeshTestBase
 
     #region Schema Helper API
 
-    [Fact]
-    public async Task GetContentSchemaAsync_ForRegisteredType_ReturnsSchema()
+    [Fact(Timeout = 30000)]
+    public async Task GetContentSchema_ForRegisteredType_ReturnsSchema()
     {
         var ops = new MeshOperations(Mesh);
 
-        var schema = await ops.GetContentSchemaAsync(TestNodeType);
+        var schema = await ops.GetContentSchema(TestNodeType)
+            .Should().Within(10.Seconds()).Emit();
 
         schema.Should().NotBeNullOrEmpty();
         schema!.Should().Contain("name");
@@ -328,14 +334,37 @@ public class SchemaValidationTest : MonolithMeshTestBase
         schema.Should().Contain("quantity");
     }
 
-    [Fact]
-    public async Task GetContentSchemaAsync_ForUnknownType_ReturnsNull()
+    [Fact(Timeout = 30000)]
+    public async Task GetContentSchema_ForUnknownType_ReturnsNull()
     {
         var ops = new MeshOperations(Mesh);
 
-        var schema = await ops.GetContentSchemaAsync("NonExistentType");
+        var schema = await ops.GetContentSchema("NonExistentType")
+            .Should().Within(10.Seconds()).Emit();
 
         schema.Should().BeNull();
+    }
+
+    [Fact(Timeout = 30000)]
+    public async Task GetContentSchema_TypeReferences_UseRegisteredName_NotFullyQualifiedClrName()
+    {
+        // The content type is registered in the per-NodeType hub's TypeRegistry under
+        // its clean short name ("TestProduct"). The schema MUST be generated with that
+        // hub's JsonSerializerOptions so the polymorphic $type discriminators resolve to
+        // the registered name. Generating it with the parent hub's options (whose
+        // TypeRegistry does not own the type) makes GetOrAddType fall back to
+        // TypeRegistry.FormatType, leaking the fully-qualified, capitalized CLR FullName
+        // into every $type reference — i.e. the "schema references are capitalized" bug.
+        var ops = new MeshOperations(Mesh);
+
+        var schema = await ops.GetContentSchema(TestNodeType)
+            .Should().Within(10.Seconds()).Emit();
+
+        schema.Should().NotBeNullOrEmpty();
+        schema!.Should().NotContain(typeof(TestProduct).FullName!,
+            because: "$type references must use the registered short name, never the fully-qualified CLR FullName");
+        schema.Should().Contain("\"TestProduct\"",
+            because: "the $type discriminator should be the clean registered type name");
     }
 
     #endregion
@@ -366,7 +395,7 @@ public class SchemaValidationTest : MonolithMeshTestBase
 
     #region Schema-Based Validation Helper
 
-    [Fact]
+    [Fact(Timeout = 30000)]
     public async Task ValidateContent_ValidContent_ReturnsNull()
     {
         var ops = new MeshOperations(Mesh);
@@ -377,12 +406,13 @@ public class SchemaValidationTest : MonolithMeshTestBase
             Content = new TestProduct { Name = "Widget", Price = 9.99m, Quantity = 5 }
         };
 
-        var result = await ops.ValidateContentAgainstSchemaAsync(node);
+        var result = await ops.ValidateContentAgainstSchema(node)
+            .Should().Within(10.Seconds()).Emit();
 
         result.Should().BeNull(because: "valid content should not produce validation errors");
     }
 
-    [Fact]
+    [Fact(Timeout = 30000)]
     public async Task ValidateContent_NoNodeType_SkipsValidation()
     {
         var ops = new MeshOperations(Mesh);
@@ -392,12 +422,13 @@ public class SchemaValidationTest : MonolithMeshTestBase
             Content = new { random = "data" }
         };
 
-        var result = await ops.ValidateContentAgainstSchemaAsync(node);
+        var result = await ops.ValidateContentAgainstSchema(node)
+            .Should().Within(10.Seconds()).Emit();
 
         result.Should().BeNull(because: "no nodeType means validation is skipped");
     }
 
-    [Fact]
+    [Fact(Timeout = 30000)]
     public async Task ValidateContent_UnknownNodeType_SkipsValidation()
     {
         var ops = new MeshOperations(Mesh);
@@ -408,7 +439,8 @@ public class SchemaValidationTest : MonolithMeshTestBase
             Content = new { anything = "goes" }
         };
 
-        var result = await ops.ValidateContentAgainstSchemaAsync(node);
+        var result = await ops.ValidateContentAgainstSchema(node)
+            .Should().Within(10.Seconds()).Emit();
 
         result.Should().BeNull(because: "unknown node type means no schema to validate against");
     }

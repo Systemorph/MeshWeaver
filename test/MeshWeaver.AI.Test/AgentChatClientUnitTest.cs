@@ -1,8 +1,7 @@
-#pragma warning disable CS1591 // Missing XML comment for publicly visible type or member
+﻿#pragma warning disable CS1591 // Missing XML comment for publicly visible type or member
 
 using System.Collections.Generic;
 using System.Linq;
-using FluentAssertions;
 using Xunit;
 
 namespace MeshWeaver.AI.Test;
@@ -149,7 +148,7 @@ public class AgentChatClientUnitTest
         var result = AgentChatClient.FindCyclicDelegations(configs).ToList();
 
         result.Should().HaveCount(2);
-        result.Select(a => a.Id).Should().BeEquivalentTo("A", "B");
+        result.Select(a => a.Id).Should().BeEquivalentTo(new[] { "A", "B" }, System.Text.Json.JsonSerializerOptions.Default);
     }
 
     [Fact]
@@ -181,7 +180,7 @@ public class AgentChatClientUnitTest
         var result = AgentChatClient.FindCyclicDelegations(configs).ToList();
 
         result.Should().HaveCount(2);
-        result.Select(a => a.Id).Should().BeEquivalentTo("A", "B");
+        result.Select(a => a.Id).Should().BeEquivalentTo(new[] { "A", "B" }, System.Text.Json.JsonSerializerOptions.Default);
     }
 
     [Fact]
@@ -203,6 +202,33 @@ public class AgentChatClientUnitTest
         var result = AgentChatClient.FindCyclicDelegations(configs).ToList();
 
         result.Should().BeEmpty();
+    }
+
+    #endregion
+
+    #region ShouldWatchOwnProviderPartition
+
+    // Regression for the prod 2026-06-04 VUser query storm: a chat client must
+    // watch its caller's OWN provider partition ONLY for real (non-virtual)
+    // identities. Guests (VUser / IsVirtual) own no providers; watching their
+    // partition fans out a `namespace:{VUser/id}/_Provider scope:descendants`
+    // query per guest session against the vuser schema, storming the DB pool.
+    [Theory]
+    [InlineData("rbuergi", false, true)]        // real user → watch own partition
+    [InlineData("acme", false, true)]           // real space → watch
+    [InlineData("VUser/abc123", true, false)]   // guest (VUser path) → do NOT watch
+    [InlineData("abc123def456", true, false)]   // guest (bare cookie id) → do NOT watch
+    [InlineData("", false, false)]              // no identity → nothing to watch
+    public void ShouldWatchOwnProviderPartition_OnlyRealUsers(string objectId, bool isVirtual, bool expected)
+    {
+        var ctx = new MeshWeaver.Messaging.AccessContext { ObjectId = objectId, Name = "T", IsVirtual = isVirtual };
+        AgentChatClient.ShouldWatchOwnProviderPartition(ctx).Should().Be(expected);
+    }
+
+    [Fact]
+    public void ShouldWatchOwnProviderPartition_NullContext_False()
+    {
+        AgentChatClient.ShouldWatchOwnProviderPartition(null).Should().Be(false);
     }
 
     #endregion

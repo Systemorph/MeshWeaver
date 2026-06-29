@@ -39,11 +39,21 @@
                             ViewModel="@GetThreadLayoutArea()"
                             Area="@($"sidepanel-{selectedThreadPath}")" />
         }
+        else if (GetThreadComposerLayoutArea() is { } chatInputArea)
+        {
+            @* New chat (out of thread) — the composer is the per-user ThreadComposer node's
+               default ("") layout area, databinding message text + harness/agent/model to
+               {user}/_Thread/ThreadComposer (see ThreadComposerView). @key includes the primary path so
+               it rebuilds on context change. *@
+            <div style="flex: 1; min-height: 0; display: flex; flex-direction: column;">
+                <LayoutAreaView @key="@($"chatinput-{lastPrimaryPath ?? string.Empty}")"
+                                ViewModel="@chatInputArea"
+                                Area="@($"chatinput-{lastPrimaryPath ?? string.Empty}")" />
+            </div>
+        }
         else
         {
-            @* New chat — render ThreadChatControl directly (no thread hub yet).
-               @key includes the primary path so the component rebuilds when the user
-               navigates to a new context (side panel stays open, chat context updates). *@
+            @* Fallback while the user identity is still resolving (no home path yet). *@
             <ThreadChatView @key="@($"newchat-{lastPrimaryPath ?? string.Empty}")"
                             ViewModel="@GetNewChatControl()" />
         }

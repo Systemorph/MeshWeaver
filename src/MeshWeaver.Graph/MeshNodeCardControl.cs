@@ -1,4 +1,5 @@
 using MeshWeaver.Layout;
+using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 
 namespace MeshWeaver.Graph;
@@ -28,7 +29,10 @@ public record MeshNodeCardControl(
         var nodePath = node?.Path ?? fallbackPath;
         var title = node?.Name ?? fallbackPath;
         var imageUrl = MeshNodeThumbnailControl.GetImageUrlForNode(node);
+        // Databind the card subtitle to the node's Description (blank when unset) —
+        // no NodeType fallback, so the line reflects the real description, nothing else.
+        var description = node?.Description;
 
-        return new MeshNodeCardControl(nodePath, title, node?.NodeType, imageUrl, itemArea, disableNavigation ? true : null);
+        return new MeshNodeCardControl(nodePath, title, description, imageUrl, itemArea, disableNavigation ? true : null);
     }
 }

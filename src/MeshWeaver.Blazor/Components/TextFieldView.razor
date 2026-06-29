@@ -2,6 +2,7 @@
 
 <FluentTextField
     @bind-Value="Value"
+    TextFieldType="@(ViewModel.Password ? Microsoft.FluentUI.AspNetCore.Components.TextFieldType.Password : Microsoft.FluentUI.AspNetCore.Components.TextFieldType.Text)"
     Placeholder="@Placeholder"
     Label="@Label"
     Autofocus="@AutoFocus"
@@ -35,6 +36,8 @@
     {
         base.BindData();
 
-        DataBind(ViewModel.Autocomplete, x => x.Autocomplete, defaultValue:"Off");
+        // Lowercase "off" — the HTML autocomplete keyword browsers honour (capital "Off" is ignored by
+        // some, re-enabling autofill/suggestion popups over the field).
+        DataBind(ViewModel.Autocomplete, x => x.Autocomplete, defaultValue:"off");
     }
 }

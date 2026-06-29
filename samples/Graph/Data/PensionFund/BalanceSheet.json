@@ -1,0 +1,18 @@
+﻿{
+    "id":  "BalanceSheet",
+    "namespace":  "PensionFund",
+    "name":  "Balance Sheet",
+    "nodeType":  "NodeType",
+    "category":  "Types",
+    "description":  "The pension fund balance sheet: loads Position/Year/Entry nodes and computes every position through the PositionValue business-rules scopes. Documented at Doc/DataMesh/DataCubes.",
+    "icon":  "\u003csvg xmlns=\u0027http://www.w3.org/2000/svg\u0027 viewBox=\u00270 0 24 24\u0027 fill=\u0027none\u0027 stroke=\u0027currentColor\u0027 stroke-width=\u00272\u0027\u003e\u003cpath d=\u0027M12 3v18M5 7l7-4 7 4M5 7v4a7 7 0 0 0 14 0V7\u0027/\u003e\u003cpath d=\u0027M3 21h18\u0027/\u003e\u003c/svg\u003e",
+    "isPersistent":  true,
+    "content":  {
+                    "$type":  "NodeTypeDefinition",
+                    "id":  "BalanceSheet",
+                    "namespace":  "PensionFund",
+                    "displayName":  "Balance Sheet",
+                    "iconName":  "Scales",
+                    "configuration":  "config =\u003e config.ConfigureBalanceSheet()"
+                }
+}

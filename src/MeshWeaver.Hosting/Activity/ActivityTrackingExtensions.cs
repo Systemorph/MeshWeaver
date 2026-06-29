@@ -1,3 +1,5 @@
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
@@ -21,7 +23,7 @@ public static class ActivityTrackingExtensions
 
     /// <summary>
     /// Adds activity tracking via ActivityLogBundler which persists bundled activity logs
-    /// directly to IMeshStorage (bypassing message handlers to avoid infinite loops).
+    /// directly to IStorageAdapter (bypassing message handlers to avoid infinite loops).
     /// </summary>
     public static MeshBuilder AddActivityTracking(this MeshBuilder builder)
     {
@@ -30,10 +32,10 @@ public static class ActivityTrackingExtensions
             services.AddScoped<ActivityLogBundler>(sp =>
             {
                 var hub = sp.GetRequiredService<IMessageHub>();
-                // Use IMeshStorage directly — NOT IMeshNodePersistence which routes through
+                // Use IStorageAdapter directly — NOT IMeshNodePersistence which routes through
                 // handlers and would trigger activity tracking again (infinite loop).
-                var persistence = sp.GetRequiredService<IMeshStorage>();
-                return new ActivityLogBundler(hub, async log =>
+                var persistence = sp.GetRequiredService<IStorageAdapter>();
+                return new ActivityLogBundler(hub, log =>
                 {
                     // Skip activity tracking for satellite node hubs.
                     // Satellite paths contain /_X/ segments (e.g., /_Thread/, /_Comment/, /_Access/).
@@ -41,24 +43,45 @@ public static class ActivityTrackingExtensions
                     if (log.HubPath != null && IsSatellitePath(log.HubPath))
                         return;
 
-                    // Also check MainNode != Path for non-satellite-path nodes
-                    var hubNode = log.HubPath != null ? await persistence.GetNodeAsync(log.HubPath) : null;
-                    if (hubNode != null && hubNode.MainNode != hubNode.Path)
-                        return;
+                    var lf = hub.ServiceProvider.GetService<ILoggerFactory>();
+                    var pathLogger = lf?.CreateLogger("ActivityLogBundler");
+                    // 🚨 User-activity tracking ALWAYS runs under System. The flush fires on the
+                    // ActivityLogBundler's TIMER thread, which never inherited the originating
+                    // user's AccessContext — and it's infrastructure logging, not a user write — so
+                    // the persistence Read+Write would post context-null and be RLS-denied. Wrap the
+                    // flush in Observable.Using(ImpersonateAsSystem): re-established at subscribe
+                    // (survives the timer thread's null ambient), Permission.All never denied. Same
+                    // rule as compile (#2). See AccessContextPropagation.md → "Persistence runs as System".
+                    var accessService = hub.ServiceProvider.GetService<MeshWeaver.Messaging.AccessService>();
 
-                    var node = MeshNode.FromPath($"{log.HubPath}/_activity/{log.Id}") with
-                    {
-                        NodeType = ActivityNodeType.NodeType,
-                        Name = $"{log.Category}: {log.Messages.FirstOrDefault()?.Message ?? "Activity"}",
-                        MainNode = log.HubPath!,
-                        State = MeshNodeState.Active,
-                        Content = log
-                    };
-                    persistence.SaveNode(node).Subscribe(
-                        _ => { },
-                        ex => hub.ServiceProvider.GetService<ILoggerFactory>()
-                            ?.CreateLogger("ActivityLogBundler")
-                            ?.LogWarning(ex, "Failed to persist activity log for {Path}", node.Path));
+                    // Reactive composition end-to-end — no await, no .ToTask. Bridge to the
+                    // observable hubNode read via SelectMany, then SaveNode chained after.
+                    // The callback is sync so onFlush can drop the deferred Subscribe; any
+                    // hub-touching work happens off the bundler's timer thread.
+                    var hubNodeObs = log.HubPath != null
+                        ? persistence.Read(log.HubPath, hub.JsonSerializerOptions).Take(1)
+                        : Observable.Return<MeshNode?>(null);
+
+                    Observable.Using(
+                            () => accessService?.ImpersonateAsSystem() ?? (IDisposable)System.Reactive.Disposables.Disposable.Empty,
+                            _ => hubNodeObs
+                                .SelectMany(hubNode =>
+                                {
+                                    if (hubNode != null && hubNode.MainNode != hubNode.Path)
+                                        return Observable.Empty<MeshNode>();
+                                    var node = MeshNode.FromPath($"{log.HubPath}/_activity/{log.Id}") with
+                                    {
+                                        NodeType = ActivityNodeType.NodeType,
+                                        Name = $"{log.Category}: {log.Messages.FirstOrDefault()?.Message ?? "Activity"}",
+                                        MainNode = log.HubPath!,
+                                        State = MeshNodeState.Active,
+                                        Content = log
+                                    };
+                                    return persistence.Write(node, hub.JsonSerializerOptions);
+                                }))
+                        .Subscribe(
+                            _ => { },
+                            ex => pathLogger?.LogWarning(ex, "Failed to persist activity log for hub {Path}", log.HubPath));
                 });
             });
             return services;

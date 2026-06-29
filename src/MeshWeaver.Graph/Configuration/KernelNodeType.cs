@@ -1,4 +1,4 @@
-using MeshWeaver.Graph.Security;
+﻿using MeshWeaver.Graph.Security;
 using MeshWeaver.Kernel;
 using MeshWeaver.Kernel.Hub;
 using MeshWeaver.Mesh;
@@ -16,22 +16,32 @@ namespace MeshWeaver.Graph.Configuration;
 /// </summary>
 public static class KernelNodeType
 {
+    /// <summary>The node-type identifier string for Kernel session nodes.</summary>
     public const string NodeType = "kernel";
 
+    /// <summary>
+    /// Registers the Kernel node type on the mesh builder: adds the MeshNode definition,
+    /// excludes it from autocomplete, registers kernel message types at mesh level, and
+    /// wires the satellite access rule and the kernel hub configurator.
+    /// </summary>
+    /// <typeparam name="TBuilder">The mesh builder type.</typeparam>
+    /// <param name="builder">The mesh builder to configure.</param>
+    /// <returns>The same builder, to allow fluent chaining.</returns>
     public static TBuilder AddKernel<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
     {
         builder.AddMeshNodes(CreateMeshNode());
         builder.AddAutocompleteExcludedTypes(NodeType);
         builder
-            .ConfigureHub(config => AddKernelTypes(config)
-                // Route kernel addresses to local hosted hubs — never delegate to grains.
-                .WithRoutes(routes => routes.RouteAddressToHostedHub(
-                    AddressExtensions.KernelType,
-                    c => c.AddKernelSubHubHandlers())))
+            // Register kernel message types at mesh level so JSON deserialization
+            // works wherever a kernel-handler hub lives (Activity hub, markdown
+            // view sub-hub, future hosts). The legacy
+            // `RouteAddressToHostedHub("kernel", â€¦)` rule is gone â€” kernel work
+            // runs inside the Activity MeshNode hub, addressed via its node path.
+            .ConfigureHub(AddKernelTypes)
             .ConfigureServices(services =>
             {
                 services.AddSingleton<INodeTypeAccessRule>(sp =>
-                    new SatelliteAccessRule(NodeType, sp.GetService<ISecurityService>() ?? new NullSecurityService()));
+                    new SatelliteAccessRule(NodeType, sp.GetRequiredService<IMessageHub>()));
                 services.AddSingleton<IKernelHubConfigurator, KernelHubConfiguratorAdapter>();
                 return services;
             });
@@ -45,10 +55,7 @@ public static class KernelNodeType
     private static MessageHubConfiguration AddKernelTypes(MessageHubConfiguration config)
     {
         config.TypeRegistry.WithType(typeof(SubmitCodeRequest), nameof(SubmitCodeRequest));
-        config.TypeRegistry.WithType(typeof(KernelEventEnvelope), nameof(KernelEventEnvelope));
-        config.TypeRegistry.WithType(typeof(KernelCommandEnvelope), nameof(KernelCommandEnvelope));
-        config.TypeRegistry.WithType(typeof(SubscribeKernelEventsRequest), nameof(SubscribeKernelEventsRequest));
-        config.TypeRegistry.WithType(typeof(UnsubscribeKernelEventsRequest), nameof(UnsubscribeKernelEventsRequest));
+        config.TypeRegistry.WithType(typeof(SubmitCodeResponse), nameof(SubmitCodeResponse));
         return config;
     }
 
@@ -79,7 +86,6 @@ public static class KernelNodeType
         Name = "Kernel Session",
         IsSatelliteType = true,
         ExcludeFromContext = new HashSet<string> { "search", "create" },
-        AssemblyLocation = typeof(KernelNodeType).Assembly.Location,
         HubConfiguration = config => config
             .AddKernelHandlers()
     };

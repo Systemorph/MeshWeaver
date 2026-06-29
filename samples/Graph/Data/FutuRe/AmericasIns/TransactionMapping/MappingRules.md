@@ -6,7 +6,7 @@ Icon: /static/storage/content/FutuRe/AmericasIns/LineOfBusiness/icon.svg
 
 # AmericasIns Transaction Mapping Rules
 
-This document defines how [AmericasIns](@FutuRe/AmericasIns)'s local Lines of Business are allocated to the [group standard classification](@FutuRe/LineOfBusiness). Each mapping specifies a <!--comment:c1-->percentage split<!--/comment:c1-->, enabling one local LoB to contribute to multiple group LoBs.
+This document defines how [AmericasIns](@FutuRe/AmericasIns)'s local Lines of Business are allocated to the [group standard classification](@FutuRe/LineOfBusiness). Each mapping specifies a percentage split, enabling one local LoB to contribute to multiple group LoBs.
 
 The mappings are applied virtually at query time by the [Profitability Analysis](@FutuRe/Analysis) hub — local data is never physically copied to the group level.
 
@@ -19,7 +19,7 @@ The mappings are applied virtually at query time by the [Profitability Analysis]
 | [Homeowners](@FutuRe/AmericasIns/LineOfBusiness/HOMEOWNERS) | [Property](@FutuRe/LineOfBusiness/PROP) | 85% |
 | [Homeowners](@FutuRe/AmericasIns/LineOfBusiness/HOMEOWNERS) | [Casualty](@FutuRe/LineOfBusiness/CAS) | 15% |
 | [Workers Compensation](@FutuRe/AmericasIns/LineOfBusiness/WORKERS_COMP) | [Casualty](@FutuRe/LineOfBusiness/CAS) | 100% |
-| <!--comment:c2-->[Commercial Lines](@FutuRe/AmericasIns/LineOfBusiness/COMMERCIAL)<!--/comment:c2--> | [Property](@FutuRe/LineOfBusiness/PROP) | 60% |
+| [Commercial Lines](@FutuRe/AmericasIns/LineOfBusiness/COMMERCIAL) | [Property](@FutuRe/LineOfBusiness/PROP) | 60% |
 | [Commercial Lines](@FutuRe/AmericasIns/LineOfBusiness/COMMERCIAL) | [Casualty](@FutuRe/LineOfBusiness/CAS) | 25% |
 | [Commercial Lines](@FutuRe/AmericasIns/LineOfBusiness/COMMERCIAL) | [Marine](@FutuRe/LineOfBusiness/MARINE) | 15% |
 | [Energy & Mining](@FutuRe/AmericasIns/LineOfBusiness/ENERGY_MINING) | [Energy](@FutuRe/LineOfBusiness/ENRG) | 80% |

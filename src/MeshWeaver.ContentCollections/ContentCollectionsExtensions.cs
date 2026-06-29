@@ -15,6 +15,10 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace MeshWeaver.ContentCollections;
 
+/// <summary>
+/// Extension and helper methods for registering content-collection infrastructure on a hub,
+/// wiring up the content service, and resolving/parsing content paths and URLs.
+/// </summary>
 public static class ContentCollectionsExtensions
 {
     /// <summary>
@@ -87,7 +91,11 @@ public static class ContentCollectionsExtensions
                                 ? null
                                 : CreateContentCollectionReferenceStream(workspace, reference, configuration)));
                 })
-                .WithHandler<GetDataRequest>(HandleCollectionConfigRequest);
+                .WithHandler<GetDataRequest>(HandleCollectionConfigRequest)
+                // Canonical content import (ImportContentRequest) — so every content-enabled node
+                // hub can receive a collection→collection folder import (e.g. the static-repo
+                // import's content sync from the embedded DocContent). See ContentImportExtensions.
+                .AddContentImportHandler();
         }
 
         /// <summary>
@@ -155,27 +163,21 @@ public static class ContentCollectionsExtensions
             configuration ?? (c => c)
         );
 
-        // Create an observable that returns the collection configs
-        var observable = Observable.FromAsync(ct =>
+        // Pure in-memory config lookup — no I/O, so it's synchronous reactive.
+        // Defer keeps it cold/lazy (runs on subscribe) like the Observable.FromAsync
+        // it replaces, but without the async/Task.FromResult shell. See
+        // AsynchronousCalls.md: in-memory work is never async.
+        var observable = Observable.Defer(() =>
         {
-            IReadOnlyCollection<ContentCollectionConfig> configs;
             var collectionNames = collectionRef.CollectionNames;
-
-            if (collectionNames is null || collectionNames.Count == 0)
-            {
-                // Return all collection configurations
-                configs = contentService.GetAllCollectionConfigs();
-            }
-            else
-            {
-                // Return specific collection configurations
-                configs = collectionNames
-                    .Select(contentService.GetCollectionConfig)
-                    .OfType<ContentCollectionConfig>()
-                    .ToArray();
-            }
-
-            return Task.FromResult<object?>(configs);
+            IReadOnlyCollection<ContentCollectionConfig> configs =
+                collectionNames is null || collectionNames.Count == 0
+                    ? contentService.GetAllCollectionConfigs()
+                    : collectionNames
+                        .Select(contentService.GetCollectionConfig)
+                        .OfType<ContentCollectionConfig>()
+                        .ToArray();
+            return Observable.Return<object?>(configs);
         });
 
         stream.RegisterForDisposal(
@@ -310,17 +312,12 @@ public static class ContentCollectionsExtensions
             configuration ?? (c => c)
         );
 
-        // Create an observable that loads the file content
-        var observable = Observable.FromAsync(async ct =>
-        {
-            var result = await fileContentProvider.GetFileContentAsync(reference.Collection, reference.Path, null, ct);
-            return result.Success ? (object?)result.Content : null;
-        });
-
+        // Reactive file read — provider exposes IObservable<FileContentResult> directly.
         stream.RegisterForDisposal(
-            observable
+            fileContentProvider.GetFileContent(reference.Collection, reference.Path)
+                .Select(result => result.Success ? (object?)result.Content : null)
+                .Where(value => value != null)
                 .Select(value => new ChangeItem<object>(value!, stream.StreamId, workspace.Hub.Version))
-                .Where(x => x.Value != null)
                 .DistinctUntilChanged()
                 .Synchronize()
                 .Subscribe(stream)
@@ -329,6 +326,13 @@ public static class ContentCollectionsExtensions
         return stream;
     }
 
+    /// <summary>
+    /// Registers the content service, file content provider, document transformers, and the
+    /// built-in stream-provider factories (FileSystem, EmbeddedResource, Hub). Idempotent —
+    /// safe to call from both the Blazor host and hub configurators.
+    /// </summary>
+    /// <param name="services">The service collection to register into.</param>
+    /// <returns>The same <paramref name="services"/> instance for chaining.</returns>
     public static IServiceCollection AddContentService(this IServiceCollection services)
     {
         if (services.All(d => d.ServiceType != typeof(IContentService)))
@@ -363,6 +367,16 @@ public static class ContentCollectionsExtensions
     internal static IContentService GetContentService(this IMessageHub hub)
         => hub.ServiceProvider.GetRequiredService<IContentService>();
 
+    /// <summary>
+    /// Parses raw markdown text into a <see cref="MarkdownElement"/>, stripping any YAML
+    /// front matter, pre-rendering HTML, and computing the content URL and executable code blocks.
+    /// </summary>
+    /// <param name="collection">The collection the file belongs to.</param>
+    /// <param name="path">The file path within the collection.</param>
+    /// <param name="lastWriteTime">The file's last-modified timestamp.</param>
+    /// <param name="content">The raw markdown content to parse.</param>
+    /// <param name="address">The hub address used to build the content URL, or <c>null</c>.</param>
+    /// <returns>The parsed markdown element.</returns>
     public static MarkdownElement ParseContent(string collection, string path, DateTime lastWriteTime, string content, Address? address)
     {
         if (OperatingSystem.IsWindows())
@@ -394,6 +408,15 @@ public static class ContentCollectionsExtensions
         };
     }
 
+    /// <summary>
+    /// Normalizes a resource URL referenced from content: absolute and root-relative URLs are
+    /// returned unchanged; a bare relative URL is rewritten under the <c>/static</c> route for
+    /// the given collection (and address, when present).
+    /// </summary>
+    /// <param name="resourceUrl">The resource URL to adapt; may be <c>null</c> or empty.</param>
+    /// <param name="collection">The collection the resource belongs to.</param>
+    /// <param name="address">The hub address, or <c>null</c> for an address-less collection.</param>
+    /// <returns>The adapted URL, or the original value when no rewrite is needed.</returns>
     public static string? AdaptResourceUrl(string? resourceUrl, string collection, Address? address)
     {
         if (string.IsNullOrEmpty(resourceUrl))
@@ -419,6 +442,14 @@ public static class ContentCollectionsExtensions
     }
 
 
+    /// <summary>
+    /// Builds the <c>/content</c> route URL for a file in a collection, including the hub
+    /// address segment when one is supplied.
+    /// </summary>
+    /// <param name="collection">The collection name.</param>
+    /// <param name="path">The file path within the collection.</param>
+    /// <param name="address">The hub address, or <c>null</c> for an address-less collection.</param>
+    /// <returns>The content route URL.</returns>
     public static string GetContentUrl(string collection, string path, Address? address = null)
         => address != null
             ? $"/content/{address}/{collection}/{path}"
@@ -428,6 +459,14 @@ public static class ContentCollectionsExtensions
     /// <param name="configuration">The message hub configuration</param>
     extension(MessageHubConfiguration configuration)
     {
+        /// <summary>
+        /// Registers a read-only content collection sourced from embedded resources of the
+        /// given assembly under the specified relative path.
+        /// </summary>
+        /// <param name="collectionName">The name of the collection to register.</param>
+        /// <param name="assembly">The assembly whose embedded resources back the collection.</param>
+        /// <param name="relativePath">The resource path prefix (relative to the assembly's default namespace).</param>
+        /// <returns>The configured message hub configuration.</returns>
         public MessageHubConfiguration AddEmbeddedResourceContentCollection(string collectionName,
             Assembly assembly,
             string relativePath)
@@ -446,8 +485,8 @@ public static class ContentCollectionsExtensions
                     {
                         Name = collectionName,
                         SourceType = "EmbeddedResource",
-                        IsEditable = false,
-                        ExposeInChildren = false,
+                        // IsEditable defaults to false — embedded resources are read-only.
+                        // ExposeInChildren defaults to false — backing store, hidden by design.
                         Settings = new Dictionary<string, string>
                         {
                             ["AssemblyName"] = assembly.GetName().Name ?? "",
@@ -484,10 +523,14 @@ public static class ContentCollectionsExtensions
                             SourceType = "FileSystem",
                             BasePath = basePath,
                             Address = configuration.Address,
-                            Settings = new Dictionary<string, string>
-                            {
-                                ["BasePath"] = basePath
-                            }
+                            // Must opt in explicitly — the wire-default flip in
+                            // 95f840f34 made ExposeInChildren default to false
+                            // (so types that don't set it get filtered out of
+                            // GetAllCollectionConfigs and ContentAutocompleteProvider).
+                            // Filesystem collections registered via this builder
+                            // are user-facing and meant to surface in children.
+                            ExposeInChildren = true,
+                            Settings = new Dictionary<string, string> { ["BasePath"] = basePath }
                         };
 
                         return new ContentCollectionConfigProvider(config);
@@ -512,8 +555,11 @@ public static class ContentCollectionsExtensions
                     {
                         var collectionConfig = collectionConfigFactory(sp);
 
-                        // Ensure Settings are set
-                        var settings = collectionConfig.Settings ?? new Dictionary<string, string>();
+                        // Ensure Settings are set. Settings is IReadOnlyDictionary; copy
+                        // into a Dictionary so BasePath can be added.
+                        var settings = collectionConfig.Settings is { } existing
+                            ? new Dictionary<string, string>(existing)
+                            : new Dictionary<string, string>();
                         if (collectionConfig.BasePath != null && !settings.ContainsKey("BasePath"))
                         {
                             settings["BasePath"] = collectionConfig.BasePath;
@@ -601,6 +647,12 @@ internal class MappedContentCollectionConfigProvider(
         Name = targetCollectionName,
         SourceType = MappedSourceType,
         Address = address,
+        // The whole point of MapContentCollection is to expose a writable
+        // per-node view over a read-only backing store; default the wrapper
+        // to editable + child-visible. (Source collection's defaults still
+        // bind it — the resolved config picks IsEditable from this wrapper.)
+        IsEditable = true,
+        ExposeInChildren = true,
         Settings = new Dictionary<string, string>
         {
             [SourceCollectionKey] = sourceCollectionName,

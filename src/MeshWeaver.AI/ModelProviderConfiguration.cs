@@ -1,0 +1,103 @@
+using System.Collections.Immutable;
+using System.ComponentModel;
+
+namespace MeshWeaver.AI;
+
+/// <summary>
+/// Content shape for <c>nodeType:ModelProvider</c> mesh nodes — one node per
+/// (user, provider) pair holding the credentials a chat-client factory uses
+/// to authenticate against the provider's API.
+///
+/// <para>Two layers populate this NodeType:</para>
+/// <list type="bullet">
+///   <item><b>Static layer</b>: <see cref="BuiltInLanguageModelProvider"/>
+///         emits one read-only <c>ModelProvider</c> per
+///         <see cref="LanguageModelCatalogSource"/> at
+///         <c>Model/{providerName}</c>, stamped with the values from the
+///         matching <c>{section}:ApiKey</c> / <c>{section}:Endpoint</c>
+///         IConfiguration entries. This preserves backward compatibility for
+///         deployments that wire credentials via appsettings.</item>
+///   <item><b>User layer</b>: <c>ModelProviderService</c> creates
+///         user-authored <c>ModelProvider</c> nodes at
+///         <c>{userId}/Model/{providerName}</c> when a user pastes their
+///         personal key in the Models settings tab. The factory resolver
+///         prefers these over the static layer via
+///         <c>scope:selfAndAncestors</c> closest-wins.</item>
+/// </list>
+///
+/// <para>The literal <see cref="ApiKey"/> lives on this content. RLS gates
+/// read access — only the owning user (or a partition admin) can read the
+/// node, so the key never reaches other tenants. Keyless providers
+/// (GitHub Copilot, local Claude Code CLI) leave <see cref="ApiKey"/> null.</para>
+/// </summary>
+public record ModelProviderConfiguration
+{
+    /// <summary>
+    /// Provider label — matches <see cref="IChatClientFactory.Name"/> and
+    /// the <see cref="ModelDefinition.Provider"/> stamp on each child
+    /// LanguageModel node. Looked up in <c>ProviderRegistry.Find</c>
+    /// to pull default endpoint / default model ids.
+    /// </summary>
+    public required string Provider { get; init; }
+
+    /// <summary>
+    /// Literal API key (or subscription token) the factory passes as
+    /// <c>x-api-key</c> / <c>Authorization: Bearer</c>. Null for keyless
+    /// providers (Copilot uses OAuth, ClaudeCode runs a local binary).
+    /// </summary>
+    /// <remarks>
+    /// <see cref="BrowsableAttribute"/>(false): SECRET — this is the platform's provider key. It MUST
+    /// NEVER be rendered on the GUI (the generic property grid showed it in plaintext = a key leak).
+    /// On the GUI the key is WRITE-ONLY: set via the masked Settings → Models card (Password input) or a
+    /// write-only "Set key" form; it is never displayed or read back. The value still serializes for the
+    /// runtime factory / persistence — only the GUI editor surface is suppressed.
+    /// </remarks>
+    [Browsable(false)]
+    public string? ApiKey { get; init; }
+
+    /// <summary>
+    /// Encrypted (<c>enc:</c>-tagged) raw MeshWeaver ApiToken (<c>mw_…</c>) auto-minted at Connect
+    /// time for the co-hosted CLI's MCP back-connection. Re-read + decrypted at spawn and injected
+    /// as a <c>Authorization: Bearer</c> header on the per-spawn HTTP MCP server, so the CLI calls
+    /// <c>/mcp</c> AS THE USER. Stored here (never on the Azure Files share) so it survives across
+    /// portal replicas via Postgres. Null until the user connects a co-hosted CLI provider.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="BrowsableAttribute"/>(false): SECRET — same rule as <see cref="ApiKey"/>. Never render
+    /// on the GUI; write-only.
+    /// </remarks>
+    [Browsable(false)]
+    public string? McpApiKey { get; init; }
+
+    /// <summary>
+    /// Optional endpoint override. Null means "use the
+    /// <c>KnownProviderProfile.DefaultEndpoint</c> from
+    /// <c>ProviderRegistry</c>". A non-null value flows through to
+    /// the factory unchanged.
+    /// </summary>
+    public string? Endpoint { get; init; }
+
+    /// <summary>Human-readable display name (e.g. "Roland's personal key").</summary>
+    public string? Label { get; init; }
+
+    /// <summary>UTC timestamp when this provider configuration node was first created.</summary>
+    public DateTimeOffset CreatedAt { get; init; }
+
+    /// <summary>UTC timestamp of the most recent use by a chat-client factory; null if never used.</summary>
+    public DateTimeOffset? LastUsedAt { get; init; }
+
+    /// <summary>
+    /// Snapshot of the model ids the service auto-created under this provider
+    /// when it was first saved. Lets the UI show a count without re-querying
+    /// the LanguageModel children, and gives the service a single source of
+    /// truth for cascade-delete.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="BrowsableAttribute"/>(false): this is a denormalized snapshot for cascade-delete /
+    /// count display, NOT an inline-editable field. The generic property form (EditorExtensions) has no
+    /// control for an <c>IEnumerable&lt;string&gt;</c>, so without this it fell through to a string-bound
+    /// control and crashed the render with a JSON array→string conversion (the atioz Anthropic provider).
+    /// </remarks>
+    [Browsable(false)]
+    public ImmutableArray<string> Models { get; init; } = ImmutableArray<string>.Empty;
+}

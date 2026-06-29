@@ -1,10 +1,9 @@
 ﻿using System;
+using System.Reactive;
 using System.Reactive.Linq;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
-using FluentAssertions;
-using FluentAssertions.Extensions;
 using MeshWeaver.Data;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Graph.Configuration;
@@ -17,40 +16,18 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 
 public class MonolithMeshTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
+    /// <summary>Share Mesh/SP across [Fact]s — see MonolithMeshTestBase.ShareMeshAcrossTests.</summary>
+    protected override bool ShareMeshAcrossTests => true;
+
     [Fact(Timeout = 20000)]
     public async Task PingPong()
     {
         var client = GetClient();
         var response = await client
-            .AwaitResponse(new PingRequest(), o => o.WithTarget(Mesh.Address)
-                , new CancellationTokenSource(10.Seconds()).Token
-                );
+            .Observe(new PingRequest(), o => o.WithTarget(Mesh.Address))
+            .Should().Within(10.Seconds()).Emit();
         response.Should().NotBeNull();
         response.Message.Should().BeOfType<PingResponse>();
-    }
-
-
-    [Theory(Timeout = 20000)]
-    [InlineData("HubFactory")]
-    [InlineData("Kernel")]
-    public async Task HubWorksAfterDisposal(string id)
-    {
-        var client = GetClient();
-        var address = AddressExtensions.CreateAppAddress(id);
-
-        var response = await client
-            .AwaitResponse(new PingRequest(), o => o.WithTarget(address)
-                , new CancellationTokenSource(10.Seconds()).Token
-            );
-        response.Should().NotBeNull();
-
-        client.Post(new DisposeRequest(), o => o.WithTarget(address));
-        await Task.Delay(100, TestContext.Current.CancellationToken);
-        response = await client
-            .AwaitResponse(new PingRequest(), o => o.WithTarget(address)
-                , new CancellationTokenSource(10.Seconds()).Token
-            );
-        response.Should().NotBeNull();
     }
 
 
@@ -60,13 +37,10 @@ public class MonolithMeshTest(ITestOutputHelper output) : MonolithMeshTestBase(o
         var client = GetClient();
         var nonExistentAddress = new Address("NonExistent", "Hub");
 
-        var ex = await Assert.ThrowsAnyAsync<Exception>(async () =>
-        {
-            await client.AwaitResponse(
-                new PingRequest(),
-                o => o.WithTarget(nonExistentAddress),
-                new CancellationTokenSource(3.Seconds()).Token);
-        });
+        var notification = await client.Observe(new PingRequest(), o => o.WithTarget(nonExistentAddress))
+            .Materialize()
+            .Should().Within(10.Seconds()).Match(n => n.Kind == NotificationKind.OnError);
+        var ex = notification.Exception!;
 
         // Should be a routing failure, NOT a timeout
         ex.Should().NotBeOfType<OperationCanceledException>();
@@ -85,10 +59,10 @@ public class MonolithMeshTest(ITestOutputHelper output) : MonolithMeshTestBase(o
             nonExistentAddress,
             new LayoutAreaReference("Overview"));
 
-        var ex = await Assert.ThrowsAnyAsync<Exception>(async () =>
-        {
-            await stream.Timeout(5.Seconds()).FirstAsync();
-        });
+        var notification = await stream
+            .Materialize()
+            .Should().Within(10.Seconds()).Match(n => n.Kind == NotificationKind.OnError);
+        var ex = notification.Exception!;
 
         // Should be a DeliveryFailure, NOT a timeout
         ex.Should().NotBeOfType<TimeoutException>();

@@ -10,6 +10,15 @@ namespace MeshWeaver.Messaging.Serialization;
 /// </summary>
 public class AddressConverter : JsonConverter<Address>
 {
+    /// <summary>
+    /// Reads an <see cref="Address"/> from JSON, accepting either a string token
+    /// ("type/seg1/seg2", with an optional "@" host suffix) or an object token
+    /// ({ "type", "id", "host" }) for backward compatibility.
+    /// </summary>
+    /// <param name="reader">The reader positioned at the address token.</param>
+    /// <param name="typeToConvert">The target type (always <see cref="Address"/>).</param>
+    /// <param name="options">The active serializer options.</param>
+    /// <returns>The deserialized <see cref="Address"/>.</returns>
     public override Address Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
     {
         return reader.TokenType switch
@@ -84,6 +93,13 @@ public class AddressConverter : JsonConverter<Address>
     private static Address ParseSimple(string address) =>
         new(address.Split('/'));
 
+    /// <summary>
+    /// Writes an <see cref="Address"/> as a single string value using its full
+    /// string form (which includes the host segment when one is present).
+    /// </summary>
+    /// <param name="writer">The writer to emit the address to.</param>
+    /// <param name="value">The address to serialize.</param>
+    /// <param name="options">The active serializer options.</param>
     public override void Write(Utf8JsonWriter writer, Address value, JsonSerializerOptions options)
     {
         // Use ToFullString to include host if present

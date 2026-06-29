@@ -1,14 +1,23 @@
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Graph.Configuration;
 
 /// <summary>
-/// Resolves hub configuration for MeshNodes by delegating to INodeTypeService.
-/// Registered as singleton — does NOT depend on MeshCatalog.
+/// Resolves hub configuration for a MeshNode via
+/// <see cref="NodeTypeEnrichmentHelpers.EnrichWithNodeType"/>: stateless,
+/// reads the live NodeType MeshNode through the shared
+/// <see cref="IMeshNodeStreamCache"/>. No INodeTypeService caches.
 /// </summary>
-internal class NodeConfigurationResolver(INodeTypeService nodeTypeService) : INodeConfigurationResolver
+internal class NodeConfigurationResolver(
+    IMessageHub meshHub,
+    MeshConfiguration meshConfiguration,
+    IMeshNodeCompilationService? compilationService = null,
+    ILogger<NodeConfigurationResolver>? logger = null) : INodeConfigurationResolver
 {
-    public Task<MeshNode> ResolveConfigurationAsync(MeshNode node, CancellationToken ct = default)
-        => nodeTypeService.EnrichWithNodeTypeAsync(node, ct);
+    public IObservable<MeshNode> ResolveConfiguration(MeshNode node)
+        => NodeTypeEnrichmentHelpers.EnrichWithNodeType(
+            meshHub, meshConfiguration, compilationService, node, logger);
 }

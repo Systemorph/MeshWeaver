@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
-using FluentAssertions;
 using Memex.Portal.Shared;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting;
@@ -26,14 +25,32 @@ namespace MeshWeaver.Query.Test;
 public class SearchQueryTests : MonolithMeshTestBase
 {
 
-    private readonly string _cacheDirectory;
+    private static readonly string _cacheDirectory =
+        Path.Combine(Path.GetTempPath(), "MeshWeaverSearchTests", Guid.NewGuid().ToString());
+    static SearchQueryTests() => Directory.CreateDirectory(_cacheDirectory);
+
+    protected override bool ShareMeshAcrossTests => true;
 
     private new IMeshService MeshQuery => Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
+    /// <summary>
+    /// Reactive replacement for <c>QueryAsync&lt;MeshNode&gt;(...).ToArrayAsync()</c>:
+    /// the first <see cref="QueryChangeType.Initial"/> emission carries the full snapshot.
+    /// </summary>
+    private async Task<MeshNode[]> Query(MeshQueryRequest request)
+        => (await MeshQuery.Query<MeshNode>(request)
+            .Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items.ToArray();
+
+    /// <summary>
+    /// Reactive replacement for the non-generic <c>QueryAsync(...).ToArrayAsync()</c> —
+    /// used by <c>select:</c> projection tests, whose rows are dictionaries, not MeshNodes.
+    /// </summary>
+    private async Task<object[]> QueryObjects(MeshQueryRequest request)
+        => (await MeshQuery.Query<object>(request)
+            .Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items.ToArray();
+
     public SearchQueryTests(ITestOutputHelper output) : base(output)
     {
-        _cacheDirectory = Path.Combine(Path.GetTempPath(), "MeshWeaverSearchTests", Guid.NewGuid().ToString());
-        Directory.CreateDirectory(_cacheDirectory);
     }
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
@@ -51,16 +68,7 @@ public class SearchQueryTests : MonolithMeshTestBase
             .AddGraph();
     }
 
-    public override async ValueTask DisposeAsync()
-    {
-        await base.DisposeAsync();
-
-        if (Directory.Exists(_cacheDirectory))
-        {
-            try { Directory.Delete(_cacheDirectory, recursive: true); }
-            catch { /* Ignore cleanup errors */ }
-        }
-    }
+    // Cache dir is class-static + shared SP — never deleted between tests.
 
     #region Text Search Tests
 
@@ -72,7 +80,7 @@ public class SearchQueryTests : MonolithMeshTestBase
         var request = new MeshQueryRequest { Query = "alice scope:descendants", Limit = 10 };
 
         // Act
-        var results = await MeshQuery.QueryAsync<MeshNode>(request, null, TestContext.Current.CancellationToken).ToArrayAsync(TestContext.Current.CancellationToken);
+        var results = await Query(request);
 
         // Assert
         Output.WriteLine($"Found {results.Length} results for 'alice scope:descendants'");
@@ -97,7 +105,7 @@ public class SearchQueryTests : MonolithMeshTestBase
         var request = new MeshQueryRequest { Query = "name:*org* scope:descendants", Limit = 10 };
 
         // Act
-        var results = await MeshQuery.QueryAsync<MeshNode>(request, null, TestContext.Current.CancellationToken).ToArrayAsync(TestContext.Current.CancellationToken);
+        var results = await Query(request);
 
         // Assert
         Output.WriteLine($"Found {results.Length} results for 'name:*org*'");
@@ -114,7 +122,7 @@ public class SearchQueryTests : MonolithMeshTestBase
         var request = new MeshQueryRequest { Query = "scope:descendants", Limit = 10 };
 
         // Act
-        var results = await MeshQuery.QueryAsync<MeshNode>(request, null, TestContext.Current.CancellationToken).ToArrayAsync(TestContext.Current.CancellationToken);
+        var results = await Query(request);
 
         // Assert
         Output.WriteLine($"Found {results.Length} results for 'scope:descendants'");
@@ -128,7 +136,7 @@ public class SearchQueryTests : MonolithMeshTestBase
         var request = new MeshQueryRequest { Query = "   ", Limit = 10 };
 
         // Act - should not throw
-        var results = await MeshQuery.QueryAsync<MeshNode>(request, null, TestContext.Current.CancellationToken).ToArrayAsync(TestContext.Current.CancellationToken);
+        var results = await Query(request);
 
         // Assert
         Output.WriteLine($"Found {results.Length} results for whitespace query");
@@ -146,7 +154,7 @@ public class SearchQueryTests : MonolithMeshTestBase
         var request = new MeshQueryRequest { Query = "name:*erson* scope:descendants", Limit = 10 };
 
         // Act
-        var results = await MeshQuery.QueryAsync<MeshNode>(request, null, TestContext.Current.CancellationToken).ToArrayAsync(TestContext.Current.CancellationToken);
+        var results = await Query(request);
 
         // Assert
         Output.WriteLine($"Found {results.Length} results for 'name:*erson* scope:descendants'");
@@ -168,7 +176,7 @@ public class SearchQueryTests : MonolithMeshTestBase
         var request = new MeshQueryRequest { Query = "name:Per* scope:descendants", Limit = 10 };
 
         // Act
-        var results = await MeshQuery.QueryAsync<MeshNode>(request, null, TestContext.Current.CancellationToken).ToArrayAsync(TestContext.Current.CancellationToken);
+        var results = await Query(request);
 
         // Assert
         Output.WriteLine($"Found {results.Length} results for 'name:Per* scope:descendants'");
@@ -189,7 +197,7 @@ public class SearchQueryTests : MonolithMeshTestBase
         var request = new MeshQueryRequest { Query = "name:*tion scope:descendants", Limit = 10 };
 
         // Act
-        var results = await MeshQuery.QueryAsync<MeshNode>(request, null, TestContext.Current.CancellationToken).ToArrayAsync(TestContext.Current.CancellationToken);
+        var results = await Query(request);
 
         // Assert
         Output.WriteLine($"Found {results.Length} results for 'name:*tion scope:descendants'");
@@ -214,7 +222,7 @@ public class SearchQueryTests : MonolithMeshTestBase
         var request = new MeshQueryRequest { Query = "nodeType:User scope:descendants", Limit = 20 };
 
         // Act
-        var results = await MeshQuery.QueryAsync<MeshNode>(request, null, TestContext.Current.CancellationToken).ToArrayAsync(TestContext.Current.CancellationToken);
+        var results = await Query(request);
 
         // Assert
         Output.WriteLine($"Found {results.Length} User nodes");
@@ -232,7 +240,7 @@ public class SearchQueryTests : MonolithMeshTestBase
         var request = new MeshQueryRequest { Query = "nodeType:NodeType scope:descendants", Limit = 10 };
 
         // Act
-        var results = await MeshQuery.QueryAsync<MeshNode>(request, null, TestContext.Current.CancellationToken).ToArrayAsync(TestContext.Current.CancellationToken);
+        var results = await Query(request);
 
         // Assert
         Output.WriteLine($"Found {results.Length} results for 'nodeType:NodeType scope:descendants'");
@@ -251,7 +259,7 @@ public class SearchQueryTests : MonolithMeshTestBase
         var request = new MeshQueryRequest { Query = "", Limit = 5 };
 
         // Act
-        var results = await MeshQuery.QueryAsync<MeshNode>(request, null, TestContext.Current.CancellationToken).ToArrayAsync(TestContext.Current.CancellationToken);
+        var results = await Query(request);
 
         // Assert
         Output.WriteLine($"Found {results.Length} results with limit 5");
@@ -265,7 +273,7 @@ public class SearchQueryTests : MonolithMeshTestBase
         var request = new MeshQueryRequest { Query = "nodeType:*Project*", Limit = 20 };
 
         // Act
-        var results = await MeshQuery.QueryAsync<MeshNode>(request, null, TestContext.Current.CancellationToken).ToArrayAsync(TestContext.Current.CancellationToken);
+        var results = await Query(request);
 
         // Assert
         Output.WriteLine($"Found {results.Length} Project-related nodes");
@@ -286,11 +294,12 @@ public class SearchQueryTests : MonolithMeshTestBase
         var basePath = "";
         var prefix = "";
 
-        // Act
-        var suggestions = await MeshQuery.AutocompleteAsync(basePath, prefix, 10, TestContext.Current.CancellationToken).ToArrayAsync(TestContext.Current.CancellationToken);
+        // Act — Autocomplete's first emission is empty (StartWith); wait for population.
+        var suggestions = await MeshQuery.Autocomplete(basePath, prefix, limit: 10)
+            .Should().Match(r => r.Count >= 1);
 
         // Assert
-        Output.WriteLine($"Found {suggestions.Length} autocomplete suggestions from root");
+        Output.WriteLine($"Found {suggestions.Count} autocomplete suggestions from root");
         foreach (var s in suggestions)
             Output.WriteLine($"  - {s.Path}: {s.Name} (Score: {s.Score:F2})");
 
@@ -304,11 +313,11 @@ public class SearchQueryTests : MonolithMeshTestBase
         var basePath = "";
         var prefix = "Per";
 
-        // Act
-        var suggestions = await MeshQuery.AutocompleteAsync(basePath, prefix, 10, TestContext.Current.CancellationToken).ToArrayAsync(TestContext.Current.CancellationToken);
+        // Act — no count assertion here; grab the first emission (log-only test).
+        var suggestions = await MeshQuery.Autocomplete(basePath, prefix, limit: 10).Should().Emit();
 
         // Assert
-        Output.WriteLine($"Found {suggestions.Length} suggestions for prefix 'Per'");
+        Output.WriteLine($"Found {suggestions.Count} suggestions for prefix 'Per'");
         foreach (var s in suggestions)
             Output.WriteLine($"  - {s.Path}: {s.Name} (Score: {s.Score:F2})");
 
@@ -321,7 +330,7 @@ public class SearchQueryTests : MonolithMeshTestBase
         // Arrange - autocomplete from a nested path
         // First find a node that has children
         var nodesRequest = new MeshQueryRequest { Query = "", Limit = 20 };
-        var nodes = await MeshQuery.QueryAsync<MeshNode>(nodesRequest, null, TestContext.Current.CancellationToken).ToArrayAsync(TestContext.Current.CancellationToken);
+        var nodes = await Query(nodesRequest);
 
         var nodeWithPotentialChildren = nodes.FirstOrDefault(n => n.Path != null && !n.Path.Contains("/"));
         if (nodeWithPotentialChildren == null)
@@ -330,11 +339,11 @@ public class SearchQueryTests : MonolithMeshTestBase
             return;
         }
 
-        // Act
-        var suggestions = await MeshQuery.AutocompleteAsync(nodeWithPotentialChildren.Path!, "", 10, TestContext.Current.CancellationToken).ToArrayAsync(TestContext.Current.CancellationToken);
+        // Act — log-only test; grab the first emission.
+        var suggestions = await MeshQuery.Autocomplete(nodeWithPotentialChildren.Path!, "", limit: 10).Should().Emit();
 
         // Assert
-        Output.WriteLine($"Found {suggestions.Length} suggestions under '{nodeWithPotentialChildren.Path}'");
+        Output.WriteLine($"Found {suggestions.Count} suggestions under '{nodeWithPotentialChildren.Path}'");
         foreach (var s in suggestions)
             Output.WriteLine($"  - {s.Path}: {s.Name}");
     }
@@ -350,7 +359,7 @@ public class SearchQueryTests : MonolithMeshTestBase
         var request = new MeshQueryRequest { Query = "namespace:Systemorph", Limit = 50 };
 
         // Act
-        var results = await MeshQuery.QueryAsync<MeshNode>(request, null, TestContext.Current.CancellationToken).ToArrayAsync(TestContext.Current.CancellationToken);
+        var results = await Query(request);
 
         // Assert
         Output.WriteLine($"Found {results.Length} nodes recursively under Systemorph namespace");
@@ -369,7 +378,7 @@ public class SearchQueryTests : MonolithMeshTestBase
         var request = new MeshQueryRequest { Query = "namespace:Systemorph scope:descendants", Limit = 50 };
 
         // Act
-        var results = await MeshQuery.QueryAsync<MeshNode>(request, null, TestContext.Current.CancellationToken).ToArrayAsync(TestContext.Current.CancellationToken);
+        var results = await Query(request);
 
         // Assert
         Output.WriteLine($"Found {results.Length} nodes recursively under Systemorph");
@@ -388,12 +397,57 @@ public class SearchQueryTests : MonolithMeshTestBase
         var request = new MeshQueryRequest { Query = "namespace:Systemorph nodeType:*Project*", Limit = 20 };
 
         // Act
-        var results = await MeshQuery.QueryAsync<MeshNode>(request, null, TestContext.Current.CancellationToken).ToArrayAsync(TestContext.Current.CancellationToken);
+        var results = await Query(request);
 
         // Assert
         Output.WriteLine($"Found {results.Length} Project nodes in Systemorph namespace");
         foreach (var r in results)
             Output.WriteLine($"  - {r.Path}: {r.Name} ({r.NodeType})");
+    }
+
+    [Fact(Timeout = 10000)]
+    public async Task NamespaceQuery_NestedSourceSubtree_DoesNotLeakSiblingSubtrees()
+    {
+        // Repro from prod (memex.meshweaver.cloud/Systemorph/Events):
+        // `namespace:Systemorph/EventCalendar/Source scope:subtree nodeType:Code`
+        // returned 47 Code nodes spread across the Systemorph partition
+        // (SocialMedia/, Post/, FutuRe/Pricing/, Event/, LinkedInProfile/, …)
+        // instead of just the EventCalendarLayoutAreas node directly under
+        // Systemorph/EventCalendar/Source/. The over-match caused the NodeType
+        // compile to fail with duplicate-type / Razor-in-C# errors.
+        //
+        // Equivalent shape in ACME samples:
+        //   ACME/Project/Source/{Project, ProjectLayoutAreas, Category, Priority, Status}
+        //   ACME/Article/Source/{Article, ArticleLayoutAreas}     <-- must NOT be returned
+        //   ACME/Project/Todo/Source/{Category, Priority, Status, Todo, TodoLayoutAreas} <-- must NOT be returned
+        var request = new MeshQueryRequest
+        {
+            Query = "namespace:ACME/Project/Source scope:subtree nodeType:Code",
+            Limit = 100,
+        };
+
+        var results = await Query(request);
+
+        Output.WriteLine($"Got {results.Length} Code nodes for 'namespace:ACME/Project/Source scope:subtree nodeType:Code':");
+        foreach (var r in results)
+            Output.WriteLine($"  - {r.Path}");
+
+        results.Should().NotBeEmpty(
+            "ACME/Project/Source has Code nodes (Project, ProjectLayoutAreas, Category, Priority, Status)");
+
+        results.Should().OnlyContain(
+            n => n.Path != null && (
+                n.Path.Equals("ACME/Project/Source", StringComparison.OrdinalIgnoreCase)
+                || n.Path.StartsWith("ACME/Project/Source/", StringComparison.OrdinalIgnoreCase)),
+            "namespace + scope:subtree must restrict results to that subtree exactly — "
+            + "sibling subtrees (ACME/Article/Source, ACME/Project/Todo/Source) must NOT leak in");
+
+        results.Should().NotContain(
+            n => n.Path != null && n.Path.StartsWith("ACME/Article/Source/", StringComparison.OrdinalIgnoreCase),
+            "Article/Source is a sibling of Project/Source and must be excluded");
+        results.Should().NotContain(
+            n => n.Path != null && n.Path.StartsWith("ACME/Project/Todo/Source/", StringComparison.OrdinalIgnoreCase),
+            "Project/Todo/Source is a descendant of Project, NOT of Project/Source — must be excluded");
     }
 
     #endregion
@@ -410,7 +464,7 @@ public class SearchQueryTests : MonolithMeshTestBase
         var request = new MeshQueryRequest { Query = "scope:descendants", Limit = 10 };
 
         // Act
-        var results = await MeshQuery.QueryAsync<MeshNode>(request, null, TestContext.Current.CancellationToken).ToArrayAsync(TestContext.Current.CancellationToken);
+        var results = await Query(request);
 
         // Assert
         Output.WriteLine($"Found {results.Length} nodes for '@' (scope:descendants query)");
@@ -429,7 +483,7 @@ public class SearchQueryTests : MonolithMeshTestBase
         var request = new MeshQueryRequest { Query = "*Org* scope:descendants", Limit = 10 };
 
         // Act
-        var results = await MeshQuery.QueryAsync<MeshNode>(request, null, TestContext.Current.CancellationToken).ToArrayAsync(TestContext.Current.CancellationToken);
+        var results = await Query(request);
 
         // Assert
         Output.WriteLine($"Found {results.Length} nodes matching '*Org* scope:descendants'");
@@ -446,7 +500,7 @@ public class SearchQueryTests : MonolithMeshTestBase
 
         // Arrange - first find a valid path
         var nodesRequest = new MeshQueryRequest { Query = "Organization scope:descendants", Limit = 5 };
-        var nodes = await MeshQuery.QueryAsync<MeshNode>(nodesRequest, null, TestContext.Current.CancellationToken).ToArrayAsync(TestContext.Current.CancellationToken);
+        var nodes = await Query(nodesRequest);
 
         if (!nodes.Any())
         {
@@ -457,11 +511,11 @@ public class SearchQueryTests : MonolithMeshTestBase
         var basePath = nodes.First().Path!;
         Output.WriteLine($"Using base path: {basePath}");
 
-        // Act - autocomplete from that path
-        var suggestions = await MeshQuery.AutocompleteAsync(basePath, "", 10, TestContext.Current.CancellationToken).ToArrayAsync(TestContext.Current.CancellationToken);
+        // Act - autocomplete from that path (log-only; grab the first emission).
+        var suggestions = await MeshQuery.Autocomplete(basePath, "", limit: 10).Should().Emit();
 
         // Assert
-        Output.WriteLine($"Found {suggestions.Length} sub-completions for '{basePath}/'");
+        Output.WriteLine($"Found {suggestions.Count} sub-completions for '{basePath}/'");
         foreach (var s in suggestions)
             Output.WriteLine($"  - {s.Path}: {s.Name}");
 
@@ -477,7 +531,7 @@ public class SearchQueryTests : MonolithMeshTestBase
         var request = new MeshQueryRequest { Query = "nodeType:*Person* scope:descendants", Limit = 10 };
 
         // Act
-        var results = await MeshQuery.QueryAsync<MeshNode>(request, null, TestContext.Current.CancellationToken).ToArrayAsync(TestContext.Current.CancellationToken);
+        var results = await Query(request);
 
         // Assert
         Output.WriteLine($"Found {results.Length} nodes with nodeType matching 'Person'");
@@ -494,7 +548,7 @@ public class SearchQueryTests : MonolithMeshTestBase
         var request = new MeshQueryRequest { Query = "nodeType:*Person* alice scope:descendants", Limit = 10 };
 
         // Act
-        var results = await MeshQuery.QueryAsync<MeshNode>(request, null, TestContext.Current.CancellationToken).ToArrayAsync(TestContext.Current.CancellationToken);
+        var results = await Query(request);
 
         // Assert
         Output.WriteLine($"Found {results.Length} Person nodes matching 'alice'");
@@ -566,7 +620,7 @@ public class SearchQueryTests : MonolithMeshTestBase
         var request = new MeshQueryRequest { Query = query, Limit = 100 };
 
         // Act
-        var results = await MeshQuery.QueryAsync<MeshNode>(request, null, TestContext.Current.CancellationToken).ToArrayAsync(TestContext.Current.CancellationToken);
+        var results = await Query(request);
 
         // Assert
         Output.WriteLine($"Query: '{query}'");
@@ -598,7 +652,7 @@ public class SearchQueryTests : MonolithMeshTestBase
         var request = new MeshQueryRequest { Query = query, Limit = 100 };
 
         // Act
-        var results = await MeshQuery.QueryAsync<MeshNode>(request, null, TestContext.Current.CancellationToken).ToArrayAsync(TestContext.Current.CancellationToken);
+        var results = await Query(request);
 
         // Assert
         Output.WriteLine($"Query: '{query}'");
@@ -631,7 +685,7 @@ public class SearchQueryTests : MonolithMeshTestBase
         var request = new MeshQueryRequest { Query = query, Limit = 100 };
 
         // Act
-        var results = await MeshQuery.QueryAsync<MeshNode>(request, null, TestContext.Current.CancellationToken).ToArrayAsync(TestContext.Current.CancellationToken);
+        var results = await Query(request);
 
         // Assert
         Output.WriteLine($"Query: '{query}'");
@@ -660,7 +714,7 @@ public class SearchQueryTests : MonolithMeshTestBase
         var request = new MeshQueryRequest { Query = "scope:descendants select:name", Limit = 5 };
 
         // Act
-        var results = await MeshQuery.QueryAsync(request, TestContext.Current.CancellationToken).ToArrayAsync(TestContext.Current.CancellationToken);
+        var results = await QueryObjects(request);
 
         // Assert
         Output.WriteLine($"Found {results.Length} results with select:name");
@@ -683,7 +737,7 @@ public class SearchQueryTests : MonolithMeshTestBase
         var request = new MeshQueryRequest { Query = "scope:descendants select:name,nodeType,path", Limit = 5 };
 
         // Act
-        var results = await MeshQuery.QueryAsync(request, TestContext.Current.CancellationToken).ToArrayAsync(TestContext.Current.CancellationToken);
+        var results = await QueryObjects(request);
 
         // Assert
         Output.WriteLine($"Found {results.Length} results with select:name,nodeType,path");
@@ -708,7 +762,7 @@ public class SearchQueryTests : MonolithMeshTestBase
         var request = new MeshQueryRequest { Query = "nodeType:User scope:descendants select:name,path", Limit = 5 };
 
         // Act
-        var results = await MeshQuery.QueryAsync(request, TestContext.Current.CancellationToken).ToArrayAsync(TestContext.Current.CancellationToken);
+        var results = await QueryObjects(request);
 
         // Assert
         Output.WriteLine($"Found {results.Length} User results with select:name,path");
@@ -731,7 +785,7 @@ public class SearchQueryTests : MonolithMeshTestBase
         var request = new MeshQueryRequest { Query = "scope:descendants", Limit = 5 };
 
         // Act
-        var results = await MeshQuery.QueryAsync(request, TestContext.Current.CancellationToken).ToArrayAsync(TestContext.Current.CancellationToken);
+        var results = await QueryObjects(request);
 
         // Assert
         results.Should().NotBeEmpty("Normal query should return results");
@@ -750,7 +804,7 @@ public class SearchQueryTests : MonolithMeshTestBase
         var request = new MeshQueryRequest { Query = "scope:descendants select:name,nonExistentProp", Limit = 3 };
 
         // Act
-        var results = await MeshQuery.QueryAsync(request, TestContext.Current.CancellationToken).ToArrayAsync(TestContext.Current.CancellationToken);
+        var results = await QueryObjects(request);
 
         // Assert
         results.Should().NotBeEmpty("Query should still return results");
@@ -776,7 +830,7 @@ public class SearchQueryTests : MonolithMeshTestBase
         var request = new MeshQueryRequest { Query = "namespace:Systemorph scope:descendants xyznonexistent123", Limit = 100 };
 
         // Act
-        var results = await MeshQuery.QueryAsync<MeshNode>(request, null, TestContext.Current.CancellationToken).ToArrayAsync(TestContext.Current.CancellationToken);
+        var results = await Query(request);
 
         // Assert
         Output.WriteLine($"Found {results.Length} results for 'namespace:Systemorph scope:descendants xyznonexistent123'");
@@ -791,13 +845,13 @@ public class SearchQueryTests : MonolithMeshTestBase
     {
         // Arrange - first get all results without filter
         var allRequest = new MeshQueryRequest { Query = "namespace:Systemorph scope:descendants", Limit = 100 };
-        var allResults = await MeshQuery.QueryAsync<MeshNode>(allRequest, null, TestContext.Current.CancellationToken).ToArrayAsync(TestContext.Current.CancellationToken);
+        var allResults = await Query(allRequest);
 
         Output.WriteLine($"Found {allResults.Length} total results in Systemorph namespace");
 
         // Now search with a specific term that only matches some node names
         var filteredRequest = new MeshQueryRequest { Query = "namespace:Systemorph scope:descendants Data", Limit = 100 };
-        var filteredResults = await MeshQuery.QueryAsync<MeshNode>(filteredRequest, null, TestContext.Current.CancellationToken).ToArrayAsync(TestContext.Current.CancellationToken);
+        var filteredResults = await Query(filteredRequest);
 
         Output.WriteLine($"Found {filteredResults.Length} results with 'Data' filter");
         foreach (var r in filteredResults)
@@ -820,7 +874,7 @@ public class SearchQueryTests : MonolithMeshTestBase
         };
 
         // Act
-        var results = await MeshQuery.QueryAsync<MeshNode>(request, null, TestContext.Current.CancellationToken).ToArrayAsync(TestContext.Current.CancellationToken);
+        var results = await Query(request);
 
         // Assert
         Output.WriteLine($"Query: 'namespace:Systemorph/Marketing scope:descendants thisdoesnotexistatall'");

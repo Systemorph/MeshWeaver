@@ -1,4 +1,5 @@
-﻿using System.Reactive.Linq;
+using System.Reactive.Linq;
+using System.Text.Json;
 using Humanizer;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
@@ -6,6 +7,7 @@ using MeshWeaver.Domain;
 using MeshWeaver.Graph;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
+using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
@@ -27,7 +29,6 @@ public static class ThreadMessageLayoutAreas
     /// </summary>
     public static MessageHubConfiguration AddThreadMessageViews(this MessageHubConfiguration configuration)
         => configuration
-            .WithHandler<UpdateThreadMessageContent>(HandleUpdateContent)
             .AddLayout(layout => layout
                 .WithDefaultArea(ThreadMessageNodeType.OverviewArea)
                 .WithView(ThreadMessageNodeType.OverviewArea, Overview)
@@ -36,8 +37,6 @@ public static class ThreadMessageLayoutAreas
                 .WithView(MeshNodeLayoutAreas.SettingsArea, SettingsLayoutArea.Settings)
                 .WithView(MeshNodeLayoutAreas.MetadataArea, MeshNodeLayoutAreas.Metadata)
                 .WithView(MeshNodeLayoutAreas.ThumbnailArea, Thumbnail));
-
-    private const string MessageDataKey = "msg";
 
     /// <summary>
     /// Compact streaming view for parent thread consumption.
@@ -52,7 +51,10 @@ public static class ThreadMessageLayoutAreas
         return syncStream!
             .Select(change =>
             {
-                var msg = change.Value?.Content as ThreadMessage;
+                // ContentAs (deserialize), not `as`: the sync stream alternates typed↔JsonElement,
+                // and `as` → null on the JsonElement frames flip-flops this control real↔null,
+                // defeating the framework RenderArea dedup → output-message render storm.
+                var msg = change.Value.ContentAs<ThreadMessage>(host.Hub.JsonSerializerOptions);
                 if (msg == null) return (UiControl?)null;
 
                 var stack = Controls.Stack
@@ -105,50 +107,15 @@ public static class ThreadMessageLayoutAreas
     }
 
     /// <summary>
-    /// Handles content updates from thread execution.
-    /// Runs ON the response message grain — updates local workspace → sync stream → clients.
-    /// </summary>
-    private static IMessageDelivery HandleUpdateContent(
-        IMessageHub hub, IMessageDelivery<UpdateThreadMessageContent> delivery)
-    {
-        var msg = delivery.Message;
-        var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
-            ?.CreateLogger("MeshWeaver.AI.MsgLayout");
-        logger?.LogInformation("[MsgLayout] HANDLE_UPDATE: hub={Hub}, textLen={TextLen}, toolCalls={ToolCalls}",
-            hub.Address, msg.Text?.Length ?? -1, msg.ToolCalls?.Count ?? -1);
-        hub.GetWorkspace().UpdateMeshNode(node =>
-        {
-            var current = node.Content as ThreadMessage ?? new ThreadMessage { Role = "assistant", Text = "" };
-            // Prefer incremental append (TextDelta). Full Text replacement is only used
-            // for final/terminal writes (completion, error, cancel markers).
-            var newText = msg.Text ?? (msg.TextDelta is { Length: > 0 } d
-                ? (current.Text ?? "") + d
-                : current.Text);
-            return node with
-            {
-                Content = current with
-                {
-                    Text = newText,
-                    ToolCalls = msg.ToolCalls ?? current.ToolCalls,
-                    UpdatedNodes = msg.UpdatedNodes ?? current.UpdatedNodes,
-                    AgentName = msg.AgentName ?? current.AgentName,
-                    ModelName = msg.ModelName ?? current.ModelName,
-                    InputTokens = msg.InputTokens ?? current.InputTokens,
-                    OutputTokens = msg.OutputTokens ?? current.OutputTokens,
-                    TotalTokens = msg.TotalTokens ?? current.TotalTokens,
-                    CompletedAt = msg.CompletedAt ?? current.CompletedAt
-                }
-            };
-        });
-        return delivery.Processed();
-    }
-
-    /// <summary>
     /// Renders the Overview area for a ThreadMessage node.
-    /// Emits control once from first node emission. Text and tool calls are data-bound
-    /// via JsonPointerReference — updates flow through host.UpdateData, no control rebuilds.
-    /// Editing is handled purely on the Blazor UI side (ThreadMessageBubbleView toggles
-    /// between readonly and Edit LayoutArea).
+    /// Ships a path-bound <see cref="ThreadMessageBubbleControl"/> — the Blazor view
+    /// subscribes to <c>workspace.GetRemoteStream&lt;MeshNode, MeshNodeReference&gt;(NodePath, ...)</c>
+    /// directly and renders Text / ToolCalls / UpdatedNodes from the live message.
+    /// No layout data section, no <see cref="JsonPointerReference"/> chain, no
+    /// per-node republish. See <c>Doc/Architecture/ThreadExecutionStreaming.md</c>.
+    ///
+    /// Editing branch (EditingPrompt) still uses the legacy snapshot path — it needs
+    /// the editor pre-populated with current text and that's a one-shot read.
     /// </summary>
     public static IObservable<UiControl?> Overview(LayoutAreaHost host, RenderingContext _)
     {
@@ -156,67 +123,29 @@ public static class ThreadMessageLayoutAreas
         var lastSlash = hubPath.LastIndexOf('/');
         var threadPath = lastSlash > 0 ? hubPath[..lastSlash] : hubPath;
         var messageId = lastSlash > 0 ? hubPath[(lastSlash + 1)..] : hubPath;
+        var nodePath = $"{threadPath}/{messageId}";
 
-        // Subscribe to the MeshNodeReference sync stream — receives updates from
-        // responseStream.Update() / PatchDataChangeRequest. Map to ThreadMessageViewModel
-        // and push to data section. The bubble binds to the view model via JsonPointerReference.
         var syncStream = host.Workspace.GetStream(new MeshNodeReference());
-
         var msgLogger = host.Hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.AI.MsgLayout");
-        host.SubscribeToDataStream(MessageDataKey, syncStream!
-            .Select(change =>
-            {
-                var msg = change.Value?.Content as ThreadMessage;
-                msgLogger?.LogInformation("[MsgLayout] STREAM_EMIT: hub={Hub}, hasContent={HasContent}, textLen={TextLen}",
-                    host.Hub.Address, msg != null, msg?.Text?.Length ?? -1);
-                return msg;
-            })
-            .Where(m => m != null)
-            .Select(m => (ThreadMessageViewModel.FromMessage(m!) with
-            {
-                Text = ConvertReferencesToLinks(m!.Text ?? "")
-            }))
-            .DistinctUntilChanged()
-            .Select(vm =>
-            {
-                msgLogger?.LogInformation("[MsgLayout] DATA_PUSH: hub={Hub}, textLen={TextLen}, toolCalls={ToolCalls}",
-                    host.Hub.Address, ((ThreadMessageViewModel)vm).Text.Length, ((ThreadMessageViewModel)vm).ToolCalls.Count);
-                return (object)vm;
-            }));
 
-        // Emit control once — role/author are static, text/toolCalls are data-bound.
-        // Try current value first (synchronous) — the stream may have already replayed
-        // before this subscription started. Fall back to observable for lazy activation.
-        var currentMsg = syncStream!.Current?.Value?.Content as ThreadMessage;
-        if (currentMsg != null)
-        {
-            msgLogger?.LogInformation("[MsgLayout] CONTROL_EMIT_SYNC: hub={Hub}, role={Role}, textLen={TextLen}",
-                hubPath, currentMsg.Role, currentMsg.Text?.Length ?? 0);
-            var control = currentMsg.Type == ThreadMessageType.EditingPrompt
-                ? BuildEditingOverview(host, currentMsg, threadPath, messageId)
-                : BuildMessageOverview(host, currentMsg, threadPath, messageId);
-            return Observable.Return((UiControl?)control);
-        }
-
+        // Always wait for the first stream emission — never read the snapshot synchronously.
+        // On cold workspaces / un-initialized remote streams it's null and we'd ship an
+        // empty overview to the user.
         msgLogger?.LogInformation("[MsgLayout] CONTROL_EMIT_ASYNC: hub={Hub}, waiting for first emission", hubPath);
-        return syncStream
-            .Select(change => change.Value?.Content as ThreadMessage)
+        return syncStream!
+            .Select(change => change.Value.ContentAs<ThreadMessage>(host.Hub.JsonSerializerOptions))
             .Where(m => m != null)
             .Take(1)
-            .Select(msg =>
-            {
-                if (msg!.Type == ThreadMessageType.EditingPrompt)
-                    return (UiControl?)BuildEditingOverview(host, msg, threadPath, messageId);
-
-                return (UiControl?)BuildMessageOverview(host, msg, threadPath, messageId);
-            });
+            .Select(msg => msg!.Type == ThreadMessageType.EditingPrompt
+                ? (UiControl?)BuildEditingOverview(host, msg, threadPath, messageId)
+                : (UiControl?)BuildMessageOverview(host, msg, threadPath, messageId, nodePath));
     }
 
     /// <summary>
     /// Renders the Edit area for a ThreadMessage node.
     /// Shows a MarkdownEditorControl with the current text and a Submit button.
-    /// Submit posts ResubmitMessageRequest (re-executes with edited text).
+    /// Submit posts ThreadSubmission.ApplyResubmit (re-executes with edited text).
     /// Cancel/Done is handled by the Blazor bubble (local isEditing toggle).
     /// </summary>
     public static IObservable<UiControl?> EditArea(LayoutAreaHost host, RenderingContext _)
@@ -229,7 +158,7 @@ public static class ThreadMessageLayoutAreas
         var syncStream = host.Workspace.GetStream(new MeshNodeReference());
 
         return syncStream!
-            .Select(change => change.Value?.Content as ThreadMessage)
+            .Select(change => change.Value.ContentAs<ThreadMessage>(host.Hub.JsonSerializerOptions))
             .Where(m => m != null)
             .Take(1)
             .Select(msg =>
@@ -260,13 +189,14 @@ public static class ThreadMessageLayoutAreas
                                     NodeType = ThreadMessageNodeType.NodeType, MainNode = threadPath,
                                     Content = new ThreadMessage { Role = "assistant", Text = "", Timestamp = DateTime.UtcNow, Type = ThreadMessageType.AgentResponse }
                                 }), o => o.WithTarget(new Address(threadPath)));
-                                actx.Hub.Post(new ResubmitMessageRequest
-                                {
-                                    ThreadPath = threadPath,
-                                    MessageId = messageId,
-                                    UserMessageText = editedText ?? msg.Text ?? "",
-                                    OutputMessageId = outId
-                                }, o => o.WithTarget(new Address(threadPath)));
+                                // Stream-update: ApplyResubmit truncates Messages after
+                                // messageId, drops it from IngestedMessageIds, and stamps
+                                // the new user text — server watcher dispatches the next
+                                // round. No bespoke ThreadSubmission.ApplyResubmit needed. See
+                                // RequestViaStreamUpdate.md.
+                                actx.Hub.ResubmitMessage(
+                                    threadPath, messageId,
+                                    newUserText: editedText ?? msg.Text ?? "");
                             });
                         }));
 
@@ -281,25 +211,21 @@ public static class ThreadMessageLayoutAreas
     }
 
     /// <summary>
-    /// Builds the Overview for messages. Role/author are static from the initial message.
-    /// Text and tool calls are data-bound via JsonPointerReference.
+    /// Builds the Overview for messages. Bubble is path-bound — the Blazor view
+    /// subscribes to the message-node remote stream directly and pulls Role,
+    /// AuthorName, Text, ToolCalls, UpdatedNodes, ModelName, Timestamp from there.
+    /// The <paramref name="msg"/> snapshot is only used for click-handler defaults
+    /// (Resubmit text fallback) where a one-shot read at render time is acceptable.
     /// </summary>
     private static UiControl BuildMessageOverview(
-        LayoutAreaHost host, ThreadMessage msg, string threadPath, string messageId)
+        LayoutAreaHost host, ThreadMessage msg, string threadPath, string messageId, string nodePath)
     {
         var isUser = msg.Role.Equals("user", StringComparison.OrdinalIgnoreCase);
-        var authorName = msg.AuthorName ?? (isUser ? "You" : msg.AgentName ?? "Assistant");
 
-        // Bind to ThreadMessageViewModel in data section
-        var dataPointer = LayoutAreaReference.GetDataPointer(MessageDataKey);
+        // Path-bound bubble — view subscribes to nodePath via GetRemoteStream<MeshNode, MeshNodeReference>.
+        // No JsonPointerReference, no layout data section, no per-chunk republish.
         var bubble = new ThreadMessageBubbleControl()
-            .WithRole(msg.Role)
-            .WithAuthorName(authorName)
-            .WithModelName(msg.ModelName)
-            .WithTimestamp(msg.Timestamp)
-            .WithText(new JsonPointerReference($"{dataPointer}/text"))
-            .WithToolCalls(new JsonPointerReference($"{dataPointer}/toolCalls"))
-            .WithUpdatedNodes(new JsonPointerReference($"{dataPointer}/updatedNodes"))
+            .WithNodePath(nodePath)
             .WithThreadPath(threadPath)
             .WithMessageId(messageId);
 
@@ -333,13 +259,9 @@ public static class ThreadMessageLayoutAreas
                             }
                         }), o => o.WithTarget(new Address(threadPath)));
 
-                        host.Hub.Post(new ResubmitMessageRequest
-                        {
-                            ThreadPath = threadPath,
-                            MessageId = messageId,
-                            UserMessageText = msg.Text,
-                            OutputMessageId = outId
-                        }, o => o.WithTarget(new Address(threadPath)));
+                        // Canonical resubmit via the IWorkspace extension surface.
+                        host.Hub.ResubmitMessage(
+                            threadPath, messageId, newUserText: msg.Text);
                     }));
         }
 
@@ -350,11 +272,8 @@ public static class ThreadMessageLayoutAreas
                 .WithLabel("Delete from here")
                 .WithClickAction(_ =>
                 {
-                    host.Hub.Post(new DeleteFromMessageRequest
-                    {
-                        ThreadPath = threadPath,
-                        MessageId = messageId
-                    }, o => o.WithTarget(new Address(threadPath)));
+                    // Stream-update delete — see RequestViaStreamUpdate.md.
+                    host.Hub.DeleteFromMessage(threadPath, messageId);
                 }));
 
         var container = Controls.Stack
@@ -372,17 +291,17 @@ public static class ThreadMessageLayoutAreas
                 if (stream is null) return Observable.Return<UiControl?>(null);
 
                 return stream
-                    .Select(change => change.Value?.Content as ThreadMessage)
+                    .Select(change => change.Value.ContentAs<ThreadMessage>(h.Hub.JsonSerializerOptions))
                     .Where(m => m is not null)
                     .Select(m => (
                         Started: m!.Timestamp,
                         Completed: m.CompletedAt,
-                        Model: m.ModelName,
+                        Harness: m.Harness,
                         In: m.InputTokens,
                         Out: m.OutputTokens,
                         Total: m.TotalTokens))
                     .DistinctUntilChanged()
-                    .Select(meta => BuildAssistantMetaRow(meta.Started, meta.Completed, meta.Model,
+                    .Select(meta => BuildAssistantMetaRow(meta.Started, meta.Completed, meta.Harness,
                         meta.In, meta.Out, meta.Total));
             });
         }
@@ -415,18 +334,18 @@ public static class ThreadMessageLayoutAreas
 
     /// <summary>
     /// Builds the muted one-line metadata row shown below an assistant cell:
-    /// <c>HH:mm:ss · model · 1.8s · 1,247 in / 392 out (1,639 total)</c>. Returns
-    /// null when there's nothing to show (e.g. response still streaming and no model
-    /// yet known).
+    /// <c>Claude Code · HH:mm:ss · 1.8s · 1,247 in / 392 out (1,639 total)</c>. Leads
+    /// with the harness (the headline identity); model is intentionally dropped.
+    /// Returns null when there's nothing to show (e.g. response still streaming).
     /// </summary>
     private static UiControl? BuildAssistantMetaRow(
-        DateTime started, DateTime? completed, string? model,
+        DateTime started, DateTime? completed, string? harness,
         int? input, int? output, int? total)
     {
         var parts = new List<string>();
+        if (!string.IsNullOrEmpty(harness))
+            parts.Add(System.Web.HttpUtility.HtmlEncode(harness));
         parts.Add(started.ToLocalTime().ToString("HH:mm:ss"));
-        if (!string.IsNullOrEmpty(model))
-            parts.Add(System.Web.HttpUtility.HtmlEncode(model));
         if (completed.HasValue)
         {
             parts.Add(FormatDurationHms(completed.Value - started));
@@ -525,11 +444,8 @@ public static class ThreadMessageLayoutAreas
                 .WithAppearance(Appearance.Neutral)
                 .WithClickAction(_ =>
                 {
-                    host.Hub.Post(new DeleteFromMessageRequest
-                    {
-                        ThreadPath = threadPath,
-                        MessageId = messageId
-                    }, o => o.WithTarget(new Address(threadPath)));
+                    // Stream-update delete — see RequestViaStreamUpdate.md.
+                    host.Hub.DeleteFromMessage(threadPath, messageId);
                 }))
             .WithView(Controls.Button("Submit")
                 .WithAppearance(Appearance.Accent)
@@ -544,13 +460,10 @@ public static class ThreadMessageLayoutAreas
                             NodeType = ThreadMessageNodeType.NodeType, MainNode = threadPath,
                             Content = new ThreadMessage { Role = "assistant", Text = "", Timestamp = DateTime.UtcNow, Type = ThreadMessageType.AgentResponse }
                         }), o => o.WithTarget(new Address(threadPath)));
-                        actx.Hub.Post(new ResubmitMessageRequest
-                        {
-                            ThreadPath = threadPath,
-                            MessageId = messageId,
-                            UserMessageText = editedText ?? msg.Text ?? "",
-                            OutputMessageId = outId
-                        }, o => o.WithTarget(new Address(threadPath)));
+                        // Canonical resubmit via the IWorkspace extension surface.
+                        actx.Hub.ResubmitMessage(
+                            threadPath, messageId,
+                            newUserText: editedText ?? msg.Text ?? "");
                     });
                 }));
 
@@ -568,7 +481,7 @@ public static class ThreadMessageLayoutAreas
     /// </summary>
     private static UiControl BuildMessageView(LayoutAreaHost host, MeshNode? node, string messagePath)
     {
-        var message = node?.Content as ThreadMessage;
+        var message = node.ContentAs<ThreadMessage>(host.Hub.JsonSerializerOptions);
         if (message == null)
         {
             // Node not yet loaded — show loading skeleton as progress indicator
@@ -717,21 +630,13 @@ public static class ThreadMessageLayoutAreas
     /// </summary>
     public static IObservable<UiControl?> Thumbnail(LayoutAreaHost host, RenderingContext _)
     {
-        var hubPath = host.Hub.Address.ToString();
-
-        var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
-            ?? Observable.Return<MeshNode[]>(Array.Empty<MeshNode>());
-
-        return nodeStream.Select(nodes =>
-        {
-            var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-            return BuildThumbnail(node);
-        });
+        return host.Workspace.GetMeshNodeStream()
+            .Select(node => BuildThumbnail(node, host.Hub.JsonSerializerOptions));
     }
 
-    private static UiControl BuildThumbnail(MeshNode? node)
+    private static UiControl BuildThumbnail(MeshNode? node, JsonSerializerOptions options)
     {
-        var message = node?.Content as ThreadMessage;
+        var message = node.ContentAs<ThreadMessage>(options);
         var role = message?.Role ?? "unknown";
         var text = message?.Text ?? "";
         var preview = text.Length > 50 ? text[..47] + "..." : text;

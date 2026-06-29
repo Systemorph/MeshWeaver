@@ -3,10 +3,10 @@ using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using CsvHelper;
-using FluentAssertions;
 using MeshWeaver.DataSetReader.Csv;
 using MeshWeaver.DataStructures;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.DataSetReader.Test
 {
@@ -163,8 +163,9 @@ namespace MeshWeaver.DataSetReader.Test
         {
             var stream = await FileStorageService.GetStreamFromFilePath($"{CsvFilesWithComplexCases}BadData.csv");
             Func<Task> act = async () => await ReadFromStream(stream);
-            (await act.Should().ThrowAsync<BadDataException>()).Where(x => x.Message.Contains("\"Here opening quote is started but not finished") &&
-                                                                           x.Message.Contains("\"ThisQuote will be treated as closing for first line"));
+            (await act.Should().ThrowAsync<BadDataException>())
+                .WithMessage("*\"Here opening quote is started but not finished*")
+                .And.WithMessage("*\"ThisQuote will be treated as closing for first line*");
         }
     }
 }

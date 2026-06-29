@@ -71,24 +71,41 @@ public record LabelControl(object Data)
 /// </remarks>
 public enum Typography
 {
+    /// <summary>Standard body text style.</summary>
     Body,
+    /// <summary>Subject-line style, slightly emphasised over body.</summary>
     Subject,
+    /// <summary>Section header style.</summary>
     Header,
+    /// <summary>Panel or pane header style.</summary>
     PaneHeader,
+    /// <summary>Email header style, formatted for email-style labels.</summary>
     EmailHeader,
+    /// <summary>Page title style, used for main page headings.</summary>
     PageTitle,
+    /// <summary>Hero/banner title style, the largest headline.</summary>
     HeroTitle,
+    /// <summary>Heading level 1.</summary>
     H1,
+    /// <summary>Heading level 2.</summary>
     H2,
+    /// <summary>Heading level 3.</summary>
     H3,
+    /// <summary>Heading level 4.</summary>
     H4,
+    /// <summary>Heading level 5.</summary>
     H5,
+    /// <summary>Heading level 6.</summary>
     H6
 }
 
+/// <summary>Specifies the CSS font-weight applied to a label.</summary>
 public enum FontWeight
 {
+    /// <summary>Normal (400) font weight.</summary>
     Normal,
+    /// <summary>Bold (700) font weight.</summary>
     Bold,
+    /// <summary>Bolder than the inherited font weight.</summary>
     Bolder
 }

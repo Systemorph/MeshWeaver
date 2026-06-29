@@ -23,35 +23,49 @@ public class MarkdownExportMenuProvider : INodeMenuProvider
     /// <summary>Menu item label for the DOCX export.</summary>
     public const string DocxLabel = "Export to DOCX";
 
+    /// <summary>The menu context this provider contributes to — the Node menu.</summary>
     public string Context => NodeMenuItemsExtensions.NodeMenuContext;
 
-    public async IAsyncEnumerable<NodeMenuItemDefinition> GetItemsAsync(
+    /// <summary>
+    /// Reactive: combines the live own-node stream with the viewer's effective permissions and
+    /// re-projects the export items on every change. Emits an empty slice when the node isn't a
+    /// Markdown node or the viewer lacks Read — and re-emits (showing the items) once a runtime
+    /// grant propagates, without a reload.
+    /// </summary>
+    public IObservable<IReadOnlyCollection<NodeMenuItemDefinition>> GetItems(
         LayoutAreaHost host, RenderingContext ctx)
     {
         var hubPath = host.Hub.Address.ToString();
-        var nodes = await (host.Workspace.GetStream<MeshNode>()
-                ?.Select(n => n ?? Array.Empty<MeshNode>())
-            ?? Observable.Return(Array.Empty<MeshNode>()))
-            .FirstAsync();
-        var node = nodes.FirstOrDefault(n => n.Path == hubPath);
 
-        if (node is null || node.NodeType != "Markdown") yield break;
+        // Own MeshNode via the canonical reducer. StartWith(null) so CombineLatest fires before
+        // the node loads; Catch degrades to "no node" on hubs without a MeshDataSource.
+        var nodeStream = host.Workspace.GetMeshNodeStream()
+            .Select(n => (MeshNode?)n)
+            .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null))
+            .StartWith((MeshNode?)null);
 
-        var perms = await PermissionHelper.GetEffectivePermissionsAsync(host.Hub, hubPath);
-        if (!perms.HasFlag(Permission.Read)) yield break;
+        return nodeStream.CombineLatest(
+            host.Hub.GetEffectivePermissions(hubPath),
+            (node, perms) =>
+            {
+                if (node is null || node.NodeType != "Markdown" || !perms.HasFlag(Permission.Read))
+                    return (IReadOnlyCollection<NodeMenuItemDefinition>)[];
 
-        yield return new NodeMenuItemDefinition(
-            Label: PdfLabel,
-            Area: ExportDocumentLayoutArea.PdfArea,
-            RequiredPermission: Permission.Read,
-            Order: 27,
-            Href: MeshNodeLayoutAreas.BuildUrl(hubPath, ExportDocumentLayoutArea.PdfArea));
-
-        yield return new NodeMenuItemDefinition(
-            Label: DocxLabel,
-            Area: ExportDocumentLayoutArea.DocxArea,
-            RequiredPermission: Permission.Read,
-            Order: 28,
-            Href: MeshNodeLayoutAreas.BuildUrl(hubPath, ExportDocumentLayoutArea.DocxArea));
+                return
+                [
+                    new NodeMenuItemDefinition(
+                        Label: PdfLabel,
+                        Area: ExportDocumentLayoutArea.PdfArea,
+                        RequiredPermission: Permission.Read,
+                        Order: 27,
+                        Href: MeshNodeLayoutAreas.BuildUrl(hubPath, ExportDocumentLayoutArea.PdfArea)),
+                    new NodeMenuItemDefinition(
+                        Label: DocxLabel,
+                        Area: ExportDocumentLayoutArea.DocxArea,
+                        RequiredPermission: Permission.Read,
+                        Order: 28,
+                        Href: MeshNodeLayoutAreas.BuildUrl(hubPath, ExportDocumentLayoutArea.DocxArea)),
+                ];
+            });
     }
 }

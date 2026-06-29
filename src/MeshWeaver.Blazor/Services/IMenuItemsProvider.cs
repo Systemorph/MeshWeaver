@@ -36,18 +36,23 @@ public class MenuItemsProvider : IMenuItemsProvider, IDisposable
 
     private readonly ConcurrentDictionary<string, BehaviorSubject<IReadOnlyList<NodeMenuItemDefinition>>> _subjects = new(StringComparer.OrdinalIgnoreCase);
 
+    /// <inheritdoc />
     public IObservable<IReadOnlyList<NodeMenuItemDefinition>> MenuItems => GetSubject(DefaultKey);
 
+    /// <inheritdoc />
     public void Update(IReadOnlyList<NodeMenuItemDefinition> items) => Update(DefaultKey, items);
 
+    /// <inheritdoc />
     public IObservable<IReadOnlyList<NodeMenuItemDefinition>> GetMenu(string context) => GetSubject(context ?? DefaultKey);
 
+    /// <inheritdoc />
     public void Update(string context, IReadOnlyList<NodeMenuItemDefinition> items)
         => GetSubject(context ?? DefaultKey).OnNext(items);
 
     private BehaviorSubject<IReadOnlyList<NodeMenuItemDefinition>> GetSubject(string key)
         => _subjects.GetOrAdd(key, _ => new BehaviorSubject<IReadOnlyList<NodeMenuItemDefinition>>([]));
 
+    /// <summary>Completes and disposes all BehaviorSubject instances tracked by this provider.</summary>
     public void Dispose()
     {
         foreach (var s in _subjects.Values)

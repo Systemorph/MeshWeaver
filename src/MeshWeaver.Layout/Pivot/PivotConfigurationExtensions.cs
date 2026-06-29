@@ -139,6 +139,10 @@ public class PivotConfigurationBuilder<T> where T : class
     private bool showColumnTotals = true;
     private bool allowFieldsPicking = true;
 
+    /// <summary>
+    /// Initializes a new builder for type <typeparamref name="T"/>, automatically discovering
+    /// all available dimensions and aggregates from the type's public properties via reflection.
+    /// </summary>
     public PivotConfigurationBuilder()
     {
         DiscoverDimensionsAndAggregates();

@@ -19,8 +19,12 @@ namespace MeshWeaver.Hosting.Cosmos;
 public class CosmosStorageAdapterFactory(
     IOptions<CosmosStorageOptions> options) : IStorageAdapterFactory
 {
+    /// <summary>
+    /// The storage-type key under which this factory is registered (<c>"Cosmos"</c>).
+    /// </summary>
     public const string StorageType = "Cosmos";
 
+    /// <inheritdoc />
     public IStorageAdapter Create(GraphStorageConfig config, IServiceProvider serviceProvider)
     {
         var opts = options.Value;
@@ -44,12 +48,10 @@ public class CosmosStorageAdapterFactory(
                 "Register via Aspire (AddAzureCosmosDatabase + AddKeyedContainer), " +
                 "or set CosmosStorageOptions.ConnectionString.");
 
-        var typeRegistry = serviceProvider.GetService<ITypeRegistry>();
-        var jsonOptions = StorageImporter.CreateFullImportOptions(typeRegistry);
-        var cosmosClient = new CosmosClient(connectionString, new CosmosClientOptions
-        {
-            UseSystemTextJsonSerializerWithOptions = jsonOptions
-        });
+        // StorageImporter.CreateFullImportOptions was deleted in the persistence-cull.
+        // Cosmos SDK will use its default System.Text.Json configuration; type
+        // polymorphism via $type lives in the MeshNode contract itself.
+        var cosmosClient = new CosmosClient(connectionString);
 
         var database = cosmosClient.GetDatabase(opts.DatabaseName);
         return new CosmosStorageAdapter(
@@ -74,16 +76,15 @@ public static class PersistenceExtensions
         services.AddKeyedSingleton<IStorageAdapterFactory, CosmosStorageAdapterFactory>(
             CosmosStorageAdapterFactory.StorageType);
 
-        // Register CosmosMeshQuery so it takes priority over InMemoryMeshQuery (via TryAddSingleton)
+        // Register CosmosMeshQuery so it takes priority over StorageAdapterMeshQueryProvider (via TryAddSingleton)
         services.AddSingleton<IMeshQueryProvider>(sp =>
         {
             var adapter = sp.GetRequiredService<IStorageAdapter>() as CosmosStorageAdapter
                 ?? throw new InvalidOperationException(
                     "CosmosMeshQuery requires CosmosStorageAdapter. " +
                     "Ensure Cosmos storage is configured.");
-            var changeNotifier = sp.GetService<IDataChangeNotifier>();
             var meshConfig = sp.GetService<MeshConfiguration>();
-            return new CosmosMeshQuery(adapter, changeNotifier, meshConfig);
+            return new CosmosMeshQuery(adapter, meshConfig);
         });
 
         return services;
@@ -126,7 +127,7 @@ public static class PersistenceExtensions
     {
         // Register CosmosMeshQuery BEFORE AddPersistence so TryAddSingleton picks it up
         services.AddSingleton<IMeshQueryProvider>(sp =>
-            new CosmosMeshQuery(storageAdapter, sp.GetService<IDataChangeNotifier>(), sp.GetService<MeshConfiguration>()));
+            new CosmosMeshQuery(storageAdapter, sp.GetService<MeshConfiguration>()));
 
         services.AddPersistence(storageAdapter);
 
@@ -150,7 +151,7 @@ public static class PersistenceExtensions
         // Create database if not exists
         var databaseResponse = await cosmosClient.CreateDatabaseIfNotExistsAsync(
             databaseName,
-            ThroughputProperties.CreateManualThroughput(throughput));
+            ThroughputProperties.CreateManualThroughput(throughput)).ConfigureAwait(false);
         var database = databaseResponse.Database;
 
         // Create containers if not exists
@@ -158,13 +159,13 @@ public static class PersistenceExtensions
             new ContainerProperties("nodes", "/key")
             {
                 DefaultTimeToLive = -1 // No expiration
-            });
+            }).ConfigureAwait(false);
 
         await database.CreateContainerIfNotExistsAsync(
             new ContainerProperties("partitions", "/partitionKey")
             {
                 DefaultTimeToLive = -1
-            });
+            }).ConfigureAwait(false);
 
         return services.AddCosmosPersistence(cosmosClient, databaseName);
     }
@@ -199,7 +200,6 @@ public static class PersistenceExtensions
         services.AddSingleton<IMeshQueryProvider>(sp =>
             new CosmosMeshQuery(
                 storageAdapter,
-                sp.GetService<IDataChangeNotifier>(),
                 sp.GetService<MeshConfiguration>()));
 
         // Register core persistence services (IStorageAdapter, IStorageService, etc.)
@@ -210,13 +210,12 @@ public static class PersistenceExtensions
         {
             var effectiveLeaseContainerName = leaseContainerName ?? $"{databaseName}-leases";
             var leaseContainer = database.GetContainer(effectiveLeaseContainerName);
-            var notifier = sp.GetRequiredService<IDataChangeNotifier>();
             var logger = sp.GetService<ILogger<CosmosChangeFeedProcessor>>();
 
             return new CosmosChangeFeedProcessor(
                 nodesContainer,
                 leaseContainer,
-                notifier,
+                storageAdapter.ChangeObserver,
                 "MeshWeaverChangeFeedProcessor",
                 logger);
         });
@@ -241,7 +240,7 @@ public static class PersistenceExtensions
         // Create database if not exists
         var databaseResponse = await cosmosClient.CreateDatabaseIfNotExistsAsync(
             databaseName,
-            ThroughputProperties.CreateManualThroughput(throughput));
+            ThroughputProperties.CreateManualThroughput(throughput)).ConfigureAwait(false);
         var database = databaseResponse.Database;
 
         // Create containers if not exists
@@ -249,20 +248,20 @@ public static class PersistenceExtensions
             new ContainerProperties("nodes", "/key")
             {
                 DefaultTimeToLive = -1 // No expiration
-            });
+            }).ConfigureAwait(false);
 
         await database.CreateContainerIfNotExistsAsync(
             new ContainerProperties("partitions", "/partitionKey")
             {
                 DefaultTimeToLive = -1
-            });
+            }).ConfigureAwait(false);
 
         // Create lease container for Change Feed
         await database.CreateContainerIfNotExistsAsync(
             new ContainerProperties($"{databaseName}-leases", "/id")
             {
                 DefaultTimeToLive = -1
-            });
+            }).ConfigureAwait(false);
 
         return services.AddCosmosPersistenceWithChangeFeed(cosmosClient, databaseName);
     }
@@ -335,7 +334,7 @@ public static class PersistenceExtensions
         // Create database if not exists
         var databaseResponse = await cosmosClient.CreateDatabaseIfNotExistsAsync(
             databaseName,
-            ThroughputProperties.CreateManualThroughput(throughput));
+            ThroughputProperties.CreateManualThroughput(throughput)).ConfigureAwait(false);
         var database = databaseResponse.Database;
 
         // Create nodes container with vector index support
@@ -345,14 +344,14 @@ public static class PersistenceExtensions
             "/embedding",
             vectorDimensions);
 
-        await database.CreateContainerIfNotExistsAsync(nodesContainerProperties);
+        await database.CreateContainerIfNotExistsAsync(nodesContainerProperties).ConfigureAwait(false);
 
         // Create partitions container (standard, no vector support needed)
         await database.CreateContainerIfNotExistsAsync(
             new ContainerProperties("partitions", "/partitionKey")
             {
                 DefaultTimeToLive = -1
-            });
+            }).ConfigureAwait(false);
 
         return services.AddCosmosPersistence(cosmosClient, databaseName);
     }
@@ -364,23 +363,29 @@ public static class PersistenceExtensions
     /// <param name="services">The service collection</param>
     /// <param name="cosmosClient">The Cosmos DB client</param>
     /// <param name="databaseName">The database name</param>
-    /// <param name="throughput">The throughput for containers (default: 400)</param>
+    /// <param name="nodesContainerName">The name of the nodes container (default: "nodes")</param>
+    /// <param name="partitionsContainerName">The name of the partitions container (default: "partitions")</param>
     /// <returns>The service collection for chaining</returns>
     public static IServiceCollection AddPartitionedCosmosPersistence(
         this IServiceCollection services,
         CosmosClient cosmosClient,
         string databaseName,
-        int throughput = 400)
+        string nodesContainerName = "nodes",
+        string partitionsContainerName = "partitions")
     {
-        services.AddSingleton<IDataChangeNotifier, DataChangeNotifier>();
 
-        services.AddSingleton<IPartitionedStoreFactory>(sp =>
-            new CosmosPartitionedStoreFactory(
-                cosmosClient,
-                databaseName,
-                sp.GetService<IDataChangeNotifier>(),
-                sp.GetService<MeshConfiguration>(),
-                throughput));
+        // Single shared CosmosStorageAdapter wired as a wildcard
+        // IPartitionStorageProvider. The previous factory model created
+        // per-partition container pairs at runtime — that lifecycle moved
+        // out of the persistence layer; if multi-container layouts are
+        // needed, provision them via a separate migration / Aspire setup
+        // and supply the container names here.
+        var database = cosmosClient.GetDatabase(databaseName);
+        var nodesContainer = database.GetContainer(nodesContainerName);
+        var partitionsContainer = database.GetContainer(partitionsContainerName);
+        var adapter = new CosmosStorageAdapter(nodesContainer, partitionsContainer);
+        services.AddSingleton(adapter);
+        services.AddSingleton<IPartitionStorageProvider>(new CosmosPartitionStorageProvider(adapter));
 
         services.AddPartitionedCoreAndWrapperServices();
 

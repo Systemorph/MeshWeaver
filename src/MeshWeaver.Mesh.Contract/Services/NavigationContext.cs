@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Mesh.Services;
@@ -9,9 +10,19 @@ namespace MeshWeaver.Mesh.Services;
 public record NavigationContext
 {
     /// <summary>
-    /// The current relative path from navigation.
+    /// The current route from navigation — the node-address part of the URL, with the
+    /// <c>?query</c> and <c>#fragment</c> stripped (the query lives on <see cref="Args"/>).
+    /// A mesh node address is never a query string (see "Mesh URL Shape"), so the route is
+    /// the only part resolved to <see cref="Address"/> and permission-checked.
     /// </summary>
     public required string Path { get; init; }
+
+    /// <summary>
+    /// The query-string parameters parsed off the navigation URL (e.g. <c>q</c>,
+    /// <c>groupBy</c> for the search page). These are PAGE parameters — never part of the
+    /// node <see cref="Address"/>. Empty when the URL carries no query.
+    /// </summary>
+    public ImmutableDictionary<string, string> Args { get; init; } = ImmutableDictionary<string, string>.Empty;
 
     /// <summary>
     /// The resolved address resolution containing prefix and remainder.

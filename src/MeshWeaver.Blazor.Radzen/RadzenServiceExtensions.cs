@@ -3,6 +3,9 @@ using Radzen;
 
 namespace MeshWeaver.Blazor.Radzen;
 
+/// <summary>
+/// Extension methods for registering Radzen Blazor services in the dependency-injection container.
+/// </summary>
 public static class RadzenServiceExtensions
 {
     /// <summary>
@@ -13,6 +16,9 @@ public static class RadzenServiceExtensions
     public static IServiceCollection AddRadzenServices(this IServiceCollection services)
     {
         services.AddRadzenComponents();
+        // Instance type-generator (memoization cache lives and dies with this
+        // ServiceProvider — no process-wide static cache, see NoStaticState.md).
+        services.AddSingleton<DynamicTypeGenerator>();
         return services;
     }
 }

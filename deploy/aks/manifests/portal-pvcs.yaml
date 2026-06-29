@@ -1,0 +1,129 @@
+# ---------------------------------------------------------------------------
+# portal-pvcs.yaml — ReadWriteMany PVCs for the HA portal + the Postgres PVC.
+#
+# The ../helm chart mounts /data and /mnt/users as emptyDir (single-pod). For HA
+# (replicas > 1) those must be shared, persistent ReadWriteMany volumes so every
+# Blazor Server replica sees the same filesystem backend. Azure Files CSI
+# provides RWX; Azure Disk cannot.
+#
+# STORAGE LAYOUT (one Azure Files "drive" per concern, mounted at explicit paths):
+#   memex-data        -> /data          framework caches ONLY (DataProtection keys,
+#                                        assembly-cache, nuget-cache). Small + churny.
+#   memex-content     -> /mnt/content   the CONTENT COLLECTION (uploaded files, media,
+#                                        attachments served per node hub). Storage__BasePath.
+#   memex-attachments -> /mnt/attachments  dedicated drive for the "attachments" collection
+#                                        (forward-looking — see values.aks.yaml note).
+#   memex-users       -> /mnt/users     co-hosted CLI configs (unchanged).
+#   memex-pgdata      -> Postgres data  single-writer RWO on managed-csi (Premium SSD).
+#
+# All RWX shares use the custom `azurefile-memex` StorageClass (storageclass-azurefile.yaml)
+# so the non-root portal (uid 1654) writes cleanly. Apply order:
+#   kubectl apply -f storageclass-azurefile.yaml
+#   kubectl apply -n memex -f portal-pvcs.yaml
+# ...then patch the portal Deployment to use these claims (see ./portal-ha-patch.yaml).
+# ---------------------------------------------------------------------------
+# /data — framework caches only (DataProtection keys, assembly-cache, nuget-cache).
+# Shrunk from 64Gi: content no longer lives here (it moved to memex-content), so
+# /data just holds small, churny cache files.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: memex-data
+  namespace: memex
+  labels:
+    app.kubernetes.io/component: memex-portal
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: azurefile-memex
+  resources:
+    requests:
+      storage: 16Gi
+---
+# /mnt/content — the content collection (Storage__BasePath). Uploaded files, media,
+# per-node-hub content subdirectories. Sized for real user content; expand as needed
+# (allowVolumeExpansion is on in the StorageClass).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: memex-content
+  namespace: memex
+  labels:
+    app.kubernetes.io/component: memex-portal
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: azurefile-memex
+  resources:
+    requests:
+      storage: 128Gi
+---
+# /mnt/attachments — dedicated drive for the "attachments" collection. The portal
+# maps an "attachments" content collection; isolating it on its own share keeps
+# large binary attachments off the content drive. See values.aks.yaml for the
+# forward-looking note on repointing attachments by env.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: memex-attachments
+  namespace: memex
+  labels:
+    app.kubernetes.io/component: memex-portal
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: azurefile-memex
+  resources:
+    requests:
+      storage: 64Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: memex-users
+  namespace: memex
+  labels:
+    app.kubernetes.io/component: memex-portal
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: azurefile-memex
+  resources:
+    requests:
+      storage: 32Gi
+---
+# /workspace — per-user git working trees ({userId}/{repoSlug}) for the in-portal
+# checkout/edit/commit feature + the co-hosted AI CLIs. RWX so both HA replicas share
+# the same checkouts.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: memex-workspace
+  namespace: memex
+  labels:
+    app.kubernetes.io/component: memex-portal
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: azurefile-memex
+  resources:
+    requests:
+      storage: 64Gi
+---
+# Postgres data volume — single-writer, so ReadWriteOnce on Premium SSD.
+# (If you keep the chart's StatefulSet emptyDir you LOSE data on pod restart —
+# always bind a real PVC for the database.)
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: memex-pgdata
+  namespace: memex
+  labels:
+    app.kubernetes.io/component: memex-postgres
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: managed-csi
+  resources:
+    requests:
+      storage: 128Gi

@@ -1,9 +1,6 @@
-using System.Linq;
+﻿using System.Linq;
 using System.Reactive.Linq;
 using System.Text.Json;
-using System.Threading.Tasks;
-using FluentAssertions;
-using FluentAssertions.Extensions;
 using MeshWeaver.Data;
 using MeshWeaver.Fixture;
 using MeshWeaver.Hosting.Persistence;
@@ -15,18 +12,18 @@ using Microsoft.Extensions.DependencyInjection;
 namespace MeshWeaver.Graph.Test;
 
 /// <summary>
-/// Tests for AccessAssignmentLayoutAreas — verifies that workspace.RequestChange
+/// Tests for AccessAssignmentLayoutAreas â€” verifies that workspace.RequestChange
 /// correctly updates the MeshNode stream, enabling reactive UI updates
 /// for ToggleDenied, RemoveRole, and AddRole operations.
 /// </summary>
 public class AccessAssignmentLayoutAreasTest(ITestOutputHelper output) : HubTestBase(output)
 {
-    private InMemoryPersistenceService _persistence = null!;
+    private InMemoryStorageAdapter _persistence = null!;
     private static readonly JsonSerializerOptions JsonOptions = new();
 
     protected override MessageHubConfiguration ConfigureMesh(MessageHubConfiguration conf)
     {
-        _persistence = new InMemoryPersistenceService();
+        _persistence = new InMemoryStorageAdapter();
 
         return conf
             .WithServices(services => services
@@ -38,7 +35,12 @@ public class AccessAssignmentLayoutAreasTest(ITestOutputHelper output) : HubTest
 
     protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
     {
+        // Plumbing fixture with no logged-in user → post as System so the data-layer
+        // workspace.RequestChange writes carry an identity (the never-null guard fails them closed
+        // otherwise). Covers the tests that build their host via Mesh.GetHostedHub(addr, ConfigureHost)
+        // — which, unlike HubTestBase.GetHost, does not add the System posting identity itself.
         return base.ConfigureHost(configuration)
+            .WithPostingIdentity(PostingIdentity.System)
             .WithRoutes(r => r.RouteAddress(ClientType, (_, d) => d.Package()))
             .AddMeshDataSource(ds => ds.WithContentType<AccessAssignment>())
             .AddAccessAssignmentViews();
@@ -54,7 +56,7 @@ public class AccessAssignmentLayoutAreasTest(ITestOutputHelper output) : HubTest
             NodeType = "AccessAssignment",
             Content = assignment
         };
-        await _persistence.SaveNodeAsync(node, JsonOptions);
+        await _persistence.SaveNode(node, JsonOptions).Should().Emit();
         return node;
     }
 
@@ -77,37 +79,32 @@ public class AccessAssignmentLayoutAreasTest(ITestOutputHelper output) : HubTest
         var host = GetHost();
         var workspace = host.GetWorkspace();
 
-        var nodeStream = workspace.GetStream<MeshNode>();
-        nodeStream.Should().NotBeNull();
+        var nodeStream = workspace.GetStream<MeshNode>()!;
 
-        var initialNodes = await nodeStream!
-            .Where(items => items?.Any() == true)
-            .Timeout(5.Seconds())
-            .FirstAsync();
+        var initialNodes = (await nodeStream
+            .Should().Within(5.Seconds()).Match(items => items?.Any() == true))!;
 
-        var node = initialNodes.First();
+        var node = initialNodes!.First();
         var initial = AccessControlLayoutArea.DeserializeAssignment(node)!;
         initial.Roles[0].Denied.Should().BeFalse("initial state should be not-denied");
 
-        // Act — toggle denied
+        // Act â€” toggle denied
         var roles = initial.Roles.ToList();
         roles[0] = roles[0] with { Denied = true };
         var updatedNode = node with { Content = initial with { Roles = roles } };
         workspace.RequestChange(DataChangeRequest.Update([updatedNode]), null, null);
 
-        // Assert — stream should reflect the change
+        // Assert â€” stream should reflect the change
         var updatedNodes = await nodeStream!
-            .Where(items =>
+            .Should().Within(5.Seconds()).Match(items =>
             {
                 var n = items?.FirstOrDefault();
                 if (n == null) return false;
                 var a = AccessControlLayoutArea.DeserializeAssignment(n);
                 return a?.Roles.FirstOrDefault()?.Denied == true;
-            })
-            .Timeout(5.Seconds())
-            .FirstAsync();
+            });
 
-        var result = AccessControlLayoutArea.DeserializeAssignment(updatedNodes.First())!;
+        var result = AccessControlLayoutArea.DeserializeAssignment(updatedNodes!.First())!;
         result.Roles[0].Denied.Should().BeTrue("Denied flag should have been toggled to true");
         result.Roles[0].Role.Should().Be("Editor");
     }
@@ -129,11 +126,9 @@ public class AccessAssignmentLayoutAreasTest(ITestOutputHelper output) : HubTest
 
         var nodeStream = workspace.GetStream<MeshNode>();
         var initialNodes = await nodeStream!
-            .Where(items => items?.Any() == true)
-            .Timeout(5.Seconds())
-            .FirstAsync();
+            .Should().Within(5.Seconds()).Match(items => items?.Any() == true);
 
-        var node = initialNodes.First();
+        var node = initialNodes!.First();
         var initial = AccessControlLayoutArea.DeserializeAssignment(node)!;
         initial.Roles[0].Denied.Should().BeTrue("initial state should be denied");
 
@@ -143,17 +138,15 @@ public class AccessAssignmentLayoutAreasTest(ITestOutputHelper output) : HubTest
         workspace.RequestChange(DataChangeRequest.Update([updatedNode]), null, null);
 
         var updatedNodes = await nodeStream!
-            .Where(items =>
+            .Should().Within(5.Seconds()).Match(items =>
             {
                 var n = items?.FirstOrDefault();
                 if (n == null) return false;
                 var a = AccessControlLayoutArea.DeserializeAssignment(n);
                 return a?.Roles.FirstOrDefault()?.Denied == false;
-            })
-            .Timeout(5.Seconds())
-            .FirstAsync();
+            });
 
-        var result = AccessControlLayoutArea.DeserializeAssignment(updatedNodes.First())!;
+        var result = AccessControlLayoutArea.DeserializeAssignment(updatedNodes!.First())!;
         result.Roles[0].Denied.Should().BeFalse();
     }
 
@@ -178,11 +171,9 @@ public class AccessAssignmentLayoutAreasTest(ITestOutputHelper output) : HubTest
 
         var nodeStream = workspace.GetStream<MeshNode>();
         var initialNodes = await nodeStream!
-            .Where(items => items?.Any() == true)
-            .Timeout(5.Seconds())
-            .FirstAsync();
+            .Should().Within(5.Seconds()).Match(items => items?.Any() == true);
 
-        var node = initialNodes.First();
+        var node = initialNodes!.First();
         var initial = AccessControlLayoutArea.DeserializeAssignment(node)!;
         initial.Roles.Should().HaveCount(2);
 
@@ -192,17 +183,15 @@ public class AccessAssignmentLayoutAreasTest(ITestOutputHelper output) : HubTest
         workspace.RequestChange(DataChangeRequest.Update([updatedNode]), null, null);
 
         var updatedNodes = await nodeStream!
-            .Where(items =>
+            .Should().Within(5.Seconds()).Match(items =>
             {
                 var n = items?.FirstOrDefault();
                 if (n == null) return false;
                 var a = AccessControlLayoutArea.DeserializeAssignment(n);
                 return a?.Roles.Count == 1;
-            })
-            .Timeout(5.Seconds())
-            .FirstAsync();
+            });
 
-        var result = AccessControlLayoutArea.DeserializeAssignment(updatedNodes.First())!;
+        var result = AccessControlLayoutArea.DeserializeAssignment(updatedNodes!.First())!;
         result.Roles.Should().HaveCount(1);
         result.Roles[0].Role.Should().Be("Editor");
     }
@@ -224,19 +213,15 @@ public class AccessAssignmentLayoutAreasTest(ITestOutputHelper output) : HubTest
 
         var nodeStream = workspace.GetStream<MeshNode>();
         var initialNodes = await nodeStream!
-            .Where(items => items?.Any() == true)
-            .Timeout(5.Seconds())
-            .FirstAsync();
+            .Should().Within(5.Seconds()).Match(items => items?.Any() == true);
 
         initialNodes.Should().HaveCount(1);
-        var node = initialNodes.First();
+        var node = initialNodes!.First();
 
         workspace.RequestChange(new DataChangeRequest().WithDeletions(node), null, null);
 
         var updatedNodes = await nodeStream!
-            .Where(items => items == null || items.Length == 0)
-            .Timeout(5.Seconds())
-            .FirstAsync();
+            .Should().Within(5.Seconds()).Match(items => items == null || items.Length == 0);
 
         (updatedNodes?.Length ?? 0).Should().Be(0);
     }
@@ -258,11 +243,9 @@ public class AccessAssignmentLayoutAreasTest(ITestOutputHelper output) : HubTest
 
         var nodeStream = workspace.GetStream<MeshNode>();
         var initialNodes = await nodeStream!
-            .Where(items => items?.Any() == true)
-            .Timeout(5.Seconds())
-            .FirstAsync();
+            .Should().Within(5.Seconds()).Match(items => items?.Any() == true);
 
-        var node = initialNodes.First();
+        var node = initialNodes!.First();
         var initial = AccessControlLayoutArea.DeserializeAssignment(node)!;
         initial.Roles.Should().HaveCount(1);
 
@@ -272,17 +255,15 @@ public class AccessAssignmentLayoutAreasTest(ITestOutputHelper output) : HubTest
         workspace.RequestChange(DataChangeRequest.Update([updatedNode]), null, null);
 
         var updatedNodes = await nodeStream!
-            .Where(items =>
+            .Should().Within(5.Seconds()).Match(items =>
             {
                 var n = items?.FirstOrDefault();
                 if (n == null) return false;
                 var a = AccessControlLayoutArea.DeserializeAssignment(n);
                 return a?.Roles.Count == 2;
-            })
-            .Timeout(5.Seconds())
-            .FirstAsync();
+            });
 
-        var result = AccessControlLayoutArea.DeserializeAssignment(updatedNodes.First())!;
+        var result = AccessControlLayoutArea.DeserializeAssignment(updatedNodes!.First())!;
         result.Roles.Should().HaveCount(2);
         result.Roles[0].Role.Should().Be("Viewer");
         result.Roles[1].Role.Should().Be("Editor");
@@ -310,11 +291,9 @@ public class AccessAssignmentLayoutAreasTest(ITestOutputHelper output) : HubTest
 
         var nodeStream = workspace.GetStream<MeshNode>();
         var initialNodes = await nodeStream!
-            .Where(items => items?.Any() == true)
-            .Timeout(5.Seconds())
-            .FirstAsync();
+            .Should().Within(5.Seconds()).Match(items => items?.Any() == true);
 
-        var node = initialNodes.First();
+        var node = initialNodes!.First();
         var initial = AccessControlLayoutArea.DeserializeAssignment(node)!;
 
         var roles = initial.Roles.ToList();
@@ -323,17 +302,15 @@ public class AccessAssignmentLayoutAreasTest(ITestOutputHelper output) : HubTest
         workspace.RequestChange(DataChangeRequest.Update([updatedNode]), null, null);
 
         var updatedNodes = await nodeStream!
-            .Where(items =>
+            .Should().Within(5.Seconds()).Match(items =>
             {
                 var n = items?.FirstOrDefault();
                 if (n == null) return false;
                 var a = AccessControlLayoutArea.DeserializeAssignment(n);
                 return a?.Roles[1].Denied == true;
-            })
-            .Timeout(5.Seconds())
-            .FirstAsync();
+            });
 
-        var result = AccessControlLayoutArea.DeserializeAssignment(updatedNodes.First())!;
+        var result = AccessControlLayoutArea.DeserializeAssignment(updatedNodes!.First())!;
         result.Roles[0].Denied.Should().BeFalse("Admin should remain unchanged");
         result.Roles[1].Denied.Should().BeTrue("Editor should now be denied");
         result.Roles[2].Denied.Should().BeTrue("Viewer should remain denied");

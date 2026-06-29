@@ -1,5 +1,4 @@
 using System.Linq;
-using FluentAssertions;
 using MeshWeaver.Documentation.BusinessRules;
 using Xunit;
 

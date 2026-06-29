@@ -20,6 +20,12 @@
     </ItemGroup>
     <ItemGroup>
         <None Include="$(OutputPath)\$(AssemblyName).dll" Pack="true" PackagePath="analyzers/dotnet/cs" Visible="false" />
+        <!-- ALSO ship the generator under lib/ so the runtime `#r "nuget:..."` resolver
+             (NuGetAssemblyResolver → reader.GetLibItemsAsync, which reads lib/ ONLY) surfaces it
+             and SourceGeneratorLoader can load + run it. Node Source pulls the generator via #r
+             rather than a framework ProjectReference (which propagated the analyzer + bloated builds).
+             Analyzer-style consumers (OutputItemType="Analyzer") keep using analyzers/dotnet/cs above. -->
+        <None Include="$(OutputPath)\$(AssemblyName).dll" Pack="true" PackagePath="lib/netstandard2.0" Visible="false" />
     </ItemGroup>
 
 </Project>

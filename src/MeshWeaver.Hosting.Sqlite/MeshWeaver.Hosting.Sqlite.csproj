@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Data.Sqlite" />
+    <!-- Override the transitive SQLitePCLRaw.lib.e_sqlite3 2.1.11 (vuln GHSA-2m69-gcr7-jv3q / NU1903)
+         with the patched native SQLite engine 3.50.3. Explicit so nearest-wins beats the transitive. -->
+    <PackageReference Include="SQLitePCLRaw.lib.e_sqlite3" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\MeshWeaver.Mesh.Contract\MeshWeaver.Mesh.Contract.csproj" />
+    <!-- For the shared persistence core wiring (AddPartitionedCoreAndWrapperServices,
+         RegisterMeshQueryCoreOnMeshHub) used by the registration extension. -->
+    <ProjectReference Include="..\MeshWeaver.Hosting\MeshWeaver.Hosting.csproj" />
+  </ItemGroup>
+
+</Project>

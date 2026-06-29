@@ -1,6 +1,5 @@
-#pragma warning disable CS1591 // Missing XML comment for publicly visible type or member
+﻿#pragma warning disable CS1591 // Missing XML comment for publicly visible type or member
 
-using FluentAssertions;
 using Xunit;
 
 namespace MeshWeaver.AI.Test;
@@ -11,7 +10,7 @@ namespace MeshWeaver.AI.Test;
 /// </summary>
 public class MarkdownReferenceExtractorTest
 {
-    #region ExtractReferences — Direct @path syntax
+    #region ExtractReferences â€” Direct @path syntax
 
     [Fact]
     public void ExtractReferences_DirectPath_ExtractsPath()
@@ -63,7 +62,7 @@ public class MarkdownReferenceExtractorTest
 
     #endregion
 
-    #region ExtractReferences — Parentheses @(path) syntax
+    #region ExtractReferences â€” Parentheses @(path) syntax
 
     [Fact]
     public void ExtractReferences_ParenthesesPath_ExtractsPath()
@@ -87,7 +86,7 @@ public class MarkdownReferenceExtractorTest
 
     #endregion
 
-    #region ExtractReferences — Quoted @"path" syntax
+    #region ExtractReferences â€” Quoted @"path" syntax
 
     [Fact]
     public void ExtractReferences_QuotedPath_ExtractsPath()
@@ -101,7 +100,7 @@ public class MarkdownReferenceExtractorTest
 
     #endregion
 
-    #region ExtractReferences — Filtering known commands
+    #region ExtractReferences â€” Filtering known commands
 
     [Fact]
     public void ExtractReferences_AgentCommand_IsFiltered()
@@ -131,7 +130,7 @@ public class MarkdownReferenceExtractorTest
 
     #endregion
 
-    #region ExtractReferences — Overlap handling and priority
+    #region ExtractReferences â€” Overlap handling and priority
 
     [Fact]
     public void ExtractReferences_ParenthesesTakesPriorityOverDirect()
@@ -161,7 +160,7 @@ public class MarkdownReferenceExtractorTest
 
     #endregion
 
-    #region ExtractReferences — Edge cases
+    #region ExtractReferences â€” Edge cases
 
     [Fact]
     public void ExtractReferences_Null_ReturnsEmpty()

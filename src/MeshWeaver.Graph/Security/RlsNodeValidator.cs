@@ -1,6 +1,8 @@
-﻿using MeshWeaver.Mesh;
+﻿using System.Reactive.Linq;
+using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging;
 using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Graph.Security;
@@ -9,67 +11,75 @@ namespace MeshWeaver.Graph.Security;
 /// Node validator that enforces Row-Level Security based on permissions.
 /// Checks if the current user has the required permission for the operation.
 /// </summary>
-public class RlsNodeValidator : INodeValidator
+public class RlsNodeValidator : INodeValidator, IOwnerEnforcedNodeValidator
 {
-    private readonly ISecurityService _securityService;
+    private readonly IMessageHub _hub;
     private readonly ILogger<RlsNodeValidator> _logger;
     private readonly IReadOnlyDictionary<string, INodeTypeAccessRule> _accessRules;
-    private readonly INodeTypeService? _nodeTypeService;
 
+    /// <summary>
+    /// Initializes a new instance of the row-level-security node validator.
+    /// </summary>
+    /// <param name="hub">The message hub used for permission checks.</param>
+    /// <param name="logger">The logger used to record access grants and denials.</param>
+    /// <param name="accessRules">The per-node-type access rules, indexed by node type (last registration wins per type).</param>
     public RlsNodeValidator(
-        ISecurityService securityService,
+        IMessageHub hub,
         ILogger<RlsNodeValidator> logger,
-        IEnumerable<INodeTypeAccessRule> accessRules,
-        INodeTypeService? nodeTypeService = null)
+        IEnumerable<INodeTypeAccessRule> accessRules)
     {
-        _securityService = securityService;
+        _hub = hub;
         _logger = logger;
-        _nodeTypeService = nodeTypeService;
         _accessRules = accessRules
             .GroupBy(r => r.NodeType, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(g => g.Key, g => g.Last(), StringComparer.OrdinalIgnoreCase);
     }
 
     /// <summary>
-    /// This validator handles all CRUD operations.
+    /// This validator handles Read, Create, Update, and Delete operations.
     /// Read validation is enforced via MeshCatalog.ValidateReadAsync for node reads.
-    /// Write validation is enforced via HandleUpdateNodeRequest/HandleDeleteNodeRequest handlers.
+    /// Update is validated on the canonical <c>stream.Update</c> patch path: the
+    /// per-node hub runs the registered <see cref="INodeValidator"/>s (this one
+    /// included) before applying the RFC 7396 merge patch, in addition to the
+    /// inbound <c>[RequiresPermission(Permission.Update)]</c> gate on
+    /// <c>PatchDataRequest</c>.
     /// </summary>
     public IReadOnlyCollection<NodeOperation> SupportedOperations =>
         [NodeOperation.Read, NodeOperation.Create, NodeOperation.Update, NodeOperation.Delete];
 
-    public async Task<NodeValidationResult> ValidateAsync(NodeValidationContext context, CancellationToken ct = default)
+    /// <summary>
+    /// Validates an operation against row-level security, granting system and own-scope
+    /// writes outright and otherwise checking the hub rule, the custom per-type access
+    /// rule, and the effective permissions for the required permission.
+    /// </summary>
+    /// <param name="context">The validation context describing the node and operation.</param>
+    /// <returns>An observable that emits the validation result for the operation.</returns>
+    public IObservable<NodeValidationResult> Validate(NodeValidationContext context)
     {
-        // System identity bypass: SecurityService uses WellKnownUsers.System for internal
-        // operations (creating AccessAssignment, PartitionAccessPolicy nodes).
-        // These must not be blocked by the permissions they manage.
+        // System bypass + own-scope shortcuts — pure sync, no observable needed.
         var userId = GetUserId(context);
         if (userId == WellKnownUsers.System)
-            return NodeValidationResult.Valid();
+            return Observable.Return(NodeValidationResult.Valid());
 
         if (!string.IsNullOrEmpty(userId))
         {
-            // Check MainNode match (original check)
             if (!string.IsNullOrEmpty(context.Node.MainNode)
                 && string.Equals(context.Node.MainNode, userId, StringComparison.OrdinalIgnoreCase))
-            {
-                return NodeValidationResult.Valid();
-            }
+                return Observable.Return(NodeValidationResult.Valid());
 
-            // Check if node is under the user's own User scope (User/{userId} and descendants)
+            // Per-user own-scope shortcut: every user owns the partition
+            // named after their userId. A node at `{userId}` or `{userId}/…`
+            // is in their own partition, granted unconditionally without
+            // walking the access-rule chain.
             var nodePath = context.Node.Path;
             if (!string.IsNullOrEmpty(nodePath))
             {
-                var userScopePath = $"User/{userId}";
-                if (nodePath.Equals(userScopePath, StringComparison.OrdinalIgnoreCase)
-                    || nodePath.StartsWith(userScopePath + "/", StringComparison.OrdinalIgnoreCase))
-                {
-                    return NodeValidationResult.Valid();
-                }
+                if (nodePath.Equals(userId, StringComparison.OrdinalIgnoreCase)
+                    || nodePath.StartsWith(userId + "/", StringComparison.OrdinalIgnoreCase))
+                    return Observable.Return(NodeValidationResult.Valid());
             }
         }
 
-        // Map operation to required permission
         var requiredPermission = context.Operation switch
         {
             NodeOperation.Read => Permission.Read,
@@ -79,37 +89,52 @@ public class RlsNodeValidator : INodeValidator
             _ => Permission.None
         };
 
-        // No permission required
         if (requiredPermission == Permission.None)
-            return NodeValidationResult.Valid();
+            return Observable.Return(NodeValidationResult.Valid());
 
-        // Check hub-config access rules (from NodeTypeService) — grant-only, fall through on no match
-        if (!string.IsNullOrEmpty(context.Node.NodeType))
-        {
-            var hubRule = _nodeTypeService?.GetAccessRule(context.Node.NodeType);
-            if (hubRule != null &&
-                (hubRule.SupportedOperations.Count == 0 ||
-                 hubRule.SupportedOperations.Contains(context.Operation)))
-            {
-                var hasHubAccess = await hubRule.HasAccessAsync(context, userId, ct);
-                if (hasHubAccess)
-                {
-                    _logger.LogTrace(
-                        "RLS: Hub-config rule granted {UserId} - {Operation} on {Path} (NodeType: {NodeType})",
-                        userId ?? "(anonymous)", context.Operation, context.Node.Path, context.Node.NodeType);
-                    return NodeValidationResult.Valid();
-                }
-            }
-        }
+        // Compose: hub-rule → custom-rule → permission check. Each step returns
+        // an observable; chain via SelectMany. A null result from one step means
+        // "fall through" — re-emit by wrapping with Observable.Return; otherwise
+        // pass to the next step in the chain.
+        //
+        // Take(1) closes the final stream: CheckPermission rides
+        // SecurityService.HasPermission, which is hot and never completes
+        // (lives on the live AccessAssignment synced query). Without Take(1)
+        // the .Concat() in RunCreationValidatorsObs would wait forever on the
+        // first validator and the create handler would never post a response.
+        return CheckHubRule(context, userId)
+            .SelectMany(hubResult => hubResult != null
+                ? Observable.Return<NodeValidationResult?>(hubResult)
+                : CheckCustomRule(context, userId))
+            .SelectMany(customResult => customResult != null
+                ? Observable.Return(customResult)
+                : CheckPermission(context, userId, requiredPermission))
+            .Take(1);
+    }
 
-        // Check DI-registered custom access rules for this node type
-        if (!string.IsNullOrEmpty(context.Node.NodeType) &&
-            _accessRules.TryGetValue(context.Node.NodeType, out var accessRule) &&
-            (accessRule.SupportedOperations.Count == 0 ||
-             accessRule.SupportedOperations.Contains(context.Operation)))
+    private IObservable<NodeValidationResult?> CheckHubRule(NodeValidationContext context, string? userId)
+    {
+        if (string.IsNullOrEmpty(context.Node.NodeType))
+            return Observable.Return<NodeValidationResult?>(null);
+
+        // _nodeTypeService.GetAccessRule was always returning null
+        // (the underlying _accessRules dict in NodeTypeService was never
+        // populated). Removed in Stage 4 of the NodeTypeService deletion —
+        // hub-rule path falls through to the next rule in the chain.
+        return Observable.Return<NodeValidationResult?>(null);
+    }
+
+    private IObservable<NodeValidationResult?> CheckCustomRule(NodeValidationContext context, string? userId)
+    {
+        if (string.IsNullOrEmpty(context.Node.NodeType)
+            || !_accessRules.TryGetValue(context.Node.NodeType, out var accessRule)
+            || (accessRule.SupportedOperations.Count != 0
+                && !accessRule.SupportedOperations.Contains(context.Operation)))
+            return Observable.Return<NodeValidationResult?>(null);
+
+        return accessRule.HasAccess(context, userId).Select<bool, NodeValidationResult?>(hasAccess =>
         {
-            var hasCustomAccess = await accessRule.HasAccessAsync(context, userId, ct);
-            if (hasCustomAccess)
+            if (hasAccess)
             {
                 _logger.LogTrace(
                     "RLS: Custom access rule granted {UserId} - {Operation} on {Path} (NodeType: {NodeType})",
@@ -122,57 +147,49 @@ public class RlsNodeValidator : INodeValidator
                 userId ?? "(anonymous)", context.Operation, context.Node.Path, context.Node.NodeType);
             return NodeValidationResult.Unauthorized(
                 $"Access denied: {context.Operation} permission required for node '{context.Node.Path}'");
-        }
+        });
+    }
 
-        // For Create operations, check permission on parent path
-        // (user needs Create permission on the parent to create a child)
+    private IObservable<NodeValidationResult> CheckPermission(
+        NodeValidationContext context, string? userId, Permission requiredPermission)
+    {
         var pathToCheck = context.Operation == NodeOperation.Create
             ? context.Node.GetParentPath() ?? context.Node.Path
             : context.Node.Path;
-
-        // Always use explicit userId for permission checks to avoid admin context leaking.
-        // When userId is null (anonymous), use WellKnownUsers.Anonymous.
         var effectiveUserId = userId ?? WellKnownUsers.Anonymous;
 
-        // Check permission - for Comment permission, also accept Update (Edit implies Comment)
-        bool hasPermission;
-        if (requiredPermission == Permission.Comment)
+        // 🚨 Permission.Sync is a write-authoriser that bypasses the content read-only cap: a
+        // partition whose _Policy denies Create/Update/Delete (Agent, Model, Doc) still admits a
+        // static-repo SYNC write when the caller holds Sync. Sync does NOT grant Read — a private
+        // partition stays private. So Sync is ORed in for write operations only.
+        // See Permission.Sync / Doc/Architecture/StaticRepoImport.md.
+        var isWrite = context.Operation
+            is NodeOperation.Create or NodeOperation.Update or NodeOperation.Delete;
+
+        IObservable<bool> hasPermissionObs = requiredPermission == Permission.Comment
+            ? _hub.GetEffectivePermissions(pathToCheck, effectiveUserId)
+                .Select(p => p.HasFlag(Permission.Comment) || p.HasFlag(Permission.Update) || p.HasFlag(Permission.Sync))
+            : isWrite
+                ? _hub.GetEffectivePermissions(pathToCheck, effectiveUserId)
+                    .Select(p => p.HasFlag(requiredPermission) || p.HasFlag(Permission.Sync))
+                : _hub.CheckPermission(pathToCheck, effectiveUserId, requiredPermission);
+
+        return hasPermissionObs.Select(hasPermission =>
         {
-            var effectivePermissions = await _securityService.GetEffectivePermissionsAsync(pathToCheck, effectiveUserId, ct);
-            hasPermission = effectivePermissions.HasFlag(Permission.Comment)
-                         || effectivePermissions.HasFlag(Permission.Update);
-        }
-        else
-        {
-            hasPermission = await _securityService.HasPermissionAsync(
-                pathToCheck,
-                effectiveUserId,
-                requiredPermission,
-                ct);
-        }
+            if (!hasPermission)
+            {
+                _logger.LogDebug(
+                    "RLS: Access denied for user {UserId} - {Operation} on {Path} requires {Permission}",
+                    userId ?? "(anonymous)", context.Operation, context.Node.Path, requiredPermission);
+                return NodeValidationResult.Unauthorized(
+                    $"Access denied: {context.Operation} permission required for node '{context.Node.Path}'");
+            }
 
-        if (!hasPermission)
-        {
-            var displayUserId = userId ?? "(anonymous)";
-
-            _logger.LogDebug(
-                "RLS: Access denied for user {UserId} - {Operation} on {Path} requires {Permission}",
-                displayUserId,
-                context.Operation,
-                context.Node.Path,
-                requiredPermission);
-
-            return NodeValidationResult.Unauthorized(
-                $"Access denied: {context.Operation} permission required for node '{context.Node.Path}'");
-        }
-
-        _logger.LogTrace(
-            "RLS: Access granted for user {UserId} - {Operation} on {Path}",
-            userId ?? "(anonymous)",
-            context.Operation,
-            context.Node.Path);
-
-        return NodeValidationResult.Valid();
+            _logger.LogTrace(
+                "RLS: Access granted for user {UserId} - {Operation} on {Path}",
+                userId ?? "(anonymous)", context.Operation, context.Node.Path);
+            return NodeValidationResult.Valid();
+        });
     }
 
     /// <summary>
@@ -196,7 +213,6 @@ public class RlsNodeValidator : INodeValidator
         var requestUserId = context.Request switch
         {
             CreateNodeRequest createReq => createReq.CreatedBy,
-            UpdateNodeRequest updateReq => updateReq.UpdatedBy,
             DeleteNodeRequest deleteReq => deleteReq.DeletedBy,
             _ => null
         };

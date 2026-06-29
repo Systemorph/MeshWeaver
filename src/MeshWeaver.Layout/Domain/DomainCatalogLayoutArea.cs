@@ -9,9 +9,21 @@ using Namotion.Reflection;
 
 namespace MeshWeaver.Layout.Domain;
 
+/// <summary>
+/// Provides the standard catalog layout area for a domain type: a title header with data-model link,
+/// an optional XML-doc description, and a data grid of all collection instances with click-through to the detail view.
+/// </summary>
 public static class DomainCatalogLayoutArea
 {
 
+    /// <summary>
+    /// Builds the catalog view for <paramref name="typeDefinition"/>: a title bar with a data-model navigation link,
+    /// an optional type description, and a data grid of all instances with row-click navigation to the detail page.
+    /// </summary>
+    /// <param name="host">The layout area host providing workspace and hub access.</param>
+    /// <param name="typeDefinition">The type whose collection instances are displayed.</param>
+    /// <param name="ctx">The rendering context (currently unused).</param>
+    /// <returns>A stack control containing the catalog header and data grid.</returns>
     public static UiControl GetCatalog(LayoutAreaHost host, ITypeDefinition typeDefinition, RenderingContext ctx)
     {
         var _= ctx;

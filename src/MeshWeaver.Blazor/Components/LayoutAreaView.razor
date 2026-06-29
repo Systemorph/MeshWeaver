@@ -1,14 +1,66 @@
 @using MeshWeaver.Layout
 @inherits BlazorView<LayoutAreaControl, LayoutAreaView>
 
-<div class="layout-area-container @(IsContentLoaded ? "content-loaded" : "content-loading")" style="@Style">
-    <NamedAreaView Stream="@AreaStream" ViewModel="@NamedArea" Area="@NamedArea.GetArea()" Top="@Top" />
+<div class="layout-area-container @(IsContentLoaded ? "content-loaded" : "content-loading") @(Top ? "top-area" : "")" style="@Style">
+    @* Surface NodeType compile progress when the stream hasn't emitted yet so the
+       user sees "Compiling <path> (Ns)…" instead of an indefinite spinner. *@
+    @if (!IsContentLoaded)
+    {
+        <CompileProgressIndicator />
+    }
+    @* Guard: Blazor's parameter pipeline transiently feeds a null ViewModel (navigation / stream
+       tear-down — see SetParametersAsync). The render path must mirror that guard, else NamedArea
+       (which reads ViewModel.SpinnerType) NREs and tears down the whole circuit. A re-render arrives
+       once ViewModel repopulates.
+       Do NOT also guard on Area: a null Area is the LEGITIMATE bare-node-URL case — it means
+       "render the node's default area". The server resolves it and stores the indirection under
+       the empty key, and NamedArea.GetArea() normalizes null to "". Guarding on Area blanked every
+       plain node page portal-wide (regression 7359ba42f, fixed 2026-06-12). *@
+    @if (ViewModel is not null)
+    {
+        @* Per-area ErrorBoundary. A SYNCHRONOUS render-tree throw in this area's subtree that
+           originates above the per-control ErrorBoundary in DispatchView (e.g. a throw in
+           NamedAreaView's own render, or a parameter-change re-render that throws before reaching a
+           leaf control) is contained HERE and shown as an inline error in THIS area — it never
+           tears down the whole circuit / blanks the app. @key ties the boundary to the area
+           reference: a year/PK switch that changes the reference recreates the boundary fresh
+           (auto-recover), so the new parameter gets a clean render attempt; a repeated throw on the
+           new parameter shows the error again rather than spinning a retry loop. (Async stream
+           OnErrors are surfaced separately by the subscription onError handlers — an ErrorBoundary
+           only catches synchronous render/lifecycle throws.) *@
+        <ErrorBoundary @key="@($"{Address}|{ViewModel.Reference}")">
+            <ChildContent>
+                <NamedAreaView Stream="@AreaStream" ViewModel="@NamedArea" Area="@NamedArea.GetArea()" Top="@Top" />
+            </ChildContent>
+            <ErrorContent Context="areaError">
+                <div class="meshweaver-render-error"
+                     style="padding:0.75rem;border:1px solid var(--error,#d13438);border-radius:4px;background:rgba(209,52,56,0.08);color:var(--error,#d13438);font-size:0.875rem">
+                    <strong>This area failed to render.</strong>
+                    <div style="margin-top:0.25rem;white-space:pre-wrap;font-family:monospace">@areaError.Message</div>
+                </div>
+            </ErrorContent>
+        </ErrorBoundary>
+    }
 </div>
 
-@* Render dialog if one is active *@
+@* Render dialog if one is active. Wrapped in its OWN ErrorBoundary: the dialog renders as a sibling
+   AFTER the per-area boundary above (it is not a child of it), so a synchronous render throw inside the
+   dialog subtree would otherwise escape every boundary and tear down the circuit. Contained here, a
+   broken dialog shows an inline error instead of blanking the app. *@
 @if (showDialog && currentDialog != null)
 {
-    <DialogView ViewModel="@currentDialog" Area="@DialogControl.DialogArea" Stream="@AreaStream" />
+    <ErrorBoundary>
+        <ChildContent>
+            <DialogView ViewModel="@currentDialog" Area="@DialogControl.DialogArea" Stream="@AreaStream" />
+        </ChildContent>
+        <ErrorContent Context="dialogError">
+            <div class="meshweaver-render-error"
+                 style="padding:0.75rem;border:1px solid var(--error,#d13438);border-radius:4px;background:rgba(209,52,56,0.08);color:var(--error,#d13438);font-size:0.875rem">
+                <strong>This dialog failed to render.</strong>
+                <div style="margin-top:0.25rem;white-space:pre-wrap;font-family:monospace">@dialogError.Message</div>
+            </div>
+        </ErrorContent>
+    </ErrorBoundary>
 }
 
 @code

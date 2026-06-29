@@ -22,12 +22,16 @@ namespace MeshWeaver.Graph;
 public static class GroupsLayoutArea
 {
     /// <summary>
-    /// Entry point for the Groups layout area.
+    /// Entry point for the Groups layout area. Pure reactive — composes the
+    /// own-node stream with the live permission stream and the live ancestor
+    /// GroupMembership query. CombineLatest re-renders whenever any input
+    /// changes (assignment changes flip isAdmin, membership additions
+    /// re-render the inherited list).
     /// </summary>
     public static IObservable<UiControl?> Groups(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
-        var securityService = host.Hub.ServiceProvider.GetService<ISecurityService>();
+        var securityService = host.Hub.Configuration.Get<EffectivePermissionsDelegate>();
 
         if (securityService == null)
         {
@@ -44,37 +48,27 @@ public static class GroupsLayoutArea
         var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? [])
             ?? Observable.Return<MeshNode[]>([]);
 
+        var isAdminStream = IsAdmin(host.Hub, hubPath);
+
+        var inheritedStream = meshQuery is null
+            ? Observable.Return((IReadOnlyList<(GroupMembership Membership, string SourcePath)>)[])
+            : meshQuery
+                .Query<MeshNode>(MeshQueryRequest.FromQuery(
+                    $"path:{hubPath} nodeType:GroupMembership scope:ancestors"))
+                .Select(change => (IReadOnlyList<(GroupMembership Membership, string SourcePath)>)
+                    (change.Items ?? [])
+                        .Select(n => (Membership: DeserializeMembership(n), SourcePath: n.Namespace ?? ""))
+                        .Where(t => t.Membership != null)
+                        .Select(t => (t.Membership!, t.SourcePath))
+                        .ToList());
+
         return nodeStream
-            .SelectMany(async nodes =>
-            {
-                var node = nodes.FirstOrDefault(n => n.Namespace == hubPath || n.Path == hubPath);
-                var isAdmin = await CheckAdminPermission(host.Hub, hubPath);
-
-                // Load inherited memberships from ancestor nodes via IMeshService (one-shot)
-                var inherited = new List<(GroupMembership Membership, string SourcePath)>();
-                if (meshQuery != null)
+            .CombineLatest(isAdminStream, inheritedStream,
+                (nodes, isAdmin, inherited) =>
                 {
-                    try
-                    {
-                        var ancestorMemberships = await meshQuery
-                            .QueryAsync<MeshNode>($"path:{hubPath} nodeType:GroupMembership scope:ancestors")
-                            .ToListAsync();
-
-                        foreach (var membershipNode in ancestorMemberships)
-                        {
-                            var membership = DeserializeMembership(membershipNode);
-                            if (membership != null)
-                                inherited.Add((membership, membershipNode.Namespace ?? ""));
-                        }
-                    }
-                    catch
-                    {
-                        // Query may fail if index not ready
-                    }
-                }
-
-                return BuildGroupsPage(host, node, hubPath, isAdmin, inherited);
-            });
+                    var node = nodes.FirstOrDefault(n => n.Namespace == hubPath || n.Path == hubPath);
+                    return (UiControl?)BuildGroupsPage(host, node, hubPath, isAdmin, inherited.ToList());
+                });
     }
 
     internal static GroupMembership? DeserializeMembership(MeshNode node)
@@ -86,11 +80,8 @@ public static class GroupsLayoutArea
         return null;
     }
 
-    private static async Task<bool> CheckAdminPermission(IMessageHub hub, string nodePath)
-    {
-        var permissions = await PermissionHelper.GetEffectivePermissionsAsync(hub, nodePath);
-        return permissions.HasFlag(Permission.Delete);
-    }
+    private static IObservable<bool> IsAdmin(IMessageHub hub, string nodePath)
+        => hub.CheckPermission(nodePath, Permission.Delete);
 
     private static UiControl? BuildGroupsPage(
         LayoutAreaHost host,
@@ -128,7 +119,11 @@ public static class GroupsLayoutArea
             stack = stack.WithView(Controls.Button("+ Add Membership")
                 .WithAppearance(Appearance.Accent)
                 .WithStyle("align-self: flex-start; margin-top: 8px;")
-                .WithClickAction(async ctx => await ShowAddMembershipDialog(ctx, nodePath)));
+                .WithClickAction(ctx =>
+                {
+                    _ = ShowAddMembershipDialog(ctx, nodePath);
+                    return Task.CompletedTask;
+                }));
         }
 
         return stack;
@@ -181,7 +176,7 @@ public static class GroupsLayoutArea
             return Observable.Return<UiControl?>(Controls.Html("<p style=\"color: var(--neutral-foreground-hint);\">No local memberships.</p>"));
 
         return meshQuery
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"namespace:{nodePath} nodeType:GroupMembership"))
+            .Query<MeshNode>(MeshQueryRequest.FromQuery($"namespace:{nodePath} nodeType:GroupMembership"))
             .Select(change =>
             {
                 var nodes = change.Items;
@@ -242,79 +237,65 @@ public static class GroupsLayoutArea
                 }))
             .WithView(Controls.Button("Create")
                 .WithAppearance(Appearance.Accent)
-                .WithClickAction(async saveCtx =>
+                .WithClickAction(saveCtx =>
                 {
-                    var formValues = await saveCtx.Host.Stream
-                        .GetDataStream<Dictionary<string, object?>>(formId).FirstAsync();
-
-                    var selectedMember = formValues.GetValueOrDefault("memberId")?.ToString()?.Trim();
-                    if (string.IsNullOrEmpty(selectedMember))
-                    {
-                        var errorDialog = Controls.Dialog(
-                            Controls.Markdown("Please select a **Member**."),
-                            "Validation Error"
-                        ).WithSize("S").WithClosable(true);
-                        saveCtx.Host.UpdateArea(DialogControl.DialogArea, errorDialog);
-                        return;
-                    }
-
-                    var memberName = selectedMember.Split('/').Last();
-                    var nodeId = $"{memberName}_Membership";
-                    var path = $"{nodePath}/{nodeId}";
-
-                    // Check if a membership already exists for this member
-                    MeshNode? existing = null;
-                    var query = saveCtx.Hub.ServiceProvider.GetService<IMeshService>();
-                    if (query != null)
-                    {
-                        try
+                    // Reactive click — no await. Read form, existence-check via GetMeshNodeStream,
+                    // then either navigate to existing or create transient + navigate.
+                    saveCtx.Host.Stream.GetDataStream<Dictionary<string, object?>>(formId)
+                        .Take(1)
+                        .Subscribe(formValues =>
                         {
-                            existing = await query.QueryAsync<MeshNode>($"path:{path}")
-                                .FirstOrDefaultAsync();
-                        }
-                        catch { }
-                    }
-
-                    // Close dialog
-                    saveCtx.Host.UpdateArea(DialogControl.DialogArea, null!);
-
-                    if (existing != null)
-                    {
-                        // Navigate to existing membership
-                        saveCtx.NavigateTo($"/{existing.Path}");
-                    }
-                    else
-                    {
-                        // Create transient node and navigate to Create view
-                        var nodeFactory = saveCtx.Hub.ServiceProvider.GetRequiredService<IMeshService>();
-                        // Look up the member node to copy their icon
-                        string? memberIcon = null;
-                        if (query != null)
-                        {
-                            try
+                            var selectedMember = formValues.GetValueOrDefault("memberId")?.ToString()?.Trim();
+                            if (string.IsNullOrEmpty(selectedMember))
                             {
-                                var memberNode = await query.QueryAsync<MeshNode>($"path:{selectedMember}")
-                                    .FirstOrDefaultAsync();
-                                memberIcon = memberNode?.Icon;
+                                var errorDialog = Controls.Dialog(
+                                    Controls.Markdown("Please select a **Member**."),
+                                    "Validation Error"
+                                ).WithSize("S").WithClosable(true);
+                                saveCtx.Host.UpdateArea(DialogControl.DialogArea, errorDialog);
+                                return;
                             }
-                            catch { }
-                        }
 
-                        var newNode = new MeshNode(nodeId, nodePath)
-                        {
-                            NodeType = Configuration.GroupMembershipNodeType.NodeType,
-                            Name = $"{memberName} Membership",
-                            Icon = memberIcon,
-                            Content = new GroupMembership
-                            {
-                                Member = selectedMember,
-                                DisplayName = memberName,
-                                Groups = [new MembershipEntry { Group = "" }]
-                            }
-                        };
-                        await nodeFactory.CreateTransientAsync(newNode);
-                        saveCtx.NavigateTo($"/{path}/{MeshNodeLayoutAreas.CreateNodeArea}");
-                    }
+                            var memberName = selectedMember.Split('/').Last();
+                            var nodeId = $"{memberName}_Membership";
+                            var path = $"{nodePath}/{nodeId}";
+                            var nodeFactory = saveCtx.Hub.ServiceProvider.GetRequiredService<IMeshService>();
+
+                            // Existence check via one-shot GetDataRequest — true
+                            // request/response, no SubscribeRequest+immediate-unsubscribe.
+                            saveCtx.Hub.GetMeshNode(path, TimeSpan.FromSeconds(5))
+                                .Subscribe(existing =>
+                                {
+                                    saveCtx.Host.UpdateArea(DialogControl.DialogArea, null!);
+
+                                    if (existing != null)
+                                    {
+                                        saveCtx.NavigateTo($"/{existing.Path}");
+                                        return;
+                                    }
+
+                                    // Look up member icon via one-shot GetDataRequest (best-effort).
+                                    saveCtx.Hub.GetMeshNode(selectedMember, TimeSpan.FromSeconds(2))
+                                        .Subscribe(memberNode =>
+                                        {
+                                            var newNode = new MeshNode(nodeId, nodePath)
+                                            {
+                                                NodeType = Configuration.GroupMembershipNodeType.NodeType,
+                                                Name = $"{memberName} Membership",
+                                                Icon = memberNode?.Icon,
+                                                Content = new GroupMembership
+                                                {
+                                                    Member = selectedMember,
+                                                    DisplayName = memberName,
+                                                    Groups = [new MembershipEntry { Group = "" }]
+                                                }
+                                            };
+                                            nodeFactory.CreateTransient(newNode).Subscribe(
+                                                _ => saveCtx.NavigateTo($"/{path}/{MeshNodeLayoutAreas.CreateNodeArea}"),
+                                                _ => { });
+                                        });
+                                });
+                        });
                 }));
 
         var dialog = Controls.Dialog(formContent, "Add Membership")

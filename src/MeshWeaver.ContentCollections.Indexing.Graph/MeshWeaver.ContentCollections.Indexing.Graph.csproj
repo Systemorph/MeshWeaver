@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <!-- IChatClient / ChatMessage / ChatResponse for the ISummarizer impl. The concrete client
+         is supplied by the host (it is not a globally-registered DI service in this codebase). -->
+    <PackageReference Include="Microsoft.Extensions.AI.Abstractions" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The storage-agnostic indexing core (Document record, DocumentInfo, IDocumentSink,
+         ISummarizer, DocumentPaths). -->
+    <ProjectReference Include="..\MeshWeaver.ContentCollections.Indexing\MeshWeaver.ContentCollections.Indexing.csproj" />
+    <!-- The content-collection service + the IContentUploadObserver post-upload seam, and the
+         collection surface used to read file bytes back / enumerate files for re-index-all. -->
+    <ProjectReference Include="..\MeshWeaver.ContentCollections\MeshWeaver.ContentCollections.csproj" />
+    <!-- The mesh graph: NodeType registration, layout areas, CreateOrUpdateNodeRequest,
+         MeshNodeLayoutAreas.OverviewArea, AddDefaultLayoutAreas, WithContentType. -->
+    <ProjectReference Include="..\MeshWeaver.Graph\MeshWeaver.Graph.csproj" />
+    <!-- IIoPool / IoPoolRegistry / IoPoolNames for the IChatClient summarize leaf. -->
+    <ProjectReference Include="..\MeshWeaver.Mesh.Contract\MeshWeaver.Mesh.Contract.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="MeshWeaver.ContentCollections.Indexing.Graph.Test" />
+  </ItemGroup>
+
+</Project>

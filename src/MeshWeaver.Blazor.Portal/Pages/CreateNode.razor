@@ -1,6 +1,9 @@
 @page "/create"
+@using System.Reactive.Linq
 @using System.Text.RegularExpressions
 @using MeshWeaver.Blazor.Portal.Chat
+@using MeshWeaver.Data
+@using MeshWeaver.Graph
 @using MeshWeaver.Mesh
 @using MeshWeaver.Mesh.Services
 @using MeshWeaver.Mesh.Security
@@ -87,7 +90,7 @@
             @* Action buttons *@
             <div style="display: flex; gap: 12px; margin-top: 8px;">
                 <FluentButton Appearance="Appearance.Accent"
-                              OnClick="CreateNodeAsync"
+                              OnClick="CreateNodeAction"
                               Disabled="@(!CanCreate)">
                     @if (isCreating)
                     {
@@ -193,7 +196,6 @@
         try
         {
             var meshConfig = Hub.ServiceProvider.GetService<MeshConfiguration>();
-            var nodeTypeService = Hub.ServiceProvider.GetService<INodeTypeService>();
 
             var defaultNs = NamespaceParam ?? ParentParam ?? NavigationService.CurrentNamespace ?? "";
 
@@ -217,7 +219,7 @@
 
             // Pre-select type: from ?type= param, or default to Markdown
             var defaultType = TypeParam ?? "Markdown";
-            await PreSelectAsync(defaultType, v => selectedTypeItem = v);
+            PreSelect(defaultType, v => selectedTypeItem = v);
 
             // --- Location picker: queries for namespaces ---
             var nsQueries = !string.IsNullOrEmpty(NamespaceQueriesParam)
@@ -236,7 +238,7 @@
 
             // Pre-select location from default namespace
             if (!string.IsNullOrEmpty(defaultNs))
-                await PreSelectAsync(defaultNs, v => selectedLocation = v);
+                PreSelect(defaultNs, v => selectedLocation = v);
         }
         catch (Exception ex)
         {
@@ -260,20 +262,20 @@
         selectedLocation = location;
     }
 
-    private async Task PreSelectAsync(string path, Action<QuerySuggestion> setter)
+    private void PreSelect(string path, Action<QuerySuggestion> setter)
     {
-        try
-        {
-            var node = await MeshService.QueryAsync<MeshNode>($"path:{path}").FirstOrDefaultAsync();
-            if (node != null)
-                setter(new QuerySuggestion(node.Path, node.Name ?? node.Id, node.NodeType, 1.0, node.Icon));
-            else
-                setter(new QuerySuggestion(path, path, null, 1.0));
-        }
-        catch
-        {
-            setter(new QuerySuggestion(path, path, null, 1.0));
-        }
+        // Reactive — Subscribe, never await on a hub round-trip (100% deadlock;
+        // see Doc/Architecture/AsynchronousCalls.md).
+        Hub.GetMeshNode(path, TimeSpan.FromSeconds(5))
+            .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null))
+            .Subscribe(node =>
+            {
+                var suggestion = node != null
+                    ? new QuerySuggestion(node.Path, node.Name ?? node.Id, node.NodeType, 1.0, node.Icon)
+                    : new QuerySuggestion(path, path, null, 1.0);
+                setter(suggestion);
+                InvokeAsync(StateHasChanged);
+            });
     }
 
     private string BackHref
@@ -285,7 +287,8 @@
         }
     }
 
-    private async Task CreateNodeAsync()
+    // Sync — the body only Subscribes; never awaits a hub round-trip.
+    private void CreateNodeAction()
     {
         if (selectedTypeItem == null || string.IsNullOrWhiteSpace(nodeName) || selectedLocation == null)
             return;
@@ -318,17 +321,28 @@
                 DesiredId = id
             };
 
-            await MeshService.CreateNodeAsync(node);
-            NavigationService.NavigateTo($"/{nodePath}/Edit");
+            // Subscribe to CreateNode (IObservable<MeshNode>) — await on hub-backed
+            // writes deadlocks the hub pump (see AsynchronousCalls.md).
+            MeshService.CreateNode(node).Subscribe(
+                _ =>
+                {
+                    isCreating = false;
+                    NavigationService.NavigateTo($"/{nodePath}/Edit");
+                },
+                ex =>
+                {
+                    errorMessage = ex.Message.Contains("Access denied") || ex.Message.Contains("Unauthorized")
+                        ? "You do not have permission to create nodes in this namespace."
+                        : $"Failed to create node: {ex.Message}";
+                    isCreating = false;
+                    _ = InvokeAsync(StateHasChanged);
+                });
         }
         catch (Exception ex)
         {
             errorMessage = ex.Message.Contains("Access denied") || ex.Message.Contains("Unauthorized")
                 ? "You do not have permission to create nodes in this namespace."
                 : $"Failed to create node: {ex.Message}";
-        }
-        finally
-        {
             isCreating = false;
         }
     }

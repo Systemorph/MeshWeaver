@@ -1,0 +1,42 @@
+@* Code-behind moved to CompileProgressIndicator.razor.cs *@
+
+@if (CompilingPath is not null)
+{
+    <div class="compile-progress">
+        <FluentProgressRing style="width: 24px; height: 24px;" />
+        <span>
+            Compiling <strong>@CompilingPath</strong>
+            @if (!string.IsNullOrEmpty(ProgressMessage))
+            {
+                <text> — @ProgressMessage</text>
+            }
+            @if (Seconds > 0)
+            {
+                <text> (@Seconds s)</text>
+            }
+            …
+        </span>
+    </div>
+}
+else if (ErrorPath is not null)
+{
+    @* Surface a failed compile so a layout area that won't load tells the user
+       WHY instead of showing an indefinite blank/spinner. *@
+    <div class="compile-progress compile-error">
+        <span class="compile-error-icon" aria-hidden="true">⚠</span>
+        <span>
+            Compilation failed for <strong>@ErrorPath</strong>
+            @if (!string.IsNullOrEmpty(CompileError))
+            {
+                <text> — @CompileError</text>
+            }
+        </span>
+    </div>
+}
+else if (StreamError is not null)
+{
+    <div class="compile-progress compile-error">
+        <span class="compile-error-icon" aria-hidden="true">⚠</span>
+        <span>Compile status unavailable — @StreamError</span>
+    </div>
+}

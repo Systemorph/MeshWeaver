@@ -39,6 +39,16 @@ public class CollaborationPlugin(IMessageHub hub, IAgentChat chat) : IAgentPlugi
         ];
     }
 
+    /// <summary>
+    /// Agent tool: anchors a comment to a passage of a Markdown document via the collaborative
+    /// editing infrastructure. Reads the document off the hub scheduler, locates
+    /// <paramref name="selectedText"/>, and posts a comment-create request to the document's node hub.
+    /// </summary>
+    /// <param name="documentPath">Canonical mesh path of the document (the node's <c>path</c>, not its display name).</param>
+    /// <param name="selectedText">The exact passage to anchor the comment to; must match document content.</param>
+    /// <param name="commentText">The comment body.</param>
+    /// <param name="cancellationToken">Token to cancel the operation.</param>
+    /// <returns>A status message describing success, or the reason the comment could not be added.</returns>
     [Description("Adds a comment to a text passage in a Markdown document. The comment is anchored to the selected text and visible to all collaborators.")]
     public Task<string> AddComment(
         [Description("Canonical path to the document — NOT the display name. Use @/full/path for absolute or @relative/path relative to the current context. Example: @/PartnerRe/AIConsulting/FinalReport or @FinalReport. If you only know the display name, call Search('name:\"...\"') first and use the path field.")] string documentPath,
@@ -56,7 +66,7 @@ public class CollaborationPlugin(IMessageHub hub, IAgentChat chat) : IAgentPlugi
         // Read the document off the hub scheduler, then fan into Post + RegisterCallback.
         // No `await` anywhere — the subscription runs the read on TaskPoolScheduler and
         // the write's callback fires on the response thread. Both resolve the TCS.
-        Observable.FromAsync(() => ops.Get(resolvedInput))
+        ops.Get(resolvedInput)
             .SubscribeOn(TaskPoolScheduler.Default)
             .Subscribe(
                 docJson => AddCommentContinuation(
@@ -118,6 +128,17 @@ public class CollaborationPlugin(IMessageHub hub, IAgentChat chat) : IAgentPlugi
                 : $"Error adding comment: {resp.Error ?? "unknown error"}");
     }
 
+    /// <summary>
+    /// Agent tool: proposes a text edit (insertion, replacement, or deletion) on a Markdown document
+    /// as a tracked change other collaborators can accept or reject. An empty
+    /// <paramref name="originalText"/> means insertion at document start; an empty
+    /// <paramref name="newText"/> means deletion.
+    /// </summary>
+    /// <param name="documentPath">Canonical mesh path of the document (the node's <c>path</c>, not its display name).</param>
+    /// <param name="originalText">The exact text to replace; empty string for a pure insertion at document start.</param>
+    /// <param name="newText">The replacement text; empty string for a deletion.</param>
+    /// <param name="cancellationToken">Token to cancel the operation.</param>
+    /// <returns>A status message describing the suggested change, or the reason it could not be created.</returns>
     [Description("Suggests a text edit (insertion, replacement, or deletion) on a Markdown document as a tracked change. Other collaborators can accept or reject the suggestion.")]
     public Task<string> SuggestEdit(
         [Description("Canonical path to the document — NOT the display name. Use @/full/path for absolute or @relative/path relative to the current context. Example: @/PartnerRe/AIConsulting/FinalReport or @FinalReport. If you only know the display name, call Search('name:\"...\"') first and use the path field.")] string documentPath,
@@ -132,7 +153,7 @@ public class CollaborationPlugin(IMessageHub hub, IAgentChat chat) : IAgentPlugi
         var resolvedPath = MeshOperations.ResolvePath(resolvedInput);
         var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        Observable.FromAsync(() => ops.Get(resolvedInput))
+        ops.Get(resolvedInput)
             .SubscribeOn(TaskPoolScheduler.Default)
             .Subscribe(
                 docJson => SuggestEditContinuation(
@@ -218,30 +239,32 @@ public class CollaborationPlugin(IMessageHub hub, IAgentChat chat) : IAgentPlugi
         Func<TResponse, string> formatSuccess)
     {
         var delivery = hub.Post(request, o => o.WithTarget(target))!;
-        hub.RegisterCallback(delivery, callback =>
-        {
-            switch (callback)
-            {
-                case IMessageDelivery<TResponse> typed:
-                    try { tcs.TrySetResult(formatSuccess(typed.Message)); }
-                    catch (Exception ex) { tcs.TrySetResult($"Error formatting response: {ex.Message}"); }
-                    break;
-                case IMessageDelivery<DeliveryFailure> failure:
+        hub.Observe(delivery)
+            .Subscribe(
+                callback =>
+                {
+                    if (callback.Message is TResponse typed)
+                    {
+                        try { tcs.TrySetResult(formatSuccess(typed)); }
+                        catch (Exception ex) { tcs.TrySetResult($"Error formatting response: {ex.Message}"); }
+                    }
+                    else
+                    {
+                        tcs.TrySetResult($"Error: unexpected response {callback.Message?.GetType().Name ?? "null"} for {originalInput}.");
+                    }
+                },
+                ex =>
+                {
                     logger.LogWarning(
-                        "Delivery to {Target} failed for {RequestType}: {Reason}. Original input: {OriginalInput}",
-                        target, request.GetType().Name, failure.Message.Message, originalInput);
+                        ex,
+                        "Delivery to {Target} failed for {RequestType}. Original input: {OriginalInput}",
+                        target, request.GetType().Name, originalInput);
                     tcs.TrySetResult(
-                        $"Error: {failure.Message.Message ?? "delivery failed"}. " +
+                        $"Error: {ex.Message ?? "delivery failed"}. " +
                         $"Check that '{originalInput}' resolves to an existing node — pass the MeshNode's " +
                         "`path` property, not its `name`. If you only know the display name, call " +
                         "Search('name:\"...\"') and use the `path` field of the match.");
-                    break;
-                default:
-                    tcs.TrySetResult($"Error: unexpected response {callback.Message?.GetType().Name ?? "null"} for {originalInput}.");
-                    break;
-            }
-            return callback;
-        });
+                });
     }
 
     private static string? ExtractContent(string rawJson)

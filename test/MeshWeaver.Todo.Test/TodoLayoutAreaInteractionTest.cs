@@ -1,9 +1,8 @@
 ﻿using System.Reactive.Linq;
 using System.Text.Json;
-using FluentAssertions;
-using FluentAssertions.Extensions;
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
+using MeshWeaver.Messaging;
 using MeshWeaver.Todo.LayoutAreas;
 using Xunit;
 
@@ -34,18 +33,14 @@ public class TodoLayoutAreaInteractionTest(ITestOutputHelper output) : TodoDataT
 
         // Wait for the final layout control (skip loading states)
         Output.WriteLine("⏳ Waiting for layout area to render with data...");
-        var control = await stream
+        var control = (LayoutGridControl)(await stream
             .GetControlStream(reference.Area!)
-            .Where(c => c is LayoutGridControl)
-            .Select(c => (LayoutGridControl)c!)
-            .Timeout(10.Seconds())
-            .FirstAsync();
+            .Should().Within(10.Seconds()).Match(c => c is LayoutGridControl))!;
 
         // Assert
         Output.WriteLine($"✅ SUCCESS: LayoutGrid rendered with {control.Areas.Count} areas");
         Output.WriteLine("✅ VERIFICATION: WithKey fix allows proper data binding and layout rendering");
 
-        control.Should().NotBeNull();
         control.Areas.Should().NotBeEmpty("Layout should have areas when data is properly configured");
     }
 
@@ -56,55 +51,54 @@ public class TodoLayoutAreaInteractionTest(ITestOutputHelper output) : TodoDataT
     public async Task TodoList_ClickStartButton_ShouldMoveItemToInProgressAndUpdateActions()
     {
         // Arrange
-        var (_, stream, reference) = await SetupTodoLayoutTest();
+        var (_, stream, reference) = SetupTodoLayoutTest();
 
         // Step 1: Wait for initial layout to render with data
         Output.WriteLine("⏳ Step 1: Waiting for initial layout area to render...");
         var layoutGrid = await GetLayoutGrid(stream, reference);
 
         // Step 2: Get initial pending count
-        var initialPendingCount = await GetPendingCount(stream, layoutGrid);
+        var initialPendingCount = await CountPendingInLayout(stream, layoutGrid);
         initialPendingCount.Should().BeGreaterThan(0, "Should have at least one pending todo item before starting test");
         Output.WriteLine($"✅ Step 2: Confirmed initial pending count: {initialPendingCount} todos");
 
         // Step 3: Find and click a button that would affect the unassigned pending items
-        var buttonResult = await FindButtonByText(stream, layoutGrid, "Auto-Assign");
-        var startButton = buttonResult.button;
-        var buttonAreaName = buttonResult.areaName;
+        var (button, areaName) = await FindButtonByText(stream, layoutGrid, "Auto-Assign");
 
         // If no Auto-Assign button found, look for Start button
-        if (startButton == null)
+        if (button == null)
         {
-            buttonResult = await FindButtonByText(stream, layoutGrid, "Start");
-            startButton = buttonResult.button;
-            buttonAreaName = buttonResult.areaName;
+            (button, areaName) = await FindButtonByText(stream, layoutGrid, "Start");
         }
 
-        startButton.Should().NotBeNull("Should find at least one clickable button");
-        buttonAreaName.Should().NotBeNull("Button area name should not be null");
+        button.Should().NotBeNull("Should find at least one clickable button");
+        areaName.Should().NotBeNull("Button area name should not be null");
+        var startButton = button!;
+        var buttonAreaName = areaName!;
         Output.WriteLine($"✅ Step 3: Found clickable button '{startButton.Title}' in area {buttonAreaName}");
 
         // Step 4: Click the button and wait for the pending count to change
         ClickButtonAndVerifyResponse(stream, buttonAreaName, startButton);
 
         // Step 5: Wait for the action to take effect and check the result
-        Output.WriteLine($"⏳ Step 5: Waiting for action to take effect...");
-        await Task.Delay(500, TestContext.Current.CancellationToken);
-
-        layoutGrid = await GetLayoutGrid(stream, reference);
-        var finalPendingCount = await GetPendingCount(stream, layoutGrid);
+        Output.WriteLine("⏳ Step 5: Waiting for action to take effect...");
 
         // Validate the final state based on the button clicked
         var buttonTitle = startButton.Title?.ToString() ?? "";
+        int finalPendingCount;
         if (buttonTitle.Contains("Auto-Assign"))
         {
             // Auto-assign doesn't change pending count, just moves items from unassigned to assigned
+            finalPendingCount = await CountPendingInLayout(stream, await GetLayoutGrid(stream, reference));
             Output.WriteLine($"✅ Step 5: Auto-assign clicked - pending count remains {finalPendingCount}");
             // We expect the count to stay the same or similar since items are still pending, just assigned
         }
-        else if (buttonTitle.Contains("Start"))
+        else
         {
-            // Start All should reduce pending count (move to InProgress)
+            // Start All should reduce pending count (move to InProgress): wait until the freshly
+            // rendered layout reports fewer pending items than we started with.
+            finalPendingCount = await WaitForPendingCount(stream, reference,
+                count => count < initialPendingCount, 5.Seconds());
             finalPendingCount.Should().BeLessThan(initialPendingCount, "Start All should reduce pending count");
             Output.WriteLine($"✅ Step 5: Start clicked - pending count reduced from {initialPendingCount} to {finalPendingCount}");
         }
@@ -126,33 +120,33 @@ public class TodoLayoutAreaInteractionTest(ITestOutputHelper output) : TodoDataT
     public async Task TodoList_ClickIndividualStartButton_ShouldMoveSpecificItemToInProgress()
     {
         // Arrange
-        var (_, stream, reference) = await SetupTodoLayoutTest();
+        var (_, stream, reference) = SetupTodoLayoutTest();
 
         // Step 1: Wait for initial layout to render with data
         Output.WriteLine("⏳ Step 1: Waiting for initial layout area to render...");
         var layoutGrid = await GetLayoutGrid(stream, reference);
 
         // Step 2: Get initial pending count
-        var initialPendingCount = await GetPendingCount(stream, layoutGrid);
+        var initialPendingCount = await CountPendingInLayout(stream, layoutGrid);
         initialPendingCount.Should().BeGreaterThan(0, "Should have at least one pending todo item before starting test");
         Output.WriteLine($"✅ Step 2: Confirmed initial pending count: {initialPendingCount} todos");
 
         // Step 3: Find an individual start button (not "Start All")
-        var buttonResult = await FindIndividualStartButton(stream, layoutGrid);
-        var startButton = buttonResult.button;
-        var buttonAreaName = buttonResult.areaName;
-        startButton.Should().NotBeNull("Should find at least one individual start button");
-        buttonAreaName.Should().NotBeNull("Button area name should not be null");
+        var (button, areaName) = await FindIndividualStartButton(stream, layoutGrid);
+        button.Should().NotBeNull("Should find at least one individual start button");
+        areaName.Should().NotBeNull("Button area name should not be null");
+        var startButton = button!;
+        var buttonAreaName = areaName!;
         Output.WriteLine($"✅ Step 3: Found individual start button '{startButton.Title}' in area {buttonAreaName}");
 
         // Step 4: Click the individual button and wait for the pending count to change
         ClickButtonAndVerifyResponse(stream, buttonAreaName, startButton);
 
-        // Step 5: Wait for the pending count to decrease by polling with timeout
+        // Step 5: Wait for the pending count to decrease
         var expectedFinalCount = initialPendingCount - 1;
         Output.WriteLine($"⏳ Step 5: Waiting for pending count to change from {initialPendingCount} to {expectedFinalCount}...");
 
-        var count = await WaitForPendingCountChange(stream, reference, initialPendingCount, expectedFinalCount, timeout: 5.Seconds());
+        var count = await WaitForPendingCount(stream, reference, c => c == expectedFinalCount, 5.Seconds());
 
         // Validate the final state
         count.Should().Be(expectedFinalCount, $"Should have {expectedFinalCount} pending todos after clicking individual start button");
@@ -173,7 +167,7 @@ public class TodoLayoutAreaInteractionTest(ITestOutputHelper output) : TodoDataT
     /// <summary>
     /// Sets up the common infrastructure for Todo layout tests
     /// </summary>
-    private Task<(dynamic client, ISynchronizationStream<JsonElement> stream, LayoutAreaReference reference)> SetupTodoLayoutTest()
+    private (IMessageHub client, ISynchronizationStream<JsonElement> stream, LayoutAreaReference reference) SetupTodoLayoutTest()
     {
         var client = GetClient();
         var workspace = client.GetWorkspace();
@@ -184,68 +178,69 @@ public class TodoLayoutAreaInteractionTest(ITestOutputHelper output) : TodoDataT
             reference
         );
 
-        return Task.FromResult<(dynamic, ISynchronizationStream<JsonElement>, LayoutAreaReference)>((client, stream, reference));
+        return (client, stream, reference);
     }
 
     /// <summary>
-    /// Gets the initial layout grid control from the stream
+    /// Reads the current control rendered for <paramref name="area"/>, blocking (inside the reactive
+    /// assertion) up to <paramref name="within"/> for the first non-null control. Returns <c>null</c>
+    /// when nothing materializes in time — the await-free equivalent of the old
+    /// <c>FirstOrDefaultAsync().Timeout(...)</c> probe used to scan many areas tolerantly.
+    /// </summary>
+    private static async Task<UiControl?> TryGetControl(ISynchronizationStream<JsonElement> stream, string area, TimeSpan within)
+    {
+        try
+        {
+            return await stream.GetControlStream(area)
+                .Should().Within(within).Match(control => control != null);
+        }
+        catch (AssertionException)
+        {
+            // No control arrived within the window — treat the area as "nothing here" and move on.
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Gets the current layout grid control from the stream (blocks inside the reactive assertion).
     /// </summary>
     private async Task<LayoutGridControl> GetLayoutGrid(ISynchronizationStream<JsonElement> stream, LayoutAreaReference reference)
     {
-        Output.WriteLine("⏳ Waiting for initial layout area to render...");
-        var initialControl = await stream
+        Output.WriteLine("⏳ Waiting for layout area to render...");
+        var initialControl = (LayoutGridControl)(await stream
             .GetControlStream(reference.Area!)
-            .Where(c => c is LayoutGridControl)
-            .Select(c => (LayoutGridControl)c!)
-            //.Timeout(10.Seconds())
-            .FirstAsync();
+            .Should().Within(10.Seconds()).Match(c => c is LayoutGridControl))!;
 
-        Output.WriteLine($"✅ Initial LayoutGrid rendered with {initialControl.Areas.Count} areas");
+        Output.WriteLine($"✅ LayoutGrid rendered with {initialControl.Areas.Count} areas");
         return initialControl;
     }
 
-
     /// <summary>
-    /// Waits for the pending count to change to the expected value by polling with timeout
+    /// Waits for the layout-rendered pending count to satisfy <paramref name="predicate"/>, then
+    /// returns it. The wait is reactive: a fresh "current pending count" snapshot is re-derived from
+    /// the layout stream on a short interval until the predicate holds or the timeout elapses.
     /// </summary>
-    private async Task<int> WaitForPendingCountChange(
+    private async Task<int> WaitForPendingCount(
         ISynchronizationStream<JsonElement> stream,
         LayoutAreaReference reference,
-        int initialCount,
-        int expectedCount,
+        Func<int, bool> predicate,
         TimeSpan timeout)
     {
-        var startTime = DateTime.UtcNow;
-        var pollInterval = 100; // Poll every 100ms
-
-        while (DateTime.UtcNow - startTime < timeout)
-        {
-            // Get a fresh layout grid to see the latest state
-            var currentLayoutGrid = await GetLayoutGrid(stream, reference);
-            var currentCount = await GetPendingCount(stream, currentLayoutGrid);
-
-            Output.WriteLine($"   Polling... current count: {currentCount}, expected: {expectedCount}");
-
-            if (currentCount == expectedCount)
-            {
-                Output.WriteLine($"✅ Pending count changed to {currentCount} as expected!");
-                return currentCount;
-            }
-
-            await Task.Delay(pollInterval, TestContext.Current.CancellationToken);
-        }
-
-        // Timeout reached, return the last count we got
-        var finalLayoutGrid = await GetLayoutGrid(stream, reference);
-        var finalCount = await GetPendingCount(stream, finalLayoutGrid);
-        Output.WriteLine($"⚠️ Timeout reached after {timeout.TotalSeconds}s. Final count: {finalCount}");
-        return finalCount;
+        return await Observable
+            .Interval(100.Milliseconds())
+            .StartWith(0L)
+            .SelectMany(_ => CurrentPendingCount(stream, reference))
+            .Do(count => Output.WriteLine($"   Polling... current pending count: {count}"))
+            .Should().Within(timeout).Match(predicate);
     }
 
     /// <summary>
-    /// Gets the current pending todo count from the layout using Observable pattern
+    /// Gets the pending todo count rendered in <paramref name="layoutGrid"/> by scanning its areas for the
+    /// "Pending (N)" header (in a label or HTML section). Returns 0 when no pending header is present.
+    /// Each area control is read sequentially (blocking inside the reactive probe), mirroring the original
+    /// per-area scan — no nested stream subscription, so no deadlock.
     /// </summary>
-    private async Task<int> GetPendingCount(ISynchronizationStream<JsonElement> stream, LayoutGridControl layoutGrid)
+    private async Task<int> CountPendingInLayout(ISynchronizationStream<JsonElement> stream, LayoutGridControl layoutGrid)
     {
         Output.WriteLine("📊 Finding and validating Pending count...");
 
@@ -254,58 +249,57 @@ public class TodoLayoutAreaInteractionTest(ITestOutputHelper output) : TodoDataT
             var areaName = area.Area.ToString();
             if (areaName == null) continue;
 
-            try
+            var areaControl = await TryGetControl(stream, areaName, 2.Seconds());
+            var count = ExtractPendingCount(areaControl);
+            if (count != null)
             {
-                var areaControl = await stream
-                    .GetControlStream(areaName)
-                    .Where(control => control != null)
-                    .Timeout(2.Seconds())
-                    .FirstOrDefaultAsync();
-
-                if (areaControl is LabelControl labelControl)
-                {
-                    var labelContent = labelControl.Data?.ToString() ?? "";
-                    Output.WriteLine($"   Checking Label area {areaName}: '{labelContent}'");
-
-                    // Look for heading with "Pending" and count
-                    if (labelContent.Contains("Pending") && labelContent.Contains("(") && labelContent.Contains(")"))
-                    {
-                        // Extract count from "(X)" format
-                        var match = System.Text.RegularExpressions.Regex.Match(labelContent, @"Pending \((\d+)\)");
-                        if (match.Success && int.TryParse(match.Groups[1].Value, out var count))
-                        {
-                            Output.WriteLine($"🎯 Found Pending header: '{labelContent}' with count {count} in area {areaName}");
-                            return count;
-                        }
-                    }
-                }
-                else if (areaControl is HtmlControl htmlControl)
-                {
-                    var htmlContent = htmlControl.Data?.ToString() ?? "";
-                    Output.WriteLine($"   Checking HTML area {areaName}: '{htmlContent}'");
-
-                    // Look for HTML content with "Pending" and count in collapsible sections
-                    if (htmlContent.Contains("Pending") && htmlContent.Contains("(") && htmlContent.Contains(")"))
-                    {
-                        // Extract count from "⏳ Pending (X)" format in HTML
-                        var match = System.Text.RegularExpressions.Regex.Match(htmlContent, @"Pending \((\d+)\)");
-                        if (match.Success && int.TryParse(match.Groups[1].Value, out var count))
-                        {
-                            Output.WriteLine($"🎯 Found Pending section in HTML: '{htmlContent}' with count {count} in area {areaName}");
-                            return count;
-                        }
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                Output.WriteLine($"   Could not get control for area {areaName}: {ex.Message}");
+                Output.WriteLine($"🎯 Found Pending header with count {count} in area {areaName}");
+                return count.Value;
             }
         }
 
         // If no pending header found, assume 0
         Output.WriteLine("🎯 No Pending header found, assuming count is 0");
         return 0;
+    }
+
+    /// <summary>
+    /// A cold observable yielding the pending count currently rendered in the AllItems layout. It reads
+    /// the first <see cref="LayoutGridControl"/>, then scans its areas for the "Pending (N)" header (in a
+    /// label or HTML section) and emits the parsed count (0 when no pending header is present).
+    /// </summary>
+    private static IObservable<int> CurrentPendingCount(ISynchronizationStream<JsonElement> stream, LayoutAreaReference reference) =>
+        stream.GetControlStream(reference.Area!)
+            .Where(c => c is LayoutGridControl)
+            .Select(c => (LayoutGridControl)c!)
+            .Take(1)
+            .SelectMany(grid => Observable
+                .Merge(grid.Areas
+                    .Select(area => area.Area.ToString())
+                    .Where(areaName => areaName != null)
+                    .Select(areaName => stream.GetControlStream(areaName!).Take(1)))
+                .Select(ExtractPendingCount)
+                .Where(count => count != null)
+                .Select(count => count!.Value)
+                .Take(1)
+                .DefaultIfEmpty(0));
+
+    /// <summary>
+    /// Extracts a "Pending (N)" count from a rendered label/HTML control, or <c>null</c> if absent.
+    /// </summary>
+    private static int? ExtractPendingCount(UiControl? control)
+    {
+        var content = control switch
+        {
+            LabelControl label => label.Data?.ToString() ?? "",
+            HtmlControl html => html.Data?.ToString() ?? "",
+            _ => null
+        };
+        if (content == null)
+            return null;
+
+        var match = System.Text.RegularExpressions.Regex.Match(content, @"Pending \((\d+)\)");
+        return match.Success && int.TryParse(match.Groups[1].Value, out var count) ? count : null;
     }
 
     /// <summary>
@@ -322,73 +316,50 @@ public class TodoLayoutAreaInteractionTest(ITestOutputHelper output) : TodoDataT
 
             Output.WriteLine($"   Area: {areaName}");
 
-            try
+            var areaControls = await TryGetControl(stream, areaName, 2.Seconds());
+
+            if (areaControls is MenuItemControl button)
             {
-                var areaControls = await stream
-                    .GetControlStream(areaName)
-                    .Where(control => control != null)
-                    .Timeout(2.Seconds())
-                    .FirstOrDefaultAsync();
+                var text = button.Title?.ToString() ?? "";
+                Output.WriteLine($"   Found button in area {areaName}: '{text}'");
 
-                if (areaControls is MenuItemControl button)
+                if (text.Contains(searchText, StringComparison.OrdinalIgnoreCase))
                 {
-                    var text = button.Title?.ToString() ?? "";
-                    Output.WriteLine($"   Found button in area {areaName}: '{text}'");
-
-                    if (text.Contains(searchText, StringComparison.OrdinalIgnoreCase))
-                    {
-                        Output.WriteLine($"🎯 Found target button: '{text}' in area {areaName}");
-                        return (button, areaName);
-                    }
+                    Output.WriteLine($"🎯 Found target button: '{text}' in area {areaName}");
+                    return (button, areaName);
                 }
-                else if (areaControls is StackControl stack)
+            }
+            else if (areaControls is StackControl stack)
+            {
+                Output.WriteLine($"   Area {areaName} has StackControl with {stack.Areas?.Count ?? 0} areas");
+
+                // Look for buttons inside the stack control areas
+                if (stack.Areas != null)
                 {
-                    Output.WriteLine($"   Area {areaName} has StackControl with {stack.Areas?.Count ?? 0} areas");
-
-                    // Look for buttons inside the stack control areas
-                    if (stack.Areas != null)
+                    foreach (var namedArea in stack.Areas)
                     {
-                        foreach (var namedArea in stack.Areas)
+                        var stackAreaName = namedArea.Area.ToString();
+                        if (string.IsNullOrEmpty(stackAreaName))
+                            continue;
+
+                        var stackAreaControl = await TryGetControl(stream, stackAreaName, 2.Seconds());
+                        if (stackAreaControl is MenuItemControl stackButton)
                         {
-                            var stackAreaName = namedArea.Area.ToString();
-                            if (!string.IsNullOrEmpty(stackAreaName))
+                            var text = stackButton.Title?.ToString() ?? "";
+                            Output.WriteLine($"   Found button in stack area {stackAreaName}: '{text}'");
+
+                            if (text.Contains(searchText, StringComparison.OrdinalIgnoreCase))
                             {
-                                try
-                                {
-                                    var stackAreaControl = await stream
-                                        .GetControlStream(stackAreaName)
-                                        .Where(control => control != null)
-                                        .Timeout(2.Seconds())
-                                        .FirstOrDefaultAsync();
-
-                                    if (stackAreaControl is MenuItemControl stackButton)
-                                    {
-                                        var text = stackButton.Title?.ToString() ?? "";
-                                        Output.WriteLine($"   Found button in stack area {stackAreaName}: '{text}'");
-
-                                        if (text.Contains(searchText, StringComparison.OrdinalIgnoreCase))
-                                        {
-                                            Output.WriteLine($"🎯 Found target button: '{text}' in stack area {stackAreaName}");
-                                            return (stackButton, stackAreaName);
-                                        }
-                                    }
-                                }
-                                catch (Exception stackEx)
-                                {
-                                    Output.WriteLine($"   Could not get control for stack area {stackAreaName}: {stackEx.Message}");
-                                }
+                                Output.WriteLine($"🎯 Found target button: '{text}' in stack area {stackAreaName}");
+                                return (stackButton, stackAreaName);
                             }
                         }
                     }
                 }
-                else if (areaControls != null)
-                {
-                    Output.WriteLine($"   Area {areaName} has control: {areaControls.GetType().Name}");
-                }
             }
-            catch (Exception ex)
+            else if (areaControls != null)
             {
-                Output.WriteLine($"   Could not get controls for area {areaName}: {ex.Message}");
+                Output.WriteLine($"   Area {areaName} has control: {areaControls.GetType().Name}");
             }
         }
 
@@ -415,62 +386,51 @@ public class TodoLayoutAreaInteractionTest(ITestOutputHelper output) : TodoDataT
             var areaName = area.Area.ToString();
             if (areaName == null) continue;
 
-            try
+            var areaControl = await TryGetControl(stream, areaName, 2.Seconds());
+
+            if (areaControl is MenuItemControl button)
             {
-                var areaControl = await stream
-                    .GetControlStream(areaName)
-                    .Where(control => control != null)
-                    .Timeout(2.Seconds())
-                    .FirstOrDefaultAsync();
+                var text = button.Title?.ToString() ?? "";
+                Output.WriteLine($"   Found button in area {areaName}: '{text}'");
 
-                if (areaControl is MenuItemControl button)
+                // Look for individual start buttons, excluding global actions
+                if (IsIndividualStartButton(text))
                 {
-                    var text = button.Title?.ToString() ?? "";
-                    Output.WriteLine($"   Found button in area {areaName}: '{text}'");
-
-                    // Look for individual start buttons, excluding global actions
-                    if (IsIndividualStartButton(text))
-                    {
-                        Output.WriteLine($"🎯 Found individual start button: '{text}' in area {areaName}");
-                        return (button, areaName);
-                    }
-                }
-                else if (areaControl is StackControl stack)
-                {
-                    Output.WriteLine($"   Area {areaName} has StackControl with {stack.Areas?.Count ?? 0} areas");
-
-                    if (stack.Areas != null)
-                    {
-                        // Recursively search within the stack control
-                        var result = await RecursivelyFindIndividualStartButton(stream, stack.Areas);
-                        if (result.button != null)
-                        {
-                            return result;
-                        }
-                    }
-                }
-                else if (areaControl is LayoutGridControl nestedGrid)
-                {
-                    Output.WriteLine($"   Area {areaName} has nested LayoutGridControl with {nestedGrid.Areas?.Count ?? 0} areas");
-
-                    if (nestedGrid.Areas != null)
-                    {
-                        // Recursively search within the nested grid
-                        var result = await RecursivelyFindIndividualStartButton(stream, nestedGrid.Areas);
-                        if (result.button != null)
-                        {
-                            return result;
-                        }
-                    }
-                }
-                else if (areaControl != null)
-                {
-                    Output.WriteLine($"   Area {areaName} has control: {areaControl.GetType().Name}");
+                    Output.WriteLine($"🎯 Found individual start button: '{text}' in area {areaName}");
+                    return (button, areaName);
                 }
             }
-            catch (Exception ex)
+            else if (areaControl is StackControl stack)
             {
-                Output.WriteLine($"   Could not get control for area {areaName}: {ex.Message}");
+                Output.WriteLine($"   Area {areaName} has StackControl with {stack.Areas?.Count ?? 0} areas");
+
+                if (stack.Areas != null)
+                {
+                    // Recursively search within the stack control
+                    var result = await RecursivelyFindIndividualStartButton(stream, stack.Areas);
+                    if (result.button != null)
+                    {
+                        return result;
+                    }
+                }
+            }
+            else if (areaControl is LayoutGridControl nestedGrid)
+            {
+                Output.WriteLine($"   Area {areaName} has nested LayoutGridControl with {nestedGrid.Areas?.Count ?? 0} areas");
+
+                if (nestedGrid.Areas != null)
+                {
+                    // Recursively search within the nested grid
+                    var result = await RecursivelyFindIndividualStartButton(stream, nestedGrid.Areas);
+                    if (result.button != null)
+                    {
+                        return result;
+                    }
+                }
+            }
+            else if (areaControl != null)
+            {
+                Output.WriteLine($"   Area {areaName} has control: {areaControl.GetType().Name}");
             }
         }
 

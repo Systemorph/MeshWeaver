@@ -1,6 +1,7 @@
 ﻿using System.Collections.Immutable;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using MeshWeaver.Domain;
@@ -9,8 +10,22 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Messaging;
 
+/// <summary>
+/// Convenience extensions over <see cref="IMessageHub"/>,
+/// <see cref="IServiceProvider"/>, and addresses — hub construction, typed
+/// response observation, route and type-registry access, and address parsing.
+/// </summary>
 public static class MessageHubExtensions
 {
+    /// <summary>
+    /// Builds a new <see cref="IMessageHub"/> for <paramref name="address"/> from
+    /// the given service provider, applying the optional configuration transform.
+    /// The address's type is registered with the hub automatically.
+    /// </summary>
+    /// <param name="serviceProvider">Service provider used to resolve hub dependencies.</param>
+    /// <param name="address">The address that identifies the new hub.</param>
+    /// <param name="configuration">Optional configuration transform; identity if omitted.</param>
+    /// <returns>The constructed hub.</returns>
     public static IMessageHub CreateMessageHub(this IServiceProvider serviceProvider, Address address, Func<MessageHubConfiguration, MessageHubConfiguration>? configuration = null)
     {
         var hubSetup = new MessageHubConfiguration(serviceProvider, address)
@@ -19,9 +34,53 @@ public static class MessageHubExtensions
         return configuration(hubSetup).Build(serviceProvider, address);
     }
 
+    /// <summary>
+    /// Reads the originating request id stamped on a delivery's properties, if any.
+    /// </summary>
+    /// <param name="delivery">The delivery to inspect.</param>
+    /// <returns>The request id, or null when the delivery is not a response to a tracked request.</returns>
     public static string? GetRequestId(this IMessageDelivery delivery)
         => delivery.Properties.GetValueOrDefault(PostOptions.RequestId) as string;
 
+    /// <summary>
+    /// Subscribes to the response for an already-posted <paramref name="delivery"/> as an observable.
+    /// Emits exactly one IMessageDelivery on the response (or an error). Replaces the
+    /// Task-returning RegisterCallback overloads — IObservable composes cleanly with Subscribe(onNext, onError),
+    /// so DeliveryFailure flows through onError as a DeliveryFailureException without the
+    /// Task-await temptation that deadlocks hub handlers.
+    /// </summary>
+    public static IObservable<IMessageDelivery> Observe(this IMessageHub hub, IMessageDelivery delivery)
+        => hub.Observe(delivery);
+
+    /// <summary>
+    /// Posts <paramref name="request"/> and observes the typed response.
+    /// <para>
+    /// Pre-registers the callback BEFORE posting (via the framework's
+    /// <c>AwaitResponse(object, Func&lt;PostOptions,PostOptions&gt;, Func&lt;IMessageDelivery,object?&gt;, CancellationToken)</c>
+    /// primitive which uses <see cref="PostOptions.WithMessageId"/>) so a synchronously-handled
+    /// response can't slip through before the callback is registered. Emits exactly one
+    /// <see cref="IMessageDelivery{TResponse}"/> on the response, or <c>OnError</c> for
+    /// <see cref="DeliveryFailureException"/> / <see cref="TimeoutException"/>.
+    /// </para>
+    /// </summary>
+    public static IObservable<IMessageDelivery<TResponse>> Observe<TResponse>(
+        this IMessageHub hub,
+        IRequest<TResponse> request,
+        Func<PostOptions, PostOptions>? options = null)
+        => hub.Observe((object)request, options ?? (o => o))
+            .Select(d => d is IMessageDelivery<TResponse> typed
+                ? typed
+                : throw new InvalidOperationException(
+                    $"Observe<{typeof(TResponse).Name}>: unexpected response type {d.Message?.GetType().Name ?? "null"}"));
+
+    /// <summary>
+    /// Appends a routing-configuration lambda to the hub configuration. The lambda
+    /// is applied to the hub's <see cref="RouteConfiguration"/> at build time,
+    /// letting callers register address routes and handlers.
+    /// </summary>
+    /// <param name="config">The hub configuration to extend.</param>
+    /// <param name="lambda">Transform that adds routes to the route configuration.</param>
+    /// <returns>The updated hub configuration, for chaining.</returns>
     public static MessageHubConfiguration WithRoutes(this MessageHubConfiguration config,
         Func<RouteConfiguration, RouteConfiguration> lambda)
         => config.Set(config.GetListOfRouteLambdas().Add(lambda));
@@ -31,8 +90,19 @@ public static class MessageHubExtensions
         => config.Get<ImmutableList<Func<RouteConfiguration, RouteConfiguration>>>() ?? [];
 
 
+    /// <summary>
+    /// Gets the <see cref="ITypeRegistry"/> associated with the hub (resolved from
+    /// its service provider).
+    /// </summary>
+    /// <param name="hub">The hub whose type registry to retrieve.</param>
+    /// <returns>The hub's type registry.</returns>
     public static ITypeRegistry GetTypeRegistry(this IMessageHub hub)
         => hub.ServiceProvider.GetTypeRegistry();
+    /// <summary>
+    /// Resolves the <see cref="ITypeRegistry"/> from a service provider.
+    /// </summary>
+    /// <param name="serviceProvider">The service provider to resolve from.</param>
+    /// <returns>The registered type registry.</returns>
     public static ITypeRegistry GetTypeRegistry(this IServiceProvider serviceProvider)
         => serviceProvider.GetRequiredService<ITypeRegistry>();
 
@@ -45,6 +115,14 @@ public static class MessageHubExtensions
     public static ITypeRegistry CreateTypeRegistry(ITypeRegistry? parent = null)
         => new TypeRegistry(parent);
 
+    /// <summary>
+    /// Splits an address-shaped instance into its type and id parts. Accepts a
+    /// <c>JsonObject</c> (reads the serialized type property) or an
+    /// address string in <c>AddressType/AddressId</c> form.
+    /// </summary>
+    /// <param name="instance">The address instance or JSON object to parse.</param>
+    /// <returns>A tuple of the address type and the (possibly multi-segment) address id.</returns>
+    /// <exception cref="InvalidOperationException">Thrown when a string address is not in <c>AddressType/AddressId</c> form.</exception>
     public static (string AddressType, string AddressId) GetAddressTypeAndId(object instance)
     {
         if (instance is JsonObject jObj)
@@ -58,6 +136,13 @@ public static class MessageHubExtensions
         return (split[0], string.Join('/', split.Skip(1)));
     }
 
+    /// <summary>
+    /// Returns the address as type <typeparamref name="T"/> if it is (or its
+    /// host-stripped form is) of that type; otherwise the default.
+    /// </summary>
+    /// <typeparam name="T">The target address type.</typeparam>
+    /// <param name="address">The address to match.</param>
+    /// <returns>The matching address of type <typeparamref name="T"/>, or default if none matches.</returns>
     public static T? GetAddressOfType<T>(object address)
     {
         if (address is T ret)
@@ -67,6 +152,13 @@ public static class MessageHubExtensions
         return default;
     }
 
+    /// <summary>
+    /// Returns the address whose <c>Type</c> matches <paramref name="addressType"/>,
+    /// checking the address and its host-stripped form; otherwise null.
+    /// </summary>
+    /// <param name="address">The address to match.</param>
+    /// <param name="addressType">The address type string to match against.</param>
+    /// <returns>The matching <see cref="Address"/>, or null if none matches.</returns>
     public static Address? GetAddressOfType(object address, string addressType)
     {
         if (address is Address addr && addr.Type == addressType)
@@ -76,63 +168,20 @@ public static class MessageHubExtensions
         return null;
     }
 
+    /// <summary>
+    /// Parses an address string into an <see cref="Address"/>, honouring the
+    /// <c>@</c> separator for hosted addresses (via the implicit string-to-address
+    /// conversion).
+    /// </summary>
+    /// <param name="hub">The hub the call is made against (not otherwise used).</param>
+    /// <param name="address">The address string to parse.</param>
+    /// <returns>The parsed address.</returns>
     public static Address GetAddress(this IMessageHub hub, string address)
     {
         // Use implicit conversion which handles @ separator for hosted addresses
         return address;
     }
 
-    /// <summary>
-    /// Sends a request deserialized from JSON and awaits the response.
-    /// This is useful when working with JSON-based messaging without direct type references.
-    /// </summary>
-    /// <param name="hub">The message hub</param>
-    /// <param name="request">The request object (deserialized from JSON)</param>
-    /// <param name="options">Post options</param>
-    /// <param name="cancellationToken">Cancellation token</param>
-    /// <returns>The response message</returns>
-    public static async Task<object?> AwaitResponse(
-        this IMessageHub hub,
-        object request,
-        Func<PostOptions, PostOptions> options,
-        CancellationToken cancellationToken = default)
-    {
-        // If the request is a JsonElement, we need to deserialize it to the concrete type first
-        if (request is JsonElement jsonElement)
-        {
-            //  Get the type discriminator from the JSON
-            if (!jsonElement.TryGetProperty("$type", out var typeElement))
-                throw new InvalidOperationException("JSON request must have a '$type' property");
-
-            var typeName = typeElement.GetString();
-            if (string.IsNullOrEmpty(typeName))
-                throw new InvalidOperationException("'$type' property cannot be empty");
-
-            // Find the type in the type registry
-            var concreteType = hub.GetTypeRegistry().GetType(typeName);
-            if (concreteType == null)
-                concreteType = typeof(JsonElement);
-
-            // Deserialize to the concrete type
-            request = JsonSerializer.Deserialize(jsonElement.GetRawText(), concreteType, hub.JsonSerializerOptions)!;
-        }
-
-        // Find the IRequest<TResponse> interface to get the response type
-        var requestType = request.GetType();
-        var requestInterface = requestType.GetInterfaces()
-            .FirstOrDefault(i => i.IsGenericType && i.GetGenericTypeDefinition() == typeof(IRequest<>));
-
-
-
-        // Create the result selector lambda: (IMessageDelivery<TResponse> d) => d.Message
-        var deliveryParam = System.Linq.Expressions.Expression.Parameter(typeof(IMessageDelivery), "d");
-        var messageProperty = System.Linq.Expressions.Expression.Property(deliveryParam, "Message");
-        var lambda = System.Linq.Expressions.Expression.Lambda<Func<IMessageDelivery, object?>>(messageProperty, deliveryParam);
-        var resultSelector = lambda.Compile();
-
-        var resultProperty = await hub.AwaitResponse(request, options, resultSelector, cancellationToken);
-        return resultProperty;
-    }
 
     /// <summary>
     /// Starts a long-running operation scope that keeps the Orleans grain alive.
@@ -155,25 +204,23 @@ public static class MessageHubExtensions
             current = parent;
         }
 
-        // Fallback: heartbeat via Observable.Interval (monolith or no grain callback).
-        // Stop on the first DeliveryFailure so we don't spam warnings when no handler is registered.
-        var cts = new CancellationTokenSource();
-        IDisposable? sub = null;
-        sub = Observable.Interval(TimeSpan.FromSeconds(25))
-            .Subscribe(_ =>
-            {
-                var delivery = hub.Post(new HeartBeatEvent());
-                if (delivery == null) return;
-                hub.RegisterCallback(delivery, (d, _) =>
-                {
-                    if (d.Message is DeliveryFailure)
-                    {
-                        sub?.Dispose();
-                        cts.Cancel();
-                    }
-                    return Task.FromResult(d);
-                }, cts.Token);
-            });
-        return new CompositeDisposable(sub, Disposable.Create(() => cts.Cancel()));
+        // No grain callback anywhere in the parent chain ⇒ we're in monolith
+        // mode (or in a hub kind that has no long-running-operation support).
+        // The XML doc above documents this returns a no-op disposable. The
+        // previous shape posted HeartBeatEvent on a 25s Observable.Interval
+        // intending to "stop on first DeliveryFailure when no handler is
+        // registered" — but the heartbeat timer runs on a background thread
+        // with no user identity, so the post pipeline records null
+        // AccessContext on HeartBeatEvent. The receiving hub's "no handler"
+        // path posts DeliveryFailure with PostOptions.ResponseFor(delivery),
+        // which inherits that null AccessContext. The pipeline then fails
+        // closed dropping the DeliveryFailure → the sender's OnError never
+        // fires → the timer loops forever. Symptom: testhost stays alive
+        // 5+ minutes after every test in the project finished, emitting
+        // "No handler found for HeartBeatEvent" + "DeliveryFailure posted
+        // with no AccessContext" every 25 s until the runner kills the host.
+        // In monolith there's nothing for the heartbeat to keep alive anyway
+        // (no grain to delay-deactivate), so a no-op is the correct shape.
+        return Disposable.Empty;
     }
 }

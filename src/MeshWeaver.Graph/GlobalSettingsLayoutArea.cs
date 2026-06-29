@@ -16,11 +16,12 @@ namespace MeshWeaver.Graph;
 /// <summary>
 /// Global settings page with Splitter layout: left NavMenu + right content pane.
 /// URL pattern: /_settings/GlobalSettings/{tabId}
-/// Tabs are registered via <see cref="GlobalSettingsMenuItemsExtensions.AddGlobalSettingsMenuItems"/>.
+/// Tabs are registered via <see cref="GlobalSettingsMenuItemsExtensions.AddGlobalSettingsMenuItems(MeshWeaver.Messaging.MessageHubConfiguration, MeshWeaver.Mesh.GlobalSettingsMenuItemProvider[])"/>.
 /// Follows the same pattern as <see cref="SettingsLayoutArea"/> for node settings.
 /// </summary>
 public static class GlobalSettingsLayoutArea
 {
+    /// <summary>Area name for the GlobalSettings layout area.</summary>
     public const string GlobalSettingsArea = "GlobalSettings";
     internal const string DataSourcesTab = "DataSources";
 
@@ -34,17 +35,13 @@ public static class GlobalSettingsLayoutArea
     {
         var tabId = host.Reference.Id?.ToString();
 
-        return Observable.FromAsync(async () =>
-        {
-            var items = await host.Hub.Configuration
-                .EvaluateGlobalSettingsMenuItemsAsync(host, ctx);
-
-            if (string.IsNullOrEmpty(tabId) && items.Count > 0)
-                tabId = items[0].Id;
-            tabId ??= DataSourcesTab;
-
-            return (UiControl?)BuildGlobalSettingsPage(host, tabId, items);
-        });
+        // Reactive menu evaluation — re-renders when a provider's live admin check resolves.
+        return host.Hub.Configuration.EvaluateGlobalSettingsMenuItems(host, ctx)
+            .Select(items =>
+            {
+                var selectedTab = string.IsNullOrEmpty(tabId) && items.Count > 0 ? items[0].Id : (tabId ?? DataSourcesTab);
+                return (UiControl?)BuildGlobalSettingsPage(host, selectedTab, items);
+            });
     }
 
     private static UiControl BuildGlobalSettingsPage(
@@ -124,9 +121,13 @@ public static class GlobalSettingsLayoutArea
         string tabId,
         IReadOnlyList<GlobalSettingsMenuItemDefinition> items)
     {
+        // Pin a max-height + overflow-y so the tab content scrolls. `height: 100%`
+        // on a fluent-stack inside a splitter pane often resolves against
+        // natural content height, not the pane — long tabs (Data Sources with
+        // many repos) used to overflow the page instead.
         var stack = Controls.Stack
             .WithWidth("100%")
-            .WithStyle("padding: 24px; height: 100%; overflow: auto;");
+            .WithStyle("padding: 24px; max-height: calc(100vh - 100px); overflow-y: auto; overflow-x: hidden;");
 
         var matchedItem = items.FirstOrDefault(i => i.Id == tabId)
             ?? items.FirstOrDefault();
@@ -167,7 +168,7 @@ public static class GlobalSettingsLayoutArea
 
         stack = stack.WithView((h, _) =>
             meshService
-                .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+                .Query<MeshNode>(MeshQueryRequest.FromQuery(
                     $"namespace:{MeshDataSourceNodeType.SourcesNamespace} nodeType:{MeshDataSourceNodeType.NodeType}"))
                 .Select(change =>
                 {
@@ -176,19 +177,19 @@ public static class GlobalSettingsLayoutArea
                         return (UiControl?)Controls.Html(
                             "<p style=\"color: var(--neutral-foreground-hint);\">No data sources registered.</p>");
 
-                    return (UiControl?)BuildDataSourcesList(nodes);
+                    return (UiControl?)BuildDataSourcesList(nodes, host.Hub.JsonSerializerOptions);
                 }));
 
         return stack;
     }
 
-    private static UiControl BuildDataSourcesList(List<MeshNode> nodes)
+    private static UiControl BuildDataSourcesList(List<MeshNode> nodes, System.Text.Json.JsonSerializerOptions options)
     {
         var container = Controls.Stack.WithWidth("100%").WithStyle("gap: 12px;");
 
         foreach (var node in nodes.OrderBy(n => n.Name))
         {
-            var config = node.Content as MeshDataSourceConfiguration;
+            var config = node.ContentAs<MeshDataSourceConfiguration>(options);
             var isEnabled = config?.Enabled ?? true;
             var isSearchable = config?.IncludeInSearch ?? true;
             var isInstalled = !string.IsNullOrEmpty(config?.InstalledTo);

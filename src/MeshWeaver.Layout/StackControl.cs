@@ -83,15 +83,31 @@ public record LayoutStackSkin : Skin<LayoutStackSkin>
     public LayoutStackSkin WithVerticalGap(object verticalGap)
         => This with { VerticalGap = verticalGap };
 
+    /// <summary>Returns a copy with <paramref name="orientation"/> controlling the stack direction.</summary>
+    /// <param name="orientation">The orientation value (e.g., <c>Orientation.Horizontal</c>).</param>
+    /// <returns>A new <see cref="LayoutStackSkin"/> with the specified orientation.</returns>
     public LayoutStackSkin WithOrientation(object orientation)
         => This with { Orientation = orientation };
+    /// <summary>Returns a copy with <paramref name="wrap"/> controlling whether items wrap to a new line.</summary>
+    /// <param name="wrap">The wrap value to set.</param>
+    /// <returns>A new <see cref="LayoutStackSkin"/> with the specified wrap setting.</returns>
     public LayoutStackSkin WithWrap(object wrap)
         => This with { Wrap = wrap };
+    /// <summary>Returns a copy with <paramref name="width"/> as the CSS width of the stack.</summary>
+    /// <param name="width">The CSS width value to set.</param>
+    /// <returns>A new <see cref="LayoutStackSkin"/> with the specified width.</returns>
     public LayoutStackSkin WithWidth(object width)
         => This with { Width = width };
+    /// <summary>Returns a copy with <paramref name="height"/> as the CSS height of the stack.</summary>
+    /// <param name="height">The CSS height value to set.</param>
+    /// <returns>A new <see cref="LayoutStackSkin"/> with the specified height.</returns>
     public LayoutStackSkin WithHeight(object height) => This with { Height = height };
 
 }
+/// <summary>
+/// Fluent extension methods that forward skin-level layout properties to <see cref="StackControl"/>
+/// via <c>WithSkin</c>, providing a convenient top-level API.
+/// </summary>
 public static class LayoutStackExtensions
 {
     /// <summary>

@@ -2,7 +2,6 @@
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
-using FluentAssertions;
 using MeshWeaver.Fixture;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
@@ -103,8 +102,8 @@ public class ContentServiceDelegationTest(ITestOutputHelper output) : HubTestBas
         childCollectionFromChild.Should().NotBeNull("child hub should have its own ChildCollection");
 
         // Debug: Check instance details
-        Output.WriteLine($"parentCollectionFromParent instance: {parentCollectionFromParent.GetHashCode()}");
-        Output.WriteLine($"parentCollectionFromChild instance: {parentCollectionFromChild.GetHashCode()}");
+        Output.WriteLine($"parentCollectionFromParent instance: {parentCollectionFromParent!.GetHashCode()}");
+        Output.WriteLine($"parentCollectionFromChild instance: {parentCollectionFromChild!.GetHashCode()}");
         Output.WriteLine($"Are they reference equal: {ReferenceEquals(parentCollectionFromParent, parentCollectionFromChild)}");
 
         // Act & Assert - The ParentCollection from child should have the same collection name
@@ -165,7 +164,7 @@ public class MapContentCollectionTest(ITestOutputHelper output) : HubTestBase(ou
     }
 
     [Fact]
-    public async Task MapContentCollection_ShouldNotCauseStackOverflow()
+    public void MapContentCollection_ShouldNotCauseStackOverflow()
     {
         // Arrange - this should NOT cause stack overflow
         var meshHub = Mesh;

@@ -1,0 +1,133 @@
+name: Publish Container Images
+
+# Prod release path for the Memex deployment images. Fires on the SAME v*.*.* tag as
+# release-packages.yml (NuGet) so one tag ships the Aspire.Hosting.Memex package AND the
+# images the generated compose/Helm/ACA artifacts reference. Local testing uses the local
+# registry instead (see deploy/ + the repo's local-publish flow) — never this workflow.
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: read
+  packages: write
+  # OIDC federated login to Azure so the released images are also mirrored into ACR (no stored secret).
+  id-token: write
+
+jobs:
+  images:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.x'
+
+      - name: Extract version from tag
+        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_ENV"
+
+      - name: Lowercase image namespace (GHCR requires lowercase)
+        run: echo "IMAGE_NS=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_ENV"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Restore workloads
+        run: dotnet workload restore
+
+      # Multi-arch tooling: QEMU emulates the linux/arm64 RUN steps of the base Dockerfile on this
+      # amd64 runner; buildx assembles + pushes the manifest list. Only the BASE needs this — the
+      # SDK container builds below assemble layers without executing them, so they cross-build arm64
+      # on an amd64 host with no emulation. (App images push the index straight to GHCR — Docker-free.)
+      - name: Set up QEMU (arm64 emulation)
+        uses: docker/setup-qemu-action@v3
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # 1. portal-ai BASE image (the one hand-authored Dockerfile: aspnet + node20 +
+      #    @anthropic-ai/claude-code + @github/copilot) — built MULTI-ARCH (linux/amd64 + linux/arm64)
+      #    so the app image layered on it (and the AKS/local-k3s pods) can be multi-arch too.
+      #    @anthropic-ai/claude-code is pure JS (arch-independent); @github/copilot resolves its
+      #    per-platform binary via npm optional deps (@github/copilot-linux-x64 / -linux-arm64), so
+      #    each platform's emulated build bakes in the matching CLI. buildx --push writes the manifest
+      #    list directly to GHCR in one shot (no separate docker push).
+      - name: Build + push portal-ai base image (multi-arch)
+        run: |
+          BASE=ghcr.io/$IMAGE_NS/memex-portal-ai-base
+          docker buildx build --platform linux/amd64,linux/arm64 \
+            -t "$BASE:$VERSION" -t "$BASE:latest" \
+            --push deploy/base-images/portal-ai
+
+      # MULTI-ARCH (steps 2-4): drop `-r linux-x64`; set RuntimeIdentifiers + ContainerRuntimeIdentifiers
+      # to "linux-x64;linux-arm64". With no single RID, the SDK (>= 8.0.405; we're on .NET 10) publishes
+      # per-RID and combines them into an OCI Image Index (manifest list) — one tag, both architectures.
+      # ContainerRuntimeIdentifiers MUST be a subset of RuntimeIdentifiers (we set them equal). The arm64
+      # leg pulls the arm64 layer from the multi-arch base built above.
+
+      # 2. portal-ai app image (SDK container build, layered on the multi-arch base; CLIs baked in).
+      - name: Build + push portal-ai
+        run: >
+          dotnet publish memex/aspire/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj
+          -c Release --no-self-contained -t:PublishContainer -p:PublishProfile=
+          -p:RuntimeIdentifiers="linux-x64;linux-arm64"
+          -p:ContainerRuntimeIdentifiers="linux-x64;linux-arm64"
+          -p:Version=$VERSION
+          -p:ContainerRegistry=ghcr.io
+          -p:ContainerRepository=$IMAGE_NS/memex-portal-ai
+          -p:ContainerImageTags="$VERSION;latest"
+          -p:ContainerBaseImage=ghcr.io/$IMAGE_NS/memex-portal-ai-base:$VERSION
+
+      # 3. lean portal app image (default — already multi-arch — SDK aspnet base, no co-hosted CLIs).
+      - name: Build + push portal (lean)
+        run: >
+          dotnet publish memex/aspire/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj
+          -c Release --no-self-contained -t:PublishContainer -p:PublishProfile=
+          -p:RuntimeIdentifiers="linux-x64;linux-arm64"
+          -p:ContainerRuntimeIdentifiers="linux-x64;linux-arm64"
+          -p:Version=$VERSION
+          -p:ContainerRegistry=ghcr.io
+          -p:ContainerRepository=$IMAGE_NS/memex-portal
+          -p:ContainerImageTags="$VERSION;latest"
+
+      # 4. db-migration image (SDK container build, default — already multi-arch — base).
+      - name: Build + push migration
+        run: >
+          dotnet publish memex/aspire/Memex.Database.Migration/Memex.Database.Migration.csproj
+          -c Release --no-self-contained -t:PublishContainer -p:PublishProfile=
+          -p:RuntimeIdentifiers="linux-x64;linux-arm64"
+          -p:ContainerRuntimeIdentifiers="linux-x64;linux-arm64"
+          -p:Version=$VERSION
+          -p:ContainerRegistry=ghcr.io
+          -p:ContainerRepository=$IMAGE_NS/memex-migration
+          -p:ContainerImageTags="$VERSION;latest"
+
+      # 5. Mirror the released (clean-version) images into ACR (meshweaver.azurecr.io). The continuous
+      #    channel ships to ACR (main-cd.yml); mirroring the official release there too means an
+      #    install on the `Stable` policy finds the clean release on the SAME registry it already polls
+      #    — "build produces all images, with or without a build number." Server-side copy (no pull).
+      #    `az acr import` copies the manifest LIST faithfully: it imports the whole multi-arch OCI
+      #    image index (all per-platform child manifests) referenced by the source tag, so the ACR
+      #    mirror stays multi-arch (amd64 + arm64) — no flattening to a single architecture.
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - name: Mirror released images into ACR
+        run: |
+          set -euo pipefail
+          for repo in memex-portal-ai memex-portal memex-migration; do
+            az acr import --name meshweaver --force \
+              --source "ghcr.io/$IMAGE_NS/$repo:$VERSION" \
+              --image "$repo:$VERSION" --image "$repo:latest" \
+              --username "${{ github.actor }}" --password "${{ secrets.GITHUB_TOKEN }}"
+          done

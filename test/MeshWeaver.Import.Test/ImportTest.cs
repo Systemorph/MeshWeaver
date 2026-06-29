@@ -4,10 +4,6 @@ using System.Reactive.Linq;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
-using FluentAssertions;
-using FluentAssertions.Equivalency;
-using FluentAssertions.Execution;
-using FluentAssertions.Extensions;
 using MeshWeaver.Data;
 using MeshWeaver.Data.TestDomain;
 using MeshWeaver.Fixture;
@@ -16,6 +12,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Xunit;
 
+using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Import.Test;
 
 public class ImportTest(ITestOutputHelper output) : HubTestBase(output)
@@ -58,14 +55,8 @@ public class ImportTest(ITestOutputHelper output) : HubTestBase(output)
 
         // act
         Logger.LogInformation("DistributedImportTest {TestId}: Sending import request with {Timeout}s timeout", testId, importRequest.Timeout?.TotalSeconds);
-        var importResponse = await client.AwaitResponse(
-            importRequest,
-            o => o.WithTarget(ImportAddress.Create(2024)),
-            CancellationTokenSource.CreateLinkedTokenSource(
-                TestContext.Current.CancellationToken,
-                new CancellationTokenSource(10.Seconds()).Token
-            ).Token
-        );
+        var importResponse = await client.Observe(importRequest, o => o.WithTarget(ImportAddress.Create(2024)))
+            .Should().Within(10.Seconds()).Emit();
         Logger.LogInformation("DistributedImportTest {TestId}: Import response received with status {Status}", testId, importResponse.Message.Log.Status);
 
         // assert
@@ -77,17 +68,15 @@ public class ImportTest(ITestOutputHelper output) : HubTestBase(output)
         );
         var transactionalItems1 = await workspace
             .GetObservable<TransactionalData>()
-            .Timeout(5.Seconds())
-            .FirstAsync(x => x.Count > 1);
+            .Should().Within(5.Seconds()).Match(x => x.Count > 1);
         Logger.LogInformation("DistributedImportTest {TestId}: Got {Count} transactional items", testId, transactionalItems1.Count);
 
         Logger.LogInformation("DistributedImportTest {TestId}: Getting computed workspace", testId);
-        var computedItems1 = await (GetWorkspace(
+        var computedItems1 = await GetWorkspace(
                 Mesh.GetHostedHub(ComputedDataAddress.Create(2024, "1"))
-            ))
+            )
             .GetObservable<ComputedData>()
-            .Timeout(5.Seconds())
-            .FirstAsync(x => x is { Count: > 0 });
+            .Should().Within(5.Seconds()).Match(x => x is { Count: > 0 });
         Logger.LogInformation("DistributedImportTest {TestId}: Got {Count} computed items", testId, computedItems1.Count);
 
         using (new AssertionScope())
@@ -100,7 +89,7 @@ public class ImportTest(ITestOutputHelper output) : HubTestBase(output)
             computedItems1
                 .Select(x => x.Value)
                 .Should()
-                .BeEquivalentTo(expectedComputedItems1.Select(x => x.Value));
+                .BeEquivalentTo(expectedComputedItems1.Select(x => x.Value), client.JsonSerializerOptions);
         }
     }
 
@@ -123,29 +112,22 @@ Id,Year,LoB,BusinessUnit,Value
     {
         var client = GetClient();
         var importRequest = new ImportRequest(VanillaCsv); // Add timeout for bulk test scenarios
-        var importResponse = await client.AwaitResponse(
-            importRequest,
-            o => o.WithTarget(ImportAddress.Create(2024)),
-            CancellationTokenSource.CreateLinkedTokenSource(
-                TestContext.Current.CancellationToken
-                , new CancellationTokenSource(10.Seconds()).Token
-            ).Token
-        );
+        var importResponse = await client.Observe(importRequest, o => o.WithTarget(ImportAddress.Create(2024)))
+            .Should().Within(10.Seconds()).Emit();
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
         var workspace = GetWorkspace(
             Mesh.GetHostedHub(ReferenceDataAddress.Create(), null!)
         );
         var items = await workspace
             .GetObservable<LineOfBusiness>()
-            .Timeout(10.Seconds())
-            .FirstAsync(x => x.FirstOrDefault()?.DisplayName.StartsWith("LoB") ?? false);
+            .Should().Within(10.Seconds()).Match(x => x.FirstOrDefault()?.DisplayName.StartsWith("LoB") ?? false);
         var expectedLoBs = new[]
         {
             new LineOfBusiness("1", "LoB_one"),
             new LineOfBusiness("2", "LoB_two"),
         };
 
-        items.Should().HaveSameCount(expectedLoBs).And.BeEquivalentTo(expectedLoBs);
+        items.Should().HaveSameCount(expectedLoBs).And.BeEquivalentTo(expectedLoBs, client.JsonSerializerOptions);
     }
 
     private const string VanillaCsv =
@@ -161,24 +143,16 @@ SystemName,DisplayName
         var client = GetClient();
         var importRequest = new ImportRequest(MultipleTypesCsv)
             .WithTimeout(15.Seconds()); // Add timeout for bulk test scenarios
-        var importResponse = await client.AwaitResponse(
-            importRequest,
-            o => o.WithTarget(ImportAddress.Create(2024)),
-            CancellationTokenSource.CreateLinkedTokenSource(
-                TestContext.Current.CancellationToken,
-                new CancellationTokenSource(15.Seconds()).Token
-            ).Token
-        );
+        var importResponse = await client.Observe(importRequest, o => o.WithTarget(ImportAddress.Create(2024)))
+            .Should().Within(15.Seconds()).Emit();
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
-        await Task.Delay(100, CancellationTokenSource.CreateLinkedTokenSource(
-            TestContext.Current.CancellationToken,
-            new CancellationTokenSource(5.Seconds()).Token
-        ).Token);
         var workspace = GetWorkspace(
             Mesh.GetHostedHub(ReferenceDataAddress.Create(), null!)
         );
-        var actualLoBs = await workspace.GetObservable<LineOfBusiness>().FirstAsync(x => x.First().DisplayName.StartsWith("LoB"));
-        var actualBUs = await workspace.GetObservable<BusinessUnit>().FirstAsync(x => x.Count > 2);
+        var actualLoBs = await workspace.GetObservable<LineOfBusiness>()
+            .Should().Match(x => x.Count > 0 && x.First().DisplayName.StartsWith("LoB"));
+        var actualBUs = await workspace.GetObservable<BusinessUnit>()
+            .Should().Match(x => x.Count > 2);
         var expectedLoBs = new[]
         {
             new LineOfBusiness("1", "LoB_one"),
@@ -193,8 +167,8 @@ SystemName,DisplayName
 
         using (new AssertionScope())
         {
-            actualLoBs.Should().HaveSameCount(expectedLoBs).And.BeEquivalentTo(expectedLoBs);
-            actualBUs.Should().HaveSameCount(expectedBUs).And.BeEquivalentTo(expectedBUs);
+            actualLoBs.Should().HaveSameCount(expectedLoBs).And.BeEquivalentTo(expectedLoBs, client.JsonSerializerOptions);
+            actualBUs.Should().HaveSameCount(expectedBUs).And.BeEquivalentTo(expectedBUs, client.JsonSerializerOptions);
         }
     }
 

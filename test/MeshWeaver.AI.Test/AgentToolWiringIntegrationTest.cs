@@ -1,13 +1,14 @@
-#pragma warning disable CS1591 // Missing XML comment for publicly visible type or member
+﻿#pragma warning disable CS1591 // Missing XML comment for publicly visible type or member
 
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
-using FluentAssertions;
 using MeshWeaver.AI.Persistence;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
@@ -40,6 +41,11 @@ public class AgentToolWiringIntegrationTest : MonolithMeshTestBase
 
     public AgentToolWiringIntegrationTest(ITestOutputHelper output) : base(output) { }
 
+    // Share Mesh/ServiceProvider across all [Fact]s in this class so the per-test
+    // Autofac-container compile cost (~190 MiB native heap, never reclaimed) is
+    // paid once per testhost run instead of once per test method.
+    protected override bool ShareMeshAcrossTests => true;
+
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
         return builder
@@ -57,17 +63,17 @@ public class AgentToolWiringIntegrationTest : MonolithMeshTestBase
     }
 
     /// <summary>
-    /// Verifies that Orchestrator agent gets all mesh tools including write operations
+    /// Verifies that the Assistant agent gets all mesh tools including write operations
     /// because it has explicit Mesh plugin configured.
     /// </summary>
     [Fact]
-    public async Task OrchestratorAgent_ShouldGetAllMeshTools()
+    public async Task AssistantAgent_ShouldGetAllMeshTools()
     {
         var capturingClient = Mesh.ServiceProvider.GetRequiredService<CapturingChatClient>();
 
         var chatClient = new AgentChatClient(Mesh.ServiceProvider);
-        await chatClient.InitializeAsync("ACME/ProductLaunch");
-        chatClient.SetSelectedAgent("Orchestrator");
+        await chatClient.Initialize("ACME/ProductLaunch").WhenInitialized.FirstAsync().ToTask(TestContext.Current.CancellationToken);
+        chatClient.SetSelectedAgent("Assistant");
 
         // Send a message to trigger agent creation and tool wiring
         var messages = new List<ChatMessage> { new(ChatRole.User, "Hello") };
@@ -78,14 +84,14 @@ public class AgentToolWiringIntegrationTest : MonolithMeshTestBase
         lastOptions.Should().NotBeNull("ChatOptions should have been captured");
         var toolNames = lastOptions!.Tools?.OfType<AIFunction>().Select(t => t.Name).ToList() ?? [];
 
-        Output.WriteLine($"Orchestrator tools ({toolNames.Count}): {string.Join(", ", toolNames)}");
+        Output.WriteLine($"Assistant tools ({toolNames.Count}): {string.Join(", ", toolNames)}");
 
-        toolNames.Should().Contain("Get", "Orchestrator should have Get tool");
-        toolNames.Should().Contain("Search", "Orchestrator should have Search tool");
-        toolNames.Should().Contain("NavigateTo", "Orchestrator should have NavigateTo tool");
-        toolNames.Should().Contain("Create", "Orchestrator has explicit Mesh plugin with all tools");
-        toolNames.Should().Contain("Update", "Orchestrator has explicit Mesh plugin with all tools");
-        toolNames.Should().Contain("Patch", "Orchestrator has explicit Mesh plugin with all tools");
+        toolNames.Should().Contain("Get", "Assistant should have Get tool");
+        toolNames.Should().Contain("Search", "Assistant should have Search tool");
+        toolNames.Should().Contain("NavigateTo", "Assistant should have NavigateTo tool");
+        toolNames.Should().Contain("Create", "Assistant has explicit Mesh plugin with all tools");
+        toolNames.Should().Contain("Update", "Assistant has explicit Mesh plugin with all tools");
+        toolNames.Should().Contain("Patch", "Assistant has explicit Mesh plugin with all tools");
     }
 
     /// <summary>
@@ -98,7 +104,7 @@ public class AgentToolWiringIntegrationTest : MonolithMeshTestBase
         var capturingClient = Mesh.ServiceProvider.GetRequiredService<CapturingChatClient>();
 
         var chatClient = new AgentChatClient(Mesh.ServiceProvider);
-        await chatClient.InitializeAsync("ACME/ProductLaunch");
+        await chatClient.Initialize("ACME/ProductLaunch").WhenInitialized.FirstAsync().ToTask(TestContext.Current.CancellationToken);
         chatClient.SetSelectedAgent("Worker");
 
         // Send a message to trigger agent creation and tool wiring
@@ -121,7 +127,7 @@ public class AgentToolWiringIntegrationTest : MonolithMeshTestBase
 
     /// <summary>
     /// Verifies that agent instructions contain expanded @@ references.
-    /// The Orchestrator.md contains @@Agent/ToolsReference
+    /// The Assistant.md contains @@Agent/ToolsReference
     /// which should be expanded to include the full tool documentation.
     /// </summary>
     [Fact]
@@ -130,8 +136,8 @@ public class AgentToolWiringIntegrationTest : MonolithMeshTestBase
         var capturingClient = Mesh.ServiceProvider.GetRequiredService<CapturingChatClient>();
 
         var chatClient = new AgentChatClient(Mesh.ServiceProvider);
-        await chatClient.InitializeAsync("ACME/ProductLaunch");
-        chatClient.SetSelectedAgent("Orchestrator");
+        await chatClient.Initialize("ACME/ProductLaunch").WhenInitialized.FirstAsync().ToTask(TestContext.Current.CancellationToken);
+        chatClient.SetSelectedAgent("Assistant");
 
         // Send a message to trigger agent creation
         var messages = new List<ChatMessage> { new(ChatRole.User, "Hello") };

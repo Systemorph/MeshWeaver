@@ -1,34 +1,93 @@
+using System.Collections.Immutable;
+using MeshWeaver.Data;
+using MeshWeaver.Mesh.Services.LanguageServer;
+
 namespace MeshWeaver.Mesh.Services;
 
 /// <summary>
 /// Result from compiling a MeshNode assembly.
+/// <see cref="Log"/> carries the executed-query / matched-source-paths /
+/// compiler-output trace so the consumer can surface "compile saw N source
+/// files" without re-running the pipeline.
+/// <see cref="CompiledSources"/> is the per-source <c>{path → version}</c>
+/// snapshot the compile actually consumed — empty when the cache hit short-
+/// circuited the recompile; populated to the full input set otherwise. The
+/// compile watcher persists it onto the NodeType MeshNode so the next
+/// recompile-needed check is a data comparison instead of a timing guess.
+/// <para>
+/// <see cref="AssemblyLocation"/> is the process-local DLL path the compile
+/// just produced — valid only inside the producing silo. For cross-silo
+/// activation, consumers must use <see cref="Collection"/> + <see cref="ContentPath"/>
+/// to look the bytes up via <see cref="IAssemblyStore"/>; these get
+/// denormalised onto <c>NodeTypeDefinition.LatestAssembly{Collection,Path}</c>
+/// and <c>NodeTypeRelease.{AssemblyCollection,AssemblyContentPath}</c> by the
+/// compile watcher.
+/// </para>
 /// </summary>
 public record NodeCompilationResult(
     string? AssemblyLocation,
-    IReadOnlyList<NodeTypeConfiguration> NodeTypeConfigurations);
+    IReadOnlyList<NodeTypeConfiguration> NodeTypeConfigurations,
+    ActivityLog? Log = null,
+    ImmutableDictionary<string, long>? CompiledSources = null,
+    string? Collection = null,
+    string? ContentPath = null,
+    long? Version = null,
+    // Structured, per-source-file Roslyn diagnostics for a FAILED compile — kept in
+    // their native form (id, severity, message, per-file SourceLocation) so the GUI can
+    // mark each error at its exact position in a Monaco editor and link to the Code node.
+    // Null/empty on success. Produced from the same per-file-tree (LSP) compilation model.
+    IReadOnlyList<DiagnosticInfo>? Diagnostics = null);
 
 /// <summary>
 /// Service for on-demand compilation of dynamic MeshNode assemblies.
 /// Compiles C# type definitions from DataModel and caches the resulting assemblies.
 /// Implemented in MeshWeaver.Graph, consumed optionally by MeshWeaver.Hosting.Orleans.
+///
+/// <para>
+/// 100% reactive — every method returns <see cref="IObservable{T}"/>. Compose with
+/// <c>.Select</c> / <c>.SelectMany</c> / <c>.Subscribe</c>. NEVER bridge to <c>Task</c>
+/// or <c>await</c> from hub-reachable code — that deadlocks the hub action block. See
+/// <c>Doc/Architecture/AsynchronousCalls.md</c>. Tests bridge at their own edge with
+/// <c>.FirstAsync().ToTask(ct)</c>.
+/// </para>
 /// </summary>
 public interface IMeshNodeCompilationService
 {
     /// <summary>
-    /// Ensures the assembly for a node is compiled and returns its location.
-    /// Uses cache if valid, otherwise compiles and caches.
+    /// Reactive: emits the assembly location (DLL path) for the node, or null if the
+    /// node does not have a NodeType definition.
     /// </summary>
-    /// <param name="node">The MeshNode to ensure assembly for.</param>
-    /// <param name="ct">Cancellation token.</param>
-    /// <returns>The assembly location (DLL path), or null if the node doesn't have a DataModel.</returns>
-    Task<string?> GetAssemblyLocationAsync(MeshNode node, CancellationToken ct = default);
+    IObservable<string?> GetAssemblyLocation(MeshNode node);
 
     /// <summary>
-    /// Compiles the assembly and extracts NodeTypeConfigurations from the MeshNodeProviderAttribute.
-    /// Uses isolated AssemblyLoadContext to avoid conflicts.
+    /// Reactive: emits the full compilation result (assembly + extracted NodeType
+    /// configurations) for the node.
+    /// <para>
+    /// Optional <paramref name="sourcesOverride"/> lets the caller hand the freshly-
+    /// observed source set in instead of letting the compiler re-fetch via the cached
+    /// <c>workspace.GetQuery</c> SyncedQuery. The latter's first emission can be
+    /// stale on the just-modified Code node — the upstream <c>Query</c> has
+    /// emitted the post-update event but the SyncedQuery's downstream gate only
+    /// fires once every query has reported, with whatever cached value sits in the
+    /// Replay(1) buffer. <c>HandleCreateRelease</c> already runs an uncached
+    /// <c>IMeshService.Query</c> to evaluate <c>IsSourcesUpToDate</c>, so the
+    /// sources it has seen by the time it kicks off the compile are the ones the
+    /// compile must consume — passing them through closes the staleness window
+    /// between trigger and compile-side fetch (root cause of the V2-compile-bytes-
+    /// are-V1 outcome in <c>CodeEditRecompileTest</c>).
+    /// </para>
     /// </summary>
-    /// <param name="node">The MeshNode to compile.</param>
-    /// <param name="ct">Cancellation token.</param>
-    /// <returns>Compilation result with assembly location and extracted configurations.</returns>
-    Task<NodeCompilationResult?> CompileAndGetConfigurationsAsync(MeshNode node, CancellationToken ct = default);
+    IObservable<NodeCompilationResult?> CompileAndGetConfigurations(
+        MeshNode node,
+        IReadOnlyList<MeshNode>? sourcesOverride = null);
+
+    /// <summary>
+    /// Loads NodeType configurations from an already-compiled assembly at an
+    /// explicit local path — callers resolve the path through
+    /// <see cref="IAssemblyStore"/> (typically <c>TryGetAssemblyPath(nodeTypePath, version)</c>).
+    /// Used by enrichment and the legacy <c>GetCompilationPathRequest</c>
+    /// handler when they hydrate a pinned release or the latest compile from
+    /// the store.
+    /// </summary>
+    IObservable<NodeCompilationResult?> GetConfigurationsFromExistingAssembly(string localPath, string nodeTypePath);
 }

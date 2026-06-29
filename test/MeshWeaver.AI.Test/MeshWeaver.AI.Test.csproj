@@ -5,19 +5,39 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\MeshWeaver.AI\MeshWeaver.AI.csproj" />
-    <ProjectReference Include="..\..\src\MeshWeaver.AI.AzureOpenAI\MeshWeaver.AI.AzureOpenAI.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.AI.OpenAI\MeshWeaver.AI.OpenAI.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.AI.ClaudeCode\MeshWeaver.AI.ClaudeCode.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.AI.AzureFoundry\MeshWeaver.AI.AzureFoundry.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Layout\MeshWeaver.Layout.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Fixture\MeshWeaver.Fixture.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Graph\MeshWeaver.Graph.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Monolith.TestBase\MeshWeaver.Hosting.Monolith.TestBase.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Hosting\MeshWeaver.Hosting.csproj" />
+    <ProjectReference Include="..\..\memex\Memex.Portal.Shared\Memex.Portal.Shared.csproj" />
+    <!-- Build-only: the deterministic fake CLI that drives the ConnectStrategy
+         tests. ReferenceOutputAssembly=false so its Exe entry point doesn't
+         clash with the test host; we run its built executable as a subprocess. -->
+    <ProjectReference Include="..\MeshWeaver.AI.Test.FakeCli\MeshWeaver.AI.Test.FakeCli.csproj"
+                      ReferenceOutputAssembly="false"
+                      OutputItemType="FakeCliBuildOutput" />
   </ItemGroup>
+  <Target Name="CopyFakeCli" AfterTargets="Build">
+    <!-- Copy the fake-CLI build output next to the test assembly so tests can
+         locate it deterministically at runtime under bin/.../FakeCli/. -->
+    <ItemGroup>
+      <FakeCliFiles Include="..\MeshWeaver.AI.Test.FakeCli\bin\$(Configuration)\$(TargetFramework)\**\*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(FakeCliFiles)"
+          DestinationFiles="@(FakeCliFiles->'$(OutDir)FakeCli\%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true"
+          Condition="'@(FakeCliFiles)' != ''" />
+  </Target>
   <ItemGroup>
     <PackageReference Include="NSubstitute" />
   </ItemGroup>
   <ItemGroup>
     <Content Include="..\..\samples\Graph\Data\**\*" LinkBase="TestData" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="TestData\**\*" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="appsettings.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

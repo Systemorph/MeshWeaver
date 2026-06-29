@@ -2,10 +2,10 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
-using FluentAssertions;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.PostgreSql.Test;
 
@@ -38,9 +38,10 @@ public class AccessAssignmentRoutingTests
         {
             Namespace = "TestOrg",
             Schema = "testorg_access",
-            TableMappings = PartitionDefinition.StandardTableMappings
+            TableMappings = PartitionDefinition.DefaultSegmentTableMappings(), NodeTypeTableMappings = PartitionDefinition.DefaultNodeTypeTableMappings()
         };
-        var (ds, adapter) = await _fixture.CreateSchemaAdapterAsync("testorg_access", partitionDef, ct);
+        var (ds, adapter) = await _fixture.CreateSchemaAdapter("testorg_access", partitionDef, ct)
+            .Should().Within(60.Seconds()).Emit();
 
         try
         {
@@ -63,16 +64,15 @@ public class AccessAssignmentRoutingTests
                 }
             };
 
-            await adapter.WriteAsync(accessNode, _options, ct);
+            await adapter.Write(accessNode, _options).Should().Within(60.Seconds()).Emit();
 
             // Verify: node should be in the `access` table, NOT in `mesh_nodes`
-            await using var checkAccess = ds.CreateCommand(
-                "SELECT count(*) FROM access WHERE id = 'rbuergi_Access' AND namespace = 'TestOrg'");
-            var accessCount = (long)(await checkAccess.ExecuteScalarAsync(ct))!;
-
-            await using var checkMeshNodes = ds.CreateCommand(
-                "SELECT count(*) FROM mesh_nodes WHERE id = 'rbuergi_Access' AND namespace = 'TestOrg'");
-            var meshNodesCount = (long)(await checkMeshNodes.ExecuteScalarAsync(ct))!;
+            var accessCount = await ds.ScalarLong(
+                "SELECT count(*) FROM access WHERE id = 'rbuergi_Access' AND namespace = 'TestOrg'", ct)
+                .Should().Within(30.Seconds()).Emit();
+            var meshNodesCount = await ds.ScalarLong(
+                "SELECT count(*) FROM mesh_nodes WHERE id = 'rbuergi_Access' AND namespace = 'TestOrg'", ct)
+                .Should().Within(30.Seconds()).Emit();
 
             accessCount.Should().Be(1,
                 "AccessAssignment should be in the `access` satellite table");
@@ -86,7 +86,7 @@ public class AccessAssignmentRoutingTests
         }
         finally
         {
-            await ds.DisposeAsync();
+            await ds.DisposeReactive().Should().Within(30.Seconds()).Emit();
         }
     }
 
@@ -100,9 +100,10 @@ public class AccessAssignmentRoutingTests
         {
             Namespace = "OrgAccSeg",
             Schema = "orgaccseg",
-            TableMappings = PartitionDefinition.StandardTableMappings
+            TableMappings = PartitionDefinition.DefaultSegmentTableMappings(), NodeTypeTableMappings = PartitionDefinition.DefaultNodeTypeTableMappings()
         };
-        var (ds, adapter) = await _fixture.CreateSchemaAdapterAsync("orgaccseg", partitionDef, ct);
+        var (ds, adapter) = await _fixture.CreateSchemaAdapter("orgaccseg", partitionDef, ct)
+            .Should().Within(60.Seconds()).Emit();
 
         try
         {
@@ -123,23 +124,22 @@ public class AccessAssignmentRoutingTests
                 }
             };
 
-            await adapter.WriteAsync(accessNode, _options, ct);
+            await adapter.Write(accessNode, _options).Should().Within(60.Seconds()).Emit();
 
             // Verify: node in `access` table (path-based routing matches _Access segment)
-            await using var checkAccess = ds.CreateCommand(
-                "SELECT count(*) FROM access WHERE id = 'rbuergi_Access' AND namespace = 'OrgAccSeg/_Access'");
-            var accessCount = (long)(await checkAccess.ExecuteScalarAsync(ct))!;
-
-            await using var checkMeshNodes = ds.CreateCommand(
-                "SELECT count(*) FROM mesh_nodes WHERE id = 'rbuergi_Access'");
-            var meshNodesCount = (long)(await checkMeshNodes.ExecuteScalarAsync(ct))!;
+            var accessCount = await ds.ScalarLong(
+                "SELECT count(*) FROM access WHERE id = 'rbuergi_Access' AND namespace = 'OrgAccSeg/_Access'", ct)
+                .Should().Within(30.Seconds()).Emit();
+            var meshNodesCount = await ds.ScalarLong(
+                "SELECT count(*) FROM mesh_nodes WHERE id = 'rbuergi_Access'", ct)
+                .Should().Within(30.Seconds()).Emit();
 
             accessCount.Should().Be(1, "AccessAssignment under _Access segment should be in `access` table");
             meshNodesCount.Should().Be(0, "AccessAssignment should NOT be in `mesh_nodes`");
         }
         finally
         {
-            await ds.DisposeAsync();
+            await ds.DisposeReactive().Should().Within(30.Seconds()).Emit();
         }
     }
 
@@ -153,9 +153,10 @@ public class AccessAssignmentRoutingTests
         {
             Namespace = "TestOrg2",
             Schema = "testorg2_access",
-            TableMappings = PartitionDefinition.StandardTableMappings
+            TableMappings = PartitionDefinition.DefaultSegmentTableMappings(), NodeTypeTableMappings = PartitionDefinition.DefaultNodeTypeTableMappings()
         };
-        var (ds, adapter) = await _fixture.CreateSchemaAdapterAsync("testorg2_access", partitionDef, ct);
+        var (ds, adapter) = await _fixture.CreateSchemaAdapter("testorg2_access", partitionDef, ct)
+            .Should().Within(60.Seconds()).Emit();
 
         try
         {
@@ -177,19 +178,19 @@ public class AccessAssignmentRoutingTests
                 }
             };
 
-            await adapter.WriteAsync(accessNode, _options, ct);
+            await adapter.Write(accessNode, _options).Should().Within(60.Seconds()).Emit();
 
             // Verify: also in `access` table (path-based routing works for _Access segment)
-            await using var checkAccess = ds.CreateCommand(
-                "SELECT count(*) FROM access WHERE id = 'rbuergi_Access'");
-            var accessCount = (long)(await checkAccess.ExecuteScalarAsync(ct))!;
+            var accessCount = await ds.ScalarLong(
+                "SELECT count(*) FROM access WHERE id = 'rbuergi_Access'", ct)
+                .Should().Within(30.Seconds()).Emit();
 
             accessCount.Should().Be(1,
                 "AccessAssignment under _Access segment should be in `access` table");
         }
         finally
         {
-            await ds.DisposeAsync();
+            await ds.DisposeReactive().Should().Within(30.Seconds()).Emit();
         }
     }
 }

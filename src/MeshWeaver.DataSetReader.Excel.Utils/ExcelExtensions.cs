@@ -1,5 +1,8 @@
 ﻿namespace MeshWeaver.DataSetReader.Excel.Utils
 {
+    /// <summary>
+    /// Well-known Excel workbook file extensions.
+    /// </summary>
     public static class ExcelExtensions
     {
         /// <summary>

@@ -1,4 +1,3 @@
-using FluentAssertions;
 using MeshWeaver.Markdown.Collaboration;
 using Xunit;
 
@@ -376,7 +375,7 @@ public class TextOperationTransformerTests
 
         var result = _transformer.Transform(opA, opB);
 
-        result.Should().BeEquivalentTo(opB);
+        result.Should().BeEquivalentTo(opB, System.Text.Json.JsonSerializerOptions.Default);
     }
 
     [Fact]

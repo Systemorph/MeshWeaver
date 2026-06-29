@@ -231,6 +231,22 @@ function debounce(fn, delay) {
     document.head.appendChild(style);
 })();
 
+// Resolves once Monaco's async AMD bundle has loaded, so the component can defer
+// rendering <StandaloneCodeEditor> (BlazorMonaco's create() touches the global
+// `monaco`) until it's safe. The host (App.razor) exposes window.monacoReady — a
+// Promise that settles when `require(['vs/editor/editor.main'])` completes. We treat
+// BOTH success and failure as "done": a failed/stalled Monaco load must NOT block the
+// editor forever (BlazorMonaco surfaces its own error if monaco is genuinely missing),
+// and it must never block the rest of the now-decoupled Blazor circuit. Hosts that
+// preload Monaco synchronously (no window.monacoReady) resolve immediately.
+export function waitForMonaco() {
+    const ready = window.monacoReady;
+    if (ready && typeof ready.then === 'function') {
+        return ready.then(() => true, () => true);
+    }
+    return true;
+}
+
 export function initEditor(editorId, placeholder, dotNetRef, codeEditMode = false, showLineNumbers = false) {
     const container = document.getElementById(editorId);
     if (!container) {
@@ -267,10 +283,22 @@ export function initEditor(editorId, placeholder, dotNetRef, codeEditMode = fals
         monaco.editor.setTheme(monacoTheme);
     }
     if (editorInstance) {
-        // Handle content changes for placeholder
+        // Handle content changes for placeholder AND push the value back to C#.
+        // 🚨 This is the SYNC content-change wiring that replaces BlazorMonaco's
+        // OnDidChangeModelContent Razor callback: that callback is registered via
+        // BlazorMonaco's async SetEventListeners in OnAfterRenderAsync, which throws
+        // "Couldn't find the editor with id …" (tearing down the circuit) when the
+        // editor is mid-teardown. Wiring the listener directly on the editor instance
+        // here avoids that race. The invoke is best-effort — a disposed dotNetRef
+        // rejects, which we swallow so a teardown can never surface an unhandled error.
         editorInstance.onDidChangeModelContent(() => {
             const value = editorInstance.getValue();
             updatePlaceholderVisibility(editorId, !value);
+            const st = editorState.get(editorId);
+            if (st?.dotNetRef) {
+                st.dotNetRef.invokeMethodAsync('HandleContentChanged', value)
+                    .catch(err => console.debug('HandleContentChanged failed (editor disposed?):', err));
+            }
         });
 
         // Handle Enter key - in code edit mode, Enter inserts newline; in chat mode, Enter submits
@@ -692,6 +720,81 @@ export function pushCompletionUpdate(editorId, items) {
     }
 }
 
+// =============================================================================
+// LSP-style live diagnostics (Stage-3)
+// =============================================================================
+// Subscribes to debounced onDidChangeModelContent and calls back to .NET with the
+// current model text; the .NET side (RequestDiagnostics) invokes the consumer's
+// IObservable<DiagnosticInfo[]>, then pushes results here via pushDiagnostics.
+
+const DIAGNOSTICS_DEBOUNCE_MS = 300;
+const DIAGNOSTICS_MARKER_OWNER = 'meshweaver-lsp';
+
+export function enableDiagnostics(editorId, dotNetRef) {
+    const state = editorState.get(editorId);
+    if (!state || !state.editorInstance) return;
+    if (state._diagnosticsEnabled) return; // idempotent
+    state._diagnosticsEnabled = true;
+    state._diagnosticsDotNetRef = dotNetRef;
+
+    const requestNow = () => {
+        const model = state.editorInstance?.getModel();
+        if (!model) return;
+        dotNetRef.invokeMethodAsync('RequestDiagnostics', model.getValue()).catch(err => {
+            console.warn('LSP RequestDiagnostics failed:', err);
+        });
+    };
+
+    const scheduleRequest = () => {
+        if (state._diagnosticsTimer) clearTimeout(state._diagnosticsTimer);
+        state._diagnosticsTimer = setTimeout(requestNow, DIAGNOSTICS_DEBOUNCE_MS);
+    };
+
+    // Initial fetch — current saved text gets a diagnostics pass before the user types.
+    requestNow();
+
+    // Subsequent edits — debounced so we don't fire on every keystroke.
+    state._diagnosticsChangeDisposable = state.editorInstance.onDidChangeModelContent(() => {
+        scheduleRequest();
+    });
+}
+
+// Maps an LSP DiagnosticSeverity (0..3) to a Monaco MarkerSeverity (Hint=1, Info=2, Warning=4, Error=8).
+function lspSeverityToMonaco(lspSeverity) {
+    switch (lspSeverity) {
+        case 3: return 8;  // Error
+        case 2: return 4;  // Warning
+        case 1: return 2;  // Info
+        case 0: return 1;  // Hidden / Hint
+        default: return 2;
+    }
+}
+
+// Push a fresh diagnostics snapshot from .NET into Monaco's marker layer for this editor.
+// Items shape (matches RequestDiagnostics's anonymous payload):
+//   { severity, message, id, startLine, startCharacter, endLine, endCharacter }  (LSP 0-based)
+export function pushDiagnostics(editorId, items) {
+    const state = editorState.get(editorId);
+    if (!state) return;
+    const editorInstance = state.editorInstance;
+    if (!editorInstance) return;
+    const model = editorInstance.getModel();
+    if (!model) return;
+
+    const markers = (items || []).map(d => ({
+        // Monaco is 1-based; LSP is 0-based — add 1 to each coordinate.
+        startLineNumber: (d.startLine | 0) + 1,
+        startColumn: (d.startCharacter | 0) + 1,
+        endLineNumber: (d.endLine | 0) + 1,
+        endColumn: (d.endCharacter | 0) + 1,
+        message: d.message || '',
+        code: d.id || '',
+        severity: lspSeverityToMonaco(d.severity | 0),
+        source: 'Roslyn',
+    }));
+    monaco.editor.setModelMarkers(model, DIAGNOSTICS_MARKER_OWNER, markers);
+}
+
 // Set cursor position to end of content
 export function setCursorToEnd(editorId) {
     const editorInstance = editorState.get(editorId)?.editorInstance;
@@ -967,6 +1070,19 @@ export function dispose(editorId) {
     if (state) {
         if (state.completionDisposable) {
             state.completionDisposable.dispose();
+        }
+        if (state._diagnosticsChangeDisposable) {
+            state._diagnosticsChangeDisposable.dispose();
+        }
+        if (state._diagnosticsTimer) {
+            clearTimeout(state._diagnosticsTimer);
+        }
+        const editorInstance = state.editorInstance;
+        if (editorInstance) {
+            const model = editorInstance.getModel();
+            if (model) {
+                monaco.editor.setModelMarkers(model, DIAGNOSTICS_MARKER_OWNER, []);
+            }
         }
         editorState.delete(editorId);
     }

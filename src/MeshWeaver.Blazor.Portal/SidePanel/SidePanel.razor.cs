@@ -29,6 +29,9 @@ public partial class SidePanel : ComponentBase, IDisposable
     private string DisplayTitle => SidePanelState.Title ?? "New Thread";
     private bool HasThread => !string.IsNullOrEmpty(SidePanelState.ContentPath);
 
+    /// <summary>
+    /// Subscribes to side-panel state changes so the panel re-renders when its state updates.
+    /// </summary>
     protected override void OnInitialized()
     {
         base.OnInitialized();
@@ -42,6 +45,13 @@ public partial class SidePanel : ComponentBase, IDisposable
 
     private void OnNewThread()
     {
+        // Clear the active thread so the new-chat composer renders. This must happen
+        // here (the always-mounted panel), not only via RequestAction: when a thread
+        // is displayed the panel body is a LayoutAreaView, so no ThreadChatView is
+        // subscribed to OnActionRequested and the click would otherwise do nothing
+        // ("clicking + keeps me on the thread").
+        SidePanelState.SetContentPath(null);
+        // Notify a mounted composer to reset its view mode (e.g. Resume → Chat).
         SidePanelState.RequestAction("New");
     }
 
@@ -68,6 +78,9 @@ public partial class SidePanel : ComponentBase, IDisposable
         }
     }
 
+    /// <summary>
+    /// Unsubscribes from side-panel state changes.
+    /// </summary>
     public void Dispose()
     {
         SidePanelState.OnStateChanged -= OnStateChanged;

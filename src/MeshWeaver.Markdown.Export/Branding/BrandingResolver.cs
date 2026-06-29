@@ -1,7 +1,8 @@
 using System.Reactive.Linq;
 using MeshWeaver.ContentCollections;
+using MeshWeaver.Data;
 using MeshWeaver.Mesh;
-using MeshWeaver.Mesh.Services;
+using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -13,52 +14,83 @@ namespace MeshWeaver.Markdown.Export.Branding;
 /// ready for the document renderer.
 /// Cascade: <c>CorporateIdentity</c> node -> <c>Organization</c>-shaped content (logo-only) ->
 /// raw content path (logo-only) -> portal defaults.
+/// Reactive — public API returns <c>IObservable&lt;T&gt;</c>; no <c>Task&lt;T&gt;</c>.
 /// </summary>
-public class BrandingResolver(IMessageHub hub, ExportTemplateResolver templateResolver, ILogger<BrandingResolver> logger)
+public class BrandingResolver
 {
+    private readonly IMessageHub hub;
+    private readonly ExportTemplateResolver templateResolver;
+    private readonly ILogger<BrandingResolver> logger;
+    private readonly IIoPool _ioPool;
+
+    /// <summary>
+    /// Initializes a new instance of the <c>BrandingResolver</c> class.
+    /// </summary>
+    /// <param name="hub">Message hub used to read brand mesh nodes and resolve services.</param>
+    /// <param name="templateResolver">Resolves export template assets (logo, fonts, DOCX template).</param>
+    /// <param name="logger">Logger for resolution warnings and diagnostics.</param>
+    /// <param name="ioPoolRegistry">
+    /// Optional I/O pool registry; the file-system pool drives logo and template loads, falling
+    /// back to the unbounded pool when not supplied.
+    /// </param>
+    public BrandingResolver(
+        IMessageHub hub,
+        ExportTemplateResolver templateResolver,
+        ILogger<BrandingResolver> logger,
+        IoPoolRegistry? ioPoolRegistry = null)
+    {
+        this.hub = hub;
+        this.templateResolver = templateResolver;
+        this.logger = logger;
+        _ioPool = ioPoolRegistry?.Get(IoPoolNames.FileSystem) ?? IoPool.Unbounded;
+    }
+
     /// <summary>
     /// Resolves the branding for a given path. Returns <see cref="BrandingOptions.Default"/> on any miss.
     /// </summary>
-    public async Task<BrandingOptions> ResolveAsync(string? brandNodePath, CancellationToken ct = default)
+    public IObservable<BrandingOptions> Resolve(string? brandNodePath)
     {
         if (string.IsNullOrWhiteSpace(brandNodePath))
-            return BrandingOptions.Default;
+            return Observable.Return(BrandingOptions.Default);
 
         // Raw content path (image): treat as logo-only brand.
         if (brandNodePath.StartsWith("content:", StringComparison.OrdinalIgnoreCase))
         {
-            var logo = await LoadLogoAsync(brandNodePath, ct);
-            return BrandingOptions.Default with { Logo = logo };
+            return LoadLogo(brandNodePath)
+                .Select(logo => BrandingOptions.Default with { Logo = logo });
         }
 
-        var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
-        var node = await meshService.QueryAsync<MeshNode>($"path:{brandNodePath}").FirstOrDefaultAsync();
-        if (node is null)
-        {
-            logger.LogWarning("Brand node '{Path}' not found; using portal defaults", brandNodePath);
-            return BrandingOptions.Default;
-        }
-
-        return node.NodeType switch
-        {
-            CorporateIdentityNodeType.NodeType when node.Content is CorporateIdentity ci
-                => await FromCorporateIdentityAsync(ci, ct),
-            "Organization"
-                => await FromOrganizationAsync(node, ct),
-            _ => BrandingOptions.Default with
+        // One-shot read — GetDataRequest, no SubscribeRequest round-trip.
+        return hub.GetMeshNode(brandNodePath, TimeSpan.FromSeconds(10))
+            .SelectMany(node =>
             {
-                Name = node.Name ?? "",
-                Logo = await LoadLogoAsync(node.Icon, ct)
-            }
-        };
+                if (node is null)
+                {
+                    logger.LogWarning("Brand node '{Path}' not found; using portal defaults", brandNodePath);
+                    return Observable.Return(BrandingOptions.Default);
+                }
+
+                return node.NodeType switch
+                {
+                    CorporateIdentityNodeType.NodeType when node.Content is CorporateIdentity ci
+                        => FromCorporateIdentity(ci),
+                    "Organization"
+                        => FromOrganization(node),
+                    _ => LoadLogo(node.Icon).Select(logo => BrandingOptions.Default with
+                    {
+                        Name = node.Name ?? "",
+                        Logo = logo
+                    })
+                };
+            });
     }
 
-    private async Task<BrandingOptions> FromCorporateIdentityAsync(CorporateIdentity ci, CancellationToken ct)
+    private IObservable<BrandingOptions> FromCorporateIdentity(CorporateIdentity ci)
     {
-        var logo = await LoadLogoAsync(ci.LogoPath, ct);
-        var template = await templateResolver.LoadAsync(ci.TemplatePath, ct);
+        var logoObs = LoadLogo(ci.LogoPath);
+        var templateObs = _ioPool.Run(ct => templateResolver.LoadAsync(ci.TemplatePath, ct));
 
-        return new BrandingOptions
+        return logoObs.Zip(templateObs, (logo, template) => new BrandingOptions
         {
             Name = ci.Name ?? ci.Id,
             Tagline = ci.Tagline ?? "",
@@ -70,10 +102,10 @@ public class BrandingResolver(IMessageHub hub, ExportTemplateResolver templateRe
             FooterText = ci.FooterText ?? "",
             Website = ci.Website ?? "",
             TemplateDocxBytes = template?.DocxBytes
-        };
+        });
     }
 
-    private async Task<BrandingOptions> FromOrganizationAsync(MeshNode node, CancellationToken ct)
+    private IObservable<BrandingOptions> FromOrganization(MeshNode node)
     {
         // Organization content is untyped JSON at present; read known fields via reflection-friendly dynamic path.
         // We only need logo and name. Everything else falls back to defaults.
@@ -86,14 +118,19 @@ public class BrandingResolver(IMessageHub hub, ExportTemplateResolver templateRe
             if (jo["name"]?.ToString() is { Length: > 0 } n) name = n;
         }
 
-        return BrandingOptions.Default with
+        return LoadLogo(logoPath).Select(logo => BrandingOptions.Default with
         {
             Name = name,
-            Logo = await LoadLogoAsync(logoPath, ct)
-        };
+            Logo = logo
+        });
     }
 
-    private async Task<LogoImage?> LoadLogoAsync(string? path, CancellationToken ct)
+    // File-I/O kernel kept as async Task internally — wrapped into IObservable at the
+    // single boundary below. This is the "non-hub I/O" exception per the reactive rules.
+    private IObservable<LogoImage?> LoadLogo(string? path) =>
+        _ioPool.Run(ct => LoadLogoInternalAsync(path, ct));
+
+    private async Task<LogoImage?> LoadLogoInternalAsync(string? path, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(path))
             return null;
@@ -107,10 +144,10 @@ public class BrandingResolver(IMessageHub hub, ExportTemplateResolver templateRe
                 var (collection, subPath) = SplitCollection(rel);
                 var contentSvc = hub.ServiceProvider.GetService<IContentService>();
                 if (contentSvc is null) return null;
-                await using var stream = await contentSvc.GetContentAsync(collection, subPath, ct);
+                await using var stream = await contentSvc.GetContentAsync(collection, subPath, ct).ConfigureAwait(false);
                 if (stream is null) return null;
                 using var ms = new MemoryStream();
-                await stream.CopyToAsync(ms, ct);
+                await stream.CopyToAsync(ms, ct).ConfigureAwait(false);
                 return new LogoImage(ms.ToArray(), InferMime(path));
             }
 
@@ -124,10 +161,10 @@ public class BrandingResolver(IMessageHub hub, ExportTemplateResolver templateRe
                 var (collection, subPath) = SplitCollection(rel);
                 var contentSvc = hub.ServiceProvider.GetService<IContentService>();
                 if (contentSvc is null) return null;
-                await using var stream = await contentSvc.GetContentAsync(collection, subPath, ct);
+                await using var stream = await contentSvc.GetContentAsync(collection, subPath, ct).ConfigureAwait(false);
                 if (stream is null) return null;
                 using var ms = new MemoryStream();
-                await stream.CopyToAsync(ms, ct);
+                await stream.CopyToAsync(ms, ct).ConfigureAwait(false);
                 return new LogoImage(ms.ToArray(), InferMime(path));
             }
 

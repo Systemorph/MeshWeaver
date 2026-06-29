@@ -22,6 +22,13 @@ public class AzureFoundryPersistentAgentFactory : IChatClientFactory
     private readonly ILogger<AzureFoundryPersistentAgentFactory> logger;
     private PersistentAgentsClient? persistentClient;
 
+    /// <summary>
+    /// Initializes the factory, capturing the hub and resolving the persistent-agent
+    /// configuration from <paramref name="options"/>.
+    /// </summary>
+    /// <param name="hub">Message hub used to resolve plugin services and build mesh tools for created agents.</param>
+    /// <param name="options">Persistent Azure AI Foundry configuration (endpoint, models, order).</param>
+    /// <param name="logger">Logger for initialization and agent-creation diagnostics.</param>
     public AzureFoundryPersistentAgentFactory(
         IMessageHub hub,
         IOptions<AzureFoundryPersistentConfiguration> options,
@@ -39,12 +46,16 @@ public class AzureFoundryPersistentAgentFactory : IChatClientFactory
             string.Join(", ", configuration.Models));
     }
 
+    /// <summary>Display name of this factory, surfaced in the model/provider listings.</summary>
     public string Name => "Azure Foundry Persistent";
 
+    /// <summary>The model ids this factory advertises as available for persistent agents.</summary>
     public IReadOnlyList<string> Models => configuration.Models;
 
+    /// <summary>Selection priority among factories; lower values are preferred when several factories support the same model.</summary>
     public int Order => configuration.Order;
 
+    /// <summary>Always <c>true</c>: agents from this factory keep server-side conversation history, so only new messages are sent per turn.</summary>
     public bool IsPersistent => true;
 
     private PersistentAgentsClient GetOrCreateClient()
@@ -62,6 +73,17 @@ public class AzureFoundryPersistentAgentFactory : IChatClientFactory
         return persistentClient;
     }
 
+    /// <summary>
+    /// Creates a persistent agent server-side in Azure AI Foundry and wraps it as a
+    /// <see cref="ChatClientAgent"/>. Resolves the model, composes the agent
+    /// instructions (including delegation hints), and registers the agent's tools.
+    /// </summary>
+    /// <param name="config">Configuration for the agent being created (id, description, instructions, plugins, delegations).</param>
+    /// <param name="chat">The active agent chat, used when building mesh/plugin tools.</param>
+    /// <param name="existingAgents">Agents already created in this hierarchy, keyed by id, available for delegation wiring.</param>
+    /// <param name="hierarchyAgents">All agents in the current hierarchy, used to build the delegation instruction list.</param>
+    /// <param name="modelName">Model id selected in the chat composer; falls back to the first configured model when null or empty.</param>
+    /// <returns>A task yielding the created persistent <see cref="ChatClientAgent"/>.</returns>
     public async Task<ChatClientAgent> CreateAgentAsync(
         AgentConfiguration config,
         IAgentChat chat,
@@ -71,12 +93,11 @@ public class AzureFoundryPersistentAgentFactory : IChatClientFactory
     {
         var client = GetOrCreateClient();
 
+        // Model comes from the chat composer selection.
         var model = !string.IsNullOrEmpty(modelName)
             ? modelName
-            : !string.IsNullOrEmpty(config.PreferredModel)
-                ? config.PreferredModel
-                : configuration.Models.FirstOrDefault()
-                  ?? throw new InvalidOperationException("No model configured");
+            : configuration.Models.FirstOrDefault()
+              ?? throw new InvalidOperationException("No model configured");
 
         var instructions = GetAgentInstructions(config, hierarchyAgents);
         var name = config.Id;

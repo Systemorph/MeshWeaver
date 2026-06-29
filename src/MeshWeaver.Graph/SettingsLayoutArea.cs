@@ -1,4 +1,4 @@
-using System.ComponentModel;
+﻿using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
 using System.Reactive.Linq;
 using MeshWeaver.Application.Styles;
@@ -7,12 +7,11 @@ using MeshWeaver.Data;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
-using MeshWeaver.Layout.Domain;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
-using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Graph;
 
@@ -20,7 +19,7 @@ namespace MeshWeaver.Graph;
 /// Unified Settings page with Splitter layout: left NavMenu + right content pane.
 /// URL pattern: /{nodePath}/Settings/{tabId}
 /// The host.Reference.Id determines which tab to show.
-/// Tabs are registered via <see cref="SettingsMenuItemsExtensions.AddSettingsMenuItems"/>.
+/// Tabs are registered via <see cref="SettingsMenuItemsExtensions.AddSettingsMenuItems(MeshWeaver.Messaging.MessageHubConfiguration, MeshWeaver.Mesh.SettingsMenuItemProvider[])"/>.
 /// </summary>
 public static class SettingsLayoutArea
 {
@@ -42,26 +41,24 @@ public static class SettingsLayoutArea
     {
         var hubPath = host.Hub.Address.ToString();
         var hubAddress = host.Hub.Address;
-        var tabId = host.Reference.Id?.ToString();
+        // Reference.Id carries any query string appended by ApplicationPage.UpdateFromContext
+        // (e.g. "GitHubSync?connect=github-ok" after an OAuth callback redirect). The tab id is
+        // the part before '?', mirroring ApplicationPage.GetDisplayNameFromId — otherwise a query
+        // string never matches item.Id and the content pane silently falls back to the first
+        // (Metadata) tab while the nav still highlights the URL tab.
+        var tabId = host.Reference.Id?.ToString()?.Split('?')[0];
 
-        var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
-            ?? Observable.Return(Array.Empty<MeshNode>());
+        var ownNode = host.Workspace.GetMeshNodeStream();
+        var permsStream = host.Hub.GetEffectivePermissions(hubPath);
 
-        return nodeStream.SelectMany(async nodes =>
-        {
-            var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-            var perms = await PermissionHelper.GetEffectivePermissionsAsync(host.Hub, hubPath);
-            var canEdit = perms.HasFlag(Permission.Update);
-
-            var items = await host.Hub.Configuration
-                .EvaluateSettingsMenuItemsAsync(host, ctx, perms);
-
-            if (string.IsNullOrEmpty(tabId) && items.Count > 0)
-                tabId = items[0].Id;
-            tabId ??= MetadataTab;
-
-            return (UiControl?)BuildSettingsPage(host, node, hubAddress, hubPath, tabId, canEdit, items);
-        });
+        return ownNode.CombineLatest(permsStream, (node, perms) => (Node: node, Perms: perms))
+            .SelectMany(t => host.Hub.Configuration.EvaluateSettingsMenuItems(host, ctx, t.Perms)
+                .Select(items =>
+                {
+                    var canEdit = t.Perms.HasFlag(Permission.Update);
+                    var selectedTab = string.IsNullOrEmpty(tabId) && items.Count > 0 ? items[0].Id : (tabId ?? MetadataTab);
+                    return (UiControl?)BuildSettingsPage(host, t.Node, hubAddress, hubPath, selectedTab, canEdit, items);
+                }));
     }
 
     private static UiControl BuildSettingsPage(
@@ -73,10 +70,26 @@ public static class SettingsLayoutArea
         bool canEdit,
         IReadOnlyList<SettingsMenuItemDefinition> items)
     {
+        // `settings-splitter` (standard-page-layout.css) gives each pane a definite-height
+        // flex context so the right content pane scrolls internally — mirrors the treatment
+        // PortalLayoutBase applies to its outer `.body-splitter`. Height fills the parent
+        // `.layout-area-container` (flex column) rather than a viewport-minus-magic-number
+        // guess, which was overshooting the real header/messagebar height and clipping the
+        // bottom of the content out of reach.
+        // Do NOT set Height="100%" on the splitter skin. FluentMultiSplitter renders its pane
+        // chrome in shadow DOM, so the global `.settings-splitter` CSS can't reach the inner
+        // host; the only height the component honours is the `Height` parameter fed from this
+        // skin. An inline `height:100%` resolves against an indefinite-height ancestor → it
+        // collapses to content height, the splitter grows past the viewport, and nothing
+        // scrolls. Instead let the splitter take its height from the `flex:1 1 auto; min-height:0`
+        // it already gets via the `.settings-splitter` class inside the flex-column
+        // `.layout-area-container` — a real, bounded height the `.settings-content-pane`
+        // (overflow-y:auto) scrolls within.
         var settingsPage = Controls.Splitter
-            .WithSkin(s => s.WithOrientation(Orientation.Horizontal).WithWidth("100%").WithHeight("calc(100vh - 100px)"))
+            .WithClass("settings-splitter")
+            .WithSkin(s => s.WithOrientation(Orientation.Horizontal).WithWidth("100%"))
             .WithView(
-                BuildNavMenu(node, hubAddress, hubPath, items),
+                BuildMenuPane(host, node, hubAddress, hubPath, items, tabId),
                 skin => skin.WithSize("280px").WithMin("200px").WithMax("400px").WithCollapsible(true)
             )
             .WithView(
@@ -86,7 +99,11 @@ public static class SettingsLayoutArea
 
         if (!canEdit)
         {
+            // Fill the layout-area-container as a flex column: the banner takes its natural
+            // height and the splitter (flex: 1, min-height: 0) shrinks to fill the rest, so
+            // the inner content pane still scrolls.
             return Controls.Stack.WithWidth("100%")
+                .WithStyle("height: 100%; min-height: 0; display: flex; flex-direction: column; overflow: hidden;")
                 .WithView(Controls.Html(
                     "<div style=\"padding: 8px 16px; background: var(--neutral-layer-3); border-bottom: 1px solid var(--neutral-stroke-rest); " +
                     "color: var(--neutral-foreground-hint); font-size: 0.85rem; text-align: center;\">Read-only — you do not have edit permissions</div>"))
@@ -96,11 +113,64 @@ public static class SettingsLayoutArea
         return settingsPage;
     }
 
+    /// <summary>
+    /// Left pane: a pinned search box on top + the (live-filtered) nav menu below.
+    /// The search box is its OWN static area so it keeps focus while typing — only the
+    /// "SettingsMenu" sub-area re-renders as the query data stream emits, filtering the
+    /// tabs by Label/Group. (Field-level content search would need searchable keywords
+    /// on each <see cref="SettingsMenuItemDefinition"/>.)
+    /// </summary>
+    private static UiControl BuildMenuPane(
+        LayoutAreaHost host,
+        MeshNode? node,
+        object hubAddress,
+        string hubPath,
+        IReadOnlyList<SettingsMenuItemDefinition> items,
+        string selectedTab)
+    {
+        var searchDataId = $"settingsMenuSearch_{hubPath.Replace('/', '_')}";
+        host.UpdateData(searchDataId, string.Empty);
+
+        var searchBox = (new TextFieldControl(new JsonPointerReference(""))
+                .WithPlaceholder("Search settings…")
+                .WithImmediate(true) with { DataContext = LayoutAreaReference.GetDataPointer(searchDataId) })
+            .WithClass("settings-menu-search");
+
+        return Controls.Stack
+            .WithClass("settings-menu-pane")
+            .WithWidth("100%")
+            .WithView(searchBox)
+            .WithView(
+                (h, c) => h.GetDataStream<string>(searchDataId)
+                    .StartWith(string.Empty)
+                    .Select(q => (UiControl)BuildNavMenu(node, hubAddress, hubPath, FilterMenuItems(items, q), selectedTab)),
+                "SettingsMenu");
+    }
+
+    /// <summary>
+    /// Case-insensitive substring filter over a settings tab's <see cref="SettingsMenuItemDefinition.Label"/>,
+    /// <see cref="SettingsMenuItemDefinition.Group"/>, and <see cref="SettingsMenuItemDefinition.Keywords"/>
+    /// (the terms describing the fields inside each section). Empty query returns all items unchanged.
+    /// </summary>
+    internal static IReadOnlyList<SettingsMenuItemDefinition> FilterMenuItems(
+        IReadOnlyList<SettingsMenuItemDefinition> items, string? query)
+    {
+        if (string.IsNullOrWhiteSpace(query))
+            return items;
+        var q = query.Trim();
+        return items.Where(i =>
+                (i.Label?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false)
+                || (i.Group?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false)
+                || (i.Keywords?.Any(k => k.Contains(q, StringComparison.OrdinalIgnoreCase)) ?? false))
+            .ToList();
+    }
+
     private static UiControl BuildNavMenu(
         MeshNode? node,
         object hubAddress,
         string hubPath,
-        IReadOnlyList<SettingsMenuItemDefinition> items)
+        IReadOnlyList<SettingsMenuItemDefinition> items,
+        string selectedTab)
     {
         var navMenu = Controls.NavMenu.WithSkin(s => s.WithWidth(280).WithCollapsible(false));
 
@@ -129,7 +199,8 @@ public static class SettingsLayoutArea
             {
                 var item = topLevel[topIdx++];
                 var href = new LayoutAreaReference(MeshNodeLayoutAreas.SettingsArea) { Id = item.Id }.ToHref(hubAddress);
-                navMenu = navMenu.WithView(new NavLinkControl(item.Label, item.Icon, href));
+                navMenu = navMenu.WithView(new NavLinkControl(item.Label, item.Icon, href)
+                    .WithIsActive(item.Id == selectedTab));
             }
             else if (grpIdx < grouped.Count)
             {
@@ -143,7 +214,8 @@ public static class SettingsLayoutArea
                 foreach (var item in group.OrderBy(i => i.Order))
                 {
                     var href = new LayoutAreaReference(MeshNodeLayoutAreas.SettingsArea) { Id = item.Id }.ToHref(hubAddress);
-                    navGroup = navGroup.WithView(new NavLinkControl(item.Label, item.Icon, href));
+                    navGroup = navGroup.WithView(new NavLinkControl(item.Label, item.Icon, href)
+                        .WithIsActive(item.Id == selectedTab));
                 }
 
                 navMenu = navMenu.WithNavGroup(navGroup);
@@ -159,9 +231,20 @@ public static class SettingsLayoutArea
         string tabId,
         IReadOnlyList<SettingsMenuItemDefinition> items)
     {
+        // Scroll the content pane internally via the flex-fill pattern defined in
+        // standard-page-layout.css — the same treatment PortalLayoutBase applies to its
+        // .body-splitter. FluentMultiSplitter renders each pane as LIGHT DOM — a plain
+        // <div class="fluent-multi-splitter-pane"> (verified against the FluentUI source;
+        // it is NOT a web component / shadow root), so the stylesheet selector
+        // `.settings-splitter .fluent-multi-splitter-pane` reaches it: it overrides the
+        // component's default `overflow:hidden` pane into a definite-height flex column, makes the
+        // content wrapper fill it, and `.settings-content-pane` (flex:1 1 auto; min-height:0;
+        // overflow-y:auto) scrolls within. The styling therefore lives in the class — only the
+        // local padding is inline. (A prior inline `height:100%` here overrode the class and is the
+        // hack this removes.)
         var stack = Controls.Stack
-            .WithWidth("100%")
-            .WithStyle("padding: 24px; height: 100%; overflow: auto;");
+            .WithClass("settings-content-pane")
+            .WithWidth("100%");
 
         var matchedItem = items.FirstOrDefault(i => i.Id == tabId)
             ?? items.FirstOrDefault();
@@ -190,16 +273,17 @@ public static class SettingsLayoutArea
             return stack;
         }
 
-        var nodePath = node.Namespace ?? host.Hub.Address.ToString();
         var meta = MeshNodeMetadata.FromNode(node);
 
-        var dataId = $"nodeMeta_{nodePath.Replace("/", "_")}";
-        host.UpdateData(dataId, meta);
-
-        SetupNodeMetadataAutoSave(host, dataId, meta, node);
+        // Display fields are bound DIRECTLY to the node (node-bound DataContext, fields-mode):
+        // Name/Description/Category/Icon/Order map onto the node's own top-level fields, and each
+        // edit writes straight back to the node stream (IMeshNodeStreamCache). No /data replica of
+        // the node, no SetupNodeMetadataAutoSave save subscription — ONE source of truth.
+        // (Identity + Timestamps are read-only and rendered from the snapshot `meta`.)
+        var nodeContext = LayoutAreaReference.GetMeshNodeDataContext(node.Path, bindContent: false);
 
         stack = stack.WithView(BuildSection("Identity", BuildIdentitySection(meta)));
-        stack = stack.WithView(BuildSection("Display", BuildDisplaySection(host, dataId)));
+        stack = stack.WithView(BuildSection("Display", BuildDisplaySection(host, node.Path, nodeContext)));
         stack = stack.WithView(BuildSection("Timestamps", BuildTimestampsSection(meta)));
 
         return stack;
@@ -283,7 +367,7 @@ public static class SettingsLayoutArea
 
         stack = stack.WithView((h, _) =>
             meshQuery
-                .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"namespace:{hubPath} nodeType:Group"))
+                .Query<MeshNode>(MeshQueryRequest.FromQuery($"namespace:{hubPath} nodeType:Group"))
                 .Select(change =>
                 {
                     var groupNodes = change.Items?.ToList() ?? [];
@@ -305,8 +389,7 @@ public static class SettingsLayoutArea
     internal static UiControl BuildEffectiveAccessTab(LayoutAreaHost host, StackControl stack, MeshNode? node)
     {
         var hubPath = host.Hub.Address.ToString();
-        var securityService = host.Hub.ServiceProvider.GetService<ISecurityService>();
-        if (securityService == null)
+        if (host.Hub.Configuration.Get<EffectivePermissionsDelegate>() is null)
         {
             return stack.WithView(Controls.Html(
                 "<p style=\"color: var(--warning-color);\">Row-Level Security is not enabled.</p>"));
@@ -336,23 +419,28 @@ public static class SettingsLayoutArea
             .WithStyle("margin-top: 12px; gap: 8px;")
             .WithView(Controls.Button("Check")
                 .WithAppearance(Appearance.Accent)
-                .WithClickAction(async ctx =>
+                .WithClickAction((Action<UiActionContext>)(ctx =>
                 {
-                    var userId = "";
+                    // Pure reactive — Subscribe to the form value, then SelectMany
+                    // into the permission stream and write the rendered HTML back
+                    // to the result data slot. No await, no Task bridging.
                     ctx.Host.Stream.GetDataStream<Dictionary<string, object?>>(formId)
                         .Take(1)
-                        .Subscribe(data => userId = data?.GetValueOrDefault("userId")?.ToString()?.Trim() ?? "");
-
-                    if (string.IsNullOrEmpty(userId))
-                    {
-                        ctx.Host.UpdateData(resultId, "<p style=\"color: var(--warning-color);\">Please enter a user ID.</p>");
-                        return;
-                    }
-
-                    var perms = await securityService.GetEffectivePermissionsAsync(hubPath, userId);
-                    var html = BuildPermissionResultHtml(userId, perms);
-                    ctx.Host.UpdateData(resultId, html);
-                })));
+                        .SelectMany(data =>
+                        {
+                            var userId = data?.GetValueOrDefault("userId")?.ToString()?.Trim() ?? "";
+                            if (string.IsNullOrEmpty(userId))
+                            {
+                                ctx.Host.UpdateData(resultId, "<p style=\"color: var(--warning-color);\">Please enter a user ID.</p>");
+                                return Observable.Empty<(string UserId, Permission Perms)>();
+                            }
+                            return host.Hub.GetEffectivePermissions(hubPath, userId)
+                                .Take(1)
+                                .Select(perms => (UserId: userId, Perms: perms));
+                        })
+                        .Subscribe(t => ctx.Host.UpdateData(resultId,
+                            BuildPermissionResultHtml(t.UserId, t.Perms)));
+                }))));
 
         stack = stack.WithView((h, _) =>
         {
@@ -376,80 +464,194 @@ public static class SettingsLayoutArea
 
     #region Helpers
 
+    // Modern-business section card. The card / header / body styling lives in
+    // standard-page-layout.css (.settings-section[-header|-body]) so it's consistent across tabs
+    // and tweakable in one place — only the title text is dynamic here.
     private static UiControl BuildSection(string title, UiControl content)
     {
         return Controls.Stack
-            .WithStyle("border: 1px solid var(--neutral-stroke-rest); border-radius: 8px; overflow: hidden; margin-bottom: 8px;")
+            .WithClass("settings-section")
+            .WithWidth("100%")
             .WithView(Controls.Html(
-                $"<div style=\"padding: 10px 16px; background: var(--neutral-layer-2); font-weight: 600; font-size: 0.9rem; border-bottom: 1px solid var(--neutral-stroke-rest);\">{System.Web.HttpUtility.HtmlEncode(title)}</div>"))
-            .WithView(Controls.Stack.WithStyle("padding: 16px; gap: 12px;").WithView(content));
+                $"<div class=\"settings-section-header\">{System.Web.HttpUtility.HtmlEncode(title)}</div>"))
+            .WithView(Controls.Stack.WithClass("settings-section-body").WithWidth("100%").WithView(content));
     }
+
+    // Responsive metadata grid: label/value cells flow into as many columns as the width
+    // allows — one column on narrow screens, several on a wide one — instead of a fixed
+    // two-column (label | value) layout that wasted horizontal space.
+    private const string MetaGridStyle =
+        "display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); " +
+        "gap: 14px 28px; font-size: 0.9rem; align-items: start;";
 
     private static UiControl BuildIdentitySection(MeshNodeMetadata meta)
     {
-        var grid = Controls.Stack.WithStyle("display: grid; grid-template-columns: 140px 1fr; gap: 8px 16px; font-size: 0.9rem;");
+        var grid = Controls.Stack.WithWidth("100%").WithStyle(MetaGridStyle);
+        // Node Type first, as a direct link to the type's Configuration area.
+        grid = AddNodeTypeField(grid, meta.NodeType);
         grid = AddReadOnlyField(grid, "Id", meta.Id);
         grid = AddReadOnlyField(grid, "Namespace", meta.Namespace);
-        grid = AddReadOnlyField(grid, "Node Type", meta.NodeType);
         grid = AddReadOnlyField(grid, "State", meta.State.ToString());
         grid = AddReadOnlyField(grid, "Version", meta.Version.ToString());
         return grid;
     }
 
-    private static StackControl AddReadOnlyField(StackControl grid, string label, string? value)
+    /// <summary>
+    /// Node Type cell: NodeTypes are themselves MeshNodes, so the type name links straight
+    /// to the type definition's Configuration area (same pattern as the header meta row).
+    /// </summary>
+    private static StackControl AddNodeTypeField(StackControl grid, string? nodeType)
     {
-        return grid
-            .WithView(Controls.Html($"<span style=\"color: var(--neutral-foreground-hint); font-weight: 500;\">{System.Web.HttpUtility.HtmlEncode(label)}</span>"))
-            .WithView(Controls.Html($"<span>{System.Web.HttpUtility.HtmlEncode(value ?? "—")}</span>"));
+        string valueHtml;
+        if (string.IsNullOrEmpty(nodeType) || nodeType == MeshNode.NodeTypePath)
+        {
+            valueHtml = $"<span style=\"word-break: break-word;\">{System.Web.HttpUtility.HtmlEncode(nodeType ?? "—")}</span>";
+        }
+        else
+        {
+            var href = MeshNodeLayoutAreas.BuildUrl(nodeType, NodeTypeLayoutAreas.ConfigurationArea);
+            var label = nodeType.Contains('/') ? nodeType.Split('/').Last() : nodeType;
+            valueHtml =
+                $"<a href=\"{System.Web.HttpUtility.HtmlEncode(href)}\" " +
+                "style=\"color: var(--accent-fill-rest); font-weight: 500; text-decoration: none; word-break: break-word;\">" +
+                $"{System.Web.HttpUtility.HtmlEncode(label)}</a>";
+        }
+        return grid.WithView(Controls.Html(BuildMetaCell("Node Type", valueHtml)));
     }
 
-    private static UiControl BuildDisplaySection(LayoutAreaHost host, string dataId)
+    private static StackControl AddReadOnlyField(StackControl grid, string label, string? value)
     {
-        var dataPointer = LayoutAreaReference.GetDataPointer(dataId);
-        var stack = Controls.Stack.WithStyle("gap: 16px;");
+        var valueHtml = $"<span style=\"word-break: break-word;\">{System.Web.HttpUtility.HtmlEncode(value ?? "—")}</span>";
+        return grid.WithView(Controls.Html(BuildMetaCell(label, valueHtml)));
+    }
 
-        stack = stack.WithView(new TextFieldControl(new JsonPointerReference("Name"))
+    private static string BuildMetaCell(string label, string valueHtml) =>
+        "<div style=\"display: flex; flex-direction: column; gap: 2px; min-width: 0;\">" +
+        "<span style=\"color: var(--neutral-foreground-hint); font-weight: 600; font-size: 0.72rem; " +
+        $"text-transform: uppercase; letter-spacing: 0.04em;\">{System.Web.HttpUtility.HtmlEncode(label)}</span>" +
+        valueHtml +
+        "</div>";
+
+    private static UiControl BuildDisplaySection(LayoutAreaHost host, string nodePath, string nodeContext)
+    {
+        var stack = Controls.Stack.WithWidth("100%").WithStyle("gap: 16px;");
+
+        stack = stack.WithView(new TextFieldControl(new JsonPointerReference(nameof(MeshNode.Name)))
         {
             Label = "Name",
             Immediate = true,
-            DataContext = dataPointer
-        });
+            DataContext = nodeContext
+        }.WithWidth("100%"));
 
-        stack = stack.WithView(new TextAreaControl(new JsonPointerReference("Description"))
-        {
-            Label = "Description",
-            Placeholder = "Long-form description. Seeds AI Name/Id/Icon generation and appears in detail views.",
-            Immediate = true,
-            DataContext = dataPointer
-        }.WithRows(3));
+        // Description + Generate button on its own row, matching the icon layout below.
+        stack = stack.WithView(Controls.Stack
+            .WithWidth("100%")
+            .WithStyle("gap: 8px;")
+            .WithView(Controls.Html("<label style=\"font-weight: 500; font-size: 0.85rem;\">Description</label>"))
+            .WithView(new MarkdownEditorControl
+            {
+                Value = new JsonPointerReference(nameof(MeshNode.Description)),
+                Height = "300px",
+                Placeholder = "Long-form description. Seeds AI Name/Id/Icon generation and appears in detail views.",
+                DataContext = nodeContext
+            }.WithStyle("width: 100%;"))
+            .WithView(Controls.Stack
+                .WithWidth("100%")
+                .WithOrientation(Orientation.Horizontal)
+                .WithHorizontalGap(8)
+                .WithStyle("justify-content: flex-end;")
+                .WithView(Controls.Button("Generate")
+                    .WithAppearance(Appearance.Neutral)
+                    .WithIconStart(FluentIcons.Sparkle())
+                    .WithClickAction(actx => RegenerateDescriptionFromNode(actx, nodePath)))));
 
-        stack = stack.WithView(new TextFieldControl(new JsonPointerReference("Category"))
+        stack = stack.WithView(new TextFieldControl(new JsonPointerReference(nameof(MeshNode.Category)))
         {
             Label = "Category",
             Immediate = true,
-            DataContext = dataPointer
-        });
+            DataContext = nodeContext
+        }.WithWidth("100%"));
 
-        stack = stack.WithView(BuildIconPicker(host, dataId));
+        stack = stack.WithView(BuildIconPicker(host, nodePath, nodeContext));
 
-        stack = stack.WithView(new NumberFieldControl(new JsonPointerReference("Order"), "Int32?")
+        stack = stack.WithView(new NumberFieldControl(new JsonPointerReference(nameof(MeshNode.Order)), "Int32?")
         {
             Label = "Order",
             Immediate = true,
-            DataContext = dataPointer
-        });
+            DataContext = nodeContext
+        }.WithWidth("100%"));
 
         return stack;
     }
 
-    private static UiControl BuildIconPicker(LayoutAreaHost host, string metadataDataId)
+    private static UiControl BuildIconPicker(LayoutAreaHost host, string nodePath, string nodeContext)
     {
         var contentService = host.Hub.ServiceProvider.GetService<IContentService>();
         var collections = contentService?.GetAllCollectionConfigs()?.ToList() ?? [];
+        var editableCollection = collections.FirstOrDefault(c => c.IsEditable);
 
-        var section = Controls.Stack.WithStyle("gap: 8px;");
+        var section = Controls.Stack.WithWidth("100%").WithStyle("gap: 8px;");
         section = section.WithView(Controls.Html(
             "<label style=\"font-weight: 500; font-size: 0.85rem;\">Icon</label>"));
+
+        // Live preview + Regenerate button — reads the Icon straight off the node stream (the same
+        // source the Icon Path field below binds to), so the preview tracks edits live.
+        section = section.WithView(Controls.Stack
+            .WithWidth("100%")
+            .WithOrientation(Orientation.Horizontal)
+            .WithHorizontalGap(12)
+            .WithStyle("align-items: center;")
+            .WithView((h, _) => h.Workspace.GetMeshNodeStream(nodePath)
+                .Select(node =>
+                {
+                    var icon = node?.Icon ?? "";
+                    return string.IsNullOrEmpty(icon)
+                        ? Controls.Html("<div style=\"width:48px;height:48px;border:1px dashed var(--neutral-stroke-rest);border-radius:6px;\"></div>")
+                        : CreateLayoutArea.BuildIconPreview(icon);
+                }))
+            .WithView(Controls.Button("Generate")
+                .WithAppearance(Appearance.Neutral)
+                .WithIconStart(FluentIcons.Sparkle())
+                .WithClickAction(actx => RegenerateIconFromNode(actx, nodePath))));
+
+        section = section.WithView(new TextFieldControl(new JsonPointerReference(nameof(MeshNode.Icon)))
+        {
+            Label = "Icon Path",
+            Placeholder = "content:logo.png, /static/…, data:image/svg+xml;… or an absolute URL",
+            Immediate = true,
+            DataContext = nodeContext
+        }.WithWidth("100%"));
+
+        // Quick-pick row — after uploading a file via the browser below, type its name here
+        // and click "Use as Icon". Writes "content:<filename>" straight to the node's Icon field.
+        // The filename text box is transient form state (not node content), so it stays in /data.
+        if (editableCollection != null)
+        {
+            var quickPickDataId = $"iconQuickPick_{nodePath.Replace("/", "_")}";
+            host.UpdateData(quickPickDataId, new Dictionary<string, object?> { ["fileName"] = "" });
+
+            section = section.WithView(Controls.Stack
+                .WithWidth("100%")
+                .WithOrientation(Orientation.Horizontal)
+                .WithHorizontalGap(8)
+                .WithStyle("align-items: flex-end;")
+                .WithView(new TextFieldControl(new JsonPointerReference("fileName"))
+                {
+                    Label = "Filename in content collection",
+                    Placeholder = "logo.png",
+                    Immediate = true,
+                    DataContext = LayoutAreaReference.GetDataPointer(quickPickDataId)
+                }.WithStyle("flex: 1;"))
+                .WithView(Controls.Button("Use as Icon")
+                    .WithAppearance(Appearance.Neutral)
+                    .WithClickAction(actx => UseFileAsIcon(actx, nodePath, quickPickDataId))));
+        }
+
+        section = section.WithView(Controls.Body(
+            "Tip: upload an image via the browser below, then type its filename and click \"Use as Icon\" — " +
+            "or type \"content:logo.png\" directly. You can also paste an absolute URL, an inline <svg>…</svg>, " +
+            "or a data:image/svg+xml URI. Click \"Generate\" to have the Node Initializer agent craft one from Name + Description.")
+            .WithStyle("color: var(--neutral-foreground-hint); font-size: 12px; margin-top: 4px;"));
 
         if (collections.Count > 0)
         {
@@ -457,8 +659,9 @@ public static class SettingsLayoutArea
                 .Select(c => (Option)new Option<string>(c.Name, c.DisplayName ?? c.Name))
                 .ToArray();
 
-            var pickerDataId = $"iconPicker_{metadataDataId}";
-            host.UpdateData(pickerDataId, new Dictionary<string, object?> { ["collection"] = "" });
+            var pickerDataId = $"iconPicker_{nodePath.Replace("/", "_")}";
+            var defaultCollection = editableCollection?.Name ?? "";
+            host.UpdateData(pickerDataId, new Dictionary<string, object?> { ["collection"] = defaultCollection });
             host.UpdateData($"{pickerDataId}_options", collectionOptions);
 
             section = section.WithView(new ComboboxControl(
@@ -466,7 +669,7 @@ public static class SettingsLayoutArea
                 new JsonPointerReference(LayoutAreaReference.GetDataPointer($"{pickerDataId}_options")))
             {
                 Label = "Browse Collection",
-                Placeholder = "Select a collection to browse icons...",
+                Placeholder = "Select a collection to browse images...",
                 Autocomplete = ComboboxAutocomplete.Both,
                 DataContext = LayoutAreaReference.GetDataPointer(pickerDataId)
             });
@@ -482,59 +685,131 @@ public static class SettingsLayoutArea
                     }));
         }
 
-        section = section.WithView(new TextFieldControl(new JsonPointerReference("Icon"))
-        {
-            Label = "Icon Path",
-            Placeholder = "e.g., /static/collection/icon.svg, or an inline data:image/svg+xml URI",
-            Immediate = true,
-            DataContext = LayoutAreaReference.GetDataPointer(metadataDataId)
-        });
-
-        section = section.WithView(Controls.Body(
-            "Upload an image via the file browser above, paste a URL, or paste an inline SVG as a data: URI (e.g. data:image/svg+xml;utf8,<svg…/>).")
-            .WithStyle("color: var(--neutral-foreground-hint); font-size: 12px; margin-top: 4px;"));
-
         return section;
+    }
+
+    /// <summary>
+    /// Click handler for the quick-pick "Use as Icon" button: reads the filename the user
+    /// typed (transient form state), then writes <c>content:&lt;filename&gt;</c> straight to the
+    /// node's <see cref="MeshNode.Icon"/> via the node stream. The icon resolver turns that into
+    /// <c>/static/storage/content/{nodePath}/{filename}</c> at render time.
+    /// </summary>
+    private static void UseFileAsIcon(UiActionContext actx, string nodePath, string quickPickDataId)
+    {
+        actx.Host.Stream.GetDataStream<Dictionary<string, object?>>(quickPickDataId)
+            .Take(1)
+            .Subscribe(data =>
+            {
+                var fileName = data?.GetValueOrDefault("fileName")?.ToString()?.Trim() ?? "";
+                if (string.IsNullOrEmpty(fileName))
+                {
+                    ShowSettingsErrorDialog(actx, "Use as Icon",
+                        "Type the filename (e.g. \"logo.png\") after uploading it to the content collection.");
+                    return;
+                }
+
+                // Accept a leading slash and strip it; users may paste paths copied from the browser.
+                fileName = fileName.TrimStart('/');
+                var iconRef = $"content:{fileName}";
+
+                WriteIcon(actx, nodePath, iconRef);
+            });
+    }
+
+    /// <summary>
+    /// Click handler for the Regenerate-icon button in the Settings Metadata tab. Reads Name +
+    /// Description from the node stream, invokes the <see cref="IIconGenerator"/>, and writes the
+    /// resulting SVG straight back to the node's <see cref="MeshNode.Icon"/> — ONE source of truth.
+    /// </summary>
+    private static void RegenerateIconFromNode(UiActionContext actx, string nodePath)
+    {
+        var generator = actx.Host.Hub.ServiceProvider.GetService<IIconGenerator>();
+        if (generator == null)
+        {
+            ShowSettingsErrorDialog(actx, "Regenerate Icon",
+                "Icon generator service is not registered. Call AddAgentChatServices().");
+            return;
+        }
+        actx.Host.Workspace.GetMeshNodeStream(nodePath)
+            .Where(n => n is not null)
+            .Take(1)
+            .Subscribe(node =>
+            {
+                var name = node!.Name ?? "";
+                var description = node.Description;
+                if (string.IsNullOrWhiteSpace(name) && string.IsNullOrWhiteSpace(description))
+                {
+                    ShowSettingsErrorDialog(actx, "Regenerate Icon",
+                        "Enter a Name or Description first — the agent uses those to craft the icon.");
+                    return;
+                }
+                generator.GenerateSvgAsync(name, description).Subscribe(
+                    svg => WriteIcon(actx, nodePath, svg),
+                    ex => ShowSettingsErrorDialog(actx, "Icon Generation Failed", ex.Message));
+            });
+    }
+
+    /// <summary>
+    /// Click handler for the Generate-description button in the Settings Display section. Reads
+    /// Name + Category from the node stream, invokes the <see cref="IDescriptionGenerator"/>, and
+    /// writes the resulting text straight back to the node's <see cref="MeshNode.Description"/>.
+    /// </summary>
+    private static void RegenerateDescriptionFromNode(UiActionContext actx, string nodePath)
+    {
+        var generator = actx.Host.Hub.ServiceProvider.GetService<IDescriptionGenerator>();
+        if (generator == null)
+        {
+            ShowSettingsErrorDialog(actx, "Generate Description",
+                "Description generator service is not registered. Call AddAgentChatServices().");
+            return;
+        }
+        actx.Host.Workspace.GetMeshNodeStream(nodePath)
+            .Where(n => n is not null)
+            .Take(1)
+            .Subscribe(node =>
+            {
+                var name = node!.Name ?? "";
+                var category = node.Category;
+                if (string.IsNullOrWhiteSpace(name))
+                {
+                    ShowSettingsErrorDialog(actx, "Generate Description",
+                        "Enter a Name first — the agent uses it to write the description.");
+                    return;
+                }
+                generator.GenerateDescriptionAsync(name, category).Subscribe(
+                    description => actx.Host.Workspace.GetMeshNodeStream(nodePath)
+                        .Update(n => n with { Description = description })
+                        .Subscribe(_ => { }, ex => actx.Host.Hub.ServiceProvider
+                            .GetService<ILoggerFactory>()?.CreateLogger(typeof(SettingsLayoutArea).FullName!)
+                            .LogWarning(ex, "Description write failed for {Path}", nodePath)),
+                    ex => ShowSettingsErrorDialog(actx, "Description Generation Failed", ex.Message));
+            });
+    }
+
+    private static void WriteIcon(UiActionContext actx, string nodePath, string icon) =>
+        actx.Host.Workspace.GetMeshNodeStream(nodePath)
+            .Update(n => n with { Icon = icon })
+            .Subscribe(_ => { }, ex => actx.Host.Hub.ServiceProvider
+                .GetService<ILoggerFactory>()?.CreateLogger(typeof(SettingsLayoutArea).FullName!)
+                .LogWarning(ex, "Icon write failed for {Path}", nodePath));
+
+    private static void ShowSettingsErrorDialog(UiActionContext ctx, string title, string message)
+    {
+        var errorDialog = Controls.Dialog(
+            Controls.Markdown($"**{title}:**\n\n{message}"),
+            title
+        ).WithSize("M").WithClosable(true);
+        ctx.Host.UpdateArea(DialogControl.DialogArea, errorDialog);
     }
 
     private static UiControl BuildTimestampsSection(MeshNodeMetadata meta)
     {
-        var grid = Controls.Stack.WithStyle("display: grid; grid-template-columns: 140px 1fr; gap: 8px 16px; font-size: 0.9rem;");
+        var grid = Controls.Stack.WithWidth("100%").WithStyle(MetaGridStyle);
         grid = AddReadOnlyField(grid, "Created",
             meta.CreatedDate == default ? "—" : meta.CreatedDate.ToString("yyyy-MM-dd HH:mm:ss zzz"));
         grid = AddReadOnlyField(grid, "Last Modified",
             meta.LastModified == default ? "—" : meta.LastModified.ToString("yyyy-MM-dd HH:mm:ss zzz"));
         return grid;
-    }
-
-    private static void SetupNodeMetadataAutoSave(
-        LayoutAreaHost host,
-        string dataId,
-        MeshNodeMetadata initial,
-        MeshNode node)
-    {
-        var current = (object)initial;
-
-        host.RegisterForDisposal($"autosave_{dataId}",
-            host.Stream.GetDataStream<object>(dataId)
-                .Throttle(TimeSpan.FromMilliseconds(300))
-                .Subscribe(updated =>
-                {
-                    if (object.Equals(current, updated))
-                        return;
-
-                    current = updated;
-
-                    if (updated is not MeshNodeMetadata updatedMeta)
-                        return;
-
-                    var updatedNode = updatedMeta.ApplyTo(node);
-
-                    // Use UpdateNodeRequest (the routed MeshNode write path) instead of
-                    // DataChangeRequest — MeshNode has no data-source key mapping and
-                    // DataChangeRequest fails with "No key mapping is defined for type MeshNode".
-                    host.Hub.Post(new UpdateNodeRequest(updatedNode));
-                }));
     }
 
     private static string BuildPermissionResultHtml(string userId, Permission perms)
@@ -573,37 +848,52 @@ public static class SettingsLayoutArea
 /// </summary>
 public record MeshNodeMetadata
 {
+    /// <summary>The unique identifier of the mesh node (read-only).</summary>
     [Editable(false)]
     public string? Id { get; init; }
 
+    /// <summary>The display name of the mesh node.</summary>
     public string? Name { get; init; }
 
+    /// <summary>The human-readable description of the mesh node.</summary>
     public string? Description { get; init; }
 
+    /// <summary>The namespace (partition-qualified) the node belongs to (read-only).</summary>
     [Editable(false)]
     public string? Namespace { get; init; }
 
+    /// <summary>The node type of the mesh node (read-only).</summary>
     [Editable(false)]
     public string? NodeType { get; init; }
 
+    /// <summary>The category used to group the node in listings.</summary>
     public string? Category { get; init; }
 
+    /// <summary>The icon associated with the mesh node.</summary>
     public string? Icon { get; init; }
 
+    /// <summary>The sort order of the node within its grouping.</summary>
     public int? Order { get; init; }
 
+    /// <summary>The lifecycle state of the mesh node (read-only).</summary>
     [Editable(false)]
     public MeshNodeState State { get; init; }
 
+    /// <summary>The timestamp when the node was created (read-only).</summary>
     [Editable(false)]
     public DateTimeOffset CreatedDate { get; init; }
 
+    /// <summary>The timestamp when the node was last modified (read-only).</summary>
     [Editable(false)]
     public DateTimeOffset LastModified { get; init; }
 
+    /// <summary>The version number of the mesh node (read-only).</summary>
     [Editable(false)]
     public long Version { get; init; }
 
+    /// <summary>Builds a MeshNodeMetadata from a mesh node, capturing its editable metadata.</summary>
+    /// <param name="node">The mesh node to read values from.</param>
+    /// <returns>The populated metadata DTO.</returns>
     public static MeshNodeMetadata FromNode(MeshNode node) => new()
     {
         Id = node.Id,
@@ -620,6 +910,9 @@ public record MeshNodeMetadata
         Version = node.Version,
     };
 
+    /// <summary>Applies the editable metadata values from this DTO onto a mesh node.</summary>
+    /// <param name="node">The mesh node to apply the values onto.</param>
+    /// <returns>The updated mesh node.</returns>
     public MeshNode ApplyTo(MeshNode node) => node with
     {
         Name = Name,

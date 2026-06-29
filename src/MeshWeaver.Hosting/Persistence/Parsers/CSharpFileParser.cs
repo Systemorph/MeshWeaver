@@ -15,6 +15,7 @@ namespace MeshWeaver.Hosting.Persistence.Parsers;
 /// </summary>
 public partial class CSharpFileParser : IFileFormatParser
 {
+    /// <inheritdoc />
     public IReadOnlyList<string> SupportedExtensions => [".cs"];
 
     // Regex to extract meshweaver metadata block
@@ -29,21 +30,26 @@ public partial class CSharpFileParser : IFileFormatParser
     [GeneratedRegex(@"(?:public|internal|private|protected)?\s*(?:partial\s+)?(?:static\s+)?(?:abstract\s+)?(?:sealed\s+)?(?:class|record|struct|interface)\s+(\w+)", RegexOptions.Multiline)]
     private static partial Regex TypeNameRegex();
 
-    public Task<CodeConfiguration?> ParseCodeConfigurationAsync(string filePath, string content, CancellationToken ct = default)
+    /// <summary>
+    /// Parses .cs file content into a <c>CodeConfiguration</c>, stripping any leading
+    /// <c>&lt;meshweaver&gt;</c> metadata comment block so only the C# code remains.
+    /// </summary>
+    /// <param name="filePath">Full path to the source file (used for context only).</param>
+    /// <param name="content">Raw .cs file content, optionally prefixed with a metadata block.</param>
+    /// <returns>A <c>CodeConfiguration</c> with the cleaned code, or null if it cannot be parsed.</returns>
+    public CodeConfiguration? ParseCodeConfiguration(string filePath, string content)
     {
-        var metadata = ExtractMetadata(content);
         var codeWithoutMetadata = RemoveMetadataBlock(content);
 
-        var config = new CodeConfiguration
+        return new CodeConfiguration
         {
             Code = codeWithoutMetadata.Trim(),
             Language = "csharp"
         };
-
-        return Task.FromResult<CodeConfiguration?>(config);
     }
 
-    public Task<MeshNode?> ParseAsync(string filePath, string content, string relativePath, CancellationToken ct = default)
+    /// <inheritdoc />
+    public MeshNode? Parse(string filePath, string content, string relativePath)
     {
         // C# files are typically loaded as partition objects (CodeConfiguration), not as MeshNodes
         // This method is here for completeness but may not be commonly used
@@ -60,27 +66,32 @@ public partial class CSharpFileParser : IFileFormatParser
 
         var displayName = metadata.GetValueOrDefault("DisplayName");
         var nodeId = metadata.GetValueOrDefault("Id") ?? ExtractPrimaryTypeName(content) ?? id;
+        // A `.cs` source defaults to a "Code" node, but the `<meshweaver>` header may declare a
+        // different type — e.g. `// NodeType: Scope` makes it a first-class BusinessRules Scope
+        // node (still CodeConfiguration content, still folded into the parent compile).
+        var nodeType = metadata.GetValueOrDefault("NodeType") ?? "Code";
 
         var fileInfo = new FileInfo(filePath);
         var lastModified = new DateTimeOffset(fileInfo.LastWriteTimeUtc, TimeSpan.Zero);
 
         var node = new MeshNode(nodeId, ns)
         {
-            NodeType = "Code",
+            NodeType = nodeType,
             Name = displayName ?? nodeId,
             LastModified = lastModified,
             Content = codeConfig
         };
 
-        return Task.FromResult<MeshNode?>(node);
+        return node;
     }
 
-    public Task<string> SerializeAsync(MeshNode node, CancellationToken ct = default)
+    /// <inheritdoc />
+    public string Serialize(MeshNode node)
     {
         if (node.Content is not CodeConfiguration codeConfig)
             throw new InvalidOperationException("Cannot serialize node without CodeConfiguration content");
 
-        return Task.FromResult(SerializeCodeConfiguration(codeConfig));
+        return SerializeCodeConfiguration(codeConfig);
     }
 
     /// <summary>
@@ -102,6 +113,7 @@ public partial class CSharpFileParser : IFileFormatParser
         return sb.ToString();
     }
 
+    /// <inheritdoc />
     public bool CanSerialize(MeshNode node)
     {
         return node.Content is CodeConfiguration;

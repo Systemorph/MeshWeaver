@@ -1,8 +1,11 @@
-﻿using System.Text.Json;
+﻿using System.Reactive;
+using System.Reactive.Linq;
+using System.Text.Json;
 using MeshWeaver.Hosting.Persistence.Parsers;
 using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Mesh.Threading;
 
 namespace MeshWeaver.Hosting.Persistence;
 
@@ -16,6 +19,11 @@ public class FileSystemStorageAdapter : IStorageAdapter
     private readonly string _baseDirectory;
     private readonly Func<JsonSerializerOptions, JsonSerializerOptions>? _writeOptionsModifier;
     private readonly FileFormatParserRegistry _parserRegistry = new();
+    // I/O leaves (Read / Write / FindBestPrefixMatch / SavePartitionObjects) are
+    // bridged to IObservable through this pool — never via a bare
+    // Observable.FromAsync, which deadlocks under a blocking subscriber. See
+    // IoPoolExtensions and Doc/Architecture/AsynchronousCalls.md.
+    private readonly IIoPool _ioPool;
 
     /// <summary>
     /// The base directory for file storage.
@@ -32,14 +40,59 @@ public class FileSystemStorageAdapter : IStorageAdapter
     /// </summary>
     /// <param name="baseDirectory">Base directory for file storage</param>
     /// <param name="writeOptionsModifier">Optional modifier for JsonSerializerOptions when writing (e.g., to enable WriteIndented)</param>
-    public FileSystemStorageAdapter(string baseDirectory, Func<JsonSerializerOptions, JsonSerializerOptions>? writeOptionsModifier = null)
+    /// <param name="ioPoolRegistry">Optional I/O pool registry; the <c>FileSystem</c> pool bridges async file I/O to <c>IObservable</c>. When <c>null</c>, the unbounded pool is used.</param>
+    public FileSystemStorageAdapter(
+        string baseDirectory,
+        Func<JsonSerializerOptions, JsonSerializerOptions>? writeOptionsModifier = null,
+        IoPoolRegistry? ioPoolRegistry = null)
     {
         _baseDirectory = baseDirectory;
         _writeOptionsModifier = writeOptionsModifier;
+        _ioPool = ioPoolRegistry?.Get(IoPoolNames.FileSystem) ?? IoPool.Unbounded;
         Directory.CreateDirectory(baseDirectory);
     }
 
-    public async Task<MeshNode?> ReadAsync(string path, JsonSerializerOptions options, CancellationToken ct = default)
+    /// <inheritdoc />
+    public IObservable<MeshNode?> Read(string path, JsonSerializerOptions options)
+        => _ioPool.Run(ct => ReadAsyncCore(path, options, ct));
+
+    /// <summary>
+    /// Walks segments deepest-first, calling <see cref="Read"/> per depth and
+    /// returning the deepest match. Handles the FileSystem index-file case
+    /// (e.g. <c>FutuRe</c> resolves via <c>FutuRe/index.md</c>) that the
+    /// default <c>(null, 0)</c> impl misses because this adapter has no
+    /// prefix-match index. Pinned by
+    /// <c>ApplicationPageResolutionTest.ResolvePathAsync_FutuRe_ShouldNotReturnNull</c>.
+    ///
+    /// <para>Implemented at the <see cref="FindBestPrefixMatch"/> seam — the
+    /// default <c>ResolvePath = FindBestPrefixMatch</c> implementation then
+    /// routes through here when neither <c>VersionWritingStorageAdapter</c> nor
+    /// <c>PersistenceService</c> overrides <c>ResolvePath</c>. For FS there's
+    /// no satellite-UNION to preserve, so this single seam suffices.</para>
+    /// </summary>
+    public IObservable<(MeshNode? Node, int MatchedSegments)> FindBestPrefixMatch(
+        string fullPath, JsonSerializerOptions options)
+        => _ioPool.Run(ct => FindBestPrefixMatchAsyncCore(fullPath, options, ct));
+
+    private async Task<(MeshNode? Node, int MatchedSegments)> FindBestPrefixMatchAsyncCore(
+        string fullPath, JsonSerializerOptions options, CancellationToken ct)
+    {
+        var normalized = fullPath?.Trim('/') ?? "";
+        if (string.IsNullOrEmpty(normalized))
+            return (null, 0);
+
+        var segments = normalized.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        for (var depth = segments.Length; depth >= 1; depth--)
+        {
+            var testPath = string.Join("/", segments.Take(depth));
+            var node = await ReadAsyncCore(testPath, options, ct).ConfigureAwait(false);
+            if (node != null)
+                return (node, depth);
+        }
+        return (null, 0);
+    }
+
+    private async Task<MeshNode?> ReadAsyncCore(string path, JsonSerializerOptions options, CancellationToken ct)
     {
         var (filePath, extension) = FindFileWithExtension(path);
         if (filePath == null || !File.Exists(filePath))
@@ -48,7 +101,7 @@ public class FileSystemStorageAdapter : IStorageAdapter
         // Use FileShare.ReadWrite | FileShare.Delete to allow concurrent access
         await using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
         using var reader = new StreamReader(stream);
-        var content = await reader.ReadToEndAsync(ct);
+        var content = await reader.ReadToEndAsync(ct).ConfigureAwait(false);
 
         // Try to use parsers for non-JSON formats (with fallback support for .md files)
         MeshNode? node;
@@ -57,8 +110,8 @@ public class FileSystemStorageAdapter : IStorageAdapter
             var parsers = _parserRegistry.GetParsers(extension);
             if (parsers.Count > 0)
             {
-                // Use TryParseAsync for fallback support (e.g., AgentFileParser -> MarkdownFileParser)
-                node = await _parserRegistry.TryParseAsync(extension, filePath, content, path, ct);
+                // Use TryParse for fallback support (e.g., AgentFileParser -> MarkdownFileParser)
+                node = _parserRegistry.TryParse(extension, filePath, content, path);
             }
             else
             {
@@ -113,13 +166,17 @@ public class FileSystemStorageAdapter : IStorageAdapter
         // Merge companion index.md content into JSON-sourced nodes that have no content
         if (extension == ".json" && node.Content is null)
         {
-            node = await MergeIndexMarkdownAsync(node, path, ct);
+            node = await MergeIndexMarkdownAsync(node, path, ct).ConfigureAwait(false);
         }
 
         return node;
     }
 
-    public async Task WriteAsync(MeshNode node, JsonSerializerOptions options, CancellationToken ct = default)
+    /// <inheritdoc />
+    public IObservable<MeshNode?> Write(MeshNode node, JsonSerializerOptions options)
+        => _ioPool.Run<MeshNode?>(async ct => { await WriteAsyncCore(node, options, ct).ConfigureAwait(false); return node; });
+
+    private async Task WriteAsyncCore(MeshNode node, JsonSerializerOptions options, CancellationToken ct)
     {
         // Check if this node uses the JSON + index.md split pattern
         var existingJsonPath = GetFilePath(node.Path, ".json");
@@ -133,12 +190,12 @@ public class FileSystemStorageAdapter : IStorageAdapter
             // Split write: JSON registry (without markdown) + index.md (markdown body)
             var jsonNode = node with { Content = null, PreRenderedHtml = null };
             var jsonContent = JsonSerializer.Serialize(jsonNode, GetWriteOptions(options));
-            await File.WriteAllTextAsync(existingJsonPath, jsonContent, ct);
+            await File.WriteAllTextAsync(existingJsonPath, jsonContent, ct).ConfigureAwait(false);
 
             var indexDir = Path.GetDirectoryName(indexMdPath);
             if (!string.IsNullOrEmpty(indexDir))
                 Directory.CreateDirectory(indexDir);
-            await File.WriteAllTextAsync(indexMdPath, mdContent.Content, ct);
+            await File.WriteAllTextAsync(indexMdPath, mdContent.Content, ct).ConfigureAwait(false);
 
             return;
         }
@@ -150,7 +207,7 @@ public class FileSystemStorageAdapter : IStorageAdapter
         var serializer = _parserRegistry.GetSerializerFor(node);
         if (serializer != null)
         {
-            content = await serializer.SerializeAsync(node, ct);
+            content = serializer.Serialize(node);
             extension = serializer.SupportedExtensions[0]; // Use the primary extension
         }
         else
@@ -167,13 +224,17 @@ public class FileSystemStorageAdapter : IStorageAdapter
             Directory.CreateDirectory(directory);
         }
 
-        await File.WriteAllTextAsync(filePath, content, ct);
+        await WriteAtomicAsync(filePath, content, ct).ConfigureAwait(false);
 
         // Clean up old files with different extensions (e.g., if originally read from .json)
         CleanupOtherExtensions(node.Path, extension);
     }
 
-    public Task DeleteAsync(string path, CancellationToken ct = default)
+    /// <inheritdoc />
+    public IObservable<string> Delete(string path)
+        => Observable.Defer(() => { DeleteCore(path); return Observable.Return(path); });
+
+    private void DeleteCore(string path)
     {
         // Delete any file with supported extensions
         foreach (var ext in SupportedExtensions)
@@ -195,29 +256,47 @@ public class FileSystemStorageAdapter : IStorageAdapter
             File.Delete(indexMdDelPath);
         }
 
-        // Also try to clean up empty directories
+        // Also try to clean up empty directories. This is concurrency-tolerant:
+        // when callers parallelize recursive deletes (e.g. FileSystemPersistenceService
+        // descendant moves via Task.WhenAll), two threads can race to remove the same
+        // newly-empty directory. Swallow the expected races so the delete remains idempotent.
         var basePath = GetFilePath(path, ".json");
         var directory = Path.GetDirectoryName(basePath);
         while (!string.IsNullOrEmpty(directory) &&
                directory != _baseDirectory &&
-               Directory.Exists(directory) &&
-               !Directory.EnumerateFileSystemEntries(directory).Any())
+               Directory.Exists(directory))
         {
-            Directory.Delete(directory);
+            try
+            {
+                if (Directory.EnumerateFileSystemEntries(directory).Any())
+                    break;
+                Directory.Delete(directory);
+            }
+            catch (DirectoryNotFoundException)
+            {
+                // Another thread won the race — directory is already gone.
+            }
+            catch (IOException)
+            {
+                // Non-empty (another thread wrote into it) or in-use — stop ascending.
+                break;
+            }
             directory = Path.GetDirectoryName(directory);
         }
-
-        return Task.CompletedTask;
     }
 
-    public Task<(IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths)> ListChildPathsAsync(string? parentPath, CancellationToken ct = default)
+    /// <inheritdoc />
+    public IObservable<(IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths)> ListChildPaths(string? parentPath)
+        => Observable.Defer(() => Observable.Return(ListChildPathsCore(parentPath)));
+
+    private (IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths) ListChildPathsCore(string? parentPath)
     {
         var directoryPath = string.IsNullOrEmpty(parentPath)
             ? _baseDirectory
             : Path.Combine(_baseDirectory, parentPath.Replace('/', Path.DirectorySeparatorChar));
 
         if (!Directory.Exists(directoryPath))
-            return Task.FromResult<(IEnumerable<string>, IEnumerable<string>)>(([], []));
+            return ([], []);
 
         var nodePaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var directoryPaths = new List<string>();
@@ -271,20 +350,26 @@ public class FileSystemStorageAdapter : IStorageAdapter
             }
         }
 
-        return Task.FromResult<(IEnumerable<string>, IEnumerable<string>)>((nodePaths, directoryPaths));
+        return (nodePaths, directoryPaths);
     }
 
-    public Task<bool> ExistsAsync(string path, CancellationToken ct = default)
-    {
-        var (filePath, _) = FindFileWithExtension(path);
-        return Task.FromResult(filePath != null && File.Exists(filePath));
-    }
+    /// <inheritdoc />
+    public IObservable<bool> Exists(string path)
+        => Observable.Defer(() =>
+        {
+            var (filePath, _) = FindFileWithExtension(path);
+            return Observable.Return(filePath != null && File.Exists(filePath));
+        });
 
-    public Task<IEnumerable<string>> ListPartitionSubPathsAsync(string nodePath, CancellationToken ct = default)
+    /// <inheritdoc />
+    public IObservable<IEnumerable<string>> ListPartitionSubPaths(string nodePath)
+        => Observable.Defer(() => Observable.Return(ListPartitionSubPathsCore(nodePath)));
+
+    private IEnumerable<string> ListPartitionSubPathsCore(string nodePath)
     {
         var nodeDir = Path.Combine(_baseDirectory, nodePath.Trim('/').Replace('/', Path.DirectorySeparatorChar));
         if (!Directory.Exists(nodeDir))
-            return Task.FromResult<IEnumerable<string>>(Enumerable.Empty<string>());
+            return Enumerable.Empty<string>();
 
         var partitionSubPaths = new List<string>();
         foreach (var subDir in Directory.GetDirectories(nodeDir))
@@ -303,7 +388,7 @@ public class FileSystemStorageAdapter : IStorageAdapter
             partitionSubPaths.Add(subDirName);
         }
 
-        return Task.FromResult<IEnumerable<string>>(partitionSubPaths);
+        return partitionSubPaths;
     }
 
     /// <summary>
@@ -321,10 +406,10 @@ public class FileSystemStorageAdapter : IStorageAdapter
         if (!File.Exists(indexMdPath))
             return node;
 
-        var mdContent = await ReadFileWithSharingAsync(indexMdPath, ct);
+        var mdContent = await ReadFileWithSharingAsync(indexMdPath, ct).ConfigureAwait(false);
 
-        var mdNode = await _parserRegistry.TryParseAsync(".md", indexMdPath, mdContent,
-            normalizedPath + "/index", ct);
+        var mdNode = _parserRegistry.TryParse(".md", indexMdPath, mdContent,
+            normalizedPath + "/index");
 
         if (mdNode?.Content is MarkdownContent markdownContent)
         {
@@ -340,7 +425,19 @@ public class FileSystemStorageAdapter : IStorageAdapter
 
     #region Partition Storage
 
-    public async IAsyncEnumerable<object> GetPartitionObjectsAsync(
+    // The async pump runs INSIDE the IIoPool (InvokeStream) — never a bare
+    // Observable.Create(async ...), which starts the pump on the SUBSCRIBER's
+    // thread and lets every await capture the subscriber's scheduler. When the
+    // subscriber is a hub/grain action block waiting on the virtual-data-source
+    // load (hub init), the continuation queues behind the blocked thread and
+    // the stream never emits — the grain wedge. Pinned by
+    // PartitionObjectsSubscriberIndependenceTest.
+    /// <inheritdoc />
+    public IObservable<object> GetPartitionObjects(
+        string nodePath, string? subPath, JsonSerializerOptions options)
+        => _ioPool.InvokeStream(ct => GetPartitionObjectsAsyncCore(nodePath, subPath, options, ct));
+
+    private async IAsyncEnumerable<object> GetPartitionObjectsAsyncCore(
         string nodePath,
         string? subPath,
         JsonSerializerOptions options,
@@ -390,7 +487,7 @@ public class FileSystemStorageAdapter : IStorageAdapter
                 try
                 {
                     var content = await ReadFileWithSharingAsync(file, ct);
-                    config = await _parserRegistry.CSharpParser.ParseCodeConfigurationAsync(file, content, ct);
+                    config = _parserRegistry.CSharpParser.ParseCodeConfiguration(file, content);
                 }
                 catch
                 {
@@ -449,12 +546,22 @@ public class FileSystemStorageAdapter : IStorageAdapter
         return obj;
     }
 
-    public async Task SavePartitionObjectsAsync(
+    /// <inheritdoc />
+    public IObservable<Unit> SavePartitionObjects(
+        string nodePath, string? subPath,
+        IReadOnlyCollection<object> objects, JsonSerializerOptions options)
+        => _ioPool.Run(async ct =>
+        {
+            await SavePartitionObjectsAsyncCore(nodePath, subPath, objects, options, ct).ConfigureAwait(false);
+            return Unit.Default;
+        });
+
+    private async Task SavePartitionObjectsAsyncCore(
         string nodePath,
         string? subPath,
         IReadOnlyCollection<object> objects,
         JsonSerializerOptions options,
-        CancellationToken ct = default)
+        CancellationToken ct)
     {
         var partitionDir = GetPartitionDirectory(nodePath, subPath);
         Directory.CreateDirectory(partitionDir);
@@ -468,22 +575,23 @@ public class FileSystemStorageAdapter : IStorageAdapter
                 var fileName = GetCodeConfigurationFileName(codeConfig);
                 var filePath = Path.Combine(partitionDir, fileName);
                 var content = CSharpFileParser.SerializeCodeConfiguration(codeConfig);
-                await File.WriteAllTextAsync(filePath, content, ct);
+                await File.WriteAllTextAsync(filePath, content, ct).ConfigureAwait(false);
             }
             else
             {
                 var fileName = GetObjectFileName(obj);
                 var filePath = Path.Combine(partitionDir, fileName);
                 var json = JsonSerializer.Serialize(obj, obj.GetType(), GetWriteOptions(options));
-                await File.WriteAllTextAsync(filePath, json, ct);
+                await File.WriteAllTextAsync(filePath, json, ct).ConfigureAwait(false);
             }
         }
     }
 
-    public Task DeletePartitionObjectsAsync(
-        string nodePath,
-        string? subPath = null,
-        CancellationToken ct = default)
+    /// <inheritdoc />
+    public IObservable<Unit> DeletePartitionObjects(string nodePath, string? subPath = null)
+        => Observable.Defer(() => { DeletePartitionObjectsCore(nodePath, subPath); return Observable.Return(Unit.Default); });
+
+    private void DeletePartitionObjectsCore(string nodePath, string? subPath)
     {
         var partitionDir = GetPartitionDirectory(nodePath, subPath);
         if (Directory.Exists(partitionDir))
@@ -509,8 +617,6 @@ public class FileSystemStorageAdapter : IStorageAdapter
                 Directory.Delete(partitionDir);
             }
         }
-
-        return Task.CompletedTask;
     }
 
     private string GetPartitionDirectory(string nodePath, string? subPath)
@@ -544,14 +650,15 @@ public class FileSystemStorageAdapter : IStorageAdapter
         return $"{typeName}_{hash}.json";
     }
 
-    public Task<DateTimeOffset?> GetPartitionMaxTimestampAsync(
-        string nodePath,
-        string? subPath = null,
-        CancellationToken ct = default)
+    /// <inheritdoc />
+    public IObservable<DateTimeOffset?> GetPartitionMaxTimestamp(string nodePath, string? subPath = null)
+        => Observable.Defer(() => Observable.Return(GetPartitionMaxTimestampCore(nodePath, subPath)));
+
+    private DateTimeOffset? GetPartitionMaxTimestampCore(string nodePath, string? subPath)
     {
         var partitionDir = GetPartitionDirectory(nodePath, subPath);
         if (!Directory.Exists(partitionDir))
-            return Task.FromResult<DateTimeOffset?>(null);
+            return null;
 
         var files = Directory.GetFiles(partitionDir, "*.json").ToList();
 
@@ -562,13 +669,13 @@ public class FileSystemStorageAdapter : IStorageAdapter
         }
 
         if (files.Count == 0)
-            return Task.FromResult<DateTimeOffset?>(null);
+            return null;
 
         var maxTime = files
             .Select(f => new FileInfo(f).LastWriteTimeUtc)
             .Max();
 
-        return Task.FromResult<DateTimeOffset?>(new DateTimeOffset(maxTime, TimeSpan.Zero));
+        return new DateTimeOffset(maxTime, TimeSpan.Zero);
     }
 
     private static string GetCodeConfigurationFileName(CodeConfiguration config)
@@ -602,10 +709,14 @@ public class FileSystemStorageAdapter : IStorageAdapter
     }
 
     /// <summary>
-    /// Checks if a sub-namespace name is a code sub-namespace (_Source or _Test).
+    /// Checks if a sub-namespace name is a code sub-namespace (Source or Test).
+    /// Legacy "_Source"/"_Test" names are recognised for backward compatibility
+    /// with existing on-disk data that has not yet been migrated.
     /// </summary>
     private static bool IsCodeSubNamespace(string? name) =>
-        string.Equals(name, "_Source", StringComparison.OrdinalIgnoreCase)
+        string.Equals(name, "Source", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(name, "Test", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(name, "_Source", StringComparison.OrdinalIgnoreCase)
         || string.Equals(name, "_Test", StringComparison.OrdinalIgnoreCase);
 
     #endregion
@@ -654,8 +765,90 @@ public class FileSystemStorageAdapter : IStorageAdapter
             }
         }
 
+        // Case-insensitive fallback for case-sensitive filesystems (Linux CI).
+        // Path normalisation upstream uses OrdinalIgnoreCase keying (workspace,
+        // _lastSaved, NormalizePath) but the file system itself preserves the
+        // original case of saved files, so a read with different casing misses.
+        // Walk the parent directory and match by segment with OrdinalIgnoreCase.
+        var ciMatch = ResolveCaseInsensitive(segments);
+        if (ciMatch != null)
+        {
+            foreach (var ext in SupportedExtensions)
+            {
+                var filePath = ciMatch + ext;
+                if (File.Exists(filePath))
+                    return (filePath, ext);
+            }
+            if (Directory.Exists(ciMatch))
+            {
+                foreach (var ext in SupportedExtensions)
+                {
+                    var indexPath = Path.Combine(ciMatch, $"index{ext}");
+                    if (File.Exists(indexPath))
+                        return (indexPath, ext);
+                }
+            }
+        }
+
         // Return the JSON path as default (for writes)
         return (basePath + ".json", ".json");
+    }
+
+    /// <summary>
+    /// Resolves a segment list to a filesystem-path by matching each segment
+    /// against the parent directory's entries with <see cref="StringComparison.OrdinalIgnoreCase"/>.
+    /// Returns the resolved absolute base path (without extension) or null if
+    /// any segment doesn't match. On case-insensitive filesystems (Windows) this
+    /// is a no-op pass-through; on Linux it lets a read of "graph/org1" find a
+    /// file written as "Graph/ORG1".
+    /// </summary>
+    private string? ResolveCaseInsensitive(string[] segments)
+    {
+        var current = _baseDirectory;
+        for (var i = 0; i < segments.Length; i++)
+        {
+            var segment = segments[i];
+            var isLast = i == segments.Length - 1;
+            if (!Directory.Exists(current)) return null;
+
+            string? matched = null;
+            if (!isLast)
+            {
+                // Intermediate segment must match a subdirectory.
+                foreach (var dir in Directory.EnumerateDirectories(current))
+                {
+                    if (string.Equals(Path.GetFileName(dir), segment, StringComparison.OrdinalIgnoreCase))
+                    {
+                        matched = dir;
+                        break;
+                    }
+                }
+                if (matched is null) return null;
+                current = matched;
+            }
+            else
+            {
+                // Last segment: match either a directory (for index lookups) or
+                // a file stem (any supported extension).
+                foreach (var dir in Directory.EnumerateDirectories(current))
+                {
+                    if (string.Equals(Path.GetFileName(dir), segment, StringComparison.OrdinalIgnoreCase))
+                    {
+                        return dir;
+                    }
+                }
+                foreach (var file in Directory.EnumerateFiles(current))
+                {
+                    var stem = Path.GetFileNameWithoutExtension(file);
+                    if (string.Equals(stem, segment, StringComparison.OrdinalIgnoreCase))
+                    {
+                        return Path.Combine(current, stem);
+                    }
+                }
+                return null;
+            }
+        }
+        return current;
     }
 
     /// <summary>
@@ -700,7 +893,36 @@ public class FileSystemStorageAdapter : IStorageAdapter
     {
         await using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
         using var reader = new StreamReader(stream);
-        return await reader.ReadToEndAsync(ct);
+        return await reader.ReadToEndAsync(ct).ConfigureAwait(false);
+    }
+
+    // Writes content via a temp file + atomic rename so a mid-write cancellation
+    // can never leave a truncated/empty target on disk. File.WriteAllTextAsync
+    // opens with FileMode.Create (truncates first); if ct cancels between
+    // truncate and the actual write, the original file is gone and the new one
+    // is empty — exactly the 0-byte SamplesGraph corruption pattern.
+    private static async Task WriteAtomicAsync(string filePath, string content, CancellationToken ct)
+    {
+        // DIAGNOSTIC: trace empty/tiny writes so we can identify the caller that
+        // overwrites SamplesGraph JSON with 0-byte content. Remove once located.
+        if (string.IsNullOrWhiteSpace(content) || content.Length < 20)
+        {
+            var stack = new System.Diagnostics.StackTrace(skipFrames: 1, fNeedFileInfo: true);
+            System.Console.Error.WriteLine(
+                $"[FileSystemStorageAdapter.WriteAtomic] EMPTY/TINY WRITE — file='{filePath}' len={content?.Length ?? -1} content='{content}'\nStack:\n{stack}");
+        }
+
+        var tempPath = filePath + ".tmp." + Guid.NewGuid().ToString("N");
+        try
+        {
+            await File.WriteAllTextAsync(tempPath, content, ct).ConfigureAwait(false);
+            File.Move(tempPath, filePath, overwrite: true);
+        }
+        catch
+        {
+            try { if (File.Exists(tempPath)) File.Delete(tempPath); } catch { }
+            throw;
+        }
     }
 
     #endregion

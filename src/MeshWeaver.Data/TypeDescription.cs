@@ -19,9 +19,18 @@ namespace MeshWeaver.Data
     /// <param name="Schema">The JSON schema string</param>
     public record SchemaInfo(string Type, string Schema);
 
+    /// <summary>
+    /// Factory helpers for addresses of transient synchronization streams.
+    /// </summary>
     public static class SynchronizationAddress
     {
+        /// <summary>The address-type discriminator used for synchronization addresses.</summary>
         public const string AddressType = "sync";
+        /// <summary>
+        /// Creates a synchronization address, generating a fresh identifier when none is supplied.
+        /// </summary>
+        /// <param name="id">Optional explicit identifier; a new GUID-based id is used when <c>null</c>.</param>
+        /// <returns>An <see cref="Address"/> of type <see cref="AddressType"/>.</returns>
         public static Address Create(string? id = null) => new(AddressType, id ?? Guid.NewGuid().AsString());
     }
 }

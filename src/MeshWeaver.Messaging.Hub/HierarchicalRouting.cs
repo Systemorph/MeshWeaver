@@ -1,4 +1,6 @@
-﻿using Microsoft.Extensions.DependencyInjection;
+﻿using System.Reactive.Linq;
+using MeshWeaver.Reflection;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Messaging;
@@ -31,7 +33,7 @@ internal class HierarchicalRouting
     /// <param name="delivery"></param>
     /// <param name="cancellationToken"></param>
     /// <returns></returns>
-    public async Task<IMessageDelivery> RouteMessageAsync(IMessageDelivery delivery,
+    public IMessageDelivery RouteMessageAsync(IMessageDelivery delivery,
         CancellationToken cancellationToken)
     {
         if (delivery.State != MessageDeliveryState.Submitted)
@@ -52,8 +54,13 @@ internal class HierarchicalRouting
 
         }
 
+        // The routing handlers are Observable.Return-shaped (synchronous emit) — fold
+        // them in sequence by subscribing inline; each handler observes the prior result.
         foreach (var handler in configuration.Handlers)
-            delivery = await handler(delivery, cancellationToken);
+        {
+            var routed = delivery;
+            handler(routed, cancellationToken).Subscribe(d => delivery = d);
+        }
 
         if (delivery.State != MessageDeliveryState.Submitted)
             return delivery;
@@ -77,11 +84,20 @@ internal class HierarchicalRouting
 
 
         var isDisposing = hub.RunLevel >= MessageHubRunLevel.DisposeHostedHubs;
+        // [CanBeIgnored] messages (Shutdown/Dispose/HeartBeat) have no sender awaiting a
+        // response, so a "no route" DeliveryFailure for them is meaningless AND it feeds the
+        // DeliveryFailure⟷ShutdownRequest disposal ping-pong storm (see ReportFailure in
+        // MessageService): a ShutdownRequest routed to an already-gone hub returns NotFound,
+        // the DeliveryFailure routes back, and the pair spins until quiesce.
+        var isFireAndForgetControl =
+            delivery.Message.GetType().HasAttribute<CanBeIgnoredAttribute>();
         if (delivery.Target.Host != null)
         {
             var hosted = delivery.Target;
-            logger.LogDebug("Routing delivery {id} of type {type} to host with address {target}", delivery.Id,
-                delivery.Message.GetType().Name, hosted.Host);
+            // Per-routed-message; gate to skip GetType().Name + boxing.
+            if (logger.IsEnabled(LogLevel.Debug))
+                logger.LogDebug("Routing delivery {id} of type {type} to host with address {target}", delivery.Id,
+                    delivery.Message.GetType().Name, hosted.Host);
             if (hub.Address.Equals(hosted.Host))
             {
                 // Get the inner address (the target without its host)
@@ -105,7 +121,7 @@ internal class HierarchicalRouting
                     : $"No route found for host {hosted}. Last tried in {hub.Address}";
 
                 logger.LogDebug(errorMessage);
-                if (!isDisposing)
+                if (!isDisposing && !isFireAndForgetControl)
                 {
                     hub.Post(
                         new DeliveryFailure(delivery)
@@ -145,7 +161,7 @@ internal class HierarchicalRouting
                 : $"No route found for host {delivery.Target}. Last tried in {hub.Address}";
 
             logger.LogDebug(errorMessage);
-            if (!isDisposing)
+            if (!isDisposing && !isFireAndForgetControl)
             {
                 hub.Post(
                     new DeliveryFailure(delivery)
@@ -166,8 +182,10 @@ internal class HierarchicalRouting
             return delivery.Failed("Parent hub disposing");
         }
 
-        logger.LogDebug("Routing delivery {id} of type {type} to parent {target}", delivery.Id,
-            delivery.Message.GetType().Name, parentHub.Address);
+        // Per-routed-message; gate to skip GetType().Name + boxing.
+        if (logger.IsEnabled(LogLevel.Debug))
+            logger.LogDebug("Routing delivery {id} of type {type} to parent {target}", delivery.Id,
+                delivery.Message.GetType().Name, parentHub.Address);
         if (parentHub.Address.Type != AddressExtensions.MeshType)
             delivery = delivery.WithSender(delivery.Sender.WithHost(parentHub.Address));
         parentHub.DeliverMessage(delivery);

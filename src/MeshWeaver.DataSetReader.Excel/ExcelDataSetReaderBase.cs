@@ -5,10 +5,21 @@ using MeshWeaver.DataStructures;
 
 namespace MeshWeaver.DataSetReader.Excel
 {
+    /// <summary>
+    /// Base class for Excel readers that converts each worksheet into a table of an <see cref="IDataSet"/>,
+    /// leaving the concrete underlying reader (binary or OpenXML) to derived classes.
+    /// </summary>
     public abstract class ExcelDataSetReaderBase
     {
+        /// <summary>Name of the custom document property carrying the data-set format descriptor.</summary>
         public const string Format = "Format";
 
+        /// <summary>
+        /// Reads every worksheet from the workbook stream into tables of a data set,
+        /// extracting the optional format descriptor from the workbook's custom properties.
+        /// </summary>
+        /// <param name="stream">The stream containing the workbook.</param>
+        /// <returns>A tuple containing the parsed data set and the optional format descriptor.</returns>
         protected (IDataSet DataSet, string? Format) ReadDataSetFromFile(Stream stream)
         {
             var spreadsheetDocument = SpreadsheetDocument.Open(stream, false);
@@ -74,6 +85,11 @@ namespace MeshWeaver.DataSetReader.Excel
             return dataReader;
         }
 
+        /// <summary>
+        /// Creates the concrete Excel data reader for the supplied stream.
+        /// </summary>
+        /// <param name="stream">The stream containing the workbook.</param>
+        /// <returns>An <see cref="IExcelDataReader"/> over the workbook.</returns>
         protected abstract IExcelDataReader GetExcelDataReader(Stream stream);
     }
 }

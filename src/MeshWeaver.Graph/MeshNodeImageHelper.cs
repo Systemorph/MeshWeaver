@@ -2,6 +2,12 @@ using MeshWeaver.Mesh;
 
 namespace MeshWeaver.Graph;
 
+/// <summary>
+/// Helper for resolving and classifying a mesh node's icon for rendering. Resolves
+/// content: references to absolute URLs, supplies NodeType default icons, and detects
+/// whether an icon value is inline SVG, an image URL/data URI, an emoji, or a legacy
+/// Fluent icon name.
+/// </summary>
 public static class MeshNodeImageHelper
 {
     /// <summary>
@@ -21,25 +27,87 @@ public static class MeshNodeImageHelper
 
     /// <summary>
     /// Resolves a node's icon for rendering, handling content: references relative to the node path.
-    /// E.g., "content:icon.svg" on node "Org/Project" → "/static/storage/content/Org/Project/icon.svg"
+    /// E.g., "content:icon.svg" on node "Org/Project" → "/static/storage/content/Org/Project/icon.svg".
+    /// When the node carries no icon of its own, falls back to a default icon for its
+    /// <see cref="MeshNode.NodeType"/> (<see cref="DefaultIconForNodeType"/>) so every node reads as
+    /// its type rather than a bare letter — Markdown → document, Code → code, Agent → bot, etc.
     /// </summary>
-    public static string? ResolveNodeIcon(MeshNode? node)
+    public static string? ResolveNodeIcon(MeshNode? node) =>
+        node == null ? null
+            // Guarantee a resolved icon for ANY non-null node so a card / avatar NEVER falls back to
+            // the bare-initial (blue) placeholder: own Icon → NodeType default → a neutral box glyph
+            // (covers a typeless node, where DefaultIconForNodeType returns null).
+            : ResolveContentPath(node.Icon, node.Path)
+              ?? DefaultIconForNodeType(node.NodeType)
+              ?? $"/static/NodeTypeIcons/{NeutralNodeIcon}.svg";
+
+    /// <summary>The neutral glyph used when a node has no own icon and its NodeType has no mapping.</summary>
+    private const string NeutralNodeIcon = "box";
+
+    /// <summary>
+    /// A default icon for a node that carries none of its own, keyed by its NodeType (the type node's
+    /// path — the last segment is matched, so both <c>"Markdown"</c> and a fully-qualified type path
+    /// resolve). Returns a <c>/static/NodeTypeIcons/*.svg</c> path; unknown/typeless nodes fall back
+    /// to a neutral box. Mirrors the icons the built-in NodeType definitions declare, so an instance
+    /// reads the same as its type.
+    /// </summary>
+    public static string? DefaultIconForNodeType(string? nodeType)
     {
-        if (node == null || string.IsNullOrEmpty(node.Icon))
+        if (string.IsNullOrWhiteSpace(nodeType))
+            return null;
+        var slash = nodeType.LastIndexOf('/');
+        var name = (slash < 0 ? nodeType : nodeType[(slash + 1)..]).ToLowerInvariant();
+        var icon = name switch
+        {
+            "markdown" or "document" => "document",
+            "code" => "code",
+            "agent" or "harness" => "bot",
+            "languagemodel" or "aisettings" or "command" or "threadcomposer" or "skill" => "sparkle",
+            "modelprovider" => "key",
+            "thread" => "chat",
+            "threadmessage" => "message",
+            "comment" => "comment",
+            "notification" => "bell",
+            "approval" => "checkmark",
+            "group" or "groupmembership" => "people",
+            "user" or "vuser" or "person" => "person",
+            "role" or "accessassignment" or "partitionaccesspolicy" => "shield",
+            "email" => "mail",
+            "space" or "organization" => "organization",
+            "nodetype" => "box",
+            _ => "box", // unknown/custom type → a neutral node glyph (never a bare letter)
+        };
+        return $"/static/NodeTypeIcons/{icon}.svg";
+    }
+
+    /// <summary>
+    /// Resolves a user-entered image path to an absolute URL, interpreting bare
+    /// <c>content:filename.ext</c> and <c>content/filename.ext</c> (both without a leading slash)
+    /// as the node's content collection. Returns the original value for absolute URLs, data URIs,
+    /// and inline SVG — and null for legacy Fluent icon names.
+    /// </summary>
+    public static string? ResolveContentPath(string? value, string? nodePath)
+    {
+        if (string.IsNullOrEmpty(value))
             return null;
 
-        var icon = node.Icon;
-
-        // Resolve content: references to absolute URL
-        if (icon.StartsWith("content:", StringComparison.OrdinalIgnoreCase))
+        // "content:filename.ext" — documented canonical form.
+        if (value.StartsWith("content:", StringComparison.OrdinalIgnoreCase))
         {
-            var fileName = icon["content:".Length..];
-            var nodePath = node.Path;
+            var fileName = value["content:".Length..];
             if (!string.IsNullOrEmpty(fileName) && !string.IsNullOrEmpty(nodePath))
                 return $"/static/storage/content/{nodePath}/{fileName}";
         }
 
-        return GetIconForRendering(icon);
+        // "content/filename.ext" — natural bare form many users type after browsing the collection.
+        if (value.StartsWith("content/", StringComparison.OrdinalIgnoreCase))
+        {
+            var fileName = value["content/".Length..];
+            if (!string.IsNullOrEmpty(fileName) && !string.IsNullOrEmpty(nodePath))
+                return $"/static/storage/content/{nodePath}/{fileName}";
+        }
+
+        return GetIconForRendering(value);
     }
 
     /// <summary>

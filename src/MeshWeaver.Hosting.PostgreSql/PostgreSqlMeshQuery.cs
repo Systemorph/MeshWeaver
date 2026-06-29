@@ -1,3 +1,4 @@
+using System.Reactive.Concurrency;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
@@ -7,6 +8,7 @@ using MeshWeaver.Hosting.Persistence.Query;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Hosting.PostgreSql;
@@ -15,27 +17,123 @@ namespace MeshWeaver.Hosting.PostgreSql;
 /// PostgreSQL native implementation of IMeshQueryProvider.
 /// Translates parsed queries directly into PostgreSQL SQL via PostgreSqlStorageAdapter.
 /// </summary>
-public class PostgreSqlMeshQuery : IMeshQueryProvider
+public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
 {
     private readonly PostgreSqlStorageAdapter _adapter;
-    private readonly IDataChangeNotifier? _changeNotifier;
     private readonly AccessService? _accessService;
     private readonly MeshConfiguration? _meshConfiguration;
     private readonly QueryParser _parser = new();
     private long _version;
 
+    /// <summary>Default debounce interval applied to live-query change notifications before re-running the query.</summary>
     public static readonly TimeSpan DefaultDebounceInterval = TimeSpan.FromMilliseconds(100);
 
+    // Namespaces handled by other (static) partitions — Postgres excludes
+    // them from its Matches() predicate so a `namespace:Agent` query never
+    // round-trips to SQL to look for built-in agents. Populated from the
+    // partition registry at DI registration time.
+    private readonly HashSet<string> _excludedNamespaces;
+
+    // Optional vector-search pipeline: when present AND a query has bare-text
+    // tokens (parsed.TextSearch is non-empty), QueryAsync routes through
+    // adapter.VectorSearchAsync instead of GenerateTextSearchClause's ILIKE
+    // fallback. Same column the writer populates via GenerateEmbeddingAsync —
+    // closed loop. When null, ILIKE substring stays in effect.
+    private readonly IEmbeddingProvider? _embeddingProvider;
+
+    // 🚨 Every async query leaf runs INSIDE this pool — never a bare
+    // Observable.FromAsync. A bare FromAsync runs the function's synchronous
+    // prologue on the SUBSCRIBING thread (the grain/hub ActionBlock when a
+    // routing query subscribes mid-handler) and applies no bound; under a
+    // blocking subscriber stacked beneath a CombineLatest provider fan-out it
+    // wedges — the "snapshot query hangs" failure that the now-deleted
+    // initial-Full watchdog was a band-aid over. pool.Invoke runs the leaf COLD
+    // (work on Subscribe, exactly like the FromAsync it replaces) inside the
+    // pool — offloaded to the ThreadPool with ConfigureAwait(false) on every
+    // await and the slot released on complete/error/unsubscribe — so the leaf
+    // never depends on the subscriber's thread to progress. (Not pool.Run: that
+    // is eager + ReplaySubject-cached, which would run the query before Subscribe
+    // and break the cold-observable / RequireSubscribe contract the live-query
+    // re-run relies on.) We use the shared storage-read pool (FileSystem cap =
+    // ProcessorCount, matching the pedestrian StorageAdapterMeshQueryProvider)
+    // — NOT the cap-1 pg:{adapter} write pool, which would serialize every
+    // read; the adapter's own per-adapter READ pool (pg-read:{adapter}) bounds
+    // the live connections below the connection-pool size.
+    // See Doc/Architecture/ControlledIoPooling.md + AsynchronousCalls.md.
+    private readonly IIoPool _ioPool;
+
+    /// <summary>
+    /// Initializes the PostgreSQL native query provider.
+    /// </summary>
+    /// <param name="adapter">The storage adapter that translates parsed queries into SQL.</param>
+    /// <param name="accessService">Optional access service used to scope results to the calling user.</param>
+    /// <param name="meshConfiguration">Optional mesh configuration (node-type permissions, etc.).</param>
+    /// <param name="excludedNamespaces">Namespaces owned by other (static) partitions; queries scoped only to these short-circuit out of SQL.</param>
+    /// <param name="embeddingProvider">Optional embedding provider that routes bare-text queries through vector search; falls back to ILIKE when absent.</param>
+    /// <param name="ioPoolRegistry">Optional I/O pool registry; the provider runs every async query leaf on the shared storage-read pool.</param>
     public PostgreSqlMeshQuery(
         PostgreSqlStorageAdapter adapter,
-        IDataChangeNotifier? changeNotifier = null,
         AccessService? accessService = null,
-        MeshConfiguration? meshConfiguration = null)
+        MeshConfiguration? meshConfiguration = null,
+        IEnumerable<string>? excludedNamespaces = null,
+        IEmbeddingProvider? embeddingProvider = null,
+        IoPoolRegistry? ioPoolRegistry = null)
     {
         _adapter = adapter;
-        _changeNotifier = changeNotifier;
         _accessService = accessService;
         _meshConfiguration = meshConfiguration;
+        _excludedNamespaces = (excludedNamespaces ?? Enumerable.Empty<string>())
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        _embeddingProvider = embeddingProvider;
+        _ioPool = ioPoolRegistry?.Get(IoPoolNames.FileSystem) ?? IoPool.Unbounded;
+    }
+
+    /// <inheritdoc/>
+    public bool Matches(IReadOnlyList<string> queryNamespaces)
+    {
+        for (var i = 0; i < queryNamespaces.Count; i++)
+            if (!_excludedNamespaces.Contains(queryNamespaces[i]))
+                return true;
+        return false;
+    }
+
+    /// <summary>
+    /// True when every namespace the request targets is owned by a static
+    /// partition (Agent, Model, Role, …) — Postgres has nothing to contribute,
+    /// so QueryAsync should yield break instead of issuing SQL. Unscoped
+    /// requests (no namespace anywhere) return false: we still need to fan out
+    /// to the writable mesh.
+    /// </summary>
+    private bool OnlyTargetsExcludedNamespaces(MeshQueryRequest request)
+    {
+        if (request.Queries is { Count: > 0 } queries)
+        {
+            // Multi-query union: skip only when EVERY branch is excluded-only.
+            // Any single branch that hits writable storage forces the SQL.
+            foreach (var q in queries)
+                if (!QueryIsExcludedOnly(q)) return false;
+            return true;
+        }
+        return QueryIsExcludedOnly(request.Query);
+    }
+
+    // namespaces a single query targets = ExtractNamespaces + first segment of
+    // Path. Mirrors MeshQuery.MergeQueryNamespaces (internal to Hosting). Returns
+    // true when at least one namespace candidate exists and every one is static.
+    private bool QueryIsExcludedOnly(string? query)
+    {
+        if (string.IsNullOrEmpty(query)) return false;
+        var parsed = _parser.Parse(query);
+        var namespaces = parsed.ExtractNamespaces();
+        var firstSegment = string.IsNullOrEmpty(parsed.Path) ? null : parsed.Path.Split('/', 2)[0];
+        if (namespaces.Count == 0 && string.IsNullOrEmpty(firstSegment))
+            return false;
+        for (var i = 0; i < namespaces.Count; i++)
+            if (!_excludedNamespaces.Contains(namespaces[i]))
+                return false;
+        if (!string.IsNullOrEmpty(firstSegment) && !_excludedNamespaces.Contains(firstSegment))
+            return false;
+        return true;
     }
 
     /// <summary>
@@ -61,17 +159,129 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider
         return string.IsNullOrEmpty(userId) ? WellKnownUsers.Anonymous : userId;
     }
 
-    public async IAsyncEnumerable<object> QueryAsync(
+    /// <inheritdoc/>
+    /// <remarks>
+    /// Reactive vector search — the embedding round-trip plus the HNSW SQL pump
+    /// run INSIDE the IIoPool (one snapshot emission), never on the subscriber's
+    /// scheduler. Replaces the former <c>SearchAsync</c> async-enumerable surface.
+    /// </remarks>
+    public IObservable<IReadOnlyCollection<MeshNode>> Search(
+        string queryText,
+        JsonSerializerOptions options,
+        string? namespacePath = null,
+        string? userId = null,
+        int topK = 10)
+    {
+        if (_embeddingProvider is null || string.IsNullOrWhiteSpace(queryText))
+            return Observable.Return((IReadOnlyCollection<MeshNode>)Array.Empty<MeshNode>());
+
+        return _ioPool.Invoke(async ct =>
+        {
+            var vec = await _embeddingProvider.GenerateEmbeddingAsync(queryText).ConfigureAwait(false);
+            if (vec is null)
+                return (IReadOnlyCollection<MeshNode>)Array.Empty<MeshNode>();
+
+            var results = new List<MeshNode>();
+            await foreach (var node in _adapter.VectorSearchAsync(
+                vec, options, filter: null, userId, namespacePath, topK, lexicalTerm: queryText, ct: ct).ConfigureAwait(false))
+                results.Add(node);
+            return (IReadOnlyCollection<MeshNode>)results;
+        });
+    }
+
+    /// <summary>
+    /// One-shot reactive snapshot of the query results — the public replacement
+    /// for the former <c>public QueryAsync</c> async-enumerable surface. The
+    /// whole pump (parse → SQL → reader enumeration) runs INSIDE the IIoPool;
+    /// the caller gets a single list emission and never lends the pump its own
+    /// scheduler. Live-delta consumers use <see cref="Query{T}"/> instead.
+    /// </summary>
+    public IObservable<IReadOnlyList<object>> QueryNodes(
+        MeshQueryRequest request, JsonSerializerOptions options)
+        => _ioPool.Invoke(async ct =>
+        {
+            var results = new List<object>();
+            await foreach (var item in QueryAsync(request, options, ct).ConfigureAwait(false))
+                results.Add(item);
+            return (IReadOnlyList<object>)results;
+        });
+
+    /// <summary>
+    /// Persistence-layer async boundary: the single async-enumerable pump over
+    /// the adapter. PRIVATE by design — it may only ever be enumerated from
+    /// inside an <see cref="IIoPool"/> bridge (<see cref="QueryNodes"/> /
+    /// <see cref="CollectQueryResultsAsync{T}"/>), never handed to a caller
+    /// whose <c>await foreach</c> would pump it on a hub/grain scheduler.
+    /// </summary>
+    private async IAsyncEnumerable<object> QueryAsync(
         MeshQueryRequest request,
         JsonSerializerOptions options,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
+        // Self-filter — MeshQuery's aggregator deliberately doesn't pre-filter
+        // by Matches() ("let each provider own the 'is this mine?' decision in
+        // one place" — MeshQuery.SelectMatchingProviders). So when a query
+        // targets only excluded (static-owned) namespaces, we'd otherwise
+        // round-trip to Postgres for guaranteed-empty SELECTs.
+        if (_excludedNamespaces.Count > 0 && OnlyTargetsExcludedNamespaces(request))
+            yield break;
+
+        // Multi-query union: push UNION down to PostgreSQL via the adapter so
+        // the database does the dedup-by-path in a single round-trip. The
+        // first query's sort/limit/skip apply to the unioned result set;
+        // additional queries contribute membership only. See
+        // PostgreSqlStorageAdapter.QueryNodesAsync(IReadOnlyList&lt;ParsedQuery&gt;,...).
+        if (request.Queries is { Count: > 1 })
+        {
+            await foreach (var item in QueryNodesUnionAsync(request, options, ct).ConfigureAwait(false))
+                yield return item;
+            yield break;
+        }
+
         var parsedQuery = _parser.Parse(request.Query);
 
         if (request.Limit.HasValue)
             parsedQuery = parsedQuery with { Limit = request.Limit };
 
         parsedQuery = StripTypeFilter(parsedQuery);
+
+        // Vector-search intercept: when the query has bare-text tokens AND we
+        // have an embedding provider, route the snapshot through HNSW cosine
+        // similarity instead of the GenerateTextSearchClause ILIKE fallback.
+        // Same `embedding` column the writer populates at WriteAsync time —
+        // semantic search reads what semantic writes stored.
+        //
+        // Conditions on entering this path:
+        //   - parsed.TextSearch is non-empty (free-floating words in the query)
+        //   - _embeddingProvider is registered (NullEmbeddingProvider returns
+        //     null vectors and falls through to ILIKE)
+        //
+        // The structured-filter portion (nodeType:, namespace:, scope:, etc.)
+        // is preserved via the `filter` parameter to VectorSearchAsync, so a
+        // query like `laptop nodeType:Story namespace:ACME scope:descendants`
+        // gets cosine-ranked among Story rows in ACME's subtree.
+        if (_embeddingProvider != null && !string.IsNullOrWhiteSpace(parsedQuery.TextSearch))
+        {
+            var vec = await _embeddingProvider.GenerateEmbeddingAsync(parsedQuery.TextSearch).ConfigureAwait(false);
+            if (vec != null)
+            {
+                var vectorUserId = GetEffectiveUserId(request);
+                if (string.IsNullOrEmpty(vectorUserId) || vectorUserId == WellKnownUsers.System)
+                    vectorUserId = null;
+                var vectorNamespace = parsedQuery.Path ?? request.DefaultPath;
+                var topK = parsedQuery.Limit ?? request.Limit ?? 50;
+                // Strip the text part from the filter so VectorSearchAsync's
+                // WHERE clause has the structured predicates only.
+                var structuralFilter = parsedQuery with { TextSearch = null };
+                await foreach (var node in _adapter.VectorSearchAsync(
+                    vec, options, structuralFilter, vectorUserId, vectorNamespace, topK, lexicalTerm: parsedQuery.TextSearch, ct: ct).ConfigureAwait(false))
+                    yield return node;
+                yield break;
+            }
+            // GenerateEmbeddingAsync returned null (NullEmbeddingProvider, or
+            // a transient failure) — fall through to ILIKE so the user still
+            // gets some result instead of an empty page.
+        }
 
         var effectivePath = parsedQuery.Path;
         var effectiveScope = parsedQuery.Scope;
@@ -102,10 +312,10 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider
         {
             var buffered = new List<(MeshNode Node, double Score)>();
             var userId = GetEffectiveUserId(request);
-            await foreach (var node in _adapter.QueryNodesAsync(parsedQuery, options, userId, activityUserId: activityUserId, excludedNodeTypes: excludedNodeTypes, ct: ct))
+            await foreach (var node in _adapter.QueryNodesAsync(parsedQuery, options, userId, activityUserId: activityUserId, excludedNodeTypes: excludedNodeTypes, ct: ct).ConfigureAwait(false))
             {
                 // Instance-level exclusion still checked in memory (node.ExcludeFromContext)
-                if (context != null && node.ExcludeFromContext?.Contains(context) == true)
+                if (node.IsExcludedFromContext(context))
                     continue;
                 var boost = PathProximity.ComputeBoost(request.ContextPath, node.Path);
                 buffered.Add((node, boost));
@@ -130,10 +340,10 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider
         var countOrig = 0;
 
         var effectiveUserId = GetEffectiveUserId(request);
-        await foreach (var node in _adapter.QueryNodesAsync(parsedQuery, options, effectiveUserId, activityUserId: activityUserId, excludedNodeTypes: excludedNodeTypes, ct: ct))
+        await foreach (var node in _adapter.QueryNodesAsync(parsedQuery, options, effectiveUserId, activityUserId: activityUserId, excludedNodeTypes: excludedNodeTypes, ct: ct).ConfigureAwait(false))
         {
             // Instance-level exclusion still checked in memory (node.ExcludeFromContext)
-            if (context != null && node.ExcludeFromContext?.Contains(context) == true)
+            if (node.IsExcludedFromContext(context))
                 continue;
 
             if (skipOrig > 0)
@@ -152,24 +362,104 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider
         }
     }
 
-    public IAsyncEnumerable<QuerySuggestion> AutocompleteAsync(
-        string basePath,
-        string prefix,
+    /// <summary>
+    /// Multi-query union path: parses each query in <see cref="MeshQueryRequest.Queries"/>,
+    /// applies the same path/scope/limit fallbacks as the single-query branch,
+    /// then hands the parsed list to the adapter's UNION-emitting overload.
+    /// First query's sort/limit/skip apply to the unioned result set.
+    /// </summary>
+    private async IAsyncEnumerable<object> QueryNodesUnionAsync(
+        MeshQueryRequest request,
         JsonSerializerOptions options,
-        int limit = 10,
-        CancellationToken ct = default)
-        => AutocompleteAsync(basePath, prefix, options, AutocompleteMode.PathFirst, limit, null, null, ct);
+        [EnumeratorCancellation] CancellationToken ct)
+    {
+        var queries = request.Queries!;
+        var parsedList = new List<ParsedQuery>(queries.Count);
+        ParsedQuery? firstParsed = null;
+        for (var qi = 0; qi < queries.Count; qi++)
+        {
+            // No per-query Limit injection — applying request.Limit to query #0
+            // only made the union iteration-order dependent (query #0 hits its
+            // limit before yielding its most relevant rows; queries #1+ then
+            // contribute everything past it). Limit is enforced post-union
+            // below via MinLimit so a request-level cap can't be circumvented
+            // and a query-string `limit:N` still wins when smaller.
+            var pq = _parser.Parse(queries[qi]);
+            pq = StripTypeFilter(pq);
 
-    public async IAsyncEnumerable<QuerySuggestion> AutocompleteAsync(
+            var effectivePath = pq.Path;
+            var effectiveScope = pq.Scope;
+            if (string.IsNullOrEmpty(effectivePath))
+            {
+                if (!string.IsNullOrEmpty(request.DefaultPath))
+                    effectivePath = request.DefaultPath;
+                if (pq.Scope == QueryScope.Exact)
+                    effectiveScope = QueryScope.Children;
+            }
+            pq = pq with { Path = effectivePath, Scope = effectiveScope };
+            if (qi == 0) firstParsed = pq;
+            parsedList.Add(pq);
+        }
+
+        var context = request.Context ?? firstParsed!.Context;
+        var excludedNodeTypes = context != null
+            ? _meshConfiguration?.GetExcludedNodeTypes(context)
+            : null;
+        var activityUserId = firstParsed!.Source == QuerySource.Accessed
+            ? GetEffectiveUserId(request)
+            : null;
+
+        var skip = request.Skip ?? 0;
+        var count = 0;
+        // Effective limit = min of request-level cap and the FIRST query's
+        // explicit `limit:N`. Smaller wins so a request-level cap can't be
+        // bypassed by a higher in-query limit, and an explicit in-query limit
+        // still applies when no request cap is set.
+        var effectiveLimit = MinLimit(request.Limit, firstParsed.Limit);
+        var effectiveUserId = GetEffectiveUserId(request);
+        await foreach (var node in _adapter.QueryNodesAsync(
+            parsedList, options, effectiveUserId, activityUserId: activityUserId,
+            excludedNodeTypes: excludedNodeTypes, ct: ct).ConfigureAwait(false))
+        {
+            if (node.IsExcludedFromContext(context))
+                continue;
+            if (skip > 0) { skip--; continue; }
+
+            yield return firstParsed.Select != null
+                ? ParsedQuery.ProjectToSelect(node, firstParsed.Select)
+                : node;
+            count++;
+            if (effectiveLimit.HasValue && count >= effectiveLimit.Value)
+                yield break;
+        }
+    }
+
+    private static int? MinLimit(int? a, int? b) =>
+        (a, b) switch
+        {
+            (null, null) => null,
+            (null, var v) => v,
+            (var v, null) => v,
+            ({ } x, { } y) => Math.Min(x, y)
+        };
+
+    /// <summary>
+    /// Native reactive autocomplete. The PG execute-query (<c>_adapter.QueryNodesAsync</c> — the
+    /// <c>await foreach</c> over the npgsql reader) is the I/O leaf: it runs inside
+    /// <see cref="IIoPool.Invoke{T}"/> so the calling hub's action block is never blocked and no
+    /// scheduler is captured. No <c>Task.Run</c> bridge (that was the deadlock), no
+    /// async-enumerable on the public surface. Emits one snapshot then completes.
+    /// </summary>
+    public IObservable<IReadOnlyCollection<QueryResult>> Autocomplete(
         string basePath,
         string prefix,
         JsonSerializerOptions options,
-        AutocompleteMode mode,
+        AutocompleteMode mode = AutocompleteMode.RelevanceFirst,
         int limit = 10,
         string? contextPath = null,
-        string? context = null,
-        [EnumeratorCancellation] CancellationToken ct = default)
+        string? context = null)
     {
+        var providerName = ((IMeshQueryProvider)this).Name;
         var normalizedPrefix = (prefix ?? "").ToLowerInvariant();
 
         // Use ILIKE-based filter instead of plainto_tsquery for substring prefix matching.
@@ -191,62 +481,60 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider
             Path: basePath,
             Scope: QueryScope.Descendants);
 
-        var suggestions = new List<QuerySuggestion>();
-
         var acUserId = _accessService?.Context?.ObjectId;
         var effectiveAutocompleteUserId = string.IsNullOrEmpty(acUserId) ? WellKnownUsers.Anonymous : acUserId;
 
-        await foreach (var node in _adapter.QueryNodesAsync(query, options, effectiveAutocompleteUserId, ct: ct))
-        {
-            // Skip node types excluded from autocomplete (configured via AddAutocompleteExcludedTypes)
-            if (_meshConfiguration?.AutocompleteExcludedNodeTypes.Contains(node.NodeType ?? "") == true)
-                continue;
-
-            // Context-based exclusion for autocomplete
-            if (context != null)
+        return _ioPool.Invoke(async cancel =>
             {
-                if (_meshConfiguration?.IsExcludedFromContext(node.NodeType, context) == true)
-                    continue;
-                if (node.ExcludeFromContext?.Contains(context) == true)
-                    continue;
-            }
+                var suggestions = new List<QuerySuggestion>();
+                await foreach (var node in _adapter.QueryNodesAsync(query, options, effectiveAutocompleteUserId, ct: cancel).ConfigureAwait(false))
+                {
+                    // Skip node types excluded from autocomplete (AddAutocompleteExcludedTypes)
+                    if (_meshConfiguration?.AutocompleteExcludedNodeTypes.Contains(node.NodeType ?? "") == true)
+                        continue;
+                    if (context != null)
+                    {
+                        if (_meshConfiguration?.IsExcludedFromContext(node.NodeType, context) == true) continue;
+                        if (node.IsExcludedFromContext(context)) continue;
+                    }
 
-            var name = node.Name ?? node.Id ?? node.Path ?? "";
-            double score = 0;
+                    var name = node.Name ?? node.Id ?? node.Path ?? "";
+                    double score = 0;
+                    if (name.StartsWith(normalizedPrefix, StringComparison.OrdinalIgnoreCase))
+                        score = 100 - (name.Length - normalizedPrefix.Length);
+                    else if (name.Contains(normalizedPrefix, StringComparison.OrdinalIgnoreCase))
+                        score = 50;
+                    else if ((node.Path ?? "").Contains(normalizedPrefix, StringComparison.OrdinalIgnoreCase))
+                        score = 30;
 
-            if (name.StartsWith(normalizedPrefix, StringComparison.OrdinalIgnoreCase))
-                score = 100 - (name.Length - normalizedPrefix.Length);
-            else if (name.Contains(normalizedPrefix, StringComparison.OrdinalIgnoreCase))
-                score = 50;
-            else if ((node.Path ?? "").Contains(normalizedPrefix, StringComparison.OrdinalIgnoreCase))
-                score = 30;
+                    score += PathProximity.ComputeBoost(contextPath, node.Path);
 
-            score += PathProximity.ComputeBoost(contextPath, node.Path);
+                    if (score > 0 || string.IsNullOrEmpty(normalizedPrefix))
+                        suggestions.Add(new QuerySuggestion(node.Path ?? "", name, node.NodeType, score, node.Icon));
+                }
 
-            if (score > 0 || string.IsNullOrEmpty(normalizedPrefix))
-                suggestions.Add(new QuerySuggestion(node.Path ?? "", name, node.NodeType, score, node.Icon));
-        }
+                IEnumerable<QuerySuggestion> ordered = mode switch
+                {
+                    AutocompleteMode.RelevanceFirst => suggestions
+                        .OrderByDescending(s => s.Score).ThenBy(s => s.Path.Length).ThenBy(s => s.Name),
+                    _ => suggestions
+                        .OrderBy(s => s.Path.Length).ThenByDescending(s => s.Score).ThenBy(s => s.Name)
+                };
 
-        IEnumerable<QuerySuggestion> ordered = mode switch
-        {
-            AutocompleteMode.RelevanceFirst => suggestions
-                .OrderByDescending(s => s.Score)
-                .ThenBy(s => s.Path.Length)
-                .ThenBy(s => s.Name),
-            _ => suggestions
-                .OrderBy(s => s.Path.Length)
-                .ThenByDescending(s => s.Score)
-                .ThenBy(s => s.Name)
-        };
-
-        foreach (var suggestion in ordered.Take(limit))
-        {
-            yield return suggestion;
-        }
+                return (IReadOnlyCollection<QueryResult>)ordered.Take(limit).Select(s => new QueryResult
+                {
+                    Path = s.Path,
+                    Name = s.Name,
+                    NodeType = s.NodeType,
+                    Icon = s.Icon,
+                    Score = s.Score,
+                    ProviderName = providerName,
+                }).ToList();
+            });
     }
 
     /// <inheritdoc />
-    public async Task<T?> SelectAsync<T>(string path, string property, JsonSerializerOptions options, CancellationToken ct = default)
+    public IObservable<T?> Select<T>(string path, string property, JsonSerializerOptions options)
     {
         var query = new ParsedQuery(
             Filter: new QueryComparison(new QueryCondition("path", QueryOperator.Equal, [path])),
@@ -257,127 +545,242 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider
         var acUserId = _accessService?.Context?.ObjectId;
         var effectiveSelectUserId = string.IsNullOrEmpty(acUserId) ? WellKnownUsers.Anonymous : acUserId;
 
-        await foreach (var node in _adapter.QueryNodesAsync(query, options, effectiveSelectUserId, ct: ct))
-        {
-            var prop = typeof(MeshNode).GetProperty(property);
-            if (prop == null)
+        // PG execute-query leaf run INSIDE the IIoPool — never a bare
+        // Observable.FromAsync (deadlocks under a blocking subscriber). Invoke
+        // (cold) preserves the original FromAsync's work-on-Subscribe semantics.
+        return _ioPool.Invoke<T?>(async cancel =>
+            {
+                await foreach (var node in _adapter.QueryNodesAsync(query, options, effectiveSelectUserId, ct: cancel).ConfigureAwait(false))
+                {
+                    if (typeof(MeshNode).GetProperty(property)?.GetValue(node) is T typedValue)
+                        return typedValue;
+                    return default;
+                }
                 return default;
-
-            var value = prop.GetValue(node);
-            if (value is T typedValue)
-                return typedValue;
-
-            return default;
-        }
-
-        return default;
+            });
     }
 
-    public IObservable<QueryResultChange<T>> ObserveQuery<T>(MeshQueryRequest request, JsonSerializerOptions options)
+    /// <inheritdoc />
+    public IObservable<QueryResultChange<T>> Query<T>(MeshQueryRequest request, JsonSerializerOptions options)
     {
-        return Observable.Create<QueryResultChange<T>>(async (observer, ct) =>
+        // Self-filter: when the request only targets static-owned namespaces,
+        // emit an empty Initial and exit — the static-node provider contributes
+        // the real rows. Without this short-circuit we'd set up a change-notifier
+        // subscription and an initial SQL probe for queries Postgres has nothing
+        // to say about. The empty Initial is required because
+        // MergeProviderObservables in MeshQuery gates the merged Initial on
+        // every provider emitting it; returning Observable.Empty would hang
+        // the consumer.
+        if (_excludedNamespaces.Count > 0 && OnlyTargetsExcludedNamespaces(request))
         {
-            var parsedQuery = _parser.Parse(request.Query);
-
-            var effectivePath = parsedQuery.Path;
-            var effectiveScope = parsedQuery.Scope;
-            if (string.IsNullOrEmpty(effectivePath))
+            return Observable.Return(new QueryResultChange<T>
             {
-                effectivePath = request.DefaultPath ?? "";
-                if (parsedQuery.Scope == QueryScope.Exact)
-                    effectiveScope = QueryScope.Children;
+                ChangeType = QueryChangeType.Initial,
+                Items = Array.Empty<T>()
+            });
+        }
+
+        // Use the synchronous Observable.Create overload so no TaskScheduler is captured
+        // at subscribe-time. Observable.Create(async ...) captures the caller's scheduler;
+        // when that caller is an Orleans grain handler the continuation deadlocks against
+        // the grain's single-threaded scheduler.
+        return Observable.Create<QueryResultChange<T>>(observer =>
+        {
+            // Multi-query union: parse EVERY query and OR-join their (basePath, scope)
+            // change-notifier filters. Without this, only query #0's path/scope drives
+            // delta refresh — matches against query #1+ silently never trigger a re-run.
+            // The Initial snapshot itself uses request.Queries via QueryAsync, but the
+            // change-detection layer must observe the union of all branches' shapes.
+            var effectiveQueries = request.EffectiveQueries;
+            var parsedFilters = new List<(string BasePath, QueryScope Scope)>(effectiveQueries.Count);
+            ParsedQuery firstParsed = null!;
+            for (var qi = 0; qi < effectiveQueries.Count; qi++)
+            {
+                var pq = _parser.Parse(effectiveQueries[qi]);
+                var effectivePath = pq.Path;
+                var effectiveScope = pq.Scope;
+                if (string.IsNullOrEmpty(effectivePath))
+                {
+                    effectivePath = request.DefaultPath ?? "";
+                    if (pq.Scope == QueryScope.Exact)
+                        effectiveScope = QueryScope.Children;
+                }
+                var normalizedBasePath = effectivePath?.Trim('/') ?? "";
+                parsedFilters.Add((normalizedBasePath, effectiveScope));
+                if (qi == 0) firstParsed = pq;
             }
-            var normalizedBasePath = effectivePath?.Trim('/') ?? "";
 
             var currentItems = new Dictionary<string, T>(StringComparer.OrdinalIgnoreCase);
+            var disposables = new CompositeDisposable();
 
-            try
-            {
-                var initialItems = new List<T>();
-                await foreach (var item in QueryAsync(request, options, ct))
+            // The DB round-trip runs INSIDE the IIoPool: offloaded to the
+            // ThreadPool with ConfigureAwait(false) throughout, so no hub/Orleans
+            // scheduler is captured and a blocking subscriber beneath the
+            // CombineLatest provider fan-out can't wedge it. Invoke (cold) keeps
+            // the original FromAsync's work-on-Subscribe semantics — RunQuery is
+            // re-invoked per change-batch and each subscribe is one fresh query,
+            // never an eager replay. CollectQueryResultsAsync is the sole async
+            // boundary (persistence layer).
+            IObservable<List<(string? Path, T Item)>> RunQuery()
+                => _ioPool.Invoke(ct => CollectQueryResultsAsync<T>(request, options, ct));
+
+            // Race-fix (mirrors StorageAdapterMeshQueryProvider): subscribe to
+            // changeNotifier BEFORE running the initial query so that any
+            // pg_notify-driven NotifyChange fired during the initial query's
+            // I/O window is captured in a backlog. Without this, events fired
+            // between RunQuery's persistence read and the live-subscription
+            // setup are dropped — DataChangeNotifier is a plain Subject<> with
+            // no buffering. Symptom: synced query consumers (e.g.
+            // EffectivePermissionPostgresTest.RuntimeCreateNode_AccessAssignment_PgBacked_GrantsPermission)
+            // never see writes that complete during the first Initial query.
+            //
+            // Approach: accumulate early notifications under a lock until the
+            // initial query completes. Inside the initialResults callback:
+            //   1) Set up the LIVE Buffer(100ms) pipeline first (captures live events).
+            //   2) Snapshot+clear the backlog under lock; set initialDone=true.
+            //   3) Dispose the early subscription (live carries everything now).
+            //   4) Emit Initial.
+            //   5) Drain the backlog as one synthetic batch by re-querying and
+            //      diffing against the just-populated currentItems via ProcessBatch.
+            // Events fired between live-set-up (step 1) and backlog-swap (step 2)
+            // may be double-captured — ProcessBatch is idempotent against
+            // currentItems, so duplicate processing is wasted CPU but correct.
+            var earlyBacklog = new List<DataChangeNotification>();
+            var earlyLock = new object();
+            var initialDone = false;
+
+            var earlySubscription = _adapter.Changes
+                .Where(n => parsedFilters.Any(f =>
+                    PathMatcher.ShouldNotify(n.Path, f.BasePath, f.Scope)))
+                .Subscribe(n =>
                 {
-                    if (item is T typedItem)
+                    lock (earlyLock)
                     {
-                        initialItems.Add(typedItem);
-                        var itemPath = (item as MeshNode)?.Path;
-                        if (!string.IsNullOrEmpty(itemPath))
-                            currentItems[itemPath] = typedItem;
-                    }
-                }
-
-                observer.OnNext(new QueryResultChange<T>
-                {
-                    ChangeType = QueryChangeType.Initial,
-                    Items = initialItems,
-                    Query = parsedQuery,
-                    Version = Interlocked.Increment(ref _version),
-                    Timestamp = DateTimeOffset.UtcNow
-                });
-            }
-            catch (Exception ex)
-            {
-                observer.OnError(ex);
-                return Disposable.Empty;
-            }
-
-            if (_changeNotifier == null)
-            {
-                observer.OnCompleted();
-                return Disposable.Empty;
-            }
-
-            var changeBuffer = new Subject<DataChangeNotification>();
-            var subscription = new CompositeDisposable();
-
-            var notifierSubscription = _changeNotifier
-                .Where(n => PathMatcher.ShouldNotify(n.Path, normalizedBasePath, effectiveScope))
-                .Subscribe(changeBuffer);
-            subscription.Add(notifierSubscription);
-
-            var debounceSubscription = changeBuffer
-                .Buffer(DefaultDebounceInterval)
-                .Where(batch => batch.Count > 0)
-                .Subscribe(async batch =>
-                {
-                    try
-                    {
-                        await ProcessChangeBatchAsync(batch, request, options, parsedQuery, currentItems, observer, ct);
-                    }
-                    catch (Exception ex)
-                    {
-                        observer.OnError(ex);
+                        if (!initialDone)
+                            earlyBacklog.Add(n);
                     }
                 });
-            subscription.Add(debounceSubscription);
-            subscription.Add(changeBuffer);
+            disposables.Add(earlySubscription);
 
-            return subscription;
+            disposables.Add(RunQuery().Subscribe(
+                initialResults =>
+                {
+                    var initialItems = new List<T>();
+                    foreach (var (path, item) in initialResults)
+                    {
+                        initialItems.Add(item);
+                        if (!string.IsNullOrEmpty(path))
+                            currentItems[path] = item;
+                    }
+
+                    DataChangeNotification[] backlog;
+                    // 1) Set up live subscription first — starts buffering immediately.
+                    var changeBuffer = new Subject<DataChangeNotification>();
+                    disposables.Add(changeBuffer);
+                    disposables.Add(
+                        _adapter.Changes
+                            .Where(n => parsedFilters.Any(f =>
+                                PathMatcher.ShouldNotify(n.Path, f.BasePath, f.Scope)))
+                            .Subscribe(changeBuffer));
+                    // 🚨 Strict unit-of-work + zero debounce: every change
+                    // triggers its own RunQuery, serialised via Concat so the
+                    // shared currentItems dictionary is never raced. Buffer
+                    // was a debouncer that batched changes for 100 ms before
+                    // re-querying; that 100 ms was a race window — a
+                    // subscriber attaching after a CreateNode but before the
+                    // debounce flush saw the stale Replay(1) snapshot
+                    // (RuntimeCreateNode_AccessAssignment-style flakes).
+                    // Trading throughput (one RunQuery per change vs batched)
+                    // for correctness: every subscriber sees every change as
+                    // soon as the persistence layer has emitted it.
+                    disposables.Add(
+                        changeBuffer
+                            .Select(n => RunQuery()
+                                .Select(newResults => (batch: (IList<DataChangeNotification>)new[] { n }, newResults)))
+                            .Concat()
+                            .Subscribe(
+                                t => ProcessBatch(t.batch, t.newResults, currentItems, firstParsed, observer),
+                                ex => observer.OnError(ex)));
+
+                    // 2) Snapshot + clear early backlog under lock; gate further early-capture.
+                    lock (earlyLock)
+                    {
+                        backlog = earlyBacklog.ToArray();
+                        earlyBacklog.Clear();
+                        initialDone = true;
+                    }
+
+                    // 3) Early subscription is now redundant — live pipeline carries
+                    //    all subsequent events. Dispose to free the upstream sub.
+                    earlySubscription.Dispose();
+
+                    observer.OnNext(new QueryResultChange<T>
+                    {
+                        ChangeType = QueryChangeType.Initial,
+                        Items = initialItems,
+                        Scores = ComputeRowScores<T>(initialItems, firstParsed, request),
+                        Query = firstParsed,
+                        Version = Interlocked.Increment(ref _version),
+                        Timestamp = DateTimeOffset.UtcNow
+                    });
+
+                    // Drain the early backlog as one immediate batch — these events
+                    // fired DURING the initial query window, so we re-query and
+                    // apply diffs against the just-populated currentItems.
+                    //
+                    // 🚨 Push through changeBuffer instead of running a parallel
+                    // RunQuery(). The live pipeline above uses .Concat() to
+                    // serialize batches; sending the backlog through the same
+                    // subject queues it BEHIND any live batch already in flight,
+                    // preserving strict unit-of-work ordering for currentItems
+                    // mutations. Posting on a thread-pool tick avoids stack
+                    // recursion through the live Subscribe.
+                    if (backlog.Length > 0)
+                    {
+                        // Drain on a thread-pool tick to avoid stack recursion through
+                        // the live Subscribe (see above). This tick races subscription
+                        // teardown: an unsubscribe disposes the CompositeDisposable —
+                        // and changeBuffer with it — so a late OnNext would throw
+                        // ObjectDisposedException on a pool thread with no handler,
+                        // crashing the host. Register the schedule so a not-yet-run
+                        // tick is cancelled on dispose, skip per-item once disposed,
+                        // and swallow the unavoidable check-then-dispose race.
+                        disposables.Add(Scheduler.Default.Schedule(() =>
+                        {
+                            try
+                            {
+                                foreach (var n in backlog)
+                                {
+                                    if (disposables.IsDisposed)
+                                        return;
+                                    changeBuffer.OnNext(n);
+                                }
+                            }
+                            catch (ObjectDisposedException)
+                            {
+                                // Subscription torn down mid-drain; the consumer is
+                                // gone, so the remaining backlog has nowhere to go.
+                            }
+                        }));
+                    }
+                },
+                ex => observer.OnError(ex)));
+
+            return disposables;
         });
     }
 
-    private async Task ProcessChangeBatchAsync<T>(
+    private void ProcessBatch<T>(
         IList<DataChangeNotification> batch,
-        MeshQueryRequest request,
-        JsonSerializerOptions options,
-        ParsedQuery parsedQuery,
+        List<(string? Path, T Item)> newResults,
         Dictionary<string, T> currentItems,
-        IObserver<QueryResultChange<T>> observer,
-        CancellationToken ct)
+        ParsedQuery parsedQuery,
+        IObserver<QueryResultChange<T>> observer)
     {
-        var changesByPath = batch
-            .GroupBy(c => c.Path, StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(g => g.Key, g => g.Last(), StringComparer.OrdinalIgnoreCase);
-
         var newItems = new Dictionary<string, T>(StringComparer.OrdinalIgnoreCase);
-        await foreach (var item in QueryAsync(request, options, ct))
-        {
-            if (item is T typedItem)
-            {
-                var itemPath = (item as MeshNode)?.Path;
-                if (!string.IsNullOrEmpty(itemPath))
-                    newItems[itemPath] = typedItem;
-            }
-        }
+        foreach (var (path, item) in newResults)
+            if (!string.IsNullOrEmpty(path))
+                newItems[path] = item;
 
         var addedItems = new List<T>();
         var updatedItems = new List<T>();
@@ -386,16 +789,10 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider
         foreach (var (path, item) in newItems)
         {
             if (currentItems.ContainsKey(path))
-            {
-                if (changesByPath.ContainsKey(path))
-                    updatedItems.Add(item);
-            }
+                updatedItems.Add(item);
             else
-            {
                 addedItems.Add(item);
-            }
         }
-
         foreach (var (path, item) in currentItems)
         {
             if (!newItems.ContainsKey(path))
@@ -403,44 +800,77 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider
         }
 
         currentItems.Clear();
-        foreach (var (path, item) in newItems)
-            currentItems[path] = item;
+        foreach (var (p, v) in newItems) currentItems[p] = v;
 
-        if (addedItems.Count > 0)
+        void Emit(QueryChangeType type, IReadOnlyList<T> items)
         {
+            if (items.Count == 0) return;
+            // Live-delta emissions don't carry scores: the aggregator's
+            // delta-path doesn't re-sort, it just merges. Initial scoring
+            // already established the relative order — subsequent Added/
+            // Updated/Removed flow through unchanged so consumers see the
+            // event shape, not a fresh ranking. (If a re-rank is needed
+            // the consumer can re-subscribe to get a new Initial.)
             observer.OnNext(new QueryResultChange<T>
             {
-                ChangeType = QueryChangeType.Added,
-                Items = addedItems,
+                ChangeType = type,
+                Items = items,
                 Query = parsedQuery,
                 Version = Interlocked.Increment(ref _version),
                 Timestamp = DateTimeOffset.UtcNow
             });
         }
+        Emit(QueryChangeType.Added, addedItems);
+        Emit(QueryChangeType.Updated, updatedItems);
+        Emit(QueryChangeType.Removed, removedItems);
+    }
 
-        if (updatedItems.Count > 0)
+    /// <summary>
+    /// Per-item scoring for Query initial emissions. Composes the same
+    /// pieces <see cref="Autocomplete"/> already uses — name-prefix bonus
+    /// (100, scaled by length), name-substring bonus (50), path-substring
+    /// bonus (30), <see cref="PathProximity.ComputeBoost"/> (max 40, decays
+    /// with namespace distance from the requesting hub) — so cross-provider
+    /// sort in <c>MeshQuery.ClipMergedInitial</c> ranks a PG name-prefix hit
+    /// above a <c>StaticNodeQueryProvider</c> filter-only hit on the same
+    /// query.
+    ///
+    /// <para>Returns <see langword="null"/> when there's no useful signal
+    /// (non-MeshNode T, no text-search term AND no context path) so the
+    /// aggregator falls back to insertion order rather than amplifying a
+    /// constant 0.</para>
+    /// </summary>
+    private static IReadOnlyList<double>? ComputeRowScores<T>(
+        IReadOnlyList<T> items, ParsedQuery parsed, MeshQueryRequest request)
+    {
+        if (items.Count == 0) return null;
+        var contextPath = request.Context;
+        var textSearch = parsed.TextSearch;
+        // Bail out when no scoring dimension applies. PathProximity is
+        // contextPath-driven; the text bonuses are textSearch-driven.
+        if (string.IsNullOrEmpty(textSearch) && string.IsNullOrEmpty(contextPath))
+            return null;
+        var lowerSearch = textSearch?.ToLowerInvariant();
+        var scores = new double[items.Count];
+        for (var i = 0; i < items.Count; i++)
         {
-            observer.OnNext(new QueryResultChange<T>
+            if (items[i] is not MeshNode node) { scores[i] = 0; continue; }
+            double s = 0;
+            if (!string.IsNullOrEmpty(lowerSearch))
             {
-                ChangeType = QueryChangeType.Updated,
-                Items = updatedItems,
-                Query = parsedQuery,
-                Version = Interlocked.Increment(ref _version),
-                Timestamp = DateTimeOffset.UtcNow
-            });
+                var name = node.Name ?? node.Id ?? node.Path ?? string.Empty;
+                if (name.StartsWith(lowerSearch, StringComparison.OrdinalIgnoreCase))
+                    s = 100 - (name.Length - lowerSearch.Length);
+                else if (name.Contains(lowerSearch, StringComparison.OrdinalIgnoreCase))
+                    s = 50;
+                else if ((node.Path ?? "").Contains(lowerSearch, StringComparison.OrdinalIgnoreCase))
+                    s = 30;
+            }
+            if (!string.IsNullOrEmpty(contextPath))
+                s += PathProximity.ComputeBoost(contextPath, node.Path);
+            scores[i] = s;
         }
-
-        if (removedItems.Count > 0)
-        {
-            observer.OnNext(new QueryResultChange<T>
-            {
-                ChangeType = QueryChangeType.Removed,
-                Items = removedItems,
-                Query = parsedQuery,
-                Version = Interlocked.Increment(ref _version),
-                Timestamp = DateTimeOffset.UtcNow
-            });
-        }
+        return scores;
     }
 
     /// <summary>
@@ -451,7 +881,7 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider
         if (context == null) return false;
         if (_meshConfiguration?.IsExcludedFromContext(node.NodeType, context) == true)
             return true;
-        if (node.ExcludeFromContext?.Contains(context) == true)
+        if (node.IsExcludedFromContext(context))
             return true;
         return false;
     }
@@ -505,5 +935,22 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider
             1 => remaining[0],
             _ => new QueryOr(remaining!)
         };
+    }
+
+    /// <summary>
+    /// Persistence-layer async boundary: collects all results from <see cref="QueryAsync"/>
+    /// into a list. Called exclusively from inside <see cref="IIoPool.Invoke{T}"/>
+    /// (see <see cref="Query{T}"/>'s <c>RunQuery</c>) so <c>await</c> always runs
+    /// behind the pool's gate on the ThreadPool — no hub/Orleans scheduler is ever
+    /// captured.
+    /// </summary>
+    private async Task<List<(string? Path, T Item)>> CollectQueryResultsAsync<T>(
+        MeshQueryRequest request, JsonSerializerOptions options, CancellationToken ct)
+    {
+        var results = new List<(string?, T)>();
+        await foreach (var item in QueryAsync(request, options, ct).ConfigureAwait(false))
+            if (item is T typed)
+                results.Add(((item as MeshNode)?.Path, typed));
+        return results;
     }
 }

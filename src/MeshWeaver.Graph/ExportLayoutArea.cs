@@ -17,6 +17,7 @@ namespace MeshWeaver.Graph;
 [Browsable(false)]
 public static class ExportLayoutArea
 {
+    /// <summary>Area name for the Export layout area.</summary>
     public const string ExportArea = "Export";
 
     /// <summary>
@@ -39,16 +40,21 @@ public static class ExportLayoutArea
     public static IObservable<UiControl?> Export(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
+        var meshService = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
 
-        return Observable.FromAsync(async () =>
+        // Own node via MeshNodeReference stream — no QueryAsync, no Observable.FromAsync.
+        var ownNode = host.Workspace.GetMeshNodeStream();
+
+        // Descendants via Query initial snapshot — listing is legitimate observable.
+        var descendants = meshService.Query<MeshNode>(
+                MeshQueryRequest.FromQuery($"path:{hubPath} scope:descendants"))
+            .Take(1)
+            .Select(c => c.Items);
+
+        return ownNode.Take(1).CombineLatest(descendants, (node, descs) =>
         {
-            var meshService = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
-
-            var node = await meshService.QueryAsync<MeshNode>($"path:{hubPath}").FirstOrDefaultAsync();
-
-            // Find which satellite types exist under this subtree
             var satelliteTypes = new HashSet<string>();
-            await foreach (var desc in meshService.QueryAsync<MeshNode>($"path:{hubPath} scope:descendants"))
+            foreach (var desc in descs)
             {
                 if ((desc.IsSatelliteType || (desc.MainNode != null && desc.MainNode != desc.Path))
                     && desc.NodeType != null)

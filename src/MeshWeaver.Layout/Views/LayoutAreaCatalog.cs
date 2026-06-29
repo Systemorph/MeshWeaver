@@ -3,13 +3,33 @@ using MeshWeaver.Layout.Composition;
 
 namespace MeshWeaver.Layout.Views;
 
+/// <summary>
+/// Registers and renders the built-in layout-area catalog view, which displays all registered
+/// layout areas grouped by category with optional thumbnail previews.
+/// </summary>
 public static class LayoutAreaCatalogArea
 {
+    /// <summary>
+    /// The reserved area name under which the catalog view is registered on a layout definition.
+    /// </summary>
     public const string LayoutAreas = nameof(LayoutAreas);
 
+    /// <summary>
+    /// Registers the layout area catalog view on <paramref name="layout"/> under the
+    /// <see cref="LayoutAreas"/> area name.
+    /// </summary>
+    /// <param name="layout">The layout definition to extend.</param>
+    /// <returns>A new <see cref="LayoutDefinition"/> with the catalog view registered.</returns>
     public static LayoutDefinition AddLayoutAreaCatalog(this LayoutDefinition layout)
         => layout.WithView(LayoutAreas, LayoutAreaCatalog);
 
+    /// <summary>
+    /// Renders all registered layout areas as a grouped grid of cards with optional thumbnails.
+    /// Areas are grouped by their <c>Group</c> property; the "General" group is placed last.
+    /// </summary>
+    /// <param name="host">The layout area host providing access to layout area definitions.</param>
+    /// <param name="ctx">The rendering context for the current request.</param>
+    /// <returns>A <see cref="UiControl"/> representing the complete catalog grid.</returns>
     [Browsable(false)]
     public static UiControl LayoutAreaCatalog(LayoutAreaHost host, RenderingContext ctx)
     {

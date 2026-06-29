@@ -1,4 +1,5 @@
-﻿using System.Text.Json;
+﻿using System.Reactive.Linq;
+using System.Text.Json;
 using MeshWeaver.Data;
 using MeshWeaver.Layout.Client;
 using Microsoft.AspNetCore.Components.Forms;
@@ -6,11 +7,20 @@ using Microsoft.FluentUI.AspNetCore.Components;
 
 namespace MeshWeaver.Blazor.Components;
 
+/// <summary>
+/// Blazor view for the edit-form control. Binds a JSON data context from the layout
+/// stream, handles form submission reactively (without async/await), and shows toast
+/// notifications on success or failure.
+/// </summary>
 public partial class EditFormView
 {
     private ModelParameter<JsonElement>? model;
     private ActivityLog? Log { get; set; }
 
+    /// <summary>
+    /// Binds the form's JSON model from the pointer path specified by the view-model's
+    /// <c>DataContext</c> property (defaults to the root <c>"/"</c>).
+    /// </summary>
     protected override void BindData()
     {
         DataBind(
@@ -20,22 +30,31 @@ public partial class EditFormView
             );
     }
 
-    private async void Submit(EditContext context)
+    private void Submit(EditContext context)
     {
-        if(Stream is null)
+        if (Stream is null)
             throw new InvalidOperationException("Stream must be set before submitting the form.");
-        var log = await Stream.SubmitModel(model!);
-        if(log.Status == ActivityStatus.Succeeded)
+
+        // Subscribe — do NOT bridge to Task / await. The hub round-trip stays
+        // observable end-to-end (see Doc/Architecture/AsynchronousCalls.md).
+        Stream.SubmitModel(model!).Subscribe(log =>
         {
-            Log = null;
-            ShowSuccess();
-            Reset();
-        }
-        else
-        {
-            Log = log;
-            ShowError();
-        }
+            InvokeAsync(() =>
+            {
+                if (log.Status == ActivityStatus.Succeeded)
+                {
+                    Log = null;
+                    ShowSuccess();
+                    Reset();
+                }
+                else
+                {
+                    Log = log;
+                    ShowError();
+                }
+                StateHasChanged();
+            });
+        });
     }
 
     private ModelParameter<JsonElement> Convert(JsonElement jsonObject)
@@ -63,6 +82,10 @@ public partial class EditFormView
         ToastService.ShowToast(ToastIntent.Error, message);
     }
 
+    /// <summary>
+    /// Unsubscribes from the model's element-changed event before delegating to the
+    /// base <c>DisposeAsync</c> to release stream subscriptions.
+    /// </summary>
     public override ValueTask DisposeAsync()
     {
         if (model is not null)

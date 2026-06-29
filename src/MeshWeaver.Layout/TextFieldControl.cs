@@ -21,4 +21,14 @@ public record
     /// <param name="autocomplete">The autocomplete attribute to set.</param>
     /// <returns>A new <see cref="TextFieldControl"/> instance with the specified autocomplete attribute.</returns>
     public TextFieldControl WithAutocomplete(object autocomplete) => this with { Autocomplete = autocomplete };
+
+    /// <summary>
+    /// When true, renders the field as a masked password input (the characters are hidden as typed).
+    /// Use for secret ENTRY (e.g. an API key): the value is never shown back; once saved, display only
+    /// a fingerprint, never the key itself.
+    /// </summary>
+    public bool Password { get; init; }
+
+    /// <summary>Marks the field as a masked password input — see <see cref="Password"/>.</summary>
+    public TextFieldControl WithPassword(bool password = true) => this with { Password = password };
 }

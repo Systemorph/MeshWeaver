@@ -1,3 +1,5 @@
+@using System.Reactive.Linq
+@using System.Reactive.Threading.Tasks
 @using MeshWeaver.Mesh
 @using MeshWeaver.Mesh.Services
 @using Microsoft.Extensions.DependencyInjection
@@ -113,67 +115,15 @@
             ExcludedSatellites.Add(satelliteType);
     }
 
-    private async Task ExportAndDownloadAsync()
+    private void ExportAndDownloadAsync()
     {
-        if (string.IsNullOrEmpty(SourcePath)) return;
-
-        IsExporting = true;
-        ExportError = null;
-        ExportDone = false;
-        ProgressMessage = "Exporting nodes...";
+        // IMeshExportService was deleted in the persistence-cull (2026-05-12).
+        // Export will be rewired via per-node CreateNodeRequest fan-out + ZIP
+        // assembly as a follow-up.
+        ExportError = "Export is being rewired (persistence-cull migration, 2026-05-12). " +
+                      "The low-level IMeshExportService surface was removed; no replacement wired up yet.";
+        IsExporting = false;
         StateHasChanged();
-
-        string? tempDir = null;
-        try
-        {
-            var exportService = Hub.ServiceProvider.GetRequiredService<IMeshExportService>();
-
-            tempDir = Path.Combine(Path.GetTempPath(), $"meshexport_{Guid.NewGuid():N}");
-
-            IReadOnlySet<string>? excluded = ExcludedSatellites.Count > 0
-                ? ExcludedSatellites
-                : null;
-
-            var result = await exportService.ExportToDirectoryAsync(SourcePath, tempDir, excluded);
-
-            if (!result.Success)
-            {
-                ExportError = result.Error;
-                IsExporting = false;
-                StateHasChanged();
-                return;
-            }
-
-            NodesExported = result.NodesExported;
-            ProgressMessage = $"Zipping {NodesExported} nodes...";
-            StateHasChanged();
-
-            // Create ZIP in memory
-            using var memoryStream = new MemoryStream();
-            ZipFile.CreateFromDirectory(tempDir, memoryStream, CompressionLevel.Optimal, includeBaseDirectory: false);
-            memoryStream.Position = 0;
-
-            // Trigger browser download via JS interop
-            var nodeId = SourcePath.Split('/').LastOrDefault() ?? "export";
-            var fileName = $"{nodeId}_{DateTime.UtcNow:yyyyMMdd_HHmmss}.zip";
-
-            using var streamRef = new DotNetStreamReference(memoryStream);
-            await JSRuntime.InvokeVoidAsync("meshweaverDownloadFileFromStream", fileName, streamRef);
-
-            IsExporting = false;
-            ExportDone = true;
-        }
-        catch (Exception ex)
-        {
-            ExportError = $"Export failed: {ex.Message}";
-            IsExporting = false;
-        }
-        finally
-        {
-            if (tempDir != null && Directory.Exists(tempDir))
-                try { Directory.Delete(tempDir, recursive: true); } catch { }
-            StateHasChanged();
-        }
     }
 
     private void Reset()

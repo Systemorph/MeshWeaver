@@ -1,8 +1,7 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Reflection;
 using System.Text.Json;
-using FluentAssertions;
 using MeshWeaver.AI;
 using Microsoft.Extensions.AI;
 using Xunit;
@@ -56,7 +55,18 @@ public class ToolStatusFormatterTest
     [Fact]
     public void DelegateToAgent_FormatsWithAgentName()
     {
+        // delegate_to_agent uses FormatDelegation which prepends the task summary
+        // when present â€” "task summary (Agent)". Falls back to "Delegating to
+        // Agent..." only when no task arg is supplied (see
+        // DelegateToAgent_NoTask_FallsBackToBareForm below).
         var call = MakeCall("delegate_to_agent", new() { ["agentName"] = "Researcher", ["task"] = "find info" });
+        ToolStatusFormatter.Format(call).Should().Be("find info (Researcher)");
+    }
+
+    [Fact]
+    public void DelegateToAgent_NoTask_FallsBackToBareForm()
+    {
+        var call = MakeCall("delegate_to_agent", new() { ["agentName"] = "Researcher" });
         ToolStatusFormatter.Format(call).Should().Be("Delegating to Researcher...");
     }
 
@@ -155,7 +165,7 @@ public class ToolStatusFormatterTest
         var method = typeof(MeshWeaver.AI.ThreadMessageLayoutAreas)
             .GetMethod("ConvertReferencesToLinks", BindingFlags.NonPublic | BindingFlags.Static);
 
-        // @/path is absolute — LinkUrlCleanupExtension will strip @ and see /path = absolute
+        // @/path is absolute â€” LinkUrlCleanupExtension will strip @ and see /path = absolute
         var result = (string)method!.Invoke(null, ["See @/User/rbuergi/doc for info"])!;
         result.Should().Contain("@/User/rbuergi/doc");
     }

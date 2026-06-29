@@ -1,8 +1,7 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
-using FluentAssertions;
 using Microsoft.Extensions.AI;
 using Xunit;
 

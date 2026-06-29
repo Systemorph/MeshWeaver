@@ -2,11 +2,11 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
-using FluentAssertions;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.PostgreSql.Test;
 
@@ -32,13 +32,14 @@ public class PartitionQueryTests
         return null;
     }
 
-    private async Task SeedPartitionDataAsync()
+    private async Task SeedPartitionData()
     {
-        await _fixture.CleanDataAsync();
+        var ct = TestContext.Current.CancellationToken;
+        await _fixture.CleanData().Should().Within(60.Seconds()).Emit();
         var adapter = _fixture.StorageAdapter;
 
         // Seed Partition nodes
-        await adapter.WriteAsync(new MeshNode("ACME", "Admin/Partition")
+        await adapter.Write(new MeshNode("ACME", "Admin/Partition")
         {
             Name = "ACME Corp",
             NodeType = "Partition",
@@ -48,12 +49,12 @@ public class PartitionQueryTests
                 Namespace = "ACME",
                 DataSource = "default",
                 Schema = "acme",
-                TableMappings = PartitionDefinition.StandardTableMappings,
+                TableMappings = PartitionDefinition.DefaultSegmentTableMappings(), NodeTypeTableMappings = PartitionDefinition.DefaultNodeTypeTableMappings(),
                 Description = "ACME organization partition"
             }
-        }, _options, TestContext.Current.CancellationToken);
+        }, _options).Should().Within(30.Seconds()).Emit();
 
-        await adapter.WriteAsync(new MeshNode("Documentation", "Admin/Partition")
+        await adapter.Write(new MeshNode("Documentation", "Admin/Partition")
         {
             Name = "MeshWeaver Documentation",
             NodeType = "Partition",
@@ -64,22 +65,21 @@ public class PartitionQueryTests
                 DataSource = "static",
                 Description = "Built-in documentation"
             }
-        }, _options, TestContext.Current.CancellationToken);
+        }, _options).Should().Within(30.Seconds()).Emit();
 
-        // Register Partition node type as public read
+        // Register Partition node type as public read (low-level PG op stays async inside Run()).
         await _fixture.AccessControl.SyncNodeTypePermissionsAsync(
-            [new NodeTypePermission("Partition", PublicRead: true)],
-            TestContext.Current.CancellationToken);
+            [new NodeTypePermission("Partition", PublicRead: true)])
+            .Run().Should().Within(30.Seconds()).Emit();
     }
 
     [Fact(Timeout = 30000)]
     public async Task PartitionNodes_CanBeWrittenAndRead()
     {
-        await SeedPartitionDataAsync();
+        await SeedPartitionData();
         var adapter = _fixture.StorageAdapter;
 
-        var node = await adapter.ReadAsync("Admin/Partition/ACME", _options,
-            TestContext.Current.CancellationToken);
+        var node = await adapter.Read("Admin/Partition/ACME", _options).Should().Within(30.Seconds()).Emit();
 
         node.Should().NotBeNull();
         node!.NodeType.Should().Be("Partition");
@@ -95,7 +95,7 @@ public class PartitionQueryTests
     [Fact(Timeout = 30000)]
     public async Task PublicReadPartitions_VisibleToAuthenticatedUser()
     {
-        await SeedPartitionDataAsync();
+        await SeedPartitionData();
 
         var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
 
@@ -103,12 +103,8 @@ public class PartitionQueryTests
         var request = MeshQueryRequest.FromQuery(
             $"namespace:Admin/Partition nodeType:Partition", userId: "alice");
 
-        var results = new List<object>();
-        await foreach (var item in query.QueryAsync(request, _options,
-            TestContext.Current.CancellationToken))
-        {
-            results.Add(item);
-        }
+        var results = await query.QueryList(request, _options, TestContext.Current.CancellationToken)
+            .Should().Within(30.Seconds()).Emit();
 
         results.Should().HaveCountGreaterThanOrEqualTo(2,
             "Partition nodes with public read should be visible to any authenticated user");
@@ -119,7 +115,7 @@ public class PartitionQueryTests
     [Fact(Timeout = 30000)]
     public async Task PartitionNodes_NotVisibleToAnonymous()
     {
-        await SeedPartitionDataAsync();
+        await SeedPartitionData();
 
         var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
 
@@ -127,12 +123,8 @@ public class PartitionQueryTests
         var request = MeshQueryRequest.FromQuery(
             $"namespace:Admin/Partition nodeType:Partition", userId: WellKnownUsers.Anonymous);
 
-        var results = new List<object>();
-        await foreach (var item in query.QueryAsync(request, _options,
-            TestContext.Current.CancellationToken))
-        {
-            results.Add(item);
-        }
+        var results = await query.QueryList(request, _options, TestContext.Current.CancellationToken)
+            .Should().Within(30.Seconds()).Emit();
 
         results.Should().BeEmpty("Anonymous users should not see public-read partition nodes");
     }
@@ -140,14 +132,13 @@ public class PartitionQueryTests
     [Fact(Timeout = 30000)]
     public async Task PartitionDefinition_RoundTrips_Content()
     {
-        await SeedPartitionDataAsync();
+        await SeedPartitionData();
         var adapter = _fixture.StorageAdapter;
 
-        var node = await adapter.ReadAsync("Admin/Partition/Documentation", _options,
-            TestContext.Current.CancellationToken);
+        var node = await adapter.Read("Admin/Partition/Documentation", _options).Should().Within(30.Seconds()).Emit();
 
         node.Should().NotBeNull();
-        var def = DeserializeContent<PartitionDefinition>(node.Content);
+        var def = DeserializeContent<PartitionDefinition>(node!.Content);
         def.Should().NotBeNull();
         def!.Namespace.Should().Be("Doc");
         def.DataSource.Should().Be("static");
@@ -157,14 +148,13 @@ public class PartitionQueryTests
     [Fact(Timeout = 30000)]
     public async Task PartitionDefinition_TableMappings_RoundTrip()
     {
-        await SeedPartitionDataAsync();
+        await SeedPartitionData();
         var adapter = _fixture.StorageAdapter;
 
-        var node = await adapter.ReadAsync("Admin/Partition/ACME", _options,
-            TestContext.Current.CancellationToken);
+        var node = await adapter.Read("Admin/Partition/ACME", _options).Should().Within(30.Seconds()).Emit();
 
         node.Should().NotBeNull();
-        var def = DeserializeContent<PartitionDefinition>(node.Content);
+        var def = DeserializeContent<PartitionDefinition>(node!.Content);
         def.Should().NotBeNull();
         def!.TableMappings.Should().NotBeNull();
         def.TableMappings.Should().ContainKey("_Activity");
@@ -174,12 +164,12 @@ public class PartitionQueryTests
     }
 
     [Fact(Timeout = 30000)]
-    public async Task PartitionDefinition_ResolveTable_RoutesCorrectly()
+    public void PartitionDefinition_ResolveTable_RoutesCorrectly()
     {
         var def = new PartitionDefinition
         {
             Namespace = "User",
-            TableMappings = PartitionDefinition.StandardTableMappings
+            TableMappings = PartitionDefinition.DefaultSegmentTableMappings(), NodeTypeTableMappings = PartitionDefinition.DefaultNodeTypeTableMappings()
         };
 
         // Main node → primary table

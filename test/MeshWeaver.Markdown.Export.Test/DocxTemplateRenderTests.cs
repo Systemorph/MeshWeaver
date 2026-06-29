@@ -5,7 +5,6 @@ using System.Linq;
 using System.Xml.Linq;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Wordprocessing;
-using FluentAssertions;
 using MeshWeaver.Markdown.Export.Ast;
 using MeshWeaver.Markdown.Export.Branding;
 using MeshWeaver.Markdown.Export.Configuration;

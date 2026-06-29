@@ -1,0 +1,8 @@
+<!-- Stops the walk-up to the repo-root Directory.Packages.props and opts this project out of
+     Central Package Management, so the MAUI template's inline $(MauiVersion) package versions
+     resolve (CPM forbids inline versions). -->
+<Project>
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+</Project>

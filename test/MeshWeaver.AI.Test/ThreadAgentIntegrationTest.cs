@@ -1,4 +1,4 @@
-#pragma warning disable CS1591 // Missing XML comment for publicly visible type or member
+﻿#pragma warning disable CS1591 // Missing XML comment for publicly visible type or member
 
 using System;
 using System.Collections.Generic;
@@ -8,7 +8,8 @@ using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
-using FluentAssertions;
+using System.Reactive.Threading.Tasks;
+using System.Reactive.Linq;
 using MeshWeaver.AI.Persistence;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
@@ -28,7 +29,7 @@ using Xunit;
 namespace MeshWeaver.AI.Test;
 
 /// <summary>
-/// End-to-end integration test for the full thread → agent → response flow.
+/// End-to-end integration test for the full thread â†’ agent â†’ response flow.
 /// Uses a fake IChatClient to avoid real AI API calls while testing
 /// the complete pipeline: thread creation, message persistence,
 /// agent initialization, streaming response, and reply storage.
@@ -40,14 +41,20 @@ public class ThreadAgentIntegrationTest : MonolithMeshTestBase
 
     public ThreadAgentIntegrationTest(ITestOutputHelper output) : base(output) { }
 
+    // Share Mesh/SP across [Fact]s â€” see MonolithMeshTestBase.ShareMeshAcrossTests.
+    protected override bool ShareMeshAcrossTests => true;
+
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
+        var assemblyRoot = Path.Combine(Path.GetTempPath(), "MeshWeaver.AI.Test", "assemblies",
+            Guid.NewGuid().AsString());
         return builder
             .UseMonolithMesh()
             .AddFileSystemPersistence(TestDataPath)
             .ConfigureServices(services =>
             {
                 services.AddSingleton<IChatClientFactory>(new FakeChatClientFactory());
+                services.AddFileSystemAssemblyStore(assemblyRoot);
                 return services;
             })
             .AddGraph()
@@ -132,7 +139,7 @@ public class ThreadAgentIntegrationTest : MonolithMeshTestBase
 
     /// <summary>
     /// Full end-to-end flow:
-    /// 1. Create Thread via NodeFactory.CreateNodeAsync
+    /// 1. Create Thread via NodeFactory.CreateNode
     /// 2. Create user ThreadMessage as child node
     /// 3. Initialize AgentChatClient, choose context and agent
     /// 4. Send message via GetStreamingResponseAsync
@@ -154,7 +161,7 @@ public class ThreadAgentIntegrationTest : MonolithMeshTestBase
             NodeType = ThreadNodeType.NodeType,
             Content = new Thread()
         };
-        await NodeFactory.CreateNodeAsync(threadNode, ct);
+        await NodeFactory.CreateNode(threadNode);
 
         // 2. Create user message as child node
         var messageId = Guid.NewGuid().AsString();
@@ -165,22 +172,17 @@ public class ThreadAgentIntegrationTest : MonolithMeshTestBase
             Timestamp = DateTime.UtcNow,
             Type = ThreadMessageType.ExecutedInput
         };
-        await NodeFactory.CreateNodeAsync(new MeshNode($"{threadPath}/{messageId}")
+        await NodeFactory.CreateNode(new MeshNode($"{threadPath}/{messageId}")
         {
             NodeType = ThreadMessageNodeType.NodeType,
             Content = userMessage
-        }, ct);
+        });
 
         // 3. Initialize AgentChatClient with context
         var agentChat = new AgentChatClient(Mesh.ServiceProvider);
-        await agentChat.InitializeAsync("ACME/ProductLaunch");
+        await agentChat.Initialize("ACME/ProductLaunch").WhenInitialized.FirstAsync().ToTask(ct);
 
-        MeshNode? contextNode = null;
-        await foreach (var node in query.QueryAsync<MeshNode>("path:ACME/ProductLaunch", null, ct))
-        {
-            contextNode = node;
-            break;
-        }
+        var contextNode = await ReadNode("ACME/ProductLaunch").FirstAsync().ToTask(ct);
         contextNode.Should().NotBeNull("ACME/ProductLaunch node should exist in test data");
 
         agentChat.SetContext(new AgentContext
@@ -190,7 +192,7 @@ public class ThreadAgentIntegrationTest : MonolithMeshTestBase
         });
         agentChat.SetThreadId(threadPath);
 
-        // 4. Choose agent — first ordered agent is the best match for context
+        // 4. Choose agent â€” first ordered agent is the best match for context
         var agents = await agentChat.GetOrderedAgentsAsync();
         agents.Should().NotBeEmpty("agents should be loaded from mesh test data");
         agentChat.SetSelectedAgent(agents[0].Name);
@@ -209,7 +211,7 @@ public class ThreadAgentIntegrationTest : MonolithMeshTestBase
         }
 
         var responseText = responseBuilder.ToString().Trim();
-        responseText.Should().NotBeEmpty("agent should produce a streaming response");
+        responseText.Should().NotBeNullOrEmpty("agent should produce a streaming response");
         responseText.Should().Contain("test response", "response should come from the fake agent");
 
         // 6. Create agent reply as child ThreadMessage
@@ -222,11 +224,11 @@ public class ThreadAgentIntegrationTest : MonolithMeshTestBase
             Timestamp = DateTime.UtcNow,
             Type = ThreadMessageType.AgentResponse
         };
-        await NodeFactory.CreateNodeAsync(new MeshNode($"{threadPath}/{replyId}")
+        await NodeFactory.CreateNode(new MeshNode($"{threadPath}/{replyId}")
         {
             NodeType = ThreadMessageNodeType.NodeType,
             Content = replyMessage
-        }, ct);
+        });
 
         // 7. Verify thread contains both messages
         var children = new List<MeshNode>();
@@ -264,23 +266,18 @@ public class ThreadAgentIntegrationTest : MonolithMeshTestBase
         // Create thread
         var threadId = Guid.NewGuid().AsString();
         var threadPath = $"ACME/ProductLaunch/{threadId}";
-        await NodeFactory.CreateNodeAsync(new MeshNode(threadPath)
+        await NodeFactory.CreateNode(new MeshNode(threadPath)
         {
             Name = "Non-Streaming Test Thread",
             NodeType = ThreadNodeType.NodeType,
             Content = new Thread()
-        }, ct);
+        });
 
         // Initialize agent
         var agentChat = new AgentChatClient(Mesh.ServiceProvider);
-        await agentChat.InitializeAsync("ACME/ProductLaunch");
+        await agentChat.Initialize("ACME/ProductLaunch").WhenInitialized.FirstAsync().ToTask(ct);
 
-        MeshNode? contextNode = null;
-        await foreach (var node in query.QueryAsync<MeshNode>("path:ACME/ProductLaunch", null, ct))
-        {
-            contextNode = node;
-            break;
-        }
+        var contextNode = await ReadNode("ACME/ProductLaunch").FirstAsync().ToTask(ct);
 
         agentChat.SetContext(new AgentContext
         {
@@ -328,30 +325,25 @@ public class ThreadAgentIntegrationTest : MonolithMeshTestBase
         var threadPath1 = $"ACME/ProductLaunch/{threadId1}";
         var threadPath2 = $"ACME/ProductLaunch/{threadId2}";
 
-        await NodeFactory.CreateNodeAsync(new MeshNode(threadPath1)
+        await NodeFactory.CreateNode(new MeshNode(threadPath1)
         {
             Name = "Thread 1",
             NodeType = ThreadNodeType.NodeType,
             Content = new Thread()
-        }, ct);
+        });
 
-        await NodeFactory.CreateNodeAsync(new MeshNode(threadPath2)
+        await NodeFactory.CreateNode(new MeshNode(threadPath2)
         {
             Name = "Thread 2",
             NodeType = ThreadNodeType.NodeType,
             Content = new Thread()
-        }, ct);
+        });
 
         // Initialize agent
         var agentChat = new AgentChatClient(Mesh.ServiceProvider);
-        await agentChat.InitializeAsync("ACME/ProductLaunch");
+        await agentChat.Initialize("ACME/ProductLaunch").WhenInitialized.FirstAsync().ToTask(ct);
 
-        MeshNode? contextNode = null;
-        await foreach (var node in query.QueryAsync<MeshNode>("path:ACME/ProductLaunch", null, ct))
-        {
-            contextNode = node;
-            break;
-        }
+        var contextNode = await ReadNode("ACME/ProductLaunch").FirstAsync().ToTask(ct);
 
         agentChat.SetContext(new AgentContext
         {
@@ -383,10 +375,10 @@ public class ThreadAgentIntegrationTest : MonolithMeshTestBase
         }
 
         // Both threads should produce responses
-        response1.ToString().Trim().Should().NotBeEmpty();
-        response2.ToString().Trim().Should().NotBeEmpty();
+        response1.ToString().Trim().Should().NotBeNullOrEmpty();
+        response2.ToString().Trim().Should().NotBeNullOrEmpty();
 
-        // Thread persistence is now via MeshNodes — no separate IChatPersistenceService
+        // Thread persistence is now via MeshNodes â€” no separate IChatPersistenceService
     }
 
     #endregion

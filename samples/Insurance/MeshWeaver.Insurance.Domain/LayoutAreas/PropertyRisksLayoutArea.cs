@@ -1,5 +1,6 @@
 ﻿using System.Reactive.Linq;
 using MeshWeaver.Data;
+using MeshWeaver.Messaging;
 using MeshWeaver.Insurance.Domain.LayoutAreas.Shared;
 using MeshWeaver.Insurance.Domain.Services;
 using MeshWeaver.Layout;
@@ -104,29 +105,26 @@ public static class PropertyRisksLayoutArea
                 p.TotalRisks == 0 ? 0 : (int)(100.0 * p.ProcessedRisks / p.TotalRisks)));
     }
 
-    private static async Task ClickGeocoding(UiActionContext obj)
+    private static Task ClickGeocoding(UiActionContext obj)
     {
         // Show initial progress
         obj.Host.UpdateArea(obj.Area, Controls.Progress("Starting geocoding...", 0));
 
-        try
-        {
-            // Start the geocoding process
-            var response = await obj.Host.Hub.AwaitResponse(
-                new GeocodingRequest(),
-                o => o.WithTarget(obj.Hub.Address));
-
-            // Show completion message
-            var resultMessage = response?.Message?.Success == true
-                ? $"✅ Geocoding Complete: {response.Message.GeocodedCount} locations geocoded successfully."
-                : $"❌ Geocoding Failed: {response?.Message?.Error}";
-
-            obj.Host.UpdateArea(obj.Area, Controls.Markdown($"**{resultMessage}**"));
-        }
-        catch (Exception ex)
-        {
-            obj.Host.UpdateArea(obj.Area, Controls.Markdown($"**Geocoding Failed**: {ex.Message}"));
-        }
+        // Reactive — Subscribe instead of await; click handler stays sync.
+        obj.Host.Hub.Observe(new GeocodingRequest(), o => o.WithTarget(obj.Hub.Address))
+            .Subscribe(
+                response =>
+                {
+                    var resultMessage = response.Message?.Success == true
+                        ? $"✅ Geocoding Complete: {response.Message.GeocodedCount} locations geocoded successfully."
+                        : $"❌ Geocoding Failed: {response.Message?.Error}";
+                    obj.Host.UpdateArea(obj.Area, Controls.Markdown($"**{resultMessage}**"));
+                },
+                ex =>
+                {
+                    obj.Host.UpdateArea(obj.Area, Controls.Markdown($"**Geocoding Failed**: {ex.Message}"));
+                });
+        return Task.CompletedTask;
     }
 }
 

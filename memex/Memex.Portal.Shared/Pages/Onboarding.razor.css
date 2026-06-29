@@ -3,7 +3,10 @@
     justify-content: center;
     align-items: flex-start;
     padding: 40px 20px;
-    min-height: 60vh;
+    /* Fill the viewport so the grey backdrop reaches the bottom. At 60vh the grey
+       stopped partway down — invisible in dark mode (blends with the page) but an
+       obvious grey-then-white seam in light mode. */
+    min-height: 100vh;
     background: var(--neutral-layer-4);
 }
 

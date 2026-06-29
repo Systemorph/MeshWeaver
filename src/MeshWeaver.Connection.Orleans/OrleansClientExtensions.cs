@@ -9,8 +9,21 @@ namespace MeshWeaver.Connection.Orleans;
 
 
 
+/// <summary>
+/// Extension methods that connect a host as an Orleans mesh client, wiring the mesh
+/// connection builder together with an Orleans client configured for memory streams.
+/// </summary>
 public static class OrleansClientExtensions
 {
+    /// <summary>
+    /// Configures the application host as an Orleans mesh client.
+    /// </summary>
+    /// <param name="hostBuilder">The application host builder to configure.</param>
+    /// <param name="address">Optional explicit mesh address for this client; a fresh mesh
+    /// address is generated when omitted.</param>
+    /// <param name="orleansConfiguration">Optional callback to further customize the Orleans
+    /// client builder.</param>
+    /// <returns>The mesh host application builder for further configuration.</returns>
     public static MeshHostApplicationBuilder UseOrleansMeshClient(this IHostApplicationBuilder hostBuilder,
         Address? address = null,
         Func<IClientBuilder, IClientBuilder>? orleansConfiguration = null)
@@ -24,6 +37,13 @@ public static class OrleansClientExtensions
         return meshBuilder;
     }
 
+    /// <summary>
+    /// Configures the (legacy) generic host as an Orleans mesh client.
+    /// </summary>
+    /// <param name="hostBuilder">The generic host builder to configure.</param>
+    /// <param name="orleansConfiguration">Optional callback to further customize the Orleans
+    /// client builder.</param>
+    /// <returns>The mesh host builder for further configuration.</returns>
     public static MeshHostBuilder UseOrleansMeshClient(this IHostBuilder hostBuilder,
         Func<IClientBuilder, IClientBuilder>? orleansConfiguration = null)
     {

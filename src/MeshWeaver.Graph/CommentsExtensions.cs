@@ -63,19 +63,19 @@ public static class CommentsExtensions
     }
 
     /// <summary>
-    /// Handles CreateCommentRequest by:
-    ///   1. Reading current markdown content from persistence
-    ///   2. Finding selected text and inserting comment markers (if text selection provided)
-    ///   3. Creating Comment MeshNode via CreateNodeRequest (fire-and-forget)
-    ///   4. Updating markdown content via UpdateNodeRequest (fire-and-forget, pushes to GUI stream)
-    ///   5. Returning CreateCommentResponse immediately
-    /// </summary>
-    /// <summary>
-    /// Fully non-blocking handler — follows the same pattern as ThreadExecution.HandleSubmitMessage.
-    /// 1) Create comment node via meshService.CreateNode (Observable, fire-and-forget)
-    /// 2) In Subscribe callback: update markdown content via workspace.UpdateMeshNode
-    /// 3) Post response after operations are dispatched
-    /// Never awaits. Never uses persistence directly.
+    /// Handles CreateCommentRequest by anchoring the comment to the document WITHOUT mutating it:
+    ///   1. Reads the current node once (for its content + <see cref="MeshNode.Version"/>)
+    ///   2. For a text selection, captures the (<see cref="Comment.Start"/>/<see cref="Comment.Length"/>)
+    ///      range plus the anchor text the comment is taken against, and records it on the satellite
+    ///   3. Creates the Comment MeshNode in the <c>_Comment</c> sub-partition via meshService.CreateNode
+    ///   4. For a reply (parent is itself a Comment) appends the reply id to the parent's Replies list
+    ///   5. Posts CreateCommentResponse once the node is created
+    /// <para>
+    /// The document text is never rewritten — the inline highlight is re-derived from the satellite
+    /// at render time (see <see cref="CommentRendering"/>). This is what lets a Comment-only user
+    /// (no document Update permission) comment, and removes the old "fragment didn't match →
+    /// no-op Update hangs forever" failure. Never awaits; never uses persistence directly.
+    /// </para>
     /// </summary>
     private static IMessageDelivery HandleCreateCommentRequest(
         IMessageHub hub,
@@ -93,127 +93,84 @@ public static class CommentsExtensions
             var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
             var workspace = hub.GetWorkspace();
 
-            // Generate marker ID
             var markerId = Guid.NewGuid().ToString("N")[..8];
             var author = msg.Author;
             var selectedText = msg.SelectedText;
             var hasTextSelection = !string.IsNullOrWhiteSpace(selectedText);
 
-            // Build the comment node
-            var comment = new Comment
-            {
-                Id = markerId,
-                PrimaryNodePath = nodePath,
-                MarkerId = hasTextSelection ? markerId : null,
-                HighlightedText = hasTextSelection ? selectedText : null,
-                Author = author,
-                Text = msg.CommentText,
-                CreatedAt = DateTimeOffset.UtcNow,
-                Status = CommentStatus.Active
-            };
-            var commentNode = new MeshNode(markerId, $"{nodePath}/{CommentPartition}")
-            {
-                Name = $"Comment by {author}",
-                NodeType = CommentNodeType.NodeType,
-                MainNode = nodePath,
-                Content = comment
-            };
-
-            // Create comment/reply node first, then update parent in onNext callback
-            // (same pattern as ThreadExecution: create cells → update parent in callback)
-            meshService.CreateNode(commentNode).Subscribe(
-                _ =>
+            // Read the current node once: a reply targets a Comment node, a text/page comment targets
+            // a Markdown node. We need its content (to anchor) and Version (to stamp on the comment).
+            workspace.GetMeshNodeStream()
+                .Take(1)
+                .Timeout(TimeSpan.FromSeconds(5))
+                .Catch<MeshNode, Exception>(_ => Observable.Return((MeshNode)null!))
+                .SelectMany(node =>
                 {
-                    try
+                    var isReply = node?.Content is Comment;
+                    var version = node?.Version ?? 0;
+
+                    // Capture the selection as a (Start, Length) range in the document's clean text.
+                    var start = -1;
+                    var length = 0;
+                    string? anchorText = null;
+                    if (hasTextSelection && !isReply
+                        && node?.Content is MarkdownContent mdContent && !string.IsNullOrEmpty(mdContent.Content))
                     {
-                        logger?.LogInformation("[CreateComment] Node created: {Id} on {Path}", markerId, nodePath);
-
-                        // Update parent node via workspace stream
-                        workspace.UpdateMeshNode(node =>
-                        {
-                            // Markdown node: inject comment markers using fragment-based matching.
-                            // JS sends start/end fragments (first/last few words of the selection).
-                            // We find them in the rendered plain text and map back to source positions.
-                            if (hasTextSelection && node.Content is MarkdownContent mdContent
-                                && !string.IsNullOrEmpty(mdContent.Content))
-                            {
-                                var rawContent = mdContent.Content;
-                                var cleanMarkdown = MarkdownAnnotationParser.StripAllMarkers(rawContent);
-                                var annotationMap = MarkdownAnnotationParser.BuildCleanToAnnotatedMap(rawContent);
-
-                                var startFrag = msg.StartFragment;
-                                var endFrag = msg.EndFragment;
-
-                                // Find start position using start fragment
-                                var cleanStart = !string.IsNullOrEmpty(startFrag)
-                                    ? MarkdownSourceMap.FindFragmentInSource(cleanMarkdown, startFrag)
-                                    : -1;
-
-                                // Find end position using end fragment (search from after start)
-                                var cleanEnd = !string.IsNullOrEmpty(endFrag)
-                                    ? MarkdownSourceMap.FindFragmentEndInSource(cleanMarkdown, endFrag,
-                                        cleanStart >= 0 ? cleanStart : 0)
-                                    : -1;
-
-                                // Fallback: use full selected text via MarkdownSourceMap
-                                if (cleanStart < 0 || cleanEnd < 0 || cleanEnd <= cleanStart)
-                                {
-                                    var (plainText, cleanMap) = MarkdownSourceMap.BuildRenderedToSourceMap(cleanMarkdown);
-                                    var idx = plainText.IndexOf(selectedText!, StringComparison.OrdinalIgnoreCase);
-                                    if (idx < 0)
-                                        return node;
-
-                                    cleanStart = idx < cleanMap.Length ? cleanMap[idx] : cleanMarkdown.Length;
-                                    cleanEnd = (idx + selectedText!.Length) < cleanMap.Length
-                                        ? cleanMap[idx + selectedText.Length]
-                                        : cleanMarkdown.Length;
-                                }
-
-                                // Map clean → raw
-                                var aStart = cleanStart < annotationMap.Length ? annotationMap[cleanStart] : rawContent.Length;
-                                var aEnd = cleanEnd < annotationMap.Length ? annotationMap[cleanEnd] : rawContent.Length;
-
-                                var date = DateTime.Now.ToString("MMM d");
-                                var meta = !string.IsNullOrEmpty(author) ? $":{author}:{date}" : "";
-                                var openTag = $"<!--comment:{markerId}{meta}-->";
-                                var closeTag = $"<!--/comment:{markerId}-->";
-                                var newContent = rawContent.Insert(aEnd, closeTag).Insert(aStart, openTag);
-
-                                logger?.LogDebug("[CreateComment] Markers inserted: MarkerId={MarkerId}, Pos={Start}-{End}", markerId, aStart, aEnd);
-                                return node with { Content = mdContent with { Content = newContent } };
-                            }
-
-                            // Comment node: add reply ID to Replies list (same as Thread.Messages)
-                            if (node.Content is Comment parentComment)
-                            {
-                                return node with
-                                {
-                                    Content = parentComment with
-                                    {
-                                        Replies = parentComment.Replies.Add(markerId)
-                                    }
-                                };
-                            }
-
-                            return node;
-                        });
-
-                        hub.Post(new CreateCommentResponse { Success = true, CommentId = markerId, MarkerId = markerId },
-                            o => o.ResponseFor(request));
+                        anchorText = MarkdownAnnotationParser.StripAllMarkers(mdContent.Content);
+                        (start, length) = CommentRendering.Capture(
+                            anchorText, msg.StartFragment, msg.EndFragment, selectedText);
                     }
-                    catch (Exception ex)
+                    var anchored = start >= 0 && length > 0;
+
+                    var comment = new Comment
                     {
-                        logger?.LogError(ex, "[CreateComment] Error in onNext for {Path}", nodePath);
+                        Id = markerId,
+                        PrimaryNodePath = nodePath,
+                        MarkerId = anchored ? markerId : null,
+                        HighlightedText = anchored ? selectedText : null,
+                        Author = author,
+                        Text = msg.CommentText,
+                        CreatedAt = DateTimeOffset.UtcNow,
+                        Status = CommentStatus.Active,
+                        Version = anchored ? version : 0,
+                        Start = anchored ? start : -1,
+                        Length = anchored ? length : 0,
+                        AnchorText = anchored ? anchorText : null
+                    };
+                    var commentNode = new MeshNode(markerId, $"{nodePath}/{CommentPartition}")
+                    {
+                        Name = $"Comment by {author}",
+                        NodeType = CommentNodeType.NodeType,
+                        MainNode = nodePath,
+                        Content = comment
+                    };
+
+                    logger?.LogInformation(
+                        "[CreateComment] Anchoring {Id} on {Path}: anchored={Anchored} pos={Start}+{Length} v={Version}",
+                        markerId, nodePath, anchored, start, length, version);
+
+                    var create = meshService.CreateNode(commentNode);
+
+                    // Reply: append the reply id to the parent Comment's Replies list. (Page/text
+                    // comments on a Markdown node leave the document untouched — no parent write.)
+                    if (isReply)
+                        return create.SelectMany(_ => workspace.GetMeshNodeStream().Update(n =>
+                            n.Content is Comment parent
+                                ? n with { Content = parent with { Replies = parent.Replies.Add(markerId) } }
+                                : n));
+
+                    return create;
+                })
+                .Subscribe(
+                    _ => hub.Post(
+                        new CreateCommentResponse { Success = true, CommentId = markerId, MarkerId = markerId },
+                        o => o.ResponseFor(request)),
+                    ex =>
+                    {
+                        logger?.LogWarning(ex, "[CreateComment] FAILED for {Path}", nodePath);
                         hub.Post(new CreateCommentResponse { Success = false, Error = ex.Message },
                             o => o.ResponseFor(request));
-                    }
-                },
-                ex =>
-                {
-                    logger?.LogWarning(ex, "[CreateComment] FAILED for {Path}", nodePath);
-                    hub.Post(new CreateCommentResponse { Success = false, Error = ex.Message },
-                        o => o.ResponseFor(request));
-                });
+                    });
 
             return request.Processed();
         }
@@ -251,49 +208,29 @@ public static class CommentsView
     public static IObservable<UiControl?> Comments(LayoutAreaHost host, RenderingContext _)
     {
         var nodePath = host.Hub.Address.ToString();
-        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshService>();
         var accessService = host.Hub.ServiceProvider.GetService<AccessService>();
         var currentUser = accessService?.Context?.Name ?? "";
 
-        var permissionsStream = Observable.FromAsync(() => PermissionHelper.GetEffectivePermissionsAsync(host.Hub, nodePath));
+        var permissionsStream = host.Hub.GetEffectivePermissions(nodePath);
 
-        // Reactive comment list via mesh query
+        // Reactive comment list via synced query — path-keyed dedup, all-Initial
+        // gating, hub-level delete fast-path. Full snapshot per emission; just
+        // rebuild the projection.
         var commentsDataId = $"pageComments_{nodePath.Replace("/", "_")}";
         host.UpdateData(commentsDataId, Array.Empty<LayoutAreaControl>());
 
-        if (meshQuery != null)
-        {
-            meshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
-                    $"namespace:{nodePath}/{CommentsExtensions.CommentPartition} nodeType:{CommentNodeType.NodeType}"))
-                .Scan(new List<MeshNode>(), (list, change) =>
-                {
-                    if (change.ChangeType == QueryChangeType.Initial || change.ChangeType == QueryChangeType.Reset)
-                        return change.Items.ToList();
-                    foreach (var item in change.Items)
-                    {
-                        if (change.ChangeType == QueryChangeType.Added)
-                            list.Add(item);
-                        else if (change.ChangeType == QueryChangeType.Removed)
-                            list.RemoveAll(n => n.Path == item.Path);
-                        else if (change.ChangeType == QueryChangeType.Updated)
-                        {
-                            list.RemoveAll(n => n.Path == item.Path);
-                            list.Add(item);
-                        }
-                    }
-                    return list;
-                })
-                .Subscribe(list =>
-                {
-                    // Show all comments (both range and page-level)
-                    var commentControls = list
-                        .Where(n => n.Content is Comment)
-                        .OrderByDescending(n => ((Comment)n.Content!).CreatedAt)
-                        .Select(n => Controls.LayoutArea(n.Path, CommentLayoutAreas.OverviewArea))
-                        .ToArray();
-                    host.UpdateData(commentsDataId, commentControls);
-                });
-        }
+        host.Workspace.GetQuery(
+                $"comments:{nodePath}",
+                $"namespace:{nodePath}/{CommentsExtensions.CommentPartition} nodeType:{CommentNodeType.NodeType}")
+            .Subscribe(snapshot =>
+            {
+                var commentControls = snapshot
+                    .Where(n => n.Content is Comment)
+                    .OrderByDescending(n => n.ContentAs<Comment>(host.Hub.JsonSerializerOptions)!.CreatedAt)
+                    .Select(n => Controls.LayoutArea(n.Path, CommentLayoutAreas.OverviewArea))
+                    .ToArray();
+                host.UpdateData(commentsDataId, commentControls);
+            });
 
         // Combine permissions with comment data to build the view
         return permissionsStream.Select(perms =>
@@ -429,33 +366,45 @@ public static class CommentsView
             .WithStyle("margin-top: 4px; justify-content: flex-end;")
             .WithView(Controls.Button("Cancel")
                 .WithAppearance(Appearance.Neutral)
-                .WithClickAction(async _ =>
+                .WithClickAction(_ =>
                 {
-                    try { await nodeFactory.DeleteNodeAsync(commentPath); } catch { }
-                    host.UpdateData(stateId, "");
+                    nodeFactory.DeleteNode(commentPath).Subscribe(
+                        __ => host.UpdateData(stateId, ""),
+                        _  => host.UpdateData(stateId, ""));
+                    return Task.CompletedTask;
                 }))
             .WithView(Controls.Button("Create")
                 .WithAppearance(Appearance.Accent)
-                .WithClickAction(async ctx =>
+                .WithClickAction(ctx =>
                 {
-                    var text = "";
+                    // Read text from the form data stream (canonical click-handler pattern),
+                    // then read the comment node via one-shot GetDataRequest — true
+                    // request/response, no SubscribeRequest+immediate-unsubscribe.
                     ctx.Host.Stream.GetDataStream<Dictionary<string, object?>>(textDataId)
                         .Take(1)
-                        .Subscribe(data => text = data?.GetValueOrDefault("text")?.ToString() ?? "");
-
-                    var node = await meshQuery.QueryAsync<MeshNode>($"path:{commentPath}").FirstOrDefaultAsync();
-                    if (node != null)
-                    {
-                        var comment = node.Content as Comment ?? new Comment();
-                        var activeNode = node with
+                        .Subscribe(data =>
                         {
-                            State = MeshNodeState.Active,
-                            Content = comment with { Text = text }
-                        };
-                        host.Hub.Post(new UpdateNodeRequest(activeNode));
-                    }
+                            var text = data?.GetValueOrDefault("text")?.ToString() ?? "";
 
-                    host.UpdateData(stateId, "");
+                            var ownPath = host.Hub.Address.Path;
+                            var cache = host.Hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
+                            cache.Update(ownPath, n =>
+                            {
+                                var c = n.ContentAs<Comment>(host.Hub.JsonSerializerOptions);
+                                // Existing node whose content can't be recovered → leave it alone, NEVER clobber.
+                                if (n.Content is not null && c is null)
+                                    return n;
+                                c ??= new Comment();
+                                return n with
+                                {
+                                    State = MeshNodeState.Active,
+                                    Content = c with { Text = text }
+                                };
+                            }, host.Hub.JsonSerializerOptions).Subscribe(
+                                _ => host.UpdateData(stateId, ""),
+                                _ => host.UpdateData(stateId, ""));
+                        });
+                    return Task.CompletedTask;
                 })));
 
         return stack;
@@ -468,7 +417,7 @@ public static class CommentsView
     private static UiControl BuildAddCommentButton(LayoutAreaHost host, string nodePath, string currentUser)
     {
         return Controls.Html("<span style=\"cursor: pointer; font-size: 0.85rem; color: var(--accent-fill-rest);\" title=\"Add Comment\">+ Comment</span>")
-            .WithClickAction(async _ =>
+            .WithClickAction(_ =>
             {
                 var commentId = Guid.NewGuid().AsString();
                 var commentPath = $"{nodePath}/{CommentsExtensions.CommentPartition}/{commentId}";
@@ -490,9 +439,10 @@ public static class CommentsView
                 };
 
                 var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
-                await nodeFactory.CreateTransientAsync(commentNode);
-
-                host.UpdateData(newCommentPathStateId, commentPath);
+                nodeFactory.CreateTransient(commentNode).Subscribe(
+                    _ => host.UpdateData(newCommentPathStateId, commentPath),
+                    _ => { /* surfaced elsewhere */ });
+                return Task.CompletedTask;
             });
     }
 }

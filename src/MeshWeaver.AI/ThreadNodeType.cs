@@ -1,10 +1,14 @@
 ﻿using System.Collections.Immutable;
+using System.Reactive.Linq;
 using System.Text.RegularExpressions;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
+using MeshWeaver.Layout;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.AI;
 
@@ -31,6 +35,21 @@ public static class ThreadNodeType
     /// Threads are created at {contextPath}/_Thread/{speakingId}.
     /// </summary>
     public const string ThreadPartition = "_Thread";
+
+    /// <summary>
+    /// The MAIN NODE of a path: everything before the first <c>/_Thread</c> segment — i.e.
+    /// "what the chat is about". <c>rbuergi/_Thread/x</c> → <c>rbuergi</c>;
+    /// <c>acme/Project/X/_Thread/y/ThreadComposer</c> → <c>acme/Project/X</c>; a path with no
+    /// <c>_Thread</c> returns unchanged. Stripping at the FIRST <c>_Thread</c> collapses any
+    /// accidental nesting (a thread/composer under another thread) back to the true main node,
+    /// so the per-(node,user) ThreadComposer never nests.
+    /// </summary>
+    public static string MainNodeOf(string path)
+    {
+        if (string.IsNullOrEmpty(path)) return path;
+        var idx = path.IndexOf($"/{ThreadPartition}", StringComparison.OrdinalIgnoreCase);
+        return idx >= 0 ? path[..idx] : path;
+    }
 
     /// <summary>
     /// Layout area for thread content and message history (default).
@@ -62,6 +81,22 @@ public static class ThreadNodeType
     public const string HeaderArea = "Header";
 
     /// <summary>
+    /// Layout area for the full-page thread hero header (gradient title block, context
+    /// back-link, live message-count subtitle, Mark Done toggle). Rendered INSIDE the
+    /// scrollable message area by the full-page chat view so it scrolls away with the
+    /// conversation rather than staying pinned above it.
+    /// </summary>
+    public const string FullHeaderArea = "FullHeader";
+
+    /// <summary>
+    /// Layout area showing the aggregated list of nodes modified across every
+    /// message of the thread, with version-before / version-after, Diff link,
+    /// per-row Revert, and a bulk "Revert All" action. Surfaced through the
+    /// node menu (Changes).
+    /// </summary>
+    public const string ChangesArea = "Changes";
+
+    /// <summary>
     /// Generates a human-readable speaking ID from message text.
     /// Takes the first few words, lowercases, replaces non-alphanumeric with hyphens,
     /// and appends a short unique suffix.
@@ -88,9 +123,11 @@ public static class ThreadNodeType
     /// <param name="contextPath">The namespace/context path (e.g., "User/Roland")</param>
     /// <param name="messageText">First message text — used for name and speaking ID</param>
     /// <param name="createdBy">User ID who creates the thread</param>
-    public static MeshNode BuildThreadNode(string contextPath, string messageText, string? createdBy = null)
+    /// <param name="speakingId">Optional pre-chosen speaking ID for the thread node; when null one is generated from <paramref name="messageText"/>.</param>
+    public static MeshNode BuildThreadNode(string contextPath, string messageText, string? createdBy = null,
+        string? speakingId = null)
     {
-        var speakingId = GenerateSpeakingId(messageText);
+        speakingId ??= GenerateSpeakingId(messageText);
         // Add _Thread partition for top-level threads. Sub-threads (delegations)
         // live directly under the parent response message — no nested _Thread.
         var ns = string.IsNullOrEmpty(contextPath)
@@ -113,8 +150,20 @@ public static class ThreadNodeType
     }
 
     /// <summary>
-    /// Builds a thread node with pre-populated messages and pending execution.
-    /// When the thread grain activates, it auto-starts execution — no separate SubmitMessageRequest needed.
+    /// Builds a thread node pre-seeded with a user message in
+    /// <see cref="Thread.PendingUserMessages"/>. The thread starts at
+    /// <see cref="ThreadExecutionStatus.Idle"/>; when the per-thread hub
+    /// activates, <c>InstallServerWatcher</c> sees the pending entry and
+    /// drives the standard claim → DispatchRound → execute flow. No
+    /// pre-allocated satellite cells, no <c>ActiveMessageId</c>, no
+    /// auto-execute trigger competing with the submission watcher.
+    ///
+    /// <para>The returned <c>UserMsgId</c> is the key used in
+    /// <c>PendingUserMessages</c>. <c>ResponseMsgId</c> is intentionally
+    /// the empty string for back-compat: <see cref="ThreadSubmissionServer.DispatchAfterClaim"/>
+    /// allocates the real response cell id when the watcher claims the
+    /// round. Callers that need the response id after dispatch should
+    /// subscribe to <see cref="Thread.ActiveMessageId"/>.</para>
     /// </summary>
     public static (MeshNode Thread, string UserMsgId, string ResponseMsgId) BuildThreadWithMessages(
         string contextPath, string messageText,
@@ -134,7 +183,19 @@ public static class ThreadNodeType
             : messageText;
 
         var userMsgId = Guid.NewGuid().ToString("N")[..8];
-        var responseMsgId = Guid.NewGuid().ToString("N")[..8];
+        var userMessage = new ThreadMessage
+        {
+            Role = "user",
+            Text = messageText,
+            CreatedBy = createdBy,
+            AgentName = agentName,
+            ModelName = modelName,
+            ContextPath = contextPath,
+            Attachments = attachments,
+            Timestamp = DateTime.UtcNow,
+            Type = ThreadMessageType.ExecutedInput,
+            Status = ThreadMessageStatus.Submitted
+        };
 
         var threadNode = new MeshNode(speakingId, ns)
         {
@@ -145,19 +206,20 @@ public static class ThreadNodeType
             Content = new Thread
             {
                 CreatedBy = createdBy,
-                Messages = ImmutableList.Create(userMsgId, responseMsgId),
-                IsExecuting = true,
-                ActiveMessageId = responseMsgId,
-                ExecutionStartedAt = DateTime.UtcNow,
-                PendingUserMessage = messageText,
-                PendingAgentName = agentName,
-                PendingModelName = modelName,
-                PendingContextPath = contextPath,
-                PendingAttachments = attachments
+                Status = ThreadExecutionStatus.Idle,
+                UserMessageIds = ImmutableList.Create(userMsgId),
+                // The pending ThreadMessage carries the round's selection
+                // (agent/model/context/attachments) — no thread-level Pending* mirror.
+                PendingUserMessages = ImmutableDictionary<string, ThreadMessage>.Empty
+                    .Add(userMsgId, userMessage)
             }
         };
 
-        return (threadNode, userMsgId, responseMsgId);
+        // ResponseMsgId is now allocated by DispatchAfterClaim, not here. Return
+        // empty string for back-compat — call sites that wanted the id pre-emptively
+        // (e.g. for parent tool-call tracking) should read Thread.ActiveMessageId
+        // from the stream after the submission watcher claims.
+        return (threadNode, userMsgId, "");
     }
 
     /// <summary>
@@ -181,6 +243,27 @@ public static class ThreadNodeType
     {
         builder.AddMeshNodes(CreateMeshNode(hubConfiguration));
         builder.AddAutocompleteExcludedTypes(NodeType);
+        // Public-read on the Thread NodeType HOST hub (address = "Thread") —
+        // grants any authenticated user Read on the type's shared metadata
+        // (layout definitions, schema). This is the type DEFINITION, not the
+        // per-instance thread data — instance access is gated by RLS on the
+        // node's mainNode/path separately. Without this, per-instance Thread
+        // hubs can't subscribe to their type's MeshNodeReference at activation,
+        // surfacing as "Access denied: user '<thread-instance-path>' lacks
+        // Read permission on 'Thread'" and the chat view never loads. Matches
+        // Agent, User, Code, Markdown, etc.
+        builder.ConfigureNodeTypeAccess(a => a.WithPublicRead(NodeType));
+        // Per-instance access: Thread is a satellite — Read requires Read on
+        // the conversation's MainNode, Create/Update/Delete require Update
+        // on the MainNode. Matches Comment / Activity / TrackedChange.
+        builder.ConfigureServices(services =>
+        {
+            services.AddSingleton<INodeTypeAccessRule>(sp =>
+                new MeshWeaver.Graph.Security.SatelliteAccessRule(
+                    NodeType,
+                    sp.GetRequiredService<IMessageHub>()));
+            return services;
+        });
         return builder;
     }
 
@@ -195,11 +278,71 @@ public static class ThreadNodeType
             Icon = DefaultIcon,
             IsSatelliteType = true,
             ExcludeFromContext = ImmutableHashSet.Create("search"),
-            AssemblyLocation = typeof(ThreadNodeType).Assembly.Location,
-            HubConfiguration = config => config
-                .AddThreadLayoutAreas()
-                .AddThreadExecution()
-                .AddMeshDataSource(source => source
-                    .WithContentType<Thread>())
+            // The NodeType carries the GUI-create protocol: creating a Thread from the "+"
+            // (anywhere) opens the new-chat composer (the per-user ThreadComposer / new-thread
+            // view) and creates nothing up front — the thread is created on submit, NOT via
+            // the generic Create form. Injected as BuildCreate so the generic CreateLayoutArea
+            // delegates to us regardless of which "+" routed here.
+            Content = new MeshWeaver.Graph.Configuration.NodeTypeDefinition
+            {
+                BuildCreate = (host, ns) =>
+                {
+                    // Composer node, owned per (main node, user). The MAIN NODE is the path
+                    // before /_Thread (what the chat is ABOUT); the user is the signed-in
+                    // identity. For the user's own partition this is the per-user default
+                    // {user}/_Thread/ThreadComposer (seeded at onboarding); for any other node it's
+                    // {node}/_Thread/{user}/ThreadComposer. Always under _Thread with ThreadComposer as the
+                    // leaf — NEVER the bare {node}/_Thread/ThreadComposer, which doesn't read back.
+                    var mainNode = MainNodeOf(ns);
+                    var accessSvc = host.Hub.ServiceProvider.GetService<AccessService>();
+                    var user = accessSvc?.Context?.ObjectId ?? accessSvc?.CircuitContext?.ObjectId;
+                    var chatInputPath =
+                        string.IsNullOrEmpty(user) || string.Equals(mainNode, user, StringComparison.OrdinalIgnoreCase)
+                            ? ThreadComposerNodeType.PathFor(string.IsNullOrEmpty(user) ? mainNode : user)
+                            : ThreadComposerNodeType.PathForNode(mainNode, user);
+                    var overviewHref = $"/{chatInputPath}";
+                    var meshService = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
+                    var logger = host.Hub.ServiceProvider.GetService<ILoggerFactory>()
+                        ?.CreateLogger("MeshWeaver.AI.ThreadCreate");
+                    var node = MeshNode.FromPath(chatInputPath) with
+                    {
+                        Name = "New Chat",
+                        NodeType = ThreadComposerNodeType.NodeType,
+                        MainNode = mainNode,
+                        State = MeshNodeState.Active,
+                    };
+                    // Create then navigate. A real failure (anything other than "already exists")
+                    // leaves the composer overview empty — surface it in the log instead of
+                    // silently swallowing; we still navigate so an existing composer opens.
+                    return meshService.CreateNode(node)
+                        .Take(1)
+                        .Select(_ => (UiControl?)new RedirectControl(overviewHref))
+                        .Catch<UiControl?, Exception>(ex =>
+                        {
+                            logger?.LogWarning(ex,
+                                "[ThreadCreate] ThreadComposer create failed at {Path}; navigating to overview anyway",
+                                chatInputPath);
+                            return Observable.Return<UiControl?>(new RedirectControl(overviewHref));
+                        });
+                }
+            },
+            // Register AI types DIRECTLY on the per-thread hub config — not just
+            // via ConfigureDefaultNodeHub. The polymorphic resolver discriminator
+            // is picked from the SENDING hub's TypeRegistry; if Thread NodeType's
+            // HubConfiguration runs in isolation (a test or host that didn't wire
+            // ConfigureDefaultNodeHub), unregistered types fall back to FullName
+            // on the wire and the receiver (whose registry has the short name)
+            // can't resolve $type → DeliveryFailure on every response.
+            // See Doc/Architecture/DebuggingMessageFlow.md "Watch for FQN vs
+            // short-name mismatches".
+            HubConfiguration = config =>
+            {
+                config.TypeRegistry.AddAITypes();
+                return config
+                    .AddThreadLayoutAreas()
+                    .AddThreadExecution()
+                    .AddMeshDataSource(source => source
+                        .WithContentType<Thread>());
+            }
         };
 }

@@ -1,10 +1,10 @@
 ﻿using System.Threading;
 using System.Threading.Tasks;
-using FluentAssertions;
-using FluentAssertions.Extensions;
 using MeshWeaver.Fixture;
 using Xunit;
 
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Messaging.Hub.Test;
 
 public class HostedHubTest(ITestOutputHelper output) : HubTestBase(output)
@@ -33,12 +33,13 @@ public class HostedHubTest(ITestOutputHelper output) : HubTestBase(output)
         var client = GetClient();
         var subHub =
             client.ServiceProvider.CreateMessageHub(new Address("new", "1"),
+                // Plumbing fixture with no user → posts as infrastructure (System), per the
+                // never-null AccessContext invariant (feedback_access_context_always_set).
                 conf => conf.WithTypes(typeof(Ping), typeof(Pong))
+                    .WithPostingIdentity(PostingIdentity.System)
                 );
         var response = await subHub
-            .AwaitResponse(new Ping(), o => o.WithTarget(CreateHostAddress())
-                , new CancellationTokenSource(5.Seconds()).Token
-                );
+            .Observe(new Ping(), o => o.WithTarget(CreateHostAddress())).Should().Within(5.Seconds()).Emit();
         response.Message.Should().BeOfType<Pong>();
     }
 

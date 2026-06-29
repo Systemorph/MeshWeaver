@@ -14,18 +14,16 @@ namespace MeshWeaver.Graph;
 /// </summary>
 public static class MarkdownNotebookLayoutArea
 {
+    /// <summary>
+    /// Renders the Notebook layout area — markdown content shown as interactive code/markdown cells.
+    /// </summary>
+    /// <param name="host">The layout area host rendering the area.</param>
+    /// <param name="_">The rendering context for the area.</param>
+    /// <returns>An observable stream of the view for the Notebook layout area.</returns>
     public static IObservable<UiControl?> Notebook(LayoutAreaHost host, RenderingContext _)
     {
-        var hubPath = host.Hub.Address.ToString();
-
-        var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
-            ?? Observable.Return(Array.Empty<MeshNode>());
-
-        return nodeStream.Select(nodes =>
-        {
-            var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-            return BuildNotebookView(host, node);
-        });
+        return host.Workspace.GetMeshNodeStream()
+            .Select(node => BuildNotebookView(host, node));
     }
 
     private static UiControl BuildNotebookView(LayoutAreaHost host, MeshNode? node)

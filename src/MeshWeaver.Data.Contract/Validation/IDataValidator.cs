@@ -4,95 +4,52 @@ namespace MeshWeaver.Data.Validation;
 
 /// <summary>
 /// Unified validator interface for all data operations.
-/// Mirrors the INodeValidator pattern from MeshWeaver.Mesh.
 /// </summary>
 public interface IDataValidator
 {
     /// <summary>
-    /// Validates a data operation.
+    /// Validates a data operation reactively. Implementations bridge to async I/O at this boundary.
     /// </summary>
-    /// <param name="context">Context containing the operation, entity, and optional request</param>
-    /// <param name="ct">Cancellation token</param>
-    /// <returns>Validation result</returns>
-    Task<DataValidationResult> ValidateAsync(DataValidationContext context, CancellationToken ct = default);
+    IObservable<DataValidationResult> Validate(DataValidationContext context);
 
     /// <summary>
     /// Operations this validator handles. Empty collection means all operations.
-    /// Use this to create validators that only handle specific operations.
     /// </summary>
     IReadOnlyCollection<DataOperation> SupportedOperations { get; }
 }
 
 /// <summary>
-/// Context for data validation containing all relevant information.
+/// Context describing a single data operation to be validated.
 /// </summary>
 public record DataValidationContext
 {
-    /// <summary>
-    /// The operation being validated.
-    /// </summary>
+    /// <summary>The kind of operation being validated.</summary>
     public required DataOperation Operation { get; init; }
-
-    /// <summary>
-    /// The entity being operated on.
-    /// For Create: the new entity being created.
-    /// For Read: the entity being read (or null for collection reads).
-    /// For Update: the updated entity (new state).
-    /// For Delete: the entity being deleted.
-    /// </summary>
+    /// <summary>The entity being created, updated, deleted or read.</summary>
     public required object Entity { get; init; }
-
-    /// <summary>
-    /// For Update operations, the existing entity before modification.
-    /// Null for other operations.
-    /// </summary>
+    /// <summary>The current persisted entity, for update/delete operations; null otherwise.</summary>
     public object? ExistingEntity { get; init; }
-
-    /// <summary>
-    /// The original request object (DataChangeRequest for write operations).
-    /// Null for Read operations.
-    /// </summary>
+    /// <summary>The originating request, if available.</summary>
     public object? Request { get; init; }
-
-    /// <summary>
-    /// The type of entity being operated on.
-    /// </summary>
+    /// <summary>The CLR type of the entity.</summary>
     public required Type EntityType { get; init; }
-
-    /// <summary>
-    /// The current user's access context.
-    /// May be null for anonymous operations.
-    /// </summary>
+    /// <summary>The access context of the caller, or null for anonymous operations.</summary>
     public AccessContext? AccessContext { get; init; }
-
-    /// <summary>
-    /// Optional service provider for resolving additional services.
-    /// </summary>
+    /// <summary>Optional service provider for resolving additional services during validation.</summary>
     public IServiceProvider? ServiceProvider { get; init; }
 }
 
 /// <summary>
-/// Data operations that can be validated.
+/// The kind of data operation being performed or validated.
 /// </summary>
 public enum DataOperation
 {
-    /// <summary>
-    /// Reading data from the workspace.
-    /// </summary>
+    /// <summary>Reading an entity.</summary>
     Read,
-
-    /// <summary>
-    /// Creating new data entities.
-    /// </summary>
+    /// <summary>Creating a new entity.</summary>
     Create,
-
-    /// <summary>
-    /// Updating existing data entities.
-    /// </summary>
+    /// <summary>Updating an existing entity.</summary>
     Update,
-
-    /// <summary>
-    /// Deleting data entities.
-    /// </summary>
+    /// <summary>Deleting an entity.</summary>
     Delete
 }

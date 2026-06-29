@@ -19,13 +19,27 @@ namespace MeshWeaver.Markdown.Export.Layout;
 [Browsable(false)]
 public static class ExportDocumentLayoutArea
 {
+    /// <summary>Area name for the PDF export dialog.</summary>
     public const string PdfArea = "ExportPdf";
+    /// <summary>Area name for the DOCX export dialog.</summary>
     public const string DocxArea = "ExportDocx";
 
+    /// <summary>
+    /// Renders the export dialog with PDF selected as the default format.
+    /// </summary>
+    /// <param name="host">The layout area host providing hub and workspace access.</param>
+    /// <param name="_">The rendering context (unused).</param>
+    /// <returns>An observable stream of the export dialog control.</returns>
     [Browsable(false)]
     public static IObservable<UiControl?> RenderPdf(LayoutAreaHost host, RenderingContext _) =>
         RenderExport(host, defaultFormat: "pdf");
 
+    /// <summary>
+    /// Renders the export dialog with DOCX selected as the default format.
+    /// </summary>
+    /// <param name="host">The layout area host providing hub and workspace access.</param>
+    /// <param name="_">The rendering context (unused).</param>
+    /// <returns>An observable stream of the export dialog control.</returns>
     [Browsable(false)]
     public static IObservable<UiControl?> RenderDocx(LayoutAreaHost host, RenderingContext _) =>
         RenderExport(host, defaultFormat: "docx");
@@ -54,24 +68,23 @@ public static class ExportDocumentLayoutArea
             o => o.WithTarget(host.Hub.Address));
         if (delivery is null)
             return subject.AsObservable();
-        // RegisterCallback returns a Task<IMessageDelivery>. Hook a continuation instead of
-        // awaiting — awaiting blocks the hub's message pump and deadlocks.
-        host.Hub.RegisterCallback(delivery, (d, _) => Task.FromResult(d), default)
-            .ContinueWith(t =>
-            {
-                if (t.Status != TaskStatus.RanToCompletion) return;
-                if (t.Result is IMessageDelivery<GetDataResponse> resp
-                    && resp.Message.Data is MeshNode node)
+        // Use Observe → Subscribe so DeliveryFailure flows through OnError without throwing.
+        host.Hub.Observe(delivery)
+            .Subscribe(
+                d =>
                 {
-                    subject.OnNext(new ExportDocumentControl
+                    if (d.Message is GetDataResponse resp && resp.Data is MeshNode node)
                     {
-                        SourcePath = hubPath,
-                        NodeName = node.Name,
-                        DefaultFormat = defaultFormat,
-                        HasDescendants = false
-                    });
-                }
-            }, TaskContinuationOptions.ExecuteSynchronously);
+                        subject.OnNext(new ExportDocumentControl
+                        {
+                            SourcePath = hubPath,
+                            NodeName = node.Name,
+                            DefaultFormat = defaultFormat,
+                            HasDescendants = false
+                        });
+                    }
+                },
+                _ => { /* leave seed control in place on failure */ });
 
         return subject.AsObservable();
     }

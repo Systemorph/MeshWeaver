@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
-using FluentAssertions;
 using MeshWeaver.Markdown.Collaboration;
 using Xunit;
 
@@ -183,7 +182,7 @@ public class CollaborativeEditingIntegrationTests
         content.Should().StartWith("Well, Hello");
 
         // Comment markers should still be in the content
-        var comments = MarkdownAnnotationParser.ExtractComments(content);
+        var comments = MarkdownAnnotationParser.ExtractComments(content!);
         comments.Should().HaveCount(1);
         comments[0].MarkerId.Should().Be("c1");
         comments[0].AnnotatedText.Should().Be("world");

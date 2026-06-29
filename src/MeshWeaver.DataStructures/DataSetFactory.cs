@@ -1,13 +1,26 @@
 #nullable enable
 namespace MeshWeaver.DataStructures
 {
+    /// <summary>
+    /// Factory and converter helpers for creating <c>IDataSet</c> instances and bridging
+    /// to and from ADO.NET <c>System.Data.DataSet</c>.
+    /// </summary>
     public static class DataSetFactory
     {
+        /// <summary>Creates a new, empty data set with the given name.</summary>
+        /// <param name="name">Name for the new data set.</param>
+        /// <returns>The newly created data set.</returns>
         public static IDataSet Create(string name)
         {
             return new DataSet(name);
         }
 
+        /// <summary>
+        /// Converts an ADO.NET <c>System.Data.DataSet</c> into a lightweight <c>IDataSet</c>,
+        /// copying its tables, columns, and rows. <c>DBNull</c> cell values are mapped to <c>null</c>.
+        /// </summary>
+        /// <param name="dataSet">The ADO.NET data set to convert.</param>
+        /// <returns>An equivalent lightweight data set.</returns>
         public static IDataSet ConvertFromAdoNet(System.Data.DataSet dataSet)
         {
             if (dataSet == null)
@@ -33,6 +46,12 @@ namespace MeshWeaver.DataStructures
             return ret;
         }
 
+        /// <summary>
+        /// Converts a lightweight <c>IDataSet</c> into an ADO.NET <c>System.Data.DataSet</c>,
+        /// copying its tables, columns, and rows.
+        /// </summary>
+        /// <param name="dataSet">The lightweight data set to convert.</param>
+        /// <returns>An equivalent ADO.NET data set.</returns>
         public static System.Data.DataSet ConvertToAdoNet(IDataSet dataSet)
         {
             if (dataSet == null)

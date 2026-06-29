@@ -6,8 +6,6 @@ using System.Linq;
 using System.Reactive.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
-using FluentAssertions;
-using FluentAssertions.Extensions;
 using MeshWeaver.Data;
 using MeshWeaver.Domain;
 using MeshWeaver.Fixture;
@@ -17,6 +15,7 @@ using MeshWeaver.Layout.DataBinding;
 using MeshWeaver.Messaging;
 using Xunit;
 
+using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Layout.Test;
 
 /// <summary>
@@ -172,8 +171,7 @@ public class InlineEditingTest(ITestOutputHelper output) : HubTestBase(output)
 
         var control = await area
             .GetControlStream(InlineEditView)
-            .Timeout(10.Seconds())
-            .FirstAsync(x => x is not null);
+            .Should().Within(10.Seconds()).Match(x => x is not null);
 
         // Should render as a LayoutGridControl
         var grid = control.Should().BeOfType<LayoutGridControl>().Subject;
@@ -198,8 +196,7 @@ public class InlineEditingTest(ITestOutputHelper output) : HubTestBase(output)
         // Wait for initial render
         var control = await stream
             .GetControlStream(InlineEditView)
-            .Timeout(10.Seconds())
-            .FirstAsync(x => x is not null);
+            .Should().Within(10.Seconds()).Match(x => x is not null);
 
         var grid = control.Should().BeOfType<LayoutGridControl>().Subject;
 
@@ -209,21 +206,20 @@ public class InlineEditingTest(ITestOutputHelper output) : HubTestBase(output)
         // Get the body control that should have a click action
         var titleControl = await stream
             .GetControlStream(titleValueArea)
-            .Timeout(5.Seconds())
-            .FirstAsync(x => x is not null);
+            .Should().Within(5.Seconds()).Match(x => x is not null);
 
         // Initial control should be a Body (Label) control
         titleControl.Should().BeOfType<LabelControl>();
+
+        var editControlStream = stream
+            .GetControlStream(titleValueArea)
+            .Where(x => x is TextFieldControl);
 
         // Send click event to switch to edit mode
         client.Post(new ClickedEvent(titleValueArea, stream.StreamId), o => o.WithTarget(CreateHostAddress()));
 
         // Wait for the control to switch to TextField
-        var editControl = await stream
-            .GetControlStream(titleValueArea)
-            .Where(x => x is TextFieldControl)
-            .Timeout(5.Seconds())
-            .FirstAsync();
+        var editControl = await editControlStream.Should().Within(5.Seconds()).Emit();
 
         // Should now be a TextFieldControl
         var textField = editControl.Should().BeOfType<TextFieldControl>().Subject;
@@ -245,15 +241,12 @@ public class InlineEditingTest(ITestOutputHelper output) : HubTestBase(output)
         // Wait for initial render
         await stream
             .GetControlStream(InlineEditView)
-            .Timeout(10.Seconds())
-            .FirstAsync(x => x is not null);
+            .Should().Within(10.Seconds()).Match(x => x is not null);
 
         // Read initial data from stream
         var initialData = await stream
             .GetDataStream<TestContent>(new JsonPointerReference("/data/\"test_content\""))
-            .Where(x => x is not null)
-            .Timeout(5.Seconds())
-            .FirstAsync();
+            .Should().Within(5.Seconds()).Match(x => x is not null);
 
         initialData.Should().NotBeNull();
         initialData!.Title.Should().Be("Test Title");
@@ -261,15 +254,10 @@ public class InlineEditingTest(ITestOutputHelper output) : HubTestBase(output)
         // Update the title via the data stream
         stream.UpdatePointer("Updated Title", "/data/\"test_content\"", new JsonPointerReference("title"));
 
-        // Wait for the update to propagate
-        await Task.Delay(100, TestContext.Current.CancellationToken);
-
-        // Read updated data
+        // Read updated data (the predicate waits for the update to propagate)
         var updatedData = await stream
             .GetDataStream<TestContent>(new JsonPointerReference("/data/\"test_content\""))
-            .Where(x => x?.Title == "Updated Title")
-            .Timeout(5.Seconds())
-            .FirstAsync();
+            .Should().Within(5.Seconds()).Match(x => x?.Title == "Updated Title");
 
         updatedData.Should().NotBeNull();
         updatedData!.Title.Should().Be("Updated Title");
@@ -293,14 +281,18 @@ public class InlineEditingTest(ITestOutputHelper output) : HubTestBase(output)
         // Wait for initial render
         await stream
             .GetControlStream(AutoSaveTestView)
-            .Timeout(10.Seconds())
-            .FirstAsync(x => x is not null);
+            .Should().Within(10.Seconds()).Match(x => x is not null);
 
         // Update the title via the client
         stream.UpdatePointer("Server Should See This", "/data/\"autosave_test\"", new JsonPointerReference("title"));
 
-        // Wait for debounce and server-side processing
-        await Task.Delay(200, TestContext.Current.CancellationToken);
+        // The server-side subscription debounces and appends to the shared list (not an observable),
+        // so probe the list until it reflects the update rather than sleeping for a fixed window.
+        await Observable.Interval(50.Milliseconds())
+            .StartWith(0L)
+            .Select(_ => ServerSideUpdates.ToArray())
+            .Where(updates => updates.Any(u => u.Contains("Server Should See This")))
+            .Should().Within(5.Seconds()).Emit();
 
         // Verify server-side subscription received the update
         ServerSideUpdates.Should().NotBeEmpty("Server-side subscription should receive client updates");
@@ -347,8 +339,7 @@ public class InlineEditingTest(ITestOutputHelper output) : HubTestBase(output)
 
         var control = await stream
             .GetControlStream(InlineEditView)
-            .Timeout(10.Seconds())
-            .FirstAsync(x => x is not null);
+            .Should().Within(10.Seconds()).Match(x => x is not null);
 
         var grid = control.Should().BeOfType<LayoutGridControl>().Subject;
 
@@ -357,8 +348,7 @@ public class InlineEditingTest(ITestOutputHelper output) : HubTestBase(output)
 
         var idControl = await stream
             .GetControlStream(idValueArea)
-            .Timeout(5.Seconds())
-            .FirstAsync(x => x is not null);
+            .Should().Within(5.Seconds()).Match(x => x is not null);
 
         // The Id control should be a Label control (readonly properties don't switch to edit)
         idControl.Should().BeOfType<LabelControl>();
@@ -367,21 +357,18 @@ public class InlineEditingTest(ITestOutputHelper output) : HubTestBase(output)
         // (Readonly properties stay as LabelControl)
         client.Post(new ClickedEvent(idValueArea, stream.StreamId), o => o.WithTarget(CreateHostAddress()));
 
-        // Wait a bit and verify control is still LabelControl
-        await Task.Delay(200, TestContext.Current.CancellationToken);
-
-        var stillLabel = await stream
+        // Negative assertion: a [Key] (readonly) property must never switch to a TextField.
+        // There is no positive signal to await, so confirm no TextField emission within a short window.
+        await stream
             .GetControlStream(idValueArea)
-            .Timeout(5.Seconds())
-            .FirstAsync(x => x is not null);
-
-        stillLabel.Should().BeOfType<LabelControl>();
+            .Where(x => x is TextFieldControl)
+            .Should().NotEmit(200.Milliseconds());
     }
 }
 
 /// <summary>
 /// Tests for inline editing with actual data persistence via DataChangeRequest.
-/// Verifies the complete flow: UpdatePointer → auto-save → DataChangeRequest → GetDataRequest returns changed value.
+/// Verifies the complete flow: UpdatePointer â†’ auto-save â†’ DataChangeRequest â†’ GetDataRequest returns changed value.
 /// </summary>
 [Collection("InlineEditingPersistenceTests")]
 public class InlineEditingPersistenceTest(ITestOutputHelper output) : HubTestBase(output)
@@ -444,7 +431,7 @@ public class InlineEditingPersistenceTest(ITestOutputHelper output) : HubTestBas
             host.Stream.GetDataStream<PersistedContent>(dataId)
                 .Do(content => Output.WriteLine($"Data stream emitted: {content?.Title ?? "null"}"))
                 .Debounce(TimeSpan.FromMilliseconds(100)) // Short debounce for testing
-                .Subscribe(async updatedContent =>
+                .Subscribe(updatedContent =>
                 {
                     if (updatedContent == null)
                     {
@@ -466,12 +453,10 @@ public class InlineEditingPersistenceTest(ITestOutputHelper output) : HubTestBas
                     // Update initial to prevent re-sending
                     initialJson = currentJson;
 
-                    // Issue DataChangeRequest to persist the change
-                    var response = await host.Hub.AwaitResponse<DataChangeResponse>(
-                        new DataChangeRequest().WithUpdates(updatedContent),
-                        o => o.WithTarget(host.Hub.Address));
-
-                    Output.WriteLine($"Auto-save: DataChangeResponse status = {response.Message.Status}");
+                    // Issue DataChangeRequest to persist the change (reactive, non-blocking)
+                    host.Hub.Observe<DataChangeResponse>(new DataChangeRequest().WithUpdates(updatedContent), o => o.WithTarget(host.Hub.Address))
+                        .Subscribe(response =>
+                            Output.WriteLine($"Auto-save: DataChangeResponse status = {response.Message.Status}"));
                 }));
     }
 
@@ -511,16 +496,14 @@ public class InlineEditingPersistenceTest(ITestOutputHelper output) : HubTestBas
         // Wait for initial render
         var control = await layoutStream
             .GetControlStream(PersistenceTestView)
-            .Timeout(10.Seconds())
-            .FirstAsync(x => x is StackControl);
+            .Should().Within(10.Seconds()).Match(x => x is StackControl);
 
         Output.WriteLine($"Initial control rendered: {control?.GetType().Name}");
 
         // Verify initial data via workspace stream
         var initialItems = await workspace
             .GetRemoteStream<PersistedContent>(hostAddress)!
-            .Timeout(5.Seconds())
-            .FirstAsync();
+            .Should().Within(5.Seconds()).Emit();
 
         var initialItem = initialItems.First(i => i.Id == "item-1");
         initialItem.Title.Should().Be("First Item");
@@ -532,16 +515,11 @@ public class InlineEditingPersistenceTest(ITestOutputHelper output) : HubTestBas
 
         layoutStream.UpdatePointer(newTitle, "/data/\"persisted_item\"", new JsonPointerReference("title"));
 
-        // Wait for auto-save debounce (100ms) + DataChangeRequest processing
-        Output.WriteLine("Waiting for auto-save...");
-        await Task.Delay(500, TestContext.Current.CancellationToken);
-
-        // Verify the data was persisted via workspace stream (backed by AddData)
+        // Verify the data was persisted via workspace stream (backed by AddData).
+        // The predicate waits for auto-save debounce + DataChangeRequest processing.
         var updatedItems = await workspace
             .GetRemoteStream<PersistedContent>(hostAddress)!
-            .Where(items => items.Any(i => i.Id == "item-1" && i.Title == newTitle))
-            .Timeout(5.Seconds())
-            .FirstAsync();
+            .Should().Within(5.Seconds()).Match(items => items.Any(i => i.Id == "item-1" && i.Title == newTitle));
 
         var updatedItem = updatedItems.First(i => i.Id == "item-1");
         Output.WriteLine($"Updated item: Title={updatedItem.Title}");
@@ -566,29 +544,25 @@ public class InlineEditingPersistenceTest(ITestOutputHelper output) : HubTestBas
         // Wait for initial render
         await layoutStream
             .GetControlStream(PersistenceTestView)
-            .Timeout(10.Seconds())
-            .FirstAsync(x => x is StackControl);
+            .Should().Within(10.Seconds()).Match(x => x is StackControl);
 
-        // Rapidly update multiple times
+        // Rapidly update multiple times. No Task.Delay between calls — back-to-back
+        // UpdatePointer fires inside the debounce window naturally; the Match() below
+        // waits on the final state via the stream, not on a wall-clock sleep.
         var finalTitle = $"Final Title {DateTime.Now:HHmmss}";
         for (int i = 1; i <= 5; i++)
         {
             var intermediateTitle = i < 5 ? $"Intermediate {i}" : finalTitle;
             layoutStream.UpdatePointer(intermediateTitle, "/data/\"persisted_item\"", new JsonPointerReference("title"));
-            await Task.Delay(20, TestContext.Current.CancellationToken); // Less than debounce window
         }
 
         Output.WriteLine($"Sent 5 rapid updates, final title: {finalTitle}");
 
-        // Wait for debounce and persistence
-        await Task.Delay(500, TestContext.Current.CancellationToken);
-
-        // Verify only the final value was persisted
+        // Verify only the final value was persisted — the stream predicate
+        // is the canonical wait-for-condition shape (no Task.Delay).
         var items = await workspace
             .GetRemoteStream<PersistedContent>(hostAddress)!
-            .Where(items => items.Any(i => i.Id == "item-1" && i.Title == finalTitle))
-            .Timeout(5.Seconds())
-            .FirstAsync();
+            .Should().Within(10.Seconds()).Match(items => items.Any(i => i.Id == "item-1" && i.Title == finalTitle));
 
         var item = items.First(i => i.Id == "item-1");
         item.Title.Should().Be(finalTitle, "Only the final debounced value should be persisted");
@@ -611,14 +585,12 @@ public class InlineEditingPersistenceTest(ITestOutputHelper output) : HubTestBas
         // Wait for initial render
         await layoutStream
             .GetControlStream(PersistenceTestView)
-            .Timeout(10.Seconds())
-            .FirstAsync(x => x is StackControl);
+            .Should().Within(10.Seconds()).Match(x => x is StackControl);
 
         // Verify initial count
         var initialItems = await workspace
             .GetRemoteStream<PersistedContent>(hostAddress)!
-            .Timeout(5.Seconds())
-            .FirstAsync();
+            .Should().Within(5.Seconds()).Emit();
 
         var initialItem = initialItems.First(i => i.Id == "item-1");
         initialItem.Count.Should().Be(10);
@@ -629,15 +601,10 @@ public class InlineEditingPersistenceTest(ITestOutputHelper output) : HubTestBas
 
         layoutStream.UpdatePointer(newCount, "/data/\"persisted_item\"", new JsonPointerReference("count"));
 
-        // Wait for auto-save
-        await Task.Delay(500, TestContext.Current.CancellationToken);
-
-        // Verify persistence
+        // Verify persistence (the predicate waits for the auto-save to land)
         var updatedItems = await workspace
             .GetRemoteStream<PersistedContent>(hostAddress)!
-            .Where(items => items.Any(i => i.Id == "item-1" && i.Count == newCount))
-            .Timeout(5.Seconds())
-            .FirstAsync();
+            .Should().Within(5.Seconds()).Match(items => items.Any(i => i.Id == "item-1" && i.Count == newCount));
 
         var updatedItem = updatedItems.First(i => i.Id == "item-1");
         updatedItem.Count.Should().Be(newCount);
@@ -704,7 +671,7 @@ public class ObjectTypeAutoSaveTest(ITestOutputHelper output) : HubTestBase(outp
             host.Stream.GetDataStream<object>(dataId)
                 .Do(content => Output.WriteLine($"Object stream emitted: {content?.GetType().Name ?? "null"}"))
                 .Debounce(TimeSpan.FromMilliseconds(100))
-                .Subscribe(async updatedContent =>
+                .Subscribe(updatedContent =>
                 {
                     Output.WriteLine($"Auto-save (object) received: {updatedContent?.GetType().Name ?? "null"}");
 
@@ -746,10 +713,10 @@ public class ObjectTypeAutoSaveTest(ITestOutputHelper output) : HubTestBase(outp
 
                     if (typedContent != null)
                     {
-                        var response = await host.Hub.AwaitResponse<DataChangeResponse>(
-                            new DataChangeRequest().WithUpdates(typedContent),
-                            o => o.WithTarget(host.Hub.Address));
-                        Output.WriteLine($"Auto-save (object): DataChangeResponse status = {response.Message.Status}");
+                        // Reactive, non-blocking — fire the persist request and log the response.
+                        host.Hub.Observe<DataChangeResponse>(new DataChangeRequest().WithUpdates(typedContent), o => o.WithTarget(host.Hub.Address))
+                            .Subscribe(response =>
+                                Output.WriteLine($"Auto-save (object): DataChangeResponse status = {response.Message.Status}"));
                     }
                 }));
     }
@@ -791,8 +758,7 @@ public class ObjectTypeAutoSaveTest(ITestOutputHelper output) : HubTestBase(outp
         // Wait for initial render
         await layoutStream
             .GetControlStream(ObjectAutoSaveView)
-            .Timeout(10.Seconds())
-            .FirstAsync(x => x is StackControl);
+            .Should().Within(10.Seconds()).Match(x => x is StackControl);
 
         Output.WriteLine("View rendered. Sending UpdatePointer...");
 
@@ -800,9 +766,14 @@ public class ObjectTypeAutoSaveTest(ITestOutputHelper output) : HubTestBase(outp
         var newName = $"Updated Object {DateTime.Now:HHmmss}";
         layoutStream.UpdatePointer(newName, "/data/\"object_item\"", new JsonPointerReference("name"));
 
-        // Wait for auto-save
+        // The auto-save handler writes to static fields (not observables), so probe them until they
+        // reflect the update rather than sleeping for a fixed window.
         Output.WriteLine("Waiting for auto-save debounce...");
-        await Task.Delay(500, TestContext.Current.CancellationToken);
+        await Observable.Interval(50.Milliseconds())
+            .StartWith(0L)
+            .Select(_ => (Triggered: AutoSaveTriggered, Name: AutoSavedName))
+            .Where(s => s.Triggered && s.Name == newName)
+            .Should().Within(5.Seconds()).Emit();
 
         // Verify auto-save was triggered
         Output.WriteLine($"AutoSaveTriggered: {AutoSaveTriggered}, AutoSavedName: {AutoSavedName}");
@@ -812,9 +783,7 @@ public class ObjectTypeAutoSaveTest(ITestOutputHelper output) : HubTestBase(outp
         // Verify the data was actually persisted
         var items = await workspace
             .GetRemoteStream<TestItem>(hostAddress)!
-            .Where(items => items.Any(i => i.Id == "obj-1" && i.Name == newName))
-            .Timeout(5.Seconds())
-            .FirstAsync();
+            .Should().Within(5.Seconds()).Match(items => items.Any(i => i.Id == "obj-1" && i.Name == newName));
 
         var item = items.First(i => i.Id == "obj-1");
         item.Name.Should().Be(newName);

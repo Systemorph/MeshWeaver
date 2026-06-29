@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
-using FluentAssertions;
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
 
@@ -121,7 +120,8 @@ public static class LayoutTestExtensions
     {
         var control = root.FindControlForProperty(propertyName);
         control.Should().NotBeNull($"Control for property '{propertyName}' should exist");
-        control.Should().BeOfType(expectedControlType, $"Property '{propertyName}' should use {expectedControlType.Name}");
+        // The library's BeOfType is generic-only; assert the runtime type against the Type variable.
+        control!.GetType().Should().Be(expectedControlType, $"Property '{propertyName}' should use {expectedControlType.Name}");
     }
 
     /// <summary>

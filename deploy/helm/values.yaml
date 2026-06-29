@@ -1,0 +1,106 @@
+parameters: {}
+# ---- Self-update (in-pod patch of the portal's own deployment) -------------
+# The portal polls the registry and, on Kubernetes, patches its own deployment to a newer image per
+# the Admin/UpdatePolicy node (see Doc/Architecture/ReleaseStrategy). The chart always creates the
+# ServiceAccount + RBAC so the pod CAN patch its own deployments (works on local k3s too). For ACR
+# polling on AKS, set azureClientId to the workload-identity UAMI client id (AcrPull on the registry);
+# leave empty for local/self-host (the in-cluster patch still works; ACR polling just won't auth).
+selfUpdate:
+  azureClientId: ""
+# ---- External Ollama (local self-host) ------------------------------------
+# Front a host-native Ollama with an in-cluster Service so the portal addresses
+# it by name (http://ollama:11434/v1) instead of a host-gateway IP. On macOS the
+# GPU is reachable only from host processes (Docker/k8s have no Metal passthrough),
+# so Ollama runs on the host and `host` is the cluster's host gateway (Colima:
+# 192.168.5.2). Disabled by default (neutral chart); a local overlay turns it on.
+ollama:
+  external:
+    enabled: false
+    host: ""        # cluster host-gateway IP of the host running Ollama
+    port: 11434
+# ---- Portal Ingress (TLS via an ingress controller) -----------------------
+# Off by default (cloud envs wire ingress/TLS their own way). A self-host overlay
+# enables it with a hostname + a pre-created TLS secret. The proxy-*-timeout
+# annotations keep the Blazor Server SignalR circuit (WebSocket) alive.
+ingress:
+  enabled: false
+  className: "nginx"
+  host: ""          # e.g. memex.localtest.me (resolves to 127.0.0.1)
+  tlsSecret: ""     # name of a kubernetes.io/tls secret in this namespace
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+secrets:
+  memex_postgres:
+    memex_postgres_password: ""
+  memex_migration:
+    ConnectionStrings__memex: ""
+    memex_postgres_password: ""
+    MEMEX_URI: ""
+  memex_portal:
+    ConnectionStrings__memex: ""
+    memex_postgres_password: ""
+    MEMEX_URI: ""
+    # AI provider keys — empty by default (neutral chart). Set in an overlay
+    # (e.g. values.aks.yaml) or via --set / Key Vault CSI. Empty = no system
+    # catalog seeded for that provider.
+    Anthropic__ApiKey: ""
+    AzureFoundry__ApiKey: ""
+    Ai__KeyProtection__MasterKey: ""
+config:
+  memex_postgres:
+    POSTGRES_HOST_AUTH_METHOD: "scram-sha-256"
+    POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256 --auth-local=scram-sha-256"
+    POSTGRES_USER: "postgres"
+  memex_migration:
+    MEMEX_HOST: "memex-postgres-service"
+    MEMEX_PORT: "5432"
+    MEMEX_USERNAME: "postgres"
+    MEMEX_JDBCCONNECTIONSTRING: "jdbc:postgresql://memex-postgres-service:5432/memex"
+    MEMEX_DATABASENAME: "memex"
+  memex_portal:
+    MEMEX_HOST: "memex-postgres-service"
+    MEMEX_PORT: "5432"
+    MEMEX_USERNAME: "postgres"
+    MEMEX_JDBCCONNECTIONSTRING: "jdbc:postgresql://memex-postgres-service:5432/memex"
+    MEMEX_DATABASENAME: "memex"
+    ASPNETCORE_HTTP_PORTS: "8080"
+    Deployment__Backend: "Filesystem"
+    Deployment__DataRoot: "/data"
+    Deployment__Orleans__Clustering: "Localhost"
+    Storage__Name: "content"
+    Storage__SourceType: "FileSystem"
+    Storage__BasePath: "/data/content"
+    Graph__Storage__Type: "PostgreSql"
+    Graph__Storage__BasePath: "/data/graph"
+    Mcp__BaseUrl: "http://memex-portal-service:8080"
+    # AI model catalog — empty by default. An overlay sets endpoints + model
+    # lists (+ keys in secrets above) to seed the system catalog on deploy.
+    Anthropic__Endpoint: ""
+    Anthropic__Models__0: ""
+    Anthropic__Models__1: ""
+    Anthropic__Models__2: ""
+    AzureFoundry__Endpoint: ""
+    AzureFoundry__Models__0: ""
+    AzureFoundry__Models__1: ""
+    AzureFoundry__Models__2: ""
+    ModelTier__Heavy: ""
+    ModelTier__Standard: ""
+    ModelTier__Light: ""
+    ModelTier__Utility: ""
+    ClaudeCode__ConfigDirRoot: ""
+    # ---- System email (Microsoft Graph) — BIDIRECTIONAL. Off by default; an
+    # overlay turns it on per environment by setting Email__Enabled + the env's
+    # own MailboxAddress / TenantId / ClientId (+ WebhookBaseUrl for inbound).
+    # The secret Email__ClientSecret comes from the SecretProviderClass.
+    Email__Enabled: "false"
+    Email__MailboxAddress: ""
+    Email__TenantId: ""
+    Email__ClientId: ""
+    Email__UseManagedIdentity: "false"
+    Email__InboundEnabled: "false"
+    Email__WebhookBaseUrl: ""
+    # Shared webhook-guard value Graph echoes on every inbound notification; the
+    # /api/email webhook rejects mismatches. Global (same across envs is fine —
+    # each deployment validates against its own configured value).
+    Email__SubscriptionClientState: "meshweaver-emailhook-7f3c9a21e84b46d2b1c05e9af6d3"

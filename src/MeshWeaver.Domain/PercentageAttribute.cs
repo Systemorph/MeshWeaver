@@ -18,8 +18,17 @@ public class PercentageAttribute : ValidationAttribute
     /// </summary>
     public double MaxPercentage { get; set; } = 1;
 
+    /// <summary>
+    /// The number of decimal digits shown when the value is rendered as a percentage.
+    /// </summary>
     public int DecimalDigits { get; set; } = 2;
 
+    /// <summary>
+    /// Validates that the value is a supported numeric type within the configured percentage range.
+    /// </summary>
+    /// <param name="value">The value to validate; <c>null</c> is treated as valid.</param>
+    /// <param name="validationContext">Context describing the member being validated.</param>
+    /// <returns><see cref="ValidationResult.Success"/> if valid; otherwise a result describing the failure.</returns>
     protected override ValidationResult? IsValid(object? value, ValidationContext validationContext)
     {
         if (value == null) return ValidationResult.Success!;

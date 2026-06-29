@@ -14,7 +14,7 @@
         @Message.Text
     </div>
 }
-else if (Message.Role != ChatRole.User)
+else if (Message.Role != ChatRole.System)
 {
     foreach (var content in Message.Contents)
     {

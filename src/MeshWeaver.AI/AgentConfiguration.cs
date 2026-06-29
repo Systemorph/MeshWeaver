@@ -6,23 +6,31 @@ namespace MeshWeaver.AI;
 /// Represents an agent configuration stored in the graph.
 /// Agents are stored as MeshNodes with nodeType="Agent" and Content=AgentConfiguration.
 /// Supports hierarchical resolution - agents at lower namespaces override parent namespaces.
+///
+/// <para>🚨 Node-level metadata is NOT duplicated here. The display name, description,
+/// icon, group, and ordering all live on the owning <see cref="MeshWeaver.Mesh.MeshNode"/>
+/// (<c>Name</c>, <c>Description</c>, <c>Icon</c>, <c>Category</c>, <c>Order</c>) and are
+/// edited through the standard node settings — never replicated on the agent content.
+/// This record carries only what's specific to the agent's behaviour. (<see cref="Id"/>
+/// is the runtime identity key and equals the owning node's <c>Id</c> by construction;
+/// <see cref="Description"/> is kept because the agent runtime feeds it to the model as
+/// delegation metadata where only the detached configuration is in hand.)</para>
 /// </summary>
 public record AgentConfiguration
 {
     /// <summary>
-    /// Unique identifier for this agent.
+    /// Unique identifier for this agent. Equals the owning <see cref="MeshWeaver.Mesh.MeshNode.Id"/>
+    /// by construction; used as the runtime identity key for agent creation, delegation
+    /// resolution, and the created-agents map. Display reads the node's Id, not this field.
     /// </summary>
     [Key]
     public required string Id { get; init; }
 
     /// <summary>
-    /// Display name for UI (defaults to Id if not set).
-    /// </summary>
-    public string? DisplayName { get; init; }
-
-    /// <summary>
-    /// Description of what this agent does.
-    /// Used for delegation decisions and UI display.
+    /// Description of what this agent does. Mirrors the owning node's
+    /// <see cref="MeshWeaver.Mesh.MeshNode.Description"/>; kept on the configuration because
+    /// the agent runtime feeds it to the model (delegation/hand-off catalogue) where only
+    /// the detached <see cref="AgentConfiguration"/> is available. UI/picker read the node.
     /// </summary>
     public string? Description { get; init; }
 
@@ -33,19 +41,9 @@ public record AgentConfiguration
     public string? Instructions { get; init; }
 
     /// <summary>
-    /// Icon URL or identifier for the agent.
-    /// </summary>
-    public string? Icon { get; init; }
-
-    /// <summary>
     /// Custom SVG path for icon (optional override).
     /// </summary>
     public string? CustomIconSvg { get; init; }
-
-    /// <summary>
-    /// Group name for UI categorization (e.g., "Insurance", "Todo").
-    /// </summary>
-    public string? GroupName { get; init; }
 
     /// <summary>
     /// Whether this is the default/entry-point agent.
@@ -72,19 +70,6 @@ public record AgentConfiguration
     public List<AgentHandoff>? Handoffs { get; init; }
 
     /// <summary>
-    /// Preferred model name from available models.
-    /// Null means use the factory default.
-    /// </summary>
-    public string? PreferredModel { get; init; }
-
-    /// <summary>
-    /// Model tier for this agent: "heavy" (most capable), "standard" (balanced), "light" (fast/cheap).
-    /// Resolved at runtime via ModelTierConfiguration to an actual model name.
-    /// Takes effect only when PreferredModel is not set.
-    /// </summary>
-    public string? ModelTier { get; init; }
-
-    /// <summary>
     /// RSQL pattern for context matching.
     /// If set, agent activates when context matches this pattern.
     /// Example: "address.type==pricing" or "address.path=like=*Todo*"
@@ -92,10 +77,15 @@ public record AgentConfiguration
     public string? ContextMatchPattern { get; init; }
 
     /// <summary>
-    /// Display order for sorting agents in the UI.
-    /// Lower values appear first.
+    /// OPTIONAL hint: abstract model tier this agent prefers — "heavy", "standard", "light",
+    /// or "utility". Never required: when unset (the normal case), or when the deployment has
+    /// no <c>ModelTier:*</c> config, model selection is entirely unaffected. When set AND
+    /// configured, it only fills the gap where nobody picked a model (headless flows like
+    /// notification triage or icon/description micro-jobs) — an explicit composer selection
+    /// always wins. Declared only on the built-in background micro-agents; interactive agents
+    /// should leave it unset.
     /// </summary>
-    public int Order { get; init; }
+    public string? ModelTier { get; init; }
 
     /// <summary>
     /// Optional list of additional plugins this agent should load.
@@ -140,6 +130,23 @@ public record AgentPluginReference
     /// If null or empty, all plugin methods are included.
     /// </summary>
     public List<string>? Methods { get; init; }
+
+    /// <summary>
+    /// Parses the frontmatter string form: "PluginName" or "PluginName:Method1,Method2".
+    /// Shared by every agent-definition parser so the syntax stays uniform.
+    /// </summary>
+    public static AgentPluginReference Parse(string s)
+    {
+        var colonIndex = s.IndexOf(':');
+        if (colonIndex < 0)
+            return new AgentPluginReference { Name = s.Trim() };
+
+        return new AgentPluginReference
+        {
+            Name = s[..colonIndex].Trim(),
+            Methods = s[(colonIndex + 1)..].Split(',').Select(m => m.Trim()).ToList()
+        };
+    }
 }
 
 /// <summary>

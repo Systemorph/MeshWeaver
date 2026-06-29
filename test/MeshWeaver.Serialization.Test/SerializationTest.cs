@@ -5,13 +5,14 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Threading;
 using System.Threading.Tasks;
-using FluentAssertions;
 using MeshWeaver.Data;
 using MeshWeaver.Domain;
 using MeshWeaver.Fixture;
 using MeshWeaver.Messaging;
 using Xunit;
 
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Serialization.Test;
 
 public class SerializationTest(ITestOutputHelper output) : HubTestBase(output)
@@ -77,11 +78,8 @@ public class SerializationTest(ITestOutputHelper output) : HubTestBase(output)
     {
         var client = Mesh.GetHostedHub(CreateClientAddress(), ConfigureClient);
 
-        var response = await client.AwaitResponse(
-            new Boomerang(new MyEvent("Hello")),
-            o => o.WithTarget(CreateHostAddress())
-            , new CancellationTokenSource(TimeSpan.FromSeconds(5)).Token
-        );
+        var response = await client.Observe(new Boomerang(new MyEvent("Hello")), o => o.WithTarget(CreateHostAddress()))
+            .Should().Within(5.Seconds()).Emit();
 
         response.Message.Object.Should().BeOfType<MyEvent>().Which.Text.Should().Be("Hello");
         response.Message.Type.Should().Be(nameof(JsonElement));
@@ -146,9 +144,9 @@ public class SerializationTest(ITestOutputHelper output) : HubTestBase(output)
         var clientDeserialized = JsonSerializer.Deserialize<PolymorphicTestMessage>(clientSerialized, client.JsonSerializerOptions);
         var hostedDeserialized = JsonSerializer.Deserialize<PolymorphicTestMessage>(hostedSerialized, hosted.JsonSerializerOptions);
 
-        clientDeserialized.Should().BeEquivalentTo(testMessage);
-        hostedDeserialized.Should().BeEquivalentTo(testMessage);
-        hostedDeserialized.Should().BeEquivalentTo(clientDeserialized, "both should deserialize identically");
+        clientDeserialized.Should().BeEquivalentTo(testMessage, client.JsonSerializerOptions);
+        hostedDeserialized.Should().BeEquivalentTo(testMessage, hosted.JsonSerializerOptions);
+        hostedDeserialized.Should().BeEquivalentTo(clientDeserialized, hosted.JsonSerializerOptions, because: "both should deserialize identically");
     }
 
     [Fact]
@@ -200,7 +198,7 @@ public class SerializationTest(ITestOutputHelper output) : HubTestBase(output)
         // Both should deserialize collections the same way
         clientDeserialized.Should().NotBeNull();
         hostedDeserialized.Should().NotBeNull();
-        clientDeserialized.Count.Should().Be(hostedDeserialized.Count);
+        clientDeserialized!.Count.Should().Be(hostedDeserialized!.Count);
 
         // Each item should be properly deserialized as PolymorphicTestMessage
         clientDeserialized.Should().AllBeOfType<PolymorphicTestMessage>();
@@ -227,8 +225,8 @@ public class SerializationTest(ITestOutputHelper output) : HubTestBase(output)
         var singleClientDeserialized = JsonSerializer.Deserialize<GenericTestClass<string>>(singleSerialized, client.JsonSerializerOptions);
         var singleHostedDeserialized = JsonSerializer.Deserialize<GenericTestClass<string>>(singleSerialized, hosted.JsonSerializerOptions);
 
-        singleClientDeserialized.Should().BeEquivalentTo(genericObject);
-        singleHostedDeserialized.Should().BeEquivalentTo(genericObject);
+        singleClientDeserialized.Should().BeEquivalentTo(genericObject, client.JsonSerializerOptions);
+        singleHostedDeserialized.Should().BeEquivalentTo(genericObject, hosted.JsonSerializerOptions);
 
         // Now test collection of generic polymorphic objects - this mimics the DataGrid columns issue
         var genericCollection = new List<object>
@@ -302,34 +300,36 @@ public class SerializationTest(ITestOutputHelper output) : HubTestBase(output)
         Output.WriteLine("Testing serialization failure handling...");
 
         // This test verifies that when no handler exists for a request message type,
-        // AwaitResponse should throw DeliveryFailureException instead of hanging
+        // the stream surfaces DeliveryFailureException instead of hanging
 
         var client = Mesh.GetHostedHub(CreateClientAddress(), ConfigureClient);
 
-        // Send an UnknownRequest to the host 
+        // Send an UnknownRequest to the host
         // The host has no handler for this type at all
         // This should result in a DeliveryFailure being sent back to the client
         var unknownRequest = new GetDataRequest(new EntityReference("collection", "id"));
 
         Output.WriteLine("Sending UnknownRequest to host (no handler exists for this type)...");
 
-        // AwaitResponse should now throw DeliveryFailureException due to no handler being found
-        var exception = await Assert.ThrowsAsync<AggregateException>(() =>
-            client.AwaitResponse(
-                unknownRequest,
-                o => o.WithTarget(CreateHostAddress()),
-                new CancellationTokenSource(TimeSpan.FromSeconds(5)).Token
-            )
-        );
+        // hub.Observe(...) surfaces routing failures directly via OnError as
+        // DeliveryFailureException — no AggregateException wrapping (the legacy
+        // RegisterCallback path used to wrap; hub.Observe doesn't). Awaiting the cold
+        // observable's first emission rethrows that OnError.
+        Func<Task> act = () => client.Observe(unknownRequest, o => o.WithTarget(CreateHostAddress()))
+            .FirstAsync().Timeout(5.Seconds()).ToTask();
+        var exception = (await act.Should().ThrowAsync<DeliveryFailureException>()).Which;
 
-        // Verify the exception contains useful information about the failure
         exception.Should().NotBeNull();
-        exception.Message.Should().NotBeEmpty();
+        exception.Message.Should().NotBeNullOrEmpty();
         Output.WriteLine($"Exception message: {exception.Message}");
 
-        // The message should indicate no handler was found
+        // The failure surfaces either as "no handler found" (post-deserialize)
+        // or "is not registered in this hub's TypeRegistry" (pre-deserialize)
+        // depending on which gate rejects first. Both indicate the message had
+        // nowhere to go — the contract under test.
         var message = exception.Message.ToLowerInvariant();
-        message.Should().Contain("no handler found");
+        (message.Contains("no handler found") || message.Contains("not registered in this hub"))
+            .Should().BeTrue($"the failure message should name the missing handler/registration, but was: {exception.Message}");
     }
 }
 

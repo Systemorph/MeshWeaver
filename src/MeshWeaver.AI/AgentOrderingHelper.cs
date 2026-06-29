@@ -1,115 +1,36 @@
 using System.Collections.Immutable;
+using System.Reactive.Linq;
+using MeshWeaver.Data;
+using MeshWeaver.Messaging;
 using MeshWeaver.Mesh;
-using MeshWeaver.Mesh.Services;
 
 namespace MeshWeaver.AI;
 
 /// <summary>
 /// Shared helper for querying and ordering agents by relevance to the current context.
-/// This is the SINGLE implementation of agent finding and ordering logic.
+/// Agent list retrieval ALWAYS flows through <see cref="AgentPickerProjection.ObserveAgents"/>
+/// → <c>workspace.GetQuery</c> — the synced pipeline that fans out across all
+/// static MeshNode providers, dedupes, and gates on the all-Initial event.
 /// </summary>
 public static class AgentOrderingHelper
 {
     /// <summary>
-    /// Queries agents from the mesh and returns them as AgentDisplayInfo with paths.
-    /// Searches NodeType namespace (children) and context path namespace (ancestors).
+    /// Reactive agent listing. Wraps <see cref="AgentPickerProjection.ObserveAgents"/>
+    /// (the canonical <c>workspace.GetQuery</c>-backed synced source) and emits the
+    /// agents ordered by <see cref="OrderByRelevance"/>. Every consumer — picker UI,
+    /// AgentDetailsArea, AzureClaude driver, tests — subscribes here, never to
+    /// <c>IMeshService.Query</c> directly.
     /// </summary>
-    public static async Task<IReadOnlyList<AgentDisplayInfo>> QueryAgentsAsync(
-        IMeshService? meshQuery,
-        string? contextPath,
-        string? nodeTypePath)
-    {
-        var agentsDict = ImmutableDictionary<string, (AgentConfiguration Config, string Path)>.Empty;
-
-        // 1. Query agents from the NodeType namespace (higher priority)
-        // Use hierarchy scope to find agents that are children of the NodeType path
-        if (meshQuery != null && !string.IsNullOrEmpty(nodeTypePath))
-        {
-            try
-            {
-                var query = $"path:{nodeTypePath} nodeType:Agent scope:hierarchy";
-                await foreach (var node in meshQuery.QueryAsync<MeshNode>(query))
-                {
-                    if (node.Content is AgentConfiguration config && !agentsDict.ContainsKey(config.Id))
-                    {
-                        agentsDict = agentsDict.SetItem(config.Id, (config, node.Path ?? ""));
-                    }
-                }
-            }
-            catch
-            {
-                // Ignore query errors
-            }
-        }
-
-        // 2. Query agents from the context path namespace (ancestors)
-        if (meshQuery != null)
-        {
-            try
-            {
-                var query = string.IsNullOrEmpty(contextPath)
-                    ? "nodeType:Agent scope:selfAndAncestors"
-                    : $"path:{contextPath} nodeType:Agent scope:selfAndAncestors";
-
-                await foreach (var node in meshQuery.QueryAsync<MeshNode>(query))
-                {
-                    if (node.Content is AgentConfiguration config && !agentsDict.ContainsKey(config.Id))
-                    {
-                        agentsDict = agentsDict.SetItem(config.Id, (config, node.Path ?? ""));
-                    }
-                }
-            }
-            catch
-            {
-                // Ignore query errors
-            }
-        }
-
-        // Build display info list
-        return agentsDict.Values
-            .Select(x => new AgentDisplayInfo
-            {
-                Name = x.Config.Id,
-                Path = x.Path,
-                Description = x.Config.Description ?? x.Config.DisplayName ?? x.Config.Id,
-                GroupName = x.Config.GroupName,
-                Order = x.Config.Order,
-                IndentLevel = 0,
-                Icon = x.Config.Icon,
-                CustomIconSvg = x.Config.CustomIconSvg,
-                AgentConfiguration = x.Config
-            })
-            .ToImmutableList();
-    }
+    public static IObservable<IReadOnlyList<AgentDisplayInfo>> ObserveAgents(
+        IMessageHub hub,
+        string? userPath,
+        string? spacePath)
+        => AgentPickerProjection.ObserveAgents(hub, userPath, spacePath)
+            .Select(agents => (IReadOnlyList<AgentDisplayInfo>)OrderByRelevance(agents, spacePath, null));
 
     /// <summary>
-    /// Gets the NodeType for a given context path.
-    /// </summary>
-    public static async Task<string?> GetNodeTypeAsync(IMeshService? meshQuery, string? contextPath)
-    {
-        if (meshQuery == null || string.IsNullOrEmpty(contextPath))
-            return null;
-
-        try
-        {
-            await foreach (var node in meshQuery.QueryAsync<MeshNode>($"path:{contextPath}"))
-            {
-                if (!string.IsNullOrEmpty(node.NodeType) && node.NodeType != "Agent" && node.NodeType != "Markdown")
-                {
-                    return node.NodeType;
-                }
-            }
-        }
-        catch
-        {
-            // Ignore errors
-        }
-
-        return null;
-    }
-
-    /// <summary>
-    /// Orders agents by Order then by DisplayName.
+    /// Orders agents by Order then by display name (both sourced from the MeshNode
+    /// via <see cref="AgentDisplayInfo"/>).
     /// </summary>
     public static IReadOnlyList<AgentDisplayInfo> OrderByRelevance(
         IEnumerable<AgentDisplayInfo> agents,
@@ -118,7 +39,7 @@ public static class AgentOrderingHelper
     {
         return agents
             .OrderBy(a => a.Order)
-            .ThenBy(a => a.AgentConfiguration.DisplayName ?? a.Name)
+            .ThenBy(a => a.Name)
             .ToImmutableList();
     }
 }

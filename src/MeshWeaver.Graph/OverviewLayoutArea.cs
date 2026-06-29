@@ -6,6 +6,9 @@ using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.DataBinding;
 using MeshWeaver.Layout.Domain;
 using MeshWeaver.Mesh;
+using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Graph;
 
@@ -23,8 +26,6 @@ public static class OverviewLayoutArea
     /// </summary>
     public static UiControl BuildPropertyOverview(LayoutAreaHost host, MeshNode node, bool canEdit = true)
     {
-        var nodePath = node.Namespace ?? host.Hub.Address.ToString();
-
         // Handle Content which could be null, JsonElement, or already deserialized typed object
         var instance = node.Content;
         if (instance == null)
@@ -35,15 +36,24 @@ public static class OverviewLayoutArea
 
         var contentType = instance.GetType();
 
-        // Set up local data for editing
-        var dataId = EditLayoutArea.GetDataId(nodePath);
-        host.UpdateData(dataId, instance);
+        // The property form is bound DIRECTLY to the node's Content (node-bound DataContext): every
+        // field reads from and writes straight back to the node stream (IMeshNodeStreamCache). ONE
+        // source of truth — no /data replica of the node content, no SetupAutoSave save subscription.
+        // See Doc/GUI/DataBinding "edit node content by binding to the node stream".
+        var dataId = EditLayoutArea.GetDataId(node.Path);
+        var boundContext = LayoutAreaReference.GetMeshNodeDataContext(node.Path, bindContent: true);
 
-        // Setup auto-save to persist changes via DataChangeRequest
-        if (canEdit)
-        {
-            SetupAutoSave(host, dataId, instance, node);
-        }
+        // A few read-only display controls (dimension / options / formatted-date labels) derive their
+        // text from the LAYOUT-AREA /data stream rather than a value pointer, so they can't read the
+        // node directly from the Layout layer. Keep /data/{dataId} as a ONE-WAY live projection of the
+        // node's Content (node → /data, NEVER /data → node) so those labels stay correct. This is a
+        // pure read mirror — there is no save loop and no drift: it follows the node, and all WRITES
+        // still go straight to the node via the node-bound DataContext above.
+        host.RegisterForDisposal($"overview-content-projection_{dataId}",
+            host.Workspace.GetMeshNodeStream(node.Path)
+                .Select(n => n?.Content)
+                .Where(c => c is not null)
+                .Subscribe(content => host.UpdateData(dataId, content!)));
 
         var container = Controls.Stack.WithWidth("100%");
 
@@ -53,22 +63,55 @@ public static class OverviewLayoutArea
             DataId = dataId,
             ContentType = contentType,
             CanEdit = canEdit,
-            IsToggleable = true  // Overview: click-to-edit, blur back to read-only
+            IsToggleable = true,  // Overview: click-to-edit, blur back to read-only
+            BoundDataContext = canEdit ? boundContext : null
         }));
 
-        // Render markdown body from index.md if present (PreRenderedHtml is set by MarkdownFileParser)
-        if (!string.IsNullOrWhiteSpace(node.PreRenderedHtml))
-        {
-            container = container.WithView(
-                new MarkdownControl("") { Html = node.PreRenderedHtml }
-                    .WithStyle("padding: 0 0 48px 0;"));
-        }
+        // The markdown body (from index.md / a Markdown node's content) is intentionally
+        // NOT rendered here — BuildDetailsContent hoists it to a direct child of the
+        // outer stack via BuildMarkdownBody so callers (and tests) can locate it without
+        // walking through nested property-overview stacks.
 
         return container;
     }
 
     /// <summary>
-    /// Builds a clickable title that switches to edit mode on click.
+    /// Builds the markdown body control for a node whose content is a parsed
+    /// <see cref="MeshWeaver.Markdown.MarkdownContent"/> (or one carrying
+    /// <see cref="MeshNode.PreRenderedHtml"/>). Returns <c>null</c> when the
+    /// node has no markdown payload.
+    ///
+    /// <para>Both <c>Markdown</c> (raw source) and <c>Html</c> (pre-rendered)
+    /// are populated. The raw source is what tests / agent tools / @@() inline-
+    /// reference resolvers consume; the pre-rendered HTML is what the browser
+    /// displays. Keeping them in lockstep is what lets the markdown round-trip
+    /// through serialization without losing the @@() references.</para>
+    /// </summary>
+    public static UiControl? BuildMarkdownBody(LayoutAreaHost host, MeshNode? node)
+    {
+        if (node is null)
+            return null;
+        var rawMarkdown = node.Content switch
+        {
+            MeshWeaver.Markdown.MarkdownContent mc => mc.Content,
+            JsonElement je when je.ValueKind == JsonValueKind.Object && je.TryGetProperty("Content", out var c)
+                => c.GetString(),
+            JsonElement je when je.ValueKind == JsonValueKind.Object && je.TryGetProperty("content", out var c2)
+                => c2.GetString(),
+            _ => null
+        };
+        var hasHtml = !string.IsNullOrWhiteSpace(node.PreRenderedHtml);
+        var hasRaw = !string.IsNullOrWhiteSpace(rawMarkdown);
+        if (!hasHtml && !hasRaw)
+            return null;
+        return new MarkdownControl(rawMarkdown ?? "") { Html = node.PreRenderedHtml }
+            .WithStyle("padding: 0 0 48px 0;");
+    }
+
+    /// <summary>
+    /// Builds a clickable title that switches to edit mode on click. The title edit is bound
+    /// DIRECTLY to the node's Content <c>title</c> field (node-bound DataContext) — the edit writes
+    /// straight back to the node stream; only the click-to-edit toggle lives in <c>/data</c>.
     /// </summary>
     public static UiControl BuildTitle(LayoutAreaHost host, MeshNode node, string dataId, bool canEdit)
     {
@@ -82,7 +125,7 @@ public static class OverviewLayoutArea
                     .DistinctUntilChanged()
                     .Select(isEditing =>
                         isEditing && canEdit
-                            ? BuildTitleEditView(h, dataId, editStateId)
+                            ? BuildTitleEditView(h, node.Path, editStateId)
                             : BuildTitleReadView(h, node, dataId, editStateId, canEdit)));
     }
 
@@ -113,14 +156,14 @@ public static class OverviewLayoutArea
 
     private static UiControl BuildTitleEditView(
         LayoutAreaHost _,
-        string dataId,
+        string nodePath,
         string editStateId)
     {
         var titleField = new TextFieldControl(new JsonPointerReference("title"))
         {
             Immediate = true,
             AutoFocus = true,
-            DataContext = LayoutAreaReference.GetDataPointer(dataId)
+            DataContext = LayoutAreaReference.GetMeshNodeDataContext(nodePath, bindContent: true)
         }
         .WithStyle("font-size: 2rem; font-weight: bold; border: none; background: transparent; min-width: 300px;")
         .WithBlurAction(ctx =>
@@ -130,40 +173,6 @@ public static class OverviewLayoutArea
         });
 
         return titleField;
-    }
-
-    /// <summary>
-    /// Sets up auto-save: watches local data stream for changes and persists via DataChangeRequest.
-    /// Follows the exact pattern from InlineEditingTest.cs but for MeshNode content.
-    /// </summary>
-    internal static void SetupAutoSave(
-        LayoutAreaHost host,
-        string dataId,
-        object instance,
-        MeshNode node)
-    {
-        var current = instance;
-
-        host.RegisterForDisposal($"autosave_{dataId}",
-            host.Stream.GetDataStream<object>(dataId)
-                .Debounce(TimeSpan.FromMilliseconds(300))
-                .Subscribe(updatedContent =>
-                {
-
-                    if (object.Equals(current, updatedContent))
-                        return;
-
-                    // Update current to prevent re-sending
-                    current = updatedContent;
-
-                    // Create updated MeshNode with new content
-                    var updatedNode = node with { Content = updatedContent };
-
-                    // Issue DataChangeRequest to persist the change
-                    host.Hub.Post(
-                        new DataChangeRequest { ChangedBy = host.Stream.ClientId }.WithUpdates(updatedNode),
-                        o => o.WithTarget(host.Hub.Address));
-                }));
     }
 
 }

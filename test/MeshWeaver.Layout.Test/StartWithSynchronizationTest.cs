@@ -5,8 +5,6 @@ using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Text.Json;
 using System.Threading.Tasks;
-using FluentAssertions;
-using FluentAssertions.Extensions;
 using MeshWeaver.Data;
 using MeshWeaver.Fixture;
 using MeshWeaver.Layout.Composition;
@@ -107,8 +105,8 @@ public class StartWithSynchronizationTest(ITestOutputHelper output) : HubTestBas
         var controls = await stream
             .GetControlStream(reference.Area!)
             .TakeUntil(c => c is HtmlControl)
-            .Timeout(5.Seconds())
-            .ToArray();
+            .ToArray()
+            .Should().Within(5.Seconds()).Emit();
 
         Output.WriteLine($"Received {controls.Length} control(s)");
         foreach (var ctrl in controls)
@@ -144,8 +142,7 @@ public class StartWithSynchronizationTest(ITestOutputHelper output) : HubTestBas
         // First, we should get the loading control
         var firstControl = await stream
             .GetControlStream(reference.Area!)
-            .Timeout(2.Seconds())
-            .FirstAsync(x => x != null);
+            .Should().Within(2.Seconds()).Match(x => x != null);
 
         Output.WriteLine($"First control: {firstControl?.GetType().Name}: {GetControlContent(firstControl)}");
         firstControl.Should().BeOfType<MarkdownControl>()
@@ -157,8 +154,8 @@ public class StartWithSynchronizationTest(ITestOutputHelper output) : HubTestBas
         var finalControl = await stream
             .GetControlStream(reference.Area!)
             .TakeUntil(c => c is HtmlControl)
-            .Timeout(3.Seconds())
-            .LastAsync();
+            .LastAsync()
+            .Should().Within(3.Seconds()).Emit();
 
         Output.WriteLine($"Final control: {finalControl?.GetType().Name}: {GetControlContent(finalControl)}");
         finalControl.Should().BeOfType<HtmlControl>()
@@ -193,8 +190,8 @@ public class StartWithSynchronizationTest(ITestOutputHelper output) : HubTestBas
         var controls = await stream
             .GetControlStream(reference.Area!)
             .TakeUntil(c => c is HtmlControl)
-            .Timeout(5.Seconds())
-            .ToArray();
+            .ToArray()
+            .Should().Within(5.Seconds()).Emit();
 
         Output.WriteLine($"Received {controls.Length} control(s)");
         foreach (var ctrl in controls)
@@ -225,31 +222,22 @@ public class StartWithSynchronizationTest(ITestOutputHelper output) : HubTestBas
             reference
         );
 
-        // Subscribe and collect all controls
-        var controlsReceived = new List<UiControl?>();
-        var subscription = stream
+        // Collect every control up to and including the content (HtmlControl), waiting on the
+        // actual transition rather than a wall-clock window.
+        var controlsReceived = await stream
             .GetControlStream(reference.Area!)
-            .Subscribe(c =>
-            {
-                Output.WriteLine($"Received: {c?.GetType().Name}: {GetControlContent(c)}");
-                lock (controlsReceived)
-                {
-                    controlsReceived.Add(c);
-                }
-            });
+            .Do(c => Output.WriteLine($"Received: {c?.GetType().Name}: {GetControlContent(c)}"))
+            .TakeUntil(c => c is HtmlControl)
+            .ToArray()
+            .Should().Within(5.Seconds()).Emit();
 
-        // Wait for at least one control
-        await Task.Delay(1.Seconds());
-
-        subscription.Dispose();
-
-        Output.WriteLine($"Total controls received: {controlsReceived.Count}");
+        Output.WriteLine($"Total controls received: {controlsReceived.Length}");
 
         // Should have received at least one control (either loading or content)
         controlsReceived.Should().NotBeEmpty();
 
         // If we got multiple controls, the last one should be the content
-        if (controlsReceived.Count > 1)
+        if (controlsReceived.Length > 1)
         {
             controlsReceived.Last().Should().BeOfType<HtmlControl>();
         }

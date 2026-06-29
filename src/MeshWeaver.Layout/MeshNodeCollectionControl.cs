@@ -40,10 +40,22 @@ public record MeshNodeCollectionControl()
     /// </summary>
     public string? AddPickerLabel { get; init; }
 
+    /// <summary>Returns a copy with <paramref name="queries"/> as the collection queries run in parallel to populate the list.</summary>
+    /// <param name="queries">One or more mesh query strings whose results are merged and displayed as cards.</param>
     public MeshNodeCollectionControl WithQueries(params string[] queries) => this with { Queries = queries };
+    /// <summary>Returns a copy with <paramref name="deletable"/> controlling whether each item shows a delete button.</summary>
+    /// <param name="deletable">When <c>true</c>, a trash button is shown on each card.</param>
     public MeshNodeCollectionControl WithDeletable(bool deletable) => this with { Deletable = deletable };
+    /// <summary>Returns a copy with <paramref name="show"/> controlling whether the "+" add button is visible.</summary>
+    /// <param name="show">When <c>true</c>, the add button is rendered.</param>
     public MeshNodeCollectionControl WithShowAdd(bool show) => this with { ShowAdd = show };
+    /// <summary>Returns a copy with <paramref name="title"/> as the title of the add dialog.</summary>
+    /// <param name="title">Title displayed at the top of the add-item dialog.</param>
     public MeshNodeCollectionControl WithAddDialogTitle(string title) => this with { AddDialogTitle = title };
+    /// <summary>Returns a copy with <paramref name="queries"/> as the picker queries used inside the add dialog.</summary>
+    /// <param name="queries">Mesh query strings for the add-dialog's node picker.</param>
     public MeshNodeCollectionControl WithAddPickerQueries(params string[] queries) => this with { AddPickerQueries = queries };
+    /// <summary>Returns a copy with <paramref name="label"/> as the picker label inside the add dialog.</summary>
+    /// <param name="label">Label shown above the node picker in the add-item dialog.</param>
     public MeshNodeCollectionControl WithAddPickerLabel(string label) => this with { AddPickerLabel = label };
 }

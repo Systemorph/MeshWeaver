@@ -34,8 +34,12 @@ public class AutocompletePrefixRegistry(IServiceProvider serviceProvider) : IAut
         }
     }
 
+    /// <summary>Returns whether the given path segment matches a registered provider prefix (case-insensitive).</summary>
+    /// <param name="segment">Path segment to test.</param>
+    /// <returns>True if a registered provider declares this prefix.</returns>
     public bool IsRegistered(string segment) =>
         !string.IsNullOrEmpty(segment) && Prefixes.Contains(segment);
 
+    /// <summary>All distinct prefixes aggregated from the registered autocomplete providers.</summary>
     public IReadOnlyCollection<string> AllPrefixes => Prefixes;
 }

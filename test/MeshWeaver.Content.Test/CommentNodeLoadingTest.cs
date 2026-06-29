@@ -1,6 +1,5 @@
 using System.Linq;
 using System.Threading.Tasks;
-using FluentAssertions;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting;
@@ -12,6 +11,8 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Xunit;
 
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Content.Test;
 
 /// <summary>
@@ -22,6 +23,9 @@ namespace MeshWeaver.Content.Test;
 [Collection("CommentNodeLoading")]
 public class CommentNodeLoadingTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
+    /// <summary>Share Mesh/SP across [Fact]s — see MonolithMeshTestBase.ShareMeshAcrossTests.</summary>
+    protected override bool ShareMeshAcrossTests => true;
+
     private const string DocPartitionCommentPath = "Doc/DataMesh/CollaborativeEditing/_Comment/c1";
     private const string DocPartitionNamespace = "Doc/DataMesh/CollaborativeEditing/_Comment";
 
@@ -42,9 +46,7 @@ public class CommentNodeLoadingTest(ITestOutputHelper output) : MonolithMeshTest
     [Fact(Timeout = 20000)]
     public async Task CommentNode_IsLoadableByExactPath()
     {
-        var node = await MeshQuery
-            .QueryAsync<MeshNode>($"path:{DocPartitionCommentPath}")
-            .FirstOrDefaultAsync();
+        var node = await Mesh.GetMeshNode(DocPartitionCommentPath, ReadNodeTimeout).Should().Within(ReadNodeTimeout).Emit();
 
         node.Should().NotBeNull(
             $"Comment node at '{DocPartitionCommentPath}' should be loadable from the Doc partition");
@@ -62,9 +64,7 @@ public class CommentNodeLoadingTest(ITestOutputHelper output) : MonolithMeshTest
     [Fact(Timeout = 20000)]
     public async Task CommentNode_HasValidCommentContent()
     {
-        var node = await MeshQuery
-            .QueryAsync<MeshNode>($"path:{DocPartitionCommentPath}")
-            .FirstOrDefaultAsync();
+        var node = await Mesh.GetMeshNode(DocPartitionCommentPath, ReadNodeTimeout).Should().Within(ReadNodeTimeout).Emit();
 
         node.Should().NotBeNull();
         node!.Content.Should().BeOfType<Comment>();
@@ -86,10 +86,10 @@ public class CommentNodeLoadingTest(ITestOutputHelper output) : MonolithMeshTest
     [Fact(Timeout = 20000)]
     public async Task CommentNodes_AreDiscoverableByNamespaceQuery()
     {
-        var comments = await MeshQuery
-            .QueryAsync<MeshNode>(
-                $"namespace:{DocPartitionNamespace} nodeType:{CommentNodeType.NodeType}")
-            .ToListAsync();
+        var comments = (await MeshQuery
+            .Query<MeshNode>(MeshQueryRequest.FromQuery(
+                $"namespace:{DocPartitionNamespace} nodeType:{CommentNodeType.NodeType}"))
+            .Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items;
 
         comments.Should().NotBeEmpty(
             $"Namespace query should find comment nodes under '{DocPartitionNamespace}'");
@@ -114,9 +114,7 @@ public class CommentNodeLoadingTest(ITestOutputHelper output) : MonolithMeshTest
     public async Task ReplyNode_IsLoadableUnderComment()
     {
         var replyPath = $"{DocPartitionCommentPath}/reply1";
-        var node = await MeshQuery
-            .QueryAsync<MeshNode>($"path:{replyPath}")
-            .FirstOrDefaultAsync();
+        var node = await Mesh.GetMeshNode(replyPath, ReadNodeTimeout).Should().Within(ReadNodeTimeout).Emit();
 
         node.Should().NotBeNull($"Reply node at '{replyPath}' should be loadable");
         node!.Id.Should().Be("reply1");
@@ -135,10 +133,7 @@ public class CommentNodeLoadingTest(ITestOutputHelper output) : MonolithMeshTest
         var client = GetClient();
         var address = new Address(DocPartitionCommentPath.Split('/'));
 
-        var response = await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(address),
-            TestContext.Current.CancellationToken);
+        var response = await client.Observe(new PingRequest(), o => o.WithTarget(address)).Should().Emit();
 
         response.Should().NotBeNull(
             $"Hub at '{DocPartitionCommentPath}' should respond to PingRequest");

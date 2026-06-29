@@ -6,6 +6,7 @@
   </PropertyGroup>
     <ItemGroup>
         <PackageReference Include="Microsoft.AspNetCore.TestHost" />
+        <PackageReference Include="Microsoft.Diagnostics.Runtime" />
         <PackageReference Include="Testcontainers" />
         <PackageReference Include="Microsoft.Extensions.Azure" />
         <PackageReference Include="Azure.Storage.Blobs" />

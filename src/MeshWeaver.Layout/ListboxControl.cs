@@ -6,6 +6,7 @@ namespace MeshWeaver.Layout;
 /// Represents a listbox control with customizable properties.
 /// </summary>
 /// <param name="Data">The data associated with the listbox control.</param>
+/// <param name="Options">The set of selectable options rendered in the listbox.</param>
 public record ListboxControl(object Data, object Options) : ListControlBase<ListboxControl>(Data, Options);
 
 /// <summary>
@@ -47,6 +48,10 @@ public abstract record ListControlBase<TControl>(object Data, object Options)
 
 }
 
+/// <summary>
+/// Abstract base for a selectable option in a list control, carrying display text and an optional icon.
+/// </summary>
+/// <param name="Text">The display text shown to the user for this option.</param>
 public abstract record Option(string Text)
 {
     /// <summary>
@@ -54,19 +59,36 @@ public abstract record Option(string Text)
     /// </summary>
     public string? Icon { get; init; }
 
+    /// <summary>Returns the underlying item value for this option.</summary>
+    /// <returns>The item object this option wraps.</returns>
     public abstract object GetItem();
+    /// <summary>Returns the CLR type of the underlying item.</summary>
+    /// <returns>The item's runtime type.</returns>
     public abstract Type GetItemType();
 }
 
+/// <summary>
+/// A strongly-typed selectable option that pairs a value of type <typeparamref name="TItem"/> with display text.
+/// </summary>
+/// <typeparam name="TItem">The type of the item this option represents.</typeparam>
+/// <param name="Item">The underlying item value.</param>
+/// <param name="Text">The display text shown to the user.</param>
 public record Option<TItem>(TItem Item, string Text) : Option(Text)
 {
+    /// <inheritdoc/>
     public override object GetItem() => Item!;
+    /// <inheritdoc/>
     public override Type GetItemType()
         => typeof(TItem);
 }
 
+/// <summary>
+/// Controls where a dropdown or popup selector is positioned relative to its trigger element.
+/// </summary>
 public enum SelectPosition
 {
+    /// <summary>The selector opens above the trigger element.</summary>
     Above,
+    /// <summary>The selector opens below the trigger element.</summary>
     Below
 }

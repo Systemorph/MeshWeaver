@@ -1,0 +1,85 @@
+# Builds the Memex MAUI client for iOS on a hosted macOS runner and uploads to TestFlight.
+# Manual trigger — run it once your Apple Developer Program account + the secrets below are set up.
+#
+# This is also the FIRST real iOS AOT/native-link of the app (the Windows build only compiled
+# managed code). If trimming/AOT trips on the framework chain, it surfaces here — fix with
+# <MtouchLink> / [DynamicDependency] and re-run.
+#
+# Required repository secrets (Settings → Secrets and variables → Actions):
+#   APPLE_CERT_P12_BASE64        base64 of your "Apple Distribution" cert (.p12)
+#   APPLE_CERT_PASSWORD          password for the .p12
+#   APPLE_PROVISIONING_PROFILE_BASE64   base64 of the .mobileprovision (App Store distribution)
+#   APPLE_SIGNING_IDENTITY       e.g. "Apple Distribution: Your Org (TEAMID)"
+#   APPLE_PROVISIONING_PROFILE_NAME     the profile's name (as in the Apple portal)
+#   ASC_KEY_ID                   App Store Connect API key id
+#   ASC_ISSUER_ID                App Store Connect issuer id
+#   ASC_API_KEY_P8_BASE64        base64 of the App Store Connect API key (.p8)
+# And set BUNDLE_ID below to your own (e.g. cloud.meshweaver.memex).
+
+name: Memex iOS → TestFlight
+
+on:
+  workflow_dispatch:
+
+env:
+  PROJECT: memex/Memex.Client/Memex.Client.csproj
+  IOS_TFM: net10.0-ios
+  BUNDLE_ID: cloud.meshweaver.memex
+  DOTNET_VERSION: '10.0.x'
+
+jobs:
+  build-ios:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Install MAUI iOS workload
+        run: dotnet workload install maui-ios --version ${{ env.DOTNET_VERSION }}
+
+      - name: Import signing certificate
+        uses: apple-actions/import-codesign-certs@v3
+        with:
+          p12-file-base64: ${{ secrets.APPLE_CERT_P12_BASE64 }}
+          p12-password: ${{ secrets.APPLE_CERT_PASSWORD }}
+
+      - name: Install provisioning profile
+        run: |
+          mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
+          echo "${{ secrets.APPLE_PROVISIONING_PROFILE_BASE64 }}" | base64 --decode \
+            > ~/Library/MobileDevice/Provisioning\ Profiles/memex.mobileprovision
+
+      - name: Publish signed .ipa
+        run: |
+          dotnet publish "$PROJECT" -f "$IOS_TFM" -c Release \
+            -p:ApplicationId=$BUNDLE_ID \
+            -p:RuntimeIdentifier=ios-arm64 \
+            -p:ArchiveOnBuild=true \
+            -p:CodesignKey="${{ secrets.APPLE_SIGNING_IDENTITY }}" \
+            -p:CodesignProvision="${{ secrets.APPLE_PROVISIONING_PROFILE_NAME }}"
+
+      - name: Locate .ipa
+        id: ipa
+        run: echo "path=$(find memex/Memex.Client/bin -name '*.ipa' | head -n1)" >> "$GITHUB_OUTPUT"
+
+      - name: Upload to TestFlight
+        run: |
+          echo "${{ secrets.ASC_API_KEY_P8_BASE64 }}" | base64 --decode > /tmp/asc_key.p8
+          xcrun altool --upload-app -f "${{ steps.ipa.outputs.path }}" -t ios \
+            --apiKey "${{ secrets.ASC_KEY_ID }}" \
+            --apiIssuer "${{ secrets.ASC_ISSUER_ID }}"
+        env:
+          # altool reads the .p8 from ~/.appstoreconnect/private_keys or API_PRIVATE_KEYS_DIR
+          API_PRIVATE_KEYS_DIR: /tmp
+
+      - name: Upload .ipa artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: memex-ios-ipa
+          path: ${{ steps.ipa.outputs.path }}
+          if-no-files-found: ignore

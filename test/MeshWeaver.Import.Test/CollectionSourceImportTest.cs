@@ -4,8 +4,6 @@ using System.Linq;
 using System.Reactive.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using FluentAssertions;
-using FluentAssertions.Extensions;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
 using MeshWeaver.Data.TestDomain;
@@ -14,6 +12,7 @@ using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
+using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Import.Test;
 
 public class CollectionSourceImportTest(ITestOutputHelper output) : HubTestBase(output)
@@ -47,11 +46,8 @@ SystemName,DisplayName
         var importRequest = new ImportRequest(new CollectionSource("TestCollection", "test-data.csv"));
 
         // Act
-        var importResponse = await client.AwaitResponse(
-            importRequest,
-            o => o.WithTarget(ImportAddress.Create(2024)),
-            TestContext.Current.CancellationToken
-        );
+        var importResponse = await client.Observe(importRequest, o => o.WithTarget(ImportAddress.Create(2024)))
+            .Should().Emit();
 
         // Assert
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
@@ -61,8 +57,7 @@ SystemName,DisplayName
         var workspace = referenceDataHub.ServiceProvider.GetRequiredService<IWorkspace>();
 
         var allData = await workspace.GetObservable<LineOfBusiness>()
-            .Timeout(10.Seconds())
-            .FirstAsync(x => x.Count >= 3);
+            .Should().Within(10.Seconds()).Match(x => x.Count >= 3);
 
         allData.Should().HaveCount(3);
         var items = allData.OrderBy(x => x.SystemName).ToList();
@@ -81,13 +76,8 @@ SystemName,DisplayName
         var importRequest = new ImportRequest(new CollectionSource("TestCollection", "test-data.csv"));
 
         // Act
-        var token = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken,
-            new CancellationTokenSource(5.Seconds()).Token).Token;
-        var importResponse = await client.AwaitResponse(
-            importRequest,
-            o => o.WithTarget(ImportAddress.Create(2024)),
-            token
-        );
+        var importResponse = await client.Observe(importRequest, o => o.WithTarget(ImportAddress.Create(2024)))
+            .Should().Emit();
 
         // Assert
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
@@ -97,8 +87,7 @@ SystemName,DisplayName
         var workspace = referenceDataHub.ServiceProvider.GetRequiredService<IWorkspace>();
 
         var allData = await workspace.GetObservable<LineOfBusiness>()
-            .Timeout(10.Seconds())
-            .FirstAsync(x => x.Count >= 3);
+            .Should().Within(10.Seconds()).Match(x => x.Count >= 3);
 
         allData.Should().HaveCount(3);
     }
@@ -112,11 +101,8 @@ SystemName,DisplayName
         var importRequest = new ImportRequest(new CollectionSource("TestCollection", "non-existent.csv"));
 
         // Act
-        var importResponse = await client.AwaitResponse(
-            importRequest,
-            o => o.WithTarget(ImportAddress.Create(2024)),
-            TestContext.Current.CancellationToken
-        );
+        var importResponse = await client.Observe(importRequest, o => o.WithTarget(ImportAddress.Create(2024)))
+            .Should().Emit();
 
         // Assert
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Failed);
@@ -133,11 +119,8 @@ SystemName,DisplayName
         var importRequest = new ImportRequest(new CollectionSource("NonExistentCollection", "test-data.csv"));
 
         // Act
-        var importResponse = await client.AwaitResponse(
-            importRequest,
-            o => o.WithTarget(ImportAddress.Create(2024)),
-            TestContext.Current.CancellationToken
-        );
+        var importResponse = await client.Observe(importRequest, o => o.WithTarget(ImportAddress.Create(2024)))
+            .Should().Emit();
 
         // Assert
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Failed);

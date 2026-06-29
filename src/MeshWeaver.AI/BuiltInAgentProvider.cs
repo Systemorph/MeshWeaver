@@ -18,6 +18,7 @@ namespace MeshWeaver.AI;
 /// </summary>
 public class BuiltInAgentProvider : IStaticNodeProvider
 {
+    /// <summary>Id of the built-in utility agent that names new threads from the first user message.</summary>
     public const string ThreadNamerId = "ThreadNamer";
 
     private static readonly Lazy<MeshNode[]> LazyNodes = new(LoadAllNodes);
@@ -37,15 +38,26 @@ public class BuiltInAgentProvider : IStaticNodeProvider
 
     private const string RootNamespace = "Agent";
 
+    /// <summary>
+    /// Returns the static agent nodes: the world-readable Agent-namespace access policy, the
+    /// built-in ThreadNamer agent, and every agent/markdown node loaded from embedded resources.
+    /// </summary>
+    /// <returns>The built-in agent and supporting MeshNodes.</returns>
     public IEnumerable<MeshNode> GetStaticNodes()
     {
-        // Read-only policy for the Agent namespace — built-in agents are unmodifiable
+        // Read-only, world-readable policy for the Agent namespace. PublicRead grants
+        // Read to every user (the agent catalog is a public catalog) WITHOUT needing a
+        // per-user role at the Agent scope — and because this is a static provider node,
+        // it is present from the first permission evaluation (no synced-query cold-start
+        // race, which previously left the agent picker empty → "No suitable agent").
+        // The write caps keep the built-in agents unmodifiable.
         yield return new MeshNode("_Policy", RootNamespace)
         {
             NodeType = "PartitionAccessPolicy",
             Name = "Access Policy",
             Content = new PartitionAccessPolicy
             {
+                PublicRead = true,
                 Create = false,
                 Update = false,
                 Delete = false,
@@ -84,13 +96,19 @@ public class BuiltInAgentProvider : IStaticNodeProvider
                             - "Fix the login bug" -> Name: Fix Login Bug / Id: FixLoginBug
                             """,
             ExposedInNavigator = false,
-            Order = 999,
+            ModelTier = "utility",
         };
 
+        // Order lives on the node (sorts last in the picker); not duplicated on the config.
         return new MeshNode(ThreadNamerId, "Agent")
         {
             Name = "Thread Namer",
             NodeType = "Agent",
+            Order = 999,
+            // Custom inline SVG (same line-art style as the .md agents — viewBox 0 0 24 24,
+            // stroke currentColor) so it reads consistently with the rest of the catalog instead of
+            // falling back to the generic bot glyph. A name-tag/label fits the thread-naming role.
+            Icon = "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M3.5 3.5h7l9.4 9.4a2 2 0 0 1 0 2.83l-4.17 4.17a2 2 0 0 1-2.83 0L3.5 10.5z\"/><circle cx=\"7.6\" cy=\"7.6\" r=\"1.3\" fill=\"currentColor\"/></svg>",
             Content = config
         };
     }
@@ -99,9 +117,12 @@ public class BuiltInAgentProvider : IStaticNodeProvider
     {
         var assembly = typeof(BuiltInAgentProvider).Assembly;
         var prefix = $"{assembly.GetName().Name}.Data.";
+        // Data/Skill/*.md are nodeType:Skill nodes served by BuiltInSkillProvider — not agents/docs.
+        var skillPrefix = $"{prefix}{SkillNodeType.RootNamespace}.";
 
         foreach (var resourceName in assembly.GetManifestResourceNames()
-                     .Where(n => n.StartsWith(prefix) && n.EndsWith(".md", StringComparison.OrdinalIgnoreCase))
+                     .Where(n => n.StartsWith(prefix) && n.EndsWith(".md", StringComparison.OrdinalIgnoreCase)
+                                 && !n.StartsWith(skillPrefix, StringComparison.Ordinal))
                      .Order())
         {
             using var stream = assembly.GetManifestResourceStream(resourceName);
@@ -151,12 +172,9 @@ public class BuiltInAgentProvider : IStaticNodeProvider
         var agentConfig = new AgentConfiguration
         {
             Id = id,
-            DisplayName = frontMatter.Name ?? frontMatter.DisplayName ?? id,
             Description = frontMatter.Description,
             Instructions = string.IsNullOrWhiteSpace(markdownBody) ? null : markdownBody.Trim(),
-            Icon = frontMatter.Icon,
             CustomIconSvg = frontMatter.CustomIconSvg,
-            GroupName = frontMatter.GroupName,
             IsDefault = frontMatter.IsDefault,
             ExposedInNavigator = frontMatter.ExposedInNavigator,
             Delegations = frontMatter.Delegations?.Select(d => new AgentDelegation
@@ -169,19 +187,23 @@ public class BuiltInAgentProvider : IStaticNodeProvider
                 AgentPath = h.AgentPath ?? "",
                 Instructions = h.Instructions
             }).ToList(),
-            Plugins = frontMatter.Plugins?.Select(ParsePluginReference).ToList(),
-            PreferredModel = frontMatter.PreferredModel,
-            ModelTier = frontMatter.ModelTier,
+            Plugins = frontMatter.Plugins?.Select(AgentPluginReference.Parse).ToList(),
             ContextMatchPattern = frontMatter.ContextMatchPattern,
-            Order = frontMatter.Order
+            ModelTier = frontMatter.ModelTier
         };
 
+        // Node-level metadata (name, description, icon, group, order) lives on the
+        // MeshNode — NOT duplicated on the AgentConfiguration content. The picker groups
+        // by Category, so the harness group (frontmatter groupName, default MeshWeaver)
+        // maps onto the node's Category.
         return new MeshNode(id, ns)
         {
             NodeType = "Agent",
             Name = frontMatter.Name ?? frontMatter.DisplayName ?? id,
-            Category = frontMatter.Category ?? "Agents",
+            Description = frontMatter.Description,
+            Category = frontMatter.GroupName ?? frontMatter.Category ?? Harnesses.MeshWeaver,
             Icon = frontMatter.Icon ?? "Bot",
+            Order = frontMatter.Order,
             Content = agentConfig
         };
     }
@@ -234,22 +256,6 @@ public class BuiltInAgentProvider : IStaticNodeProvider
         return (id, ns);
     }
 
-    /// <summary>
-    /// Parses "PluginName" or "PluginName:Method1,Method2" into AgentPluginReference.
-    /// </summary>
-    private static AgentPluginReference ParsePluginReference(string s)
-    {
-        var colonIndex = s.IndexOf(':');
-        if (colonIndex < 0)
-            return new AgentPluginReference { Name = s.Trim() };
-
-        return new AgentPluginReference
-        {
-            Name = s[..colonIndex].Trim(),
-            Methods = s[(colonIndex + 1)..].Split(',').Select(m => m.Trim()).ToList()
-        };
-    }
-
     // Peek class to check nodeType without full deserialization
     private class NodeTypePeek
     {
@@ -268,10 +274,9 @@ public class BuiltInAgentProvider : IStaticNodeProvider
         public bool IsDefault { get; set; }
         public bool ExposedInNavigator { get; set; }
         public string? ContextMatchPattern { get; set; }
-        public string? PreferredModel { get; set; }
-        public string? ModelTier { get; set; }
         public int Order { get; set; }
         public string? CustomIconSvg { get; set; }
+        public string? ModelTier { get; set; }
         public List<DelegationEntry>? Delegations { get; set; }
         public List<HandoffEntry>? Handoffs { get; set; }
         public List<string>? Plugins { get; set; }

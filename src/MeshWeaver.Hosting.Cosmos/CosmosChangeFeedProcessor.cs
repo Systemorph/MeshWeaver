@@ -7,21 +7,29 @@ using Microsoft.Extensions.Logging;
 namespace MeshWeaver.Hosting.Cosmos;
 
 /// <summary>
-/// Processes Cosmos DB Change Feed and publishes changes to IDataChangeNotifier.
+/// Processes Cosmos DB Change Feed and publishes changes to <see cref="IObserver{T}"/> of <see cref="DataChangeNotification"/>.
 /// </summary>
 public class CosmosChangeFeedProcessor : IAsyncDisposable
 {
     private readonly Container _monitoredContainer;
     private readonly Container _leaseContainer;
-    private readonly IDataChangeNotifier _changeNotifier;
+    private readonly IObserver<DataChangeNotification> _changeNotifier;
     private readonly ILogger<CosmosChangeFeedProcessor>? _logger;
     private readonly string _processorName;
     private ChangeFeedProcessor? _processor;
 
+    /// <summary>
+    /// Initializes a new instance of the <see cref="CosmosChangeFeedProcessor"/> class.
+    /// </summary>
+    /// <param name="monitoredContainer">The container whose change feed is observed.</param>
+    /// <param name="leaseContainer">The container that stores change-feed lease state.</param>
+    /// <param name="changeNotifier">The observer that receives a <see cref="DataChangeNotification"/> for each change.</param>
+    /// <param name="processorName">The change-feed processor name used for lease coordination.</param>
+    /// <param name="logger">Optional logger for diagnostics.</param>
     public CosmosChangeFeedProcessor(
         Container monitoredContainer,
         Container leaseContainer,
-        IDataChangeNotifier changeNotifier,
+        IObserver<DataChangeNotification> changeNotifier,
         string processorName = "MeshWeaverChangeFeedProcessor",
         ILogger<CosmosChangeFeedProcessor>? logger = null)
     {
@@ -48,7 +56,7 @@ public class CosmosChangeFeedProcessor : IAsyncDisposable
 
         var containerResponse = await database.CreateContainerIfNotExistsAsync(
             new ContainerProperties(containerName, "/id"),
-            cancellationToken: cancellationToken);
+            cancellationToken: cancellationToken).ConfigureAwait(false);
 
         return containerResponse.Container;
     }
@@ -69,7 +77,7 @@ public class CosmosChangeFeedProcessor : IAsyncDisposable
             "Starting Cosmos Change Feed processor '{ProcessorName}' for container '{ContainerName}'",
             _processorName, _monitoredContainer.Id);
 
-        await _processor.StartAsync();
+        await _processor.StartAsync().ConfigureAwait(false);
     }
 
     /// <summary>
@@ -83,7 +91,7 @@ public class CosmosChangeFeedProcessor : IAsyncDisposable
                 "Stopping Cosmos Change Feed processor '{ProcessorName}'",
                 _processorName);
 
-            await _processor.StopAsync();
+            await _processor.StopAsync().ConfigureAwait(false);
             _processor = null;
         }
     }
@@ -138,13 +146,14 @@ public class CosmosChangeFeedProcessor : IAsyncDisposable
 
         // Cosmos Change Feed only reports creates and updates (not deletes in the default mode)
         // To detect deletes, you would need to use the "AllVersionsAndDeletes" mode with dedicated configuration
-        _changeNotifier.NotifyChange(DataChangeNotification.Updated(path, null));
+        _changeNotifier.OnNext(DataChangeNotification.Updated(path, null));
 
         _logger?.LogDebug("Published change notification for path '{Path}'", path);
     }
 
+    /// <inheritdoc />
     public async ValueTask DisposeAsync()
     {
-        await StopAsync();
+        await StopAsync().ConfigureAwait(false);
     }
 }

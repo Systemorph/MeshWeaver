@@ -4,12 +4,30 @@ using Markdig.Syntax;
 
 namespace MeshWeaver.Markdown;
 
+/// <summary>
+/// HTML renderer for <see cref="ExecutableCodeBlock"/>: emits the optional code display, the kernel
+/// result-area placeholder div, mermaid diagrams, and embedded layout areas.
+/// </summary>
 public class ExecutableCodeBlockRenderer : CodeBlockRenderer
 {
+    /// <summary>Fence argument that requests the code be displayed (<c>--show-code</c>).</summary>
     public const string ShowCode = "show-code";
+
+    /// <summary>Fence argument that requests the fenced header (language + args) be displayed (<c>--show-header</c>).</summary>
     public const string ShowHeader = "show-header";
+
+    /// <summary>
+    /// Literal placeholder emitted in place of the kernel address; substituted with the real address
+    /// once the hosting view knows it (see <c>MarkdownViewLogic.ReplaceKernelPlaceholder</c>).
+    /// </summary>
     public const string KernelAddressPlaceholder = "__KERNEL_ADDRESS__";
 
+    /// <summary>
+    /// Renders an executable/layout/mermaid code block to HTML, falling back to the base renderer for
+    /// plain code blocks.
+    /// </summary>
+    /// <param name="renderer">The HTML renderer to write to.</param>
+    /// <param name="obj">The code block being rendered.</param>
     protected override void Write(HtmlRenderer renderer, CodeBlock obj)
     {
 
@@ -51,9 +69,14 @@ public class ExecutableCodeBlockRenderer : CodeBlockRenderer
         {
             if (fenced.Info == "mermaid")
             {
+                // HTML-escape the diagram source: Mermaid class diagrams contain '<'
+                // (stereotypes `<<enumeration>>`, inheritance `<|--`). Written raw, the
+                // browser/HtmlAgilityPack parse those as live tags and the diagram text
+                // is destroyed before Mermaid reads it. Escaped, it round-trips through
+                // textContent/InnerText decoding back to the literal source.
                 renderer.Write("<div class='mermaid'>");
                 renderer.EnsureLine();
-                renderer.Write(fenced.Lines.ToString());
+                renderer.WriteEscape(fenced.Lines.ToString());
                 renderer.EnsureLine();
                 renderer.Write("</div>");
             }

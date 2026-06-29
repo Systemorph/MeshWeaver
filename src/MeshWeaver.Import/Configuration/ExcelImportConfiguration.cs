@@ -7,10 +7,25 @@ namespace MeshWeaver.Import.Configuration;
 /// </summary>
 public class ExcelImportConfiguration : ImportConfiguration
 {
+    /// <summary>
+    /// Initializes an empty configuration; populate the worksheet, mapping and total-row
+    /// properties individually before use.
+    /// </summary>
     public ExcelImportConfiguration()
     {
     }
 
+    /// <summary>
+    /// Initializes the configuration with all core import settings in one call.
+    /// </summary>
+    /// <param name="name">Display name of the import configuration.</param>
+    /// <param name="address">Source address (e.g. file path or collection path) the worksheet is read from.</param>
+    /// <param name="worksheetName">Name of the worksheet to process.</param>
+    /// <param name="dataStartRow">1-based index of the first data row (the heading row is not counted).</param>
+    /// <param name="totalRowMarkers">Marker texts that identify total/grand-total rows to ignore.</param>
+    /// <param name="totalRowScanAllCells">When true, scans every used cell of a row for total markers.</param>
+    /// <param name="totalRowMatchExact">When true, total markers must match a cell exactly; otherwise a substring match is used.</param>
+    /// <param name="ignoreRowExpressions">Per-row expressions; a row is skipped when any evaluates to true.</param>
     [SetsRequiredMembers]
     public ExcelImportConfiguration(string name, string address, string worksheetName, int dataStartRow, HashSet<string> totalRowMarkers, bool totalRowScanAllCells, bool totalRowMatchExact, List<string> ignoreRowExpressions)
     {

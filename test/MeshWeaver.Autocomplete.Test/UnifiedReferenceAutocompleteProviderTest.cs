@@ -2,9 +2,10 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Reactive.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
-using FluentAssertions;
+using MeshWeaver.Reactive;
 using Memex.Portal.Shared;
 using MeshWeaver.Data.Completion;
 using MeshWeaver.Graph;
@@ -29,15 +30,18 @@ namespace MeshWeaver.Autocomplete.Test;
 [Collection("UnifiedReferenceAutocompleteProviderTest")]
 public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
 {
-    private readonly string _cacheDirectory;
+    private static readonly string _cacheDirectory =
+        Path.Combine(Path.GetTempPath(), "MeshWeaverUcrTests", Guid.NewGuid().ToString());
+    static UnifiedReferenceAutocompleteProviderTest() => Directory.CreateDirectory(_cacheDirectory);
+
+    protected override bool ShareMeshAcrossTests => true;
+
     private IMessageHub Hub => Mesh.ServiceProvider.GetRequiredService<IMessageHub>();
 
     private MeshConfiguration MeshConfig => Mesh.ServiceProvider.GetRequiredService<MeshConfiguration>();
 
     public UnifiedReferenceAutocompleteProviderTest(ITestOutputHelper output) : base(output)
     {
-        _cacheDirectory = Path.Combine(Path.GetTempPath(), "MeshWeaverUcrTests", Guid.NewGuid().ToString());
-        Directory.CreateDirectory(_cacheDirectory);
     }
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
@@ -55,16 +59,7 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
             .ConfigureHub(hub => hub.AddMeshNavigation());  // Register the autocomplete provider
     }
 
-    public override async ValueTask DisposeAsync()
-    {
-        await base.DisposeAsync();
-
-        if (Directory.Exists(_cacheDirectory))
-        {
-            try { Directory.Delete(_cacheDirectory, recursive: true); }
-            catch { /* Ignore cleanup errors */ }
-        }
-    }
+    // Cache dir is class-static + shared SP — never deleted between tests.
 
     #region Configuration Validation Tests
 
@@ -72,7 +67,7 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
     public void MeshConfig_HasTopLevelNodes()
     {
         // Verify the mesh configuration is populated with top-level nodes
-        var nodes = MeshConfig.Nodes.Values.ToArray();
+        var nodes = Mesh.ServiceProvider.EnumerateStaticNodes().ToArray();
 
         Output.WriteLine($"MeshConfig has {nodes.Length} total nodes:");
         foreach (var node in nodes.Take(20))
@@ -103,7 +98,8 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
         Output.WriteLine("Querying for Systemorph via IMeshService...");
 
         // Query from root to find Systemorph
-        var suggestions = await MeshQuery.AutocompleteAsync("", "Sys", 10, TestContext.Current.CancellationToken).ToArrayAsync(TestContext.Current.CancellationToken);
+        var suggestions = (await MeshQuery.AutocompleteAsync("", "Sys", 10)
+            .ToObservableSequence().ToList().Should().Within(10.Seconds()).Emit()).ToArray();
 
         Output.WriteLine($"Found {suggestions.Length} suggestions for 'Sys':");
         foreach (var s in suggestions)
@@ -137,8 +133,9 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
         // Arrange - get provider from DI
         var provider = GetUnifiedReferenceProvider();
 
-        // Act - query with just "@"
-        var items = await provider.GetItemsAsync("@", null, TestContext.Current.CancellationToken).ToArrayAsync(TestContext.Current.CancellationToken);
+        // Act - query with just "@" — wait for the first non-empty snapshot (don't block on completion)
+        var items = (await provider.GetItems("@", null)
+            .Should().Within(10.Seconds()).Match(snap => snap.Count > 0)).ToArray();
 
         // Assert
         Output.WriteLine($"Got {items.Count()} suggestions for '@':");
@@ -156,8 +153,12 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
         // Arrange - get provider from DI
         var provider = GetUnifiedReferenceProvider();
 
-        // Act - query with "@Sys" (partial match for Systemorph)
-        var items = await provider.GetItemsAsync("@Sys", null, TestContext.Current.CancellationToken).ToArrayAsync(TestContext.Current.CancellationToken);
+        // Act - query with "@Sys" — wait for the first snapshot that contains Systemorph
+        var items = (await provider.GetItems("@Sys", null)
+            .Should().Within(10.Seconds())
+            .Match(snap => snap.Any(i =>
+                i.Label.Contains("Systemorph", StringComparison.OrdinalIgnoreCase) ||
+                i.InsertText.Contains("Systemorph", StringComparison.OrdinalIgnoreCase)))).ToArray();
 
         // Assert
         Output.WriteLine($"Got {items.Count()} suggestions for '@Sys':");
@@ -182,8 +183,19 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
         // Arrange - get provider from DI
         var provider = GetUnifiedReferenceProvider();
 
-        // Act - query with "@Pro" (partial match for Project)
-        var items = await provider.GetItemsAsync("@Pro", null, TestContext.Current.CancellationToken).ToArrayAsync(TestContext.Current.CancellationToken);
+        // ACME/Project is a NESTED NodeType — the provider's root-scoped
+        // autocomplete fans out only to partitions the router has already
+        // discovered. Warm up the ACME partition first so this test is
+        // order-independent; without it the test only passed when an earlier
+        // test in the shared-mesh class happened to load ACME (it failed in
+        // CI's test order).
+        await MeshQuery.AutocompleteAsync("ACME", "Pro", 15)
+            .ToObservableSequence().ToList().Should().Within(10.Seconds()).Emit();
+
+        // Act - query with "@Pro" — wait for the first snapshot that contains Project
+        var items = (await provider.GetItems("@Pro", null)
+            .Should().Within(10.Seconds())
+            .Match(snap => snap.Any(i => i.Label.Contains("Project", StringComparison.OrdinalIgnoreCase)))).ToArray();
 
         // Assert
         Output.WriteLine($"Got {items.Count()} suggestions for '@Pro':");
@@ -204,8 +216,10 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
         // Arrange - get provider from DI
         var provider = GetUnifiedReferenceProvider();
 
-        // Act - query with "@Use" (partial match for User)
-        var items = await provider.GetItemsAsync("@Use", null, TestContext.Current.CancellationToken).ToArrayAsync(TestContext.Current.CancellationToken);
+        // Act - query with "@Use" — wait for the first snapshot that contains User
+        var items = (await provider.GetItems("@Use", null)
+            .Should().Within(10.Seconds())
+            .Match(snap => snap.Any(i => i.Label.Contains("User", StringComparison.OrdinalIgnoreCase)))).ToArray();
 
         // Assert
         Output.WriteLine($"Got {items.Count()} suggestions for '@Use':");
@@ -226,8 +240,10 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
         // Arrange - get provider from DI
         var provider = GetUnifiedReferenceProvider();
 
-        // Act - query with lowercase "@sys"
-        var items = await provider.GetItemsAsync("@sys", null, TestContext.Current.CancellationToken).ToArrayAsync(TestContext.Current.CancellationToken);
+        // Act - query with lowercase "@sys" — wait for the first snapshot that contains Systemorph
+        var items = (await provider.GetItems("@sys", null)
+            .Should().Within(10.Seconds())
+            .Match(snap => snap.Any(i => i.Label.Contains("Systemorph", StringComparison.OrdinalIgnoreCase)))).ToArray();
 
         // Assert
         Output.WriteLine($"Got {items.Count()} suggestions for '@sys' (lowercase):");
@@ -250,8 +266,7 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
     public async Task Provider_AtEmpty_DoesNotReturnRandomWords()
     {
         var provider = GetUnifiedReferenceProvider();
-        var items = await provider.GetItemsAsync("@", null, TestContext.Current.CancellationToken)
-            .ToArrayAsync(TestContext.Current.CancellationToken);
+        var items = (await provider.GetItems("@", null).TakeLast(1).Should().Within(10.Seconds()).Emit()).ToArray();
 
         Output.WriteLine($"Got {items.Length} suggestions for '@':");
         foreach (var item in items.Take(10))
@@ -269,8 +284,7 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
     public async Task Provider_AtPartialPrefix_OnlyReturnsMatchingNodes()
     {
         var provider = GetUnifiedReferenceProvider();
-        var items = await provider.GetItemsAsync("@Sys", null, TestContext.Current.CancellationToken)
-            .ToArrayAsync(TestContext.Current.CancellationToken);
+        var items = (await provider.GetItems("@Sys", null).TakeLast(1).Should().Within(10.Seconds()).Emit()).ToArray();
 
         // All results should contain "Sys" somewhere — no unrelated suggestions
         items.Should().AllSatisfy(item =>
@@ -285,8 +299,7 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
     public async Task Provider_AtNonexistentPrefix_ReturnsEmpty()
     {
         var provider = GetUnifiedReferenceProvider();
-        var items = await provider.GetItemsAsync("@ZzzNonexistent999", null, TestContext.Current.CancellationToken)
-            .ToArrayAsync(TestContext.Current.CancellationToken);
+        var items = (await provider.GetItems("@ZzzNonexistent999", null).TakeLast(1).Should().Within(10.Seconds()).Emit()).ToArray();
 
         items.Should().BeEmpty("a nonexistent prefix should not match any nodes");
     }
@@ -295,8 +308,8 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
     public async Task MeshQuery_WithBasePath_OnlyReturnsChildren()
     {
         // Verify AutocompleteAsync with basePath scopes results
-        var suggestions = await MeshQuery.AutocompleteAsync("Systemorph", "", 20, TestContext.Current.CancellationToken)
-            .ToArrayAsync(TestContext.Current.CancellationToken);
+        var suggestions = (await MeshQuery.AutocompleteAsync("Systemorph", "", 20)
+            .ToObservableSequence().ToList().Should().Within(10.Seconds()).Emit()).ToArray();
 
         Output.WriteLine($"Children of Systemorph: {suggestions.Length}");
         foreach (var s in suggestions)
@@ -313,8 +326,8 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
     public async Task MeshQuery_WithBasePathAndPrefix_FiltersCorrectly()
     {
         // Get all children of Systemorph first
-        var allChildren = await MeshQuery.AutocompleteAsync("Systemorph", "", 20, TestContext.Current.CancellationToken)
-            .ToArrayAsync(TestContext.Current.CancellationToken);
+        var allChildren = (await MeshQuery.AutocompleteAsync("Systemorph", "", 20)
+            .ToObservableSequence().ToList().Should().Within(10.Seconds()).Emit()).ToArray();
 
         if (allChildren.Length == 0)
         {
@@ -326,8 +339,8 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
         var firstChild = allChildren[0];
         var prefix = firstChild.Name[..Math.Min(3, firstChild.Name.Length)];
 
-        var filtered = await MeshQuery.AutocompleteAsync("Systemorph", prefix, 20, TestContext.Current.CancellationToken)
-            .ToArrayAsync(TestContext.Current.CancellationToken);
+        var filtered = (await MeshQuery.AutocompleteAsync("Systemorph", prefix, 20)
+            .ToObservableSequence().ToList().Should().Within(10.Seconds()).Emit()).ToArray();
 
         Output.WriteLine($"Filtered '{prefix}' under Systemorph: {filtered.Length} results");
         filtered.Should().AllSatisfy(s =>
@@ -367,8 +380,10 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
         // Get provider from DI
         var provider = GetUnifiedReferenceProvider();
 
-        // Act
-        var items = await provider.GetItemsAsync("@Sys", null, TestContext.Current.CancellationToken).ToArrayAsync(TestContext.Current.CancellationToken);
+        // Act - wait for the first snapshot that contains Systemorph
+        var items = (await provider.GetItems("@Sys", null)
+            .Should().Within(10.Seconds())
+            .Match(snap => snap.Any(i => i.Label.Contains("Systemorph", StringComparison.OrdinalIgnoreCase)))).ToArray();
 
         // Assert
         Output.WriteLine($"Provider returned {items.Length} suggestions for '@Sys':");
@@ -386,9 +401,14 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
     {
         var provider = GetUnifiedReferenceProvider();
 
-        // Provider expects addressType/addressId (2 segments) before showing keywords
-        var items = await provider.GetItemsAsync("@Systemorph/Marketing/", null, TestContext.Current.CancellationToken)
-            .ToArrayAsync(TestContext.Current.CancellationToken);
+        // Provider expects addressType/addressId (2 segments) before showing keywords.
+        // Wait for the first snapshot carrying the content/data/schema keyword suggestions.
+        var items = (await provider.GetItems("@Systemorph/Marketing/", null)
+            .Should().Within(10.Seconds())
+            .Match(snap =>
+                snap.Any(i => i.Label.Contains("content", StringComparison.OrdinalIgnoreCase)) &&
+                snap.Any(i => i.Label.Contains("data", StringComparison.OrdinalIgnoreCase)) &&
+                snap.Any(i => i.Label.Contains("schema", StringComparison.OrdinalIgnoreCase)))).ToArray();
 
         Output.WriteLine($"Got {items.Length} suggestions for '@Systemorph/Marketing/':");
         foreach (var item in items)
@@ -410,8 +430,9 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
     {
         var provider = GetUnifiedReferenceProvider();
 
-        var items = await provider.GetItemsAsync("@Systemorph/Marketing/", null, TestContext.Current.CancellationToken)
-            .ToArrayAsync(TestContext.Current.CancellationToken);
+        var items = (await provider.GetItems("@Systemorph/Marketing/", null)
+            .Should().Within(10.Seconds())
+            .Match(snap => snap.Any(i => i.Label.Contains("content")))).ToArray();
 
         var contentItem = items.FirstOrDefault(i => i.Label.Contains("content"));
         contentItem.Should().NotBeNull();
@@ -424,8 +445,11 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
     {
         var provider = GetUnifiedReferenceProvider();
 
-        var items = await provider.GetItemsAsync("@Systemorph/Marketing/", null, TestContext.Current.CancellationToken)
-            .ToArrayAsync(TestContext.Current.CancellationToken);
+        var items = (await provider.GetItems("@Systemorph/Marketing/", null)
+            .Should().Within(10.Seconds())
+            .Match(snap =>
+                snap.Any(i => i.Label.Contains("content")) &&
+                snap.Any(i => i.Label.Contains("data")))).ToArray();
 
         // All keyword insert texts should use / separator (not :)
         var contentItem = items.FirstOrDefault(i => i.Label.Contains("content"));
@@ -446,12 +470,11 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
     {
         var provider = GetUnifiedReferenceProvider();
 
-        // Query with context — should get relative results with higher priority
-        var withContext = await provider.GetItemsAsync("@", "Systemorph/Marketing", TestContext.Current.CancellationToken)
-            .ToArrayAsync(TestContext.Current.CancellationToken);
+        // Query with context — wait for the first snapshot that returns children of the context
+        var withContext = (await provider.GetItems("@", "Systemorph/Marketing")
+            .Should().Within(10.Seconds()).Match(snap => snap.Count > 0)).ToArray();
 
-        var withoutContext = await provider.GetItemsAsync("@", null, TestContext.Current.CancellationToken)
-            .ToArrayAsync(TestContext.Current.CancellationToken);
+        var withoutContext = (await provider.GetItems("@", null).TakeLast(1).Should().Within(10.Seconds()).Emit()).ToArray();
 
         Output.WriteLine($"With context: {withContext.Length} items, Without context: {withoutContext.Length} items");
         foreach (var item in withContext.Take(5))
@@ -469,8 +492,8 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
         // Query with a base path that has children at different depths
-        var suggestions = await meshQuery.AutocompleteAsync("", "", 20, TestContext.Current.CancellationToken)
-            .ToArrayAsync(TestContext.Current.CancellationToken);
+        var suggestions = (await meshQuery.AutocompleteAsync("", "", 20)
+            .ToObservableSequence().ToList().Should().Within(10.Seconds()).Emit()).ToArray();
 
         Output.WriteLine($"Got {suggestions.Length} top-level suggestions:");
         foreach (var s in suggestions)

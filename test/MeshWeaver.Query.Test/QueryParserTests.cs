@@ -1,4 +1,3 @@
-using FluentAssertions;
 using MeshWeaver.Mesh;
 using Xunit;
 
@@ -107,7 +106,120 @@ public class QueryParserTests
         var comparison = (QueryComparison)result.Filter!;
         comparison.Condition.Selector.Should().Be("category");
         comparison.Condition.Operator.Should().Be(QueryOperator.In);
-        comparison.Condition.Values.Should().BeEquivalentTo(["Electronics", "Computers", "Gadgets"]);
+        comparison.Condition.Values.Should().BeEquivalentTo(new[] { "Electronics", "Computers", "Gadgets" }, System.Text.Json.JsonSerializerOptions.Default);
+    }
+
+    // ─── Grep-style `|` alternation (`grep -E`'s alternation operator) ───
+    // Equivalent to `(A OR B OR C)` but more concise. Pushed down by backends as IN(...).
+
+    [Fact]
+    public void Parse_PipeAlternation_ProducesInOperator()
+    {
+        var result = _parser.Parse("nodeType:Story|Task|Bug");
+
+        result.Filter.Should().BeOfType<QueryComparison>();
+        var comparison = (QueryComparison)result.Filter!;
+        comparison.Condition.Selector.Should().Be("nodeType");
+        comparison.Condition.Operator.Should().Be(QueryOperator.In);
+        comparison.Condition.Values.Should().BeEquivalentTo(new[] { "Story", "Task", "Bug" }, System.Text.Json.JsonSerializerOptions.Default);
+    }
+
+    [Fact]
+    public void Parse_PipeAlternation_NegatedProducesNotInOperator()
+    {
+        var result = _parser.Parse("-nodeType:Spam|Trash");
+
+        result.Filter.Should().BeOfType<QueryComparison>();
+        var comparison = (QueryComparison)result.Filter!;
+        comparison.Condition.Selector.Should().Be("nodeType");
+        comparison.Condition.Operator.Should().Be(QueryOperator.NotIn);
+        comparison.Condition.Values.Should().BeEquivalentTo(new[] { "Spam", "Trash" }, System.Text.Json.JsonSerializerOptions.Default);
+    }
+
+    [Fact]
+    public void Parse_PipeAlternation_SingleValueAfterSplitStaysEqual()
+    {
+        // "foo|" with trailing pipe but only one non-empty value should remain Equal
+        // (RemoveEmptyEntries collapses to one part → no In conversion).
+        var result = _parser.Parse("nodeType:foo|");
+
+        result.Filter.Should().BeOfType<QueryComparison>();
+        var comparison = (QueryComparison)result.Filter!;
+        comparison.Condition.Operator.Should().Be(QueryOperator.Equal);
+        comparison.Condition.Value.Should().Be("foo|");
+    }
+
+    [Fact]
+    public void Parse_PipeAlternation_DoesNotApplyToWildcard()
+    {
+        // `*` already implies Like — the | inside a Like pattern stays literal,
+        // it does NOT split into alternation. Avoids accidental over-conversion.
+        var result = _parser.Parse("name:*foo|bar*");
+
+        result.Filter.Should().BeOfType<QueryComparison>();
+        var comparison = (QueryComparison)result.Filter!;
+        comparison.Condition.Operator.Should().Be(QueryOperator.Like);
+        comparison.Condition.Value.Should().Be("*foo|bar*");
+    }
+
+    [Fact]
+    public void Parse_PipeAlternation_OnPathQualifier_PopulatesPathsList()
+    {
+        // path:a|b|c is the routing-layer use case — produces multi-value Paths
+        // for backends to push down as `WHERE path IN (...)`. The single Path
+        // field stays populated with the first value for back-compat with
+        // consumers that don't yet read Paths.
+        var result = _parser.Parse("path:foo/bar/baz|foo/bar|foo");
+
+        result.Paths.Should().BeEquivalentTo(new[] { "foo/bar/baz", "foo/bar", "foo" }, System.Text.Json.JsonSerializerOptions.Default);
+        result.Path.Should().Be("foo/bar/baz");
+    }
+
+    [Fact]
+    public void Parse_SinglePath_LeavesPathsNull()
+    {
+        var result = _parser.Parse("path:foo/bar");
+
+        result.Path.Should().Be("foo/bar");
+        result.Paths.Should().BeNull();
+    }
+
+    // ─── SQL-function selectors in sort: ───
+    // `sort:length(path)-desc` — function-call syntax in the sort selector lets
+    // backends emit `ORDER BY length(n.path) DESC` without hardcoding sort
+    // aliases. Routing-layer "longest-matching-prefix" lookups rely on this.
+
+    [Fact]
+    public void Parse_SortLengthFunction_ParsesAsSortSelector()
+    {
+        var result = _parser.Parse("sort:length(path)-desc");
+
+        result.OrderBy.Should().NotBeNull();
+        result.OrderBy!.Property.Should().Be("length(path)");
+        result.OrderBy.Descending.Should().BeTrue();
+    }
+
+    [Fact]
+    public void Parse_SortLowerFunction_AscendingDefault()
+    {
+        var result = _parser.Parse("sort:lower(name)");
+
+        result.OrderBy.Should().NotBeNull();
+        result.OrderBy!.Property.Should().Be("lower(name)");
+        result.OrderBy.Descending.Should().BeFalse();
+    }
+
+    [Fact]
+    public void Parse_PathQualifier_AcceptsFunctionCallInSort_AlongsidePathFilter()
+    {
+        // Routing-layer canonical form: path filter with alternation + sort + limit.
+        var result = _parser.Parse("path:a/b/c|a/b|a sort:length(path)-desc limit:1");
+
+        result.Paths.Should().BeEquivalentTo(new[] { "a/b/c", "a/b", "a" }, System.Text.Json.JsonSerializerOptions.Default);
+        result.OrderBy.Should().NotBeNull();
+        result.OrderBy!.Property.Should().Be("length(path)");
+        result.OrderBy.Descending.Should().BeTrue();
+        result.Limit.Should().Be(1);
     }
 
     [Fact]
@@ -119,7 +231,7 @@ public class QueryParserTests
         var comparison = (QueryComparison)result.Filter!;
         comparison.Condition.Selector.Should().Be("status");
         comparison.Condition.Operator.Should().Be(QueryOperator.NotIn);
-        comparison.Condition.Values.Should().BeEquivalentTo(["deleted", "archived"]);
+        comparison.Condition.Values.Should().BeEquivalentTo(new[] { "deleted", "archived" }, System.Text.Json.JsonSerializerOptions.Default);
     }
 
     #endregion
@@ -225,6 +337,21 @@ public class QueryParserTests
         var result = _parser.Parse("scope:hierarchy");
 
         result.Scope.Should().Be(QueryScope.Hierarchy);
+    }
+
+    [Fact]
+    public void Parse_ScopeParameterNextLevel_SetsScope()
+    {
+        var result = _parser.Parse("namespace:ACME scope:nextLevel");
+
+        result.Scope.Should().Be(QueryScope.NextLevel);
+        result.Path.Should().Be("ACME");
+    }
+
+    [Fact]
+    public void Parse_ScopeParameterPopulated_AliasesNextLevel()
+    {
+        _parser.Parse("scope:populated").Scope.Should().Be(QueryScope.NextLevel);
     }
 
     [Fact]
@@ -610,6 +737,69 @@ public class QueryParserTests
 
     #endregion
 
+    #region Namespace Alternation (A|B|C exact membership — the agent / model registry union)
+
+    private static QueryCondition? FindCondition(QueryNode? node, string selector) => node switch
+    {
+        QueryComparison c when c.Condition.Selector.Equals(selector, System.StringComparison.OrdinalIgnoreCase)
+            => c.Condition,
+        QueryAnd a => a.Children.Select(ch => FindCondition(ch, selector)).FirstOrDefault(x => x != null),
+        QueryOr o => o.Children.Select(ch => FindCondition(ch, selector)).FirstOrDefault(x => x != null),
+        _ => null,
+    };
+
+    [Fact]
+    public void Parse_NamespaceAlternation_IsExactMembershipFilter()
+    {
+        // The canonical agent registry query. `namespace:A|B|C` lists the platform + space + user
+        // namespaces DIRECTLY — exact membership (`namespace IN (...)`), no ancestor/graph walk.
+        var result = _parser.Parse("nodeType:Agent namespace:rbuergi/Agent|AgenticPension/Agent|Agent");
+
+        // No single base namespace/scope survives — it's purely a filter, so no path-based walk.
+        result.Path.Should().BeNull();
+        result.Scope.Should().Be(QueryScope.Exact);
+
+        var ns = FindCondition(result.Filter, "namespace");
+        ns.Should().NotBeNull();
+        ns!.Operator.Should().Be(QueryOperator.In);
+        ns.Values.Should().BeEquivalentTo(new[] { "rbuergi/Agent", "AgenticPension/Agent", "Agent" },
+            System.Text.Json.JsonSerializerOptions.Default);
+
+        // The nodeType filter is still ANDed in alongside the namespace membership.
+        FindCondition(result.Filter, "nodeType")!.Value.Should().Be("Agent");
+
+        // Partition routing sees the namespace candidates (so the user + space schemas are queried).
+        result.ExtractNamespaces().Should().BeEquivalentTo(
+            new[] { "rbuergi/Agent", "AgenticPension/Agent", "Agent" },
+            System.Text.Json.JsonSerializerOptions.Default);
+    }
+
+    [Fact]
+    public void Parse_NamespaceAlternation_DedupesAndTrims()
+    {
+        var result = _parser.Parse("namespace:Agent|Agent|/Model/ nodeType:Agent");
+
+        var ns = FindCondition(result.Filter, "namespace");
+        ns!.Operator.Should().Be(QueryOperator.In);
+        ns.Values.Should().BeEquivalentTo(new[] { "Agent", "Model" },
+            System.Text.Json.JsonSerializerOptions.Default);
+    }
+
+    [Fact]
+    public void Parse_SingleNamespace_Unchanged_StaysPathScoped()
+    {
+        // A SINGLE namespace (no alternation) is deliberately left untouched — still a base namespace
+        // + scope walk — so existing Role/Group/AccessAssignment callers keep their behaviour. Only
+        // the `|` alternation form becomes an exact-membership filter.
+        var result = _parser.Parse("namespace:ACME/Project nodeType:Role scope:selfAndAncestors");
+
+        result.Path.Should().Be("ACME/Project");
+        result.Scope.Should().Be(QueryScope.AncestorsAndSelf);
+        FindCondition(result.Filter, "namespace").Should().BeNull("single namespace is NOT a filter");
+    }
+
+    #endregion
+
     #region Children Scope
 
     [Fact]
@@ -683,7 +873,7 @@ public class QueryParserTests
         var result = _parser.Parse("select:name");
 
         result.Select.Should().NotBeNull();
-        result.Select.Should().BeEquivalentTo(["name"]);
+        result.Select.Should().BeEquivalentTo(new[] { "name" }, System.Text.Json.JsonSerializerOptions.Default);
         result.Filter.Should().BeNull();
     }
 
@@ -693,7 +883,7 @@ public class QueryParserTests
         var result = _parser.Parse("select:name,nodeType,icon");
 
         result.Select.Should().NotBeNull();
-        result.Select.Should().BeEquivalentTo(["name", "nodeType", "icon"]);
+        result.Select.Should().BeEquivalentTo(new[] { "name", "nodeType", "icon" }, System.Text.Json.JsonSerializerOptions.Default);
     }
 
     [Fact]
@@ -702,7 +892,7 @@ public class QueryParserTests
         var result = _parser.Parse("nodeType:Story select:path,name");
 
         result.Select.Should().NotBeNull();
-        result.Select.Should().BeEquivalentTo(["path", "name"]);
+        result.Select.Should().BeEquivalentTo(new[] { "path", "name" }, System.Text.Json.JsonSerializerOptions.Default);
         result.Filter.Should().BeOfType<QueryComparison>();
         var comparison = (QueryComparison)result.Filter!;
         comparison.Condition.Selector.Should().Be("nodeType");
@@ -715,7 +905,7 @@ public class QueryParserTests
         var result = _parser.Parse("namespace:Systemorph select:name,nodeType sort:name limit:10");
 
         result.Select.Should().NotBeNull();
-        result.Select.Should().BeEquivalentTo(["name", "nodeType"]);
+        result.Select.Should().BeEquivalentTo(new[] { "name", "nodeType" }, System.Text.Json.JsonSerializerOptions.Default);
         result.Path.Should().Be("Systemorph");
         result.OrderBy.Should().NotBeNull();
         result.OrderBy!.Property.Should().Be("name");

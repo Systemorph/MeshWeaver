@@ -4,6 +4,11 @@ using MeshWeaver.Layout.Catalog;
 
 namespace MeshWeaver.Blazor.Components;
 
+/// <summary>
+/// Blazor view for the <c>CatalogControl</c> layout control. Renders catalog items
+/// grouped into collapsible sections with configurable card dimensions and responsive
+/// grid breakpoints.
+/// </summary>
 public partial class CatalogView
 {
     private ImmutableList<CatalogGroup> Groups { get; set; } = [];
@@ -22,6 +27,10 @@ public partial class CatalogView
     private string ContainerStyle => "display: flex; flex-direction: column;";
     private string CardStyle => $"height: {CardHeight}px; min-height: {CardHeight}px; max-height: {CardHeight}px; overflow: hidden; border: 1px solid var(--neutral-stroke-rest); border-radius: 4px; background: var(--neutral-layer-card-container);";
 
+    /// <summary>
+    /// Binds all catalog view-model properties (groups, layout breakpoints, card height,
+    /// section collapsibility) and initialises the per-group expanded state map.
+    /// </summary>
     protected override void BindData()
     {
         base.BindData();

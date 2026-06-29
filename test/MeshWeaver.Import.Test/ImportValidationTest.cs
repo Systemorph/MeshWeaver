@@ -2,8 +2,6 @@
 using System.Reactive.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using FluentAssertions;
-using FluentAssertions.Extensions;
 using MeshWeaver.Data;
 using MeshWeaver.Data.TestDomain;
 using MeshWeaver.Fixture;
@@ -12,6 +10,7 @@ using MeshWeaver.Messaging;
 using Microsoft.Extensions.Logging;
 using Xunit;
 
+using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Import.Test;
 
 public class ImportValidationTest(ITestOutputHelper output) : HubTestBase(output)
@@ -89,14 +88,8 @@ SystemName,FoundationYear,ContractType
 
         var client = GetClient();
         var importRequest = new ImportRequest(content);
-        var importResponse = await client.AwaitResponse(
-            importRequest,
-            o => o.WithTarget(TestDomain.TestImportAddress.Create()),
-            CancellationTokenSource.CreateLinkedTokenSource(
-                TestContext.Current.CancellationToken
-                , new CancellationTokenSource(10.Seconds()).Token
-            ).Token
-        );
+        var importResponse = await client.Observe(importRequest, o => o.WithTarget(TestDomain.TestImportAddress.Create()))
+            .Should().Within(10.Seconds()).Emit();
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Failed);
         importResponse
             .Message.Log.Messages
@@ -104,8 +97,12 @@ SystemName,FoundationYear,ContractType
             .Select(x => x.Message)
             .Should()
             .BeEquivalentTo(
-                "The field FoundationYear must be between 1999 and 2023.",
-                ImportManager.ImportFailed
+                new[]
+                {
+                    "The field FoundationYear must be between 1999 and 2023.",
+                    ImportManager.ImportFailed
+                },
+                client.JsonSerializerOptions
             );
 
         // Workspace check removed - the workspace observable doesn't emit for failed imports
@@ -123,14 +120,8 @@ FR,France";
 
         var client = GetClient();
         var importRequest = new ImportRequest(Content) { Format = "Test1", SaveLog = true };
-        var importResponse = await client.AwaitResponse(
-            importRequest,
-            o => o.WithTarget(TestDomain.TestImportAddress.Create()),
-            CancellationTokenSource.CreateLinkedTokenSource(
-                TestContext.Current.CancellationToken
-                , new CancellationTokenSource(1000.Seconds()).Token
-            ).Token
-        );
+        var importResponse = await client.Observe(importRequest, o => o.WithTarget(TestDomain.TestImportAddress.Create()))
+            .Should().Within(1000.Seconds()).Emit();
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Failed);
 
         importResponse
@@ -153,14 +144,8 @@ DoubleValue,Country
 
         var client = GetClient();
         var importRequest = new ImportRequest(content);
-        var importResponse = await client.AwaitResponse(
-            importRequest,
-            o => o.WithTarget(TestDomain.TestImportAddress.Create()),
-            CancellationTokenSource.CreateLinkedTokenSource(
-                TestContext.Current.CancellationToken,
-                new CancellationTokenSource(10.Seconds()).Token
-            ).Token
-        );
+        var importResponse = await client.Observe(importRequest, o => o.WithTarget(TestDomain.TestImportAddress.Create()))
+            .Should().Within(10.Seconds()).Emit();
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Failed);
         importResponse
             .Message.Log.Messages
@@ -168,9 +153,13 @@ DoubleValue,Country
             .Select(x => x.Message)
             .Should()
             .BeEquivalentTo(
-                "The IntValue field must have type from these: System.Double, System.Decimal, System.Single.",
-                "The DecimalValue field value should be in interval from 10 to 20.",
-                ImportManager.ImportFailed
+                new[]
+                {
+                    "The IntValue field must have type from these: System.Double, System.Decimal, System.Single.",
+                    "The DecimalValue field value should be in interval from 10 to 20.",
+                    ImportManager.ImportFailed
+                },
+                client.JsonSerializerOptions
             );
 
         // Workspace check removed - the workspace observable doesn't emit for failed imports
@@ -187,14 +176,8 @@ A,B";
 
         var client = GetClient();
         var importRequest = new ImportRequest(content) { Format = "Test1", SaveLog = true };
-        var importResponse = await client.AwaitResponse(
-            importRequest,
-            o => o.WithTarget(TestDomain.TestImportAddress.Create()),
-            CancellationTokenSource.CreateLinkedTokenSource(
-                TestContext.Current.CancellationToken,
-                new CancellationTokenSource(10.Seconds()).Token
-            ).Token
-        );
+        var importResponse = await client.Observe(importRequest, o => o.WithTarget(TestDomain.TestImportAddress.Create()))
+            .Should().Within(10.Seconds()).Emit();
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Failed);
 
         importResponse
@@ -205,39 +188,4 @@ A,B";
 
     }
 
-    [Fact(Skip = "Currently not implemented functionality")]
-    public async Task ImportWithCategoryValidationTest()
-    {
-        const string content =
-            @"@@Country
-SystemName,DisplayName
-RU,Russia
-FR,France
-@@Address
-Street,Country
-Red,RU
-Blue,FR";
-
-        var client = GetClient();
-        var importRequest = new ImportRequest(content) { Format = "Test2" };
-        var importResponse = await client.AwaitResponse(
-            importRequest,
-            o => o.WithTarget(TestDomain.TestImportAddress.Create()),
-            CancellationTokenSource.CreateLinkedTokenSource(
-                TestContext.Current.CancellationToken,
-                new CancellationTokenSource(10.Seconds()).Token
-            ).Token
-        );
-        importResponse.Message.Log.Status.Should().Be(ActivityStatus.Failed);
-
-        importResponse
-            .Message.Log.Messages
-            .Should()
-            .ContainSingle(x => x.LogLevel == LogLevel.Error)
-            .Which.Message.Should()
-            .Be(ImportManager.ImportFailed);
-
-        // Workspace check removed - the workspace observable doesn't emit for failed imports
-        // where no data was written, causing a race condition/timeout
-    }
 }

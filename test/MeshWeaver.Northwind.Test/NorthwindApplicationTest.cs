@@ -3,7 +3,6 @@ using System.Linq;
 using System.Reactive.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
-using FluentAssertions;
 using MeshWeaver.Data;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Layout;
@@ -49,9 +48,7 @@ public class NorthwindApplicationTest(ITestOutputHelper output) : MonolithMeshTe
             reference
         );
 
-        var result = await stream
-            .Timeout(TimeSpan.FromSeconds(10))
-            .FirstAsync();
+        var result = await stream.Should().Within(TimeSpan.FromSeconds(10)).Emit();
 
         result.Should().NotBeNull();
     }
@@ -70,8 +67,7 @@ public class NorthwindApplicationTest(ITestOutputHelper output) : MonolithMeshTe
         var result = await stream
             .Where(x => x.Value != null && x.Value.Instances.Count > 0)
             .Select(x => x.Value!.Get<NorthwindDataCube>())
-            .Timeout(TimeSpan.FromSeconds(30))
-            .FirstAsync(x => x.Any());
+            .Should().Within(TimeSpan.FromSeconds(30)).Match(x => x.Any());
 
         result.Should().HaveCountGreaterThan(0);
     }

@@ -4,7 +4,6 @@ using System.IO;
 using System.Reactive.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
-using FluentAssertions;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
@@ -20,6 +19,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
+using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Hosting.Monolith.Test;
 
 /// <summary>
@@ -31,6 +31,9 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 [Collection("SamplesGraphData")]
 public class CreateLayoutAreaIntegrationTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
+    /// <summary>Share Mesh/SP across [Fact]s — see MonolithMeshTestBase.ShareMeshAcrossTests.</summary>
+    protected override bool ShareMeshAcrossTests => true;
+
     private static readonly string SharedCacheDirectory = Path.Combine(
         Path.GetTempPath(),
         "MeshWeaverCreateLayoutTests",
@@ -78,19 +81,11 @@ public class CreateLayoutAreaIntegrationTest(ITestOutputHelper output) : Monolit
     /// Test that the Create area renders on a parent node (ProductLaunch) with type parameter.
     /// Should show the Name+Description form when ?type=ACME/Project/Todo is specified.
     /// </summary>
-    [Fact(Timeout = 20000)]
+    [Fact(Timeout = 60000)]
     public async Task CreateArea_WithTypeParam_ShowsCreateForm()
     {
         var client = GetClient();
         var parentAddress = new Address("ACME/ProductLaunch");
-
-        Output.WriteLine("Initializing hub...");
-        // Initialize the hub first - this triggers dynamic compilation which can take time
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(parentAddress),
-            TestContext.Current.CancellationToken);
-        Output.WriteLine("Hub initialized.");
 
         var workspace = client.GetWorkspace();
         // Query parameters are passed via the Id property
@@ -99,13 +94,14 @@ public class CreateLayoutAreaIntegrationTest(ITestOutputHelper output) : Monolit
             Id = "?type=ACME%2FProject%2FTodo"
         };
 
+        // No ping: the layout-area subscription itself activates the hub +
+        // triggers the cold NodeType compile. Budget covers the cold Roslyn build.
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             parentAddress,
             reference);
 
         Output.WriteLine("Waiting for Create form to render...");
-        // Use simpler pattern: just FirstAsync() which waits for any value
-        var value = await stream.Timeout(TimeSpan.FromSeconds(10)).FirstAsync();
+        var value = await stream.Should().Within(TimeSpan.FromSeconds(40)).Emit();
 
         Output.WriteLine($"Received value");
         value.Should().NotBe(default(JsonElement), "Create form should render when type parameter is specified");
@@ -115,30 +111,23 @@ public class CreateLayoutAreaIntegrationTest(ITestOutputHelper output) : Monolit
     /// Test that the Create area renders on a parent node without type parameter.
     /// Should show type selection grid or a message.
     /// </summary>
-    [Fact(Timeout = 20000)]
+    [Fact(Timeout = 60000)]
     public async Task CreateArea_WithoutTypeParam_ShowsTypeSelection()
     {
         var client = GetClient();
         var parentAddress = new Address("ACME/ProductLaunch");
 
-        Output.WriteLine("Initializing hub...");
-        // Initialize the hub first - this triggers dynamic compilation which can take time
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(parentAddress),
-            TestContext.Current.CancellationToken);
-        Output.WriteLine("Hub initialized.");
-
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference(MeshNodeLayoutAreas.CreateNodeArea);
 
+        // No ping: the layout-area subscription activates the hub + triggers the
+        // cold NodeType compile on its own.
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             parentAddress,
             reference);
 
         Output.WriteLine("Waiting for type selection to render...");
-        // Use simpler pattern: just FirstAsync() which waits for any value
-        var value = await stream.Timeout(TimeSpan.FromSeconds(10)).FirstAsync();
+        var value = await stream.Should().Within(TimeSpan.FromSeconds(40)).Emit();
 
         Output.WriteLine($"Received value");
         value.Should().NotBe(default(JsonElement), "Type selection should render when no type parameter is specified");
@@ -147,30 +136,23 @@ public class CreateLayoutAreaIntegrationTest(ITestOutputHelper output) : Monolit
     /// <summary>
     /// Test that the Overview area works for ProductLaunch (baseline test).
     /// </summary>
-    [Fact(Timeout = 20000)]
+    [Fact(Timeout = 60000)]
     public async Task OverviewArea_WorksForProductLaunch()
     {
         var client = GetClient();
         var parentAddress = new Address("ACME/ProductLaunch");
 
-        Output.WriteLine("Initializing hub...");
-        // Initialize the hub first - this triggers dynamic compilation which can take time
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(parentAddress),
-            TestContext.Current.CancellationToken);
-        Output.WriteLine("Hub initialized.");
-
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference(MeshNodeLayoutAreas.OverviewArea);
 
+        // No ping: the layout-area subscription activates the hub + triggers the
+        // cold NodeType compile on its own.
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             parentAddress,
             reference);
 
         Output.WriteLine("Waiting for Overview to render...");
-        // Use simpler pattern: just FirstAsync() which waits for any value
-        var value = await stream.Timeout(TimeSpan.FromSeconds(10)).FirstAsync();
+        var value = await stream.Should().Within(TimeSpan.FromSeconds(40)).Emit();
 
         Output.WriteLine($"Received value");
         value.Should().NotBe(default(JsonElement), "Overview should render for ProductLaunch");
@@ -179,24 +161,20 @@ public class CreateLayoutAreaIntegrationTest(ITestOutputHelper output) : Monolit
     /// <summary>
     /// Test that IMeshService service is available for CreateLayoutArea.
     /// </summary>
-    [Fact(Timeout = 20000)]
-    public async Task MeshNodeFactory_IsRegistered()
+    [Fact(Timeout = 60000)]
+    public void MeshNodeFactory_IsRegistered()
     {
         var nodeFactory = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         nodeFactory.Should().NotBeNull("IMeshService should be registered for CreateLayoutArea to work");
-
-        await Task.CompletedTask;
     }
 
     /// <summary>
-    /// Test that INodeTypeService service is available for CreateLayoutArea.
+    /// Test that ICreatableTypesProvider is available for CreateLayoutArea.
     /// </summary>
-    [Fact(Timeout = 20000)]
-    public async Task NodeTypeService_IsRegistered()
+    [Fact(Timeout = 60000)]
+    public void CreatableTypesProvider_IsRegistered()
     {
-        var nodeTypeService = Mesh.ServiceProvider.GetService<INodeTypeService>();
-        nodeTypeService.Should().NotBeNull("INodeTypeService should be registered for type selection");
-
-        await Task.CompletedTask;
+        var provider = Mesh.ServiceProvider.GetService<ICreatableTypesProvider>();
+        provider.Should().NotBeNull("ICreatableTypesProvider should be registered for type selection");
     }
 }

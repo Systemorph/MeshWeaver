@@ -1,0 +1,7 @@
+<!-- Stops the walk-up to the repo-root Directory.Packages.props and opts MeshWeaver.Maui out of Central
+     Package Management, so the MAUI SDK's inline package versions resolve. Mirrors memex/Memex.Client. -->
+<Project>
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+</Project>

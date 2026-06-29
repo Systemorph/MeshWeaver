@@ -226,21 +226,25 @@ public static class Charts
 /// </summary>
 public static class ChartPalettes
 {
+    /// <summary>Default multi-hue palette: pink, blue, yellow, teal, purple, orange.</summary>
     public static readonly string[] Default = new[]
     {
         "#FF6384", "#36A2EB", "#FFCE56", "#4BC0C0", "#9966FF", "#FF9F40", "#FF6384", "#C9CBCF"
     };
 
+    /// <summary>Soft pastel palette: light pink, sky blue, moccasin, mint, plum, khaki.</summary>
     public static readonly string[] Pastel = new[]
     {
         "#FFB6C1", "#87CEEB", "#FFE4B5", "#98D8C8", "#DDA0DD", "#F0E68C"
     };
 
+    /// <summary>High-contrast bold palette: crimson, blue, gold, green, dark magenta, orange-red.</summary>
     public static readonly string[] Bold = new[]
     {
         "#DC143C", "#0000FF", "#FFD700", "#008000", "#8B008B", "#FF4500"
     };
 
+    /// <summary>Earth-tone palette: saddle brown, forest green, goldenrod, dark slate, tan, dark olive.</summary>
     public static readonly string[] Earth = new[]
     {
         "#8B4513", "#228B22", "#DAA520", "#2F4F4F", "#8B7355", "#556B2F"

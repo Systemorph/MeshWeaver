@@ -1,15 +1,23 @@
 using System.Collections.Immutable;
+using System.Reactive.Linq;
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Components;
+using Microsoft.AspNetCore.Components.Authorization;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.FluentUI.AspNetCore.Components;
 
 namespace MeshWeaver.Blazor.Pages;
 
+/// <summary>
+/// Main application page component. Resolves the current URL path to a mesh address,
+/// subscribes to the navigation context stream, renders a layout area view, and handles
+/// the prerender to interactive lifecycle including pre-rendered HTML caching.
+/// </summary>
 public partial class ApplicationPage : ComponentBase, IDisposable
 {
     private DesignThemeModes Mode { get; set; }
@@ -27,24 +35,26 @@ public partial class ApplicationPage : ComponentBase, IDisposable
     [Inject]
     private IMeshService MeshService { get; set; } = null!;
 
-    // Resolved lazily from the service provider so the page still renders when
-    // INodeTypeService isn't registered. A hard [Inject] would throw during
-    // component construction and leave the user with a black screen.
     [Inject]
-    private IServiceProvider Services { get; set; } = null!;
-    private INodeTypeService? NodeTypeService => Services.GetService<INodeTypeService>();
+    private Microsoft.Extensions.Logging.ILogger<ApplicationPage> Logger { get; set; } = null!;
 
     /// <summary>
-    /// Path of any NodeType currently compiling. Used by the razor template to flip
-    /// the "Looking up …" placeholder into "Compiling &lt;path&gt; (Ns)…" during the
-    /// navigation blocking phase, so the user sees activity instead of a blank spinner.
+    /// Auth state of the current visitor. Used to suppress the prerender HTML flash
+    /// for a logged-OUT visitor: the anonymous gate (NavigationService → AccessDenied →
+    /// RedirectToLogin) fires only once the circuit goes interactive, so without this
+    /// check a PublicRead node's cached HTML would be served during the static prerender
+    /// pass — the "public page shown to anonymous" symptom — before the redirect lands.
     /// </summary>
-    private string? CompilingPath { get; set; }
+    [CascadingParameter]
+    private Task<AuthenticationState>? AuthState { get; set; }
 
-    /// <summary>Elapsed seconds since the current compile started.</summary>
-    private int CompilingSeconds { get; set; }
+    /// <summary>
+    /// Current status of the page-lookup pipeline. Always set to a non-null
+    /// value so every render branch can safely display <see cref="NavigationStatus.Message"/>.
+    /// </summary>
+    private NavigationStatus Status { get; set; } = NavigationStatus.Idle();
 
-    private System.Threading.Timer? _compileProgressTimer;
+    private IDisposable? _statusSubscription;
 
     /// <summary>
     /// Catch-all path parameter - the entire URL path is matched against registered namespace patterns.
@@ -54,6 +64,7 @@ public partial class ApplicationPage : ComponentBase, IDisposable
 
     private string? PageTitle { get; set; } = "";
 
+    /// <summary>Catches any route parameters not explicitly declared; passed through to the layout area as additional options.</summary>
     [Parameter(CaptureUnmatchedValues = true)]
     public IReadOnlyDictionary<string, object>? Options { get; set; } = ImmutableDictionary<string, object>.Empty;
 
@@ -81,55 +92,77 @@ public partial class ApplicationPage : ComponentBase, IDisposable
     private string? _lastInitializedPath;
 
     /// <summary>
-    /// Tracks whether NavigationService.InitializeAsync() has been called.
+    /// Tracks whether NavigationService.Initialize() has been called.
     /// Subsequent navigations rely on OnNavigationContextChanged instead
     /// of reading potentially stale NavigationService state.
     /// </summary>
     private bool _navigationServiceInitialized;
 
+    private NavigationContext? _currentContext;
+    private IDisposable? _navContextSubscription;
+
+    /// <summary>
+    /// Subscribes to the navigation context and status streams so the component reacts reactively
+    /// to address resolution changes and navigation status updates throughout the circuit lifetime.
+    /// </summary>
     protected override void OnInitialized()
     {
         base.OnInitialized();
-        NavigationService.OnNavigationContextChanged += OnNavigationContextChanged;
 
-        // Poll NodeTypeService.GetCompilingPaths while the page is in "Looking up"
-        // state so the user sees "Compiling <path> (Ns)…" rather than a blank spinner.
-        // Stopped once IsLoading flips to false. Two-second granularity is enough —
-        // most compiles are sub-second; the tick is for reassurance on slow ones.
-        _compileProgressTimer = new System.Threading.Timer(_ =>
-        {
-            try
+        // Subscribe to the navigation-context stream — replaces the legacy
+        // OnNavigationContextChanged event. ReplaySubject(1) on the service side
+        // emits the current value on subscribe, so this also picks up state set
+        // before the page initialised.
+        _navContextSubscription = NavigationService.NavigationContext.Subscribe(
+            context =>
             {
-                if (!IsLoading) return;
-                var paths = NodeTypeService?.GetCompilingPaths();
-                var first = paths?.FirstOrDefault();
-                if (first != CompilingPath)
+                _currentContext = context;
+                InvokeAsync(() =>
                 {
-                    CompilingPath = first;
-                    CompilingSeconds = 0;
-                }
-                else if (first != null)
-                {
-                    CompilingSeconds++;
-                }
+                    IsLoading = NavigationService.IsResolving;
+                    UpdateFromContext();
+                    StateHasChanged();
+                });
+            },
+            // A faulting page-level stream with no onError propagates UNHANDLED on the Rx
+            // scheduler and tears down the whole circuit (blank app). Log + leave the last-good
+            // state; a subsequent navigation re-establishes the subscription.
+            ex => Logger.LogWarning(ex, "NavigationContext subscription faulted"));
+
+        _statusSubscription = NavigationService.Status.Subscribe(
+            status =>
+            {
+                Status = status;
                 _ = InvokeAsync(StateHasChanged);
-            }
-            catch
-            {
-                // Timer tick should never take down the page. The worst-case is a stale
-                // "Compiling…" message; that's better than a crashed circuit.
-            }
-        }, null, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1));
+            },
+            ex => Logger.LogWarning(ex, "Navigation Status subscription faulted"));
     }
 
+    /// <summary>
+    /// During the prerender phase, fetches cached pre-rendered HTML for authenticated visitors.
+    /// During the interactive phase, triggers a full navigation initialization when the path changes.
+    /// </summary>
     protected override async Task OnParametersSetAsync()
     {
         if (!IsInteractive)
         {
-            // Prerender: one-shot attempt to get cached HTML directly from the MeshNode.
-            // No path resolution, no stream subscriptions, no PortalApplication.
-            if (!string.IsNullOrEmpty(Path))
-                PreRenderedHtml = await MeshService.GetPreRenderedHtmlAsync(Path);
+            // Prerender: subscribe once for the cached HTML; first emission wins.
+            // Subscribe + Take(1) — no await on a hub-touching observable.
+            // Skip entirely for a logged-OUT visitor: serving a PublicRead node's
+            // cached HTML here would leak content before the interactive anonymous
+            // gate (NavigationService → AccessDenied → RedirectToLogin) redirects them.
+            if (!string.IsNullOrEmpty(Path) && await IsAuthenticatedAsync())
+            {
+                MeshService.GetPreRenderedHtml(Path)
+                    .Take(1)
+                    .Subscribe(
+                        html =>
+                        {
+                            PreRenderedHtml = html;
+                            _ = InvokeAsync(StateHasChanged);
+                        },
+                        ex => Logger.LogWarning(ex, "GetPreRenderedHtml subscription faulted for {Path}", Path));
+            }
             return;
         }
 
@@ -138,6 +171,11 @@ public partial class ApplicationPage : ComponentBase, IDisposable
             await InitializeForCurrentPath();
     }
 
+    /// <summary>
+    /// On the first render, marks the component as interactive and runs the full path initialization
+    /// so the layout area subscription and navigation service are set up for the interactive circuit.
+    /// </summary>
+    /// <param name="firstRender">True on the first render after the circuit becomes interactive.</param>
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         if (firstRender)
@@ -149,6 +187,14 @@ public partial class ApplicationPage : ComponentBase, IDisposable
         }
     }
 
+    /// <summary>
+    /// True when the current visitor is logged in. Returns false when no auth-state
+    /// cascade is present (fail-closed: treat an unknown visitor as anonymous so the
+    /// prerender content gate is never silently bypassed).
+    /// </summary>
+    private async Task<bool> IsAuthenticatedAsync()
+        => AuthState is not null && (await AuthState).User.Identity?.IsAuthenticated == true;
+
     private async Task InitializeForCurrentPath()
     {
         _lastInitializedPath = Path;
@@ -158,8 +204,11 @@ public partial class ApplicationPage : ComponentBase, IDisposable
         if (!_navigationServiceInitialized)
         {
             _navigationServiceInitialized = true;
-            await NavigationService.InitializeAsync();
-            // First init: safe to read state since InitializeAsync awaited resolution
+            // Synchronous: Initialize() only wires Rx subscriptions and pushes the
+            // current path — no await (a Task here would deadlock the circuit). The
+            // resolved IsResolving snapshot below is the initial reactive state;
+            // OnNavigationContextChanged keeps it live thereafter.
+            NavigationService.Initialize();
             IsLoading = NavigationService.IsResolving;
             UpdateFromContext();
         }
@@ -167,19 +216,9 @@ public partial class ApplicationPage : ComponentBase, IDisposable
         // to avoid showing stale content from a previous path
     }
 
-    private void OnNavigationContextChanged(NavigationContext? context)
-    {
-        InvokeAsync(() =>
-        {
-            IsLoading = NavigationService.IsResolving;
-            UpdateFromContext();
-            StateHasChanged();
-        });
-    }
-
     private void UpdateFromContext()
     {
-        var context = NavigationService.Context;
+        var context = _currentContext;
 
         if (context is null)
         {
@@ -204,10 +243,19 @@ public partial class ApplicationPage : ComponentBase, IDisposable
             Id = id,
         };
 
+        // Seed the layout-area progress message with "Subscribing to area …" so
+        // that the LayoutAreaView never renders a labelless spinner while waiting
+        // for its first stream emission. CompileProgressIndicator still wins when
+        // a node-type compile is running (more specific signal).
+        var progressMessage = NavigationStatus
+            .Subscribing(context.Address.ToString() ?? string.Empty, area)
+            .Message;
+
         ViewModel = Controls.LayoutArea(context.Address, Reference)
             with
         {
-            ShowProgress = true
+            ShowProgress = true,
+            ProgressMessage = progressMessage
         };
 
         // Use node name for the page title, falling back to the last address segment
@@ -224,9 +272,10 @@ public partial class ApplicationPage : ComponentBase, IDisposable
         return Reference.Id.ToString()!.Split("?").First().Split("/").Last();
     }
 
+    /// <summary>Disposes the navigation context and status subscriptions.</summary>
     public void Dispose()
     {
-        NavigationService.OnNavigationContextChanged -= OnNavigationContextChanged;
-        _compileProgressTimer?.Dispose();
+        _navContextSubscription?.Dispose();
+        _statusSubscription?.Dispose();
     }
 }

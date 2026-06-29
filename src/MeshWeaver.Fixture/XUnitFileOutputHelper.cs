@@ -8,31 +8,45 @@ using Xunit;
 namespace MeshWeaver.Fixture;
 
 /// <summary>
-/// Static registry to track active test output helpers for cross-class access
+/// Tracks the active test output helper for the current test's async execution context.
+/// Backed by <see cref="AsyncLocal{T}"/> — NOT a static collection — so concurrent tests
+/// never see each other's helper (the parallel-safe replacement for the former
+/// process-wide <c>ConcurrentDictionary&lt;object, …&gt;</c>; see NoStaticState.md). The
+/// value set in a test's ctor flows to its method and any awaited continuations.
 /// </summary>
 public static class XUnitFileOutputRegistry
 {
-    private static readonly ConcurrentDictionary<object, XUnitFileOutputHelper> _activeOutputHelpers = new();
-    
+    private static readonly AsyncLocal<XUnitFileOutputHelper?> _current = new();
+
+    /// <summary>
+    /// Sets the output helper for the current async execution context.
+    /// </summary>
+    /// <param name="testInstance">The owning test instance (used for call-site identification only).</param>
+    /// <param name="outputHelper">The output helper to make current.</param>
     public static void Register(object testInstance, XUnitFileOutputHelper outputHelper)
-    {
-        _activeOutputHelpers[testInstance] = outputHelper;
-    }
-    
+        => _current.Value = outputHelper;
+
+    /// <summary>
+    /// Clears the output helper for the current async execution context.
+    /// </summary>
+    /// <param name="testInstance">The owning test instance (used for call-site identification only).</param>
     public static void Unregister(object testInstance)
-    {
-        _activeOutputHelpers.TryRemove(testInstance, out _);
-    }
-    
+        => _current.Value = null;
+
+    /// <summary>
+    /// Returns the output helper for the current async execution context, if any.
+    /// </summary>
+    /// <param name="testInstance">The owning test instance (used for call-site identification only).</param>
+    /// <returns>The current output helper, or null when none is active.</returns>
     public static XUnitFileOutputHelper? GetOutputHelper(object testInstance)
-    {
-        return _activeOutputHelpers.TryGetValue(testInstance, out var helper) ? helper : null;
-    }
-    
+        => _current.Value;
+
+    /// <summary>
+    /// Returns the output helper active on the current async execution context, if any.
+    /// </summary>
+    /// <returns>The current output helper, or null when none is active.</returns>
     public static XUnitFileOutputHelper? GetAnyActiveOutputHelper()
-    {
-        return _activeOutputHelpers.Values.FirstOrDefault();
-    }
+        => _current.Value;
 }
 
 /// <summary>
@@ -49,12 +63,39 @@ public class XUnitFileOutputHelper : ITestOutputHelper, IDisposable
     private readonly string _baseFileName;
     private string? _currentTestMethod;
 
+    // Per-test-method log files: opt-in via MESHWEAVER_TEST_FILE_LOGS=1. Disabled
+    // by default so CI runners aren't writing thousands of .log files (their
+    // upload step then ships the lot as an artifact, blowing through storage
+    // quotas). Locally you can flip this on for the hung-test workflow:
+    //   set MESHWEAVER_TEST_FILE_LOGS=1
+    //   dotnet test … --filter X
+    // and the per-method files appear at bin/Debug/net10.0/test-logs/.
+    // ITestOutputHelper.WriteLine is unaffected — xUnit console output remains.
+    private static readonly bool FileLogsEnabled =
+        string.Equals(Environment.GetEnvironmentVariable("MESHWEAVER_TEST_FILE_LOGS"), "1", StringComparison.Ordinal)
+        || string.Equals(Environment.GetEnvironmentVariable("MESHWEAVER_TEST_FILE_LOGS"), "true", StringComparison.OrdinalIgnoreCase);
+    // Long-lived writer for the active test method. Replaces the previous
+    // `File.AppendAllText` per WriteLine — that opened, wrote, and closed
+    // the file on every call (with up to 3 retries on lock contention).
+    // Showed up at ~2.4% in autocomplete-test CPU profiles. AutoFlush
+    // preserves the "see the last line of a hung test" tail-visibility
+    // semantics; the StreamWriter is recreated on SetCurrentTestMethod
+    // (per-method log file) and disposed on Dispose.
+    private StreamWriter? _writer;
+
     static XUnitFileOutputHelper()
     {
-        // Ensure log directory exists
-        Directory.CreateDirectory(LogDirectory);
+        // Ensure log directory exists only when file logging is enabled.
+        if (FileLogsEnabled)
+            Directory.CreateDirectory(LogDirectory);
     }
 
+    /// <summary>
+    /// Initializes a new helper that mirrors output to the given xUnit helper and (when enabled)
+    /// to per-test-method log files.
+    /// </summary>
+    /// <param name="xunitOutput">The underlying xUnit output helper to forward to.</param>
+    /// <param name="testName">Optional test class name used as the log file base name.</param>
     public XUnitFileOutputHelper(ITestOutputHelper xunitOutput, string? testName = null)
     {
         _xunitOutput = xunitOutput;
@@ -66,33 +107,50 @@ public class XUnitFileOutputHelper : ITestOutputHelper, IDisposable
         _logFilePath = string.Empty;
     }
 
+    /// <summary>
+    /// Sets the current test method name and, when file logging is enabled, opens a fresh
+    /// per-method log file and writes its header.
+    /// </summary>
+    /// <param name="methodName">The name of the test method now executing.</param>
     public void SetCurrentTestMethod(string methodName)
     {
         if (_disposed) return;
-        
+
         _currentTestMethod = methodName;
-        
+
+        // Opt-out by default: skip file I/O entirely unless MESHWEAVER_TEST_FILE_LOGS
+        // is set. xUnit's own ITestOutputHelper still captures everything for
+        // console display; we just stop persisting per-method .log files.
+        if (!FileLogsEnabled) return;
+
         // Create simple log file name: TestClass_TestMethod.log
         var newLogPath = Path.Combine(LogDirectory, $"{_baseFileName}_{methodName}.log");
-        
+
         lock (_fileLock)
         {
             _logFilePath = newLogPath;
-            
-            // Delete the existing log file if it exists to start fresh
-            if (File.Exists(_logFilePath))
+
+            // Dispose the previous writer (if any) and open a fresh one.
+            // `append: false` truncates an existing file, so we don't need
+            // a separate File.Delete pass. FileShare.Read lets developers
+            // tail the log while the test is running.
+            try { _writer?.Dispose(); } catch { /* best-effort */ }
+            _writer = null;
+
+            try
             {
-                try
-                {
-                    File.Delete(_logFilePath);
-                }
-                catch
-                {
-                    // If we can't delete it, we'll just overwrite it
-                }
+                var stream = new FileStream(_logFilePath,
+                    FileMode.Create, FileAccess.Write, FileShare.Read);
+                _writer = new StreamWriter(stream) { AutoFlush = true };
+            }
+            catch
+            {
+                // If we can't open the file, fall back to silent — file
+                // logging is best-effort and must never break a test.
+                _writer = null;
             }
         }
-        
+
         // Write initial header now that we have a log file
         WriteToFile($"=== TEST LOG STARTED: {DateTime.Now:yyyy-MM-dd HH:mm:ss} ===");
         WriteToFile($"Test Method: {_baseFileName}.{methodName}");
@@ -100,95 +158,129 @@ public class XUnitFileOutputHelper : ITestOutputHelper, IDisposable
         WriteToFile(new string('=', 60));
     }
 
+    /// <summary>
+    /// Clears the current test method name, marking that no test method is currently running.
+    /// </summary>
     public void ClearCurrentTestMethod()
     {
         if (_disposed) return;
         _currentTestMethod = null;
     }
 
+    /// <summary>
+    /// Indicates whether a test method is currently active.
+    /// </summary>
+    /// <returns><c>true</c> while a test method is set; otherwise <c>false</c>.</returns>
     public bool IsInTestMethod()
     {
         return !string.IsNullOrEmpty(_currentTestMethod);
     }
 
+    /// <summary>
+    /// Writes a timestamped line to both the xUnit output and (when enabled) the log file.
+    /// </summary>
+    /// <param name="message">The message to write.</param>
     public void WriteLine(string message)
     {
         if (_disposed) return;
         
         var timestampedMessage = $"[{DateTime.Now:HH:mm:ss.fff}] {message}";
         
-        // Write to xUnit output (visible in test runners)
+        // Write to xUnit output (visible in test runners). Catch ANY exception:
+        // xUnit v2 throws InvalidOperationException after test completion, but v3
+        // may throw ObjectDisposedException or other types when the test's output
+        // helper is invalidated. A throw here propagating into ILogger callers
+        // (e.g. MessageHub's dispose chain) would either fault the action block
+        // or — worse — re-trigger the log path on the way up, producing the
+        // "endless logs" cascade the dispose pipeline can't recover from.
         try
         {
             _xunitOutput.WriteLine(timestampedMessage);
         }
-        catch (InvalidOperationException)
+        catch
         {
-            // xUnit output may not be available (e.g., after test completion)
-            // Continue with file logging
+            // Swallow — file logging below still records the message; xUnit
+            // output is best-effort once the test has been reported.
         }
         
         // Write to file
         WriteToFile(timestampedMessage);
     }
 
+    /// <summary>
+    /// Formats and writes a timestamped line to both the xUnit output and (when enabled) the log file.
+    /// </summary>
+    /// <param name="format">A composite format string.</param>
+    /// <param name="args">The arguments to format into <paramref name="format"/>.</param>
     public void WriteLine(string format, params object[] args)
     {
         WriteLine(string.Format(format, args));
     }
 
+    /// <summary>
+    /// Writes a message. Implemented as a line write for consistency with file logging.
+    /// </summary>
+    /// <param name="message">The message to write.</param>
     public void Write(string message)
     {
         // Convert Write to WriteLine for consistency with file logging
         WriteLine(message);
     }
 
+    /// <summary>
+    /// Formats and writes a message. Implemented as a line write for consistency with file logging.
+    /// </summary>
+    /// <param name="format">A composite format string.</param>
+    /// <param name="args">The arguments to format into <paramref name="format"/>.</param>
     public void Write(string format, params object[] args)
     {
         // Convert Write to WriteLine for consistency with file logging
         WriteLine(format, args);
     }
 
+    /// <summary>Gets the captured output. Returns a constant placeholder identifier.</summary>
     public string Output => "XUnitFileOutputHelper";
 
     private void WriteToFile(string message)
     {
         if (_disposed) return;
-        
-        // Don't write to file if no log file has been created yet (no test method active)
-        if (string.IsNullOrEmpty(_logFilePath)) return;
 
-        // Use retry logic for file access to handle temporary conflicts
-        for (int attempt = 0; attempt < 3; attempt++)
+        // Don't write if no log file is active (no test method has started yet).
+        var writer = _writer;
+        if (writer is null) return;
+
+        // Single WriteLine on the held-open StreamWriter — no per-call file
+        // open/close, no retry loop, no IOException to chase. AutoFlush keeps
+        // the tail visible immediately for hung-test diagnostics.
+        try
         {
-            try
+            lock (_fileLock)
             {
-                lock (_fileLock)
-                {
-                    File.AppendAllText(_logFilePath, message + Environment.NewLine);
-                }
-                break; // Success, exit retry loop
+                writer.WriteLine(message);
             }
-            catch (IOException) when (attempt < 2)
-            {
-                // File might be locked, wait and retry
-                Thread.Sleep(10 + attempt * 10);
-            }
-            catch (Exception)
-            {
-                // Other exceptions or final attempt - give up silently to avoid breaking tests
-                break;
-            }
+        }
+        catch
+        {
+            // Best-effort — never break a test on a logger I/O failure.
         }
     }
 
+    /// <summary>
+    /// Writes the log-end marker and disposes the underlying file writer.
+    /// </summary>
     public void Dispose()
     {
         if (_disposed) return;
-        _disposed = true;
-        
+
         WriteToFile($"=== TEST LOG ENDED: {DateTime.Now:yyyy-MM-dd HH:mm:ss} ===");
-        
+        _disposed = true;
+
+        lock (_fileLock)
+        {
+            try { _writer?.Dispose(); } catch { /* best-effort */ }
+            _writer = null;
+        }
+
         GC.SuppressFinalize(this);
     }
 }
@@ -204,12 +296,22 @@ public class XUnitFileLoggerProvider : ILoggerProvider
     private readonly IServiceProvider? _serviceProvider;
     private bool _disposed = false;
 
+    /// <summary>
+    /// Initializes a new provider that creates loggers backed by the supplied output helper factory.
+    /// </summary>
+    /// <param name="outputHelperFactory">Factory returning the current output helper (may return null).</param>
+    /// <param name="serviceProvider">Optional service provider used to resolve log-level configuration.</param>
     public XUnitFileLoggerProvider(Func<XUnitFileOutputHelper?> outputHelperFactory, IServiceProvider? serviceProvider = null)
     {
         _outputHelperFactory = outputHelperFactory;
         _serviceProvider = serviceProvider;
     }
 
+    /// <summary>
+    /// Returns a cached <see cref="XUnitFileLogger"/> for the given category, creating one if needed.
+    /// </summary>
+    /// <param name="categoryName">The logger category name.</param>
+    /// <returns>The logger for the category.</returns>
     public ILogger CreateLogger(string categoryName)
     {
         if (_disposed)
@@ -218,6 +320,9 @@ public class XUnitFileLoggerProvider : ILoggerProvider
         return _loggers.GetOrAdd(categoryName, name => new XUnitFileLogger(name, _outputHelperFactory, _serviceProvider));
     }
 
+    /// <summary>
+    /// Disposes the provider and clears its cached loggers.
+    /// </summary>
     public void Dispose()
     {
         if (_disposed) return;
@@ -239,6 +344,13 @@ public class XUnitFileLogger : ILogger
     private readonly IServiceProvider? _serviceProvider;
     private readonly Lazy<LogLevel> _minLogLevel;
 
+    /// <summary>
+    /// Initializes a new logger for the given category, resolving its minimum log level lazily
+    /// from configuration.
+    /// </summary>
+    /// <param name="categoryName">The logger category name.</param>
+    /// <param name="outputHelperFactory">Factory returning the current output helper (may return null).</param>
+    /// <param name="serviceProvider">Optional service provider used to resolve log-level configuration.</param>
     public XUnitFileLogger(string categoryName, Func<XUnitFileOutputHelper?> outputHelperFactory, IServiceProvider? serviceProvider = null)
     {
         _categoryName = categoryName;
@@ -247,9 +359,20 @@ public class XUnitFileLogger : ILogger
         _minLogLevel = new Lazy<LogLevel>(GetMinLogLevel);
     }
 
+    /// <summary>
+    /// Begins a logical logging scope. This implementation returns a no-op disposable.
+    /// </summary>
+    /// <typeparam name="TState">The type of the scope state.</typeparam>
+    /// <param name="state">The scope state.</param>
+    /// <returns>A disposable that does nothing when disposed.</returns>
     public IDisposable BeginScope<TState>(TState state) where TState : notnull 
         => new NoOpDisposable();
 
+    /// <summary>
+    /// Determines whether logging is enabled for the given level based on the resolved minimum level.
+    /// </summary>
+    /// <param name="logLevel">The level to test.</param>
+    /// <returns><c>true</c> if logging is enabled for <paramref name="logLevel"/>; otherwise <c>false</c>.</returns>
     public bool IsEnabled(LogLevel logLevel) => logLevel >= _minLogLevel.Value;
 
     private LogLevel GetMinLogLevel()
@@ -310,6 +433,16 @@ public class XUnitFileLogger : ILogger
         }
     }
 
+    /// <summary>
+    /// Writes a log entry to the active output helper when the level is enabled and a test
+    /// method is currently running.
+    /// </summary>
+    /// <typeparam name="TState">The type of the state object being logged.</typeparam>
+    /// <param name="logLevel">The severity level of the entry.</param>
+    /// <param name="eventId">The event id of the entry.</param>
+    /// <param name="state">The state to be logged.</param>
+    /// <param name="exception">An optional exception associated with the entry.</param>
+    /// <param name="formatter">Function that produces the log message from <paramref name="state"/> and <paramref name="exception"/>.</param>
     public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
     {
         if (!IsEnabled(logLevel))

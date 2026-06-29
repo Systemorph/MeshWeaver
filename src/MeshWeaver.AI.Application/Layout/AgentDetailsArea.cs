@@ -1,4 +1,6 @@
+using System.Reactive.Linq;
 using System.Text;
+using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Utils;
@@ -6,39 +8,60 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.AI.Application.Layout;
 
+/// <summary>
+/// Layout area that renders the details page for a single AI agent — its description,
+/// instructions, attributes, and its incoming and outgoing delegation graph.
+/// </summary>
 public static class AgentDetailsArea
 {
+    /// <summary>
+    /// Registers the <c>AgentDetails</c> view on the given layout definition.
+    /// </summary>
+    /// <param name="layout">The layout definition to extend.</param>
+    /// <returns>The same layout definition with the agent-details view registered.</returns>
     public static LayoutDefinition AddAgentDetails(this LayoutDefinition layout)
     {
         return layout.WithView(nameof(AgentDetails), AgentDetails);
     }
 
-    public static async Task<UiControl?> AgentDetails(LayoutAreaHost host, RenderingContext ctx, CancellationToken ct)
+    /// <summary>
+    /// Builds the agent-details view for the agent identified by the layout area reference id.
+    /// </summary>
+    /// <param name="host">The layout area host that supplies the hub and the reference id.</param>
+    /// <param name="ctx">The rendering context for this area.</param>
+    /// <returns>
+    /// An observable emitting the rendered details control, or an error/not-found message
+    /// when no agent matches the requested name.
+    /// </returns>
+    public static IObservable<UiControl?> AgentDetails(LayoutAreaHost host, RenderingContext ctx)
     {
         // Extract agent name from LayoutAreaReference.Id
         var agentName = ExtractAgentNameFromLayoutAreaId(host.Reference.Id);
-        var meshQuery = host.Hub.ServiceProvider.GetService<MeshWeaver.Mesh.Services.IMeshService>();
-        if (meshQuery == null)
-        {
-            return Controls.Stack
-                .WithView(Controls.Title("Agent Details", 2), "Title")
-                .WithView(Controls.Text("Agent service not available."), "ErrorMessage");
-        }
 
-        // Load agents using AgentOrderingHelper
-        var agentDisplayInfos = await AgentOrderingHelper.QueryAgentsAsync(meshQuery, null, null);
-        var agents = agentDisplayInfos.Select(a => a.AgentConfiguration).ToList();
-        var agent = agents.FirstOrDefault(a => a.Id == agentName);
+        // Agent list ALWAYS through the synced GetQuery pipeline
+        // (AgentPickerProjection.ObserveAgents) — never IMeshService.Query /
+        // QueryAsync, those miss static-provider fan-out, dedup, and the Initial
+        // gating that produces "empty Agent dropdown" bugs.
+        // Fully reactive — composed Select, no await/ToTask (AsynchronousCalls.md).
+        return AgentPickerProjection
+            .ObserveAgents(host.Hub)
+            .FirstAsync()
+            .Timeout(TimeSpan.FromSeconds(10))
+            .Select(agentDisplayInfos =>
+            {
+                var agents = agentDisplayInfos.Select(a => a.AgentConfiguration).ToList();
+                var agent = agents.FirstOrDefault(a => a.Id == agentName);
 
-        if (agent == null)
-        {
-            return Controls.Stack
-                .WithView(Controls.Title("Agent Details", 2), "Title")
-                .WithView(Controls.Text($"Agent '{agentName}' not found. Please verify the agent name and try again."), "ErrorMessage")
-                .WithView(Controls.NavLink("Agents", $"{host.Hub.Address}/Overview"), "BackLink");
-        }
+                if (agent == null)
+                {
+                    return (UiControl?)Controls.Stack
+                        .WithView(Controls.Title("Agent Details", 2), "Title")
+                        .WithView(Controls.Text($"Agent '{agentName}' not found. Please verify the agent name and try again."), "ErrorMessage")
+                        .WithView(Controls.NavLink("Agents", $"{host.Hub.Address}/Overview"), "BackLink");
+                }
 
-        return await CreateAgentDetailsView(agent, agents, host);
+                return CreateAgentDetailsView(agent, agents, host);
+            });
     }
 
     private static string ExtractAgentNameFromLayoutAreaId(object? id)
@@ -48,22 +71,24 @@ public static class AgentDetailsArea
         return id?.ToString() ?? "";
     }
 
-    private static Task<UiControl?> CreateAgentDetailsView(AgentConfiguration agent, IReadOnlyList<AgentConfiguration> agents, LayoutAreaHost host)
+    private static UiControl? CreateAgentDetailsView(AgentConfiguration agent, IReadOnlyList<AgentConfiguration> agents, LayoutAreaHost host)
     {
         var markdown = GenerateAgentDetailsMarkdown(agent, agents, host);
 
-        return Task.FromResult<UiControl?>(Controls.Stack
+        return Controls.Stack
             .WithView(Controls.NavLink("Agents", $"{host.Hub.Address}/Overview"), "BackLink")
             .WithView(Controls.Markdown(markdown), "Content")
-            .WithView(CreateDelegationsSection(agent, agents, host)));
+            .WithView(CreateDelegationsSection(agent, agents, host));
     }
 
     private static string GenerateAgentDetailsMarkdown(AgentConfiguration agent, IReadOnlyList<AgentConfiguration> agents, LayoutAreaHost host)
     {
         var markdown = new StringBuilder();
 
-        // Title and Description
-        var displayName = agent.DisplayName ?? agent.Id.Wordify();
+        // Title and Description — display name now lives on the MeshNode; this
+        // delegation-graph view works off detached configs, so it falls back to the
+        // wordified id (the primary agent page renders the node's Name).
+        var displayName = agent.Id.Wordify();
         markdown.AppendLine($"# {displayName}");
         markdown.AppendLine();
         if (!string.IsNullOrEmpty(agent.Description))
@@ -154,7 +179,7 @@ public static class AgentDetailsArea
                 var targetId = d.AgentPath.Split('/').Last();
                 var targetAgent = agentsById.GetValueOrDefault(targetId);
                 var agentLink = targetAgent != null
-                    ? $"<a href='{host.Hub.Address}/AgentDetails/{targetId}' style='color: #0171ff; text-decoration: none; font-weight: 600;'>{targetAgent.DisplayName ?? targetId}</a>"
+                    ? $"<a href='{host.Hub.Address}/AgentDetails/{targetId}' style='color: #0171ff; text-decoration: none; font-weight: 600;'>{targetId.Wordify()}</a>"
                     : $"<strong style='color: #0171ff;'>{targetId}</strong>";
 
                 return $"<li style='margin: 8px 0; padding: 12px; background: var(--code-block-background-color, #f6f8fa); border-left: 4px solid #0171ff; border-radius: 4px; border: 1px solid var(--code-block-border-color, #e1e4e8);'>" +
@@ -189,7 +214,7 @@ public static class AgentDetailsArea
             var delegationsFromHtml = string.Join("", delegationsFromList.Select(item =>
             {
                 var (sourceAgent, reason) = item;
-                var agentLink = $"<a href='{host.Hub.Address}/AgentDetails/{sourceAgent.Id}' style='color: #6f42c1; text-decoration: none; font-weight: 600;'>{sourceAgent.DisplayName ?? sourceAgent.Id.Wordify()}</a>";
+                var agentLink = $"<a href='{host.Hub.Address}/AgentDetails/{sourceAgent.Id}' style='color: #6f42c1; text-decoration: none; font-weight: 600;'>{sourceAgent.Id.Wordify()}</a>";
 
                 return $"<li style='margin: 8px 0; padding: 12px; background: var(--code-block-background-color, #f6f8fa); border-left: 4px solid #6f42c1; border-radius: 4px; border: 1px solid var(--code-block-border-color, #e1e4e8);'>" +
                        $"<div style='margin-bottom: 4px;'>{agentLink}</div>" +

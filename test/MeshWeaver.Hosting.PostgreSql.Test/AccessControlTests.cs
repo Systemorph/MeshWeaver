@@ -1,5 +1,4 @@
 using System.Threading.Tasks;
-using FluentAssertions;
 using Xunit;
 
 namespace MeshWeaver.Hosting.PostgreSql.Test;

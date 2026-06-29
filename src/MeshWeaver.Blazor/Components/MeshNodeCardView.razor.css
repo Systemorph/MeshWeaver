@@ -1,8 +1,10 @@
 .mesh-node-card {
-    width: 100%;
-    height: 100%;
+    /* NOTE: <fluent-card> is a CHILD-component host, so this component's CSS-isolation (b-*)
+       attribute is NOT applied to it — the width/display rules below would NOT land here.
+       The card's "fill the grid cell" sizing therefore lives as a GLOBAL rule in
+       standard-page-layout.css (`.mesh-search-area-grid .mesh-node-card`). Keep cursor here;
+       it's harmless even if it doesn't reach the host. */
     cursor: pointer;
-    min-width: 200px;
 }
 
 .mesh-node-card:hover {

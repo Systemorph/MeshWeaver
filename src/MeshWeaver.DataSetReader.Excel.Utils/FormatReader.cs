@@ -1,10 +1,17 @@
 ﻿namespace MeshWeaver.DataSetReader.Excel.Utils
 {
+	/// <summary>
+	/// Inspects an Excel number-format string to decide whether it represents a date/time format,
+	/// ignoring format tokens that are bracketed, quoted or backslash-escaped.
+	/// </summary>
 	public class FormatReader
 	{
 		private const char escapeChar = '\\';
+		/// <summary>Gets or sets the Excel number-format string to examine.</summary>
 		public required string FormatString { get; set; }
 
+		/// <summary>Determines whether <see cref="FormatString"/> is a date/time format.</summary>
+		/// <returns><c>true</c> if the format contains an unescaped date/time token (y, m, d, h, s); otherwise <c>false</c>.</returns>
 		public bool IsDateFormatString()
 		{
 			//it is a date if it contains y,m,d,s,h but only

@@ -2,7 +2,6 @@ using System;
 using System.Reactive.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
-using FluentAssertions;
 using MeshWeaver.Data;
 using MeshWeaver.Data.Serialization;
 using MeshWeaver.Graph;
@@ -24,6 +23,9 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 /// </summary>
 public class UserIdentityLeakTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
+    /// <summary>Share Mesh/SP across [Fact]s — see MonolithMeshTestBase.ShareMeshAcrossTests.</summary>
+    protected override bool ShareMeshAcrossTests => true;
+
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => base.ConfigureMesh(builder)
             .AddSampleUsers()
@@ -52,9 +54,8 @@ public class UserIdentityLeakTest(ITestOutputHelper output) : MonolithMeshTestBa
         ISynchronizationStream<JsonElement> stream, string expectedSubstring, TimeSpan timeout)
     {
         var changeItem = await ((IObservable<ChangeItem<JsonElement>>)stream)
-            .Where(ci => ci.Value.ToString().Contains(expectedSubstring, StringComparison.OrdinalIgnoreCase))
-            .Timeout(timeout)
-            .FirstAsync();
+            .Should().Within(timeout)
+            .Match(ci => ci.Value.ToString().Contains(expectedSubstring, StringComparison.OrdinalIgnoreCase));
         return changeItem.Value.ToString();
     }
 
@@ -115,10 +116,7 @@ public class UserIdentityLeakTest(ITestOutputHelper output) : MonolithMeshTestBa
         var aliceAddress = new Address("User/Alice");
 
         // Ensure the hub is ready
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(aliceAddress),
-            TestContext.Current.CancellationToken);
+        await client.Observe(new PingRequest(), o => o.WithTarget(aliceAddress)).Should().Within(15.Seconds()).Emit();
 
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference(UserActivityLayoutAreas.ActivityArea);
@@ -147,10 +145,7 @@ public class UserIdentityLeakTest(ITestOutputHelper output) : MonolithMeshTestBa
         var client = GetClient();
         var aliceAddress = new Address("User/Alice");
 
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(aliceAddress),
-            TestContext.Current.CancellationToken);
+        await client.Observe(new PingRequest(), o => o.WithTarget(aliceAddress)).Should().Within(15.Seconds()).Emit();
 
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference(UserActivityLayoutAreas.ActivityArea);
@@ -179,10 +174,7 @@ public class UserIdentityLeakTest(ITestOutputHelper output) : MonolithMeshTestBa
         var client = GetClient();
         var aliceAddress = new Address("User/Alice");
 
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(aliceAddress),
-            TestContext.Current.CancellationToken);
+        await client.Observe(new PingRequest(), o => o.WithTarget(aliceAddress)).Should().Within(15.Seconds()).Emit();
 
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference(UserActivityLayoutAreas.ActivityArea);

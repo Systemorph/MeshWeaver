@@ -53,14 +53,22 @@ public class AzureClaudeChatClient : IChatClient
         if (string.IsNullOrEmpty(modelId))
             throw new ArgumentException("Model ID is required", nameof(modelId));
 
-        // Ensure endpoint ends with /messages
+        // Endpoint normalisation handles both direct Anthropic and Azure
+        // Foundry deployments — same wire protocol, different URL shapes.
+        //   • https://api.anthropic.com                → /v1/messages
+        //   • https://x.services.ai.azure.com          → /anthropic/v1/messages
+        //   • https://x.services.ai.azure.com/anthropic → /v1/messages
+        //   • fully qualified URLs ending /v1/messages → unchanged
         this.endpoint = endpoint.TrimEnd('/');
         if (!this.endpoint.EndsWith("/v1/messages", StringComparison.OrdinalIgnoreCase))
         {
             if (this.endpoint.EndsWith("/anthropic", StringComparison.OrdinalIgnoreCase))
                 this.endpoint += "/v1/messages";
-            else if (!this.endpoint.Contains("/anthropic/"))
+            else if (this.endpoint.Contains(".azure.com", StringComparison.OrdinalIgnoreCase)
+                     && !this.endpoint.Contains("/anthropic/", StringComparison.OrdinalIgnoreCase))
                 this.endpoint += "/anthropic/v1/messages";
+            else
+                this.endpoint += "/v1/messages";
         }
 
         this.apiKey = apiKey;

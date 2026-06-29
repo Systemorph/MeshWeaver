@@ -6,11 +6,26 @@ using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Data.Persistence
 {
+    /// <summary>
+    /// A partitioned data source backed by remote message hubs: each partition is mirrored from
+    /// the hub addressed by that partition, and a null partition combines all initialized
+    /// partition streams into a single aggregate stream.
+    /// </summary>
+    /// <typeparam name="TPartition">The type used to discriminate partitions.</typeparam>
+    /// <param name="Id">The identity of this data source.</param>
+    /// <param name="Workspace">The local workspace this data source belongs to.</param>
     public record PartitionedHubDataSource<TPartition>(object Id, IWorkspace Workspace)
         : PartitionedDataSource<PartitionedHubDataSource<TPartition>, IPartitionedTypeSource, TPartition>(Id, Workspace)
     {
         private new ILogger Logger => Workspace.Hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.Data.PartitionedHubDataSource") ?? Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance;
+        /// <summary>
+        /// Registers type <typeparamref name="T"/> with this data source, mapping each instance to its partition.
+        /// </summary>
+        /// <typeparam name="T">The entity type to register.</typeparam>
+        /// <param name="partitionFunction">Maps an instance of <typeparamref name="T"/> to the partition it belongs to.</param>
+        /// <param name="config">Optional configuration applied to the partitioned type source.</param>
+        /// <returns>This data source with the type registered.</returns>
         public override PartitionedHubDataSource<TPartition> WithType<T>(Func<T, TPartition> partitionFunction, Func<IPartitionedTypeSource, IPartitionedTypeSource>? config = null)
 => WithTypeSource(
                 typeof(T),
@@ -21,6 +36,12 @@ namespace MeshWeaver.Data.Persistence
 
 
 
+        /// <summary>
+        /// Returns a copy of this data source whose set of partitions to initialize eagerly is
+        /// extended with the supplied partitions.
+        /// </summary>
+        /// <param name="partitions">The partitions to initialize when the data source starts.</param>
+        /// <returns>A new data source instance with the additional initial partitions.</returns>
         public PartitionedHubDataSource<TPartition> InitializingPartitions(params IEnumerable<object> partitions) =>
             this with
             {
@@ -30,6 +51,13 @@ namespace MeshWeaver.Data.Persistence
         private object[] InitializePartitions { get; init; } = [];
 
 
+        /// <summary>
+        /// Creates the synchronization stream for the given identity. When the identity targets a
+        /// concrete partition address, a remote stream to that hub is opened; for a null partition
+        /// the initialized partition streams are combined into one aggregate stream.
+        /// </summary>
+        /// <param name="identity">The identity of the stream to create.</param>
+        /// <returns>The synchronization stream for the requested partition (or the combined stream).</returns>
         protected override ISynchronizationStream<EntityStore> CreateStream(StreamIdentity identity)
         {
             if (identity.Partition is Address partition)
@@ -113,6 +141,10 @@ namespace MeshWeaver.Data.Persistence
         }
 
 
+        /// <summary>
+        /// Initializes the data source by eagerly opening a stream for each partition registered
+        /// via <see cref="InitializingPartitions"/>.
+        /// </summary>
         public override void Initialize()
         {
             foreach (var partition in InitializePartitions)

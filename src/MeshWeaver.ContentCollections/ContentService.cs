@@ -1,10 +1,17 @@
 ﻿using System.Collections.Concurrent;
 using MeshWeaver.Messaging;
+using MeshWeaver.Reactive;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.ContentCollections;
 
+/// <summary>
+/// Default <see cref="IContentService"/> implementation. Aggregates collection configs from all
+/// registered providers, lazily instantiates and caches <see cref="ContentCollection"/> instances,
+/// resolves mapped collections, and falls back to the parent hub's content service when a
+/// collection is not found locally.
+/// </summary>
 public class ContentService : IContentService
 {
     private readonly IMessageHub hub;
@@ -21,6 +28,12 @@ public class ContentService : IContentService
     private bool parentResolved;
     private readonly Lock parentLock = new();
     private readonly ILogger<ContentService> logger;
+    /// <summary>
+    /// Initializes the content service, collecting collection configurations from every
+    /// registered <see cref="IContentCollectionConfigProvider"/> (later registrations win).
+    /// </summary>
+    /// <param name="hub">The owning message hub.</param>
+    /// <param name="accessService">The access service used for permission checks.</param>
     public ContentService(IMessageHub hub, AccessService accessService)
     {
         this.hub = hub;
@@ -142,10 +155,9 @@ public class ContentService : IContentService
             BasePath = fullPath,
             Address = mappedConfig.Address,
             IsEditable = mappedConfig.IsEditable,
-            Settings = new Dictionary<string, string>(sourceConfig.Settings ?? new Dictionary<string, string>())
-            {
-                ["BasePath"] = fullPath
-            }
+            Settings = sourceConfig.Settings is { } src
+                ? new Dictionary<string, string>(src) { ["BasePath"] = fullPath }
+                : new Dictionary<string, string> { ["BasePath"] = fullPath }
         };
 
         // Cache the resolved config
@@ -160,17 +172,21 @@ public class ContentService : IContentService
         if (factory is null)
             throw new ArgumentException($"Unknown source type {config.SourceType}");
 
-        // Create provider using the factory (now properly async)
-        var provider = await factory.CreateAsync(config, cancellationToken);
-
-        // Create and initialize the collection
-        var collection = new ContentCollection(config, provider, hub);
-        await collection.InitializeAsync(cancellationToken);
-
+        // Bridge the IObservable<IStreamProvider> into the cached Task<ContentCollection?>
+        // surface via await foreach + early return — this is a one-shot creation, the
+        // Task is the framework's caching boundary (Dictionary<string, Task<...>>).
+        ContentCollection? collection = null;
+        await foreach (var provider in factory.Create(config).ToAsyncEnumerableSequence(cancellationToken))
+        {
+            collection = new ContentCollection(config, provider, hub);
+            await collection.InitializeAsync(cancellationToken);
+            return collection;
+        }
         return collection;
     }
 
 
+    /// <inheritdoc />
     public async Task<ContentCollection?> GetCollectionAsync(string collection, CancellationToken ct)
     {
         // Try local collections first (matches GetCollectionConfig's local-first pattern)
@@ -226,6 +242,7 @@ public class ContentService : IContentService
 
     }
 
+    /// <inheritdoc />
     public ContentCollectionConfig? GetCollectionConfig(string collection)
     {
         // Try local configs first
@@ -247,6 +264,7 @@ public class ContentService : IContentService
         return null;
     }
 
+    /// <inheritdoc />
     public IReadOnlyCollection<ContentCollectionConfig> GetAllCollectionConfigs()
     {
         // Get local configs, resolving any mapped configs
@@ -276,6 +294,7 @@ public class ContentService : IContentService
         return configs;
     }
 
+    /// <inheritdoc />
     public void AddConfiguration(ContentCollectionConfig contentCollectionConfig)
     {
         var name = contentCollectionConfig.Name;
@@ -310,6 +329,7 @@ public class ContentService : IContentService
 
 
 
+    /// <inheritdoc />
     public async Task<Stream?> GetContentAsync(string collection, string path, CancellationToken ct = default)
     {
         var coll = await GetCollectionAsync(collection, ct);
@@ -318,6 +338,7 @@ public class ContentService : IContentService
         return await coll.GetContentAsync(path, ct);
     }
 
+    /// <inheritdoc />
     public IAsyncEnumerable<ContentCollection> GetCollectionsAsync()
     {
         return collections.Values.ToAsyncEnumerable().Select(async x => await x).OfType<ContentCollection>();

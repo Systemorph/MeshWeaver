@@ -1,4 +1,4 @@
-using System.Runtime.CompilerServices;
+using System.Reactive.Linq;
 using MeshWeaver.Data.Completion;
 using MeshWeaver.Insurance.Domain.Services;
 
@@ -12,26 +12,17 @@ namespace MeshWeaver.Insurance.Domain.Completion;
 public class PricingAutocompleteProvider(IPricingService pricingService) : IAutocompleteProvider
 {
     /// <inheritdoc />
-    public async IAsyncEnumerable<AutocompleteItem> GetItemsAsync(
-        string query,
-        string? contextPath = null,
-        [EnumeratorCancellation] CancellationToken ct = default)
-    {
-        await Task.CompletedTask; // Satisfy async requirement
-
-        var pricings = pricingService.GetCatalog();
-
-        // p.Id is now in format "company/year" (e.g., "Microsoft/2026")
-        foreach (var p in pricings)
-        {
-            yield return new AutocompleteItem(
-                Label: $"@{InsuranceApplicationAttribute.PricingType}/{p.Id}/",
-                InsertText: $"@{InsuranceApplicationAttribute.PricingType}/{p.Id}/",
-                Description: p.InsuredName ?? p.Id,
-                Category: "Pricing",
-                Priority: 1000,
-                Kind: AutocompleteKind.Other
-            );
-        }
-    }
+    public IObservable<IReadOnlyCollection<AutocompleteItem>> GetItems(string query, string? contextPath = null) =>
+        // Pure in-memory enumeration of the pricing catalog — no I/O, no async. One settled snapshot.
+        // p.Id is in format "company/year" (e.g., "Microsoft/2026").
+        Observable.Return<IReadOnlyCollection<AutocompleteItem>>(
+            pricingService.GetCatalog()
+                .Select(p => new AutocompleteItem(
+                    Label: $"@{InsuranceApplicationAttribute.PricingType}/{p.Id}/",
+                    InsertText: $"@{InsuranceApplicationAttribute.PricingType}/{p.Id}/",
+                    Description: p.InsuredName ?? p.Id,
+                    Category: "Pricing",
+                    Priority: 1000,
+                    Kind: AutocompleteKind.Other))
+                .ToArray());
 }

@@ -7,6 +7,10 @@ using static MeshWeaver.DataSetReader.Excel.OpenXmlFormat.ExcelOpenXmlConst;
 
 namespace MeshWeaver.DataSetReader.Excel.OpenXmlFormat
 {
+    /// <summary>
+    /// An <see cref="IExcelDataReader"/> implementation that streams rows from an OpenXML (<c>.xlsx</c>) workbook,
+    /// exposing each worksheet as a forward-only data reader and materialising the whole workbook as a <see cref="DataSet"/>.
+    /// </summary>
     public class ExcelOpenXmlReader : IExcelDataReader
     {
         #region Members
@@ -246,6 +250,8 @@ namespace MeshWeaver.DataSetReader.Excel.OpenXmlFormat
 
         #region IExcelDataReader Members
 
+        /// <summary>Opens the workbook from the supplied stream, extracts its parts and reads the global workbook metadata.</summary>
+        /// <param name="fileStream">The <c>.xlsx</c> package stream to read.</param>
         public void Initialize(Stream fileStream)
         {
             _zipWorker = new ZipWorker();
@@ -264,11 +270,16 @@ namespace MeshWeaver.DataSetReader.Excel.OpenXmlFormat
             ReadGlobals();
         }
 
+        /// <summary>Reads every worksheet into a <see cref="DataSet"/>, converting OLE-automation date serials to <see cref="DateTime"/>.</summary>
+        /// <returns>A <see cref="DataSet"/> with one <see cref="DataTable"/> per non-empty worksheet.</returns>
         public DataSet AsDataSet()
         {
             return AsDataSet(true);
         }
 
+        /// <summary>Reads every worksheet into a <see cref="DataSet"/>.</summary>
+        /// <param name="convertOADateTime">When <c>true</c>, OLE-automation date serial numbers in date-formatted cells are converted to <see cref="DateTime"/>.</param>
+        /// <returns>A <see cref="DataSet"/> with one <see cref="DataTable"/> per non-empty worksheet.</returns>
         public DataSet AsDataSet(bool convertOADateTime)
         {
             if (!_isValid) return new DataSet();
@@ -322,27 +333,32 @@ namespace MeshWeaver.DataSetReader.Excel.OpenXmlFormat
             return dataset;
         }
 
+        /// <summary>Gets or sets whether the first row of each sheet supplies the column names instead of data.</summary>
         public bool IsFirstRowAsColumnNames
         {
             get { return _isFirstRowAsColumnNames; }
             set { _isFirstRowAsColumnNames = value; }
         }
 
+        /// <summary>Gets whether the workbook was opened successfully and is readable.</summary>
         public bool IsValid
         {
             get { return _isValid; }
         }
 
+        /// <summary>Gets the message describing why the workbook is invalid, or an empty string when valid.</summary>
         public string ExceptionMessage
         {
             get { return _exceptionMessage; }
         }
 
+        /// <summary>Gets the name of the worksheet at the current result index, or an empty string when out of range.</summary>
         public string Name
         {
             get { return (_resultIndex >= 0 && _resultIndex < ResultsCount) ? _workbook.Sheets[_resultIndex].Name : string.Empty; }
         }
 
+        /// <summary>Closes the reader, releasing the current sheet stream and the underlying zip package.</summary>
         public void Close()
         {
             _isClosed = true;
@@ -351,21 +367,26 @@ namespace MeshWeaver.DataSetReader.Excel.OpenXmlFormat
             if (_zipWorker != null) _zipWorker.Dispose();
         }
 
+        /// <summary>Gets the zero-based index of the current row within the active worksheet.</summary>
         public int Depth
         {
             get { return _depth; }
         }
 
+        /// <summary>Gets the number of worksheets in the workbook, or <c>-1</c> if no workbook has been loaded.</summary>
         public int ResultsCount
         {
             get { return _workbook == null ? -1 : _workbook.Sheets.Count; }
         }
 
+        /// <summary>Gets whether the reader has been closed.</summary>
         public bool IsClosed
         {
             get { return _isClosed; }
         }
 
+        /// <summary>Advances the reader to the next worksheet.</summary>
+        /// <returns><c>true</c> if another worksheet is available; otherwise <c>false</c>.</returns>
         public bool NextResult()
         {
             if (_resultIndex >= (ResultsCount - 1)) return false;
@@ -377,6 +398,8 @@ namespace MeshWeaver.DataSetReader.Excel.OpenXmlFormat
             return true;
         }
 
+        /// <summary>Advances to the next row of the current worksheet.</summary>
+        /// <returns><c>true</c> if a row was read; otherwise <c>false</c>.</returns>
         public bool Read()
         {
             if (!_isValid) return false;
@@ -389,11 +412,15 @@ namespace MeshWeaver.DataSetReader.Excel.OpenXmlFormat
             return ReadSheetRow(_workbook.Sheets[_resultIndex]);
         }
 
+        /// <summary>Gets the number of columns in the current worksheet, or <c>-1</c> when no worksheet is active.</summary>
         public int FieldCount
         {
             get { return _resultIndex >= 0 && _resultIndex < ResultsCount ? _workbook.Sheets[_resultIndex].ColumnsCount : -1; }
         }
 
+        /// <summary>Gets the value of the specified column as a <see cref="bool"/>.</summary>
+        /// <param name="i">Zero-based column index.</param>
+        /// <returns>The boolean value, or <c>false</c> if the cell is null.</returns>
         public bool GetBoolean(int i)
         {
             if (IsDBNull(i)) return false;
@@ -401,6 +428,9 @@ namespace MeshWeaver.DataSetReader.Excel.OpenXmlFormat
             return Boolean.Parse(_cellsValues[i].ToString()!);
         }
 
+        /// <summary>Gets the value of the specified column as a <see cref="DateTime"/>.</summary>
+        /// <param name="i">Zero-based column index.</param>
+        /// <returns>The date/time value, or <see cref="DateTime.MinValue"/> if the cell is null or not a date.</returns>
         public DateTime GetDateTime(int i)
         {
             if (IsDBNull(i)) return DateTime.MinValue;
@@ -415,6 +445,9 @@ namespace MeshWeaver.DataSetReader.Excel.OpenXmlFormat
             }
         }
 
+        /// <summary>Gets the value of the specified column as a <see cref="decimal"/>.</summary>
+        /// <param name="i">Zero-based column index.</param>
+        /// <returns>The decimal value, or <see cref="decimal.MinValue"/> if the cell is null.</returns>
         public decimal GetDecimal(int i)
         {
             if (IsDBNull(i)) return decimal.MinValue;
@@ -422,6 +455,9 @@ namespace MeshWeaver.DataSetReader.Excel.OpenXmlFormat
             return decimal.Parse(_cellsValues[i].ToString()!);
         }
 
+        /// <summary>Gets the value of the specified column as a <see cref="double"/>.</summary>
+        /// <param name="i">Zero-based column index.</param>
+        /// <returns>The double value, or <see cref="double.MinValue"/> if the cell is null.</returns>
         public double GetDouble(int i)
         {
             if (IsDBNull(i)) return double.MinValue;
@@ -429,6 +465,9 @@ namespace MeshWeaver.DataSetReader.Excel.OpenXmlFormat
             return double.Parse(_cellsValues[i].ToString()!);
         }
 
+        /// <summary>Gets the value of the specified column as a <see cref="float"/>.</summary>
+        /// <param name="i">Zero-based column index.</param>
+        /// <returns>The float value, or <see cref="float.MinValue"/> if the cell is null.</returns>
         public float GetFloat(int i)
         {
             if (IsDBNull(i)) return float.MinValue;
@@ -436,6 +475,9 @@ namespace MeshWeaver.DataSetReader.Excel.OpenXmlFormat
             return float.Parse(_cellsValues[i].ToString()!);
         }
 
+        /// <summary>Gets the value of the specified column as a 16-bit integer.</summary>
+        /// <param name="i">Zero-based column index.</param>
+        /// <returns>The <see cref="short"/> value, or <see cref="short.MinValue"/> if the cell is null.</returns>
         public short GetInt16(int i)
         {
             if (IsDBNull(i)) return short.MinValue;
@@ -443,6 +485,9 @@ namespace MeshWeaver.DataSetReader.Excel.OpenXmlFormat
             return short.Parse(_cellsValues[i].ToString()!);
         }
 
+        /// <summary>Gets the value of the specified column as a 32-bit integer.</summary>
+        /// <param name="i">Zero-based column index.</param>
+        /// <returns>The <see cref="int"/> value, or <see cref="int.MinValue"/> if the cell is null.</returns>
         public int GetInt32(int i)
         {
             if (IsDBNull(i)) return int.MinValue;
@@ -450,6 +495,9 @@ namespace MeshWeaver.DataSetReader.Excel.OpenXmlFormat
             return int.Parse(_cellsValues[i].ToString()!);
         }
 
+        /// <summary>Gets the value of the specified column as a 64-bit integer.</summary>
+        /// <param name="i">Zero-based column index.</param>
+        /// <returns>The <see cref="long"/> value, or <see cref="long.MinValue"/> if the cell is null.</returns>
         public long GetInt64(int i)
         {
             if (IsDBNull(i)) return long.MinValue;
@@ -457,6 +505,9 @@ namespace MeshWeaver.DataSetReader.Excel.OpenXmlFormat
             return long.Parse(_cellsValues[i].ToString()!);
         }
 
+        /// <summary>Gets the value of the specified column as a string.</summary>
+        /// <param name="i">Zero-based column index.</param>
+        /// <returns>The string value, or an empty string if the cell is null.</returns>
         public string GetString(int i)
         {
             if (IsDBNull(i)) return string.Empty;
@@ -464,16 +515,24 @@ namespace MeshWeaver.DataSetReader.Excel.OpenXmlFormat
             return _cellsValues[i].ToString() ?? string.Empty;
         }
 
+        /// <summary>Gets the raw value of the specified column.</summary>
+        /// <param name="i">Zero-based column index.</param>
+        /// <returns>The cell value as stored.</returns>
         public object GetValue(int i)
         {
             return _cellsValues[i];
         }
 
+        /// <summary>Determines whether the specified column holds a null/empty value.</summary>
+        /// <param name="i">Zero-based column index.</param>
+        /// <returns><c>true</c> if the cell is null or <see cref="DBNull"/>; otherwise <c>false</c>.</returns>
         public bool IsDBNull(int i)
         {
             return (null == _cellsValues[i]) || (DBNull.Value == _cellsValues[i]);
         }
 
+        /// <summary>Gets the raw value of the column at the specified ordinal in the current row.</summary>
+        /// <param name="i">Zero-based column index.</param>
         public object this[int i]
         {
             get { return _cellsValues[i]; }
@@ -483,6 +542,7 @@ namespace MeshWeaver.DataSetReader.Excel.OpenXmlFormat
 
         #region IDisposable Members
 
+        /// <summary>Releases all resources held by the reader, including the sheet stream and zip package.</summary>
         public void Dispose()
         {
             Dispose(true);
@@ -513,6 +573,7 @@ namespace MeshWeaver.DataSetReader.Excel.OpenXmlFormat
             }
         }
 
+        /// <summary>Finalizer that releases unmanaged resources if <see cref="Dispose()"/> was not called.</summary>
         ~ExcelOpenXmlReader()
         {
             Dispose(false);
@@ -522,11 +583,15 @@ namespace MeshWeaver.DataSetReader.Excel.OpenXmlFormat
 
         #region  Not Supported IDataReader Members
 
+        /// <summary>Not supported by this reader.</summary>
+        /// <returns>This method never returns; it always throws.</returns>
+        /// <exception cref="NotSupportedException">Always thrown.</exception>
         public DataTable GetSchemaTable()
         {
             throw new NotSupportedException();
         }
 
+        /// <summary>Not supported by this reader; always throws <see cref="NotSupportedException"/>.</summary>
         public int RecordsAffected
         {
             get { throw new NotSupportedException(); }
@@ -536,61 +601,115 @@ namespace MeshWeaver.DataSetReader.Excel.OpenXmlFormat
 
         #region Not Supported IDataRecord Members
 
+        /// <summary>Not supported by this reader.</summary>
+        /// <param name="i">Zero-based column index.</param>
+        /// <returns>This method never returns; it always throws.</returns>
+        /// <exception cref="NotSupportedException">Always thrown.</exception>
         public byte GetByte(int i)
         {
             throw new NotSupportedException();
         }
 
+        /// <summary>Not supported by this reader.</summary>
+        /// <param name="i">Zero-based column index.</param>
+        /// <param name="fieldOffset">Offset within the field at which to start reading.</param>
+        /// <param name="buffer">Destination buffer.</param>
+        /// <param name="bufferoffset">Offset within <paramref name="buffer"/> at which to start writing.</param>
+        /// <param name="length">Maximum number of bytes to read.</param>
+        /// <returns>This method never returns; it always throws.</returns>
+        /// <exception cref="NotSupportedException">Always thrown.</exception>
         public long GetBytes(int i, long fieldOffset, byte[]? buffer, int bufferoffset, int length)
         {
             throw new NotSupportedException();
         }
 
+        /// <summary>Not supported by this reader.</summary>
+        /// <param name="i">Zero-based column index.</param>
+        /// <returns>This method never returns; it always throws.</returns>
+        /// <exception cref="NotSupportedException">Always thrown.</exception>
         public char GetChar(int i)
         {
             throw new NotSupportedException();
         }
 
+        /// <summary>Not supported by this reader.</summary>
+        /// <param name="i">Zero-based column index.</param>
+        /// <param name="fieldoffset">Offset within the field at which to start reading.</param>
+        /// <param name="buffer">Destination buffer.</param>
+        /// <param name="bufferoffset">Offset within <paramref name="buffer"/> at which to start writing.</param>
+        /// <param name="length">Maximum number of characters to read.</param>
+        /// <returns>This method never returns; it always throws.</returns>
+        /// <exception cref="NotSupportedException">Always thrown.</exception>
         public long GetChars(int i, long fieldoffset, char[]? buffer, int bufferoffset, int length)
         {
             throw new NotSupportedException();
         }
 
+        /// <summary>Not supported by this reader.</summary>
+        /// <param name="i">Zero-based column index.</param>
+        /// <returns>This method never returns; it always throws.</returns>
+        /// <exception cref="NotSupportedException">Always thrown.</exception>
         public IDataReader GetData(int i)
         {
             throw new NotSupportedException();
         }
 
+        /// <summary>Not supported by this reader.</summary>
+        /// <param name="i">Zero-based column index.</param>
+        /// <returns>This method never returns; it always throws.</returns>
+        /// <exception cref="NotSupportedException">Always thrown.</exception>
         public string GetDataTypeName(int i)
         {
             throw new NotSupportedException();
         }
 
+        /// <summary>Not supported by this reader.</summary>
+        /// <param name="i">Zero-based column index.</param>
+        /// <returns>This method never returns; it always throws.</returns>
+        /// <exception cref="NotSupportedException">Always thrown.</exception>
         public Type GetFieldType(int i)
         {
             throw new NotSupportedException();
         }
 
+        /// <summary>Not supported by this reader.</summary>
+        /// <param name="i">Zero-based column index.</param>
+        /// <returns>This method never returns; it always throws.</returns>
+        /// <exception cref="NotSupportedException">Always thrown.</exception>
         public Guid GetGuid(int i)
         {
             throw new NotSupportedException();
         }
 
+        /// <summary>Not supported by this reader.</summary>
+        /// <param name="i">Zero-based column index.</param>
+        /// <returns>This method never returns; it always throws.</returns>
+        /// <exception cref="NotSupportedException">Always thrown.</exception>
         public string GetName(int i)
         {
             throw new NotSupportedException();
         }
 
+        /// <summary>Not supported by this reader.</summary>
+        /// <param name="name">Column name to look up.</param>
+        /// <returns>This method never returns; it always throws.</returns>
+        /// <exception cref="NotSupportedException">Always thrown.</exception>
         public int GetOrdinal(string name)
         {
             throw new NotSupportedException();
         }
 
+        /// <summary>Not supported by this reader.</summary>
+        /// <param name="values">Array that would receive the column values.</param>
+        /// <returns>This method never returns; it always throws.</returns>
+        /// <exception cref="NotSupportedException">Always thrown.</exception>
         public int GetValues(object[] values)
         {
             throw new NotSupportedException();
         }
 
+        /// <summary>Not supported by this reader; always throws <see cref="NotSupportedException"/>.</summary>
+        /// <param name="name">Column name.</param>
         public object this[string name]
         {
             get { throw new NotSupportedException(); }

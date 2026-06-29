@@ -1,4 +1,4 @@
-using System.Runtime.CompilerServices;
+using System.Reactive.Linq;
 using MeshWeaver.Data.Completion;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -19,68 +19,70 @@ internal class MeshNodeAutocompleteProvider(
     private const int DefaultMaxResults = 20;
 
     /// <inheritdoc />
-    public async IAsyncEnumerable<AutocompleteItem> GetItemsAsync(
-        string query,
-        string? contextPath = null,
-        [EnumeratorCancellation] CancellationToken ct = default)
+    public IObservable<IReadOnlyCollection<AutocompleteItem>> GetItems(string query, string? contextPath = null)
     {
         // Skip UCR prefix queries — handled by dedicated providers (Content, Data, etc.)
         if (StartsWithUcrPrefix(query))
-            yield break;
+            return Observable.Return(AutocompleteSnapshots.Empty);
 
-        // Use the hub's address as the parent path
+        // Use the hub's address as the parent path.
         var parentPath = hub.Address.ToString();
-
         var queryString = $"namespace:{parentPath}";
         if (!string.IsNullOrWhiteSpace(query))
             queryString += $" name:{query}";
 
-        // Query for child nodes and yield results
-        var count = 0;
-        await foreach (var node in meshQuery.QueryAsync<MeshNode>(queryString).WithCancellation(ct))
+        // Pure reactive: Query emits the initial snapshot; project the first N children to
+        // AutocompleteItems. No await, no IAsyncEnumerable bridge — the old EnumerateAsync
+        // round-tripped Observable → IAsyncEnumerable → Observable (via ToAsyncEnumerableSequence +
+        // FromAsyncEnumerable) for nothing.
+        var items = meshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(queryString))
+            .Take(1)
+            .SelectMany(c => c.Items
+                .Take(DefaultMaxResults)
+                .Select(node => ToAutocompleteItem(node, contextPath)));
+        return AutocompleteSnapshots.FromItems(items, 50);
+    }
+
+    private static AutocompleteItem ToAutocompleteItem(MeshNode node, string? contextPath)
+    {
+        // Use relative name when context matches, absolute path otherwise.
+        var insertText = $"@{node.Path}/";
+        var priority = 1000 - (node.Order ?? 0);
+
+        if (!string.IsNullOrEmpty(contextPath))
         {
-            if (count >= DefaultMaxResults) break;
-            count++;
-
-            // Use relative name when context matches, absolute path otherwise
-            var insertText = $"@{node.Path}/";
-            var priority = 1000 - (node.Order ?? 0);
-
-            if (!string.IsNullOrEmpty(contextPath))
+            if (node.Path.StartsWith(contextPath + "/", StringComparison.OrdinalIgnoreCase))
             {
-                if (node.Path.StartsWith(contextPath + "/", StringComparison.OrdinalIgnoreCase))
+                var relativeName = node.Path[(contextPath.Length + 1)..];
+                insertText = $"@{relativeName}/";
+                // Direct child or descendant of context: high priority
+                priority += relativeName.Contains('/') ? 1500 : 2000;
+            }
+            else
+            {
+                // Check for sibling (same parent)
+                var contextParent = contextPath.LastIndexOf('/');
+                if (contextParent > 0)
                 {
-                    var relativeName = node.Path[(contextPath.Length + 1)..];
-                    insertText = $"@{relativeName}/";
-                    // Direct child or descendant of context: high priority
-                    priority += relativeName.Contains('/') ? 1500 : 2000;
-                }
-                else
-                {
-                    // Check for sibling (same parent)
-                    var contextParent = contextPath.LastIndexOf('/');
-                    if (contextParent > 0)
-                    {
-                        var parent = contextPath[..contextParent];
-                        if (node.Path.StartsWith(parent + "/", StringComparison.OrdinalIgnoreCase))
-                            priority += 1000; // sibling
-                    }
+                    var parent = contextPath[..contextParent];
+                    if (node.Path.StartsWith(parent + "/", StringComparison.OrdinalIgnoreCase))
+                        priority += 1000; // sibling
                 }
             }
-
-            // Prefer shorter paths
-            var segmentCount = node.Path.Count(c => c == '/') + 1;
-            priority -= segmentCount * 50;
-
-            yield return new AutocompleteItem(
-                Label: $"@{node.Path}/",
-                InsertText: insertText,
-                Description: node.Name ?? node.NodeType,
-                Category: node.NodeType ?? "Nodes",
-                Priority: priority,
-                Kind: AutocompleteKind.Other
-            );
         }
+
+        // Prefer shorter paths
+        var segmentCount = node.Path.Count(c => c == '/') + 1;
+        priority -= segmentCount * 50;
+
+        return new AutocompleteItem(
+            Label: $"@{node.Path}/",
+            InsertText: insertText,
+            Description: node.Name ?? node.NodeType,
+            Category: node.NodeType ?? "Nodes",
+            Priority: priority,
+            Kind: AutocompleteKind.Other
+        );
     }
 
     private bool StartsWithUcrPrefix(string? query)

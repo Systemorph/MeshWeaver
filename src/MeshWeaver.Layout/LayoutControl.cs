@@ -37,4 +37,5 @@ public record HeaderSkin : Skin<HeaderSkin>;
 /// <a href="https://www.fluentui-blazor.net/footer">Fluent UI Blazor Footer documentation</a>.
 /// </remarks>
 public record FooterSkin : Skin<FooterSkin>;
+/// <summary>Represents the skin for the main content area of the page layout.</summary>
 public record MainSkin : Skin<MainSkin>;

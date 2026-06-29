@@ -1,12 +1,23 @@
 using System.Collections.Immutable;
+using System.IO;
+using System.Reactive.Concurrency;
+using System.Reactive.Disposables;
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Schema;
+using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
+using MeshWeaver.Markdown;
 using MeshWeaver.Layout;
 using MeshWeaver.Domain;
+using MeshWeaver.Graph;
+using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
+using MeshWeaver.Kernel;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -15,14 +26,18 @@ namespace MeshWeaver.AI;
 
 /// <summary>
 /// Shared mesh operations for AI agents and MCP tools.
-/// All operations go through Hub messaging to enforce security via validators.
+///
+/// **Every public method returns <see cref="IObservable{T}"/>, never <see cref="Task{T}"/>.**
+/// This is deliberate — the mesh is an actor-hub system and `await` on hub-backed work
+/// deadlocks. Callers subscribe to drive work (<c>.Subscribe(onNext, onError)</c>) or
+/// bridge at an external boundary (<c>.FirstAsync().ToTask()</c>) — never inside hub
+/// flow. See CLAUDE.md "NOTHING ASYNC EVER".
 /// </summary>
 public class MeshOperations
 {
     private readonly IMessageHub hub;
     private readonly ILogger<MeshOperations> logger;
     private readonly IMeshService mesh;
-    private readonly INodeTypeService? nodeTypeService;
 
     /// <summary>
     /// Callback invoked when a node is created, updated, or patched.
@@ -30,29 +45,60 @@ public class MeshOperations
     /// </summary>
     public Action<NodeChangeEntry>? OnNodeChange { get; set; }
 
+    /// <summary>
+    /// Creates the operations facade over a message hub, resolving the logger and
+    /// <c>IMeshService</c> from the hub's service provider.
+    /// </summary>
+    /// <param name="hub">The message hub whose services and address back every mesh operation.</param>
     public MeshOperations(IMessageHub hub)
     {
         this.hub = hub;
         this.logger = hub.ServiceProvider.GetRequiredService<ILogger<MeshOperations>>();
         this.mesh = hub.ServiceProvider.GetRequiredService<IMeshService>();
-        this.nodeTypeService = hub.ServiceProvider.GetService<INodeTypeService>();
     }
 
     /// <summary>
     /// Looks up the cached compilation error for the owning NodeType of <paramref name="node"/>.
-    /// - If <paramref name="node"/> is a NodeType definition, checks its own path.
+    /// - If <paramref name="node"/> is a NodeType definition (Content is
+    ///   <see cref="Graph.Configuration.NodeTypeDefinition"/> OR <c>NodeType</c>
+    ///   field equals the meta-type marker <see cref="MeshNode.NodeTypePath"/>),
+    ///   checks its own path.
     /// - Otherwise checks the NodeType's path.
     /// Returns <c>null</c> if no error is recorded.
     /// </summary>
-    private string? LookupCompilationError(MeshNode node)
+    private IObservable<string?> LookupCompilationError(MeshNode node)
     {
-        if (nodeTypeService == null) return null;
-        var nodeTypePath = node.Content is Graph.Configuration.NodeTypeDefinition
-            ? node.Path
-            : node.NodeType;
-        return !string.IsNullOrEmpty(nodeTypePath)
-            ? nodeTypeService.GetCompilationError(nodeTypePath)
-            : null;
+        // NodeType==MeshNode.NodeTypePath catches the case where Content arrived
+        // as a JsonElement (per-node hub didn't have NodeTypeDefinition in its
+        // TypeRegistry, so polymorphic deserialisation fell back) — without
+        // this check, we'd look up the meta-NodeType "NodeType" and miss the
+        // actual broken-type error cached against the node's own path.
+        var isNodeTypeDef = node.Content is Graph.Configuration.NodeTypeDefinition
+            || string.Equals(node.NodeType, MeshNode.NodeTypePath, StringComparison.Ordinal);
+        var nodeTypePath = isNodeTypeDef ? node.Path : node.NodeType;
+        if (string.IsNullOrEmpty(nodeTypePath))
+            return Observable.Return<string?>(null);
+
+        // Fast path: the input node IS the settled NodeType MeshNode. Pre-settle
+        // states (Pending/Compiling/Unknown) fall through to the stream so we
+        // wait for the CompileWatcher's write-back rather than report a stale
+        // null error.
+        if (isNodeTypeDef
+            && node.Content is Graph.Configuration.NodeTypeDefinition ownDef
+            && IsSettled(ownDef))
+            return Observable.Return<string?>(ownDef.CompilationError);
+
+        // Slow path: subscribe to the NodeType's live stream, wait for a
+        // settled CompilationStatus emission, then read the CompilationError.
+        return hub.GetWorkspace().GetMeshNodeStream(nodeTypePath)
+            // JsonElement-tolerant settle check + error read: a degraded NodeType node
+            // (Content stayed a JsonElement) still satisfies the wait and yields its real
+            // error, instead of hanging to the 5s timeout then reporting a null error.
+            .Where(n => IsSettled(ReadCompilationStatusFromNode(n)))
+            .Take(1)
+            .Timeout(TimeSpan.FromSeconds(5))
+            .Select(ReadCompilationError)
+            .Catch<string?, Exception>(_ => Observable.Return<string?>(null));
     }
 
     /// <summary>
@@ -148,72 +194,296 @@ public class MeshOperations
         return $"@{contextPath2}/{raw}";
     }
 
-    public async Task<string> Get(string path)
+    /// <summary>
+    /// Reads a node (or, for a <c>path/*</c> query, its direct children) and returns it as a
+    /// JSON string. Resolves <c>@</c>/quote noise and Unified-Path prefixes first; surfaces a
+    /// recorded NodeType compilation error alongside the node, or an <c>"Error: …"</c>/<c>"Not found: …"</c> string.
+    /// </summary>
+    /// <param name="path">The node path to read, or a <c>path/*</c> form to list children.</param>
+    /// <returns>A cold observable emitting the JSON payload or a descriptive error string.</returns>
+    public IObservable<string> Get(string path)
     {
         logger.LogInformation("Get called with path={Path}", path);
 
         if (string.IsNullOrWhiteSpace(path))
-            return "Error: path is required.";
+            return Observable.Return("Error: path is required.");
 
         var resolvedPath = ResolvePath(path);
         if (string.IsNullOrWhiteSpace(resolvedPath))
-            return "Error: path is required.";
+            return Observable.Return("Error: path is required.");
 
-        try
+        // Handle children query (path/*) — Query emits a QueryResultChange whose
+        // Initial change contains every matching child in a single batch. Take(1) completes
+        // the stream as soon as the first snapshot arrives; no await, no FromAsync bridge.
+        if (resolvedPath.EndsWith("/*"))
         {
-            // Handle children query (path/*)
-            if (resolvedPath.EndsWith("/*"))
-            {
-                var parentPath = resolvedPath[..^2];
-                var result = ImmutableList<object>.Empty;
-                var query = $"namespace:{parentPath}";
-                await foreach (var node in mesh.QueryAsync<MeshNode>(MeshQueryRequest.FromQuery(query)))
+            var parentPath = resolvedPath[..^2];
+            return mesh.Query<MeshNode>(MeshQueryRequest.FromQuery($"namespace:{parentPath}"))
+                .Take(1)
+                .Select(change =>
                 {
-                    result = result.Add(new
+                    var list = change.Items
+                        .Select(node => (object)new { node.Path, node.Name, node.NodeType, node.Icon })
+                        .ToImmutableList();
+                    return JsonSerializer.Serialize(list, hub.JsonSerializerOptions);
+                })
+                .Catch((Exception ex) =>
+                {
+                    logger.LogWarning(ex, "Error getting data at path {Path}", resolvedPath);
+                    return Observable.Return($"Error: {ex.Message}");
+                });
+        }
+
+        // Single-node content read via GetDataRequest + MeshNodeReference + RegisterCallback.
+        // See Doc/Architecture/CqrsAndContentAccess.md — queries are for sets only.
+        return TryResolveUnifiedPath(resolvedPath)
+            .SelectMany(unified => unified != null
+                ? Observable.Return(unified)
+                : FetchNode(resolvedPath).SelectMany(node =>
                     {
-                        node.Path,
-                        node.Name,
-                        node.NodeType,
-                        node.Icon
-                    });
-                }
-                return JsonSerializer.Serialize(result, hub.JsonSerializerOptions);
-            }
-
-            // Check for Unified Path prefix (e.g., "ACME/schema:", "ACME/data:Collection/id")
-            var unifiedResult = await TryResolveUnifiedPathAsync(resolvedPath);
-            if (unifiedResult != null)
-                return unifiedResult;
-
-            // Get single node via query (reads from persistence, not cached)
-            await foreach (var node in mesh.QueryAsync<MeshNode>(
-                MeshQueryRequest.FromQuery($"path:{resolvedPath}")))
+                        if (node is null)
+                            return GetWithBrokenNodeTypeFallback(resolvedPath);
+                        return LookupCompilationError(node)
+                            .Select(compileError => compileError != null
+                                ? JsonSerializer.Serialize(
+                                    new { node, compilationError = compileError },
+                                    hub.JsonSerializerOptions)
+                                : JsonSerializer.Serialize(node, hub.JsonSerializerOptions));
+                    }))
+            .Catch((Exception ex) =>
             {
-                var compileError = LookupCompilationError(node);
-                if (compileError != null)
-                    return JsonSerializer.Serialize(
-                        new { node, compilationError = compileError },
-                        hub.JsonSerializerOptions);
-                return JsonSerializer.Serialize(node, hub.JsonSerializerOptions);
+                logger.LogWarning(ex, "Error getting data at path {Path}", resolvedPath);
+                return Observable.Return($"Error: {ex.Message}");
+            });
+    }
+
+    /// <summary>
+    /// Fallback when <see cref="FetchNode"/> returned <c>null</c> — typically a
+    /// broken-NodeType path whose per-node hub couldn't activate (compilation
+    /// failed) and whose <see cref="GetDataRequest"/> timed out after 10s.
+    ///
+    /// <para>If the NodeType MeshNode carries a recorded
+    /// <see cref="Graph.Configuration.NodeTypeDefinition.CompilationError"/>,
+    /// the catalog still has the node's stored definition
+    /// even though its hub is broken. We read it via a one-shot
+    /// <c>Query</c> snapshot as the documented exception to
+    /// "queries are for sets only" (see <c>Doc/Architecture/CqrsAndContentAccess.md</c>):
+    /// the live content is unreachable, the catalog snapshot is the best we
+    /// have, and the wrapped response surfaces the compile error so callers
+    /// (Coder agent, MCP, UI overlays) can fix the source instead of seeing a
+    /// generic "Not found".</para>
+    /// </summary>
+    private IObservable<string> GetWithBrokenNodeTypeFallback(string resolvedPath)
+    {
+        // Read the NodeType MeshNode directly — the snapshot carries the
+        // CompilationError if compilation has failed at least once.
+        return hub.GetWorkspace().GetMeshNodeStream(resolvedPath)
+            .Where(n => n is not null)
+            .Take(1)
+            .Timeout(TimeSpan.FromSeconds(5))
+            .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null))
+            .SelectMany(node =>
+            {
+                var compileError = node.ContentAs<Graph.Configuration.NodeTypeDefinition>(hub.JsonSerializerOptions)?.CompilationError;
+                if (string.IsNullOrEmpty(compileError))
+                    return Observable.Return($"Not found: {resolvedPath}");
+
+                // Live Query — first emission carries the snapshot; the catalog
+                // is the source of truth here (the per-node hub is broken by
+                // definition, so live content is unreachable).
+                return mesh.Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{resolvedPath}"))
+                    .Select(c => c.Items.FirstOrDefault())
+                    .Select(qn => qn is null
+                        ? $"Not found: {resolvedPath}"
+                        : JsonSerializer.Serialize(
+                            new { node = qn, compilationError = compileError },
+                            hub.JsonSerializerOptions))
+                    .Catch((Exception ex) =>
+                    {
+                        logger.LogWarning(ex,
+                            "Catalog fallback for broken NodeType at {Path} failed", resolvedPath);
+                        return Observable.Return(JsonSerializer.Serialize(
+                            new { compilationError = compileError, error = "Catalog read failed: " + ex.Message },
+                            hub.JsonSerializerOptions));
+                    });
+            });
+    }
+
+    /// <summary>
+    /// One-shot read of the MeshNode at <paramref name="resolvedPath"/> via the
+    /// owning per-node hub's <c>MeshNodeReference</c> reducer — the authoritative
+    /// source of truth, no catalog lag. <c>GetDataRequest</c> activates the cold
+    /// per-node hub on receipt; the response carries the live MeshNode.
+    /// Returns <c>null</c> on timeout or routing failure (node does not exist /
+    /// hub couldn't be activated). See <c>Doc/Architecture/CqrsAndContentAccess.md</c>.
+    /// </summary>
+    private IObservable<MeshNode?> FetchNode(string resolvedPath, int timeoutSeconds = 10) =>
+        Observable.Create<MeshNode?>(observer =>
+        {
+            var cts = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds));
+            var emitted = 0;
+            // 🚨 Capture the inner hub.Observe subscription so disposal tears
+            // down the hub-level callback. Without this, a CTS timeout or
+            // outer-subscriber early dispose leaves the GetDataRequest's
+            // pending-callback entry in the hub's responseSubjects dict until
+            // the framework's RequestTimeout (~30s). The test base's
+            // Quiescing-budget watchdog flags it as a leak — the exact
+            // failure signature behind FullCrudWorkflow_CreateGetUpdateDelete's
+            // CI flake (`GetDataRequest@ACME/CrudTest_…(17001ms)` pending).
+            // Matches the GetMeshNode shape in MeshNodeStreamExtensions.cs.
+            IDisposable? innerSubscription = null;
+
+            void EmitOnce(MeshNode? node)
+            {
+                if (Interlocked.Exchange(ref emitted, 1) != 0) return;
+                observer.OnNext(node);
+                observer.OnCompleted();
             }
 
-            return $"Not found: {resolvedPath}";
-        }
-        catch (Exception ex)
+            cts.Token.Register(() => EmitOnce(null));
+
+            try
+            {
+                // 🚨 Read the LIVE node via GetMeshNodeStream (the shared in-memory cache
+                // mirror), NOT a one-shot GetDataRequest. A GetDataRequest activates a cold
+                // per-node hub that loads from PERSISTENCE — stale when a recent write's
+                // debounced save hasn't flushed: the in-memory mirror already holds the
+                // update, persistence does not. Paired with the read-your-writes wait in
+                // Patch/Update (which freshens this same mirror to the written version), a
+                // read immediately after a write sees the fresh value. GetMeshNodeStream also
+                // activates a cold hub on subscribe. See Doc/Architecture/CqrsAndContentAccess.md.
+                // The CTS timeout above maps a never-emitting (non-existent) node to null.
+                innerSubscription = hub.GetWorkspace().GetMeshNodeStream(resolvedPath)
+                    // Routing-fallback safety: a path with no per-node hub can route to the
+                    // closest ancestor, which returns ITS node. Filter by exact path so
+                    // callers (Patch / Update / Delete) never operate on an ancestor.
+                    .Where(n => n is not null
+                        && string.Equals(n.Path, resolvedPath, StringComparison.OrdinalIgnoreCase))
+                    .Take(1)
+                    .Subscribe(
+                        node => EmitOnce(node),
+                        ex =>
+                        {
+                            // DeliveryFailure or other error — node not found / unreachable.
+                            logger.LogDebug(ex, "FetchNode read failed for {Path}", resolvedPath);
+                            EmitOnce(null);
+                        });
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "FetchNode read setup failed for {Path}", resolvedPath);
+                EmitOnce(null);
+            }
+
+            return Disposable.Create(() =>
+            {
+                innerSubscription?.Dispose();
+                cts.Dispose();
+            });
+        });
+
+    /// <summary>
+    /// Read-your-writes barrier: waits (bounded) for the live mesh-node mirror at
+    /// <paramref name="path"/> to advance PAST <paramref name="versionBefore"/> — the
+    /// version observed before the write. The owning hub stamps a fresh, higher Version
+    /// when it applies a change, so a mirror version strictly greater than the pre-write
+    /// value means the reconciled update has propagated and a subsequent read will see it.
+    /// Best-effort: on timeout it emits <c>null</c> so the caller falls back to the
+    /// optimistic node rather than failing the write. Subscribes to the cache mirror's
+    /// READ stream (never the per-path Update queue), so it cannot deadlock — unlike the
+    /// removed in-queue echo-wait.
+    /// </summary>
+    private IObservable<MeshNode?> WaitForReadYourWrites(string path, long versionBefore) =>
+        hub.GetWorkspace().GetMeshNodeStream(path)
+            .Where(n => n is not null && n.Version > versionBefore)
+            .Take(1)
+            .Select(n => (MeshNode?)n)
+            .Timeout(TimeSpan.FromSeconds(5))
+            .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null));
+
+    /// <summary>
+    /// Writes a full <see cref="MeshNode"/> to the node's own hub via
+    /// <see cref="DataChangeRequest"/>. The target hub's data-change handler applies
+    /// the update to its workspace (ticking the <c>MeshNodeReference</c> stream so
+    /// subsequent <see cref="GetDataRequest"/> sees the new value) and persists via
+    /// its data source. Emits the saved node on success.
+    /// </summary>
+    private IObservable<MeshNode> UpdateViaDataChange(MeshNode node, int timeoutSeconds = 10) =>
+        Observable.Create<MeshNode>(observer =>
         {
-            logger.LogWarning(ex, "Error getting data at path {Path}", resolvedPath);
-            return $"Error: {ex.Message}";
-        }
-    }
+            var cts = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds));
+            var completed = 0;
+
+            void Fail(Exception ex)
+            {
+                if (Interlocked.Exchange(ref completed, 1) != 0) return;
+                observer.OnError(ex);
+            }
+
+            void Emit(MeshNode n)
+            {
+                if (Interlocked.Exchange(ref completed, 1) != 0) return;
+                observer.OnNext(n);
+                observer.OnCompleted();
+            }
+
+            // 🚨 Capture the inner Subscribe so disposal removes the
+            // hub-level pending callback. See FetchNode for the failure
+            // mode this avoids (test-base Quiescing leak detection trips
+            // on the orphaned callback entry).
+            IDisposable? innerSubscription = null;
+
+            try
+            {
+                var delivery = hub.Post(
+                    DataChangeRequest.Update([node]),
+                    o => o.WithTarget(new Address(node.Path)))!;
+
+                innerSubscription = hub.Observe(delivery)
+                    .Subscribe(
+                        d =>
+                        {
+                            if (d.Message is DataChangeResponse resp)
+                            {
+                                if (resp.Status == DataChangeStatus.Committed)
+                                    Emit(node with { Version = resp.Version });
+                                else
+                                    Fail(new InvalidOperationException(
+                                        $"DataChangeRequest rejected for {node.Path}: {resp.Log?.Status}"));
+                            }
+                            else
+                            {
+                                Fail(new InvalidOperationException(
+                                    $"Unexpected response {d.Message?.GetType().Name} for DataChangeRequest at {node.Path}"));
+                            }
+                        },
+                        ex => Fail(new InvalidOperationException(
+                            ex.Message ?? $"Delivery failed to {node.Path}", ex)));
+
+                cts.Token.Register(() => Fail(new TimeoutException(
+                    $"DataChangeRequest for {node.Path} did not complete within {timeoutSeconds}s.")));
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "UpdateViaDataChange: Post/RegisterCallback failed for {Path}", node.Path);
+                Fail(ex);
+            }
+
+            return () =>
+            {
+                innerSubscription?.Dispose();
+                cts.Dispose();
+            };
+        });
 
     /// <summary>
     /// Tries to resolve a path as a Unified Path with prefix (schema/, model/, data/, content/).
     /// Supports both legacy colon format (address/prefix:path) and new slash format (address/prefix/path).
     /// Parses the path to find the prefix, splits into address and remainder,
     /// then routes data request to the resolved address.
-    /// Returns null if the path is not a Unified Path.
+    /// Emits <c>null</c> if the path is not a Unified Path; emits a JSON / error string otherwise.
     /// </summary>
-    private async Task<string?> TryResolveUnifiedPathAsync(string resolvedPath)
+    private IObservable<string?> TryResolveUnifiedPath(string resolvedPath)
     {
         string? addressPart = null;
         string? remainder = null;
@@ -238,7 +508,6 @@ public class MeshOperations
             {
                 if (UcrPrefixResolver.PrefixToAreaMap.ContainsKey(segments[i]))
                 {
-                    // Found a UCR prefix at segment i — everything before is address, everything from i onwards is remainder
                     if (i > 0)
                     {
                         addressPart = string.Join("/", segments.Take(i));
@@ -246,7 +515,6 @@ public class MeshOperations
                     }
                     else
                     {
-                        // Prefix at the start (e.g., "content/file.md") — relative path, no address
                         addressPart = null;
                         remainder = resolvedPath;
                     }
@@ -256,47 +524,89 @@ public class MeshOperations
         }
 
         if (remainder == null)
-            return null;
+            return Observable.Return<string?>(null);
 
         var reference = new UnifiedReference(remainder);
-        Address address;
-        if (!string.IsNullOrEmpty(addressPart))
-        {
-            address = new Address(addressPart);
-        }
-        else
-        {
-            // No address — route to the current hub
-            address = hub.Address;
-        }
+        var address = !string.IsNullOrEmpty(addressPart) ? new Address(addressPart) : hub.Address;
 
         logger.LogInformation("Resolving Unified Path: address={Address}, remainder={Remainder}",
             addressPart, remainder);
 
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-        var delivery = hub.Post(
-            new GetDataRequest(reference),
-            o => o.WithTarget(address))!;
-        var callbackResponse = await hub.RegisterCallback(delivery, (d, _) => Task.FromResult(d), cts.Token);
+        // Fire the GetDataRequest and receive the response via RegisterCallback.
+        // Observable.Create wraps the post/register pair so the caller can compose it
+        // into the Get pipeline without ever awaiting — the callback completes the
+        // observable from a non-hub thread. The outer Timeout enforces an upper
+        // bound on the response wait so missing hubs (e.g. a UCR path whose
+        // address segment doesn't have a running per-node hub) surface as an
+        // "Error: …" string instead of hanging the whole Get pipeline.
+        return Observable.Create<string?>(observer =>
+        {
+            // 🚨 Capture inner Subscribe for proper teardown. Same leak class
+            // as FetchNode — outer Timeout cancellation tore down the
+            // observer's chain but left the hub-level callback registered.
+            IDisposable? innerSubscription = null;
+            try
+            {
+                var delivery = hub.Post(
+                    new GetDataRequest(reference),
+                    o => o.WithTarget(address))!;
 
-        // Handle routing failures (e.g., node hub not found in Orleans)
-        if (callbackResponse is IMessageDelivery<DeliveryFailure> failure)
-            return $"Error: {failure.Message.Message ?? "Delivery failed to " + addressPart}";
+                innerSubscription = hub.Observe(delivery)
+                    .Subscribe(
+                        d =>
+                        {
+                            try
+                            {
+                                if (d.Message is GetDataResponse responseMsg)
+                                {
+                                    if (responseMsg.Error != null)
+                                        observer.OnNext($"Error: {responseMsg.Error}");
+                                    else
+                                        observer.OnNext(JsonSerializer.Serialize(responseMsg.Data, hub.JsonSerializerOptions));
+                                }
+                                else
+                                {
+                                    observer.OnNext($"Error: Unexpected response type {d.Message?.GetType().Name} for {remainder} at {addressPart}");
+                                }
+                                observer.OnCompleted();
+                            }
+                            catch (Exception ex)
+                            {
+                                observer.OnError(ex);
+                            }
+                        },
+                        ex =>
+                        {
+                            observer.OnNext($"Error: {ex.Message ?? "Delivery failed to " + addressPart}");
+                            observer.OnCompleted();
+                        });
+            }
+            catch (Exception ex)
+            {
+                observer.OnError(ex);
+            }
 
-        if (callbackResponse is not IMessageDelivery<GetDataResponse> dataResponse)
-            return $"Error: Unexpected response type {callbackResponse.Message?.GetType().Name} for {remainder} at {addressPart}";
-
-        var responseMsg = dataResponse.Message;
-
-        if (responseMsg.Error != null)
-            return $"Error: {responseMsg.Error}";
-
-        return JsonSerializer.Serialize(responseMsg.Data, hub.JsonSerializerOptions);
+            return () => innerSubscription?.Dispose();
+        })
+        .Timeout(TimeSpan.FromSeconds(10))
+        .Catch((TimeoutException _) =>
+            Observable.Return<string?>($"Error: Timeout resolving '{remainder}' at {addressPart}"));
     }
 
-    public async Task<string> Search(string query, string? basePath = null)
+    /// <summary>
+    /// Runs a mesh query and returns a JSON envelope <c>{count, limit, truncated, results:[{path,name,nodeType}]}</c>.
+    /// When <paramref name="basePath"/> is set the query is scoped to that namespace; <c>truncated</c> flags that
+    /// more matches exist than were returned.
+    /// </summary>
+    /// <param name="query">The GitHub-style query string (e.g. <c>nodeType:Agent name:*sales*</c>).</param>
+    /// <param name="basePath">Optional namespace to scope the search to; <c>null</c> searches everywhere.</param>
+    /// <param name="limit">Maximum number of results, clamped to 1..200 (default 50).</param>
+    /// <returns>A cold observable emitting the JSON results envelope or an <c>"Error: …"</c> string.</returns>
+    public IObservable<string> Search(string query, string? basePath = null, int limit = 50)
     {
-        logger.LogInformation("Search called with query={Query}, basePath={BasePath}", query, basePath);
+        logger.LogInformation("Search called with query={Query}, basePath={BasePath}, limit={Limit}", query, basePath, limit);
+
+        limit = Math.Clamp(limit, 1, 200);
 
         var resolvedBase = basePath != null ? ResolvePath(basePath) : null;
         string fullQuery;
@@ -306,68 +616,90 @@ public class MeshOperations
         }
         else
         {
-            // Remove empty namespace: placeholder — basePath provides the namespace context.
-            // Use namespace: (not path:) so scope defaults to Children (search within, not exact).
             var cleanQuery = query.Replace("namespace:", "").Trim();
             fullQuery = $"namespace:{resolvedBase} {cleanQuery}".Trim();
         }
 
-        try
-        {
-            var results = ImmutableList<object>.Empty;
-            await foreach (var item in mesh.QueryAsync(new MeshQueryRequest { Query = fullQuery, Limit = 50 }))
+        // Snapshot semantics: Take(1) on Query gives us the Initial change
+        // containing every match for this query in one batch — no async enumeration,
+        // no FromAsync bridge.
+        return mesh.Query<MeshNode>(new MeshQueryRequest { Query = fullQuery, Limit = limit })
+            .Take(1)
+            .Select(change =>
             {
-                if (item is MeshNode node)
+                var list = change.Items
+                    .Select(node => (object)new { node.Path, node.Name, node.NodeType })
+                    .ToImmutableList();
+                // Envelope instead of a bare array so truncation is VISIBLE: a result
+                // set that silently stops at the limit reads as "that's everything"
+                // and the agent under-reports. Composed explicitly via JsonObject —
+                // the hub serializer options drop empty collections, which would strip
+                // the 'results' key from a zero-hit response and break consumers.
+                var truncated = list.Count >= limit;
+                var payload = new JsonObject
                 {
-                    results = results.Add(new
-                    {
-                        node.Path,
-                        node.Name,
-                        node.NodeType
-                    });
-                }
-                else
-                {
-                    results = results.Add(item);
-                }
-            }
-
-            return JsonSerializer.Serialize(results, hub.JsonSerializerOptions);
-        }
-        catch (Exception ex)
-        {
-            logger.LogWarning(ex, "Error searching with query {Query}", query);
-            return $"Error: {ex.Message}";
-        }
+                    ["count"] = list.Count,
+                    ["limit"] = limit,
+                    ["truncated"] = truncated,
+                    ["results"] = JsonSerializer.SerializeToNode(list, hub.JsonSerializerOptions) ?? new JsonArray(),
+                };
+                if (truncated)
+                    payload["hint"] =
+                        "Result set hit the limit — there may be more matches. Narrow the query (namespace:/nodeType:/name:) or raise 'limit' (max 200).";
+                return payload.ToJsonString();
+            })
+            .Catch((Exception ex) =>
+            {
+                logger.LogWarning(ex, "Error searching with query {Query}", query);
+                return Observable.Return($"Error: {ex.Message}");
+            });
     }
 
-    public async Task<string> Create(string node)
+    /// <summary>
+    /// Deserialises a single MeshNode from JSON (repairing common LLM JSON defects), validates its
+    /// identity and content schema, then creates it in the mesh.
+    /// </summary>
+    /// <param name="node">The JSON MeshNode to create (requires id, name, nodeType, namespace).</param>
+    /// <returns>A cold observable emitting <c>"Created: {path}"</c> or a descriptive error string.</returns>
+    public IObservable<string> Create(string node)
     {
         logger.LogInformation("Create called");
 
-        try
+        return Observable.Defer(() =>
         {
-            var sanitized = RepairJson(node);
-            var meshNode = JsonSerializer.Deserialize<MeshNode>(sanitized, hub.JsonSerializerOptions);
-            if (meshNode == null)
-                return "Invalid node: deserialized to null.";
-
-            if (string.IsNullOrWhiteSpace(meshNode.Name))
-                return "Error: 'name' property is required. Provide a human-readable display name.";
-
-            meshNode = SanitizeNodeId(meshNode);
-
-            // Validate content against schema if both nodeType and content are provided
-            if (!string.IsNullOrEmpty(meshNode.NodeType) && meshNode.Content != null)
+            MeshNode? meshNode;
+            try
             {
-                var validationError = await ValidateContentWithSchemaAsync(meshNode);
-                if (validationError != null)
-                    return validationError;
+                var sanitized = RepairJson(node);
+                meshNode = JsonSerializer.Deserialize<MeshNode>(sanitized, hub.JsonSerializerOptions);
+            }
+            catch (JsonException ex)
+            {
+                logger.LogWarning(ex, "Create: invalid JSON, length={Length}", node.Length);
+                return Observable.Return(
+                    $"Invalid JSON: {ex.Message}. Tip: ensure all quotes and special characters in markdown content are properly escaped for JSON strings.");
             }
 
-            var tcs = new TaskCompletionSource<string>();
-            mesh.CreateNode(meshNode).Subscribe(
-                created =>
+            if (meshNode == null)
+                return Observable.Return("Invalid node: deserialized to null.");
+
+            meshNode = SanitizeNodeId(meshNode);
+            meshNode = NormalizeNamespace(meshNode);
+
+            var identityError = ValidateNodeIdentity(meshNode, "create");
+            if (identityError != null)
+                return Observable.Return(identityError);
+
+            // Validate content against schema when content is provided.
+            var validationObs = meshNode.Content != null
+                ? ValidateContentWithSchema(meshNode)
+                : Observable.Return<string?>(null);
+
+            return validationObs.SelectMany(validationError =>
+                validationError != null
+                    ? Observable.Return(validationError)
+                    : mesh.CreateNode(meshNode)
+                .Select(created =>
                 {
                     OnNodeChange?.Invoke(new NodeChangeEntry
                     {
@@ -378,221 +710,499 @@ public class MeshOperations
                         NodeType = created.NodeType,
                         NodeName = created.Name
                     });
-                    tcs.TrySetResult($"Created: {created.Path}");
-                },
-                ex => tcs.TrySetResult($"Error creating node: {ex.Message}"));
-            return await tcs.Task;
-        }
-        catch (JsonException ex)
-        {
-            logger.LogWarning(ex, "Create: invalid JSON, length={Length}", node.Length);
-            return $"Invalid JSON: {ex.Message}. Tip: ensure all quotes and special characters in markdown content are properly escaped for JSON strings.";
-        }
-        catch (Exception ex)
-        {
-            logger.LogWarning(ex, "Error creating node");
-            return $"Error: {ex.Message}";
-        }
+                    return $"Created: {created.Path}";
+                })
+                .Catch((Exception ex) =>
+                {
+                    logger.LogWarning(ex, "Error creating node");
+                    return Observable.Return($"Error creating node: {ex.Message}");
+                }));
+        });
     }
 
-    public async Task<string> Update(string nodes)
+    /// <summary>
+    /// Full-replacement update of one or more existing nodes from a JSON array. Each node is validated and
+    /// written independently (results combine in input order); a read-your-writes barrier ensures a
+    /// following read sees the reconciled state.
+    /// </summary>
+    /// <param name="nodes">A JSON array of complete MeshNode objects to write.</param>
+    /// <returns>A cold observable emitting a newline-joined per-node result/error summary.</returns>
+    public IObservable<string> Update(string nodes)
     {
         logger.LogInformation("Update called");
 
-        try
+        return Observable.Defer(() =>
         {
-            var sanitized = RepairJson(nodes);
-            var nodeList = JsonSerializer.Deserialize<List<MeshNode>>(sanitized, hub.JsonSerializerOptions);
-            if (nodeList == null || nodeList.Count == 0)
-                return "No nodes provided.";
+            List<MeshNode>? nodeList;
+            try
+            {
+                var sanitized = RepairJson(nodes);
+                nodeList = JsonSerializer.Deserialize<List<MeshNode>>(sanitized, hub.JsonSerializerOptions);
+            }
+            catch (JsonException ex)
+            {
+                return Observable.Return($"Invalid JSON: {ex.Message}");
+            }
 
-            var results = ImmutableList<string>.Empty;
+            if (nodeList == null || nodeList.Count == 0)
+                return Observable.Return("No nodes provided.");
+
+            // Validate each node up-front and spawn per-node UpdateNode observables for the rest.
+            // Per-node outputs combine in input order via Concat so the caller sees a deterministic
+            // result string even for batches.
+            var perNode = ImmutableList<IObservable<string>>.Empty;
             foreach (var rawNode in nodeList)
             {
                 if (rawNode == null)
                 {
-                    results = results.Add("Error: array contained a null entry. " +
-                                "Each array element must be a complete MeshNode JSON object.");
+                    perNode = perNode.Add(Observable.Return(
+                        "Error: array contained a null entry. Each array element must be a complete MeshNode JSON object."));
                     continue;
                 }
 
-                var meshNode = SanitizeNodeId(rawNode);
+                var meshNode = NormalizeNamespace(SanitizeNodeId(rawNode));
 
-                // Reject empty identity — without id we cannot address the node.
-                if (string.IsNullOrWhiteSpace(meshNode.Id))
+                var identityError = ValidateNodeIdentity(meshNode, "update");
+                if (identityError != null)
                 {
-                    results = results.Add("Error: node is missing 'id'. " +
-                                "Every node requires an id — fetch with Get first if unsure.");
+                    perNode = perNode.Add(Observable.Return(identityError));
                     continue;
                 }
 
-                // Reject empty name — downstream UI and streams key off Name.
-                if (string.IsNullOrWhiteSpace(meshNode.Name))
-                {
-                    results = results.Add($"Error: node at {meshNode.Path} has empty 'name'. " +
-                                "Provide a non-empty human-readable display name.");
-                    continue;
-                }
-
-                // Reject partial nodes — Update does full replacement.
-                // Use Patch for partial changes instead.
-                if (string.IsNullOrEmpty(meshNode.NodeType))
-                {
-                    results = results.Add($"Error: node at {meshNode.Path} is missing 'nodeType'. " +
-                                "Update requires the complete node (from Get). Use Patch for partial updates.");
-                    continue;
-                }
-
-                // Reject updates that would blank out content — agents must always send the
-                // full content payload. Returning the schema lets the agent reconstruct it.
                 if (meshNode.Content == null)
                 {
-                    results = results.Add(await BuildNullContentErrorAsync(meshNode.Path, meshNode.NodeType!));
-                    continue;
-                }
-
-                // Validate the content against the registered content type for this NodeType.
-                var validationError = await ValidateContentWithSchemaAsync(meshNode);
-                if (validationError != null)
-                {
-                    results = results.Add(validationError);
+                    perNode = perNode.Add(BuildNullContentError(meshNode.Path, meshNode.NodeType!));
                     continue;
                 }
 
                 var versionBefore = meshNode.Version;
-                var updateTcs = new TaskCompletionSource<string>();
-                mesh.UpdateNode(meshNode).Subscribe(
-                    updated =>
-                    {
-                        OnNodeChange?.Invoke(new NodeChangeEntry
-                        {
-                            Path = updated.Path,
-                            Operation = "Updated",
-                            VersionBefore = versionBefore,
-                            VersionAfter = updated.Version,
-                            NodeType = updated.NodeType,
-                            NodeName = updated.Name
-                        });
-                        updateTcs.TrySetResult($"Updated: {updated.Path}");
-                    },
-                    ex => updateTcs.TrySetResult($"Error updating {meshNode.Path}: {ex.Message}"));
-                results = results.Add(await updateTcs.Task);
+                var currentPath = meshNode.Path;
+                var nodeForCapture = meshNode;
+                perNode = perNode.Add(
+                    ValidateContentWithSchema(nodeForCapture).SelectMany(validationError =>
+                        validationError != null
+                            ? Observable.Return(validationError)
+                            : mesh.UpdateNode(nodeForCapture)
+                                // Read-your-writes barrier (see Patch): wait for the live
+                                // mirror to advance PAST the optimistic version before
+                                // returning, so a follow-up Get sees the reconciled update.
+                                .SelectMany(updated => WaitForReadYourWrites(currentPath, updated.Version)
+                                    .Select(confirmed =>
+                                    {
+                                        var after = confirmed ?? updated;
+                                        OnNodeChange?.Invoke(new NodeChangeEntry
+                                        {
+                                            Path = after.Path,
+                                            Operation = "Updated",
+                                            VersionBefore = versionBefore,
+                                            VersionAfter = after.Version,
+                                            NodeType = after.NodeType,
+                                            NodeName = after.Name
+                                        });
+                                        return $"Updated: {after.Path}";
+                                    }))
+                                .Catch((Exception ex) =>
+                                    Observable.Return($"Error updating {currentPath}: {ex.Message}"))));
             }
 
-            return string.Join("\n", results);
-        }
-        catch (JsonException ex)
-        {
-            return $"Invalid JSON: {ex.Message}";
-        }
-        catch (Exception ex)
-        {
-            logger.LogWarning(ex, "Error updating nodes");
-            return $"Error: {ex.Message}";
-        }
+            return perNode
+                .ToObservable()
+                .Concat()
+                .ToList()
+                .Select(lines => string.Join("\n", lines))
+                .Catch((Exception ex) =>
+                {
+                    logger.LogWarning(ex, "Error updating nodes");
+                    return Observable.Return($"Error: {ex.Message}");
+                });
+        });
     }
 
-    public async Task<string> Patch(string path, string fields)
+    /// <summary>
+    /// Pretty-prints a MeshNode for inclusion in diff output. Indented JSON keeps each
+    /// field on its own line so the unified diff shows field-level changes rather than
+    /// one massive minified line.
+    /// </summary>
+    private string SerialisePretty(MeshNode node) =>
+        JsonSerializer.Serialize(node, new JsonSerializerOptions(hub.JsonSerializerOptions) { WriteIndented = true });
+
+    /// <summary>
+    /// Partial update of a single node: only the keys present in <paramref name="fields"/> change, with
+    /// <c>content</c> deep-merged per RFC 7396 (omitted keys preserved, a null member deletes that key).
+    /// Merged content is schema-validated before the write.
+    /// </summary>
+    /// <param name="path">The exact path of the node to patch.</param>
+    /// <param name="fields">A JSON object holding only the fields to change.</param>
+    /// <returns>A cold observable emitting <c>"Patched: {path}"</c> (with version delta) or a descriptive error string.</returns>
+    public IObservable<string> Patch(string path, string fields)
     {
         logger.LogInformation("Patch called for path={Path}", path);
 
-        // Fail-fast on empty/garbage path — without this, QueryAsync on "path:" or "path:<garbage>"
-        // can hang forever (seen in AgentWriteFailureTests.NoTool_EverReturnsEmpty_OnAnyInput).
         if (string.IsNullOrWhiteSpace(path))
-            return "Error: path is required.";
+            return Observable.Return("Error: path is required.");
 
-        try
+        return Observable.Defer(() =>
         {
             var resolvedPath = ResolvePath(path);
             if (string.IsNullOrWhiteSpace(resolvedPath))
-                return "Error: path is required.";
+                return Observable.Return("Error: path is required.");
 
-            var existing = await mesh.QueryAsync<MeshNode>($"path:{resolvedPath}").FirstOrDefaultAsync();
-            if (existing == null)
-                return $"Error: node not found at {resolvedPath}";
-
-            var sanitized = RepairJson(fields);
-            var jsonObj = JsonNode.Parse(sanitized) as JsonObject;
-            if (jsonObj == null)
-                return "Error: fields must be a JSON object";
-
-            // Reject patches that explicitly blank out content (key present, value null).
-            // Omitting the key entirely is fine — that preserves existing content.
-            if (jsonObj.ContainsKey("content") && jsonObj["content"] is null)
-                return await BuildNullContentErrorAsync(existing.Path, existing.NodeType!);
-
-            // Deserialize to get typed values using the hub's serializer options
-            var partial = jsonObj.Deserialize<MeshNode>(hub.JsonSerializerOptions)
-                ?? new MeshNode(existing.Id, existing.Namespace);
-
-            var merged = existing with
+            // Validate fields is a JSON object client-side. The actual merge happens
+            // on the node hub via PatchDataRequest — no need to fetch the existing
+            // MeshNode here, the hub applies the delta to its own workspace state.
+            JsonObject? jsonObj;
+            try
             {
-                Name = jsonObj.ContainsKey("name") ? partial.Name : existing.Name,
-                Icon = jsonObj.ContainsKey("icon") ? partial.Icon : existing.Icon,
-                Category = jsonObj.ContainsKey("category") ? partial.Category : existing.Category,
-                Order = jsonObj.ContainsKey("order") ? partial.Order : existing.Order,
-                Content = jsonObj.ContainsKey("content") ? partial.Content : existing.Content,
-                PreRenderedHtml = jsonObj.ContainsKey("preRenderedHtml") ? partial.PreRenderedHtml : existing.PreRenderedHtml,
-            };
-
-            // If the patch touches content, validate the merged content against the node's schema.
-            // This protects downstream consumers (sync streams, persistence) from shape-broken writes.
-            if (jsonObj.ContainsKey("content") && !string.IsNullOrEmpty(merged.NodeType) && merged.Content != null)
+                var sanitized = RepairJson(fields);
+                jsonObj = JsonNode.Parse(sanitized) as JsonObject;
+            }
+            catch (JsonException ex)
             {
-                var validationError = await ValidateContentWithSchemaAsync(merged);
-                if (validationError != null)
-                    return validationError;
+                return Observable.Return($"Invalid JSON: {ex.Message}");
             }
 
-            // Reject empty or effectively-empty names — empty string names corrupt UI
-            // and downstream streams that key off Name.
-            if (jsonObj.ContainsKey("name") && string.IsNullOrWhiteSpace(merged.Name))
-                return $"Error: cannot patch {existing.Path}: 'name' is empty. " +
-                       "Provide a non-empty human-readable display name, or omit the 'name' key to keep the current name.";
+            if (jsonObj == null)
+                return Observable.Return("Error: fields must be a JSON object");
 
-            var versionBefore = existing.Version;
-            var patchTcs = new TaskCompletionSource<string>();
-            mesh.UpdateNode(merged).Subscribe(
-                updated =>
+            if (jsonObj.ContainsKey("name") && string.IsNullOrWhiteSpace(jsonObj["name"]?.ToString()))
+                return Observable.Return(
+                    $"Error: cannot patch {resolvedPath}: 'name' is empty. " +
+                    "Provide a non-empty human-readable display name, or omit the 'name' key.");
+
+            // Read-merge-write via DataChangeRequest. FetchNode returns null when the
+            // path doesn't resolve (now with path-match verification so we don't
+            // accidentally patch an ancestor hub).
+            return FetchNode(resolvedPath).SelectMany(existing =>
+            {
+                if (existing == null)
+                    return Observable.Return(
+                        $"Error: node not found at {resolvedPath}. The path must be the node's exact 'path' property " +
+                        "(never its display name). Locate it with Search (e.g. Search('name:\"…the name…\"')) and " +
+                        "retry with the 'path' value from the match; to create a new node instead, use Create.");
+
+                // Content-specific rejections carry the expected schema so agents
+                // can recover on the next call without guessing.
+                if (jsonObj.ContainsKey("content") && jsonObj["content"] is null)
+                    return BuildNullContentError(existing.Path, existing.NodeType!);
+
+                // 🚨 Deep-merge content (RFC 7396), never wholesale-replace it. A bare
+                // `jsonObj["content"]` carries ONLY the keys the caller sent, so
+                // deserialising it straight into MeshNode.Content would DROP every
+                // existing content field the caller omitted — the 2026-06-13 logo patch
+                // ({"content":{"logo":…}}) clobbered name/description/body exactly this
+                // way. Merge the delta onto the existing content, serialised via the FULL
+                // node so the polymorphic `$type` discriminator is present, so omitted
+                // keys are preserved and only the provided keys change. A null member
+                // deletes that key; arrays/scalars replace wholesale (RFC 7396).
+                if (jsonObj["content"] is JsonObject contentPatch)
                 {
-                    OnNodeChange?.Invoke(new NodeChangeEntry
-                    {
-                        Path = updated.Path,
-                        Operation = "Updated",
-                        VersionBefore = versionBefore,
-                        VersionAfter = updated.Version,
-                        NodeType = updated.NodeType,
-                        NodeName = updated.Name
-                    });
+                    var existingNodeJson = JsonSerializer.SerializeToNode(existing, hub.JsonSerializerOptions) as JsonObject;
+                    if (existingNodeJson?["content"] is JsonObject existingContent)
+                        jsonObj["content"] = MergePatch(existingContent, contentPatch);
+                }
 
-                    // Silent-failure guard: if the version did not increment, the write did
-                    // not commit (likely a stale snapshot read or a routing-layer no-op).
-                    // The agent must see this and retry/refresh — never report success on a no-op.
-                    if (updated.Version == versionBefore)
-                    {
-                        logger.LogWarning(
-                            "Patch silent-failure on {Path}: version unchanged ({Version}) — write did not commit",
-                            updated.Path, versionBefore);
-                        patchTcs.TrySetResult(
-                            $"Error: patch on {updated.Path} did not commit (version stayed at {versionBefore}). " +
-                            "This usually means a stale snapshot — retry after re-fetching the node.");
-                        return;
-                    }
+                var partial = jsonObj.Deserialize<MeshNode>(hub.JsonSerializerOptions)
+                    ?? new MeshNode(existing.Id, existing.Namespace);
 
-                    patchTcs.TrySetResult($"Patched: {updated.Path} (v{versionBefore} → v{updated.Version})");
-                },
-                ex => patchTcs.TrySetResult($"Error patching {merged.Path}: {ex.Message}"));
-            return await patchTcs.Task;
-        }
-        catch (JsonException ex)
+                var merged = existing with
+                {
+                    Name = jsonObj.ContainsKey("name") ? partial.Name : existing.Name,
+                    Icon = jsonObj.ContainsKey("icon") ? partial.Icon : existing.Icon,
+                    Category = jsonObj.ContainsKey("category") ? partial.Category : existing.Category,
+                    Order = jsonObj.ContainsKey("order") ? partial.Order : existing.Order,
+                    Content = jsonObj.ContainsKey("content") ? partial.Content : existing.Content,
+                    PreRenderedHtml = jsonObj.ContainsKey("preRenderedHtml") ? partial.PreRenderedHtml : existing.PreRenderedHtml,
+                };
+
+                // Validate merged content against the NodeType's schema when the
+                // caller touched content. Surface the schema in the error so an
+                // agent can fix its payload on the retry.
+                var validationObs = (jsonObj.ContainsKey("content") && !string.IsNullOrEmpty(merged.NodeType) && merged.Content != null)
+                    ? ValidateContentWithSchema(merged)
+                    : Observable.Return<string?>(null);
+
+                var versionBefore = existing.Version;
+                return validationObs.SelectMany(validationError =>
+                    validationError != null
+                        ? Observable.Return(validationError)
+                        : mesh.UpdateNode(merged)
+                            // 🚨 Read-your-writes barrier. UpdateNode emits OPTIMISTICALLY —
+                            // the owner applies asynchronously and stamps a fresh, higher
+                            // Version on apply, so the emitted `updated` still carries the
+                            // pre-apply version. Without the wait, the immediately-following
+                            // Get races the propagation and reads the stale value. Wait
+                            // (bounded) for the live mirror to advance PAST versionBefore so
+                            // the reconciled update is observable before we return.
+                            .SelectMany(updated => WaitForReadYourWrites(resolvedPath, versionBefore)
+                                .Select(confirmed =>
+                                {
+                                    var after = confirmed ?? updated;
+                                    OnNodeChange?.Invoke(new NodeChangeEntry
+                                    {
+                                        Path = after.Path,
+                                        Operation = "Updated",
+                                        VersionBefore = versionBefore,
+                                        VersionAfter = after.Version,
+                                        NodeType = after.NodeType,
+                                        NodeName = after.Name
+                                    });
+                                    var versionText = after.Version > versionBefore
+                                        ? $" (v{versionBefore} → v{after.Version})"
+                                        : "";
+                                    return $"Patched: {after.Path}{versionText}";
+                                }))
+                            .Catch((Exception ex) =>
+                                Observable.Return($"Error patching {merged.Path}: {ex.Message}")));
+            })
+            .Catch((Exception ex) =>
+            {
+                logger.LogWarning(ex, "Error patching node at {Path}", path);
+                return Observable.Return($"Error: {ex.Message}");
+            });
+        });
+    }
+
+    /// <summary>
+    /// Anchored text edit on a node's primary text content (Markdown body or Code source).
+    /// Replaces an exact substring, so the agent supplies just the snippet to change plus
+    /// enough surrounding context to make it unique — instead of re-emitting the whole
+    /// document through Patch (token cost + truncation corruption on long files).
+    /// Same read-your-writes semantics as Patch. Every failure mode returns a descriptive
+    /// error telling the agent how to recover.
+    /// </summary>
+    public IObservable<string> EditContent(string path, string oldText, string newText, bool replaceAll = false)
+    {
+        logger.LogInformation("EditContent called for path={Path}", path);
+
+        if (string.IsNullOrWhiteSpace(path))
+            return Observable.Return("Error: path is required.");
+        if (string.IsNullOrEmpty(oldText))
+            return Observable.Return(
+                "Error: oldText is required — Get the node and copy the exact text to replace, including whitespace.");
+        if (oldText == newText)
+            return Observable.Return("Error: oldText and newText are identical — nothing to change.");
+
+        return Observable.Defer(() =>
         {
-            return $"Invalid JSON: {ex.Message}";
-        }
-        catch (Exception ex)
+            var resolvedPath = ResolvePath(path);
+            return FetchNode(resolvedPath).SelectMany(existing =>
+            {
+                if (existing == null)
+                    return Observable.Return(
+                        $"Error: node not found at {resolvedPath}. The path must be the node's exact 'path' property — " +
+                        "locate it with Search and retry with the 'path' value from the match.");
+
+                var text = existing.Content switch
+                {
+                    MarkdownContent md => md.Content,
+                    CodeConfiguration code => code.Code,
+                    string s => s,
+                    _ => null
+                };
+
+                if (text == null)
+                    return Observable.Return(
+                        $"Error: cannot edit {resolvedPath}: its content is " +
+                        $"{existing.Content?.GetType().Name ?? "empty"}, not editable text. EditContent works on " +
+                        "Markdown and Code nodes; for structured content use Patch with the full 'content' object.");
+
+                var count = CountOccurrences(text, oldText);
+                if (count == 0)
+                    return Observable.Return(
+                        $"Error: the text to replace was not found in {resolvedPath}. Get the node and copy the " +
+                        "exact text — including whitespace and line breaks — then retry. " +
+                        $"(Current content is {text.Length} chars.)");
+                if (count > 1 && !replaceAll)
+                    return Observable.Return(
+                        $"Error: the text to replace occurs {count} times in {resolvedPath}. Include more " +
+                        "surrounding context to make the match unique, or set replaceAll=true to change every occurrence.");
+
+                var newFull = text.Replace(oldText, newText, StringComparison.Ordinal);
+                var merged = existing.Content switch
+                {
+                    MarkdownContent md => WithRerenderedMarkdown(existing, md, newFull),
+                    CodeConfiguration code => existing with { Content = code with { Code = newFull } },
+                    _ => existing with { Content = newFull },
+                };
+
+                var versionBefore = existing.Version;
+                return mesh.UpdateNode(merged)
+                    // Same read-your-writes barrier as Patch — see comment there.
+                    .SelectMany(updated => WaitForReadYourWrites(resolvedPath, versionBefore)
+                        .Select(confirmed =>
+                        {
+                            var after = confirmed ?? updated;
+                            OnNodeChange?.Invoke(new NodeChangeEntry
+                            {
+                                Path = after.Path,
+                                Operation = "Updated",
+                                VersionBefore = versionBefore,
+                                VersionAfter = after.Version,
+                                NodeType = after.NodeType,
+                                NodeName = after.Name
+                            });
+                            var plural = count == 1 ? "" : "s";
+                            return $"Edited: {after.Path} ({count} replacement{plural})";
+                        }))
+                    .Catch((Exception ex) =>
+                        Observable.Return($"Error editing {resolvedPath}: {ex.Message}"));
+            })
+            .Catch((Exception ex) =>
+            {
+                logger.LogWarning(ex, "Error editing node at {Path}", path);
+                return Observable.Return($"Error: {ex.Message}");
+            });
+        });
+    }
+
+    /// <summary>
+    /// Rebuilds the derived markdown artefacts (prerendered HTML, code submissions) after a
+    /// text edit, preserving the record's other fields (authors, tags, thumbnail, abstract).
+    /// Without this, the portal would keep rendering the stale pre-edit HTML.
+    /// </summary>
+    private static MeshNode WithRerenderedMarkdown(MeshNode node, MarkdownContent md, string newText)
+    {
+        var parsed = MarkdownContent.Parse(newText, node.Namespace, node.Path);
+        return node with
         {
-            logger.LogWarning(ex, "Error patching node at {Path}", path);
-            return $"Error: {ex.Message}";
+            Content = md with
+            {
+                Content = newText,
+                PrerenderedHtml = parsed.PrerenderedHtml,
+                CodeSubmissions = parsed.CodeSubmissions
+            },
+            PreRenderedHtml = parsed.PrerenderedHtml,
+        };
+    }
+
+    private static int CountOccurrences(string text, string needle)
+    {
+        var count = 0;
+        var i = 0;
+        while ((i = text.IndexOf(needle, i, StringComparison.Ordinal)) >= 0)
+        {
+            count++;
+            i += needle.Length;
         }
+        return count;
+    }
+
+    /// <summary>
+    /// Posts a <see cref="PatchDataRequest"/> to the node's hub with the raw JSON
+    /// delta. The hub applies the JSON merge patch to its own <c>MeshNodeReference</c>
+    /// workspace stream and returns <see cref="PatchDataResponse"/>. Emits the
+    /// committed version on success; OnError on failure/timeout.
+    /// </summary>
+    private IObservable<long> PatchViaDataRequest(string resolvedPath, string rawPatch, int timeoutSeconds = 10) =>
+        Observable.Create<long>(observer =>
+        {
+            var cts = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds));
+            var completed = 0;
+
+            void Fail(Exception ex)
+            {
+                if (Interlocked.Exchange(ref completed, 1) != 0) return;
+                observer.OnError(ex);
+            }
+
+            void Emit(long version)
+            {
+                if (Interlocked.Exchange(ref completed, 1) != 0) return;
+                observer.OnNext(version);
+                observer.OnCompleted();
+            }
+
+            // 🚨 Capture inner Subscribe for proper teardown.
+            IDisposable? innerSubscription = null;
+
+            try
+            {
+                var delivery = hub.Post(
+                    new PatchDataRequest(new MeshNodeReference(), new RawJson(rawPatch)),
+                    o => o.WithTarget(new Address(resolvedPath)))!;
+
+                innerSubscription = hub.Observe(delivery)
+                    .Subscribe(
+                        d =>
+                        {
+                            if (d.Message is PatchDataResponse resp)
+                            {
+                                if (resp.Success)
+                                    Emit(resp.Version);
+                                else
+                                    Fail(new InvalidOperationException(resp.Error ?? "Patch rejected"));
+                            }
+                            else
+                                Fail(new InvalidOperationException(
+                                    $"Unexpected response {d.Message?.GetType().Name} for PatchDataRequest at {resolvedPath}"));
+                        },
+                        ex => Fail(new InvalidOperationException(ex.Message ?? "Delivery failed", ex)));
+
+                cts.Token.Register(() => Fail(new TimeoutException(
+                    $"PatchDataRequest for {resolvedPath} did not complete within {timeoutSeconds}s.")));
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "PatchViaDataRequest: Post/RegisterCallback failed for {Path}", resolvedPath);
+                Fail(ex);
+            }
+
+            return () =>
+            {
+                innerSubscription?.Dispose();
+                cts.Dispose();
+            };
+        });
+
+    /// <summary>
+    /// Up-front identity validation shared by Create and Update. Returns a descriptive,
+    /// actionable error string when the node is missing 'id', 'nodeType', or 'name', or when
+    /// the namespace is malformed — or null when the node is sound enough to attempt the write.
+    /// Validating BEFORE posting to the mesh turns a routed-to-nowhere grain call (opaque
+    /// timeout, silent no-op) into an immediate, specific answer the agent can act on.
+    /// </summary>
+    private static string? ValidateNodeIdentity(MeshNode node, string operation)
+    {
+        if (string.IsNullOrWhiteSpace(node.Id))
+            return $"Error: cannot {operation}: 'id' is not set. The id is the node's own slug — the final path segment, " +
+                   "no slashes (e.g. \"PricingTool\"). Put the parent path in 'namespace' (e.g. \"ACME/Projects\"); " +
+                   "the node's path is derived as {namespace}/{id}.";
+
+        if (string.IsNullOrWhiteSpace(node.NodeType))
+            return $"Error: cannot {operation} '{node.Path}': 'nodeType' is not set. Every node must declare a nodeType — " +
+                   "it is the path of the type definition that gives the node its shape, views, and behaviour " +
+                   "(e.g. \"Markdown\", \"Code\", \"Organization\"). Discover available types with " +
+                   "Search('nodeType:NodeType') and retry with nodeType set." +
+                   (operation == "update"
+                       ? " If you only meant to change a few fields, use Patch instead — it preserves all fields you don't mention."
+                       : "");
+
+        if (string.IsNullOrWhiteSpace(node.Name))
+            return $"Error: cannot {operation} '{node.Path}': 'name' is not set. Provide a non-empty, human-readable " +
+                   "display name — it is shown as the node's title in the navigator and page heading.";
+
+        var ns = node.Namespace;
+        if (!string.IsNullOrEmpty(ns) && (ns.EndsWith('/') || ns.Contains("//")))
+            return $"Error: cannot {operation} '{node.Id}': namespace '{ns}' is malformed. The namespace is the parent " +
+                   "path, segments separated by single slashes, no trailing slash (e.g. \"ACME/Projects\", \"User/rbuergi\").";
+
+        return null;
+    }
+
+    /// <summary>
+    /// Normalizes agent-emitted namespace noise the same way <see cref="ResolvePath"/> does for
+    /// path arguments: strips a leading '@' / '/' and surrounding whitespace. Models routinely
+    /// copy the namespace out of an absolute reference ("@/ACME/Projects") — that intent is
+    /// unambiguous, so fix it instead of failing the write.
+    /// </summary>
+    private static MeshNode NormalizeNamespace(MeshNode node)
+    {
+        var ns = node.Namespace;
+        if (string.IsNullOrEmpty(ns))
+            return node;
+
+        var normalized = ResolvePath(ns).TrimStart('/');
+        return normalized == ns ? node : node with { Namespace = normalized };
     }
 
     /// <summary>
@@ -604,12 +1214,10 @@ public class MeshOperations
         if (string.IsNullOrEmpty(node.Id) || !node.Id.Contains('/'))
             return node;
 
-        // Split full path into namespace + id
         var lastSlash = node.Id.LastIndexOf('/');
         var ns = node.Id[..lastSlash];
         var id = node.Id[(lastSlash + 1)..];
 
-        // If the node already has a namespace, prepend it
         if (!string.IsNullOrEmpty(node.Namespace))
             ns = $"{node.Namespace}/{ns}";
 
@@ -617,6 +1225,34 @@ public class MeshOperations
             node.Id, id, ns);
 
         return node with { Id = id, Namespace = ns };
+    }
+
+    /// <summary>
+    /// RFC 7396 JSON Merge Patch: recursively merges <paramref name="patch"/> onto
+    /// <paramref name="target"/>. Object members merge recursively; a <c>null</c>
+    /// member deletes that key; any non-object (scalar or array) replaces wholesale.
+    /// Returns a fresh, detached node — neither argument is mutated, so callers can
+    /// keep using <paramref name="target"/>/<paramref name="patch"/> afterwards.
+    /// </summary>
+    internal static JsonNode? MergePatch(JsonNode? target, JsonNode? patch)
+    {
+        // Non-object patch (scalar, array, or null literal) replaces the target.
+        if (patch is not JsonObject patchObj)
+            return patch?.DeepClone();
+
+        var result = target is JsonObject targetObj
+            ? (JsonObject)targetObj.DeepClone()
+            : new JsonObject();
+
+        foreach (var (key, value) in patchObj)
+        {
+            if (value is null)
+                result.Remove(key);            // RFC 7396: null deletes the member
+            else
+                result[key] = MergePatch(result[key], value);  // recurse; result[key] is null when absent
+        }
+
+        return result;
     }
 
     /// <summary>
@@ -629,19 +1265,13 @@ public class MeshOperations
         if (string.IsNullOrEmpty(json))
             return json;
 
-        // Try parsing first — if it's valid, return as-is
         try
         {
             using var doc = JsonDocument.Parse(json);
             return json;
         }
-        catch (JsonException)
-        {
-            // Fall through to repair
-        }
+        catch (JsonException) { }
 
-        // Repair: try truncating to last complete JSON structure
-        // Find the last closing brace/bracket that makes valid JSON
         for (var i = json.Length - 1; i > 0; i--)
         {
             if (json[i] is '}' or ']')
@@ -652,233 +1282,497 @@ public class MeshOperations
                     using var doc = JsonDocument.Parse(candidate);
                     return candidate;
                 }
-                catch (JsonException)
-                {
-                    // Try next position
-                }
+                catch (JsonException) { }
             }
         }
 
-        return json; // Return original if repair fails
+        return json;
     }
 
-    public Task<string> Delete(string paths)
+    /// <summary>
+    /// Writes raw bytes into a content collection on the node addressed by <paramref name="path"/>.
+    /// Transport-agnostic: callers (MCP base64, REST multipart, CLI HTTP) decode at the boundary
+    /// and hand off the <paramref name="bytes"/> here.
+    ///
+    /// <para>Path shape: <c>{nodePath}/{collection}/{filePath}</c> — e.g. <c>Systemorph/content/logo.png</c>
+    /// or <c>Doc/Architecture/content/diagrams/flow.svg</c>. The collection must exist on the node
+    /// and be <c>IsEditable = true</c>.</para>
+    ///
+    /// <para>Returns a JSON string <c>{"status":"Uploaded","path":"…","bytes":N}</c> on success, or an
+    /// <c>"Error: …"</c> string on any validation/resolution failure (mirrors the other tool methods).</para>
+    /// </summary>
+    public IObservable<string> Upload(string path, byte[] bytes)
+    {
+        logger.LogInformation("Upload path={Path} bytes={Bytes}", path, bytes?.Length ?? 0);
+
+        if (string.IsNullOrWhiteSpace(path))
+            return Observable.Return("Error: path is required.");
+        if (bytes is null || bytes.Length == 0)
+            return Observable.Return("Error: content is required.");
+
+        var resolvedPath = ResolvePath(path).TrimStart('/');
+        if (string.IsNullOrWhiteSpace(resolvedPath))
+            return Observable.Return("Error: path is required.");
+
+        var pathResolver = hub.ServiceProvider.GetRequiredService<IPathResolver>();
+        return pathResolver.ResolvePath(resolvedPath).SelectMany(resolution =>
+        {
+            if (resolution == null)
+                return Observable.Return($"Error: no matching node for path '{resolvedPath}'");
+            if (string.IsNullOrEmpty(resolution.Remainder))
+                return Observable.Return("Error: path must include '{collection}/{filePath}' after the node path (e.g. 'Systemorph/content/logo.png').");
+
+            var remainderParts = resolution.Remainder.Split('/');
+            if (remainderParts.Length < 2)
+                return Observable.Return($"Error: expected '{{collection}}/{{filePath}}' in remainder '{resolution.Remainder}'.");
+
+            var collectionName = remainderParts[0];
+            var filePath = string.Join("/", remainderParts.Skip(1));
+            if (string.IsNullOrEmpty(Path.GetFileName(filePath)))
+                return Observable.Return($"Error: missing filename in path '{filePath}'.");
+
+            var targetAddress = (Address)resolution.Prefix;
+            var qualifiedCollectionName = $"{resolution.Prefix}/{collectionName}";
+
+            // Ask the owning node hub for its collection config — exact same mechanism
+            // the static GET endpoint uses (see BlazorHostingExtensions.ResolveStatic).
+            // 🚨 .Timeout is mandatory: HandleCollectionConfigRequest is registered ONLY by
+            // AddContentCollections(). A target node hub WITHOUT it never answers this
+            // GetDataRequest, so an un-timed Take(1) hangs FOREVER — and since the MCP/REST
+            // boundary does ops.Upload(...).FirstAsync().ToTask(), that wedges the calling
+            // request (the 2026-06-14 atioz upload wedge). On timeout the TimeoutException
+            // falls through to the .Catch below and surfaces as a clean "Error: …" string.
+            return hub.Observe(
+                new GetDataRequest(new ContentCollectionReference([collectionName])),
+                o => o.WithTarget(targetAddress))
+                .Take(1)
+                .Timeout(TimeSpan.FromSeconds(30))
+                .Select(collectionResponse =>
+                {
+                    // Deserialize via the hub's JSON options so the naming policy (camelCase)
+                    // and all fields — including IsEditable — round-trip correctly. The
+                    // ContentCollectionConfig bools default to false (matching bool's
+                    // type-default) so writable / visible callsites must set them
+                    // explicitly; that keeps WhenWritingDefault from silently dropping
+                    // meaningful state across the wire.
+                    IReadOnlyCollection<ContentCollectionConfig>? configs = collectionResponse?.Message switch
+                    {
+                        GetDataResponse { Data: JsonElement je } =>
+                            JsonSerializer.Deserialize<ContentCollectionConfig[]>(je, hub.JsonSerializerOptions),
+                        GetDataResponse { Data: IReadOnlyCollection<ContentCollectionConfig> direct } => direct,
+                        _ => null
+                    };
+                    var sourceConfig = configs?.FirstOrDefault(c => c.Name == collectionName);
+                    if (sourceConfig == null) return (ContentCollectionConfig?)null;
+                    return sourceConfig with { Name = qualifiedCollectionName, Address = targetAddress };
+                })
+                .SelectMany(collectionConfig =>
+                {
+                    if (collectionConfig == null)
+                        return Observable.Return($"Error: collection '{collectionName}' not found on '{resolution.Prefix}'.");
+                    if (!collectionConfig.IsEditable)
+                        return Observable.Return($"Error: collection '{collectionName}' on '{resolution.Prefix}' is read-only.");
+
+                    var contentService = hub.ServiceProvider.GetService<IContentService>();
+                    if (contentService == null)
+                        return Observable.Return("Error: content service not configured on the hub.");
+
+                    contentService.AddConfiguration(collectionConfig);
+                    var ioPool = hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.FileSystem) ?? IoPool.Unbounded;
+                    return ioPool.Run(async ct =>
+                    {
+                        var collection = await contentService.GetCollectionAsync(qualifiedCollectionName, ct).ConfigureAwait(false);
+                        if (collection == null)
+                            return $"Error: failed to initialize collection '{qualifiedCollectionName}'.";
+
+                        var dir = Path.GetDirectoryName(filePath)?.Replace('\\', '/') ?? "";
+                        var fileName = Path.GetFileName(filePath);
+                        using var ms = new MemoryStream(bytes);
+                        await collection.SaveFileAsync(dir, fileName, ms).ConfigureAwait(false);
+
+                        // Post-upload seam: notify registered observers (e.g. the content-indexing
+                        // pipeline) AFTER the save succeeds. Fire-and-forget — each observer starts its
+                        // own off-band work (an Activity), so the upload response returns immediately
+                        // and indexing never runs inline on this pooled continuation. No-op when no
+                        // observer is registered; ContentCollections itself takes no indexing/AI/pg dep.
+                        hub.RaiseContentUploaded(qualifiedCollectionName, filePath);
+
+                        return JsonSerializer.Serialize(new
+                        {
+                            status = "Uploaded",
+                            path = $"{resolution.Prefix}/{collectionName}/{filePath}",
+                            bytes = bytes.Length,
+                        }, hub.JsonSerializerOptions);
+                    });
+                });
+        })
+        .Catch((Exception ex) =>
+        {
+            logger.LogWarning(ex, "Upload failed for {Path}", path);
+            var message = ex is TimeoutException
+                ? $"the node for '{path}' did not respond to the content-collection lookup in time — " +
+                  "confirm the path resolves to a content-enabled node (one configured with AddContentCollections)."
+                : ex.Message;
+            return Observable.Return($"Error: {message}");
+        });
+    }
+
+    /// <summary>
+    /// Deletes one or more nodes (and their descendants) given a JSON array of path strings.
+    /// </summary>
+    /// <param name="paths">A JSON array of node paths to delete.</param>
+    /// <returns>A cold observable emitting the per-path deletion result or a descriptive error string.</returns>
+    public IObservable<string> Delete(string paths)
     {
         logger.LogInformation("Delete called");
 
-        List<string>? pathList;
-        try
+        return Observable.Defer(() =>
         {
-            pathList = JsonSerializer.Deserialize<List<string>>(paths, hub.JsonSerializerOptions);
-        }
-        catch (JsonException ex)
-        {
-            return Task.FromResult($"Invalid JSON: {ex.Message}");
-        }
-        if (pathList == null || pathList.Count == 0)
-            return Task.FromResult("No paths provided.");
-
-        // Subscribe to each IMeshService.DeleteNode observable and aggregate the per-path
-        // outcome into a single result string once all complete. No `await` on a Task — the
-        // TaskCompletionSource is resolved from the Subscribe callbacks, which run off the
-        // hub scheduler. This lets the caller rely on "Deleted: ..." meaning the delete
-        // actually finished (matches what tests and agent follow-up Gets expect).
-        var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var gate = new object();
-        var lines = new string[pathList.Count];
-        var remaining = pathList.Count;
-
-        for (var i = 0; i < pathList.Count; i++)
-        {
-            var index = i;
-            var rawPath = pathList[i];
-            if (string.IsNullOrWhiteSpace(rawPath))
-            {
-                lock (gate)
-                {
-                    lines[index] = "Error deleting: empty path";
-                    if (--remaining == 0)
-                        tcs.TrySetResult(string.Join("\n", lines));
-                }
-                continue;
-            }
-
-            string resolvedPath;
+            List<string>? pathList;
             try
             {
-                resolvedPath = ResolvePath(rawPath);
+                pathList = JsonSerializer.Deserialize<List<string>>(paths, hub.JsonSerializerOptions);
             }
-            catch (Exception ex)
+            catch (JsonException ex)
             {
-                lock (gate)
-                {
-                    lines[index] = $"Error deleting '{rawPath}': {ex.Message}";
-                    if (--remaining == 0)
-                        tcs.TrySetResult(string.Join("\n", lines));
-                }
-                continue;
+                return Observable.Return($"Invalid JSON: {ex.Message}");
             }
 
-            mesh.DeleteNode(resolvedPath).Subscribe(
-                _ =>
+            if (pathList == null || pathList.Count == 0)
+                return Observable.Return("No paths provided.");
+
+            var perPath = ImmutableList<IObservable<string>>.Empty;
+            foreach (var rawPath in pathList)
+            {
+                if (string.IsNullOrWhiteSpace(rawPath))
                 {
-                    lock (gate)
-                    {
-                        lines[index] = $"Deleted: {resolvedPath}";
-                        if (--remaining == 0)
-                            tcs.TrySetResult(string.Join("\n", lines));
-                    }
-                },
-                ex =>
+                    perPath = perPath.Add(Observable.Return("Error deleting: empty path"));
+                    continue;
+                }
+
+                string resolvedPath;
+                try
                 {
-                    logger.LogWarning(ex, "Error deleting {Path}", resolvedPath);
-                    lock (gate)
-                    {
-                        lines[index] = $"Error deleting {resolvedPath}: {ex.Message}";
-                        if (--remaining == 0)
-                            tcs.TrySetResult(string.Join("\n", lines));
-                    }
-                });
-        }
-        return tcs.Task;
+                    resolvedPath = ResolvePath(rawPath);
+                }
+                catch (Exception ex)
+                {
+                    perPath = perPath.Add(Observable.Return($"Error deleting '{rawPath}': {ex.Message}"));
+                    continue;
+                }
+
+                var capturedPath = resolvedPath;
+                perPath = perPath.Add(
+                    mesh.DeleteNode(capturedPath)
+                        .Select(_ => $"Deleted: {capturedPath}")
+                        .Catch((Exception ex) =>
+                        {
+                            logger.LogWarning(ex, "Error deleting {Path}", capturedPath);
+                            return Observable.Return($"Error deleting {capturedPath}: {ex.Message}");
+                        }));
+            }
+
+            return perPath
+                .ToObservable()
+                .Concat()
+                .ToList()
+                .Select(lines => string.Join("\n", lines));
+        });
     }
 
     /// <summary>
     /// Builds the standard "content is null" rejection message for Update/Patch,
     /// embedding the JSON schema for the node's content type when available so the
-    /// agent can fill content correctly on the next call.
+    /// agent can fill content correctly on the next call. Reactive: schema lookup
+    /// may need a workspace round-trip for dynamic NodeTypes.
     /// </summary>
-    internal async Task<string> BuildNullContentErrorAsync(string path, string nodeType)
+    internal IObservable<string> BuildNullContentError(string path, string nodeType)
     {
         var msg = $"Error: cannot write {path}: 'content' is null. " +
                   "Fetch the node first with Get, modify the returned content in-place, " +
                   "and resend the complete node. Never send null content.";
-        var schema = await GetContentSchemaAsync(nodeType);
-        if (schema != null)
-            msg += $" Expected content schema for NodeType '{nodeType}': {schema}";
-        return msg;
+        return GetContentSchema(nodeType)
+            .Select(schema => schema != null
+                ? msg + $" Expected content schema for NodeType '{nodeType}': {schema}"
+                : msg);
     }
 
     /// <summary>
     /// Runs schema validation for <paramref name="meshNode"/> and, when invalid,
     /// appends the expected JSON schema to the error so the agent can recover.
-    /// Returns null when content is valid (or when no schema is available).
+    /// Emits null when content is valid (or when no schema is available).
     /// </summary>
-    internal async Task<string?> ValidateContentWithSchemaAsync(MeshNode meshNode)
+    internal IObservable<string?> ValidateContentWithSchema(MeshNode meshNode)
     {
-        var validationError = await ValidateContentAgainstSchemaAsync(meshNode);
-        if (validationError == null)
-            return null;
+        return ValidateContentAgainstSchema(meshNode)
+            .SelectMany(validationError =>
+            {
+                if (validationError == null)
+                    return Observable.Return<string?>(null);
+                if (string.IsNullOrEmpty(meshNode.NodeType))
+                    return Observable.Return<string?>(validationError);
+                return GetContentSchema(meshNode.NodeType!)
+                    .Select(schema => schema != null
+                        ? validationError + $" Expected content schema for NodeType '{meshNode.NodeType}': {schema}"
+                        : validationError);
+            });
+    }
 
-        if (!string.IsNullOrEmpty(meshNode.NodeType))
+    /// <summary>
+    /// Resolves the HubConfiguration delegate for <paramref name="nodeType"/>:
+    /// fast path — static NodeType registered via <c>AddMeshNodes</c> in
+    /// <c>meshConfiguration.Nodes</c>; slow path — read the NodeType MeshNode
+    /// via <c>workspace.GetMeshNodeStream</c> and recover the delegate from the
+    /// already-cached DLL via
+    /// <see cref="IMeshNodeCompilationService.GetConfigurationsFromExistingAssembly"/>.
+    /// Single emission; emits null when neither path can produce a delegate.
+    /// </summary>
+    private IObservable<Func<MessageHubConfiguration, MessageHubConfiguration>?>
+        ResolveHubConfigForSchema(string nodeType)
+    {
+        var staticNode = hub.ServiceProvider.FindStaticNode(nodeType);
+        if (staticNode is { HubConfiguration: { } cfg })
         {
-            var schema = await GetContentSchemaAsync(meshNode.NodeType);
-            if (schema != null)
-                validationError += $" Expected content schema for NodeType '{meshNode.NodeType}': {schema}";
+            return Observable.Return<Func<MessageHubConfiguration, MessageHubConfiguration>?>(cfg);
         }
-        return validationError;
+
+        var compilationService = hub.ServiceProvider.GetService<IMeshNodeCompilationService>();
+        if (compilationService == null)
+            return Observable.Return<Func<MessageHubConfiguration, MessageHubConfiguration>?>(null);
+
+        return hub.GetWorkspace().GetMeshNodeStream(nodeType)
+            .Where(n => n?.Content is NodeTypeDefinition def
+                        && def.CompilationStatus == CompilationStatus.Ok
+                        && !string.IsNullOrEmpty(def.LatestAssemblyCollection)
+                        && !string.IsNullOrEmpty(def.LatestAssemblyPath))
+            .Take(1)
+            .Timeout(TimeSpan.FromSeconds(5))
+            .SelectMany(node =>
+            {
+                var def = (NodeTypeDefinition)node!.Content!;
+                var version = def.LastCompiledVersion ?? node.Version;
+                var store = string.Equals(def.LatestAssemblyCollection, FrameworkAssemblyStore.CollectionName, StringComparison.Ordinal)
+                    ? (IAssemblyStore)FrameworkAssemblyStore.Instance
+                    : hub.ServiceProvider.GetService<IAssemblyStore>() ?? NullAssemblyStore.Instance;
+                return store.TryGetAssemblyPath(node.Path, version)
+                    .SelectMany(localPath => string.IsNullOrEmpty(localPath)
+                        ? Observable.Return<NodeCompilationResult?>(null)
+                        : compilationService.GetConfigurationsFromExistingAssembly(localPath!, nodeType).Take(1));
+            })
+            .Select(result =>
+            {
+                var matching = result?.NodeTypeConfigurations
+                    .FirstOrDefault(c => string.Equals(c.NodeType, nodeType, StringComparison.OrdinalIgnoreCase))
+                    ?? result?.NodeTypeConfigurations.FirstOrDefault();
+                return matching?.HubConfiguration;
+            })
+            .Catch<Func<MessageHubConfiguration, MessageHubConfiguration>?, Exception>(_ =>
+                Observable.Return<Func<MessageHubConfiguration, MessageHubConfiguration>?>(null));
     }
 
     /// <summary>
     /// Returns the JSON schema string for the content type registered against
     /// <paramref name="nodeType"/>, or null if no schema can be derived.
     /// </summary>
-    internal Task<string?> GetContentSchemaAsync(string nodeType)
+    internal IObservable<string?> GetContentSchema(string nodeType)
     {
-        try
-        {
-            var nodeTypeService = hub.ServiceProvider.GetService<INodeTypeService>();
-            if (nodeTypeService == null)
-                return Task.FromResult<string?>(null);
-
-            var hubConfig = nodeTypeService.GetCachedHubConfiguration(nodeType);
-            if (hubConfig == null)
-                return Task.FromResult<string?>(null);
-
-            var tempAddress = new Address($"_schema_lookup/{Guid.NewGuid():N}");
-            var tempHub = hub.GetHostedHub(tempAddress, hubConfig);
-            if (tempHub == null)
-                return Task.FromResult<string?>(null);
-
-            try
+        return ResolveHubConfigForSchema(nodeType)
+            .Select(hubConfig =>
             {
-                var typeRegistry = tempHub.ServiceProvider.GetService<ITypeRegistry>();
-                if (typeRegistry == null || !typeRegistry.TryGetType(nodeType, out var typeDefinition))
-                    return Task.FromResult<string?>(null);
-
-                var schemaNode = hub.JsonSerializerOptions.GetJsonSchemaAsNode(typeDefinition!.Type);
-                return Task.FromResult<string?>(schemaNode.ToJsonString());
-            }
-            finally
-            {
-                tempHub.Dispose();
-            }
-        }
-        catch (Exception ex)
-        {
-            logger.LogDebug(ex, "Schema retrieval skipped for NodeType {NodeType}", nodeType);
-            return Task.FromResult<string?>(null);
-        }
+                if (hubConfig == null) return null;
+                try
+                {
+                    var tempAddress = new Address($"_schema_lookup/{Guid.NewGuid():N}");
+                    var tempHub = hub.GetHostedHub(tempAddress, hubConfig);
+                    if (tempHub == null) return null;
+                    try
+                    {
+                        var typeRegistry = tempHub.ServiceProvider.GetService<ITypeRegistry>();
+                        if (typeRegistry == null || !typeRegistry.TryGetType(nodeType, out var typeDefinition))
+                            return null;
+                        // Generate the schema with tempHub's options, NOT the parent hub's.
+                        // The compiled content type (and its nested types) is registered in
+                        // tempHub's TypeRegistry under its clean short name. The parent hub's
+                        // PolymorphicTypeInfoResolver is bound to the parent's registry, which
+                        // does not own the type — so GetOrAddType would fall back to
+                        // TypeRegistry.FormatType and leak the fully-qualified, capitalized CLR
+                        // FullName into every $type reference. Use the type-owning hub's options
+                        // so the schema references resolve to the registered name.
+                        var schemaNode = tempHub.JsonSerializerOptions.GetJsonSchemaAsNode(typeDefinition!.Type);
+                        return (string?)schemaNode.ToJsonString();
+                    }
+                    finally
+                    {
+                        tempHub.Dispose();
+                    }
+                }
+                catch (Exception ex)
+                {
+                    logger.LogDebug(ex, "Schema retrieval skipped for NodeType {NodeType}", nodeType);
+                    return null;
+                }
+            });
     }
 
     /// <summary>
     /// Validates node content against the content type for its NodeType.
     /// Creates a temporary hub with the NodeType's configuration to find the
     /// registered content type, then attempts to deserialize the content into that type.
-    /// Returns an error message if invalid, or null if valid/no schema available.
+    /// Emits an error message if invalid, or null if valid/no schema available.
     /// </summary>
-    internal Task<string?> ValidateContentAgainstSchemaAsync(MeshNode meshNode)
+    internal IObservable<string?> ValidateContentAgainstSchema(MeshNode meshNode)
     {
-        try
-        {
-            var nodeTypeService = hub.ServiceProvider.GetService<INodeTypeService>();
-            if (nodeTypeService == null)
-                return Task.FromResult<string?>(null);
+        if (string.IsNullOrEmpty(meshNode.NodeType))
+            return Observable.Return<string?>(null);
 
-            var hubConfig = nodeTypeService.GetCachedHubConfiguration(meshNode.NodeType!);
-            if (hubConfig == null)
-                return Task.FromResult<string?>(null);
-
-            // Create a temporary hub with the NodeType's config to access its type registry
-            var tempAddress = new Address($"_schema_validation/{Guid.NewGuid():N}");
-            var tempHub = hub.GetHostedHub(tempAddress, hubConfig);
-            if (tempHub == null)
-                return Task.FromResult<string?>(null);
-
-            try
+        return ResolveHubConfigForSchema(meshNode.NodeType!)
+            .Select(hubConfig =>
             {
-                // Find the content type from the hub's type registry
-                var typeRegistry = tempHub.ServiceProvider.GetService<ITypeRegistry>();
-                if (typeRegistry == null || !typeRegistry.TryGetType(meshNode.NodeType!, out var typeDefinition))
-                    return Task.FromResult<string?>(null);
-
-                var contentType = typeDefinition!.Type;
-
-                // Serialize content to JSON and try to deserialize into the target type
-                var contentJson = JsonSerializer.Serialize(meshNode.Content, hub.JsonSerializerOptions);
+                if (hubConfig == null) return null;
                 try
                 {
-                    var deserialized = JsonSerializer.Deserialize(contentJson, contentType, hub.JsonSerializerOptions);
-                    if (deserialized == null)
-                        return Task.FromResult<string?>($"Error: Content is null after deserialization for NodeType '{meshNode.NodeType}'.");
+                    var tempAddress = new Address($"_schema_validation/{Guid.NewGuid():N}");
+                    var tempHub = hub.GetHostedHub(tempAddress, hubConfig);
+                    if (tempHub == null) return null;
+                    try
+                    {
+                        var typeRegistry = tempHub.ServiceProvider.GetService<ITypeRegistry>();
+                        if (typeRegistry == null || !typeRegistry.TryGetType(meshNode.NodeType!, out var typeDefinition))
+                            return null;
 
-                    return Task.FromResult<string?>(null); // Valid
+                        var contentType = typeDefinition!.Type;
+                        var contentJson = JsonSerializer.Serialize(meshNode.Content, hub.JsonSerializerOptions);
+                        try
+                        {
+                            var deserialized = JsonSerializer.Deserialize(contentJson, contentType, hub.JsonSerializerOptions);
+                            return (string?)(deserialized == null
+                                ? $"Error: Content is null after deserialization for NodeType '{meshNode.NodeType}'."
+                                : null);
+                        }
+                        catch (JsonException ex)
+                        {
+                            return (string?)$"Error: Content does not match the schema for NodeType '{meshNode.NodeType}'. {ex.Message}";
+                        }
+                    }
+                    finally
+                    {
+                        tempHub.Dispose();
+                    }
                 }
-                catch (JsonException ex)
+                catch (Exception ex)
                 {
-                    return Task.FromResult<string?>($"Error: Content does not match the schema for NodeType '{meshNode.NodeType}'. {ex.Message}");
+                    logger.LogDebug(ex, "Schema validation skipped for NodeType {NodeType}", meshNode.NodeType);
+                    return null;
                 }
-            }
-            finally
-            {
-                tempHub.Dispose();
-            }
-        }
-        catch (Exception ex)
+            });
+    }
+
+    /// <summary>
+    /// Moves a node and its descendants to a new path. Posts <see cref="MoveNodeRequest"/>
+    /// and subscribes via <c>RegisterCallback</c> — no <c>AwaitResponse</c>, no <c>await</c>
+    /// on the hub scheduler.
+    /// </summary>
+    public IObservable<string> Move(string sourcePath, string targetPath)
+    {
+        logger.LogInformation("Move called: {Source} -> {Target}", sourcePath, targetPath);
+
+        if (string.IsNullOrWhiteSpace(sourcePath))
+            return Observable.Return("Error: sourcePath is required.");
+        if (string.IsNullOrWhiteSpace(targetPath))
+            return Observable.Return("Error: targetPath is required.");
+
+        var resolvedSource = ResolvePath(sourcePath);
+        var resolvedTarget = ResolvePath(targetPath);
+
+        if (resolvedSource == resolvedTarget)
+            return Observable.Return($"Error: target path is the same as source ({resolvedSource}).");
+
+        return Observable.Create<string>(observer =>
         {
-            logger.LogDebug(ex, "Schema validation skipped for NodeType {NodeType}", meshNode.NodeType);
-            return Task.FromResult<string?>(null);
-        }
+            var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            // 🚨 Capture inner Subscribe for proper teardown.
+            IDisposable? innerSubscription = null;
+            try
+            {
+                var delivery = hub.Post(
+                    new MoveNodeRequest(resolvedSource, resolvedTarget),
+                    o => o.WithTarget(new Address(resolvedSource)))!;
+
+                innerSubscription = hub.Observe(delivery)
+                    .Subscribe(
+                        d =>
+                        {
+                            try
+                            {
+                                if (d.Message is MoveNodeResponse msg)
+                                {
+                                    if (msg.Success)
+                                        observer.OnNext($"Moved: {resolvedSource} -> {resolvedTarget}");
+                                    else
+                                        observer.OnNext(
+                                            $"Error moving {resolvedSource} -> {resolvedTarget}: {msg.Error ?? "unknown error"}"
+                                            + (msg.RejectionReason is { } r ? $" ({r})" : ""));
+                                }
+                                else
+                                {
+                                    observer.OnNext(
+                                        $"Error moving {resolvedSource} -> {resolvedTarget}: unexpected response {d.Message?.GetType().Name}");
+                                }
+                                observer.OnCompleted();
+                            }
+                            catch (Exception ex)
+                            {
+                                logger.LogWarning(ex, "Error moving {Source} -> {Target}", resolvedSource, resolvedTarget);
+                                observer.OnNext($"Error: {ex.Message}");
+                                observer.OnCompleted();
+                            }
+                        },
+                        ex =>
+                        {
+                            observer.OnNext(
+                                $"Error moving {resolvedSource} -> {resolvedTarget}: {ex.Message ?? "delivery failed"}");
+                            observer.OnCompleted();
+                        });
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Error moving {Source} -> {Target}", resolvedSource, resolvedTarget);
+                observer.OnNext($"Error: {ex.Message}");
+                observer.OnCompleted();
+            }
+
+            return () =>
+            {
+                innerSubscription?.Dispose();
+                cts.Dispose();
+            };
+        });
+    }
+
+    /// <summary>
+    /// Copies a node and all its descendants to a target namespace. Delegates to
+    /// <see cref="NodeCopyHelper.CopyNodeTree"/> — fully reactive pipeline (Query +
+    /// MeshNodeReference streams + CreateNode observables chained sequentially).
+    /// </summary>
+    public IObservable<string> Copy(string sourcePath, string targetNamespace, bool force = false)
+    {
+        logger.LogInformation("Copy called: {Source} -> {Target}, force={Force}", sourcePath, targetNamespace, force);
+
+        if (string.IsNullOrWhiteSpace(sourcePath))
+            return Observable.Return("Error: sourcePath is required.");
+        if (string.IsNullOrWhiteSpace(targetNamespace))
+            return Observable.Return("Error: targetNamespace is required.");
+
+        var resolvedSource = ResolvePath(sourcePath);
+        var resolvedTarget = ResolvePath(targetNamespace);
+
+        return NodeCopyHelper.CopyNodeTree(mesh, mesh, hub, resolvedSource, resolvedTarget, force, logger)
+            .Select(copied => $"Copied {copied} node(s): {resolvedSource} -> {resolvedTarget}")
+            .Catch((Exception ex) =>
+            {
+                logger.LogWarning(ex, "Error copying {Source} -> {Target}", resolvedSource, resolvedTarget);
+                return Observable.Return($"Error: {ex.Message}");
+            });
     }
 
     /// <summary>
@@ -889,32 +1783,64 @@ public class MeshOperations
     /// Returns a JSON <c>{status, path}</c> envelope. The caller should wait ~100ms
     /// before re-accessing so the grain teardown completes.
     /// </summary>
-    public Task<string> Recycle(string path)
+    public IObservable<string> Recycle(string path)
     {
         logger.LogInformation("Recycle called with path={Path}", path);
 
         if (string.IsNullOrWhiteSpace(path))
-            return Task.FromResult(JsonSerializer.Serialize(
+            return Observable.Return(JsonSerializer.Serialize(
                 new { status = "Error", message = "path is required" },
                 hub.JsonSerializerOptions));
 
         var resolvedPath = ResolvePath(path);
         if (string.IsNullOrWhiteSpace(resolvedPath))
-            return Task.FromResult(JsonSerializer.Serialize(
+            return Observable.Return(JsonSerializer.Serialize(
                 new { status = "Error", message = "path is required" },
                 hub.JsonSerializerOptions));
 
+        // Permission gate: recycling disposes the node's hub (DisposeRequest) and forces
+        // re-initialization — operationally a write on that node. Require Update on the
+        // target so a read-only caller can't bounce other partitions' hubs. With no RLS
+        // wired, the default evaluator grants All and behavior is unchanged. Fail closed
+        // on evaluator errors/timeouts.
+        return hub.CheckPermission(resolvedPath, MeshWeaver.Mesh.Security.Permission.Update)
+            .Take(1)
+            .Timeout(TimeSpan.FromSeconds(10))
+            .Catch((Exception ex) =>
+            {
+                logger.LogWarning(ex, "Recycle: permission check failed for {Path}", resolvedPath);
+                return Observable.Return(false);
+            })
+            .SelectMany(allowed => allowed
+                ? RecycleCore(resolvedPath)
+                : Observable.Return(JsonSerializer.Serialize(
+                    new
+                    {
+                        status = "Error",
+                        path = resolvedPath,
+                        message = "Recycle requires Update permission on the target node — it disposes the node's hub and forces re-initialization. Ask someone with write access to the node (or a platform admin) to do it."
+                    },
+                    hub.JsonSerializerOptions)));
+    }
+
+    private IObservable<string> RecycleCore(string resolvedPath)
+    {
         try
         {
-            // 1. Flush LOCAL NodeTypeService caches so a fresh compile runs on next access.
-            //    Disposing the hub alone is not enough — NodeTypeService._compilationErrors
-            //    and _compilationTasks survive hub teardown and would keep serving stale
-            //    errors.
-            nodeTypeService?.InvalidateCache(resolvedPath);
+            // Trigger a fresh compile by flipping CompilationStatus = Pending on
+            // the NodeType MeshNode. The per-NodeType hub's CompileWatcher (see
+            // NodeTypeCompilationHelpers.InstallCompileWatcher) picks up the
+            // Pending flip and runs Roslyn — the MeshNode IS the cache, so we
+            // don't need a side cache to invalidate.
+            hub.GetWorkspace().GetMeshNodeStream(resolvedPath).Update(curr =>
+                    curr.Content is Graph.Configuration.NodeTypeDefinition def
+                        ? curr with { Content = def with { CompilationStatus = CompilationStatus.Pending } }
+                        : curr)
+                .Subscribe(
+                    _ => { },
+                    ex => logger.LogWarning(ex,
+                        "Recycle: failed to flip CompilationStatus=Pending for {Path}", resolvedPath));
 
-            // 2. Broadcast the invalidation across silos via IMeshChangeFeed. Every silo's
-            //    NodeTypeService subscribes to this feed and calls InvalidateCache locally
-            //    when it sees an event for a tracked NodeType path.
             var changeFeed = hub.ServiceProvider.GetService<IMeshChangeFeed>();
             if (changeFeed != null)
             {
@@ -931,9 +1857,8 @@ public class MeshOperations
                     Timestamp: DateTimeOffset.UtcNow));
             }
 
-            // 3. Dispose the hub so the next request re-initialises with fresh config.
             hub.Post(new DisposeRequest(), o => o.WithTarget(new Address(resolvedPath)));
-            return Task.FromResult(JsonSerializer.Serialize(
+            return Observable.Return(JsonSerializer.Serialize(
                 new
                 {
                     status = "Recycled",
@@ -945,7 +1870,7 @@ public class MeshOperations
         catch (Exception ex)
         {
             logger.LogWarning(ex, "Error recycling {Path}", resolvedPath);
-            return Task.FromResult(JsonSerializer.Serialize(
+            return Observable.Return(JsonSerializer.Serialize(
                 new { status = "Error", path = resolvedPath, message = ex.Message },
                 hub.JsonSerializerOptions));
         }
@@ -953,63 +1878,460 @@ public class MeshOperations
 
     /// <summary>
     /// Returns compilation diagnostics for a NodeType or an instance of one.
-    /// The response is JSON with <c>status</c> (<c>Error</c> / <c>Ok</c> /
-    /// <c>Unknown</c>) and, when relevant, the error text from the last compile.
-    /// Used by the Coder agent's self-verification loop after creating / updating
-    /// a NodeType.
     /// </summary>
-    public async Task<string> GetDiagnostics(string path)
+    public IObservable<string> GetDiagnostics(string path)
     {
         logger.LogInformation("GetDiagnostics called with path={Path}", path);
 
         if (string.IsNullOrWhiteSpace(path))
-            return JsonSerializer.Serialize(
+            return Observable.Return(JsonSerializer.Serialize(
                 new { status = "Error", message = "path is required" },
-                hub.JsonSerializerOptions);
+                hub.JsonSerializerOptions));
 
         var resolvedPath = ResolvePath(path);
-        if (nodeTypeService == null)
-            return JsonSerializer.Serialize(
-                new { status = "Unknown", message = "INodeTypeService not registered on this hub" },
-                hub.JsonSerializerOptions);
+        var meshConfig = hub.ServiceProvider.GetService<MeshConfiguration>();
 
-        // Resolve the owning NodeType path: either the path itself (if it IS a NodeType)
-        // or the NodeType of the instance at that path.
-        string? nodeTypePath = null;
-        await foreach (var node in mesh.QueryAsync<MeshNode>(MeshQueryRequest.FromQuery($"path:{resolvedPath}")))
-        {
-            nodeTypePath = node.Content is Graph.Configuration.NodeTypeDefinition
-                ? node.Path
-                : node.NodeType;
-            break;
-        }
+        // Diagnostics are read directly off the NodeType MeshNode — the
+        // owner-driven status/error/timestamps live on NodeTypeDefinition,
+        // populated by the per-NodeType hub's CompileWatcher.
+        return FetchNode(resolvedPath).SelectMany(node =>
+            {
+                // Match LookupCompilationError: node.Content arrives as JsonElement
+                // when the per-node hub doesn't have NodeTypeDefinition in its
+                // TypeRegistry, so check NodeType==MeshNode.NodeTypePath as fallback.
+                var isNodeTypeDef = node?.Content is Graph.Configuration.NodeTypeDefinition
+                    || (node is not null && string.Equals(node.NodeType, MeshNode.NodeTypePath, StringComparison.Ordinal));
+                var nodeTypePath = isNodeTypeDef ? node!.Path : node?.NodeType;
 
-        if (string.IsNullOrEmpty(nodeTypePath))
-            return JsonSerializer.Serialize(
-                new { status = "Unknown", message = $"Not found: {resolvedPath}" },
-                hub.JsonSerializerOptions);
+                if (string.IsNullOrEmpty(nodeTypePath))
+                    return Observable.Return(JsonSerializer.Serialize(
+                        new { status = "Unknown", message = $"Not found: {resolvedPath}" },
+                        hub.JsonSerializerOptions));
 
-        // Compiling has priority over any prior error — the error we're seeing is stale
-        // and a fresh result is on its way. Tell the caller to wait and retry.
-        if (nodeTypeService.IsCompiling(nodeTypePath))
-        {
-            var startedAt = nodeTypeService.GetCompilationStartedAt(nodeTypePath);
-            var elapsedMs = startedAt is null
-                ? (long?)null
-                : (long)(DateTimeOffset.UtcNow - startedAt.Value).TotalMilliseconds;
-            return JsonSerializer.Serialize(
-                new { status = "Compiling", nodeTypePath, elapsedMs },
-                hub.JsonSerializerOptions);
-        }
+                // Fast path: the input node already IS the NodeType MeshNode
+                // AND its compile has settled (Ok/Error). Compiling/Pending/Unknown
+                // states fall through to the stream so we wait for the
+                // CompileWatcher's write-back instead of returning a stale snapshot.
+                if (isNodeTypeDef
+                    && node!.Content is Graph.Configuration.NodeTypeDefinition ownDef
+                    && IsSettled(ownDef))
+                    return Observable.Return(FormatDiagnosticsFromDef(ownDef, nodeTypePath));
 
-        var err = nodeTypeService.GetCompilationError(nodeTypePath);
-        if (string.IsNullOrEmpty(err))
-            return JsonSerializer.Serialize(
-                new { status = "Ok", nodeTypePath },
-                hub.JsonSerializerOptions);
+                // Static fast path: NodeType registered via AddMeshNodes — there is
+                // no per-NodeType hub or persisted MeshNode, so the runtime status
+                // is implicit Ok (its HubConfiguration is bundled with the framework).
+                if (hub.ServiceProvider.FindStaticNode(nodeTypePath) is not null)
+                    return Observable.Return(FormatDiagnostics(
+                        CompilationStatus.Ok, nodeTypePath,
+                        error: null, startedAt: null, lastCompiledAt: null,
+                        hub.JsonSerializerOptions));
 
-        return JsonSerializer.Serialize(
-            new { status = "Error", nodeTypePath, error = err },
+                // Slow path: subscribe to the NodeType's live stream and wait for
+                // the CompileWatcher to settle. Where(settled).Take(1) keeps the
+                // read in lockstep with the writer; without it we'd race against
+                // the Compiling → Ok/Error write-back and return stale state.
+                return hub.GetWorkspace().GetMeshNodeStream(nodeTypePath)
+                    // JsonElement-tolerant settle check: a degraded NodeType node (Content
+                    // stayed a JsonElement because the per-node hub's TypeRegistry lacked the
+                    // NodeTypeDefinition $type) still satisfies the wait, instead of hanging to
+                    // the 5s timeout and then reporting "Unknown".
+                    .Where(n => IsSettled(ReadCompilationStatusFromNode(n)))
+                    .Take(1)
+                    .Timeout(TimeSpan.FromSeconds(5))
+                    .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null))
+                    .Select(typeNode =>
+                    {
+                        var def = typeNode.ContentAs<Graph.Configuration.NodeTypeDefinition>(hub.JsonSerializerOptions);
+                        if (def is not null)
+                            return FormatDiagnosticsFromDef(def, nodeTypePath);
+                        // Degraded JsonElement content: format from the tolerant readers so a
+                        // settled-but-degraded node reports its real status/error rather than
+                        // "has no definition".
+                        var status = ReadCompilationStatusFromNode(typeNode);
+                        if (status is not null)
+                            return FormatDiagnostics(status.Value, nodeTypePath,
+                                ReadCompilationError(typeNode), startedAt: null, lastCompiledAt: null,
+                                hub.JsonSerializerOptions);
+                        return JsonSerializer.Serialize(
+                            new { status = "Unknown", message = $"NodeType '{nodeTypePath}' has no definition" },
+                            hub.JsonSerializerOptions);
+                    });
+            });
+    }
+
+    /// <summary>
+    /// True when the NodeType's <see cref="NodeTypeDefinition.CompilationStatus"/>
+    /// has reached a terminal state (<see cref="CompilationStatus.Ok"/> or
+    /// <see cref="CompilationStatus.Error"/>). Pending and Compiling are
+    /// transient — readers should keep waiting for the watcher's settle
+    /// write rather than report a half-baked state.
+    /// </summary>
+    private static bool IsSettled(Graph.Configuration.NodeTypeDefinition def)
+        => IsSettled(def.CompilationStatus);
+
+    /// <summary>
+    /// Settled check over a raw <see cref="CompilationStatus"/> read via the
+    /// JsonElement-tolerant <see cref="ReadCompilationStatusFromNode"/> — so a
+    /// settled-but-DEGRADED node (Content stayed a JsonElement because the per-node
+    /// hub's TypeRegistry lacked the NodeTypeDefinition <c>$type</c>) still satisfies
+    /// the compile-settle wait instead of hanging until the 5s timeout.
+    /// </summary>
+    private static bool IsSettled(CompilationStatus? status)
+        => status == CompilationStatus.Ok || status == CompilationStatus.Error;
+
+    private string FormatDiagnosticsFromDef(
+        Graph.Configuration.NodeTypeDefinition def, string nodeTypePath)
+    {
+        var status = def.CompilationStatus ?? CompilationStatus.Unknown;
+        return FormatDiagnostics(
+            status,
+            nodeTypePath,
+            error: status == CompilationStatus.Error ? def.CompilationError : null,
+            startedAt: status == CompilationStatus.Compiling ? def.LastCompileStartedAt : null,
+            lastCompiledAt: status == CompilationStatus.Ok ? def.LastCompileSucceededAt : null,
             hub.JsonSerializerOptions);
+    }
+
+    /// <summary>
+    /// Triggers a compile for a NodeType by flipping its
+    /// <see cref="NodeTypeDefinition.CompilationStatus"/> to
+    /// <see cref="CompilationStatus.Pending"/> via the canonical remote-stream
+    /// write path: <see cref="MeshNodeStreamExtensions.UpdateMeshNode"/> opens a
+    /// <c>GetRemoteStream&lt;MeshNode, MeshNodeReference&gt;</c> against the
+    /// owning per-node hub and pushes a <see cref="ChangeItem{T}"/> patch through
+    /// the synchronization protocol. The CompileWatcher (installed by
+    /// <c>AddMeshDataSource</c>) observes the Pending state on its own MeshNode
+    /// stream and runs Roslyn, then writes back <see cref="CompilationStatus.Ok"/>
+    /// or <see cref="CompilationStatus.Error"/> plus
+    /// <see cref="NodeTypeDefinition.LastCompilationActivityPath"/>.
+    ///
+    /// <para>Why a dedicated tool over <see cref="Patch"/>: Patch requires both
+    /// Read (to merge the existing node) and Update permission on the target node.
+    /// <c>Compile</c> only needs the per-node hub to accept the synchronisation
+    /// patch — caller drives the same hub that the CompileWatcher listens on, so
+    /// state transitions never bottleneck on a routing service.</para>
+    ///
+    /// <para>Observe progress: poll <c>get @nodeTypePath</c> for
+    /// <c>compilationStatus</c> transitions, then once it settles to Ok/Error
+    /// follow <c>lastCompilationActivityPath</c> to fetch the full executed-source-
+    /// queries / matched-Code-paths / Roslyn-output trace.</para>
+    /// </summary>
+    public IObservable<string> Compile(string path)
+    {
+        logger.LogInformation("Compile called with path={Path}", path);
+
+        if (string.IsNullOrWhiteSpace(path))
+            return Observable.Return(JsonSerializer.Serialize(
+                new { status = "Error", message = "path is required" },
+                hub.JsonSerializerOptions));
+
+        var resolvedPath = ResolvePath(path);
+        if (string.IsNullOrWhiteSpace(resolvedPath))
+            return Observable.Return(JsonSerializer.Serialize(
+                new { status = "Error", message = "path is required" },
+                hub.JsonSerializerOptions));
+
+        return Observable.Defer(() =>
+        {
+            IWorkspace workspace;
+            try { workspace = hub.GetWorkspace(); }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Compile: workspace unavailable for {Path}", resolvedPath);
+                return Observable.Return(JsonSerializer.Serialize(
+                    new { status = "Error", path = resolvedPath, message = ex.Message },
+                    hub.JsonSerializerOptions));
+            }
+
+            // Subscribe to the NodeType's stream BEFORE flipping Pending so we
+            // don't miss the watcher's status transitions. The stream emits the
+            // current node first (whatever status it's in); we wait for a
+            // settled Ok/Error after the trigger.
+            var stream = workspace.GetMeshNodeStream(resolvedPath);
+
+            try
+            {
+                // Impersonate System for the Pending flip. Triggering a recompile is an
+                // INFRASTRUCTURE operation that fills the assembly cache — it must succeed
+                // even when the caller has no Update right on the target partition (the
+                // read-only Doc partition is the canonical case). Under the caller's identity
+                // this flip was denied → "UpdateMeshNode failed" → the compile never ran and
+                // the cache stayed empty (atioz on-demand-compile failure on Doc). The
+                // RunCompile watcher + Release-node creation already run as System; this entry
+                // flip was the straggler still on the caller's identity.
+                var accessService = hub.ServiceProvider.GetService<AccessService>();
+                using (accessService?.ImpersonateAsSystem())
+                    workspace.GetMeshNodeStream(resolvedPath).Update(node => node with
+                    {
+                        Content = WithPendingCompilationStatus(node.Content)
+                    }).Subscribe(
+                        _ => { },
+                        ex => logger.LogWarning(ex,
+                            "Compile: UpdateMeshNode failed for {Path}", resolvedPath));
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Compile trigger failed for {Path}", resolvedPath);
+                return Observable.Return(JsonSerializer.Serialize(
+                    new { status = "Error", path = resolvedPath, message = ex.Message },
+                    hub.JsonSerializerOptions));
+            }
+
+            // Wait for the watcher to write back Ok or Error (60s budget — Roslyn
+            // first compile of a moderate node is 5-15s; bigger trees can take
+            // longer; some hubs may take ~5s to emit a settled state after the
+            // initial Pending). Then return a structured result with the error
+            // body inline if Error — agents/humans get the diagnostic without a
+            // second polling round-trip.
+            return stream
+                .Where(n =>
+                {
+                    var status = ReadCompilationStatusFromNode(n);
+                    return status == CompilationStatus.Ok || status == CompilationStatus.Error;
+                })
+                .Take(1)
+                .Timeout(TimeSpan.FromSeconds(60))
+                .Select(n =>
+                {
+                    var status = ReadCompilationStatusFromNode(n);
+                    var error = ReadCompilationError(n);
+                    var activityPath = ReadActivityPath(n);
+                    return JsonSerializer.Serialize(
+                        new
+                        {
+                            status = status?.ToString() ?? "Unknown",
+                            path = resolvedPath,
+                            error,
+                            activityPath,
+                            message = status == CompilationStatus.Ok
+                                ? "Compile SUCCEEDED."
+                                : "Compile FAILED — see `error` for Roslyn diagnostics. "
+                                  + "Full source-discovery + matched-Code-paths trace lives at "
+                                  + (activityPath ?? "(no activity log written)") + "."
+                        },
+                        hub.JsonSerializerOptions);
+                })
+                .Catch((Exception ex) =>
+                {
+                    logger.LogWarning(ex,
+                        "Compile: timeout / observer error waiting for {Path} to settle", resolvedPath);
+                    return Observable.Return(JsonSerializer.Serialize(
+                        new
+                        {
+                            status = "Pending",
+                            path = resolvedPath,
+                            message = "Compile triggered but did not settle within the deadline. "
+                                + "Poll `get " + resolvedPath + "` for `compilationStatus` and "
+                                + "`lastCompilationActivityPath`. Underlying error: " + ex.Message
+                        },
+                        hub.JsonSerializerOptions));
+                });
+        });
+    }
+
+    private static CompilationStatus? ReadCompilationStatusFromNode(MeshNode? node)
+    {
+        if (node?.Content is Graph.Configuration.NodeTypeDefinition def)
+            return def.CompilationStatus;
+        if (node?.Content is JsonElement json && json.TryGetProperty("compilationStatus", out var p))
+        {
+            if (p.ValueKind == JsonValueKind.String && Enum.TryParse<CompilationStatus>(p.GetString(), true, out var parsed))
+                return parsed;
+        }
+        return null;
+    }
+
+    private static string? ReadCompilationError(MeshNode? node)
+    {
+        if (node?.Content is Graph.Configuration.NodeTypeDefinition def)
+            return def.CompilationError;
+        if (node?.Content is JsonElement json && json.TryGetProperty("compilationError", out var p))
+            return p.ValueKind == JsonValueKind.String ? p.GetString() : null;
+        return null;
+    }
+
+    private static string? ReadActivityPath(MeshNode? node)
+    {
+        if (node?.Content is Graph.Configuration.NodeTypeDefinition def)
+            return def.LastCompilationActivityPath;
+        if (node?.Content is JsonElement json && json.TryGetProperty("lastCompilationActivityPath", out var p))
+            return p.ValueKind == JsonValueKind.String ? p.GetString() : null;
+        return null;
+    }
+
+    /// <summary>
+    /// Returns a new <c>Content</c> object with <c>compilationStatus</c> set to
+    /// <c>Pending</c>. Handles both strongly-typed
+    /// <see cref="Graph.Configuration.NodeTypeDefinition"/> (own hub registered
+    /// the type) and <see cref="JsonElement"/> (remote hub passed it through
+    /// untyped). Other content shapes are returned unchanged with a warning —
+    /// this method is only meaningful on a NodeType node.
+    /// </summary>
+    private object? WithPendingCompilationStatus(object? content)
+    {
+        switch (content)
+        {
+            case Graph.Configuration.NodeTypeDefinition def:
+                return def with { CompilationStatus = CompilationStatus.Pending };
+
+            case JsonElement json:
+            {
+                var node = JsonNode.Parse(json.GetRawText()) as JsonObject ?? new JsonObject();
+                node["compilationStatus"] = "Pending";
+                return JsonSerializer.SerializeToElement(node, hub.JsonSerializerOptions);
+            }
+
+            case null:
+            {
+                var node = new JsonObject { ["compilationStatus"] = "Pending" };
+                return JsonSerializer.SerializeToElement(node, hub.JsonSerializerOptions);
+            }
+
+            default:
+                logger.LogWarning(
+                    "Compile: unexpected content type {Type} on NodeType node — wrapping",
+                    content.GetType().Name);
+                return content;
+        }
+    }
+
+    /// <summary>
+    /// Pure JSON formatter for <see cref="GetDiagnostics"/>. Lives on its own so a unit
+    /// test can lock in the exact wording: in particular, the Ok branch must explicitly
+    /// say "Compile SUCCEEDED" (not just "status: Ok") so that agents and humans reading
+    /// the response can't confuse "no error recorded" with "compile actually ran cleanly".
+    /// </summary>
+    public static string FormatDiagnostics(
+        CompilationStatus status,
+        string nodeTypePath,
+        string? error,
+        DateTimeOffset? startedAt,
+        DateTimeOffset? lastCompiledAt,
+        JsonSerializerOptions options)
+    {
+        switch (status)
+        {
+            case CompilationStatus.Compiling:
+            {
+                var elapsedMs = startedAt is null
+                    ? (long?)null
+                    : (long)(DateTimeOffset.UtcNow - startedAt.Value).TotalMilliseconds;
+                return JsonSerializer.Serialize(
+                    new
+                    {
+                        status = "Compiling",
+                        nodeTypePath,
+                        elapsedMs,
+                        message = "Compile is IN PROGRESS. The NodeType assembly is not yet available — "
+                            + "wait and re-call GetDiagnostics."
+                    },
+                    options);
+            }
+            case CompilationStatus.Error:
+                return JsonSerializer.Serialize(
+                    new
+                    {
+                        status = "Error",
+                        nodeTypePath,
+                        error,
+                        message = "Compile FAILED. The NodeType assembly was NOT built — see `error` "
+                            + "for the Roslyn diagnostics. Fix the source and recycle the NodeType."
+                    },
+                    options);
+            case CompilationStatus.Ok:
+                return JsonSerializer.Serialize(
+                    new
+                    {
+                        status = "Ok",
+                        nodeTypePath,
+                        lastCompiledAt,
+                        message = "Compile SUCCEEDED at " + lastCompiledAt?.ToString("u")
+                            + ". The NodeType assembly was built without errors and is loaded."
+                    },
+                    options);
+            case CompilationStatus.Unknown:
+            default:
+                return JsonSerializer.Serialize(
+                    new
+                    {
+                        status = "Unknown",
+                        nodeTypePath,
+                        message = "NO compile has run since the last invalidation (this is NOT 'Ok'). "
+                            + "The assembly state is unknown — trigger a compile (e.g. navigate to a "
+                            + "layout area on an instance) and re-call GetDiagnostics."
+                    },
+                    options);
+        }
+    }
+
+    /// <summary>
+    /// Runs an executable Code node's C# through the kernel (Microsoft.DotNet.Interactive)
+    /// and returns status JSON. The target node must have
+    /// <c>CodeConfiguration.IsExecutable == true</c>. Emits once when the kernel signals
+    /// completion (the kernel hub posts a response to <see cref="SubmitCodeRequest"/>
+    /// after the code finishes) or on timeout.
+    /// </summary>
+    public IObservable<string> ExecuteScript(string path, int timeoutSeconds = 120)
+    {
+        logger.LogInformation("ExecuteScript called with path={Path}", path);
+        if (string.IsNullOrWhiteSpace(path))
+            return Observable.Return(JsonSerializer.Serialize(
+                new { status = "Error", message = "path is required" },
+                hub.JsonSerializerOptions));
+
+        var resolvedPath = ResolvePath(path);
+
+        // Fire-and-forget dispatch. The Code hub creates an Activity at
+        // `{partition}/_Activity/{submissionId}` (the kernel runs inside the
+        // Activity hub) and writes ActivityLog.Messages + Status as the script
+        // executes. We pre-generate the SubmissionId here so we can return the
+        // Activity path immediately — callers poll `get @{activityPath}` to
+        // observe progress and final status without waiting for an ack.
+        //
+        // Why no wait? The ack `ExecuteScriptResponse` from the Code hub is a
+        // throw-away "got it, here's the activity path" — but routing it back
+        // to a hosted MCP session hub is fragile (we lost ~half a day chasing
+        // it). The Activity itself is the source of truth: live messages,
+        // terminal Status, error details — everything's there. So just return
+        // the activity path and let the caller observe.
+        var partition = resolvedPath.Split('/', 2)[0];
+        if (string.IsNullOrEmpty(partition))
+            return Observable.Return(JsonSerializer.Serialize(
+                new
+                {
+                    status = "Error",
+                    path = resolvedPath,
+                    message = "Could not derive partition from script path."
+                },
+                hub.JsonSerializerOptions));
+
+        var submissionId = Guid.NewGuid().ToString("N");
+        var activityPath = $"{partition}/_Activity/{submissionId}";
+
+        try
+        {
+            hub.Post(
+                new ExecuteScriptRequest { SubmissionId = submissionId },
+                o => o.WithTarget(new Address(resolvedPath)));
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "ExecuteScript failed to dispatch for {Path}", resolvedPath);
+            return Observable.Return(JsonSerializer.Serialize(
+                new { status = "Error", path = resolvedPath, message = ex.Message },
+                hub.JsonSerializerOptions));
+        }
+
+        return Observable.Return(JsonSerializer.Serialize(
+            new
+            {
+                status = "Dispatched",
+                path = resolvedPath,
+                submissionId,
+                activityPath,
+                message = $"Script dispatched. Poll `get @{activityPath}` for live messages " +
+                          "and final status (Running → Succeeded/Failed)."
+            },
+            hub.JsonSerializerOptions));
     }
 }

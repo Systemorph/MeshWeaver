@@ -1,6 +1,5 @@
 ﻿using System.Reactive.Linq;
 using System.Threading.Tasks;
-using FluentAssertions;
 using MeshWeaver.Data;
 using MeshWeaver.Fixture;
 using MeshWeaver.Import.Test.Domain;
@@ -30,7 +29,7 @@ public class EmbeddedResourceInitializationTest(ITestOutputHelper output) : HubT
         var workspace = host.GetWorkspace();
         var categories = await workspace
             .GetObservable<Category>()
-            .FirstAsync(x => x?.Count > 0);
+            .Should().Match(x => x?.Count > 0);
         categories.Should().NotBeEmpty();
     }
 }

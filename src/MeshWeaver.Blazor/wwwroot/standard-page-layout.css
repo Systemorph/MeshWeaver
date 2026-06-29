@@ -40,7 +40,7 @@ html, body {
 }
 
 body {
-    --body-font: "Segoe UI Variable", "Segoe UI", sans-serif;
+    --body-font: "Segoe UI Variable", "Segoe UI", -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
     font-family: var(--body-font);
     font-size: var(--type-ramp-base-font-size);
     line-height: var(--type-ramp-base-line-height);
@@ -59,6 +59,142 @@ body {
 
 .body-content {
     padding: 16px
+}
+
+/* Side-menu splitters (Settings page, NodeType shell) — give each pane a
+   definite-height flex context so menu and content scroll INDEPENDENTLY instead
+   of the whole page overflowing. Mirrors the treatment PortalLayoutBase applies
+   to its outer .body-splitter. The splitter fills its parent
+   .layout-area-container (a flex column) rather than a viewport-minus-magic-number
+   guess. */
+.settings-splitter,
+.shell-splitter {
+    flex: 1 1 auto;
+    min-height: 0;
+}
+
+/* NOTE: the pane is a <div class="fluent-multi-splitter-pane"> (a CLASS), not a
+   <fluent-multi-splitter-pane> element. The leading dot is mandatory — without it
+   these rules match nothing, the pane keeps FluentUI's default
+   `display:block; overflow:hidden`, and the content stack below never gets a
+   definite height to scroll within (it just clips). */
+.settings-splitter .fluent-multi-splitter-pane,
+.shell-splitter .fluent-multi-splitter-pane {
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+}
+
+.settings-splitter .fluent-multi-splitter-pane > div,
+.shell-splitter .fluent-multi-splitter-pane > div {
+    width: 100%;
+    /* flex:1 1 auto, NOT height:100% — the pane's height comes from flex stretch,
+       which is INDEFINITE for percentage resolution, so a child height:100% collapses
+       to auto (content height) and the pane's overflow:hidden clips it = no scroll.
+       Filling via flex against the column-flex pane gives a used height the inner
+       overflow:auto can scroll within. */
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+/* NodeType shell: the pane's child div (the area's actual control — no wrapper
+   stack, so tests and embeds see the real control) IS the scroll container.
+   Settings keeps its dedicated .settings-content-pane inner scroller instead. */
+.shell-splitter .fluent-multi-splitter-pane > div {
+    overflow-y: auto;
+    overflow-x: hidden;
+}
+
+/* Menu pane scrolls on its own. NavMenuView ignores inline Style on its root,
+   so the scroll context has to come from the stylesheet. flex:1 1 auto (not
+   height:100%) for the same indefinite-percentage-height reason as the content pane. */
+.settings-splitter .navmenu,
+.shell-splitter .navmenu {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+}
+
+/* Settings menu pane: pinned search box on top, the live-filtered nav menu fills
+   and scrolls below it. The pane's > div (this stack) is already a flex column via
+   the rule above; pin the search, let the menu area grow. */
+.settings-menu-search {
+    flex: 0 0 auto;
+    margin: 8px 8px 4px 8px;
+}
+
+.settings-menu-pane .layout-area {
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+/* Make the collapse/expand chevrons on the splitter bar an easier click target —
+   the FluentUI default is an 8px glyph that is easy to miss. */
+.settings-splitter > .fluent-multi-splitter-bar > span[part="collapse"],
+.settings-splitter > .fluent-multi-splitter-bar > span[part="expand"],
+.shell-splitter > .fluent-multi-splitter-bar > span[part="collapse"],
+.shell-splitter > .fluent-multi-splitter-bar > span[part="expand"] {
+    font-size: 10px;
+    padding: 8px 0;
+}
+
+.settings-content-pane {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding: 32px 40px 56px;
+    background: var(--neutral-layer-1);
+}
+
+
+/* Comfortable, centered reading column — modern settings/admin convention. */
+.settings-content-pane > * {
+    max-width: 920px;
+    margin-inline: auto;
+}
+
+/* ── Settings section card (modern business) ─────────────────────────────────
+   Replaces inline border/padding on each section (SettingsLayoutArea.BuildSection)
+   so the look is consistent and tweakable in one place. */
+.settings-section {
+    width: 100%;
+    background: var(--neutral-layer-2);
+    border: 1px solid var(--neutral-stroke-rest);
+    border-radius: 12px;
+    overflow: hidden;
+    margin-bottom: 20px;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 2px 6px rgba(0, 0, 0, 0.05);
+    transition: box-shadow 0.15s ease, border-color 0.15s ease;
+}
+
+.settings-section:hover {
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.06), 0 8px 20px rgba(0, 0, 0, 0.07);
+    border-color: var(--neutral-stroke-hover);
+}
+
+.settings-section-header {
+    padding: 13px 20px;
+    font-weight: 600;
+    font-size: 0.72rem;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    color: var(--neutral-foreground-hint);
+    background: var(--neutral-layer-3);
+    border-bottom: 1px solid var(--neutral-stroke-rest);
+}
+
+.settings-section-body {
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
 }
 
 fluent-toolbar {
@@ -256,6 +392,43 @@ fluent-header,
 .header-gutters,
 .header-gutters > * {
     overflow: visible !important;
+}
+
+/* ── Catalog / search card grid — cards fill their grid cell ──────────────────
+   The grid cell, the wrapping <a>/<div>, and the <fluent-card> host are rendered by
+   DIFFERENT Blazor components (MeshSearchView → MeshNodeCardView → FluentCard), so a
+   component-scoped `.razor.css` rule never reaches the inner hosts — the CSS-isolation
+   b-* attribute is not applied across component boundaries (nor to a child-component's
+   host element). That is why the earlier `display:block;width:100%` on `.mesh-node-card`
+   in MeshNodeCardView.razor.css never landed. These GLOBAL (non-scoped) rules cross every
+   boundary, so each card tiles to the FULL cell width instead of shrinking to its content
+   (the cause of the gaps + overlapping titles). <fluent-card> defaults to
+   display:inline-block (content width) — force block fill; min-width:0 lets long titles
+   ellipsize instead of widening the auto-fill track. */
+.mesh-search-area-grid > * {
+    min-width: 0;
+}
+
+.mesh-search-area-grid > * > * {
+    /* the card wrapper is a flex item of the grid cell — grow to fill it. Absolutely-
+       positioned affordances (drill-down / delete) are NOT flex items, so this never
+       stretches them. */
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.mesh-search-area-grid .mesh-node-card,
+.mesh-search-area-grid .mesh-search-card {
+    display: block;
+    width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+    height: 100%;
+}
+
+.mesh-search-area-grid .mesh-node-card:hover,
+.mesh-search-area-grid .mesh-search-card:hover {
+    box-shadow: var(--elevation-shadow-card-active);
 }
 
 /* Global SVG icon mask — any element with --icon-url renders the SVG as a mask */

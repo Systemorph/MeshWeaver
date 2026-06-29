@@ -17,31 +17,12 @@
     {
         <div class="editor-section metadata-section" style="margin-bottom: 24px;">
             <h3>Metadata</h3>
-
-            <div class="path-editor" style="display: flex; gap: 8px; align-items: center; margin-bottom: 16px;">
-                <FluentTextField Label="Parent Path" Value="@_parentPath" ReadOnly="true" Style="flex: 1;" />
-                <span style="font-size: 18px;">/</span>
-                <FluentTextField Label="Name Segment" @bind-Value="_lastSegment" Style="flex: 1;" />
-            </div>
-
             <div class="metadata-fields" style="display: flex; flex-direction: column; gap: 12px;">
-                <FluentTextField Label="Display Name" @bind-Value="_name" Style="width: 100%;" />
+                <FluentTextField Label="Display Name"
+                                 Value="@_name"
+                                 @oninput="@(e => OnNameChanged(e.Value?.ToString() ?? string.Empty))"
+                                 Style="width: 100%;" />
             </div>
-
-            <div style="margin-top: 16px;">
-                <FluentButton Appearance="FluentAppearance.Accent" OnClick="SaveMetadataAsync" Disabled="_isSaving">
-                    @(_isSaving ? "Saving..." : "Save Metadata")
-                </FluentButton>
-            </div>
-
-            @if (!string.IsNullOrEmpty(_metadataMessage))
-            {
-                <FluentMessageBar Title="@(_metadataSuccess ? "Success" : "Error")"
-                                  Intent="@(_metadataSuccess ? MessageIntent.Success : MessageIntent.Error)"
-                                  Style="margin-top: 12px;">
-                    @_metadataMessage
-                </FluentMessageBar>
-            }
         </div>
 
         <div class="editor-section content-section">
@@ -76,24 +57,10 @@
                     Content editing is only supported for Story and Article node types.
                 </FluentMessageBar>
             }
+        </div>
 
-            @if (_nodeType == "story" || _nodeType == "article")
-            {
-                <div style="margin-top: 16px;">
-                    <FluentButton Appearance="FluentAppearance.Accent" OnClick="SaveContentAsync" Disabled="_isSaving">
-                        @(_isSaving ? "Saving..." : "Save Content")
-                    </FluentButton>
-                </div>
-
-                @if (!string.IsNullOrEmpty(_contentMessage))
-                {
-                    <FluentMessageBar Title="@(_contentSuccess ? "Success" : "Error")"
-                                      Intent="@(_contentSuccess ? MessageIntent.Success : MessageIntent.Error)"
-                                      Style="margin-top: 12px;">
-                        @_contentMessage
-                    </FluentMessageBar>
-                }
-            }
+        <div class="editor-status" style="margin-top: 12px; font-size: 12px; color: var(--neutral-foreground-hint);">
+            Changes are saved automatically.
         </div>
     }
 </div>

@@ -2,6 +2,7 @@ using System.Text.Json;
 using MeshWeaver.Data.Completion;
 using MeshWeaver.Hosting.Activity;
 using MeshWeaver.Hosting.Completion;
+using MeshWeaver.Hosting.Persistence.Http;
 using MeshWeaver.Hosting.Persistence.Query;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Activity;
@@ -21,6 +22,81 @@ namespace MeshWeaver.Hosting.Persistence;
 public static class PersistenceExtensions
 {
     /// <summary>
+    /// Keyed-service key used to expose the un-decorated <see cref="IStorageAdapter"/>
+    /// to the version-writing decorator (and to <see cref="IVersionQuery"/> factory
+    /// type-sniffing for <see cref="FileSystemStorageAdapter"/>).
+    /// </summary>
+    private const string InnerStorageAdapterKey = "inner";
+
+    /// <summary>Marker singleton: present once <see cref="DecorateStorageAdapterWithVersionWriting"/> ran.</summary>
+    private sealed class VersionWritingDecoratedMarker { }
+
+    /// <summary>
+    /// Finds the last <see cref="IStorageAdapter"/> registration, re-exposes it as a
+    /// keyed singleton with key "inner", then re-registers the default
+    /// <see cref="IStorageAdapter"/> service as a <see cref="VersionWritingStorageAdapter"/>
+    /// that wraps the inner. Replaces the historical
+    /// <c>FileSystemPersistenceService.SaveNodeAsync</c> chokepoint deleted in the
+    /// persistence cull (2026-05-12) — without this, every save path skipped the
+    /// version-history snapshot.
+    ///
+    /// <para>Idempotency is via the <see cref="VersionWritingDecoratedMarker"/> singleton:
+    /// the previous <c>descriptor.ImplementationType == typeof(VersionWritingStorageAdapter)</c>
+    /// check never fired because the decorator is registered as a factory (so
+    /// <c>ImplementationType</c> is null). Repeated calls (e.g.
+    /// <c>UseOrleansMeshServer</c> wires <c>AddPartitionedInMemoryPersistence</c>
+    /// as default, then the host calls another <c>Add…Persistence</c>) stacked
+    /// decorators and duplicate keyed <c>"inner"</c> entries — the
+    /// <see cref="System.Collections.IEnumerable"/>-mediated cycle that produced
+    /// the StackOverflow at Orleans silo bootstrap.</para>
+    /// </summary>
+    private static void DecorateStorageAdapterWithVersionWriting(IServiceCollection services)
+    {
+        if (services.Any(d => d.ServiceType == typeof(VersionWritingDecoratedMarker)))
+            return;
+
+        var descriptor = services.LastOrDefault(d => d.ServiceType == typeof(IStorageAdapter));
+        if (descriptor == null) return;
+
+        services.Remove(descriptor);
+
+        // Republish the original descriptor under the keyed slot so the
+        // decorator (and IVersionQuery factory) can resolve the inner.
+        if (descriptor.ImplementationInstance is IStorageAdapter instance)
+        {
+            services.AddKeyedSingleton(InnerStorageAdapterKey, instance);
+        }
+        else if (descriptor.ImplementationFactory != null)
+        {
+            services.AddKeyedSingleton<IStorageAdapter>(
+                InnerStorageAdapterKey,
+                (sp, _) => (IStorageAdapter)descriptor.ImplementationFactory(sp));
+        }
+        else if (descriptor.ImplementationType != null)
+        {
+            services.AddKeyedSingleton<IStorageAdapter>(
+                InnerStorageAdapterKey,
+                (sp, _) => (IStorageAdapter)ActivatorUtilities.CreateInstance(sp, descriptor.ImplementationType));
+        }
+        else
+        {
+            // Unknown descriptor shape — put it back as-is and bail.
+            services.Add(descriptor);
+            return;
+        }
+
+        services.AddSingleton<IStorageAdapter>(sp =>
+            new VersionWritingStorageAdapter(
+                sp.GetRequiredKeyedService<IStorageAdapter>(InnerStorageAdapterKey),
+                sp.GetService<IVersionQuery>()));
+
+        // Sentinel so repeat calls (Orleans default + host-explicit persistence)
+        // see the prior decoration and bail above instead of stacking another
+        // decorator + another keyed "inner" entry.
+        services.AddSingleton<VersionWritingDecoratedMarker>(new VersionWritingDecoratedMarker());
+    }
+
+    /// <summary>
     /// Adds persistence configured from Graph:Storage section.
     /// Uses the Type field to select the appropriate storage adapter factory.
     /// </summary>
@@ -31,6 +107,32 @@ public static class PersistenceExtensions
         where TBuilder : MeshBuilder
     {
         builder.ConfigureServices(services => services.AddPersistenceFromConfig(configuration));
+        return builder.RegisterMeshQueryCoreOnMeshHub();
+    }
+
+    /// <summary>
+    /// Registers <see cref="IMeshQueryCore"/> as a singleton on the top-most
+    /// mesh hub's service container. Resolves to <see cref="StorageAdapterMeshQueryProvider"/>,
+    /// the unsecured surface (no <c>SecurityService</c> dep) used by
+    /// <see cref="MeshWeaver.Graph.SyncedQueryMeshNodes"/> and other infrastructure paths
+    /// (NavigationService, VUserHelper, etc.).
+    ///
+    /// <para>Per-node hubs inherit the registration through Autofac child-scope
+    /// resolution, so <c>hub.ServiceProvider.GetRequiredService&lt;IMeshQueryCore&gt;()</c>
+    /// works at every hub depth without walking the parent chain.</para>
+    ///
+    /// <para>This is the SINGLE registration point for <see cref="IMeshQueryCore"/>.
+    /// Do not also register it on the root service collection — keeping it on the
+    /// mesh hub avoids the AsiaRe-style "service has not been registered" failure
+    /// when a per-hub container couldn't see a root-level singleton.</para>
+    /// </summary>
+    public static TBuilder RegisterMeshQueryCoreOnMeshHub<TBuilder>(this TBuilder builder)
+        where TBuilder : MeshBuilder
+    {
+        // IMeshQueryCore registration moved to the root container — see
+        // AddCoreAndWrapperServices / AddPartitionedCoreAndWrapperServices.
+        // The cross-instance mirror handler was deleted in the persistence-cull
+        // (2026-05-12); the new shape will fan out CreateNodeRequest per node.
         return builder;
     }
 
@@ -83,7 +185,7 @@ public static class PersistenceExtensions
         });
 
         // Register common services and wrapper services
-        return services.AddCoreAndWrapperServices<FileSystemPersistenceService>();
+        return services.AddCoreAndWrapperServices();
     }
 
     /// <summary>
@@ -100,7 +202,7 @@ public static class PersistenceExtensions
         where TBuilder : MeshBuilder
     {
         builder.ConfigureServices(services => services.AddFileSystemPersistence(baseDirectory, writeOptionsModifier));
-        return builder;
+        return builder.RegisterMeshQueryCoreOnMeshHub();
     }
 
     /// <summary>
@@ -127,7 +229,7 @@ public static class PersistenceExtensions
         where TBuilder : MeshBuilder
     {
         builder.ConfigureServices(services => services.AddInMemoryPersistence());
-        return builder;
+        return builder.RegisterMeshQueryCoreOnMeshHub();
     }
 
     /// <summary>
@@ -141,26 +243,98 @@ public static class PersistenceExtensions
         => builder.AddInMemoryPersistence();
 
     /// <summary>
-    /// Adds an in-memory persistence service (no file system backing).
+    /// Adds in-memory persistence (no file system backing) using a single
+    /// <c>AdapterPersistenceService</c> singleton. Use this when the test
+    /// or app does not need <see cref="IPartitionStorageProvider"/> rules
+    /// (e.g. <c>EmbeddedResourcePartition</c>) — those go through the
+    /// routing core and require <see cref="AddPartitionedInMemoryPersistence(IServiceCollection)"/>.
     /// </summary>
     /// <param name="services">The service collection</param>
     /// <returns>The service collection for chaining</returns>
     public static IServiceCollection AddInMemoryPersistence(this IServiceCollection services)
     {
-        // Register common services and wrapper services
-        return services.AddCoreAndWrapperServices<InMemoryPersistenceService>();
+        // The in-memory adapter owns its own change-feed Subject and surfaces
+        // it via IStorageAdapter.Changes — synced-query providers subscribe
+        // there. No standalone IDataChangeNotifier service needed.
+        services.TryAddSingleton<IStorageAdapter>(sp =>
+            new InMemoryStorageAdapter(
+                sp.GetService<ILogger<InMemoryStorageAdapter>>()));
+        RegisterDefaultAssemblyStore(services);
+        return services.AddCoreAndWrapperServices();
     }
 
     /// <summary>
-    /// Adds an existing in-memory persistence service instance.
-    /// Useful for tests that need to seed data before the hub is initialized.
+    /// Adds in-memory persistence using the partition-routing stack. Each
+    /// first-segment partition gets its own <c>AdapterPersistenceService</c>
+    /// via <c>InMemoryPartitionedStoreFactory</c>; explicit
+    /// <see cref="IPartitionStorageProvider"/> rules (e.g.
+    /// <see cref="EmbeddedResourcePartitionStorageProvider"/> registered by
+    /// <c>AddEmbeddedResourcePartition</c>) are honoured first-match-wins; the
+    /// in-memory factory is the writable catch-all fallback. Static partitions
+    /// (<see cref="PartitionDefinition"/> with <c>DataSource = "static"</c>) are
+    /// surfaced read-only by <c>RoutingPersistenceServiceCore</c>.
+    ///
+    /// <para>Use this when the host registers <c>EmbeddedResourcePartition</c>
+    /// rules — e.g. <c>MeshWeaver.Documentation.DocumentationExtensions.AddDocumentation</c>.
+    /// Plain <see cref="AddInMemoryPersistence(IServiceCollection)"/> registers a
+    /// single store and bypasses the routing core, so embedded-resource
+    /// partitions wouldn't be reachable.</para>
     /// </summary>
     /// <param name="services">The service collection</param>
-    /// <param name="instance">The pre-created persistence service instance</param>
     /// <returns>The service collection for chaining</returns>
-    public static IServiceCollection AddInMemoryPersistence(this IServiceCollection services, InMemoryPersistenceService instance)
+    public static IServiceCollection AddPartitionedInMemoryPersistence(this IServiceCollection services)
     {
-        return services.AddPersistence(instance);
+        // One shared in-memory adapter + provider — InMemoryPartitionStorageProvider
+        // is a wildcard catch-all that handles every first-segment partition.
+        services.AddSingleton<InMemoryStorageAdapter>(sp =>
+            new InMemoryStorageAdapter(sp.GetService<ILoggerFactory>()?.CreateLogger<InMemoryStorageAdapter>()));
+        services.AddSingleton<IPartitionStorageProvider>(sp =>
+            new InMemoryPartitionStorageProvider(sp.GetRequiredService<InMemoryStorageAdapter>()));
+        RegisterDefaultAssemblyStore(services);
+        return services.AddPartitionedCoreAndWrapperServices();
+    }
+
+    /// <summary>
+    /// Mesh-builder shortcut for <see cref="AddPartitionedInMemoryPersistence(IServiceCollection)"/>.
+    /// Also registers <c>IMeshQueryCore</c> on the top-most mesh hub.
+    /// </summary>
+    public static TBuilder AddPartitionedInMemoryPersistence<TBuilder>(this TBuilder builder)
+        where TBuilder : MeshBuilder
+    {
+        builder.ConfigureServices(services => services.AddPartitionedInMemoryPersistence());
+        return builder.RegisterMeshQueryCoreOnMeshHub();
+    }
+
+    /// <summary>
+    /// Adds an existing in-memory storage adapter instance.
+    /// Useful for tests that need to seed data before the hub is initialized.
+    /// </summary>
+    public static IServiceCollection AddInMemoryPersistence(this IServiceCollection services, IStorageAdapter adapter)
+    {
+        services.AddSingleton(adapter);
+        RegisterDefaultAssemblyStore(services);
+        return services.AddCoreAndWrapperServices();
+    }
+
+    /// <summary>
+    /// Default IAssemblyStore: per-process temp-dir FileSystem store. TryAddSingleton
+    /// so callers that wire an explicit store (production: AddBlobAssemblyStore;
+    /// dev monolith / test base: AddFileSystemAssemblyStore) still win. Without
+    /// this fallback, dynamic NodeType compiles run with NullAssemblyStore — the
+    /// compile produces a DLL but UploadToStoreIfNeeded silently skips, the
+    /// NodeTypeDefinition write-back stamps Status=Ok with null
+    /// LatestAssembly{Collection,Path}, and slow-path enrichment stalls every
+    /// per-instance hub waiting for assembly fields that never arrive (repro:
+    /// MeshNodeVersionSyncTest after AddInMemoryPersistence override that
+    /// skipped the base class's AddFileSystemAssemblyStore call).
+    /// </summary>
+    private static void RegisterDefaultAssemblyStore(IServiceCollection services)
+    {
+        services.TryAddSingleton<IAssemblyStore>(sp =>
+            new MeshWeaver.Graph.Configuration.FileSystemAssemblyStore(
+                System.IO.Path.Combine(System.IO.Path.GetTempPath(),
+                    $"MeshWeaver-AssemblyStore-pid{System.Environment.ProcessId}"),
+                sp.GetRequiredService<ILogger<MeshWeaver.Graph.Configuration.FileSystemAssemblyStore>>()));
     }
 
     /// <summary>
@@ -179,7 +353,7 @@ public static class PersistenceExtensions
         services.AddSingleton<IStorageAdapter>(new FileSystemStorageAdapter(baseDirectory, writeOptionsModifier));
 
         // Register common services and wrapper services
-        return services.AddCoreAndWrapperServices<FileSystemPersistenceService>();
+        return services.AddCoreAndWrapperServices();
     }
 
     /// <summary>
@@ -195,44 +369,17 @@ public static class PersistenceExtensions
     {
         builder.ConfigureServices(services =>
         {
-            services.AddSingleton<IStorageAdapter>(new CachingStorageAdapter(baseDirectory, writeOptionsModifier));
-            return services.AddCoreAndWrapperServices<FileSystemPersistenceService>();
+            services.AddSingleton<IStorageAdapter>(sp => new CachingStorageAdapter(
+                baseDirectory, writeOptionsModifier,
+                logger: sp.GetService<Microsoft.Extensions.Logging.ILogger<CachingStorageAdapter>>()));
+            return services.AddCoreAndWrapperServices();
         });
-        return builder;
+        return builder.RegisterMeshQueryCoreOnMeshHub();
     }
 
-    /// <summary>
-    /// Adds cached partitioned file system persistence that pre-loads all files into memory.
-    /// </summary>
-    public static TBuilder AddCachedPartitionedFileSystemPersistence<TBuilder>(
-        this TBuilder builder,
-        string baseDirectory,
-        Func<JsonSerializerOptions, JsonSerializerOptions>? writeOptionsModifier = null)
-        where TBuilder : MeshBuilder
-    {
-        builder.ConfigureServices(services =>
-        {
-            services.TryAddSingleton<IDataChangeNotifier, DataChangeNotifier>();
-            services.TryAddSingleton<IStorageAdapter>(new CachingStorageAdapter(baseDirectory, writeOptionsModifier));
-
-            services.AddSingleton<IPartitionedStoreFactory>(sp =>
-            {
-                var inclusions = sp.GetServices<PartitionInclusion>().ToList();
-                var filter = inclusions.Count > 0
-                    ? new PartitionFilter(inclusions.Select(i => i.Name))
-                    : null;
-
-                return new CachingPartitionedStoreFactory(
-                    baseDirectory,
-                    writeOptionsModifier,
-                    sp.GetService<IDataChangeNotifier>(),
-                    filter);
-            });
-
-            return services.AddPartitionedCoreAndWrapperServices();
-        });
-        return builder;
-    }
+    // AddCachedPartitionedFileSystemPersistence deleted — no consumers in
+    // src/, test/, samples/, or memex/. CachingStorageAdapter survives for
+    // AddCachedFileSystemPersistence (single-partition fixture path).
 
     /// <summary>
     /// Adds a custom storage adapter with in-memory persistence service.
@@ -245,53 +392,12 @@ public static class PersistenceExtensions
         services.AddSingleton(storageAdapter);
 
         // Register common services and wrapper services
-        return services.AddCoreAndWrapperServices<InMemoryPersistenceService>();
+        return services.AddCoreAndWrapperServices();
     }
 
-    /// <summary>
-    /// Adds a custom persistence core service.
-    /// </summary>
-    /// <param name="services">The service collection</param>
-    /// <param name="persistenceServiceCore">The custom persistence core service</param>
-    /// <returns>The service collection for chaining</returns>
-    internal static IServiceCollection AddPersistence(this IServiceCollection services, IStorageService persistenceServiceCore)
-    {
-        // Register the data change notifier as singleton
-        services.TryAddSingleton<IDataChangeNotifier, DataChangeNotifier>();
-
-        // Core services remain singletons (for shared caches)
-        services.AddSingleton(persistenceServiceCore);
-        services.TryAddSingleton<InMemoryMeshQuery>();
-        services.TryAddSingleton<IMeshQueryProvider>(sp => sp.GetRequiredService<InMemoryMeshQuery>());
-        services.TryAddSingleton<IMeshQueryCore>(sp => sp.GetRequiredService<InMemoryMeshQuery>());
-
-        // Always add static node provider (picks up IStaticNodeProvider registrations + MeshConfiguration.Nodes)
-        services.AddSingleton<IMeshQueryProvider>(sp =>
-            new StaticNodeQueryProvider(
-                sp.GetServices<IStaticNodeProvider>(),
-                sp.GetService<MeshConfiguration>()));
-
-        // Register MeshCatalog and its interfaces
-        services.AddMeshCatalog();
-
-        // Import/Export services (scoped — need IMessageHub for JsonSerializerOptions)
-        services.TryAddScoped<IMeshImportService, MeshImportService>();
-        services.TryAddScoped<IMeshExportService, MeshExportService>();
-
-        // Wrapper services are scoped (per hub)
-        services.AddScoped<IMeshStorage, PersistenceService>();
-        services.AddScoped<IMeshService>(sp =>
-            new MeshService(
-                sp.GetServices<IMeshQueryProvider>(),
-                sp.GetRequiredService<IMessageHub>()));
-        services.TryAddScoped<IChatCompletionOrchestrator>(sp =>
-            new ChatCompletionOrchestrator(
-                sp.GetRequiredService<IMeshService>(),
-                sp.GetRequiredService<IMessageHub>(),
-                sp.GetService<ILogger<ChatCompletionOrchestrator>>()));
-
-        return services;
-    }
+    // AddPersistence(IServiceCollection, IStorageService) deleted in the cull —
+    // IStorageService is gone. Callers register an IStorageAdapter directly
+    // and call AddCoreAndWrapperServices().
 
     /// <summary>
     /// Adds partitioned file system persistence where each top-level path segment
@@ -309,7 +415,7 @@ public static class PersistenceExtensions
         where TBuilder : MeshBuilder
     {
         builder.ConfigureServices(services => services.AddPartitionedFileSystemPersistence(baseDirectory, writeOptionsModifier));
-        return builder;
+        return builder.RegisterMeshQueryCoreOnMeshHub();
     }
 
     /// <summary>
@@ -325,28 +431,56 @@ public static class PersistenceExtensions
         string baseDirectory,
         Func<JsonSerializerOptions, JsonSerializerOptions>? writeOptionsModifier = null)
     {
-        services.TryAddSingleton<IDataChangeNotifier, DataChangeNotifier>();
 
-        // Register IStorageAdapter for cross-partition scanning (e.g. activity log feed)
-        services.TryAddSingleton<IStorageAdapter>(new FileSystemStorageAdapter(baseDirectory, writeOptionsModifier));
+        // In-memory routing for Release MeshNodes that the compile watcher
+        // emits at {nodeTypePath}/Release/{version}. Registered BEFORE the
+        // wildcard FileSystem provider so PersistenceService's first-match-wins
+        // iteration picks it for any path containing a /Release/ segment.
+        // Rationale: Release nodes are regenerated on every successful compile
+        // — persisting them to disk only litters file-system partition
+        // directories with per-compile snapshots that go stale across
+        // path-format changes (e.g. the _Release → Release rename).
+        services.AddSingleton<IPartitionStorageProvider>(sp =>
+            new InMemoryPartitionStorageProvider(
+                adapter: new InMemoryStorageAdapter(
+                    sp.GetService<ILoggerFactory>()?.CreateLogger<InMemoryStorageAdapter>()),
+                matches: ContainsReleaseSegment,
+                name: "InMemory:Release",
+                // Above the durable backends (100): Release nodes must stay
+                // in-memory even though FileSystem/PG would claim them. The
+                // matches predicate (now enforced by PathFilteringStorageAdapter)
+                // scopes the claim to /Release/ paths only.
+                priority: 150));
 
-        services.AddSingleton<IPartitionedStoreFactory>(sp =>
-        {
-            // Collect all partition inclusions registered via IncludePartition()
-            var inclusions = sp.GetServices<PartitionInclusion>().ToList();
-            var filter = inclusions.Count > 0
-                ? new PartitionFilter(inclusions.Select(i => i.Name))
-                : null;
+        // One shared FileSystemStorageAdapter + wildcard provider — handles every
+        // first-segment partition rooted at baseDirectory. No factory, no per-segment
+        // store provisioning.
+        var fsAdapter = new FileSystemStorageAdapter(baseDirectory, writeOptionsModifier);
+        services.AddSingleton(fsAdapter);
+        services.AddSingleton<IPartitionStorageProvider>(new FileSystemPartitionStorageProvider(fsAdapter));
 
-            return new FileSystemPartitionedStoreFactory(
-                baseDirectory,
-                writeOptionsModifier,
-                sp.GetService<IDataChangeNotifier>(),
-                filter);
-        });
+        // Default IAssemblyStore so dynamic NodeType compiles can persist their
+        // bytes cross-silo; see RegisterDefaultAssemblyStore for the rationale.
+        RegisterDefaultAssemblyStore(services);
 
         return services.AddPartitionedCoreAndWrapperServices();
     }
+
+    /// <summary>
+    /// Matches a path that contains <c>Release</c> as a whole path segment —
+    /// the shape <see cref="MeshWeaver.Graph.MeshDataSourceExtensions"/>'s
+    /// <c>TryCreateReleaseNode</c> emits at <c>{nodeTypePath}/Release/{version}</c>.
+    /// Anchored at start, after a <c>/</c>, and bounded by <c>/</c> or end-of-string
+    /// so partition names that merely start with "Release" don't accidentally
+    /// match.
+    /// </summary>
+    private static readonly System.Text.RegularExpressions.Regex _releaseSegmentRegex =
+        new(@"(^|/)Release(/|$)",
+            System.Text.RegularExpressions.RegexOptions.Compiled
+            | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
+    private static bool ContainsReleaseSegment(string fullPath)
+        => !string.IsNullOrWhiteSpace(fullPath) && _releaseSegmentRegex.IsMatch(fullPath);
 
     /// <summary>
     /// Includes a specific partition by name in selective partitioned persistence.
@@ -359,124 +493,165 @@ public static class PersistenceExtensions
         builder.ConfigureServices(services =>
         {
             services.AddSingleton(new PartitionInclusion(partitionName));
+            // Also surface every PartitionInclusion as a discoverable
+            // Admin/Partition/{name} Partition MeshNode via a static provider.
+            // TryAddEnumerable so a host calling IncludePartition multiple times
+            // registers the provider once; the provider itself enumerates all
+            // PartitionInclusion singletons resolved from DI.
+            services.TryAddEnumerable(
+                ServiceDescriptor.Singleton<IStaticNodeProvider, IncludedPartitionStaticProvider>());
             return services;
         });
         return builder;
     }
 
+    /// <summary>Marker singleton: present once a core/wrapper-services pass ran.</summary>
+    private sealed class CoreAndWrapperServicesMarker { }
+
     /// <summary>
     /// Adds partitioned persistence using a custom IPartitionedStoreFactory.
+    ///
+    /// <para>Idempotent — repeat calls (Orleans defaults the partitioned in-memory
+    /// stack from <c>UseOrleansMeshServer</c>, the host typically calls another
+    /// <c>Add…Persistence</c> right after, both of which funnel here) bail on a
+    /// sentinel marker. Otherwise the duplicate <c>IStorageAdapter</c> +
+    /// <c>IMeshQueryProvider</c> factory registrations stack and Autofac cycles
+    /// through the IEnumerable fan-in.</para>
     /// </summary>
     /// <param name="services">The service collection</param>
     /// <returns>The service collection for chaining</returns>
     public static IServiceCollection AddPartitionedCoreAndWrapperServices(this IServiceCollection services)
     {
-        services.TryAddSingleton<IDataChangeNotifier, DataChangeNotifier>();
+        if (services.Any(d => d.ServiceType == typeof(CoreAndWrapperServicesMarker)))
+            return services;
 
-        // Register the routing persistence core
-        services.AddSingleton<RoutingPersistenceServiceCore>(sp =>
-            new RoutingPersistenceServiceCore(
-                sp.GetRequiredService<IPartitionedStoreFactory>(),
-                sp.GetService<IDataChangeNotifier>(),
-                sp.GetServices<IStaticNodeProvider>()));
-        services.AddSingleton<IStorageService>(sp =>
-            sp.GetRequiredService<RoutingPersistenceServiceCore>());
 
-        // Register the routing query provider.
-        // Partition-level access control is enforced in SQL (public.partition_access),
-        // not in the routing layer.
+        // PersistenceService bundles all IPartitionStorageProvider adapters.
+        // Pure delegation by path — no cache, no init, no factory wrapper.
+        services.AddSingleton<IStorageAdapter>(sp =>
+            new PersistenceService(
+                sp.GetServices<IPartitionStorageProvider>(),
+                sp.GetService<ILogger<PersistenceService>>()));
+
+        // Default adapter-backed query provider — pedestrian exact-path probes
+        // every backend needs in the IMeshQueryProvider fan-in. Native query
+        // backends (Postgres, Cosmos) register their OWN IMeshQueryProvider
+        // alongside this one; both are needed because the native provider
+        // typically short-circuits scoped queries (path:X) back to this
+        // pedestrian one for the actual row fetch.
+        //
+        // 🚨 AddSingleton, not TryAddSingleton: `TryAddSingleton<IMeshQueryProvider>`
+        // is FIRST-WINS by service-type, so a backend that registered its own
+        // IMeshQueryProvider BEFORE calling AddPartitionedCoreAndWrapperServices
+        // would silently skip this registration, leaving the fan-in without the
+        // pedestrian exact-path probe — symptom: PathResolver returns null for
+        // any path the backend doesn't handle in fan-out mode (Postgres
+        // partition-scoped path queries; repro:
+        // PartitionLifecycleTests.LazyCreate_FirstWrite_EnablesSubsequentReads).
+        // The CoreAndWrapperServicesMarker idempotency guard above guarantees
+        // we only register this once per service collection.
+        services.TryAddSingleton<StorageAdapterMeshQueryProvider>();
+        services.AddSingleton<IMeshQueryProvider>(sp =>
+            sp.GetRequiredService<StorageAdapterMeshQueryProvider>());
+
+        // IMeshQueryCore — one boss for unsecured fan-out across every registered
+        // IMeshQueryProvider. Hub null is OK; the unsecured surface takes options
+        // explicitly and doesn't read hub.JsonSerializerOptions.
+        services.TryAddSingleton<IMeshQueryCore>(sp =>
+            new MeshQuery(sp.GetServices<IMeshQueryProvider>(), hub: null!));
+
+        // Versioning is per-backend. Default no-op; PostgreSQL / FileSystem
+        // can override with their own IVersionQuery registration.
+        services.TryAddSingleton<IVersionQuery>(sp => new NoOpVersionQuery());
+
+        DecorateStorageAdapterWithVersionWriting(services);
+
+        // Static-node query provider for built-in catalogs (Agent, Model, Role).
         services.AddSingleton<IMeshQueryProvider>(sp =>
         {
-            var crossSchema = sp.GetService<ICrossSchemaQueryProvider>();
-            var logger = sp.GetService<ILoggerFactory>()?.CreateLogger<RoutingMeshQueryProvider>();
-            logger?.LogInformation("[STARTUP] RoutingMeshQueryProvider: CrossSchemaProvider={HasCrossSchema}",
-                crossSchema != null);
-            return new RoutingMeshQueryProvider(
-                sp.GetRequiredService<RoutingPersistenceServiceCore>(),
-                sp.GetService<MeshConfiguration>(),
-                crossSchema,
-                sp.GetService<AccessService>(),
-                sp.GetService<IDataChangeNotifier>(),
-                logger);
+            var providers = sp.GetServices<IStaticNodeProvider>();
+            var config = sp.GetService<MeshConfiguration>();
+            return new StaticNodeQueryProvider(
+                providers,
+                StaticNodeQueryProvider.BuildDefaultMatches(providers, config),
+                config,
+                sp.GetService<ILoggerFactory>());
         });
 
-        // Register the routing version query
-        services.AddSingleton<IVersionQuery>(sp =>
-        {
-            var routingCore = sp.GetRequiredService<RoutingPersistenceServiceCore>();
-            var routingVersionQuery = new RoutingVersionQuery();
-            foreach (var (partition, vq) in routingCore.VersionQueries)
-                routingVersionQuery.Register(partition, vq);
-            return routingVersionQuery;
-        });
+        // AddMeshNodes seed flows through StaticMeshNodeListProvider, registered
+        // in MeshBuilder.Build — no extra registration needed here.
 
-        // Always add static node provider
-        services.AddSingleton<IMeshQueryProvider>(sp =>
-            new StaticNodeQueryProvider(
-                sp.GetServices<IStaticNodeProvider>(),
-                sp.GetService<MeshConfiguration>()));
-
-        // Register MeshCatalog and its interfaces
         services.AddMeshCatalog();
 
-        // Import/Export services (scoped — need IMessageHub for JsonSerializerOptions)
-        services.TryAddScoped<IMeshImportService, MeshImportService>();
-        services.TryAddScoped<IMeshExportService, MeshExportService>();
-
-        // Wrapper services are scoped (per hub)
-        services.AddScoped<IMeshStorage, PersistenceService>();
         services.AddScoped<IMeshService>(sp =>
             new MeshService(
                 sp.GetServices<IMeshQueryProvider>(),
                 sp.GetRequiredService<IMessageHub>()));
+
         services.TryAddScoped<IChatCompletionOrchestrator>(sp =>
             new ChatCompletionOrchestrator(
                 sp.GetRequiredService<IMeshService>(),
                 sp.GetRequiredService<IMessageHub>(),
                 sp.GetService<ILogger<ChatCompletionOrchestrator>>()));
 
+        services.AddSingleton<CoreAndWrapperServicesMarker>(new CoreAndWrapperServicesMarker());
         return services;
     }
 
     /// <summary>
     /// Helper method to register common services and wrapper services.
+    /// Shares the <see cref="CoreAndWrapperServicesMarker"/> sentinel with the
+    /// partitioned overload so mixed callers (e.g. <c>UseOrleansMeshServer</c>
+    /// + <c>AddFileSystemPersistence</c>) bail safely on the second pass
+    /// instead of stacking duplicate registrations.
     /// </summary>
-    private static IServiceCollection AddCoreAndWrapperServices<TPersistenceCore>(this IServiceCollection services)
-        where TPersistenceCore : class, IStorageService
+    private static IServiceCollection AddCoreAndWrapperServices(this IServiceCollection services)
     {
-        // Register the data change notifier as singleton (use TryAdd to avoid duplicates)
-        services.TryAddSingleton<IDataChangeNotifier, DataChangeNotifier>();
+        if (services.Any(d => d.ServiceType == typeof(CoreAndWrapperServicesMarker)))
+            return services;
 
-        // Register in-memory activity store as default (PostgreSQL overrides with its own)
+        services.TryAddSingleton<StorageAdapterMeshQueryProvider>();
+        // 🚨 AddSingleton, not TryAddSingleton — see the same-shape comment in
+        // AddPartitionedCoreAndWrapperServices. Backends that register their own
+        // IMeshQueryProvider (Postgres, Cosmos) BEFORE this method runs would
+        // otherwise crowd the pedestrian provider out and break exact-path probes.
+        services.AddSingleton<IMeshQueryProvider>(sp => sp.GetRequiredService<StorageAdapterMeshQueryProvider>());
+        // IMeshQueryCore — one boss for unsecured fan-out (see comment on the
+        // partitioned registration). Constructs MeshQuery over every
+        // IMeshQueryProvider; null hub is OK because the IMeshQueryCore
+        // surface takes options explicitly.
+        services.TryAddSingleton<IMeshQueryCore>(sp =>
+            new MeshQuery(sp.GetServices<IMeshQueryProvider>(), hub: null!));
 
-        // Core services remain singletons (for shared caches)
-        services.AddSingleton<IStorageService, TPersistenceCore>();
-        services.TryAddSingleton<IMeshQueryProvider, InMemoryMeshQuery>();
+        services.AddSingleton<StaticNodeQueryProvider>(sp =>
+        {
+            var providers = sp.GetServices<IStaticNodeProvider>();
+            var config = sp.GetService<MeshConfiguration>();
+            return new StaticNodeQueryProvider(
+                providers,
+                StaticNodeQueryProvider.BuildDefaultMatches(providers, config),
+                config,
+                sp.GetService<ILoggerFactory>());
+        });
+        services.AddSingleton<IMeshQueryProvider>(sp => sp.GetRequiredService<StaticNodeQueryProvider>());
 
-        // Always add static node provider (picks up IStaticNodeProvider registrations + MeshConfiguration.Nodes)
-        services.AddSingleton<IMeshQueryProvider>(sp =>
-            new StaticNodeQueryProvider(
-                sp.GetServices<IStaticNodeProvider>(),
-                sp.GetService<MeshConfiguration>()));
-
-        // Register IVersionQuery for non-partitioned mode (uses FileSystemVersionStore if available)
         services.TryAddSingleton<IVersionQuery>(sp =>
         {
-            var adapter = sp.GetService<IStorageAdapter>();
-            if (adapter is FileSystemStorageAdapter fsAdapter)
+            // Resolve through the keyed "inner" registration set up by
+            // DecorateStorageAdapterWithVersionWriting — otherwise the lookup
+            // recurses into the decorator and stack-overflows.
+            var inner = sp.GetKeyedService<IStorageAdapter>(InnerStorageAdapterKey)
+                        ?? sp.GetService<IStorageAdapter>();
+            if (inner is FileSystemStorageAdapter fsAdapter)
                 return new FileSystemVersionStore(fsAdapter.BaseDirectory);
             return new NoOpVersionQuery();
         });
 
-        // Register MeshCatalog and its interfaces
+        DecorateStorageAdapterWithVersionWriting(services);
+
         services.AddMeshCatalog();
 
-        // Import/Export services (scoped — need IMessageHub for JsonSerializerOptions)
-        services.TryAddScoped<IMeshImportService, MeshImportService>();
-        services.TryAddScoped<IMeshExportService, MeshExportService>();
 
-        // Wrapper services are scoped (per hub)
-        services.AddScoped<IMeshStorage, PersistenceService>();
         services.AddScoped<IMeshService>(sp =>
             new MeshService(
                 sp.GetServices<IMeshQueryProvider>(),
@@ -487,20 +662,33 @@ public static class PersistenceExtensions
                 sp.GetRequiredService<IMessageHub>(),
                 sp.GetService<ILogger<ChatCompletionOrchestrator>>()));
 
+        services.AddSingleton<CoreAndWrapperServicesMarker>(new CoreAndWrapperServicesMarker());
         return services;
     }
 
     /// <summary>
-    /// Registers the MeshCatalog and its public interfaces (IMeshCatalog, IPathResolver).
+    /// Registers <see cref="IPathResolver"/> + the shared mesh-node stream cache.
+    /// (Old name <c>AddMeshCatalog</c> retained for back-compat; the MeshCatalog
+    /// class itself is gone — path resolution lives in PathResolutionService now.)
     /// </summary>
     public static IServiceCollection AddMeshCatalog(this IServiceCollection services)
     {
         services.TryAddSingleton<IMeshChangeFeed, InProcessMeshChangeFeed>();
-        services.TryAddSingleton<MeshCatalog>();
-        services.TryAddSingleton<IMeshCatalog>(sp => sp.GetRequiredService<MeshCatalog>());
-        // PathResolutionService owns the cache + subscribes to IMeshChangeFeed internally
+        // PathResolutionService owns the per-path Replay(1).RefCount() cache
+        // and subscribes to IMeshChangeFeed internally.
         services.TryAddSingleton<PathResolutionService>();
         services.TryAddSingleton<IPathResolver>(sp => sp.GetRequiredService<PathResolutionService>());
+        // Replay-AutoConnect cache for MeshNode streams. Routing reads it for
+        // compile readiness; grain activations read it for the assembly path;
+        // path-resolution lookups share the same handle so a single live
+        // upstream subscription per path serves every consumer.
+        services.TryAddSingleton<MeshNodeStreamCache>();
+        services.TryAddSingleton<IMeshNodeStreamCache>(sp => sp.GetRequiredService<MeshNodeStreamCache>());
+        // Post-commit durable-flush hook for the PatchDataRequest handler: chains the
+        // owner's ack off the storage write so a cross-hub stream.Update completion
+        // guarantees read-after-write (see IPostCommitFlush / StoragePostCommitFlush).
+        services.TryAddSingleton<MeshWeaver.Data.IPostCommitFlush>(sp =>
+            new StoragePostCommitFlush(sp.GetRequiredService<IMessageHub>()));
         return services;
     }
 }

@@ -1,14 +1,15 @@
 @inherits BlazorView<ThreadChatControl, ThreadChatView>
+@using MeshWeaver.AI
+@using MeshWeaver.AI.Connect
+@using MeshWeaver.Data
 @using MeshWeaver.Layout
 @using MeshWeaver.Blazor.Components
 @using MeshWeaver.Blazor.Components.Monaco
-@using FluentOrientation = Microsoft.FluentUI.AspNetCore.Components.Orientation
-@using FluentVerticalAlignment = Microsoft.FluentUI.AspNetCore.Components.VerticalAlignment
+@using MeshWeaver.Messaging
 @using FluentAppearance = Microsoft.FluentUI.AspNetCore.Components.Appearance
-@using FluentJustifyContent = Microsoft.FluentUI.AspNetCore.Components.JustifyContent
 @inject NavigationManager NavigationManager
 
-<div class="thread-chat-container @(ViewModel.HideEmptyState ? "compact-mode" : "")" style="@Style">
+<div class="thread-chat-container @(ViewModel.HideEmptyState ? "compact-mode" : "") @(HasNoMessages ? "no-messages" : "")" style="@Style">
 @if (viewMode == ChatViewMode.ResumeThreads)
 {
     <div class="thread-resume-view">
@@ -19,19 +20,192 @@
             <span style="font-weight: 600;">Threads</span>
         </div>
         <div class="resume-threads-list">
-            <MeshSearchView ViewModel="@GetResumeSearchControl()"
-                            OnNodeSelected="@OnSelectThread"
-                            SelectedPath="@threadPath"
-                            Area="resume-threads" />
+            @* Live-bound to hub.GetQuery (synced, write-consistent snapshot) — see
+               SwitchToResumeModeAsync. A thread UPDATE on submit re-emits the full set with the
+               thread present, so it never drops out of the list the way the old MeshSearchView/
+               IMeshService.Query binding did. *@
+            @if (resumeLoading)
+            {
+                <FluentProgressRing Style="width: 24px; height: 24px; margin: 16px auto;" />
+            }
+            else if (resumeThreads.Count == 0)
+            {
+                <div class="resume-thread-date" style="padding: 12px; text-align: center;">No threads yet</div>
+            }
+            else
+            {
+                @foreach (var thread in resumeThreads)
+                {
+                    <div class="resume-thread-item @(thread.Path == threadPath ? "resume-thread-item-active" : "")"
+                         @key="@thread.Path"
+                         @onclick="@(() => OnSelectThread(thread))">
+                        <div class="resume-thread-name">@(thread.Name ?? thread.Id)</div>
+                        <div class="resume-thread-date">@thread.LastModified.LocalDateTime.ToString("MMM d, HH:mm")</div>
+                    </div>
+                }
+            }
         </div>
     </div>
 }
 else
 {
+    @* ─── In-thread navigation menu ──────────────────────────────────────
+       The thread's position in the hierarchy (ancestors → current → sub-threads),
+       my OTHER open threads (all partitions), and the context chip. Toggles between
+       a horizontal top bar, a vertical left rail, and hidden (CycleNavLayout); the
+       whole shell captures Option-Tab to cycle the other open threads. Only on the
+       full-page thread view (ShowFullHeader + a real thread). *@
+    <div class="thread-nav-shell nav-@(_navLayout.ToString().ToLowerInvariant())" tabindex="0" @onkeydown="OnThreadShellKeyDown">
+    @if (ShowThreadNav && _navLayout != ThreadNavLayout.Hidden)
+    {
+        var ancestors = ThreadAncestors();
+        var others = OtherOpenThreads();
+        var navCtx = ThreadViewModel?.InitialContext;
+        <nav class="thread-nav-menu">
+            <div class="thread-nav-toolbar">
+                <button class="thread-nav-cycle" @onclick="CycleNavLayout"
+                        title="@($"Navigation: {_navLayout} — click for next (top bar → left rail → hidden)")">
+                    <FluentIcon Value="@(new Icons.Regular.Size16.Navigation())" Color="Color.Neutral" />
+                </button>
+                <span class="thread-nav-title">Threads</span>
+            </div>
+
+            @if (!string.IsNullOrEmpty(navCtx))
+            {
+                <div class="thread-nav-section">
+                    <button type="button" class="thread-context-chip thread-nav-context"
+                            title="@($"Context: {navCtx} — click to open")"
+                            @onclick="@(() => OnContextChipClicked(navCtx))">
+                        <FluentIcon Value="@(new Icons.Regular.Size16.Location())" Color="Color.Accent" />
+                        <span class="thread-context-chip-text">@(ThreadViewModel?.InitialContextDisplayName ?? LastSegment(navCtx))</span>
+                    </button>
+                </div>
+            }
+
+            <div class="thread-nav-section thread-nav-hierarchy">
+                <div class="thread-nav-section-label">This thread</div>
+                @foreach (var anc in ancestors)
+                {
+                    <a class="thread-nav-item thread-nav-ancestor" href="/@anc.Path" title="@anc.Path">
+                        <span class="thread-nav-item-glyph">&#8593;</span>
+                        <span class="thread-nav-item-text">@anc.Label</span>
+                    </a>
+                }
+                <div class="thread-nav-item thread-nav-current" title="@threadPath">
+                    <span class="thread-nav-item-glyph">&#9679;</span>
+                    <span class="thread-nav-item-text">@(string.IsNullOrWhiteSpace(ThreadViewModel?.Name) ? "This thread" : ThreadViewModel!.Name)</span>
+                </div>
+                @foreach (var child in childThreads)
+                {
+                    <a class="thread-nav-item thread-nav-child" href="/@child.Path" title="@child.Path">
+                        <span class="thread-nav-item-glyph">&#8627;</span>
+                        <span class="thread-nav-item-text">@(child.Name ?? child.Id)</span>
+                    </a>
+                }
+            </div>
+
+            <div class="thread-nav-section thread-nav-others">
+                <div class="thread-nav-section-label">
+                    <span>Other open threads</span>
+                    @if (others.Count > 0) { <span class="thread-nav-count">@others.Count</span> }
+                    <span class="thread-nav-hint" title="Option-Tab cycles through them">&#8997;&#8677;</span>
+                </div>
+                @if (others.Count == 0)
+                {
+                    <div class="thread-nav-empty">No other open threads</div>
+                }
+                else
+                {
+                    @foreach (var t in others.Take(30))
+                    {
+                        <a class="thread-nav-item" href="/@t.Path" title="@t.Path">
+                            <span class="thread-nav-item-glyph">&#9211;</span>
+                            <span class="thread-nav-item-text">@(t.Name ?? t.Id)</span>
+                        </a>
+                    }
+                }
+            </div>
+        </nav>
+    }
+    else if (ShowThreadNav)
+    {
+        <button class="thread-nav-reveal" @onclick="CycleNavLayout" title="Show thread navigation">
+            <FluentIcon Value="@(new Icons.Regular.Size16.Navigation())" Color="Color.Neutral" />
+        </button>
+    }
+    <div class="thread-nav-body">
     <!-- Message history display (hidden in compact/dashboard mode) -->
     @if (!ViewModel.HideEmptyState)
     {
         <div class="thread-chat-messages" @ref="messagesContainer">
+            @* Full-page hero header — rendered NATIVELY (not an embedded layout area) as the FIRST
+               item INSIDE the scroll so it scrolls away with the conversation. Compact: a top row with
+               the thread's starting-point context chip (right) + Mark Done, then a click-to-edit title,
+               then a click-to-edit description as a smaller abstract. Side panel leaves ShowFullHeader
+               false (and CSS hides .thread-full-header there) → only the compact Header area renders. *@
+            @if (ViewModel.ShowFullHeader && !string.IsNullOrEmpty(threadPath))
+            {
+                <div class="thread-full-header">
+                    <div class="thread-full-header-toprow">
+                        @{
+                            var hdrCtxPath = ThreadViewModel?.InitialContext;
+                            var hdrCtxName = ThreadViewModel?.InitialContextDisplayName;
+                        }
+                        @if (!string.IsNullOrEmpty(hdrCtxPath))
+                        {
+                            <button type="button" class="thread-context-chip"
+                                    title="@($"Context: {hdrCtxPath} — click to open")"
+                                    @onclick="@(() => OnContextChipClicked(hdrCtxPath))">
+                                <FluentIcon Value="@(new Icons.Regular.Size16.Location())" Color="Color.Accent" />
+                                <span class="thread-context-chip-text">@(hdrCtxName ?? LastSegment(hdrCtxPath))</span>
+                            </button>
+                        }
+                        @if (!IsReadOnlyThread && ThreadViewModel?.IsExecuting != true)
+                        {
+                            var isDone = ThreadViewModel?.IsDone == true;
+                            <FluentButton Appearance="@(isDone ? FluentAppearance.Neutral : FluentAppearance.Accent)"
+                                          IconStart="@(isDone ? (Icon)new Icons.Regular.Size16.ArrowUndo() : new Icons.Regular.Size16.Checkmark())"
+                                          OnClick="ToggleThreadDone">
+                                @(isDone ? "Reopen" : "Mark Done")
+                            </FluentButton>
+                        }
+                    </div>
+
+                    @* Title — nice headline; click to edit (writes the thread node's Name). *@
+                    @if (isEditingTitle)
+                    {
+                        <FluentTextField @ref="_titleEditField" @bind-Value="editTitleText" Immediate="true"
+                                         class="thread-header-title-input" Placeholder="Untitled thread"
+                                         @onkeydown="OnTitleEditKeyDown" @onblur="CommitTitleEdit" />
+                    }
+                    else
+                    {
+                        var hasTitle = !string.IsNullOrWhiteSpace(ThreadViewModel?.Name);
+                        <div class="thread-header-title @(IsReadOnlyThread ? "" : "editable") @(hasTitle ? "" : "untitled")"
+                             @onclick="BeginTitleEdit"
+                             title="@(IsReadOnlyThread ? null : "Click to edit title")">@(hasTitle ? ThreadViewModel!.Name : "Untitled thread")</div>
+                    }
+
+                    @* Description — smaller abstract; click to edit (writes the thread node's Description). *@
+                    @if (isEditingDescription)
+                    {
+                        <FluentTextArea @ref="_descEditField" @bind-Value="editDescriptionText" Immediate="true"
+                                        class="thread-header-desc-input" Rows="2" Placeholder="Add a description…"
+                                        @onkeydown="OnDescriptionEditKeyDown" @onblur="CommitDescriptionEdit" />
+                    }
+                    else if (!string.IsNullOrWhiteSpace(ThreadViewModel?.Description))
+                    {
+                        <div class="thread-header-desc @(IsReadOnlyThread ? "" : "editable")"
+                             @onclick="BeginDescriptionEdit"
+                             title="@(IsReadOnlyThread ? null : "Click to edit description")">@ThreadViewModel!.Description</div>
+                    }
+                    else if (!IsReadOnlyThread)
+                    {
+                        <div class="thread-header-desc editable placeholder"
+                             @onclick="BeginDescriptionEdit" title="Click to add a description">Add a description…</div>
+                    }
+                </div>
+            }
             @{
                 var header = GetHeaderCell();
             }
@@ -39,25 +213,204 @@ else
             {
                 <LayoutAreaView @key="@($"hdr-{threadPath}")" ViewModel="@header" Stream="@Stream" Area="@($"hdr-{threadPath}")" />
             }
+            @{
+                var pendingTexts = ThreadViewModel?.PendingMessageTexts ?? Array.Empty<string>();
+                var hasAnyMessage = ThreadMessages.Count > 0 || pendingTexts.Count > 0;
+            }
+            @* Chat history rendered inline per message — one
+               IMeshNodeStreamCache subscription per visible id is opened by
+               SyncMessageSubscriptions; this template just reads from the
+               messageStates dictionary. No per-message LayoutAreaView server
+               round-trip; the bubble is the chat's own DOM. *@
             @if (ThreadMessages.Count > 0)
             {
                 @foreach (var msgId in ThreadMessages)
                 {
-                    var cell = GetMessageCell(msgId);
-                    @if (cell != null)
+                    var state = GetMessageState(msgId);
+                    var isUser = state?.Role?.Equals("user", StringComparison.OrdinalIgnoreCase) ?? false;
+                    var bubbleRoleClass = isUser ? "thread-msg-user" : "thread-msg-assistant";
+
+                    <div @key="@msgId" class="thread-msg-bubble @bubbleRoleClass @(IsMissing(msgId) ? "thread-msg-missing" : "")">
+                    @if (state is null && IsMissing(msgId))
                     {
-                        <LayoutAreaView @key="@msgId" ViewModel="@cell" Stream="@Stream" Area="@($"msg-{msgId}")" />
+                        @* Satellite cell never delivered an emission within the
+                           probe window — either deleted, never materialised, or
+                           denied by RLS. Surface as "Missing message" instead
+                           of an indefinite skeleton so the user knows the chat
+                           continued past this point. *@
+                        <div class="thread-msg-author thread-msg-author-user">— message missing —</div>
+                        <div class="thread-msg-meta">id: @msgId</div>
                     }
+                    else if (state is null)
+                    {
+                        <div class="thread-msg-skeleton-line"></div>
+                        <div class="thread-msg-skeleton-line" style="width: 80%;"></div>
+                    }
+                    else
+                    {
+                        <div class="thread-msg-author @(isUser ? "thread-msg-author-user" : "")">@state.AuthorName</div>
+                        @* Assistant meta row: Harness · time · duration · in/out tokens.
+                           Model name intentionally dropped — the harness is the headline
+                           identity; for Claude Code / Copilot the model is implied. *@
+                        @if (!isUser && (!string.IsNullOrEmpty(state.Harness) || state.Timestamp.HasValue))
+                        {
+                            <div class="thread-msg-meta">
+                                @if (!string.IsNullOrEmpty(state.Harness))
+                                {
+                                    <span class="thread-msg-harness">@state.Harness</span>
+                                }
+                                @if (state.Timestamp.HasValue)
+                                {
+                                    <span>@state.Timestamp.Value.ToString("HH:mm:ss")</span>
+                                }
+                                @* Stream duration:
+                                   • Live (ticker-driven, "0:12") ONLY while the THREAD is executing —
+                                     a cell can't be streaming once the thread is idle. Gating on
+                                     IsExecuting (not just the cell's Status string) is what STOPS the
+                                     clock when the round ends: if a cell's Status lags/sticks at
+                                     "Streaming" the bare-status check would tick forever.
+                                   • CompletedAt set → frozen final ("1:23"). The terminal completion
+                                     push always stamps CompletedAt, so an idle thread shows the frozen
+                                     duration here.
+                                   • Otherwise (legacy bubbles without Status/CompletedAt) → omit. *@
+                                @{ var isLiveStreaming = state.Status == "Streaming" && ThreadViewModel?.IsExecuting == true; }
+                                @if (isLiveStreaming && state.Timestamp.HasValue)
+                                {
+                                    <span class="thread-msg-elapsed thread-msg-elapsed-live" title="Streaming...">@FormatElapsed(state.Timestamp)</span>
+                                }
+                                else if (state.Timestamp.HasValue && state.CompletedAt.HasValue)
+                                {
+                                    <span class="thread-msg-elapsed" title="Stream duration">@FormatElapsed(state.Timestamp, state.CompletedAt)</span>
+                                }
+                                @if (state.InputTokens.HasValue || state.OutputTokens.HasValue)
+                                {
+                                    <span class="thread-msg-tokens" title="Token usage">@($"{state.InputTokens ?? 0:N0} in / {state.OutputTokens ?? 0:N0} out")</span>
+                                }
+                            </div>
+                        }
+
+                        @if (IsEditing(msgId))
+                        {
+                            <LayoutAreaView ViewModel="@(new LayoutAreaControl($"{threadPath}/{msgId}", new LayoutAreaReference("Edit")))"
+                                            Stream="@Stream" Area="@($"edit-{msgId}")" />
+                            <div class="thread-msg-edit-actions">
+                                <button class="thread-msg-edit-cancel" @onclick="() => CancelEdit(msgId)">Done</button>
+                            </div>
+                        }
+                        else
+                        {
+                            @if (!string.IsNullOrEmpty(state.Text))
+                            {
+                                <MarkdownView ViewModel="@(new MarkdownControl(state.Text).WithStyle("background: transparent;"))"
+                                              Stream="@Stream" Area="@($"md-{msgId}")" />
+                                @* Hover actions. Edit/Resubmit/Delete only for the user's OWN cells; "New
+                                   thread from this cell" is available on ANY input/output cell — it opens a
+                                   fresh side-panel composer prefilled with this cell's text (created on submit). *@
+                                <div class="thread-msg-inline-actions">
+                                    @if (isUser && !IsReadOnlyThread)
+                                    {
+                                        <button class="thread-msg-action-btn" @onclick="() => StartEdit(msgId)" title="Edit">&#9998;</button>
+                                        <button class="thread-msg-action-btn" @onclick="() => ResubmitMessage(msgId)" title="Resubmit">&#8635;</button>
+                                        <button class="thread-msg-action-btn" @onclick="() => DeleteFromMessage(msgId)" title="Delete from here">&#128465;</button>
+                                    }
+                                    <button class="thread-msg-action-btn" @onclick="() => NewThreadFromCell(msgId)" title="New thread from this cell">&#8599;</button>
+                                </div>
+                            }
+                        }
+
+                        @if (state.ToolCalls is { Count: > 0 })
+                        {
+                            <div class="thread-msg-tool-calls">
+                                @foreach (var call in state.ToolCalls)
+                                {
+                                    var isDelegation = !string.IsNullOrEmpty(call.DelegationPath);
+                                    var isPending = call.Result == null;
+                                    var summary = FormatToolCallSummary(call);
+
+                                    @if (isDelegation)
+                                    {
+                                        @* Inline link only — sub-thread progress + status lives in the
+                                           runtime panel below the chat (anchored near the input). Keeps
+                                           the bubble compact and avoids the duplicate "tool call + embedded
+                                           streaming area" the user flagged. *@
+                                        var delHeader = GetDelegationHeader(call.DelegationPath);
+                                        var title = delHeader?.Title ?? summary;
+                                        var icon = delHeader?.Icon ?? "/static/NodeTypeIcons/chat.svg";
+                                        var stateIcon = isPending
+                                            ? "↗"
+                                            : (call.IsSuccess ? "✓" : "✗");
+                                        var stateClass = isPending
+                                            ? "thread-msg-tool-delegation-pending"
+                                            : (call.IsSuccess ? "thread-msg-tool-delegation-ok" : "thread-msg-tool-delegation-error");
+                                        <a href="/@call.DelegationPath"
+                                           class="thread-msg-tool-delegation @stateClass"
+                                           title="@title">
+                                            <span class="thread-msg-tool-delegation-state">@stateIcon</span>
+                                            <img src="@icon" alt="" class="thread-msg-tool-delegation-icon" />
+                                            <span class="thread-msg-tool-delegation-title">@title</span>
+                                            <span class="thread-msg-tool-delegation-agent">@summary</span>
+                                        </a>
+                                    }
+                                    else
+                                    {
+                                        var display = FormatToolCallDisplay(call);
+                                        var change = display.IsNodeModifying ? FindChange(state.UpdatedNodes, display.Path) : null;
+
+                                        <details class="thread-msg-tool-entry">
+                                            <summary class="thread-msg-tool-entry-name">
+                                                <span class="thread-msg-tool-done @(call.IsSuccess ? "" : "thread-msg-tool-error")">@(call.IsSuccess ? "✓" : "✗")</span>
+                                                <span>@display.Verb</span>
+                                                @if (!string.IsNullOrEmpty(display.Path))
+                                                {
+                                                    <text>&nbsp;</text>
+                                                    <a href="/@display.Path" class="thread-msg-tool-path" title="@display.Path" @onclick:stopPropagation>@display.Path</a>
+                                                }
+                                                @if (change is not null)
+                                                {
+                                                    @if (change.VersionBefore.HasValue && change.VersionAfter.HasValue)
+                                                    {
+                                                        <a class="thread-msg-tool-action"
+                                                           href="/@display.Path/VersionDiff?from=@(change.VersionBefore)&to=@(change.VersionAfter)"
+                                                           @onclick:stopPropagation>Diff</a>
+                                                    }
+                                                    @if (change.VersionBefore.HasValue)
+                                                    {
+                                                        <a class="thread-msg-tool-action thread-msg-tool-action-muted"
+                                                           href="/@display.Path/VersionDiff?version=@(change.VersionBefore)"
+                                                           @onclick:stopPropagation>Revert v@(change.VersionBefore)</a>
+                                                    }
+                                                }
+                                            </summary>
+                                            @if (!string.IsNullOrEmpty(call.Arguments))
+                                            {
+                                                <pre class="thread-msg-tool-args">@call.Arguments</pre>
+                                            }
+                                            @if (!string.IsNullOrEmpty(call.Result))
+                                            {
+                                                <pre class="thread-msg-tool-result">@call.Result</pre>
+                                            }
+                                        </details>
+                                    }
+                                }
+                            </div>
+                        }
+                    }
+                    </div>
                 }
             }
-            else if (isCreatingThread)
+            @* Pending user messages (PendingMessageTexts) and running sub-threads
+               moved OUT of the scrollable history into the runtime panel
+               immediately above the input — see `.thread-runtime-panel` below.
+               Keeps the chat history clean (only persisted messages) and pins
+               in-flight state next to the input where the user is acting. *@
+            @if (!hasAnyMessage && isCreatingThread)
             {
                 <div class="empty-thread-message">
                     <FluentProgressRing />
                     <p>Creating thread...</p>
                 </div>
             }
-            else if (string.IsNullOrEmpty(threadPath))
+            else if (!hasAnyMessage && string.IsNullOrEmpty(threadPath))
             {
                 <div class="empty-thread-message">
                     <FluentIcon Value="@(new Icons.Regular.Size48.Chat())" Color="Color.Neutral" />
@@ -68,6 +421,13 @@ else
         </div>
     }
 
+    @* ─── Bottom bar ───────────────────────────────────────────────────
+       Everything pinned to the bottom of the screen, top-down: execution
+       status ("where we are"), the runtime panel, then the input footer
+       (harness selector + editor + send button). Grouped in one flex
+       column so the chat history above scrolls and this block stays put. *@
+    <div class="thread-chat-bottom">
+
     <!-- Execution status bar — shows when thread is executing -->
     @if (ThreadViewModel?.IsExecuting == true)
     {
@@ -75,10 +435,20 @@ else
             <div class="thread-exec-header">
                 <span class="thread-exec-star">&#10041;</span>
                 <span class="thread-exec-status">@(ThreadViewModel.ExecutionStatus ?? "Generating response...")</span>
-                <button class="thread-exec-cancel" @onclick="CancelExecution">
-                    <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" style="opacity: 0.7;"><rect x="3" y="3" width="10" height="10" rx="1"/></svg>
-                    Stop
-                </button>
+                @* Elapsed-time chip — driven by the 1 s ticker installed in OnInitialized.
+                   ExecutionStartedAt is null until the round flips Status → Executing, so
+                   the chip auto-hides for the brief StartingExecution window. *@
+                @if (ThreadViewModel.ExecutionStartedAt is { } started)
+                {
+                    <span class="thread-exec-elapsed" title="Elapsed since round started">@FormatElapsed(started)</span>
+                }
+                @if (!IsReadOnlyThread)
+                {
+                    <button class="thread-exec-cancel" @onclick="CancelExecution">
+                        <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" style="opacity: 0.7;"><rect x="3" y="3" width="10" height="10" rx="1"/></svg>
+                        Stop
+                    </button>
+                }
             </div>
             @if (!string.IsNullOrEmpty(ThreadViewModel.StreamingText))
             {
@@ -95,17 +465,97 @@ else
                     }
                 </div>
             }
+            @* Pending-user-message rendering moved INTO the chat history (above)
+               so the user sees their submission immediately — including before
+               round dispatch starts streaming. The exec-bar no longer duplicates
+               the queue display. *@
         </div>
     }
 
-    <!-- Footer: input — pinned at bottom, never scrolls -->
+    @* ─── Runtime panel ─────────────────────────────────────────────────
+       Pinned just above the chat input. Two sections, top-down:
+         (1) Running sub-threads — live cards for every delegation whose
+             sub-thread currently has IsExecuting=true. Title, icon,
+             ExecutionStatus, and a truncated preview of StreamingText.
+             Drops out the moment the sub-thread settles.
+         (2) Scheduled messages — entries the user typed while a round is
+             in flight. They sit BELOW the running section so the visual
+             ordering matches the lifecycle: "in flight" above,
+             "waiting to be picked up" below. When the round completes
+             and the inbox drains, they get promoted to real messages in
+             the history. *@
+    @{
+        var runningSubThreads = GetRunningSubThreads().ToList();
+        var runtimeScheduled = ThreadViewModel?.PendingMessageTexts ?? Array.Empty<string>();
+    }
+    @if (runningSubThreads.Count > 0 || runtimeScheduled.Count > 0)
+    {
+        <div class="thread-runtime-panel">
+            @if (runningSubThreads.Count > 0)
+            {
+                <div class="thread-runtime-section thread-runtime-subthreads">
+                    <div class="thread-runtime-section-label">Running sub-threads</div>
+                    @foreach (var (path, header) in runningSubThreads)
+                    {
+                        var subIcon = header.Icon ?? "/static/NodeTypeIcons/chat.svg";
+                        var subTitle = header.Title ?? path;
+                        var preview = !string.IsNullOrWhiteSpace(header.StreamingText)
+                            ? TruncateText(header.StreamingText.Trim(), 200)
+                            : (header.ExecutionStatus ?? "Working…");
+                        <a class="thread-runtime-subthread-card" href="/@path" title="@subTitle">
+                            <img src="@subIcon" alt="" class="thread-runtime-subthread-icon" />
+                            <div class="thread-runtime-subthread-body">
+                                <div class="thread-runtime-subthread-title">
+                                    <span class="thread-runtime-subthread-title-text">@subTitle</span>
+                                    @* Elapsed-time chip for the sub-thread — null StartedAt
+                                       means the sub-thread is in StartingExecution and
+                                       hasn't flipped LastActivityAt yet; chip auto-hides. *@
+                                    @if (header.StartedAt is { } subStarted)
+                                    {
+                                        <span class="thread-runtime-subthread-elapsed" title="Elapsed since sub-thread started">@FormatElapsed(subStarted)</span>
+                                    }
+                                </div>
+                                <div class="thread-runtime-subthread-preview">@preview</div>
+                            </div>
+                            <span class="thread-runtime-subthread-pulse" aria-hidden="true">●</span>
+                        </a>
+                    }
+                </div>
+            }
+            @if (runtimeScheduled.Count > 0)
+            {
+                <div class="thread-runtime-section thread-runtime-scheduled">
+                    <div class="thread-runtime-section-label">
+                        Scheduled <span class="thread-runtime-hint">— waiting for current round to finish</span>
+                    </div>
+                    @foreach (var pendingText in runtimeScheduled)
+                    {
+                        <div class="thread-runtime-scheduled-row" @key="@($"pending-{pendingText.GetHashCode()}")">
+                            <span class="thread-runtime-scheduled-icon" aria-hidden="true">⏳</span>
+                            <span class="thread-runtime-scheduled-text">@pendingText</span>
+                        </div>
+                    }
+                </div>
+            }
+        </div>
+    }
+
+    <!-- Footer: input — pinned at bottom, never scrolls. The
+         `is-allocating` modifier overlays the "Allocating agent…" banner
+         INSIDE the existing input-area box rather than replacing the
+         whole subtree, so the dialog keeps its full height (breadcrumb +
+         editor + send + attachments stay laid out underneath, just
+         dimmed + non-interactive). Without this the chat shrinks to a
+         small panel during thread allocation and snaps back when the
+         thread is ready, which the user noticed. -->
+    @* Input footer — only for editable threads. Other users' threads are
+       read-only (threads are editable only by their owner). *@
+    @if (!IsReadOnlyThread)
+    {
     <div class="thread-chat-footer">
-        <div class="thread-chat-input-area">
+        <div class="thread-chat-input-area @(showSubmissionProgress ? "is-allocating" : "")">
         @if (showSubmissionProgress)
         {
-            <!-- During thread creation (compact/embedded flow on User Activity etc.) we hide
-                 the editor entirely and show a prominent "Allocating agent..." panel with a
-                 spinner. When OnThreadCreated fires the page navigates to the new thread. -->
             <div class="thread-allocating-panel">
                 <FluentProgressRing Style="width: 28px; height: 28px;" />
                 <div class="thread-allocating-text">
@@ -113,128 +563,292 @@ else
                     <div class="thread-allocating-subtitle">Creating conversation and redirecting</div>
                 </div>
             </div>
+            @if (!string.IsNullOrWhiteSpace(lastSubmittedText))
+            {
+                @* Echo the just-submitted message under the progress so it's visible during create+redirect. *@
+                <div class="thread-allocating-submitted">
+                    <div class="thread-allocating-submitted-label">You</div>
+                    <div class="thread-allocating-submitted-text">@lastSubmittedText</div>
+                </div>
+            }
         }
-        else
-        {
-        <!-- Attachment chip collection -->
-        <ReferenceChipCollection
-            Attachments="@attachments"
-            OnAttachmentRemoved="@OnAttachmentRemoved"
-            OnChipClick="@OnChipClicked" />
+        @{ var inputDimmed = showSubmissionProgress; }
+        <div class="thread-chat-input-content @(inputDimmed ? "dimmed" : "")" aria-hidden="@(inputDimmed.ToString().ToLowerInvariant())">
 
-        @* Monaco editor for markdown input with completion *@
-        <div class="input-container" style="@(!submissionHandler.IsInputEnabled ? "display: none;" : "")">
+        @* Thin, READ-ONLY thread status — what this thread uses (harness · agent · model)
+           plus a token-usage chip, fully data-bound to the composer selections
+           (boundHarness/boundAgentPath/boundModelPath). The chip reads the per-model TokenUsage
+           satellites ({threadPath}/_Usage/*). Selection itself is via the /harness, /agent and
+           /model slash-commands — this row only displays. *@
+        @if (!string.IsNullOrEmpty(boundHarness) || !string.IsNullOrEmpty(boundModelPath) || !string.IsNullOrEmpty(boundAgentPath))
+        {
+            var harnessId = LastSegment(boundHarness);
+            var isClaudeCode = string.Equals(harnessId, "ClaudeCode", StringComparison.OrdinalIgnoreCase);
+            var isCopilot = string.Equals(harnessId, "Copilot", StringComparison.OrdinalIgnoreCase);
+            <div class="thread-chat-status-row">
+                @if (!string.IsNullOrEmpty(boundHarness))
+                {
+                    <span class="thread-chat-status-item" title="Harness (/harness to change)">⬡ @harnessId</span>
+                }
+                @if (isClaudeCode || isCopilot)
+                {
+                    @* Claude Code and GitHub Copilot run the user's OWN CLI subscription — there is no mesh
+                       agent to pick, and the model is the CLI's OWN (probed from its init/hello message),
+                       NOT the user's mesh Model-partition selection. Claude Code adds reasoning effort. *@
+                    @* harnessId is non-null here: this branch is gated by isClaudeCode || isCopilot,
+                       which are false when harnessId is null (string.Equals(null, "ClaudeCode") == false). *@
+                    var harnessRt = harnessRuntimes.GetValueOrDefault(harnessId!);
+                    <span class="thread-chat-status-item" title="Model (reported by @harnessId)">✦ @(string.IsNullOrEmpty(harnessRt?.Model) ? "…" : harnessRt!.Model)</span>
+                    @if (isClaudeCode)
+                    {
+                        <span class="thread-chat-status-item" title="Reasoning effort (from settings.json)">⚡ @(string.IsNullOrEmpty(harnessRt?.Effort) ? "…" : harnessRt!.Effort)</span>
+                    }
+                }
+                else
+                {
+                    @if (!string.IsNullOrEmpty(boundAgentPath))
+                    {
+                        <span class="thread-chat-status-item" title="Agent (/agent to change)">🤖 @LastSegment(boundAgentPath)</span>
+                    }
+                    @if (!string.IsNullOrEmpty(boundModelPath))
+                    {
+                        <span class="thread-chat-status-item" title="Model (/model to change)">✦ @LastSegment(boundModelPath)</span>
+                    }
+                }
+                @* The token chip renders its own leading separator only when it has usage data,
+                   so it sits inline after the model/effort chip on this same row (no dangling "·"). *@
+                <ThreadTokenChip ThreadPath="@threadPath" />
+            </div>
+        }
+
+        @* GENERIC node picker — every node-pick command (/agent, /model, /harness, and any
+           module-defined one) pops THIS one menu. The command supplied the query + title; the
+           host queried the mesh (OpenPicker) and listed the nodes; clicking one writes its PATH
+           to the command's composer field. No per-command widget. *@
+        @if (pendingPicker is { } picker)
+        {
+            <div class="thread-chat-widget"
+                 tabindex="0"
+                 @ref="_pickerWidget"
+                 @onkeydown="OnPickerKeyDown"
+                 @onkeydown:preventDefault="true"
+                 @onkeydown:stopPropagation="true">
+                <div class="thread-chat-widget-header">
+                    <span>@picker.Title</span>
+                    <button class="thread-msg-action-btn" @onclick="DismissWidget" title="Close">&#10005;</button>
+                </div>
+                <div class="thread-chat-widget-list">
+                    @for (var i = 0; i < pickerNodes.Count; i++)
+                    {
+                        var node = pickerNodes[i];
+                        @if (IsPickerHeaderNode(node))
+                        {
+                            @* Non-selectable group title (e.g. a model provider). Its models
+                               render as selectable items underneath. *@
+                            <div class="thread-chat-widget-group">
+                                @if (!string.IsNullOrEmpty(node.Icon) && !node.Icon.TrimStart().StartsWith("<"))
+                                {
+                                    <img class="thread-chat-widget-group-icon" src="@node.Icon" alt="" />
+                                }
+                                <span class="thread-chat-widget-group-name">@(node.Name ?? LastSegment(node.Path))</span>
+                            </div>
+                        }
+                        else
+                        {
+                            var isActive = i == _pickerHighlight;
+                            <button class="thread-chat-widget-item @(isActive ? "thread-chat-widget-item--active" : "")"
+                                    @onclick="@(() => SelectFromPicker(picker, node))">
+                                @if (!string.IsNullOrEmpty(node.Icon))
+                                {
+                                    @if (node.Icon.TrimStart().StartsWith("<"))
+                                    {
+                                        <span class="thread-chat-widget-item-icon">@((MarkupString)node.Icon)</span>
+                                    }
+                                    else
+                                    {
+                                        <img class="thread-chat-widget-item-icon" src="@node.Icon" alt="" />
+                                    }
+                                }
+                                <span class="thread-chat-widget-item-text">
+                                    <span class="thread-chat-widget-item-name">@(node.Name ?? node.Id)</span>
+                                    @if (!string.IsNullOrEmpty(node.Description))
+                                    {
+                                        <span class="thread-chat-widget-item-desc">@node.Description</span>
+                                    }
+                                </span>
+                            </button>
+                        }
+                    }
+                    @if (pickerNodes.Count == 0)
+                    {
+                        <div class="thread-chat-widget-empty">Nothing to pick.</div>
+                    }
+                    else if (_pickerHighlight < 0)
+                    {
+                        @* Titles only, nothing selectable — e.g. providers present but no models. *@
+                        <div class="thread-chat-widget-empty">No models available to select.</div>
+                    }
+                </div>
+            </div>
+        }
+
+        @* Inline harness LOGIN (Connect) — driven by a harness's /login command. Reuses
+           ConnectSessionManager (the same flow Settings → Models uses), surfaced in the chat so the
+           user never leaves the conversation to authenticate a CLI harness. *@
+        @if (_connectProvider is not null)
+        {
+            @* Uses the shared widget's responsive max-height (min(440px, calc(100vh-180px))) so it fits
+               below the side-panel header; the inner list scrolls if the login content exceeds it. *@
+            <div class="thread-chat-widget">
+                <div class="thread-chat-widget-header">
+                    <span>Log in to @_connectHarnessLabel</span>
+                    <button class="thread-msg-action-btn" @onclick="CancelConnect" title="Close">&#10005;</button>
+                </div>
+                @* Composed with the framework's FluentStack + FluentAnchor / FluentTextField / FluentButton
+                   rather than hand-rolled flex divs + a raw <input> — one vertical stack, framework-themed. *@
+                <FluentStack Orientation="Microsoft.FluentUI.AspNetCore.Components.Orientation.Vertical" VerticalGap="10"
+                             Style="padding:12px 14px; flex:1 1 auto; min-height:0; overflow-y:auto;">
+                    @switch (_connectStatus)
+                    {
+                        case ConnectStatus.Connected:
+                            <div style="color:var(--success-foreground, #16a34a);">&#10003; Connected — you can chat now.</div>
+                            break;
+
+                        case ConnectStatus.Error err:
+                            <div style="color:var(--error-foreground, #dc2626);">@err.Reason</div>
+                            <FluentButton Appearance="FluentAppearance.Accent"
+                                          OnClick="@(() => StartHarnessConnect(_connectHarness!))">Try again</FluentButton>
+                            break;
+
+                        case ConnectStatus.Connecting c when !string.IsNullOrEmpty(c.Challenge.VerificationUrl):
+                            @* A compact accent link instead of the raw OAuth URL — the full URL wraps to
+                               ~8 lines and shoves the paste field + Submit off the bottom of the widget. *@
+                            <div><strong>1</strong>&nbsp; Open the authorization page and approve:</div>
+                            <FluentAnchor Href="@c.Challenge.VerificationUrl" Target="_blank"
+                                          Appearance="FluentAppearance.Accent">Open authorization page&nbsp;↗</FluentAnchor>
+                            @if (c.Challenge.RequiresPastedCode)
+                            {
+                                <div style="margin-top:4px;"><strong>2</strong>&nbsp; Paste the code Claude shows you, then submit:</div>
+                                <FluentTextField @bind-Value="_connectCode" Immediate="true" Placeholder="Paste code"
+                                                 @onkeydown="OnConnectInputKeyDown" Style="width:100%;" />
+                                <FluentButton Appearance="FluentAppearance.Accent" Style="width:100%;"
+                                              Disabled="@(_connectBusy || string.IsNullOrWhiteSpace(_connectCode))"
+                                              OnClick="SubmitConnectCode">@(_connectBusy ? "Verifying…" : "Submit code")</FluentButton>
+                            }
+                            else if (!string.IsNullOrEmpty(c.Challenge.UserCode))
+                            {
+                                <div>Enter this code in the browser: <strong>@c.Challenge.UserCode</strong></div>
+                                <div style="color:var(--neutral-foreground-hint);">Waiting for authorization…</div>
+                            }
+                            break;
+
+                        default:
+                            <div style="color:var(--neutral-foreground-hint);">Starting login…</div>
+                            break;
+                    }
+                </FluentStack>
+            </div>
+        }
+
+        @* Monaco editor for markdown input with completion. Stays visible during
+           execution (Claude.ai pattern) — typing while a round is in flight is
+           allowed; it queues via PendingUserMessages and dispatches when the round
+           completes. Esc cancels the in-flight round; the typed text is preserved.
+           HIDDEN while a CLI-harness login (Connect) widget is up, so the user pastes the
+           code into the widget's field above — not into this chat box — and the widget's
+           Submit isn't pushed below the fold. *@
+        @if (_connectProvider is null)
+        {
+        <div class="input-container" @onkeydown="@OnInputKeyDown">
             <MonacoEditorView @ref="monacoEditor"
                               Value="@MessageText"
                               ValueChanged="@OnMessageTextChanged"
                               OnSubmit="SendMessage"
                               OnCompletionAccepted="OnCompletionItemAccepted"
-                              IsDisabled="@(!submissionHandler.IsInputEnabled)"
                               Placeholder="@placeholderText"
                               Height="80px"
                               MaxHeight="200px"
                               CompletionProvider="@GetCompletionConfig()"
-                              AsyncCompletionCallback="@GetCompletionsAsync" />
-        </div>
-        <!-- Selector bar (agent + model + send) — right-aligned -->
-        <div class="selector-bar">
-            <SimpleDropdown TOption="AgentDisplayInfo"
-                            SelectedItem="@selectedAgentInfo"
-                            SelectedItemChanged="@OnAgentChanged"
-                            Items="@agentDisplayInfos"
-                            GetDisplayText="@(a => a?.Name ?? "Select agent...")"
-                            Placeholder="Select agent..."
-                            Tooltip="@(selectedAgentInfo?.Path ?? "Select agent")"
-                            PanelWidth="320px"
-                            Class="selector-agent">
-                <ItemTemplate Context="agent">
-                    <div class="simple-dropdown-item-name">@agent.Name</div>
-                    @if (!string.IsNullOrEmpty(agent.Path) && agent.Path != agent.Name)
-                    {
-                        <div class="simple-dropdown-item-path">@agent.Path</div>
-                    }
-                    @if (!string.IsNullOrEmpty(agent.Description))
-                    {
-                        <div class="simple-dropdown-item-description">@TruncateText(agent.Description, 80)</div>
-                    }
-                </ItemTemplate>
-            </SimpleDropdown>
-
-            @if (availableModels.Count > 0)
-            {
-                <SimpleDropdown TOption="ModelInfo"
-                                SelectedItem="@selectedModelInfo"
-                                SelectedItemChanged="@OnModelChanged"
-                                Items="@availableModels"
-                                GetDisplayText="@(m => m?.Name ?? "Select model...")"
-                                GetGroupKey="@(m => m.Provider)"
-                                Placeholder="Select model..."
-                                ShowSearch="false"
-                                PanelWidth="280px"
-                                Class="selector-model">
-                    <ItemTemplate Context="model">
-                        <div class="simple-dropdown-item-name">@model.Name</div>
-                    </ItemTemplate>
-                </SimpleDropdown>
-            }
-
-            @if (!submissionHandler.IsInputEnabled)
-            {
-                <FluentButton Appearance="FluentAppearance.Accent" Disabled="true" Title="Sending...">
-                    <FluentProgressRing Style="width: 20px; height: 20px;" />
-                </FluentButton>
-            }
-            else
-            {
-                <FluentButton Appearance="FluentAppearance.Accent" OnClick="SendMessage"
-                              Disabled="@(string.IsNullOrWhiteSpace(MessageText))" Title="Send">
-                    <FluentIcon Value="@(new Icons.Regular.Size20.Send())" Color="Color.Neutral" />
-                </FluentButton>
-            }
+                              CompletionCallback="@GetCompletions" />
         </div>
         }
+
+        @* Attachments split: the navigation-context chip(s) sit inline in the compact bottom
+           row (next to the harness combobox + Send); any extra @@-reference attachments get
+           their own section above the row so the row never overflows. *@
+        @{
+            var contextChips = attachments.Where(a => a.IsContext).ToList();
+            var referenceChips = attachments.Where(a => !a.IsContext).ToList();
+        }
+        @if (referenceChips.Count > 0)
+        {
+            <div class="thread-chat-attachments">
+                <ReferenceChipCollection
+                    Attachments="@referenceChips"
+                    OnAttachmentRemoved="@OnAttachmentRemoved"
+                    OnChipClick="@OnChipClicked" />
+            </div>
+        }
+
+        @* Compact bottom row: context chip(s) + Send. Harness/agent/model are chosen via the
+           /harness /agent /model slash-commands (which write the same composer node) — the in-footer
+           MeshNodePicker comboboxes were removed: eagerly resolving a picked agent whose model is not
+           wired threw out of the embedded area and tore the whole composer down (the "choosing
+           Assistant crashes the chat" defect). Slash-command selection records the choice on the
+           composer without building the agent, so it can never crash the footer. *@
+        @* Hidden while the login (Connect) widget is up — only its paste-field + Submit are interactive. *@
+        @if (_connectProvider is null)
+        {
+        <div class="thread-chat-bottom-row" style="display: flex; align-items: center; gap: 8px; flex-wrap: nowrap; margin-top: 4px;">
+            @if (contextChips.Count > 0)
+            {
+                <div class="thread-chat-context" style="flex: 1 1 auto; min-width: 0; overflow: hidden;">
+                    @* Context chip → peek the context object in the side panel (OnContextChipClicked),
+                       NOT navigate away (that's OnChipClicked, used by the @-reference chips above). *@
+                    <ReferenceChipCollection
+                        Attachments="@contextChips"
+                        OnAttachmentRemoved="@OnAttachmentRemoved"
+                        OnChipClick="@OnContextChipClicked" />
+                </div>
+            }
+            <div class="selector-bar" style="flex: 0 0 auto; margin-left: auto;">
+                @if (!submissionHandler.IsInputEnabled)
+                {
+                    <FluentButton Appearance="FluentAppearance.Accent" Disabled="true" Title="Sending...">
+                        <FluentProgressRing Style="width: 20px; height: 20px;" />
+                    </FluentButton>
+                }
+                else
+                {
+                    @* Submit is disabled until the thread is idle — the mid-round inbox is off, so
+                       follow-ups are ingested only after the current round finishes. Esc cancels. *@
+                    <FluentButton Appearance="FluentAppearance.Accent" OnClick="SendMessage"
+                                  Disabled="@(string.IsNullOrWhiteSpace(MessageText) || ThreadViewModel?.IsExecuting == true || HasNoModels)"
+                                  Title="@(HasNoModels ? "No model available — configure one to chat" : ThreadViewModel?.IsExecuting == true ? "Waiting for the current response to finish… (Esc to stop)" : "Send")">
+                        <FluentIcon Value="@(new Icons.Regular.Size20.Send())" Color="Color.Neutral" />
+                    </FluentButton>
+                }
+            </div>
+        </div>
+        }
+        @if (HasNoModels)
+        {
+            <span class="thread-chat-status-msg error">
+                No language model is available. Add one in Settings → Language Models
+                (or configure a provider's models for this deployment) to start chatting.
+            </span>
+        }
+        @if (!string.IsNullOrEmpty(lastCommandStatus))
+        {
+            <span class="thread-chat-status-msg @(lastCommandStatusIsError ? "error" : "")">@lastCommandStatus</span>
+        }
+        </div> @* /thread-chat-input-content *@
     </div>
     </div>
+    }
+    </div> @* /thread-chat-bottom *@
+    </div> @* /thread-nav-body *@
+    </div> @* /thread-nav-shell *@
 }
 
 </div>
-
-<style>
-    .thread-allocating-panel {
-        display: flex; align-items: center; gap: 14px;
-        padding: 18px 22px; border-radius: 12px;
-        background: var(--neutral-layer-2);
-        border: 1px solid var(--neutral-stroke-rest);
-    }
-    .thread-allocating-text { display: flex; flex-direction: column; gap: 2px; }
-    .thread-allocating-title {
-        font-weight: 600; font-size: 0.95rem;
-        color: var(--accent-fill-rest);
-    }
-    .thread-allocating-subtitle {
-        font-size: 0.8rem; color: var(--neutral-foreground-hint);
-    }
-    @@keyframes thread-pending-pulse {
-        0%, 100% { opacity: 0.6; }
-        50% { opacity: 1; }
-    }
-    .thread-msg-dot {
-        width: 5px; height: 5px; border-radius: 50%;
-        background: var(--neutral-foreground-hint);
-        animation: thread-dots-blink 1.4s infinite both;
-    }
-    @@keyframes thread-dots-blink {
-        0%, 80%, 100% { opacity: 0.3; }
-        40% { opacity: 1; }
-    }
-    .thread-exec-star {
-        animation: thread-exec-star-pulse 1.5s ease-in-out infinite;
-    }
-    @@keyframes thread-exec-star-pulse {
-        0% { color: var(--accent-fill-rest); transform: scale(1) rotate(0deg); }
-        25% { color: #ff6b6b; transform: scale(1.3) rotate(15deg); }
-        50% { color: #ffd93d; transform: scale(1) rotate(0deg); }
-        75% { color: #6bcb77; transform: scale(1.3) rotate(-15deg); }
-        100% { color: var(--accent-fill-rest); transform: scale(1) rotate(0deg); }
-    }
-</style>

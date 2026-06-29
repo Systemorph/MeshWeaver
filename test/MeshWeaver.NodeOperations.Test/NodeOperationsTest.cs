@@ -3,8 +3,8 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using FluentAssertions;
-using FluentAssertions.Extensions;
+using System.Reactive.Threading.Tasks;
+using System.Reactive.Linq;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
@@ -22,15 +22,15 @@ public class RejectingNodeValidator : INodeValidator
 {
     public IReadOnlyCollection<NodeOperation> SupportedOperations => [NodeOperation.Create];
 
-    public Task<NodeValidationResult> ValidateAsync(NodeValidationContext context, CancellationToken ct = default)
+    public IObservable<NodeValidationResult> Validate(NodeValidationContext context)
     {
         if (context.Node.Name?.Contains("rejected", StringComparison.OrdinalIgnoreCase) == true)
         {
-            return Task.FromResult(NodeValidationResult.Invalid(
+            return Observable.Return(NodeValidationResult.Invalid(
                 $"Node name '{context.Node.Name}' is not allowed by hub policy",
                 NodeRejectionReason.ValidationFailed));
         }
-        return Task.FromResult(NodeValidationResult.Valid());
+        return Observable.Return(NodeValidationResult.Valid());
     }
 }
 
@@ -41,19 +41,19 @@ public class RequireContentValidator(string nodeType) : INodeValidator
 {
     public IReadOnlyCollection<NodeOperation> SupportedOperations => [NodeOperation.Create];
 
-    public Task<NodeValidationResult> ValidateAsync(NodeValidationContext context, CancellationToken ct = default)
+    public IObservable<NodeValidationResult> Validate(NodeValidationContext context)
     {
         // Only validate nodes of the specific type
         if (context.Node.NodeType != nodeType)
-            return Task.FromResult(NodeValidationResult.Valid());
+            return Observable.Return(NodeValidationResult.Valid());
 
         if (context.Node.Content == null)
         {
-            return Task.FromResult(NodeValidationResult.Invalid(
+            return Observable.Return(NodeValidationResult.Invalid(
                 "Node must have Content set",
                 NodeRejectionReason.ValidationFailed));
         }
-        return Task.FromResult(NodeValidationResult.Valid());
+        return Observable.Return(NodeValidationResult.Valid());
     }
 }
 
@@ -64,16 +64,16 @@ public class ProtectedNodeDeletionValidator : INodeValidator
 {
     public IReadOnlyCollection<NodeOperation> SupportedOperations => [NodeOperation.Delete];
 
-    public Task<NodeValidationResult> ValidateAsync(NodeValidationContext context, CancellationToken ct = default)
+    public IObservable<NodeValidationResult> Validate(NodeValidationContext context)
     {
         // Check if Content contains a protected flag
         if (context.Node.Content is ProtectedContent { IsProtected: true })
         {
-            return Task.FromResult(NodeValidationResult.Invalid(
+            return Observable.Return(NodeValidationResult.Invalid(
                 $"Node '{context.Node.Path}' is protected and cannot be deleted",
                 NodeRejectionReason.ValidationFailed));
         }
-        return Task.FromResult(NodeValidationResult.Valid());
+        return Observable.Return(NodeValidationResult.Valid());
     }
 }
 
@@ -92,11 +92,16 @@ public class NodeOperationsTest(ITestOutputHelper output) : MonolithMeshTestBase
     [Fact]
     public async Task CreateNode_Success()
     {
-        // Arrange
-        var node = new MeshNode("TestNode", "test/path") { Name = "Test Node" };
+        // Arrange — legal node: has NodeType (and would also pass with just Content set).
+        var node = new MeshNode("TestNode", "test/path")
+        {
+            Name = "Test Node",
+            NodeType = "Markdown",
+            Content = new MeshWeaver.Markdown.MarkdownContent { Content = "# Test" }
+        };
 
         // Act
-        var createdNode = await NodeFactory.CreateNodeAsync(node);
+        var createdNode = await NodeFactory.CreateNode(node).Should().Emit();
 
         // Assert
         createdNode.Should().NotBeNull();
@@ -109,13 +114,18 @@ public class NodeOperationsTest(ITestOutputHelper output) : MonolithMeshTestBase
     public async Task CreateNode_AlreadyExists_ShouldFail()
     {
         // Arrange
-        var node = new MeshNode("ExistingNode", "test") { Name = "Existing Node" };
+        var node = new MeshNode("ExistingNode", "test")
+        {
+            Name = "Existing Node",
+            NodeType = "Markdown",
+            Content = new MeshWeaver.Markdown.MarkdownContent { Content = "# Existing" }
+        };
 
         // Create the node first
-        await NodeFactory.CreateNodeAsync(node);
+        await NodeFactory.CreateNode(node).Should().Emit();
 
         // Act - try to create the same node again
-        var act = () => NodeFactory.CreateNodeAsync(node);
+        Func<Task> act = async () => await NodeFactory.CreateNode(node).FirstAsync().ToTask();
 
         // Assert
         await act.Should().ThrowAsync<InvalidOperationException>()
@@ -126,13 +136,31 @@ public class NodeOperationsTest(ITestOutputHelper output) : MonolithMeshTestBase
     public async Task CreateNode_InvalidPath_ShouldFail()
     {
         // Arrange
-        var node = new MeshNode("", "test") { Name = "Invalid Node" }; // Empty Id
+        var node = new MeshNode("", "test")
+        {
+            Name = "Invalid Node", // Empty Id
+            NodeType = "Markdown",
+            Content = new MeshWeaver.Markdown.MarkdownContent { Content = "" }
+        };
 
         // Act
-        var act = () => NodeFactory.CreateNodeAsync(node);
+        Func<Task> act = async () => await NodeFactory.CreateNode(node).FirstAsync().ToTask();
 
         // Assert
         await act.Should().ThrowAsync<UnauthorizedAccessException>();
+    }
+
+    [Fact]
+    public async Task CreateNode_NoTypeAndNoContent_ShouldReject()
+    {
+        // A bare MeshNode with neither NodeType nor Content can't spawn a useful per-node
+        // hub, so HandleCreateNodeRequest must reject it before persisting.
+        var node = new MeshNode("BareNode", "bare/test") { Name = "Bare" };
+
+        Func<Task> act = async () => await NodeFactory.CreateNode(node).FirstAsync().ToTask();
+
+        await act.Should().ThrowAsync<UnauthorizedAccessException>()
+            .WithMessage("*NodeType or Content*");
     }
 
     [Fact]
@@ -147,7 +175,7 @@ public class NodeOperationsTest(ITestOutputHelper output) : MonolithMeshTestBase
         };
 
         // Act
-        var createdNode = await NodeFactory.CreateNodeAsync(node);
+        var createdNode = await NodeFactory.CreateNode(node).Should().Emit();
 
         // Assert
         createdNode.Should().NotBeNull();
@@ -157,14 +185,19 @@ public class NodeOperationsTest(ITestOutputHelper output) : MonolithMeshTestBase
     [Fact]
     public async Task CreateNode_VerifyPersistence()
     {
-        // Arrange
-        var node = new MeshNode("PersistNode", "persist/test") { Name = "Persist Node" };
+        // Arrange — legal node: has NodeType + Content so it passes the bare-node rejection.
+        var node = new MeshNode("PersistNode", "persist/test")
+        {
+            Name = "Persist Node",
+            NodeType = "Markdown",
+            Content = new MeshWeaver.Markdown.MarkdownContent { Content = "# Persist" }
+        };
 
         // Act
-        await NodeFactory.CreateNodeAsync(node);
+        await NodeFactory.CreateNode(node).Should().Emit();
 
         // Verify via query
-        var retrievedNode = await MeshQuery.QueryAsync<MeshNode>("path:persist/test/PersistNode").FirstOrDefaultAsync();
+        var retrievedNode = await ReadNode("persist/test/PersistNode").Should().Emit();
 
         // Assert
         retrievedNode.Should().NotBeNull();
@@ -180,49 +213,50 @@ public class NodeOperationsTest(ITestOutputHelper output) : MonolithMeshTestBase
     public async Task DeleteNode_Success()
     {
         // Arrange
-        var node = new MeshNode("ToDelete", "delete/test") { Name = "To Delete" };
-        await NodeFactory.CreateNodeAsync(node);
+        var node = new MeshNode("ToDelete", "delete/test")
+        {
+            Name = "To Delete",
+            NodeType = "Markdown",
+            Content = new MeshWeaver.Markdown.MarkdownContent { Content = "# Placeholder" }
+        };
+        await NodeFactory.CreateNode(node).Should().Emit();
 
         // Act - delete the node
-        await NodeFactory.DeleteNodeAsync("delete/test/ToDelete");
+        await NodeFactory.DeleteNode("delete/test/ToDelete").Should().Emit();
 
-        // Assert - Verify node is gone
-        var deletedNode = await MeshQuery.QueryAsync<MeshNode>("path:delete/test/ToDelete").FirstOrDefaultAsync();
-        deletedNode.Should().BeNull();
+        // Assert - Verify node is gone (poll the authoritative per-node read)
+        await Observable.Interval(TimeSpan.FromMilliseconds(50))
+            .StartWith(0L)
+            .SelectMany(_ => ReadNode("delete/test/ToDelete"))
+            .Should().Within(10.Seconds()).Match(n => n is null);
     }
 
     [Fact]
     public async Task DeleteNode_NotFound_ShouldFail()
     {
         // Act
-        var act = () => NodeFactory.DeleteNodeAsync("nonexistent/path/Node");
+        Func<Task> act = async () => await NodeFactory.DeleteNode("nonexistent/path/Node").FirstAsync().ToTask();
 
         // Assert
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*not found*");
     }
 
-    [Fact(Skip = "Non-recursive delete via message routing not yet supported — needs proper node hub target")]
+    [Fact]
     public async Task DeleteNode_WithChildren_NonRecursive_ShouldFail()
     {
-        // Arrange
-        var client = GetClient();
-
-        // Create parent node under TestData partition (Markdown hub with node operation handlers)
         var parent = new MeshNode("HierParent", TestPartition) { Name = "Parent", NodeType = "Markdown" };
-        await NodeFactory.CreateNodeAsync(parent);
+        await NodeFactory.CreateNode(parent).Should().Emit();
 
-        // Create child node
         var child = new MeshNode("HierChild", $"{TestPartition}/HierParent") { Name = "Child", NodeType = "Markdown" };
-        await NodeFactory.CreateNodeAsync(child);
+        await NodeFactory.CreateNode(child).Should().Emit();
 
-        // Act - try to delete parent without recursive flag — target the TestData partition node (real Markdown hub)
-        var deleteResponse = await client.AwaitResponse(
-            new DeleteNodeRequest($"{TestPartition}/HierParent") { Recursive = false },
-            o => o.WithTarget(new Address(TestPartition)),
-            TestTimeout);
+        // DeleteNodeRequest handler lives on the mesh hub — target Mesh.Address, not the partition hub.
+        var deleteResponse = await Mesh.Observe(
+                new DeleteNodeRequest($"{TestPartition}/HierParent"),
+                o => o.WithTarget(Mesh.Address))
+            .Should().Emit();
 
-        // Assert
         deleteResponse.Message.Success.Should().BeFalse();
         deleteResponse.Message.RejectionReason.Should().Be(NodeDeletionRejectionReason.HasChildren);
         deleteResponse.Message.Error.Should().Contain("has children");
@@ -232,43 +266,63 @@ public class NodeOperationsTest(ITestOutputHelper output) : MonolithMeshTestBase
     public async Task DeleteNode_WithChildren_Recursive_ShouldSucceed()
     {
         // Arrange
-        var parent = new MeshNode("RecursiveParent", "recursive") { Name = "Parent" };
-        await NodeFactory.CreateNodeAsync(parent);
+        var parent = new MeshNode("RecursiveParent", "recursive")
+        {
+            Name = "Parent",
+            NodeType = "Markdown",
+            Content = new MeshWeaver.Markdown.MarkdownContent { Content = "# Placeholder" }
+        };
+        await NodeFactory.CreateNode(parent).Should().Emit();
 
-        var child = new MeshNode("RecursiveChild", "recursive/RecursiveParent") { Name = "Child" };
-        await NodeFactory.CreateNodeAsync(child);
+        var child = new MeshNode("RecursiveChild", "recursive/RecursiveParent")
+        {
+            Name = "Child",
+            NodeType = "Markdown",
+            Content = new MeshWeaver.Markdown.MarkdownContent { Content = "# Placeholder" }
+        };
+        await NodeFactory.CreateNode(child).Should().Emit();
 
         // Act - delete parent (NodeFactory.DeleteNodeAsync uses recursive by default)
-        await NodeFactory.DeleteNodeAsync("recursive/RecursiveParent");
+        await NodeFactory.DeleteNode("recursive/RecursiveParent").Should().Emit();
 
-        // Assert - Verify both parent and child are gone
-        var deletedParent = await MeshQuery.QueryAsync<MeshNode>("path:recursive/RecursiveParent").FirstOrDefaultAsync();
-        var deletedChild = await MeshQuery.QueryAsync<MeshNode>("path:recursive/RecursiveParent/RecursiveChild").FirstOrDefaultAsync();
-        deletedParent.Should().BeNull();
-        deletedChild.Should().BeNull();
+        // Assert - Verify both parent and child are gone. Use Observable.Interval
+        // polling so we wait for cache invalidation + descendant-delete
+        // propagation to settle (recursive delete dispatches per-leaf deletes
+        // which clear the cache + dispose hubs in turn; under CI load this is
+        // not synchronous with the parent's response).
+        await Observable.Interval(TimeSpan.FromMilliseconds(50))
+            .StartWith(0L)
+            .SelectMany(_ => ReadNode("recursive/RecursiveParent")
+                .SelectMany(parentNode => ReadNode("recursive/RecursiveParent/RecursiveChild")
+                    .Select(childNode => (parentNode, childNode))))
+            .Should().Within(10.Seconds()).Match(t => t.parentNode is null && t.childNode is null);
     }
 
     [Fact]
     public async Task CreateAndDeleteNode_FullLifecycle()
     {
-        // Arrange
+        // Arrange — use a legal NodeType so the per-node hub gets AddMeshDataSource.
         var nodePath = "lifecycle/test/Node";
-        var node = new MeshNode("Node", "lifecycle/test") { Name = "Lifecycle Test" };
+        var node = new MeshNode("Node", "lifecycle/test") { Name = "Lifecycle Test", NodeType = "Markdown" };
 
-        // Act & Assert - Create
-        var createdNode = await NodeFactory.CreateNodeAsync(node);
+        // Create — `NodeFactory.CreateNode(...).Should().Emit()` is the canonical
+        // "written" signal: CreateNodeResponse is posted only after the save
+        // observable completes AND the Created MeshChangeEvent has been
+        // published on IMeshChangeFeed (HandleCreateNodeRequest in
+        // MeshExtensions.cs). The returned node carries post-save state.
+        var createdNode = await NodeFactory.CreateNode(node).Should().Emit();
         createdNode.State.Should().Be(MeshNodeState.Active);
+        createdNode.Path.Should().Be(nodePath);
 
-        // Verify exists
-        var existingNode = await MeshQuery.QueryAsync<MeshNode>($"path:{nodePath}").FirstOrDefaultAsync();
-        existingNode.Should().NotBeNull();
-
-        // Act - Delete
-        await NodeFactory.DeleteNodeAsync(nodePath);
-
-        // Verify deleted
-        var deletedNode = await MeshQuery.QueryAsync<MeshNode>($"path:{nodePath}").FirstOrDefaultAsync();
-        deletedNode.Should().BeNull();
+        // Delete — same contract: DeleteNodeResponse is posted only after
+        // BulkDeleteViaStorage clears persistence AND every Deleted
+        // MeshChangeEvent is published on the change feed
+        // (HandleDeleteNodeRequest in MeshExtensions.cs:666-672). The emission
+        // IS the verification — no follow-up GetDataRequest needed, which
+        // would race per-node hub disposal and used to flake at the 30s
+        // ReadNode watchdog.
+        var deleted = await NodeFactory.DeleteNode(nodePath).Should().Emit();
+        deleted.Should().BeTrue();
     }
 
     #endregion
@@ -294,35 +348,39 @@ public class NodeOperationsWithValidatorTest(ITestOutputHelper output) : Monolit
     [Fact]
     public async Task CreateNode_HubValidatorRejects_ShouldFailAndDeleteTransientNode()
     {
-        // Arrange
+        // Arrange — legal node (NodeType + Content); validator must reject on Name.
         var node = new MeshNode("RejectedByHub", "hubvalidation/test")
         {
-            Name = "This will be rejected by hub policy"
+            Name = "This will be rejected by hub policy",
+            NodeType = "Markdown",
+            Content = new MeshWeaver.Markdown.MarkdownContent { Content = "# Rejected" }
         };
 
         // Act
-        var act = () => NodeFactory.CreateNodeAsync(node);
+        Func<Task> act = async () => await NodeFactory.CreateNode(node).FirstAsync().ToTask();
 
         // Assert — validator rejection surfaces as UnauthorizedAccessException
         await act.Should().ThrowAsync<UnauthorizedAccessException>()
             .WithMessage("*not allowed by hub policy*");
 
         // Verify the transient node was deleted (not left behind)
-        var deletedNode = await MeshQuery.QueryAsync<MeshNode>("path:hubvalidation/test/RejectedByHub").FirstOrDefaultAsync();
+        var deletedNode = await ReadNode("hubvalidation/test/RejectedByHub").Should().Emit();
         deletedNode.Should().BeNull();
     }
 
     [Fact]
     public async Task CreateNode_HubValidatorAllows_ShouldSucceed()
     {
-        // Arrange
+        // Arrange — legal node (NodeType + Content)
         var node = new MeshNode("AllowedByHub", "hubvalidation/test")
         {
-            Name = "This is perfectly fine"
+            Name = "This is perfectly fine",
+            NodeType = "Markdown",
+            Content = new MeshWeaver.Markdown.MarkdownContent { Content = "# Allowed" }
         };
 
         // Act
-        var createdNode = await NodeFactory.CreateNodeAsync(node);
+        var createdNode = await NodeFactory.CreateNode(node).Should().Emit();
 
         // Assert
         createdNode.Should().NotBeNull();
@@ -333,25 +391,23 @@ public class NodeOperationsWithValidatorTest(ITestOutputHelper output) : Monolit
     [Fact]
     public async Task CreateNode_TransientStateIsClearedOnRejection()
     {
-        // Arrange
+        // Arrange — legal node (NodeType + Content); validator must reject on Name.
         var nodePath = "transientcleanup/test/RejectedTransient";
 
         var node = new MeshNode("RejectedTransient", "transientcleanup/test")
         {
-            Name = "rejected by policy"
+            Name = "rejected by policy",
+            NodeType = "Markdown",
+            Content = new MeshWeaver.Markdown.MarkdownContent { Content = "# Rejected" }
         };
 
         // Act — creation should fail due to validator
-        var act = () => NodeFactory.CreateNodeAsync(node);
+        Func<Task> act = async () => await NodeFactory.CreateNode(node).FirstAsync().ToTask();
         await act.Should().ThrowAsync<UnauthorizedAccessException>();
 
-        // Verify no trace of the node exists
-        var nodeAfterRejection = await MeshQuery.QueryAsync<MeshNode>($"path:{nodePath}").FirstOrDefaultAsync();
+        // Verify no trace of the node exists.
+        var nodeAfterRejection = await ReadNode(nodePath).Should().Emit();
         nodeAfterRejection.Should().BeNull("transient node should be deleted after rejection");
-
-        // Also verify via query that node does not exist in persistence
-        var existsInPersistence = (await MeshQuery.QueryAsync<MeshNode>($"path:{nodePath}").FirstOrDefaultAsync()) != null;
-        existsInPersistence.Should().BeFalse("transient node should be removed from persistence after rejection");
     }
 }
 
@@ -366,12 +422,11 @@ public class NodeOperationsWithContentValidatorTest(ITestOutputHelper output) : 
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
-        // Register the NodeType as a MeshNode so it passes NodeType validation
-        builder.AddMeshNodes(new MeshNode(ContentRequiredNodeType) { Name = "Content Required" });
-
-        // Register RequireContentValidator globally for the specific NodeType
-        builder.ConfigureServices(services =>
-            services.AddSingleton<INodeValidator>(new RequireContentValidator(ContentRequiredNodeType)));
+        // NodeType definition lives in IStaticNodeProvider so the per-node hub
+        // gets AddMeshDataSource via HubConfiguration. See Doc/Architecture/TestStateIsolation.
+        builder.ConfigureServices(services => services
+            .AddSingleton<IStaticNodeProvider, ContentRequiredTypeProvider>()
+            .AddSingleton<INodeValidator>(new RequireContentValidator(ContentRequiredNodeType)));
 
         return base.ConfigureMesh(builder);
     }
@@ -388,14 +443,14 @@ public class NodeOperationsWithContentValidatorTest(ITestOutputHelper output) : 
         };
 
         // Act
-        var act = () => NodeFactory.CreateNodeAsync(node);
+        Func<Task> act = async () => await NodeFactory.CreateNode(node).FirstAsync().ToTask();
 
         // Assert — validator rejection surfaces as UnauthorizedAccessException
         await act.Should().ThrowAsync<UnauthorizedAccessException>()
             .WithMessage("*Content*");
 
         // Verify the transient node was cleaned up
-        var deletedNode = await MeshQuery.QueryAsync<MeshNode>("path:content/validation/NoContentNode").FirstOrDefaultAsync();
+        var deletedNode = await ReadNode("content/validation/NoContentNode").Should().Emit();
         deletedNode.Should().BeNull();
     }
 
@@ -411,7 +466,7 @@ public class NodeOperationsWithContentValidatorTest(ITestOutputHelper output) : 
         };
 
         // Act
-        var createdNode = await NodeFactory.CreateNodeAsync(node);
+        var createdNode = await NodeFactory.CreateNode(node).Should().Emit();
 
         // Assert
         createdNode.Should().NotBeNull();
@@ -420,18 +475,20 @@ public class NodeOperationsWithContentValidatorTest(ITestOutputHelper output) : 
     }
 
     [Fact]
-    public async Task CreateNode_WithoutNodeType_WithoutContent_ShouldSucceed()
+    public async Task CreateNode_DifferentNodeType_WithoutContent_ShouldSucceed()
     {
-        // Arrange - node without NodeType should NOT trigger NodeType validators
+        // Arrange - node with a NodeType OTHER than ContentRequiredNodeType should NOT
+        // trigger the type-keyed RequireContentValidator. We use "Markdown" so the bare-node
+        // guard also passes (NodeType is set), letting us exercise the validator-not-applied path.
         var node = new MeshNode("NoTypeNoContent", "content/validation")
         {
-            Name = "Node without NodeType"
-            // No NodeType set - validator should NOT be applied
-            // No Content set - but should still succeed
+            Name = "Node with non-validated NodeType",
+            NodeType = "Markdown" // Different from ContentRequiredNodeType — validator should NOT fire
+            // No Content set - but should still succeed because validator is type-keyed
         };
 
         // Act
-        var createdNode = await NodeFactory.CreateNodeAsync(node);
+        var createdNode = await NodeFactory.CreateNode(node).Should().Emit();
 
         // Assert - should succeed because validator is only applied to ContentRequiredNodeType
         createdNode.Should().NotBeNull();
@@ -459,62 +516,77 @@ public class NodeOperationsWithDeletionValidatorTest(ITestOutputHelper output) :
     [Fact]
     public async Task DeleteNode_ProtectedNode_ShouldFailValidation()
     {
-        // Arrange — create a protected node
+        // Arrange — create a protected node. NodeType is required so the per-node hub
+        // for "deletion/validation/ProtectedNode" gets AddMeshDataSource via Markdown's
+        // HubConfiguration; otherwise the post-rejection ReadNodeAsync at the bottom of
+        // the test routes to a non-existent hub and returns null instead of the node.
         var node = new MeshNode("ProtectedNode", "deletion/validation")
         {
             Name = "Protected Node",
+            NodeType = "Markdown",
             Content = new ProtectedContent("Important Data", IsProtected: true)
         };
-        await NodeFactory.CreateNodeAsync(node);
+        await NodeFactory.CreateNode(node).Should().Emit();
 
         // Act - try to delete the protected node
-        var act = () => NodeFactory.DeleteNodeAsync("deletion/validation/ProtectedNode");
+        Func<Task> act = async () => await NodeFactory.DeleteNode("deletion/validation/ProtectedNode").FirstAsync().ToTask();
 
         // Assert — validator rejection surfaces as UnauthorizedAccessException
         await act.Should().ThrowAsync<UnauthorizedAccessException>()
             .WithMessage("*protected*");
 
         // Verify the node still exists
-        var existingNode = await MeshQuery.QueryAsync<MeshNode>("path:deletion/validation/ProtectedNode").FirstOrDefaultAsync();
+        var existingNode = await ReadNode("deletion/validation/ProtectedNode").Should().Emit();
         existingNode.Should().NotBeNull();
     }
 
     [Fact]
     public async Task DeleteNode_UnprotectedNode_ShouldSucceed()
     {
-        // Arrange — create an unprotected node
+        // Arrange — create an unprotected node. NodeType is required so the per-node
+        // hub gets AddMeshDataSource via Markdown's HubConfiguration; otherwise the
+        // deletion validator's GetWorkspace() throws
+        // "Configuration of message hub is inconsistent: AddData was not called."
         var node = new MeshNode("UnprotectedNode", "deletion/validation")
         {
             Name = "Unprotected Node",
+            NodeType = "Markdown",
             Content = new ProtectedContent("Regular Data", IsProtected: false)
         };
-        await NodeFactory.CreateNodeAsync(node);
+        await NodeFactory.CreateNode(node).Should().Emit();
 
         // Act - delete the unprotected node
-        await NodeFactory.DeleteNodeAsync("deletion/validation/UnprotectedNode");
+        await NodeFactory.DeleteNode("deletion/validation/UnprotectedNode").Should().Emit();
 
-        // Assert — verify the node is deleted
-        var deletedNode = await MeshQuery.QueryAsync<MeshNode>("path:deletion/validation/UnprotectedNode").FirstOrDefaultAsync();
-        deletedNode.Should().BeNull();
+        // Assert — verify the node is deleted (poll the authoritative read)
+        await Observable.Interval(TimeSpan.FromMilliseconds(50))
+            .StartWith(0L)
+            .SelectMany(_ => ReadNode("deletion/validation/UnprotectedNode"))
+            .Should().Within(10.Seconds()).Match(n => n is null);
     }
 
     [Fact]
     public async Task DeleteNode_NodeWithoutProtectedContent_ShouldSucceed()
     {
-        // Arrange — create a node with different content type (not ProtectedContent)
+        // Arrange — create a node with different content type (not ProtectedContent).
+        // NodeType required so the per-node hub's IWorkspace activates — see the
+        // comment on DeleteNode_UnprotectedNode_ShouldSucceed above.
         var node = new MeshNode("RegularNode", "deletion/validation")
         {
             Name = "Regular Node",
+            NodeType = "Markdown",
             Content = new { Data = "Some data" }  // Not ProtectedContent
         };
-        await NodeFactory.CreateNodeAsync(node);
+        await NodeFactory.CreateNode(node).Should().Emit();
 
         // Act - delete the node
-        await NodeFactory.DeleteNodeAsync("deletion/validation/RegularNode");
+        await NodeFactory.DeleteNode("deletion/validation/RegularNode").Should().Emit();
 
-        // Assert — verify the node is deleted
-        var deletedNode = await MeshQuery.QueryAsync<MeshNode>("path:deletion/validation/RegularNode").FirstOrDefaultAsync();
-        deletedNode.Should().BeNull();
+        // Assert — verify the node is deleted (poll the authoritative read)
+        await Observable.Interval(TimeSpan.FromMilliseconds(50))
+            .StartWith(0L)
+            .SelectMany(_ => ReadNode("deletion/validation/RegularNode"))
+            .Should().Within(10.Seconds()).Match(n => n is null);
     }
 }
 
@@ -533,19 +605,19 @@ public class RequireTitleValidator : INodeValidator
 
     public IReadOnlyCollection<NodeOperation> SupportedOperations => [NodeOperation.Create];
 
-    public Task<NodeValidationResult> ValidateAsync(NodeValidationContext context, CancellationToken ct = default)
+    public IObservable<NodeValidationResult> Validate(NodeValidationContext context)
     {
         // Only apply to specific NodeTypes
         if (!ApplicableNodeTypes.Contains(context.Node.NodeType))
-            return Task.FromResult(NodeValidationResult.Valid());
+            return Observable.Return(NodeValidationResult.Valid());
 
         if (context.Node.Content is ValidatedContent content && string.IsNullOrWhiteSpace(content.Title))
         {
-            return Task.FromResult(NodeValidationResult.Invalid(
+            return Observable.Return(NodeValidationResult.Invalid(
                 "ValidatedContent must have a non-empty Title",
                 NodeRejectionReason.ValidationFailed));
         }
-        return Task.FromResult(NodeValidationResult.Valid());
+        return Observable.Return(NodeValidationResult.Valid());
     }
 }
 
@@ -556,15 +628,15 @@ public class PreventLockedDeletionValidator : INodeValidator
 {
     public IReadOnlyCollection<NodeOperation> SupportedOperations => [NodeOperation.Delete];
 
-    public Task<NodeValidationResult> ValidateAsync(NodeValidationContext context, CancellationToken ct = default)
+    public IObservable<NodeValidationResult> Validate(NodeValidationContext context)
     {
         if (context.Node.Content is ValidatedContent { Description: "locked" })
         {
-            return Task.FromResult(NodeValidationResult.Invalid(
+            return Observable.Return(NodeValidationResult.Invalid(
                 "Cannot delete node with locked description",
                 NodeRejectionReason.ValidationFailed));
         }
-        return Task.FromResult(NodeValidationResult.Valid());
+        return Observable.Return(NodeValidationResult.Valid());
     }
 }
 
@@ -579,12 +651,10 @@ public class NodeOperationsWithNodeTypeValidatorsTest(ITestOutputHelper output) 
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
-        // Register the NodeType as a MeshNode so it passes NodeType validation
-        builder.AddMeshNodes(new MeshNode(ValidatedNodeType) { Name = "Validated" });
-
-        // Register validators globally - they check Content type, so they only apply to ValidatedContent nodes
+        // NodeType definition lives in IStaticNodeProvider (see TestStateIsolation).
         builder.ConfigureServices(services =>
         {
+            services.AddSingleton<IStaticNodeProvider, ValidatedTypeProvider>();
             services.AddSingleton<INodeValidator, RequireTitleValidator>();
             services.AddSingleton<INodeValidator, PreventLockedDeletionValidator>();
             return services;
@@ -605,14 +675,14 @@ public class NodeOperationsWithNodeTypeValidatorsTest(ITestOutputHelper output) 
         };
 
         // Act
-        var act = () => NodeFactory.CreateNodeAsync(node);
+        Func<Task> act = async () => await NodeFactory.CreateNode(node).FirstAsync().ToTask();
 
         // Assert — validator rejection surfaces as UnauthorizedAccessException
         await act.Should().ThrowAsync<UnauthorizedAccessException>()
             .WithMessage("*Title*");
 
         // Verify transient node was cleaned up
-        var deletedNode = await MeshQuery.QueryAsync<MeshNode>("path:nodetype/validation/NoTitleNode").FirstOrDefaultAsync();
+        var deletedNode = await ReadNode("nodetype/validation/NoTitleNode").Should().Emit();
         deletedNode.Should().BeNull();
     }
 
@@ -628,7 +698,7 @@ public class NodeOperationsWithNodeTypeValidatorsTest(ITestOutputHelper output) 
         };
 
         // Act
-        var createdNode = await NodeFactory.CreateNodeAsync(node);
+        var createdNode = await NodeFactory.CreateNode(node).Should().Emit();
 
         // Assert
         createdNode.Should().NotBeNull();
@@ -647,7 +717,7 @@ public class NodeOperationsWithNodeTypeValidatorsTest(ITestOutputHelper output) 
         };
 
         // Act
-        var createdNode = await NodeFactory.CreateNodeAsync(node);
+        var createdNode = await NodeFactory.CreateNode(node).Should().Emit();
 
         // Assert - should succeed because validator is not applied to this NodeType
         createdNode.Should().NotBeNull();
@@ -663,17 +733,17 @@ public class NodeOperationsWithNodeTypeValidatorsTest(ITestOutputHelper output) 
             NodeType = ValidatedNodeType,
             Content = new ValidatedContent(Title: "Locked", Description: "locked")
         };
-        await NodeFactory.CreateNodeAsync(node);
+        await NodeFactory.CreateNode(node).Should().Emit();
 
         // Act - try to delete the locked node
-        var act = () => NodeFactory.DeleteNodeAsync("nodetype/deletion/LockedNode");
+        Func<Task> act = async () => await NodeFactory.DeleteNode("nodetype/deletion/LockedNode").FirstAsync().ToTask();
 
         // Assert — validator rejection surfaces as UnauthorizedAccessException
         await act.Should().ThrowAsync<UnauthorizedAccessException>()
             .WithMessage("*locked*");
 
         // Verify node still exists
-        var existingNode = await MeshQuery.QueryAsync<MeshNode>("path:nodetype/deletion/LockedNode").FirstOrDefaultAsync();
+        var existingNode = await ReadNode("nodetype/deletion/LockedNode").Should().Emit();
         existingNode.Should().NotBeNull();
     }
 
@@ -687,14 +757,16 @@ public class NodeOperationsWithNodeTypeValidatorsTest(ITestOutputHelper output) 
             NodeType = ValidatedNodeType,
             Content = new ValidatedContent(Title: "Unlocked", Description: "not-locked")
         };
-        await NodeFactory.CreateNodeAsync(node);
+        await NodeFactory.CreateNode(node).Should().Emit();
 
         // Act - delete the unlocked node
-        await NodeFactory.DeleteNodeAsync("nodetype/deletion/UnlockedNode");
+        await NodeFactory.DeleteNode("nodetype/deletion/UnlockedNode").Should().Emit();
 
-        // Assert — verify node is deleted
-        var deletedNode = await MeshQuery.QueryAsync<MeshNode>("path:nodetype/deletion/UnlockedNode").FirstOrDefaultAsync();
-        deletedNode.Should().BeNull();
+        // Assert — verify node is deleted (poll the authoritative read)
+        await Observable.Interval(TimeSpan.FromMilliseconds(50))
+            .StartWith(0L)
+            .SelectMany(_ => ReadNode("nodetype/deletion/UnlockedNode"))
+            .Should().Within(10.Seconds()).Match(n => n is null);
     }
 }
 
@@ -709,14 +781,10 @@ public class NodeOperationsWithCombinedValidatorsTest(ITestOutputHelper output) 
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
-        // Register the NodeType as a MeshNode so it passes NodeType validation
-        builder.AddMeshNodes(new MeshNode(ValidatedNodeType) { Name = "Combined" });
-
-        // Register validators globally via DI
-        // RejectingNodeValidator rejects names containing "rejected"
-        // RequireTitleValidator checks ValidatedContent has non-empty Title
+        // NodeType definition lives in IStaticNodeProvider (see TestStateIsolation).
         builder.ConfigureServices(services =>
         {
+            services.AddSingleton<IStaticNodeProvider, CombinedTypeProvider>();
             services.AddSingleton<INodeValidator, RejectingNodeValidator>();
             services.AddSingleton<INodeValidator, RequireTitleValidator>();
             return services;
@@ -737,7 +805,7 @@ public class NodeOperationsWithCombinedValidatorsTest(ITestOutputHelper output) 
         };
 
         // Act
-        var act = () => NodeFactory.CreateNodeAsync(node);
+        Func<Task> act = async () => await NodeFactory.CreateNode(node).FirstAsync().ToTask();
 
         // Assert - global validator rejects first
         await act.Should().ThrowAsync<UnauthorizedAccessException>()
@@ -756,7 +824,7 @@ public class NodeOperationsWithCombinedValidatorsTest(ITestOutputHelper output) 
         };
 
         // Act
-        var act = () => NodeFactory.CreateNodeAsync(node);
+        Func<Task> act = async () => await NodeFactory.CreateNode(node).FirstAsync().ToTask();
 
         // Assert - NodeType validator rejects after global passes
         await act.Should().ThrowAsync<UnauthorizedAccessException>()
@@ -775,7 +843,7 @@ public class NodeOperationsWithCombinedValidatorsTest(ITestOutputHelper output) 
         };
 
         // Act
-        var createdNode = await NodeFactory.CreateNodeAsync(node);
+        var createdNode = await NodeFactory.CreateNode(node).Should().Emit();
 
         // Assert
         createdNode.Should().NotBeNull();
@@ -797,20 +865,20 @@ public class HiddenNodeReadValidator : INodeValidator
 
     public IReadOnlyCollection<NodeOperation> SupportedOperations => [NodeOperation.Read];
 
-    public Task<NodeValidationResult> ValidateAsync(NodeValidationContext context, CancellationToken ct = default)
+    public IObservable<NodeValidationResult> Validate(NodeValidationContext context)
     {
         // Only apply to nodes with the readable NodeType
         if (context.Node.NodeType != ReadableNodeType)
-            return Task.FromResult(NodeValidationResult.Valid());
+            return Observable.Return(NodeValidationResult.Valid());
 
         if (context.Node.Content is ReadableContent { IsHidden: true })
         {
-            return Task.FromResult(new NodeValidationResult(
+            return Observable.Return(new NodeValidationResult(
                 false,
                 $"Node '{context.Node.Path}' is hidden",
                 NodeRejectionReason.NodeHidden));
         }
-        return Task.FromResult(NodeValidationResult.Valid());
+        return Observable.Return(NodeValidationResult.Valid());
     }
 }
 
@@ -825,12 +893,10 @@ public class NodeOperationsWithReadValidatorTest(ITestOutputHelper output) : Mon
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
-        // Register the NodeType as a MeshNode so it passes NodeType validation
-        builder.AddMeshNodes(new MeshNode(ReadableNodeType) { Name = "Readable" });
-
-        // Register HiddenNodeReadValidator globally - it checks Content type, so only applies to ReadableContent nodes
-        builder.ConfigureServices(services =>
-            services.AddSingleton<INodeValidator, HiddenNodeReadValidator>());
+        // NodeType definition lives in IStaticNodeProvider (see TestStateIsolation).
+        builder.ConfigureServices(services => services
+            .AddSingleton<IStaticNodeProvider, ReadableTypeProvider>()
+            .AddSingleton<INodeValidator, HiddenNodeReadValidator>());
 
         return base.ConfigureMesh(builder);
     }
@@ -845,10 +911,10 @@ public class NodeOperationsWithReadValidatorTest(ITestOutputHelper output) : Mon
             NodeType = ReadableNodeType,
             Content = new ReadableContent(Title: "Hidden", IsHidden: true)
         };
-        await NodeFactory.CreateNodeAsync(node);
+        await NodeFactory.CreateNode(node).Should().Emit();
 
         // Act - try to read the hidden node
-        var readNode = await MeshQuery.QueryAsync<MeshNode>("path:read/validation/HiddenNode").FirstOrDefaultAsync();
+        var readNode = await ReadNode("read/validation/HiddenNode").Should().Emit();
 
         // Assert - should return null because the node is hidden
         readNode.Should().BeNull();
@@ -864,34 +930,16 @@ public class NodeOperationsWithReadValidatorTest(ITestOutputHelper output) : Mon
             NodeType = ReadableNodeType,
             Content = new ReadableContent(Title: "Visible", IsHidden: false)
         };
-        await NodeFactory.CreateNodeAsync(node);
+        await NodeFactory.CreateNode(node).Should().Emit();
 
         // Act - read the visible node
-        var readNode = await MeshQuery.QueryAsync<MeshNode>("path:read/validation/VisibleNode").FirstOrDefaultAsync();
+        var readNode = await ReadNode("read/validation/VisibleNode").Should().Emit();
 
         // Assert - should return the node
         readNode.Should().NotBeNull();
         readNode!.Name.Should().Be("Visible Node");
     }
 
-    [Fact]
-    public async Task GetNode_NodeWithoutNodeType_ReadValidatorNotApplied()
-    {
-        // Arrange - create a node without NodeType (validator should not apply)
-        var node = new MeshNode("NoTypeHiddenNode", "read/validation")
-        {
-            Name = "No Type Hidden Node",
-            // No NodeType - validator should NOT be applied
-            Content = new ReadableContent(Title: "Hidden", IsHidden: true)
-        };
-        await NodeFactory.CreateNodeAsync(node);
-
-        // Act - read the node
-        var readNode = await MeshQuery.QueryAsync<MeshNode>("path:read/validation/NoTypeHiddenNode").FirstOrDefaultAsync();
-
-        // Assert - should return the node because validator doesn't apply to nodes without NodeType
-        readNode.Should().NotBeNull();
-    }
 }
 
 /// <summary>
@@ -901,16 +949,16 @@ public class BlockedNodeReadValidator : INodeValidator
 {
     public IReadOnlyCollection<NodeOperation> SupportedOperations => [NodeOperation.Read];
 
-    public Task<NodeValidationResult> ValidateAsync(NodeValidationContext context, CancellationToken ct = default)
+    public IObservable<NodeValidationResult> Validate(NodeValidationContext context)
     {
         if (context.Node.Name?.Contains("blocked", StringComparison.OrdinalIgnoreCase) == true)
         {
-            return Task.FromResult(new NodeValidationResult(
+            return Observable.Return(new NodeValidationResult(
                 false,
                 $"Node '{context.Node.Path}' is blocked by global policy",
                 NodeRejectionReason.Unauthorized));
         }
-        return Task.FromResult(NodeValidationResult.Valid());
+        return Observable.Return(NodeValidationResult.Valid());
     }
 }
 
@@ -934,15 +982,17 @@ public class NodeOperationsWithGlobalReadValidatorTest(ITestOutputHelper output)
     [Fact]
     public async Task GetNode_BlockedByGlobalValidator_ShouldReturnNull()
     {
-        // Arrange - create a node with "blocked" in name
+        // Arrange - create a node with "blocked" in name (legal: NodeType + Content)
         var node = new MeshNode("BlockedByPolicy", "global/read")
         {
-            Name = "This is blocked by global policy"
+            Name = "This is blocked by global policy",
+            NodeType = "Markdown",
+            Content = new MeshWeaver.Markdown.MarkdownContent { Content = "# Blocked" }
         };
-        await NodeFactory.CreateNodeAsync(node);
+        await NodeFactory.CreateNode(node).Should().Emit();
 
         // Act - try to read the blocked node
-        var readNode = await MeshQuery.QueryAsync<MeshNode>("path:global/read/BlockedByPolicy").FirstOrDefaultAsync();
+        var readNode = await ReadNode("global/read/BlockedByPolicy").Should().Emit();
 
         // Assert - should return null because the node is blocked
         readNode.Should().BeNull();
@@ -951,15 +1001,17 @@ public class NodeOperationsWithGlobalReadValidatorTest(ITestOutputHelper output)
     [Fact]
     public async Task GetNode_NotBlockedByGlobalValidator_ShouldReturnNode()
     {
-        // Arrange - create a node without "blocked" in name
+        // Arrange - create a node without "blocked" in name (legal: NodeType + Content)
         var node = new MeshNode("AllowedNode", "global/read")
         {
-            Name = "This is allowed"
+            Name = "This is allowed",
+            NodeType = "Markdown",
+            Content = new MeshWeaver.Markdown.MarkdownContent { Content = "# Allowed" }
         };
-        await NodeFactory.CreateNodeAsync(node);
+        await NodeFactory.CreateNode(node).Should().Emit();
 
         // Act - read the allowed node
-        var readNode = await MeshQuery.QueryAsync<MeshNode>("path:global/read/AllowedNode").FirstOrDefaultAsync();
+        var readNode = await ReadNode("global/read/AllowedNode").Should().Emit();
 
         // Assert - should return the node
         readNode.Should().NotBeNull();
@@ -981,28 +1033,28 @@ public class NoVersionDowngradeValidator : INodeValidator
 
     public IReadOnlyCollection<NodeOperation> SupportedOperations => [NodeOperation.Update];
 
-    public Task<NodeValidationResult> ValidateAsync(NodeValidationContext context, CancellationToken ct = default)
+    public IObservable<NodeValidationResult> Validate(NodeValidationContext context)
     {
         // Only apply to Update operations with existing node
         if (context.ExistingNode == null)
-            return Task.FromResult(NodeValidationResult.Valid());
+            return Observable.Return(NodeValidationResult.Valid());
 
         // Only apply to nodes with the updatable NodeType
         if (context.ExistingNode.NodeType != UpdatableNodeType)
-            return Task.FromResult(NodeValidationResult.Valid());
+            return Observable.Return(NodeValidationResult.Valid());
 
         if (context.ExistingNode.Content is UpdatableContent existingContent &&
             context.Node.Content is UpdatableContent updatedContent)
         {
             if (updatedContent.Version < existingContent.Version)
             {
-                return Task.FromResult(new NodeValidationResult(
+                return Observable.Return(new NodeValidationResult(
                     false,
                     $"Cannot downgrade version from {existingContent.Version} to {updatedContent.Version}",
                     NodeRejectionReason.ValidationFailed));
             }
         }
-        return Task.FromResult(NodeValidationResult.Valid());
+        return Observable.Return(NodeValidationResult.Valid());
     }
 }
 
@@ -1017,12 +1069,10 @@ public class NodeOperationsWithUpdateValidatorTest(ITestOutputHelper output) : M
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
-        // Register the NodeType as a MeshNode so it passes NodeType validation
-        builder.AddMeshNodes(new MeshNode(UpdatableNodeType) { Name = "Updatable" });
-
-        // Register NoVersionDowngradeValidator globally - it checks Content type, so only applies to UpdatableContent nodes
-        builder.ConfigureServices(services =>
-            services.AddSingleton<INodeValidator, NoVersionDowngradeValidator>());
+        // NodeType definition lives in IStaticNodeProvider (see TestStateIsolation).
+        builder.ConfigureServices(services => services
+            .AddSingleton<IStaticNodeProvider, UpdatableTypeProvider>()
+            .AddSingleton<INodeValidator, NoVersionDowngradeValidator>());
 
         return base.ConfigureMesh(builder);
     }
@@ -1037,7 +1087,7 @@ public class NodeOperationsWithUpdateValidatorTest(ITestOutputHelper output) : M
             NodeType = UpdatableNodeType,
             Content = new UpdatableContent(Title: "Original", Version: 1)
         };
-        await NodeFactory.CreateNodeAsync(node);
+        await NodeFactory.CreateNode(node).Should().Emit();
 
         // Act - update with version 2
         var updatedNode = node with
@@ -1045,7 +1095,7 @@ public class NodeOperationsWithUpdateValidatorTest(ITestOutputHelper output) : M
             Name = "Updated Node",
             Content = new UpdatableContent(Title: "Updated", Version: 2)
         };
-        var result = await NodeFactory.UpdateNodeAsync(updatedNode);
+        var result = await NodeFactory.UpdateNode(updatedNode).Should().Emit();
 
         // Assert
         result.Should().NotBeNull();
@@ -1062,7 +1112,7 @@ public class NodeOperationsWithUpdateValidatorTest(ITestOutputHelper output) : M
             NodeType = UpdatableNodeType,
             Content = new UpdatableContent(Title: "High Version", Version: 5)
         };
-        await NodeFactory.CreateNodeAsync(node);
+        await NodeFactory.CreateNode(node).Should().Emit();
 
         // Act - try to downgrade to version 3
         var downgradedNode = node with
@@ -1070,7 +1120,7 @@ public class NodeOperationsWithUpdateValidatorTest(ITestOutputHelper output) : M
             Name = "Downgraded Node",
             Content = new UpdatableContent(Title: "Downgraded", Version: 3)
         };
-        var act = () => NodeFactory.UpdateNodeAsync(downgradedNode);
+        Func<Task> act = async () => await NodeFactory.UpdateNode(downgradedNode).FirstAsync().ToTask();
 
         // Assert — validator rejection surfaces as UnauthorizedAccessException
         await act.Should().ThrowAsync<UnauthorizedAccessException>()
@@ -1087,7 +1137,7 @@ public class NodeOperationsWithUpdateValidatorTest(ITestOutputHelper output) : M
             NodeType = UpdatableNodeType,
             Content = new UpdatableContent(Title: "Original", Version: 1)
         };
-        await NodeFactory.CreateNodeAsync(node);
+        await NodeFactory.CreateNode(node).Should().Emit();
 
         // Act - update with same version (just change title)
         var updatedNode = node with
@@ -1095,7 +1145,7 @@ public class NodeOperationsWithUpdateValidatorTest(ITestOutputHelper output) : M
             Name = "Updated Same Version",
             Content = new UpdatableContent(Title: "Updated", Version: 1)
         };
-        var result = await NodeFactory.UpdateNodeAsync(updatedNode);
+        var result = await NodeFactory.UpdateNode(updatedNode).Should().Emit();
 
         // Assert
         result.Should().NotBeNull();
@@ -1113,36 +1163,17 @@ public class NodeOperationsWithUpdateValidatorTest(ITestOutputHelper output) : M
         };
 
         // Act - try to update a node that doesn't exist
-        var act = () => NodeFactory.UpdateNodeAsync(node);
+        Func<Task> act = async () => await NodeFactory.UpdateNode(node).FirstAsync().ToTask();
 
-        // Assert
+        // Assert — UpdateNodeRequest is forwarded to the owning per-node hub
+        // (see MeshExtensions.cs HandleUpdateNodeRequest forwarding in 727ba0925).
+        // When the path doesn't resolve, the response is mapped to
+        // NodeUpdateRejectionReason.NodeNotFound and IMeshService.UpdateNode
+        // surfaces it as InvalidOperationException("Node not found: {path}").
         await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*not found*");
+            .WithMessage("*Node not found*");
     }
 
-    [Fact]
-    public async Task UpdateNode_NodeWithoutNodeType_ValidatorNotApplied()
-    {
-        // Arrange - create a node without NodeType
-        var node = new MeshNode("NoTypeNode", "update/validation")
-        {
-            Name = "No Type Node",
-            // No NodeType - validator should NOT be applied
-            Content = new UpdatableContent(Title: "Original", Version: 5)
-        };
-        await NodeFactory.CreateNodeAsync(node);
-
-        // Act - try to downgrade version (would fail with validator, but should succeed without)
-        var downgradedNode = node with
-        {
-            Name = "Downgraded No Type",
-            Content = new UpdatableContent(Title: "Downgraded", Version: 1)
-        };
-        var result = await NodeFactory.UpdateNodeAsync(downgradedNode);
-
-        // Assert - should succeed because validator doesn't apply
-        result.Should().NotBeNull();
-    }
 }
 
 /// <summary>
@@ -1152,16 +1183,16 @@ public class ForbiddenNameUpdateValidator : INodeValidator
 {
     public IReadOnlyCollection<NodeOperation> SupportedOperations => [NodeOperation.Update];
 
-    public Task<NodeValidationResult> ValidateAsync(NodeValidationContext context, CancellationToken ct = default)
+    public IObservable<NodeValidationResult> Validate(NodeValidationContext context)
     {
         if (context.Node.Name?.Contains("forbidden", StringComparison.OrdinalIgnoreCase) == true)
         {
-            return Task.FromResult(new NodeValidationResult(
+            return Observable.Return(new NodeValidationResult(
                 false,
                 "Cannot update node name to contain 'forbidden'",
                 NodeRejectionReason.ValidationFailed));
         }
-        return Task.FromResult(NodeValidationResult.Valid());
+        return Observable.Return(NodeValidationResult.Valid());
     }
 }
 
@@ -1185,19 +1216,21 @@ public class NodeOperationsWithGlobalUpdateValidatorTest(ITestOutputHelper outpu
     [Fact]
     public async Task UpdateNode_ForbiddenName_ShouldFail()
     {
-        // Arrange - create a node
+        // Arrange - create a node (legal: NodeType + Content)
         var node = new MeshNode("NormalNode", "global/update")
         {
-            Name = "Normal Node"
+            Name = "Normal Node",
+            NodeType = "Markdown",
+            Content = new MeshWeaver.Markdown.MarkdownContent { Content = "# Normal" }
         };
-        await NodeFactory.CreateNodeAsync(node);
+        await NodeFactory.CreateNode(node).Should().Emit();
 
         // Act - try to update with forbidden name
         var updatedNode = node with
         {
             Name = "This is forbidden by policy"
         };
-        var act = () => NodeFactory.UpdateNodeAsync(updatedNode);
+        Func<Task> act = async () => await NodeFactory.UpdateNode(updatedNode).FirstAsync().ToTask();
 
         // Assert — validator rejection surfaces as UnauthorizedAccessException
         await act.Should().ThrowAsync<UnauthorizedAccessException>()
@@ -1207,19 +1240,21 @@ public class NodeOperationsWithGlobalUpdateValidatorTest(ITestOutputHelper outpu
     [Fact]
     public async Task UpdateNode_AllowedName_ShouldSucceed()
     {
-        // Arrange - create a node
+        // Arrange - create a node (legal: NodeType + Content)
         var node = new MeshNode("AllowedUpdateNode", "global/update")
         {
-            Name = "Allowed Node"
+            Name = "Allowed Node",
+            NodeType = "Markdown",
+            Content = new MeshWeaver.Markdown.MarkdownContent { Content = "# Allowed" }
         };
-        await NodeFactory.CreateNodeAsync(node);
+        await NodeFactory.CreateNode(node).Should().Emit();
 
         // Act - update with allowed name
         var updatedNode = node with
         {
             Name = "Updated Allowed Node"
         };
-        var result = await NodeFactory.UpdateNodeAsync(updatedNode);
+        var result = await NodeFactory.UpdateNode(updatedNode).Should().Emit();
 
         // Assert
         result.Should().NotBeNull();

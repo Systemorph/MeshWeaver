@@ -4,8 +4,6 @@ using System.Linq;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
-using FluentAssertions;
-using FluentAssertions.Extensions;
 using MeshWeaver.AI;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Documentation;
@@ -45,9 +43,8 @@ public class AgentMarkdownParsingTest(ITestOutputHelper output) : MonolithMeshTe
             Output.WriteLine($"  {node.Path}: {node.NodeType} - {node.Name}");
 
         // Verify expected agents exist
-        nodes.Should().Contain(n => n.Path == "Agent/Orchestrator", "Orchestrator agent should exist");
+        nodes.Should().Contain(n => n.Path == "Agent/Assistant", "Assistant agent should exist (renamed from Orchestrator in c31fd04da)");
         nodes.Should().Contain(n => n.Path == "Agent/Worker", "Worker agent should exist");
-        nodes.Should().Contain(n => n.Path == "Agent/Planner", "Planner agent should exist");
         nodes.Should().Contain(n => n.Path == "Agent/Researcher", "Researcher agent should exist");
         nodes.Should().Contain(n => n.Path == "Agent/ToolsReference", "ToolsReference should exist");
     }
@@ -93,7 +90,7 @@ public class AgentMarkdownParsingTest(ITestOutputHelper output) : MonolithMeshTe
         }
 
         violations.Should().BeEmpty(
-            "agent instructions must not contain literal '@path' — " +
+            "agent instructions must not contain literal '@path' â€” " +
             "the AI agent will try to use it as an actual address. " +
             "Use a real example node path instead.");
     }
@@ -105,7 +102,6 @@ public class AgentMarkdownParsingTest(ITestOutputHelper output) : MonolithMeshTe
     [Fact]
     public async Task AgentInstructions_InlineReferences_PointToExistingNodes()
     {
-        var ct = new CancellationTokenSource(15.Seconds()).Token;
         var provider = new BuiltInAgentProvider();
         var allStaticNodes = provider.GetStaticNodes().ToList();
 
@@ -143,14 +139,13 @@ public class AgentMarkdownParsingTest(ITestOutputHelper output) : MonolithMeshTe
                     // Also check if it's a content reference (contains ':')
                     if (!refPath.Contains(':'))
                     {
-                        // Try querying persistence
-                        var found = await MeshQuery.QueryAsync<MeshNode>($"path:{refPath}")
-                            .FirstOrDefaultAsync(ct);
+                        // Try reading via per-node stream
+                        var found = await ReadNode(refPath).Should().Emit();
                         if (found == null)
-                            missingRefs.Add($"{node.Path}: @@{refPath} — node not found");
+                            missingRefs.Add($"{node.Path}: @@{refPath} â€” node not found");
                     }
                     // Content references (e.g., Doc/AI/content:inline-example.md) are harder
-                    // to validate statically — skip for now
+                    // to validate statically â€” skip for now
                 }
             }
         }

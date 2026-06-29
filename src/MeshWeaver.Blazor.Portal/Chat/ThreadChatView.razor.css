@@ -17,6 +17,27 @@
     width: 100%;
 }
 
+/* No-messages (new-chat) landing. The composer is height:100% of its slot a priori; the
+   Thread view controls how big that slot is by collapsing the empty message history and
+   letting the bottom block flex-fill. The fill propagates down the chain (bottom → footer →
+   input-area → input-content → editor) so the input field grows to occupy the space rather
+   than sitting as a thin bar. With messages present this class is absent, so the history
+   takes flex:1 and the composer reverts to its natural bottom-bar height. */
+.thread-chat-container.no-messages .thread-chat-messages {
+    flex: 0 1 auto;
+    min-height: 0;
+}
+.thread-chat-container.no-messages .thread-chat-bottom,
+.thread-chat-container.no-messages .thread-chat-footer,
+.thread-chat-container.no-messages .thread-chat-input-area,
+.thread-chat-container.no-messages .thread-chat-input-content,
+.thread-chat-container.no-messages .input-container {
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+}
+
 .thread-chat-messages {
     flex: 1;
     min-height: 0;
@@ -24,11 +45,146 @@
     width: 100%;
     overflow-y: auto;
     overflow-x: hidden;
-    padding: 16px;
+    padding: 20px 24px;
+    /* Flex column so the bubble's `align-self: flex-end` (user)
+       puts user bubbles flush right while assistant stays left. */
+    display: flex;
+    flex-direction: column;
 }
 
-/* Execution status bar above chat input */
+/* ─── Hero header (full-page chat) ─────────────────────────────────────
+   Rendered NATIVELY as the first child of the scrollable message list, so it
+   flows ABOVE the conversation (no overlap) and scrolls away with it. Compact /
+   narrow: a top row (starting-point context chip + Mark Done) then a click-to-edit
+   title and a smaller click-to-edit description. `flex: 0 0 auto` so it reserves its
+   own height and is never squeezed into the messages below. Hidden inside the side
+   panel via SidePanel.razor.css (`.thread-full-header { display:none }`). */
+.thread-full-header {
+    flex: 0 0 auto;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 0 4px 14px 4px;
+    margin-bottom: 12px;
+    border-bottom: 1px solid var(--neutral-stroke-divider-rest, var(--neutral-stroke-rest));
+    min-width: 0;
+}
+
+.thread-full-header-toprow {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+    gap: 8px;
+    min-height: 24px;
+}
+
+/* Starting-point context chip — pill on the RIGHT of the top row, clickable to open the
+   full context object the thread was started from. */
+.thread-context-chip {
+    appearance: none;
+    -webkit-appearance: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    max-width: 60%;
+    padding: 3px 11px 3px 8px;
+    border-radius: 999px;
+    cursor: pointer;
+    font: inherit;
+    font-size: 0.78rem;
+    font-weight: 500;
+    color: var(--accent-fill-rest);
+    background: color-mix(in srgb, var(--accent-fill-rest) 10%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent-fill-rest) 30%, transparent);
+    transition: background 150ms ease;
+}
+.thread-context-chip:hover {
+    background: color-mix(in srgb, var(--accent-fill-rest) 18%, transparent);
+}
+.thread-context-chip-text {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+}
+
+/* Title — nice headline; click-to-edit. The -6px side margins let the hover
+   background bleed slightly past the text without shifting the layout. */
+.thread-header-title {
+    font-size: 1.5rem;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    line-height: 1.2;
+    color: var(--neutral-foreground-rest);
+    word-break: break-word;
+    border-radius: 6px;
+    padding: 2px 6px;
+    margin: 0 -6px;
+}
+.thread-header-title.editable {
+    cursor: text;
+    transition: background 120ms ease;
+}
+.thread-header-title.editable:hover {
+    background: var(--neutral-fill-stealth-hover);
+}
+.thread-header-title.untitled {
+    color: var(--neutral-foreground-hint);
+    font-style: italic;
+}
+.thread-header-title-input {
+    width: 100%;
+}
+
+/* Description — smaller abstract; click-to-edit. */
+.thread-header-desc {
+    font-size: 0.9rem;
+    line-height: 1.45;
+    color: var(--neutral-foreground-hint);
+    white-space: pre-wrap;
+    word-break: break-word;
+    border-radius: 6px;
+    padding: 2px 6px;
+    margin: 0 -6px;
+}
+.thread-header-desc.editable {
+    cursor: text;
+    transition: background 120ms ease;
+}
+.thread-header-desc.editable:hover {
+    background: var(--neutral-fill-stealth-hover);
+}
+.thread-header-desc.placeholder {
+    font-style: italic;
+    opacity: 0.7;
+}
+.thread-header-desc-input {
+    width: 100%;
+}
+
+/* Loading skeleton lines — shown when a message's satellite cell hasn't
+   delivered content yet through the IMeshNodeStreamCache subscription. */
+.thread-msg-skeleton-line {
+    height: 13px;
+    border-radius: 6px;
+    background: var(--neutral-stroke-rest);
+    margin: 4px 0;
+    width: 60%;
+    animation: thread-msg-skeleton-pulse 1.4s ease-in-out infinite;
+}
+@@keyframes thread-msg-skeleton-pulse {
+    0%, 100% { opacity: 0.35; }
+    50%      { opacity: 0.15; }
+}
+
+/* Execution status bar above chat input. `flex: 0 1 auto` + `min-height: 0`
+   lets it shrink (and scroll internally) when the bottom bar runs out of room,
+   so it yields space to the always-visible input footer rather than pushing it
+   off the bottom. */
 .thread-exec-bar {
+    flex: 0 1 auto;
+    min-height: 0;
     display: flex;
     flex-direction: column;
     gap: 6px;
@@ -82,6 +238,17 @@
     text-overflow: ellipsis;
     white-space: nowrap;
 }
+.thread-exec-elapsed {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.78rem;
+    font-variant-numeric: tabular-nums;
+    color: var(--neutral-foreground-hint);
+    padding: 2px 8px;
+    border: 1px solid var(--neutral-stroke-rest);
+    border-radius: 10px;
+    background: var(--neutral-layer-1);
+    flex: 0 0 auto;
+}
 .thread-exec-cancel {
     display: inline-flex;
     align-items: center;
@@ -97,6 +264,82 @@
 }
 .thread-exec-cancel:hover {
     background: var(--neutral-layer-4);
+}
+
+/* Pending-inbox section inside the executing-progress strip.
+   Shows messages the user typed during the in-flight turn
+   that the agent has NOT yet pulled via check_inbox. */
+.thread-exec-pending-inbox {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 8px 10px;
+    margin-top: 6px;
+    border: 1px dashed color-mix(in srgb, var(--accent-fill-rest) 50%, transparent);
+    border-radius: 6px;
+    background: color-mix(in srgb, var(--accent-fill-rest) 4%, transparent);
+}
+.thread-exec-pending-inbox-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.74rem;
+    color: var(--accent-fill-rest);
+    font-weight: 600;
+}
+.thread-exec-pending-inbox-item {
+    font-size: 0.78rem;
+    color: var(--neutral-foreground-rest);
+    padding: 2px 6px;
+    border-left: 2px solid color-mix(in srgb, var(--accent-fill-rest) 60%, transparent);
+    background: var(--neutral-layer-1);
+    border-radius: 0 4px 4px 0;
+    line-height: 1.35;
+    white-space: pre-wrap;
+}
+
+/* In-chat queued user message — rendered inline after the materialised
+   message cells, showing the user their just-submitted text immediately
+   (before round dispatch creates the satellite cell). Pulse animation
+   conveys "waiting to be picked up". */
+.thread-chat-pending-message {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 10px 14px;
+    margin: 4px 0;
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--accent-fill-rest) 6%, transparent);
+    border: 1px dashed color-mix(in srgb, var(--accent-fill-rest) 35%, transparent);
+    color: var(--neutral-foreground-rest);
+    animation: thread-pending-pulse 1.6s ease-in-out infinite;
+}
+.thread-chat-pending-message-text {
+    flex: 1;
+    line-height: 1.4;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+/* Bottom bar: groups the execution status ("where we are"), the runtime panel,
+   and the input footer (harness selector + editor + send) into one block pinned
+   to the bottom of the screen. The chat history above (flex:1) scrolls under it.
+
+   `flex: 0 1 auto` + `min-height: 0` (NOT `flex-shrink: 0`): the block must be
+   ALLOWED to shrink so the container's height bounds it. Otherwise, when a thread
+   is running with sub-threads, the exec-bar (≤200px) + runtime-panel (≤38vh) +
+   input together exceed the side-panel height; with the block unshrinkable the
+   surplus overflows the `overflow:hidden` container and clips its LAST child —
+   the input footer — off the bottom. Letting the block shrink hands the surplus
+   to the shrinkable status panels below (which scroll internally) while the
+   footer stays flex-shrink:0 and fully visible. */
+.thread-chat-bottom {
+    flex: 0 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    max-width: 100%;
 }
 
 /* Footer: progress + input pinned at bottom */
@@ -117,6 +360,72 @@
     overflow: visible;
     min-width: 0;
     max-width: 100%;
+    /* Position context so the "Allocating agent…" overlay can sit on top of
+       the dimmed input content without changing the box's outer height. */
+    position: relative;
+}
+
+.thread-chat-input-area.is-allocating .thread-allocating-panel {
+    /* Float the banner over the (still-rendered) input content so the box
+       keeps its natural height. The dialog used to swap the entire input
+       subtree for a small spinner panel and snap back when the thread
+       was ready, which the user noticed as a layout jump. */
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    margin: 0;
+    z-index: 2;
+    background: color-mix(in srgb, var(--neutral-layer-card-container) 92%, transparent);
+    backdrop-filter: blur(2px);
+    border-radius: 8px;
+}
+
+.thread-chat-input-content {
+    transition: opacity 120ms ease;
+    /* Anchor the slash-command picker as a floating popup (see .thread-chat-widget) so opening it
+       does NOT push the Monaco editor's DOM down + back up — which re-laid-out the editor and made
+       the composer appear to vanish on selection. */
+    position: relative;
+}
+
+.thread-chat-input-content.dimmed {
+    opacity: 0.35;
+    pointer-events: none;
+    user-select: none;
+}
+
+/* Thin, read-only thread status — harness · agent · model · tokens used.
+   Muted + small so it reads as metadata above the editor, not a control. */
+.thread-chat-status-row {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px;
+    padding: 0 2px 6px 2px;
+    font-size: 11px;
+    line-height: 1.4;
+    color: var(--neutral-foreground-hint);
+    min-width: 0;
+}
+
+.thread-chat-status-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 180px;
+}
+
+.thread-chat-status-sep {
+    color: var(--neutral-stroke-rest);
+}
+
+.thread-chat-status-tokens {
+    font-variant-numeric: tabular-nums;
 }
 
 .input-container {
@@ -135,6 +444,302 @@
     overflow: visible;
     flex-wrap: nowrap;
     min-width: 0;
+}
+
+/* Compact harness combobox in the bottom row — JUST the picker (no label).
+   Agent + model are chosen via the /agent and /model slash-commands, so the
+   row stays small enough to fit harness + context chip + Send on one line. */
+.thread-chat-harness {
+    display: flex;
+    align-items: center;
+    min-width: 0;
+    max-width: 220px;
+}
+
+/* Navigation-context chip(s) inline in the bottom row, between the harness and
+   Send. The collection wraps its own chips; cap its share so a long context
+   name truncates rather than pushing Send off the row. */
+.thread-chat-context {
+    display: flex;
+    align-items: center;
+    min-width: 0;
+}
+.thread-chat-context ::deep .reference-chip-collection {
+    margin: 0;
+    flex-wrap: nowrap;
+}
+
+/* Legacy selectors container — kept for any remaining consumer; the chat
+   footer now uses .thread-chat-harness above. */
+.thread-chat-selectors {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 2px 6px 2px;
+    min-width: 0;
+}
+
+/* Each dropdown shares the row equally and shrinks below content width so
+   Agent + Model always fit on a single line. SimpleDropdown's inner
+   `.simple-dropdown-text` already has text-overflow: ellipsis, so long
+   names ("Description Writer", "claude-sonnet-4-6") truncate cleanly
+   when the chat dock narrows. Max-width caps the spread on wide layouts
+   so the row doesn't look stretched. */
+.thread-chat-selectors ::deep .simple-dropdown {
+    flex: 1 1 0;
+    min-width: 0;
+    max-width: 240px;
+}
+
+.thread-chat-selectors .simple-dropdown-item-path,
+.thread-chat-selectors .simple-dropdown-item-description {
+    font-size: 0.78rem;
+    color: var(--neutral-foreground-hint);
+}
+
+/* Icon / name layout inside dropdown items. Explicit color: in dark mode
+   the inner <span> inherits transparent text from FluentIcon's wrapper
+   if we don't pin it — that produced "icon visible, name invisible"
+   chips that the user noticed. */
+.thread-chat-selectors ::deep .dropdown-icon-name {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--neutral-foreground-rest);
+}
+
+.thread-chat-selectors ::deep .dropdown-icon-name span {
+    color: var(--neutral-foreground-rest);
+    font-weight: 500;
+}
+
+.thread-chat-selectors ::deep .dropdown-icon-name svg {
+    width: 14px;
+    height: 14px;
+    flex: 0 0 auto;
+    color: var(--neutral-foreground-hint);
+}
+
+/* Inside the SELECTED dropdown button — same layout, but the span/icon
+   inherit the button's foreground (which Fluent's button styling
+   already sets correctly for accent / neutral surfaces). */
+.thread-chat-selectors ::deep .simple-dropdown-button .dropdown-icon-name,
+.thread-chat-selectors ::deep .simple-dropdown-button .dropdown-icon-name span,
+.thread-chat-selectors ::deep .simple-dropdown-button .dropdown-icon-name svg {
+    color: inherit;
+}
+
+/* Confirmation / error message from a slash-command (e.g. "Switched
+   agent → Worker"). Trails after the dropdowns; cleared on next
+   submission. */
+.thread-chat-status-msg {
+    font-size: 0.78rem;
+    color: var(--neutral-foreground-hint);
+    font-style: italic;
+}
+
+.thread-chat-status-msg.error {
+    color: var(--error-rest, #c0392b);
+    font-style: normal;
+}
+
+/* Inline picker widget rendered above the editor when /agent or /model
+   is invoked without an argument. Theme-aware via Fluent design tokens
+   so dark mode + high-contrast read correctly. */
+.thread-chat-widget {
+    /* Floating popup ABOVE the input (a command palette popping up), anchored to
+       .thread-chat-input-content — does not push the Monaco DOM. Floating-popup tier (10000) so it
+       opens ABOVE the menu bar (z-index 1100 in PortalLayoutBase) instead of being covered by it. */
+    position: absolute;
+    bottom: calc(100% + 6px);
+    left: 0;
+    right: 0;
+    z-index: 10000;
+    border: 1px solid var(--neutral-stroke-rest);
+    border-radius: 8px;
+    background: var(--neutral-layer-1);
+    overflow: hidden;
+    /* Responsive cap: never taller than the space between the side-panel header and the input,
+       so the popup (agent/model picker AND the CLI-login dialog) can't overrun the "New Thread"
+       header at the top of a short side panel. calc(100vh - 180px) ≈ viewport minus header+input+gap;
+       capped at 440px so it stays compact on a tall window. The inner list scrolls past that. */
+    max-height: min(440px, calc(100vh - 180px));
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
+}
+
+.thread-chat-widget-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 10px;
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--neutral-foreground-rest);
+    background: var(--neutral-layer-2);
+    border-bottom: 1px solid var(--neutral-stroke-rest);
+}
+
+.thread-chat-widget-list {
+    overflow-y: auto;
+    padding: 4px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.thread-chat-widget-group {
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--neutral-foreground-hint);
+    padding: 8px 8px 4px 8px;
+    font-weight: 600;
+}
+
+/* Reset native button defaults — without `appearance: none` the chip-style
+   buttons fell back to the browser's grey-on-grey button rendering and
+   ignored the dark-mode tokens. */
+.thread-chat-widget-item {
+    appearance: none;
+    -webkit-appearance: none;
+    text-align: left;
+    border: 1px solid transparent;
+    background: transparent;
+    cursor: pointer;
+    border-radius: 6px;
+    padding: 8px 10px;
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+    color: var(--neutral-foreground-rest);
+    font: inherit;
+    transition: background 80ms ease, border-color 80ms ease;
+}
+
+.thread-chat-widget-item-icon {
+    flex: 0 0 auto;
+    width: 18px;
+    height: 18px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--neutral-foreground-hint);
+}
+
+.thread-chat-widget-item-icon :deep(svg),
+.thread-chat-widget-item-icon img,
+.thread-chat-widget-item-icon svg {
+    width: 18px;
+    height: 18px;
+}
+
+.thread-chat-widget-item-text {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+
+.thread-chat-widget-item:hover,
+.thread-chat-widget-item:focus-visible {
+    background: var(--neutral-fill-stealth-hover);
+    border-color: var(--neutral-stroke-rest);
+    outline: none;
+}
+
+.thread-chat-widget-item.selected {
+    background: var(--accent-fill-rest);
+    color: var(--foreground-on-accent-rest);
+    border-color: var(--accent-stroke-control-rest);
+}
+
+/* Keyboard-highlighted row (↑/↓). Accent box so the Enter target is obvious — distinct from hover. */
+.thread-chat-widget-item--active {
+    background: var(--neutral-fill-stealth-hover);
+    border-color: var(--accent-fill-rest);
+    outline: 1px solid var(--accent-fill-rest);
+    outline-offset: -1px;
+}
+
+/* The picker widget takes focus when opened so arrow keys reach it; don't draw a focus ring on the
+   container itself (the highlighted row is the affordance). */
+.thread-chat-widget:focus,
+.thread-chat-widget:focus-visible {
+    outline: none;
+}
+
+.thread-chat-widget-item-name {
+    font-weight: 600;
+    font-size: 0.9rem;
+    color: inherit;
+}
+
+.thread-chat-widget-item-path,
+.thread-chat-widget-item-desc {
+    font-size: 0.78rem;
+    color: var(--neutral-foreground-hint);
+}
+
+.thread-chat-widget-item.selected .thread-chat-widget-item-path,
+.thread-chat-widget-item.selected .thread-chat-widget-item-desc {
+    color: var(--foreground-on-accent-rest);
+    opacity: 0.85;
+}
+
+.thread-chat-widget-empty {
+    padding: 12px;
+    text-align: center;
+    color: var(--neutral-foreground-hint);
+    font-size: 0.85rem;
+}
+
+/* Non-selectable group title (e.g. a model provider): a quiet heading above its
+   selectable items. Not a button — no hover/cursor, dimmed + uppercase so it reads
+   as a section label rather than a choice. */
+.thread-chat-widget-group {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 10px 2px;
+    color: var(--neutral-foreground-hint);
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    cursor: default;
+    user-select: none;
+}
+
+.thread-chat-widget-group:not(:first-child) {
+    margin-top: 4px;
+    border-top: 1px solid var(--neutral-stroke-divider-rest);
+}
+
+.thread-chat-widget-group-icon {
+    width: 14px;
+    height: 14px;
+    flex: 0 0 auto;
+    opacity: 0.8;
+}
+
+.thread-chat-widget-group-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* Attachment chips moved below the send button — they're inputs to the
+   next message, not state about the current one, so they belong at the
+   bottom of the dialog where the user is actively composing. */
+.thread-chat-attachments {
+    padding-top: 8px;
+    margin-top: 4px;
+    border-top: 1px dashed var(--neutral-stroke-rest);
 }
 
 .loading-overlay {
@@ -286,3 +891,749 @@
     color: var(--neutral-foreground-hint);
     margin-top: 2px;
 }
+
+/* Allocating-thread / message-pending styles — moved out of the inline
+   <style> block in ThreadChatView.razor so the CSS analyzer parses them
+   without the @@keyframes Razor escape (CSS041 false positives). */
+.thread-allocating-panel {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 18px 22px;
+    border-radius: 12px;
+    background: var(--neutral-layer-2);
+    border: 1px solid var(--neutral-stroke-rest);
+}
+
+.thread-allocating-text {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.thread-allocating-title {
+    font-weight: 600;
+    font-size: 0.95rem;
+    color: var(--accent-fill-rest);
+}
+
+.thread-allocating-subtitle {
+    font-size: 0.8rem;
+    color: var(--neutral-foreground-hint);
+}
+
+@keyframes thread-pending-pulse {
+    0%, 100% { opacity: 0.6; }
+    50% { opacity: 1; }
+}
+
+.thread-msg-dot {
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: var(--neutral-foreground-hint);
+    animation: thread-dots-blink 1.4s infinite both;
+}
+
+@keyframes thread-dots-blink {
+    0%, 80%, 100% { opacity: 0.3; }
+    40% { opacity: 1; }
+}
+
+.thread-exec-star {
+    animation: thread-exec-star-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes thread-exec-star-pulse {
+    0%   { color: var(--accent-fill-rest); transform: scale(1) rotate(0deg); }
+    25%  { color: #ff6b6b; transform: scale(1.3) rotate(15deg); }
+    50%  { color: #ffd93d; transform: scale(1) rotate(0deg); }
+    75%  { color: #6bcb77; transform: scale(1.3) rotate(-15deg); }
+    100% { color: var(--accent-fill-rest); transform: scale(1) rotate(0deg); }
+}
+
+/* Provider-coloured model badge (replaces the generic Sparkle icon in the
+   model picker). Anthropic tiers get distinct hues (Opus = brand-orange,
+   Sonnet = brand-purple, Haiku = brand-teal) so the user can spot the tier
+   at a glance; OpenAI shows the model number on green. */
+.model-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 22px;
+    height: 18px;
+    padding: 0 5px;
+    border-radius: 4px;
+    font-size: 0.7rem;
+    font-weight: 700;
+    color: #fff;
+    background: var(--neutral-foreground-hint);
+    flex: 0 0 auto;
+    line-height: 1;
+    letter-spacing: 0.02em;
+}
+
+.model-badge-anthropic-opus    { background: #c4814a; }   /* warm tan */
+.model-badge-anthropic-sonnet  { background: #7c5cd1; }   /* purple */
+.model-badge-anthropic-haiku   { background: #2fb39e; }   /* teal */
+.model-badge-openai            { background: #10a37f; }   /* OpenAI green */
+.model-badge-other             { background: var(--accent-fill-rest); }
+
+/* In the selected dropdown button, badge inherits parent foreground for
+   accent-on-accent contrast — but keep the colored chip background.
+   The text on the chip stays white regardless of theme. */
+.thread-chat-selectors ::deep .simple-dropdown-button .model-badge {
+    color: #fff;
+}
+
+/* ─── Bubble baseline ───────────────────────────────────────────────────
+   Bubble shapes used across user / assistant messages. Earlier the markup
+   relied on browser defaults, which gave the user the "plain CSS" look in
+   the screenshot. Pin a card aesthetic that matches the rest of the
+   portal (rounded, subtle border, layered surface). */
+.thread-msg-bubble {
+    max-width: 92%;
+    padding: 12px 16px;
+    border-radius: 12px;
+    margin: 6px 0;
+    line-height: 1.45;
+    word-wrap: break-word;
+    color: var(--neutral-foreground-rest);
+    background: var(--neutral-layer-3, var(--neutral-layer-card-container));
+    border: 1px solid var(--neutral-stroke-divider-rest, transparent);
+    box-shadow: 0 1px 0 rgba(0, 0, 0, 0.04);
+}
+
+.thread-msg-user {
+    align-self: flex-end;
+    background: color-mix(in srgb, var(--accent-fill-rest) 14%, var(--neutral-layer-3, transparent));
+    border-color: color-mix(in srgb, var(--accent-fill-rest) 24%, transparent);
+    border-bottom-right-radius: 4px;
+}
+
+.thread-msg-assistant {
+    align-self: flex-start;
+    border-bottom-left-radius: 4px;
+}
+
+/* "— message missing —" placeholder. Italic, muted, dashed border to read
+   as a non-content gap in the conversation. The chat keeps flowing past the
+   missing entry rather than getting stuck on a spinning skeleton. */
+.thread-msg-missing {
+    background: transparent;
+    border-style: dashed;
+    color: var(--neutral-foreground-hint);
+    font-style: italic;
+}
+
+.thread-msg-author {
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: var(--accent-fill-rest);
+    margin-bottom: 2px;
+}
+
+.thread-msg-author-user {
+    color: var(--neutral-foreground-hint);
+}
+
+.thread-msg-meta {
+    display: flex;
+    gap: 8px;
+    font-size: 0.72rem;
+    color: var(--neutral-foreground-hint);
+    margin-bottom: 6px;
+    align-items: center;
+}
+
+.thread-msg-elapsed {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-variant-numeric: tabular-nums;
+    padding: 1px 6px;
+    border: 1px solid var(--neutral-stroke-rest);
+    border-radius: 8px;
+    background: var(--neutral-layer-1);
+    color: var(--neutral-foreground-hint);
+}
+
+/* Harness name leads the assistant meta row — slightly emphasized vs the
+   muted time/token siblings so the harness reads as the headline identity. */
+.thread-msg-harness {
+    font-weight: 600;
+    color: var(--neutral-foreground-rest);
+}
+
+.thread-msg-tokens {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-variant-numeric: tabular-nums;
+    color: var(--neutral-foreground-hint);
+}
+
+.thread-msg-elapsed-live {
+    color: var(--accent-fill-rest);
+    border-color: var(--accent-fill-rest);
+    animation: thread-msg-elapsed-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes thread-msg-elapsed-pulse {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: 0.55; }
+}
+
+/* Hover-revealed edit/resubmit/delete row. Collapsed to zero height (not just
+   opacity:0) when hidden so it reserves NO layout space — otherwise every bubble
+   carried ~30px of invisible buttons below its text (the "lots of empty space at
+   the bottom" the user flagged on a one-word "hi"). */
+.thread-msg-inline-actions {
+    display: flex;
+    gap: 4px;
+    margin-top: 0;
+    max-height: 0;
+    overflow: hidden;
+    opacity: 0;
+    transition: max-height 120ms ease, opacity 120ms ease, margin-top 120ms ease;
+}
+
+.thread-msg-bubble:hover .thread-msg-inline-actions {
+    max-height: 40px;
+    margin-top: 6px;
+    opacity: 1;
+}
+
+/* Markdown wraps each line in a <p> carrying a 1.5em bottom margin (good for doc
+   pages, wrong for a chat bubble) — drop it on the LAST block so a short message
+   doesn't leave a big gap above the bubble's bottom edge. */
+.thread-msg-bubble ::deep .markdown-body > :last-child,
+.thread-msg-bubble ::deep .markdown-body p:last-child {
+    margin-bottom: 0;
+}
+
+.thread-msg-action-btn {
+    border: none;
+    background: transparent;
+    cursor: pointer;
+    color: var(--neutral-foreground-hint);
+    font-size: 0.95rem;
+    padding: 2px 4px;
+    border-radius: 4px;
+}
+
+.thread-msg-action-btn:hover {
+    color: var(--accent-fill-rest);
+    background: color-mix(in srgb, var(--accent-fill-rest) 12%, transparent);
+}
+
+/* ─── Tool-call list inside a bubble ───────────────────────────────────
+   Compact rows. Plain tool calls collapse into a <details>; delegation
+   tool calls are now inline links (see .thread-msg-tool-delegation
+   below). The container just stacks them. */
+.thread-msg-tool-calls {
+    margin-top: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 0.86rem;
+}
+
+.thread-msg-tool-entry {
+    background: color-mix(in srgb, var(--neutral-stroke-rest) 40%, transparent);
+    border-radius: 6px;
+    padding: 4px 8px;
+}
+
+.thread-msg-tool-entry > summary {
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    list-style: none;
+    /* Allow the flex children (notably the long query/path) to shrink within the
+       bubble instead of pushing past its right edge. */
+    min-width: 0;
+    overflow: hidden;
+}
+
+.thread-msg-tool-entry > summary::-webkit-details-marker { display: none; }
+.thread-msg-tool-entry > summary::marker { content: ''; }
+
+.thread-msg-tool-done {
+    flex: 0 0 auto;
+    color: var(--accent-fill-rest);
+    font-weight: 700;
+}
+
+.thread-msg-tool-error { color: var(--error-foreground-rest, #d93636); }
+
+.thread-msg-tool-path,
+.thread-msg-tool-action {
+    color: var(--accent-fill-rest);
+    text-decoration: none;
+}
+
+/* The query/path is the one variable-length item in the summary row — let it
+   take the remaining width and ellipsis-truncate so it never spills past the
+   message bubble. (Full text stays available via the title tooltip and the
+   expandable <details> args below.) */
+.thread-msg-tool-path {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.thread-msg-tool-action {
+    margin-left: 8px;
+    font-size: 0.78rem;
+    padding: 1px 6px;
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--accent-fill-rest) 12%, transparent);
+}
+
+.thread-msg-tool-action-muted {
+    color: var(--neutral-foreground-hint);
+    background: var(--neutral-stroke-divider-rest, var(--neutral-stroke-rest));
+}
+
+.thread-msg-tool-args,
+.thread-msg-tool-result {
+    white-space: pre-wrap;
+    word-break: break-word;
+    background: var(--neutral-layer-4, rgba(0,0,0,0.06));
+    border-radius: 4px;
+    padding: 6px 8px;
+    margin-top: 4px;
+    font-family: var(--monospace-font, "Cascadia Code", Consolas, monospace);
+    font-size: 0.78rem;
+    color: var(--neutral-foreground-rest);
+}
+
+/* ─── Delegation tool call — inline link ────────────────────────────────
+   Replaces the previous "chip with embedded streaming area" — the live
+   sub-thread progress now lives in `.thread-runtime-subthreads` near the
+   chat input. The bubble just links out to the sub-thread; one row per
+   delegate_to_agent call, regardless of in-flight vs completed. */
+.thread-msg-tool-delegation {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 8px;
+    border-radius: 999px;
+    text-decoration: none;
+    background: color-mix(in srgb, var(--accent-fill-rest) 10%, transparent);
+    color: var(--neutral-foreground-rest);
+    font-size: 0.86rem;
+    line-height: 1.2;
+    max-width: 100%;
+    overflow: hidden;
+}
+
+.thread-msg-tool-delegation:hover {
+    background: color-mix(in srgb, var(--accent-fill-rest) 18%, transparent);
+}
+
+.thread-msg-tool-delegation-state {
+    flex: 0 0 auto;
+    color: var(--accent-fill-rest);
+    font-weight: 700;
+}
+
+.thread-msg-tool-delegation-pending .thread-msg-tool-delegation-state {
+    color: var(--accent-fill-rest);
+    animation: thread-msg-delegation-pulse-anim 1.4s ease-in-out infinite;
+}
+
+.thread-msg-tool-delegation-error .thread-msg-tool-delegation-state {
+    color: var(--error-foreground-rest, #d93636);
+}
+
+.thread-msg-tool-delegation-icon {
+    width: 14px;
+    height: 14px;
+    flex: 0 0 auto;
+    opacity: 0.85;
+}
+
+.thread-msg-tool-delegation-title {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.thread-msg-tool-delegation-agent {
+    font-size: 0.72rem;
+    color: var(--neutral-foreground-hint);
+    flex: 0 0 auto;
+    padding: 1px 6px;
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--accent-fill-rest) 14%, transparent);
+}
+
+@@keyframes thread-msg-delegation-pulse-anim {
+    0%, 100% { opacity: 0.4; }
+    50%      { opacity: 1;   }
+}
+
+/* ─── Runtime panel ────────────────────────────────────────────────────
+   Pinned just above the chat input. Houses two sub-sections: running
+   sub-threads (live cards) and scheduled messages (queue not yet
+   ingested). Visual order — running first, scheduled below — matches
+   the lifecycle: in-flight above, waiting below. Both share a card
+   surface so the chat input feels like the bottom of a stacked
+   control. */
+.thread-runtime-panel {
+    /* `flex: 0 1 auto` + `min-height: 0` (was `flex: 0 0 auto`): the panel must be
+       allowed to shrink so it yields vertical space to the input footer when the
+       side panel is short. `flex: 0 0 auto` made it refuse to shrink, so a tall
+       run of sub-thread cards (up to 38vh) pushed the input past the container's
+       `overflow:hidden` fold and hid it. Now it shrinks and scrolls its cards
+       internally; the input stays visible. */
+    flex: 0 1 auto;
+    min-height: 0;
+    max-height: 38vh;
+    overflow-y: auto;
+    padding: 8px 24px;
+    border-top: 1px solid var(--neutral-stroke-divider-rest, var(--neutral-stroke-rest));
+    background: color-mix(in srgb, var(--neutral-layer-card-container) 90%, var(--accent-fill-rest));
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.thread-runtime-section {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.thread-runtime-section-label {
+    font-size: 0.72rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--neutral-foreground-hint);
+    padding-left: 2px;
+}
+
+.thread-runtime-hint {
+    text-transform: none;
+    letter-spacing: normal;
+    font-weight: 400;
+    opacity: 0.85;
+    margin-left: 4px;
+}
+
+.thread-runtime-subthread-card {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 10px;
+    border-radius: 8px;
+    background: var(--neutral-layer-3, var(--neutral-layer-card-container));
+    border: 1px solid var(--neutral-stroke-divider-rest, var(--neutral-stroke-rest));
+    text-decoration: none;
+    color: var(--neutral-foreground-rest);
+    min-width: 0;
+}
+
+.thread-runtime-subthread-card:hover {
+    border-color: var(--accent-fill-rest);
+    background: color-mix(in srgb, var(--accent-fill-rest) 8%, var(--neutral-layer-3));
+}
+
+.thread-runtime-subthread-icon {
+    width: 24px;
+    height: 24px;
+    border-radius: 6px;
+    flex: 0 0 auto;
+    opacity: 0.9;
+}
+
+.thread-runtime-subthread-body {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+}
+
+.thread-runtime-subthread-title {
+    font-weight: 600;
+    font-size: 0.88rem;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+}
+
+.thread-runtime-subthread-title-text {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex: 1 1 auto;
+}
+
+.thread-runtime-subthread-elapsed {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-variant-numeric: tabular-nums;
+    font-size: 0.72rem;
+    font-weight: 500;
+    color: var(--accent-fill-rest);
+    padding: 1px 6px;
+    border: 1px solid var(--accent-fill-rest);
+    border-radius: 8px;
+    flex: 0 0 auto;
+}
+
+.thread-runtime-subthread-preview {
+    font-size: 0.78rem;
+    color: var(--neutral-foreground-hint);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+}
+
+.thread-runtime-subthread-pulse {
+    flex: 0 0 auto;
+    color: var(--accent-fill-rest);
+    font-size: 0.7rem;
+    animation: thread-runtime-subthread-pulse-anim 1.4s ease-in-out infinite;
+}
+
+@@keyframes thread-runtime-subthread-pulse-anim {
+    0%, 100% { opacity: 0.3; transform: scale(0.85); }
+    50%      { opacity: 1;   transform: scale(1.15); }
+}
+
+.thread-runtime-scheduled-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    border-radius: 6px;
+    background: color-mix(in srgb, var(--neutral-stroke-rest) 35%, transparent);
+    border: 1px dashed var(--neutral-stroke-divider-rest, var(--neutral-stroke-rest));
+    font-size: 0.85rem;
+    color: var(--neutral-foreground-hint);
+    min-width: 0;
+}
+
+.thread-runtime-scheduled-icon {
+    flex: 0 0 auto;
+    font-size: 0.95rem;
+}
+
+.thread-runtime-scheduled-text {
+    flex: 1 1 auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* ─── In-thread navigation menu ───────────────────────────────────────
+   A navigation surface within the thread: hierarchy (ancestors → current →
+   sub-threads), my other open threads, and the context chip. The shell wraps
+   the menu + the conversation body; its flex-direction (set by the nav-* class)
+   makes the menu a horizontal TOP BAR (column shell) or a vertical LEFT RAIL
+   (row shell). Hidden → only a small reveal toggle. */
+.thread-nav-shell {
+    flex: 1;
+    min-height: 0;
+    min-width: 0;
+    display: flex;
+    width: 100%;
+}
+.thread-nav-shell:focus,
+.thread-nav-shell:focus-visible { outline: none; }
+.thread-nav-shell.nav-topbar { flex-direction: column; }
+.thread-nav-shell.nav-leftrail { flex-direction: row; }
+.thread-nav-shell.nav-hidden { flex-direction: column; }
+
+.thread-nav-body {
+    flex: 1;
+    min-height: 0;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+}
+
+.thread-nav-menu {
+    display: flex;
+    gap: 8px;
+    background: var(--neutral-layer-1);
+    border: 0 solid var(--neutral-stroke-divider-rest, var(--neutral-stroke-rest));
+}
+
+/* Top bar — horizontal strip above the conversation, scrolls sideways. */
+.nav-topbar .thread-nav-menu {
+    flex-direction: row;
+    align-items: center;
+    flex: 0 0 auto;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding: 6px 12px;
+    border-bottom-width: 1px;
+}
+
+/* Left rail — vertical panel beside the conversation, scrolls vertically. */
+.nav-leftrail .thread-nav-menu {
+    flex-direction: column;
+    align-items: stretch;
+    flex: 0 0 auto;
+    width: 230px;
+    max-width: 40%;
+    overflow-y: auto;
+    padding: 10px;
+    gap: 10px;
+    border-right-width: 1px;
+}
+
+.thread-nav-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex: 0 0 auto;
+}
+.nav-leftrail .thread-nav-toolbar {
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--neutral-stroke-divider-rest, var(--neutral-stroke-rest));
+}
+
+.thread-nav-cycle,
+.thread-nav-reveal {
+    appearance: none;
+    -webkit-appearance: none;
+    border: 1px solid var(--neutral-stroke-rest);
+    background: var(--neutral-layer-2);
+    border-radius: 6px;
+    padding: 4px 6px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--neutral-foreground-rest);
+}
+.thread-nav-cycle:hover,
+.thread-nav-reveal:hover { background: var(--neutral-fill-stealth-hover); }
+
+/* Hidden state: a small inline reveal toggle above the conversation. */
+.thread-nav-reveal {
+    flex: 0 0 auto;
+    align-self: flex-start;
+    margin: 6px 0 4px 12px;
+}
+
+.thread-nav-title {
+    font-size: 0.72rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--neutral-foreground-hint);
+}
+.nav-topbar .thread-nav-title { display: none; }   /* save horizontal space in the bar */
+
+.thread-nav-section {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 0;
+}
+.nav-topbar .thread-nav-section {
+    flex-direction: row;
+    align-items: center;
+    gap: 4px;
+    flex: 0 0 auto;
+}
+.nav-topbar .thread-nav-section + .thread-nav-section {
+    padding-left: 8px;
+    border-left: 1px solid var(--neutral-stroke-divider-rest, var(--neutral-stroke-rest));
+}
+
+.thread-nav-section-label {
+    font-size: 0.66rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--neutral-foreground-hint);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+/* In the bar, hide the long "Other open threads" word but keep count + hint. */
+.nav-topbar .thread-nav-section-label > span:first-child { display: none; }
+
+.thread-nav-count {
+    font-size: 0.62rem;
+    font-weight: 700;
+    background: var(--accent-fill-rest);
+    color: var(--foreground-on-accent-rest, #fff);
+    border-radius: 8px;
+    padding: 0 6px;
+    line-height: 1.6;
+}
+.thread-nav-hint {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    color: var(--neutral-foreground-hint);
+    opacity: 0.85;
+}
+
+.thread-nav-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    text-decoration: none;
+    color: var(--neutral-foreground-rest);
+    border-radius: 6px;
+    padding: 4px 8px;
+    font-size: 0.82rem;
+    min-width: 0;
+    max-width: 100%;
+    border: 1px solid transparent;
+}
+.thread-nav-item:hover {
+    background: var(--neutral-fill-stealth-hover);
+    border-color: var(--neutral-stroke-rest);
+}
+.nav-topbar .thread-nav-item { flex: 0 0 auto; max-width: 180px; }
+
+.thread-nav-item-glyph {
+    flex: 0 0 auto;
+    color: var(--neutral-foreground-hint);
+    font-size: 0.8rem;
+}
+.thread-nav-item-text {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+}
+
+.thread-nav-current {
+    font-weight: 600;
+    color: var(--accent-fill-rest);
+    background: color-mix(in srgb, var(--accent-fill-rest) 10%, transparent);
+}
+.thread-nav-current .thread-nav-item-glyph { color: var(--accent-fill-rest); }
+.thread-nav-ancestor,
+.thread-nav-child { color: var(--neutral-foreground-hint); }
+.nav-leftrail .thread-nav-child { padding-left: 18px; }
+
+.thread-nav-context { max-width: 100%; }
+.nav-topbar .thread-nav-context { max-width: 200px; }
+
+.thread-nav-empty {
+    font-size: 0.78rem;
+    color: var(--neutral-foreground-hint);
+    font-style: italic;
+    padding: 2px 8px;
+}
+
+/* The others list scrolls within the rail; in the bar it lays out inline. */
+.nav-leftrail .thread-nav-others { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+.nav-topbar .thread-nav-others,
+.nav-topbar .thread-nav-hierarchy { flex-direction: row; }

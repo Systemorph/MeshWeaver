@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Net.Http.Json;
 using System.Reactive.Subjects;
 using MeshWeaver.GoogleMaps;
+using MeshWeaver.Mesh.Threading;
 using Microsoft.Extensions.Options;
 
 namespace MeshWeaver.Insurance.Domain.Services;
@@ -9,11 +10,15 @@ namespace MeshWeaver.Insurance.Domain.Services;
 /// <summary>
 /// Google Maps-based geocoding service for property risks.
 /// </summary>
-public class GoogleGeocodingService(IOptions<GoogleMapsConfiguration> googleConfig) : IGeocodingService
+public class GoogleGeocodingService(
+    IOptions<GoogleMapsConfiguration> googleConfig,
+    IoPoolRegistry? ioPoolRegistry = null) : IGeocodingService
 {
     private readonly ReplaySubject<GeocodingProgress?> progressSubject = InitializeProgress();
     private readonly object progressLock = new();
     private readonly HttpClient http = new();
+    // The geocoding HTTP fan-out runs on the bounded Http I/O queue (pool), never inline / FromAsync.
+    private readonly IIoPool ioPool = ioPoolRegistry?.Get(IoPoolNames.Http) ?? IoPool.Unbounded;
 
     private static ReplaySubject<GeocodingProgress?> InitializeProgress()
     {
@@ -24,7 +29,15 @@ public class GoogleGeocodingService(IOptions<GoogleMapsConfiguration> googleConf
 
     public IObservable<GeocodingProgress?> Progress => progressSubject;
 
-    public async Task<GeocodingResponse> GeocodeRisksAsync(IReadOnlyCollection<PropertyRisk> risks, CancellationToken cancellationToken = default)
+    /// <summary>
+    /// Reactive geocoding — the HTTP fan-out runs inside the bounded Http I/O queue (pool); the
+    /// genuine async leaf is sealed in <see cref="GeocodeRisksCoreAsync"/>. Returns
+    /// <see cref="IObservable{T}"/> (never Task).
+    /// </summary>
+    public IObservable<GeocodingResponse> GeocodeRisks(IReadOnlyCollection<PropertyRisk> risks)
+        => ioPool.Invoke(ct => GeocodeRisksCoreAsync(risks, ct));
+
+    private async Task<GeocodingResponse> GeocodeRisksCoreAsync(IReadOnlyCollection<PropertyRisk> risks, CancellationToken cancellationToken = default)
     {
         try
         {

@@ -1,9 +1,10 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Threading.Tasks;
-using FluentAssertions;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith;
 using MeshWeaver.Hosting.Monolith.TestBase;
@@ -15,15 +16,20 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using System.Linq;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Persistence.Test;
 
 /// <summary>
-/// Tests for syncing MeshNode.Version with MessageHub.Version.
+/// Tests for the MeshNode.Version model — see
+/// <c>Doc/Architecture/MeshNodeVersioning.md</c> ("1 op = 1 change").
 /// Verifies that:
-/// - Initial version is 0
-/// - Version increments on operations
-/// - Version persists across hub restarts
+/// - A seeded, never-mutated node keeps its seed Version (0).
+/// - An explicitly-supplied Version round-trips through persistence.
+/// - <see cref="IMessageHub.SetInitialVersion"/> exists (the hub clock is
+///   the source of truth a mutated node's Version is stamped from).
+/// Version is the owning hub's logical clock at the moment of mutation,
+/// NOT a node-local "+1 per write" counter — monotonic, not contiguous.
 /// </summary>
 [Collection("MeshNodeVersionSyncTests")]
 public class MeshNodeVersionSyncTest : MonolithMeshTestBase
@@ -50,63 +56,94 @@ public class MeshNodeVersionSyncTest : MonolithMeshTestBase
     {
     }
 
-    private static void SetupTestConfiguration(InMemoryPersistenceService persistence)
+    // Share Mesh/SP across [Fact]s — see MonolithMeshTestBase.ShareMeshAcrossTests.
+    protected override bool ShareMeshAcrossTests => true;
+
+    private static void SaveNode(InMemoryStorageAdapter persistence, MeshNode node)
+        => persistence.SaveNode(node, SetupJsonOptions).FirstAsync().ToTask().GetAwaiter().GetResult();
+
+    /// <summary>
+    /// Seeds two compilable NodeTypes the legal way (see
+    /// <c>MeshNodeCompilationIntegrationTest</c>): a NodeType MeshNode whose
+    /// <see cref="NodeTypeDefinition.Configuration"/> wires the content type,
+    /// plus the source as a child <c>Code</c> MeshNode at
+    /// <c>{type}/Source/code</c>. The compile pipeline pulls source from
+    /// <c>namespace:$self/Source scope:subtree</c> — NOT from a
+    /// <c>SavePartitionObjects</c> blob on the NodeType's own path, which is
+    /// an obsolete shape the current pipeline can't read.
+    /// </summary>
+    private static void SetupTestConfiguration(InMemoryStorageAdapter persistence)
     {
-        // Create Story type for testing content changes
-        var storyCodeConfig = new CodeConfiguration
+        // Story NodeType + its source Code node. Both Active — the compile
+        // pipeline's source query (namespace:$self/Source scope:subtree) only
+        // sees Active nodes.
+        SaveNode(persistence, MeshNode.FromPath("type/story") with
         {
-            Code = @"
+            Name = "Story",
+            NodeType = MeshNode.NodeTypePath,
+            Icon = "Document",
+            Order = 30,
+            State = MeshNodeState.Active,
+            Content = new NodeTypeDefinition
+            {
+                Description = "A user story",
+                Configuration = "config => config.WithContentType<Story>()"
+            }
+        });
+        SaveNode(persistence, MeshNode.FromPath("type/story/Source/code") with
+        {
+            Name = "code",
+            NodeType = "Code",
+            State = MeshNodeState.Active,
+            Content = new CodeConfiguration
+            {
+                Language = "csharp",
+                Code = @"
 public record Story
 {
-    [Key]
     public string Id { get; init; } = string.Empty;
     public string Title { get; init; } = string.Empty;
     public string? Description { get; init; }
     public int Points { get; init; }
 }
 "
-        };
+            }
+        });
 
-        var storyNode = MeshNode.FromPath("type/story") with
+        // Graph NodeType + its source Code node. The content record is named
+        // GraphRoot, NOT Graph — a bare "Graph" collides with the
+        // MeshWeaver.Graph namespace in the compile context
+        // ('Graph' is a namespace but is used like a type).
+        SaveNode(persistence, MeshNode.FromPath("type/graph") with
         {
-            Name = "Story",
-            NodeType = "NodeType",
-            Icon = "Document",
-            Order = 30,
+            Name = "Graph",
+            NodeType = MeshNode.NodeTypePath,
+            Icon = "Diagram",
+            Order = 0,
+            State = MeshNodeState.Active,
             Content = new NodeTypeDefinition
             {
-                Description = "A user story"
+                Description = "The graph root",
+                Configuration = "config => config.WithContentType<GraphRoot>()"
             }
-        };
-        persistence.SaveNodeAsync(storyNode, SetupJsonOptions).GetAwaiter().GetResult();
-        persistence.SavePartitionObjectsAsync("type/story", null, [storyCodeConfig], SetupJsonOptions).GetAwaiter().GetResult();
-
-        // Create Graph type
-        var graphCodeConfig = new CodeConfiguration
+        });
+        SaveNode(persistence, MeshNode.FromPath("type/graph/Source/code") with
         {
-            Code = @"
-public record Graph
+            Name = "code",
+            NodeType = "Code",
+            State = MeshNodeState.Active,
+            Content = new CodeConfiguration
+            {
+                Language = "csharp",
+                Code = @"
+public record GraphRoot
 {
-    [Key]
     public string Id { get; init; } = string.Empty;
     public string Name { get; init; } = string.Empty;
 }
 "
-        };
-
-        var graphTypeNode = MeshNode.FromPath("type/graph") with
-        {
-            Name = "Graph",
-            NodeType = "NodeType",
-            Icon = "Diagram",
-            Order = 0,
-            Content = new NodeTypeDefinition
-            {
-                Description = "The graph root"
             }
-        };
-        persistence.SaveNodeAsync(graphTypeNode, SetupJsonOptions).GetAwaiter().GetResult();
-        persistence.SavePartitionObjectsAsync("type/graph", null, [graphCodeConfig], SetupJsonOptions).GetAwaiter().GetResult();
+        });
     }
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
@@ -114,19 +151,18 @@ public record Graph
         var testDataDirectory = GetOrCreateTestDirectory();
 
         // Create fresh persistence for each test
-        var persistence = new InMemoryPersistenceService();
+        var persistence = new InMemoryStorageAdapter();
 
         // Setup NodeType configurations
         SetupTestConfiguration(persistence);
 
         // Pre-seed the graph node (Version should be 0 initially)
-        var graphNode = MeshNode.FromPath("graph") with
+        SaveNode(persistence, MeshNode.FromPath("graph") with
         {
             Name = "Graph",
             NodeType = "type/graph",
             Version = 0
-        };
-        persistence.SaveNodeAsync(graphNode, SetupJsonOptions).GetAwaiter().GetResult();
+        });
 
         return builder
             .UseMonolithMesh()
@@ -157,8 +193,8 @@ public record Graph
     [Fact(Timeout = 10000)]
     public async Task MeshNode_InitialVersion_IsZero()
     {
-        // Arrange - check initial version via query before hub starts
-        var initialNode = await MeshQuery.QueryAsync<MeshNode>("path:graph", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+        // Arrange - check initial version via the authoritative owner-hub read
+        var initialNode = await ReadNode("graph").Should().Emit();
 
         // Assert - Version property exists and is initialized to 0
         initialNode.Should().NotBeNull("graph node should exist in persistence");
@@ -168,19 +204,25 @@ public record Graph
     [Fact(Timeout = 10000)]
     public async Task MeshNode_VersionProperty_CanBeSetAndPersisted()
     {
-        // Arrange - create a node with a specific version
+        // Arrange - create a node with a specific version. Use a built-in
+        // NodeType ("Group") so the per-node hub activates without waiting
+        // for a Roslyn compile — this test exercises Version persistence,
+        // not NodeType compilation. The compile cache can't help here
+        // because the test creates source nodes fresh on every run
+        // (LastModified=now), invalidating any prior cache entry against
+        // the source-timestamp gate.
         var nodeWithVersion = MeshNode.FromPath("test/versioned") with
         {
             Name = "Versioned Node",
-            NodeType = "type/graph",
+            NodeType = "Group",
             Version = 42
         };
 
         // Act - save the node with version
-        await NodeFactory.CreateNodeAsync(nodeWithVersion, ct: TestContext.Current.CancellationToken);
+        await NodeFactory.CreateNode(nodeWithVersion).Should().Emit();
 
         // Assert - version is preserved when reading back
-        var savedNode = await MeshQuery.QueryAsync<MeshNode>("path:test/versioned", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+        var savedNode = await ReadNode("test/versioned").Should().Emit();
         savedNode.Should().NotBeNull();
         savedNode!.Version.Should().Be(42, "version should be preserved in persistence");
     }

@@ -2,20 +2,28 @@
 @using MeshWeaver.Layout.Client
 @using MeshWeaver.Data
 @using MeshWeaver.Blazor.Components.Monaco
+@using MeshWeaver.Mesh.Services.LanguageServer
 @using System.Text.Json
 @using System.Reactive.Linq
+@using Microsoft.Extensions.Logging
+@using Microsoft.Extensions.DependencyInjection
+@using MeshWeaver.Blazor.Infrastructure
 @implements IDisposable
+@inject IServiceProvider Services
 
 <MonacoEditorView @ref="editorRef"
                   Value="@BoundValue"
                   Language="@BoundLanguage"
                   Height="@BoundHeight"
+                  MaxHeight="none"
                   IsDisabled="@BoundReadonly"
                   Placeholder="@BoundPlaceholder"
                   ShowLineNumbers="true"
                   ShowBorder="true"
                   CodeEditMode="true"
-                  ValueChanged="@OnValueChanged" />
+                  ValueChanged="@OnValueChanged"
+                  DiagnosticsCallback="@diagnosticsCallback"
+                  DiagnosticSourcePath="@diagnosticSourcePath" />
 
 @code {
     private MonacoEditorView? editorRef;
@@ -27,6 +35,12 @@
     private string BoundHeight = "300px";
     private bool BoundReadonly = false;
     private string BoundPlaceholder = "";
+
+    // Live-diagnostics wiring — populated by BindData when ViewModel.LanguageServer is set.
+    // Re-resolved on each OnParametersSet so a swap of CodeEditorControl (e.g., editing a
+    // different Code node in the same component lifetime) picks up the new paths.
+    private Func<string, IObservable<IReadOnlyList<DiagnosticInfo>>>? diagnosticsCallback;
+    private string? diagnosticSourcePath;
 
     // Store the data pointer for two-way binding
     private JsonPointerReference? ValuePointer;
@@ -101,6 +115,15 @@
                         InvokeAsync(StateHasChanged);
                         isUpdatingFromStream = false;
                     }
+                },
+                // No onError used to leave a faulted value stream silently un-updating the editor. This
+                // component is a plain ComponentBase (not BlazorView), so surface via the resolved logger +
+                // the circuit's PortalErrorSink modal (when present).
+                ex =>
+                {
+                    Services.GetService<ILoggerFactory>()?.CreateLogger<CodeEditorView>()
+                        .LogWarning(ex, "Editor value binding faulted");
+                    Services.GetService<PortalErrorSink>()?.Report($"Editor value: {ex.Message}");
                 });
             subscriptions.Add(subscription);
         }
@@ -110,6 +133,55 @@
         BoundHeight = ResolveValue<string>(ViewModel.Height) ?? "300px";
         BoundReadonly = ResolveValue<bool?>(ViewModel.Readonly) ?? false;
         BoundPlaceholder = ResolveValue<string>(ViewModel.Placeholder) ?? "";
+
+        // LSP opt-in: when the control specifies LanguageServer, resolve IMeshLanguageService
+        // from DI and build a closure that feeds the editor's current text into CheckSpeculative
+        // on each debounced change. DiagnosticSourcePath filters to this file so we don't
+        // surface diagnostics from sibling sources as squiggles in the wrong editor.
+        var lspConfig = ViewModel.LanguageServer;
+        if (lspConfig != null)
+        {
+            var languageService = Services.GetService(typeof(IMeshLanguageService)) as IMeshLanguageService;
+            if (languageService != null)
+            {
+                var nodeTypePath = lspConfig.NodeTypePath;
+                var sourcePath = lspConfig.SourcePath;
+                diagnosticsCallback = text =>
+                    languageService.CheckSpeculative(nodeTypePath, sourcePath, text ?? string.Empty);
+                diagnosticSourcePath = sourcePath;
+            }
+            else
+            {
+                diagnosticsCallback = null;
+                diagnosticSourcePath = null;
+            }
+        }
+        else if (ViewModel.Diagnostics is { Count: > 0 } staticDiags)
+        {
+            // Static, pre-computed markers (the compile-error "error overlay"): convert the
+            // flat Layout-level CodeEditorDiagnostic shape into the DiagnosticInfo the marker
+            // pipeline expects, and feed them as a constant observable. The JS enableDiagnostics
+            // fires an initial diagnostics pass on load, so the squiggles appear immediately
+            // even though the (read-only) content never changes — no live language-server call.
+            var infos = (IReadOnlyList<DiagnosticInfo>)staticDiags
+                .Select(d => new DiagnosticInfo(
+                    d.Code ?? string.Empty,
+                    (DiagnosticSeverity)d.Severity,
+                    d.Message,
+                    new SourceLocation(
+                        string.Empty,
+                        new SourceRange(
+                            new SourcePosition(d.StartLine, d.StartCharacter),
+                            new SourcePosition(d.EndLine, d.EndCharacter)))))
+                .ToList();
+            diagnosticsCallback = _ => Observable.Return(infos);
+            diagnosticSourcePath = null; // already this file's diagnostics — no filtering
+        }
+        else
+        {
+            diagnosticsCallback = null;
+            diagnosticSourcePath = null;
+        }
     }
 
     private string? GetEffectiveDataContext()
@@ -138,8 +210,12 @@
             {
                 return element.Deserialize<T>();
             }
-            catch
+            catch (Exception ex)
             {
+                // Was a fully-silent `catch { return default; }`. This is a best-effort fallback
+                // conversion, so a failure is non-fatal — but log it (Debug) so it isn't invisible.
+                Services.GetService<ILoggerFactory>()?.CreateLogger<CodeEditorView>()
+                    .LogDebug(ex, "ResolveValue<{Type}> could not deserialize; using default", typeof(T).Name);
                 return default;
             }
         }

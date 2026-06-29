@@ -8,6 +8,9 @@ using Microsoft.Extensions.Options;
 
 namespace MeshWeaver.Blazor.GoogleMaps;
 
+/// <summary>
+/// Blazor view that renders a <c>GoogleMapControl</c>, loading the Google Maps JavaScript module and keeping markers and circles in sync.
+/// </summary>
 public partial class GoogleMapView : BlazorView<GoogleMapControl, GoogleMapView>
 {
     [Inject] private IOptions<GoogleMapsConfiguration> Configuration { get; set; } = null!;
@@ -15,6 +18,11 @@ public partial class GoogleMapView : BlazorView<GoogleMapControl, GoogleMapView>
     private string ApiKey => Configuration.Value.ApiKey;
     private string MapId { get; set; } = null!;
     private IJSObjectReference? jsModule;
+    /// <summary>
+    /// Loads the JavaScript module and initializes the map on first render, then keeps markers and circles in sync on subsequent renders.
+    /// </summary>
+    /// <param name="firstRender"><c>true</c> on the component's first render; otherwise <c>false</c>.</param>
+    /// <returns>A task that completes when post-render work is finished.</returns>
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         if (firstRender)
@@ -180,6 +188,9 @@ public partial class GoogleMapView : BlazorView<GoogleMapControl, GoogleMapView>
         }
     }
 
+    /// <summary>
+    /// Binds the map's element id and style from the view model, generating a unique id when none is supplied.
+    /// </summary>
     protected override void BindData()
     {
         base.BindData();
@@ -223,6 +234,10 @@ public partial class GoogleMapView : BlazorView<GoogleMapControl, GoogleMapView>
         };
     }
 
+    /// <summary>
+    /// JavaScript-invokable callback raised when a marker or circle is clicked; posts a <c>ClickedEvent</c> carrying the element id to the hub.
+    /// </summary>
+    /// <param name="id">Identifier of the clicked marker or circle.</param>
     [JSInvokable]
     public void OnClicked(string id)
     {

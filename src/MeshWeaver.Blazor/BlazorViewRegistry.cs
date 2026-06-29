@@ -17,17 +17,33 @@ using MeshWeaver.Markdown;
 using MeshWeaver.Markdown.Export.Configuration;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
-using Microsoft.DotNet.Interactive.Formatting;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using static MeshWeaver.Layout.Client.LayoutClientConfiguration;
 
 [assembly: InternalsVisibleTo("MeshWeaver.Hosting.Blazor")]
+[assembly: InternalsVisibleTo("MeshWeaver.Hosting.Monolith.Test")]
 namespace MeshWeaver.Blazor;
 
+/// <summary>
+/// Static registry that maps <c>IUiControl</c> instances to their Blazor component view types
+/// and registers all framework-supplied Blazor views on a <c>MessageHubConfiguration</c>.
+/// </summary>
 public static class BlazorViewRegistry
 {
-    internal static MessageHubConfiguration AddBlazor(
+    // Public so non-Server hosts (e.g. the MAUI in-process portal) can wire the standard Blazor view
+    // registry on their hub directly. The Server path reaches it via MeshBuilder.AddBlazor; a Hybrid
+    // host that can't reference MeshWeaver.Hosting.Blazor (Microsoft.AspNetCore.App framework ref) calls
+    // this on its hub config instead.
+    /// <summary>
+    /// Wires the standard Blazor view registry, data layer, layout client, and type registrations
+    /// onto <paramref name="config"/>. Non-Server hosts (e.g. MAUI hybrid) call this directly when
+    /// they cannot reference <c>MeshWeaver.Hosting.Blazor</c>.
+    /// </summary>
+    /// <param name="config">The hub configuration to extend.</param>
+    /// <param name="configuration">Optional callback to further customize the <c>LayoutClientConfiguration</c>.</param>
+    /// <returns>The extended <paramref name="config"/>.</returns>
+    public static MessageHubConfiguration AddBlazor(
         this MessageHubConfiguration config,
         Func<LayoutClientConfiguration, LayoutClientConfiguration>? configuration = null
     ) => config
@@ -125,7 +141,7 @@ public static class BlazorViewRegistry
                 MeshNodeCardControl card => StandardView<MeshNodeCardControl, MeshNodeCardView>(card, stream, area),
                 AppearanceControl appearance => StandardView<AppearanceControl, AppearanceView>(appearance, stream, area),
                 ThreadMessageBubbleControl bubble => StandardView<ThreadMessageBubbleControl, ThreadMessageBubbleView>(bubble, stream, area),
-                _ => DelegateToDotnetInteractive(instance, stream, area),
+                _ => FallbackHtml(instance, stream, area),
             };
         }
         catch (Exception ex)
@@ -177,14 +193,13 @@ public static class BlazorViewRegistry
     }
 
 
-    private static ViewDescriptor DelegateToDotnetInteractive(
+    private static ViewDescriptor FallbackHtml(
         object instance,
         ISynchronizationStream<JsonElement>? stream,
         string area
     )
     {
-        var mimeType = Formatter.GetPreferredMimeTypesFor(instance.GetType()).FirstOrDefault() ?? "text/html";
-        var output = Controls.Html(instance.ToDisplayString(mimeType));
+        var output = Controls.Html(System.Net.WebUtility.HtmlEncode(instance.ToString() ?? string.Empty));
         return new ViewDescriptor(
             typeof(HtmlView),
             ImmutableDictionary<string, object?>

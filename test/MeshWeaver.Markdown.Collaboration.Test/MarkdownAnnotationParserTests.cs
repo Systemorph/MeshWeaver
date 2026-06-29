@@ -1,5 +1,4 @@
 using System;
-using FluentAssertions;
 using MeshWeaver.Markdown.Collaboration;
 using Xunit;
 
@@ -338,8 +337,8 @@ public class MarkdownAnnotationParserTests
         var commentIds = MarkdownAnnotationParser.GetMarkerIds(content, AnnotationType.Comment);
         var insertIds = MarkdownAnnotationParser.GetMarkerIds(content, AnnotationType.Insert);
 
-        commentIds.Should().BeEquivalentTo(["c1", "c2"]);
-        insertIds.Should().BeEquivalentTo(["i1"]);
+        commentIds.Should().BeEquivalentTo(new[] { "c1", "c2" }, System.Text.Json.JsonSerializerOptions.Default);
+        insertIds.Should().BeEquivalentTo(new[] { "i1" }, System.Text.Json.JsonSerializerOptions.Default);
     }
 
     [Fact]

@@ -1,10 +1,7 @@
 ﻿using System;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Threading;
 using System.Threading.Tasks;
-using FluentAssertions;
-using FluentAssertions.Extensions;
 using MeshWeaver.Data;
 using MeshWeaver.Fixture;
 using MeshWeaver.Layout;
@@ -78,50 +75,42 @@ public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
         var categories = await client
             .GetWorkspace()
             .GetObservable<Category>()
-            .Timeout(Timeout)
-            .FirstAsync();
+            .Should().Within(Timeout).Emit();
         categories.Should().HaveCountGreaterThan(0);
         var territories = await client
             .GetWorkspace()
             .GetObservable<Territory>()
-            .Timeout(Timeout)
-            .FirstAsync();
+            .Should().Within(Timeout).Emit();
         territories.Should().HaveCountGreaterThan(0);
         var employees = await client
             .GetWorkspace()
             .GetObservable<Employee>()
-            .Timeout(Timeout)
-            .FirstAsync();
+            .Should().Within(Timeout).Emit();
         employees.Should().HaveCountGreaterThan(0);
         var products = await client
             .GetWorkspace()
             .GetObservable<Product>()
-            .Timeout(TimeSpan.FromSeconds(10))
-            .FirstAsync();
+            .Should().Within(TimeSpan.FromSeconds(10)).Emit();
         products.Should().HaveCountGreaterThan(0);
         var orders = await client
             .GetWorkspace()
             .GetObservable<Order>()
-            .Timeout(Timeout)
-            .FirstAsync();
+            .Should().Within(Timeout).Emit();
         orders.Should().HaveCountGreaterThan(0);
         var suppliers = await client
             .GetWorkspace()
             .GetObservable<Supplier>()
-            .Timeout(Timeout)
-            .FirstAsync();
+            .Should().Within(Timeout).Emit();
         suppliers.Should().HaveCountGreaterThan(0);
         var customers = await client
             .GetWorkspace()
             .GetObservable<Customer>()
-            .Timeout(Timeout)
-            .FirstAsync();
+            .Should().Within(Timeout).Emit();
         customers.Should().HaveCountGreaterThan(0);
         var orderDetails = await client
             .GetWorkspace()
             .GetObservable<OrderDetails>()
-            .Timeout(Timeout)
-            .FirstAsync();
+            .Should().Within(Timeout).Emit();
         orderDetails.Should().HaveCountGreaterThan(0);
     }
 
@@ -136,14 +125,12 @@ public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
         var stream = workspace.GetStream(new LayoutAreaReference(ViewName));
 
         var control = await stream.GetControlStream(controlName)
-            .Timeout(10.Seconds())
-            .FirstAsync(x => x != null);
+            .Should().Within(10.Seconds()).Match(x => x != null);
 
         var stack = control.Should().BeOfType<StackControl>().Subject;
         var gridArea = stack.Areas.Last().Area;
         control = await stream.GetControlStream(gridArea.ToString()!)
-            .Timeout(10.Seconds())
-            .FirstAsync(x => x != null);
+            .Should().Within(10.Seconds()).Match(x => x != null);
         var pivotGrid = control.Should().BeOfType<PivotGridControl>().Subject;
         pivotGrid.Configuration.Should().NotBeNull();
         pivotGrid.Configuration.RowDimensions.Should().HaveCountGreaterThan(0);
@@ -161,13 +148,11 @@ public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
 
         var control = await stream
             .GetControlStream(controlName)
-            .Timeout(10.Seconds())
-            .FirstAsync(x => x != null);
+            .Should().Within(10.Seconds()).Match(x => x != null);
         var stack = control.Should().BeOfType<StackControl>().Subject;
         var gridArea = stack.Areas.Last().Area;
         control = await stream.GetControlStream(gridArea.ToString()!)
-            .Timeout(10.Seconds())
-            .FirstAsync(x => x != null);
+            .Should().Within(10.Seconds()).Match(x => x != null);
         var pivotGrid = control.Should().BeOfType<PivotGridControl>().Subject;
         pivotGrid.Configuration.Should().NotBeNull();
         pivotGrid.Configuration.RowDimensions.Should().HaveCountGreaterThan(0);
@@ -186,16 +171,14 @@ public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
         // Step 1: Get initial NorthwindDataCube data
         var initialCubeData = await workspace
             .GetObservable<NorthwindDataCube>()
-            .Timeout(Timeout)
-            .FirstAsync(x => x.Any());
+            .Should().Within(Timeout).Match(x => x.Any());
 
         initialCubeData.Should().HaveCountGreaterThan(0, "Should have data cube entries");
 
         // Step 2: Get a category to update
         var categories = await workspace
             .GetObservable<Category>()
-            .Timeout(Timeout)
-            .FirstAsync();
+            .Should().Within(Timeout).Emit();
 
         var categoryToUpdate = categories.First();
         var originalCategoryName = categoryToUpdate.CategoryName;
@@ -224,8 +207,7 @@ public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
 
         var updatedCubeData = await workspace
             .GetObservable<NorthwindDataCube>()
-            .Timeout(TimeSpan.FromSeconds(30))
-            .FirstAsync(cubeEntries =>
+            .Should().Within(TimeSpan.FromSeconds(30)).Match(cubeEntries =>
                 cubeEntries.Any(c => c.CategoryName == newCategoryName));
 
         // Step 5: Verify the data cube updated correctly
@@ -257,11 +239,8 @@ public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
     {
         var client = GetClient();
 
-        var response = await client.AwaitResponse(
-            new GetLayoutAreasRequest(),
-            o => o.WithTarget(CreateHostAddress()),
-            new CancellationTokenSource(Timeout).Token
-        );
+        var response = await client.Observe(new GetLayoutAreasRequest(), o => o.WithTarget(CreateHostAddress()))
+            .Should().Within(Timeout).Emit();
 
         var areas = response.Message.Areas.ToList();
         areas.Should().NotBeEmpty("Northwind should have layout areas defined");
@@ -282,9 +261,7 @@ public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
         var stream = workspace.GetStream(new LayoutAreaReference("LayoutAreas"))!;
 
         Output.WriteLine("Waiting for first emission...");
-        var result = await stream
-            .Timeout(TimeSpan.FromSeconds(10))
-            .FirstAsync();
+        var result = await stream.Should().Within(TimeSpan.FromSeconds(10)).Emit();
 
         result.Should().NotBeNull();
         Output.WriteLine($"Got result: {result.Value}");

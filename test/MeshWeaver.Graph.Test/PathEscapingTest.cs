@@ -1,4 +1,3 @@
-using FluentAssertions;
 using MeshWeaver.Graph.Configuration;
 using Xunit;
 

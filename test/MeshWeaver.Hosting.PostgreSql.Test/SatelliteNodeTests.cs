@@ -3,10 +3,10 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
-using FluentAssertions;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Activity;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.PostgreSql.Test;
 
@@ -28,7 +28,7 @@ public class SatelliteNodeTests : IAsyncLifetime
         Namespace = "ACME",
         DataSource = "default",
         Schema = "acme_sat_test",
-        TableMappings = PartitionDefinition.StandardTableMappings,
+        TableMappings = PartitionDefinition.DefaultSegmentTableMappings(), NodeTypeTableMappings = PartitionDefinition.DefaultNodeTypeTableMappings(),
     };
 
     /// <summary>
@@ -61,6 +61,9 @@ public class SatelliteNodeTests : IAsyncLifetime
         return ValueTask.CompletedTask;
     }
 
+    private Task<long> Count(string sql, System.Threading.CancellationToken ct)
+        => _schemaDs.ScalarLong(sql, ct).Should().Within(30.Seconds()).Emit();
+
     #region Activity satellite
 
     [Fact(Timeout = 30000)]
@@ -76,16 +79,15 @@ public class SatelliteNodeTests : IAsyncLifetime
             MainNode = "ACME/Projects/Alpha",
             Content = new { Action = "Created", UserId = "alice", Timestamp = DateTimeOffset.UtcNow }
         };
-        await activityAdapter.WriteAsync(activity, _options, ct);
+        await activityAdapter.Write(activity, _options).Should().Within(30.Seconds()).Emit();
 
         // Verify in activities table
-        await using var cmd = _schemaDs.CreateCommand(
-            "SELECT COUNT(*) FROM activities WHERE namespace = 'ACME/Projects/Alpha/_Activity' AND id = 'act-1'");
-        var count = (long)(await cmd.ExecuteScalarAsync(ct))!;
-        count.Should().Be(1);
+        (await Count("SELECT COUNT(*) FROM activities WHERE namespace = 'ACME/Projects/Alpha/_Activity' AND id = 'act-1'", ct))
+            .Should().Be(1);
 
         // Read back
-        var read = await activityAdapter.ReadAsync("ACME/Projects/Alpha/_Activity/act-1", _options, ct);
+        var read = await activityAdapter.Read("ACME/Projects/Alpha/_Activity/act-1", _options)
+            .Should().Within(30.Seconds()).Emit();
         read.Should().NotBeNull();
         read!.NodeType.Should().Be("Activity");
         read.MainNode.Should().Be("ACME/Projects/Alpha");
@@ -117,14 +119,12 @@ public class SatelliteNodeTests : IAsyncLifetime
                 AccessCount = 3
             }
         };
-        await uaAdapter.WriteAsync(ua, _options, ct);
+        await uaAdapter.Write(ua, _options).Should().Within(30.Seconds()).Emit();
 
-        await using var cmd = _schemaDs.CreateCommand(
-            "SELECT COUNT(*) FROM user_activities WHERE id = 'ACME_Projects_Alpha'");
-        var count = (long)(await cmd.ExecuteScalarAsync(ct))!;
-        count.Should().Be(1);
+        (await Count("SELECT COUNT(*) FROM user_activities WHERE id = 'ACME_Projects_Alpha'", ct)).Should().Be(1);
 
-        var read = await uaAdapter.ReadAsync("User/alice/_UserActivity/ACME_Projects_Alpha", _options, ct);
+        var read = await uaAdapter.Read("User/alice/_UserActivity/ACME_Projects_Alpha", _options)
+            .Should().Within(30.Seconds()).Emit();
         read.Should().NotBeNull();
         read!.NodeType.Should().Be("UserActivity");
     }
@@ -146,14 +146,12 @@ public class SatelliteNodeTests : IAsyncLifetime
             MainNode = "ACME/Projects/Alpha",
             Content = new { UserId = "bob", RoleId = "Admin", AssignedBy = "alice" }
         };
-        await aaAdapter.WriteAsync(aa, _options, ct);
+        await aaAdapter.Write(aa, _options).Should().Within(30.Seconds()).Emit();
 
-        await using var cmd = _schemaDs.CreateCommand(
-            "SELECT COUNT(*) FROM access WHERE id = 'aa-1'");
-        var count = (long)(await cmd.ExecuteScalarAsync(ct))!;
-        count.Should().Be(1);
+        (await Count("SELECT COUNT(*) FROM access WHERE id = 'aa-1'", ct)).Should().Be(1);
 
-        var read = await aaAdapter.ReadAsync("ACME/Projects/Alpha/_Access/aa-1", _options, ct);
+        var read = await aaAdapter.Read("ACME/Projects/Alpha/_Access/aa-1", _options)
+            .Should().Within(30.Seconds()).Emit();
         read.Should().NotBeNull();
         read!.Name.Should().Be("Admin role for Bob");
     }
@@ -161,25 +159,24 @@ public class SatelliteNodeTests : IAsyncLifetime
     [Fact(Timeout = 30000)]
     public async Task AccessAssignment_MultipleAssignments_ListCorrectly()
     {
-        var ct = TestContext.Current.CancellationToken;
         var aaAdapter = AdapterFor("_Access", "access");
         var ns = "ACME/Projects/Beta/_Access";
 
-        await aaAdapter.WriteAsync(new MeshNode("aa-b1", ns)
+        await aaAdapter.Write(new MeshNode("aa-b1", ns)
         {
             Name = "Viewer for carol",
             NodeType = "AccessAssignment",
             MainNode = "ACME/Projects/Beta",
-        }, _options, ct);
+        }, _options).Should().Within(30.Seconds()).Emit();
 
-        await aaAdapter.WriteAsync(new MeshNode("aa-b2", ns)
+        await aaAdapter.Write(new MeshNode("aa-b2", ns)
         {
             Name = "Editor for dave",
             NodeType = "AccessAssignment",
             MainNode = "ACME/Projects/Beta",
-        }, _options, ct);
+        }, _options).Should().Within(30.Seconds()).Emit();
 
-        var (paths, _) = await aaAdapter.ListChildPathsAsync(ns, ct);
+        var (paths, _) = await aaAdapter.ListChildPaths(ns).Should().Within(30.Seconds()).Emit();
         paths.Should().HaveCount(2);
     }
 
@@ -200,37 +197,31 @@ public class SatelliteNodeTests : IAsyncLifetime
             MainNode = "ACME/Docs/readme",
             Content = new { Author = "alice", Text = "This is really helpful!", CreatedAt = DateTimeOffset.UtcNow }
         };
-        await commentAdapter.WriteAsync(comment, _options, ct);
+        await commentAdapter.Write(comment, _options).Should().Within(30.Seconds()).Emit();
 
-        await using var cmd = _schemaDs.CreateCommand(
-            "SELECT COUNT(*) FROM annotations WHERE id = 'cmt-1'");
-        var count = (long)(await cmd.ExecuteScalarAsync(ct))!;
-        count.Should().Be(1);
+        (await Count("SELECT COUNT(*) FROM annotations WHERE id = 'cmt-1'", ct)).Should().Be(1);
 
         // Not in mesh_nodes
-        await using var mnCmd = _schemaDs.CreateCommand(
-            "SELECT COUNT(*) FROM mesh_nodes WHERE id = 'cmt-1' AND namespace = 'ACME/Docs/readme/_Comment'");
-        var mnCount = (long)(await mnCmd.ExecuteScalarAsync(ct))!;
-        mnCount.Should().Be(0);
+        (await Count("SELECT COUNT(*) FROM mesh_nodes WHERE id = 'cmt-1' AND namespace = 'ACME/Docs/readme/_Comment'", ct))
+            .Should().Be(0);
     }
 
     [Fact(Timeout = 30000)]
     public async Task Comment_Delete_RemovesFromTable()
     {
-        var ct = TestContext.Current.CancellationToken;
         var commentAdapter = AdapterFor("_Comment", "annotations");
         var path = "ACME/Docs/guide/_Comment/cmt-del";
 
-        await commentAdapter.WriteAsync(new MeshNode("cmt-del", "ACME/Docs/guide/_Comment")
+        await commentAdapter.Write(new MeshNode("cmt-del", "ACME/Docs/guide/_Comment")
         {
             Name = "Temporary comment",
             NodeType = "Comment",
             MainNode = "ACME/Docs/guide",
-        }, _options, ct);
+        }, _options).Should().Within(30.Seconds()).Emit();
 
-        (await commentAdapter.ExistsAsync(path, ct)).Should().BeTrue();
-        await commentAdapter.DeleteAsync(path, ct);
-        (await commentAdapter.ExistsAsync(path, ct)).Should().BeFalse();
+        await commentAdapter.Exists(path).Should().Within(30.Seconds()).Be(true);
+        await commentAdapter.Delete(path).Should().Within(30.Seconds()).Emit();
+        await commentAdapter.Exists(path).Should().Within(30.Seconds()).Be(false);
     }
 
     #endregion
@@ -250,14 +241,12 @@ public class SatelliteNodeTests : IAsyncLifetime
             MainNode = "ACME/Docs/report",
             Content = new { Author = "bob", ChangeType = "Edit", Section = "2" }
         };
-        await tcAdapter.WriteAsync(tc, _options, ct);
+        await tcAdapter.Write(tc, _options).Should().Within(30.Seconds()).Emit();
 
-        await using var cmd = _schemaDs.CreateCommand(
-            "SELECT COUNT(*) FROM annotations WHERE id = 'tc-1'");
-        var count = (long)(await cmd.ExecuteScalarAsync(ct))!;
-        count.Should().Be(1);
+        (await Count("SELECT COUNT(*) FROM annotations WHERE id = 'tc-1'", ct)).Should().Be(1);
 
-        var read = await tcAdapter.ReadAsync("ACME/Docs/report/_Tracking/tc-1", _options, ct);
+        var read = await tcAdapter.Read("ACME/Docs/report/_Tracking/tc-1", _options)
+            .Should().Within(30.Seconds()).Emit();
         read.Should().NotBeNull();
         read!.Name.Should().Be("Section 2 updated");
     }
@@ -279,75 +268,132 @@ public class SatelliteNodeTests : IAsyncLifetime
             MainNode = "ACME/Docs/policy",
             Content = new { Approver = "carol", Status = "Approved", ApprovedAt = DateTimeOffset.UtcNow }
         };
-        await approvalAdapter.WriteAsync(approval, _options, ct);
+        await approvalAdapter.Write(approval, _options).Should().Within(30.Seconds()).Emit();
 
-        await using var cmd = _schemaDs.CreateCommand(
-            "SELECT COUNT(*) FROM annotations WHERE id = 'apr-1'");
-        var count = (long)(await cmd.ExecuteScalarAsync(ct))!;
-        count.Should().Be(1);
+        (await Count("SELECT COUNT(*) FROM annotations WHERE id = 'apr-1'", ct)).Should().Be(1);
     }
 
     #endregion
 
-    #region Code satellite (_Source and _Test → code)
+    #region Notification satellite (→ notifications)
+
+    [Fact(Timeout = 30000)]
+    public async Task Notification_WriteAndRead_RoutesToNotificationsTable()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var notifAdapter = AdapterFor("_Notification", "notifications");
+
+        var notification = new MeshNode("notif-1", "ACME/_Thread/chat-abc/_Notification")
+        {
+            Name = "Thread ready",
+            NodeType = "Notification",
+            MainNode = "ACME/_Thread/chat-abc",
+            Content = new
+            {
+                Title = "\"chat-abc\" is ready",
+                Message = "Response complete.",
+                NotificationType = "General",
+                IsRead = false,
+                CreatedAt = DateTimeOffset.UtcNow,
+                TargetNodePath = "ACME/_Thread/chat-abc"
+            }
+        };
+        await notifAdapter.Write(notification, _options).Should().Within(30.Seconds()).Emit();
+
+        // Lands in the dedicated notifications table.
+        (await Count("SELECT COUNT(*) FROM notifications WHERE id = 'notif-1'", ct)).Should().Be(1);
+
+        // NOT in mesh_nodes (would indicate a routing regression).
+        (await Count("SELECT COUNT(*) FROM mesh_nodes WHERE id = 'notif-1' AND namespace = 'ACME/_Thread/chat-abc/_Notification'", ct))
+            .Should().Be(0);
+
+        // Read back via the adapter.
+        var read = await notifAdapter.Read("ACME/_Thread/chat-abc/_Notification/notif-1", _options)
+            .Should().Within(30.Seconds()).Emit();
+        read.Should().NotBeNull();
+        read!.NodeType.Should().Be("Notification");
+        read.MainNode.Should().Be("ACME/_Thread/chat-abc");
+    }
+
+    [Fact(Timeout = 30000)]
+    public async Task Notification_NotInAnnotationsTable_ProvesDedicatedRouting()
+    {
+        // Defensive: confirms a Notification doesn't accidentally land in the
+        // annotations table (which Comment/Tracking/Approval share). If the
+        // _Notification → notifications mapping is removed from
+        // PartitionDefinition.StandardTableMappings, the longest-suffix
+        // resolver could fall back to annotations or mesh_nodes — this catches
+        // that regression.
+        var ct = TestContext.Current.CancellationToken;
+        var notifAdapter = AdapterFor("_Notification", "notifications");
+
+        await notifAdapter.Write(new MeshNode("notif-isolated",
+            "ACME/Docs/spec/_Notification")
+        {
+            Name = "Isolated check",
+            NodeType = "Notification",
+            MainNode = "ACME/Docs/spec",
+            Content = new { Title = "Test", Message = "" }
+        }, _options).Should().Within(30.Seconds()).Emit();
+
+        (await Count("SELECT COUNT(*) FROM annotations WHERE id = 'notif-isolated'", ct)).Should().Be(0);
+        (await Count("SELECT COUNT(*) FROM notifications WHERE id = 'notif-isolated'", ct)).Should().Be(1);
+    }
+
+    #endregion
+
+    #region Code content (Source and Test → code table)
 
     [Fact(Timeout = 30000)]
     public async Task CodeFile_WriteAndRead_RoutesToCodeTable()
     {
         var ct = TestContext.Current.CancellationToken;
-        var codeAdapter = AdapterFor("_Source", "code");
+        var codeAdapter = AdapterFor("Source", "code");
 
-        var codeNode = new MeshNode("MyClass", "ACME/Projects/Alpha/_Source")
+        var codeNode = new MeshNode("MyClass", "ACME/Projects/Alpha/Source")
         {
             Name = "MyClass.cs",
             NodeType = "Code",
-            MainNode = "ACME/Projects/Alpha",
             Content = new { FileName = "MyClass.cs", Language = "csharp", Namespace = "ACME.Projects" }
         };
-        await codeAdapter.WriteAsync(codeNode, _options, ct);
+        await codeAdapter.Write(codeNode, _options).Should().Within(30.Seconds()).Emit();
 
         // Verify in code table
-        await using var cmd = _schemaDs.CreateCommand(
-            "SELECT COUNT(*) FROM code WHERE namespace = 'ACME/Projects/Alpha/_Source' AND id = 'MyClass'");
-        var count = (long)(await cmd.ExecuteScalarAsync(ct))!;
-        count.Should().Be(1);
+        (await Count("SELECT COUNT(*) FROM code WHERE namespace = 'ACME/Projects/Alpha/Source' AND id = 'MyClass'", ct))
+            .Should().Be(1);
 
         // Not in mesh_nodes
-        await using var mnCmd = _schemaDs.CreateCommand(
-            "SELECT COUNT(*) FROM mesh_nodes WHERE namespace = 'ACME/Projects/Alpha/_Source' AND id = 'MyClass'");
-        var mnCount = (long)(await mnCmd.ExecuteScalarAsync(ct))!;
-        mnCount.Should().Be(0);
+        (await Count("SELECT COUNT(*) FROM mesh_nodes WHERE namespace = 'ACME/Projects/Alpha/Source' AND id = 'MyClass'", ct))
+            .Should().Be(0);
 
         // Read back
-        var read = await codeAdapter.ReadAsync("ACME/Projects/Alpha/_Source/MyClass", _options, ct);
+        var read = await codeAdapter.Read("ACME/Projects/Alpha/Source/MyClass", _options)
+            .Should().Within(30.Seconds()).Emit();
         read.Should().NotBeNull();
         read!.NodeType.Should().Be("Code");
-        read.MainNode.Should().Be("ACME/Projects/Alpha");
     }
 
     [Fact(Timeout = 30000)]
     public async Task TestFile_WriteAndRead_AlsoRoutesToCodeTable()
     {
         var ct = TestContext.Current.CancellationToken;
-        var testAdapter = AdapterFor("_Test", "code");
+        var testAdapter = AdapterFor("Test", "code");
 
-        var testNode = new MeshNode("MyClassTests", "ACME/Projects/Alpha/_Test")
+        var testNode = new MeshNode("MyClassTests", "ACME/Projects/Alpha/Test")
         {
             Name = "MyClassTests.cs",
             NodeType = "Code",
-            MainNode = "ACME/Projects/Alpha",
             Content = new { FileName = "MyClassTests.cs", Language = "csharp", Namespace = "ACME.Projects.Tests" }
         };
-        await testAdapter.WriteAsync(testNode, _options, ct);
+        await testAdapter.Write(testNode, _options).Should().Within(30.Seconds()).Emit();
 
-        // Verify in code table (same table as _Source)
-        await using var cmd = _schemaDs.CreateCommand(
-            "SELECT COUNT(*) FROM code WHERE namespace = 'ACME/Projects/Alpha/_Test' AND id = 'MyClassTests'");
-        var count = (long)(await cmd.ExecuteScalarAsync(ct))!;
-        count.Should().Be(1);
+        // Verify in code table (same table as Source)
+        (await Count("SELECT COUNT(*) FROM code WHERE namespace = 'ACME/Projects/Alpha/Test' AND id = 'MyClassTests'", ct))
+            .Should().Be(1);
 
         // Read back
-        var read = await testAdapter.ReadAsync("ACME/Projects/Alpha/_Test/MyClassTests", _options, ct);
+        var read = await testAdapter.Read("ACME/Projects/Alpha/Test/MyClassTests", _options)
+            .Should().Within(30.Seconds()).Emit();
         read.Should().NotBeNull();
         read!.Name.Should().Be("MyClassTests.cs");
     }
@@ -364,38 +410,29 @@ public class SatelliteNodeTests : IAsyncLifetime
         var activityAdapter = AdapterFor("_Activity", "activities");
 
         // Write to annotations (comment)
-        await commentAdapter.WriteAsync(new MeshNode("iso-1", "ACME/X/_Comment")
+        await commentAdapter.Write(new MeshNode("iso-1", "ACME/X/_Comment")
         {
             Name = "A comment",
             NodeType = "Comment",
             MainNode = "ACME/X",
-        }, _options, ct);
+        }, _options).Should().Within(30.Seconds()).Emit();
 
         // Write to activities
-        await activityAdapter.WriteAsync(new MeshNode("iso-2", "ACME/X/_Activity")
+        await activityAdapter.Write(new MeshNode("iso-2", "ACME/X/_Activity")
         {
             Name = "An activity",
             NodeType = "Activity",
             MainNode = "ACME/X",
-        }, _options, ct);
+        }, _options).Should().Within(30.Seconds()).Emit();
 
         // Comment should NOT be in activities table
-        await using var cmd1 = _schemaDs.CreateCommand(
-            "SELECT COUNT(*) FROM activities WHERE id = 'iso-1'");
-        var cnt1 = (long)(await cmd1.ExecuteScalarAsync(ct))!;
-        cnt1.Should().Be(0);
+        (await Count("SELECT COUNT(*) FROM activities WHERE id = 'iso-1'", ct)).Should().Be(0);
 
         // Activity should NOT be in annotations table
-        await using var cmd2 = _schemaDs.CreateCommand(
-            "SELECT COUNT(*) FROM annotations WHERE id = 'iso-2'");
-        var cnt2 = (long)(await cmd2.ExecuteScalarAsync(ct))!;
-        cnt2.Should().Be(0);
+        (await Count("SELECT COUNT(*) FROM annotations WHERE id = 'iso-2'", ct)).Should().Be(0);
 
         // Neither should be in mesh_nodes
-        await using var cmd3 = _schemaDs.CreateCommand(
-            "SELECT COUNT(*) FROM mesh_nodes WHERE id IN ('iso-1', 'iso-2')");
-        var cnt3 = (long)(await cmd3.ExecuteScalarAsync(ct))!;
-        cnt3.Should().Be(0);
+        (await Count("SELECT COUNT(*) FROM mesh_nodes WHERE id IN ('iso-1', 'iso-2')", ct)).Should().Be(0);
     }
 
     [Fact(Timeout = 30000)]
@@ -404,17 +441,15 @@ public class SatelliteNodeTests : IAsyncLifetime
         var ct = TestContext.Current.CancellationToken;
 
         // Write a regular (non-satellite) node via the main adapter
-        await _mainAdapter.WriteAsync(new MeshNode("proj-1", "ACME/Projects")
+        await _mainAdapter.Write(new MeshNode("proj-1", "ACME/Projects")
         {
             Name = "Alpha Project",
             NodeType = "Project",
-        }, _options, ct);
+        }, _options).Should().Within(30.Seconds()).Emit();
 
         // Should be in mesh_nodes since the path doesn't match any satellite suffix
-        await using var cmd = _schemaDs.CreateCommand(
-            "SELECT COUNT(*) FROM mesh_nodes WHERE namespace = 'ACME/Projects' AND id = 'proj-1'");
-        var count = (long)(await cmd.ExecuteScalarAsync(ct))!;
-        count.Should().Be(1);
+        (await Count("SELECT COUNT(*) FROM mesh_nodes WHERE namespace = 'ACME/Projects' AND id = 'proj-1'", ct))
+            .Should().Be(1);
     }
 
     #endregion
@@ -427,17 +462,19 @@ public class SatelliteNodeTests : IAsyncLifetime
         var ct = TestContext.Current.CancellationToken;
         var commentAdapter = AdapterFor("_Comment", "annotations");
 
-        await commentAdapter.WriteAsync(new MeshNode("mn-cmt", "ACME/Reports/Q1/_Comment")
+        await commentAdapter.Write(new MeshNode("mn-cmt", "ACME/Reports/Q1/_Comment")
         {
             Name = "Review note",
             NodeType = "Comment",
             MainNode = "ACME/Reports/Q1",
-        }, _options, ct);
+        }, _options).Should().Within(30.Seconds()).Emit();
 
         // Verify main_node column value via raw SQL
-        await using var cmd = _schemaDs.CreateCommand(
-            "SELECT main_node FROM annotations WHERE id = 'mn-cmt'");
-        var mainNode = (string)(await cmd.ExecuteScalarAsync(ct))!;
+        var mainNode = await _schemaDs.Probe(
+            "SELECT main_node FROM annotations WHERE id = 'mn-cmt'",
+            System.Array.Empty<(string, object)>(),
+            rdr => rdr.GetString(0), ct)
+            .Should().Within(30.Seconds()).Emit();
         mainNode.Should().Be("ACME/Reports/Q1");
     }
 
@@ -448,29 +485,22 @@ public class SatelliteNodeTests : IAsyncLifetime
         var activityAdapter = AdapterFor("_Activity", "activities");
 
         // Create activities for two different main nodes
-        await activityAdapter.WriteAsync(new MeshNode("qa-1", "ACME/A/_Activity")
+        await activityAdapter.Write(new MeshNode("qa-1", "ACME/A/_Activity")
         {
             NodeType = "Activity", MainNode = "ACME/A",
-        }, _options, ct);
-        await activityAdapter.WriteAsync(new MeshNode("qa-2", "ACME/A/_Activity")
+        }, _options).Should().Within(30.Seconds()).Emit();
+        await activityAdapter.Write(new MeshNode("qa-2", "ACME/A/_Activity")
         {
             NodeType = "Activity", MainNode = "ACME/A",
-        }, _options, ct);
-        await activityAdapter.WriteAsync(new MeshNode("qa-3", "ACME/B/_Activity")
+        }, _options).Should().Within(30.Seconds()).Emit();
+        await activityAdapter.Write(new MeshNode("qa-3", "ACME/B/_Activity")
         {
             NodeType = "Activity", MainNode = "ACME/B",
-        }, _options, ct);
+        }, _options).Should().Within(30.Seconds()).Emit();
 
         // Query by main_node via raw SQL (this is what the query engine would do)
-        await using var cmd = _schemaDs.CreateCommand(
-            "SELECT COUNT(*) FROM activities WHERE main_node = 'ACME/A'");
-        var countA = (long)(await cmd.ExecuteScalarAsync(ct))!;
-        countA.Should().Be(2);
-
-        await using var cmd2 = _schemaDs.CreateCommand(
-            "SELECT COUNT(*) FROM activities WHERE main_node = 'ACME/B'");
-        var countB = (long)(await cmd2.ExecuteScalarAsync(ct))!;
-        countB.Should().Be(1);
+        (await Count("SELECT COUNT(*) FROM activities WHERE main_node = 'ACME/A'", ct)).Should().Be(2);
+        (await Count("SELECT COUNT(*) FROM activities WHERE main_node = 'ACME/B'", ct)).Should().Be(1);
     }
 
     #endregion
@@ -492,32 +522,28 @@ public class SatelliteNodeTests : IAsyncLifetime
             ("rt-cmt", "ACME/Y/_Comment", "Comment", "annotations"),
             ("rt-trk", "ACME/Y/_Tracking", "TrackedChange", "annotations"),
             ("rt-apr", "ACME/Y/_Approval", "Approval", "annotations"),
-            ("rt-src", "ACME/Y/_Source", "Code", "code"),
-            ("rt-tst", "ACME/Y/_Test", "Code", "code"),
+            ("rt-src", "ACME/Y/Source", "Code", "code"),
+            ("rt-tst", "ACME/Y/Test", "Code", "code"),
         };
 
         foreach (var (id, ns, nodeType, _) in nodes)
         {
-            await _mainAdapter.WriteAsync(new MeshNode(id, ns)
+            await _mainAdapter.Write(new MeshNode(id, ns)
             {
                 Name = id,
                 NodeType = nodeType,
                 MainNode = "ACME/Y",
-            }, _options, ct);
+            }, _options).Should().Within(30.Seconds()).Emit();
         }
 
         // Verify each node is in the expected table and NOT in mesh_nodes
         foreach (var (id, _, _, expectedTable) in nodes)
         {
-            await using var cmd = _schemaDs.CreateCommand(
-                $"SELECT COUNT(*) FROM \"{expectedTable}\" WHERE id = '{id}'");
-            var count = (long)(await cmd.ExecuteScalarAsync(ct))!;
-            count.Should().Be(1, $"node '{id}' should be in table '{expectedTable}'");
+            (await Count($"SELECT COUNT(*) FROM \"{expectedTable}\" WHERE id = '{id}'", ct))
+                .Should().Be(1, $"node '{id}' should be in table '{expectedTable}'");
 
-            await using var mnCmd = _schemaDs.CreateCommand(
-                $"SELECT COUNT(*) FROM mesh_nodes WHERE id = '{id}'");
-            var mnCount = (long)(await mnCmd.ExecuteScalarAsync(ct))!;
-            mnCount.Should().Be(0, $"node '{id}' should NOT be in mesh_nodes");
+            (await Count($"SELECT COUNT(*) FROM mesh_nodes WHERE id = '{id}'", ct))
+                .Should().Be(0, $"node '{id}' should NOT be in mesh_nodes");
         }
     }
 
@@ -531,7 +557,7 @@ public class SatelliteNodeTests : IAsyncLifetime
         var def = new PartitionDefinition
         {
             Namespace = "User",
-            TableMappings = PartitionDefinition.StandardTableMappings
+            TableMappings = PartitionDefinition.DefaultSegmentTableMappings(), NodeTypeTableMappings = PartitionDefinition.DefaultNodeTypeTableMappings()
         };
 
         def.ResolveTable("User/alice/_Activity/act-1").Should().Be("activities");
@@ -542,8 +568,8 @@ public class SatelliteNodeTests : IAsyncLifetime
         def.ResolveTable("User/alice/_Comment/cmt-1").Should().Be("annotations");
         def.ResolveTable("User/alice/_Tracking/tc-1").Should().Be("annotations");
         def.ResolveTable("User/alice/_Approval/apr-1").Should().Be("annotations");
-        def.ResolveTable("User/alice/_Source/MyClass").Should().Be("code");
-        def.ResolveTable("User/alice/_Test/MyTest").Should().Be("code");
+        def.ResolveTable("User/alice/Source/MyClass").Should().Be("code");
+        def.ResolveTable("User/alice/Test/MyTest").Should().Be("code");
     }
 
     [Fact(Timeout = 30000)]
@@ -552,7 +578,7 @@ public class SatelliteNodeTests : IAsyncLifetime
         var def = new PartitionDefinition
         {
             Namespace = "User",
-            TableMappings = PartitionDefinition.StandardTableMappings
+            TableMappings = PartitionDefinition.DefaultSegmentTableMappings(), NodeTypeTableMappings = PartitionDefinition.DefaultNodeTypeTableMappings()
         };
 
         def.ResolveTable("User/alice").Should().Be("mesh_nodes");

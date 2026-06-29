@@ -10,6 +10,14 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Built-in export script templates seeded as Code MeshNodes via
+         MarkdownExportNodeProvider. Embed as resources so the .csx text travels
+         inside the assembly with no file-system lookup at runtime. -->
+    <EmbeddedResource Include="Templates\ExportPdf.csx" />
+    <EmbeddedResource Include="Templates\ExportDocx.csx" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\MeshWeaver.Data.Contract\MeshWeaver.Data.Contract.csproj" />
     <ProjectReference Include="..\MeshWeaver.Markdown\MeshWeaver.Markdown.csproj" />
     <ProjectReference Include="..\MeshWeaver.Layout\MeshWeaver.Layout.csproj" />
@@ -17,5 +25,6 @@
     <ProjectReference Include="..\MeshWeaver.Mesh.Contract\MeshWeaver.Mesh.Contract.csproj" />
     <ProjectReference Include="..\MeshWeaver.Messaging.Hub\MeshWeaver.Messaging.Hub.csproj" />
     <ProjectReference Include="..\MeshWeaver.ContentCollections\MeshWeaver.ContentCollections.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Kernel.Hub\MeshWeaver.Kernel.Hub.csproj" />
   </ItemGroup>
 </Project>

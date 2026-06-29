@@ -1,5 +1,4 @@
-using FluentAssertions;
-using MeshWeaver.AI;
+﻿using MeshWeaver.AI;
 using Xunit;
 
 namespace MeshWeaver.AI.Test;

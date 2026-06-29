@@ -1,9 +1,10 @@
 @using Orientation = Microsoft.FluentUI.AspNetCore.Components.Orientation
 @inherits SkinnedView<TabsControl, TabsSkin, TabsView>
 
-<FluentTabs 
-    ActiveTabId="@ActiveTabId" 
-    Height="@Height" 
+<FluentTabs
+    ActiveTabId="@ActiveTabId"
+    Height="@Height"
+    Width="@Width"
     Orientation="@Orientation"
     Style="@Style"
 >
@@ -14,6 +15,7 @@
 {
     private string? ActiveTabId { get; set; }
     private string? Height { get; set; }
+    private string? Width { get; set; }
 
     private Orientation Orientation { get; set; } = Orientation.Horizontal;
     protected override void BindData()
@@ -24,6 +26,7 @@
         else 
             ActiveTabId = ViewModel.Areas?.FirstOrDefault()?.Id?.ToString() ?? "";
         DataBind(Skin.Height, x => x.Height);
+        DataBind(Skin.Width, x => x.Width);
         DataBind(Skin.Orientation, x => x.Orientation);
     }
 

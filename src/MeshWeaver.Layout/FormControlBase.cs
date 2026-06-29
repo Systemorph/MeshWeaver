@@ -1,5 +1,12 @@
 ﻿namespace MeshWeaver.Layout;
 
+/// <summary>
+/// Abstract base for all form input controls. Carries common properties (label, disabled,
+/// placeholder, focus, immediate update, icons) and fluent builder methods. Concrete controls
+/// inherit and add type-specific properties (e.g. <c>NumberFieldControl</c>, <c>TextFieldControl</c>).
+/// </summary>
+/// <typeparam name="TControl">The concrete control type returned by fluent builder methods (CRTP).</typeparam>
+/// <param name="Data">The data-bound value or binding expression for this control.</param>
 public abstract record FormControlBase <TControl>(object Data)
     : UiControl<TControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion), IFormControl
     where TControl : FormControlBase<TControl>, IFormControl
@@ -32,6 +39,10 @@ public abstract record FormControlBase <TControl>(object Data)
     /// </summary>
     public object? Required { get; init; }
 
+    /// <summary>
+    /// When set, the browser focuses this control automatically on mount.
+    /// Data-bindable (accepts <c>bool</c> or a <c>JsonPointerReference</c>).
+    /// </summary>
     public object? AutoFocus { get; init; }
     /// <summary>
     /// Gets or initializes the immediate update state of the input control.
@@ -122,14 +133,24 @@ public abstract record FormControlBase <TControl>(object Data)
 
 
 
+    /// <summary>Returns a copy with <paramref name="autoFocus"/> controlling whether the control receives focus on mount.</summary>
+    /// <param name="autoFocus">The auto-focus flag or binding expression.</param>
     public TControl WithAutoFocus(object autoFocus) => (TControl)this with { AutoFocus = autoFocus };
 
+    /// <summary>Returns a copy with <paramref name="disabled"/> controlling whether the control is disabled.</summary>
+    /// <param name="disabled">The disabled flag or binding expression.</param>
     public TControl WithDisabled(object disabled) => (TControl)this with { Disabled = disabled };
 
+    /// <summary>Returns a copy with <paramref name="placeholder"/> as the placeholder text.</summary>
+    /// <param name="placeholder">The placeholder text or binding expression shown when the control is empty.</param>
     public TControl WithPlaceholder(object placeholder) => (TControl)this with { Placeholder = placeholder };
 
+    /// <summary>Returns a copy with <paramref name="immediate"/> controlling whether value changes are propagated on every keystroke.</summary>
+    /// <param name="immediate">The immediate-update flag or binding expression.</param>
     public TControl WithImmediate(object immediate) => (TControl)this with { Immediate = immediate };
 
+    /// <summary>Returns a copy with <paramref name="immediateDelay"/> as the debounce delay (ms) for immediate updates.</summary>
+    /// <param name="immediateDelay">The debounce delay in milliseconds or binding expression.</param>
     public TControl WithImmediateDelay(object immediateDelay) => (TControl)this with { ImmediateDelay = immediateDelay };
 
 }

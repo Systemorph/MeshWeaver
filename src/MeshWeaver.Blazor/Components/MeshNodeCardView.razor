@@ -8,7 +8,7 @@
 }
 else
 {
-    <a href="/@NodePath" style="text-decoration: none; color: inherit; display: block;">
+    <a href="/@NodePath" style="text-decoration: none; color: inherit; display: block; width: 100%; box-sizing: border-box;">
         @CardContent
     </a>
 }
@@ -24,6 +24,14 @@ else
     private bool DisableNavigation { get; set; }
 
     private string Initial => !string.IsNullOrEmpty(Title) ? Title[0].ToString().ToUpper() : "?";
+
+    /// <summary>
+    /// Hard cap on the title so a very long name can never overflow the card (a backstop to the
+    /// CSS single-line ellipsis, which can't kick in when a parent doesn't constrain width).
+    /// </summary>
+    private string TruncatedTitle => Title?.Length > 64
+        ? Title[..63].TrimEnd() + "…"
+        : Title ?? "";
 
     private string TruncatedDescription => Description?.Length > 100
         ? Description[..97] + "..."
@@ -41,7 +49,7 @@ else
         }
         else
         {
-            <FluentCard Class="mesh-node-card" Style="cursor: pointer;">
+            <FluentCard Class="mesh-node-card" Style="cursor: pointer; width: 100%; display: block; box-sizing: border-box;">
                 <div class="mesh-node-card-content">
                     @if (!string.IsNullOrEmpty(ImageUrl))
                     {
@@ -63,7 +71,7 @@ else
                         <div class="mesh-node-card-placeholder">@Initial</div>
                     }
                     <div class="mesh-node-card-text">
-                        <div class="mesh-node-card-title">@Title</div>
+                        <div class="mesh-node-card-title" title="@Title">@TruncatedTitle</div>
                         @if (!string.IsNullOrEmpty(Description))
                         {
                             <div class="mesh-node-card-description">@TruncatedDescription</div>

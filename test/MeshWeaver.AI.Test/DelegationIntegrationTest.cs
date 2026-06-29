@@ -1,13 +1,14 @@
-#pragma warning disable CS1591 // Missing XML comment for publicly visible type or member
+﻿#pragma warning disable CS1591 // Missing XML comment for publicly visible type or member
 
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Threading;
 using System.Threading.Tasks;
-using FluentAssertions;
-using MeshWeaver.AI.AzureOpenAI;
+using MeshWeaver.AI.OpenAI;
 using MeshWeaver.AI.Persistence;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
@@ -136,7 +137,7 @@ public class DelegationIntegrationTest : MonolithMeshTestBase
 
         // Arrange: Create AgentChatClient from the mesh service provider
         var chatClient = new AgentChatClient(Mesh.ServiceProvider);
-        await chatClient.InitializeAsync(null, "gpt-4o-mini");
+        await chatClient.Initialize(null, "gpt-4o-mini").WhenInitialized.FirstAsync().ToTask(TestContext.Current.CancellationToken);
 
         // Verify agents were loaded
         var agents = await chatClient.GetOrderedAgentsAsync();
@@ -144,7 +145,7 @@ public class DelegationIntegrationTest : MonolithMeshTestBase
         agents.Should().Contain(a => a.Name == "Coordinator", "Coordinator agent should be loaded from .md file");
         agents.Should().Contain(a => a.Name == "Worker", "Worker agent should be loaded from .md file");
 
-        // Act: Send a message — Coordinator should delegate to Worker
+        // Act: Send a message â€” Coordinator should delegate to Worker
         var messages = new List<ChatMessage>
         {
             new(ChatRole.User, "What is the capital of France?")
@@ -214,7 +215,7 @@ public class DelegationIntegrationTest : MonolithMeshTestBase
 
     /// <summary>
     /// Verifies that the Worker's result (from its isolated thread) appears
-    /// as a FunctionResultContent in the Coordinator's thread — proving
+    /// as a FunctionResultContent in the Coordinator's thread â€” proving
     /// that Worker's thread is in the namespace of Coordinator's thread.
     /// </summary>
     [Fact(Timeout = 120_000)]
@@ -229,7 +230,7 @@ public class DelegationIntegrationTest : MonolithMeshTestBase
 
         // Arrange
         var chatClient = new AgentChatClient(Mesh.ServiceProvider);
-        await chatClient.InitializeAsync(null, "gpt-4o-mini");
+        await chatClient.Initialize(null, "gpt-4o-mini").WhenInitialized.FirstAsync().ToTask(TestContext.Current.CancellationToken);
 
         // Act
         var messages = new List<ChatMessage>
@@ -282,7 +283,7 @@ public class DelegationIntegrationTest : MonolithMeshTestBase
     /// Verifies that agents loaded from .md files are correctly parsed
     /// and have their delegation configurations set up.
     /// </summary>
-    [Fact(Timeout = 60_000)]
+    [Fact]
     public async Task AgentLoading_FromMarkdownFiles_ParsesDelegationsCorrectly()
     {
         var ghToken = Environment.GetEnvironmentVariable("GH_TOKEN");
@@ -294,7 +295,7 @@ public class DelegationIntegrationTest : MonolithMeshTestBase
 
         // Arrange & Act
         var chatClient = new AgentChatClient(Mesh.ServiceProvider);
-        await chatClient.InitializeAsync(null, "gpt-4o-mini");
+        await chatClient.Initialize(null, "gpt-4o-mini").WhenInitialized.FirstAsync().ToTask(TestContext.Current.CancellationToken);
 
         var agents = await chatClient.GetOrderedAgentsAsync();
 
@@ -305,7 +306,7 @@ public class DelegationIntegrationTest : MonolithMeshTestBase
         var coordinator = agents.FirstOrDefault(a => a.Name == "Coordinator");
         coordinator.Should().NotBeNull("Coordinator agent should be loaded");
         coordinator!.AgentConfiguration.Should().NotBeNull();
-        coordinator.AgentConfiguration!.Delegations.Should().NotBeNullOrEmpty(
+        coordinator.AgentConfiguration!.Delegations.Should().NotBeEmpty(
             "Coordinator should have delegations configured from .md front matter");
         coordinator.AgentConfiguration.Delegations!
             .Should().Contain(d => d.AgentPath == "Worker",

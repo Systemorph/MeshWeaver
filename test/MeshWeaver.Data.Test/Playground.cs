@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Text.Json;
-using FluentAssertions;
 using Json.Patch;
 using Json.Pointer;
 using Xunit;
@@ -50,7 +49,7 @@ public class Playground
         var altered = instance with { Value = 2 };
         var patch = instance.CreatePatch(altered);
         var applied = patch.Apply(instance);
-        applied.Should().BeEquivalentTo(altered);
+        applied.Should().BeEquivalentTo(altered, System.Text.Json.JsonSerializerOptions.Default);
     }
 
     /// <summary>

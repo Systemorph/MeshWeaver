@@ -7,6 +7,7 @@ using MeshWeaver.Hosting;
 using MeshWeaver.Hosting.Monolith;
 using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.DataProtection;
+using Microsoft.Extensions.DependencyInjection;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -20,6 +21,15 @@ var keysPath = Path.Combine(
 Directory.CreateDirectory(keysPath);
 builder.Services.AddDataProtection()
     .PersistKeysToFileSystem(new DirectoryInfo(keysPath));
+
+// NodeType compile cache: filesystem-backed in monolith (shared-blob isn't available
+// without an Azure account). Versioned entries under {LocalAppData}/Memex/assembly-cache
+// persist across restarts; cross-replica sharing isn't applicable here since the
+// monolith runs in a single process.
+var assemblyCachePath = Path.Combine(
+    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+    "Memex", "assembly-cache");
+builder.Services.AddFileSystemAssemblyStore(assemblyCachePath);
 
 // Add Aspire service defaults (health checks, OpenTelemetry, service discovery)
 builder.AddServiceDefaults();
@@ -44,7 +54,9 @@ builder.UseMeshWeaver(
         // Register storage collection at mesh level for static file serving (monolith only)
         if (storageConfig != null)
         {
-            storageConfig = storageConfig with { IsEditable = false, IsStatic = true, ExposeInChildren = false };
+            // Storage collection: read-only static backing store, hidden from children.
+            // IsEditable / ExposeInChildren default to false — leave unset.
+            storageConfig = storageConfig with { IsStatic = true };
             config.ConfigureHub(hub => hub.AddContentCollection(_ => storageConfig));
         }
 

@@ -1,5 +1,4 @@
 using System.Collections.Generic;
-using FluentAssertions;
 using MeshWeaver.Mesh;
 using Xunit;
 
@@ -133,7 +132,7 @@ public class QueryRoutingHintsTest
         };
 
         var config = new MeshConfiguration(
-            new Dictionary<string, MeshNode>(),
+            [],
             queryRoutingRules: rules);
 
         var parsed = _parser.Parse("nodeType:User");
@@ -165,7 +164,7 @@ public class QueryRoutingHintsTest
         };
 
         var config = new MeshConfiguration(
-            new Dictionary<string, MeshNode>(),
+            [],
             queryRoutingRules: rules);
 
         var parsed = _parser.Parse("namespace:Admin/_Access nodeType:AccessAssignment");
@@ -186,7 +185,7 @@ public class QueryRoutingHintsTest
         };
 
         var config = new MeshConfiguration(
-            new Dictionary<string, MeshNode>(),
+            [],
             queryRoutingRules: rules);
 
         var parsed = _parser.Parse("laptop"); // text search, no nodeType
@@ -199,7 +198,7 @@ public class QueryRoutingHintsTest
     [Fact]
     public void MeshConfiguration_ResolveRoutingHints_EmptyRules()
     {
-        var config = new MeshConfiguration(new Dictionary<string, MeshNode>());
+        var config = new MeshConfiguration([]);
 
         var parsed = _parser.Parse("nodeType:User");
         var hints = config.ResolveRoutingHints(parsed);

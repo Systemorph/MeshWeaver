@@ -6,8 +6,6 @@ using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
-using FluentAssertions;
-using FluentAssertions.Extensions;
 using MeshWeaver.Connection.Orleans;
 using MeshWeaver.Data;
 using MeshWeaver.Fixture;
@@ -28,10 +26,12 @@ using Xunit;
 
 namespace MeshWeaver.Hosting.Orleans.Test;
 
+// TODO: needs custom shared fixture â€” uses CommentSiloConfigurator with AddFileSystemPersistence(SamplesGraphData)
+// and a CommentClientConfigurator (custom client wiring), which the SharedOrleansFixture does not configure.
 /// <summary>
 /// Orleans integration test for CreateCommentRequest.
 /// Follows the same pattern as OrleansChatTest: GetRemoteStream for reactive verification,
-/// GetDataRequest for content verification — no QueryAsync.
+/// GetDataRequest for content verification â€” no QueryAsync.
 /// </summary>
 public class OrleansCommentTest(ITestOutputHelper output) : TestBase(output)
 {
@@ -47,19 +47,23 @@ public class OrleansCommentTest(ITestOutputHelper output) : TestBase(output)
     {
         await base.InitializeAsync();
         var builder = new TestClusterBuilder();
+        builder.Options.InitialSilosCount = 1;
         builder.AddSiloBuilderConfigurator<CommentSiloConfigurator>();
         builder.AddClientBuilderConfigurator<CommentClientConfigurator>();
         Cluster = builder.Build();
         await Cluster.DeployAsync();
+        // Seed a default System circuit identity so client-hub posts carry an
+        // identity (never-null AccessContext invariant). See OrleansTestIdentity.
+        OrleansTestIdentity.SeedDefaultIdentity(Cluster);
     }
 
-    private async Task<IMessageHub> GetClientAsync()
+    private IMessageHub GetClient()
     {
         var client = ClientMesh.ServiceProvider.CreateMessageHub(
             new Address("client", "comment-test"),
             config => config.AddLayoutClient());
-        await Cluster.Client.ServiceProvider.GetRequiredService<IRoutingService>()
-            .RegisterStreamAsync(client.Address, client.DeliverMessage);
+        Cluster.Client.ServiceProvider.GetRequiredService<IRoutingService>()
+            .RegisterStream(client.Address, client.DeliverMessage);
         return client;
     }
 
@@ -70,10 +74,10 @@ public class OrleansCommentTest(ITestOutputHelper output) : TestBase(output)
     private IObservable<string> ObserveMarkdownContent(IMessageHub client, string docPath)
     {
         var workspace = client.GetWorkspace();
-        return workspace.GetRemoteStream<MeshNode>(new Address(docPath))!
-            .Select(nodes =>
+        return workspace.GetMeshNodeStream(docPath)
+            .Select(node =>
             {
-                var node = nodes?.FirstOrDefault(n => n.Path == docPath);
+                
                 return (node?.Content as MarkdownContent)?.Content ?? "";
             });
     }
@@ -83,10 +87,8 @@ public class OrleansCommentTest(ITestOutputHelper output) : TestBase(output)
     /// </summary>
     private async Task<T?> GetHubContentAsync<T>(IMessageHub client, string path, CancellationToken ct) where T : class
     {
-        var nodeId = path.Contains('/') ? path[(path.LastIndexOf('/') + 1)..] : path;
-        var response = await client.AwaitResponse(
-            new GetDataRequest(new EntityReference(nameof(MeshNode), nodeId)),
-            o => o.WithTarget(new Address(path)), ct);
+        // Canonical CQRS-correct read via per-node MeshNodeReference reducer (not catalog lookup).
+        var response = await client.Observe(new GetDataRequest(new MeshNodeReference()), o => o.WithTarget(new Address(path))).FirstAsync().ToTask(ct);
         var node = response.Message.Data as MeshNode;
         if (node == null && response.Message.Data is JsonElement je)
             node = je.Deserialize<MeshNode>(ClientMesh.JsonSerializerOptions);
@@ -98,40 +100,38 @@ public class OrleansCommentTest(ITestOutputHelper output) : TestBase(output)
 
     /// <summary>
     /// Full end-to-end test through Orleans:
-    /// 0) Subscribe to markdown stream
+    /// 0) Activate the grain
     /// 1) Send CreateCommentRequest
     /// 2) Verify response
-    /// 3) Wait for markers to appear in markdown stream
-    /// 4) Verify comment node content via GetDataRequest
+    /// 3) Verify comment node carries the anchor (HighlightedText + Start/Length + Version)
+    /// 4) Verify the document text was NOT mutated (comments live on the satellite, not the doc)
     /// </summary>
     [Fact(Timeout = 60000)]
     public async Task CreateComment_ThroughOrleans()
     {
         var ct = new CancellationTokenSource(45.Seconds()).Token;
-        var client = await GetClientAsync();
+        var client = GetClient();
         var docAddress = new Address(DocPath);
 
         // Activate the grain
         Output.WriteLine("Pinging document grain...");
-        await client.AwaitResponse(new PingRequest(), o => o.WithTarget(docAddress), ct);
+        await client.Observe(new PingRequest(), o => o.WithTarget(docAddress)).FirstAsync().ToTask(ct);
         Output.WriteLine("Grain activated.");
 
         // 1) Send CreateCommentRequest
         Output.WriteLine("Sending CreateCommentRequest...");
-        var response = await client.AwaitResponse(
-            new CreateCommentRequest
+        var response = await client.Observe(new CreateCommentRequest
             {
                 DocumentId = DocPath,
                 SelectedText = "satellite entities",
                 CommentText = "Orleans integration test comment",
                 Author = "TestAuthor"
-            },
-            o => o.WithTarget(docAddress), ct);
+            }, o => o.WithTarget(docAddress)).FirstAsync().ToTask(ct);
 
-        // 2) Verify response (no deadlock — handler is non-blocking)
+        // 2) Verify response (no deadlock â€” handler is non-blocking)
         var commentResponse = response.Message as CreateCommentResponse;
-        commentResponse.Should().NotBeNull("Expected CreateCommentResponse, got {0}", response.Message?.GetType().Name);
-        commentResponse!.Success.Should().BeTrue("Error: {0}", commentResponse.Error);
+        commentResponse.Should().NotBeNull("Expected CreateCommentResponse, got {0}", response.Message?.GetType().Name ?? "(null)");
+        commentResponse!.Success.Should().BeTrue("Error: {0}", commentResponse.Error ?? "");
         commentResponse.MarkerId.Should().NotBeNullOrEmpty();
         Output.WriteLine($"Comment created: MarkerId={commentResponse.MarkerId}");
 
@@ -143,14 +143,18 @@ public class OrleansCommentTest(ITestOutputHelper output) : TestBase(output)
         comment.Author.Should().Be("TestAuthor");
         comment.MarkerId.Should().Be(commentResponse.MarkerId);
         comment.HighlightedText.Should().Be("satellite entities");
-        Output.WriteLine($"Comment node verified: {commentPath}");
+        comment.Start.Should().BeGreaterThanOrEqualTo(0, "the selection should anchor to a captured range");
+        comment.Length.Should().BeGreaterThan(0);
+        Output.WriteLine($"Comment node verified: {commentPath} anchored at {comment.Start}+{comment.Length} v{comment.Version}");
 
-        // 4) Verify markers in markdown via GetDataRequest on the doc node
+        // 4) The new comment must NOT be injected into the document text — it is anchored on the
+        //    satellite and the highlight is re-derived at render time. (The sample doc already
+        //    carries illustrative markers, so assert on OUR marker id specifically.)
         var mdContent = await GetHubContentAsync<MarkdownContent>(client, DocPath, ct);
         mdContent.Should().NotBeNull();
-        mdContent!.Content.Should().Contain($"<!--comment:{commentResponse.MarkerId}",
-            "Markers should be in the markdown content");
-        Output.WriteLine("Markdown markers verified via GetDataRequest.");
+        mdContent!.Content.Should().NotContain($"<!--comment:{commentResponse.MarkerId}",
+            "the new comment is anchored on the satellite, not injected into the document text");
+        Output.WriteLine("Document text confirmed un-mutated by the new comment via GetDataRequest.");
     }
 
     /// <summary>
@@ -160,27 +164,25 @@ public class OrleansCommentTest(ITestOutputHelper output) : TestBase(output)
     public async Task CreatePageLevelComment_ThroughOrleans()
     {
         var ct = new CancellationTokenSource(45.Seconds()).Token;
-        var client = await GetClientAsync();
+        var client = GetClient();
         var docAddress = new Address(DocPath);
 
         // Activate the grain
-        await client.AwaitResponse(new PingRequest(), o => o.WithTarget(docAddress), ct);
+        await client.Observe(new PingRequest(), o => o.WithTarget(docAddress)).FirstAsync().ToTask(ct);
 
         // Send page-level comment
         Output.WriteLine("Sending page-level CreateCommentRequest...");
-        var response = await client.AwaitResponse(
-            new CreateCommentRequest
+        var response = await client.Observe(new CreateCommentRequest
             {
                 DocumentId = DocPath,
                 SelectedText = "",
                 CommentText = "A page-level comment via Orleans",
                 Author = "TestAuthor"
-            },
-            o => o.WithTarget(docAddress), ct);
+            }, o => o.WithTarget(docAddress)).FirstAsync().ToTask(ct);
 
         var commentResponse = response.Message as CreateCommentResponse;
         commentResponse.Should().NotBeNull();
-        commentResponse!.Success.Should().BeTrue("Error: {0}", commentResponse.Error);
+        commentResponse!.Success.Should().BeTrue("Error: {0}", commentResponse.Error ?? "");
         Output.WriteLine($"Page-level comment created: MarkerId={commentResponse.MarkerId}");
 
         // Verify comment node via GetDataRequest
@@ -195,7 +197,7 @@ public class OrleansCommentTest(ITestOutputHelper output) : TestBase(output)
     public override async ValueTask DisposeAsync()
     {
         if (Cluster is not null)
-            await Cluster.DisposeAsync();
+            OrleansClusterDisposal.DisposeInBackground(Cluster);
         await base.DisposeAsync();
     }
 }

@@ -1,7 +1,6 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
-using FluentAssertions;
 using MeshWeaver.Kernel;
 using MeshWeaver.Messaging;
 using Xunit;
@@ -114,9 +113,9 @@ public class MarkdownViewLogicTest
 
         result.Should().NotBeNull();
         result!.Should().HaveCount(2);
-        result[0].Id.Should().Be("cell-1");
-        result[0].Code.Should().Be("var x = 1;");
-        result[1].Id.Should().Be("cell-2");
+        result![0].Id.Should().Be("cell-1");
+        result![0].Code.Should().Be("var x = 1;");
+        result![1].Id.Should().Be("cell-2");
     }
 
     [Fact]
@@ -189,7 +188,7 @@ public class MarkdownViewLogicTest
 
         result.CodeSubmissions.Should().NotBeNull();
         result.CodeSubmissions!.Should().HaveCount(1);
-        result.CodeSubmissions[0].Code.Should().Contain("var x = 1 + 2");
+        result.CodeSubmissions![0].Code.Should().Contain("var x = 1 + 2");
     }
 
     [Fact]
@@ -205,7 +204,7 @@ public class MarkdownViewLogicTest
 
         result.CodeSubmissions.Should().NotBeNull();
         result.CodeSubmissions!.Should().HaveCount(1);
-        result.CodeSubmissions[0].Id.Should().Be("my-area");
+        result.CodeSubmissions![0].Id.Should().Be("my-area");
     }
 
     [Fact]
@@ -222,6 +221,95 @@ public class MarkdownViewLogicTest
 
         result.CodeSubmissions.Should().BeNull(
             "bare fenced blocks are documentation-only by design — execution requires --execute or --render");
+    }
+
+    // ---------- Pipe tables across line endings ----------
+    // Regression for the 2026-06-13 "balance-sheet table renders as one inline line"
+    // report. A generator emitted rows with StringBuilder.AppendLine() (CRLF on
+    // Windows); the table arrived at the browser as inline text. The render pipeline
+    // must be robust to EITHER line ending, so we don't have to chase down every
+    // generator's AppendLine. These pin that contract.
+
+    // {0} = the row separator (LF or CRLF) spliced between every table line.
+    private const string PipeTableTemplate =
+        "| Position | 2024 | 2025 |{0}|---|---:|---:|{0}| Kassenmittel | 50.0 | 60.0 |{0}| Obligationen | 400.0 | 410.0 |{0}";
+
+    [Theory]
+    [InlineData("\n")]    // LF
+    [InlineData("\r\n")]  // CRLF — StringBuilder.AppendLine() on Windows
+    public void Render_PipeTable_WithRightAlignedSeparator_ProducesHtmlTable(string newline)
+    {
+        // The separator is `|---|---:|---:|` — the right-align `:` immediately before
+        // `|` is the case the ASCII-smiley parser used to turn into 😐, breaking the table.
+        var markdown = string.Format(PipeTableTemplate, newline);
+
+        var html = MarkdownViewLogic.Render(markdown, null, null).Html;
+
+        html.Should().Contain("<table",
+            "a right-aligned pipe table must render as a real <table> — the :| in the " +
+            "alignment delimiter must not be eaten by the smiley parser");
+        html.Should().Contain("Kassenmittel");
+        html.Should().NotContain("😐", "the alignment delimiter must not become an emoji");
+        html.Should().NotContain("| Kassenmittel |",
+            "the row must become table cells, not survive as a literal markdown pipe row");
+    }
+
+    [Fact]
+    public void Render_EmojiShortcode_StillConverts()
+    {
+        var html = MarkdownViewLogic.Render("Released :tada:", null, null).Html;
+        html.Should().Contain("🎉", "':shortcode:' emoji must still render");
+    }
+
+    // ---------- @@ area-embed resolution (the Space-welcome catalog) ----------
+    // A relative @@("area/Search") resolves ONLY when the renderer has a node path; without
+    // it the layout-area div has no address and renders dead. That's why MarkdownControl.NodePath
+    // exists and SpaceLayoutAreas sets it on the Space body (the body's stream owner is not a
+    // reliable node-path source). The absolute @@/{path}/area/Search resolves either way.
+
+    [Fact]
+    public void Render_RelativeAreaEmbed_ResolvesAgainstNodePath()
+    {
+        var html = MarkdownViewLogic.Render("@@(\"area/Search\")", null, "Acme").Html;
+        html.Should().Contain("data-address='Acme'",
+            "a relative @@ embed must resolve to an addressed layout area when a node path is supplied");
+        html.Should().Contain("data-area='Search'");
+    }
+
+    [Fact]
+    public void Render_RelativeAreaEmbed_WithoutNodePath_RendersUnaddressed()
+    {
+        // The bug: no context → no address → a dead layout-area div. This is exactly what the
+        // Space welcome produced before NodePath was threaded through.
+        var html = MarkdownViewLogic.Render("@@(\"area/Search\")", null, null).Html;
+        html.Should().NotContain("data-address=",
+            "without a node path the relative embed cannot resolve to an address");
+    }
+
+    [Fact]
+    public void Render_AbsoluteAreaEmbed_ResolvesWithoutNodePath()
+    {
+        var html = MarkdownViewLogic.Render("@@/Acme/area/Search", null, null).Html;
+        html.Should().Contain("data-address='Acme'", "the absolute form carries its own address");
+        html.Should().Contain("data-area='Search'");
+    }
+
+    [Fact]
+    public void Render_OrdinarySmiley_StillConverts()
+    {
+        // The fix keeps ASCII smileys — it only drops the pipe-bearing ones (:| , :-|).
+        var html = MarkdownViewLogic.Render("nice :)", null, null).Html;
+        html.Should().NotContain(":)", "ordinary ASCII smileys must still convert to an emoji");
+    }
+
+    [Fact]
+    public void Render_PipeBearingSmiley_StaysLiteral()
+    {
+        // `:|` is intentionally NOT converted — that conversion (→ 😐) is what corrupted
+        // table alignment delimiters. In plain text it simply stays literal.
+        var html = MarkdownViewLogic.Render("meh :| ok", null, null).Html;
+        html.Should().NotContain("😐", ":| must not become the neutral-face emoji anymore");
+        html.Should().Contain(":|", "the pipe-bearing smiley is left as literal text");
     }
 
     [Fact]
@@ -322,7 +410,8 @@ public class MarkdownViewLogicTest
 
         fromExtract.Should().NotBeNull();
         fromExtract!.Should().HaveCount(fromRender!.Count);
-        fromExtract.Select(s => s.Code).Should().BeEquivalentTo(fromRender.Select(s => s.Code));
+        fromExtract!.Select(s => s.Code).Should()
+            .BeEquivalentTo(fromRender!.Select(s => s.Code), JsonSerializerOptions.Default);
     }
 
     [Fact]
@@ -364,7 +453,7 @@ public class MarkdownViewLogicTest
 
         recovered.Should().NotBeNull();
         recovered!.Should().HaveCount(2);
-        recovered[0].Code.Should().Contain("var x = 1");
-        recovered[1].Id.Should().Be("my-area");
+        recovered![0].Code.Should().Contain("var x = 1");
+        recovered![1].Id.Should().Be("my-area");
     }
 }

@@ -11,6 +11,7 @@ namespace MeshWeaver.Graph;
 /// </summary>
 public static class WelcomeLayoutArea
 {
+    /// <summary>Area name for the Welcome layout area.</summary>
     public const string WelcomeArea = "Welcome";
 
     /// <summary>

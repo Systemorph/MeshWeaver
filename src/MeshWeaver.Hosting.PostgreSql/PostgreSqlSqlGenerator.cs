@@ -84,9 +84,30 @@ public class PostgreSqlSqlGenerator
 
     /// <summary>
     /// Maps a selector for ORDER BY (returns typed column or JSONB extraction).
+    /// <para>
+    /// Supports SQL-function call syntax — e.g. <c>length(path)</c>,
+    /// <c>lower(name)</c>. The function name is allow-listed (no arbitrary SQL
+    /// injection); the inner selector is mapped through the same column map as
+    /// bare selectors. The canonical use is the routing-layer
+    /// "longest-matching-prefix" lookup: <c>sort:length(path)-desc</c> picks
+    /// the deepest match in a single round-trip.
+    /// </para>
     /// </summary>
     private static string MapOrderBySelector(string selector)
     {
+        // Detect `func(arg)` syntax. Allow-listed functions only.
+        var openParen = selector.IndexOf('(');
+        if (openParen > 0 && selector.EndsWith(")"))
+        {
+            var funcName = selector[..openParen].Trim();
+            var argName = selector[(openParen + 1)..^1].Trim();
+            if (AllowedSqlFunctions.Contains(funcName))
+            {
+                var mappedArg = MapOrderBySelector(argName);
+                return $"{funcName.ToLowerInvariant()}({mappedArg})";
+            }
+        }
+
         if (PropertyMap.TryGetValue(selector, out var mapped))
             return mapped;
 
@@ -106,6 +127,23 @@ public class PostgreSqlSqlGenerator
         return $"n.content->>'{selector}'";
     }
 
+    /// <summary>
+    /// Allow-listed SQL functions usable in <c>sort:func(field)-desc</c>.
+    /// Tight allow-list — no arbitrary SQL in the sort selector.
+    /// </summary>
+    private static readonly HashSet<string> AllowedSqlFunctions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "length", "lower", "upper"
+    };
+
+    /// <summary>
+    /// Builds the <c>WHERE</c> clause (with bound parameters) for a parsed query, combining
+    /// filter, text search, access control, main-node, excluded-node-type, and active-state predicates.
+    /// </summary>
+    /// <param name="query">The parsed query whose filter/text/scope predicates are translated.</param>
+    /// <param name="userId">Optional user id used to add the access-control predicate; omit for system/unfiltered access.</param>
+    /// <param name="excludedNodeTypes">Optional node types to exclude (e.g. hidden from a given context).</param>
+    /// <returns>The <c>WHERE</c> clause text (empty when no predicates) and the bound parameter map.</returns>
     public (string WhereClause, Dictionary<string, object> Parameters) GenerateWhereClause(
         ParsedQuery query, string? userId = null, IReadOnlyCollection<string>? excludedNodeTypes = null)
     {
@@ -163,26 +201,48 @@ public class PostgreSqlSqlGenerator
         return (whereClause, new Dictionary<string, object>(_parameters));
     }
 
+    /// <summary>
+    /// Builds a complete <c>SELECT</c> statement (columns, optional activity/user-activity joins,
+    /// scope, order, and limit) for a parsed query, with bound parameters.
+    /// </summary>
+    /// <param name="query">The parsed query to translate.</param>
+    /// <param name="userId">Optional user id for the access-control predicate.</param>
+    /// <param name="activityUserId">Optional user id used to join the user-activity satellite for <c>source:accessed</c> queries.</param>
+    /// <param name="tableName">Primary table to select from; defaults to <c>mesh_nodes</c>.</param>
+    /// <param name="activityTable">Activity satellite table joined for <c>source:activity</c> queries.</param>
+    /// <param name="userActivityTable">User-activity satellite table joined for <c>source:accessed</c> queries.</param>
+    /// <param name="excludedNodeTypes">Optional node types to exclude from results.</param>
+    /// <param name="includeContent">When false, projects <c>NULL::jsonb</c> for content to avoid fetching large blobs.</param>
+    /// <returns>The SQL statement text and the bound parameter map.</returns>
     public (string Sql, Dictionary<string, object> Parameters) GenerateSelectQuery(
         ParsedQuery query, string? userId = null, string? activityUserId = null,
         string tableName = "mesh_nodes",
         string activityTable = "activities",
         string userActivityTable = "user_activities",
-        IReadOnlyCollection<string>? excludedNodeTypes = null)
+        IReadOnlyCollection<string>? excludedNodeTypes = null,
+        bool includeContent = true)
     {
         var (whereClause, parameters) = GenerateWhereClause(query, userId, excludedNodeTypes);
 
         var isAccessedQuery = query.Source == QuerySource.Accessed && !string.IsNullOrEmpty(activityUserId);
         var isActivityQuery = query.Source == QuerySource.Activity;
 
+        // n.content is a JSONB column that can be many KB. When the caller projects via
+        // `select:` and didn't ask for "content", emit NULL::jsonb AS content so the
+        // result-set shape is unchanged (ReadMeshNode still finds the column) but the
+        // planner avoids the heap fetch + de-tuple of large blobs.
+        var contentColumn = includeContent ? "n.content" : "NULL::jsonb AS content";
+
         var sql = new StringBuilder("SELECT n.id, n.namespace, n.name, n.node_type, n.description, " +
-            "n.category, n.icon, n.display_order, n.last_modified, n.version, n.state, n.content, " +
+            $"n.category, n.icon, n.display_order, n.last_modified, n.version, n.state, {contentColumn}, " +
             $"n.desired_id, n.main_node FROM {tableName} n");
 
         if (isAccessedQuery)
         {
-            // JOIN with UserActivity nodes stored in the user_activities satellite table
-            parameters["@actUserNs"] = $"User/{activityUserId}/_UserActivity";
+            // JOIN with UserActivity nodes stored in the user_activities
+            // satellite table — they live under {userId}/_UserActivity per the
+            // post-v10 per-user partition layout.
+            parameters["@actUserNs"] = $"{activityUserId}/_UserActivity";
             sql.Append($" INNER JOIN {userActivityTable} ua ON ua.namespace = @actUserNs" +
                         " AND ua.node_type = 'UserActivity'" +
                         " AND REPLACE(n.path, '/', '_') = ua.id");
@@ -220,6 +280,26 @@ public class PostgreSqlSqlGenerator
             var direction = query.OrderBy.Descending ? "DESC" : "ASC";
             sql.Append($" ORDER BY {MapOrderBySelector(query.OrderBy.Property)} {direction}");
         }
+        else if (!string.IsNullOrEmpty(query.TextSearch))
+        {
+            // PG-side relevance parity with GenerateCrossSchemaSelectQuery (#20): rank by a
+            // hybrid score so the LIMIT keeps the most-RELEVANT rows, not arbitrary heap order
+            // (a relevant row could otherwise fall outside the LIMIT before any C#-side
+            // ComputeRowScores re-rank ever sees it). Same ladder: exact name > name-prefix >
+            // id-prefix > name-substring > id-substring > description-substring. An explicit
+            // OrderBy (handled above) supersedes. Single-schema keeps the `n` alias (no UNION
+            // wrap) and parameterises the term (unlike the inlined cross-schema generator).
+            parameters["@scoreText"] = query.TextSearch;
+            sql.Append(
+                " ORDER BY (CASE " +
+                "WHEN LOWER(COALESCE(n.name,'')) = LOWER(@scoreText) THEN 1000 " +
+                "WHEN LOWER(COALESCE(n.name,'')) LIKE LOWER(@scoreText) || '%' THEN 600 " +
+                "WHEN LOWER(COALESCE(n.id,'')) LIKE LOWER(@scoreText) || '%' THEN 500 " +
+                "WHEN LOWER(COALESCE(n.name,'')) LIKE '%' || LOWER(@scoreText) || '%' THEN 300 " +
+                "WHEN LOWER(COALESCE(n.id,'')) LIKE '%' || LOWER(@scoreText) || '%' THEN 200 " +
+                "WHEN LOWER(COALESCE(n.description,'')) LIKE '%' || LOWER(@scoreText) || '%' THEN 100 " +
+                "ELSE 0 END) DESC, n.last_modified DESC NULLS LAST");
+        }
 
         if (query.Limit.HasValue)
             sql.Append($" LIMIT {query.Limit.Value}");
@@ -227,8 +307,49 @@ public class PostgreSqlSqlGenerator
         return (sql.ToString(), parameters);
     }
 
+    /// <summary>
+    /// Multi-path overload — emits <c>n.path IN (@p0, @p1, ...)</c> for the
+    /// <see cref="QueryScope.Exact"/> + multi-value <c>path:a|b|c</c> case
+    /// (canonical use: routing-layer "longest-matching-prefix" lookup with
+    /// <c>sort:pathLength-desc limit:1</c>). Other scopes / single-path values
+    /// fall through to the single-path overload.
+    /// </summary>
     public (string Clause, Dictionary<string, object> Parameters) GenerateScopeClause(
-        string? basePath, QueryScope scope)
+        IReadOnlyList<string>? paths, QueryScope scope, bool useMainNode = false, string? qualifiedTable = null)
+    {
+        if (paths == null || paths.Count <= 1)
+            return GenerateScopeClause(paths is { Count: 1 } ? paths[0] : null, scope, useMainNode, qualifiedTable);
+
+        // Only Exact scope supports multi-path push-down today. Subtree/Children/etc.
+        // would require OR-ing N LIKE clauses — caller can either emit those itself
+        // or stick to single-path for non-Exact scopes.
+        if (scope != QueryScope.Exact)
+            return GenerateScopeClause(paths[0], scope, useMainNode, qualifiedTable);
+
+        var parameters = new Dictionary<string, object>();
+        var paramNames = new List<string>(paths.Count);
+        for (var i = 0; i < paths.Count; i++)
+        {
+            var name = $"@scopePath{i}";
+            paramNames.Add(name);
+            parameters[name] = paths[i].Trim('/');
+        }
+        var column = useMainNode ? "n.main_node" : "n.path";
+        var clause = $"{column} IN ({string.Join(", ", paramNames)})";
+        return (clause, parameters);
+    }
+
+    /// <summary>
+    /// Builds the path-scoping predicate (with bound parameters) for a single base path and
+    /// <paramref name="scope"/> — exact, children, or subtree matching against the path or main-node column.
+    /// </summary>
+    /// <param name="basePath">The base path to scope to; <c>null</c> yields an empty clause.</param>
+    /// <param name="scope">How <paramref name="basePath"/> is matched (exact, children, subtree, etc.).</param>
+    /// <param name="useMainNode">When true, scopes against <c>n.main_node</c> instead of <c>n.path</c>.</param>
+    /// <param name="qualifiedTable">Optional schema-qualified table alias to use instead of the default.</param>
+    /// <returns>The scope clause text (empty when no base path) and the bound parameter map.</returns>
+    public (string Clause, Dictionary<string, object> Parameters) GenerateScopeClause(
+        string? basePath, QueryScope scope, bool useMainNode = false, string? qualifiedTable = null)
     {
         var parameters = new Dictionary<string, object>();
 
@@ -237,55 +358,240 @@ public class PostgreSqlSqlGenerator
 
         var normalizedPath = basePath.Trim('/');
 
+        // For satellite-table queries, the scope filter targets `main_node` (the
+        // path of the parent the satellite is attached to) instead of `namespace`
+        // / `path`, because satellite namespaces include the satellite suffix
+        // (e.g. "OrgAlpha/_Thread") while the user's `namespace:X` qualifier
+        // expresses an attachment-scoped predicate ("satellites attached to
+        // nodes within X"). Children semantics (the default for `namespace:X`)
+        // therefore map to Subtree-on-main_node — a thread at
+        // `Org/doc/_Thread` with `main_node=Org/doc` is conceptually "in Org"
+        // for partition-fan-out purposes.
         var clause = scope switch
         {
-            QueryScope.Exact => GenerateExactClause(normalizedPath, parameters),
-            QueryScope.Children => GenerateChildrenClause(normalizedPath, parameters),
-            QueryScope.Descendants => GenerateDescendantsClause(normalizedPath, parameters),
-            QueryScope.Subtree => GenerateSubtreeClause(normalizedPath, parameters),
+            QueryScope.Exact => useMainNode
+                ? GenerateMainNodeExactClause(normalizedPath, parameters)
+                : GenerateExactClause(normalizedPath, parameters),
+            QueryScope.Children => useMainNode
+                ? GenerateMainNodeSubtreeClause(normalizedPath, parameters)
+                : GenerateChildrenClause(normalizedPath, parameters),
+            QueryScope.Descendants => useMainNode
+                ? GenerateMainNodeDescendantsClause(normalizedPath, parameters)
+                : GenerateDescendantsClause(normalizedPath, parameters),
+            QueryScope.Subtree => useMainNode
+                ? GenerateMainNodeSubtreeClause(normalizedPath, parameters)
+                : GenerateSubtreeClause(normalizedPath, parameters),
             QueryScope.Ancestors => GenerateAncestorsClause(normalizedPath, parameters),
             QueryScope.AncestorsAndSelf => GenerateAncestorsAndSelfClause(normalizedPath, parameters),
             QueryScope.Hierarchy => GenerateHierarchyClause(normalizedPath, parameters),
+            // NextLevel = the populated frontier: descendants with no nearer active ancestor.
+            // Satellite (useMainNode) navigation isn't a thing — degrade to the main-node subtree.
+            QueryScope.NextLevel => useMainNode
+                ? GenerateMainNodeSubtreeClause(normalizedPath, parameters)
+                : GenerateNextLevelClause(normalizedPath, qualifiedTable, parameters),
             _ => ""
         };
 
         return (clause, parameters);
     }
 
+    private static string GenerateMainNodeExactClause(string path, Dictionary<string, object> parameters)
+    {
+        parameters["@scopeMain"] = path;
+        return "n.main_node = @scopeMain";
+    }
+
+    private static string GenerateMainNodeDescendantsClause(string path, Dictionary<string, object> parameters)
+    {
+        parameters["@scopeMainPrefix"] = $"{path}/";
+        return "n.main_node LIKE @scopeMainPrefix || '%'";
+    }
+
+    private static string GenerateMainNodeSubtreeClause(string path, Dictionary<string, object> parameters)
+    {
+        parameters["@scopeMain"] = path;
+        parameters["@scopeMainPrefix"] = $"{path}/";
+        return "(n.main_node = @scopeMain OR n.main_node LIKE @scopeMainPrefix || '%')";
+    }
+
     /// <summary>
     /// Generates a UNION ALL query across multiple schemas.
     /// Each schema gets the same WHERE clause but different schema-qualified table names.
+    ///
+    /// <para><paramref name="activityUserId"/> opts into the
+    /// <c>source:activity</c> / <c>source:accessed</c> JOIN form: for activity,
+    /// each schema's branch INNER JOINs <c>{schema}.activities</c> on
+    /// <c>main_node = n.path</c>; for accessed, it JOINs
+    /// <c>{schema}.user_activities</c> by the user's namespace. <c>is:main</c>
+    /// is implied (<c>n.main_node = n.path</c>) and the default sort becomes
+    /// the joined satellite's <c>last_modified</c> so activity-recency
+    /// ordering survives the UNION.</para>
+    ///
+    /// <para><paramref name="contentSchemas"/> folds indexed content into the SAME omnibox UNION: for a
+    /// FREE-TEXT query (a non-empty <see cref="ParsedQuery.TextSearch"/>) ONLY, each content schema adds
+    /// a branch that lexically matches <c>{schema}.content_chunks.chunk_text</c> and projects each file's
+    /// best chunk to its synthetic <c>Document</c> row (path slug, <c>_Documents</c> namespace — replicates
+    /// <c>DocumentPaths.For/Slug</c>; see <see cref="SlugSql"/>). Pure structured queries skip it, and an
+    /// empty list adds nothing.</para>
     /// </summary>
     public (string Sql, Dictionary<string, object> Parameters) GenerateCrossSchemaSelectQuery(
         ParsedQuery query,
         IReadOnlyList<string> schemas,
         string? userId = null,
-        string tableName = "mesh_nodes")
+        string tableName = "mesh_nodes",
+        string? activityUserId = null,
+        IReadOnlyList<string>? contentSchemas = null)
     {
-        // Don't pass userId to GenerateWhereClause — access control is handled per-schema
-        // by BuildPerSchemaAccessClause with properly schema-qualified table names.
-        // GenerateWhereClause would add unqualified UEP references that resolve to public schema.
         var (whereClause, parameters) = GenerateWhereClause(query);
+        var whereCore = whereClause.StartsWith("WHERE ", StringComparison.Ordinal)
+            ? whereClause[6..]
+            : whereClause;
+
+        // Push-down for the routing-layer `path:a|b|c` form (PathResolutionService
+        // emits this to fetch every ancestor in one query and pick the longest
+        // by `sort:length(path)-desc limit:1`). Without an IN-list filter, the
+        // cross-schema UNION returns EVERY row in the satellite table, the outer
+        // ORDER BY picks whichever row has the longest path, and the resolver
+        // surfaces a sibling instead of the requested node. Single-schema
+        // queries don't hit this because PostgreSqlStorageAdapter.QueryAsyncInternal
+        // post-injects the IN clause; cross-schema needs the same treatment.
+        // Repro: ThreadUrlResolutionTest.ResolvePath_SatelliteByFullPath for
+        // _Access (auto-grant + user grant) failed pre-fix.
+        if (query.Paths is { Count: > 1 } && query.Scope == QueryScope.Exact)
+        {
+            var paramNames = new List<string>(query.Paths.Count);
+            for (var i = 0; i < query.Paths.Count; i++)
+            {
+                var name = $"@xspath{i}";
+                paramNames.Add(name);
+                parameters[name] = query.Paths[i].Trim('/');
+            }
+            var pathInClause = $"n.path IN ({string.Join(", ", paramNames)})";
+            whereCore = string.IsNullOrEmpty(whereCore)
+                ? pathInClause
+                : $"{pathInClause} AND {whereCore}";
+        }
+        else if (query.Paths is null or { Count: <= 1 }
+                 && !string.IsNullOrEmpty(query.Path)
+                 && query.Scope == QueryScope.Exact
+                 && !query.Path.Contains('*'))
+        {
+            // Single-path exact form goes through the same routing surface
+            // (PathResolutionService also fires path:X for trivial requests).
+            // Same logic — pin the satellite UNION to that one path.
+            parameters["@xspath0"] = query.Path.Trim('/');
+            var pathEqClause = "n.path = @xspath0";
+            whereCore = string.IsNullOrEmpty(whereCore)
+                ? pathEqClause
+                : $"{pathEqClause} AND {whereCore}";
+        }
+        else if (query.Paths is null or { Count: <= 1 }
+                 && !string.IsNullOrEmpty(query.Path)
+                 && query.Scope != QueryScope.Exact
+                 && !query.Path.Contains('*'))
+        {
+            // Subtree / Children / Descendants / Hierarchy / AncestorsAndSelf —
+            // same class of bug as the Exact branch above, just one level out.
+            // Without this push-down the cross-schema UNION returns every row
+            // in the satellite table; the per-schema PostgreSqlStorageAdapter
+            // path applies the scope clause via GenerateScopeClause but the
+            // cross-schema path (engaged whenever ResolveTable != "mesh_nodes",
+            // i.e. any namespace ending in a satellite segment like /Source
+            // or any nodeType-routed satellite) did not.
+            // Repro: SqlGeneratorTests.GenerateCrossSchemaSelectQuery_NamespaceSubtree_PushesDownPathFilter.
+            // Prod symptom: namespace:Systemorph/EventCalendar/Source scope:subtree
+            // nodeType:Code returned 47 Code rows across the whole Systemorph
+            // partition (SocialMedia/, Post/, FutuRe/Pricing/, Event/, …)
+            // instead of just the EventCalendar/Source subtree, breaking
+            // NodeType compile of every page backed by EventCalendar.
+            var (scopeClause, scopeParams) = GenerateScopeClause(query.Path, query.Scope);
+            if (!string.IsNullOrEmpty(scopeClause))
+            {
+                whereCore = string.IsNullOrEmpty(whereCore)
+                    ? scopeClause
+                    : $"{scopeClause} AND {whereCore}";
+                foreach (var (k, v) in scopeParams)
+                    parameters[k] = v;
+            }
+        }
+
+        var isActivity = query.Source == QuerySource.Activity;
+        var isAccessed = query.Source == QuerySource.Accessed && !string.IsNullOrEmpty(activityUserId);
+
+        if (isAccessed)
+            parameters["@actUserNs"] = $"{activityUserId}/_UserActivity";
 
         var parts = new List<string>();
         foreach (var schema in schemas)
         {
             var qualifiedTable = $"\"{schema}\".\"{tableName}\"";
+            var activityTable = $"\"{schema}\".\"activities\"";
+            var userActivityTable = $"\"{schema}\".\"user_activities\"";
             var uepTable = $"\"{schema}\".\"user_effective_permissions\"";
             var ntpTable = $"\"{schema}\".\"node_type_permissions\"";
 
+            // For source:activity, project the JOINed activity's last_modified into
+            // the same column slot so the outer ORDER BY ranks rows by activity recency.
+            // For source:accessed, project the UserActivity row's last_modified the same way.
+            // For plain queries, n.last_modified is fine.
+            var lastModifiedExpr = isActivity ? "act.last_modified" : (isAccessed ? "ua.last_modified" : "n.last_modified");
+
             var selectSql = "SELECT n.id, n.namespace, n.name, n.node_type, n.description, " +
-                "n.category, n.icon, n.display_order, n.last_modified, n.version, n.state, n.content, " +
+                $"n.category, n.icon, n.display_order, {lastModifiedExpr} AS last_modified, " +
+                "n.version, n.state, n.content, " +
                 $"n.desired_id, n.main_node FROM {qualifiedTable} n";
 
-            // Build per-schema access control inline (can't use the instance SchemaName for multi-schema)
-            var accessClause = BuildPerSchemaAccessClause(userId, schema, uepTable, ntpTable, parameters);
+            if (isAccessed)
+                selectSql += $" INNER JOIN {userActivityTable} ua ON ua.namespace = @actUserNs" +
+                             " AND ua.node_type = 'UserActivity'" +
+                             " AND REPLACE(n.path, '/', '_') = ua.id";
+            else if (isActivity)
+                selectSql += $" INNER JOIN {activityTable} act ON act.main_node = n.path" +
+                             " AND act.node_type = 'Activity'";
 
-            var fullWhere = string.IsNullOrEmpty(whereClause)
-                ? (string.IsNullOrEmpty(accessClause) ? "" : $"WHERE {accessClause}")
-                : (string.IsNullOrEmpty(accessClause) ? whereClause : $"{whereClause} AND {accessClause}");
+            var accessClause = BuildPerSchemaAccessClause(userId, schema, uepTable, ntpTable, parameters);
+            var mainNodeFilter = (isActivity || isAccessed) ? "n.main_node = n.path" : null;
+
+            var clauses = new List<string>();
+            if (!string.IsNullOrEmpty(whereCore)) clauses.Add(whereCore);
+            if (mainNodeFilter is not null) clauses.Add(mainNodeFilter);
+            if (!string.IsNullOrEmpty(accessClause)) clauses.Add(accessClause);
+            var fullWhere = clauses.Count == 0 ? "" : "WHERE " + string.Join(" AND ", clauses);
 
             parts.Add($"{selectSql} {fullWhere}");
+        }
+
+        // Content branches — only for a FREE-TEXT omnibox query, and only over schemas that hold a
+        // content_chunks table. Each branch lexically matches the chunk text and projects each file's
+        // best chunk to its synthetic Document row (slug + _Documents namespace — replicates
+        // DocumentPaths.For/Slug; see SlugSql). The 14 projected columns align positionally with the
+        // mesh_nodes branches above so the outer SELECT * / ReadMeshNode shape is uniform; the term is
+        // inlined (this generator inlines all params) and single-quotes doubled, mirroring the
+        // mesh_nodes text-rank term handling below.
+        if (contentSchemas is { Count: > 0 } && !string.IsNullOrEmpty(query.TextSearch))
+        {
+            var term = query.TextSearch.Replace("'", "''");
+            foreach (var schema in contentSchemas)
+            {
+                var contentTable = $"\"{schema}\".\"content_chunks\"";
+                parts.Add(
+                    // Parenthesized so DISTINCT ON's required trailing ORDER BY stays scoped to THIS
+                    // arm — an unparenthesized ORDER BY binds to the whole UNION ALL and puts `cc` out
+                    // of scope (42P01 'missing FROM-clause entry for table cc'), silently swallowed.
+                    "(SELECT DISTINCT ON (cc.collection_path, cc.file_path) " +
+                    $"{SlugSql} AS id, " +
+                    "cc.collection_path || '/_Documents' AS namespace, " +
+                    "regexp_replace(cc.file_path, '^.*[\\\\/]', '') AS name, " +
+                    "'Document' AS node_type, " +
+                    "left(regexp_replace(cc.chunk_text, '\\s+', ' ', 'g'), 200) AS description, " +
+                    "NULL::text AS category, NULL::text AS icon, NULL::int AS display_order, " +
+                    "cc.last_modified AS last_modified, 0::bigint AS version, 2::smallint AS state, " +
+                    "NULL::jsonb AS content, NULL::text AS desired_id, " +
+                    $"cc.collection_path || '/_Documents/' || {SlugSql} AS main_node " +
+                    $"FROM {contentTable} cc WHERE cc.chunk_text ILIKE '%{term}%' " +
+                    // DISTINCT ON requires its keys lead the ORDER BY; keep one (best) row per file.
+                    "ORDER BY cc.collection_path, cc.file_path)");
+            }
         }
 
         var sql = string.Join(" UNION ALL ", parts);
@@ -296,6 +602,31 @@ public class PostgreSqlSqlGenerator
             // Strip "n." prefix — the outer query uses alias "combined", not "n"
             var orderCol = MapOrderBySelector(query.OrderBy.Property).Replace("n.", "");
             sql = $"SELECT * FROM ({sql}) combined ORDER BY {orderCol} {direction}";
+        }
+        else if (isActivity || isAccessed)
+        {
+            // Activity / accessed default ordering: satellite's last_modified DESC.
+            // We projected the joined timestamp into the last_modified column slot above,
+            // so a plain column reference is enough.
+            sql = $"SELECT * FROM ({sql}) combined ORDER BY last_modified DESC NULLS LAST";
+        }
+        else if (!string.IsNullOrEmpty(query.TextSearch))
+        {
+            // #20 PG-side relevance: rank by a hybrid score so the LIMIT keeps the most-RELEVANT
+            // rows, not arbitrary heap order (where a relevant row could fall outside the LIMIT
+            // and the C# merge never sees it — a relevance bug). Score: exact name > name-prefix
+            // > id-prefix > name-substring > id-substring > description-substring. Sort by score
+            // DESC, NOT alphabetically; an explicit OrderBy (handled above) supersedes. Term
+            // inlined (this generator inlines params); single-quotes doubled for safety.
+            var t = query.TextSearch.Replace("'", "''");
+            sql = $"SELECT * FROM ({sql}) combined ORDER BY (CASE " +
+                $"WHEN LOWER(COALESCE(name,'')) = LOWER('{t}') THEN 1000 " +
+                $"WHEN LOWER(COALESCE(name,'')) LIKE LOWER('{t}') || '%' THEN 600 " +
+                $"WHEN LOWER(COALESCE(id,'')) LIKE LOWER('{t}') || '%' THEN 500 " +
+                $"WHEN LOWER(COALESCE(name,'')) LIKE '%' || LOWER('{t}') || '%' THEN 300 " +
+                $"WHEN LOWER(COALESCE(id,'')) LIKE '%' || LOWER('{t}') || '%' THEN 200 " +
+                $"WHEN LOWER(COALESCE(description,'')) LIKE '%' || LOWER('{t}') || '%' THEN 100 " +
+                "ELSE 0 END) DESC, last_modified DESC NULLS LAST";
         }
 
         if (query.Limit.HasValue)
@@ -340,21 +671,65 @@ public class PostgreSqlSqlGenerator
         return $"({partitionAccessExists} AND ({nodeAccess}))";
     }
 
+    /// <summary>
+    /// SQL that replicates <c>DocumentPaths.Slug</c> (MeshWeaver.ContentCollections.Indexing) for a
+    /// <c>content_chunks.file_path</c>: keep <c>[A-Za-z0-9._-]</c> verbatim, collapse every other run to
+    /// a single <c>-</c>, trim leading/trailing <c>-</c>, and fall back to <c>'document'</c> when empty.
+    /// The C# <c>DocumentPaths.Slug</c> is the source of truth — this SQL MUST stay in lock-step with it
+    /// (that's why this generator is referenced from the Graph-side wiring's doc comment).
+    /// </summary>
+    private const string SlugSql =
+        "COALESCE(NULLIF(regexp_replace(regexp_replace(trim(cc.file_path), '[^A-Za-z0-9._-]+', '-', 'g'), '^-+|-+$', '', 'g'), ''), 'document')";
+
+    /// <summary>
+    /// Builds a vector-similarity <c>SELECT</c> (HNSW cosine distance against <paramref name="queryVector"/>),
+    /// optionally folding in a lexical term and indexed content chunks, with access control and an optional
+    /// namespace-prefix scope. Returns the top <paramref name="topK"/> matches.
+    /// </summary>
+    /// <param name="filterQuery">Optional parsed query providing additional structured predicates.</param>
+    /// <param name="queryVector">The embedding vector to rank candidates against.</param>
+    /// <param name="userId">Optional user id for the access-control predicate.</param>
+    /// <param name="topK">Maximum number of nearest matches to return.</param>
+    /// <param name="lexicalTerm">Optional lexical term blended into the ranking alongside vector similarity.</param>
+    /// <param name="namespacePath">Optional namespace prefix to scope the search to a partition subtree.</param>
+    /// <param name="includeContentChunks">When true, also ranks indexed content chunks and projects them to their owning document.</param>
+    /// <returns>The SQL statement text and the bound parameter map.</returns>
     public (string Sql, Dictionary<string, object> Parameters) GenerateVectorSearchQuery(
         ParsedQuery? filterQuery,
         float[] queryVector,
         string? userId = null,
-        int topK = 10)
+        int topK = 10,
+        string? lexicalTerm = null,
+        string? namespacePath = null,
+        bool includeContentChunks = false)
     {
-        var parameters = new Dictionary<string, object>();
+        var parameters = new Dictionary<string, object> { ["@queryVector"] = new Vector(queryVector) };
 
+        // Namespace-prefix predicate — applied PER BRANCH inside the generator (not post-injected by a
+        // string Replace("WHERE", …) downstream, which would corrupt a UNION's two WHERE keywords).
+        var hasNamespace = !string.IsNullOrEmpty(namespacePath);
+        if (hasNamespace)
+            parameters["@nsPrefix"] = $"{namespacePath!.Trim('/')}/";
+
+        // 🔀 HYBRID recall: when the user typed a term, a row is eligible if it has an embedding
+        // (semantic neighbour) OR it lexically matches the term on name/id/description — so turning on
+        // an embedding provider NEVER hides un-embedded content that is still findable lexically (the
+        // "existing content vanishes from search until re-embedded" trap). Pure-semantic queries (no
+        // term) keep the embedding-only filter. The lexical tier in the ORDER BY then ranks exact/prefix
+        // name matches ahead of pure-semantic neighbours, with NULL cosine distance sorting last.
+        var hasLex = !string.IsNullOrEmpty(lexicalTerm);
+        if (hasLex) parameters["@lexTerm"] = lexicalTerm!;
+        const string lexMatch =
+            "LOWER(COALESCE(n.name,'')) LIKE '%' || LOWER(@lexTerm) || '%' " +
+            "OR LOWER(COALESCE(n.id,'')) LIKE '%' || LOWER(@lexTerm) || '%' " +
+            "OR LOWER(COALESCE(n.description,'')) LIKE '%' || LOWER(@lexTerm) || '%'";
+
+        // ── Branch 1: existing mesh nodes (real embeddings on mesh_nodes) ──
         var meshTable = QualifyTable("mesh_nodes");
-        var sql = new StringBuilder(
-            "SELECT n.id, n.namespace, n.name, n.node_type, n.description, " +
-            "n.category, n.icon, n.display_order, n.last_modified, n.version, n.state, n.content, " +
-            $"n.desired_id FROM {meshTable} n");
-
-        var clauses = new List<string> { "n.embedding IS NOT NULL" };
+        var meshClauses = new List<string>
+        {
+            hasLex ? $"(n.embedding IS NOT NULL OR {lexMatch})" : "n.embedding IS NOT NULL"
+        };
 
         if (filterQuery != null)
         {
@@ -362,25 +737,86 @@ public class PostgreSqlSqlGenerator
             if (!string.IsNullOrEmpty(whereClause))
             {
                 // Strip "WHERE " prefix since we're building our own WHERE
-                clauses.Add(whereClause[6..]);
+                meshClauses.Add(whereClause[6..]);
                 foreach (var (k, v) in filterParams)
                     parameters[k] = v;
             }
         }
         else if (!string.IsNullOrEmpty(userId))
         {
-            clauses.Add(GenerateAccessControlClause(userId));
-            parameters = new Dictionary<string, object>(_parameters);
+            meshClauses.Add(GenerateAccessControlClause(userId));
+            foreach (var (k, v) in _parameters)
+                parameters[k] = v;
         }
 
-        sql.Append(" WHERE ");
-        sql.Append(string.Join(" AND ", clauses));
+        if (hasNamespace)
+            meshClauses.Add("n.path LIKE @nsPrefix || '%'");
 
-        parameters["@queryVector"] = new Vector(queryVector);
-        sql.Append(" ORDER BY n.embedding <=> @queryVector");
-        sql.Append($" LIMIT {topK}");
+        var branch1 = new StringBuilder(
+            "SELECT n.id, n.namespace, n.name, n.node_type, n.description, " +
+            "n.category, n.icon, n.display_order, n.last_modified, n.version, n.state, n.content, " +
+            $"n.desired_id, n.main_node, (n.embedding <=> @queryVector) AS _distance FROM {meshTable} n WHERE ");
+        branch1.Append(string.Join(" AND ", meshClauses));
 
-        return (sql.ToString(), parameters);
+        // No content branch → keep the original single-branch shape (cosine, or lexical-tier+cosine).
+        if (!includeContentChunks)
+        {
+            // Hybrid rank: when a lexical term is present, lexical exact/prefix matches outrank
+            // pure semantic neighbours and cosine distance breaks ties WITHIN a tier. A user
+            // typing an exact node name must get it first even if another node is semantically
+            // closer — without the tier, HNSW order could bury the exact match past the LIMIT.
+            // No term (pure semantic search) → cosine only, unchanged.
+            if (!string.IsNullOrEmpty(lexicalTerm))
+            {
+                parameters["@lexTerm"] = lexicalTerm;
+                branch1.Append(
+                    " ORDER BY (CASE " +
+                    "WHEN LOWER(COALESCE(n.name,'')) = LOWER(@lexTerm) THEN 0 " +
+                    "WHEN LOWER(COALESCE(n.name,'')) LIKE LOWER(@lexTerm) || '%' THEN 1 " +
+                    "WHEN LOWER(COALESCE(n.id,'')) LIKE LOWER(@lexTerm) || '%' THEN 2 " +
+                    "WHEN LOWER(COALESCE(n.name,'')) LIKE '%' || LOWER(@lexTerm) || '%' THEN 3 " +
+                    "ELSE 4 END), n.embedding <=> @queryVector");
+            }
+            else
+            {
+                branch1.Append(" ORDER BY n.embedding <=> @queryVector");
+            }
+            branch1.Append($" LIMIT {topK}");
+            return (branch1.ToString(), parameters);
+        }
+
+        // ── Branch 2: indexed content_chunks, each file's best-matching chunk projected to its
+        //    synthetic Document mesh node. Path convention (slug, _Documents namespace) replicates
+        //    DocumentPaths.For/Slug — see SlugSql. DISTINCT ON keeps ONE Document row per file (a file
+        //    yields many chunks); ordered so the closest chunk per file wins. The 14 projected columns
+        //    align positionally with branch 1 so ReadMeshNode (reads by name off branch-1 aliases)
+        //    materializes a valid MeshNode (state = 2 Active survives the structural filter). ──
+        var contentTable = QualifyTable("content_chunks");
+        var contentBranch = new StringBuilder(
+            "SELECT DISTINCT ON (cc.collection_path, cc.file_path) " +
+            $"{SlugSql} AS id, " +
+            "cc.collection_path || '/_Documents' AS namespace, " +
+            "regexp_replace(cc.file_path, '^.*[\\\\/]', '') AS name, " +
+            "'Document' AS node_type, " +
+            "left(regexp_replace(cc.chunk_text, '\\s+', ' ', 'g'), 200) AS description, " +
+            "NULL::text AS category, NULL::text AS icon, NULL::int AS display_order, " +
+            "cc.last_modified AS last_modified, 0::bigint AS version, 2::smallint AS state, " +
+            "NULL::jsonb AS content, NULL::text AS desired_id, " +
+            $"cc.collection_path || '/_Documents/' || {SlugSql} AS main_node, " +
+            $"(cc.embedding <=> @queryVector) AS _distance FROM {contentTable} cc WHERE cc.embedding IS NOT NULL");
+        if (hasNamespace)
+            contentBranch.Append($" AND (cc.collection_path || '/_Documents/' || {SlugSql}) LIKE @nsPrefix || '%'");
+        // DISTINCT ON requires the dedup keys lead the ORDER BY; the closest chunk per file wins.
+        contentBranch.Append(" ORDER BY cc.collection_path, cc.file_path, cc.embedding <=> @queryVector");
+
+        // Unified ranking is cosine distance only (no lexical tier carried across the UNION) — the
+        // wrapped outer ORDER BY ranks both branches by _distance ASC and the LIMIT keeps the closest.
+        // Parenthesize the content arm: its DISTINCT ON requires a trailing ORDER BY, which would
+        // otherwise bind to the inner (branch1 UNION ALL contentBranch) and put `cc` out of scope
+        // (42P01 'missing FROM-clause entry for table cc'), swallowed by the table-absent catch.
+        var sql =
+            $"SELECT * FROM ({branch1} UNION ALL ({contentBranch})) u ORDER BY u._distance ASC LIMIT {topK}";
+        return (sql, parameters);
     }
 
     #region Scope Clauses
@@ -399,15 +835,57 @@ public class PostgreSqlSqlGenerator
 
     private static string GenerateDescendantsClause(string path, Dictionary<string, object> parameters)
     {
+        if (string.IsNullOrEmpty(path))
+            return ""; // descendants of root = all nodes in schema, no path filter needed
         parameters["@scopePrefix"] = $"{path}/";
         return "n.path LIKE @scopePrefix || '%'";
     }
 
     private static string GenerateSubtreeClause(string path, Dictionary<string, object> parameters)
     {
+        if (string.IsNullOrEmpty(path))
+            return ""; // subtree of root = all nodes in schema, no path filter needed
         parameters["@scopePath"] = path;
         parameters["@scopePrefix"] = $"{path}/";
         return "(n.path = @scopePath OR n.path LIKE @scopePrefix || '%')";
+    }
+
+    /// <summary>
+    /// The <see cref="QueryScope.NextLevel"/> "populated frontier" — a single anti-join: a node is
+    /// returned when it is a strict descendant of <paramref name="path"/> AND no other active node
+    /// in the same table sits strictly between it and <paramref name="path"/>. This is what skips
+    /// empty intermediate namespace segments (e.g. <c>a/b/node</c> surfaces directly at the root).
+    /// One indexed query — no N+1 child-count probes.
+    ///
+    /// <para><paramref name="qualifiedTable"/> is the schema-qualified table the outer query reads
+    /// (the anti-join must reference the same relation). When it's null — cross-schema / unscoped
+    /// callers can't name one table — we degrade to plain descendants (documented: NextLevel is a
+    /// within-partition scope).</para>
+    /// </summary>
+    private static string GenerateNextLevelClause(
+        string path, string? qualifiedTable, Dictionary<string, object> parameters)
+    {
+        if (string.IsNullOrEmpty(qualifiedTable))
+            return GenerateDescendantsClause(path, parameters);
+
+        string nPrefix, ancPrefix;
+        if (string.IsNullOrEmpty(path))
+        {
+            // Frontier of the whole schema = nodes with no active ancestor at all.
+            nPrefix = "n.path <> ''";
+            ancPrefix = "anc.path <> ''";
+        }
+        else
+        {
+            parameters["@scopePrefix"] = $"{path}/";
+            nPrefix = "n.path LIKE @scopePrefix || '%'";
+            ancPrefix = "anc.path LIKE @scopePrefix || '%'";
+        }
+
+        return $"({nPrefix} AND NOT EXISTS (" +
+               $"SELECT 1 FROM {qualifiedTable} anc " +
+               $"WHERE anc.state = 2 AND anc.path <> n.path AND {ancPrefix} " +
+               "AND n.path LIKE anc.path || '/%'))";
     }
 
     private static string GenerateAncestorsClause(string path, Dictionary<string, object> parameters)
@@ -499,20 +977,27 @@ public class PostgreSqlSqlGenerator
                     _parameters[paramName] = condition.Value.ToLowerInvariant();
                     return $"LOWER({selector}) = {paramName}";
                 }
-                _parameters[paramName] = ConvertValue(condition.Value);
+                _parameters[paramName] = ConvertValue(condition.Selector, condition.Value);
                 return $"{selector} = {paramName}";
             }
 
             case QueryOperator.NotEqual:
             {
                 var paramName = NextParam();
+                // 🚨 SQL three-valued logic: NULL != 'x' evaluates to NULL,
+                // not TRUE — so a bare `{sel} != {val}` filter silently drops
+                // every row where {sel} is NULL. For negated filters this is
+                // almost never what the user wants (e.g. `-content.status:Done`
+                // should INCLUDE threads created before Done existed where
+                // content.status is absent → null). Coalesce with IS NULL so
+                // null is treated as "definitely not equal".
                 if (IsTextField(condition.Selector))
                 {
                     _parameters[paramName] = condition.Value.ToLowerInvariant();
-                    return $"LOWER({selector}) != {paramName}";
+                    return $"(LOWER({selector}) != {paramName} OR {selector} IS NULL)";
                 }
-                _parameters[paramName] = ConvertValue(condition.Value);
-                return $"{selector} != {paramName}";
+                _parameters[paramName] = ConvertValue(condition.Selector, condition.Value);
+                return $"({selector} != {paramName} OR {selector} IS NULL)";
             }
 
             case QueryOperator.GreaterThan:
@@ -567,7 +1052,7 @@ public class PostgreSqlSqlGenerator
                 foreach (var value in condition.Values)
                 {
                     var inParamName = NextParam();
-                    _parameters[inParamName] = isTextIn ? value.ToLowerInvariant() : ConvertValue(value);
+                    _parameters[inParamName] = isTextIn ? value.ToLowerInvariant() : ConvertValue(condition.Selector, value);
                     inParams.Add(inParamName);
                 }
                 return isTextIn
@@ -580,12 +1065,15 @@ public class PostgreSqlSqlGenerator
                 foreach (var value in condition.Values)
                 {
                     var notInParamName = NextParam();
-                    _parameters[notInParamName] = isTextNotIn ? value.ToLowerInvariant() : ConvertValue(value);
+                    _parameters[notInParamName] = isTextNotIn ? value.ToLowerInvariant() : ConvertValue(condition.Selector, value);
                     notInParams.Add(notInParamName);
                 }
+                // 🚨 Same null-handling as NotEqual: NULL NOT IN (...) is NULL,
+                // not TRUE — coalesce with IS NULL so rows with null selector
+                // are not silently filtered out of negated lookups.
                 return isTextNotIn
-                    ? $"LOWER({selector}) NOT IN ({string.Join(", ", notInParams)})"
-                    : $"{selector} NOT IN ({string.Join(", ", notInParams)})";
+                    ? $"(LOWER({selector}) NOT IN ({string.Join(", ", notInParams)}) OR {selector} IS NULL)"
+                    : $"({selector} NOT IN ({string.Join(", ", notInParams)}) OR {selector} IS NULL)";
 
             default:
                 return "";
@@ -734,6 +1222,20 @@ public class PostgreSqlSqlGenerator
     private static bool IsJsonbField(string selector) =>
         !PropertyMap.ContainsKey(selector);
 
+    /// <summary>
+    /// Selector-aware conversion: the <c>state</c> column is a smallint backing
+    /// <c>MeshNodeState</c>, so symbolic values in queries (<c>state:Active</c>)
+    /// must map to the enum's numeric value — sending the raw string produces
+    /// <c>42883: operator does not exist: smallint = text</c>.
+    /// </summary>
+    private static object ConvertValue(string selector, string value)
+    {
+        if (selector.Equals("state", StringComparison.OrdinalIgnoreCase)
+            && Enum.TryParse<MeshNodeState>(value, ignoreCase: true, out var state))
+            return (short)state;
+        return ConvertValue(value);
+    }
+
     private static object ConvertValue(string value)
     {
         if (bool.TryParse(value, out var boolVal))
@@ -751,6 +1253,12 @@ public class PostgreSqlSqlGenerator
         return value;
     }
 
+    /// <summary>
+    /// Returns the ancestor paths of <paramref name="path"/>, from the top-level segment down to the
+    /// immediate parent (excluding <paramref name="path"/> itself). Returns an empty array for a root or empty path.
+    /// </summary>
+    /// <param name="path">The slash-separated node path to derive ancestors from.</param>
+    /// <returns>The ancestor paths, ordered shallowest-first.</returns>
     public static string[] GetAncestorPaths(string path)
     {
         if (string.IsNullOrEmpty(path))

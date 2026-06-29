@@ -2,6 +2,9 @@
 
 namespace MeshWeaver.DataSetReader.Excel.Utils
 {
+	/// <summary>
+	/// A forward-only data reader over an Excel workbook that can also materialise the whole workbook as a <see cref="DataSet"/>.
+	/// </summary>
 	public interface IExcelDataReader : IDataReader
     {
         /// <summary>

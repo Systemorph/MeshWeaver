@@ -1,6 +1,9 @@
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Runtime.CompilerServices;
 using System.Text;
 using ClaudeAgentSdk;
+using MeshWeaver.AI.Connect;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 
@@ -14,16 +17,52 @@ public class ClaudeCodeChatClient : IChatClient
 {
     private readonly ClaudeCodeConfiguration configuration;
     private readonly string? modelName;
+    private readonly string? configDir;
+    private readonly string? oauthToken;
+    private readonly IMcpBackConnection? mcpBackConnection;
+    private readonly string? userId;
+    private readonly string? userName;
+    private readonly string? userEmail;
     private readonly ILogger? logger;
 
+    /// <summary>
+    /// Creates a chat client that runs the Claude Code CLI (via the Claude Agent SDK) for a single
+    /// user, isolating their credentials, config dir, and MCP back-connection per spawn.
+    /// </summary>
+    /// <param name="configuration">Claude Code configuration: CLI directory, skills/working directory, global system prompt, session timeout, and max turns.</param>
+    /// <param name="modelName">Optional model name. The harness passes <c>null</c> so the CLI uses the user's own subscription default; forwarding a model would make the <c>claude</c> CLI fail.</param>
+    /// <param name="logger">Optional logger for diagnostics.</param>
+    /// <param name="configDir">Per-user <c>CLAUDE_CONFIG_DIR</c> so concurrent users on one portal replica never share <c>.claude</c> credentials or session state. <c>null</c> in single-user dev (the CLI uses the machine's own login).</param>
+    /// <param name="oauthToken">The user's Claude subscription OAuth token (<c>CLAUDE_CODE_OAUTH_TOKEN</c>) resolved from their Connect provider node. Falls back to the token persisted in the config dir's <c>.credentials.json</c> when the resolver cache is cold.</param>
+    /// <param name="mcpBackConnection">Provisions the per-spawn HTTP MCP back-connection so the mesh is the CLI's workspace, authenticated as the user.</param>
+    /// <param name="userId">The calling user's id, used to mint/reuse the MCP back-connection.</param>
+    /// <param name="userName">The calling user's display name, forwarded to the MCP back-connection provisioning.</param>
+    /// <param name="userEmail">The calling user's email, forwarded to the MCP back-connection provisioning.</param>
     public ClaudeCodeChatClient(
         ClaudeCodeConfiguration configuration,
         string? modelName = null,
-        ILogger<ClaudeCodeChatClient>? logger = null)
+        ILogger<ClaudeCodeChatClient>? logger = null,
+        string? configDir = null,
+        string? oauthToken = null,
+        IMcpBackConnection? mcpBackConnection = null,
+        string? userId = null,
+        string? userName = null,
+        string? userEmail = null)
     {
         this.configuration = configuration ?? throw new ArgumentNullException(nameof(configuration));
         this.modelName = modelName;
         this.logger = logger;
+        // Per-user isolation for co-hosted multi-user (Phase 5b): each spawn
+        // gets the calling user's own .claude (CLAUDE_CONFIG_DIR) + subscription
+        // token (CLAUDE_CODE_OAUTH_TOKEN), so concurrent users on one portal
+        // replica never share credentials or session state.
+        this.configDir = configDir;
+        this.oauthToken = oauthToken;
+        // Automatic MCP back-connection (the mesh is the CLI's workspace) — resolved per spawn.
+        this.mcpBackConnection = mcpBackConnection;
+        this.userId = userId;
+        this.userName = userName;
+        this.userEmail = userEmail;
     }
 
     /// <inheritdoc />
@@ -78,6 +117,24 @@ public class ClaudeCodeChatClient : IChatClient
         var messageList = messages.ToList();
         var userPrompt = BuildPromptFromMessages(messageList);
 
+        // Co-hosted multi-user: when this user runs under their OWN per-user config dir, a missing
+        // subscription token AND missing .credentials.json means they've never logged in. Surface an
+        // actionable auth error (ThreadExecution turns it into a "/login" affordance) instead of
+        // letting the CLI fail later with a cryptic "Not logged in · Please run /login" →
+        // ProcessException exit 1. (configDir is null only in single-user dev, where the CLI uses the
+        // machine's own login — so we don't pre-empt there.)
+        // The token comes from the node-backed resolver (oauthToken); when its cache is cold after a
+        // reload / pod restart, fall back to the token persisted in .credentials.json on the shared
+        // config-dir volume — so we still set CLAUDE_CODE_OAUTH_TOKEN and authenticate instead of
+        // surfacing a spurious "Not logged in". (Sync file read; this is the off-hub SDK leaf.)
+        var effectiveToken = !string.IsNullOrEmpty(oauthToken) ? oauthToken : ReadCredentialsToken(configDir);
+        if (!string.IsNullOrEmpty(configDir) && string.IsNullOrEmpty(effectiveToken))
+        {
+            throw new AuthRequiredException(
+                Harnesses.ClaudeCode,
+                "Not logged in to Claude Code. Run /login to connect your Claude subscription.");
+        }
+
         // If CliDirectory is specified, add it to PATH for CLI discovery
         // This must be done BEFORE calling the SDK as FindCli() checks PATH
         if (!string.IsNullOrEmpty(configuration.CliDirectory))
@@ -92,18 +149,85 @@ public class ClaudeCodeChatClient : IChatClient
         }
 
         // Build options
-        var claudeOptions = new ClaudeAgentOptions
+        var env = new Dictionary<string, string>
         {
-            // Set UTF-8 encoding environment variables for proper character handling on Windows
-            Env = new Dictionary<string, string>
-            {
-                ["PYTHONUTF8"] = "1",                    // Python UTF-8 mode
-                ["PYTHONIOENCODING"] = "utf-8",          // Python I/O encoding
-                ["LANG"] = "en_US.UTF-8",                // Unix locale
-                ["LC_ALL"] = "en_US.UTF-8",              // Unix locale override
-                ["CHCP"] = "65001"                       // Windows code page hint
-            }
+            ["PYTHONUTF8"] = "1",                    // Python UTF-8 mode
+            ["PYTHONIOENCODING"] = "utf-8",          // Python I/O encoding
+            ["LANG"] = "en_US.UTF-8",                // Unix locale
+            ["LC_ALL"] = "en_US.UTF-8",              // Unix locale override
+            ["CHCP"] = "65001"                       // Windows code page hint
         };
+        // Per-user isolation: run the CLI under this user's own .claude + token.
+        if (!string.IsNullOrEmpty(configDir))
+        {
+            env["CLAUDE_CONFIG_DIR"] = configDir;
+            try { Directory.CreateDirectory(configDir); }
+            catch (Exception ex) { logger?.LogWarning(ex, "Could not create CLAUDE_CONFIG_DIR {Dir}", configDir); }
+        }
+        if (!string.IsNullOrEmpty(effectiveToken))
+            env["CLAUDE_CODE_OAUTH_TOKEN"] = effectiveToken;
+
+        var claudeOptions = new ClaudeAgentOptions { Env = env };
+
+        // The shared, sync-maintained WORKSPACE ({SkillsDirectory}) holds ONE AGENTS.md (read by Claude
+        // Code AND Copilot — no CLAUDE.md duplicate): the base "the mesh is reachable via the meshweaver
+        // MCP server" instructions PLUS a listing of the platform skill catalog (name + description +
+        // load path). Skill BODIES are NOT materialised to disk — the CLI fetches each on demand via the
+        // meshweaver MCP `get`. Point the session's Cwd at the workspace and load PROJECT scope so the CLI
+        // reads AGENTS.md; USER scope keeps the per-user config/creds. The sync service
+        // (AgentSkillSyncService) is the single writer.
+        if (!string.IsNullOrEmpty(configuration.SkillsDirectory))
+        {
+            claudeOptions.Cwd = configuration.SkillsDirectory;
+            claudeOptions.SettingSources = new List<SettingSource> { SettingSource.User, SettingSource.Project };
+        }
+
+        // Automatic MCP back-connection — the mesh is this CLI's workspace (no file tree). Inject a
+        // per-spawn HTTP MCP server at the portal's /mcp, authenticated AS THE USER via a Bearer
+        // token (minted/reused on demand by IMcpBackConnection). In-memory only — the token is
+        // never written to the config dir / Azure Files share.
+        if (mcpBackConnection != null && !string.IsNullOrEmpty(userId))
+        {
+            McpConnectionInfo? mcpInfo = null;
+            try
+            {
+                mcpInfo = await mcpBackConnection.EnsureForUser(userId, userName, userEmail)
+                    .FirstOrDefaultAsync().ToTask(cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                logger?.LogWarning(ex, "Could not provision the MCP back-connection; Claude Code will run without mesh access.");
+            }
+            if (mcpInfo != null)
+            {
+                // 🚨 MUST be Dictionary<string, object> — NOT Dictionary<string, McpHttpServerConfig>.
+                // ClaudeAgentOptions.McpServers is typed `object?`; the SDK (SubprocessCliTransport)
+                // only JSON-serializes it into `--mcp-config` when `McpServers is Dictionary<string,
+                // object>` — otherwise it falls through to `McpServers.ToString()` and passes the literal
+                // type name "System.Collections.Generic.Dictionary`2[...]" as the arg. The CLI then tries
+                // to open a file by that name, fails ("MCP config file not found"), and exits 1
+                // ("Command failed with exit code 1") — blocking EVERY round. The value stays an
+                // McpHttpServerConfig (the SDK serializes it to {"type":"http","url":…,"headers":{…}}).
+                // The value MUST serialize with LOWERCASE keys (type/url/headers) — the claude CLI's
+                // --mcp-config schema is camelCase. The SDK serializes whatever object we put here with
+                // DEFAULT options, and McpHttpServerConfig serializes PascalCase ("Type"/"Url"/"Headers"),
+                // which the CLI silently ignores (the mesh MCP never connects). A plain dictionary with the
+                // exact wire keys avoids the casing trap.
+                claudeOptions.McpServers = new Dictionary<string, object>
+                {
+                    ["meshweaver"] = new Dictionary<string, object>
+                    {
+                        ["type"] = "http",
+                        ["url"] = mcpInfo.McpUrl,
+                        ["headers"] = new Dictionary<string, string>
+                        {
+                            ["Authorization"] = $"Bearer {mcpInfo.BearerToken}"
+                        }
+                    }
+                };
+                logger?.LogInformation("Claude Code MCP workspace wired to {McpUrl}", mcpInfo.McpUrl);
+            }
+        }
 
         if (!string.IsNullOrEmpty(modelName))
         {
@@ -122,7 +246,7 @@ public class ClaudeCodeChatClient : IChatClient
             claudeOptions.MaxTurns = configuration.MaxTurns.Value;
         }
 
-        if (!string.IsNullOrEmpty(configuration.WorkingDirectory))
+        if (string.IsNullOrEmpty(claudeOptions.Cwd) && !string.IsNullOrEmpty(configuration.WorkingDirectory))
         {
             claudeOptions.Cwd = configuration.WorkingDirectory;
         }
@@ -143,62 +267,95 @@ public class ClaudeCodeChatClient : IChatClient
         using var timeoutCts = new CancellationTokenSource(configuration.SessionTimeoutMs);
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCts.Token);
 
-        // Use the static QueryAsync method for streaming
-        await foreach (var message in ClaudeAgent.QueryAsync(userPrompt, claudeOptions).WithCancellation(linkedCts.Token))
+        // Manually enumerate so we survive the Claude Agent SDK 0.2.1 bug where
+        // MessageParser throws ArgumentException("Unknown message type: …") on the
+        // newer CLI's informational events (e.g. rate_limit_event) — which would
+        // otherwise crash the whole chat. 0.2.1 is the LATEST SDK, so this wrapper
+        // is the only fix until Anthropic ships one (claude-agent-sdk #583/#599/
+        // #601/#603, claude-code #26498). The inner try/catch wraps MoveNextAsync
+        // only (no yield inside it); the outer try/finally allows yield.
+        var enumerator = ClaudeAgent.QueryAsync(userPrompt, claudeOptions)
+            .GetAsyncEnumerator(linkedCts.Token);
+        var yieldedAny = false;
+        var swallowedUnknown = false;
+        try
         {
-            // Process different message types
-            switch (message)
+            while (true)
             {
-                case AssistantMessage assistantMessage:
-                    foreach (var block in assistantMessage.Content)
-                    {
-                        switch (block)
+                bool moved;
+                try
+                {
+                    moved = await enumerator.MoveNextAsync();
+                }
+                catch (ArgumentException ex) when (
+                    ex.Message.Contains("Unknown message type", StringComparison.OrdinalIgnoreCase))
+                {
+                    logger?.LogWarning(ex,
+                        "Claude Agent SDK could not parse a CLI message — ending stream gracefully (SDK 0.2.1 bug, e.g. rate_limit_event).");
+                    swallowedUnknown = true;
+                    break;
+                }
+                if (!moved) break;
+
+                var message = enumerator.Current;
+                switch (message)
+                {
+                    case AssistantMessage assistantMessage:
+                        foreach (var block in assistantMessage.Content)
                         {
-                            case TextBlock textBlock:
-                                if (!string.IsNullOrEmpty(textBlock.Text))
-                                {
-                                    yield return new ChatResponseUpdate(ChatRole.Assistant, textBlock.Text);
-                                }
-                                break;
+                            switch (block)
+                            {
+                                case TextBlock textBlock:
+                                    if (!string.IsNullOrEmpty(textBlock.Text))
+                                    {
+                                        yieldedAny = true;
+                                        yield return new ChatResponseUpdate(ChatRole.Assistant, textBlock.Text);
+                                    }
+                                    break;
 
-                            case ToolUseBlock toolUseBlock:
-                                // Convert tool use to FunctionCallContent
-                                var toolId = toolUseBlock.Id ?? Guid.NewGuid().ToString();
-                                IDictionary<string, object?>? arguments = null;
+                                case ToolUseBlock toolUseBlock:
+                                    var toolId = toolUseBlock.Id ?? Guid.NewGuid().ToString();
+                                    IDictionary<string, object?>? arguments = null;
+                                    if (toolUseBlock.Input != null && toolUseBlock.Input.Count > 0)
+                                    {
+                                        arguments = toolUseBlock.Input.ToDictionary(
+                                            kvp => kvp.Key, kvp => (object?)kvp.Value);
+                                    }
+                                    yieldedAny = true;
+                                    yield return new ChatResponseUpdate(ChatRole.Assistant,
+                                        [new FunctionCallContent(toolId, toolUseBlock.Name ?? "unknown", arguments)]);
+                                    break;
 
-                                if (toolUseBlock.Input != null && toolUseBlock.Input.Count > 0)
-                                {
-                                    // Input is already a Dictionary<string, object>, convert to nullable version
-                                    arguments = toolUseBlock.Input.ToDictionary(
-                                        kvp => kvp.Key,
-                                        kvp => (object?)kvp.Value);
-                                }
-
-                                var functionCall = new FunctionCallContent(toolId, toolUseBlock.Name ?? "unknown", arguments);
-                                yield return new ChatResponseUpdate(ChatRole.Assistant, [functionCall]);
-                                break;
-
-                            case ThinkingBlock thinkingBlock:
-                                // Optionally expose thinking as a special content type or log it
-                                logger?.LogDebug("Claude thinking: {Thinking}", thinkingBlock.Thinking);
-                                break;
+                                case ThinkingBlock thinkingBlock:
+                                    logger?.LogDebug("Claude thinking: {Thinking}", thinkingBlock.Thinking);
+                                    break;
+                            }
                         }
-                    }
-                    break;
+                        break;
 
-                case SystemMessage systemMessage:
-                    // System messages from the SDK (not the LLM)
-                    logger?.LogDebug("Claude system message: {Subtype}", systemMessage.Subtype);
-                    break;
+                    case SystemMessage systemMessage:
+                        logger?.LogDebug("Claude system message: {Subtype}", systemMessage.Subtype);
+                        break;
 
-                case ResultMessage resultMessage:
-                    // Query completed - log cost/duration info
-                    logger?.LogInformation(
-                        "Claude query completed. Duration: {Duration}ms, Cost: ${Cost:F4}",
-                        resultMessage.DurationMs,
-                        resultMessage.TotalCostUsd ?? 0.0);
-                    break;
+                    case ResultMessage resultMessage:
+                        logger?.LogInformation(
+                            "Claude query completed. Duration: {Duration}ms, Cost: ${Cost:F4}",
+                            resultMessage.DurationMs, resultMessage.TotalCostUsd ?? 0.0);
+                        break;
+                }
             }
+        }
+        finally
+        {
+            await enumerator.DisposeAsync();
+        }
+
+        // If the only thing that stopped us was the unparseable event and we never
+        // produced output, surface a graceful note instead of a silent empty reply.
+        if (swallowedUnknown && !yieldedAny)
+        {
+            yield return new ChatResponseUpdate(ChatRole.Assistant,
+                "Claude Code produced no output before the session ended (often a transient rate limit). Please retry shortly.");
         }
     }
 
@@ -284,6 +441,57 @@ public class ClaudeCodeChatClient : IChatClient
             .Select(c => c.Text);
 
         return string.Join("", textParts);
+    }
+
+    /// <summary>
+    /// True when the per-user config dir holds a non-empty <c>.credentials.json</c> (the CLI's
+    /// persisted OAuth login). A cheap file probe that mirrors
+    /// <c>ClaudeConnectStrategy.IsLoggedIn</c> — the Connect flow writes this file into the same dir.
+    /// </summary>
+    private static bool HasCredentials(string configDir)
+    {
+        try
+        {
+            var creds = Path.Combine(configDir, ".credentials.json");
+            return File.Exists(creds) && new FileInfo(creds).Length > 2;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>Reads the OAuth token back from <c>{configDir}/.credentials.json</c> (Claude shape
+    /// <c>claudeAiOauth.accessToken</c>, or any nested access-token key) — the persistent fallback
+    /// when the node-backed resolver cache is cold after a reload. Null on any miss.</summary>
+    private static string? ReadCredentialsToken(string? configDir)
+    {
+        if (string.IsNullOrEmpty(configDir)) return null;
+        try
+        {
+            var path = Path.Combine(configDir, ".credentials.json");
+            if (!File.Exists(path)) return null;
+            using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(path));
+            return ExtractToken(doc.RootElement);
+        }
+        catch { return null; }
+    }
+
+    private static string? ExtractToken(System.Text.Json.JsonElement el)
+    {
+        foreach (var name in new[] { "accessToken", "access_token", "token", "oauthToken" })
+        {
+            if (el.ValueKind == System.Text.Json.JsonValueKind.Object && el.TryGetProperty(name, out var v)
+                && v.ValueKind == System.Text.Json.JsonValueKind.String && !string.IsNullOrEmpty(v.GetString()))
+                return v.GetString();
+        }
+        if (el.ValueKind == System.Text.Json.JsonValueKind.Object)
+            foreach (var prop in el.EnumerateObject())
+            {
+                var found = ExtractToken(prop.Value);
+                if (!string.IsNullOrEmpty(found)) return found;
+            }
+        return null;
     }
 
     private static readonly object PathLock = new();

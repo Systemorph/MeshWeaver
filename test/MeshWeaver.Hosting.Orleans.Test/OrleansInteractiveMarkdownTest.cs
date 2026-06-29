@@ -2,7 +2,6 @@ using System;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
-using FluentAssertions;
 using MeshWeaver.Connection.Orleans;
 using MeshWeaver.Fixture;
 using MeshWeaver.Hosting.Persistence;
@@ -36,6 +35,9 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// kernel and producing output) lives in the monolith test suite where the kernel is
 /// co-located and far faster to exercise.
 /// </summary>
+// TODO: needs custom shared fixture — uses InteractiveMarkdownSiloConfigurator with
+// AddInMemoryPersistence and ConfigurePortalMesh only (no Graph/AI/RLS). The SharedOrleansFixture
+// adds Graph/AI/RLS which would change the registered services and TypeRegistry.
 public class OrleansInteractiveMarkdownTest(ITestOutputHelper output) : TestBase(output)
 {
     private TestCluster Cluster { get; set; } = null!;
@@ -44,6 +46,7 @@ public class OrleansInteractiveMarkdownTest(ITestOutputHelper output) : TestBase
     {
         await base.InitializeAsync();
         var builder = new TestClusterBuilder();
+        builder.Options.InitialSilosCount = 1;
         builder.AddSiloBuilderConfigurator<InteractiveMarkdownSiloConfigurator>();
         builder.AddClientBuilderConfigurator<TestClientConfigurator>();
         Cluster = builder.Build();
@@ -53,7 +56,7 @@ public class OrleansInteractiveMarkdownTest(ITestOutputHelper output) : TestBase
     public override async ValueTask DisposeAsync()
     {
         if (Cluster is not null)
-            await Cluster.DisposeAsync();
+            OrleansClusterDisposal.DisposeInBackground(Cluster);
         await base.DisposeAsync();
     }
 
@@ -66,11 +69,8 @@ public class OrleansInteractiveMarkdownTest(ITestOutputHelper output) : TestBase
             AddressExtensions.CreatePortalAddress(),
             config => config
                 .AddLayoutClient()
-                .WithInitialization(async (hub, _) =>
-                {
-                    var registration = await routingService.RegisterStreamAsync(hub);
-                    hub.RegisterForDisposal(registration);
-                }))!;
+                .WithInitialization(hub =>
+                    hub.RegisterForDisposal(routingService.RegisterStream(hub))))!;
 
         await Task.Delay(500);
         return portalHub;
@@ -118,7 +118,7 @@ public class OrleansInteractiveMarkdownTest(ITestOutputHelper output) : TestBase
             asJsonElement, portal.JsonSerializerOptions);
         recovered.Should().NotBeNull();
         recovered!.Should().HaveCount(2);
-        recovered[0].Id.Should().Be("orleans-wire");
+        recovered![0].Id.Should().Be("orleans-wire");
         recovered[0].Code.Should().Contain("Survived the grain boundary");
         recovered[1].Code.Should().Contain("var x = 123");
     }

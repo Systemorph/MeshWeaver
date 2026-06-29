@@ -1,4 +1,6 @@
-﻿using MeshWeaver.AI;
+﻿using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
+using MeshWeaver.AI;
 using MeshWeaver.Blazor.Portal.Resize;
 using MeshWeaver.Blazor.Portal.SidePanel;
 using MeshWeaver.Blazor.Services;
@@ -10,19 +12,68 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Components;
+using Microsoft.AspNetCore.Components.Authorization;
 using Microsoft.JSInterop;
 
 namespace MeshWeaver.Blazor.Portal.Layout;
 
+/// <summary>
+/// Base component for the portal's main layout: hosts the header navigation menus
+/// (Node / Mesh / AI), the routed content area, and the resizable, auth-gated side panel
+/// that shows chat threads or layout-area content.
+/// </summary>
 public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
 {
+    /// <summary>
+    /// JS runtime used for side-panel persistence, sizing, and resize dispatch.
+    /// </summary>
     [Inject] protected IJSRuntime JSRuntime { get; set; } = null!;
+
+    /// <summary>
+    /// Manages URL navigation in response to menu clicks and panel actions.
+    /// </summary>
     [Inject] protected NavigationManager NavigationManager { get; set; } = null!;
+
+    /// <summary>
+    /// Holds and persists the side panel's visibility, position, size, and content.
+    /// </summary>
     [Inject] protected SidePanelStateService SidePanelState { get; set; } = null!;
+
+    /// <summary>
+    /// Message hub used for mesh queries such as the global-admin check.
+    /// </summary>
     [Inject] protected IMessageHub Hub { get; set; } = null!;
+
+    /// <summary>
+    /// Provides the reactive navigation context and side-panel navigation requests.
+    /// </summary>
     [Inject] protected INavigationService NavigationService { get; set; } = null!;
+
+    /// <summary>
+    /// Supplies the dynamic Node / Mesh / AI menu item definitions.
+    /// </summary>
     [Inject] protected IMenuItemsProvider MenuItemsProvider { get; set; } = null!;
+
+    /// <summary>
+    /// Resolves content paths into layout-area references for the side panel.
+    /// </summary>
     [Inject] protected IPathResolver PathResolver { get; set; } = null!;
+
+    /// <summary>
+    /// Provides the current user's access context (e.g. their object id).
+    /// </summary>
+    [Inject] protected AccessService AccessService { get; set; } = null!;
+
+    /// <summary>
+    /// Cascading authentication state; used to gate side-panel content for anonymous circuits.
+    /// </summary>
+    [CascadingParameter]
+    protected Task<AuthenticationState>? AuthStateTask { get; set; }
+
+    // Tracks whether the current circuit's user is signed in. Side panel content
+    // (ThreadChatView / LayoutAreaView) accesses the workspace and throws for
+    // anonymous users — so we hide it when not authenticated.
+    private bool isAuthenticated;
 
     // Splitter pane sizes - default 3:1 ratio (75% main, 25% side panel)
     private string MainPaneSize => SidePanelState.Width.HasValue ? $"{100 - SidePanelState.Width.Value}%" : "75%";
@@ -46,36 +97,57 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     [Parameter]
     public RenderFragment? MobileNavMenu { get; set; }
 
+    /// <summary>
+    /// Name of the message-bar section where top-of-page notifications are rendered.
+    /// </summary>
     protected const string MessageBarSection = "MessagesTop";
 
     private bool isNavMenuOpen;
+
+    /// <summary>
+    /// Whether the mobile navigation menu is currently open.
+    /// </summary>
     protected bool IsNavMenuOpen => isNavMenuOpen;
 
     private bool isNodeMenuOpen;
     private bool isMeshMenuOpen;
+    private bool isAiMenuOpen;
 
     // Menu context names (must match NodeMenuItemsExtensions.NodeMenuContext / MeshMenuContext).
     private const string NodeMenuContext = "Node";
     private const string MeshMenuContext = "Mesh";
+    private const string AiMenuContext = "AI";
 
     // Menu items per context from IMenuItemsProvider (populated by LayoutAreaView from $Menu:{context} streams)
     private IReadOnlyList<NodeMenuItemDefinition> _nodeMenuItems = [];
     private IReadOnlyList<NodeMenuItemDefinition> _meshMenuItems = [];
+    private IReadOnlyList<NodeMenuItemDefinition> _aiMenuItems = [];
     private IDisposable? _nodeMenuSubscription;
     private IDisposable? _meshMenuSubscription;
+    private IDisposable? _aiMenuSubscription;
 
 
     // Editable content collections
+    /// <summary>
+    /// Content collections the current user is permitted to edit.
+    /// </summary>
     protected IReadOnlyList<ContentCollectionConfig> EditableCollections { get; private set; } = [];
     private IJSObjectReference? jsModule;
     private DotNetObjectReference<PortalLayoutBase>? dotNetRef;
 
+    private IDisposable? _navContextSubscription;
+
+    /// <summary>
+    /// Wires the side-panel, navigation-context, and Node / Mesh / AI menu subscriptions,
+    /// re-rendering as each stream emits.
+    /// </summary>
     protected override void OnInitialized()
     {
         base.OnInitialized();
         SidePanelState.OnStateChanged += OnSidePanelStateChanged;
         NavigationService.SidePanelNavigationRequested += OnSidePanelNavigation;
-        NavigationService.OnNavigationContextChanged += OnNavigationContextChanged;
+        _navContextSubscription = NavigationService.NavigationContext
+            .Subscribe(OnNavigationContextChanged);
         _nodeMenuSubscription = MenuItemsProvider.GetMenu(NodeMenuContext).Subscribe(items =>
         {
             _nodeMenuItems = items;
@@ -86,15 +158,41 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
             _meshMenuItems = items;
             InvokeAsync(StateHasChanged);
         });
+        _aiMenuSubscription = MenuItemsProvider.GetMenu(AiMenuContext).Subscribe(items =>
+        {
+            _aiMenuItems = items;
+            InvokeAsync(StateHasChanged);
+        });
     }
 
+    /// <summary>
+    /// Initializes the navigation service, snapshots the authentication state, and forces the
+    /// side panel closed (resolving its content only when authenticated and visible).
+    /// </summary>
+    /// <returns>A task that completes when initialization finishes.</returns>
     protected override async Task OnInitializedAsync()
     {
         await base.OnInitializedAsync();
-        await NavigationService.InitializeAsync();
-        // Only resolve side panel content if already visible — defer until opened otherwise
-        if (SidePanelState.IsVisible)
-            await ResolveSidePanelContentAsync();
+        // Synchronous (no await): Initialize() only wires Rx subscriptions; a Task
+        // awaited in OnInitializedAsync would deadlock the circuit's sync-context.
+        NavigationService.Initialize();
+
+        // Snapshot auth state. If the user signed out (or arrived anonymous) with a
+        // previously-persisted IsVisible=true, force the panel closed before any
+        // child component subscribes to a workspace it can't access.
+        if (AuthStateTask is not null)
+        {
+            var authState = await AuthStateTask;
+            isAuthenticated = authState.User?.Identity?.IsAuthenticated == true;
+        }
+        if (!isAuthenticated && SidePanelState.IsVisible)
+        {
+            SidePanelState.SetVisible(false);
+        }
+
+        // Only resolve side panel content if visible AND authenticated.
+        if (isAuthenticated && SidePanelState.IsVisible)
+            ResolveSidePanelContent();
     }
 
     /// <summary>
@@ -105,7 +203,7 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     {
         get
         {
-            var node = NavigationService.Context?.Node;
+            var node = _currentNavContext?.Node;
             return node?.Name ?? node?.Id;
         }
     }
@@ -130,17 +228,78 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
         isMeshMenuOpen = open;
     }
 
+    private void ToggleAiMenu()
+    {
+        isAiMenuOpen = !isAiMenuOpen;
+    }
+
+    private void OnAiMenuOpenChanged(bool open)
+    {
+        isAiMenuOpen = open;
+    }
+
+    /// <summary>
+    /// AI menu items — aggregated reactively from the injectable "AI" menu context (default seed:
+    /// Threads / Models / Agents / Skills, each opening mesh search grouped by namespace). NOT a
+    /// hardcoded list: modules contribute via an <c>INodeMenuProvider</c> with <c>Context = "AI"</c>.
+    /// Populated like the Node / Mesh menus from <see cref="IMenuItemsProvider"/>.
+    /// </summary>
+    private IReadOnlyList<NodeMenuItemDefinition> GetAiMenuItems() => _aiMenuItems;
+
     /// <summary>
     /// Navigates to the Settings page — per-node Settings when on a node, Global Settings at the root.
     /// </summary>
     private void NavigateToSettings()
     {
         var ns = NavigationService.CurrentNamespace;
-        var url = string.IsNullOrEmpty(ns)
-            ? $"/{GlobalSettingsLayoutArea.GlobalSettingsArea}"
-            : $"/{ns}/Settings";
-        NavigationManager.NavigateTo(url);
+        if (!string.IsNullOrEmpty(ns))
+        {
+            // Per-node settings — governed by the node's own RLS, not platform-admin gated.
+            NavigationManager.NavigateTo($"/{ns}/Settings");
+            return;
+        }
+
+        // Root → Global Settings is ADMIN-ONLY (Admin-partition Read). A non-admin circuit that
+        // subscribes to the GlobalSettings area gets a repeating "Access denied … lacks Read on
+        // 'GlobalSettings'" DeliveryFailure → bounded resubscribe storm. Gate the navigation on the
+        // canonical IsGlobalAdmin() predicate so a non-admin never issues that subscribe; route them
+        // to their own account page instead.
+        Hub.IsGlobalAdmin()
+            .Take(1)
+            .Timeout(TimeSpan.FromSeconds(5))
+            .Catch<bool, Exception>(_ => Observable.Return(false))
+            .Subscribe(isAdmin => InvokeAsync(() =>
+            {
+                if (isAdmin)
+                {
+                    NavigationManager.NavigateTo($"/{GlobalSettingsLayoutArea.GlobalSettingsArea}");
+                    return;
+                }
+                var userId = AccessService?.Context?.ObjectId;
+                NavigationManager.NavigateTo(string.IsNullOrEmpty(userId) ? "/" : $"/User/{userId}");
+            }));
     }
+
+    /// <summary>
+    /// Navigates to the current user's Activity dashboard — the canonical
+    /// "all my threads" surface (Latest Threads section already filters out
+    /// Done threads by default; type <c>content.status:Done</c> in the search
+    /// box to surface them).
+    /// </summary>
+    private void NavigateToThreads()
+    {
+        var userId = AccessService?.Context?.ObjectId;
+        if (string.IsNullOrEmpty(userId))
+            return;
+        NavigationManager.NavigateTo($"/User/{userId}/Activity");
+    }
+
+    /// <summary>
+    /// Sentinel <see cref="NodeMenuItemDefinition.Area"/> for the AI menu's "New thread" item. It carries
+    /// NO Href, so it is handled imperatively in <see cref="HandleMenuItemClick"/> (open the chat panel in
+    /// new-thread mode) instead of navigating. Lives here so the menu seed and the handler agree.
+    /// </summary>
+    public const string AiNewThreadAction = "ai-new-thread";
 
     /// <summary>
     /// Handles a click on a dynamic menu item.
@@ -150,10 +309,34 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     {
         isNodeMenuOpen = false;
         isMeshMenuOpen = false;
+        isAiMenuOpen = false;
+        // Imperative actions (no Href): the AI menu's "New thread" opens the chat panel fresh.
+        if (string.Equals(item.Area, AiNewThreadAction, StringComparison.Ordinal))
+        {
+            _ = OpenNewThreadInSidePanel();
+            return;
+        }
         if (!string.IsNullOrEmpty(item.Href))
             NavigationManager.NavigateTo(item.Href);
         else
             NavigateToArea(item.Area);
+    }
+
+    /// <summary>
+    /// Opens the chat side panel ready for a brand-new thread: clears any shown content (so the new-chat
+    /// composer renders), signals a mounted composer to reset to chat mode, and shows the panel (applying
+    /// the persisted size). Same end state as the side panel's existing New-thread button.
+    /// </summary>
+    private async Task OpenNewThreadInSidePanel()
+    {
+        SidePanelState.SetContentPath(null);
+        SidePanelState.SetTitle(null);
+        SidePanelState.RequestAction("New");
+        if (!SidePanelState.IsVisible)
+        {
+            SidePanelState.SetVisible(true);
+            await ApplyPersistedSizeAsync();
+        }
     }
 
     /// <summary>
@@ -232,6 +415,12 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
         return Task.CompletedTask;
     }
 
+    /// <summary>
+    /// On first render, imports the layout's JS module, registers the .NET reference, and
+    /// restores the persisted side-panel state from local storage.
+    /// </summary>
+    /// <param name="firstRender">True on the component's first render pass.</param>
+    /// <returns>A task that completes when first-render initialization finishes.</returns>
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         if (firstRender)
@@ -259,8 +448,13 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
             var saved = await jsModule!.InvokeAsync<SidePanelState?>("loadSidePanelState");
             if (saved != null)
             {
+                // Anonymous circuits must never restore a visible panel — workspace
+                // access fails for them and the panel children throw on render.
+                if (!isAuthenticated && saved.IsVisible)
+                    saved = saved with { IsVisible = false };
                 SidePanelState.State = saved;
-                await ResolveSidePanelContentAsync();
+                if (isAuthenticated)
+                    ResolveSidePanelContent();
                 StateHasChanged();
             }
         }
@@ -294,7 +488,7 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     {
         InvokeAsync(async () =>
         {
-            await ResolveSidePanelContentAsync();
+            ResolveSidePanelContent();
             await SaveSidePanelStateAsync();
             StateHasChanged();
 
@@ -312,13 +506,67 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
         });
     }
 
-    private void OnNavigationContextChanged(NavigationContext? _)
+    private NavigationContext? _currentNavContext;
+
+    private void OnNavigationContextChanged(NavigationContext? ctx)
     {
-        // Context changed (user navigated) — invalidate cached side panel control
-        // so next render picks up the new context path
+        _currentNavContext = ctx;
+
+        // New model: while a thread is open in the MAIN view, a VISIBLE side panel peeks that thread's
+        // MAIN (context) node. Keep that peek in sync as the user moves between threads — but only when
+        // the panel is ALREADY peeking a context (its content is a non-thread node), NEVER replacing a
+        // side-panel CHAT the user is in. Visibility is untouched (collapsed stays collapsed); the
+        // toggle is what opens the peek (ToggleSidePanel). When this handles the navigation we skip the
+        // hide rule below, which only governs a panel holding a chat/thread.
+        if (TrySyncContextPeek(ctx))
+        {
+            InvokeAsync(StateHasChanged);
+            return;
+        }
+
+        // A thread lives in EITHER the main view OR the side panel, never both — but ONLY
+        // close the side panel when the user opened a DIFFERENT thread full-screen than the
+        // one already shown in the panel. Closing on the SAME thread (or on a brand-new
+        // side-panel chat) is what made the active side-panel conversation vanish during
+        // normal chat → submit → navigate use. The decision rule lives in SidePanelChatKeying
+        // so it is unit-testable without a render host.
+        if (ctx?.Node != null
+            && SidePanelChatKeying.ShouldHideSidePanelOnThreadNavigation(
+                ctx.Node.NodeType, ctx.Node.Path, SidePanelState.ContentPath, SidePanelState.IsVisible))
+        {
+            SidePanelState.SetVisible(false);
+        }
+
         InvokeAsync(StateHasChanged);
     }
 
+    /// <summary>
+    /// Keeps a VISIBLE context-peek panel pointed at the current main thread's context node as the user
+    /// navigates between threads. Returns true when it owns the navigation (panel is peeking a context),
+    /// so the caller skips the "hide on different thread" rule (which only governs a panel holding a
+    /// chat). No-op (false) when not on a thread, or the panel is hidden / empty (new chat) / holding a
+    /// thread-chat — those keep their existing behavior.
+    /// </summary>
+    private bool TrySyncContextPeek(NavigationContext? ctx)
+    {
+        var contextPath = CurrentThreadContextPath();
+        if (contextPath is null)
+            return false;
+        var current = SidePanelState.ContentPath;
+        if (!SidePanelState.IsVisible || string.IsNullOrEmpty(current) || IsThreadPath(current))
+            return false;
+        if (!string.Equals(current, contextPath, StringComparison.OrdinalIgnoreCase))
+        {
+            SidePanelState.SetTitle(
+                MeshWeaver.AI.NavigationContextProjection.ContextChipLabel(ctx) ?? LastSegmentOf(contextPath));
+            SidePanelState.SetContentPath(contextPath);
+        }
+        return true;
+    }
+
+    /// <summary>
+    /// Closes the mobile navigation menu when the viewport switches to a desktop size.
+    /// </summary>
     protected override void OnParametersSet()
     {
         if (ViewportInformation.IsDesktop && isNavMenuOpen)
@@ -328,14 +576,23 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
         }
     }
 
+    /// <summary>
+    /// Current viewport classification (desktop/mobile, ultra-low), supplied as a cascading value.
+    /// </summary>
     [CascadingParameter]
     public required ViewportInformation ViewportInformation { get; set; }
 
+    /// <summary>
+    /// Toggles the mobile navigation menu open or closed.
+    /// </summary>
     protected void ToggleNavMenu()
     {
         isNavMenuOpen = !isNavMenuOpen;
     }
 
+    /// <summary>
+    /// Closes the mobile navigation menu and re-renders.
+    /// </summary>
     protected void CloseMobileNavMenu()
     {
         isNavMenuOpen = false;
@@ -343,40 +600,88 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     }
 
 
-    public bool IsSidePanelVisible => SidePanelState.IsVisible;
+    // Side panel is gated on auth — anonymous users see neither toggle nor pane.
+    /// <summary>
+    /// Whether the side panel should render — requires both an authenticated circuit and visible state.
+    /// </summary>
+    public bool IsSidePanelVisible => isAuthenticated && SidePanelState.IsVisible;
+
+    /// <summary>
+    /// The side panel's current docking position.
+    /// </summary>
     protected SidePanelPosition SidePanelPositionValue => SidePanelState.Position;
 
+    /// <summary>
+    /// Toggles the side panel. When a thread is shown in the MAIN view, the thread STAYS in the main
+    /// view and the panel peeks the thread's MAIN (context) node — opening always brings the main path
+    /// (no navigate-away). Otherwise flips visibility normally. Persisted size is applied on open.
+    /// </summary>
+    /// <returns>A task that completes once panel state and size have been applied.</returns>
     public async Task ToggleSidePanel()
     {
-        var context = NavigationService.Context;
+        var contextPath = CurrentThreadContextPath();
 
-        // Check if viewing a thread full-screen by checking the node's NodeType
-        if (context?.Node != null && ThreadNodeType.IsThreadNodeType(context.Node.NodeType))
+        // On a thread in the main view → the side panel is a peek of the thread's context node.
+        if (contextPath is not null)
         {
-            var threadPath = context.Namespace;
-            var mainNode = context.Node.MainNode;
-
-            // Navigate to content entity (or home if self-referencing)
-            var navigateTo = mainNode != context.Node.Path ? $"/{mainNode}" : "/";
-            NavigationManager.NavigateTo(navigateTo);
-
-            // Open panel with thread and set title
-            SidePanelState.SetTitle(context.Node.Name ?? "Thread");
-            SidePanelState.OpenWithContent(threadPath);
-            await ApplyPersistedSizeAsync();
-        }
-        else
-        {
-            // Normal toggle
-            SidePanelState.Toggle();
-
             if (SidePanelState.IsVisible)
             {
-                // Apply persisted size when opening
+                SidePanelState.SetVisible(false);
+            }
+            else
+            {
+                // Set the content BEFORE showing so opening always brings the main path.
+                SidePanelState.SetTitle(
+                    MeshWeaver.AI.NavigationContextProjection.ContextChipLabel(_currentNavContext)
+                    ?? LastSegmentOf(contextPath));
+                SidePanelState.OpenWithContent(contextPath);
                 await ApplyPersistedSizeAsync();
             }
+            return;
+        }
+
+        // Not on a thread — normal toggle (new-chat composer / current content).
+        SidePanelState.Toggle();
+        if (SidePanelState.IsVisible)
+        {
+            // Apply persisted size when opening
+            await ApplyPersistedSizeAsync();
         }
     }
+
+    /// <summary>
+    /// When the MAIN view is showing a thread, the path of that thread's MAIN (context) node — the node
+    /// the side panel peeks. Null when not on a thread, or the thread is self-referencing (no distinct
+    /// context). Drives the side-panel-as-context-peek model AND the context-aware toggle icon.
+    /// </summary>
+    private string? CurrentThreadContextPath()
+    {
+        var node = _currentNavContext?.Node;
+        if (node is null || !ThreadNodeType.IsThreadNodeType(node.NodeType))
+            return null;
+        var mainNode = node.MainNode;
+        return !string.IsNullOrEmpty(mainNode)
+               && !string.Equals(mainNode, node.Path, StringComparison.OrdinalIgnoreCase)
+            ? mainNode : null;
+    }
+
+    /// <summary>True when the main view is on a thread with a distinct context node to peek.</summary>
+    protected bool HasThreadContext => CurrentThreadContextPath() is not null;
+
+    /// <summary>Tooltip for the side-panel toggle, matching its context-aware icon.</summary>
+    protected string SidePanelToggleTitle =>
+        IsSidePanelVisible ? "Close side panel"
+        : HasThreadContext ? "Show context"
+        : "Chat";
+
+    private static string LastSegmentOf(string path)
+    {
+        var idx = path.LastIndexOf('/');
+        return idx >= 0 && idx < path.Length - 1 ? path[(idx + 1)..] : path;
+    }
+
+    private static bool IsThreadPath(string path)
+        => path.Contains($"/{ThreadNodeType.ThreadPartition}/", StringComparison.OrdinalIgnoreCase);
 
     private async Task ApplyPersistedSizeAsync()
     {
@@ -391,15 +696,20 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     }
 
 
-    // Side panel content state
-    // Key derived from the primary path so the ThreadChatView is rebuilt (re-running
-    // OnInitialized, re-seeding the context attachment chip) when navigation moves
-    // to a different node. Without this, the ThreadChatView stays stuck on the
-    // InitialContext it was first rendered with.
-    private string sidePanelContentKey => $"newchat-{NavigationService.Context?.PrimaryPath ?? string.Empty}";
+    // Side panel content state.
+    //
+    // 🚨 The side-panel chat's identity (its Blazor @key AND its cached control) is keyed
+    // ONLY on the stable content path — NEVER on the navigation context's PrimaryPath. A
+    // key that embeds PrimaryPath flips on every navigation, so Blazor tears down + recreates
+    // the ThreadChatView and DESTROYS the in-progress conversation (the recurring "lost the
+    // thread again" nuisance). The context-attachment chip is refreshed LIVE inside
+    // ThreadChatView via its NavigationService.NavigationContext subscription
+    // (OnNavigationContextChanged) — the component never needs rebuilding to reflect a
+    // navigation change. The keying/caching rules live in SidePanelChatKeying so the
+    // invariant is unit-testable without a render host.
+    private const string sidePanelContentKey = SidePanelChatKeying.NewChatKey;
     private ThreadChatControl? _cachedSidePanelControl;
     private string? _cachedContentPath;
-    private string? _cachedContextPath;
 
     private LayoutAreaControl? sidePanelViewModel;
     private string? resolvedSidePanelPath;
@@ -409,7 +719,7 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     /// If the content path points to a node that no longer exists (e.g. deleted thread),
     /// the path resolves to a parent with satellite segments as remainder — detect and clear.
     /// </summary>
-    private async Task ResolveSidePanelContentAsync()
+    private void ResolveSidePanelContent()
     {
         var contentPath = SidePanelState.ContentPath;
         if (contentPath == resolvedSidePanelPath)
@@ -423,31 +733,34 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
             return;
         }
 
-        var resolution = await PathResolver.ResolvePathAsync(contentPath);
-        if (resolution == null)
+        // Reactive — Subscribe, never await on PathResolver chain (deadlock surface;
+        // see Doc/Architecture/AsynchronousCalls.md).
+        PathResolver.ResolvePath(contentPath).Subscribe(resolution =>
         {
-            // Node doesn't exist at all — clear stale content path
-            sidePanelViewModel = null;
-            SidePanelState.SetContentPath(null);
-            resolvedSidePanelPath = null;
-            return;
-        }
+            if (resolution == null)
+            {
+                sidePanelViewModel = null;
+                SidePanelState.SetContentPath(null);
+                resolvedSidePanelPath = null;
+                InvokeAsync(StateHasChanged);
+                return;
+            }
 
-        // If the resolved prefix doesn't match the content path, it means the node
-        // no longer exists and resolution fell back to a parent (e.g. _Thread/id became
-        // remainder on the parent hub → invalid area). Clear the stale path.
-        if (!string.Equals(resolution.Prefix, contentPath, StringComparison.OrdinalIgnoreCase)
-            && !string.IsNullOrEmpty(resolution.Remainder))
-        {
-            sidePanelViewModel = null;
-            SidePanelState.SetContentPath(null);
-            resolvedSidePanelPath = null;
-            return;
-        }
+            if (!string.Equals(resolution.Prefix, contentPath, StringComparison.OrdinalIgnoreCase)
+                && !string.IsNullOrEmpty(resolution.Remainder))
+            {
+                sidePanelViewModel = null;
+                SidePanelState.SetContentPath(null);
+                resolvedSidePanelPath = null;
+                InvokeAsync(StateHasChanged);
+                return;
+            }
 
-        var (area, id) = ParseSidePanelRemainder(resolution.Remainder);
-        var reference = new LayoutAreaReference(area) { Id = id ?? "" };
-        sidePanelViewModel = Controls.LayoutArea((Address)resolution.Prefix, reference);
+            var (area, id) = ParseSidePanelRemainder(resolution.Remainder);
+            var reference = new LayoutAreaReference(area) { Id = id ?? "" };
+            sidePanelViewModel = Controls.LayoutArea((Address)resolution.Prefix, reference);
+            InvokeAsync(StateHasChanged);
+        });
     }
 
     private static (string? Area, string? Id) ParseSidePanelRemainder(string? remainder)
@@ -462,19 +775,24 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
 
     private ThreadChatControl GetSidePanelControl()
     {
-        var context = NavigationService.Context;
-        var contextPath = context?.PrimaryPath;
         var contentPath = SidePanelState.ContentPath ?? string.Empty;
 
-        // Return cached instance if inputs haven't changed
+        // Return the cached control unless the CONTENT path changed. Navigation
+        // (PrimaryPath) is deliberately NOT a cache input: rebuilding on every node
+        // click would replace the ViewModel and re-bind the chat (and, combined with a
+        // PrimaryPath-keyed @key, tear it down entirely). The current navigation context
+        // only seeds the INITIAL attachment chip below; ThreadChatView then keeps the
+        // chip in sync via its own NavigationContext subscription — no rebuild needed.
         if (_cachedSidePanelControl != null
-            && _cachedContentPath == contentPath
-            && _cachedContextPath == contextPath)
+            && !SidePanelChatKeying.ShouldRebuildControl(_cachedContentPath, contentPath))
             return _cachedSidePanelControl;
 
-        var contextDisplayName = context?.Node?.Name ?? context?.Node?.Id;
+        var context = _currentNavContext;
+        var contextPath = context?.PrimaryPath;
+        // Label the OWNER, never the navigated satellite (a thread "hi"): ContextChipLabel returns null
+        // for a satellite so the chip falls back to the main-node path's last segment, not the thread name.
+        var contextDisplayName = MeshWeaver.AI.NavigationContextProjection.ContextChipLabel(context);
         _cachedContentPath = contentPath;
-        _cachedContextPath = contextPath;
         _cachedSidePanelControl = new ThreadChatControl()
             .WithThreadPath(contentPath)
             .WithInitialContext(contextPath ?? string.Empty)
@@ -482,13 +800,17 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
         return _cachedSidePanelControl;
     }
 
+    /// <summary>
+    /// Unsubscribes from side-panel, navigation, and menu events and disposes JS interop references.
+    /// </summary>
     public void Dispose()
     {
         SidePanelState.OnStateChanged -= OnSidePanelStateChanged;
         NavigationService.SidePanelNavigationRequested -= OnSidePanelNavigation;
-        NavigationService.OnNavigationContextChanged -= OnNavigationContextChanged;
+        _navContextSubscription?.Dispose();
         _nodeMenuSubscription?.Dispose();
         _meshMenuSubscription?.Dispose();
+        _aiMenuSubscription?.Dispose();
         dotNetRef?.Dispose();
         jsModule?.DisposeAsync();
     }
@@ -512,3 +834,5 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
         return true;
     }
 }
+
+

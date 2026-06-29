@@ -23,7 +23,7 @@ public partial class QueryParser
             return ParsedQuery.Empty;
 
         var tokens = Tokenize(query);
-        var (filterTokens, textSearch, path, scope, orderBy, limit, source, select, context, isMain) = ExtractReservedQualifiers(tokens);
+        var (filterTokens, textSearch, path, scope, orderBy, limit, source, select, context, isMain, paths) = ExtractReservedQualifiers(tokens);
 
         // Parse the filter expression from remaining tokens
         QueryNode? filter = null;
@@ -33,7 +33,7 @@ public partial class QueryParser
             filter = ParseOr(filterTokens, ref position);
         }
 
-        return new ParsedQuery(filter, textSearch, path, scope, orderBy, limit, source, select, context, isMain);
+        return new ParsedQuery(filter, textSearch, path, scope, orderBy, limit, source, select, context, isMain, paths);
     }
 
     /// <summary>
@@ -228,8 +228,50 @@ public partial class QueryParser
             op = isNegated ? QueryOperator.NotEqual : QueryOperator.Equal;
         }
 
-        // Parse the value
-        var value = ParseSingleValue(input, ref i);
+        // Parse the value. At the top level we allow `(` and `)` inside the value
+        // so SQL-function calls in sort selectors work — e.g. `sort:length(path)-desc`.
+        // The `(A OR B OR C)` list form is detected above (immediately-after-colon),
+        // so we never confuse a list with an embedded paren here.
+        var value = ParseSingleValue(input, ref i, stopAtParens: false);
+
+        // Quoted `|` alternation — `field:"A B"|"C D"|E`. ParseSingleValue stops a
+        // QUOTED value at its closing quote, so a trailing `|` here is the alternation
+        // separator (the unquoted form keeps `|` inside the value and is split by the
+        // block below). This is what lets path segments containing SPACES take part in
+        // the prefix-set query the path resolver builds (`path:"a/b c"|"a"`).
+        if ((op == QueryOperator.Equal || op == QueryOperator.NotEqual)
+            && i < input.Length && input[i] == '|')
+        {
+            var altParts = new List<string>();
+            if (value.Length > 0) altParts.Add(value);
+            while (i < input.Length && input[i] == '|')
+            {
+                i++; // consume '|'
+                var next = ParseSingleValue(input, ref i, stopAtParens: false);
+                if (next.Length > 0) altParts.Add(next);
+            }
+            if (altParts.Count > 1)
+            {
+                op = isNegated ? QueryOperator.NotIn : QueryOperator.In;
+                return (new QueryCondition(field, op, altParts.ToArray()), i - start);
+            }
+        }
+
+        // Grep-style `|` alternation — `field:A|B|C` is equivalent to
+        // `field:(A OR B OR C)` but more concise, modelled on `grep -E`'s
+        // alternation operator. Pushed down to `IN(...)` by query backends.
+        // Only triggers for plain Equal/NotEqual (not for >, <, >=, <=, Like).
+        if ((op == QueryOperator.Equal || op == QueryOperator.NotEqual)
+            && !value.Contains('*')
+            && value.Contains('|'))
+        {
+            var parts = value.Split('|', StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length > 1)
+            {
+                op = isNegated ? QueryOperator.NotIn : QueryOperator.In;
+                return (new QueryCondition(field, op, parts), i - start);
+            }
+        }
 
         // Check for wildcard pattern
         if (!isNegated && (op == QueryOperator.Equal || op == QueryOperator.NotEqual))
@@ -294,8 +336,16 @@ public partial class QueryParser
 
     /// <summary>
     /// Parses a single value, handling quotes.
+    /// <para>
+    /// <paramref name="stopAtParens"/> = true (default) — used inside list
+    /// expressions <c>field:(A OR B OR C)</c> where each value must end at the
+    /// closing <c>)</c>. <paramref name="stopAtParens"/> = false — used at the
+    /// top level so SQL-function syntax like <c>length(path)</c> stays inside
+    /// the value. The list form is already disambiguated by the
+    /// immediately-after-colon <c>(</c> check in <c>ParseFieldValue</c>.
+    /// </para>
     /// </summary>
-    private string ParseSingleValue(string input, ref int i)
+    private string ParseSingleValue(string input, ref int i, bool stopAtParens = true)
     {
         // Skip whitespace
         while (i < input.Length && char.IsWhiteSpace(input[i]))
@@ -318,15 +368,34 @@ public partial class QueryParser
             return value;
         }
 
-        // Unquoted value - read until whitespace or parentheses.
+        // Unquoted value - read until whitespace.
         // OR keywords are handled by ParseListValues, not here —
         // detecting OR mid-value causes false positives (e.g. "Operator" → "Operat" + OR).
+        // Paren handling: when stopAtParens=true (inside list `field:(A OR B)`),
+        // stop at any unescaped paren. When false (top-level value), we still need
+        // to stop at the structural CLOSING `)` of an enclosing group like
+        // `(a:1 b:2)` — but NOT at the closing `)` of a function call inside the
+        // value like `length(path)`. Track depth: balanced internal parens stay
+        // in the value; an unbalanced `)` exits.
         var valueStart = i;
+        var depth = 0;
         while (i < input.Length)
         {
             var c = input[i];
-            if (char.IsWhiteSpace(c) || c == ')' || c == '(')
+            if (char.IsWhiteSpace(c))
                 break;
+            if (stopAtParens && (c == ')' || c == '('))
+                break;
+            if (!stopAtParens)
+            {
+                if (c == '(')
+                    depth++;
+                else if (c == ')')
+                {
+                    if (depth == 0) break; // structural close of an enclosing group
+                    depth--;
+                }
+            }
 
             i++;
         }
@@ -338,15 +407,23 @@ public partial class QueryParser
     /// Extracts reserved qualifiers (path, namespace, scope, sort, limit, source) from tokens.
     /// Returns remaining filter tokens and extracted values.
     /// </summary>
-    private (List<Token> FilterTokens, string? TextSearch, string? Path, QueryScope Scope, OrderByClause? OrderBy, int? Limit, QuerySource Source, IReadOnlyList<string>? Select, string? Context, bool? IsMain)
+    private (List<Token> FilterTokens, string? TextSearch, string? Path, QueryScope Scope, OrderByClause? OrderBy, int? Limit, QuerySource Source, IReadOnlyList<string>? Select, string? Context, bool? IsMain, IReadOnlyList<string>? Paths)
         ExtractReservedQualifiers(List<Token> tokens)
     {
         var filterTokens = new List<Token>();
         var textSearchParts = new List<string>();
         string? path = null;
+        IReadOnlyList<string>? paths = null;
         var scope = QueryScope.Exact;
         bool explicitScope = false;
         bool namespaceUsed = false;
+        // Multi-value `namespace:A|B|C` alternation. Deferred to post-loop processing
+        // (the scope: qualifier may appear after the namespace: token) where it becomes a
+        // `namespace IN (...)` membership FILTER — expanded to each value's self+ancestor
+        // namespaces when scope:selfAndAncestors. This is what lets a SINGLE query union
+        // built-in + per-context + per-NodeType + per-user instances (see AgentPickerProjection).
+        string[]? namespaceAlternation = null;
+        bool namespaceAlternationNegated = false;
         OrderByClause? orderBy = null;
         int? limit = null;
         var source = QuerySource.Default;
@@ -369,12 +446,35 @@ public partial class QueryParser
 
                 if (field.Equals("path", StringComparison.OrdinalIgnoreCase))
                 {
-                    path = value;
+                    // Multi-value `path:a|b|c` — `In`/`NotIn` carries the
+                    // alternation list. Backends use the list to push down
+                    // `WHERE path IN (...)`. Single-value form sets only Path.
+                    if (token.Condition.Operator is QueryOperator.In or QueryOperator.NotIn
+                        && token.Condition.Values.Length > 1)
+                    {
+                        paths = token.Condition.Values;
+                        path = token.Condition.Values[0];
+                    }
+                    else
+                    {
+                        path = value;
+                    }
                     continue;
                 }
 
                 if (field.Equals("namespace", StringComparison.OrdinalIgnoreCase))
                 {
+                    // Alternation `namespace:A|B|C` (parsed to In/NotIn with >1 values) is an EXACT
+                    // MEMBERSHIP constraint across the listed namespaces, not a single base namespace
+                    // + scope walk. Deferred to post-loop resolution (a `namespace IN (...)` filter).
+                    if (token.Condition!.Operator is QueryOperator.In or QueryOperator.NotIn
+                        && token.Condition.Values.Length > 1)
+                    {
+                        namespaceAlternation = token.Condition.Values;
+                        namespaceAlternationNegated = token.Condition.Operator == QueryOperator.NotIn;
+                        namespaceUsed = true;
+                        continue;
+                    }
                     if (value.Contains('*'))
                     {
                         // Wildcard namespace: add as LIKE filter (e.g., namespace:*/_Thread)
@@ -394,6 +494,8 @@ public partial class QueryParser
                     explicitScope = true;
                     scope = value.ToLowerInvariant() switch
                     {
+                        "exact" => QueryScope.Exact,
+                        "children" => QueryScope.Children,
                         "descendants" => QueryScope.Descendants,
                         "ancestors" => QueryScope.Ancestors,
                         "hierarchy" => QueryScope.Hierarchy,
@@ -401,6 +503,9 @@ public partial class QueryParser
                         "ancestorsandself" => QueryScope.AncestorsAndSelf,
                         "selfandancestors" => QueryScope.AncestorsAndSelf,
                         "myselfandancestors" => QueryScope.AncestorsAndSelf, // legacy alias
+                        "selfanddescendants" => QueryScope.Subtree,           // alias for symmetry with selfAndAncestors
+                        "nextlevel" => QueryScope.NextLevel,
+                        "populated" => QueryScope.NextLevel,                   // reads as "next populated level"
                         _ => QueryScope.Exact
                     };
                     continue;
@@ -472,8 +577,32 @@ public partial class QueryParser
             scope = QueryScope.Children;
         }
 
+        // Resolve a deferred `namespace:A|B|C` alternation into a `namespace IN (...)` membership
+        // FILTER. With scope:selfAndAncestors each value expands to itself + every ancestor
+        // namespace, so a node whose namespace is the value OR any ancestor matches (closest-wins
+        // is the caller's concern, as with AccessAssignment). Without that scope it's exact
+        // membership across the listed namespaces. Emitting a plain filter means every backend
+        // (Postgres `LOWER(n.namespace) IN`, in-memory QueryEvaluator, the static-node provider)
+        // evaluates it identically — no scope-clause surgery — and the path/scope is cleared so no
+        // path-based walk runs on top. Single `namespace:X` is left untouched (path + scope walk).
+        if (namespaceAlternation is { Length: > 1 })
+        {
+            // `namespace:A|B|C` is EXACT membership across the listed namespaces — a single
+            // `namespace IN (A, B, C)` filter, no ancestor/descendant graph walk. This is what the
+            // agent / model registry uses to list the platform + space + user namespaces directly
+            // (e.g. `namespace:{user}/Agent|{space}/Agent|Agent`). The alternation IS the namespace
+            // constraint, so the single-namespace path/scope is dropped — no walk on top.
+            var distinct = namespaceAlternation.Select(v => v.Trim('/'))
+                .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            filterTokens.Add(new Token(TokenType.Comparison, string.Empty,
+                new QueryCondition("namespace",
+                    namespaceAlternationNegated ? QueryOperator.NotIn : QueryOperator.In, distinct)));
+            path = null;
+            scope = QueryScope.Exact;
+        }
+
         var textSearch = textSearchParts.Count > 0 ? string.Join(" ", textSearchParts) : null;
-        return (filterTokens, textSearch, path, scope, orderBy, limit, source, select, context, isMain);
+        return (filterTokens, textSearch, path, scope, orderBy, limit, source, select, context, isMain, paths);
     }
 
     /// <summary>

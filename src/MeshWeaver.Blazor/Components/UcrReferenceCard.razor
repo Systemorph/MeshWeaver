@@ -1,3 +1,5 @@
+﻿@using System.Reactive.Linq
+@using System.Reactive.Threading.Tasks
 @using MeshWeaver.Layout
 @using MeshWeaver.Mesh.Services
 @inject IPathResolver PathResolver
@@ -23,7 +25,7 @@ else
     private bool IsLoading { get; set; } = true;
     private LayoutAreaControl? ResolvedViewModel { get; set; }
 
-    protected override async Task OnParametersSetAsync()
+    protected override void OnParametersSet()
     {
         if (string.IsNullOrEmpty(Path))
         {
@@ -34,26 +36,23 @@ else
         IsLoading = true;
         ResolvedViewModel = null;
 
-        try
-        {
-            var resolution = await PathResolver.ResolvePathAsync(Path);
-            if (resolution != null)
+        // Reactive — Subscribe, never await on the resolver chain (deadlock surface;
+        // see Doc/Architecture/AsynchronousCalls.md).
+        PathResolver.ResolvePath(Path)
+            .Catch<AddressResolution?, Exception>(_ => Observable.Return<AddressResolution?>(null))
+            .Subscribe(resolution =>
             {
-                // Use the Thumbnail layout area - same control as catalog
-                ResolvedViewModel = new LayoutAreaControl(
-                    (Messaging.Address)resolution.Prefix,
-                    new Data.LayoutAreaReference("Thumbnail")
-                );
-            }
-        }
-        catch
-        {
-            // Silent failure - will show error message
-        }
-        finally
-        {
-            IsLoading = false;
-            await InvokeAsync(StateHasChanged);
-        }
+                if (resolution != null)
+                {
+                    ResolvedViewModel = new LayoutAreaControl(
+                        (Messaging.Address)resolution.Prefix,
+                        new Data.LayoutAreaReference("Thumbnail")
+                    );
+                }
+                IsLoading = false;
+                InvokeAsync(StateHasChanged);
+            });
     }
 }
+
+

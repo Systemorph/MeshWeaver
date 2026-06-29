@@ -1,6 +1,5 @@
 using System;
 using System.IO;
-using FluentAssertions;
 using MeshWeaver.Markdown.Export.Branding;
 using Xunit;
 

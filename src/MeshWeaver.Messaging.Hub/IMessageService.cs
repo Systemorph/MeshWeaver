@@ -1,6 +1,6 @@
 ﻿namespace MeshWeaver.Messaging;
 
-internal interface IMessageService : IAsyncDisposable
+internal interface IMessageService : IDisposable
 {
     Address Address { get; }
     IMessageDelivery RouteMessageAsync(IMessageDelivery message, CancellationToken cancellationToken);

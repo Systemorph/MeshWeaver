@@ -2,8 +2,6 @@
 using MeshWeaver.Messaging;
 using System.Text.Json;
 using System.Threading.Tasks;
-using FluentAssertions;
-using FluentAssertions.Extensions;
 using MeshWeaver.Data;
 using MeshWeaver.Fixture;
 using Xunit;
@@ -51,9 +49,8 @@ public class NavMenuExtensionsTest(ITestOutputHelper output) : HubTestBase(outpu
             );
 
             var control = await stream.GetControlStream(reference.Area!)
-                .Timeout(10.Seconds())
-                .FirstAsync(x => x != null);
-            
+                .Should().Within(10.Seconds()).Match(x => x != null);
+
             control
                 .Should()
                 .BeOfType<NavMenuControl>()

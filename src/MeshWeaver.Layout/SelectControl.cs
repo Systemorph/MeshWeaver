@@ -4,6 +4,7 @@
 /// Represents a select control with customizable properties.
 /// </summary>
 /// <param name="Data">The data associated with the select control.</param>
+/// <param name="Options">The collection of selectable options to display in the dropdown.</param>
 public record SelectControl(object Data, object Options) : ListControlBase<SelectControl>(Data, Options), IListControl
 {
     /// <summary>

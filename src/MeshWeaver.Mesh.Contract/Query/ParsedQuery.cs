@@ -7,7 +7,7 @@ namespace MeshWeaver.Mesh;
 /// </summary>
 /// <param name="Filter">The parsed query AST (null if no filter conditions)</param>
 /// <param name="TextSearch">Full-text search value (bare text in query)</param>
-/// <param name="Path">Base path from path: qualifier (supports wildcards)</param>
+/// <param name="Path">Base path from path: qualifier (supports wildcards). Single-value form.</param>
 /// <param name="Scope">Path scope from scope: qualifier</param>
 /// <param name="OrderBy">Ordering clause from sort: qualifier</param>
 /// <param name="Limit">Result limit from limit: qualifier</param>
@@ -15,6 +15,7 @@ namespace MeshWeaver.Mesh;
 /// <param name="Select">Property names to project results onto (from select: qualifier)</param>
 /// <param name="Context">Context for visibility filtering (from context: qualifier)</param>
 /// <param name="IsMain">When true, filters to main nodes only (MainNode is null or equals Path)</param>
+/// <param name="Paths">Multi-value path filter from <c>path:a|b|c</c> alternation. When set, backends should push down <c>WHERE path IN (...)</c>. <see cref="Path"/> is also set to the first value for back-compat with consumers that don't know about multi-path.</param>
 public record ParsedQuery(
     QueryNode? Filter,
     string? TextSearch,
@@ -25,7 +26,8 @@ public record ParsedQuery(
     QuerySource Source = QuerySource.Default,
     IReadOnlyList<string>? Select = null,
     string? Context = null,
-    bool? IsMain = null
+    bool? IsMain = null,
+    IReadOnlyList<string>? Paths = null
 )
 {
     /// <summary>
@@ -56,6 +58,41 @@ public record ParsedQuery(
         QueryAnd and => and.Children.Select(ExtractNodeTypeFromNode).FirstOrDefault(v => v != null),
         _ => null
     };
+
+    /// <summary>
+    /// Extracts every value from <c>namespace:X</c> conditions in the filter.
+    /// Used by the top-level aggregator to dispatch a query to the set of
+    /// providers whose <c>Matches</c> predicate accepts any of these
+    /// namespaces. Empty when the query has no namespace constraint
+    /// (broadcast to all providers).
+    /// </summary>
+    public IReadOnlyList<string> ExtractNamespaces()
+    {
+        if (Filter == null) return Array.Empty<string>();
+        var collected = new List<string>();
+        ExtractNamespacesFromNode(Filter, collected);
+        return collected;
+    }
+
+    private static void ExtractNamespacesFromNode(QueryNode node, List<string> collected)
+    {
+        switch (node)
+        {
+            // Equal → single namespace; In → a `namespace:A|B|C` alternation (membership filter,
+            // produced by the parser for the agent/extensible-defaults union). Both forms carry the
+            // namespace candidates the aggregator routes on, so collect Values for either operator.
+            case QueryComparison c when c.Condition.Selector.Equals("namespace", StringComparison.OrdinalIgnoreCase)
+                && c.Condition.Operator is QueryOperator.Equal or QueryOperator.In:
+                collected.AddRange(c.Condition.Values);
+                break;
+            case QueryAnd and:
+                foreach (var child in and.Children) ExtractNamespacesFromNode(child, collected);
+                break;
+            case QueryOr or:
+                foreach (var child in or.Children) ExtractNamespacesFromNode(child, collected);
+                break;
+        }
+    }
 
     /// <summary>
     /// Projects an item down to only the requested properties.

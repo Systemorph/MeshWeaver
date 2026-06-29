@@ -1,8 +1,11 @@
 using System.Collections.Immutable;
 using System.ComponentModel;
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Text;
 using System.Text.Json;
 using HtmlAgilityPack;
+using MeshWeaver.Mesh.Threading;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -33,115 +36,151 @@ public class WebSearchConfiguration
 
 /// <summary>
 /// Plugin providing web search and web page fetching tools for AI agents.
-/// Register via <see cref="WebSearchPluginExtensions.AddWebSearchPlugin"/>.
+/// Register via <c>AIExtensions.AddWebSearchPlugin</c>.
 /// </summary>
 public class WebSearchPlugin : IAgentPlugin
 {
     private readonly HttpClient httpClient;
     private readonly WebSearchConfiguration config;
     private readonly ILogger<WebSearchPlugin> logger;
+    private readonly IIoPool ioPool;
 
+    /// <summary>The plugin's stable identifier, <c>WebSearch</c>.</summary>
     public string Name => "WebSearch";
 
+    /// <summary>
+    /// Creates the plugin, resolving the named <c>Http</c> I/O pool through which every
+    /// HTTP leaf is bridged (falls back to <c>IoPool.Unbounded</c> when no registry is supplied).
+    /// </summary>
+    /// <param name="httpClient">HTTP client used for search and page-fetch requests.</param>
+    /// <param name="options">Web-search configuration (Bing key, endpoint, fetch limit).</param>
+    /// <param name="logger">Logger for diagnostics.</param>
+    /// <param name="ioPoolRegistry">Optional registry supplying the bounded HTTP I/O pool.</param>
     public WebSearchPlugin(
         HttpClient httpClient,
         IOptions<WebSearchConfiguration> options,
-        ILogger<WebSearchPlugin> logger)
+        ILogger<WebSearchPlugin> logger,
+        IoPoolRegistry? ioPoolRegistry = null)
     {
         this.httpClient = httpClient;
         this.config = options.Value;
         this.logger = logger;
+        ioPool = ioPoolRegistry?.Get(IoPoolNames.Http) ?? IoPool.Unbounded;
     }
 
+    // The AIFunction surface requires Task<string> — these are the sanctioned one-line
+    // boundary adapters; the bodies are reactive with the HTTP leaf bridged through the
+    // IIoPool (AsynchronousCalls.md, ControlledIoPooling.md).
+    /// <summary>
+    /// MCP/agent tool: searches the web via Bing and returns matching results
+    /// (title, URL and snippet) as JSON.
+    /// </summary>
+    /// <param name="query">Search query string.</param>
+    /// <param name="count">Number of results to return (default 5, clamped to 1..20).</param>
+    /// <returns>A task resolving to the JSON result list, or a message when search is not configured or fails.</returns>
     [Description("Searches the web using Bing and returns relevant results with titles, URLs, and snippets. Use this to find current information, documentation, or any topic on the internet.")]
-    public async Task<string> SearchWeb(
+    public Task<string> SearchWeb(
         [Description("Search query string")] string query,
         [Description("Number of results to return (default 5, max 20)")] int count = 5)
+        => SearchWebCore(query, count).FirstAsync().ToTask();
+
+    /// <summary>
+    /// MCP/agent tool: fetches a web page and extracts its readable text, truncated
+    /// to the configured maximum length.
+    /// </summary>
+    /// <param name="url">URL of the web page to fetch.</param>
+    /// <returns>A task resolving to the extracted text, or a message when the URL is empty or the fetch fails.</returns>
+    [Description("Fetches a web page and extracts its text content. Use this to read articles, documentation, or any public web page after finding URLs via SearchWeb.")]
+    public Task<string> FetchWebPage(
+        [Description("URL of the web page to fetch")] string url)
+        => FetchWebPageCore(url).FirstAsync().ToTask();
+
+    internal IObservable<string> SearchWebCore(string query, int count)
     {
         logger.LogInformation("SearchWeb called with query={Query}, count={Count}", query, count);
 
         if (string.IsNullOrWhiteSpace(config.BingApiKey))
-            return "Web search is not configured. A Bing Search API key is required.";
+            return Observable.Return("Web search is not configured. A Bing Search API key is required.");
 
-        count = Math.Clamp(count, 1, 20);
+        var clamped = Math.Clamp(count, 1, 20);
 
-        try
-        {
-            using var request = new HttpRequestMessage(HttpMethod.Get,
-                $"{config.Endpoint}?q={Uri.EscapeDataString(query)}&count={count}&textFormat=Plain");
-            request.Headers.Add("Ocp-Apim-Subscription-Key", config.BingApiKey);
-
-            using var response = await httpClient.SendAsync(request);
-            response.EnsureSuccessStatusCode();
-
-            var json = await response.Content.ReadAsStringAsync();
-            using var doc = JsonDocument.Parse(json);
-
-            var results = ImmutableList<object>.Empty;
-            if (doc.RootElement.TryGetProperty("webPages", out var webPages) &&
-                webPages.TryGetProperty("value", out var pages))
+        // The HTTP round-trip is ONE pooled async leaf — async lives only inside
+        // the IIoPool bridge, never on the subscribing thread.
+        return ioPool.Invoke(async ct =>
             {
-                foreach (var page in pages.EnumerateArray())
+                using var request = new HttpRequestMessage(HttpMethod.Get,
+                    $"{config.Endpoint}?q={Uri.EscapeDataString(query)}&count={clamped}&textFormat=Plain");
+                request.Headers.Add("Ocp-Apim-Subscription-Key", config.BingApiKey);
+
+                using var response = await httpClient.SendAsync(request, ct);
+                response.EnsureSuccessStatusCode();
+
+                var json = await response.Content.ReadAsStringAsync(ct);
+                using var doc = JsonDocument.Parse(json);
+
+                var results = ImmutableList<object>.Empty;
+                if (doc.RootElement.TryGetProperty("webPages", out var webPages) &&
+                    webPages.TryGetProperty("value", out var pages))
                 {
-                    results = results.Add(new
+                    foreach (var page in pages.EnumerateArray())
                     {
-                        title = page.GetProperty("name").GetString(),
-                        url = page.GetProperty("url").GetString(),
-                        snippet = page.GetProperty("snippet").GetString()
-                    });
+                        results = results.Add(new
+                        {
+                            title = page.GetProperty("name").GetString(),
+                            url = page.GetProperty("url").GetString(),
+                            snippet = page.GetProperty("snippet").GetString()
+                        });
+                    }
                 }
-            }
 
-            if (results.Count == 0)
-                return "No results found.";
+                if (results.Count == 0)
+                    return "No results found.";
 
-            return JsonSerializer.Serialize(results);
-        }
-        catch (HttpRequestException ex)
-        {
-            logger.LogError(ex, "Web search failed for query={Query}", query);
-            return $"Web search failed: {ex.Message}";
-        }
+                return JsonSerializer.Serialize(results);
+            })
+            .Catch((HttpRequestException ex) =>
+            {
+                logger.LogError(ex, "Web search failed for query={Query}", query);
+                return Observable.Return($"Web search failed: {ex.Message}");
+            });
     }
 
-    [Description("Fetches a web page and extracts its text content. Use this to read articles, documentation, or any public web page after finding URLs via SearchWeb.")]
-    public async Task<string> FetchWebPage(
-        [Description("URL of the web page to fetch")] string url)
+    internal IObservable<string> FetchWebPageCore(string url)
     {
         logger.LogInformation("FetchWebPage called with url={Url}", url);
 
         if (string.IsNullOrWhiteSpace(url))
-            return "URL cannot be empty.";
+            return Observable.Return("URL cannot be empty.");
 
-        try
-        {
-            using var request = new HttpRequestMessage(HttpMethod.Get, url);
-            request.Headers.Add("User-Agent", "MeshWeaver/1.0");
-            request.Headers.Add("Accept", "text/html,application/xhtml+xml,text/plain");
-
-            using var response = await httpClient.SendAsync(request);
-            response.EnsureSuccessStatusCode();
-
-            var contentType = response.Content.Headers.ContentType?.MediaType ?? "";
-            var content = await response.Content.ReadAsStringAsync();
-
-            // Extract text from HTML
-            if (contentType.Contains("html", StringComparison.OrdinalIgnoreCase) ||
-                content.TrimStart().StartsWith("<", StringComparison.Ordinal))
+        return ioPool.Invoke(async ct =>
             {
-                content = ExtractTextFromHtml(content);
-            }
+                using var request = new HttpRequestMessage(HttpMethod.Get, url);
+                request.Headers.Add("User-Agent", "MeshWeaver/1.0");
+                request.Headers.Add("Accept", "text/html,application/xhtml+xml,text/plain");
 
-            if (content.Length > config.MaxFetchContentLength)
-                content = content[..config.MaxFetchContentLength] + "\n\n[Content truncated]";
+                using var response = await httpClient.SendAsync(request, ct);
+                response.EnsureSuccessStatusCode();
 
-            return content;
-        }
-        catch (HttpRequestException ex)
-        {
-            logger.LogError(ex, "Failed to fetch web page url={Url}", url);
-            return $"Failed to fetch web page: {ex.Message}";
-        }
+                var contentType = response.Content.Headers.ContentType?.MediaType ?? "";
+                var content = await response.Content.ReadAsStringAsync(ct);
+
+                // Extract text from HTML
+                if (contentType.Contains("html", StringComparison.OrdinalIgnoreCase) ||
+                    content.TrimStart().StartsWith("<", StringComparison.Ordinal))
+                {
+                    content = ExtractTextFromHtml(content);
+                }
+
+                if (content.Length > config.MaxFetchContentLength)
+                    content = content[..config.MaxFetchContentLength] + "\n\n[Content truncated]";
+
+                return content;
+            })
+            .Catch((HttpRequestException ex) =>
+            {
+                logger.LogError(ex, "Failed to fetch web page url={Url}", url);
+                return Observable.Return($"Failed to fetch web page: {ex.Message}");
+            });
     }
 
     private static string ExtractTextFromHtml(string html)
@@ -185,6 +224,10 @@ public class WebSearchPlugin : IAgentPlugin
             sb.AppendLine();
     }
 
+    /// <summary>
+    /// Builds the <c>AITool</c> set this plugin exposes to agents — SearchWeb and FetchWebPage.
+    /// </summary>
+    /// <returns>The web-search tools.</returns>
     public IEnumerable<AITool> CreateTools()
     {
         return

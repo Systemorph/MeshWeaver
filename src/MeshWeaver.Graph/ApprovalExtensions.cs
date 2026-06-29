@@ -1,10 +1,12 @@
-﻿using MeshWeaver.Data;
+﻿using System.Reactive.Linq;
+using MeshWeaver.Data;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Messaging;
+using MeshWeaver.Reactive;
 using MeshWeaver.ShortGuid;
 
 namespace MeshWeaver.Graph;
@@ -51,15 +53,20 @@ public static class ApprovalExtensions
         => configuration.Get<ApprovalsEnabled>() != null;
 
     /// <summary>
-    /// Menu provider that yields "Request Approval" for users with update permission.
+    /// Reactive menu provider that emits "Request Approval" for users with Update permission.
+    /// Re-emits when the viewer's effective permissions change (e.g. a role is granted at runtime),
+    /// so the item appears/disappears without a reload. Emits an empty slice when Update is absent.
     /// </summary>
-    private static async IAsyncEnumerable<NodeMenuItemDefinition> ApprovalMenuProvider(
+    private static IObservable<IReadOnlyCollection<NodeMenuItemDefinition>> ApprovalMenuProvider(
         LayoutAreaHost host, RenderingContext ctx)
     {
         var hubPath = host.Hub.Address.ToString();
-        var perms = await PermissionHelper.GetEffectivePermissionsAsync(host.Hub, hubPath);
-        if (perms.HasFlag(Permission.Update))
-            yield return new NodeMenuItemDefinition("Request Approval", "RequestApproval",
-                Order: 30, Href: MeshNodeLayoutAreas.BuildUrl(hubPath, "RequestApproval"));
+        return host.Hub.GetEffectivePermissions(hubPath).Select(perms =>
+            perms.HasFlag(Permission.Update)
+                ? (IReadOnlyCollection<NodeMenuItemDefinition>)
+                    [new NodeMenuItemDefinition(
+                        "Request Approval", "RequestApproval",
+                        Order: 30, Href: MeshNodeLayoutAreas.BuildUrl(hubPath, "RequestApproval"))]
+                : []);
     }
 }

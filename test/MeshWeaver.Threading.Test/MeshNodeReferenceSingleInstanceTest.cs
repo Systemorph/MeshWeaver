@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Immutable;
 using System.Linq;
 using System.Reactive.Linq;
@@ -6,8 +6,6 @@ using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
-using FluentAssertions;
-using FluentAssertions.Extensions;
 using MeshWeaver.AI;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
@@ -41,11 +39,9 @@ public class MeshNodeReferenceSingleInstanceTest(ITestOutputHelper output) : Mon
     [Fact]
     public async Task GetRemoteStream_CollectionReference_ReturnsMeshNode()
     {
-        var ct = new CancellationTokenSource(10.Seconds()).Token;
-
         // Create a thread node
         var threadNode = ThreadNodeType.BuildThreadNode("User/Roland", "single instance test", "Roland");
-        var created = await NodeFactory.CreateNodeAsync(threadNode, ct);
+        var created = await NodeFactory.CreateNode(threadNode).Should().Emit();
         var threadPath = created.Path;
 
         // Get via CollectionReference for MeshNode collection
@@ -54,14 +50,10 @@ public class MeshNodeReferenceSingleInstanceTest(ITestOutputHelper output) : Mon
             .GetRemoteStream<InstanceCollection, CollectionReference>(
                 new Address(threadPath), new CollectionReference(nameof(MeshNode)));
 
-        stream.Should().NotBeNull();
-
-        var node = await stream!
+        var node = await stream
             .Select(ci => ci.Value?.Instances.Values.OfType<MeshNode>().FirstOrDefault())
-            .Timeout(5.Seconds())
-            .FirstAsync(n => n != null);
+            .Should().Within(5.Seconds()).Match(n => n != null);
 
-        node.Should().NotBeNull();
         node!.Path.Should().Be(threadPath);
         node.Content.Should().BeOfType<MeshThread>();
         Output.WriteLine($"Got single node: {node.Path}");
@@ -70,10 +62,8 @@ public class MeshNodeReferenceSingleInstanceTest(ITestOutputHelper output) : Mon
     [Fact]
     public async Task UpdateMeshNode_SingleUpdate_MessagesChange()
     {
-        var ct = new CancellationTokenSource(10.Seconds()).Token;
-
         var threadNode = ThreadNodeType.BuildThreadNode("User/Roland", "update test", "Roland");
-        var created = await NodeFactory.CreateNodeAsync(threadNode, ct);
+        var created = await NodeFactory.CreateNode(threadNode).Should().Emit();
         var threadPath = created.Path;
 
         var client = GetClient();
@@ -84,15 +74,31 @@ public class MeshNodeReferenceSingleInstanceTest(ITestOutputHelper output) : Mon
             new Address(threadPath), new CollectionReference(nameof(MeshNode)));
 
         // Wait for initial node
-        var initial = await collectionStream!
+        var initial = await collectionStream
             .Select(ci => ci.Value?.Instances.Values.OfType<MeshNode>().FirstOrDefault())
-            .Timeout(5.Seconds())
-            .FirstAsync(n => n != null);
+            .Should().Within(5.Seconds()).Match(n => n != null);
         var initialContent = initial!.Content as MeshThread;
         initialContent!.Messages.Should().BeEmpty();
 
+        // Cross-hub update via DataChangeRequest — read current via the
+        // collectionStream subscription, build the patch, post.
+        Output.WriteLine($"[TEST] Posting DataChangeRequest for {threadPath}");
+        {
+            var current = collectionStream.Current?.Value?.Instances.Values
+                .OfType<MeshNode>().FirstOrDefault();
+            if (current is null)
+                throw new InvalidOperationException("Node not found in collection stream");
+            Output.WriteLine($"[TEST] DataChangeRequest: node={current.Id}, Content={current.Content?.GetType().Name}");
+            var thread = current.Content as MeshThread ?? new MeshThread();
+            var patched = current with { Content = thread with { Messages = ImmutableList.Create("msg1") } };
+            client.Post(
+                new DataChangeRequest { Updates = [patched] },
+                o => o.WithTarget(new Address(threadPath)));
+        }
+        Output.WriteLine("[TEST] DataChangeRequest posted, waiting for stream emission");
+
         // Update Messages to ["msg1"]
-        var updated = collectionStream
+        var result = await collectionStream
             .Select(ci =>
             {
                 var node = ci.Value?.Instances.Values.OfType<MeshNode>().FirstOrDefault();
@@ -100,60 +106,30 @@ public class MeshNodeReferenceSingleInstanceTest(ITestOutputHelper output) : Mon
                 Output.WriteLine($"[STREAM] ChangeType={ci.ChangeType}, Value={node?.Id}, Messages={t?.Messages.Count}");
                 return node;
             })
-            .Timeout(5.Seconds())
-            .FirstAsync(n =>
-            {
-                var t = n?.Content as MeshThread;
-                return t?.Messages.Count >= 1;
-            }).ToTask(ct);
+            .Should().Within(5.Seconds()).Match(n => (n?.Content as MeshThread)?.Messages.Count >= 1);
 
-        Output.WriteLine($"[TEST] Calling UpdateMeshNode for {threadPath}");
-        workspace.UpdateMeshNode(node =>
-        {
-            if (node?.Content is null)
-                throw new InvalidOperationException("Node content is null");
-            Output.WriteLine($"[TEST] UpdateMeshNode callback: node={node.Id}, Content={node.Content.GetType().Name}");
-            var thread = node.Content as MeshThread ?? new MeshThread();
-            return node with { Content = thread with { Messages = ImmutableList.Create("msg1") } };
-        }, new Address(threadPath), threadPath);
-        Output.WriteLine("[TEST] UpdateMeshNode called, waiting for stream emission");
-
-        var result = await updated;
-        result.Should().NotBeNull();
         result!.Path.Should().Be(threadPath);
         var resultContent = result.Content as MeshThread;
         resultContent.Should().NotBeNull();
-        resultContent!.Messages.Should().BeEquivalentTo(new[] { "msg1" });
+        resultContent!.Messages.Should().BeEquivalentTo(new[] { "msg1" }, client.JsonSerializerOptions);
         Output.WriteLine($"After update 1: Messages=[{string.Join(", ", resultContent.Messages)}]");
 
-        // Verify back-sync: poll GetDataRequest until the hub reflects the update
-        var nodeId = threadPath.Contains('/') ? threadPath[(threadPath.LastIndexOf('/') + 1)..] : threadPath;
-        MeshThread? serverContent = null;
-        for (var i = 0; i < 20; i++)
-        {
-            var response = await client.AwaitResponse(
-                new GetDataRequest(new EntityReference(nameof(MeshNode), nodeId)),
-                o => o.WithTarget(new Address(threadPath)), ct);
-            var serverNode = response.Message.Data as MeshNode;
-            if (serverNode == null && response.Message.Data is System.Text.Json.JsonElement je)
-                serverNode = je.Deserialize<MeshNode>(Mesh.JsonSerializerOptions);
-            serverContent = serverNode?.Content as MeshThread;
-            if (serverContent?.Messages.Count >= 1) break;
-            await Task.Delay(100, ct);
-        }
+        // Verify back-sync via the canonical MeshNode stream handle — same
+        // primitive the GUI uses; no GetDataRequest polling.
+        var serverNode = await workspace.GetMeshNodeStream(threadPath)
+            .Should().Within(5.Seconds()).Match(n => (n.Content as MeshThread)?.Messages.Count >= 1);
+        var serverContent = serverNode.Content as MeshThread;
         serverContent.Should().NotBeNull("server MeshNode should have Thread content");
-        serverContent!.Messages.Should().BeEquivalentTo(new[] { "msg1" },
-            "server should reflect the client's update (back-sync)");
+        serverContent!.Messages.Should().BeEquivalentTo(new[] { "msg1" }, client.JsonSerializerOptions,
+            because: "server should reflect the client's update (back-sync)");
         Output.WriteLine($"Back-sync verified: server Messages=[{string.Join(", ", serverContent.Messages)}]");
     }
 
     [Fact]
     public async Task UpdateMeshNode_MultipleUpdates_AccumulateMessages()
     {
-        var ct = new CancellationTokenSource(10.Seconds()).Token;
-
         var threadNode = ThreadNodeType.BuildThreadNode("User/Roland", "multi update test", "Roland");
-        var created = await NodeFactory.CreateNodeAsync(threadNode, ct);
+        var created = await NodeFactory.CreateNode(threadNode).Should().Emit();
         var threadPath = created.Path;
 
         var client = GetClient();
@@ -165,62 +141,60 @@ public class MeshNodeReferenceSingleInstanceTest(ITestOutputHelper output) : Mon
         MeshNode? ExtractNode(ChangeItem<InstanceCollection> ci) =>
             ci.Value?.Instances.Values.OfType<MeshNode>().FirstOrDefault();
 
+        IObservable<MeshNode?> nodes = collectionStream.Select(ExtractNode);
+
         // Wait for initial
-        await collectionStream!
-            .Select(ExtractNode)
-            .Timeout(5.Seconds())
-            .FirstAsync(n => n != null);
+        await nodes.Should().Within(5.Seconds()).Match(n => n != null);
 
-        // Update 1: add msg1
-        var afterFirst = collectionStream
-            .Select(ExtractNode)
-            .Timeout(5.Seconds())
-            .FirstAsync(n => (n?.Content as MeshThread)?.Messages.Count >= 1)
-            .ToTask(ct);
-
-        workspace.UpdateMeshNode(node =>
+        // Update 1: add msg1 — read current via the collectionStream subscription
+        // above, build the patch, post.
+        var current = collectionStream.Current?.Value?.Instances.Values
+            .OfType<MeshNode>().FirstOrDefault();
+        if (current is { Content: MeshThread t1 })
         {
-            var thread = node.Content as MeshThread ?? new MeshThread();
-            return node with { Content = thread with { Messages = thread.Messages.Add("msg1") } };
-        }, new Address(threadPath), threadPath);
+            client.Post(
+                new DataChangeRequest { Updates = [current with { Content = t1 with { Messages = t1.Messages.Add("msg1") } }] },
+                o => o.WithTarget(new Address(threadPath)));
+        }
 
-        var r1 = await afterFirst;
+        var r1 = await nodes.Should().Within(5.Seconds())
+            .Match(n => (n?.Content as MeshThread)?.Messages.Count >= 1);
         Output.WriteLine($"After update 1: Messages=[{string.Join(", ", ((MeshThread)r1!.Content!).Messages)}]");
 
         // Update 2: add msg2
-        var afterSecond = collectionStream
-            .Select(ExtractNode)
-            .Timeout(5.Seconds())
-            .FirstAsync(n => (n?.Content as MeshThread)?.Messages.Count >= 2)
-            .ToTask(ct);
-
-        workspace.UpdateMeshNode(node =>
         {
-            var thread = node.Content as MeshThread ?? new MeshThread();
-            return node with { Content = thread with { Messages = thread.Messages.Add("msg2") } };
-        }, new Address(threadPath), threadPath);
+            var c = collectionStream.Current?.Value?.Instances.Values
+                .OfType<MeshNode>().FirstOrDefault();
+            if (c is { Content: MeshThread t2 })
+            {
+                client.Post(
+                    new DataChangeRequest { Updates = [c with { Content = t2 with { Messages = t2.Messages.Add("msg2") } }] },
+                    o => o.WithTarget(new Address(threadPath)));
+            }
+        }
 
-        var r2 = await afterSecond;
+        var r2 = await nodes.Should().Within(5.Seconds())
+            .Match(n => (n?.Content as MeshThread)?.Messages.Count >= 2);
         var finalContent = r2!.Content as MeshThread;
-        finalContent!.Messages.Should().BeEquivalentTo(new[] { "msg1", "msg2" });
+        finalContent!.Messages.Should().BeEquivalentTo(new[] { "msg1", "msg2" }, client.JsonSerializerOptions);
         Output.WriteLine($"After update 2: Messages=[{string.Join(", ", finalContent.Messages)}]");
 
         // Update 3: add msg3
-        var afterThird = collectionStream
-            .Select(ExtractNode)
-            .Timeout(5.Seconds())
-            .FirstAsync(n => (n?.Content as MeshThread)?.Messages.Count >= 3)
-            .ToTask(ct);
-
-        workspace.UpdateMeshNode(node =>
         {
-            var thread = node.Content as MeshThread ?? new MeshThread();
-            return node with { Content = thread with { Messages = thread.Messages.Add("msg3") } };
-        }, new Address(threadPath), threadPath);
+            var c = collectionStream.Current?.Value?.Instances.Values
+                .OfType<MeshNode>().FirstOrDefault();
+            if (c is { Content: MeshThread t3 })
+            {
+                client.Post(
+                    new DataChangeRequest { Updates = [c with { Content = t3 with { Messages = t3.Messages.Add("msg3") } }] },
+                    o => o.WithTarget(new Address(threadPath)));
+            }
+        }
 
-        var r3 = await afterThird;
+        var r3 = await nodes.Should().Within(5.Seconds())
+            .Match(n => (n?.Content as MeshThread)?.Messages.Count >= 3);
         var final3 = r3!.Content as MeshThread;
-        final3!.Messages.Should().BeEquivalentTo(new[] { "msg1", "msg2", "msg3" });
+        final3!.Messages.Should().BeEquivalentTo(new[] { "msg1", "msg2", "msg3" }, client.JsonSerializerOptions);
         Output.WriteLine($"After update 3: Messages=[{string.Join(", ", final3.Messages)}]");
     }
 
@@ -231,20 +205,15 @@ public class MeshNodeReferenceSingleInstanceTest(ITestOutputHelper output) : Mon
     [Fact]
     public async Task ThreadsCatalog_CreateNewThread_Succeeds()
     {
-        var ct = new CancellationTokenSource(15.Seconds()).Token;
-
         // 1. Create a context node and a thread under it
         var contextPath = "TestContext";
-        await NodeFactory.CreateNodeAsync(
-            new MeshNode(contextPath) { Name = "Test Context", NodeType = "Markdown" }, ct);
+        // Top-level partition root → seed under System (only the partition provisioner may create there).
+        await SeedTopLevel(new MeshNode(contextPath) { Name = "Test Context", NodeType = "Markdown" });
 
         var client = GetClient();
-        var response = await client.AwaitResponse(
-            new CreateNodeRequest(ThreadNodeType.BuildThreadNode(contextPath, "Parent thread for catalog test")),
-            o => o.WithTarget(new Address(contextPath)),
-            ct);
+        var response = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode(contextPath, "Parent thread for catalog test")), o => o.WithTarget(new Address(contextPath))).Should().Emit();
 
-        response.Message.Success.Should().BeTrue(response.Message.Error);
+        response.Message.Success.Should().BeTrue(response.Message.Error ?? "");
         var threadPath = response.Message.Node!.Path;
         Output.WriteLine($"Created parent thread at: {threadPath}");
 
@@ -253,19 +222,15 @@ public class MeshNodeReferenceSingleInstanceTest(ITestOutputHelper output) : Mon
         var layoutStream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             new Address(threadPath),
             new LayoutAreaReference(MeshNodeLayoutAreas.ThreadsArea));
-        layoutStream.Should().NotBeNull("Thread hub should serve the Threads area (ThreadsCatalog)");
 
-        // Wait for the layout to render
-        var layout = await layoutStream!.Timeout(10.Seconds()).FirstAsync();
+        // Wait for the layout to render — the hub must serve the Threads area (ThreadsCatalog)
+        await layoutStream.Should().Within(10.Seconds()).Emit();
         Output.WriteLine("ThreadsCatalog layout rendered");
 
         // 3. Create a sub-thread (delegation) via CreateNodeRequest — same flow as the "Create Thread" button
-        var subResponse = await client.AwaitResponse(
-            new CreateNodeRequest(ThreadNodeType.BuildThreadNode(threadPath, "Delegation sub-thread")),
-            o => o.WithTarget(new Address(threadPath)),
-            ct);
+        var subResponse = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode(threadPath, "Delegation sub-thread")), o => o.WithTarget(new Address(threadPath))).Should().Emit();
 
-        subResponse.Message.Success.Should().BeTrue(subResponse.Message.Error);
+        subResponse.Message.Success.Should().BeTrue(subResponse.Message.Error ?? "");
         var subThreadPath = subResponse.Message.Node!.Path;
         Output.WriteLine($"Created sub-thread at: {subThreadPath}");
 
@@ -275,8 +240,9 @@ public class MeshNodeReferenceSingleInstanceTest(ITestOutputHelper output) : Mon
 
         // 4. Verify the sub-thread is queryable — lives directly under the parent thread namespace
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-        var threads = await meshQuery.QueryAsync<MeshNode>(
-            $"namespace:{threadPath} nodeType:{ThreadNodeType.NodeType}").ToListAsync(ct);
+        var threads = (await meshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(
+            $"namespace:{threadPath} nodeType:{ThreadNodeType.NodeType}"))
+            .Should().Match(c => c.Items.Count >= 1)).Items;
 
         threads.Should().ContainSingle("should find the created sub-thread");
         threads[0].Path.Should().Be(subThreadPath);

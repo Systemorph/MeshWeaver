@@ -4,6 +4,10 @@ using MeshWeaver.Layout.Composition;
 
 namespace MeshWeaver.Layout.Domain;
 
+/// <summary>
+/// Extension helpers for layout rendering: stream-based view factories, config-based renderer setup,
+/// and data equality/hash utilities used by the rendering infrastructure.
+/// </summary>
 public static class LayoutHelperExtensions
 {
     /// <summary>
@@ -63,6 +67,19 @@ public static class LayoutHelperExtensions
             .StartWith(Controls.Markdown($"# {loadingTitle}\n\n*Loading {loadingTitle.ToLower()}...*"));
     }
 
+    /// <summary>
+    /// Retrieves (or creates via <paramref name="factory"/>) the <typeparamref name="TControl"/> stored
+    /// under <paramref name="area"/> in <paramref name="store"/>, applies <paramref name="config"/>, then
+    /// renders it — the canonical pattern for singleton config-controlled areas such as the nav menu.
+    /// </summary>
+    /// <typeparam name="TControl">The UI control type managed for the area.</typeparam>
+    /// <param name="host">The layout area host owning the rendering stream.</param>
+    /// <param name="context">The current rendering context.</param>
+    /// <param name="store">The entity store that may already contain the control.</param>
+    /// <param name="area">The area name used as the key in the store.</param>
+    /// <param name="factory">Creates a default control when none is found in the store.</param>
+    /// <param name="config">Applies caller-supplied configuration to the retrieved or created control.</param>
+    /// <returns>The updated store and incremental change set after rendering the configured control.</returns>
     public static EntityStoreAndUpdates ConfigBasedRenderer<TControl>(this LayoutAreaHost host,
         RenderingContext context,
         EntityStore store,
@@ -77,21 +94,6 @@ public static class LayoutHelperExtensions
                 context with { Area = area }, menu, store)
             ;
     }
-    public static async Task<EntityStoreAndUpdates> ConfigBasedRenderer<TControl>(this LayoutAreaHost host,
-        RenderingContext context,
-        EntityStore store,
-        string area,
-        Func<TControl> factory,
-        Func<TControl, LayoutAreaHost, RenderingContext, Task<TControl>> config)
-        where TControl : UiControl
-    {
-        var menu = store.GetLayoutArea<TControl>(area) ?? factory();
-        menu = await config(menu, host, context);
-        return host.RenderArea(
-                context with { Area = area }, menu, store)
-            ;
-    }
-
     internal static bool DataEquality(object data, object otherData)
     {
         if (data is null)
@@ -102,6 +104,12 @@ public static class LayoutHelperExtensions
         return JsonObjectEqualityComparer.Instance.Equals(data, otherData);
     }
 
+    /// <summary>
+    /// Computes a stable hash code for a data value suitable for change-detection in the rendering pipeline.
+    /// Sequences are hashed by XOR-folding element hash codes; null returns 0.
+    /// </summary>
+    /// <param name="data">The data value to hash; may be null or an <see cref="IEnumerable{T}"/> of objects.</param>
+    /// <returns>An integer hash code.</returns>
     public static int DataHashCode(object data)
     {
         if (data is null)

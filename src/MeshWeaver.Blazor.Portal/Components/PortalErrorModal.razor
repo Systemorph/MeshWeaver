@@ -1,0 +1,60 @@
+@* Mounted ONCE in PortalLayoutBase (next to <FluentDialogProvider/>). Subscribes to the
+   circuit-scoped PortalErrorSink and shows ONE modal at a time with an OK button; a failure
+   burst is drained sequentially, never stacked into a wall of dialogs. Mirrors the
+   IDialogService usage in NotificationCenter. *@
+@implements IDisposable
+@inject IDialogService DialogService
+@inject MeshWeaver.Blazor.Infrastructure.PortalErrorSink ErrorSink
+
+@code {
+    private IDisposable? sub;
+    private readonly object gate = new();
+    private System.Collections.Immutable.ImmutableQueue<string> pending =
+        System.Collections.Immutable.ImmutableQueue<string>.Empty;
+    private bool showing;
+
+    protected override void OnInitialized() =>
+        sub = ErrorSink.Errors.Subscribe(msg =>
+        {
+            bool start;
+            lock (gate)                          // tiny sync critical section, NOT an async gate
+            {
+                pending = pending.Enqueue(msg);
+                start = !showing;
+                if (start) showing = true;
+            }
+            if (start)
+                _ = InvokeAsync(DrainAsync);     // marshal onto the renderer
+        });
+
+    // One modal at a time, OK-gated — the same await-the-dialog shape NotificationCenter uses.
+    private async Task DrainAsync()
+    {
+        while (true)
+        {
+            string msg;
+            lock (gate)
+            {
+                if (pending.IsEmpty) { showing = false; return; }
+                pending = pending.Dequeue(out msg);
+            }
+
+            var dialog = await DialogService.ShowMessageBoxAsync(new DialogParameters<MessageBoxContent>
+            {
+                Content = new MessageBoxContent
+                {
+                    Title = "Something went wrong",
+                    // MarkupMessage (MarkupString) replaces the obsolete Message (plain string).
+                    // HtmlEncode the error text so it still renders as plain text — MarkupMessage is
+                    // raw HTML, and exception messages can contain '<'/'&'.
+                    MarkupMessage = new MarkupString(System.Net.WebUtility.HtmlEncode(msg)),
+                },
+                PrimaryAction = "OK",
+                SecondaryAction = null,
+            });
+            await dialog.Result;                 // block until the user clicks OK / dismisses
+        }
+    }
+
+    public void Dispose() => sub?.Dispose();
+}

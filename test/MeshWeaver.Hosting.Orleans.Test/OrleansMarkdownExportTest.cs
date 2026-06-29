@@ -3,8 +3,6 @@ using System.Linq;
 using System.Reactive.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using FluentAssertions;
-using FluentAssertions.Extensions;
 using MeshWeaver.Connection.Orleans;
 using MeshWeaver.Data;
 using MeshWeaver.Fixture;
@@ -27,17 +25,20 @@ using Orleans.Hosting;
 using Orleans.TestingHost;
 using Xunit;
 
+using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Hosting.Orleans.Test;
 
+// TODO: needs custom shared fixture â€” uses MarkdownExportSiloConfigurator with AddMarkdownExport(),
+// which the SharedOrleansFixture does not configure.
 /// <summary>
 /// End-to-end Orleans tests for the markdown PDF / DOCX export pipeline. Exercises the full
-/// cross-hub serialization path: client hub → routing → node hub → handler → response back.
+/// cross-hub serialization path: client hub â†’ routing â†’ node hub â†’ handler â†’ response back.
 /// Regression guard for the InvalidCastException users hit when <c>$type</c> discriminators
 /// disagreed between hubs (full name on server, short name on mesh registry).
 /// </summary>
 public class OrleansMarkdownExportTest(ITestOutputHelper output) : TestBase(output)
 {
-    private const string TestUserId = "Roland";
+    private const string TestUserId = "TestUser";
 
     private TestCluster Cluster { get; set; } = null!;
     private IMessageHub ClientMesh => Cluster.Client.ServiceProvider.GetRequiredService<IMessageHub>();
@@ -46,6 +47,7 @@ public class OrleansMarkdownExportTest(ITestOutputHelper output) : TestBase(outp
     {
         await base.InitializeAsync();
         var builder = new TestClusterBuilder();
+        builder.Options.InitialSilosCount = 1;
         builder.AddSiloBuilderConfigurator<MarkdownExportSiloConfigurator>();
         builder.AddClientBuilderConfigurator<TestClientConfigurator>();
         Cluster = builder.Build();
@@ -55,7 +57,7 @@ public class OrleansMarkdownExportTest(ITestOutputHelper output) : TestBase(outp
     public override async ValueTask DisposeAsync()
     {
         if (Cluster is not null)
-            await Cluster.DisposeAsync();
+            OrleansClusterDisposal.DisposeInBackground(Cluster);
         await base.DisposeAsync();
     }
 
@@ -64,7 +66,7 @@ public class OrleansMarkdownExportTest(ITestOutputHelper output) : TestBase(outp
     /// the markdown-export message types via <see cref="MarkdownExportExtensions.AddMarkdownExportTypes"/>.
     /// Without those type registrations the response comes back as <c>JsonElement</c>.
     /// </summary>
-    private async Task<IMessageHub> GetClientAsync(string id = "export")
+    private IMessageHub GetClient(string id = "export")
     {
         var client = ClientMesh.ServiceProvider.CreateMessageHub(
             new Address("client", id),
@@ -77,11 +79,11 @@ public class OrleansMarkdownExportTest(ITestOutputHelper output) : TestBase(outp
         accessService.SetCircuitContext(new AccessContext
         {
             ObjectId = TestUserId,
-            Name = "Roland Buergi",
-            Email = "rbuergi@systemorph.com"
+            Name = "Test User",
+            Email = "testuser@meshweaver.io"
         });
-        await Cluster.Client.ServiceProvider.GetRequiredService<IRoutingService>()
-            .RegisterStreamAsync(client.Address, client.DeliverMessage);
+        Cluster.Client.ServiceProvider.GetRequiredService<IRoutingService>()
+            .RegisterStream(client.Address, client.DeliverMessage);
         return client;
     }
 
@@ -91,24 +93,22 @@ public class OrleansMarkdownExportTest(ITestOutputHelper output) : TestBase(outp
     /// </summary>
     private async Task<string> CreateMarkdownNodeAsync(IMessageHub client, string id, string markdown, CancellationToken ct)
     {
-        var node = new MeshNode(id, "User/" + TestUserId)
+        var node = new MeshNode(id, TestUserId)
         {
             Name = id,
             NodeType = MarkdownNodeType.NodeType,
             Content = new MarkdownContent { Content = markdown }
         };
-        var response = await client.AwaitResponse(
-            new CreateNodeRequest(node),
-            o => o.WithTarget(new Address("User/" + TestUserId)), ct);
-        response.Message.Success.Should().BeTrue(response.Message.Error);
+        var response = await client.Observe(new CreateNodeRequest(node), o => o.WithTarget(new Address(TestUserId))).FirstAsync().ToTask(ct);
+        response.Message.Success.Should().BeTrue(response.Message.Error ?? "");
         return response.Message.Node!.Path!;
     }
 
-    [Fact(Timeout = 120000)]
+    [Fact(Timeout = 60000)]
     public async Task ExportPdf_RoundTrips_AsTypedResponse()
     {
         using var cts = new CancellationTokenSource(60.Seconds());
-        var client = await GetClientAsync();
+        var client = GetClient();
 
         var nodePath = await CreateMarkdownNodeAsync(
             client, "pdf-round-trip",
@@ -118,42 +118,61 @@ public class OrleansMarkdownExportTest(ITestOutputHelper output) : TestBase(outp
         var request = new ExportDocumentRequest(nodePath,
             new DocumentExportOptions { Format = ExportFormat.Pdf, Title = "Test PDF" });
 
-        var delivery = await client.AwaitResponse(
-            request, o => o.WithTarget(new Address(nodePath)), cts.Token);
+        var delivery = await client.Observe(request, o => o.WithTarget(new Address(nodePath))).FirstAsync().ToTask(cts.Token);
 
-        // The cast that used to throw InvalidCastException:
+        // The cast that used to throw InvalidCastException — start-ack still
+        // routes via the typed response, so this regression guard stays.
         delivery.Should().BeOfType<MessageDelivery<ExportDocumentResponse>>(
             "response must deserialize to the concrete type — JsonElement fallback means the $type " +
             "discriminator didn't match any registered type on the client hub");
 
-        var response = delivery.Message;
-        response.Error.Should().BeNull(response.Error);
-        response.Format.Should().Be(ExportFormat.Pdf);
-        response.Content.Should().NotBeNull().And.NotBeEmpty("PDF render should produce bytes");
-        response.MimeType.Should().Be("application/pdf");
+        var dispatch = delivery.Message;
+        dispatch.Error.Should().BeNull(dispatch.Error ?? "");
+        dispatch.Format.Should().Be(ExportFormat.Pdf);
+        dispatch.ActivityPath.Should().NotBeNullOrEmpty(
+            "the just-start dispatch returns the activity path — bytes flow via ActivityLog.ReturnValue");
+
+        // Two-step: subscribe to the activity stream and read the rendered bytes
+        // off ActivityLog.ReturnValue on terminal status. Pure observable
+        // composition, no per-step await on hub-touching streams.
+        var terminal = await client.GetWorkspace()
+            .GetMeshNodeStream(dispatch.ActivityPath)
+            .Select(n => n?.Content as ActivityLog)
+            .Where(log => log is not null && log.Status != ActivityStatus.Running)
+            .Take(1)
+            .ToTask(cts.Token);
+
+        terminal!.Status.Should().Be(ActivityStatus.Succeeded,
+            because: "the script should render the PDF. Messages: "
+                     + string.Join(" | ", terminal.Messages.Select(m => $"[{m.LogLevel}] {m.Message}")));
+        terminal.ReturnValue.Should().NotBeNull("the script writes RenderedDocument here");
+        var rendered = terminal.ReturnValue!.Value.Deserialize<RenderedDocument>(client.JsonSerializerOptions);
+        rendered!.Format.Should().Be(ExportFormat.Pdf);
+        rendered.Content.Should().NotBeEmpty("PDF render should produce bytes");
+        rendered.MimeType.Should().Be("application/pdf");
     }
 
     /// <summary>
     /// Reproduces the user-facing <c>NotSupportedException</c> from
-    /// <c>LayoutExtensions.GetStream&lt;UiControl&gt;</c> — the client hub must deserialize a
+    /// <c>LayoutExtensions.GetStream&lt;UiControl&gt;</c> â€” the client hub must deserialize a
     /// polymorphic <see cref="UiControl"/> JSON payload whose <c>$type</c> is
     /// <c>ExportDocumentControl</c>. If the client's type registry doesn't know that subtype,
     /// <c>PolymorphicTypeInfoResolver</c> can't build the JsonDerivedType mapping and
     /// deserialization throws "The JSON payload for polymorphic interface or abstract type
     /// 'UiControl' must specify a type discriminator".
     /// </summary>
-    [Fact(Timeout = 120000)]
+    [Fact(Timeout = 60000)]
     public async Task ExportPdfArea_RendersExportDocumentControl_ClientDeserializes()
     {
         using var cts = new CancellationTokenSource(60.Seconds());
-        var client = await GetClientAsync("layout-stream");
+        var client = GetClient("layout-stream");
 
         var nodePath = await CreateMarkdownNodeAsync(
             client, "pdf-layout-stream",
             "# Hello\n\nFor layout-stream test.", cts.Token);
         Output.WriteLine($"Created Markdown node: {nodePath}");
 
-        // Subscribe to the ExportPdf layout area — this is what the portal does when the
+        // Subscribe to the ExportPdf layout area â€” this is what the portal does when the
         // user clicks "Export to PDF". The server renders an ExportDocumentControl; the
         // client must deserialize it as UiControl via PolymorphicTypeInfoResolver.
         var workspace = client.GetWorkspace();
@@ -162,14 +181,17 @@ public class OrleansMarkdownExportTest(ITestOutputHelper output) : TestBase(outp
             new Address(nodePath), reference);
 
         // GetControlStream hits LayoutExtensions.GetStream<UiControl> — exactly the path
-        // that throws in the user's stack trace.
-        var control = await stream.GetControlStream(string.Empty)
+        // that throws in the user's stack trace. The server renders the UiControl under
+        // the Area pointer (LayoutAreaReference.GetControlPointer(area)), so we must
+        // pass the same area name we subscribed with — empty-string asks for a
+        // non-existent key and the stream never emits.
+        var control = await stream.GetControlStream(reference.Area!)
             .Timeout(30.Seconds())
             .FirstAsync(x => x != null);
 
         control.Should().NotBeNull("the ExportPdf area must render a UiControl");
         control.Should().BeOfType<ExportDocumentControl>(
-            "the $type discriminator must resolve to ExportDocumentControl — if client " +
+            "the $type discriminator must resolve to ExportDocumentControl â€” if client " +
             "type-registry is missing the type, deserialization falls back to the base " +
             "UiControl and throws NotSupportedException");
 
@@ -189,11 +211,11 @@ public class OrleansMarkdownExportTest(ITestOutputHelper output) : TestBase(outp
     /// the sub-hub too (see <c>PortalApplication.DefaultPortalConfig</c>).
     /// This test is green when the fix is present and red without it.
     /// </summary>
-    [Fact(Timeout = 120000)]
+    [Fact(Timeout = 60000)]
     public async Task SubHub_WithExportTypesRegistered_DeserializesPolymorphicExportDocumentControl()
     {
         using var cts = new CancellationTokenSource(60.Seconds());
-        var parent = await GetClientAsync("portal-parent");
+        var parent = GetClient("portal-parent");
 
         var nodePath = await CreateMarkdownNodeAsync(
             parent, "subhub-with-types",
@@ -224,7 +246,7 @@ public class OrleansMarkdownExportTest(ITestOutputHelper output) : TestBase(outp
     }
 
     /// <summary>
-    /// Negative counterpart: a sub-hub that does NOT register the export types — reproduces the
+    /// Negative counterpart: a sub-hub that does NOT register the export types â€” reproduces the
     /// prod condition before <c>PortalApplication.DefaultPortalConfig</c> was updated. The
     /// deserialize path used to throw <see cref="NotSupportedException"/> straight into the
     /// observable and crash the circuit. After the robustness fix in
@@ -233,18 +255,18 @@ public class OrleansMarkdownExportTest(ITestOutputHelper output) : TestBase(outp
     /// graceful-degradation contract: the stream completes with <c>null</c> rather than tearing
     /// down the pipeline.
     /// </summary>
-    [Fact(Timeout = 120000)]
+    [Fact(Timeout = 60000)]
     public async Task SubHub_WithoutExportTypesRegistered_DegradesGracefullyToNull()
     {
         using var cts = new CancellationTokenSource(60.Seconds());
-        var parent = await GetClientAsync("portal-parent-bare");
+        var parent = GetClient("portal-parent-bare");
 
         var nodePath = await CreateMarkdownNodeAsync(
             parent, "subhub-bare",
             "# Hello\n\nSub-hub without export types registered.", cts.Token);
         Output.WriteLine($"Created Markdown node: {nodePath}");
 
-        // Bare sub-hub — no AddMarkdownExportTypes. This is what the portal did before the fix.
+        // Bare sub-hub â€” no AddMarkdownExportTypes. This is what the portal did before the fix.
         var subHub = parent.GetHostedHub(new Address("portal", "subhub-bare"),
             c => c.AddLayoutClient())!;
 
@@ -252,7 +274,7 @@ public class OrleansMarkdownExportTest(ITestOutputHelper output) : TestBase(outp
             new Address(nodePath), new LayoutAreaReference(ExportDocumentLayoutArea.PdfArea));
         // Server renders the UiControl under the Area pointer (not empty string).
 
-        // Observe the control stream — should NOT throw. An entry arrives but deserialization
+        // Observe the control stream â€” should NOT throw. An entry arrives but deserialization
         // fails (caught + logged), yielding null.
         UiControl? control = null;
         using var subscription = stream.GetControlStream(ExportDocumentLayoutArea.PdfArea)
@@ -268,11 +290,11 @@ public class OrleansMarkdownExportTest(ITestOutputHelper output) : TestBase(outp
             "instead of tearing down the observable pipeline.");
     }
 
-    [Fact(Timeout = 120000)]
+    [Fact(Timeout = 60000)]
     public async Task ExportDocx_RoundTrips_AsTypedResponse()
     {
         using var cts = new CancellationTokenSource(60.Seconds());
-        var client = await GetClientAsync();
+        var client = GetClient();
 
         var nodePath = await CreateMarkdownNodeAsync(
             client, "docx-round-trip",
@@ -282,18 +304,31 @@ public class OrleansMarkdownExportTest(ITestOutputHelper output) : TestBase(outp
         var request = new ExportDocumentRequest(nodePath,
             new DocumentExportOptions { Format = ExportFormat.Docx, Title = "Test DOCX" });
 
-        var delivery = await client.AwaitResponse(
-            request, o => o.WithTarget(new Address(nodePath)), cts.Token);
+        var delivery = await client.Observe(request, o => o.WithTarget(new Address(nodePath))).FirstAsync().ToTask(cts.Token);
 
         delivery.Should().BeOfType<MessageDelivery<ExportDocumentResponse>>(
             "response must deserialize to the concrete type — JsonElement fallback means the $type " +
             "discriminator didn't match any registered type on the client hub");
 
-        var response = delivery.Message;
-        response.Error.Should().BeNull(response.Error);
-        response.Format.Should().Be(ExportFormat.Docx);
-        response.Content.Should().NotBeNull().And.NotBeEmpty("DOCX render should produce bytes");
-        response.MimeType.Should().Be("application/vnd.openxmlformats-officedocument.wordprocessingml.document");
+        var dispatch = delivery.Message;
+        dispatch.Error.Should().BeNull(dispatch.Error ?? "");
+        dispatch.Format.Should().Be(ExportFormat.Docx);
+        dispatch.ActivityPath.Should().NotBeNullOrEmpty();
+
+        var terminal = await client.GetWorkspace()
+            .GetMeshNodeStream(dispatch.ActivityPath)
+            .Select(n => n?.Content as ActivityLog)
+            .Where(log => log is not null && log.Status != ActivityStatus.Running)
+            .Take(1)
+            .ToTask(cts.Token);
+
+        terminal!.Status.Should().Be(ActivityStatus.Succeeded,
+            because: "the script should render the DOCX. Messages: "
+                     + string.Join(" | ", terminal.Messages.Select(m => $"[{m.LogLevel}] {m.Message}")));
+        var rendered = terminal.ReturnValue!.Value.Deserialize<RenderedDocument>(client.JsonSerializerOptions);
+        rendered!.Format.Should().Be(ExportFormat.Docx);
+        rendered.Content.Should().NotBeEmpty("DOCX render should produce bytes");
+        rendered.MimeType.Should().Be("application/vnd.openxmlformats-officedocument.wordprocessingml.document");
     }
 }
 
@@ -316,9 +351,9 @@ public class MarkdownExportSiloConfigurator : ISiloConfigurator, IHostConfigurat
             .AddInMemoryPersistence()
             .ConfigurePortalMesh()
             .AddMarkdownExport()
-            .AddMeshNodes(new MeshNode(TestUserId, "User") { Name = "Roland", NodeType = "User" })
+            .AddMeshNodes(new MeshNode(TestUserId) { Name = "TestUser", NodeType = "User" })
             .ConfigureDefaultNodeHub(config => config.AddDefaultLayoutAreas());
     }
 
-    private const string TestUserId = "Roland";
+    private const string TestUserId = "TestUser";
 }

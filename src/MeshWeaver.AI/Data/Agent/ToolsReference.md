@@ -9,6 +9,33 @@ MeshPlugin provides tools for interacting with the mesh data graph.
 
 **IMPORTANT**: Examples below use `Doc/Architecture` as a sample node path. Always use the actual node path from the user's context instead.
 
+## Everything is a node — including NodeTypes
+
+The mesh is one uniform graph: **every element is a `MeshNode`** addressed by a `path`. Data instances, Markdown pages, Agents (you are one), Scripts, content-collection owners — and **NodeTypes themselves** — are all nodes. There is no separate "type registry" off to the side.
+
+- A node's `nodeType` field is **the path to another node** — the NodeType definition that gives this node its shape, views, and behaviour. It is a reference you can follow, not just a label.
+- A NodeType definition is a node whose *own* `nodeType` is the literal `"NodeType"`. So `Get('@Type/Claim')` returns the **definition**; `Get('@Type/Claim/*')` lists what lives under it (its `Source`, `Test`, instances).
+- Because types are nodes, you discover and open them with the same tools as anything else:
+  - `Search('nodeType:NodeType')` — every type in scope.
+  - `Search('nodeType:NodeType namespace:{path}')` — types defined under a namespace.
+  - `Get('@{typePath}')` / `NavigateTo('@{typePath}')` — read or display a type like any node.
+- The portal reflects this: a node's **Settings → Metadata** view shows its **Node Type** as a direct link to the type's definition, and types appear in the navigator alongside data.
+
+When the user asks "what type is this?", "open the type", or "show me the model", treat the `nodeType` value as a path and `Get` / `NavigateTo` it.
+
+## Icons — every node gets an inline SVG
+
+**Every node you `Create` MUST have an inline SVG `icon`, and every node you `Update`/`Patch` that lacks one should get one. This applies to ALL node types — NodeTypes, data instances, Markdown pages, agents, scripts, everything — not just Markdown.**
+
+- The value must start with `<svg` (inline markup, rendered directly into the page). **Never** a file path (`/static/…​.svg`), **never** an emoji, **never** blank.
+- **Use `currentColor` for `fill`/`stroke` instead of hard-coded colours.** Inline icons render inheriting the surrounding text colour, so `currentColor` keeps them legible in **both light and dark mode**. A hard-coded dark stroke (e.g. `#0f172a`) disappears on a dark background — that is the #1 icon bug. For multi-colour illustrative icons, pick colours that read on both light and dark surfaces.
+- Set an explicit `width`/`height` (e.g. `24`) and a `viewBox` so the icon renders crisply inside the ~48px icon box.
+- Make it **distinct and topical** — design the glyph to represent that node's subject (a hurricane swirl for a storm bond, a seismograph trace for an earthquake bond, a shield-and-bolt for an insurance-linked security). Distinct icons make the navigator scannable.
+
+```svg
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12h3l2-6 4 14 3-9 1.6 4H22"/></svg>
+```
+
 ## Path Rules
 
 **Every tool argument that expects a node reference MUST be the node's `path` property — never its `name`, `id`, or any human-readable label.** When `Get` / `Search` returns a MeshNode, you will see both `name` ("Final Report – AI Readiness Assessment & 100-Day Plan") and `path` ("PartnerRe/AIConsulting/FinalReport"). **Use the `path` value.** Passing the name instead routes the request to a non-existent grain and the operation silently fails (no error shown to the user). If you only know the display name, call `Search('name:"...the name..."')` first and read the `path` field off the match.
@@ -33,9 +60,17 @@ Every user message carries a **"Current Application Context"** header with the c
 
 ### Output links
 
-**LINKS in markdown output**: Always use **absolute paths** starting with `@/` so they are clickable regardless of where the message is viewed.
-- Correct: `@/OrgA/Projects/my-doc`, `@/User/rbuergi/my-page`
+**LINKS in markdown output**: Always use **absolute paths** starting with `@/` inside **native markdown link syntax** — `[text](@/OrgA/Projects/my-doc)`. Markdig's `LinkUrlCleanupExtension` strips the leading `@` at render time and produces a clean `/OrgA/Projects/my-doc` URL.
+- Correct: `[Final Report](@/OrgA/Projects/my-doc)`, `[My Page](@/User/rbuergi/my-page)`
 - **Wrong**: `my-doc`, `../Projects/my-doc`, `@my-doc` (relative links break when viewed from another context)
+
+**⚠️ DO NOT put `@/` inside raw HTML `href` attributes.** The link-cleanup extension does not reach inside HTML blocks. A raw `<a href="@/X">` leaks the `@/` to the browser, producing a broken `https://host/@/X` URL. When writing HTML-in-markdown (hero banners, styled cards, etc.), use plain paths: `<a href="/OrgA/Projects/my-doc">`.
+
+| Context | Correct | Wrong |
+|---------|---------|-------|
+| Markdown link | `[text](@/X)` | `[text](/X)` also works, but `@/` gives mesh UCR semantics |
+| Raw HTML href | `<a href="/X">` | `<a href="@/X">` — leaks `@/` to browser |
+| HTTP URL / external | `https://host/X` | `https://host/@/X` |
 
 ### Choosing relative vs. absolute in tool calls
 
@@ -121,19 +156,20 @@ With any other prefix, it accesses files from a content collection.
 
 - `Get('@Doc/Architecture')` — Get a specific node
 - `Get('@NodeType/*')` — List all available node types
-- `Get('@Doc/DataMesh/data:')` — Get the node's content data as JSON
-- `Get('@Doc/DataMesh/schema:')` — Get content type schema
-- `Get('@Doc/DataMesh/model:')` — Get the full data model
-- `Get('@Doc/DataMesh/layoutAreas:')` — List available layout areas
+- `Get('@Doc/DataMesh/data/')` — Get the node's content data as JSON
+- `Get('@Doc/DataMesh/schema/')` — Get content type schema
+- `Get('@Doc/DataMesh/model/')` — Get the full data model
+- `Get('@Doc/DataMesh/layoutAreas/')` — List available layout areas
 
 ## Search
 
-Searches the mesh using a GitHub-style query syntax. Returns a JSON array of matching nodes (limited to 50).
+Searches the mesh using a GitHub-style query syntax. Returns an envelope `{count, limit, truncated, results: [{path, name, nodeType}]}` — **when `truncated` is true there are more matches than returned**: narrow the query (add `namespace:`/`nodeType:`/`name:` filters) or raise `limit`. Never report a truncated result set as complete.
 
 ### Parameters
 
 - `query` (string, required) — Query string with field filters, wildcards, scoping, sorting
 - `basePath` (string, optional) — Base path to narrow the search scope
+- `limit` (int, optional) — Maximum results to return. Default 50, max 200.
 
 ### Common Patterns
 
@@ -255,7 +291,7 @@ Creates a new node in the mesh. The node is validated before being persisted.
 | `name` | string | Yes | Descriptive human-readable title. Make it clear and meaningful. |
 | `nodeType` | string | Yes | Type category (must match an existing NodeType) |
 | `category` | string | No | Grouping category |
-| `icon` | string | **Yes** | Inline SVG icon (start with `<svg`) — **ALWAYS** create a unique, visually appealing SVG that represents the node's topic. Never leave blank. |
+| `icon` | string | **Yes** | Inline SVG icon (start with `<svg`) — **ALWAYS** create a unique, visually appealing SVG that represents the node's topic. Use `currentColor` for fill/stroke so it adapts to light/dark theme, and set `width`/`height`/`viewBox`. Never a file path, never blank. See **Icons** above. |
 | `order` | int | No | Sort order (lower values appear first) |
 | `content` | object | Depends on type | Type-specific data model content |
 
@@ -271,14 +307,14 @@ The `path` of a node is derived as `{namespace}/{id}` (or just `{id}` for root-l
 
 Before creating a node, discover what content fields are expected:
 
-- `Get('@Doc/Architecture/schema:')` — Returns the JSON Schema for the node's content type
-- `Get('@Doc/Architecture/schema:TypeName')` — Returns the JSON Schema for a specific named type
-- `Get('@Doc/Architecture/model:')` — Returns the full data model with all registered types
+- `Get('@Doc/Architecture/schema/')` — Returns the JSON Schema for the node's content type
+- `Get('@Doc/Architecture/schema/TypeName')` — Returns the JSON Schema for a specific named type
+- `Get('@Doc/Architecture/model/')` — Returns the full data model with all registered types
 
 ### Workflow
 
 1. Find an existing node of the type you want to create, or the namespace where you want to create
-2. Retrieve its content schema: `Get('@Doc/Architecture/schema:')`
+2. Retrieve its content schema: `Get('@Doc/Architecture/schema/')`
 3. Construct the MeshNode JSON with all required fields
 4. Call Create with the JSON
 
@@ -337,10 +373,34 @@ Patch('@MyOrg/MyPage', '{"name": "Renamed Page"}')
 Patch('@MyOrg/MyPage', '{"content": {"text": "Updated markdown content"}}')
 ```
 
-### When to use Patch vs Update
+### When to use Patch vs Update vs EditContent
 
-- **Patch**: Simple field changes (icon, name, category, content). No Get needed.
+- **EditContent**: Any change *inside* a long text — Markdown body or source code. Cheapest and safest.
+- **Patch**: Simple field changes (icon, name, category, short content). No Get needed.
 - **Update**: Complex changes to multiple fields, or when you need full control. Always Get first.
+
+## EditContent
+
+Anchored text edit on a node's primary text content (Markdown body or Code source). Replaces an exact substring — you send only the snippet to change plus enough surrounding context to make it unique, instead of re-emitting the whole document. **Prefer this over Patch for any edit inside a long document or source file**: it costs a fraction of the tokens and cannot corrupt the rest of the content through truncation.
+
+### Parameters
+
+- `path` (string, required) — Path to the node
+- `oldText` (string, required) — The exact text to replace. Copy it **verbatim** from Get, including whitespace and line breaks. Must match exactly once.
+- `newText` (string, required) — The replacement text
+- `replaceAll` (bool, optional) — Replace every occurrence instead of requiring a unique match. Default false.
+
+### Errors are recoverable
+
+- *Not found* → you paraphrased instead of copying. Get the node and copy the exact text.
+- *Occurs N times* → include more surrounding context to make the match unique, or set `replaceAll: true`.
+- *Not editable text* → the node has structured content; use Patch with the full `content` object instead.
+
+### Example
+
+```
+EditContent('@MyOrg/MyPage', 'deadline is March 1', 'deadline is April 15')
+```
 
 ## Delete
 
@@ -365,7 +425,7 @@ When the user asks about **reports**, **views**, **charts**, **analysis**, **das
 Use the `layoutAreas:` prefix to list all available layout areas for a node:
 
 ```
-Get('@Doc/Architecture/layoutAreas:')
+Get('@Doc/Architecture/layoutAreas/')
 ```
 
 This returns an array of `LayoutAreaDefinition` objects with `Area`, `Title`, `Description`, `Group`, and `Order` fields.
@@ -375,7 +435,7 @@ This returns an array of `LayoutAreaDefinition` objects with `Area`, `Title`, `D
 Use the `area:` prefix to download a layout area's data for analysis:
 
 ```
-Get('@Doc/Architecture/area:AreaName')
+Get('@Doc/Architecture/area/AreaName')
 ```
 
 This returns the area's data as an EntityStore, which you can analyze and summarize.
@@ -460,6 +520,28 @@ After uploading, reference the file with `@Doc/Architecture/content/diagram.svg`
 
 **Tip for icons:** Set a node's `icon` property to inline SVG (starting with `<svg`) and it renders directly — no upload needed.
 
+### Searching Indexed Content (Chunks)
+
+Indexed content files are split into overlapping **chunks** (1000-char windows, 150-char overlap, numbered 0-based per file). Two tools read those chunks directly — the chunk-level companion to node `Search`, which only resolves a content hit up to its Document node:
+
+- `search_chunks` — semantic search returning the matching chunks WITH their `(collectionPath, filePath, chunkIndex)`, so you get the exact passage, not just the file. Use it to find relevant passages and gather context. Returns `{count, results:[{documentPath, collectionPath, filePath, chunkIndex, rank, snippet}]}`.
+- `get_chunk` — reads ONE chunk by its 0-based index, with `prevIndex`/`nextIndex` so you can step through a file. Returns `{found, text, prevIndex, nextIndex, totalChunks, …}`.
+
+```
+search_chunks('accrued benefit obligation', '@ACME/Reports')
+search_chunks('namespace:ACME/content scope:subtree accrued benefit obligation')   // one named collection
+get_chunk('ACME/Reports', 'pension/2025.txt', 4)   // → text + prevIndex 3 + nextIndex 5
+```
+
+`search_chunks` scopes its search two ways:
+
+- **Anchored** (pass `scope` as a node path): that path AND each *ancestor* prefix are searched (e.g. `@ACME/Reports` also searches `@ACME`) — good when you don't know exactly which collection holds the content.
+- **Targeted** (put `namespace:<node>/<collection>` in the query): search ONE named collection, with an optional `scope:` qualifier — `scope:subtree` (the **default** when a namespace is given) checks only that collection and anything nested under it; `scope:exact` only the collection itself; `scope:ancestorsandself` reproduces the anchored walk. The `namespace:` form wins and the `scope` parameter is ignored.
+
+With neither a `scope` path nor a `namespace:` token there is no collection to search, so an empty result with a hint is returned. **Chunks are for retrieval and context** — to extract a whole table or read a full document, use `Get` on the Document instead (a chunk window can start or end mid-table).
+
+The in-portal **Content Indexing** settings tab (on Space nodes) has an *Explore index* search box that drives this exact tool and shows the `search_chunks(...)` / `get_chunk(...)` call each query maps to.
+
 ## Satellite Namespaces
 
 Nodes can have satellite data stored in dedicated sub-namespaces with underscore prefixes. These are persisted in separate database tables per partition.
@@ -473,6 +555,7 @@ Nodes can have satellite data stored in dedicated sub-namespaces with underscore
 | `_Access` | access | AccessAssignment | Permission grants |
 | `_Approval` | approvals | Approval | Approval workflows |
 | `_Tracking` | tracking | TrackedChange | Track changes / collaborative editing |
+| `_Notification` | notifications | Notification | Bell notifications (e.g. thread completion) |
 
 ### Path Patterns
 
@@ -488,6 +571,35 @@ Search('namespace:{parentPath}/_Comment nodeType:Comment')   # Find comments
 Search('namespace:{parentPath}/_Activity')                   # Find activity logs
 ```
 
+## check_inbox
+
+Check whether the user has typed any new messages while the current turn was running. Pure read+drain — no arguments.
+
+**When to call:**
+- Between major steps in a multi-step task (after each tool call in a sequence).
+- Before starting a new file edit / `Update` / `Patch`.
+- Before delegating to another agent.
+- At natural breakpoints during long synthesis passes.
+
+**When NOT to call:**
+- During a single fast read (`Get` then a one-line reply).
+- Right after a previous `check_inbox` returned `(no new messages)` in the same response — the queue can't fill that quickly.
+
+**Returns:**
+- `(no new messages)` if the queue is empty.
+- The text(s) of all messages typed since the last `check_inbox` call, otherwise.
+
+Once a message is returned by this tool it is **permanently delivered** to you (it won't be re-delivered on the next call). Fold the new input into your current response — if it's compatible, just include it; if it changes direction, acknowledge briefly and pivot. Do NOT ignore returned messages — they were the user's chance to steer you mid-task.
+
+### Example
+
+```
+check_inbox()
+→ "User sent a follow-up message:\n\nAlso include unit tests"
+```
+
+You then proceed with the original task AND add unit tests, without waiting for the round to end.
+
 ## Reading Documentation
 
 To browse all available documentation:
@@ -495,6 +607,15 @@ To browse all available documentation:
 Search('namespace:Doc scope:descendants')
 ```
 Then read any article with `Get('@Doc/...')`.
+
+## Skills — capabilities you load as you go
+
+Reusable **skills** are `nodeType:Skill` nodes in the mesh — step-by-step instructions for a specific operation (importing data, running a checklist, a domain workflow). They are NOT loaded up-front; you pull one in on demand:
+
+1. **Find** the relevant skill with `Search('nodeType:Skill <what you need>')` — e.g. `Search('nodeType:Skill import claims')`. Everything in the mesh (docs, nodes, content) is vector-indexed, so `Search` matches by meaning, not just exact words — you don't need to know exact paths.
+2. **Load** it with `load_skill('<skillPath>')` — this returns the skill's instructions (its how-to), which you then follow.
+
+Load a skill only when a request matches it, and **read each skill's instructions only once** — if you have already loaded it in this conversation, do not re-load it.
 
 ## Binary Attachments (PDF, Images)
 
@@ -517,12 +638,12 @@ Chat threads support binary file attachments from content collections. When a `c
 
 ### Delegation
 
-Delegation creates an isolated sub-thread for a target agent. The delegation tool:
-1. Creates a Thread node under the parent message
-2. Posts `SubmitMessageRequest` to the sub-thread
-3. Waits for `ExecutionCompleted` response via callback re-registration
-4. Returns the result to the parent agent
+`delegate_to_agent(agentName, task, context?)` runs the task in an isolated sub-thread:
 
-**Depth limit**: Maximum 2 delegation levels to prevent infinite recursion.
+1. A sub-thread node is created under your current response message. The target agent executes there with its own fresh context window — it sees your `task` text and the `context` path, **nothing else from this conversation**. Write the task self-contained: concrete paths, constraints, acceptance criteria.
+2. The tool result you receive back is the sub-thread's **summary** (the `<summary>` block of its final response), not its full transcript. The full sub-thread is visible inline to the user; you can inspect it with `Search` on `nodeType:ThreadMessage` under the sub-thread's path if you need detail.
+3. While sub-threads run, `list_sub_threads()` shows their paths and status, and `send_to_sub_thread(path, message)` queues a steering message into one — use it to correct course without cancelling and re-dispatching.
 
-**Identity**: All tool calls run with the original user's identity, restored via `AccessContextAIFunction` wrapper.
+**Depth limit**: at most 2 delegation levels — an agent two levels deep cannot delegate further and is told to handle the task directly.
+
+**Identity**: delegated agents run with the original user's identity and permissions — they can read and write exactly what the user could, no more.

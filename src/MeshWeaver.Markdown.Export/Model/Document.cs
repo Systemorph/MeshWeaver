@@ -5,7 +5,7 @@ using MeshWeaver.Markdown.Export.Configuration;
 namespace MeshWeaver.Markdown.Export.Model;
 
 /// <summary>
-/// The full document to be rendered. Produced by <see cref="DocumentBuilder"/> from the
+/// The full document to be rendered. Produced by <see cref="MeshWeaver.Markdown.Export.Ast.DocumentBuilder"/> from the
 /// source markdown(s), options, and resolved branding.
 /// </summary>
 public record Document(

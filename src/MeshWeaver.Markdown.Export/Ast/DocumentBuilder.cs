@@ -21,6 +21,10 @@ public class DocumentBuilder
 {
     private readonly MarkdownPipeline _pipeline;
 
+    /// <summary>
+    /// Initializes a new instance of the <c>DocumentBuilder</c> class, building the Markdig
+    /// pipeline with advanced extensions and page-break support enabled.
+    /// </summary>
     public DocumentBuilder()
     {
         _pipeline = new MarkdownPipelineBuilder()

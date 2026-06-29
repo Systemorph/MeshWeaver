@@ -48,11 +48,6 @@ public record LayoutAreaControl(object Address, LayoutAreaReference Reference)
     public const string CatalogArea = "Catalog";
 
     /// <summary>
-    /// Well-known area name for the Children view (thumbnails without search).
-    /// </summary>
-    public const string ChildrenArea = "Children";
-
-    /// <summary>
     /// Well-known area name for the NodeTypes view.
     /// </summary>
     public const string NodeTypesArea = "NodeTypes";
@@ -64,15 +59,6 @@ public record LayoutAreaControl(object Address, LayoutAreaReference Reference)
     /// <returns>A LayoutAreaControl configured for the Catalog area.</returns>
     public static LayoutAreaControl Catalog(IMessageHub hub)
         => new(hub.Address, new LayoutAreaReference(CatalogArea));
-
-    /// <summary>
-    /// Creates a LayoutAreaControl for the Children area of the specified hub.
-    /// Shows child nodes as thumbnails without search bar.
-    /// </summary>
-    /// <param name="hub">The message hub.</param>
-    /// <returns>A LayoutAreaControl configured for the Children area.</returns>
-    public static LayoutAreaControl Children(IMessageHub hub)
-        => new(hub.Address, new LayoutAreaReference(ChildrenArea));
 
     /// <summary>
     /// Creates a LayoutAreaControl for the NodeTypes area of the specified hub.
@@ -113,6 +99,12 @@ public record LayoutAreaControl(object Address, LayoutAreaReference Reference)
     /// <returns>A new <see cref="LayoutAreaControl"/> instance with the specified spinner type.</returns>
     public LayoutAreaControl WithSpinnerType(SpinnerType spinnerType) => this with { SpinnerType = spinnerType };
 
+    /// <summary>
+    /// Determines whether this instance is equal to another <see cref="LayoutAreaControl"/> by
+    /// comparing all significant properties (Address, Reference, ShowProgress, SpinnerType, ProgressMessage).
+    /// </summary>
+    /// <param name="other">The instance to compare with, or null.</param>
+    /// <returns>True if all significant properties match; false otherwise.</returns>
     public virtual bool Equals(LayoutAreaControl? other)
     {
         if (other is null) return false;
@@ -150,6 +142,9 @@ public record LayoutAreaControl(object Address, LayoutAreaReference Reference)
         );
     }
 
+    /// <summary>Returns a copy with the loading indicator visibility set to <paramref name="showProgress"/>.</summary>
+    /// <param name="showProgress">True to show the spinner while the area is loading; false to hide it.</param>
+    /// <returns>A new <see cref="LayoutAreaControl"/> with the updated show-progress setting.</returns>
     public LayoutAreaControl WithShowProgress(bool showProgress)
         => this with { ShowProgress = showProgress };
 }

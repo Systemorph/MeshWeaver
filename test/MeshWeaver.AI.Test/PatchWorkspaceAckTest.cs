@@ -1,4 +1,4 @@
-#pragma warning disable CS1591
+﻿#pragma warning disable CS1591
 
 using System;
 using System.Collections.Generic;
@@ -9,8 +9,6 @@ using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
-using FluentAssertions;
-using FluentAssertions.Extensions;
 using MeshWeaver.AI;
 using MeshWeaver.AI.Persistence;
 using MeshWeaver.Data;
@@ -32,14 +30,14 @@ namespace MeshWeaver.AI.Test;
 /// <summary>
 /// Regression coverage for the 2026-04-14 cached-display incident: agent reported a
 /// successful Patch on FinalReport, persistence committed, but the in-memory workspace
-/// stream kept emitting the stale node — Blazor views displayed the old content until
+/// stream kept emitting the stale node â€” Blazor views displayed the old content until
 /// grain deactivation / circuit close re-loaded from persistence.
 ///
-/// Root cause was in <c>HandleUpdateNodeRequest</c> (<c>MeshExtensions.cs:679</c>) —
+/// Root cause was in <c>HandleUpdateNodeRequest</c> (<c>MeshExtensions.cs:679</c>) â€”
 /// the workspace-refresh <c>DataChangeRequest</c> was fire-and-forget, and the
 /// <c>UpdateNodeResponse.Ok</c> went out before the workspace observed the change.
 /// The fix uses Post + RegisterCallback inline (no TCS, no await) so Ok is sent only
-/// after the workspace acks — and DataChangeStatus.Failed / DeliveryFailure paths
+/// after the workspace acks â€” and DataChangeStatus.Failed / DeliveryFailure paths
 /// surface as <c>UpdateNodeResponse.Fail</c> so the caller sees actual errors.
 ///
 /// These tests also stress concurrent patches: a deadlock in the plugin layer would
@@ -48,6 +46,9 @@ namespace MeshWeaver.AI.Test;
 /// </summary>
 public class PatchWorkspaceAckTest : MonolithMeshTestBase
 {
+    /// <summary>Share Mesh/SP across [Fact]s â€” see MonolithMeshTestBase.ShareMeshAcrossTests.</summary>
+    protected override bool ShareMeshAcrossTests => true;
+
     private const string TestNodeType = nameof(TestProduct);
     private static readonly string TestDataPath = Path.Combine(AppContext.BaseDirectory, "TestData");
 
@@ -62,7 +63,6 @@ public class PatchWorkspaceAckTest : MonolithMeshTestBase
             .AddMeshNodes(new MeshNode(TestNodeType)
             {
                 Name = "Test Product",
-                AssemblyLocation = typeof(PatchWorkspaceAckTest).Assembly.Location,
                 HubConfiguration = config => config
                     .AddMeshDataSource(source => source.WithContentType<TestProduct>())
                     .AddDefaultLayoutAreas()
@@ -84,7 +84,7 @@ public class PatchWorkspaceAckTest : MonolithMeshTestBase
 
     /// <summary>
     /// The cache-bug regression: after Patch returns Ok, the next Get must reflect the
-    /// new state immediately. Before the HandleUpdateNodeRequest fix this would race —
+    /// new state immediately. Before the HandleUpdateNodeRequest fix this would race â€”
     /// Get could read the stale workspace cache because Ok was returned before the
     /// DataChangeRequest fan-out had been observed by the workspace.
     /// </summary>
@@ -94,13 +94,14 @@ public class PatchWorkspaceAckTest : MonolithMeshTestBase
         var plugin = CreatePlugin();
         var id = $"ack-{Guid.NewGuid():N}";
         var path = await SeedAsync(plugin, id);
+        var newName = $"Renamed by patch {Guid.NewGuid():N}";
 
-        var patched = await plugin.Patch($"@{path}", "{\"name\":\"Renamed by patch\"}");
+        var patched = await plugin.Patch($"@{path}", $"{{\"name\":\"{newName}\"}}");
         patched.Should().StartWith("Patched:", because: "valid patch must succeed");
 
-        // Immediately after Ok, Get must see the new state — no fresh page-load required.
+        // Immediately after Ok, Get must see the new state â€” no fresh page-load required.
         var got = await plugin.Get($"@{path}");
-        got.Should().Contain("Renamed by patch",
+        got.Should().Contain(newName,
             because: "the workspace must already reflect the patch when Ok is returned " +
                      "(otherwise we have the cached-display bug)");
     }
@@ -114,23 +115,27 @@ public class PatchWorkspaceAckTest : MonolithMeshTestBase
     {
         var plugin = CreatePlugin();
         var id = $"ws-{Guid.NewGuid():N}";
-        var path = await SeedAsync(plugin, id);
+        // SeedAsync / Patch are genuine Task<string> SDK boundaries — bridge them
+        // via .ToObservable() so the body stays await-free (§2a).
+        var path = await SeedAsync(plugin, id).ToObservable().Should().Within(30.Seconds()).Emit();
 
-        var patched = await plugin.Patch($"@{path}", "{\"name\":\"Updated via stream test\"}");
+        var patched = await plugin.Patch($"@{path}", "{\"name\":\"Updated via stream test\"}")
+            .ToObservable().Should().Within(30.Seconds()).Emit();
         patched.Should().StartWith("Patched:");
 
         // Workspace stream of the node hub must observe the new name within a short window.
         var nodeHub = Mesh.GetHostedHub(new Address(path));
         var workspace = nodeHub.GetWorkspace();
         var stream = workspace.GetStream<MeshNode>();
-        stream.Should().NotBeNull("the hub must expose a MeshNode stream");
+        // IObservable<T> routes to ObservableAssertions (no NotBeNull) — this is a
+        // plain reference-null guard, not a stream-emission assertion. The actual
+        // emission wait is asserted below via observedName.Should().Be(...).
+        Assert.NotNull(stream);
 
         var observedName = await stream!
             .Where(nodes => nodes != null && nodes.Any(n => n.Path == path))
             .Select(nodes => nodes!.First(n => n.Path == path).Name)
-            .Where(name => name == "Updated via stream test")
-            .Timeout(5.Seconds())
-            .FirstAsync();
+            .Should().Within(5.Seconds()).Match(name => name == "Updated via stream test");
 
         observedName.Should().Be("Updated via stream test");
     }
@@ -154,7 +159,7 @@ public class PatchWorkspaceAckTest : MonolithMeshTestBase
 
     /// <summary>
     /// Negative scenario: patching with an empty name (which existing validator rejects)
-    /// must surface as a "Error: cannot patch ... 'name' is empty" error — not silent
+    /// must surface as a "Error: cannot patch ... 'name' is empty" error â€” not silent
     /// success, not a deadlock, not a stale workspace.
     /// </summary>
     [Fact(Timeout = 20000)]
@@ -189,10 +194,40 @@ public class PatchWorkspaceAckTest : MonolithMeshTestBase
     }
 
     /// <summary>
+    /// 🚨 Regression for the 2026-06-13 content-clobber: a Patch that touches a SINGLE
+    /// content field must DEEP-MERGE (RFC 7396) — preserving every other content field —
+    /// not wholesale-replace 'content'. This is the exact bug that wiped
+    /// name/description/body off the live AgenticPension Space when only {"content":{"logo":…}}
+    /// was sent. Here: seed {name:"Widget", price:1.00, quantity:1}, patch only price,
+    /// and assert name + quantity survive.
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task Patch_SingleContentField_DeepMerges_PreservingSiblings()
+    {
+        var plugin = CreatePlugin();
+        var id = $"merge-{Guid.NewGuid():N}";
+        var path = await SeedAsync(plugin, id);   // content { name="Widget", price=1.00, quantity=1 }
+
+        var patched = await plugin.Patch($"@{path}", "{\"content\":{\"price\":2.50}}");
+        patched.Should().StartWith("Patched:", because: "a single-field content patch is valid");
+
+        var got = await plugin.Get($"@{path}");
+        using var doc = JsonDocument.Parse(got);
+        var content = doc.RootElement.GetProperty("content");
+
+        content.GetProperty("price").GetDecimal().Should().Be(2.50m,
+            because: "the one field in the patch must be applied");
+        content.GetProperty("name").GetString().Should().Be("Widget",
+            because: "'name' was omitted from the patch and must be preserved (was clobbered before the fix)");
+        content.GetProperty("quantity").GetInt32().Should().Be(1,
+            because: "'quantity' was omitted from the patch and must be preserved (was clobbered before the fix)");
+    }
+
+    /// <summary>
     /// Stress / deadlock regression: 10 concurrent Patch calls on independent nodes
     /// must all complete within the timeout window. Before the no-await refactor of
     /// the plugin layer (commit d165533c8) the await hub.AwaitResponse pattern would
-    /// deadlock the hub scheduler under any concurrent load — this test would hang
+    /// deadlock the hub scheduler under any concurrent load â€” this test would hang
     /// past its method timeout.
     /// </summary>
     [Fact(Timeout = 60000)]
@@ -212,13 +247,13 @@ public class PatchWorkspaceAckTest : MonolithMeshTestBase
         sw.Stop();
 
         results.Should().AllSatisfy(r => r.Should().StartWith("Patched:",
-            because: "every concurrent patch must complete successfully — a deadlock would manifest as timeout"));
+            because: "every concurrent patch must complete successfully â€” a deadlock would manifest as timeout"));
         sw.Elapsed.Should().BeLessThan(45.Seconds(),
             because: "10 trivial patches in parallel should finish well under the timeout; if it's close, we likely have lock contention even without full deadlock");
     }
 
     /// <summary>
-    /// Minimal IAgentChat stub — MeshPlugin only reads ExecutionContext and Context.
+    /// Minimal IAgentChat stub â€” MeshPlugin only reads ExecutionContext and Context.
     /// </summary>
     private sealed class MinimalChat : IAgentChat
     {

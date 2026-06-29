@@ -68,15 +68,38 @@ public static class MarkdownExportExtensions
         // client) can serialize/deserialize them with a consistent $type discriminator. Without
         // this the client hub receives a MessageDelivery<JsonElement> that can't be cast to
         // IMessageDelivery<ExportDocumentResponse>.
+        //
+        // ExportDocumentControl ALSO has to be mesh-wide: the per-node hub renders it as a
+        // UiControl inside a layout-area DataChangedEvent. The routing layer between the silo
+        // hub and the client client/portal hub serialises the polymorphic UiControl through
+        // the mesh-wide type registry. Without ExportDocumentControl registered there, the
+        // routing serialiser can't resolve the $type discriminator and the response is
+        // silently dropped — SubscribeRequest never gets a reply, the client times out at
+        // 30s. Local-only `WithTypes` on the per-node hub is not enough.
         builder
             .WithMeshType(typeof(ExportDocumentRequest), nameof(ExportDocumentRequest))
             .WithMeshType(typeof(ExportDocumentResponse), nameof(ExportDocumentResponse))
-            .WithMeshType(typeof(DocumentExportOptions), nameof(DocumentExportOptions));
+            .WithMeshType(typeof(DocumentExportOptions), nameof(DocumentExportOptions))
+            .WithMeshType(typeof(ExportDocumentControl), nameof(ExportDocumentControl));
 
         builder.ConfigureServices(services => services
             .AddSingleton(cfg)
             .AddTransient<ExportTemplateResolver>()
-            .AddTransient<BrandingResolver>());
+            .AddTransient<BrandingResolver>()
+            // Make this assembly visible to kernel scripts. Without this the
+            // export template .csx files can't resolve `using MeshWeaver.Markdown.Export.*`
+            // when AppDomain hasn't eagerly loaded the assembly before the
+            // first script run. See KernelScriptAssembly.
+            .AddSingleton(new MeshWeaver.Kernel.Hub.KernelScriptAssembly(
+                typeof(MarkdownExportTemplates).Assembly)));
+
+        // Seed the built-in PDF/DOCX template Code MeshNodes at
+        // Templates/Export/{Pdf,Docx}. Layout areas drive export by posting
+        // ExecuteScriptRequest at these nodes — the kernel runs the embedded
+        // .csx with caller-supplied Inputs and writes progress / output to an
+        // Activity in the caller's home. See Doc/Architecture/ActivityControlPlane.md
+        // → "Operations as scripts". Stateless static helper, no DI provider.
+        builder.AddMeshNodes(MarkdownExportTemplates.GetStaticNodes());
 
         // Menu items, layout views, and the export request handler must live on the
         // node hubs (one per Markdown node) — that's where layout rendering runs and where

@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <IsPackable>true</IsPackable>
+    <Description>Fluent, await-free assertions for IObservable&lt;T&gt;. Subscribe, wait (with a timeout) for the relevant emission, and assert — in one fluent chain. Self-contained: depends only on System.Reactive.</Description>
+    <PackageTags>reactive;rx;observable;testing;assertions;async</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <!-- Ship IntelliSense docs with the package and enforce complete XML comments
+         on the public assertion surface (CS1591). Fixed by writing comments, never suppressed. -->
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.Reactive" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+</Project>

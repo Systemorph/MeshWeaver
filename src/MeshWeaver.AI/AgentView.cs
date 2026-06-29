@@ -1,5 +1,7 @@
 ﻿using System.Collections.Immutable;
 using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
+using System.Text.Json;
 using Humanizer;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
@@ -7,11 +9,13 @@ using MeshWeaver.Graph;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.Domain;
+using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using MeshWeaver.ShortGuid;
 using MeshWeaver.Utils;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.AI;
 
@@ -23,11 +27,14 @@ namespace MeshWeaver.AI;
 /// </summary>
 public static class AgentView
 {
+    /// <summary>Area name for the agent catalog (list of all agents).</summary>
     public const string CatalogArea = "Catalog";
-    public const string DetailsArea = "Details";
-    public const string EditArea = "Edit";
 
-    private const string AgentDataId = "agent";
+    /// <summary>Area name for an agent's details/overview view.</summary>
+    public const string DetailsArea = "Details";
+
+    /// <summary>Area name for the agent configuration editor.</summary>
+    public const string EditArea = "Edit";
 
     /// <summary>
     /// Adds the Agent views to the hub's layout for Agent nodes.
@@ -54,24 +61,16 @@ public static class AgentView
         return Controls.Stack
             .WithWidth("100%")
             .WithView(
-                (h, c) => Observable.FromAsync(async () =>
+                (h, c) =>
                 {
                     var meshQuery = host.Hub.ServiceProvider.GetService<IMeshService>();
                     if (meshQuery == null)
-                        return RenderError("Query service not available.");
+                        return Observable.Return(RenderError("Query service not available."));
 
-                    List<MeshNode> agents;
-                    try
-                    {
-                        agents = await meshQuery.QueryAsync<MeshNode>("nodeType:Agent").ToListAsync();
-                    }
-                    catch
-                    {
-                        agents = [];
-                    }
-
-                    return BuildCatalogContent(agents);
-                }),
+                    return meshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("nodeType:Agent"))
+                        .Select(change => BuildCatalogContent(change.Items.ToList()))
+                        .Catch<UiControl, Exception>(_ => Observable.Return(BuildCatalogContent([])));
+                },
                 "Content");
     }
 
@@ -107,34 +106,50 @@ public static class AgentView
 
     /// <summary>
     /// Renders the Details area for an Agent.
-    /// Shows an overview of the agent configuration.
+    /// Shows an overview of the agent configuration. Node-level metadata (name,
+    /// description, icon, group, order) is read from the owning MeshNode — the single
+    /// source of truth — and only agent-specific behaviour from the AgentConfiguration.
     /// </summary>
     public static UiControl Details(LayoutAreaHost host, RenderingContext ctx)
     {
-        // Subscribe to agent data stream
-        host.SubscribeToDataStream(AgentDataId, host.Workspace.GetNodeContent<AgentConfiguration>());
-
         return Controls.Stack
             .WithWidth("100%")
             .WithView(
-                (h, c) => h.GetDataStream<AgentConfiguration>(AgentDataId)
-                    .Select(agent =>
+                (h, c) => host.Workspace.GetMeshNodeStream()
+                    .Select(node =>
                     {
-                        if (agent == null)
+                        var agent = AsAgentConfiguration(node, host.Hub.JsonSerializerOptions);
+                        if (node == null || agent == null)
                             return RenderLoading("Loading agent...");
-                        return BuildDetailsLayout(host, agent);
+                        return BuildDetailsLayout(host, node, agent);
                     }),
                 "Content"
             );
     }
 
-    private static UiControl BuildDetailsLayout(LayoutAreaHost host, AgentConfiguration agent)
+    /// <summary>Resolves the typed <see cref="AgentConfiguration"/> from a node's Content,
+    /// tolerating a <see cref="JsonElement"/> when the hub's registry isn't AI-typed.</summary>
+    private static AgentConfiguration? AsAgentConfiguration(MeshNode? node, JsonSerializerOptions jsonOptions)
+        => node?.Content switch
+        {
+            AgentConfiguration ac => ac,
+            JsonElement je => TryDeserialiseConfig(je, jsonOptions),
+            _ => null,
+        };
+
+    private static AgentConfiguration? TryDeserialiseConfig(JsonElement je, JsonSerializerOptions jsonOptions)
+    {
+        try { return JsonSerializer.Deserialize<AgentConfiguration>(je.GetRawText(), jsonOptions); }
+        catch { return null; }
+    }
+
+    private static UiControl BuildDetailsLayout(LayoutAreaHost host, MeshNode node, AgentConfiguration agent)
     {
         var hubAddress = host.Hub.Address;
         var stack = Controls.Stack.WithWidth("100%").WithStyle("padding: 24px;");
 
-        // Header with edit button
-        var displayName = agent.DisplayName ?? agent.Id.Wordify();
+        // Header with edit button — display name from the node.
+        var displayName = node.Name ?? node.Id.Wordify();
         var headerRow = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
             .WithStyle("justify-content: space-between; align-items: center; margin-bottom: 8px;")
@@ -146,10 +161,10 @@ public static class AgentView
 
         stack = stack.WithView(headerRow);
 
-        // Description
-        if (!string.IsNullOrEmpty(agent.Description))
+        // Description — from the node.
+        if (!string.IsNullOrEmpty(node.Description))
         {
-            stack = stack.WithView(Controls.Html($"<p style=\"color: #666; margin: 0 0 24px 0;\">{System.Web.HttpUtility.HtmlEncode(agent.Description)}</p>"));
+            stack = stack.WithView(Controls.Html($"<p style=\"color: #666; margin: 0 0 24px 0;\">{System.Web.HttpUtility.HtmlEncode(node.Description)}</p>"));
         }
 
         // Attributes badges
@@ -159,18 +174,18 @@ public static class AgentView
             stack = stack.WithView(Controls.Html($"<div style=\"margin-bottom: 24px;\">{attributes}</div>"));
         }
 
-        // Info card
+        // Info card — node-level rows read from the node; only the context pattern
+        // (genuinely agent-specific) comes from the configuration.
         var infoCard = Controls.Stack
             .WithStyle("background: var(--neutral-layer-2); border-radius: 8px; padding: 20px; margin-bottom: 24px;");
 
-        infoCard = infoCard.WithView(BuildInfoRow("ID", agent.Id));
-        if (!string.IsNullOrEmpty(agent.GroupName))
-            infoCard = infoCard.WithView(BuildInfoRow("Group", agent.GroupName));
-        if (!string.IsNullOrEmpty(agent.Icon))
-            infoCard = infoCard.WithView(BuildInfoRow("Icon", agent.Icon));
-        infoCard = infoCard.WithView(BuildInfoRow("Display Order", agent.Order.ToString()));
-        if (!string.IsNullOrEmpty(agent.PreferredModel))
-            infoCard = infoCard.WithView(BuildInfoRow("Preferred Model", agent.PreferredModel));
+        infoCard = infoCard.WithView(BuildInfoRow("ID", node.Id));
+        if (!string.IsNullOrEmpty(node.Category))
+            infoCard = infoCard.WithView(BuildInfoRow("Group", node.Category));
+        if (!string.IsNullOrEmpty(node.Icon))
+            infoCard = infoCard.WithView(BuildInfoRow("Icon", node.Icon));
+        if (node.Order is { } order)
+            infoCard = infoCard.WithView(BuildInfoRow("Display Order", order.ToString()));
         if (!string.IsNullOrEmpty(agent.ContextMatchPattern))
             infoCard = infoCard.WithView(BuildInfoRow("Context Pattern", agent.ContextMatchPattern));
 
@@ -232,28 +247,29 @@ public static class AgentView
     }
 
     /// <summary>
-    /// Renders the Edit area for an Agent.
+    /// Renders the Edit area for an Agent. Node-level fields (name, description, icon,
+    /// group, order) persist to the owning MeshNode; agent-specific fields persist to the
+    /// AgentConfiguration content. Both land in one <c>stream.Update</c> so there is a
+    /// single source of truth — no duplicated metadata.
     /// </summary>
     public static UiControl Edit(LayoutAreaHost host, RenderingContext ctx)
     {
-        // Subscribe to agent data stream
-        host.SubscribeToDataStream(AgentDataId, host.Workspace.GetNodeContent<AgentConfiguration>());
-
         return Controls.Stack
             .WithWidth("100%")
             .WithView(
-                (h, c) => h.GetDataStream<AgentConfiguration>(AgentDataId)
-                    .Select(agent =>
+                (h, c) => host.Workspace.GetMeshNodeStream()
+                    .Select(node =>
                     {
-                        if (agent == null)
+                        var agent = AsAgentConfiguration(node, host.Hub.JsonSerializerOptions);
+                        if (node == null || agent == null)
                             return RenderLoading("Loading agent...");
-                        return BuildEditLayout(host, agent);
+                        return BuildEditLayout(host, node, agent);
                     }),
                 "Content"
             );
     }
 
-    private static UiControl BuildEditLayout(LayoutAreaHost host, AgentConfiguration agent)
+    private static UiControl BuildEditLayout(LayoutAreaHost host, MeshNode node, AgentConfiguration agent)
     {
         var hubAddress = host.Hub.Address;
         var stack = Controls.Stack.WithWidth("100%").WithStyle("padding: 24px;");
@@ -264,26 +280,24 @@ public static class AgentView
         var iconNameDataId = Guid.NewGuid().AsString();
         var groupNameDataId = Guid.NewGuid().AsString();
         var orderDataId = Guid.NewGuid().AsString();
-        var preferredModelDataId = Guid.NewGuid().AsString();
         var contextMatchPatternDataId = Guid.NewGuid().AsString();
         var isDefaultDataId = Guid.NewGuid().AsString();
         var exposedInNavigatorDataId = Guid.NewGuid().AsString();
         var instructionsDataId = Guid.NewGuid().AsString();
 
-        // Initialize data streams
-        host.UpdateData(displayNameDataId, agent.DisplayName ?? "");
-        host.UpdateData(descriptionDataId, agent.Description ?? "");
-        host.UpdateData(iconNameDataId, agent.Icon ?? "");
-        host.UpdateData(groupNameDataId, agent.GroupName ?? "");
-        host.UpdateData(orderDataId, agent.Order.ToString());
-        host.UpdateData(preferredModelDataId, agent.PreferredModel ?? "");
+        // Initialize data streams — node-level fields from the node, agent-level from config.
+        host.UpdateData(displayNameDataId, node.Name ?? "");
+        host.UpdateData(descriptionDataId, node.Description ?? "");
+        host.UpdateData(iconNameDataId, node.Icon ?? "");
+        host.UpdateData(groupNameDataId, node.Category ?? "");
+        host.UpdateData(orderDataId, (node.Order ?? 0).ToString());
         host.UpdateData(contextMatchPatternDataId, agent.ContextMatchPattern ?? "");
         host.UpdateData(isDefaultDataId, agent.IsDefault ? "true" : "false");
         host.UpdateData(exposedInNavigatorDataId, agent.ExposedInNavigator ? "true" : "false");
         host.UpdateData(instructionsDataId, agent.Instructions ?? "");
 
         // Header
-        var displayName = agent.DisplayName ?? agent.Id.Wordify();
+        var displayName = node.Name ?? node.Id.Wordify();
         stack = stack.WithView(Controls.Html($"<h2 style=\"margin-bottom: 24px;\">Edit: {System.Web.HttpUtility.HtmlEncode(displayName)}</h2>"));
 
         // Form fields
@@ -334,15 +348,6 @@ public static class AgentView
                 .WithPlaceholder("0")
                 .WithImmediate(true) with
             { DataContext = LayoutAreaReference.GetDataPointer(orderDataId) }));
-
-        // Preferred Model
-        stack = stack.WithView(Controls.Stack
-            .WithStyle(formStyle)
-            .WithView(Controls.Html("<label style=\"font-weight: 500;\">Preferred Model:</label>"))
-            .WithView(new TextFieldControl(new JsonPointerReference(""))
-                .WithPlaceholder("e.g., claude-sonnet-4-5")
-                .WithImmediate(true) with
-            { DataContext = LayoutAreaReference.GetDataPointer(preferredModelDataId) }));
 
         // Context Match Pattern
         stack = stack.WithView(Controls.Stack
@@ -405,84 +410,75 @@ public static class AgentView
         buttonRow = buttonRow.WithView(Controls.Button("Save")
             .WithAppearance(Appearance.Accent)
             .WithIconStart(FluentIcons.Save())
-            .WithClickAction(async actx =>
+            .WithClickAction(actx =>
             {
-                // Get all field values
-                var newDisplayName = await host.Stream.GetDataStream<string>(displayNameDataId).FirstAsync();
-                var newDescription = await host.Stream.GetDataStream<string>(descriptionDataId).FirstAsync();
-                var newIconName = await host.Stream.GetDataStream<string>(iconNameDataId).FirstAsync();
-                var newGroupName = await host.Stream.GetDataStream<string>(groupNameDataId).FirstAsync();
-                var newOrderStr = await host.Stream.GetDataStream<string>(orderDataId).FirstAsync();
-                var newPreferredModel = await host.Stream.GetDataStream<string>(preferredModelDataId).FirstAsync();
-                var newContextMatchPattern = await host.Stream.GetDataStream<string>(contextMatchPatternDataId).FirstAsync();
-                var newIsDefaultStr = await host.Stream.GetDataStream<string>(isDefaultDataId).FirstAsync();
-                var newExposedInNavigatorStr = await host.Stream.GetDataStream<string>(exposedInNavigatorDataId).FirstAsync();
-                var newInstructions = await host.Stream.GetDataStream<string>(instructionsDataId).FirstAsync();
+                // Sync click action — Subscribe to combined snapshot of all form streams,
+                // then write through the canonical mesh-node mutation API. Node-level
+                // fields land on the MeshNode; agent-specific fields on its Content. One
+                // update, one source of truth.
+                Observable.CombineLatest(
+                    host.Stream.GetDataStream<string>(displayNameDataId).Take(1),
+                    host.Stream.GetDataStream<string>(descriptionDataId).Take(1),
+                    host.Stream.GetDataStream<string>(iconNameDataId).Take(1),
+                    host.Stream.GetDataStream<string>(groupNameDataId).Take(1),
+                    host.Stream.GetDataStream<string>(orderDataId).Take(1),
+                    host.Stream.GetDataStream<string>(contextMatchPatternDataId).Take(1),
+                    host.Stream.GetDataStream<string>(isDefaultDataId).Take(1),
+                    host.Stream.GetDataStream<string>(exposedInNavigatorDataId).Take(1),
+                    host.Stream.GetDataStream<string>(instructionsDataId).Take(1),
+                    (newDisplayName, newDescription, newIconName, newGroupName, newOrderStr,
+                     newContextMatchPattern, newIsDefaultStr, newExposedInNavigatorStr, newInstructions) =>
+                        (newDisplayName, newDescription, newIconName, newGroupName, newOrderStr,
+                         newContextMatchPattern, newIsDefaultStr, newExposedInNavigatorStr, newInstructions))
+                    .Take(1)
+                    .Subscribe(form =>
+                    {
+                        var (newDisplayName, newDescription, newIconName, newGroupName, newOrderStr,
+                             newContextMatchPattern, newIsDefaultStr, newExposedInNavigatorStr, newInstructions) = form;
+                        int? newOrder = int.TryParse(newOrderStr, out var parsed) ? parsed : null;
+                        var newIsDefault = newIsDefaultStr?.Equals("true", StringComparison.OrdinalIgnoreCase) == true;
+                        var newExposedInNavigator = newExposedInNavigatorStr?.Equals("true", StringComparison.OrdinalIgnoreCase) == true;
 
-                // Parse order
-                if (!int.TryParse(newOrderStr, out var newOrder))
-                    newOrder = 0;
-
-                // Parse booleans
-                var newIsDefault = newIsDefaultStr?.Equals("true", StringComparison.OrdinalIgnoreCase) == true;
-                var newExposedInNavigator = newExposedInNavigatorStr?.Equals("true", StringComparison.OrdinalIgnoreCase) == true;
-
-                // Update the AgentConfiguration
-                var updatedAgent = agent with
-                {
-                    DisplayName = string.IsNullOrWhiteSpace(newDisplayName) ? null : newDisplayName,
-                    Description = string.IsNullOrWhiteSpace(newDescription) ? null : newDescription,
-                    Icon = string.IsNullOrWhiteSpace(newIconName) ? null : newIconName,
-                    GroupName = string.IsNullOrWhiteSpace(newGroupName) ? null : newGroupName,
-                    Order = newOrder,
-                    PreferredModel = string.IsNullOrWhiteSpace(newPreferredModel) ? null : newPreferredModel,
-                    ContextMatchPattern = string.IsNullOrWhiteSpace(newContextMatchPattern) ? null : newContextMatchPattern,
-                    IsDefault = newIsDefault,
-                    ExposedInNavigator = newExposedInNavigator,
-                    Instructions = string.IsNullOrWhiteSpace(newInstructions) ? null : newInstructions
-                };
-
-                using var cts = new CancellationTokenSource(10.Seconds());
-                var delivery = actx.Host.Hub.Post(
-                    new DataChangeRequest { ChangedBy = actx.Host.Stream.ClientId }.WithUpdates(updatedAgent),
-                    o => o.WithTarget(hubAddress))!;
-                var callbackResponse = await actx.Host.Hub.RegisterCallback(delivery, (d, _) => Task.FromResult(d), cts.Token);
-
-                // Handle routing failures (e.g., agent hub unreachable) and unexpected
-                // response shapes before touching the DataChangeResponse fields.
-                if (callbackResponse is IMessageDelivery<DeliveryFailure> deliveryFailure)
-                {
-                    var dialog = Controls.Dialog(
-                        Controls.Markdown($"**Error saving:**\n\n{deliveryFailure.Message.Message ?? "Delivery failed"}"),
-                        "Save Failed"
-                    ).WithSize("M");
-                    actx.Host.UpdateArea(DialogControl.DialogArea, dialog);
-                    return;
-                }
-                if (callbackResponse is not IMessageDelivery<DataChangeResponse> dataChange)
-                {
-                    var dialog = Controls.Dialog(
-                        Controls.Markdown($"**Error saving:** Unexpected response `{callbackResponse.Message?.GetType().Name ?? "null"}`."),
-                        "Save Failed"
-                    ).WithSize("M");
-                    actx.Host.UpdateArea(DialogControl.DialogArea, dialog);
-                    return;
-                }
-                var responseMsg = dataChange.Message;
-
-                if (responseMsg.Log.Status != ActivityStatus.Succeeded)
-                {
-                    var errorDialog = Controls.Dialog(
-                        Controls.Markdown($"**Error saving:**\n\n{responseMsg.Log}"),
-                        "Save Failed"
-                    ).WithSize("M");
-                    actx.Host.UpdateArea(DialogControl.DialogArea, errorDialog);
-                    return;
-                }
-
-                // Navigate back to details
-                var overviewHref = new LayoutAreaReference(DetailsArea).ToHref(hubAddress);
-                actx.Host.UpdateArea(actx.Area, new RedirectControl(overviewHref));
+                        actx.Host.Workspace.GetMeshNodeStream().Update(current =>
+                        {
+                            var baseConfig = AsAgentConfiguration(current, actx.Host.Hub.JsonSerializerOptions)
+                                              ?? agent;
+                            return current with
+                            {
+                                // Node-level metadata — the single source of truth.
+                                Name = string.IsNullOrWhiteSpace(newDisplayName) ? current.Id : newDisplayName,
+                                Description = string.IsNullOrWhiteSpace(newDescription) ? null : newDescription,
+                                Icon = string.IsNullOrWhiteSpace(newIconName) ? null : newIconName,
+                                Category = string.IsNullOrWhiteSpace(newGroupName) ? null : newGroupName,
+                                Order = newOrder,
+                                // Agent-specific behaviour.
+                                Content = baseConfig with
+                                {
+                                    ContextMatchPattern = string.IsNullOrWhiteSpace(newContextMatchPattern) ? null : newContextMatchPattern,
+                                    IsDefault = newIsDefault,
+                                    ExposedInNavigator = newExposedInNavigator,
+                                    Instructions = string.IsNullOrWhiteSpace(newInstructions) ? null : newInstructions
+                                }
+                            };
+                        }).Subscribe(
+                            _ =>
+                            {
+                                var overviewHref = new LayoutAreaReference(DetailsArea).ToHref(hubAddress);
+                                actx.Host.UpdateArea(actx.Area, new RedirectControl(overviewHref));
+                            },
+                            ex =>
+                            {
+                                actx.Host.Hub.ServiceProvider.GetService<ILoggerFactory>()
+                                    ?.CreateLogger(typeof(AgentView))
+                                    .LogWarning(ex, "Agent edit save failed for {Path}", node.Path);
+                                var dialog = Controls.Dialog(
+                                    Controls.Markdown($"**Error saving:**\n\n{ex.Message}"),
+                                    "Save Failed"
+                                ).WithSize("M");
+                                actx.Host.UpdateArea(DialogControl.DialogArea, dialog);
+                            });
+                    });
+                return Task.CompletedTask;
             }));
 
         stack = stack.WithView(buttonRow);

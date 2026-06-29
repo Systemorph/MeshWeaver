@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
-using FluentAssertions;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
@@ -15,6 +14,8 @@ using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Persistence.Test;
 
 /// <summary>
@@ -33,12 +34,16 @@ public class MapContentCollectionTest(ITestOutputHelper output) : MonolithMeshTe
         Directory.CreateDirectory(_testBasePath);
         Output.WriteLine($"Test base path: {_testBasePath}");
 
-        // Create a "TestStorage" collection config at mesh level
+        // Create a "TestStorage" collection config at mesh level.
+        // ExposeInChildren=true so per-node MapContentCollection wrappers
+        // (which copy this flag from the source config) surface in
+        // GetAllCollectionConfigs after the default flip (95f840f34).
         var testStorageConfig = new ContentCollectionConfig
         {
             Name = "TestStorage",
             SourceType = "FileSystem",
-            BasePath = _testBasePath
+            BasePath = _testBasePath,
+            ExposeInChildren = true
         };
 
         return builder
@@ -74,10 +79,8 @@ public class MapContentCollectionTest(ITestOutputHelper output) : MonolithMeshTe
         Output.WriteLine($"Client address: {client.Address}");
 
         // Act - request the avatars collection configuration from the client's own hub
-        var response = await client.AwaitResponse(
-            new GetDataRequest(new ContentCollectionReference(["avatars"])),
-            o => o.WithTarget(client.Address), // Send to self
-            TestContext.Current.CancellationToken);
+        var response = await client.Observe(new GetDataRequest(new ContentCollectionReference(["avatars"])), o => o.WithTarget(client.Address)) // Send to self
+            .Should().Emit();
 
         // Assert
         response.Should().NotBeNull();
@@ -111,10 +114,8 @@ public class MapContentCollectionTest(ITestOutputHelper output) : MonolithMeshTe
             .MapContentCollection("storage", "TestStorage", ""));
 
         // Act
-        var response = await client.AwaitResponse(
-            new GetDataRequest(new ContentCollectionReference(["storage"])),
-            o => o.WithTarget(client.Address),
-            TestContext.Current.CancellationToken);
+        var response = await client.Observe(new GetDataRequest(new ContentCollectionReference(["storage"])), o => o.WithTarget(client.Address))
+            .Should().Emit();
 
         // Assert
         response.Should().NotBeNull();
@@ -145,18 +146,18 @@ public class MapContentCollectionTest(ITestOutputHelper output) : MonolithMeshTe
             .MapContentCollection("files", "NonExistentCollection", "subdir"));
 
         // Act - requesting the collection should return empty/null because source doesn't exist
-        var response = await client.AwaitResponse(
-            new GetDataRequest(new ContentCollectionReference(["files"])),
-            o => o.WithTarget(client.Address),
-            TestContext.Current.CancellationToken);
+        var response = await client.Observe(new GetDataRequest(new ContentCollectionReference(["files"])), o => o.WithTarget(client.Address))
+            .Should().Emit();
 
         // Assert - response should have no configs because the source collection wasn't found
         response.Should().NotBeNull();
         response.Message.Should().NotBeNull();
 
         var configs = response.Message.Data as IReadOnlyCollection<ContentCollectionConfig>;
-        // configs may be null or empty because the mapped config couldn't be resolved
-        configs.Should().BeNullOrEmpty("mapped config should not resolve when source collection doesn't exist");
+        // configs may be null or empty because the mapped config couldn't be resolved.
+        // The library has no collection-level BeNullOrEmpty, so check both conditions explicitly.
+        (configs is null || configs.Count == 0).Should()
+            .BeTrue("mapped config should not resolve when source collection doesn't exist");
     }
 
     /// <summary>
@@ -172,10 +173,8 @@ public class MapContentCollectionTest(ITestOutputHelper output) : MonolithMeshTe
             .MapContentCollection("collection2", "TestStorage", "dir2"));
 
         // Act - request all collection configurations (empty array)
-        var response = await client.AwaitResponse(
-            new GetDataRequest(new ContentCollectionReference()),
-            o => o.WithTarget(client.Address),
-            TestContext.Current.CancellationToken);
+        var response = await client.Observe(new GetDataRequest(new ContentCollectionReference()), o => o.WithTarget(client.Address))
+            .Should().Emit();
 
         // Assert
         response.Should().NotBeNull();

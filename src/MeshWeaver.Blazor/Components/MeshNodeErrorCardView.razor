@@ -1,0 +1,59 @@
+@using MeshWeaver.Mesh
+@using Microsoft.FluentUI.AspNetCore.Components
+
+@if (Error is not null)
+{
+    <FluentMessageBar Intent="@Intent" Title="@Title" AllowDismiss="false">
+        <div class="mesh-node-error-body">
+            <div class="mesh-node-error-message">@Error.Message</div>
+            <div class="mesh-node-error-meta">
+                <span class="mesh-node-error-code">@Error.Code</span>
+                <span class="mesh-node-error-path">@Error.Path</span>
+            </div>
+            @if (!string.IsNullOrEmpty(Error.Diagnostic))
+            {
+                <FluentAccordion>
+                    <FluentAccordionItem Heading="Details">
+                        <pre class="mesh-node-error-diagnostic">@Error.Diagnostic</pre>
+                    </FluentAccordionItem>
+                </FluentAccordion>
+            }
+        </div>
+    </FluentMessageBar>
+}
+
+@code
+{
+    /// <summary>
+    /// Structured error from a MeshNode read/write failure. Render via
+    /// <c>&lt;MeshNodeErrorCardView Error="@error" /&gt;</c> from any catch
+    /// block that handles <see cref="MeshNodeStreamException"/>:
+    /// <code>
+    /// try { ... }
+    /// catch (MeshNodeStreamException ex) { error = ex.Error; }
+    /// </code>
+    /// </summary>
+    [Parameter, EditorRequired] public MeshNodeError? Error { get; set; }
+
+    private MessageIntent Intent => Error?.Code switch
+    {
+        MeshNodeErrorCode.AccessDenied => MessageIntent.Warning,
+        MeshNodeErrorCode.NotFound => MessageIntent.Info,
+        MeshNodeErrorCode.Validation => MessageIntent.Warning,
+        MeshNodeErrorCode.OwnerUnreachable => MessageIntent.Error,
+        MeshNodeErrorCode.Deserialization => MessageIntent.Error,
+        MeshNodeErrorCode.Conflict => MessageIntent.Warning,
+        _ => MessageIntent.Error,
+    };
+
+    private string Title => Error?.Code switch
+    {
+        MeshNodeErrorCode.AccessDenied => "Access denied",
+        MeshNodeErrorCode.NotFound => "Not found",
+        MeshNodeErrorCode.Validation => "Validation failed",
+        MeshNodeErrorCode.OwnerUnreachable => "Owner unreachable",
+        MeshNodeErrorCode.Deserialization => "Content could not be deserialized",
+        MeshNodeErrorCode.Conflict => "Concurrent update conflict",
+        _ => "MeshNode operation failed",
+    };
+}

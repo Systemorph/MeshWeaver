@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <PackageReference Include="UglyToad.PdfPig" />
+    <PackageReference Include="DocSharp.Markdown" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- IIoPool / IoPool.Unbounded / IoPoolRegistry live in MeshWeaver.Mesh.Contract
+         (namespace MeshWeaver.Mesh.Threading). This is the only framework dependency the
+         storage-agnostic indexing core needs. -->
+    <ProjectReference Include="..\MeshWeaver.Mesh.Contract\MeshWeaver.Mesh.Contract.csproj" />
+  </ItemGroup>
+
+</Project>

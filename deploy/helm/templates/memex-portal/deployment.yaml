@@ -1,0 +1,109 @@
+---
+apiVersion: "apps/v1"
+kind: "Deployment"
+metadata:
+  name: "memex-portal-deployment"
+  labels:
+    app.kubernetes.io/name: "{{ .Chart.Name }}"
+    app.kubernetes.io/component: "memex-portal"
+    app.kubernetes.io/instance: "{{ .Release.Name }}"
+spec:
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: "{{ .Chart.Name }}"
+        app.kubernetes.io/component: "memex-portal"
+        app.kubernetes.io/instance: "{{ .Release.Name }}"
+        {{- with .Values.selfUpdate }}
+        {{- if .azureClientId }}
+        # Opt the pod into the Azure workload-identity webhook (injects the federated token so the
+        # self-updater can list ACR tags). Only when a client id is configured.
+        azure.workload.identity/use: "true"
+        {{- end }}
+        {{- end }}
+    spec:
+      # The in-pod self-updater patches this deployment via the Kubernetes API using this SA's
+      # projected token (RBAC in rbac.yaml). See Doc/Architecture/ReleaseStrategy.
+      serviceAccountName: "memex-portal-sa"
+      initContainers:
+        # Postgres and the portal start concurrently on a fresh install; the portal's hub
+        # init FAILS (and the host aborts) if Postgres isn't yet accepting connections.
+        # Gate startup on Postgres TCP readiness so the ordering is deterministic.
+        - name: "wait-for-postgres"
+          image: "busybox:1.36"
+          command:
+            - "sh"
+            - "-c"
+            - "until nc -z memex-postgres-service 5432; do echo 'waiting for postgres'; sleep 2; done"
+      containers:
+        - image: "ghcr.io/systemorph/memex-portal-ai:latest"
+          name: "memex-portal"
+          envFrom:
+            - configMapRef:
+                name: "memex-portal-config"
+            - secretRef:
+                name: "memex-portal-secrets"
+          {{- with .Values.selfUpdate }}
+          {{- if .azureClientId }}
+          env:
+            # Explicit AZURE_CLIENT_ID for the self-updater's ACR credential (the workload-identity
+            # webhook also injects this; set here so it's correct even without the webhook).
+            - name: "AZURE_CLIENT_ID"
+              value: "{{ .azureClientId }}"
+          {{- end }}
+          {{- end }}
+          ports:
+            - name: "http"
+              protocol: "TCP"
+              containerPort: 8080
+          volumeMounts:
+            - name: "memex-data"
+              mountPath: "/data"
+            - name: "memex-users"
+              mountPath: "/mnt/users"
+          imagePullPolicy: "IfNotPresent"
+          # 🚦 Zero-502 rollouts. Without a readiness probe a pod counts as "Ready" the moment its
+          # container starts — long before the app serves (Orleans + mesh + static-repo import take
+          # tens of seconds) — so a rollout sends traffic to a still-booting pod → 502. /health
+          # (all health checks pass) is the "actually serving" signal; combined with maxUnavailable:0
+          # below the old pod is kept until the new one passes /health.
+          startupProbe:
+            # Generous window for a cold boot (schema provisioning + static import). While this is
+            # failing, readiness/liveness are suspended, so a slow boot is never flagged unhealthy.
+            httpGet: { path: /health, port: 8080 }
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            httpGet: { path: /health, port: 8080 }
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            # Self-heal a genuinely wedged pod (the connection-exhaustion wedge we hit). Conservative
+            # — only a sustained /alive failure restarts it, so a transient blip never loops.
+            httpGet: { path: /alive, port: 8080 }
+            periodSeconds: 15
+            timeoutSeconds: 10
+            failureThreshold: 6
+      volumes:
+        - name: "memex-data"
+          emptyDir: {}
+        - name: "memex-users"
+          emptyDir: {}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: "{{ .Chart.Name }}"
+      app.kubernetes.io/component: "memex-portal"
+      app.kubernetes.io/instance: "{{ .Release.Name }}"
+  replicas: 1
+  revisionHistoryLimit: 3
+  strategy:
+    rollingUpdate:
+      maxSurge: 1
+      # 0 → the OLD pod is kept serving until the NEW pod passes its readiness probe (/health). With
+      # a single replica this is what turns a rollout from "brief outage" into zero-downtime: traffic
+      # only moves once the replacement actually serves. (If the new pod can't come up — e.g. the PG
+      # connection-exhaustion wedge — the rollout simply stalls with the old pod still serving, no 502.)
+      maxUnavailable: 0
+    type: "RollingUpdate"

@@ -2,8 +2,20 @@
 
 namespace MeshWeaver.Layout.Composition;
 
+/// <summary>
+/// Recursively walks an object graph and yields every value that is assignable to a given type,
+/// avoiding infinite loops by tracking already-visited instances.
+/// </summary>
 public static class TypeScanner
 {
+    /// <summary>
+    /// Walks <paramref name="instance"/> and all reachable property values (and enumerable elements)
+    /// and yields each value that is of type <typeparamref name="T"/>.
+    /// Cycles are broken by reference equality; primitives, strings, Type objects, and exceptions are not descended into.
+    /// </summary>
+    /// <typeparam name="T">The type to scan for.</typeparam>
+    /// <param name="instance">The root object to start scanning from; null returns an empty sequence.</param>
+    /// <returns>An enumerable of all instances of <typeparamref name="T"/> found in the object graph.</returns>
     public static IEnumerable<T> ScanFor<T>(object? instance)
     {
         return ScanForInner<T>(instance, new HashSet<object>());

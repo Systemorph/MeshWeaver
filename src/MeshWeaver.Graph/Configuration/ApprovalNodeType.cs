@@ -1,11 +1,17 @@
-using MeshWeaver.Data;
+﻿using MeshWeaver.Data;
+using MeshWeaver.Messaging;
+using MeshWeaver.Graph.Security;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
+using MeshWeaver.Mesh.Services;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Graph.Configuration;
 
 /// <summary>
 /// Provides configuration for Approval nodes in the graph.
-/// Approval nodes are system-generated — excluded from search and create contexts.
+/// Approval nodes are system-generated â€” excluded from search and create contexts.
+/// Access is delegated to the MainNode (parent) via SatelliteAccessRule.
 /// </summary>
 public static class ApprovalNodeType
 {
@@ -21,6 +27,12 @@ public static class ApprovalNodeType
     {
         builder.AddMeshNodes(CreateMeshNode());
         builder.AddAutocompleteExcludedTypes(NodeType);
+        builder.ConfigureServices(services =>
+        {
+            services.AddSingleton<INodeTypeAccessRule>(sp =>
+                new SatelliteAccessRule(NodeType, sp.GetRequiredService<IMessageHub>()));
+            return services;
+        });
         return builder;
     }
 
@@ -33,7 +45,6 @@ public static class ApprovalNodeType
         Icon = "/static/NodeTypeIcons/checkmark.svg",
         IsSatelliteType = true,
         ExcludeFromContext = new HashSet<string> { "search", "create" },
-        AssemblyLocation = typeof(ApprovalNodeType).Assembly.Location,
         HubConfiguration = config => config
             .AddApprovalViews()
             .AddMeshDataSource(source => source

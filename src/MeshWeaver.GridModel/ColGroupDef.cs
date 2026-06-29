@@ -3,17 +3,23 @@ using System.Collections.Immutable;
 
 namespace MeshWeaver.GridModel
 {
+    /// <summary>
+    /// A column group (ag-Grid style <c>ColGroupDef</c>): a header that contains nested
+    /// <see cref="ColDef"/> children. Inherits the column properties of <see cref="ColDef"/>.
+    /// </summary>
     public record ColGroupDef() : ColDef
     {
 
+        /// <summary>The columns (or nested groups) contained within this group.</summary>
         public IImmutableList<ColDef> Children { get; init; } = ImmutableList<ColDef>.Empty;
 
+        /// <summary>Unique identifier for the group.</summary>
         public object? GroupId { get; init; }
 
-        // Set to true to keep columns in this group beside each other in the grid. Moving the columns outside of the group (and hence breaking the group) is not allowed.
+        /// <summary>When <c>true</c>, keeps the group's columns adjacent; they cannot be moved out of the group.</summary>
         public bool? MarryChildren { get; init; }
 
-        // Set to true if this group should be opened by default.
+        /// <summary>When <c>true</c>, the group is expanded by default.</summary>
         public bool? OpenByDefault { get; init; }
     }
 }

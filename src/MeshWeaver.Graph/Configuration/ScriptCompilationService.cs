@@ -10,6 +10,7 @@ using MeshWeaver.ContentCollections;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using MeshWeaver.NuGet;
 
 namespace MeshWeaver.Graph.Configuration;
 
@@ -24,6 +25,7 @@ internal class ScriptCompilationService : IDisposable
     private readonly ILogger<ScriptCompilationService> _logger;
     private readonly CompilationCacheOptions _cacheOptions;
     private readonly ScriptOptions _scriptOptions;
+    private readonly INuGetAssemblyResolver _nugetResolver;
 
     // In-memory cache of compiled scripts by cache key
     private readonly ConcurrentDictionary<string, Script<MeshNode>> _compiledScripts = new();
@@ -33,10 +35,12 @@ internal class ScriptCompilationService : IDisposable
 
     public ScriptCompilationService(
         ILogger<ScriptCompilationService> logger,
-        IOptions<CompilationCacheOptions> cacheOptions)
+        IOptions<CompilationCacheOptions> cacheOptions,
+        INuGetAssemblyResolver nugetResolver)
     {
         _logger = logger;
         _cacheOptions = cacheOptions.Value ?? new CompilationCacheOptions();
+        _nugetResolver = nugetResolver;
         _scriptOptions = CreateScriptOptions();
     }
 
@@ -65,7 +69,17 @@ internal class ScriptCompilationService : IDisposable
         if (!_compiledScripts.TryGetValue(cacheKey, out var script))
         {
             // Generate script source
-            var source = _generator.GenerateScriptSource(node, codeFile, hubConfiguration, contentCollections);
+            var rawSource = _generator.GenerateScriptSource(node, codeFile, hubConfiguration, contentCollections);
+
+            // Strip #r "nuget:..." directives and resolve the packages in-process.
+            var (source, nugetRefs) = NuGetDirectiveParser.Extract(rawSource);
+            var scriptOptions = _scriptOptions;
+            if (nugetRefs.Length > 0)
+            {
+                var resolved = await _nugetResolver.ResolveAsync(nugetRefs, targetFramework: null, ct);
+                scriptOptions = scriptOptions.AddReferences(
+                    resolved.AssemblyPaths.Select(p => MetadataReference.CreateFromFile(p)));
+            }
 
             // Save source to disk for debugging if enabled
             if (_cacheOptions.EnableDiskCache && _cacheOptions.EnableSourceDebugging)
@@ -74,7 +88,7 @@ internal class ScriptCompilationService : IDisposable
             }
 
             // Compile the script
-            script = CSharpScript.Create<MeshNode>(source, _scriptOptions);
+            script = CSharpScript.Create<MeshNode>(source, scriptOptions);
 
             // Validate compilation
             var diagnostics = script.Compile(ct);

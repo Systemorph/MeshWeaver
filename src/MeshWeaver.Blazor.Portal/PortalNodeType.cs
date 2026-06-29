@@ -1,4 +1,5 @@
-using MeshWeaver.AI;
+﻿using MeshWeaver.AI;
+using MeshWeaver.Messaging;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Graph.Security;
 using MeshWeaver.Mesh;
@@ -16,8 +17,18 @@ namespace MeshWeaver.Blazor.Portal;
 /// </summary>
 public static class PortalNodeType
 {
+    /// <summary>
+    /// The node type identifier (<c>Portal</c>) for portal session satellite nodes.
+    /// </summary>
     public const string NodeType = "Portal";
 
+    /// <summary>
+    /// Registers the Portal satellite node type on the mesh builder, excluding it from autocomplete
+    /// and wiring up a <c>SatelliteAccessRule</c> that delegates access to the parent MainNode.
+    /// </summary>
+    /// <typeparam name="TBuilder">The mesh builder type being configured.</typeparam>
+    /// <param name="builder">The mesh builder to configure.</param>
+    /// <returns>The same <paramref name="builder"/> instance for chaining.</returns>
     public static TBuilder AddPortalType<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
     {
         builder.AddMeshNodes(CreateMeshNode());
@@ -25,7 +36,7 @@ public static class PortalNodeType
         builder.ConfigureServices(services =>
         {
             services.AddSingleton<INodeTypeAccessRule>(sp =>
-                new SatelliteAccessRule(NodeType, sp.GetService<ISecurityService>() ?? new NullSecurityService()));
+                new SatelliteAccessRule(NodeType, sp.GetRequiredService<IMessageHub>()));
             return services;
         });
         return builder;
@@ -41,7 +52,6 @@ public static class PortalNodeType
         Name = "Portal Session",
         IsSatelliteType = true,
         ExcludeFromContext = new HashSet<string> { "search", "create" },
-        AssemblyLocation = typeof(PortalNodeType).Assembly.Location,
         HubConfiguration = config =>
         {
             config.TypeRegistry.AddAITypes();

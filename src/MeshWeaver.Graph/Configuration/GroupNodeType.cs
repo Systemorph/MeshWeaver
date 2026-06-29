@@ -1,4 +1,4 @@
-using MeshWeaver.Data;
+﻿using MeshWeaver.Data;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 
@@ -34,7 +34,6 @@ public static class GroupNodeType
     {
         Name = "Group",
         Icon = "/static/NodeTypeIcons/people.svg",
-        AssemblyLocation = typeof(GroupNodeType).Assembly.Location,
         HubConfiguration = config => config
             .AddGroupViews()
             .AddMeshDataSource(source => source

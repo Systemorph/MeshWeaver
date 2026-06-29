@@ -30,6 +30,15 @@ public class ModelTierConfiguration
     public string? Light { get; set; }
 
     /// <summary>
+    /// Model name for the "utility" tier — a cheap, fast model (e.g. Kimi / Moonshot) for
+    /// background micro-jobs: node icon + user-avatar generation, description writing, and
+    /// thread auto-naming. Latency and cost matter more than peak reasoning here. Configure
+    /// per deployment via <c>ModelTier:Utility</c> (like the embedding model); when unset,
+    /// agents tagged <c>modelTier: utility</c> fall back to the deployment's default model.
+    /// </summary>
+    public string? Utility { get; set; }
+
+    /// <summary>
     /// Resolves a tier name to a concrete model name.
     /// Returns null if the tier is not configured or not recognized.
     /// </summary>
@@ -43,6 +52,10 @@ public class ModelTierConfiguration
             "heavy" => Heavy,
             "standard" => Standard,
             "light" => Light,
+            // Utility falls back to the light model when not separately configured, so routing
+            // the icon/description agents to "utility" never breaks a deployment that hasn't set
+            // ModelTier:Utility — it just behaves as before until an operator points it at Kimi.
+            "utility" => string.IsNullOrWhiteSpace(Utility) ? (Light ?? Standard) : Utility,
             _ => null
         };
     }

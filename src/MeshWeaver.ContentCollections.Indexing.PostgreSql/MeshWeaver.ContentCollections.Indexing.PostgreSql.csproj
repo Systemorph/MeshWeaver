@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <PackageReference Include="Npgsql" />
+    <PackageReference Include="Pgvector" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The storage-agnostic indexing core (IChunkedContentVectorStore / ContentChunk /
+         IChunkEmbedder) this adapter implements. -->
+    <ProjectReference Include="..\MeshWeaver.ContentCollections.Indexing\MeshWeaver.ContentCollections.Indexing.csproj" />
+    <!-- The framework PG hosting project that owns IEmbeddingProvider (the embedder this
+         adapter wraps) and the NpgsqlDataSourceBuilder.UseVector() / pgvector DDL patterns
+         this schema mirrors. Brings MeshWeaver.Hosting transitively (MessageHubConfiguration). -->
+    <ProjectReference Include="..\MeshWeaver.Hosting.PostgreSql\MeshWeaver.Hosting.PostgreSql.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="MeshWeaver.ContentCollections.Indexing.PostgreSql.Test" />
+  </ItemGroup>
+
+</Project>

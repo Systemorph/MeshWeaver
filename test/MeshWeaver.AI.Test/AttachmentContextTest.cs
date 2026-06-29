@@ -1,14 +1,15 @@
-#pragma warning disable CS1591 // Missing XML comment for publicly visible type or member
+﻿#pragma warning disable CS1591 // Missing XML comment for publicly visible type or member
 
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
-using FluentAssertions;
 using MeshWeaver.AI.Persistence;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
@@ -28,7 +29,7 @@ using Xunit;
 namespace MeshWeaver.AI.Test;
 
 /// <summary>
-/// Integration tests verifying that SetAttachments() → BuildMessageWithContextAsync()
+/// Integration tests verifying that SetAttachments() â†’ BuildMessageWithContextAsync()
 /// loads attachment content and places it before the user message in the assembled prompt.
 /// </summary>
 public class AttachmentContextTest : MonolithMeshTestBase
@@ -36,6 +37,10 @@ public class AttachmentContextTest : MonolithMeshTestBase
     private static readonly string TestDataPath = Path.Combine(AppContext.BaseDirectory, "TestData");
 
     public AttachmentContextTest(ITestOutputHelper output) : base(output) { }
+
+    // Share Mesh/ServiceProvider across all [Fact]s in this class â€” saves the
+    // ~190 MiB native heap that would otherwise leak per test method.
+    protected override bool ShareMeshAcrossTests => true;
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
@@ -152,15 +157,10 @@ public class AttachmentContextTest : MonolithMeshTestBase
         var factory = (CapturingChatClientFactory)Mesh.ServiceProvider.GetRequiredService<IChatClientFactory>();
 
         var agentChat = new AgentChatClient(Mesh.ServiceProvider);
-        await agentChat.InitializeAsync("ACME");
+        await agentChat.Initialize("ACME").WhenInitialized.FirstAsync().ToTask(ct);
 
-        var query = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-        MeshNode? contextNode = null;
-        await foreach (var node in query.QueryAsync<MeshNode>("path:ACME", null, ct))
-        {
-            contextNode = node;
-            break;
-        }
+        // Static node read â€” no write before, catalog read is correct (no CQRS lag).
+        var contextNode = await MeshQuery.QueryAsync<MeshNode>("path:ACME", null, ct).FirstOrDefaultAsync(ct);
         contextNode.Should().NotBeNull();
 
         agentChat.SetContext(new AgentContext
@@ -269,7 +269,7 @@ public class AttachmentContextTest : MonolithMeshTestBase
     }
 
     /// <summary>
-    /// Verifies the full ordering: agent instructions → context → attachments → user message.
+    /// Verifies the full ordering: agent instructions â†’ context â†’ attachments â†’ user message.
     /// </summary>
     [Fact]
     public async Task PromptAssembly_FullOrdering_InstructionsContextAttachmentsUserMessage()
@@ -383,8 +383,8 @@ public class AttachmentContextTest : MonolithMeshTestBase
         var ct = TestContext.Current.CancellationToken;
         var (agentChat, factory) = await SetupAgentChatAsync(ct);
 
-        // Explicitly select Orchestrator via the combobox
-        agentChat.SetSelectedAgent("Orchestrator");
+        // Explicitly select Assistant via the combobox
+        agentChat.SetSelectedAgent("Assistant");
 
         // Send a message that references @Agent/Researcher (like the UI does when user types @Agent/Researcher)
         // Also set Agent/Researcher as an attachment (the UI adds @references to attachments)
@@ -398,10 +398,10 @@ public class AttachmentContextTest : MonolithMeshTestBase
         var assembledPrompt = GetLastUserMessageText(factory.AllCapturedMessages);
         assembledPrompt.Should().NotBeNullOrEmpty();
 
-        // The agent instructions in the prompt should be Researcher's, not Orchestrator's
+        // The agent instructions in the prompt should be Researcher's, not Assistant's
         assembledPrompt.Should().Contain("You are **Researcher**",
-            "the @Agent/Researcher reference should override the Orchestrator combobox selection");
-        assembledPrompt.Should().NotContain("You are **Orchestrator**",
-            "Orchestrator's instructions should NOT be present when Researcher was selected via @reference");
+            "the @Agent/Researcher reference should override the Assistant combobox selection");
+        assembledPrompt.Should().NotContain("You are **Assistant**",
+            "Assistant's instructions should NOT be present when Researcher was selected via @reference");
     }
 }

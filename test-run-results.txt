@@ -1,0 +1,116 @@
+=== Targeted re-run started: Tue, Apr 28, 2026  2:03:50 PM ===
+
+=== Markdown.Test (1 tests) ===
+[xUnit.net 00:00:15.07]     MeshWeaver.Markdown.Test.InteractiveMarkdownExecutionTest.MultipleBlocks_ShareKernelState_ViaSharedAddress [FAIL]
+  Error Message:
+Failed!  - Failed:     1, Passed:     0, Skipped:     0, Total:     1, Duration: 11 s - MeshWeaver.Markdown.Test.dll (net10.0)
+(returned 0)
+
+=== AccessControl.Test (3 tests) ===
+[xUnit.net 00:00:34.56]     MeshWeaver.AccessControl.Test.AccessAssignmentThumbnailTest.Thumbnail_ClickRemoveRole_RemovesChip [FAIL]
+  Error Message:
+[xUnit.net 00:00:46.02]     MeshWeaver.AccessControl.Test.AccessAssignmentThumbnailTest.UpdateAccessObject_ChangesSubject_ViaDataChange [FAIL]
+  Error Message:
+Failed!  - Failed:     2, Passed:     1, Skipped:     0, Total:     3, Duration: 42 s - MeshWeaver.AccessControl.Test.dll (net10.0)
+(returned 0)
+
+=== Insurance.Test (2 tests) ===
+[xUnit.net 00:00:24.68]     MeshWeaver.Insurance.Test.PricingCatalogTests.GetPricingCatalog_UsingLayoutAreaReference_ShouldReturnPricingsControl [FAIL]
+  Error Message:
+Failed!  - Failed:     1, Passed:     1, Skipped:     0, Total:     2, Duration: 20 s - MeshWeaver.Insurance.Test.dll (net10.0)
+(returned 0)
+
+=== Todo.Test (1 tests) ===
+[xUnit.net 00:00:21.16]     MeshWeaver.Todo.Test.TodoDataChangeTest.Step1_SetupDataContext_WithTodoItems [FAIL]
+  Error Message:
+Failed!  - Failed:     1, Passed:     0, Skipped:     0, Total:     1, Duration: 17 s - MeshWeaver.Todo.Test.dll (net10.0)
+(returned 0)
+
+=== Threading.Test (2 tests) ===
+Passed!  - Failed:     0, Passed:     2, Skipped:     0, Total:     2, Duration: 33 s - MeshWeaver.Threading.Test.dll (net10.0)
+(returned 0)
+
+=== Content.Test (3 tests) ===
+[xUnit.net 00:00:33.65]     MeshWeaver.Content.Test.VersionViewsTest.VersionsArea_SingleVersion_RendersWithoutError [FAIL]
+  Error Message:
+Failed!  - Failed:     1, Passed:     2, Skipped:     0, Total:     3, Duration: 23 s - MeshWeaver.Content.Test.dll (net10.0)
+(returned 0)
+
+=== Persistence.Test (6 tests) ===
+[xUnit.net 00:00:21.50]     MeshWeaver.Persistence.Test.PageLoadingTest.MarkdownNode_LoadsWithoutHanging(nodePath: "MeshWeaver/Documentation/DataMesh/UnifiedPath") [FAIL]
+  Error Message:
+[xUnit.net 00:00:41.54]     MeshWeaver.Persistence.Test.MonolithKernelTest.InteractiveShowcaseMd_FullPipeline_AllBlocksExecute [FAIL]
+  Error Message:
+Failed!  - Failed:     2, Passed:     7, Skipped:     0, Total:     9, Duration: 38 s - MeshWeaver.Persistence.Test.dll (net10.0)
+(returned 0)
+
+=== Hosting.Blazor.Test (2 tests) ===
+(returned 1)
+
+=== Auth.Test (2 tests) ===
+Passed!  - Failed:     0, Passed:     2, Skipped:     0, Total:     2, Duration: 2 s - MeshWeaver.Auth.Test.dll (net10.0)
+(returned 0)
+
+=== Security.Test (10 tests) ===
+[xUnit.net 00:00:31.77]     MeshWeaver.Security.Test.McpAccessControlTests.McpSearch_User1SeesOnlyPermittedNodes [FAIL]
+  Error Message:
+[xUnit.net 00:00:32.29]     MeshWeaver.Security.Test.McpAccessControlTests.McpUpdate_User1CannotUpdatePrivateOrg_User2Can [FAIL]
+[xUnit.net 00:00:32.70]     MeshWeaver.Security.Test.McpAccessControlTests.McpGet_User1CanReadPublicNode [FAIL]
+[xUnit.net 00:00:33.13]     MeshWeaver.Security.Test.McpAccessControlTests.McpSearch_User1CannotSearchPrivateOrg [FAIL]
+  Error Message:
+  Error Message:
+  Error Message:
+[xUnit.net 00:00:33.52]     MeshWeaver.Security.Test.McpAccessControlTests.McpUpdate_User1CannotUpdate_User2Can [FAIL]
+[xUnit.net 00:00:33.93]     MeshWeaver.Security.Test.McpAccessControlTests.McpGet_User1CannotReadPrivateOrg_User2Can [FAIL]
+[xUnit.net 00:00:34.37]     MeshWeaver.Security.Test.McpAccessControlTests.McpGet_User1CannotReadConfidentialNode_User2Can [FAIL]
+[xUnit.net 00:00:34.86]     MeshWeaver.Security.Test.AccessControlPipelineTest.SubscribeRequest_WithReadPermission_Succeeds [FAIL]
+  Error Message:
+  Error Message:
+  Error Message:
+  Error Message:
+Failed!  - Failed:     8, Passed:     2, Skipped:     0, Total:    10, Duration: 31 s - MeshWeaver.Security.Test.dll (net10.0)
+(returned 0)
+
+=== Autocomplete.Test (7 tests) ===
+[xUnit.net 00:00:16.00]     MeshWeaver.Autocomplete.Test.AutocompleteMultiSourceTest.LocalFirst_ChildrenOfContextScoreHigherThanDistant [FAIL]
+  Error Message:
+Failed!  - Failed:     1, Passed:     6, Skipped:     0, Total:     7, Duration: 13 s - MeshWeaver.Autocomplete.Test.dll (net10.0)
+(returned 0)
+
+=== NodeOperations.Test (3 tests) ===
+Passed!  - Failed:     0, Passed:     2, Skipped:     0, Total:     2, Duration: 24 s - MeshWeaver.NodeOperations.Test.dll (net10.0)
+(returned 0)
+
+=== Hosting.PostgreSql.Test (1 tests) ===
+[xUnit.net 00:00:11.20]     MeshWeaver.Hosting.PostgreSql.Test.EffectivePermissionPostgresTest.CreateOrganization_HasPermission_ReturnsAdmin [FAIL]
+  Error Message:
+Failed!  - Failed:     1, Passed:     0, Skipped:     0, Total:     1, Duration: 1 ms - MeshWeaver.Hosting.PostgreSql.Test.dll (net10.0)
+(returned 0)
+
+=== Query.Test (9 tests) ===
+[xUnit.net 00:00:53.90]     MeshWeaver.Query.Test.RemoteStreamCacheTest.GetRemoteStream_AfterDispose_ReturnsFreshInstance [FAIL]
+  Error Message:
+[xUnit.net 00:01:01.13]     MeshWeaver.Query.Test.ChatCompletionOrchestratorTest.AtText_ReturnsCurrentNodeAndGlobal [FAIL]
+  Error Message:
+[xUnit.net 00:01:03.47]     MeshWeaver.Query.Test.SyncedQueryTest.PropertyChange_NoLongerMatchesQuery_RemovesFromCollection [FAIL]
+  Error Message:
+Failed!  - Failed:     3, Passed:     6, Skipped:     0, Total:     9, Duration: 55 s - MeshWeaver.Query.Test.dll (net10.0)
+(returned 0)
+
+=== Acme.Test (4 tests) ===
+[xUnit.net 00:02:38.45]     MeshWeaver.Acme.Test.TodoDataChangeWorkflowTest.MultipleTodoHubs_CanBeAccessedIndependently [FAIL]
+  Error Message:
+Failed!  - Failed:     1, Passed:    21, Skipped:     0, Total:    22, Duration: 4 m 17 s - MeshWeaver.Acme.Test.dll (net10.0)
+(returned 0)
+
+=== Hosting.Orleans.Test (3 tests) ===
+[xUnit.net 00:00:55.19]     MeshWeaver.Hosting.Orleans.Test.OrleansMarkdownExportTest.SubHub_WithExportTypesRegistered_DeserializesPolymorphicExportDocumentControl [FAIL]
+  Error Message:
+[xUnit.net 00:01:26.51]     MeshWeaver.Hosting.Orleans.Test.OrleansMarkdownExportTest.ExportPdfArea_RendersExportDocumentControl_ClientDeserializes [FAIL]
+  Error Message:
+[xUnit.net 00:01:38.82]     MeshWeaver.Hosting.Orleans.Test.OrleansReentrancyTest.ToolCall_DuringStreaming_DoesNotDeadlock [FAIL]
+  Error Message:
+Failed!  - Failed:     3, Passed:     0, Skipped:     0, Total:     3, Duration: 1 m 33 s - MeshWeaver.Hosting.Orleans.Test.dll (net10.0)
+(returned 0)
+
+=== Run finished: Tue, Apr 28, 2026  2:26:12 PM ===

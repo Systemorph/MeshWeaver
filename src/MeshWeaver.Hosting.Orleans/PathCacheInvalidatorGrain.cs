@@ -19,6 +19,11 @@ public class PathCacheInvalidatorGrain : Grain, IAsyncObserver<MeshChangeEvent>
     private readonly InProcessMeshChangeFeed _localFeed;
     private readonly ILogger<PathCacheInvalidatorGrain>? _logger;
 
+    /// <summary>
+    /// Initializes a new instance of the <c>PathCacheInvalidatorGrain</c> class.
+    /// </summary>
+    /// <param name="localFeed">The in-process change feed that received cross-silo events are relayed to.</param>
+    /// <param name="logger">Optional logger for stream subscription diagnostics.</param>
     public PathCacheInvalidatorGrain(
         InProcessMeshChangeFeed localFeed,
         ILogger<PathCacheInvalidatorGrain>? logger = null)
@@ -27,6 +32,7 @@ public class PathCacheInvalidatorGrain : Grain, IAsyncObserver<MeshChangeEvent>
         _logger = logger;
     }
 
+    /// <inheritdoc />
     public override async Task OnActivateAsync(CancellationToken cancellationToken)
     {
         var streamProvider = this.GetStreamProvider(StreamProviders.Memory);
@@ -51,6 +57,7 @@ public class PathCacheInvalidatorGrain : Grain, IAsyncObserver<MeshChangeEvent>
         }
     }
 
+    /// <inheritdoc />
     public Task OnNextAsync(MeshChangeEvent item, StreamSequenceToken? token = null)
     {
         _logger?.LogDebug("PathCacheInvalidatorGrain: received {Kind} {Path} from stream", item.Kind, item.Path);
@@ -58,8 +65,10 @@ public class PathCacheInvalidatorGrain : Grain, IAsyncObserver<MeshChangeEvent>
         return Task.CompletedTask;
     }
 
+    /// <inheritdoc />
     public Task OnCompletedAsync() => Task.CompletedTask;
 
+    /// <inheritdoc />
     public Task OnErrorAsync(Exception ex)
     {
         _logger?.LogWarning(ex, "PathCacheInvalidatorGrain: stream error");

@@ -2,9 +2,6 @@
 using System.Reactive.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using FluentAssertions;
-using FluentAssertions.Execution;
-using FluentAssertions.Extensions;
 using MeshWeaver.Data;
 using MeshWeaver.Data.TestDomain;
 using MeshWeaver.DataSetReader;
@@ -12,6 +9,7 @@ using MeshWeaver.Fixture;
 using MeshWeaver.Messaging;
 using Xunit;
 
+using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Import.Test;
 
 public class ImportWithCustomReadingOptionsTest(ITestOutputHelper output) : HubTestBase(output)
@@ -53,11 +51,8 @@ public class ImportWithCustomReadingOptionsTest(ITestOutputHelper output) : HubT
         };
 
         // act
-        var importResponse = await client.AwaitResponse(
-            importRequest,
-            o => o.WithTarget(CreateHostAddress())
-            , new CancellationTokenSource(10.Seconds()).Token
-        );
+        var importResponse = await client.Observe(importRequest, o => o.WithTarget(CreateHostAddress()))
+            .Should().Within(10.Seconds()).Emit();
 
         // assert
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
@@ -65,8 +60,7 @@ public class ImportWithCustomReadingOptionsTest(ITestOutputHelper output) : HubT
         var workspace = host
             .GetWorkspace();
         var ret = await workspace.GetObservable<MyRecord>()
-            .Timeout(10.Seconds())
-            .FirstAsync(x => x.Any());
+            .Should().Within(10.Seconds()).Match(x => x.Any());
 
         var resRecord = ret.Should().ContainSingle().Which;
         resRecord.Should().NotBeNull();

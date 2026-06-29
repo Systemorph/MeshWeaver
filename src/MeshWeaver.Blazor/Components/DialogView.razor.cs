@@ -3,6 +3,11 @@ using Microsoft.FluentUI.AspNetCore.Components;
 
 namespace MeshWeaver.Blazor.Components;
 
+/// <summary>
+/// Blazor view for the <c>DialogControl</c>. Renders a modal dialog whose title,
+/// closability, and size are data-bound from the layout stream, and posts a
+/// <c>CloseDialogEvent</c> back to the owning hub when the user dismisses it.
+/// </summary>
 public partial class DialogView : BlazorView<DialogControl, DialogView>
 {
     private bool isHidden;
@@ -10,6 +15,10 @@ public partial class DialogView : BlazorView<DialogControl, DialogView>
     private bool? IsClosable;
     private object? Size;
 
+    /// <summary>
+    /// Binds the dialog title, closability flag, and size from the view-model,
+    /// when each property is non-null on the view-model.
+    /// </summary>
     protected override void BindData()
     {
         base.BindData();
@@ -21,6 +30,10 @@ public partial class DialogView : BlazorView<DialogControl, DialogView>
             DataBind(ViewModel.Size, x => x.Size);
     }
 
+    /// <summary>
+    /// Ensures the dialog is visible when the component first initialises (sets
+    /// <c>isHidden = false</c> so the dialog opens immediately on render).
+    /// </summary>
     protected override void OnInitialized()
     {
         base.OnInitialized();
