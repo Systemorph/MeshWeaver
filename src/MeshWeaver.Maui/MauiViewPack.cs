@@ -862,9 +862,12 @@ public sealed class MauiCollaborativeMarkdownView : MauiView<CollaborativeMarkdo
                 box.Children.Add(new Label { Text = "+ " + change.NewText, FontSize = 11, TextColor = Color.FromArgb("#98C379") });
 
             var path = node.Path;
+            var ch = change!;
+            var accept = new Button { Text = "Accept", FontSize = 11, BackgroundColor = Color.FromArgb("#2E7D32"), TextColor = Colors.White, CornerRadius = 6, Padding = new Thickness(10, 4) };
+            accept.Clicked += (_, _) => AcceptChange(ch, path);
             var reject = new Button { Text = "Reject", FontSize = 11, BackgroundColor = Color.FromArgb("#3A3A3C"), TextColor = Colors.White, CornerRadius = 6, Padding = new Thickness(10, 4) };
             reject.Clicked += (_, _) => Stream?.Hub.ServiceProvider.GetService<IMeshService>()?.DeleteNode(path).Subscribe(_ => { }, _ => { });
-            box.Children.Add(new HorizontalStackLayout { Spacing = 8, HorizontalOptions = LayoutOptions.End, Children = { reject } });
+            box.Children.Add(new HorizontalStackLayout { Spacing = 8, HorizontalOptions = LayoutOptions.End, Children = { accept, reject } });
 
             panel.Children.Add(new Border
             {
@@ -872,6 +875,29 @@ public sealed class MauiCollaborativeMarkdownView : MauiView<CollaborativeMarkdo
                 StrokeShape = new Microsoft.Maui.Controls.Shapes.RoundRectangle { CornerRadius = 8 }, Content = box,
             });
         }
+    }
+
+    // Accept a tracked change: apply its suggested text into the doc, then drop the satellite — mirrors the
+    // Blazor accept (StripAllMarkers → ResolveEffective(version) → Apply → write MarkdownContent.Content).
+    private void AcceptChange(MeshWeaver.Mesh.TrackedChange change, string satellitePath)
+    {
+        if (Stream is null || string.IsNullOrEmpty(Model.NodePath)) return;
+        var opts = Stream.Hub.JsonSerializerOptions;
+        var meshService = Stream.Hub.ServiceProvider.GetService<IMeshService>();
+        var read = Stream.Hub.GetMeshNodeStream(Model.NodePath).Where(n => n is not null).Take(1)
+            .Subscribe(node => MainThread.BeginInvokeOnMainThread(() =>
+            {
+                var md = node!.ContentAs<MeshWeaver.Markdown.MarkdownContent>(opts);
+                if (md is null) return;
+                var clean = MeshWeaver.Markdown.Collaboration.MarkdownAnnotationParser.StripAllMarkers(md.Content);
+                var resolved = ChangeRendering.ResolveEffective(change, clean, node.Version);
+                var newClean = ChangeRendering.Apply(clean, resolved);
+                Stream.Hub.GetMeshNodeStream(Model.NodePath)
+                    .Update(n => n.Content is MeshWeaver.Markdown.MarkdownContent m
+                        ? n with { Content = m with { Content = newClean } } : n)
+                    .Subscribe(_ => meshService?.DeleteNode(satellitePath).Subscribe(__ => { }, __ => { }), _ => { });
+            }));
+        Disposables.Add(read);
     }
 
     // A WebView chunk in MarkdownView's dark/sans shell, auto-sized to its content (JS scrollHeight).
