@@ -752,22 +752,44 @@ public sealed class MauiCollaborativeMarkdownView : MauiView<CollaborativeMarkdo
         if (Stream is null) return;
         list.Children.Clear();
         var opts = Stream.Hub.JsonSerializerOptions;
-        var comments = nodes.Select(n => n.ContentAs<MeshWeaver.Mesh.Comment>(opts)).Where(c => c is not null).Select(c => c!).ToList();
+        // Show only Active comments; Resolve flips Status → they drop off (live query re-renders).
+        var comments = nodes
+            .Select(n => (Node: n, Comment: n.ContentAs<MeshWeaver.Mesh.Comment>(opts)))
+            .Where(t => t.Comment is { Status: MeshWeaver.Mesh.CommentStatus.Active })
+            .ToList();
         if (comments.Count == 0) return;
         list.Children.Add(new Label { Text = $"Comments ({comments.Count})", FontAttributes = FontAttributes.Bold, FontSize = 13, TextColor = Colors.White });
-        foreach (var c in comments)
+        foreach (var (node, c) in comments)
         {
             var box = new VerticalStackLayout { Spacing = 2 };
-            box.Children.Add(new Label { Text = string.IsNullOrWhiteSpace(c.Author) ? "Someone" : c.Author, FontSize = 11, FontAttributes = FontAttributes.Bold, TextColor = Color.FromArgb("#C0C0C0") });
+            box.Children.Add(new Label { Text = string.IsNullOrWhiteSpace(c!.Author) ? "Someone" : c.Author, FontSize = 11, FontAttributes = FontAttributes.Bold, TextColor = Color.FromArgb("#C0C0C0") });
             if (!string.IsNullOrWhiteSpace(c.HighlightedText))
                 box.Children.Add(new Label { Text = "“" + c.HighlightedText + "”", FontSize = 11, FontAttributes = FontAttributes.Italic, TextColor = Color.FromArgb("#9A9A9A") });
             box.Children.Add(new Label { Text = c.Text, FontSize = 12, TextColor = Colors.White, LineBreakMode = LineBreakMode.WordWrap });
+
+            var path = node.Path;
+            var resolve = new Button { Text = "Resolve", FontSize = 11, BackgroundColor = Color.FromArgb("#3A3A3C"), TextColor = Colors.White, CornerRadius = 6, Padding = new Thickness(10, 4) };
+            resolve.Clicked += (_, _) => ResolveComment(path);
+            box.Children.Add(new HorizontalStackLayout { Spacing = 8, HorizontalOptions = LayoutOptions.End, Children = { resolve } });
+
             list.Children.Add(new Border
             {
                 Padding = 8, BackgroundColor = Color.FromArgb("#2A2A2C"), StrokeThickness = 0,
                 StrokeShape = new Microsoft.Maui.Controls.Shapes.RoundRectangle { CornerRadius = 8 }, Content = box,
             });
         }
+    }
+
+    // Resolve a comment: flip its Content.Status → Resolved via the canonical external-node stream update.
+    private void ResolveComment(string path)
+    {
+        if (Stream is null) return;
+        var opts = Stream.Hub.JsonSerializerOptions;
+        Stream.Hub.GetMeshNodeStream(path).Update(node =>
+        {
+            var c = node.ContentAs<MeshWeaver.Mesh.Comment>(opts);
+            return c is null ? node : node with { Content = c with { Status = MeshWeaver.Mesh.CommentStatus.Resolved } };
+        }).Subscribe(_ => { }, _ => { });
     }
 
     // Creates a _Comment satellite via the canonical CreateNode (carries the caller's AccessContext).
