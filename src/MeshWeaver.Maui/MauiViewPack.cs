@@ -658,6 +658,7 @@ public sealed class MauiCollaborativeMarkdownView : MauiView<CollaborativeMarkdo
         {
             _root.Children.Add(NewHtmlChunk(result.Html));
             AddCommentsPanel();
+            AddTrackedChangesPanel();
             return;
         }
 
@@ -681,6 +682,7 @@ public sealed class MauiCollaborativeMarkdownView : MauiView<CollaborativeMarkdo
         }
 
         AddCommentsPanel();
+        AddTrackedChangesPanel();
 
         if (_submitted) return;
         _submitted = true;
@@ -746,6 +748,51 @@ public sealed class MauiCollaborativeMarkdownView : MauiView<CollaborativeMarkdo
             if (!string.IsNullOrWhiteSpace(c.HighlightedText))
                 box.Children.Add(new Label { Text = "“" + c.HighlightedText + "”", FontSize = 11, FontAttributes = FontAttributes.Italic, TextColor = Color.FromArgb("#9A9A9A") });
             box.Children.Add(new Label { Text = c.Text, FontSize = 12, TextColor = Colors.White, LineBreakMode = LineBreakMode.WordWrap });
+            panel.Children.Add(new Border
+            {
+                Padding = 8, BackgroundColor = Color.FromArgb("#2A2A2C"), StrokeThickness = 0,
+                StrokeShape = new Microsoft.Maui.Controls.Shapes.RoundRectangle { CornerRadius = 8 }, Content = box,
+            });
+        }
+    }
+
+    // Pending tracked-changes panel: lists the node's _Tracking satellites (author + original→new) with a
+    // functional Reject (delete the satellite). Accept (apply NewText to the collaborative doc) is a refinement.
+    private void AddTrackedChangesPanel()
+    {
+        if (Stream is null || string.IsNullOrEmpty(Model.NodePath)) return;
+        var panel = new VerticalStackLayout { Spacing = 6, Margin = new Thickness(0, 8, 0, 0) };
+        _root.Children.Add(panel);
+        var sub = Stream.Hub.GetQuery("changes:" + Model.NodePath, $"namespace:{Model.NodePath}/_Tracking nodeType:TrackedChange")
+            .Take(1)
+            .Subscribe(nodes => MainThread.BeginInvokeOnMainThread(() => RenderTrackedChanges(panel, nodes)));
+        Disposables.Add(sub);
+    }
+
+    private void RenderTrackedChanges(VerticalStackLayout panel, IEnumerable<MeshNode> nodes)
+    {
+        if (Stream is null) return;
+        var opts = Stream.Hub.JsonSerializerOptions;
+        var pending = nodes
+            .Select(n => (Node: n, Change: n.ContentAs<MeshWeaver.Mesh.TrackedChange>(opts)))
+            .Where(t => t.Change is { Status: MeshWeaver.Mesh.TrackedChangeStatus.Pending })
+            .ToList();
+        if (pending.Count == 0) return;
+        panel.Children.Add(new Label { Text = $"Suggested changes ({pending.Count})", FontAttributes = FontAttributes.Bold, FontSize = 13, TextColor = Colors.White });
+        foreach (var (node, change) in pending)
+        {
+            var box = new VerticalStackLayout { Spacing = 2 };
+            box.Children.Add(new Label { Text = string.IsNullOrWhiteSpace(change!.Author) ? "Someone" : change.Author, FontSize = 11, FontAttributes = FontAttributes.Bold, TextColor = Color.FromArgb("#C0C0C0") });
+            if (!string.IsNullOrWhiteSpace(change.OriginalText))
+                box.Children.Add(new Label { Text = "− " + change.OriginalText, FontSize = 11, TextColor = Color.FromArgb("#E06C75") });
+            if (!string.IsNullOrWhiteSpace(change.NewText))
+                box.Children.Add(new Label { Text = "+ " + change.NewText, FontSize = 11, TextColor = Color.FromArgb("#98C379") });
+
+            var path = node.Path;
+            var reject = new Button { Text = "Reject", FontSize = 11, BackgroundColor = Color.FromArgb("#3A3A3C"), TextColor = Colors.White, CornerRadius = 6, Padding = new Thickness(10, 4) };
+            reject.Clicked += (_, _) => Stream?.Hub.ServiceProvider.GetService<IMeshService>()?.DeleteNode(path).Subscribe(_ => { }, _ => { });
+            box.Children.Add(new HorizontalStackLayout { Spacing = 8, HorizontalOptions = LayoutOptions.End, Children = { reject } });
+
             panel.Children.Add(new Border
             {
                 Padding = 8, BackgroundColor = Color.FromArgb("#2A2A2C"), StrokeThickness = 0,
