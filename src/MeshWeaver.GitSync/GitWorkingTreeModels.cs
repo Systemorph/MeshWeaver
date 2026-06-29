@@ -12,6 +12,14 @@ public sealed record WorkingTree(string UserId, string RepoSlug, string Path, st
 /// <param name="Status">The two-char porcelain code (e.g. <c>M</c>, <c>A</c>, <c>D</c>, <c>??</c>).</param>
 public sealed record GitFileChange(string Path, string Status);
 
+/// <summary>One commit in the working tree's history — a row in the git-browser commit log.</summary>
+/// <param name="Hash">The full commit SHA.</param>
+/// <param name="ShortHash">The abbreviated SHA (git's <c>%h</c>).</param>
+/// <param name="Date">The author date, pre-formatted for display (e.g. <c>2026-06-29 14:03</c>).</param>
+/// <param name="Author">The author name.</param>
+/// <param name="Subject">The commit subject (first line of the message).</param>
+public sealed record GitCommit(string Hash, string ShortHash, string Date, string Author, string Subject);
+
 /// <summary>Working-tree status: current branch + whether it is clean + the pending changes.</summary>
 public sealed record WorkingTreeStatus(string Branch, bool IsClean, IReadOnlyList<GitFileChange> Changes);
 
