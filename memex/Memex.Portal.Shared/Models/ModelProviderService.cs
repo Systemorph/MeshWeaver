@@ -26,10 +26,10 @@ namespace Memex.Portal.Shared.Models;
 /// 🚨 Reactive end-to-end. No <c>async</c>, no <c>await</c>, no
 /// <c>FromAsync</c>. Reads go through <c>workspace.GetQuery</c> (synced) or
 /// <c>workspace.GetMeshNodeStream</c> (live single-node) per
-/// <see cref="MeshWeaver.Documentation.Data.Architecture.SyncedMeshNodeQueries">SyncedMeshNodeQueries</see>.
+/// <c>SyncedMeshNodeQueries</c>.
 /// Writes go through <see cref="IMeshService.CreateNode"/> /
 /// <see cref="IMeshService.DeleteNode"/> and
-/// <see cref="MeshNodeStreamExtensions.Update"/> on the workspace remote
+/// <c>MeshNodeStreamExtensions.Update</c> on the workspace remote
 /// stream.
 /// </para>
 ///
@@ -229,7 +229,7 @@ public class ModelProviderService(IMeshService meshService, IMessageHub hub, ILo
     /// <summary>
     /// Reactive rotate-key. Updates the <c>ApiKey</c> field on the
     /// <c>ModelProvider</c> node via
-    /// <see cref="MeshNodeStreamExtensions.Update"/>. Other fields are
+    /// <c>MeshNodeStreamExtensions.Update</c>. Other fields are
     /// preserved.
     /// </summary>
     public IObservable<bool> RotateKey(string providerNodePath, string? newApiKey)

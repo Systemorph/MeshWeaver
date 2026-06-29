@@ -7,7 +7,7 @@ using Microsoft.Extensions.DependencyInjection;
 namespace Memex.Portal.Shared.Authentication;
 
 /// <summary>
-/// Thin façade over <see cref="OnboardingMiddleware.LoadUserRoles"/> so callers
+/// Thin façade over <c>OnboardingMiddleware.LoadUserRoles</c> so callers
 /// outside this assembly can resolve a user's AccessAssignment-derived roles in
 /// one call.
 ///
