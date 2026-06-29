@@ -37,6 +37,9 @@ memex-local status             # colima / pods / ingress / port-forward / health
 memex-local logs               # tail the portal logs (verbose; see "Full logging")
 memex-local logs --migration   # tail the migration job
 memex-local update             # roll portal+migration to a newer image, refresh forward
+memex-local autoroll up        # AUTO-redeploy portal+migration whenever a fresh image is built
+memex-local autoroll status    # show the watcher + last-rolled portal/migration digests
+memex-local autoroll down      # stop auto-rolling
 memex-local observability      # Grafana/Loki/Promtail/Prometheus (§11)
 memex-local doctor             # preflight: tools, chart/assets, cluster
 memex-local down               # uninstall release (KEEPS the Postgres PVC)
@@ -60,6 +63,50 @@ in your Microsoft Entra `ClientId` / `TenantId` / `ClientSecret` (`LocalColimaMa
 §9), or uncomment `Authentication__EnableDevLogin` for a no-Azure login. Re-run
 `memex-local up` to apply.
 
+## Auto-update (auto-roll) — the local equivalent of AKS self-update
+
+On AKS the portal self-updates by polling ACR and patching its own Deployment
+(`SelfUpdateHostedService`, per [`ReleaseStrategy.md`](../../src/MeshWeaver.Documentation/Data/Architecture/ReleaseStrategy.md)).
+That in-pod poll **cannot work locally** — the local images are built straight into
+Colima's Docker store, never pushed to a registry the pod can list (the in-pod
+`AcrTagLister` would fail the Azure→ACR token exchange). So locally the same
+*outcome* is driven from the **host** instead:
+
+```bash
+memex-local autoroll up        # arm it (once)
+```
+
+This installs a launchd agent (`com.memex.local.autoroll`) that, every 30s:
+
+1. **Pins the portal Deployment to the moving tag** `…/memex-portal-ai:latest`
+   (`imagePullPolicy: IfNotPresent` — k3s reuses the Docker-store image, no pull).
+2. Watches the **portal** *and* **migration** `…-local:latest` image digests.
+   When a build changes one, it first **retags** that fresh `…-local:latest` onto
+   the chart ref the cluster actually runs (`…/memex-portal-ai:latest`,
+   `…/memex-migration:latest`) — so even a bare `dotnet publish` (which only writes
+   `…-local:latest`) goes live — then:
+   - **migration first** — re-runs the migration as a one-shot Job against the
+     main DB and **waits for it** (the portal's `DbVersionGate` blocks boot until
+     the schema is current; if the migration fails it leaves everything on the
+     current images and retries — it never rolls the portal onto a schema it
+     can't run);
+   - then **`rollout restart`** the portal so the rebuilt image goes live.
+
+So after `autoroll up`, **any rebuild** — `memex-local update`, `memex-local up
+--build`, or a bare `dotnet publish -t:PublishContainer` of the portal/migration
+— auto-deploys within ~30s, with **no manual `kubectl set image`** (the retag in
+step 2 is what makes the bare-`publish` case work — without it the roll would
+re-run the old chart-ref image).
+
+> **Do you need to install anything first?** No. `autoroll` uses **launchd**
+> (built into macOS) plus `docker` + `kubectl`, which are already `memex-local`
+> prerequisites (`LocalColimaMac.md` §1). Nothing new to install.
+
+`autoroll status` shows whether the watcher is running and the last-rolled portal
+and migration digests; `autoroll down` stops it (the portal stays on its current
+image). The log is `~/.memex-local/autoroll.log`. Only the **portal** Deployment is
+rolled in place; the **migration** is re-run as a Job (it has no Deployment).
+
 ## How each `LocalColimaMac.md` step maps into the CLI
 
 | Doc section | Manual step | CLI implementation (function in `bin/memex-local`) |
@@ -79,7 +126,7 @@ in your Microsoft Entra `ClientId` / `TenantId` / `ClientSecret` (`LocalColimaMa
 | §12 Instance identity | `Portal__InstanceName/Color` | overlay `config.memex_portal` |
 | §14 Verify | `curl --cacert …/rootCA.pem https://memex.localhost:8443/` | `verify_endpoint()` |
 | §14 Troubleshoot (stale forward) | restart the port-forward after a rollout | `cmd_port_forward()`; `update` auto-refreshes it |
-| Self-update (ReleaseStrategy) | in-pod patch per `Admin/UpdatePolicy` (Continuous default) | `cmd_update()` is the manual path; chart ships the RBAC + self-updater |
+| Self-update (ReleaseStrategy) | in-pod patch per `Admin/UpdatePolicy` (Continuous default) — can't see local-built images | `cmd_update()` = manual roll; `cmd_autoroll()` = host-side auto-roll on a new local build (the local stand-in for the in-pod poll; see "Auto-update" above) |
 
 `down` reverses §7 (launchd) and §4 (Helm release) while **retaining the Postgres
 PVC** so data survives — exactly the "survives reboot" property the doc emphasises.
