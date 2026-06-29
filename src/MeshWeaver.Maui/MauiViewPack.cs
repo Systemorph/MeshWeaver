@@ -408,19 +408,44 @@ public sealed class ContainerView : MauiView
     {
         // Honor StackControl orientation — a horizontal Stack (e.g. a tab bar / button row) must lay its
         // children left-to-right, not stacked vertically. Default + non-Stack containers stay vertical.
-        var horizontal = Control is StackControl stack && IsHorizontal(stack.Skin);
+        var skin = Control is StackControl stack ? stack.Skin : null;
+        var horizontal = IsHorizontal(skin);
+        var spacing = Gap(skin, horizontal) ?? 8;   // honour the skin's gap; default 8 when unset
         Microsoft.Maui.Controls.Layout layout = horizontal
-            ? new HorizontalStackLayout { Spacing = 8 }
-            : new VerticalStackLayout { Spacing = 8 };
+            ? new HorizontalStackLayout { Spacing = spacing }
+            : new VerticalStackLayout { Spacing = spacing };
         if (Stream is not null && Control is IContainerControl container)
             foreach (var named in container.Areas)
                 layout.Children.Add(Renderer.RenderArea(Stream, named.Area.ToString()!));
+
+        // A CardSkin wraps the container in a bordered card (no-op when absent → default unchanged).
+        if (Control.Skins.OfType<CardSkin>().Any())
+            return new Border
+            {
+                Padding = 12, BackgroundColor = Color.FromArgb("#2A2A2C"), StrokeThickness = 0,
+                StrokeShape = new Microsoft.Maui.Controls.Shapes.RoundRectangle { CornerRadius = 10 },
+                Content = layout,
+            };
         return layout;
     }
 
     // Orientation rides the skin as object? (an enum at author time, a JSON string after stream round-trip).
     private static bool IsHorizontal(LayoutStackSkin? skin) =>
         skin?.Orientation?.ToString()?.Contains("Horizontal", StringComparison.OrdinalIgnoreCase) == true;
+
+    // The skin's HorizontalGap/VerticalGap (an int, a double, or a CSS-ish "8px" string) → a spacing value.
+    private static double? Gap(LayoutStackSkin? skin, bool horizontal)
+    {
+        var g = horizontal ? skin?.HorizontalGap : skin?.VerticalGap;
+        if (g is null) return null;
+        if (g is int i) return i;
+        if (g is double d) return d;
+        var s = g is JsonElement je
+            ? (je.ValueKind == JsonValueKind.Number ? je.GetRawText() : je.GetString() ?? "")
+            : g.ToString() ?? "";
+        var digits = new string(s.TakeWhile(c => char.IsDigit(c) || c == '.').ToArray());
+        return double.TryParse(digits, System.Globalization.CultureInfo.InvariantCulture, out var px) ? px : null;
+    }
 }
 
 /// <summary>A reference to a sibling area → renders that area.</summary>
