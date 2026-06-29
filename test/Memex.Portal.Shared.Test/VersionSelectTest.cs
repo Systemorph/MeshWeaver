@@ -32,6 +32,22 @@ public class VersionSelectTest
     public void PickTarget_NoParseableTags_ReturnsNull()
         => Assert.Null(VersionSelect.PickTarget(["latest", "main", "garbage"], UpdatePolicyKind.Continuous));
 
+    // CI-green gate: a `-edge.N` build is UNVERIFIED. Default (RequireCiGreen=true) must skip it even
+    // though it is the newest; opting into "any" (RequireCiGreen=false) rolls to it.
+    [Fact]
+    public void GreenOnly_Default_ExcludesEdgeBuilds_EvenWhenNewest()
+        => Assert.Equal("3.0.0-ci.51",
+            VersionSelect.PickTarget(["3.0.0-ci.51", "3.1.0-edge.7"], UpdatePolicyKind.Continuous));
+
+    [Fact]
+    public void Any_RequireCiGreenFalse_IncludesEdgeBuilds()
+        => Assert.Equal("3.1.0-edge.7",
+            VersionSelect.PickTarget(["3.0.0-ci.51", "3.1.0-edge.7"], UpdatePolicyKind.Continuous, requireCiGreen: false));
+
+    [Fact]
+    public void UpdatePolicyContent_DefaultsToRequireCiGreen()
+        => Assert.True(new UpdatePolicyContent().RequireCiGreen, "green-only must be the safe default");
+
     [Theory]
     [InlineData("3.1.0-ci.5", "3.0.0-ci.51", true)]   // higher base wins
     [InlineData("3.0.0-ci.51", "3.0.0-ci.40", true)]  // monotonic ci number
