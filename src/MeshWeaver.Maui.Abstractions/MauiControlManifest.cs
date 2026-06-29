@@ -43,14 +43,15 @@ public static class MauiControlManifest
         "ChartControl", "MarkdownEditorControl", "CodeEditorControl", "DiffEditorControl",
         // Phase 3/misc — profile / appearance / item template / layout-area definition
         "UserProfileControl", "AppearanceControl", "ItemTemplateControl", "LayoutAreaDefinitionControl",
+        // Phase 3 — node editors
+        "MeshNodeEditorControl", "MeshNodeRoleEditorControl",
     };
 
     /// <summary>Concrete controls not yet given a native view — the remaining parity work (Phases 3-5).</summary>
     public static readonly IReadOnlySet<string> PlannedControls = new HashSet<string>(StringComparer.Ordinal)
     {
         // Phase 3 — node management / misc
-        "MeshNodeEditorControl", "MeshNodeRoleEditorControl", "EditFormControl",
-        "EditorControl",
+        "EditFormControl", "EditorControl",
         "FileBrowserControl", "NodeImportControl", "NodeExportControl",
         "ExportDocumentControl",
         // Phase 4 — rich data (OSS libs)

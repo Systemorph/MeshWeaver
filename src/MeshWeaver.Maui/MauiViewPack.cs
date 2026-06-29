@@ -378,6 +378,9 @@ public static class MauiViewPackExtensions
         .Register<AppearanceControl, AppearanceView>()
         .Register<ItemTemplateControl, ItemTemplateView>()
         .Register<LayoutAreaDefinitionControl, LayoutAreaDefinitionView>()
+        // Phase 3 — node editors (generic name editor + role editor).
+        .Register<MeshNodeEditorControl, MeshNodeEditorView>()
+        .Register<MeshNodeRoleEditorControl, MeshNodeRoleEditorView>()
         // Embedded remote area (e.g. the home page's bottom chat composer) → the existing LayoutAreaView.
         .Register<LayoutAreaControl, LayoutAreaControlView>()
         // Wave 2 — nav + badges.
@@ -1379,6 +1382,60 @@ public sealed class LayoutAreaDefinitionView : MauiView<LayoutAreaDefinitionCont
             Padding = 10, BackgroundColor = Color.FromArgb("#2A2A2C"), StrokeThickness = 0,
             StrokeShape = new Microsoft.Maui.Controls.Shapes.RoundRectangle { CornerRadius = 10 },
             Content = content,
+        };
+    }
+}
+
+/// <summary>Mesh-node editor → a live, node-bound name field (writes back via
+/// <c>GetMeshNodeStream(path).Update</c>) under a node-type caption. Rich typed-field editing is the
+/// dedicated MeshNodeContentEditor; this is the generic by-path/by-type editor.</summary>
+public sealed class MeshNodeEditorView : MauiView<MeshNodeEditorControl>
+{
+    private Entry _name = null!;
+    private bool _suppress;
+    protected override View CreateView()
+    {
+        var caption = new Label { Text = string.IsNullOrWhiteSpace(Model.NodeType) ? "Node" : Model.NodeType!, FontSize = 10, TextColor = Color.FromArgb("#9A9A9A") };
+        _name = new Entry { Placeholder = "Name", TextColor = Colors.White };
+        _name.TextChanged += (_, e) => { if (!_suppress) Persist(e.NewTextValue); };
+        return new VerticalStackLayout { Spacing = 4, Children = { caption, _name } };
+    }
+    protected override void Bind()
+    {
+        if (Stream is null || string.IsNullOrEmpty(Model.NodePath)) return;
+        var sub = Stream.Hub.GetMeshNodeStream(Model.NodePath).Where(n => n is not null)
+            .Subscribe(node => MainThread.BeginInvokeOnMainThread(() =>
+            {
+                _suppress = true;
+                try { _name.Text = node!.Name ?? ""; } finally { _suppress = false; }
+            }));
+        Disposables.Add(sub);
+    }
+    private void Persist(string? name)
+    {
+        if (Stream is null || string.IsNullOrEmpty(Model.NodePath)) return;
+        Stream.Hub.GetMeshNodeStream(Model.NodePath).Update(n => n with { Name = name }).Subscribe(_ => { }, _ => { });
+    }
+}
+
+/// <summary>Mesh-node role editor → a role <see cref="Picker"/> (from RoleOptions) + a Deny checkbox, gated
+/// by CanEdit. Native UI for the role assignment; the access-assignment write-back is a later wave.</summary>
+public sealed class MeshNodeRoleEditorView : MauiView<MeshNodeRoleEditorControl>
+{
+    protected override View CreateView()
+    {
+        var picker = new Picker { IsEnabled = Model.CanEdit, TextColor = Colors.White, Title = "Role" };
+        foreach (var r in Model.RoleOptions) picker.Items.Add(r);
+        var deny = new CheckBox { IsEnabled = Model.CanEdit };
+        return new HorizontalStackLayout
+        {
+            Spacing = 8,
+            Children =
+            {
+                picker,
+                new Label { Text = "Deny", VerticalOptions = LayoutOptions.Center, TextColor = Color.FromArgb("#C0C0C0") },
+                deny,
+            },
         };
     }
 }
