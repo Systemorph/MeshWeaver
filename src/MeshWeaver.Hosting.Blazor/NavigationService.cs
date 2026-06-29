@@ -461,6 +461,20 @@ internal class NavigationService : INavigationService
         // re-introduce the 2026-05-21 identity-loss false-denial.
         if (string.Equals(userId, WellKnownUsers.Anonymous, StringComparison.OrdinalIgnoreCase))
         {
+            // The anonymous hard-gate is firing → a forceLoad:true redirect to /login is a FULL page
+            // reload (the "send → page reloads / GUI vanishes" symptom). Log WHY: dump the three identity
+            // sources at the decision point so a MIS-fire on an actually-authenticated user (the
+            // 2026-05-21 identity-loss regression, where a deferred Rx continuation reads a cleared
+            // ambient context) is visible in the logs instead of silent. Warning-level so it surfaces
+            // under the default MeshWeaver=Warning cap with no config change.
+            var accessService = _hub.ServiceProvider.GetService<AccessService>();
+            _logger?.LogWarning(
+                "Anonymous-gate: redirecting {Uri} → /login (forceLoad full reload), resolved path '{Prefix}'. "
+                + "Identity sources at decision — ambient={Ambient}, circuit={Circuit}, accessor={Accessor}.",
+                _navigationManager.Uri, resolution.Prefix,
+                accessService?.Context?.ObjectId ?? "(null)",
+                accessService?.CircuitContext?.ObjectId ?? "(null)",
+                _circuitContextAccessor?.UserContext?.ObjectId ?? "(null)");
             IsResolving = false;
             Context = null;
             CurrentNamespace = null;
