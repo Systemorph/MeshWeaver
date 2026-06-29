@@ -112,30 +112,35 @@ jobs:
       # subset of RuntimeIdentifiers (we set them equal). No Docker is needed: pushing the index straight
       # to a remote registry (ContainerRegistry set) is fully Docker-free.
       # 🚨 PREREQUISITE: memex-portal-ai-base:latest in ACR must itself be MULTI-ARCH, else the arm64 leg
-      # has no base layer and this step fails. release-images.yml builds it multi-arch (buildx); operators
-      # doing the first multi-arch roll must rebuild the base multi-arch once (see LocalColimaMac.md).
+      # has no base layer and this step fails. base-image-acr.yml (workflow_dispatch) builds it multi-arch
+      # (buildx → ACR); operators doing the first multi-arch roll run that once (see LocalColimaMac.md).
+      # 🚨 The ;-separated property LISTS are %3B-escaped, NOT raw `;`: a raw `;` in a `-p:Foo=a;b` arg is
+      # parsed by MSBuild's command-line property splitter as the START OF A NEW PROPERTY (`b`), which it
+      # then rejects — `MSBUILD : error MSB1006: Property is not valid. Switch: linux-arm64`. `%3B` is the
+      # MSBuild escape for a literal semicolon inside a value. Applies to RuntimeIdentifiers,
+      # ContainerRuntimeIdentifiers AND ContainerImageTags (every `-p:` whose value is a `;`-list).
       - name: Build + push portal-ai
         run: >
           dotnet publish memex/aspire/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj
           -c Release --no-self-contained -t:PublishContainer -p:PublishProfile=
-          -p:RuntimeIdentifiers="linux-x64;linux-arm64"
-          -p:ContainerRuntimeIdentifiers="linux-x64;linux-arm64"
+          -p:RuntimeIdentifiers="linux-x64%3Blinux-arm64"
+          -p:ContainerRuntimeIdentifiers="linux-x64%3Blinux-arm64"
           -p:CIRun=true
           -p:ContainerRegistry=${{ env.ACR }}
           -p:ContainerRepository=memex-portal-ai
-          -p:ContainerImageTags="${{ steps.vars.outputs.version }};${{ steps.vars.outputs.sha }};main"
+          -p:ContainerImageTags="${{ steps.vars.outputs.version }}%3B${{ steps.vars.outputs.sha }}%3Bmain"
           -p:ContainerBaseImage=${{ env.ACR }}/memex-portal-ai-base:latest
       # migration — lean image on the standard (already multi-arch) aspnet base; same multi-arch publish.
       - name: Build + push migration
         run: >
           dotnet publish memex/aspire/Memex.Database.Migration/Memex.Database.Migration.csproj
           -c Release --no-self-contained -t:PublishContainer -p:PublishProfile=
-          -p:RuntimeIdentifiers="linux-x64;linux-arm64"
-          -p:ContainerRuntimeIdentifiers="linux-x64;linux-arm64"
+          -p:RuntimeIdentifiers="linux-x64%3Blinux-arm64"
+          -p:ContainerRuntimeIdentifiers="linux-x64%3Blinux-arm64"
           -p:CIRun=true
           -p:ContainerRegistry=${{ env.ACR }}
           -p:ContainerRepository=memex-migration
-          -p:ContainerImageTags="${{ steps.vars.outputs.version }};${{ steps.vars.outputs.sha }};main"
+          -p:ContainerImageTags="${{ steps.vars.outputs.version }}%3B${{ steps.vars.outputs.sha }}%3Bmain"
 
   # ───────────────────────────────── DEPLOY ──────────────────────────────────
   # One leg per environment (namespace) on the shared private cluster. Each leg points the
