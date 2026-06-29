@@ -41,13 +41,22 @@ public sealed record MessageBubbleState(
 /// </summary>
 public static class MauiChatProjection
 {
-    /// <summary>Reads the data-bound ThreadViewModel snapshot into the bubble-list + status state.</summary>
+    /// <summary>
+    /// Reads the bubble-list + status state from EITHER the data-section <c>ThreadViewModel</c> (which
+    /// carries an explicit <c>isExecuting</c>) OR a raw <c>Thread</c> node (whose <c>IsExecuting</c> is a
+    /// computed <c>[JsonIgnore]</c> getter, so only <c>status</c> is present) — the direct-path mode reads
+    /// the raw node. Execution is therefore derived from <c>isExecuting</c> OR an executing <c>status</c>.
+    /// </summary>
     public static ThreadChatState ReadThreadViewModel(JsonElement vm) => new(
         ThreadPath: GetString(vm, "threadPath"),
         MessageIds: GetStringArray(vm, "messages"),
         PendingTexts: GetStringArray(vm, "pendingMessageTexts"),
-        IsExecuting: GetBool(vm, "isExecuting"),
+        IsExecuting: GetBool(vm, "isExecuting") || IsExecutingStatus(GetString(vm, "status")),
         ExecutionStatus: GetString(vm, "executionStatus"));
+
+    // The raw Thread node has no isExecuting (it's [JsonIgnore]); these Status values mean "executing".
+    private static bool IsExecutingStatus(string? status) =>
+        status is "StartingExecution" or "Executing";
 
     /// <summary>Reads a <c>ThreadMessage</c> node's content into the fields a bubble renders.</summary>
     public static MessageBubbleState ReadMessage(JsonElement content) => new(

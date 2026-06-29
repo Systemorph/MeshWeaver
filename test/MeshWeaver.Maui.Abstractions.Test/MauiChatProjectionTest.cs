@@ -48,6 +48,18 @@ public class MauiChatProjectionTest
     }
 
     [Fact]
+    public void ReadThreadViewModel_RawNode_DerivesExecutingFromStatus()
+    {
+        // The raw Thread node has no "isExecuting" (it's a [JsonIgnore] computed getter) — only "status".
+        MauiChatProjection.ReadThreadViewModel(Json("""{ "messages": ["m1"], "status": "Executing" }"""))
+            .IsExecuting.Should().BeTrue();
+        MauiChatProjection.ReadThreadViewModel(Json("""{ "messages": ["m1"], "status": "StartingExecution" }"""))
+            .IsExecuting.Should().BeTrue();
+        MauiChatProjection.ReadThreadViewModel(Json("""{ "messages": [], "status": "Idle" }"""))
+            .IsExecuting.Should().BeFalse();
+    }
+
+    [Fact]
     public void ReadMessage_UserCell()
     {
         var msg = Json("""{ "role": "user", "text": "hello", "status": "Completed", "timestamp": "2026-06-29T10:00:00Z" }""");
