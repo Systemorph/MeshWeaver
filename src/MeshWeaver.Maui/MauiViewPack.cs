@@ -886,7 +886,8 @@ public sealed class MauiCollaborativeMarkdownView : MauiView<CollaborativeMarkdo
             var accept = new Button { Text = "Accept", FontSize = 11, BackgroundColor = Color.FromArgb("#2E7D32"), TextColor = Colors.White, CornerRadius = 6, Padding = new Thickness(10, 4) };
             accept.Clicked += (_, _) => AcceptChange(ch, path);
             var reject = new Button { Text = "Reject", FontSize = 11, BackgroundColor = Color.FromArgb("#3A3A3C"), TextColor = Colors.White, CornerRadius = 6, Padding = new Thickness(10, 4) };
-            reject.Clicked += (_, _) => Stream?.Hub.ServiceProvider.GetService<IMeshService>()?.DeleteNode(path).Subscribe(_ => { }, _ => { });
+            reject.Clicked += (_, _) => Stream?.Hub.ServiceProvider.GetService<IMeshService>()?.DeleteNode(path)
+                .Subscribe(_ => { }, ex => Log(ex, "reject change"));
             box.Children.Add(new HorizontalStackLayout { Spacing = 8, HorizontalOptions = LayoutOptions.End, Children = { accept, reject } });
 
             panel.Children.Add(new Border
@@ -905,6 +906,7 @@ public sealed class MauiCollaborativeMarkdownView : MauiView<CollaborativeMarkdo
         var opts = Stream.Hub.JsonSerializerOptions;
         var meshService = Stream.Hub.ServiceProvider.GetService<IMeshService>();
         var read = Stream.Hub.GetMeshNodeStream(Model.NodePath).Where(n => n is not null).Take(1)
+            .Timeout(TimeSpan.FromSeconds(10))   // one-shot read for the action — never leak the subscription
             .Subscribe(node => MainThread.BeginInvokeOnMainThread(() =>
             {
                 var md = node!.ContentAs<MeshWeaver.Markdown.MarkdownContent>(opts);
@@ -915,8 +917,10 @@ public sealed class MauiCollaborativeMarkdownView : MauiView<CollaborativeMarkdo
                 Stream.Hub.GetMeshNodeStream(Model.NodePath)
                     .Update(n => n.Content is MeshWeaver.Markdown.MarkdownContent m
                         ? n with { Content = m with { Content = newClean } } : n)
-                    .Subscribe(_ => meshService?.DeleteNode(satellitePath).Subscribe(__ => { }, __ => { }), _ => { });
-            }));
+                    .Subscribe(
+                        _ => meshService?.DeleteNode(satellitePath).Subscribe(__ => { }, ex => Log(ex, "drop accepted change")),
+                        ex => Log(ex, "apply accepted change"));
+            }), ex => Log(ex, "read doc for accept"));
         Disposables.Add(read);
     }
 
