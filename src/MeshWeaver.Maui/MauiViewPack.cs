@@ -243,6 +243,44 @@ public abstract class FormMauiView<TControl> : MauiView<TControl> where TControl
         if (boundValue is JsonPointerReference reference && Stream is not null)
             Stream.UpdatePointer(value, Control.DataContext, reference);
     }
+
+    /// <summary>
+    /// Coerces a list control's Options into (display text, value-string) pairs the native picker/list
+    /// can show + select. Handles both a typed <see cref="Option"/> list AND — the case the old code
+    /// missed — a <see cref="JsonElement"/> array (Options arrive serialized after the layout-stream
+    /// round-trip, so <c>as IEnumerable&lt;Option&gt;</c> was null → no options rendered). Value is the
+    /// item's string form (selection-match + write-back); covers the common string/enum-valued option.
+    /// </summary>
+    protected static List<(string Text, string? Value)> CoerceOptions(object? options)
+    {
+        var result = new List<(string Text, string? Value)>();
+        switch (options)
+        {
+            case IEnumerable<Option> typed:
+                foreach (var o in typed) result.Add((o.Text, o.GetItem()?.ToString()));
+                break;
+            case JsonElement { ValueKind: JsonValueKind.Array } arr:
+                foreach (var el in arr.EnumerateArray())
+                {
+                    var text = el.TryGetProperty("text", out var t) && t.ValueKind == JsonValueKind.String
+                        ? t.GetString() ?? ""
+                        : el.ToString();
+                    var val = el.TryGetProperty("item", out var it) ? JsonScalar(it)
+                        : el.TryGetProperty("itemString", out var its) ? its.GetString()
+                        : text;
+                    result.Add((text, val));
+                }
+                break;
+        }
+        return result;
+    }
+
+    private static string? JsonScalar(JsonElement e) => e.ValueKind switch
+    {
+        JsonValueKind.String => e.GetString(),
+        JsonValueKind.Null => null,
+        _ => e.GetRawText()
+    };
 }
 
 /// <summary>
@@ -803,26 +841,31 @@ public sealed class CheckBoxView : FormMauiView<CheckBoxControl>
 public sealed class SelectView : FormMauiView<SelectControl>
 {
     private Picker _picker = null!;
-    private List<Option> _options = new();
+    private List<(string Text, string? Value)> _options = new();
 
     protected override View CreateView()
     {
         _picker = new Picker();
-        _options = (Model.Options as IEnumerable<Option>)?.ToList() ?? new();
-        foreach (var o in _options) _picker.Items.Add(o.Text);
         _picker.SelectedIndexChanged += (_, _) =>
         {
             if (_picker.SelectedIndex >= 0 && _picker.SelectedIndex < _options.Count)
-                Write(Model.Data, _options[_picker.SelectedIndex].GetItem());
+                Write(Model.Data, _options[_picker.SelectedIndex].Value);
         };
         return _picker;
     }
 
-    protected override void Bind() => BindValue<object>(Model.Data, v =>
+    protected override void Bind()
     {
-        var idx = _options.FindIndex(o => Equals(o.GetItem()?.ToString(), v?.ToString()));
-        if (idx >= 0) _picker.SelectedIndex = idx;
-    });
+        // Options now coerce from the JsonElement round-trip too (were silently empty before).
+        _options = CoerceOptions(Model.Options);
+        _picker.Items.Clear();
+        foreach (var (text, _) in _options) _picker.Items.Add(text);
+        BindValue<object>(Model.Data, v =>
+        {
+            var idx = _options.FindIndex(o => string.Equals(o.Value, v?.ToString(), StringComparison.Ordinal));
+            if (idx >= 0) _picker.SelectedIndex = idx;
+        });
+    }
 }
 
 /// <summary>Boolean toggle → MAUI <see cref="Switch"/> (two-way).</summary>
@@ -900,48 +943,57 @@ public sealed class DateTimeView : FormMauiView<DateTimeControl>
 public sealed class ComboboxView : FormMauiView<ComboboxControl>
 {
     private Picker _picker = null!;
-    private List<Option> _options = new();
+    private List<(string Text, string? Value)> _options = new();
     protected override View CreateView()
     {
         _picker = new Picker();
-        _options = (Model.Options as IEnumerable<Option>)?.ToList() ?? new();
-        foreach (var o in _options) _picker.Items.Add(o.Text);
         _picker.SelectedIndexChanged += (_, _) =>
         {
             if (_picker.SelectedIndex >= 0 && _picker.SelectedIndex < _options.Count)
-                Write(Model.Data, _options[_picker.SelectedIndex].GetItem());
+                Write(Model.Data, _options[_picker.SelectedIndex].Value);
         };
         return _picker;
     }
-    protected override void Bind() => BindValue<object>(Model.Data, v =>
+    protected override void Bind()
     {
-        var idx = _options.FindIndex(o => Equals(o.GetItem()?.ToString(), v?.ToString()));
-        if (idx >= 0) _picker.SelectedIndex = idx;
-    });
+        // Free-type filter is still a later wave (native Picker has none); options now at least populate.
+        _options = CoerceOptions(Model.Options);
+        _picker.Items.Clear();
+        foreach (var (text, _) in _options) _picker.Items.Add(text);
+        BindValue<object>(Model.Data, v =>
+        {
+            var idx = _options.FindIndex(o => string.Equals(o.Value, v?.ToString(), StringComparison.Ordinal));
+            if (idx >= 0) _picker.SelectedIndex = idx;
+        });
+    }
 }
 
 /// <summary>Listbox → MAUI <see cref="Picker"/> (two-way single-select this wave).</summary>
 public sealed class ListboxView : FormMauiView<ListboxControl>
 {
     private Picker _picker = null!;
-    private List<Option> _options = new();
+    private List<(string Text, string? Value)> _options = new();
     protected override View CreateView()
     {
         _picker = new Picker();
-        _options = (Model.Options as IEnumerable<Option>)?.ToList() ?? new();
-        foreach (var o in _options) _picker.Items.Add(o.Text);
         _picker.SelectedIndexChanged += (_, _) =>
         {
             if (_picker.SelectedIndex >= 0 && _picker.SelectedIndex < _options.Count)
-                Write(Model.Data, _options[_picker.SelectedIndex].GetItem());
+                Write(Model.Data, _options[_picker.SelectedIndex].Value);
         };
         return _picker;
     }
-    protected override void Bind() => BindValue<object>(Model.Data, v =>
+    protected override void Bind()
     {
-        var idx = _options.FindIndex(o => Equals(o.GetItem()?.ToString(), v?.ToString()));
-        if (idx >= 0) _picker.SelectedIndex = idx;
-    });
+        _options = CoerceOptions(Model.Options);
+        _picker.Items.Clear();
+        foreach (var (text, _) in _options) _picker.Items.Add(text);
+        BindValue<object>(Model.Data, v =>
+        {
+            var idx = _options.FindIndex(o => string.Equals(o.Value, v?.ToString(), StringComparison.Ordinal));
+            if (idx >= 0) _picker.SelectedIndex = idx;
+        });
+    }
 }
 
 /// <summary>Layout grid → a wrapping MAUI <see cref="FlexLayout"/> of its child areas (a real flowing grid
