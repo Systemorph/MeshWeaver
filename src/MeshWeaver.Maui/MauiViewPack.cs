@@ -361,9 +361,10 @@ public static class MauiViewPackExtensions
         .Register<CatalogControl, CatalogView>()
         .Register<MeshNodeCollectionControl, MeshNodeCollectionView>()
         .Register<SearchBoxControl, SearchBoxView>()
-        // Phase 3 — redirect (navigate-on-render) + code sample.
+        // Phase 3 — redirect (navigate-on-render) + code sample + dialog.
         .Register<RedirectControl, RedirectView>()
         .Register<CodeSampleControl, CodeSampleView>()
+        .Register<DialogControl, DialogView>()
         // Embedded remote area (e.g. the home page's bottom chat composer) → the existing LayoutAreaView.
         .Register<LayoutAreaControl, LayoutAreaControlView>()
         // Wave 2 — nav + badges.
@@ -1096,6 +1097,36 @@ public sealed class CodeSampleView : MauiView<CodeSampleControl>
         };
     }
     protected override void Bind() => Bind<object>(Model.Data, v => _code.Text = MarkdownViewLogic.CoerceString(v) ?? "");
+}
+
+/// <summary>
+/// A dialog → a card-styled panel with a title, the <see cref="DialogControl.ContentArea"/> rendered as a
+/// child area, and (when it has actions) the <see cref="DialogControl.ActionsArea"/> below. Rendered inline
+/// rather than as an OS modal (no Page context here) — the AspNetCore-free counterpart of Blazor's dialog.
+/// </summary>
+public sealed class DialogView : MauiView<DialogControl>
+{
+    protected override View CreateView()
+    {
+        var stack = new VerticalStackLayout { Spacing = 10 };
+        stack.Children.Add(new Label
+        {
+            Text = MarkdownViewLogic.CoerceString(Model.Title) ?? "Dialog",
+            FontAttributes = FontAttributes.Bold, FontSize = 16, TextColor = Colors.White,
+        });
+        if (Stream is not null && Model.ContentArea?.Area is not null)
+            stack.Children.Add(Renderer.RenderArea(Stream, Model.ContentArea.Area.ToString()!));
+        if (Stream is not null && Model.HasActions && Model.ActionsArea?.Area is not null)
+            stack.Children.Add(Renderer.RenderArea(Stream, Model.ActionsArea.Area.ToString()!));
+        return new Border
+        {
+            Padding = 16,
+            BackgroundColor = Color.FromArgb("#2A2A2C"),
+            Stroke = Color.FromArgb("#444"), StrokeThickness = 1,
+            StrokeShape = new Microsoft.Maui.Controls.Shapes.RoundRectangle { CornerRadius = 12 },
+            Content = stack,
+        };
+    }
 }
 
 /// <summary>Tabular data → a header + rows (read-only this wave; sorting/virtualization later).</summary>
