@@ -9,6 +9,7 @@ using MeshWeaver.Layout;
 using MeshWeaver.Layout.Catalog;
 using MeshWeaver.Layout.Chart;
 using MeshWeaver.Layout.Client;
+using MeshWeaver.Layout.Pivot;
 using MeshWeaver.Layout.Views;
 using MeshWeaver.Layout.DataGrid;
 using MeshWeaver.Markdown;
@@ -381,6 +382,12 @@ public static class MauiViewPackExtensions
         // Phase 3 — node editors (generic name editor + role editor).
         .Register<MeshNodeEditorControl, MeshNodeEditorView>()
         .Register<MeshNodeRoleEditorControl, MeshNodeRoleEditorView>()
+        // Phase 3/4 — operations (import/export/document) + file browser + pivot grid.
+        .Register<NodeImportControl, NodeImportView>()
+        .Register<NodeExportControl, NodeExportView>()
+        .Register<ExportDocumentControl, ExportDocumentView>()
+        .Register<FileBrowserControl, FileBrowserView>()
+        .Register<PivotGridControl, PivotGridView>()
         // Embedded remote area (e.g. the home page's bottom chat composer) → the existing LayoutAreaView.
         .Register<LayoutAreaControl, LayoutAreaControlView>()
         // Wave 2 — nav + badges.
@@ -1438,6 +1445,104 @@ public sealed class MeshNodeRoleEditorView : MauiView<MeshNodeRoleEditorControl>
             },
         };
     }
+}
+
+/// <summary>Node import → a native form (target path + force / remove-missing flags) and an Import button
+/// that dispatches the control's action (<see cref="MauiView.PostClick"/>). File/ZIP picking is a later wave.</summary>
+public sealed class NodeImportView : MauiView<NodeImportControl>
+{
+    protected override View CreateView()
+    {
+        var target = new Entry { Placeholder = "Target path", Text = Model.TargetPath ?? "", TextColor = Colors.White };
+        var force = new CheckBox { IsChecked = Model.Force };
+        var removeMissing = new CheckBox { IsChecked = Model.RemoveMissing };
+        var go = new Button { Text = "Import", BackgroundColor = Colors.RoyalBlue, TextColor = Colors.White, CornerRadius = 8 };
+        go.Clicked += (_, _) => PostClick();
+        return new VerticalStackLayout
+        {
+            Spacing = 6,
+            Children =
+            {
+                new Label { Text = "Import nodes", FontAttributes = FontAttributes.Bold, TextColor = Colors.White },
+                target,
+                Flag("Force re-import", force),
+                Flag("Remove missing", removeMissing),
+                go,
+            },
+        };
+    }
+    internal static View Flag(string text, CheckBox cb) => new HorizontalStackLayout
+    {
+        Spacing = 6, Children = { cb, new Label { Text = text, VerticalOptions = LayoutOptions.Center, TextColor = Color.FromArgb("#C0C0C0") } },
+    };
+}
+
+/// <summary>Node export → a native form (source + satellite-type toggles) and an Export button that
+/// dispatches the control's action. The download is a later wave.</summary>
+public sealed class NodeExportView : MauiView<NodeExportControl>
+{
+    protected override View CreateView()
+    {
+        var stack = new VerticalStackLayout { Spacing = 6 };
+        stack.Children.Add(new Label { Text = $"Export {Model.NodeName ?? Model.SourcePath ?? "node"}", FontAttributes = FontAttributes.Bold, TextColor = Colors.White });
+        foreach (var sat in Model.AvailableSatelliteTypes ?? Array.Empty<string>())
+            stack.Children.Add(NodeImportView.Flag(sat, new CheckBox { IsChecked = true }));
+        var go = new Button { Text = "Export", BackgroundColor = Colors.RoyalBlue, TextColor = Colors.White, CornerRadius = 8 };
+        go.Clicked += (_, _) => PostClick();
+        stack.Children.Add(go);
+        return stack;
+    }
+}
+
+/// <summary>Document export → a native form (title + PDF/DOCX format + include-children) and an Export
+/// button that dispatches the control's action.</summary>
+public sealed class ExportDocumentView : MauiView<ExportDocumentControl>
+{
+    protected override View CreateView()
+    {
+        var title = new Entry { Placeholder = "Title", Text = Model.NodeName ?? "", TextColor = Colors.White };
+        var format = new Picker { Title = "Format", TextColor = Colors.White };
+        format.Items.Add("pdf"); format.Items.Add("docx");
+        format.SelectedItem = string.Equals(Model.DefaultFormat, "docx", StringComparison.OrdinalIgnoreCase) ? "docx" : "pdf";
+        var stack = new VerticalStackLayout
+        {
+            Spacing = 6,
+            Children = { new Label { Text = "Export document", FontAttributes = FontAttributes.Bold, TextColor = Colors.White }, title, format },
+        };
+        if (Model.HasDescendants)
+            stack.Children.Add(NodeImportView.Flag("Include children", new CheckBox()));
+        var go = new Button { Text = "Export", BackgroundColor = Colors.RoyalBlue, TextColor = Colors.White, CornerRadius = 8 };
+        go.Clicked += (_, _) => PostClick();
+        stack.Children.Add(go);
+        return stack;
+    }
+}
+
+/// <summary>File browser → a native header showing the collection path (full file listing + upload/delete is
+/// a later wave that needs the content service surfaced natively).</summary>
+public sealed class FileBrowserView : MauiView<FileBrowserControl>
+{
+    protected override View CreateView() => new VerticalStackLayout
+    {
+        Spacing = 4,
+        Children =
+        {
+            new Label { Text = "Files", FontAttributes = FontAttributes.Bold, TextColor = Colors.White },
+            new Label { Text = MarkdownViewLogic.CoerceString(Model.Path) ?? MarkdownViewLogic.CoerceString(Model.Collection) ?? "", FontSize = 12, TextColor = Color.FromArgb("#C0C0C0") },
+        },
+    };
+}
+
+/// <summary>Pivot grid → a native placeholder header (the full pivot rendering builds on the OSS data grid,
+/// a later wave). Closes the gap so the control renders natively instead of the fallback label.</summary>
+public sealed class PivotGridView : MauiView<PivotGridControl>
+{
+    protected override View CreateView() => new Border
+    {
+        Padding = 10, BackgroundColor = Color.FromArgb("#2A2A2C"), StrokeThickness = 0,
+        StrokeShape = new Microsoft.Maui.Controls.Shapes.RoundRectangle { CornerRadius = 8 },
+        Content = new Label { Text = "Pivot grid", FontAttributes = FontAttributes.Bold, TextColor = Color.FromArgb("#C0C0C0") },
+    };
 }
 
 /// <summary>Tabular data → a header + rows (read-only this wave; sorting/virtualization later).</summary>

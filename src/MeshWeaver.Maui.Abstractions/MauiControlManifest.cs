@@ -45,17 +45,16 @@ public static class MauiControlManifest
         "UserProfileControl", "AppearanceControl", "ItemTemplateControl", "LayoutAreaDefinitionControl",
         // Phase 3 — node editors
         "MeshNodeEditorControl", "MeshNodeRoleEditorControl",
+        // Phase 3/4 — operations + file browser + pivot grid
+        "NodeImportControl", "NodeExportControl", "ExportDocumentControl", "FileBrowserControl", "PivotGridControl",
     };
 
     /// <summary>Concrete controls not yet given a native view — the remaining parity work (Phases 3-5).</summary>
     public static readonly IReadOnlySet<string> PlannedControls = new HashSet<string>(StringComparer.Ordinal)
     {
         // Phase 3 — node management / misc
+        // Container controls — rendered by the generic ContainerView fallback (here for documentation).
         "EditFormControl", "EditorControl",
-        "FileBrowserControl", "NodeImportControl", "NodeExportControl",
-        "ExportDocumentControl",
-        // Phase 4 — rich data (OSS libs)
-        "PivotGridControl",
         // DataGrid column control (rendered by the grid, not standalone). PropertyColumnControl is
         // generic (PropertyColumnControl<T>) so it isn't a concrete control in the coverage scan.
         "TemplateColumnControl",
