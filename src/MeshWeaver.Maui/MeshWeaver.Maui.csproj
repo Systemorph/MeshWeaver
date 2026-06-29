@@ -43,6 +43,9 @@
              drives. MeshWeaver.AI is AspNetCore-free (framework deps only) and already in the maccatalyst
              closure via Memex.Client, so referencing it keeps the build AspNetCore-free. -->
         <ProjectReference Include="..\MeshWeaver.AI\MeshWeaver.AI.csproj" />
+        <!-- MAUI-FREE pure logic (option coercion / href / chat-JSON projection) — the SINGLE source the
+             native views call into, so it can be unit-tested from a plain net10.0 project. -->
+        <ProjectReference Include="..\MeshWeaver.Maui.Abstractions\MeshWeaver.Maui.Abstractions.csproj" />
     </ItemGroup>
 
 </Project>

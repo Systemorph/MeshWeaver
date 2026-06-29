@@ -4,6 +4,7 @@ using System.Text.Json.Nodes;
 using MeshWeaver.AI;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
+using MeshWeaver.Maui.Abstractions;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Client;
 using MeshWeaver.Layout.DataGrid;
@@ -248,41 +249,12 @@ public abstract class FormMauiView<TControl> : MauiView<TControl> where TControl
 
     /// <summary>
     /// Coerces a list control's Options into (display text, value-string) pairs the native picker/list
-    /// can show + select. Handles both a typed <see cref="Option"/> list AND — the case the old code
-    /// missed — a <see cref="JsonElement"/> array (Options arrive serialized after the layout-stream
-    /// round-trip, so <c>as IEnumerable&lt;Option&gt;</c> was null → no options rendered). Value is the
-    /// item's string form (selection-match + write-back); covers the common string/enum-valued option.
+    /// can show + select — delegates to the MAUI-free <see cref="MauiOptionCoercion"/> (the single,
+    /// unit-tested implementation; handles both a typed <see cref="Option"/> list and the JsonElement
+    /// array Options take after the layout-stream round-trip).
     /// </summary>
     protected static List<(string Text, string? Value)> CoerceOptions(object? options)
-    {
-        var result = new List<(string Text, string? Value)>();
-        switch (options)
-        {
-            case IEnumerable<Option> typed:
-                foreach (var o in typed) result.Add((o.Text, o.GetItem()?.ToString()));
-                break;
-            case JsonElement { ValueKind: JsonValueKind.Array } arr:
-                foreach (var el in arr.EnumerateArray())
-                {
-                    var text = el.TryGetProperty("text", out var t) && t.ValueKind == JsonValueKind.String
-                        ? t.GetString() ?? ""
-                        : el.ToString();
-                    var val = el.TryGetProperty("item", out var it) ? JsonScalar(it)
-                        : el.TryGetProperty("itemString", out var its) ? its.GetString()
-                        : text;
-                    result.Add((text, val));
-                }
-                break;
-        }
-        return result;
-    }
-
-    private static string? JsonScalar(JsonElement e) => e.ValueKind switch
-    {
-        JsonValueKind.String => e.GetString(),
-        JsonValueKind.Null => null,
-        _ => e.GetRawText()
-    };
+        => MauiOptionCoercion.Coerce(options);
 }
 
 /// <summary>
@@ -1598,19 +1570,15 @@ public sealed class ThreadMessageBubbleView : MauiView<ThreadMessageBubbleContro
         SetFooter(Model.ModelName, Model.Timestamp);
     }
 
-    // Apply the live message-node content (path-bound mode).
+    // Apply the live message-node content (path-bound mode) via the unit-tested MauiChatProjection.
     private void ApplyNode(MeshNode node)
     {
-        var obj = ToJsonObject(node.Content);
-        if (obj is null) return;
-        var role = Str(obj, "role") ?? "assistant";
-        var author = Str(obj, "authorName") ?? Str(obj, "agentName");
-        ApplyRole(role, author);
-        _body.Text = Str(obj, "text") ?? "";
-        var streaming = string.Equals(Str(obj, "status"), "Streaming", StringComparison.OrdinalIgnoreCase);
-        SetExecuting(streaming);
-        DateTime? ts = obj["timestamp"] is JsonValue tv && tv.TryGetValue<DateTime>(out var t) ? t : null;
-        SetFooter(Str(obj, "modelName"), ts);
+        if (ToJsonElement(node.Content) is not { } content) return;
+        var m = MauiChatProjection.ReadMessage(content);
+        ApplyRole(m.Role, m.AuthorName);
+        _body.Text = m.Text;
+        SetExecuting(m.IsStreaming);
+        SetFooter(m.ModelName, m.Timestamp);
     }
 
     private void ApplyRole(string? role, string? authorName)
@@ -1639,17 +1607,12 @@ public sealed class ThreadMessageBubbleView : MauiView<ThreadMessageBubbleContro
         _footer.IsVisible = parts.Count > 0;
     }
 
-    private static string? Str(JsonObject obj, string key) =>
-        obj[key] is JsonValue v && v.TryGetValue<string>(out var s) ? s : null;
-
-    private JsonObject? ToJsonObject(object? content)
+    private JsonElement? ToJsonElement(object? content)
     {
         if (content is null || Stream is null) return null;
         try
         {
-            return content is JsonElement je
-                ? JsonNode.Parse(je.GetRawText()) as JsonObject
-                : JsonSerializer.SerializeToNode(content, Stream.Hub.JsonSerializerOptions) as JsonObject;
+            return content is JsonElement je ? je : JsonSerializer.SerializeToElement(content, Stream.Hub.JsonSerializerOptions);
         }
         catch { return null; }
     }
@@ -1723,25 +1686,19 @@ public sealed class ThreadChatView : MauiView<ThreadChatControl>
         });
     }
 
+    // Both modes project through the unit-tested MauiChatProjection (same JSON keys as the data-section VM).
     private void ApplyViewModel(JsonElement vm)
     {
-        var threadPath = StrProp(vm, "threadPath") ?? _threadPath;
-        var ids = StrArray(vm, "messages");
-        var pending = StrArray(vm, "pendingMessageTexts");
-        var executing = BoolProp(vm, "isExecuting");
-        var status = StrProp(vm, "executionStatus");
-        RenderState(threadPath, ids, pending, executing, status);
+        var s = MauiChatProjection.ReadThreadViewModel(vm);
+        RenderState(s.ThreadPath ?? _threadPath, s.MessageIds.ToList(), s.PendingTexts.ToList(), s.IsExecuting, s.ExecutionStatus);
     }
 
     private void ApplyThreadNode(MeshNode node)
     {
-        var obj = ToJsonObject(node.Content);
-        var ids = obj?["messages"] is JsonArray arr
-            ? arr.Select(e => e?.GetValue<string>()).Where(s => s is not null).Select(s => s!).ToList()
-            : new List<string>();
-        var executing = obj?["isExecuting"] is JsonValue ev && ev.TryGetValue<bool>(out var b) && b;
-        var status = obj?["executionStatus"] is JsonValue sv && sv.TryGetValue<string>(out var s) ? s : null;
-        RenderState(_threadPath ?? node.Path, ids, new List<string>(), executing, status);
+        var s = ToJsonElement(node.Content) is { } content
+            ? MauiChatProjection.ReadThreadViewModel(content)
+            : new ThreadChatState(null, [], [], false, null);
+        RenderState(_threadPath ?? node.Path, s.MessageIds.ToList(), new List<string>(), s.IsExecuting, s.ExecutionStatus);
     }
 
     private void RenderState(string? threadPath, List<string> ids, List<string> pending, bool executing, string? status)
@@ -1787,31 +1744,13 @@ public sealed class ThreadChatView : MauiView<ThreadChatControl>
         _composer.Text = "";
     }
 
-    private JsonObject? ToJsonObject(object? content)
+    private JsonElement? ToJsonElement(object? content)
     {
         if (content is null || Stream is null) return null;
         try
         {
-            return content is JsonElement je
-                ? JsonNode.Parse(je.GetRawText()) as JsonObject
-                : JsonSerializer.SerializeToNode(content, Stream.Hub.JsonSerializerOptions) as JsonObject;
+            return content is JsonElement je ? je : JsonSerializer.SerializeToElement(content, Stream.Hub.JsonSerializerOptions);
         }
         catch { return null; }
-    }
-
-    private static string? StrProp(JsonElement e, string name) =>
-        e.ValueKind == JsonValueKind.Object && e.TryGetProperty(name, out var p) && p.ValueKind == JsonValueKind.String
-            ? p.GetString() : null;
-
-    private static bool BoolProp(JsonElement e, string name) =>
-        e.ValueKind == JsonValueKind.Object && e.TryGetProperty(name, out var p) && p.ValueKind == JsonValueKind.True;
-
-    private static List<string> StrArray(JsonElement e, string name)
-    {
-        var list = new List<string>();
-        if (e.ValueKind == JsonValueKind.Object && e.TryGetProperty(name, out var arr) && arr.ValueKind == JsonValueKind.Array)
-            foreach (var item in arr.EnumerateArray())
-                if (item.ValueKind == JsonValueKind.String) list.Add(item.GetString()!);
-        return list;
     }
 }
