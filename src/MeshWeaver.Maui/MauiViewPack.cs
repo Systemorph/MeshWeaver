@@ -7,6 +7,7 @@ using MeshWeaver.Graph;
 using MeshWeaver.Maui.Abstractions;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Catalog;
+using MeshWeaver.Layout.Chart;
 using MeshWeaver.Layout.Client;
 using MeshWeaver.Layout.DataGrid;
 using MeshWeaver.Markdown;
@@ -365,6 +366,8 @@ public static class MauiViewPackExtensions
         .Register<RedirectControl, RedirectView>()
         .Register<CodeSampleControl, CodeSampleView>()
         .Register<DialogControl, DialogView>()
+        // Phase 4 — charts via LiveCharts2 (OSS/MIT).
+        .Register<ChartControl, ChartView>()
         // Embedded remote area (e.g. the home page's bottom chat composer) → the existing LayoutAreaView.
         .Register<LayoutAreaControl, LayoutAreaControlView>()
         // Wave 2 — nav + badges.
@@ -1127,6 +1130,86 @@ public sealed class DialogView : MauiView<DialogControl>
             Content = stack,
         };
     }
+}
+
+/// <summary>
+/// A chart → native via LiveCharts2 (MIT, SkiaSharp): maps the framework <see cref="ChartControl"/>'s
+/// typed series ($type line/column/bar/pie/doughnut + data + label) to LiveCharts series. Pie/doughnut →
+/// a <c>PieChart</c> (one slice per labelled value); line/column/bar → a <c>CartesianChart</c> with the
+/// labels as the category X axis. The LiveCharts series share names with the framework's
+/// (<c>LineSeries</c>/<c>ColumnSeries</c>/<c>PieSeries</c>), so they're fully qualified here.
+/// </summary>
+public sealed class ChartView : MauiView<ChartControl>
+{
+    protected override View CreateView()
+    {
+        var labels = CoerceLabels(Model.Labels);
+        var series = CoerceSeries(Model.Series);
+        var height = ToDouble(Model.Height, 300);
+        var width = ToDouble(Model.Width, double.NaN);
+
+        var isPie = series.Count > 0 && series.All(s => s.Type is "pie" or "doughnut");
+        if (isPie)
+        {
+            var s0 = series[0];
+            var slices = new List<LiveChartsCore.ISeries>();
+            for (var i = 0; i < s0.Data.Length; i++)
+                slices.Add(new LiveChartsCore.SkiaSharpView.PieSeries<double>
+                {
+                    Values = new[] { s0.Data[i] },
+                    Name = i < labels.Count ? labels[i] : $"#{i + 1}",
+                });
+            var pie = new LiveChartsCore.SkiaSharpView.Maui.PieChart { Series = slices, HeightRequest = height };
+            if (!double.IsNaN(width)) pie.WidthRequest = width;
+            return pie;
+        }
+
+        var cartSeries = series.Select(s => (LiveChartsCore.ISeries)(s.Type == "line"
+            ? new LiveChartsCore.SkiaSharpView.LineSeries<double> { Values = s.Data, Name = s.Label }
+            : new LiveChartsCore.SkiaSharpView.ColumnSeries<double> { Values = s.Data, Name = s.Label })).ToList();
+        var chart = new LiveChartsCore.SkiaSharpView.Maui.CartesianChart { Series = cartSeries, HeightRequest = height };
+        if (!double.IsNaN(width)) chart.WidthRequest = width;
+        if (labels.Count > 0)
+            chart.XAxes = new[] { new LiveChartsCore.SkiaSharpView.Axis { Labels = labels } };
+        return chart;
+    }
+
+    private static List<string> CoerceLabels(object? labels)
+    {
+        var result = new List<string>();
+        if (labels is JsonElement { ValueKind: JsonValueKind.Array } arr)
+            foreach (var el in arr.EnumerateArray())
+                result.Add(el.ValueKind == JsonValueKind.String ? el.GetString() ?? "" : el.ToString());
+        else if (labels is IEnumerable<string> typed)
+            result.AddRange(typed);
+        return result;
+    }
+
+    // Each series JSON carries its $type discriminator (line/column/bar/pie/...) + data + label.
+    private static List<(string Type, string Label, double[] Data)> CoerceSeries(object? series)
+    {
+        var result = new List<(string, string, double[])>();
+        if (series is not JsonElement { ValueKind: JsonValueKind.Array } arr) return result;
+        foreach (var el in arr.EnumerateArray())
+        {
+            var type = el.TryGetProperty("$type", out var t) && t.ValueKind == JsonValueKind.String ? t.GetString() ?? "column" : "column";
+            var label = el.TryGetProperty("label", out var l) && l.ValueKind == JsonValueKind.String ? l.GetString() ?? "" : "";
+            var data = el.TryGetProperty("data", out var d) && d.ValueKind == JsonValueKind.Array
+                ? d.EnumerateArray().Where(x => x.ValueKind == JsonValueKind.Number).Select(x => x.GetDouble()).ToArray()
+                : Array.Empty<double>();
+            result.Add((type, label, data));
+        }
+        return result;
+    }
+
+    private static double ToDouble(object? v, double dflt) =>
+        v switch
+        {
+            null => dflt,
+            double d => d,
+            JsonElement je when je.ValueKind == JsonValueKind.Number => je.GetDouble(),
+            _ => double.TryParse(v.ToString(), out var p) ? p : dflt,
+        };
 }
 
 /// <summary>Tabular data → a header + rows (read-only this wave; sorting/virtualization later).</summary>

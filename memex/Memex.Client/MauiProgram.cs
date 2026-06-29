@@ -9,6 +9,7 @@ using MeshWeaver.Documentation;
 using MeshWeaver.Layout;
 using MeshWeaver.Maui;
 using MeshWeaver.Graph;
+using LiveChartsCore.SkiaSharpView.Maui;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith;
 using MeshWeaver.Hosting.Persistence.Http;
@@ -60,6 +61,8 @@ public static class MauiProgram
         var builder = MauiApp.CreateBuilder();
         builder
             .UseMauiApp<App>()
+            // LiveCharts2 (MIT, SkiaSharp) — inits the chart engine for the native ChartView (ChartControl).
+            .UseLiveCharts()
             .ConfigureFonts(fonts =>
             {
                 fonts.AddFont("OpenSans-Regular.ttf", "OpenSansRegular");
