@@ -3,6 +3,14 @@
     <ProjectGuid>{a1b2c3d4-e5f6-7890-abcd-ef1234567890}</ProjectGuid>
     <OutputType>Exe</OutputType>
     <ImplicitUsings>enable</ImplicitUsings>
+    <!-- Multi-arch container publish: declare the RID set HERE (project-local), NOT as a global
+         `-p:RuntimeIdentifiers=` on the CLI. The container publish (`-t:PublishContainer
+         -p:ContainerRuntimeIdentifiers=linux-x64;linux-arm64`) requires RuntimeIdentifiers to be
+         declared so the SDK drives a per-RID inner build and assembles an OCI image index. A global
+         `-p:RuntimeIdentifiers` would propagate to every ProjectReference and make the libraries fail
+         `NETSDK1083: RuntimeIdentifier 'linux-x64;linux-arm64' is not recognized`; a project-local
+         property does not propagate, so the libraries are built per-RID with a single valid RID. -->
+    <RuntimeIdentifiers>linux-x64;linux-arm64</RuntimeIdentifiers>
   </PropertyGroup>
 
   <ItemGroup>
