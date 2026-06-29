@@ -657,6 +657,7 @@ public sealed class MauiCollaborativeMarkdownView : MauiView<CollaborativeMarkdo
         if (result.CodeSubmissions is not { Count: > 0 })
         {
             _root.Children.Add(NewHtmlChunk(result.Html));
+            AddCommentsPanel();
             return;
         }
 
@@ -678,6 +679,8 @@ public sealed class MauiCollaborativeMarkdownView : MauiView<CollaborativeMarkdo
             else if (!string.IsNullOrEmpty(html))
                 _root.Children.Add(NewHtmlChunk(html!));
         }
+
+        AddCommentsPanel();
 
         if (_submitted) return;
         _submitted = true;
@@ -714,6 +717,41 @@ public sealed class MauiCollaborativeMarkdownView : MauiView<CollaborativeMarkdo
             onError: ex => MainThread.BeginInvokeOnMainThread(() =>
                 SetAll(pending, $"⚠ Could not start interactive kernel — {ex.GetType().Name}: {ex.Message}",
                     Colors.OrangeRed)));
+    }
+
+    // Read-only comments panel: lists the node's _Comment satellites (author + quoted text + body). Comment
+    // authoring (anchor to a selection, reply, resolve) + tracked-changes accept/reject are refinements.
+    private void AddCommentsPanel()
+    {
+        if (Stream is null || string.IsNullOrEmpty(Model.NodePath)) return;
+        var panel = new VerticalStackLayout { Spacing = 6, Margin = new Thickness(0, 12, 0, 0) };
+        _root.Children.Add(panel);
+        var sub = Stream.Hub.GetQuery("comments:" + Model.NodePath, $"namespace:{Model.NodePath}/_Comment nodeType:Comment")
+            .Take(1)
+            .Subscribe(nodes => MainThread.BeginInvokeOnMainThread(() => RenderComments(panel, nodes)));
+        Disposables.Add(sub);
+    }
+
+    private void RenderComments(VerticalStackLayout panel, IEnumerable<MeshNode> nodes)
+    {
+        if (Stream is null) return;
+        var opts = Stream.Hub.JsonSerializerOptions;
+        var comments = nodes.Select(n => n.ContentAs<MeshWeaver.Mesh.Comment>(opts)).Where(c => c is not null).Select(c => c!).ToList();
+        if (comments.Count == 0) return;
+        panel.Children.Add(new Label { Text = $"Comments ({comments.Count})", FontAttributes = FontAttributes.Bold, FontSize = 13, TextColor = Colors.White });
+        foreach (var c in comments)
+        {
+            var box = new VerticalStackLayout { Spacing = 2 };
+            box.Children.Add(new Label { Text = string.IsNullOrWhiteSpace(c.Author) ? "Someone" : c.Author, FontSize = 11, FontAttributes = FontAttributes.Bold, TextColor = Color.FromArgb("#C0C0C0") });
+            if (!string.IsNullOrWhiteSpace(c.HighlightedText))
+                box.Children.Add(new Label { Text = "“" + c.HighlightedText + "”", FontSize = 11, FontAttributes = FontAttributes.Italic, TextColor = Color.FromArgb("#9A9A9A") });
+            box.Children.Add(new Label { Text = c.Text, FontSize = 12, TextColor = Colors.White, LineBreakMode = LineBreakMode.WordWrap });
+            panel.Children.Add(new Border
+            {
+                Padding = 8, BackgroundColor = Color.FromArgb("#2A2A2C"), StrokeThickness = 0,
+                StrokeShape = new Microsoft.Maui.Controls.Shapes.RoundRectangle { CornerRadius = 8 }, Content = box,
+            });
+        }
     }
 
     // A WebView chunk in MarkdownView's dark/sans shell, auto-sized to its content (JS scrollHeight).
