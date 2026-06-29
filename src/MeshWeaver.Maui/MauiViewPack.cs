@@ -429,8 +429,16 @@ public sealed class ContainerView : MauiView
             foreach (var named in container.Areas)
                 layout.Children.Add(Renderer.RenderArea(Stream, named.Area.ToString()!));
 
-        // A CardSkin wraps the container in a bordered card (no-op when absent → default unchanged).
-        return Control.Skins.OfType<CardSkin>().Any() ? Card(layout) : layout;
+        // Skinned wrappers (each a no-op when its skin is absent → default layout unchanged).
+        if (Control is NavMenuControl nav)   // a fixed-width sidebar with a subtle panel background
+        {
+            layout.WidthRequest = NavWidth(nav.Skin?.Width);
+            return Region(layout);
+        }
+        if (Control.Skins.OfType<CardSkin>().Any()) return Card(layout);
+        if (Control.Skins.OfType<HeaderSkin>().Any() || Control.Skins.OfType<FooterSkin>().Any())
+            return Region(layout);   // header/footer → a subtle full-width region band
+        return layout;
     }
 
     private View BuildSplitter(SplitterControl splitter, IContainerControl container)
@@ -454,6 +462,19 @@ public sealed class ContainerView : MauiView
         Padding = 12, BackgroundColor = Color.FromArgb("#2A2A2C"), StrokeThickness = 0,
         StrokeShape = new Microsoft.Maui.Controls.Shapes.RoundRectangle { CornerRadius = 10 },
         Content = content,
+    };
+
+    // A subtle full-width region band — header / footer / nav-menu panel chrome.
+    private static View Region(View content) => new Border
+    {
+        Padding = new Thickness(8, 6), BackgroundColor = Color.FromArgb("#1A1A1C"), StrokeThickness = 0, Content = content,
+    };
+
+    private static double NavWidth(object? width) => width switch
+    {
+        int i => i,
+        double d => d,
+        _ => double.TryParse(width?.ToString(), out var px) ? px : 250,
     };
 
     // Orientation rides the skin as object? (an enum at author time, a JSON string after stream round-trip).
