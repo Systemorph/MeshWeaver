@@ -1630,25 +1630,73 @@ public sealed class GoogleMapView : MauiView<GoogleMapControl>
 /// <summary>Tabular data → a header + rows (read-only this wave; sorting/virtualization later).</summary>
 public sealed class DataGridView : MauiView<DataGridControl>
 {
-    private VerticalStackLayout _root = null!;
     private readonly List<PropertyColumnControl> _columns = new();
+    private ContentView _header = null!;
+    private VerticalStackLayout _body = null!;
+    private Entry _filter = null!;
+    private List<JsonElement> _rows = new();
+    private int _sortCol = -1;
+    private bool _sortDesc;
 
     protected override View CreateView()
     {
         _columns.AddRange(Model.Columns.OfType<PropertyColumnControl>());
-        _root = new VerticalStackLayout { Spacing = 4 };
-        _root.Children.Add(Row(_columns.Select(c => c.Title?.ToString() ?? c.Property ?? "").ToArray(), bold: true));
-        return _root;
+        _filter = new Entry { Placeholder = "Filter…", FontSize = 12, TextColor = Colors.White };
+        _filter.TextChanged += (_, _) => Rebuild();
+        _header = new ContentView { Content = HeaderRow() };
+        _body = new VerticalStackLayout { Spacing = 4 };
+        return new VerticalStackLayout { Spacing = 4, Children = { _filter, _header, _body } };
     }
 
-    protected override void Bind() => Bind<JsonElement>(Model.Data, RenderRows);
-
-    private void RenderRows(JsonElement rows)
+    protected override void Bind() => Bind<JsonElement>(Model.Data, rows =>
     {
-        while (_root.Children.Count > 1) _root.Children.RemoveAt(1);   // keep the header row
-        if (rows.ValueKind != JsonValueKind.Array) return;
-        foreach (var row in rows.EnumerateArray())
-            _root.Children.Add(Row(_columns.Select(c => CellText(row, c.Property)).ToArray(), bold: false));
+        _rows = rows.ValueKind == JsonValueKind.Array ? rows.EnumerateArray().ToList() : new();
+        Rebuild();
+    });
+
+    // Header cells are tappable → sort by that column, toggling asc/desc; an arrow marks the sort key.
+    private View HeaderRow()
+    {
+        var h = new HorizontalStackLayout { Spacing = 12 };
+        for (var i = 0; i < _columns.Count; i++)
+        {
+            var col = i;
+            var arrow = _sortCol == col ? (_sortDesc ? " ▼" : " ▲") : "";
+            var lbl = new Label
+            {
+                Text = (_columns[i].Title?.ToString() ?? _columns[i].Property ?? "") + arrow,
+                WidthRequest = 120, FontAttributes = FontAttributes.Bold, TextColor = Colors.White,
+            };
+            var tap = new TapGestureRecognizer();
+            tap.Tapped += (_, _) =>
+            {
+                if (_sortCol == col) _sortDesc = !_sortDesc; else { _sortCol = col; _sortDesc = false; }
+                Rebuild();
+            };
+            lbl.GestureRecognizers.Add(tap);
+            h.Children.Add(lbl);
+        }
+        return h;
+    }
+
+    private void Rebuild()
+    {
+        if (_body is null) return;
+        _header.Content = HeaderRow();   // refresh the sort arrow
+        _body.Children.Clear();
+        IEnumerable<JsonElement> rows = _rows;
+        var filter = _filter.Text?.Trim() ?? "";
+        if (filter.Length > 0)
+            rows = rows.Where(r => _columns.Any(c => CellText(r, c.Property).Contains(filter, StringComparison.OrdinalIgnoreCase)));
+        if (_sortCol >= 0 && _sortCol < _columns.Count)
+        {
+            var prop = _columns[_sortCol].Property;
+            rows = _sortDesc
+                ? rows.OrderByDescending(r => CellText(r, prop), DataGridCellComparer.Instance)
+                : rows.OrderBy(r => CellText(r, prop), DataGridCellComparer.Instance);
+        }
+        foreach (var row in rows)
+            _body.Children.Add(Row(_columns.Select(c => CellText(row, c.Property)).ToArray(), bold: false));
     }
 
     private static string CellText(JsonElement row, string? property)
@@ -1671,6 +1719,20 @@ public sealed class DataGridView : MauiView<DataGridControl>
                 FontAttributes = bold ? FontAttributes.Bold : FontAttributes.None,
             });
         return h;
+    }
+}
+
+/// <summary>Sorts grid cells numerically when both values parse as numbers, else case-insensitively —
+/// so a "Count" column sorts 2,10,100 not 10,100,2.</summary>
+internal sealed class DataGridCellComparer : IComparer<string>
+{
+    public static readonly DataGridCellComparer Instance = new();
+    public int Compare(string? x, string? y)
+    {
+        if (double.TryParse(x, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var nx)
+            && double.TryParse(y, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var ny))
+            return nx.CompareTo(ny);
+        return string.Compare(x, y, StringComparison.OrdinalIgnoreCase);
     }
 }
 
