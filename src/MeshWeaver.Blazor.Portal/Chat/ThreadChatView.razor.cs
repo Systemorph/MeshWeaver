@@ -1876,6 +1876,15 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                 break;
             }
         }
+        // 🎯 The user's home is addressed `User/{id}` (the User catalog entry), but a thread started
+        // there belongs in the OWNER's writable partition `{id}` — NEVER the system-managed `User`
+        // partition, which the user lacks Thread permission on (StartThread there is denied → no thread
+        // → the side-panel chat tears down, and on Postgres the `user` schema may not even exist → 42P01).
+        // Map `User/{id}[/…]` → `{id}` so the thread anchors in the user's own partition.
+        var ownerSegments = normalized.Split('/');
+        if (ownerSegments.Length >= 2 && string.Equals(ownerSegments[0], "User", StringComparison.OrdinalIgnoreCase))
+            normalized = ownerSegments[1];
+
         // A rogue/reserved ROUTE partition (login, welcome, settings, …) is NOT a real node — never use
         // it as a chat context. Reading it sends a GetDataRequest to a hub that never opens its init
         // gates (DataContextInit/MeshNodeInit) and the read hangs >30s. Treat a reserved context as none.
