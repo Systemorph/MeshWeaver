@@ -40,8 +40,15 @@ public sealed class AcrTagLister(SelfUpdateOptions options, ILogger<AcrTagLister
 
     private static TokenCredential CreateCredential()
     {
-        // Mirror SchemaHelpers: pin to AZURE_CLIENT_ID when present (workload/managed identity on
-        // AKS), else fall back to the full DefaultAzureCredential chain for local/dev.
+        // AKS WORKLOAD IDENTITY (the deployed shape): the workload-identity webhook injects
+        // AZURE_FEDERATED_TOKEN_FILE (+ AZURE_CLIENT_ID / AZURE_TENANT_ID / AZURE_AUTHORITY_HOST). The
+        // portal's UAMI is FEDERATED, not assigned to the node VMSS, so ManagedIdentityCredential (IMDS)
+        // gets NO token — only WorkloadIdentityCredential exchanges the projected service-account token
+        // for an AAD token. Detect WI by the token file and prefer it. Fall back to a VMSS/IMDS
+        // user-assigned MI when only AZURE_CLIENT_ID is set, else the full dev chain (local/non-Azure,
+        // where the AAD acquisition simply fails and the poller logs + skips).
+        if (!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("AZURE_FEDERATED_TOKEN_FILE")))
+            return new WorkloadIdentityCredential();
         var clientId = Environment.GetEnvironmentVariable("AZURE_CLIENT_ID");
         return string.IsNullOrEmpty(clientId)
             ? new DefaultAzureCredential()
