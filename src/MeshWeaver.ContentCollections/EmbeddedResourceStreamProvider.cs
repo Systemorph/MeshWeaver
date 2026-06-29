@@ -1,15 +1,24 @@
 ﻿using System.Collections.Immutable;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 
 namespace MeshWeaver.ContentCollections;
 
+/// <summary>
+/// Read-only <see cref="IStreamProvider"/> that serves content from an assembly's embedded
+/// resources, mapping slash-style paths to resource names under a configured base prefix.
+/// </summary>
+/// <param name="assembly">The assembly whose embedded resources are served.</param>
+/// <param name="basePath">The resource-name prefix that scopes the collection's files.</param>
 public class EmbeddedResourceStreamProvider(Assembly assembly, string basePath) : IStreamProvider
 {
     private readonly string basePath = basePath.EndsWith('.') ? basePath : basePath + '.';
     private ImmutableDictionary<string, string> resourcePaths = ImmutableDictionary<string, string>.Empty;
     private bool initialized;
 
+    /// <inheritdoc />
     public string ProviderType => SourceType;
+    /// <summary>The source-type discriminator for embedded-resource collections.</summary>
     public const string SourceType = "EmbeddedResource";
 
     private void EnsureInitialized()
@@ -38,6 +47,12 @@ public class EmbeddedResourceStreamProvider(Assembly assembly, string basePath) 
         return withoutPrefix.Replace('.', '/');
     }
 
+    /// <summary>
+    /// Resolves the manifest resource name for a slash-style path, trying a <c>.md</c> match as a
+    /// fallback. Returns <c>null</c> when no matching resource exists.
+    /// </summary>
+    /// <param name="path">The slash-style file path within the collection.</param>
+    /// <returns>The embedded resource name, or <c>null</c> if not found.</returns>
     public string? GetResourceName(string path)
     {
         EnsureInitialized();
@@ -62,6 +77,7 @@ public class EmbeddedResourceStreamProvider(Assembly assembly, string basePath) 
         return null;
     }
 
+    /// <inheritdoc />
     public Task<Stream?> GetStreamAsync(string reference, CancellationToken cancellationToken = default)
     {
         // Convert path (with /) to resource name (with .)
@@ -78,6 +94,7 @@ public class EmbeddedResourceStreamProvider(Assembly assembly, string basePath) 
         return basePath + normalizedPath;
     }
 
+    /// <inheritdoc />
     public Task<(Stream? Stream, string Path, DateTime LastModified)> GetStreamWithMetadataAsync(string path, CancellationToken cancellationToken = default)
     {
         EnsureInitialized();
@@ -106,11 +123,13 @@ public class EmbeddedResourceStreamProvider(Assembly assembly, string basePath) 
         return Task.FromResult<(Stream? Stream, string Path, DateTime LastModified)>(default);
     }
 
+    /// <inheritdoc />
     public Task WriteStreamAsync(string reference, Stream content, CancellationToken cancellationToken = default)
     {
         throw new NotSupportedException("Embedded resource collections are read-only");
     }
 
+    /// <inheritdoc />
     public IAsyncEnumerable<(Stream? Stream, string Path, DateTime LastModified)> GetStreamsAsync(Func<string, bool> filter, CancellationToken cancellationToken = default)
     {
         EnsureInitialized();
@@ -128,7 +147,10 @@ public class EmbeddedResourceStreamProvider(Assembly assembly, string basePath) 
             .ToAsyncEnumerable();
     }
 
-    public Task<IReadOnlyCollection<FolderItem>> GetFoldersAsync(string path)
+    /// <inheritdoc />
+    public async IAsyncEnumerable<FolderItem> GetFolders(
+        string path,
+        [EnumeratorCancellation] CancellationToken ct = default)
     {
         EnsureInitialized();
         var normalizedPath = path.TrimStart('/').Replace('/', '.');
@@ -137,43 +159,48 @@ public class EmbeddedResourceStreamProvider(Assembly assembly, string basePath) 
             .Select(p => p[(normalizedPath.Length == 0 ? 0 : normalizedPath.Length + 1)..])
             .Where(p => p.Contains('.'))
             .Select(p => p[..p.IndexOf('.')])
-            .Distinct()
-            .Select(name => new FolderItem($"{path.TrimEnd('/')}/{name}", name, 0))
-            .ToArray();
-
-        return Task.FromResult<IReadOnlyCollection<FolderItem>>(folders);
+            .Distinct();
+        foreach (var name in folders)
+        {
+            ct.ThrowIfCancellationRequested();
+            yield return new FolderItem($"{path.TrimEnd('/')}/{name}", name, 0);
+        }
     }
 
-    public Task<IReadOnlyCollection<FileItem>> GetFilesAsync(string path)
+    /// <inheritdoc />
+    public async IAsyncEnumerable<FileItem> GetFiles(
+        string path,
+        [EnumeratorCancellation] CancellationToken ct = default)
     {
         EnsureInitialized();
-        var normalizedPath = path.TrimStart('/').Replace('/', '.');
-        var files = resourcePaths.Keys
-            .Where(p => p.StartsWith(normalizedPath, StringComparison.OrdinalIgnoreCase))
-            .Where(p =>
-            {
-                var relativePath = p[(normalizedPath.Length == 0 ? 0 : normalizedPath.Length + 1)..];
-                return !relativePath.Contains('.') || relativePath.EndsWith(".md", StringComparison.OrdinalIgnoreCase);
-            })
-            .Select(p =>
-            {
-                var fileName = p.Split('.').Last();
-                if (p.EndsWith(".md", StringComparison.OrdinalIgnoreCase))
-                {
-                    fileName += ".md";
-                }
-                return new FileItem($"{path.TrimEnd('/')}/{fileName}", fileName, DateTime.UtcNow);
-            })
-            .ToArray();
-
-        return Task.FromResult<IReadOnlyCollection<FileItem>>(files);
+        // resourcePaths keys are already clean slash-paths with extension (see ExtractPath), e.g.
+        // "DataMesh/UnifiedPath/logo.svg". Match by the slash-path prefix (NOT a dot-path — the old
+        // code converted '/'→'.' and never matched the slash keys, so only the .md fallback ever
+        // surfaced, and even that yielded a mangled "md.md" name). Enumerate ANY direct-child file of
+        // any extension under the path — mirrors FileSystemStreamProvider.GetFiles (one folder level,
+        // no recursion).
+        var prefix = path.Trim('/');
+        var prefixWithSlash = prefix.Length == 0 ? string.Empty : prefix + "/";
+        foreach (var key in resourcePaths.Keys)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (prefixWithSlash.Length > 0
+                && !key.StartsWith(prefixWithSlash, StringComparison.OrdinalIgnoreCase))
+                continue;
+            var relative = prefixWithSlash.Length == 0 ? key : key[prefixWithSlash.Length..];
+            if (relative.Length == 0 || relative.Contains('/'))
+                continue; // nested under a sub-folder — not a direct child of `path`
+            yield return new FileItem(key, relative, DateTime.UtcNow);
+        }
     }
 
+    /// <inheritdoc />
     public Task SaveFileAsync(string path, string fileName, Stream content, CancellationToken cancellationToken = default)
     {
         throw new NotSupportedException("Embedded resource collections are read-only");
     }
 
+    /// <inheritdoc />
     public Task CreateFolderAsync(string folderPath)
     {
         if (string.IsNullOrEmpty(folderPath) || folderPath == "/")
@@ -181,22 +208,26 @@ public class EmbeddedResourceStreamProvider(Assembly assembly, string basePath) 
         throw new NotSupportedException("Embedded resource collections are read-only");
     }
 
+    /// <inheritdoc />
     public Task DeleteFolderAsync(string folderPath)
     {
         throw new NotSupportedException("Embedded resource collections are read-only");
     }
 
+    /// <inheritdoc />
     public Task DeleteFileAsync(string filePath)
     {
         throw new NotSupportedException("Embedded resource collections are read-only");
     }
 
+    /// <inheritdoc />
     public IDisposable? AttachMonitor(Action<string> onChanged)
     {
         // Embedded resources don't change, so no monitoring needed
         return null;
     }
 
+    /// <inheritdoc />
     public async Task<ImmutableDictionary<string, Author>> LoadAuthorsAsync(CancellationToken cancellationToken = default)
     {
         try

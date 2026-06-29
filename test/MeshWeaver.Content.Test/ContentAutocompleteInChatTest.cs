@@ -2,7 +2,7 @@ using System;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
-using FluentAssertions;
+using MeshWeaver.Reactive;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.ContentCollections.Completion;
 using MeshWeaver.Data.Completion;
@@ -28,6 +28,9 @@ namespace MeshWeaver.Content.Test;
 [Collection("SamplesGraphData")]
 public class ContentAutocompleteInChatTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
+    /// <summary>Share Mesh/SP across [Fact]s — see MonolithMeshTestBase.ShareMeshAcrossTests.</summary>
+    protected override bool ShareMeshAcrossTests => true;
+
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
         var graphPath = TestPaths.SamplesGraph;
@@ -47,7 +50,12 @@ public class ContentAutocompleteInChatTest(ITestOutputHelper output) : MonolithM
         {
             Name = "storage",
             SourceType = "FileSystem",
-            BasePath = graphPath
+            BasePath = graphPath,
+            // Per-node mapped collections (MapContentCollection below) inherit
+            // ExposeInChildren from the source; storage defaults to false since
+            // the wire-default flip, so set it explicitly here so the autocomplete
+            // tests' GetAllCollectionConfigs walks see the storage view.
+            ExposeInChildren = true
         };
 
         return builder
@@ -107,7 +115,7 @@ public class ContentAutocompleteInChatTest(ITestOutputHelper output) : MonolithM
         var collection = await contentService.GetCollectionAsync(firstConfig.Name);
         collection.Should().NotBeNull();
 
-        var files = await collection!.GetFilesAsync("/");
+        var files = await collection!.GetFiles("/").ToListAsync(TestContext.Current.CancellationToken);
         Output.WriteLine($"Collection '{collection.Collection}' has {files.Count} files:");
         foreach (var f in files.Take(10))
             Output.WriteLine($"  - {f.Path} ({f.Name})");
@@ -134,7 +142,11 @@ public class ContentAutocompleteInChatTest(ITestOutputHelper output) : MonolithM
             return;
         }
 
-        var items = await contentProvider.GetItemsAsync("@").ToListAsync();
+        // GetItems is a snapshot stream; the settled (last) snapshot is the complete item set.
+        var snapshots = await contentProvider.GetItems("@")
+            .ToAsyncEnumerableSequence(TestContext.Current.CancellationToken)
+            .ToListAsync(TestContext.Current.CancellationToken);
+        var items = snapshots.LastOrDefault() ?? (IReadOnlyCollection<AutocompleteItem>)Array.Empty<AutocompleteItem>();
         Output.WriteLine($"ContentAutocompleteProvider returned {items.Count} items:");
         foreach (var item in items.Take(10))
             Output.WriteLine($"  - [{item.Kind}] {item.Label}: {item.InsertText}");
@@ -157,14 +169,14 @@ public class ContentAutocompleteInChatTest(ITestOutputHelper output) : MonolithM
         var collection = await contentService.GetCollectionAsync(firstConfig.Name);
         collection.Should().NotBeNull();
 
-        var folders = await collection!.GetFoldersAsync("/");
+        var folders = await collection!.GetFolders("/").ToListAsync(TestContext.Current.CancellationToken);
         Output.WriteLine($"Root folders in '{collection.Collection}': {string.Join(", ", folders.Select(f => f.Name))}");
 
         // If there are folders, verify we can browse into them
         if (folders.Count > 0)
         {
             var firstFolder = folders.First();
-            var subItems = await collection.GetCollectionItemsAsync($"/{firstFolder.Name}");
+            var subItems = await collection.GetCollectionItems($"/{firstFolder.Name}").ToListAsync(TestContext.Current.CancellationToken);
             Output.WriteLine($"Items in '{firstFolder.Name}': {subItems.Count}");
             subItems.Should().NotBeNull();
         }
@@ -198,8 +210,8 @@ public class ContentAutocompleteInChatTest(ITestOutputHelper output) : MonolithM
         collection.Should().NotBeNull();
 
         // After user selects "content:", they should see files and/or folders
-        var files = await collection!.GetFilesAsync("/");
-        var folders = await collection.GetFoldersAsync("/");
+        var files = await collection!.GetFiles("/").ToListAsync(TestContext.Current.CancellationToken);
+        var folders = await collection.GetFolders("/").ToListAsync(TestContext.Current.CancellationToken);
 
         Output.WriteLine($"Items after '{firstConfig.Name}:' -> {files.Count} files, {folders.Count} folders");
         (files.Count + folders.Count).Should().BeGreaterThan(0,
@@ -219,7 +231,7 @@ public class ContentAutocompleteInChatTest(ITestOutputHelper output) : MonolithM
             var collection = await contentService.GetCollectionAsync(config.Name);
             if (collection == null) continue;
 
-            var files = await collection.GetFilesAsync("/");
+            var files = await collection.GetFiles("/").ToListAsync(TestContext.Current.CancellationToken);
             foreach (var file in files.Take(5))
             {
                 var filePath = file.Path.TrimStart('/');
@@ -245,7 +257,7 @@ public class ContentAutocompleteInChatTest(ITestOutputHelper output) : MonolithM
         var collection = await contentService.GetCollectionAsync(firstConfig.Name);
         collection.Should().NotBeNull();
 
-        var allFiles = await collection!.GetFilesAsync("/");
+        var allFiles = await collection!.GetFiles("/").ToListAsync(TestContext.Current.CancellationToken);
         if (allFiles.Count == 0)
         {
             Output.WriteLine("No files in collection — skipping filter test");
@@ -263,7 +275,7 @@ public class ContentAutocompleteInChatTest(ITestOutputHelper output) : MonolithM
         Output.WriteLine($"Filter '{filterText}': {expectedMatches.Count} matches out of {allFiles.Count} files");
         expectedMatches.Should().NotBeEmpty($"filter '{filterText}' should match at least the original file");
         expectedMatches.Should().AllSatisfy(f =>
-            f.Name.Should().Contain(filterText, Exactly.Once(),
+            f.Name.Should().Contain(filterText,
                 $"each match should contain the filter text '{filterText}'"));
     }
 
@@ -276,7 +288,7 @@ public class ContentAutocompleteInChatTest(ITestOutputHelper output) : MonolithM
         var collection = await contentService.GetCollectionAsync(firstConfig.Name);
         collection.Should().NotBeNull();
 
-        var rootFolders = await collection!.GetFoldersAsync("/");
+        var rootFolders = await collection!.GetFolders("/").ToListAsync(TestContext.Current.CancellationToken);
         if (rootFolders.Count == 0)
         {
             Output.WriteLine("No folders in root — skipping scoping test");
@@ -284,8 +296,8 @@ public class ContentAutocompleteInChatTest(ITestOutputHelper output) : MonolithM
         }
 
         var folder = rootFolders.First();
-        var subFiles = await collection.GetFilesAsync($"/{folder.Name}");
-        var subFolders = await collection.GetFoldersAsync($"/{folder.Name}");
+        var subFiles = await collection.GetFiles($"/{folder.Name}").ToListAsync(TestContext.Current.CancellationToken);
+        var subFolders = await collection.GetFolders($"/{folder.Name}").ToListAsync(TestContext.Current.CancellationToken);
 
         Output.WriteLine($"Browsing '{folder.Name}/': {subFiles.Count} files, {subFolders.Count} folders");
 

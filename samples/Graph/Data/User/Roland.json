@@ -1,14 +1,1 @@
-{
-  "id": "Roland",
-  "namespace": "User",
-  "name": "Roland Buergi",
-  "nodeType": "User",
-  "icon": "/static/NodeTypeIcons/person.svg",
-  "isPersistent": true,
-  "content": {
-    "$type": "User",
-    "email": "rbuergi@systemorph.com",
-    "bio": "Founder of Systemorph and creator of MeshWeaver.",
-    "pinnedPaths": ["Doc"]
-  }
-}
+{"$type":"MeshNode","id":"Roland","namespace":"User","path":"User/Roland","mainNode":"User/Roland","name":"Roland Buergi","nodeType":"User","icon":"/static/NodeTypeIcons/person.svg","lastModified":"2026-06-23T15:47:57.2002006+00:00","version":1,"state":"Active","content":{"$type":"User","email":"rbuergi@systemorph.com","bio":"Founder of Systemorph and creator of MeshWeaver.","pinnedPaths":["Doc"]}}

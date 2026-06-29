@@ -1,6 +1,7 @@
-using System.Linq;
+﻿using System.Linq;
 using System.Threading.Tasks;
-using FluentAssertions;
+using System.Reactive.Threading.Tasks;
+using System.Reactive.Linq;
 using MeshWeaver.AI;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
@@ -27,23 +28,30 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
 
     private async Task EnsureNodesCreated()
     {
-        var existingPricing = await MeshQuery.QueryAsync<MeshNode>("path:pricing").FirstOrDefaultAsync();
+        // `pricing` / `app` are TOP-LEVEL nodes = partition roots. A Markdown node does not
+        // own a partition (only User/Space do), so PartitionWriteGuardValidator Rule 3 rejects
+        // a non-System caller creating one ("the root namespace is reserved for partitions").
+        // Seed via SeedTopLevel (System is the legitimate partition provisioner) — the same way
+        // onboarding/migration provision partitions in production.
+        var existingPricing = await ReadNode("pricing").Should().Emit();
         if (existingPricing == null)
         {
-            await NodeFactory.CreateNodeAsync(MeshNode.FromPath(PricingPath) with
+            await SeedTopLevel(MeshNode.FromPath(PricingPath) with
             {
                 Name = "Pricing",
                 Icon = "Calculator",
+                NodeType = "Markdown",
             });
         }
 
-        var existingApp = await MeshQuery.QueryAsync<MeshNode>("path:app").FirstOrDefaultAsync();
+        var existingApp = await ReadNode("app").Should().Emit();
         if (existingApp == null)
         {
-            await NodeFactory.CreateNodeAsync(MeshNode.FromPath(AppPath) with
+            await SeedTopLevel(MeshNode.FromPath(AppPath) with
             {
                 Name = "Applications",
                 Icon = "App",
+                NodeType = "Markdown",
             });
         }
     }
@@ -54,7 +62,7 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
     public async Task ResolvePath_SingleSegmentNode_MatchesAndReturnsRemainder()
     {
         await EnsureNodesCreated();
-        var resolution = await PathResolver.ResolvePathAsync("pricing/Microsoft/2026/Overview/details");
+        var resolution = await PathResolver.ResolvePath("pricing/Microsoft/2026/Overview/details").Should().Emit();
 
         resolution.Should().NotBeNull();
         resolution!.Prefix.Should().Be("pricing");
@@ -65,7 +73,7 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
     public async Task ResolvePath_AppPath_ReturnsPrefixAndRemainder()
     {
         await EnsureNodesCreated();
-        var resolution = await PathResolver.ResolvePathAsync("app/Todo/Dashboard/123");
+        var resolution = await PathResolver.ResolvePath("app/Todo/Dashboard/123").Should().Emit();
 
         resolution.Should().NotBeNull();
         resolution!.Prefix.Should().Be("app");
@@ -76,7 +84,7 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
     public async Task ResolvePath_ExactMatch_ReturnsNullRemainder()
     {
         await EnsureNodesCreated();
-        var resolution = await PathResolver.ResolvePathAsync("pricing");
+        var resolution = await PathResolver.ResolvePath("pricing").Should().Emit();
 
         resolution.Should().NotBeNull();
         resolution!.Prefix.Should().Be("pricing");
@@ -87,7 +95,7 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
     public async Task ResolvePath_WithLeadingSlash_ParsesCorrectly()
     {
         await EnsureNodesCreated();
-        var resolution = await PathResolver.ResolvePathAsync("/pricing/Microsoft/2026");
+        var resolution = await PathResolver.ResolvePath("/pricing/Microsoft/2026").Should().Emit();
 
         resolution.Should().NotBeNull();
         resolution!.Prefix.Should().Be("pricing");
@@ -98,7 +106,7 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
     public async Task ResolvePath_UnknownPath_ReturnsNull()
     {
         await EnsureNodesCreated();
-        var resolution = await PathResolver.ResolvePathAsync("unknown/test/path");
+        var resolution = await PathResolver.ResolvePath("unknown/test/path").Should().Emit();
 
         resolution.Should().BeNull();
     }
@@ -115,7 +123,7 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
         string path, string expectedPrefix, string? expectedRemainder)
     {
         await EnsureNodesCreated();
-        var resolution = await PathResolver.ResolvePathAsync(path);
+        var resolution = await PathResolver.ResolvePath(path).Should().Emit();
 
         resolution.Should().NotBeNull();
         resolution!.Prefix.Should().Be(expectedPrefix);
@@ -125,7 +133,7 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
     [Fact(Timeout = 10000)]
     public async Task ResolvePath_EmptyPath_ReturnsNull()
     {
-        var resolution = await PathResolver.ResolvePathAsync("");
+        var resolution = await PathResolver.ResolvePath("").Should().Emit();
 
         resolution.Should().BeNull();
     }
@@ -133,9 +141,56 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
     [Fact(Timeout = 10000)]
     public async Task ResolvePath_NullPath_ReturnsNull()
     {
-        var resolution = await PathResolver.ResolvePathAsync(null!);
+        var resolution = await PathResolver.ResolvePath(null!).Should().Emit();
 
         resolution.Should().BeNull();
+    }
+
+    [Fact(Timeout = 10000)]
+    public async Task ResolvePath_SegmentWithSpace_ResolvesToExactNode()
+    {
+        await EnsureNodesCreated();
+        // Content and files commonly have spaces in their names → spaces in the path
+        // (e.g. "Agentic Pension", "Annual Report.pdf"). The resolver builds a
+        // `path:{prefixes}` query; a parser that treats a space as a token separator
+        // splits "pricing/Annual Report" into `path:pricing/Annual` + free-text and
+        // never matches the node — the "trouble loading paths with spaces" symptom.
+        // Child under the System-seeded `pricing` partition — seed via System too (the partition
+        // owner granted no Write to the test's Admin identity; fixtures only need to EXIST so the
+        // System-impersonated resolver query can find them).
+        await SeedTopLevel(MeshNode.FromPath("pricing/Annual Report") with
+        {
+            Name = "Annual Report",
+            NodeType = "Markdown",
+        });
+
+        var resolution = await PathResolver.ResolvePath("pricing/Annual Report").Should().Emit();
+
+        resolution.Should().NotBeNull("a path segment containing a space must resolve");
+        resolution!.Prefix.Should().Be("pricing/Annual Report",
+            "the full space-containing path is an exact node — it must not break on the space and fall back to 'pricing'");
+        resolution.Remainder.Should().BeNull();
+    }
+
+    [Fact(Timeout = 10000)]
+    public async Task ResolvePath_SpaceSegmentWithAreaSuffix_FallsBackToNode()
+    {
+        await EnsureNodesCreated();
+        // Child under the System-seeded `pricing` partition — seed via System too (the partition
+        // owner granted no Write to the test's Admin identity; fixtures only need to EXIST so the
+        // System-impersonated resolver query can find them).
+        await SeedTopLevel(MeshNode.FromPath("pricing/Annual Report") with
+        {
+            Name = "Annual Report",
+            NodeType = "Markdown",
+        });
+
+        // /pricing/Annual Report/Overview → node "pricing/Annual Report" + area "Overview"
+        var resolution = await PathResolver.ResolvePath("pricing/Annual Report/Overview").Should().Emit();
+
+        resolution.Should().NotBeNull();
+        resolution!.Prefix.Should().Be("pricing/Annual Report");
+        resolution.Remainder.Should().Be("Overview");
     }
 
     #endregion
@@ -146,7 +201,7 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
     public async Task ResolvePath_MultipleNodes_HighestScoreWins()
     {
         await EnsureNodesCreated();
-        var resolution = await PathResolver.ResolvePathAsync("pricing/Microsoft/2026");
+        var resolution = await PathResolver.ResolvePath("pricing/Microsoft/2026").Should().Emit();
 
         resolution.Should().NotBeNull();
         resolution!.Prefix.Should().Be("pricing");
@@ -158,7 +213,7 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
     {
         await EnsureNodesCreated();
         // Persistence paths may be case-sensitive
-        var resolution = await PathResolver.ResolvePathAsync("PRICING/Microsoft/2026");
+        var resolution = await PathResolver.ResolvePath("PRICING/Microsoft/2026").Should().Emit();
 
         // Case-insensitive match depends on persistence backend
         if (resolution != null)
@@ -189,7 +244,7 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
                 Messages = ["msg1"]
             }
         };
-        await NodeFactory.CreateNodeAsync(threadNode);
+        await NodeFactory.CreateNode(threadNode).Should().Emit();
 
         // Create ThreadMessage child node
         var msgNode = new MeshNode("msg1", threadPath)
@@ -204,10 +259,10 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
                 Type = ThreadMessageType.ExecutedInput
             }
         };
-        await NodeFactory.CreateNodeAsync(msgNode);
+        await NodeFactory.CreateNode(msgNode).Should().Emit();
 
-        // Resolve the ThreadMessage path — should return the full message path, no remainder
-        var resolution = await PathResolver.ResolvePathAsync($"{threadPath}/msg1");
+        // Resolve the ThreadMessage path â€” should return the full message path, no remainder
+        var resolution = await PathResolver.ResolvePath($"{threadPath}/msg1").Should().Emit();
 
         resolution.Should().NotBeNull("ThreadMessage node exists at {0}/msg1", threadPath);
         resolution!.Prefix.Should().Be($"{threadPath}/msg1",
@@ -232,7 +287,7 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
                 Messages = ["m1"]
             }
         };
-        await NodeFactory.CreateNodeAsync(threadNode);
+        await NodeFactory.CreateNode(threadNode).Should().Emit();
 
         var msgNode = new MeshNode("m1", threadPath)
         {
@@ -246,10 +301,10 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
                 Type = ThreadMessageType.AgentResponse
             }
         };
-        await NodeFactory.CreateNodeAsync(msgNode);
+        await NodeFactory.CreateNode(msgNode).Should().Emit();
 
-        // Resolve the Thread path — should match the Thread node exactly
-        var resolution = await PathResolver.ResolvePathAsync(threadPath);
+        // Resolve the Thread path â€” should match the Thread node exactly
+        var resolution = await PathResolver.ResolvePath(threadPath).Should().Emit();
 
         resolution.Should().NotBeNull();
         resolution!.Prefix.Should().Be(threadPath);
@@ -258,3 +313,4 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
 
     #endregion
 }
+

@@ -1,7 +1,6 @@
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
-using FluentAssertions;
 using MeshWeaver.Mesh;
 using Xunit;
 
@@ -169,7 +168,7 @@ public class CrossSchemaStoredProcTest
     [Fact]
     public void RoutingHints_NoPath_NullPartition_CrossSchemaFires()
     {
-        var config = new MeshConfiguration(new Dictionary<string, MeshNode>());
+        var config = new MeshConfiguration(System.Array.Empty<MeshNode>());
         var parsed = _parser.Parse("partner");
         var hints = config.ResolveRoutingHints(parsed);
 
@@ -190,7 +189,7 @@ public class CrossSchemaStoredProcTest
             }
         };
         var config = new MeshConfiguration(
-            new Dictionary<string, MeshNode>(), queryRoutingRules: rules);
+            System.Array.Empty<MeshNode>(), queryRoutingRules: rules);
 
         var parsed = _parser.Parse("namespace:PartnerRe nodeType:Thread");
         var hints = config.ResolveRoutingHints(parsed);
@@ -207,7 +206,7 @@ public class CrossSchemaStoredProcTest
                 ? new QueryRoutingHints { Partition = "User" } : null
         };
         var config = new MeshConfiguration(
-            new Dictionary<string, MeshNode>(), queryRoutingRules: rules);
+            System.Array.Empty<MeshNode>(), queryRoutingRules: rules);
 
         var parsed = _parser.Parse("nodeType:User");
         var hints = config.ResolveRoutingHints(parsed);
@@ -218,7 +217,7 @@ public class CrossSchemaStoredProcTest
     [Fact]
     public void RoutingHints_SourceActivity_NoPartition_CrossSchemaFires()
     {
-        var config = new MeshConfiguration(new Dictionary<string, MeshNode>());
+        var config = new MeshConfiguration(System.Array.Empty<MeshNode>());
         var parsed = _parser.Parse("source:activity");
         var hints = config.ResolveRoutingHints(parsed);
 
@@ -237,7 +236,7 @@ public class CrossSchemaStoredProcTest
             }
         };
         var config = new MeshConfiguration(
-            new Dictionary<string, MeshNode>(), queryRoutingRules: rules);
+            System.Array.Empty<MeshNode>(), queryRoutingRules: rules);
 
         var parsed = _parser.Parse("nodeType:Thread");
         var hints = config.ResolveRoutingHints(parsed);

@@ -7,9 +7,13 @@ namespace MeshWeaver.Data.Validation;
 /// </summary>
 public static class AccessAction
 {
+    /// <summary>The create action.</summary>
     public const string Create = "Create";
+    /// <summary>The read action.</summary>
     public const string Read = "Read";
+    /// <summary>The update action.</summary>
     public const string Update = "Update";
+    /// <summary>The delete action.</summary>
     public const string Delete = "Delete";
 
     /// <summary>
@@ -26,7 +30,10 @@ public static class AccessAction
 }
 
 /// <summary>
-/// Delegate for evaluating access restrictions.
+/// Delegate for evaluating access restrictions reactively. Emits a single bool
+/// (allowed / denied) when the check completes. Hub-reachable code composes through
+/// <see cref="IObservable{T}"/>; sync/async restrictions wrap their work via the
+/// helper overloads on <c>DataContext</c> and <c>TypeSourceWithType&lt;T,TTypeSource&gt;</c>.
 /// </summary>
 /// <param name="action">The action being performed (Create, Read, Update, Delete)</param>
 /// <param name="operationContext">
@@ -36,12 +43,10 @@ public static class AccessAction
 /// - DataChangeRequest: the full request (for batch validation)
 /// </param>
 /// <param name="context">Access restriction context with user info</param>
-/// <returns>True if access is allowed, false otherwise</returns>
-public delegate Task<bool> AccessRestrictionDelegate(
+public delegate IObservable<bool> AccessRestrictionDelegate(
     string action,
     object operationContext,
-    AccessRestrictionContext context,
-    CancellationToken ct);
+    AccessRestrictionContext context);
 
 /// <summary>
 /// Context passed to access restriction lambdas.

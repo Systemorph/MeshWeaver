@@ -6,6 +6,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Graph;
 
@@ -15,7 +16,9 @@ namespace MeshWeaver.Graph;
 /// </summary>
 public static class NotificationLayoutAreas
 {
+    /// <summary>Area name for the Overview layout area.</summary>
     public const string OverviewArea = "Overview";
+    /// <summary>Area name for the Thumbnail layout area.</summary>
     public const string ThumbnailArea = "Thumbnail";
 
     /// <summary>
@@ -35,16 +38,8 @@ public static class NotificationLayoutAreas
     /// </summary>
     public static IObservable<UiControl?> Overview(LayoutAreaHost host, RenderingContext _)
     {
-        var hubPath = host.Hub.Address.ToString();
-
-        var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
-            ?? Observable.Return(Array.Empty<MeshNode>());
-
-        return nodeStream.Select(nodes =>
-        {
-            var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-            return (UiControl?)BuildOverview(host, node);
-        });
+        return host.Workspace.GetMeshNodeStream()
+            .Select(node => (UiControl?)BuildOverview(host, node));
     }
 
     private static UiControl BuildOverview(LayoutAreaHost host, MeshNode? node)
@@ -96,16 +91,22 @@ public static class NotificationLayoutAreas
         var readLabel = notification.IsRead ? "Mark as Unread" : "Mark as Read";
         buttons = buttons.WithView(Controls.Button(readLabel)
             .WithAppearance(Appearance.Neutral)
-            .WithClickAction(async ctx =>
+            .WithClickAction(ctx =>
             {
-                if (node != null)
+                if (node?.Path is { Length: > 0 } notificationPath)
                 {
-                    var updated = node with
+                    var cache = ctx.Host.Hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
+                    cache.Update(notificationPath, n =>
                     {
-                        Content = notification with { IsRead = !notification.IsRead }
-                    };
-                    ctx.Host.Hub.Post(new UpdateNodeRequest(updated));
+                        var current = n.ContentAs<Notification>(ctx.Host.Hub.JsonSerializerOptions) ?? notification;
+                        return n with { Content = current with { IsRead = !current.IsRead } };
+                    }, ctx.Host.Hub.JsonSerializerOptions).Subscribe(
+                        _ => { },
+                        ex => ctx.Host.Hub.ServiceProvider.GetService<Microsoft.Extensions.Logging.ILoggerFactory>()
+                            ?.CreateLogger(typeof(NotificationLayoutAreas).FullName!)
+                            .LogWarning(ex, "IsRead toggle failed for {Path}", notificationPath));
                 }
+                return Task.CompletedTask;
             }));
 
         // Link to target node
@@ -132,12 +133,9 @@ public static class NotificationLayoutAreas
     public static UiControl Thumbnail(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
-        var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
-            ?? Observable.Return(Array.Empty<MeshNode>());
-
-        return Controls.Stack.WithView((h, c) => nodeStream.Select(nodes =>
+        return Controls.Stack.WithView((h, c) => host.Workspace.GetMeshNodeStream()
+            .Select(node =>
         {
-            var node = nodes.FirstOrDefault(n => n.Path == hubPath);
             if (node?.Content is Notification notification)
             {
                 var card = Controls.Stack.WithStyle(

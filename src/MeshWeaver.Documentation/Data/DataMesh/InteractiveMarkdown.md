@@ -1,36 +1,46 @@
 ---
 Name: Interactive Markdown
 Category: Documentation
-Description: Interactive markdown is the future of software engineering. With the introduction of AI in software engineering, the main job of humans will be to compose different parts and review the quality. Executable markdown facilitates this process.
+Description: "MeshWeaver's executable markdown dialect: embed C# fenced code blocks with --render flags to run live code and display layout areas directly inside a document."
 Icon: /static/DocContent/DataMesh/InteractiveMarkdown/icon.svg
 ---
 
-There is a tradition including executable code in markdown, for instance: [R Markdown](https://rmarkdown.rstudio.com/). This is a normal Markdown dialect that allows specifying executable code. This is very close to the [Literate Programming](https://en.wikipedia.org/wiki/Literate_programming) approach promoted by [Donald Knuth](https://en.wikipedia.org/wiki/Donald_Knuth).
+Interactive Markdown brings the spirit of [Literate Programming](https://en.wikipedia.org/wiki/Literate_Programming) — championed by [Donald Knuth](https://en.wikipedia.org/wiki/Donald_Knuth) and popularized in data science by tools like [R Markdown](https://rmarkdown.rstudio.com/) — to the MeshWeaver platform. The idea is simple: code lives alongside the prose that explains it, and that code actually runs.
 
-We decided to build on this and develop our own dialect of interactive markdown. The basic idea is very simple: additional flags can be specified in the heading of the fenced code blocks, analogous to command line arguments. Should the output be rendered, we specify:
+## How It Works
 
-```csharp
+MeshWeaver extends standard Markdown fenced code blocks with a small set of flags in the block header, much like command-line arguments. The most important flag is `--render`:
+
+```
 --render <area>
 ```
 
-Whereby area is the name of the area which is exposed in this article. Let's look at a practical example:
+`area` is the name of the layout area that will be injected into the rendered document at the location of the code block. When the document loads, MeshWeaver allocates a lightweight kernel, executes the block, and streams the result back into the page.
+
+### Displaying the Code
+
+Two flags control whether readers see the source alongside the output:
+
+| Flag | Effect |
+|---|---|
+| `--show-header` | Displays the full fenced block, including its header line |
+| `--show-code` | Displays the code body only (without the header line) |
+
+**Example — full header visible:**
 
 ```csharp --render HelloWorld --show-header
 "Hello World " + DateTime.Now.ToString()
 ```
 
-In this example, we render the output to an area called HelloWorld. the additional --show-header
-shows the full code block, including the header. We do this only here to explain how to use headers.
-
-Alternatively, you can only use --show-code, which will show the code without the header:
-
+**Example — code visible, header hidden:**
 
 ```csharp --render HelloWorld2 --show-code
 "Hello World " + DateTime.Now.ToString()
 ```
 
-Behind the scenes, Mesh Weaver allocates a kernel and executes the statements. The results
-are stored as layout areas in the kernel and displayed by the markdown component:
+## Execution Pipeline
+
+When a page containing executable blocks is opened, the following sequence runs automatically:
 
 ```mermaid
 sequenceDiagram
@@ -44,9 +54,11 @@ sequenceDiagram
     Kernel->>View: Returns Layout Area
 ```
 
-This diagram was produced using [Mermaid](https://mermaid.js.org/). Refer to their
-documentation for a full set of supported syntax. Mermaid diagrams can be embedded in
-interactive markdowns by declaring them as fenced code block:
+The kernel runs each block in document order, stores every named result as a layout area, and the Markdown component replaces each `--render` placeholder with the live output. No page reload is needed.
+
+## Mermaid Diagrams
+
+Mermaid diagrams are supported natively — just declare them as a fenced code block with the `mermaid` language tag. The diagram above was produced this way:
 
 ````
 ```mermaid
@@ -62,7 +74,14 @@ sequenceDiagram
 ```
 ````
 
+Refer to the [Mermaid documentation](https://mermaid.js.org/) for the full range of supported diagram types (flowcharts, class diagrams, Gantt charts, and more).
 
-Interactive markdown represents a significant step forward in software engineering. By combining the simplicity of markdown with the power of executable code, it allows developers to create rich, interactive documentation that can be directly tested and validated. This approach not only improves the quality of the documentation but also ensures that it remains up-to-date and relevant throughout the development process.
+## Live Example
 
-Stay tuned to the Mesh Bros channel for more insights and tutorials on interactive markdown and other cutting-edge software development techniques.
+The cell below runs on page load and renders a small layout control into the document — a minimal demonstration of the `--render` + `--show-code` combination in action:
+
+```csharp --render InteractiveMdDemo --show-code
+MeshWeaver.Layout.Controls.Markdown($"**Interactive Markdown is live.** This cell executed at {DateTime.Now:HH:mm:ss} on {DateTime.Now:yyyy-MM-dd}.")
+```
+
+> **Why this matters.** Documentation that executes its own examples can never silently drift out of date — a broken example is a build failure, not a future support ticket.

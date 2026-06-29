@@ -1,15 +1,15 @@
 ---
 Name: JSON Serialization
 Category: Documentation
-Description: How MeshWeaver handles polymorphic JSON serialization with per-hub type registries
+Description: Per-hub polymorphic JSON serialization with type registries, discriminators, and storage adapter contracts
 Icon: code
 ---
 
-MeshWeaver uses **per-hub JsonSerializerOptions** to handle polymorphic JSON serialization. Each MessageHub has its own type registry, enabling type-safe serialization and deserialization across the persistence layer.
+MeshWeaver serializes all mesh node content as polymorphic JSON. Rather than using a single global serializer, every `MessageHub` carries its own `JsonSerializerOptions` instance backed by a dedicated `ITypeRegistry`. This design means each hub serializes only the types it knows about and round-trips them correctly — without coupling unrelated hubs to each other's type systems.
 
-# Architecture Overview
+## Architecture Overview
 
-Each MessageHub maintains its own `JsonSerializerOptions` instance with a dedicated `ITypeRegistry`. This design ensures that types registered with a hub are properly serialized with `$type` discriminators and deserialized back to their concrete types.
+The hub-per-registry model is the foundation. Two hubs running side-by-side can own completely different type sets, and both write to the persistence layer with their own discriminators.
 
 ```mermaid
 flowchart TB
@@ -31,11 +31,11 @@ flowchart TB
     Hub2 --> P2[Persistence Layer]
 ```
 
-# How It Works
+## How Serialization Works
 
-## 1. Per-Hub Type Registration
+### 1. Register types with the hub
 
-Types are registered with a hub during configuration:
+Types are declared during hub configuration. Every type listed here will be given a `$type` discriminator on write and resolved back to its CLR type on read.
 
 ```csharp
 services.AddMeshWeaver(meshWeaver => meshWeaver
@@ -47,9 +47,9 @@ services.AddMeshWeaver(meshWeaver => meshWeaver
 );
 ```
 
-## 2. Type Discriminators
+### 2. `$type` discriminators on the wire
 
-When serializing objects, MeshWeaver adds a `$type` property to enable polymorphic deserialization:
+When the serializer writes a registered type, it injects a `$type` property. Readers use that property to reconstruct the correct CLR type — even when the declared field is typed as `object` or a base class.
 
 ```json
 {
@@ -60,9 +60,9 @@ When serializing objects, MeshWeaver adds a `$type` property to enable polymorph
 }
 ```
 
-## 3. Options Flow Through Persistence
+### 3. Options flow through every persistence call
 
-The hub's `JsonSerializerOptions` flows through all persistence operations:
+The hub's `JsonSerializerOptions` travels from the hub through the persistence stack all the way to the storage adapter. No intermediate layer substitutes its own options.
 
 ```mermaid
 sequenceDiagram
@@ -79,11 +79,11 @@ sequenceDiagram
     PS-->>Hub: MeshNode
 ```
 
-# Key Interfaces
+## Key Interfaces
 
-## IMeshStorage
+All persistence contracts accept `JsonSerializerOptions` explicitly — there is no global fallback.
 
-All persistence methods accept `JsonSerializerOptions`:
+### `IMeshStorage`
 
 ```csharp
 Task<MeshNode?> GetNodeAsync(string path, JsonSerializerOptions options, CancellationToken ct);
@@ -91,61 +91,63 @@ Task<MeshNode> SaveNodeAsync(MeshNode node, JsonSerializerOptions options, Cance
 IAsyncEnumerable<MeshNode> GetChildrenAsync(string? parentPath, JsonSerializerOptions options);
 ```
 
-## IMeshService
+### `IMeshService`
 
-Query methods also require options for proper type resolution:
+Query and autocomplete operations require options for type resolution during result projection.
 
 ```csharp
 IAsyncEnumerable<object> QueryAsync(MeshQueryRequest request, JsonSerializerOptions options, CancellationToken ct);
 IAsyncEnumerable<QuerySuggestion> AutocompleteAsync(string basePath, string prefix, JsonSerializerOptions options, int limit, CancellationToken ct);
 ```
 
-## IStorageAdapter
+### `IStorageAdapter`
 
-Storage adapters use options for serialization/deserialization:
+Each backend adapter serializes and deserializes using exactly the options it is given.
 
 ```csharp
 Task<MeshNode?> ReadAsync(string path, JsonSerializerOptions options, CancellationToken ct);
 Task WriteAsync(MeshNode node, JsonSerializerOptions options, CancellationToken ct);
 ```
 
-# Configuration Options
+## Default Configuration
 
-MeshWeaver configures `JsonSerializerOptions` with these defaults:
+MeshWeaver initializes `JsonSerializerOptions` with these defaults out of the box:
 
 | Setting | Value | Purpose |
-|---------|-------|---------|
-| `WriteIndented` | `true` | Human-readable output |
+|---|---|---|
+| `WriteIndented` | `true` | Human-readable stored JSON |
 | `PropertyNamingPolicy` | `CamelCase` | JavaScript compatibility |
-| `PropertyNameCaseInsensitive` | `true` | Flexible parsing |
+| `PropertyNameCaseInsensitive` | `true` | Tolerant parsing |
 | `DefaultIgnoreCondition` | `WhenWritingNull` | Compact output |
 
-# Best Practices
+## Best Practices
 
-## 1. Always Pass Hub Options
+### Always pass the hub's options
 
-When calling persistence methods, use the hub's options:
+Never create a fresh `JsonSerializerOptions` for persistence calls — a bare instance has no type registry and silently discards `$type` discriminators.
 
 ```csharp
-// Correct
+// Correct — type registry flows through
 await persistence.SaveNodeAsync(node, hub.JsonSerializerOptions);
 
-// Incorrect - loses type information
+// Incorrect — loses type information
 await persistence.SaveNodeAsync(node, new JsonSerializerOptions());
 ```
 
-## 2. Register All Types
+### Register every content type
 
-Ensure all types that need polymorphic serialization are registered:
+Any type that appears as `MeshNode.Content` must be registered. Use `WithTypes` for domain types and `WithContentType<T>` for well-known content shapes:
 
 ```csharp
 hub.WithTypes(typeof(Story), typeof(Task), typeof(Comment))
    .WithContentType<AgentConfiguration>()
 ```
 
-## 3. Use Typed Queries
+A missing registration does not throw on write — the discriminator is simply absent, and the object deserializes as `JsonElement` or `object` instead of the expected CLR type. Register early; diagnose by inspecting stored JSON for a missing `$type`.
 
-For type-safe queries, use the extension methods:
+### Use typed query helpers
+
+The extension methods filter by `$type` and project directly to `T`, avoiding manual casting:
 
 ```csharp
 // Type-safe query with automatic $type filtering
@@ -155,18 +157,18 @@ await foreach (var story in meshQuery.QueryAsync<Story>(query, hub.JsonSerialize
 }
 ```
 
-# Storage Adapters
+## Storage Backends
 
-MeshWeaver supports multiple storage backends, all using the same serialization approach:
+All adapters implement the same interface and accept the same options — swapping backends requires no serialization changes.
 
 | Adapter | Description |
-|---------|-------------|
-| `FileSystemStorageAdapter` | Local file storage (.json files) |
+|---|---|
+| `FileSystemStorageAdapter` | Local `.json` files |
 | `CosmosStorageAdapter` | Azure Cosmos DB documents |
 | `AzureBlobStorageAdapter` | Azure Blob Storage |
-| `InMemoryPersistenceService` | In-memory storage for testing |
+| `InMemoryPersistenceService` | In-memory store for testing |
 
-# Related Topics
+## Related Topics
 
-- [Data Configuration](../../DataMesh/DataConfiguration) - Setting up data sources
-- [Message-Based Communication](../MessageBasedCommunication) - Hub architecture
+- [Data Configuration](../../DataMesh/DataConfiguration) — setting up data sources
+- [Message-Based Communication](../MessageBasedCommunication) — hub architecture

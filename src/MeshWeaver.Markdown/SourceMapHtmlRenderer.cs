@@ -15,6 +15,11 @@ namespace MeshWeaver.Markdown;
 /// </summary>
 public class SourceMapHtmlRenderer : HtmlRenderer
 {
+    /// <summary>
+    /// Creates the renderer, replacing the default block/inline renderers with source-map-aware ones
+    /// that emit <c>data-start</c>/<c>data-end</c> attributes.
+    /// </summary>
+    /// <param name="writer">The text writer that receives the rendered HTML.</param>
     public SourceMapHtmlRenderer(TextWriter writer) : base(writer)
     {
         // Replace default renderers with source-map-aware versions

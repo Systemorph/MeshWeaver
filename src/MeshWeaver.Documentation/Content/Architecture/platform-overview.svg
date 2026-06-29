@@ -41,8 +41,8 @@
   <g filter="url(#shadow)">
     <rect x="60" y="80" width="180" height="120" rx="10" fill="url(#aiGradient)"/>
     <text x="150" y="110" text-anchor="middle" font-family="Arial, sans-serif" font-size="14" font-weight="bold" fill="white">AI Agents</text>
-    <text x="150" y="135" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" fill="rgba(255,255,255,0.9)">Planner • Researcher</text>
-    <text x="150" y="152" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" fill="rgba(255,255,255,0.9)">Executor • Custom</text>
+    <text x="150" y="135" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" fill="rgba(255,255,255,0.9)">Orchestrator • Researcher</text>
+    <text x="150" y="152" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" fill="rgba(255,255,255,0.9)">Worker • Custom</text>
     <!-- Robot icon -->
     <rect x="125" y="165" width="50" height="25" rx="4" fill="white" opacity="0.3"/>
     <circle cx="140" cy="177" r="4" fill="white"/>

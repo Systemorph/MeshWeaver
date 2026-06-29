@@ -1,12 +1,21 @@
-﻿using System.Text.Json;
+﻿using System.Collections.Concurrent;
+using System.Collections.Immutable;
+using System.Reactive.Disposables;
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using MeshWeaver.ContentCollections;
+using MeshWeaver.Data;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
+using MeshWeaver.NuGet;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.Emit;
+using Lsp = MeshWeaver.Mesh.Services.LanguageServer;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -22,124 +31,168 @@ internal class MeshNodeCompilationService(
     ICompilationCacheService cacheService,
     IOptions<CompilationCacheOptions> cacheOptions,
     IMessageHub hub,
-    ILogger<MeshNodeCompilationService> logger)
+    INuGetAssemblyResolver nugetResolver,
+    ILogger<MeshNodeCompilationService> logger,
+    IAssemblyStore? assemblyStore = null)
     : IMeshNodeCompilationService
 {
+    private readonly IAssemblyStore _assemblyStore = assemblyStore ?? NullAssemblyStore.Instance;
     private readonly CompilationCacheOptions _cacheOptions = cacheOptions.Value ?? new CompilationCacheOptions();
+
+    // Compile pool for the bare-async leaf (CompilationInputs assembly): a plain
+    // Observable.FromAsync deadlocks under a blocking subscriber because SubscribeOn
+    // only moves the subscribe, not the await continuation. The pool runs the leaf
+    // with ConfigureAwait(false) behind a concurrency gate. Falls back to the
+    // unbounded pool when no registry is wired (e.g. tests outside DI).
+    private readonly IIoPool _ioPool =
+        hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.Compile)
+        ?? IoPool.Unbounded;
+
+    // 🚨 Offload the compile to the ThreadPool via Task.Run — NOT the IoPool. Two reasons the
+    // IoPool ("the correct abstraction") fails for this leaf:
+    //   1. Its SemaphoreSlim gate serialises the compile against itself (activity-driven +
+    //      GetCompilationPathRequest-driven compiles both acquire the Compile pool gate; the
+    //      synchronous single-flight in-memory compile re-enters / parks on WaitAsync — an idle
+    //      wait, the dotnet-stack signature).
+    //   2. SubscribeOn + ConfigureAwait(false) hop threads, which DROPS the AccessService
+    //      identity the same way Task.Run does — see below.
+    // Task.Run schedules on TaskScheduler.Default (ThreadPool): no gate, no re-entrancy, and the
+    // continuation never captures the action-block TaskScheduler the way Task.ToObservable() does.
+    //
+    // 🚨 RE-ESTABLISH THE LOGIN. The handler ran the compile under ImpersonateAsSystem so its
+    // source reads + WriteToParent bypass the caller's per-node permissions. Task.Run hops to a
+    // fresh ThreadPool thread where the AccessService identity (AsyncLocal) does NOT flow, and the
+    // handler's Impersonate scope is long disposed by the time this runs. Without re-impersonating,
+    // the source reads run unauthenticated and stall until the next 45s sync-stream heartbeat
+    // re-delivers the content — the ~42s freeze. Impersonate INSIDE the async lambda so the scope
+    // spans every await of the compile.
+    private IObservable<T> OnThreadPool<T>(Func<Task<T>> asyncWork)
+        => OnThreadPoolCore(() => Task.Run(async () =>
+        {
+            var accessService = hub.ServiceProvider.GetService<AccessService>();
+            using (accessService?.ImpersonateAsSystem())
+                return await asyncWork();
+        }));
+
+    // Synchronous heavy work (Roslyn Emit + assembly load + reflection). Run it on a
+    // DEDICATED long-running thread via CompileThread.Run — NOT the ThreadPool. A Roslyn Emit
+    // is multi-second, CPU-bound, synchronous work; on Task.Run it pins a ThreadPool worker
+    // thread for its whole duration, and a burst of compiles starves the reactive continuations
+    // (which also run on the ThreadPool, growing only ~1-2 threads/s) that deliver every
+    // cross-hub response — the bulk-only "different test times out each run" flake class. The
+    // dedicated thread keeps the compile's CPU off the pool the actor/reactive scheduler needs.
+    // Same no-gate / no-captured-scheduler / ExecutionContext-flows (AccessService identity)
+    // guarantees as Task.Run — see CompileThread.
+    private IObservable<T> OnThreadPool<T>(Func<T> syncWork)
+        => OnThreadPoolCore(() => CompileThread.Run(() =>
+        {
+            var accessService = hub.ServiceProvider.GetService<AccessService>();
+            using (accessService?.ImpersonateAsSystem())
+                return syncWork();
+        }));
+
+    // Shared bridge: subscribe a Task<T>-producing leaf into the observable contract, hopping the
+    // OnNext/OnError onto the continuation via ExecuteSynchronously on TaskScheduler.Default so the
+    // calling hub's action-block scheduler is never captured. See the class-level note above on why
+    // this path uses Task.Run and NOT the IoPool (the Compile pool's gate deadlocks the compile
+    // against itself; the thread-hop also drops the AccessService identity — re-established inside).
+    private static IObservable<T> OnThreadPoolCore<T>(Func<Task<T>> start)
+        => Observable.Create<T>(observer =>
+        {
+            start().ContinueWith(
+                t =>
+                {
+                    if (t.IsFaulted) observer.OnError(t.Exception!.GetBaseException());
+                    else if (t.IsCanceled) observer.OnError(new OperationCanceledException());
+                    else { observer.OnNext(t.Result); observer.OnCompleted(); }
+                },
+                CancellationToken.None,
+                TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
+            return Disposable.Empty;
+        });
+
     private JsonSerializerOptions JsonOptions => hub.JsonSerializerOptions;
     private readonly DynamicMeshNodeAttributeGenerator _attributeGenerator = new();
 
+    // Per-nodeName single-flight: when two callers ask to compile the same
+    // NodeType concurrently, the first one's Task runs the compile; every
+    // other caller receives the SAME Task and awaits its result. No second
+    // call to CompileAsyncCore (which the old SemaphoreSlim shape forced —
+    // caller 2 waited for the semaphore, then re-entered the cache-check
+    // path even though caller 1 had just finished). Entries clear once the
+    // task settles so a future re-compile (e.g. after source edit) starts
+    // fresh.
+    private readonly ConcurrentDictionary<string, Lazy<Task<string?>>> _inflightCompiles =
+        new(StringComparer.Ordinal);
+
+    // Query expansion lives in CodeQueryResolver now so the NodeType Configuration
+    // side menu can evaluate the *same* queries the compiler uses — the Sources /
+    // Tests lists displayed in the UI are guaranteed to match the files compiled.
+    //
+    // Default Roslyn references are process-wide: TPA list + a few well-known
+    // additions never change at runtime. Eager static-field init runs once at
+    // type load and the result is then a plain field read on every compile —
+    // no Lazy property dispatch, no synchronization, zero per-compile cost.
+    private static readonly IReadOnlyList<MetadataReference> _references = GetDefaultReferences();
+
     /// <summary>
-    /// Resolve one Sources entry into one-or-more concrete queries, ready to hand
-    /// to <see cref="IMeshService.QueryAsync{T}"/>. Rules:
-    /// <list type="bullet">
-    ///   <item><c>$self</c> expands to <paramref name="selfPath"/>.</item>
-    ///   <item>A leading <c>@@</c> or <c>@</c> marks a shorthand that yields both a
-    ///     <c>path:X</c> exact match and a <c>namespace:X scope:subtree</c> folder
-    ///     match (de-duplicated downstream by the caller).</item>
-    ///   <item>A <c>namespace:X</c> value that is a single relative segment (no
-    ///     <c>/</c>, no absolute root) is rebased onto <paramref name="selfPath"/>,
-    ///     so the default <c>namespace:_Source</c> reads as "my own _Source folder".</item>
-    ///   <item>Every emitted query is ANDed with <c>nodeType:Code</c> so non-code
-    ///     children can never leak into the compilation.</item>
-    /// </list>
+    /// Builds the process-wide MetadataReference list — TPA assemblies plus a few
+    /// well-known additions. Uses <see cref="MetadataReference.CreateFromFile(string, MetadataReferenceProperties, DocumentationProvider)"/>
+    /// (mmap, lazy read) — Roslyn typically reads only a small fraction of each
+    /// assembly's metadata, so the upfront cost is tiny. An earlier attempt at
+    /// <see cref="MetadataReference.CreateFromStream(Stream, MetadataReferenceProperties, DocumentationProvider, string?)"/>
+    /// to avoid finalizer pressure ended up reading the whole DLL into managed
+    /// memory eagerly — net 10%+ slower in the autocomplete-test CPU profile,
+    /// since most of those bytes were never touched. The file-handle finalizer
+    /// pressure those references add is also tiny in practice (the static field
+    /// holds them for the process lifetime; finalizers only run at shutdown).
     /// </summary>
-    private static IEnumerable<string> ExpandSourceQuery(string rawQuery, string selfPath)
-    {
-        var expanded = rawQuery.Replace("$self", selfPath).Trim();
-
-        var isAt = expanded.StartsWith("@@") || expanded.StartsWith("@");
-        if (isAt)
-        {
-            var stripped = expanded.TrimStart('@').TrimStart();
-            if (stripped.Length == 0) yield break;
-            if (stripped.Contains(':'))
-            {
-                // "@namespace:X scope:subtree" — already qualified, pass through.
-                yield return WithCodeTypeFilter(stripped);
-                yield break;
-            }
-            yield return WithCodeTypeFilter($"path:{stripped}");
-            yield return WithCodeTypeFilter($"namespace:{stripped} scope:subtree");
-            yield break;
-        }
-
-        // Rebase relative "namespace:X" values onto selfPath. A value without '/' is
-        // assumed to be a subfolder of the NodeType (the default "_Source" case).
-        var rebased = RebaseRelativeNamespace(expanded, selfPath);
-        yield return WithCodeTypeFilter(rebased);
-    }
-
-    private static string RebaseRelativeNamespace(string query, string selfPath)
-    {
-        const string nsKey = "namespace:";
-        var idx = query.IndexOf(nsKey, StringComparison.OrdinalIgnoreCase);
-        if (idx < 0) return query;
-
-        var valueStart = idx + nsKey.Length;
-        var valueEnd = valueStart;
-        while (valueEnd < query.Length && !char.IsWhiteSpace(query[valueEnd]))
-            valueEnd++;
-        var value = query.Substring(valueStart, valueEnd - valueStart);
-
-        // Relative iff it contains no path separator (e.g. "_Source").
-        if (value.Length == 0 || value.Contains('/')) return query;
-
-        var rebased = $"{selfPath}/{value}";
-        return query.Substring(0, valueStart) + rebased + query.Substring(valueEnd);
-    }
-
-    private static string WithCodeTypeFilter(string query) =>
-        query.Contains("nodeType:", StringComparison.OrdinalIgnoreCase)
-            ? query
-            : $"{query} nodeType:{CodeNodeType.NodeType}";
-    private readonly List<MetadataReference> _references = GetDefaultReferences();
-
     private static List<MetadataReference> GetDefaultReferences()
     {
         var references = new List<MetadataReference>();
 
-        // Add runtime assemblies
         var trustedAssemblies = AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES") as string;
         if (trustedAssemblies != null)
         {
             foreach (var path in trustedAssemblies.Split(Path.PathSeparator))
             {
-                if (File.Exists(path))
+                if (string.IsNullOrEmpty(path) || !File.Exists(path))
+                    continue;
+                try
                 {
-                    try
-                    {
-                        references.Add(MetadataReference.CreateFromFile(path));
-                    }
-                    catch
-                    {
-                        // Skip assemblies that can't be loaded
-                    }
+                    references.Add(MetadataReference.CreateFromFile(path));
+                }
+                catch
+                {
+                    // Skip assemblies that can't be loaded
                 }
             }
         }
 
-        // Also add specific assemblies we need
-        var additionalAssemblies = new[]
+        // Three well-known additions in case TPA didn't include them. Dedup
+        // against TPA-derived set by Display path so we don't double-load.
+        var seen = new HashSet<string>(
+            references.Select(r => r.Display ?? string.Empty),
+            StringComparer.OrdinalIgnoreCase);
+        foreach (var assembly in new[]
         {
             typeof(object).Assembly,                                           // System.Runtime
             typeof(System.ComponentModel.DataAnnotations.KeyAttribute).Assembly, // DataAnnotations
             typeof(System.Text.Json.Serialization.JsonPropertyNameAttribute).Assembly, // System.Text.Json
-        };
-
-        foreach (var assembly in additionalAssemblies)
+        })
         {
-            if (!string.IsNullOrEmpty(assembly.Location) && File.Exists(assembly.Location))
+            if (!string.IsNullOrEmpty(assembly.Location)
+                && File.Exists(assembly.Location)
+                && seen.Add(assembly.Location))
             {
                 try
                 {
-                    var reference = MetadataReference.CreateFromFile(assembly.Location);
-                    if (!references.Any(r => r.Display == assembly.Location))
-                        references.Add(reference);
+                    references.Add(MetadataReference.CreateFromFile(assembly.Location));
                 }
                 catch
                 {
-                    // Skip if already added or can't be loaded
+                    // Skip if it can't be loaded
                 }
             }
         }
@@ -152,268 +205,529 @@ internal class MeshNodeCompilationService(
     /// </summary>
     private static readonly Regex CodeIncludePattern = new(@"@@([^\s#\]]+)", RegexOptions.Compiled);
 
-    /// <summary>
-    /// Resolves @@path references in code content by fetching the referenced node's CodeConfiguration.
-    /// For example, @@FutuRe/LineOfBusiness/_Source/LineOfBusiness resolves to that node's code content.
-    /// Resolution is transitive: if a resolved include itself contains @@references, those are resolved too.
-    /// </summary>
-    internal async Task<string> ResolveCodeIncludesAsync(
-        string code, IMeshService meshQuery, CancellationToken ct)
-    {
-        var resolved = new HashSet<string>();
-        return await ResolveCodeIncludesAsync(code, meshQuery, resolved, ct);
-    }
-
-    /// <summary>
-    /// Overload that uses IMeshStorage directly to bypass routing.
-    /// Used by NodeTypeService during compilation to avoid circular hub creation.
-    /// </summary>
-    internal async Task<string> ResolveCodeIncludesAsync(
-        string code, IMeshStorage meshStorage, CancellationToken ct)
-    {
-        var resolved = new HashSet<string>();
-        return await ResolveCodeIncludesAsync(code, meshStorage, resolved, ct);
-    }
-
-    private async Task<string> ResolveCodeIncludesAsync(
-        string code, IMeshService meshQuery, HashSet<string> resolved, CancellationToken ct)
+    private IObservable<string> ResolveCodeIncludes(string code, HashSet<string> resolved)
     {
         if (string.IsNullOrWhiteSpace(code) || !code.Contains("@@"))
-            return code;
+            return Observable.Return(code);
 
         var matches = CodeIncludePattern.Matches(code);
         if (matches.Count == 0)
-            return code;
+            return Observable.Return(code);
 
-        var result = code;
+        // For each @@ match, fetch the referenced node via composed hub.GetMeshNode
+        // (NEVER await — that's a 100% deadlock). Each result feeds the recursive
+        // resolution; the final substituted string is built up in left-to-right order
+        // by serially aggregating the per-match observables.
+        IObservable<string> chain = Observable.Return(code);
         foreach (Match match in matches)
         {
             var path = match.Groups[1].Value;
-            if (!resolved.Add(path))
+            var matchValue = match.Value;
+            chain = chain.SelectMany(current =>
             {
-                result = result.Replace(match.Value, string.Empty);
-                continue;
-            }
+                if (!resolved.Add(path))
+                    return Observable.Return(current.Replace(matchValue, string.Empty));
 
-            string? resolvedCode = null;
-
-            await foreach (var referencedNode in meshQuery
-                               .QueryAsync<MeshNode>($"path:{path}", ct: ct)
-                               .WithCancellation(ct))
-            {
-                if (referencedNode.Content is CodeConfiguration cf && !string.IsNullOrWhiteSpace(cf.Code))
-                {
-                    resolvedCode = cf.Code;
-                }
-                break;
-            }
-
-            if (resolvedCode != null)
-            {
-                logger.LogDebug("Resolved code include @@{Path}", path);
-                resolvedCode = await ResolveCodeIncludesAsync(resolvedCode, meshQuery, resolved, ct);
-                result = result.Replace(match.Value, resolvedCode);
-            }
-            else
-            {
-                logger.LogWarning("Could not resolve code include @@{Path}", path);
-            }
+                return hub.GetMeshNode(path, TimeSpan.FromSeconds(15))
+                    .SelectMany(referencedNode =>
+                    {
+                        if (referencedNode?.Content is CodeConfiguration cf
+                            && !string.IsNullOrWhiteSpace(cf.Code))
+                        {
+                            logger.LogDebug("Resolved code include @@{Path}", path);
+                            return ResolveCodeIncludes(cf.Code, resolved)
+                                .Select(resolvedInner => current.Replace(matchValue, resolvedInner));
+                        }
+                        logger.LogWarning("Could not resolve code include @@{Path}", path);
+                        return Observable.Return(current);
+                    });
+            });
         }
 
-        return result;
-    }
-
-    private async Task<string> ResolveCodeIncludesAsync(
-        string code, IMeshStorage meshStorage, HashSet<string> resolved, CancellationToken ct)
-    {
-        if (string.IsNullOrWhiteSpace(code) || !code.Contains("@@"))
-            return code;
-
-        var matches = CodeIncludePattern.Matches(code);
-        if (matches.Count == 0)
-            return code;
-
-        var result = code;
-        foreach (Match match in matches)
-        {
-            var path = match.Groups[1].Value;
-            if (!resolved.Add(path))
-            {
-                result = result.Replace(match.Value, string.Empty);
-                continue;
-            }
-
-            // Use IMeshStorage directly to bypass routing
-            var referencedNode = await meshStorage.GetNodeAsync(path, ct);
-            string? resolvedCode = null;
-            if (referencedNode?.Content is CodeConfiguration cf && !string.IsNullOrWhiteSpace(cf.Code))
-            {
-                resolvedCode = cf.Code;
-            }
-
-            if (resolvedCode != null)
-            {
-                logger.LogDebug("Resolved code include @@{Path}", path);
-                resolvedCode = await ResolveCodeIncludesAsync(resolvedCode, meshStorage, resolved, ct);
-                result = result.Replace(match.Value, resolvedCode);
-            }
-            else
-            {
-                logger.LogWarning("Could not resolve code include @@{Path}", path);
-            }
-        }
-
-        return result;
+        return chain;
     }
 
     /// <inheritdoc />
-    public async Task<string?> GetAssemblyLocationAsync(MeshNode node, CancellationToken ct = default)
+    public IObservable<string?> GetAssemblyLocation(MeshNode node)
+        => GetAssemblyLocationWithLog(node).Select(t => t.Path);
+
+    /// <summary>
+    /// Companion to <see cref="GetAssemblyLocation"/> that also surfaces the
+    /// <see cref="ActivityLog"/> of the compile attempt — every executed source
+    /// query, every matched Code path, the final compile result. The same chain
+    /// runs underneath; this method is what <see cref="CompileAndGetConfigurations"/>
+    /// uses so the response surfaced through <c>GetCompilationPathResponse.Log</c>
+    /// reflects what actually happened (no double-compile to gather diagnostics).
+    /// </summary>
+    private IObservable<(string? Path, ActivityLog Log)> GetAssemblyLocationWithLog(
+        MeshNode node, IReadOnlyList<MeshNode>? sourcesOverride = null)
     {
+        var log = new ActivityLog(ActivityCategory.Compilation)
+        {
+            HubPath = node.Path,
+            AffectedPaths = ImmutableList<string>.Empty.Add(node.Path)
+        };
+
         if (string.IsNullOrEmpty(node.NodeType))
         {
             logger.LogDebug("Node {NodePath} has no NodeType, skipping assembly compilation", node.Path);
-            return null;
+            return Observable.Return<(string?, ActivityLog)>((null,
+                AppendInfo(log, $"Skipped — node '{node.Path}' has no NodeType.")
+                    .Finish((int)hub.Version, ActivityStatus.Succeeded)));
         }
 
         var nodeName = cacheService.SanitizeNodeName(node.Path);
+        // GetDllPath returns the flat shorthand ({cacheDir}/{nodeName}.dll) —
+        // CompileToDiskAsync actually writes to a timestamped subdir.
+        // TryGetLatestCachedDllPath resolves to the newest valid subdir DLL,
+        // used below in the cache-hit branch so the load actually finds bytes.
         var dllPath = cacheService.GetDllPath(nodeName);
 
-        // Check cache validity first (only for disk cache)
-        if (cacheService.IsDiskCacheEnabled && cacheService.IsCacheValid(nodeName, node.LastModified))
-        {
-            logger.LogDebug("Using cached assembly for {NodePath}", node.Path);
-            return dllPath;
-        }
-
-        // Resolve the owning NodeTypeDefinition once — used both for source discovery
-        // (Sources / _Source convention) and for Configuration / ContentCollections.
-        // - If this node IS a NodeType, "self" is its own path and we read its Content.
-        // - If this node is an instance, "self" is the NodeType's path and we fetch it.
-        var meshQuery = hub.ServiceProvider.GetService<IMeshService>();
-        NodeTypeDefinition? ntDef = null;
+        // Resolve the owning NodeTypeDefinition once — used for source discovery
+        // (Sources / Source convention) and for Configuration / ContentCollections.
+        IObservable<NodeTypeDefinition?> resolveDef;
         string selfPath;
         if (node.Content is NodeTypeDefinition selfDef)
         {
-            ntDef = selfDef;
+            resolveDef = Observable.Return<NodeTypeDefinition?>(selfDef);
             selfPath = node.Path;
         }
         else
         {
+            resolveDef = hub.GetMeshNode(node.NodeType, TimeSpan.FromSeconds(15))
+                .Select(typeNode => typeNode.ContentAs<NodeTypeDefinition>(JsonOptions));
             selfPath = node.NodeType;
-            if (meshQuery != null)
-            {
-                await foreach (var nodeTypeNode in meshQuery.QueryAsync<MeshNode>($"path:{node.NodeType}", ct: ct).WithCancellation(ct))
-                {
-                    if (nodeTypeNode?.Content is NodeTypeDefinition fetched)
-                        ntDef = fetched;
-                    break;
-                }
-            }
         }
 
-        // Collect Code nodes from each configured source query.
-        // Default: "_Source" subtree directly under the NodeType (implicitly self-relative).
-        var sourceQueries = ntDef?.Sources is { Count: > 0 } configured
-            ? configured
-            : (IReadOnlyList<string>)["namespace:_Source scope:subtree"];
-
-        var codeFiles = new List<CodeConfiguration>();
-        var matchedCodePaths = new List<string>();
-        var executedQueries = new List<string>();
-        if (meshQuery != null)
-        {
-            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var rawQuery in sourceQueries)
-            {
-                if (string.IsNullOrWhiteSpace(rawQuery)) continue;
-
-                foreach (var finalQuery in ExpandSourceQuery(rawQuery, selfPath))
+        return resolveDef.SelectMany(ntDef =>
+            // Source-aware cache check: discover the LastModified of every source
+            // Code node + the NodeType itself. The cache is valid only if the
+            // compiled DLL is newer than the most recent source change.
+            DiscoverSourceMaxLastModified(ntDef, selfPath, sourcesOverride)
+                .SelectMany(maxSourceLastModified =>
                 {
-                    executedQueries.Add(finalQuery);
-                    var matchesForThisQuery = 0;
-                    await foreach (var codeNode in meshQuery.QueryAsync<MeshNode>(finalQuery, ct: ct).WithCancellation(ct))
+                    var effectiveLastModified = node.LastModified > maxSourceLastModified
+                        ? node.LastModified
+                        : maxSourceLastModified;
+
+                    if (cacheService.IsDiskCacheEnabled)
                     {
-                        if (codeNode.Content is CodeConfiguration cf
-                            && !string.IsNullOrWhiteSpace(cf.Code)
-                            && seen.Add(codeNode.Path ?? cf.Code!))
+                        var cachedDllPath = cacheService.TryGetLatestCachedDllPath(nodeName, effectiveLastModified);
+                        if (cachedDllPath is not null)
                         {
-                            codeFiles.Add(cf);
-                            if (!string.IsNullOrEmpty(codeNode.Path))
-                                matchedCodePaths.Add(codeNode.Path);
-                            matchesForThisQuery++;
+                            logger.LogDebug(
+                                "Using cached assembly for {NodePath} at {DllPath} (effectiveLastModified={EffectiveLastModified})",
+                                node.Path, cachedDllPath, effectiveLastModified);
+                            return Observable.Return<(string?, ActivityLog)>((
+                                cachedDllPath,
+                                AppendInfo(log,
+                                    $"Cache hit — returning {cachedDllPath} (effective LastModified={effectiveLastModified:O}).")
+                                    .Finish((int)hub.Version, ActivityStatus.Succeeded)));
                         }
                     }
-                    logger.LogInformation(
-                        "Source discovery for {NodePath}: query '{Query}' matched {Count} Code nodes",
-                        node.Path, finalQuery, matchesForThisQuery);
-                }
-            }
-        }
 
-        // Resolve @@ include references in code files (e.g., @@FutuRe/LineOfBusiness/_Source/LineOfBusiness)
-        if (meshQuery != null)
-        {
-            for (int i = 0; i < codeFiles.Count; i++)
-            {
-                var resolved = await ResolveCodeIncludesAsync(codeFiles[i].Code!, meshQuery, ct);
-                if (resolved != codeFiles[i].Code)
-                    codeFiles[i] = codeFiles[i] with { Code = resolved };
-            }
-        }
-
-        // Combine all code files into a single CodeConfiguration
-        CodeConfiguration? codeFile = codeFiles.Count switch
-        {
-            0 => null,
-            1 => codeFiles[0],
-            _ => new CodeConfiguration { Code = string.Join("\n\n", codeFiles.Select(cf => cf.Code)) }
-        };
-
-        var configuration = ntDef?.Configuration;
-        var contentCollections = ntDef?.ContentCollections;
-
-        try
-        {
-            // Compile using CodeConfiguration, Configuration, and ContentCollections
-            await CompileAsync(codeFile, configuration, contentCollections, node, ct);
-
-            // For disk cache, return the DLL path if it exists
-            if (cacheService.IsDiskCacheEnabled)
-            {
-                if (File.Exists(dllPath))
-                {
-                    logger.LogInformation(
-                        "Compiled assembly for node {NodePath} at {DllPath}",
-                        node.Path, dllPath);
-                    return dllPath;
-                }
-
-                logger.LogWarning("Assembly compilation succeeded but DLL not found at {DllPath}", dllPath);
-                return null;
-            }
-
-            // For in-memory cache, return a virtual path (assembly is already loaded)
-            logger.LogInformation("Compiled assembly for node {NodePath} (in-memory)", node.Path);
-            return $"memory://{nodeName}";
-        }
-        catch (CompilationException ex)
-        {
-            // Re-throw enriched with the actual queries that ran + which Code nodes matched,
-            // so the error overlay can tell the user *why* references are missing (usually:
-            // 0 Code nodes matched the configured sources).
-            var diag = BuildSourceDiscoveryReport(executedQueries, matchedCodePaths);
-            logger.LogError(ex, "Failed to compile assembly for node {NodePath}. {Diagnostics}", node.Path, diag);
-            throw new CompilationException(
-                ex.NodePath,
-                $"{ex.Message}\n\n--- Source discovery ---\n{diag}",
-                ex);
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            logger.LogError(ex, "Failed to compile assembly for node {NodePath}", node.Path);
-            throw;
-        }
+                    return CompileCore(node, ntDef, selfPath, log, sourcesOverride);
+                }));
     }
+
+    private static ActivityLog AppendInfo(ActivityLog log, string message)
+        => log with { Messages = log.Messages.Add(new LogMessage(message, LogLevel.Information)) };
+
+    private static ActivityLog AppendWarning(ActivityLog log, string message)
+        => log with { Messages = log.Messages.Add(new LogMessage(message, LogLevel.Warning)) };
+
+    private static ActivityLog AppendError(ActivityLog log, string message)
+        => log with { Messages = log.Messages.Add(new LogMessage(message, LogLevel.Error)) };
+
+    /// <summary>
+    /// Source-set discovery via the workspace SyncedQuery registry — one
+    /// long-lived, cached, replayed <see cref="IObservable{T}"/> per
+    /// <paramref name="selfPath"/>. The first call spins up a single
+    /// <see cref="IMeshQueryCore.Query"/> per NodeType-resolved query
+    /// (union of <c>Sources</c> + <c>Tests</c>); subsequent compiles for the
+    /// same NodeType hit the registry's <c>Replay(1).RefCount()</c> cache and
+    /// skip the Initial re-fetch entirely. Live updates flow through too —
+    /// when a Source/Test Code node changes, the cached collection re-emits.
+    /// </summary>
+    private IObservable<IEnumerable<MeshNode>> GetSourceCollection(
+        NodeTypeDefinition? ntDef, string selfPath)
+    {
+        // SHARED with the per-NodeType hub's sources/IsDirty watcher and any
+        // layout-area that lists Source/Test children. Same cache id =
+        // ONE Replay(1).RefCount() upstream subscription = "what the
+        // compile sees" === "what the watcher computes IsDirty against".
+        // If the cache keys diverged, IsDirty could disagree with whatever
+        // bytes the compile produced (the bug class CodeEditRecompileTest
+        // catches). See NodeSources.GetSources / NodeSources.CacheId.
+        //
+        // 🚨 Run the source GetQuery under System. Source-set discovery is
+        // framework infrastructure, NOT a user-scoped read. Under a user-triggered
+        // (or thread-hopped) compile the ambient identity can be lost, and the
+        // per-source RLS check then routes a CheckPermission back INTO this hub —
+        // a self-call that stalls the read until the ~45s sync-stream heartbeat
+        // (the ~42s compile freeze; kickoff activity stuck Running at "Invoking
+        // compiler…"). Observable.Using keeps the System scope alive for the live
+        // GetQuery subscription. Mirrors InstallSourcesWatcher.
+        var accessService = hub.ServiceProvider.GetService<AccessService>();
+        return Observable.Using(
+            () => accessService?.ImpersonateAsSystem()
+                  ?? System.Reactive.Disposables.Disposable.Empty,
+            _ => NodeSources.GetSources(hub.GetWorkspace(), ntDef, selfPath));
+    }
+
+    /// <summary>
+    /// Returns the maximum <c>LastModified</c> across all source Code nodes that
+    /// would feed a compile of <paramref name="ntDef"/>. Reads from the cached
+    /// SyncedQuery so cache invalidation tracks the exact same set of files the
+    /// compile reads. Returns <see cref="DateTimeOffset.MinValue"/> if there are
+    /// no sources.
+    /// </summary>
+    private IObservable<DateTimeOffset> DiscoverSourceMaxLastModified(
+        NodeTypeDefinition? ntDef, string selfPath,
+        IReadOnlyList<MeshNode>? sourcesOverride = null) =>
+        ResolveSources(ntDef, selfPath, sourcesOverride)
+            .Take(1)
+            .Select(nodes => nodes.Aggregate(
+                DateTimeOffset.MinValue,
+                (acc, n) => n.LastModified > acc ? n.LastModified : acc));
+
+    /// <summary>
+    /// Captures <c>{path → MeshNode.LastModified.Ticks}</c> for every source Code/Test
+    /// node that feeds a compile of <paramref name="ntDef"/>. Sibling to
+    /// <see cref="DiscoverSourceMaxLastModified"/> — same SyncedQuery, different
+    /// aggregation. Used by the compile watcher to populate
+    /// <c>NodeTypeDefinition.CompiledSources</c> on success so a future
+    /// recompile-needed check is a data comparison (added/removed/modified)
+    /// instead of a max-LastModified timing guess.
+    /// <para>
+    /// Uses <c>LastModified.Ticks</c> (not <c>Version</c>) because the framework's
+    /// <c>UpdateNodeRequest</c> handler reliably refreshes <c>LastModified</c>, while
+    /// <c>MeshNode.Version</c> is bumped only by the local workspace's
+    /// <c>MeshNodeTypeSource</c> stamp and may not propagate through the synced
+    /// mesh-level query that <c>HandleCreateRelease</c> reads from.
+    /// </para>
+    /// </summary>
+    public IObservable<ImmutableDictionary<string, long>> DiscoverSourceVersionSnapshot(
+        NodeTypeDefinition? ntDef, string selfPath,
+        IReadOnlyList<MeshNode>? sourcesOverride = null) =>
+        ResolveSources(ntDef, selfPath, sourcesOverride)
+            .Take(1)
+            .Select(nodes => nodes
+                .Where(n => !string.IsNullOrEmpty(n.Path))
+                .Aggregate(
+                    ImmutableDictionary<string, long>.Empty,
+                    (acc, n) => acc.SetItem(n.Path, n.LastModified.UtcTicks)));
+
+    /// <summary>
+    /// Resolves the source set for a compile run. When the caller hands in a
+    /// <paramref name="sourcesOverride"/> (the freshly-observed set from
+    /// <c>HandleCreateRelease</c>'s uncached <c>IMeshService.Query</c>),
+    /// use that — it's the authoritative post-update snapshot the trigger
+    /// already evaluated. Otherwise fall back to the cached SyncedQuery.
+    /// </summary>
+    private IObservable<IEnumerable<MeshNode>> ResolveSources(
+        NodeTypeDefinition? ntDef, string selfPath, IReadOnlyList<MeshNode>? sourcesOverride)
+    {
+        if (sourcesOverride is not null)
+            return Observable.Return<IEnumerable<MeshNode>>(sourcesOverride);
+        return GetSourceCollection(ntDef, selfPath);
+    }
+
+    /// <summary>
+    /// IObservable end-to-end. Source discovery rides the cached SyncedQuery
+    /// registered for this NodeType; @@ include resolution composes via
+    /// <see cref="ResolveCodeIncludes"/>. The only Task→Observable bridge is
+    /// the Roslyn <see cref="CompileAsync"/> call. No <c>Observable.FromAsync</c>,
+    /// no <c>await</c> on hub round-trips — both are the canonical deadlock
+    /// patterns documented in <c>Doc/Architecture/AsynchronousCalls.md</c>.
+    /// </summary>
+    private IObservable<(string? Path, ActivityLog Log)> CompileCore(
+        MeshNode node, NodeTypeDefinition? ntDef, string selfPath, ActivityLog log,
+        IReadOnlyList<MeshNode>? sourcesOverride = null)
+    {
+        var nodeName = cacheService.SanitizeNodeName(node.Path);
+        var executedQueries = CodeQueryResolver
+            .ExpandAll(ntDef?.Sources, CodeQueryResolver.DefaultSources, selfPath)
+            .Concat(CodeQueryResolver.ExpandAll(ntDef?.Tests, CodeQueryResolver.DefaultTests, selfPath))
+            .ToList();
+        var matchedCodePaths = new List<string>();
+
+        // Source discovery: prefer the caller-supplied freshly-observed sources
+        // (HandleCreateRelease's uncached IMeshService.Query snapshot —
+        // authoritative for the just-modified Code node), falling back to the
+        // workspace SyncedQuery registry's Replay(1) cache when no override is
+        // supplied. Without the override, the .Take(1) on the cached observable
+        // could pick up the pre-update Initial emission and the V2 compile would
+        // silently consume V1 source — that was the V1↔V2 mismatch root cause in
+        // CodeEditRecompileTest.
+        var discoverCodeFiles = ResolveSources(ntDef, selfPath, sourcesOverride)
+            .Take(1)
+            .Select(matches =>
+            {
+                var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                var acc = new List<CodeConfiguration>();
+                foreach (var n in matches)
+                {
+                    if (string.IsNullOrEmpty(n.Path) || !seen.Add(n.Path))
+                        continue;
+                    if (n.Content is CodeConfiguration cf
+                        && !string.IsNullOrWhiteSpace(cf.Code))
+                    {
+                        // Skip executable scripts — they run via the kernel
+                        // (ExecuteScriptRequest), not folded into the parent
+                        // NodeType's Roslyn unit. Top-level statements would
+                        // collide with class declarations from Source/ siblings
+                        // ("Top-level statements must precede namespace and
+                        // type declarations"). Test/ commonly mixes both
+                        // shapes; this filter lets both coexist.
+                        if (cf.IsExecutable)
+                        {
+                            logger.LogDebug(
+                                "Source discovery for {NodePath}: skipping executable Code {CodePath} — runs via kernel only",
+                                node.Path, n.Path);
+                            continue;
+                        }
+                        acc.Add(cf);
+                        matchedCodePaths.Add(n.Path);
+                    }
+                }
+                logger.LogDebug(
+                    "Source discovery for {NodePath}: matched {Count} Code nodes from {QueryCount} queries",
+                    node.Path, matchedCodePaths.Count, executedQueries.Count);
+                return acc;
+            });
+
+        return discoverCodeFiles
+            .SelectMany(codeFiles =>
+            {
+                // Stage: resolve @@ include references reactively. Each include lookup
+                // composes via ResolveCodeIncludes (already an IObservable<string>). No await.
+                if (codeFiles.Count == 0)
+                    return Observable.Return(codeFiles);
+
+                IObservable<List<CodeConfiguration>> includeChain =
+                    Observable.Return(new List<CodeConfiguration>(codeFiles.Count));
+                foreach (var codeFile in codeFiles)
+                {
+                    var cf = codeFile;
+                    includeChain = includeChain.SelectMany(acc =>
+                        ResolveCodeIncludes(cf.Code!, new HashSet<string>())
+                            .Select(resolvedCode =>
+                            {
+                                acc.Add(resolvedCode != cf.Code ? cf with { Code = resolvedCode } : cf);
+                                return acc;
+                            }));
+                }
+                return includeChain;
+            })
+            .SelectMany(codeFiles =>
+            {
+                // Final stage: combine + compile. The Roslyn `Compile` call itself is
+                // the only Task→Observable bridge in this whole method.
+                CodeConfiguration? codeFile = codeFiles.Count switch
+                {
+                    0 => null,
+                    1 => codeFiles[0],
+                    _ => new CodeConfiguration { Code = string.Join("\n\n", codeFiles.Select(cf => cf.Code)) }
+                };
+                var configuration = ntDef?.Configuration;
+                var contentCollections = ntDef?.ContentCollections;
+
+                // Snapshot the discovery into the activity log: every executed query +
+                // every matched Code path. Lets the response carry "compile saw N
+                // source files from queries [Q1, Q2…]" without re-running the pipeline.
+                var discoveryLog = log;
+                foreach (var q in executedQueries)
+                    discoveryLog = AppendInfo(discoveryLog, $"Source query: {q}");
+                if (matchedCodePaths.Count == 0)
+                {
+                    discoveryLog = AppendWarning(discoveryLog,
+                        $"Source discovery for '{node.Path}' matched 0 Code nodes — " +
+                        "check that the Source Code nodes exist and the NodeType's " +
+                        "`Sources` list points at them.");
+                }
+                else
+                {
+                    discoveryLog = AppendInfo(discoveryLog,
+                        $"Source discovery matched {matchedCodePaths.Count} Code node(s): " +
+                        string.Join(", ", matchedCodePaths));
+                }
+
+                // 🚨 Compile on the ThreadPool via Task.Run, never inline and never the IoPool.
+                // For in-memory compilation CompileAsyncCore has NO await before the synchronous
+                // Roslyn Emit (CompileToMemory), so CompileAsync() runs the ENTIRE compile
+                // synchronously — the old `CompileAsync(...).ToObservable()` ran it on whatever
+                // thread subscribed (the activity hub's action block), wedging the mesh; and
+                // `_ioPool.Run` re-entered/parked on the Compile pool's SemaphoreSlim gate (idle
+                // 40s wait). Task.Run (TaskScheduler.Default) has no gate and never captures the
+                // calling scheduler — see OnThreadPool.
+                return OnThreadPool(() =>
+                        CompileAsync(codeFile, configuration, contentCollections, node, CancellationToken.None))
+                    .Select(actualPath =>
+                    {
+                        ActivityLog finalLog;
+                        string? finalPath;
+                        if (cacheService.IsDiskCacheEnabled)
+                        {
+                            if (actualPath != null && File.Exists(actualPath))
+                            {
+                                logger.LogDebug(
+                                    "Compiled assembly for node {NodePath} at {DllPath}",
+                                    node.Path, actualPath);
+                                finalPath = actualPath;
+                                finalLog = AppendInfo(discoveryLog,
+                                    $"Compiled assembly written to {actualPath}.");
+                            }
+                            else
+                            {
+                                logger.LogWarning(
+                                    "Assembly compilation succeeded but DLL not found at {DllPath}", actualPath);
+                                finalPath = null;
+                                finalLog = AppendError(discoveryLog,
+                                    $"Compilation succeeded but DLL not found at {actualPath}.");
+                            }
+                        }
+                        else
+                        {
+                            logger.LogDebug("Compiled assembly for node {NodePath} (in-memory)", node.Path);
+                            finalPath = actualPath;
+                            finalLog = AppendInfo(discoveryLog,
+                                $"Compiled assembly loaded in-memory ({actualPath}).");
+                        }
+                        return (finalPath, finalLog.Finish((int)hub.Version, ActivityStatus.Succeeded));
+                    })
+                    .Catch<(string?, ActivityLog), CompilationException>(ex =>
+                    {
+                        var diag = BuildSourceDiscoveryReport(executedQueries, matchedCodePaths);
+                        logger.LogError(ex, "Failed to compile assembly for node {NodePath}. {Diagnostics}",
+                            node.Path, diag);
+                        var failedLog = AppendError(discoveryLog,
+                                $"Compilation failed: {ex.Message}\n--- Source discovery ---\n{diag}")
+                            .Finish((int)hub.Version, ActivityStatus.Failed);
+                        return Observable.Return<(string?, ActivityLog)>((null, failedLog));
+                    });
+            });
+    }
+
+    /// <summary>
+    /// Formats a failed Roslyn <c>Emit</c>'s diagnostics into a complete, never-empty error
+    /// message — each line carries the diagnostic <c>CS####</c> id, severity, source line and
+    /// message. Falls back to Warning-severity diagnostics when there are no Errors, and to an
+    /// explanatory sentence when Emit failed with NO diagnostics at all (typically a missing
+    /// source file or a configuration lambda referencing a type that was never compiled). The
+    /// previous <c>Where(Severity == Error).Select(GetMessage)</c> produced a bare
+    /// "Compilation failed for 'X':" whenever the failure carried no Error-severity diagnostic.
+    /// </summary>
+    private static string FormatCompileFailure(string nodePath, IEnumerable<Diagnostic> diagnostics)
+    {
+        var joined = string.Join('\n', diagnostics
+            .Where(d => d.Severity is DiagnosticSeverity.Error or DiagnosticSeverity.Warning)
+            .OrderByDescending(d => d.Severity)
+            .Select(d =>
+            {
+                var loc = d.Location.IsInSource
+                    ? $" (line {d.Location.GetLineSpan().StartLinePosition.Line + 1})"
+                    : "";
+                return $"{d.Id} {d.Severity}{loc}: {d.GetMessage()}";
+            }));
+        return !string.IsNullOrEmpty(joined)
+            ? $"Compilation failed for '{nodePath}':\n{joined}"
+            : $"Compilation failed for '{nodePath}': Roslyn emit failed but produced no error/warning "
+              + "diagnostics — this usually means a source file was not found, or the configuration "
+              + "lambda references a type that was never compiled (see the source-discovery report below).";
+    }
+
+    // Sentinel FilePath for the generated skeleton tree — must match the one the LSP uses
+    // so skeleton-internal diagnostics (framework noise the user can't act on) are filtered out.
+    private const string SkeletonDiagnosticsPath = "__skeleton__.cs";
+
+    /// <summary>
+    /// On a FAILED compile, re-derive the diagnostics in their structured, per-source-file
+    /// form by assembling ONE LSP-style compilation (skeleton tree + one tree per src/test
+    /// Code node, each carrying the MeshNode path as its <c>FilePath</c>) — exactly the model
+    /// <see cref="SpeculativeCompilation"/> / <see cref="MeshNodeLanguageService"/> use, so a
+    /// diagnostic's <see cref="Lsp.SourceLocation.SourcePath"/> is the Code node path. This is
+    /// what lets the GUI mark each error at its exact line/column in a Monaco editor and link to
+    /// the source. Runs only on failure (off the hub via <see cref="OnThreadPool{T}(Func{T})"/>),
+    /// so the working success emit path is untouched. Reuses <see cref="GetCompilationInputsAsync"/>
+    /// (already source-discovery-, @@-include- and NuGet-resolved).
+    /// </summary>
+    private IObservable<IReadOnlyList<Lsp.DiagnosticInfo>> BuildFailureDiagnostics(
+        MeshNode node, IReadOnlyList<MeshNode>? sourcesOverride)
+        => GetCompilationInputsAsync(node, sourcesOverride)
+            .Take(1)
+            .SelectMany(inputs => inputs is null
+                ? Observable.Return<IReadOnlyList<Lsp.DiagnosticInfo>>(Array.Empty<Lsp.DiagnosticInfo>())
+                : OnThreadPool(() => DiagnoseInputs(inputs)))
+            // Diagnostics are best-effort GUI sugar — a failure here must never break the
+            // compile result; the flattened FormatCompileFailure summary still surfaces.
+            .Catch<IReadOnlyList<Lsp.DiagnosticInfo>, Exception>(ex =>
+            {
+                logger.LogDebug(ex, "Structured failure-diagnostics capture failed for {NodePath} (best-effort)", node.Path);
+                return Observable.Return<IReadOnlyList<Lsp.DiagnosticInfo>>(Array.Empty<Lsp.DiagnosticInfo>());
+            });
+
+    private static IReadOnlyList<Lsp.DiagnosticInfo> DiagnoseInputs(CompilationInputs inputs)
+    {
+        var trees = new List<SyntaxTree>(inputs.Sources.Length + 1)
+        {
+            CSharpSyntaxTree.ParseText(
+                Microsoft.CodeAnalysis.Text.SourceText.From(inputs.SkeletonSource),
+                inputs.ParseOptions, path: SkeletonDiagnosticsPath),
+        };
+        foreach (var (path, code) in inputs.Sources)
+            trees.Add(CSharpSyntaxTree.ParseText(
+                Microsoft.CodeAnalysis.Text.SourceText.From(code), inputs.ParseOptions, path: path));
+
+        // Structured failure diagnostics are best-effort: pass no generator candidates so
+        // RunSourceGenerators is a no-op here (the authoritative flat summary from the production
+        // compile already reflects generation). Avoids loading any generator on every failed compile.
+        var compilation = RunSourceGenerators(
+            CSharpCompilation.Create(inputs.AssemblyName, trees, inputs.References, inputs.CompilationOptions),
+            Array.Empty<string>(), Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance, CancellationToken.None);
+
+        var diags = compilation.GetDiagnostics();
+        if (diags.IsDefaultOrEmpty) return Array.Empty<Lsp.DiagnosticInfo>();
+
+        var result = new List<Lsp.DiagnosticInfo>(diags.Length);
+        foreach (var d in diags)
+        {
+            if (d.Severity is not (DiagnosticSeverity.Error or DiagnosticSeverity.Warning)) continue;
+            // Skeleton-internal diagnostics are framework noise the user can't act on.
+            if (d.Location.SourceTree?.FilePath == SkeletonDiagnosticsPath) continue;
+            result.Add(ToDiagnosticInfo(d));
+        }
+        // Errors first, then by file then position — stable order for the GUI.
+        return result
+            .OrderByDescending(d => d.Severity)
+            .ThenBy(d => d.Location?.SourcePath, StringComparer.Ordinal)
+            .ThenBy(d => d.Location?.Range.Start.Line ?? 0)
+            .ToList();
+    }
+
+    private static Lsp.DiagnosticInfo ToDiagnosticInfo(Diagnostic d)
+    {
+        Lsp.SourceLocation? location = null;
+        if (d.Location.IsInSource && d.Location.SourceTree?.FilePath is { Length: > 0 } path)
+        {
+            var span = d.Location.GetLineSpan();
+            location = new Lsp.SourceLocation(
+                path,
+                new Lsp.SourceRange(
+                    new Lsp.SourcePosition(span.StartLinePosition.Line, span.StartLinePosition.Character),
+                    new Lsp.SourcePosition(span.EndLinePosition.Line, span.EndLinePosition.Character)));
+        }
+        return new Lsp.DiagnosticInfo(d.Id, MapDiagnosticSeverity(d.Severity), d.GetMessage(), location);
+    }
+
+    private static Lsp.DiagnosticSeverity MapDiagnosticSeverity(DiagnosticSeverity s) => s switch
+    {
+        DiagnosticSeverity.Hidden => Lsp.DiagnosticSeverity.Hidden,
+        DiagnosticSeverity.Info => Lsp.DiagnosticSeverity.Info,
+        DiagnosticSeverity.Warning => Lsp.DiagnosticSeverity.Warning,
+        DiagnosticSeverity.Error => Lsp.DiagnosticSeverity.Error,
+        _ => Lsp.DiagnosticSeverity.Info,
+    };
 
     private static string BuildSourceDiscoveryReport(IReadOnlyList<string> executedQueries, IReadOnlyList<string> matchedCodePaths)
     {
@@ -423,7 +737,7 @@ internal class MeshNodeCompilationService(
             sb.AppendLine($"  - {q}");
         sb.AppendLine($"Matched Code nodes ({matchedCodePaths.Count}):");
         if (matchedCodePaths.Count == 0)
-            sb.AppendLine("  (none) — the configuration lambda cannot reference types because no source files were included. Check that your _Source Code nodes exist and that the NodeType's `sources` list points at them.");
+            sb.AppendLine("  (none) — the configuration lambda cannot reference types because no source files were included. Check that your Source Code nodes exist and that the NodeType's `sources` list points at them.");
         else
             foreach (var p in matchedCodePaths)
                 sb.AppendLine($"  - {p}");
@@ -431,70 +745,413 @@ internal class MeshNodeCompilationService(
     }
 
     /// <inheritdoc />
-    public async Task<NodeCompilationResult?> CompileAndGetConfigurationsAsync(MeshNode node, CancellationToken ct = default)
+    public IObservable<NodeCompilationResult?> CompileAndGetConfigurations(
+        MeshNode node,
+        IReadOnlyList<MeshNode>? sourcesOverride = null)
+        => GetAssemblyLocationWithLog(node, sourcesOverride).SelectMany(t =>
+        {
+            var (assemblyLocation, log) = t;
+            if (string.IsNullOrEmpty(assemblyLocation))
+                // Failed compile: capture the per-source-file Roslyn diagnostics (one
+                // LSP-style per-file-tree compilation of all this NodeType's src+test) so
+                // the Settings → Progress error page can mark each error at its exact
+                // position in a Monaco editor and link to the Code node. Failure-only — the
+                // working success emit is untouched. The flattened summary still lives on
+                // the ActivityLog (FormatCompileFailure).
+                return BuildFailureDiagnostics(node, sourcesOverride)
+                    .Select(diags => (NodeCompilationResult?)new NodeCompilationResult(
+                        null, [], log, Diagnostics: diags));
+
+            // Capture the per-source version snapshot AFTER the compile resolved
+            // its source set so the snapshot reflects the same storage enumeration
+            // the cache check uses. Compose via SelectMany so the observable chain
+            // stays reactive (no Task bridges, no .Result deadlocks).
+            var ntDef = node.ContentAs<NodeTypeDefinition>(JsonOptions);
+            var selfPath = ntDef != null ? node.Path : node.NodeType ?? node.Path;
+            return DiscoverSourceVersionSnapshot(ntDef, selfPath ?? "", sourcesOverride)
+                // 🚨 Assembly load + GetTypes() + MeshNodeProviderAttribute reflection +
+                // config instantiation is heavy, synchronous, blocking work. Run it on the
+                // ThreadPool (Task.Run), never inline (would wedge whatever hub action block
+                // emitted upstream) and never the IoPool's gated blocking factory.
+                .SelectMany(snapshot => OnThreadPool(() =>
+                    CompileResultFromAssembly(node, assemblyLocation, log, snapshot)))
+                // Re-Finish the log after CompileResultFromAssembly. CompileCore already
+                // Finished it Succeeded, but CompileResultFromAssembly's downstream steps
+                // (assembly load, MeshNodeProviderAttribute reflection) can append fresh
+                // Error messages — those need to flip Status to Failed.
+                // ActivityLog.Finish(version, override) takes MAX(override, GetFinalStatus
+                // from Messages), so an Error message appended after the first Finish
+                // bumps Status to Failed automatically.
+                .Select(result => result is null
+                    ? result
+                    : result with { Log = result.Log?.Finish((int)hub.Version, ActivityStatus.Succeeded) })
+                .SelectMany(result => UploadToStoreIfNeeded(result, node));
+        });
+
+    /// <summary>
+    /// After a successful Roslyn compile, push the bytes through <see cref="IAssemblyStore"/>
+    /// so cross-silo readers can hydrate the same compile output without recompiling.
+    /// Stamps the returned <see cref="AssemblyStoreLocation"/> onto a new
+    /// <see cref="NodeCompilationResult"/>; the watcher then denormalises Collection +
+    /// ContentPath onto <c>NodeTypeDefinition.LatestAssembly{Collection,Path}</c>.
+    /// <para>
+    /// Upload failures don't fail the compile — the local assembly is still usable in
+    /// the producing silo, only cross-silo activation needs the store. We log and pass
+    /// the un-stamped result through so the compile completes and a fresh Release
+    /// MeshNode still gets written.
+    /// </para>
+    /// <para>
+    /// Memory-mode compiles (<c>memory://...</c>) skip the upload — there are no bytes
+    /// on disk to read, and the in-memory ALC the cache service holds is per-process by
+    /// design. Memory mode is reserved for unit-test fast paths; production silos run
+    /// disk-cache mode where this upload always happens.
+    /// </para>
+    /// </summary>
+    private IObservable<NodeCompilationResult?> UploadToStoreIfNeeded(NodeCompilationResult? result, MeshNode node)
     {
-        var assemblyLocation = await GetAssemblyLocationAsync(node, ct);
-        if (string.IsNullOrEmpty(assemblyLocation))
-            return null;
+        if (result is null
+            || string.IsNullOrEmpty(result.AssemblyLocation)
+            || result.AssemblyLocation.StartsWith("memory://", StringComparison.Ordinal))
+            return Observable.Return(result);
+        if (result.NodeTypeConfigurations.Count == 0)
+            return Observable.Return(result);
+        if (_assemblyStore is NullAssemblyStore)
+        {
+            // A null store is a misconfiguration in any non-trivial host. Log once
+            // per compile so the operator notices — silent skip strands cross-silo
+            // activation with Status=Ok + null assembly fields.
+            logger.LogWarning(
+                "Compile for {NodePath} produced an assembly but IAssemblyStore is NullAssemblyStore — " +
+                "downstream cross-silo activation will see Status=Ok with null LatestAssembly fields. " +
+                "Register a real IAssemblyStore (AddBlobAssemblyStore / AddFileSystemAssemblyStore).",
+                node.Path);
+            return Observable.Return(result);
+        }
 
-        var nodeName = cacheService.SanitizeNodeName(node.Path);
-
+        byte[] dll;
+        byte[]? pdb = null;
         try
         {
-            // Load assembly using isolated context
-            var assembly = cacheService.LoadAssembly(nodeName);
-            if (assembly == null)
-            {
-                logger.LogWarning("Failed to load assembly for {NodePath}", node.Path);
-                return new NodeCompilationResult(assemblyLocation, []);
-            }
+            dll = File.ReadAllBytes(result.AssemblyLocation);
+            var pdbPath = Path.ChangeExtension(result.AssemblyLocation, ".pdb");
+            if (File.Exists(pdbPath))
+                pdb = File.ReadAllBytes(pdbPath);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex,
+                "AssemblyStore upload skipped for {NodePath}: could not read bytes from {Path}",
+                node.Path, result.AssemblyLocation);
+            return Observable.Return(result);
+        }
 
-            // Extract NodeTypeConfigurations from MeshNodeProviderAttribute.Nodes
-            var configurations = new List<NodeTypeConfiguration>();
-            foreach (var type in assembly.GetTypes())
+        var version = node.Version > 0 ? node.Version : 1;
+        return _assemblyStore.PutWithLocation(node.Path, version, dll, pdb)
+            .Select(loc => (NodeCompilationResult?)(result with
             {
-                if (typeof(MeshNodeProviderAttribute).IsAssignableFrom(type) && !type.IsAbstract)
+                Collection = string.IsNullOrEmpty(loc.Collection) ? null : loc.Collection,
+                ContentPath = string.IsNullOrEmpty(loc.ContentPath) ? null : loc.ContentPath,
+                Version = version
+            }))
+            .Catch<NodeCompilationResult?, Exception>(ex =>
+            {
+                logger.LogWarning(ex,
+                    "AssemblyStore upload failed for {NodePath}@v{Version}; compile still succeeded locally",
+                    node.Path, version);
+                return Observable.Return(result);
+            });
+    }
+
+    /// <inheritdoc />
+    public IObservable<NodeCompilationResult?> GetConfigurationsFromExistingAssembly(string localPath, string nodeTypePath)
+    {
+        if (string.IsNullOrEmpty(localPath))
+            return Observable.Return((NodeCompilationResult?)null);
+
+        // Synthesise a minimal MeshNode for CompileResultFromAssembly's ALC bookkeeping.
+        // The Path is what determines the cache key — the rest of the node is irrelevant
+        // for this path because we're not running Roslyn.
+        var stubNode = new MeshNode(MeshNode.FromPath(nodeTypePath).Id, MeshNode.FromPath(nodeTypePath).Namespace);
+        var log = new ActivityLog(ActivityCategory.Compilation) { HubPath = nodeTypePath };
+        var result = CompileResultFromAssembly(stubNode, localPath, log,
+            ImmutableDictionary<string, long>.Empty);
+        // CompileResultFromAssembly hands back a log that's still Running (the
+        // constructor default). Finish it so callers (response.Log readers,
+        // activity-MeshNode renderers) see a terminal Succeeded / Failed.
+        // ActivityLog.Finish reads its own Messages: any Error appended along
+        // the way (assembly load fail, reflection fail) flips status to Failed
+        // automatically — we pass Succeeded as the floor, the message-level
+        // dominates a higher severity. CompileCore on the fresh-compile path
+        // already Finishes; this branch covers the assembly-hydration shortcut.
+        if (result is not null)
+        {
+            result = result with
+            {
+                Log = (result.Log ?? log).Finish((int)hub.Version, ActivityStatus.Succeeded)
+            };
+        }
+        return Observable.Return(result);
+    }
+
+    /// <summary>
+    /// Reactive: emits the assembled <see cref="CompilationInputs"/> for the NodeType — every
+    /// source as its own paired <c>(Path, Code)</c> entry, the @@-include resolution applied,
+    /// NuGet refs resolved, the skeleton (assembly attribute + generated provider class)
+    /// generated separately. Callers build their own <c>CSharpCompilation</c> or
+    /// <c>AdhocWorkspace</c> from these inputs — per-file syntax trees mean positions in
+    /// language-service queries map back to what the user is editing in Monaco.
+    /// <para>
+    /// Distinct from the emit path (<see cref="CompileCore"/>) which concatenates all sources
+    /// into one syntax tree to produce an assembly. Used by <c>MeshNodeLanguageService</c>
+    /// (hover / completion / diagnostics) and <c>SpeculativeCompilation</c> (Coder pre-flight
+    /// check). Does NOT register NuGet probing directories — that's emit-path bookkeeping.
+    /// </para>
+    /// </summary>
+    public IObservable<CompilationInputs?> GetCompilationInputsAsync(
+        MeshNode node,
+        IReadOnlyList<MeshNode>? sourcesOverride = null)
+    {
+        if (string.IsNullOrEmpty(node.NodeType))
+            return Observable.Return<CompilationInputs?>(null);
+
+        NodeTypeDefinition? selfDef = node.ContentAs<NodeTypeDefinition>(JsonOptions);
+        IObservable<NodeTypeDefinition?> resolveDef = selfDef != null
+            ? Observable.Return<NodeTypeDefinition?>(selfDef)
+            : hub.GetMeshNode(node.NodeType, TimeSpan.FromSeconds(15))
+                .Select(typeNode => typeNode.ContentAs<NodeTypeDefinition>(JsonOptions));
+        string selfPath = selfDef != null ? node.Path : node.NodeType;
+
+        return resolveDef.SelectMany(ntDef =>
+            ResolveSources(ntDef, selfPath, sourcesOverride)
+                .Take(1)
+                .SelectMany(matches =>
                 {
-                    var attribute = (MeshNodeProviderAttribute?)Activator.CreateInstance(type);
-                    if (attribute != null)
+                    var pairs = CollectSourcePairs(matches);
+                    return ResolveIncludesForPairs(pairs)
+                        .SelectMany(resolvedPairs =>
+                            // Reactive input assembly — NOT in the pool (see
+                            // AssembleCompilationInputs). Only the Roslyn Emit border
+                            // touches the pool.
+                            AssembleCompilationInputs(node, ntDef, resolvedPairs));
+                }));
+    }
+
+    /// <summary>
+    /// Discovers source <c>(Path, CodeConfiguration, LastModifiedTicks)</c> triples — mirrors
+    /// the dedup + IsExecutable filter from <see cref="CompileCore"/>'s discovery step but
+    /// retains paths alongside configurations so language services can address each file.
+    /// </summary>
+    private static List<(string Path, CodeConfiguration Config, long LastModifiedTicks)>
+        CollectSourcePairs(IEnumerable<MeshNode> matches)
+    {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var pairs = new List<(string, CodeConfiguration, long)>();
+        foreach (var n in matches)
+        {
+            if (string.IsNullOrEmpty(n.Path) || !seen.Add(n.Path)) continue;
+            if (n.Content is CodeConfiguration cf
+                && !string.IsNullOrWhiteSpace(cf.Code)
+                && !cf.IsExecutable)
+            {
+                pairs.Add((n.Path, cf, n.LastModified.UtcTicks));
+            }
+        }
+        return pairs;
+    }
+
+    /// <summary>Resolves @@ includes for each source independently, preserving paths. Sequential aggregation matches <see cref="CompileCore"/>.</summary>
+    private IObservable<List<(string Path, CodeConfiguration Config, long LastModifiedTicks)>>
+        ResolveIncludesForPairs(IReadOnlyList<(string Path, CodeConfiguration Config, long LastModifiedTicks)> pairs)
+    {
+        if (pairs.Count == 0)
+            return Observable.Return(new List<(string, CodeConfiguration, long)>());
+
+        IObservable<List<(string, CodeConfiguration, long)>> chain =
+            Observable.Return(new List<(string, CodeConfiguration, long)>(pairs.Count));
+        foreach (var p in pairs)
+        {
+            var pair = p;
+            chain = chain.SelectMany(acc =>
+                ResolveCodeIncludes(pair.Config.Code!, new HashSet<string>())
+                    .Select(resolvedCode =>
                     {
-                        // Extract configurations from Nodes property
-                        foreach (var meshNode in attribute.Nodes)
+                        var resolvedConfig = !ReferenceEquals(resolvedCode, pair.Config.Code)
+                            ? pair.Config with { Code = resolvedCode }
+                            : pair.Config;
+                        acc.Add((pair.Path, resolvedConfig, pair.LastModifiedTicks));
+                        return acc;
+                    }));
+        }
+        return chain;
+    }
+
+    private IObservable<CompilationInputs?> AssembleCompilationInputs(
+        MeshNode node,
+        NodeTypeDefinition? ntDef,
+        IReadOnlyList<(string Path, CodeConfiguration Config, long LastModifiedTicks)> resolvedPairs)
+    {
+        var nodeName = cacheService.SanitizeNodeName(node.Path);
+
+        // Skeleton: assembly attribute + generated provider class. Passing codeFile=null
+        // suppresses user-code emission so the skeleton stays decoupled from user sources.
+        var rawSkeleton = _attributeGenerator.GenerateAttributeSource(
+            node, codeFile: null, ntDef?.Configuration, ntDef?.ContentCollections);
+        var (skeleton, skeletonNugetRefs) = NuGetDirectiveParser.Extract(rawSkeleton);
+
+        // User #r "nuget:..." directives can sit in any source file. Aggregate across files
+        // so cross-file references resolve. (Skeleton-derived nugetRefs is normally empty —
+        // the generator doesn't emit #r — but handle them for forward-compatibility.)
+        var allNugetRefs = new List<NuGetPackageReference>(skeletonNugetRefs);
+        var strippedSources = new List<(string Path, string Code, long LastModifiedTicks)>(resolvedPairs.Count);
+        foreach (var p in resolvedPairs)
+        {
+            var (stripped, refs) = NuGetDirectiveParser.Extract(p.Config.Code ?? string.Empty);
+            allNugetRefs.AddRange(refs);
+            strippedSources.Add((p.Path, stripped, p.LastModifiedTicks));
+        }
+
+        // 🚨 100% reactive — NO await, and the input assembly is NOT wrapped in
+        // _ioPool.Run. The only async leaf is NuGet restore (network IO), and it runs
+        // ONLY when a `#r "nuget:"` directive is present — bridged through the IoPool
+        // reactively. The common case (no NuGet) is a pure Observable.Return, so the
+        // pipeline stays reactive end-to-end and never blocks/parks: only Roslyn's
+        // synchronous Emit touches the pool (see CompileCore → OnThreadPool/InvokeBlocking).
+        IObservable<ImmutableArray<MetadataReference>> referencesObs =
+            allNugetRefs.Count > 0
+                ? _ioPool.Run(ct => nugetResolver.ResolveAsync(allNugetRefs, targetFramework: null, ct))
+                    .Select(resolved => _references
+                        .Concat(resolved.AssemblyPaths.Select(p => (MetadataReference)MetadataReference.CreateFromFile(p)))
+                        .ToImmutableArray())
+                : Observable.Return(_references.ToImmutableArray());
+
+        return referencesObs.Select(references =>
+        {
+            var parseOptions = new CSharpParseOptions(documentationMode: DocumentationMode.Diagnose);
+            var compilationOptions = new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
+                .WithOptimizationLevel(OptimizationLevel.Debug)
+                .WithPlatform(Platform.AnyCpu);
+
+            var sourcesArray = strippedSources
+                .Select(s => (s.Path, s.Code))
+                .ToImmutableArray();
+
+            var versions = ImmutableDictionary<string, long>.Empty.WithComparers(StringComparer.OrdinalIgnoreCase);
+            foreach (var s in strippedSources)
+                versions = versions.SetItem(s.Path, s.LastModifiedTicks);
+
+            return (CompilationInputs?)new CompilationInputs(
+                AssemblyName: $"DynamicNode_{nodeName}",
+                Sources: sourcesArray,
+                SkeletonSource: skeleton,
+                References: references,
+                ParseOptions: parseOptions,
+                CompilationOptions: compilationOptions,
+                SourceVersions: versions);
+        });
+    }
+
+    private NodeCompilationResult? CompileResultFromAssembly(
+        MeshNode node, string assemblyLocation, ActivityLog log,
+        ImmutableDictionary<string, long> compiledSources)
+    {
+
+            var nodeName = cacheService.SanitizeNodeName(node.Path);
+
+            try
+            {
+                // Load from the exact path recorded on the node, not from the shared
+                // GetDllPath(nodeName) shorthand. Each release writes to a unique subdir
+                // so V1 and V2 ALCs are separate; loading from the canonical shared path
+                // would always return V1's assembly after V2 compiles. In-memory
+                // assemblies keep the old keyed-by-nodeName path.
+                var assembly = assemblyLocation.StartsWith("memory://", StringComparison.Ordinal)
+                    ? cacheService.LoadAssembly(nodeName)
+                    : cacheService.GetOrCreateLoadContextForPath(nodeName, assemblyLocation).LoadNodeAssembly();
+                if (assembly == null)
+                {
+                    // Promoted from Warning → Error: this is the root cause that
+                    // cascades into every downstream "SubscribeRequest timed out"
+                    // for hubs of this NodeType. Log noise from the cascade was
+                    // hiding this single offender — make it stand out so the
+                    // operator sees the cause, not the symptoms.
+                    logger.LogError(
+                        "Failed to load assembly for {NodePath} — the per-node hub for this " +
+                        "NodeType (and every instance of it) cannot activate. Subscribe / GetData " +
+                        "calls to its grains will time out. Common causes: corrupt cached .dll " +
+                        "(delete .mesh-cache to force recompile), source compilation error " +
+                        "(check the Code node's diagnostics), or missing dependency.",
+                        node.Path);
+                    // The build is NOT usable → record NO assembly. Downstream `ok` is
+                    // `Error is null && !IsNullOrEmpty(AssemblyLocation)`, so a null location
+                    // makes ok=false → CompilationStatus=Error, NO release, the emergency
+                    // compilation-error overlay renders the failure on the Overview, and the
+                    // first-build kickoff (gated on Status==null) does NOT retry. Recording the
+                    // assemblyLocation here was the wedge: it read as success (Status=Ok) while the
+                    // per-node hub could not actually activate against it → Subscribe parked.
+                    return new NodeCompilationResult(null, [],
+                        AppendError(log,
+                            $"Failed to load assembly at {assemblyLocation} — the build is not usable " +
+                            "(corrupt cached .dll or a missing dependency)."),
+                        compiledSources);
+                }
+
+                var configurations = new List<NodeTypeConfiguration>();
+                foreach (var type in assembly.GetTypes())
+                {
+                    if (typeof(MeshNodeProviderAttribute).IsAssignableFrom(type) && !type.IsAbstract)
+                    {
+                        var attribute = (MeshNodeProviderAttribute?)Activator.CreateInstance(type);
+                        if (attribute != null)
                         {
-                            var hubConfig = meshNode.HubConfiguration;
-                            if (hubConfig != null)
+                            foreach (var meshNode in attribute.Nodes)
                             {
-                                configurations.Add(new NodeTypeConfiguration
+                                var hubConfig = meshNode.HubConfiguration;
+                                if (hubConfig != null)
                                 {
-                                    NodeType = meshNode.Path,
-                                    DataType = typeof(object),
-                                    HubConfiguration = hubConfig,
-                                    DisplayName = meshNode.Name,
-                                    Icon = meshNode.Icon,
-                                });
+                                    configurations.Add(new NodeTypeConfiguration
+                                    {
+                                        NodeType = meshNode.Path,
+                                        DataType = typeof(object),
+                                        HubConfiguration = hubConfig,
+                                        DisplayName = meshNode.Name,
+                                        Icon = meshNode.Icon,
+                                    });
+                                }
                             }
                         }
                     }
                 }
+
+                logger.LogDebug("Extracted {Count} NodeTypeConfigurations from {AssemblyLocation}",
+                    configurations.Count, assemblyLocation);
+
+                return new NodeCompilationResult(assemblyLocation, configurations, log, compiledSources);
             }
-
-            logger.LogDebug("Extracted {Count} NodeTypeConfigurations from {AssemblyLocation}",
-                configurations.Count, assemblyLocation);
-
-            return new NodeCompilationResult(assemblyLocation, configurations);
-        }
-        catch (Exception ex)
-        {
-            logger.LogWarning(ex, "Failed to extract NodeTypeConfigurations from {AssemblyLocation}", assemblyLocation);
-            return new NodeCompilationResult(assemblyLocation, []);
-        }
+            catch (Exception ex)
+            {
+                // The assembly loaded but its types can't be realised — typically a MISSING
+                // DEPENDENCY (e.g. a referenced package that isn't deployed). Surface the loader
+                // detail so the overlay Overview names the actual problem ("could not load type X").
+                // Record NO assembly (location null): ok=false → CompilationStatus=Error, NO release,
+                // the overlay renders the failure, and the kickoff does not retry (Status != null).
+                var detail = ex is System.Reflection.ReflectionTypeLoadException rtl
+                    ? string.Join("; ", rtl.LoaderExceptions
+                        .Where(e => e is not null).Select(e => e!.Message).Distinct())
+                    : ex.Message;
+                logger.LogWarning(ex,
+                    "Failed to extract NodeTypeConfigurations from {AssemblyLocation}: {Detail}",
+                    assemblyLocation, detail);
+                return new NodeCompilationResult(null, [],
+                    AppendError(log, $"Failed to load the compiled assembly — {detail}"),
+                    compiledSources);
+            }
     }
 
     /// <summary>
     /// Compiles CodeConfiguration into an assembly using Roslyn.
     /// Supports both disk-based and in-memory compilation.
     /// </summary>
-    private async Task CompileAsync(
+    private Task<string?> CompileAsync(
         CodeConfiguration? codeFile,
         string? hubConfiguration,
         IReadOnlyList<ContentCollectionConfig>? contentCollections,
@@ -502,10 +1159,43 @@ internal class MeshNodeCompilationService(
         CancellationToken ct)
     {
         var nodeName = cacheService.SanitizeNodeName(node.Path);
+        // Single-flight: GetOrAdd with Lazy<T> ensures the factory runs at
+        // most once even under concurrent entry. All callers receive the
+        // SAME Task and await its result. The continuation evicts the entry
+        // once the task settles so a future invalidation triggers a fresh
+        // compile instead of returning the stale completed task.
+        var lazy = _inflightCompiles.GetOrAdd(nodeName, n =>
+            new Lazy<Task<string?>>(() => RunCompileAndEvict(
+                codeFile, hubConfiguration, contentCollections, node, n, ct)));
+        return lazy.Value;
+    }
 
-        // Invalidate old cache and prepare for recompilation
-        cacheService.InvalidateCache(nodeName);
+    private async Task<string?> RunCompileAndEvict(
+        CodeConfiguration? codeFile,
+        string? hubConfiguration,
+        IReadOnlyList<ContentCollectionConfig>? contentCollections,
+        MeshNode node,
+        string nodeName,
+        CancellationToken ct)
+    {
+        try
+        {
+            return await CompileAsyncCore(codeFile, hubConfiguration, contentCollections, node, nodeName, ct);
+        }
+        finally
+        {
+            _inflightCompiles.TryRemove(nodeName, out _);
+        }
+    }
 
+    private async Task<string?> CompileAsyncCore(
+        CodeConfiguration? codeFile,
+        string? hubConfiguration,
+        IReadOnlyList<ContentCollectionConfig>? contentCollections,
+        MeshNode node,
+        string nodeName,
+        CancellationToken ct)
+    {
         if (cacheService.IsDiskCacheEnabled)
         {
             cacheService.EnsureCacheDirectoryExists();
@@ -514,7 +1204,24 @@ internal class MeshNodeCompilationService(
         ct.ThrowIfCancellationRequested();
 
         // Generate full source with MeshNodeProviderAttribute (including content collections)
-        var source = _attributeGenerator.GenerateAttributeSource(node, codeFile, hubConfiguration, contentCollections);
+        var rawSource = _attributeGenerator.GenerateAttributeSource(node, codeFile, hubConfiguration, contentCollections);
+
+        // Strip #r "nuget:..." directives — Roslyn compilation (unlike scripting) does not process them.
+        // The BusinessRules scope generator is pulled in ONLY when the node Source EXPLICITLY declares
+        // `#r "nuget:MeshWeaver.BusinessRules.Generator"` — no auto-injection heuristic (that forced
+        // generator resolution on the compile path for any node merely mentioning IScope). Explicit
+        // #r → resolved here → discovered + run by RunSourceGenerators from the resolved assemblies.
+        var (source, nugetRefs) = NuGetDirectiveParser.Extract(rawSource);
+        IEnumerable<MetadataReference> references = _references;
+        IReadOnlyList<string> nugetAssemblyPaths = [];
+        if (nugetRefs.Length > 0)
+        {
+            var resolved = await nugetResolver.ResolveAsync(nugetRefs, targetFramework: null, ct);
+            references = _references.Concat(
+                resolved.AssemblyPaths.Select(p => MetadataReference.CreateFromFile(p)));
+            nugetAssemblyPaths = resolved.AssemblyPaths;
+            cacheService.RegisterProbingDirectories(nodeName, resolved.ProbingDirectories);
+        }
 
         // Write source file for debugging (only for disk cache)
         var sourcePath = cacheService.GetSourcePath(nodeName);
@@ -524,8 +1231,8 @@ internal class MeshNodeCompilationService(
             logger.LogDebug("Wrote source file for debugging: {SourcePath}", sourcePath);
         }
 
-        logger.LogInformation("Compiling assembly for {NodeName} ({Mode})",
-            nodeName, cacheService.IsDiskCacheEnabled ? "disk" : "in-memory");
+        logger.LogInformation("Compiling assembly for {NodeName} ({Mode}, {NuGetRefs} NuGet refs)",
+            nodeName, cacheService.IsDiskCacheEnabled ? "disk" : "in-memory", nugetRefs.Length);
 
         // Parse with source path and encoding embedded (critical for PDB source linking)
         var sourceText = Microsoft.CodeAnalysis.Text.SourceText.From(source, System.Text.Encoding.UTF8);
@@ -538,65 +1245,157 @@ internal class MeshNodeCompilationService(
 
         var assemblyName = $"DynamicNode_{nodeName}";
 
-        var compilation = CSharpCompilation.Create(
+        var compilation = RunSourceGenerators(CSharpCompilation.Create(
             assemblyName,
             syntaxTrees: [syntaxTree],
-            references: _references,
+            references: references,
             options: new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
                 .WithOptimizationLevel(OptimizationLevel.Debug)
-                .WithPlatform(Platform.AnyCpu));
+                .WithPlatform(Platform.AnyCpu)), nugetAssemblyPaths, logger, ct);
 
+        string? actualPath;
         if (cacheService.IsDiskCacheEnabled)
         {
-            // Emit to disk
-            await CompileToDiskAsync(compilation, nodeName, node.Path, ct);
+            actualPath = await CompileToDiskAsync(compilation, nodeName, node.Path, ct);
         }
         else
         {
-            // Emit to memory and load immediately
             CompileToMemory(compilation, nodeName, node.Path, ct);
+            actualPath = $"memory://{nodeName}";
         }
 
-        logger.LogInformation("Successfully compiled assembly for {NodePath}", node.Path);
+        logger.LogInformation("Successfully compiled assembly for {NodePath} to {ActualPath}", node.Path, actualPath);
+        return actualPath;
     }
 
     /// <summary>
-    /// Compiles and emits assembly to disk.
+    /// Runs the in-process Roslyn source generators over a dynamic-node
+    /// compilation before Emit — currently the MeshWeaver.BusinessRules
+    /// <c>ScopeCodeGenerator</c>, which emits the concrete implementations for
+    /// <c>IScope&lt;TIdentity, TState&gt;</c> interfaces declared in node Source.
+    /// A compilation that doesn't reference <c>IScope</c> passes through
+    /// unchanged (the generator no-ops), so this costs nothing for ordinary
+    /// node types. This is what lets Source code nodes use the business-rules
+    /// scopes framework: declare the interface, the compiler generates the
+    /// proxy, and <c>services.AddBusinessRules(assembly)</c> discovers it.
     /// </summary>
-    private async Task CompileToDiskAsync(CSharpCompilation compilation, string nodeName, string nodePath, CancellationToken ct)
+    private static CSharpCompilation RunSourceGenerators(
+        CSharpCompilation compilation, IReadOnlyList<string> generatorAssemblyPaths, ILogger logger, CancellationToken ct)
     {
-        var dllPath = cacheService.GetDllPath(nodeName);
-        var pdbPath = cacheService.GetPdbPath(nodeName);
-        var xmlDocPath = cacheService.GetXmlDocPath(nodeName);
+        // The scope generator is supplied EXPLICITLY: only nodes whose Source declares
+        // `#r "nuget:MeshWeaver.BusinessRules.Generator"` resolve it (into generatorAssemblyPaths)
+        // — there is NO auto-inject heuristic. The generator is never a framework reference (that
+        // propagated the analyzer and bloated every build). Nothing #r'd → nothing to discover →
+        // pass through unchanged (a scope source that forgot the #r fails to compile and surfaces
+        // the error on the Progress page; it never hangs).
+        if (generatorAssemblyPaths.Count == 0)
+            return compilation;
+        var generators = SourceGeneratorLoader.Discover(generatorAssemblyPaths, logger);
+        if (generators.IsDefaultOrEmpty)
+            return compilation;
+        var driver = CSharpGeneratorDriver.Create(generators);
+        driver.RunGeneratorsAndUpdateCompilation(compilation, out var updated, out _, ct);
+        return (CSharpCompilation)updated;
+    }
 
-        await using var dllStream = File.Create(dllPath);
-        await using var pdbStream = File.Create(pdbPath);
-        await using var xmlDocStream = File.Create(xmlDocPath);
+    /// <summary>
+    /// Compiles and emits assembly to a unique per-compile subdirectory, then VERIFIES the
+    /// assembly actually landed on disk and re-emits when it did not. Each compile writes to
+    /// {cacheDir}/{nodeName}_{ticks_hex}/ so V1 and V2 DLLs coexist on disk without overwriting.
+    ///
+    /// <para>🩹 Self-heal: on container deployments the cache directory is an ephemeral
+    /// <c>/tmp/...</c>; a "successful" Roslyn emit can leave NO file on disk when the just-written
+    /// assembly is evicted before the next read. That used to poison the NodeType permanently with
+    /// a sticky "Compilation succeeded but DLL not found" error (atioz AgenticPension/Datenpunkt,
+    /// 2026-06-22) — the grain never recompiled. We now re-emit the lost artifact (a genuine compile
+    /// error is NOT retried) and, if it still cannot be persisted, surface a clear, loud failure
+    /// instead of a silent poison. See <see cref="EmitToDiskWithRetry"/>.</para>
+    /// </summary>
+    private Task<string> CompileToDiskAsync(CSharpCompilation compilation, string nodeName, string nodePath, CancellationToken ct)
+        => Task.FromResult(EmitToDiskWithRetry(
+            cacheService.CacheDirectory, nodeName, DiskEmitAttempts, logger,
+            releaseDir =>
+            {
+                var dllPath = Path.Combine(releaseDir, $"{nodeName}.dll");
+                var pdbPath = Path.Combine(releaseDir, $"{nodeName}.pdb");
+                var xmlDocPath = Path.Combine(releaseDir, $"DynamicNode_{nodeName}.xml");
 
-        var emitOptions = new EmitOptions(
-            debugInformationFormat: DebugInformationFormat.PortablePdb,
-            pdbFilePath: pdbPath);
+                using (var dllStream = File.Create(dllPath))
+                using (var pdbStream = File.Create(pdbPath))
+                using (var xmlDocStream = File.Create(xmlDocPath))
+                {
+                    var emitOptions = new EmitOptions(
+                        debugInformationFormat: DebugInformationFormat.PortablePdb,
+                        pdbFilePath: pdbPath);
 
-        var emitResult = compilation.Emit(dllStream, pdbStream, xmlDocumentationStream: xmlDocStream, options: emitOptions, cancellationToken: ct);
+                    var emitResult = compilation.Emit(
+                        dllStream, pdbStream, xmlDocumentationStream: xmlDocStream,
+                        options: emitOptions, cancellationToken: ct);
 
-        if (!emitResult.Success)
+                    if (!emitResult.Success)
+                    {
+                        // Deterministic compile error — propagates straight out of the retry loop.
+                        var errorMessage = FormatCompileFailure(nodePath, emitResult.Diagnostics);
+                        logger.LogError("{ErrorMessage}", errorMessage);
+                        throw new CompilationException(nodePath, errorMessage);
+                    }
+                }
+                // Streams flushed + closed here, before EmitToDiskWithRetry verifies the file.
+                return dllPath;
+            }));
+
+    /// <summary>
+    /// Number of times <see cref="EmitToDiskWithRetry"/> re-emits when a "successful" Roslyn
+    /// emit leaves no assembly on disk (ephemeral-cache eviction). Three attempts recover a
+    /// transient lost write while still failing fast on a genuinely unwritable cache directory.
+    /// </summary>
+    internal const int DiskEmitAttempts = 3;
+
+    /// <summary>
+    /// Emits to a fresh per-attempt subdirectory under <paramref name="cacheDirectory"/> and
+    /// confirms the assembly actually persisted, re-emitting up to <paramref name="maxAttempts"/>
+    /// times when the DLL is missing or empty afterward. <paramref name="emitToReleaseDir"/> runs
+    /// the real Roslyn emit into the supplied directory and returns the DLL path it wrote; it may
+    /// throw <see cref="CompilationException"/> for a genuine compile error, which propagates
+    /// immediately (NEVER retried — only a lost/empty artifact triggers a re-emit). Extracted and
+    /// <c>internal</c> so the lost-write self-heal is unit-testable without a real flaky filesystem.
+    /// </summary>
+    internal static string EmitToDiskWithRetry(
+        string cacheDirectory,
+        string nodeName,
+        int maxAttempts,
+        ILogger logger,
+        Func<string, string> emitToReleaseDir)
+    {
+        string? lastDllPath = null;
+        for (var attempt = 1; attempt <= maxAttempts; attempt++)
         {
-            cacheService.InvalidateCache(nodeName);
+            var timestamp = DateTimeOffset.UtcNow.Ticks.ToString("x");
+            var releaseDir = Path.Combine(cacheDirectory, $"{nodeName}_{timestamp}");
+            Directory.CreateDirectory(releaseDir);
 
-            var errors = emitResult.Diagnostics
-                .Where(d => d.Severity == DiagnosticSeverity.Error)
-                .Select(d => d.GetMessage())
-                .ToList();
+            // The real emit (a compile error throws straight through — see method remarks).
+            lastDllPath = emitToReleaseDir(releaseDir);
 
-            var errorMessage = $"Compilation failed for '{nodePath}':\n{string.Join('\n', errors)}";
-            logger.LogError("{ErrorMessage}", errorMessage);
-            throw new CompilationException(nodePath, errorMessage);
+            // Roslyn reported success — confirm the bytes are genuinely on disk. On an ephemeral
+            // cache directory the file can be evicted between emit and the next read.
+            if (File.Exists(lastDllPath) && new FileInfo(lastDllPath).Length > 0)
+                return lastDllPath;
+
+            logger.LogWarning(
+                "Emit for {NodeName} reported success but the assembly was missing or empty at " +
+                "{DllPath} after flush (attempt {Attempt}/{Max}); re-emitting.",
+                nodeName, lastDllPath, attempt, maxAttempts);
+
+            // Drop the empty/partial directory so the retry starts clean.
+            try { Directory.Delete(releaseDir, recursive: true); }
+            catch (Exception ex) { logger.LogDebug(ex, "Could not clean up empty release dir {ReleaseDir}", releaseDir); }
         }
 
-        // Close streams before loading
-        await dllStream.DisposeAsync();
-        await pdbStream.DisposeAsync();
-        await xmlDocStream.DisposeAsync();
+        throw new CompilationException(nodeName,
+            $"Compilation succeeded but the emitted assembly for '{nodeName}' could not be persisted to " +
+            $"'{cacheDirectory}' after {maxAttempts} attempts (last target '{lastDllPath}'). The compilation " +
+            "host's cache directory may be read-only or evicting files.");
     }
 
     /// <summary>
@@ -614,12 +1413,7 @@ internal class MeshNodeCompilationService(
 
         if (!emitResult.Success)
         {
-            var errors = emitResult.Diagnostics
-                .Where(d => d.Severity == DiagnosticSeverity.Error)
-                .Select(d => d.GetMessage())
-                .ToList();
-
-            var errorMessage = $"Compilation failed for '{nodePath}':\n{string.Join('\n', errors)}";
+            var errorMessage = FormatCompileFailure(nodePath, emitResult.Diagnostics);
             logger.LogError("{ErrorMessage}", errorMessage);
             throw new CompilationException(nodePath, errorMessage);
         }
@@ -662,7 +1456,23 @@ internal class MeshNodeCompilationService(
 
         // Generate source code
         var codeConfig = string.IsNullOrEmpty(release.Code) ? null : new CodeConfiguration { Code = release.Code };
-        var source = _attributeGenerator.GenerateAttributeSource(node, codeConfig, release.HubConfiguration, release.ContentCollections);
+        var rawSource = _attributeGenerator.GenerateAttributeSource(node, codeConfig, release.HubConfiguration, release.ContentCollections);
+
+        // Strip #r "nuget:..." directives — Roslyn compilation (unlike scripting) does not process them.
+        // Scope generator is resolved ONLY via an explicit `#r "nuget:MeshWeaver.BusinessRules.Generator"`
+        // in the node Source (no auto-inject), then discovered by RunSourceGenerators.
+        var (source, nugetRefs) = NuGetDirectiveParser.Extract(rawSource);
+        IEnumerable<MetadataReference> references = _references;
+        IReadOnlyList<string> probingDirs = [];
+        IReadOnlyList<string> nugetAssemblyPaths = [];
+        if (nugetRefs.Length > 0)
+        {
+            var resolved = await nugetResolver.ResolveAsync(nugetRefs, targetFramework: null, ct);
+            references = _references.Concat(
+                resolved.AssemblyPaths.Select(p => MetadataReference.CreateFromFile(p)));
+            probingDirs = resolved.ProbingDirectories;
+            nugetAssemblyPaths = resolved.AssemblyPaths;
+        }
 
         // Write source file for debugging
         if (_cacheOptions.EnableSourceDebugging)
@@ -682,13 +1492,13 @@ internal class MeshNodeCompilationService(
 
         var assemblyName = sanitizedPath;
 
-        var compilation = CSharpCompilation.Create(
+        var compilation = RunSourceGenerators(CSharpCompilation.Create(
             assemblyName,
             syntaxTrees: [syntaxTree],
-            references: _references,
+            references: references,
             options: new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
                 .WithOptimizationLevel(OptimizationLevel.Debug)
-                .WithPlatform(Platform.AnyCpu));
+                .WithPlatform(Platform.AnyCpu)), nugetAssemblyPaths, logger, ct);
 
         // Emit to release folder
         await using var dllStream = File.Create(dllPath);
@@ -710,12 +1520,7 @@ internal class MeshNodeCompilationService(
 
             try { Directory.Delete(releaseFolder, recursive: true); } catch { /* ignore */ }
 
-            var errors = emitResult.Diagnostics
-                .Where(d => d.Severity == DiagnosticSeverity.Error)
-                .Select(d => d.GetMessage())
-                .ToList();
-
-            var errorMessage = $"Compilation failed for '{node.Path}':\n{string.Join('\n', errors)}";
+            var errorMessage = FormatCompileFailure(node.Path, emitResult.Diagnostics);
             logger.LogError("{ErrorMessage}", errorMessage);
             throw new CompilationException(node.Path, errorMessage);
         }
@@ -729,6 +1534,15 @@ internal class MeshNodeCompilationService(
         var metadataPath = Path.Combine(releaseFolder, "release.json");
         var metadataJson = JsonSerializer.Serialize(release, new JsonSerializerOptions { WriteIndented = true });
         await File.WriteAllTextAsync(metadataPath, metadataJson, ct);
+
+        // Persist NuGet probing directories alongside the release so the load context
+        // can probe for transitive dependencies at load time.
+        if (probingDirs.Count > 0)
+        {
+            var probingPath = Path.Combine(releaseFolder, "probing.json");
+            var probingJson = JsonSerializer.Serialize(probingDirs);
+            await File.WriteAllTextAsync(probingPath, probingJson, ct);
+        }
 
         logger.LogInformation("Successfully compiled {NodePath} to {DllPath}", node.Path, dllPath);
 
@@ -799,14 +1613,27 @@ internal class MeshNodeCompilationService(
 /// </summary>
 public class CompilationException : Exception
 {
+    /// <summary>The mesh path of the node whose compilation failed.</summary>
     public string NodePath { get; }
 
+    /// <summary>
+    /// Initializes a new instance of the exception for a failed compilation.
+    /// </summary>
+    /// <param name="nodePath">The mesh path of the node whose compilation failed.</param>
+    /// <param name="message">The error message describing the failure.</param>
     public CompilationException(string nodePath, string message)
         : base(message)
     {
         NodePath = nodePath;
     }
 
+    /// <summary>
+    /// Initializes a new instance of the exception for a failed compilation, wrapping an
+    /// underlying cause.
+    /// </summary>
+    /// <param name="nodePath">The mesh path of the node whose compilation failed.</param>
+    /// <param name="message">The error message describing the failure.</param>
+    /// <param name="innerException">The underlying exception that caused the failure.</param>
     public CompilationException(string nodePath, string message, Exception innerException)
         : base(message, innerException)
     {

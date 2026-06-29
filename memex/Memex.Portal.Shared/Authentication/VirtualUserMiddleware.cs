@@ -24,7 +24,7 @@ public class VirtualUserMiddleware(RequestDelegate next, ILogger<VirtualUserMidd
     private const string CookieName = "meshweaver_virtual_user";
 
     private static readonly string[] ExcludedPrefixes =
-        ["/_framework", "/_content", "/_blazor", "/static/", "/favicon.ico", "/mcp"];
+        ["/_framework", "/_content", "/_blazor", "/static/", "/favicon.ico", "/mcp", "/bootstrap", "/healthz"];
 
     public async Task InvokeAsync(HttpContext context)
     {
@@ -41,21 +41,55 @@ public class VirtualUserMiddleware(RequestDelegate next, ILogger<VirtualUserMidd
             if (portalApp != null)
             {
                 var accessService = portalApp.Hub.ServiceProvider.GetRequiredService<AccessService>();
-                var (virtualUserId, isNew) = GetOrCreateVirtualUserId(context);
 
-                // Fast path: if the circuit already has a context for this virtual user, reuse it
-                // (avoids mesh call on every request — only needed once per circuit).
-                var existing = accessService.Context ?? accessService.CircuitContext;
-                if (existing is not null && existing.ObjectId == virtualUserId && existing.IsVirtual)
+                // 🚨 Skip the entire VUser flow when a real-user identity is
+                // already on AccessService — `UserContextMiddleware` runs
+                // BEFORE us in the pipeline (see MemexConfiguration.cs) and
+                // resolves OAuth / Bearer / mesh-User-by-email into
+                // AccessService.Context. Real users sometimes have
+                // `context.User.Identity.IsAuthenticated == false` (e.g.,
+                // the ASP.NET cookie expired but a Bearer token in the
+                // request still resolves a valid user via the cache); without
+                // this guard we'd wastefully provision a guest VUser node
+                // for them AND post the CreateNodeRequest into the portal
+                // hub, which has no handler — the crash the user just hit
+                // on the sub-thread URL.
+                var preExisting = accessService.Context ?? accessService.CircuitContext;
+                if (preExisting is not null && !preExisting.IsVirtual
+                    && !string.IsNullOrEmpty(preExisting.ObjectId))
                 {
-                    accessService.SetContext(existing);
                     await next(context);
                     return;
                 }
 
-                // First request in this circuit — ensure VUser node exists.
-                // Runs once per page load; subsequent requests reuse CircuitContext above.
-                await EnsureVirtualUserNodeAsync(portalApp, virtualUserId);
+                var (virtualUserId, isNew) = GetOrCreateVirtualUserId(context);
+
+                // Fast path: if the circuit already has a context for this virtual user, reuse it
+                // (avoids mesh call on every request — only needed once per circuit).
+                if (preExisting is not null && preExisting.ObjectId == virtualUserId && preExisting.IsVirtual)
+                {
+                    accessService.SetContext(preExisting);
+                    await next(context);
+                    return;
+                }
+
+                // 🚨 Mint the VUser NODE only on cookie ROUND-TRIP (isNew == false):
+                // the node (a mesh write + a per-node hub graph) is created the
+                // first time the cookie COMES BACK, proving a cookie-keeping
+                // browser session. First-contact requests get the cookie + an
+                // in-memory guest context only. Without this gate, every
+                // cookie-less client minted a fresh node PER REQUEST — kube-probe
+                // alone created ~15 VUsers/minute (and any crawler does the same),
+                // leaking 10,000+ hubs until the portal wedged at 100% CPU
+                // (2026-06-12 atioz outage). A real visitor's node exists by
+                // their second request — before the Blazor circuit needs it.
+                //
+                // 100% reactive, NO await: EnsureVUserNode composes
+                // hub.Observe(CreateNodeRequest).Subscribe(...) internally — the
+                // request thread never waits on mesh work (AsynchronousCalls.md;
+                // an await here parks the request on the hub pump = deadlock).
+                if (!isNew)
+                    EnsureVirtualUserNode(portalApp, virtualUserId);
 
                 var portalIdentity = portalApp.Hub.Address.ToFullString();
                 var virtualContext = new AccessContext
@@ -107,11 +141,11 @@ public class VirtualUserMiddleware(RequestDelegate next, ILogger<VirtualUserMidd
         return (newId, true);
     }
 
-    private async Task EnsureVirtualUserNodeAsync(PortalApplication portalApp, string virtualUserId)
+    private void EnsureVirtualUserNode(PortalApplication portalApp, string virtualUserId)
     {
         try
         {
-            await VUserHelper.EnsureVUserNodeAsync(portalApp, virtualUserId, logger);
+            VUserHelper.EnsureVUserNode(portalApp, virtualUserId, logger);
         }
         catch (Exception ex)
         {

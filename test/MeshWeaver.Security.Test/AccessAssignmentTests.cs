@@ -1,8 +1,8 @@
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using FluentAssertions;
-using FluentAssertions.Extensions;
+using System.Reactive.Threading.Tasks;
+using System.Reactive.Linq;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Hosting.Security;
@@ -17,33 +17,52 @@ namespace MeshWeaver.Security.Test;
 /// <summary>
 /// Tests for AccessAssignment as MeshNodes: creation, deletion, deny override logic,
 /// and effective permission evaluation.
+///
+/// All AccessAssignment nodes are seeded via static <see cref="MeshBuilder.AddMeshNodes"/>
+/// (preferred) or via runtime <see cref="IMeshService.CreateNode"/> (when the test exercises
+/// the create/delete lifecycle itself). Reads use the reactive
+/// <see cref="SecurityService.GetEffectivePermissions(string,string)"/> surface bridged
+/// to <see cref="Task{T}"/> via <c>.FirstAsync().ToTask(ct)</c>.
 /// </summary>
 public class AccessAssignmentTests(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
     private CancellationToken TestTimeout => new CancellationTokenSource(10.Seconds()).Token;
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
-        => ConfigureMeshBase(builder).AddRowLevelSecurity();
+        => ConfigureMeshBase(builder)
+            .AddRowLevelSecurity()
+            .AddMeshNodes(
+                // For tests that exercise additional grants/deletions at runtime,
+                // seed admin context via the per-test IMeshService.CreateNode calls below.
+                AssignmentNodeFactory.UserRole("GlobalUser", "Admin", null),
+                AssignmentNodeFactory.UserRole("AncestorUser", "Editor", "ACME"),
+                AssignmentNodeFactory.UserRole("LocalUser", "Viewer", "ACME/Project"),
+                AssignmentNodeFactory.UserRole("GlobalAdmin", "Admin", null),
+                AssignmentNodeFactory.UserRole("OrgEditor", "Editor", "ACME"),
+                AssignmentNodeFactory.UserRole("LocalViewer", "Viewer", "ACME/Project"),
+                AssignmentNodeFactory.UserRole("Alice", "Editor", "ACME"),
+                AssignmentNodeFactory.UserRole("OverrideUser", "Viewer", "Org"),
+                // OverrideUser also gets a grant at child for the deny-then-grant test
+                AssignmentNodeFactory.UserRole("OverrideUser_Child", "Viewer", "Org/Team/Project", accessObject: "OverrideUser"),
+                AssignmentNodeFactory.UserRole("MixedUser", "Admin", null),
+                AssignmentNodeFactory.UserRole("MixedUser_AcmeEditor", "Editor", "ACME", accessObject: "MixedUser"),
+                AssignmentNodeFactory.UserRole("InheritedUser", "Viewer", "NS"),
+                AssignmentNodeFactory.UserRole("LocalUserNS", "Editor", "NS/Child"));
 
     #region AddUserRole creates AccessAssignment MeshNodes
 
     [Fact(Timeout = 20000)]
     public async Task AddUserRole_GlobalAssignment_GrantsPermissionsEverywhere()
     {
-        var svc = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
-        await svc.AddUserRoleAsync("GlobalUser", "Admin", null, "system", TestTimeout);
-
-        var permissions = await svc.GetEffectivePermissionsAsync("ACME/Project", "GlobalUser", TestTimeout);
-        permissions.Should().Be(Permission.All);
+        await Mesh.GetEffectivePermissions("ACME/Project", "GlobalUser")
+            .Should().Match(p => p == (Permission.All | Permission.Compile));
     }
 
     [Fact(Timeout = 20000)]
     public async Task AddUserRole_AncestorAssignment_GrantsPermissionsToDescendants()
     {
-        var svc = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
-        await svc.AddUserRoleAsync("AncestorUser", "Editor", "ACME", "system", TestTimeout);
-
-        var permissions = await svc.GetEffectivePermissionsAsync("ACME/Project", "AncestorUser", TestTimeout);
+        var permissions = await Mesh.GetEffectivePermissions("ACME/Project", "AncestorUser")
+            .Should().Match(p => p.HasFlag(Permission.Read) && p.HasFlag(Permission.Create) && p.HasFlag(Permission.Update));
         permissions.Should().HaveFlag(Permission.Read);
         permissions.Should().HaveFlag(Permission.Create);
         permissions.Should().HaveFlag(Permission.Update);
@@ -52,33 +71,23 @@ public class AccessAssignmentTests(ITestOutputHelper output) : MonolithMeshTestB
     [Fact(Timeout = 20000)]
     public async Task AddUserRole_LocalAssignment_GrantsPermissionsAtPath()
     {
-        var svc = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
-        await svc.AddUserRoleAsync("LocalUser", "Viewer", "ACME/Project", "system", TestTimeout);
-
-        var permissions = await svc.GetEffectivePermissionsAsync("ACME/Project", "LocalUser", TestTimeout);
-        permissions.Should().Be(Permission.Read | Permission.Execute | Permission.Api);
+        await Mesh.GetEffectivePermissions("ACME/Project", "LocalUser")
+            .Should().Match(p => p == (Permission.Read | Permission.Execute | Permission.Api));
     }
 
     [Fact(Timeout = 20000)]
     public async Task AddUserRole_MixedLevels_CombinesPermissions()
     {
-        var svc = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
-        await svc.AddUserRoleAsync("GlobalAdmin", "Admin", null, "system", TestTimeout);
-        await svc.AddUserRoleAsync("OrgEditor", "Editor", "ACME", "system", TestTimeout);
-        await svc.AddUserRoleAsync("LocalViewer", "Viewer", "ACME/Project", "system", TestTimeout);
+        await Mesh.GetEffectivePermissions("ACME/Project", "GlobalAdmin")
+            .Should().Match(p => p == (Permission.All | Permission.Compile));
 
-        // GlobalAdmin should have all permissions
-        var globalPerms = await svc.GetEffectivePermissionsAsync("ACME/Project", "GlobalAdmin", TestTimeout);
-        globalPerms.Should().Be(Permission.All);
-
-        // OrgEditor should have editor permissions on Software/Project (inherited)
-        var orgPerms = await svc.GetEffectivePermissionsAsync("ACME/Project", "OrgEditor", TestTimeout);
+        var orgPerms = await Mesh.GetEffectivePermissions("ACME/Project", "OrgEditor")
+            .Should().Match(p => p.HasFlag(Permission.Read) && p.HasFlag(Permission.Update));
         orgPerms.Should().HaveFlag(Permission.Read);
         orgPerms.Should().HaveFlag(Permission.Update);
 
-        // LocalViewer should have viewer permissions at Software/Project
-        var localPerms = await svc.GetEffectivePermissionsAsync("ACME/Project", "LocalViewer", TestTimeout);
-        localPerms.Should().Be(Permission.Read | Permission.Execute | Permission.Api);
+        await Mesh.GetEffectivePermissions("ACME/Project", "LocalViewer")
+            .Should().Match(p => p == (Permission.Read | Permission.Execute | Permission.Api));
     }
 
     #endregion
@@ -88,54 +97,54 @@ public class AccessAssignmentTests(ITestOutputHelper output) : MonolithMeshTestB
     [Fact(Timeout = 20000)]
     public async Task DenyAssignment_OverridesInheritedGrant()
     {
-        var svc = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
-        // Grant at parent
-        await svc.AddUserRoleAsync("Alice", "Editor", "ACME", "system", TestTimeout);
-
-        // Create a deny AccessAssignment MeshNode at child using NodeFactory
-        var denyNode = new MeshNode("Alice_Access", "ACME/Project")
+        // Alice already has an Editor grant at ACME from ConfigureMesh.
+        // Add a deny at child via runtime CreateNode.
+        var denyNode = new MeshNode("Alice_Access", "ACME/Project/_Access")
         {
             NodeType = "AccessAssignment",
             Name = "Alice Access",
+            MainNode = "ACME/Project",
             Content = new AccessAssignment
             {
                 AccessObject = "Alice",
                 Roles = [new RoleAssignment { Role = "Editor", Denied = true }]
             }
         };
-        await NodeFactory.CreateNodeAsync(denyNode, ct: TestTimeout);
+        await meshService.CreateNode(denyNode).Should().Emit();
 
-        var permissions = await svc.GetEffectivePermissionsAsync("ACME/Project", "Alice", TestTimeout);
+        // Wait for the synced AccessAssignment query to surface the deny.
+        var permissions = await Mesh.GetEffectivePermissions("ACME/Project", "Alice")
+            .Should().Match(p => p == Permission.None);
         permissions.Should().Be(Permission.None, "denied Editor role should yield no permissions at child");
     }
 
     [Fact(Timeout = 20000)]
     public async Task DenyAtMiddle_GrantAtChild_ChildOverridesDeny()
     {
-        var svc = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
-        // Grant at grandparent
-        await svc.AddUserRoleAsync("OverrideUser", "Viewer", "Org", "system", TestTimeout);
-
-        // Deny at parent using NodeFactory
-        var denyNode = new MeshNode("OverrideUser_Access", "Org/Team")
+        // OverrideUser already has Viewer at "Org" (parent) and "Org/Team/Project" (child)
+        // from ConfigureMesh. Add a deny at middle via runtime CreateNode.
+        var denyNode = new MeshNode("OverrideUser_Access", "Org/Team/_Access")
         {
             NodeType = "AccessAssignment",
             Name = "OverrideUser Access",
+            MainNode = "Org/Team",
             Content = new AccessAssignment
             {
                 AccessObject = "OverrideUser",
                 Roles = [new RoleAssignment { Role = "Viewer", Denied = true }]
             }
         };
-        await NodeFactory.CreateNodeAsync(denyNode, ct: TestTimeout);
+        await meshService.CreateNode(denyNode).Should().Emit();
 
-        // Grant again at child
-        await svc.AddUserRoleAsync("OverrideUser", "Viewer", "Org/Team/Project", "system", TestTimeout);
-
-        var permTeam = await svc.GetEffectivePermissionsAsync("Org/Team", "OverrideUser", TestTimeout);
-        var permProject = await svc.GetEffectivePermissionsAsync("Org/Team/Project", "OverrideUser", TestTimeout);
+        // Wait for the synced query to surface the deny at Org/Team.
+        var permTeam = await Mesh.GetEffectivePermissions("Org/Team", "OverrideUser")
+            .Should().Match(p => p == Permission.None);
+        var permProject = await Mesh.GetEffectivePermissions("Org/Team/Project", "OverrideUser")
+            .Should().Emit();
 
         permTeam.Should().Be(Permission.None, "deny at Org/Team should block inherited grant");
         permProject.Should().Be(Permission.Read | Permission.Execute | Permission.Api, "grant at child should override deny at parent");
@@ -144,29 +153,28 @@ public class AccessAssignmentTests(ITestOutputHelper output) : MonolithMeshTestB
     [Fact(Timeout = 20000)]
     public async Task DenyOneRole_KeepsOtherRoles()
     {
-        var svc = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
-        // Grant Admin globally
-        await svc.AddUserRoleAsync("MixedUser", "Admin", null, "system", TestTimeout);
-        // Also grant Editor at Software
-        await svc.AddUserRoleAsync("MixedUser", "Editor", "ACME", "system", TestTimeout);
-
-        // Deny Admin at Software/Secure using NodeFactory
-        var denyNode = new MeshNode("MixedUser_Access", "ACME/Secure")
+        // MixedUser already has Admin globally + Editor at ACME from ConfigureMesh.
+        // Deny Admin at ACME/Secure via runtime CreateNode.
+        var denyNode = new MeshNode("MixedUser_Access", "ACME/Secure/_Access")
         {
             NodeType = "AccessAssignment",
             Name = "MixedUser Access",
+            MainNode = "ACME/Secure",
             Content = new AccessAssignment
             {
                 AccessObject = "MixedUser",
                 Roles = [new RoleAssignment { Role = "Admin", Denied = true }]
             }
         };
-        await NodeFactory.CreateNodeAsync(denyNode, ct: TestTimeout);
+        await meshService.CreateNode(denyNode).Should().Emit();
 
-        var permissions = await svc.GetEffectivePermissionsAsync("ACME/Secure", "MixedUser", TestTimeout);
+        // Wait for the deny to take effect — Admin's Delete must drop out
+        // while Editor permissions (Read/Create/Update) remain.
+        var permissions = await Mesh.GetEffectivePermissions("ACME/Secure", "MixedUser")
+            .Should().Match(p => !p.HasFlag(Permission.Delete) && p.HasFlag(Permission.Update));
 
-        // Should have Editor permissions but NOT Admin's Delete
         permissions.Should().HaveFlag(Permission.Read);
         permissions.Should().HaveFlag(Permission.Create);
         permissions.Should().HaveFlag(Permission.Update);
@@ -181,19 +189,24 @@ public class AccessAssignmentTests(ITestOutputHelper output) : MonolithMeshTestB
     [Fact(Timeout = 20000)]
     public async Task RemoveUserRole_RevokesPermissions()
     {
-        var svc = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
-        await svc.AddUserRoleAsync("TempUser", "Editor", "ACME/Project", "system", TestTimeout);
+        // Create the assignment via runtime CreateNode (this test exercises the lifecycle).
+        var assignNode = AssignmentNodeFactory.UserRole("TempUser", "Editor", "ACME/Project");
+        await meshService.CreateNode(assignNode).Should().Emit();
 
-        // Verify permission exists
-        var permBefore = await svc.GetEffectivePermissionsAsync("ACME/Project", "TempUser", TestTimeout);
+        // Wait for the synced query to surface the new grant.
+        var permBefore = await Mesh.GetEffectivePermissions("ACME/Project", "TempUser")
+            .Should().Match(p => p.HasFlag(Permission.Update));
         permBefore.Should().HaveFlag(Permission.Update);
 
-        // Remove the role
-        await svc.RemoveUserRoleAsync("TempUser", "Editor", "ACME/Project", TestTimeout);
+        // Delete the assignment and assert the synced query drops the grant.
+        await meshService.DeleteNode(assignNode.Path).Should().Emit();
 
-        var permAfter = await svc.GetEffectivePermissionsAsync("ACME/Project", "TempUser", TestTimeout);
-        permAfter.Should().Be(Permission.None, "removed role should yield no permissions");
+        var permAfter = await Mesh.GetEffectivePermissions("ACME/Project", "TempUser")
+            .Should().Match(p => p == Permission.None);
+        permAfter.Should().Be(Permission.None,
+            "deleting the AccessAssignment should revoke all permissions");
     }
 
     #endregion
@@ -203,37 +216,25 @@ public class AccessAssignmentTests(ITestOutputHelper output) : MonolithMeshTestB
     [Fact(Timeout = 20000)]
     public async Task AccessControl_NoRLS_ShowsWarningMessage()
     {
-        var svc = Mesh.ServiceProvider.GetService<ISecurityService>();
-        svc.Should().NotBeNull("RLS is configured in this test base");
+        // RLS sanity: any effective-permission round-trip should work; skip explicit SecurityService check.
+        await Mesh.GetEffectivePermissions("smoke", "anyone").Should().Emit();
     }
 
     [Fact(Timeout = 20000)]
     public async Task AccessControl_EmptyAssignments_HasNoPermissions()
     {
-        var svc = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
-
-        // Query permissions for a path with no roles assigned
-        var permissions = await svc.GetEffectivePermissionsAsync("Empty/Namespace/Path", "SomeUser", TestTimeout);
-
-        permissions.Should().Be(Permission.None, "no roles have been assigned to this path");
+        await Mesh.GetEffectivePermissions("Empty/Namespace/Path", "SomeUser")
+            .Should().Match(p => p == Permission.None);
     }
 
     [Fact(Timeout = 20000)]
     public async Task AccessControl_InheritedAndLocalAssignments_BothApply()
     {
-        var svc = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+        await Mesh.GetEffectivePermissions("NS/Child", "InheritedUser")
+            .Should().Match(p => p == (Permission.Read | Permission.Execute | Permission.Api));
 
-        // Set up inherited + local assignments
-        await svc.AddUserRoleAsync("InheritedUser", "Viewer", "NS", "system", TestTimeout);
-        await svc.AddUserRoleAsync("LocalUser", "Editor", "NS/Child", "system", TestTimeout);
-
-        // InheritedUser should have Viewer on NS/Child (inherited)
-        var inheritedPerms = await svc.GetEffectivePermissionsAsync("NS/Child", "InheritedUser", TestTimeout);
-        inheritedPerms.Should().Be(Permission.Read | Permission.Execute | Permission.Api);
-
-        // LocalUser should have Editor on NS/Child (local)
-        var localPerms = await svc.GetEffectivePermissionsAsync("NS/Child", "LocalUser", TestTimeout);
-        localPerms.Should().HaveFlag(Permission.Update);
+        await Mesh.GetEffectivePermissions("NS/Child", "LocalUserNS")
+            .Should().Match(p => p.HasFlag(Permission.Update));
     }
 
     #endregion

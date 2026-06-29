@@ -1,5 +1,4 @@
 using System.Threading.Tasks;
-using FluentAssertions;
 using MeshWeaver.AI;
 using MeshWeaver.Hosting.Persistence.Parsers;
 using MeshWeaver.Mesh;
@@ -17,7 +16,7 @@ public class AgentFileParserTest
     #region Parse Tests
 
     [Fact(Timeout = 20000)]
-    public async Task ParseAsync_ValidAgentMarkdown_ReturnsAgentConfiguration()
+    public void ParseAsync_ValidAgentMarkdown_ReturnsAgentConfiguration()
     {
         // Arrange
         var content = """
@@ -33,7 +32,7 @@ public class AgentFileParserTest
             """;
 
         // Act
-        var node = await _parser.ParseAsync("/test/TestAgent.md", content, "test/TestAgent.md");
+        var node = _parser.Parse("/test/TestAgent.md", content, "test/TestAgent.md");
 
         // Assert
         node.Should().NotBeNull();
@@ -43,16 +42,17 @@ public class AgentFileParserTest
         node.Name.Should().Be("Test Agent");
         node.Icon.Should().Be("Bot");
         node.Category.Should().Be("Testing");
+        // Node-level metadata lives on the MeshNode, not duplicated on the content.
+        node.Description.Should().Be("A test agent");
 
         var agentConfig = node.Content.Should().BeOfType<AgentConfiguration>().Subject;
         agentConfig.Id.Should().Be("TestAgent");
-        agentConfig.DisplayName.Should().Be("Test Agent");
         agentConfig.Description.Should().Be("A test agent");
         agentConfig.Instructions.Should().Be("You are a test agent. Do testing things.");
     }
 
     [Fact(Timeout = 20000)]
-    public async Task ParseAsync_WithDelegations_ParsesDelegationsList()
+    public void ParseAsync_WithDelegations_ParsesDelegationsList()
     {
         // Arrange
         var content = """
@@ -60,7 +60,7 @@ public class AgentFileParserTest
             nodeType: Agent
             name: Orchestrator
             delegations:
-              - agentPath: Planner
+              - agentPath: Specialist
                 instructions: Handle planning tasks
               - agentPath: Worker
                 instructions: Execute actions
@@ -70,20 +70,20 @@ public class AgentFileParserTest
             """;
 
         // Act
-        var node = await _parser.ParseAsync("/Orchestrator.md", content, "Orchestrator.md");
+        var node = _parser.Parse("/Orchestrator.md", content, "Orchestrator.md");
 
         // Assert
         node.Should().NotBeNull();
         var agentConfig = node!.Content.Should().BeOfType<AgentConfiguration>().Subject;
         agentConfig.Delegations.Should().HaveCount(2);
-        agentConfig.Delegations![0].AgentPath.Should().Be("Planner");
+        agentConfig.Delegations![0].AgentPath.Should().Be("Specialist");
         agentConfig.Delegations[0].Instructions.Should().Be("Handle planning tasks");
         agentConfig.Delegations[1].AgentPath.Should().Be("Worker");
         agentConfig.Delegations[1].Instructions.Should().Be("Execute actions");
     }
 
     [Fact(Timeout = 20000)]
-    public async Task ParseAsync_InstructionsInMarkdownBody_ExtractsToInstructions()
+    public void ParseAsync_InstructionsInMarkdownBody_ExtractsToInstructions()
     {
         // Arrange
         var content = """
@@ -105,7 +105,7 @@ public class AgentFileParserTest
             """;
 
         // Act
-        var node = await _parser.ParseAsync("/Research.md", content, "Research.md");
+        var node = _parser.Parse("/Research.md", content, "Research.md");
 
         // Assert
         node.Should().NotBeNull();
@@ -117,7 +117,7 @@ public class AgentFileParserTest
     }
 
     [Fact(Timeout = 20000)]
-    public async Task ParseAsync_WithAllProperties_ParsesAllProperties()
+    public void ParseAsync_WithAllProperties_ParsesAllProperties()
     {
         // Arrange
         var content = """
@@ -139,21 +139,21 @@ public class AgentFileParserTest
             """;
 
         // Act
-        var node = await _parser.ParseAsync("/FullAgent.md", content, "FullAgent.md");
+        var node = _parser.Parse("/FullAgent.md", content, "FullAgent.md");
 
-        // Assert
+        // Assert — group + order are node-level (groupName maps onto the node's Category);
+        // only agent-specific behaviour is on the configuration content.
         node.Should().NotBeNull();
-        var agentConfig = node!.Content.Should().BeOfType<AgentConfiguration>().Subject;
-        agentConfig.GroupName.Should().Be("TestGroup");
+        node!.Category.Should().Be("TestGroup");
+        node.Order.Should().Be(10);
+        var agentConfig = node.Content.Should().BeOfType<AgentConfiguration>().Subject;
         agentConfig.IsDefault.Should().BeTrue();
         agentConfig.ExposedInNavigator.Should().BeTrue();
         agentConfig.ContextMatchPattern.Should().Be("address=like=*Test*");
-        agentConfig.PreferredModel.Should().Be("gpt-4");
-        agentConfig.Order.Should().Be(10);
     }
 
     [Fact(Timeout = 20000)]
-    public async Task ParseAsync_NonAgentNodeType_ReturnsNull()
+    public void ParseAsync_NonAgentNodeType_ReturnsNull()
     {
         // Arrange
         var content = """
@@ -166,14 +166,14 @@ public class AgentFileParserTest
             """;
 
         // Act
-        var node = await _parser.ParseAsync("/test.md", content, "test.md");
+        var node = _parser.Parse("/test.md", content, "test.md");
 
         // Assert
         node.Should().BeNull();
     }
 
     [Fact(Timeout = 20000)]
-    public async Task ParseAsync_NoYamlFrontMatter_ReturnsNull()
+    public void ParseAsync_NoYamlFrontMatter_ReturnsNull()
     {
         // Arrange
         var content = """
@@ -183,14 +183,14 @@ public class AgentFileParserTest
             """;
 
         // Act
-        var node = await _parser.ParseAsync("/test.md", content, "test.md");
+        var node = _parser.Parse("/test.md", content, "test.md");
 
         // Assert
         node.Should().BeNull();
     }
 
     [Fact(Timeout = 20000)]
-    public async Task ParseAsync_WithHandoffs_ParsesHandoffsList()
+    public void ParseAsync_WithHandoffs_ParsesHandoffsList()
     {
         // Arrange
         var content = """
@@ -201,7 +201,7 @@ public class AgentFileParserTest
               - agentPath: Researcher
                 instructions: Look up information
             handoffs:
-              - agentPath: Planner
+              - agentPath: Specialist
                 instructions: Handle planning tasks
               - agentPath: Worker
                 instructions: Execute actions directly
@@ -211,7 +211,7 @@ public class AgentFileParserTest
             """;
 
         // Act
-        var node = await _parser.ParseAsync("/Orchestrator.md", content, "Orchestrator.md");
+        var node = _parser.Parse("/Orchestrator.md", content, "Orchestrator.md");
 
         // Assert
         node.Should().NotBeNull();
@@ -220,30 +220,30 @@ public class AgentFileParserTest
         agentConfig.Delegations![0].AgentPath.Should().Be("Researcher");
 
         agentConfig.Handoffs.Should().HaveCount(2);
-        agentConfig.Handoffs![0].AgentPath.Should().Be("Planner");
+        agentConfig.Handoffs![0].AgentPath.Should().Be("Specialist");
         agentConfig.Handoffs[0].Instructions.Should().Be("Handle planning tasks");
         agentConfig.Handoffs[1].AgentPath.Should().Be("Worker");
         agentConfig.Handoffs[1].Instructions.Should().Be("Execute actions directly");
     }
 
     [Fact(Timeout = 20000)]
-    public async Task ParseAsync_WithHandoffsOnly_ParsesHandoffs()
+    public void ParseAsync_WithHandoffsOnly_ParsesHandoffs()
     {
         // Arrange
         var content = """
             ---
             nodeType: Agent
-            name: Planner
+            name: Specialist
             handoffs:
               - agentPath: Worker
                 instructions: Execute the planned tasks
             ---
 
-            You are Planner.
+            You are Specialist.
             """;
 
         // Act
-        var node = await _parser.ParseAsync("/Planner.md", content, "Planner.md");
+        var node = _parser.Parse("/Specialist.md", content, "Specialist.md");
 
         // Assert
         node.Should().NotBeNull();
@@ -258,17 +258,14 @@ public class AgentFileParserTest
     #region Serialize Tests
 
     [Fact(Timeout = 20000)]
-    public async Task SerializeAsync_AgentNode_ProducesValidMarkdown()
+    public void SerializeAsync_AgentNode_ProducesValidMarkdown()
     {
-        // Arrange
+        // Arrange — node-level metadata on the node; only behaviour on the content.
         var agentConfig = new AgentConfiguration
         {
             Id = "TestAgent",
-            DisplayName = "Test Agent",
             Description = "A test agent",
             Instructions = "You are a test agent.",
-            Icon = "Bot",
-            GroupName = "Testing",
             IsDefault = false,
             ExposedInNavigator = true
         };
@@ -277,13 +274,14 @@ public class AgentFileParserTest
         {
             NodeType = "Agent",
             Name = "Test Agent",
+            Description = "A test agent",
             Icon = "Bot",
-            Category = "Agents",
+            Category = "Testing",
             Content = agentConfig
         };
 
         // Act
-        var result = await _parser.SerializeAsync(node);
+        var result = _parser.Serialize(node);
 
         // Assert
         result.Should().Contain("---");
@@ -296,17 +294,16 @@ public class AgentFileParserTest
     }
 
     [Fact(Timeout = 20000)]
-    public async Task SerializeAsync_WithDelegations_SerializesDelegations()
+    public void SerializeAsync_WithDelegations_SerializesDelegations()
     {
         // Arrange
         var agentConfig = new AgentConfiguration
         {
             Id = "Orchestrator",
-            DisplayName = "Orchestrator",
             Instructions = "Navigate requests.",
             Delegations =
             [
-                new AgentDelegation { AgentPath = "Planner", Instructions = "Plan tasks" },
+                new AgentDelegation { AgentPath = "Specialist", Instructions = "Plan tasks" },
                 new AgentDelegation { AgentPath = "Worker", Instructions = "Execute tasks" }
             ]
         };
@@ -319,24 +316,23 @@ public class AgentFileParserTest
         };
 
         // Act
-        var result = await _parser.SerializeAsync(node);
+        var result = _parser.Serialize(node);
 
         // Assert
         result.Should().Contain("delegations:");
-        result.Should().Contain("agentPath: Planner");
+        result.Should().Contain("agentPath: Specialist");
         result.Should().Contain("instructions: Plan tasks");
         result.Should().Contain("agentPath: Worker");
         result.Should().Contain("instructions: Execute tasks");
     }
 
     [Fact(Timeout = 20000)]
-    public async Task SerializeAsync_WithHandoffs_SerializesHandoffs()
+    public void SerializeAsync_WithHandoffs_SerializesHandoffs()
     {
         // Arrange
         var agentConfig = new AgentConfiguration
         {
             Id = "Orchestrator",
-            DisplayName = "Orchestrator",
             Instructions = "Navigate requests.",
             Delegations =
             [
@@ -344,7 +340,7 @@ public class AgentFileParserTest
             ],
             Handoffs =
             [
-                new AgentHandoff { AgentPath = "Planner", Instructions = "Plan tasks" },
+                new AgentHandoff { AgentPath = "Specialist", Instructions = "Plan tasks" },
                 new AgentHandoff { AgentPath = "Worker", Instructions = "Execute tasks" }
             ]
         };
@@ -357,20 +353,20 @@ public class AgentFileParserTest
         };
 
         // Act
-        var result = await _parser.SerializeAsync(node);
+        var result = _parser.Serialize(node);
 
         // Assert
         result.Should().Contain("delegations:");
         result.Should().Contain("agentPath: Researcher");
         result.Should().Contain("handoffs:");
-        result.Should().Contain("agentPath: Planner");
+        result.Should().Contain("agentPath: Specialist");
         result.Should().Contain("instructions: Plan tasks");
         result.Should().Contain("agentPath: Worker");
         result.Should().Contain("instructions: Execute tasks");
     }
 
     [Fact(Timeout = 20000)]
-    public async Task RoundTrip_WithHandoffs_PreservesHandoffs()
+    public void RoundTrip_WithHandoffs_PreservesHandoffs()
     {
         // Arrange
         var originalContent = """
@@ -382,7 +378,7 @@ public class AgentFileParserTest
               - agentPath: Researcher
                 instructions: Look up info
             handoffs:
-              - agentPath: Planner
+              - agentPath: Specialist
                 instructions: Plan tasks
               - agentPath: Worker
                 instructions: Execute tasks
@@ -392,11 +388,11 @@ public class AgentFileParserTest
             """;
 
         // Act - Parse then serialize
-        var node = await _parser.ParseAsync("/Orchestrator.md", originalContent, "Orchestrator.md");
-        var serialized = await _parser.SerializeAsync(node!);
+        var node = _parser.Parse("/Orchestrator.md", originalContent, "Orchestrator.md");
+        var serialized = _parser.Serialize(node!);
 
         // Re-parse to verify
-        var reparsed = await _parser.ParseAsync("/Orchestrator.md", serialized, "Orchestrator.md");
+        var reparsed = _parser.Parse("/Orchestrator.md", serialized, "Orchestrator.md");
 
         // Assert
         reparsed.Should().NotBeNull();
@@ -405,7 +401,7 @@ public class AgentFileParserTest
         agentConfig.Delegations![0].AgentPath.Should().Be("Researcher");
 
         agentConfig.Handoffs.Should().HaveCount(2);
-        agentConfig.Handoffs![0].AgentPath.Should().Be("Planner");
+        agentConfig.Handoffs![0].AgentPath.Should().Be("Specialist");
         agentConfig.Handoffs[0].Instructions.Should().Be("Plan tasks");
         agentConfig.Handoffs[1].AgentPath.Should().Be("Worker");
         agentConfig.Handoffs[1].Instructions.Should().Be("Execute tasks");
@@ -448,7 +444,7 @@ public class AgentFileParserTest
     {
         var node = new MeshNode("test")
         {
-            NodeType = "Organization",
+            NodeType = "Space",
             Content = new { Id = "test" }
         };
         _parser.CanSerialize(node).Should().BeFalse();
@@ -459,7 +455,7 @@ public class AgentFileParserTest
     #region Round-Trip Tests
 
     [Fact(Timeout = 20000)]
-    public async Task RoundTrip_PreservesAllProperties()
+    public void RoundTrip_PreservesAllProperties()
     {
         // Arrange
         var originalContent = """
@@ -490,24 +486,24 @@ public class AgentFileParserTest
             """;
 
         // Act - Parse then serialize
-        var node = await _parser.ParseAsync("/test/CompleteAgent.md", originalContent, "test/CompleteAgent.md");
-        var serialized = await _parser.SerializeAsync(node!);
+        var node = _parser.Parse("/test/CompleteAgent.md", originalContent, "test/CompleteAgent.md");
+        var serialized = _parser.Serialize(node!);
 
         // Re-parse to verify
-        var reparsed = await _parser.ParseAsync("/test/CompleteAgent.md", serialized, "test/CompleteAgent.md");
+        var reparsed = _parser.Parse("/test/CompleteAgent.md", serialized, "test/CompleteAgent.md");
 
         // Assert
         reparsed.Should().NotBeNull();
         reparsed!.NodeType.Should().Be("Agent");
         reparsed.Name.Should().Be("Complete Agent");
+        // Group + order are node-level (groupName round-trips through the node's Category).
+        reparsed.Category.Should().Be("TestGroup");
+        reparsed.Order.Should().Be(5);
 
         var agentConfig = reparsed.Content.Should().BeOfType<AgentConfiguration>().Subject;
-        agentConfig.GroupName.Should().Be("TestGroup");
         agentConfig.IsDefault.Should().BeTrue();
         agentConfig.ExposedInNavigator.Should().BeTrue();
         agentConfig.ContextMatchPattern.Should().Be("address=like=*Test*");
-        agentConfig.PreferredModel.Should().Be("gpt-4");
-        agentConfig.Order.Should().Be(5);
         agentConfig.Delegations.Should().HaveCount(1);
         agentConfig.Delegations![0].AgentPath.Should().Be("Helper");
         agentConfig.Instructions.Should().Contain("# Complete Agent Instructions");

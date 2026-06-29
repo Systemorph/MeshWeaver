@@ -3,7 +3,7 @@ using System.IO;
 using System.Reactive.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
-using FluentAssertions;
+using System.Reactive.Threading.Tasks;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith;
@@ -25,6 +25,9 @@ namespace MeshWeaver.Content.Test;
 /// </summary>
 public class CompilationErrorTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
+    /// <summary>Share Mesh/SP across [Fact]s — see MonolithMeshTestBase.ShareMeshAcrossTests.</summary>
+    protected override bool ShareMeshAcrossTests => true;
+
     private static readonly string CacheDirectory = Path.Combine(
         Path.GetTempPath(),
         "MeshWeaverCompilationErrorTests",
@@ -60,11 +63,9 @@ public class CompilationErrorTest(ITestOutputHelper output) : MonolithMeshTestBa
     /// Seeds the in-memory persistence with a NodeType that has broken code,
     /// then verifies the Overview area returns an error control.
     /// </summary>
-    [Fact(Timeout = 20000)]
+    [Fact(Timeout = 60000)]
     public async Task Overview_ShouldShowCompilationError_WhenCodeIsBroken()
     {
-        var ct = TestContext.Current.CancellationToken;
-
         // 1. Create a NodeType definition with broken code
         var nodeTypePath = "type/BrokenType";
         var nodeTypeNode = MeshNode.FromPath(nodeTypePath) with
@@ -73,10 +74,10 @@ public class CompilationErrorTest(ITestOutputHelper output) : MonolithMeshTestBa
             NodeType = MeshNode.NodeTypePath,
             Content = new NodeTypeDefinition()
         };
-        await NodeFactory.CreateNodeAsync(nodeTypeNode, ct: ct);
+        await NodeFactory.CreateNode(nodeTypeNode).Should().Emit();
 
         // Code with a compile error: missing required parameter
-        var codeNode = new MeshNode("BrokenCode", $"{nodeTypePath}/_Source")
+        var codeNode = new MeshNode("BrokenCode", $"{nodeTypePath}/Source")
         {
             NodeType = "Code",
             Name = "Broken Code",
@@ -91,7 +92,7 @@ public record BrokenType
 }"
             }
         };
-        await NodeFactory.CreateNodeAsync(codeNode, ct: ct);
+        await NodeFactory.CreateNode(codeNode).Should().Emit();
 
         // 2. Create an instance node of the broken type
         var instanceNode = MeshNode.FromPath("test/broken-instance") with
@@ -100,17 +101,14 @@ public record BrokenType
             NodeType = nodeTypePath,
             LastModified = DateTimeOffset.UtcNow
         };
-        await NodeFactory.CreateNodeAsync(instanceNode, ct: ct);
+        await NodeFactory.CreateNode(instanceNode).Should().Emit();
 
         // 3. Initialize the hub -- this triggers compilation
         var client = GetClient();
         var address = new Address("test/broken-instance");
 
         Output.WriteLine("Initializing hub for test/broken-instance...");
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(address),
-            ct);
+        await client.Observe(new PingRequest(), o => o.WithTarget(address)).Should().Emit();
         Output.WriteLine("Hub initialized.");
 
         // 4. Request the Overview layout area
@@ -123,8 +121,9 @@ public record BrokenType
         Output.WriteLine("Waiting for Overview area...");
         var control = await stream
             .GetControlStream(reference.Area!)
-            .Timeout(TimeSpan.FromSeconds(15))
-            .FirstAsync(x => x is not null);
+            .Should()
+            .Within(TimeSpan.FromSeconds(15))
+            .Match(x => x is not null);
 
         Output.WriteLine($"Received control: {control?.GetType().Name}");
 

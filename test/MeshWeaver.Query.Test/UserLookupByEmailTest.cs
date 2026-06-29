@@ -2,7 +2,6 @@ using System;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
-using FluentAssertions;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting;
 using MeshWeaver.Hosting.Monolith;
@@ -63,9 +62,8 @@ public class UserLookupByEmailTest : MonolithMeshTestBase
         MeshNode[] results;
         using (accessService.ImpersonateAsHub(Mesh))
         {
-            results = await MeshQuery.QueryAsync<MeshNode>(
-                query, ct: TestContext.Current.CancellationToken
-            ).ToArrayAsync(TestContext.Current.CancellationToken);
+            results = (await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(query))
+                .Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items.ToArray();
         }
 
         // Assert
@@ -91,9 +89,8 @@ public class UserLookupByEmailTest : MonolithMeshTestBase
         MeshNode[] results;
         using (accessService.ImpersonateAsHub(Mesh))
         {
-            results = await MeshQuery.QueryAsync<MeshNode>(
-                query, ct: TestContext.Current.CancellationToken
-            ).ToArrayAsync(TestContext.Current.CancellationToken);
+            results = (await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(query))
+                .Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items.ToArray();
         }
 
         // Assert
@@ -113,16 +110,13 @@ public class UserLookupByEmailTest : MonolithMeshTestBase
 
         // Act - look up mesh user by email (middleware pattern)
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
-        MeshNode? meshUser = null;
+        MeshNode? meshUser;
         using (accessService.ImpersonateAsHub(Mesh))
         {
-            await foreach (var node in MeshQuery.QueryAsync<MeshNode>(
-                $"nodeType:User namespace:User content.email:{claimEmail} limit:1",
-                ct: TestContext.Current.CancellationToken))
-            {
-                meshUser = node;
-                break;
-            }
+            meshUser = (await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(
+                    $"nodeType:User namespace:User content.email:{claimEmail} limit:1"))
+                .Should().Match(c => c.ChangeType == QueryChangeType.Initial))
+                .Items.FirstOrDefault();
         }
 
         // Override name if found

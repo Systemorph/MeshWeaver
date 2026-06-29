@@ -1,8 +1,7 @@
+using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
-using FluentAssertions;
-using FluentAssertions.Extensions;
 using MeshWeaver.AI;
 using MeshWeaver.AI.Persistence;
 using MeshWeaver.Graph;
@@ -34,26 +33,26 @@ public class MeshPluginAccessContextTest(ITestOutputHelper output) : MonolithMes
     [Fact]
     public async Task MeshPlugin_Get_RestoresAccessContext()
     {
-        var ct = new CancellationTokenSource(10.Seconds()).Token;
-
-        // Create a node
-        await CreateNodeAsync(
-            new MeshNode("test-doc", "User/rbuergi") { Name = "Test Doc", NodeType = "Markdown" },
-            ct);
+        // Create a node in the DevLogin user's own partition. "Roland" is the auto-admin's
+        // ObjectId, so it's the caller's own space — PartitionWriteGuardValidator exempts it.
+        // (A bare User/{user}/test-doc write would now be rejected as a system-mirror write.)
+        await NodeFactory.CreateNode(
+            new MeshNode("test-doc", "Roland") { Name = "Test Doc", NodeType = "Markdown" })
+            .Should().Within(10.Seconds()).Emit();
 
         // Simulate what happens during thread execution:
         // 1. Set user context (normally done by ExecuteMessageAsync)
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
-        accessService.SetContext(new AccessContext { ObjectId = "rbuergi", Name = "Roland" });
+        accessService.SetContext(new AccessContext { ObjectId = "Roland", Name = "Roland" });
 
         // 2. Create plugin with a mock chat that has the execution context
         var chat = new TestAgentChat
         {
             ExecutionContext = new ThreadExecutionContext
             {
-                ThreadPath = "User/rbuergi/_Thread/test",
+                ThreadPath = "Roland/_Thread/test",
                 ResponseMessageId = "test-msg",
-                UserAccessContext = new AccessContext { ObjectId = "rbuergi", Name = "Roland" }
+                UserAccessContext = new AccessContext { ObjectId = "Roland", Name = "Roland" }
             }
         };
         var plugin = new MeshPlugin(Mesh, chat);
@@ -61,8 +60,11 @@ public class MeshPluginAccessContextTest(ITestOutputHelper output) : MonolithMes
         // 3. Clear the AsyncLocal (simulates what happens when AI framework calls the tool)
         accessService.SetContext(null);
 
-        // 4. Call Get — should succeed because MeshPlugin restores context
-        var result = await plugin.Get("User/rbuergi/test-doc");
+        // 4. Call Get — should succeed because MeshPlugin restores context.
+        //    plugin.Get is a genuine Task<string> SDK boundary → bridge to an
+        //    observable so the assertion stays awaited-reactive.
+        var result = await plugin.Get("Roland/test-doc").ToObservable()
+            .Should().Within(10.Seconds()).Emit();
         result.Should().Contain("Test Doc", "MeshPlugin.Get should restore user context and return the node");
         Output.WriteLine($"Get result: {result[..System.Math.Min(200, result.Length)]}");
     }
@@ -70,17 +72,17 @@ public class MeshPluginAccessContextTest(ITestOutputHelper output) : MonolithMes
     [Fact]
     public async Task MeshPlugin_Update_RestoresAccessContext()
     {
-        var ct = new CancellationTokenSource(10.Seconds()).Token;
-
-        // Create a node (under admin context — DevLogin set this up in InitializeAsync)
-        await CreateNodeAsync(
-            new MeshNode("update-test", "User/rbuergi")
+        // Create a node in the DevLogin user's own partition ("Roland" = the auto-admin's
+        // ObjectId). The mirror partition (User/…) now rejects both the create AND the later
+        // plugin.Update, so the doc must live in a real partition the user owns.
+        await NodeFactory.CreateNode(
+            new MeshNode("update-test", "Roland")
             {
                 Name = "Original",
                 NodeType = "Markdown",
                 Content = new MeshWeaver.Markdown.MarkdownContent { Content = "# Original" },
-            },
-            ct);
+            })
+            .Should().Within(10.Seconds()).Emit();
 
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         // Capture the active circuit context from DevLogin so the simulated chat carries
@@ -92,7 +94,7 @@ public class MeshPluginAccessContextTest(ITestOutputHelper output) : MonolithMes
         {
             ExecutionContext = new ThreadExecutionContext
             {
-                ThreadPath = "User/rbuergi/_Thread/test",
+                ThreadPath = "Roland/_Thread/test",
                 ResponseMessageId = "test-msg",
                 UserAccessContext = chatUserContext
             }
@@ -110,14 +112,17 @@ public class MeshPluginAccessContextTest(ITestOutputHelper output) : MonolithMes
         // failure guard that fires under the in-memory persistence used by this test base
         // (which doesn't bump versions on update). The restoration semantics are identical;
         // only Update gives a clean signal.
-        var existingNode = new MeshNode("update-test", "User/rbuergi")
+        var existingNode = new MeshNode("update-test", "Roland")
         {
             Name = "Updated Name",
             NodeType = "Markdown",
             Content = new MeshWeaver.Markdown.MarkdownContent { Content = "# Updated" },
         };
         var updateJson = JsonSerializer.Serialize(new[] { existingNode }, Mesh.JsonSerializerOptions);
-        var result = await plugin.Update(updateJson);
+        // plugin.Update is a genuine Task<string> SDK boundary → bridge to an
+        // observable so the assertion stays awaited-reactive.
+        var result = await plugin.Update(updateJson).ToObservable()
+            .Should().Within(10.Seconds()).Emit();
         result.Should().Contain("Updated", "MeshPlugin.Update should restore user context and update");
         Output.WriteLine($"Update result: {result}");
     }

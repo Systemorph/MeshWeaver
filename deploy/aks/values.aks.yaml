@@ -1,0 +1,323 @@
+# ===========================================================================
+# values.aks.yaml — AKS overlay for the existing ../helm chart (deploy/helm).
+#
+# Apply with:
+#   helm install memex ../helm -f ../helm/values.yaml -f values.aks.yaml \
+#     --namespace memex --create-namespace
+#
+# This file ONLY sets the keys that the existing chart templates consume
+# (config.* / secrets.*). The chart's templates currently hardcode the image,
+# replica count, volumes (emptyDir) and have no ingress/storageClass plumbing,
+# so the genuinely AKS-specific pieces — RWX PVCs, ingress with cookie session
+# affinity, HA replicas, and the pgBackRest PITR sidecar/CronJob — are shipped
+# as standalone manifests under ./manifests and applied alongside the release.
+# See ./README.md "Helm + manifests layering" for the exact order.
+#
+# The annotated blocks at the bottom (ingress:, persistence:, replicas:,
+# pgbackrest:) are the values the manifests read AND a forward-looking contract:
+# if/when the ../helm chart is extended to template these, this overlay already
+# carries the AKS-correct values.
+# ===========================================================================
+
+# --- Postgres password ------------------------------------------------------
+# Replace with your own secret BEFORE installing, or (recommended) pass via
+# `--set-file` / an external secret store (CSI Secrets Store add-on is enabled
+# in aks.bicep). Never commit a real password to git.
+secrets:
+  memex_postgres:
+    memex_postgres_password: "CHANGE_ME_strong_password"
+  memex_migration:
+    ConnectionStrings__memex: ""   # chart builds this from the password if blank
+    memex_postgres_password: "CHANGE_ME_strong_password"
+    MEMEX_URI: ""
+  memex_portal:
+    ConnectionStrings__memex: ""
+    memex_postgres_password: "CHANGE_ME_strong_password"
+    MEMEX_URI: ""
+    # ---- OAuth client SECRETS (memex.systemorph.com sign-in) ----------------
+    # Client SECRETS belong in the secret, not the configmap. Pass via
+    # `--set secrets.memex_portal.Authentication__Microsoft__ClientSecret=...`
+    # or (recommended) Key Vault via the CSI Secrets Store add-on. NEVER commit
+    # real secrets. The matching non-secret ClientId / TenantId live under
+    # config.memex_portal below.
+    Authentication__Microsoft__ClientSecret: "CHANGE_ME_aad_client_secret"
+    Authentication__Google__ClientSecret: "CHANGE_ME_google_client_secret"
+    Authentication__LinkedIn__ClientSecret: "CHANGE_ME_linkedin_client_secret"
+    # ---- AI provider keys ---------------------------------------------------
+    # Never commit a real key. The chart emits each secret key ONLY when non-empty, so leaving
+    # these empty means "don't manage / preserve whatever is set out-of-band". Inject the real
+    # AzureFoundry key (the s-meshweaver key1) at deploy via Key Vault CSI
+    # (manifests/secretproviderclass.yaml) or `--set secrets.memex_portal.AzureFoundry__ApiKey=...`.
+    AzureFoundry__ApiKey: ""
+    # Ai__KeyProtection__MasterKey: intentionally UNSET — it is provided out-of-band, and overriding
+    # it makes stored enc: provider keys undecryptable. If you DO manage it via the chart, point it
+    # at the SAME Key Vault secret the deployment already uses (a different value breaks decryption).
+    Ai__KeyProtection__MasterKey: ""
+
+config:
+  memex_postgres:
+    POSTGRES_HOST_AUTH_METHOD: "scram-sha-256"
+    POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256 --auth-local=scram-sha-256"
+    POSTGRES_USER: "postgres"
+  memex_migration:
+    MEMEX_HOST: "memex-postgres-service"
+    MEMEX_PORT: "5432"
+    MEMEX_USERNAME: "postgres"
+    MEMEX_JDBCCONNECTIONSTRING: "jdbc:postgresql://memex-postgres-service:5432/memex"
+    MEMEX_DATABASENAME: "memex"
+  memex_portal:
+    MEMEX_HOST: "memex-postgres-service"
+    MEMEX_PORT: "5432"
+    MEMEX_USERNAME: "postgres"
+    MEMEX_JDBCCONNECTIONSTRING: "jdbc:postgresql://memex-postgres-service:5432/memex"
+    MEMEX_DATABASENAME: "memex"
+    ASPNETCORE_HTTP_PORTS: "8080"
+    Deployment__Backend: "Filesystem"
+    # /data holds ONLY framework caches now: DataProtection keys
+    # (/data/dataprotection-keys), the NodeType assembly-cache, and the NuGet
+    # package-cache. The content collection moved off /data onto its own Azure
+    # Files drive (/mnt/content) — see Storage__BasePath below.
+    Deployment__DataRoot: "/data"
+    # ---- HA: multiple portal replicas REQUIRE AdoNet Orleans clustering -----
+    # With more than one portal replica the Orleans silos must form a cluster
+    # via the shared Postgres (AdoNet), NOT "Localhost" (single-process). This
+    # mirrors deploy/compose-ha. If you keep replicas: 1 you may leave this as
+    # "Localhost".
+    Deployment__Orleans__Clustering: "AdoNet"
+    # ---- Content collection -> its own mountable Azure Files drive ----------
+    # The portal reads `Storage:BasePath` as the FileSystem content-collection
+    # root (MemexConfiguration.ConfigureMemexMesh -> contentStorageConfig). Each
+    # node hub gets a per-node subdirectory under it: {BasePath}/content/{nodePath}.
+    # We point it at the dedicated /mnt/content drive (memex-content PVC) so user
+    # content lives on its own share, separate from the framework caches on /data.
+    Storage__Name: "content"
+    Storage__SourceType: "FileSystem"
+    Storage__BasePath: "/mnt/content"
+    # ---- Attachments drive (forward-looking) --------------------------------
+    # The portal also maps an "attachments" collection
+    # (MemexConfiguration: MapContentCollection("attachments","storage",
+    # "attachments/{nodePath}")). In THIS (Distributed / Filesystem) backend the
+    # "storage" SOURCE collection is not separately registered — only the Monolith
+    # registers it — so attachments has NO independently env-repointable base path
+    # today: there is no `Storage__Attachments__BasePath` knob in the app. We mount
+    # /mnt/attachments anyway (memex-attachments PVC) so the drive exists and is
+    # ready: if the app later registers a filesystem "storage" source collection
+    # rooted here (e.g. a Storage2/attachments section), no manifest change is
+    # needed. The REAL functional change in this overlay is Storage__BasePath above.
+    #
+    # If you ALSO run the Monolith image (which DOES register the "storage" source
+    # from the Storage section), set Storage__BasePath=/mnt/attachments to root the
+    # attachments mapping there — but then content + attachments share one drive.
+    # For the HA Distributed portal, keep Storage__BasePath=/mnt/content.
+    Graph__Storage__Type: "PostgreSql"
+    Graph__Storage__BasePath: "/data/graph"
+    Mcp__BaseUrl: "http://memex-portal-service:8080"
+    # ---- AI model providers (templated by the chart) ------------------------
+    # These seed the system model catalog on deploy (BuiltInLanguageModelProvider
+    # scans {Section}:Models/:Endpoint → nodeType:LanguageModel nodes the picker shows).
+    # Only the AzureFoundry (open-weight /models) provider is configured via Helm.
+    # Section name "AzureFoundry" is what the code binds (NOT "AzureAIS" — dead section).
+    # Anthropic/Claude is intentionally NOT wired here — add it node-based later (a
+    # ModelProvider node with the /anthropic endpoint). Key is in secrets.memex_portal
+    # below (source from Key Vault via the CSI add-on). Full guide: Doc/AI/ModelProviderSetup.
+    AzureFoundry__Endpoint: "https://s-meshweaver.services.ai.azure.com/models"
+    AzureFoundry__Models__0: "DeepSeek-V4-Pro"
+    AzureFoundry__Models__1: "DeepSeek-V3-0324"
+    AzureFoundry__Models__2: "DeepSeek-V4-Flash"
+    # Tier → model (h/m/l + utility). Open-weight DeepSeek ladder, all deployed on
+    # s-meshweaver. Claude works very well but costs more — it's NOT wired via Helm
+    # here; add it node-based later and pin per-agent via PreferredModel when worth it.
+    ModelTier__Heavy: "DeepSeek-V4-Pro"
+    ModelTier__Standard: "DeepSeek-V3-0324"
+    ModelTier__Light: "DeepSeek-V4-Flash"
+    ModelTier__Utility: "DeepSeek-V4-Flash"
+    # Per-user Claude Code config root → the RWX /mnt/users share (mounted by the portal deployment).
+    # Lets each user connect Claude Code under their own dir; pairs with the PTY login fix.
+    ClaudeCode__ConfigDirRoot: "/mnt/users"
+    # ---- OpenTelemetry: export to the in-cluster OTel Collector -------------
+    # ServiceDefaults.AddOpenTelemetryExporters() calls UseOtlpExporter() when
+    # OTEL_EXPORTER_OTLP_ENDPOINT is set — this is the only telemetry path
+    # (Azure Application Insights has been discontinued; observability is the
+    # Prometheus / Grafana / Loki stack). The collector Service
+    # (manifests/observability/otel-collector.yaml) listens on 4317 (gRPC) /
+    # 4318 (HTTP). UseOtlpExporter defaults to gRPC, so the :4317 endpoint is
+    # correct; OTEL_EXPORTER_OTLP_PROTOCOL is set explicitly for clarity.
+    OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4317"
+    OTEL_EXPORTER_OTLP_PROTOCOL: "grpc"
+    # ---- Sign-in: Systemorph AAD as HOME tenant + Google + LinkedIn ---------
+    # The portal's auth pipeline (AuthenticationBuilderExtensions) reads these
+    # Authentication:* keys. Any provider with a ClientId set is offered on the
+    # login page; "Microsoft" with a real TenantId pins the HOME (primary) AAD.
+    #
+    # Provider mode: setting any external-provider ClientId flips the portal into
+    # multi-provider "Custom" mode automatically (HasExternalProviders == true) —
+    # dev login is already disabled in the Distributed image (Program.cs). We set
+    # it explicitly for clarity. Public host = memex.systemorph.com.
+    Authentication__Provider: "Custom"
+    Authentication__EnableDevLogin: "false"
+    # -- Microsoft / Entra ID (HOME tenant = Systemorph) ----------------------
+    # TenantId MUST be the Systemorph AAD tenant GUID (NOT "common"/"organizations")
+    # so this AAD is the home directory. ClientId = the app registration's
+    # Application (client) ID. Add redirect URI https://memex.systemorph.com/signin-microsoft
+    # to that app registration. ClientSecret is in secrets.memex_portal above.
+    # Systemorph AAD home tenant (the subscription's own tenant).
+    Authentication__Microsoft__TenantId: "3a01d7ac-3330-444d-942d-975eb491b5d6"
+    Authentication__Microsoft__ClientId: "CHANGE_ME_aad_application_client_id"
+    # -- Google (other accounts) ----------------------------------------------
+    # Redirect URI: https://memex.systemorph.com/signin-google
+    Authentication__Google__ClientId: "CHANGE_ME_google_oauth_client_id"
+    # -- LinkedIn (other accounts) --------------------------------------------
+    # Redirect URI: https://memex.systemorph.com/signin-linkedin
+    Authentication__LinkedIn__ClientId: "CHANGE_ME_linkedin_oauth_client_id"
+
+# ===========================================================================
+# AKS-specific values consumed by ./manifests (and a chart-extension contract).
+# ===========================================================================
+
+# --- Self-update (in-pod patch + ACR polling) -------------------------------
+# Set azureClientId to the client id of the user-assigned managed identity federated to the
+# memex-portal-sa service account (subject system:serviceaccount:<ns>:memex-portal-sa) and granted
+# AcrPull on the registry. This arms ACR polling AND opts the pod into the workload-identity webhook.
+# The in-cluster deployment PATCH (RBAC) works regardless; this is only needed to authenticate the
+# ACR tag-list call. See Doc/Architecture/ReleaseStrategy → "AKS prerequisites".
+#
+# The value is the `portalIdentityClientId` output of infra/main.bicep (modules/portal-identity.bicep
+# provisions the shared portal UAMI + a federated credential per namespace). The SAME client id is
+# used for EVERY portal namespace (memex, atioz, memex-cloud) — one shared UAMI, one AcrPull grant.
+# Inject it at `helm upgrade` time rather than committing it: for the `memex` env put the real id in
+# the git-ignored values.deploy.yaml (see scripts/values.deploy.example.yaml) or pass
+# `--set selfUpdate.azureClientId=<portalIdentityClientId>`; for atioz / memex-cloud set it in their
+# git-ignored envs/<env>/values.<env>.yaml. See Doc/Architecture/DeploymentAKS → "Portal self-update".
+selfUpdate:
+  azureClientId: ""   # set per-env from the portalIdentityClientId bicep output
+
+# --- Container images -------------------------------------------------------
+# Default = pull straight from GHCR (no ACR needed). To use the private ACR,
+# `az acr import` the images (see README) and set registry to the ACR login
+# server, e.g. memexaksacrxxxx.azurecr.io. The chart currently hardcodes the
+# ghcr.io path; ./manifests/portal-ingress.yaml and the README's
+# `helm upgrade --set` examples show how to repoint it.
+image:
+  registry: "ghcr.io/systemorph"      # or "<acrName>.azurecr.io"
+  # Sizable image: memex-portal-ai is the FULL AI-enabled portal (co-hosted
+  # Claude Code / Copilot CLIs, all providers) — the heavyweight variant, as
+  # opposed to the lean `memex-portal`. Paired with the larger resources block
+  # below + portal-ha-patch.yaml so each replica gets a few CPUs and a bit of RAM.
+  portal: "memex-portal-ai"
+  migration: "memex-migration"
+  tag: "latest"
+  pullPolicy: "IfNotPresent"
+
+# --- Portal pod resources (GENEROUS — sizable AI image on 32 GiB nodes) ------
+# Applied to each replica. The actual requests/limits land on the container via
+# manifests/portal-ha-patch.yaml (kept in sync with these). The AI image is
+# memory-hungry (NodeType compile cache, agent runtimes), so on the Standard_D8s_v5
+# nodes (8 vCPU / 32 GiB) we give it generous headroom — 2 replicas + system pods
+# still fit comfortably per node.
+resources:
+  portal:
+    requests:
+      cpu: "4"         # a few CPUs
+      memory: "8Gi"    # a bit of RAM
+    limits:
+      cpu: "6"         # generous CPU ceiling
+      memory: "16Gi"   # generous memory ceiling (half a 32 GiB node)
+
+# --- HA / replicas ----------------------------------------------------------
+# Launch 2 portal replicas by default (still needs cookie session affinity +
+# AdoNet Orleans clustering; both are configured). Bump to 3 for full 3-zone
+# spread. portal-ha-patch.yaml sets the same count — keep the two in sync (or
+# `kubectl scale deployment memex-portal-deployment --replicas=2`).
+replicas:
+  portal: 2        # Blazor Server: 2 replicas (zone-spread is ScheduleAnyway)
+  postgres: 1      # self-managed pg StatefulSet stays single-writer
+
+# --- Persistence (Azure Files CSI for ReadWriteMany) ------------------------
+# Blazor Server portal replicas share every /data + /mnt/* path, so those PVCs
+# MUST be ReadWriteMany. They use the custom `azurefile-memex` StorageClass
+# (manifests/storageclass-azurefile.yaml) which pins uid/gid=1654 so the non-root
+# portal user can write. The Postgres data volume is single-writer and uses
+# managed-csi (Premium SSD) for IOPS. The chart ships these as emptyDir today;
+# ./manifests/portal-pvcs.yaml creates the real PVCs.
+#
+# One Azure Files "drive" per concern, mounted at an explicit path:
+#   data        -> /data            framework caches only (DP keys, asm + nuget cache)
+#   content     -> /mnt/content     the content collection (Storage__BasePath)
+#   attachments -> /mnt/attachments dedicated attachments drive (forward-looking)
+#   users       -> /mnt/users       co-hosted CLI configs
+persistence:
+  data:
+    storageClass: "azurefile-memex"   # RWX, uid/gid 1654
+    accessMode: "ReadWriteMany"
+    mountPath: "/data"
+    size: "16Gi"                      # shrunk: content moved off /data
+  content:
+    storageClass: "azurefile-memex"   # RWX, uid/gid 1654
+    accessMode: "ReadWriteMany"
+    mountPath: "/mnt/content"
+    size: "128Gi"
+  attachments:
+    storageClass: "azurefile-memex"   # RWX, uid/gid 1654
+    accessMode: "ReadWriteMany"
+    mountPath: "/mnt/attachments"
+    size: "64Gi"
+  users:
+    storageClass: "azurefile-memex"   # RWX, uid/gid 1654
+    accessMode: "ReadWriteMany"
+    mountPath: "/mnt/users"
+    size: "32Gi"
+  postgres:
+    storageClass: "managed-csi"       # RWO, Premium SSD
+    accessMode: "ReadWriteOnce"
+    size: "128Gi"
+
+# --- Ingress with cookie session affinity (Blazor Server is sticky) ---------
+# Blazor Server holds a per-circuit SignalR connection; without sticky sessions
+# a reconnect can land on a different replica and drop the circuit. Pick ONE
+# ingress controller (see README for AGIC vs ingress-nginx trade-offs); both
+# annotation sets are provided in ./manifests/portal-ingress.yaml.
+ingress:
+  enabled: true
+  className: "webapprouting.kubernetes.azure.com"  # AKS app routing (managed nginx)
+  host: "memex.systemorph.com"
+  tls:
+    enabled: true
+    secretName: "memex-tls"
+  sessionAffinity:
+    enabled: true
+    cookieName: "MEMEX_AFFINITY"
+    # nginx ("webapprouting"/"ingress-nginx") cookie-affinity annotations:
+    nginxAnnotations:
+      nginx.ingress.kubernetes.io/affinity: "cookie"
+      nginx.ingress.kubernetes.io/affinity-mode: "persistent"
+      nginx.ingress.kubernetes.io/session-cookie-name: "MEMEX_AFFINITY"
+      nginx.ingress.kubernetes.io/session-cookie-max-age: "172800"
+      nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"      # long-lived SignalR
+      nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    # AGIC (Application Gateway Ingress Controller) cookie-affinity annotations:
+    agicAnnotations:
+      appgw.ingress.kubernetes.io/cookie-based-affinity: "true"
+      appgw.ingress.kubernetes.io/request-timeout: "3600"
+
+# --- pgBackRest PITR sidecar (self-managed Postgres backup to Azure Blob) ---
+# Toggle for the ./manifests/pgbackrest resources. Disable if you migrate to
+# Azure Database for PostgreSQL Flexible Server (managed PITR — recommended for
+# turnkey prod; see README).
+pgbackrest:
+  enabled: true
+  # Values from the storage.bicep outputs:
+  azure:
+    account: "memexaksbkpXXXX"          # backupStorageAccount output
+    container: "pgbackrest"             # backupContainerName output
+    # Workload Identity client id (backupIdentityClientId output). Keyless.
+    workloadIdentityClientId: "00000000-0000-0000-0000-000000000000"
+    # Alternatively set a storage account key here and switch repo auth in the
+    # pgbackrest config (see manifests/pgbackrest/configmap.yaml).
+    accountKey: ""
+  serviceAccount: "pgbackrest-sa"
+  retention:
+    full: 4        # keep 4 full backups
+    diff: 6        # keep 6 differentials
+  schedule:
+    full: "0 2 * * 0"     # weekly full,  Sun 02:00 UTC
+    diff: "0 2 * * 1-6"   # daily diff,   Mon-Sat 02:00 UTC

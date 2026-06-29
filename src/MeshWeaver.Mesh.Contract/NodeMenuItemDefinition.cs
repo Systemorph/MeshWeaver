@@ -15,6 +15,7 @@ namespace MeshWeaver.Mesh;
 /// <param name="Order">Sort order within the menu (lower = earlier)</param>
 /// <param name="Href">Optional absolute href — when set, navigates to this URL instead of constructing from Area</param>
 /// <param name="Children">Optional child menu items for nested/hierarchical menus</param>
+/// <param name="Tooltip">Optional hover tooltip; falls back to <paramref name="Label"/> when null</param>
 public record NodeMenuItemDefinition(
     string Label,
     string Area,
@@ -22,13 +23,20 @@ public record NodeMenuItemDefinition(
     Permission RequiredPermission = Permission.None,
     int Order = 0,
     string? Href = null,
-    IReadOnlyList<NodeMenuItemDefinition>? Children = null);
+    IReadOnlyList<NodeMenuItemDefinition>? Children = null,
+    string? Tooltip = null);
 
 /// <summary>
-/// Provider delegate that yields menu items via IAsyncEnumerable.
-/// Providers are evaluated during layout rendering; they can check permissions inline.
+/// Provider delegate that emits the current set of menu items as a reactive stream.
+/// Each emission is the provider's <b>complete</b> set of items for the current state — the
+/// renderer replaces (not appends) the provider's slice on every emission. Providers compose
+/// the live MeshNode + permission streams, so the menu re-renders automatically when a runtime
+/// <c>AccessAssignment</c> propagates (the access-race fix — see
+/// <c>Doc/GUI/NodeMenu.md</c>). Emit an empty collection (never <c>Observable.Empty</c>) when
+/// the provider contributes nothing for the current node, so the aggregator's
+/// <c>CombineLatest</c> never stalls waiting on a silent provider.
 /// </summary>
-public delegate IAsyncEnumerable<NodeMenuItemDefinition> NodeMenuItemProvider(
+public delegate IObservable<IReadOnlyCollection<NodeMenuItemDefinition>> NodeMenuItemProvider(
     LayoutAreaHost host, RenderingContext context);
 
 /// <summary>
@@ -46,11 +54,14 @@ public interface INodeMenuProvider
     string Context => "Node";
 
     /// <summary>
-    /// Yields menu items. Providers may check node type / permissions before yielding — the
-    /// renderer passes them no filter, so any early-exit (e.g. for the wrong node type) must
-    /// happen inside the implementation.
+    /// Emits this provider's complete set of menu items as a reactive stream. Providers may check
+    /// node type / permissions inside the stream — the renderer passes no filter, so any
+    /// "contributes nothing" case must emit an <b>empty</b> collection (never
+    /// <c>Observable.Empty</c>, which would stall the aggregator's <c>CombineLatest</c>).
+    /// Compose live streams (<c>GetMeshNodeStream</c>, <c>GetEffectivePermissions</c>) so the menu
+    /// re-renders when permissions or node content change.
     /// </summary>
-    IAsyncEnumerable<NodeMenuItemDefinition> GetItemsAsync(LayoutAreaHost host, RenderingContext context);
+    IObservable<IReadOnlyCollection<NodeMenuItemDefinition>> GetItems(LayoutAreaHost host, RenderingContext context);
 }
 
 /// <summary>

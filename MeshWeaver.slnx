@@ -29,6 +29,7 @@
   </Folder>
   <Folder Name="/memex/aspire/">
     <Project Path="memex/aspire/Memex.AppHost/Memex.AppHost.csproj" />
+    <Project Path="memex/aspire/Memex.Aspire.Hosting/Memex.Aspire.Hosting.csproj" />
     <Project Path="memex/aspire/Memex.Database.Migration/Memex.Database.Migration.csproj" />
     <Project Path="memex/aspire/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj" />
     <Project Path="memex/aspire/Memex.Portal.ServiceDefaults/Memex.Portal.ServiceDefaults.csproj" />
@@ -36,7 +37,7 @@
   <Folder Name="/Solution Items/">
     <File Path=".editorconfig" />
     <File Path=".gitignore" />
-    <File Path="CLAUDE.md" />
+    <File Path="AGENTS.md" />
     <File Path="Directory.Build.props" />
     <File Path="Directory.Packages.props" />
     <File Path="nuget.config" />
@@ -45,7 +46,7 @@
   <Folder Name="/src/">
     <Project Path="src/MeshWeaver.AI.Application/MeshWeaver.AI.Application.csproj" />
     <Project Path="src/MeshWeaver.AI.AzureFoundry/MeshWeaver.AI.AzureFoundry.csproj" />
-    <Project Path="src/MeshWeaver.AI.AzureOpenAI/MeshWeaver.AI.AzureOpenAI.csproj" />
+    <Project Path="src/MeshWeaver.AI.OpenAI/MeshWeaver.AI.OpenAI.csproj" />
     <Project Path="src/MeshWeaver.AI/MeshWeaver.AI.csproj" />
     <Project Path="src/MeshWeaver.AI.ClaudeCode/MeshWeaver.AI.ClaudeCode.csproj" />
     <Project Path="src/MeshWeaver.AI.Copilot/MeshWeaver.AI.Copilot.csproj" />
@@ -60,6 +61,10 @@
     <Project Path="src/MeshWeaver.BusinessRules/MeshWeaver.BusinessRules.csproj" />
     <Project Path="src/MeshWeaver.Connection.Orleans/MeshWeaver.Connection.Orleans.csproj" />
     <Project Path="src/MeshWeaver.ContentCollections/MeshWeaver.ContentCollections.csproj" />
+    <Project Path="src/MeshWeaver.ContentCollections.Indexing/MeshWeaver.ContentCollections.Indexing.csproj" />
+    <Project Path="src/MeshWeaver.ContentCollections.Indexing.PostgreSql/MeshWeaver.ContentCollections.Indexing.PostgreSql.csproj" />
+    <Project Path="src/MeshWeaver.Connection.SignalR/MeshWeaver.Connection.SignalR.csproj" />
+    <Project Path="src/MeshWeaver.ContentCollections.Indexing.Graph/MeshWeaver.ContentCollections.Indexing.Graph.csproj" />
     <Project Path="src/MeshWeaver.Data.Contract/MeshWeaver.Data.Contract.csproj" />
     <Project Path="src/MeshWeaver.Data/MeshWeaver.Data.csproj" />
     <Project Path="src/MeshWeaver.DataSetReader.Csv/MeshWeaver.DataSetReader.Csv.csproj" />
@@ -72,8 +77,10 @@
     <Project Path="src/MeshWeaver.Documentation/MeshWeaver.Documentation.csproj" />
     <Project Path="src/MeshWeaver.Domain/MeshWeaver.Domain.csproj" />
     <Project Path="src/MeshWeaver.Fixture/MeshWeaver.Fixture.csproj" />
+    <Project Path="src/MeshWeaver.Reactive.Assertions/MeshWeaver.Reactive.Assertions.csproj" />
     <Project Path="src/MeshWeaver.GoogleMaps/MeshWeaver.GoogleMaps.csproj" />
     <Project Path="src/MeshWeaver.Graph/MeshWeaver.Graph.csproj" />
+    <Project Path="src/MeshWeaver.GitSync/MeshWeaver.GitSync.csproj" />
     <Project Path="src/MeshWeaver.GridModel/MeshWeaver.GridModel.csproj" />
     <Project Path="src/MeshWeaver.Hosting.AzureBlob/MeshWeaver.Hosting.AzureBlob.csproj" />
     <Project Path="src/MeshWeaver.Hosting.Blazor/MeshWeaver.Hosting.Blazor.csproj" />
@@ -82,6 +89,8 @@
     <Project Path="src/MeshWeaver.Hosting.AzureStorage/MeshWeaver.Hosting.AzureStorage.csproj" />
     <Project Path="src/MeshWeaver.Hosting.Cosmos/MeshWeaver.Hosting.Cosmos.csproj" />
     <Project Path="src/MeshWeaver.Hosting.PostgreSql/MeshWeaver.Hosting.PostgreSql.csproj" />
+    <Project Path="src/MeshWeaver.Hosting.Sqlite/MeshWeaver.Hosting.Sqlite.csproj" />
+    <Project Path="src/MeshWeaver.Hosting.SignalR/MeshWeaver.Hosting.SignalR.csproj" />
     <Project Path="src/MeshWeaver.Hosting/MeshWeaver.Hosting.csproj" />
     <Project Path="src/MeshWeaver.Import/MeshWeaver.Import.csproj" />
     <Project Path="src/MeshWeaver.Kernel.Hub/MeshWeaver.Kernel.Hub.csproj" />
@@ -93,9 +102,12 @@
     <Project Path="src/MeshWeaver.Mesh.Contract/MeshWeaver.Mesh.Contract.csproj" />
     <Project Path="src/MeshWeaver.Messaging.Contract/MeshWeaver.Messaging.Contract.csproj" />
     <Project Path="src/MeshWeaver.Messaging.Hub/MeshWeaver.Messaging.Hub.csproj" />
+    <Project Path="src/MeshWeaver.NuGet.AzureBlob/MeshWeaver.NuGet.AzureBlob.csproj" />
+    <Project Path="src/MeshWeaver.NuGet/MeshWeaver.NuGet.csproj" />
     <Project Path="src/MeshWeaver.Reflection/MeshWeaver.Reflection.csproj" />
     <Project Path="src/MeshWeaver.ServiceProvider/MeshWeaver.ServiceProvider.csproj" />
     <Project Path="src/MeshWeaver.ShortGuid/MeshWeaver.ShortGuid.csproj" />
+    <Project Path="src/MeshWeaver.Social/MeshWeaver.Social.csproj" />
     <Project Path="src/MeshWeaver.Utils/MeshWeaver.Utils.csproj" />
   </Folder>
   <Folder Name="/test/">
@@ -104,9 +116,13 @@
     <File Path="test/Directory.Packages.props" />
     <Project Path="src/MeshWeaver.Hosting.Monolith.TestBase/MeshWeaver.Hosting.Monolith.TestBase.csproj" />
     <Project Path="test/MeshWeaver.AI.Test/MeshWeaver.AI.Test.csproj" />
+    <Project Path="test/MeshWeaver.AI.Test.FakeCli/MeshWeaver.AI.Test.FakeCli.csproj" />
     <Project Path="test/MeshWeaver.BusinessRules.Test/MeshWeaver.BusinessRules.Test.csproj" />
     <Project Path="test/MeshWeaver.Content.Test/MeshWeaver.Content.Test.csproj" />
     <Project Path="test/MeshWeaver.ContentCollections.Test/MeshWeaver.ContentCollections.Test.csproj" />
+    <Project Path="test/MeshWeaver.ContentCollections.Indexing.Test/MeshWeaver.ContentCollections.Indexing.Test.csproj" />
+    <Project Path="test/MeshWeaver.ContentCollections.Indexing.PostgreSql.Test/MeshWeaver.ContentCollections.Indexing.PostgreSql.Test.csproj" />
+    <Project Path="test/MeshWeaver.ContentCollections.Indexing.Graph.Test/MeshWeaver.ContentCollections.Indexing.Graph.Test.csproj" />
     <Project Path="test/MeshWeaver.Data.Test/MeshWeaver.Data.Test.csproj" />
     <Project Path="test/MeshWeaver.Documentation.Test/MeshWeaver.Documentation.Test.csproj" />
     <Project Path="test/MeshWeaver.Data.TestDomain/MeshWeaver.Data.TestDomain.csproj" />
@@ -114,29 +130,31 @@
     <Project Path="test/MeshWeaver.Hosting.Monolith.Test/MeshWeaver.Hosting.Monolith.Test.csproj" />
     <Project Path="test/MeshWeaver.Hosting.Orleans.Test/MeshWeaver.Hosting.Orleans.Test.csproj" />
     <Project Path="test/MeshWeaver.Import.Test/MeshWeaver.Import.Test.csproj" />
-    <Project Path="test/MeshWeaver.Json.Assertions.Test/MeshWeaver.Json.Assertions.Test.csproj" />
-    <Project Path="test/MeshWeaver.Json.Assertions/MeshWeaver.Json.Assertions.csproj" />
     <Project Path="test/MeshWeaver.Layout.Test/MeshWeaver.Layout.Test.csproj" />
     <Project Path="test/MeshWeaver.Markdown.Test/MeshWeaver.Markdown.Test.csproj" />
+    <Project Path="test/MeshWeaver.MathDemo.Test/MeshWeaver.MathDemo.Test.csproj" />
     <Project Path="test/MeshWeaver.Messaging.Hub.Test/MeshWeaver.Messaging.Hub.Test.csproj" />
     <Project Path="test/MeshWeaver.NodeOperations.Test/MeshWeaver.NodeOperations.Test.csproj" />
     <Project Path="test/MeshWeaver.Northwind.Test/MeshWeaver.Northwind.Test.csproj" />
     <Project Path="test/MeshWeaver.Search.Test/MeshWeaver.Search.Test.csproj" />
     <Project Path="test/MeshWeaver.Security.Test/MeshWeaver.Security.Test.csproj" />
-    <Project Path="test/MeshWeaver.Serialization.Test/MeshWeaver.Serialization.Test.csproj" />
+    <Project Path="test/MeshWeaver.Social.Test/MeshWeaver.Social.Test.csproj" />
     <Project Path="test/MeshWeaver.TestDomain/MeshWeaver.TestDomain.csproj" />
     <Project Path="test/MeshWeaver.Graph.Test/MeshWeaver.Graph.Test.csproj" />
+    <Project Path="test/MeshWeaver.GitSync.Test/MeshWeaver.GitSync.Test.csproj" />
     <Project Path="test/MeshWeaver.Hosting.Blazor.Test/MeshWeaver.Hosting.Blazor.Test.csproj" />
     <Project Path="test/MeshWeaver.Hosting.Test/MeshWeaver.Hosting.Test.csproj" />
     <Project Path="test/MeshWeaver.Hub.Fixture/MeshWeaver.Hub.Fixture.csproj" />
     <Project Path="test/MeshWeaver.Kernel.Test/MeshWeaver.Kernel.Test.csproj" />
     <Project Path="test/MeshWeaver.Markdown.Collaboration.Test/MeshWeaver.Markdown.Collaboration.Test.csproj" />
     <Project Path="test/MeshWeaver.Markdown.Export.Test/MeshWeaver.Markdown.Export.Test.csproj" />
-    <Project Path="test/MeshWeaver.StorageImport.Test/MeshWeaver.StorageImport.Test.csproj" />
     <Project Path="test/MeshWeaver.Hosting.Cosmos.Test/MeshWeaver.Hosting.Cosmos.Test.csproj" />
     <Project Path="test/MeshWeaver.Hosting.PostgreSql.Test/MeshWeaver.Hosting.PostgreSql.Test.csproj" />
+    <Project Path="test/MeshWeaver.Hosting.Sqlite.Test/MeshWeaver.Hosting.Sqlite.Test.csproj" />
+    <Project Path="test/MeshWeaver.Connection.SignalR.Test/MeshWeaver.Connection.SignalR.Test.csproj" />
     <Project Path="test/MeshWeaver.Auth.Test/MeshWeaver.Auth.Test.csproj" />
     <Project Path="test/MeshWeaver.FutuRe.Test/MeshWeaver.FutuRe.Test.csproj" />
+    <Project Path="test/MeshWeaver.PensionFund.Test/MeshWeaver.PensionFund.Test.csproj" />
     <Project Path="test/MeshWeaver.AccessControl.Test/MeshWeaver.AccessControl.Test.csproj" />
     <Project Path="test/MeshWeaver.Acme.Test/MeshWeaver.Acme.Test.csproj" />
     <Project Path="test/MeshWeaver.Threading.Test/MeshWeaver.Threading.Test.csproj" />
@@ -145,13 +163,14 @@
     <Project Path="test/MeshWeaver.Persistence.Test/MeshWeaver.Persistence.Test.csproj" />
     <Project Path="test/MeshWeaver.Autocomplete.Test/MeshWeaver.Autocomplete.Test.csproj" />
     <Project Path="test/MeshWeaver.Query.Test/MeshWeaver.Query.Test.csproj" />
+    <Project Path="test/MeshWeaver.Reactive.Assertions.Test/MeshWeaver.Reactive.Assertions.Test.csproj" />
     <Project Path="test/Memex.Portal.Shared.Test/Memex.Portal.Shared.Test.csproj" />
   </Folder>
   <Project Path="test/MeshWeaver.MemexTemplate.Test/MeshWeaver.MemexTemplate.Test.csproj" />
   <Folder Name="/tools/">
     <File Path="tools/generate-memex-template.cs" />
+    <Project Path="tools/MeshWeaver.Cli/MeshWeaver.Cli.csproj" />
     <Project Path="tools/MeshWeaver.MemexTemplate.Pack/MeshWeaver.MemexTemplate.Pack.csproj" />
     <Project Path="tools/MeshWeaver.ThumbnailGenerator/MeshWeaver.ThumbnailGenerator.csproj" />
-    <Project Path="tools/MeshWeaver.Tools.CosmosImport/MeshWeaver.Tools.CosmosImport.csproj" />
   </Folder>
 </Solution>

@@ -1,0 +1,169 @@
+﻿<!-- Native MAUI app — NO Blazor. Renders the mesh portal via the native MeshWeaver.Maui view pack, so the
+     build never references Microsoft.AspNetCore.App (no maccatalyst/iOS runtime pack → NETSDK1082). -->
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <TargetFrameworks>net10.0-android</TargetFrameworks>
+        <TargetFrameworks Condition="!$([MSBuild]::IsOSPlatform('linux'))">$(TargetFrameworks);net10.0-ios;net10.0-maccatalyst</TargetFrameworks>
+        <TargetFrameworks Condition="$([MSBuild]::IsOSPlatform('windows'))">$(TargetFrameworks);net10.0-windows10.0.19041.0</TargetFrameworks>
+
+        <!-- Note for MacCatalyst:
+            The default runtime is maccatalyst-x64, except in Release config, in which case the default is maccatalyst-x64;maccatalyst-arm64.
+            When specifying both architectures, use the plural <RuntimeIdentifiers> instead of the singular <RuntimeIdentifier>.
+            The Mac App Store will NOT accept apps with ONLY maccatalyst-arm64 indicated;
+            either BOTH runtimes must be indicated or ONLY macatalyst-x64. -->
+        <!-- For example: <RuntimeIdentifiers>maccatalyst-x64;maccatalyst-arm64</RuntimeIdentifiers> -->
+
+        <OutputType>Exe</OutputType>
+        <RootNamespace>Memex.Client</RootNamespace>
+        <UseMaui>true</UseMaui>
+        <SingleProject>true</SingleProject>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <EnableDefaultCssItems>false</EnableDefaultCssItems>
+        <Nullable>enable</Nullable>
+        <!-- AudioCaptureService reads AVAudioPCMBuffer.FloatChannelData (float**) in the realtime tap. -->
+        <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+
+        <!-- Enable XAML source generation for faster build times and improved performance.
+             This generates C# code from XAML at compile time instead of runtime inflation.
+             To disable, remove this line.
+             For individual files, you can override by setting Inflator metadata:
+               <MauiXaml Update="MyPage.xaml" Inflator="Default" /> (reverts to defaults: Runtime for Debug, XamlC for Release)
+               <MauiXaml Update="MyPage.xaml" Inflator="Runtime" /> (force runtime inflation) -->
+        <MauiXamlInflator>SourceGen</MauiXamlInflator>
+
+        <!-- Display name -->
+        <ApplicationTitle>Memex.Client</ApplicationTitle>
+
+        <!-- App Identifier -->
+        <ApplicationId>com.companyname.memex.client</ApplicationId>
+
+        <!-- Versions -->
+        <ApplicationDisplayVersion>1.0</ApplicationDisplayVersion>
+        <ApplicationVersion>1</ApplicationVersion>
+
+        <!-- To develop, package, and publish an app to the Microsoft Store, see: https://aka.ms/MauiTemplateUnpackaged -->
+        <WindowsPackageType>None</WindowsPackageType>
+
+        <SupportedOSPlatformVersion Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'ios'">15.0</SupportedOSPlatformVersion>
+        <SupportedOSPlatformVersion Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'maccatalyst'">15.0</SupportedOSPlatformVersion>
+        <SupportedOSPlatformVersion Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'android'">24.0</SupportedOSPlatformVersion>
+        <SupportedOSPlatformVersion Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'windows'">10.0.17763.0</SupportedOSPlatformVersion>
+        <TargetPlatformMinVersion Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'windows'">10.0.17763.0</TargetPlatformMinVersion>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <!-- App Icon -->
+        <MauiIcon Include="Resources\AppIcon\appicon.svg" ForegroundFile="Resources\AppIcon\appiconfg.svg" Color="#512BD4" />
+
+        <!-- Splash Screen -->
+        <MauiSplashScreen Include="Resources\Splash\splash.svg" Color="#512BD4" BaseSize="128,128" />
+
+        <!-- Images -->
+        <MauiImage Include="Resources\Images\*" />
+        <MauiImage Update="Resources\Images\dotnet_bot.svg" BaseSize="168,208" />
+
+        <!-- Custom Fonts -->
+        <MauiFont Include="Resources\Fonts\*" />
+
+        <!-- Raw Assets (also remove the "Resources\Raw" prefix) -->
+        <MauiAsset Include="Resources\Raw\**" LogicalName="%(RecursiveDir)%(Filename)%(Extension)" />
+    </ItemGroup>
+
+    <!-- Packaged Swiss-German model — bundled into the MacCatalyst (macOS desktop) app so it works fully
+         offline, no download. Scoped to maccatalyst ONLY (the ~1.5 GB bundle is impractical for the iPhone
+         build) and gated on the files being present (staged in Models/, gitignored) so the build never
+         breaks when they're absent — the app just downloads instead. VoiceModelCatalog copies them out of
+         the package by logical name. Used at runtime when the `swiss-german` feature flag is on. -->
+    <ItemGroup Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'maccatalyst' And Exists('Models\ggml-swiss-german-turbo-q5_0.bin')">
+        <MauiAsset Include="Models\ggml-swiss-german-turbo-q5_0.bin" LogicalName="ggml-swiss-german-turbo-q5_0.bin" />
+        <MauiAsset Include="Models\ggml-swiss-german-turbo-encoder.mlmodelc.zip" LogicalName="ggml-swiss-german-turbo-encoder.mlmodelc.zip" Condition="Exists('Models\ggml-swiss-german-turbo-encoder.mlmodelc.zip')" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <PackageReference Include="Microsoft.Maui.Controls" Version="$(MauiVersion)" />
+        <PackageReference Include="Microsoft.Extensions.Logging.Debug" Version="10.0.0" />
+        <PackageReference Include="Plugin.Maui.Audio" Version="4.0.0" />
+        <PackageReference Include="Whisper.net" Version="1.9.1" />
+        <!-- Base CPU/Metal runtime for every target EXCEPT MacCatalyst. On MacCatalyst the CoreML runtime
+             below ships its own (self-contained) native libs — both reference the same static libwhisper.a
+             etc., so including both would double-link. CoreML supersedes the base runtime there. -->
+        <PackageReference Include="Whisper.net.Runtime" Version="1.9.1"
+            Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) != 'maccatalyst'" />
+        <!-- GPU backend on Windows + Android (Intel Arc / discrete GPUs are Vulkan-capable). The iOS
+             DEVICE build keeps Metal from the base runtime. Whisper.net loads the GPU lib when present. -->
+        <PackageReference Include="Whisper.net.Runtime.Vulkan" Version="1.9.1"
+            Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'windows' or $([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'android'" />
+        <!-- GPU backend on MacCatalyst (our macOS client). Unlike the iOS device build, Whisper.net builds
+             whisper.cpp with GGML_METAL=OFF for MacCatalyst, so there is NO Metal here — CoreML (Apple GPU
+             / Neural Engine) is the only GPU path. The runtime is built WHISPER_COREML_ALLOW_FALLBACK=ON,
+             so it loads safely even without the CoreML "apple image"; it accelerates the encoder when a
+             matching "…-encoder.mlmodelc" sits next to the ggml model (see VoiceModelCatalog / the
+             "apple-gpu" feature flag). Scoped to maccatalyst ONLY so iOS device keeps its Metal runtime. -->
+        <PackageReference Include="Whisper.net.Runtime.CoreML" Version="1.9.1"
+            Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'maccatalyst'" />
+    </ItemGroup>
+
+    <ItemGroup>
+      <ProjectReference Include="..\..\src\MeshWeaver.Connection.SignalR\MeshWeaver.Connection.SignalR.csproj" />
+      <ProjectReference Include="..\..\src\MeshWeaver.AI\MeshWeaver.AI.csproj" />
+      <!-- Public catalogs shipped IN THE DISTRO (offline, no GitHub, no import): MeshWeaver.AI already
+           embeds the Agent/Skill/Harness/Provider .md; MeshWeaver.Documentation embeds the Doc pages
+           + DocContent. Both are plain Microsoft.NET.Sdk (no AspNetCore) → MAUI/iOS/MacCatalyst-safe. -->
+      <ProjectReference Include="..\..\src\MeshWeaver.Documentation\MeshWeaver.Documentation.csproj" />
+      <!-- Local-first mesh: this client hosts its own in-process monolith mesh on SQLite.
+           (Hosting.Monolith brings MeshWeaver.Hosting transitively — AddRowLevelSecurity lives there.) -->
+      <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Monolith\MeshWeaver.Hosting.Monolith.csproj" />
+      <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Sqlite\MeshWeaver.Hosting.Sqlite.csproj" />
+      <ProjectReference Include="..\..\src\MeshWeaver.Graph\MeshWeaver.Graph.csproj" />
+      <!-- In-process portal rendered NATIVELY: the MAUI view pack maps mesh layout-area controls to native
+           Microsoft.Maui.Controls views (replaces the Blazor RCLs — keeps the build AspNetCore-free). -->
+      <ProjectReference Include="..\..\src\MeshWeaver.Maui\MeshWeaver.Maui.csproj" />
+    </ItemGroup>
+
+    <!-- ╔══════════════════════════════════════════════════════════════════════════════════════════════╗
+         ║ Apple Intelligence native shim (iOS / MacCatalyst only)                                        ║
+         ╚══════════════════════════════════════════════════════════════════════════════════════════════╝
+         AppleIntelligenceChat.cs P/Invokes memex_ai_available/_respond/_free as [DllImport("__Internal")],
+         so those @_cdecl symbols must be statically linked INTO the app binary. The plain `dotnet build`
+         doesn't compile Swift, so we compile Platforms/{MacCatalyst,iOS}/AppleIntelligence.swift to a static
+         lib here and link it via <NativeReference>. LinkWithSwiftSystemLibraries pulls in the OS Swift
+         runtime (/usr/lib/swift) so the shim's stdlib symbols resolve. -->
+    <PropertyGroup Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'maccatalyst' or $([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'ios'">
+        <LinkWithSwiftSystemLibraries>true</LinkWithSwiftSystemLibraries>
+        <!-- BaseIntermediateOutputPath (obj/, gitignored) is set in SDK props; IntermediateOutputPath is
+             NOT yet set during csproj evaluation, so using it would drop the .a at the project root. -->
+        <_AppleAiShimLib>$(BaseIntermediateOutputPath)libmemexai.a</_AppleAiShimLib>
+        <_AppleAiShimSrc Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'maccatalyst'">Platforms\MacCatalyst\AppleIntelligence.swift</_AppleAiShimSrc>
+        <_AppleAiShimSrc Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'ios'">Platforms\iOS\AppleIntelligence.swift</_AppleAiShimSrc>
+    </PropertyGroup>
+
+    <ItemGroup Condition="'$(_AppleAiShimLib)' != ''">
+        <NativeReference Include="$(_AppleAiShimLib)" Kind="Static" ForceLoad="true" />
+    </ItemGroup>
+
+    <Target Name="_CompileAppleAiShim"
+            Condition="'$(_AppleAiShimLib)' != ''"
+            BeforeTargets="CoreCompile;_LinkNativeExecutable;_CompileNativeExecutable"
+            Inputs="$(_AppleAiShimSrc)"
+            Outputs="$(_AppleAiShimLib)">
+        <PropertyGroup>
+            <_ShimArch Condition="$(RuntimeIdentifier.EndsWith('arm64'))">arm64</_ShimArch>
+            <_ShimArch Condition="$(RuntimeIdentifier.EndsWith('x64'))">x86_64</_ShimArch>
+            <_ShimMin>$(SupportedOSPlatformVersion)</_ShimMin>
+            <!-- MacCatalyst: macOS SDK, the …-macabi ABI variant. -->
+            <_ShimSdk Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'maccatalyst'">macosx</_ShimSdk>
+            <_ShimTriple Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'maccatalyst'">$(_ShimArch)-apple-ios$(_ShimMin)-macabi</_ShimTriple>
+            <!-- iOS device / simulator. -->
+            <_ShimSdk Condition="'$(RuntimeIdentifier)' == 'ios-arm64'">iphoneos</_ShimSdk>
+            <_ShimTriple Condition="'$(RuntimeIdentifier)' == 'ios-arm64'">$(_ShimArch)-apple-ios$(_ShimMin)</_ShimTriple>
+            <_ShimSdk Condition="$(RuntimeIdentifier.StartsWith('iossimulator'))">iphonesimulator</_ShimSdk>
+            <_ShimTriple Condition="$(RuntimeIdentifier.StartsWith('iossimulator'))">$(_ShimArch)-apple-ios$(_ShimMin)-simulator</_ShimTriple>
+        </PropertyGroup>
+        <MakeDir Directories="$(BaseIntermediateOutputPath)" />
+        <!-- Backticks (not $()) so MSBuild doesn't try to expand the shell sub-command as a property. -->
+        <Exec Command="xcrun swiftc -sdk `xcrun --sdk $(_ShimSdk) --show-sdk-path` -target $(_ShimTriple) -parse-as-library -O -emit-library -static -o &quot;$(_AppleAiShimLib)&quot; &quot;$(_AppleAiShimSrc)&quot;" />
+        <Message Importance="high" Text="Compiled Apple Intelligence shim → $(_AppleAiShimLib) ($(_ShimTriple))" />
+    </Target>
+
+</Project>

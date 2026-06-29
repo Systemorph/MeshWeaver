@@ -1,0 +1,66 @@
+# ---------------------------------------------------------------------------
+# storageclass-azurefile.yaml — Custom Azure Files (SMB) StorageClass tuned for
+#                               the NON-ROOT Memex portal container.
+#
+# WHY A CUSTOM CLASS (and not the built-in `azurefile-csi`)?
+# ----------------------------------------------------------
+# The portal image runs as the .NET `app` user — uid 1654 / gid 1654 (the
+# standard non-root uid baked into the `mcr.microsoft.com/dotnet/aspnet`
+# chiseled images). On a freshly-provisioned Azure Files share the default CSI
+# mountOptions are `file_mode=0777,dir_mode=0777,uid=0,gid=0` — world-writable
+# but root-OWNED. That is *usually* enough (0777 lets anyone write), but it is
+# brittle: any path the app `chmod`s, any tool that checks ownership, or a share
+# whose CSI defaults drift to a tighter mode, and the non-root process hits
+#   UnauthorizedAccessException: Access to the path '/.../dataprotection-keys' is denied
+# (the exact failure that bit the Docker-Compose deploy on a root-owned volume).
+#
+# Pinning `uid=1654,gid=1654` makes EVERY file/dir on the share owned by the
+# portal user, so writes succeed regardless of mode drift — explicit and robust,
+# as the deployment brief requires.
+#
+# mountOptions rationale:
+#   dir_mode=0777,file_mode=0777  — permissive mode (belt-and-braces with uid)
+#   uid=1654,gid=1654             — own every inode as the .NET `app` user
+#   mfsymlinks                    — emulate POSIX symlinks over SMB (DataProtection
+#                                   and some asset flows create symlinks)
+#   cache=strict                  — coherent caching; safe for the read-mostly
+#                                   content/cache workloads here
+#   actimeo=30                    — 30 s attribute cache; cuts SMB round-trips on
+#                                   the many small-file stats the content service does
+#   nobrl                         — do NOT send byte-range-lock requests. Azure Files
+#                                   SMB rejects the POSIX advisory locks that SQLite
+#                                   and other file-lock-y libraries take, surfacing as
+#                                   "Operation not supported" / EIO. `nobrl` makes
+#                                   those locks no-ops so file-locking workloads run.
+#
+# Used by the memex-data / memex-content / memex-attachments / memex-users PVCs
+# (portal-pvcs.yaml) and the otel-logs PVC (observability/). Apply BEFORE the PVCs:
+#
+#   kubectl apply -f storageclass-azurefile.yaml
+#
+# NOTE: provisioner `file.csi.azure.com` is the Azure Files CSI driver enabled in
+# aks.bicep (storageProfile.fileCSIDriver). `skuName: Standard_LRS` keeps cost low;
+# switch to `Premium_LRS` (and mind the 100 GiB minimum share size) for IOPS-heavy
+# content. `Standard_ZRS` gives zone-redundant durability where the region offers it.
+# ---------------------------------------------------------------------------
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: azurefile-memex
+provisioner: file.csi.azure.com
+# Retain so an accidental PVC delete doesn't nuke the share + its content/keys.
+# (The built-in azurefile-csi uses Delete; we deliberately diverge for safety.)
+reclaimPolicy: Retain
+volumeBindingMode: Immediate
+allowVolumeExpansion: true
+parameters:
+  skuName: Standard_LRS
+mountOptions:
+  - dir_mode=0777
+  - file_mode=0777
+  - uid=1654
+  - gid=1654
+  - mfsymlinks
+  - cache=strict
+  - actimeo=30
+  - nobrl

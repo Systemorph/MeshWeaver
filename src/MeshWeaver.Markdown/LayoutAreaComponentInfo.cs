@@ -4,6 +4,11 @@ using MeshWeaver.Data;
 
 namespace MeshWeaver.Markdown;
 
+/// <summary>
+/// A Markdig block representing an embedded or linked layout-area reference parsed from a unified
+/// content reference (<c>@</c>/<c>@@</c> syntax or a <c>layout</c> code block). Carries either a raw
+/// path resolved at render time, or a pre-parsed address/area/id triple.
+/// </summary>
 public class LayoutAreaComponentInfo : ContainerBlock
 {
     /// <summary>
@@ -76,9 +81,18 @@ public class LayoutAreaComponentInfo : ContainerBlock
     /// </summary>
     public bool IsInline { get; }
 
+    /// <summary>
+    /// The layout-area reference (<see cref="Area"/> + <see cref="Id"/>) used to subscribe to / link the area.
+    /// </summary>
     public LayoutAreaReference Reference =>
         new(Area) { Id = Id };
 }
 
+/// <summary>
+/// A parsed source reference describing a typed pointer to mesh content.
+/// </summary>
+/// <param name="Type">The reference type (e.g. data, content, area).</param>
+/// <param name="Reference">The reference value (path or id within the type).</param>
+/// <param name="Address">The resolved node address the reference targets.</param>
 public record SourceInfo(string Type, string Reference, string Address);
 

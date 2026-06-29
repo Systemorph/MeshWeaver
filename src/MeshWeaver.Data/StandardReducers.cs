@@ -8,9 +8,20 @@ using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Data;
 
+/// <summary>
+/// Builds the default reduce manager for an <see cref="EntityStore"/>, wiring the standard
+/// workspace-reference reducers and patch functions used to project and patch workspace state.
+/// </summary>
 public static class StandardReducers
 {
 
+    /// <summary>
+    /// Creates the default reduce manager for an <see cref="EntityStore"/>, registering reducers for the
+    /// standard workspace references (entity, collection, JSON-pointer, schema, content, and partitioned
+    /// variants) and the patch functions for entity stores, instance collections and JSON elements.
+    /// </summary>
+    /// <param name="hub">The hub whose type registry and serializer options the reducers use.</param>
+    /// <returns>A configured entity-store reduce manager.</returns>
     public static ReduceManager<EntityStore> CreateReduceManager(this IMessageHub hub)
     {
         var typeRegistry = hub.TypeRegistry;
@@ -190,7 +201,12 @@ public static class StandardReducers
         if (!string.IsNullOrWhiteSpace(reference.Pointer) && reference.Pointer != "/")
             serialized = JsonPointer.Parse(reference.Pointer).Evaluate(serialized)!.Value;
 
-        return new(serialized, current.ChangedBy, current.StreamId, ChangeType.Patch, current.Version, current.Updates);
+        // PRESERVE the source ChangeType — do NOT hardcode Patch. The layout render path delivers an area's
+        // generator-produced control as a Full (empty Updates); GetControlStream/GetStream<UiControl> passes
+        // a frame only on `first || ChangeType==Full || matching Update`, so a Full→Patch here drops the
+        // control for a single-subscribe reader (the native MAUI LayoutAreaView) → GetControlStream null.
+        // The sibling reducers (ReduceJsonElementTo, ReduceEntityStoreTo(EntityReference)) already preserve it.
+        return new(serialized, current.ChangedBy, current.StreamId, current.ChangeType, current.Version, current.Updates);
     }
     private static ChangeItem<EntityStore> ReduceEntityStoreTo(ChangeItem<EntityStore> current, CollectionsReference reference, bool initial)
     {

@@ -1,0 +1,51 @@
+---
+apiVersion: "apps/v1"
+kind: "StatefulSet"
+metadata:
+  name: "memex-postgres-statefulset"
+  labels:
+    app.kubernetes.io/name: "{{ .Chart.Name }}"
+    app.kubernetes.io/component: "memex-postgres"
+    app.kubernetes.io/instance: "{{ .Release.Name }}"
+spec:
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: "{{ .Chart.Name }}"
+        app.kubernetes.io/component: "memex-postgres"
+        app.kubernetes.io/instance: "{{ .Release.Name }}"
+    spec:
+      containers:
+        - image: "docker.io/pgvector/pgvector:pg17"
+          name: "memex-postgres"
+          envFrom:
+            - configMapRef:
+                name: "memex-postgres-config"
+            - secretRef:
+                name: "memex-postgres-secrets"
+          ports:
+            - name: "tcp"
+              protocol: "TCP"
+              containerPort: 5432
+          volumeMounts:
+            - name: "memex-pgdata"
+              mountPath: "/var/lib/postgresql/data"
+          imagePullPolicy: "IfNotPresent"
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: "{{ .Chart.Name }}"
+      app.kubernetes.io/component: "memex-postgres"
+      app.kubernetes.io/instance: "{{ .Release.Name }}"
+  replicas: 1
+  persistentVolumeClaimRetentionPolicy: {}
+  updateStrategy:
+    rollingUpdate: {}
+    type: "RollingUpdate"
+  volumeClaimTemplates:
+    - metadata:
+        name: "memex-pgdata"
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 10Gi

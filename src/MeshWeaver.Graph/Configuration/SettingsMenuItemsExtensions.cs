@@ -1,3 +1,4 @@
+using System.Reactive.Linq;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh;
@@ -37,55 +38,45 @@ public static class SettingsMenuItemsExtensions
         var providers = items.Select(item =>
         {
             var captured = item;
-            return new SettingsMenuItemProvider((_, _) => YieldSingle(captured));
+            return new SettingsMenuItemProvider((_, _) =>
+                Observable.Return<IReadOnlyList<SettingsMenuItemDefinition>>(new[] { captured }));
         }).ToArray();
         return config.AddSettingsMenuItems(providers);
     }
 
-    private static async IAsyncEnumerable<SettingsMenuItemDefinition> YieldSingle(
-        SettingsMenuItemDefinition item)
-    {
-        await Task.CompletedTask;
-        yield return item;
-    }
-
     /// <summary>
-    /// Evaluates all registered providers, filters by permission, and returns
-    /// items sorted by Order.
+    /// Evaluates all registered providers (subscribe-all-upfront via CombineLatest), filters by
+    /// permission, and returns items sorted by Order — reactive (<see cref="IObservable{T}"/>),
+    /// re-emitting whenever a provider's live check (e.g. global-admin) resolves.
     /// </summary>
-    internal static async Task<IReadOnlyList<SettingsMenuItemDefinition>>
-        EvaluateSettingsMenuItemsAsync(
+    internal static IObservable<IReadOnlyList<SettingsMenuItemDefinition>>
+        EvaluateSettingsMenuItems(
             this MessageHubConfiguration config,
             LayoutAreaHost host,
             RenderingContext ctx,
             Permission userPermissions)
     {
         var collection = config.Get<SettingsMenuProviderCollection>();
-        if (collection == null)
-            return [];
+        if (collection == null || collection.Providers.Count == 0)
+            return Observable.Return<IReadOnlyList<SettingsMenuItemDefinition>>([]);
 
-        var items = new List<SettingsMenuItemDefinition>();
-        foreach (var provider in collection.Providers)
-        {
-            try
+        var streams = collection.Providers.Select(provider =>
+            // Skip failing providers so one broken tab can't crash all settings.
+            provider(host, ctx).Catch<IReadOnlyList<SettingsMenuItemDefinition>, Exception>(
+                _ => Observable.Return<IReadOnlyList<SettingsMenuItemDefinition>>([])));
+
+        return Observable.CombineLatest(streams)
+            .Select(lists =>
             {
-                await foreach (var item in provider(host, ctx))
-                {
-                    if (item.RequiredPermission != Permission.None
-                        && !userPermissions.HasFlag(item.RequiredPermission))
-                        continue;
-
-                    items.Add(item);
-                }
-            }
-            catch
-            {
-                // Skip failing providers to prevent one broken tab from crashing all settings
-            }
-        }
-
-        items.Sort((a, b) => a.Order.CompareTo(b.Order));
-        return items;
+                var items = new List<SettingsMenuItemDefinition>();
+                foreach (var list in lists)
+                    foreach (var item in list)
+                        if (item.RequiredPermission == Permission.None
+                            || userPermissions.HasFlag(item.RequiredPermission))
+                            items.Add(item);
+                items.Sort((a, b) => a.Order.CompareTo(b.Order));
+                return (IReadOnlyList<SettingsMenuItemDefinition>)items;
+            });
     }
 
     /// <summary>
@@ -106,7 +97,10 @@ public static class SettingsMenuItemsExtensions
                 Label: "Metadata",
                 ContentBuilder: SettingsLayoutArea.BuildMetadataTab,
                 Icon: FluentIcons.Info(),
-                Order: 0),
+                Order: 0,
+                Keywords: ["name", "description", "category", "icon", "order", "id",
+                    "namespace", "node type", "state", "version", "created", "modified",
+                    "timestamps", "identity", "display"]),
 
             new SettingsMenuItemDefinition(
                 Id: SettingsLayoutArea.NodeTypesTab,
@@ -115,7 +109,9 @@ public static class SettingsMenuItemsExtensions
                 Group: "Management",
                 Icon: FluentIcons.Document(),
                 GroupIcon: FluentIcons.Document(),
-                Order: 100),
+                Order: 100,
+                Keywords: ["node types", "types", "definitions", "schema", "data model",
+                    "creatable types"]),
 
             new SettingsMenuItemDefinition(
                 Id: SettingsLayoutArea.FilesTab,
@@ -123,7 +119,9 @@ public static class SettingsMenuItemsExtensions
                 ContentBuilder: SettingsLayoutArea.BuildFilesTab,
                 Group: "Management",
                 Icon: FluentIcons.Folder(),
-                Order: 110),
+                Order: 110,
+                Keywords: ["files", "documents", "uploads", "attachments", "content",
+                    "collections", "blobs"]),
 
             new SettingsMenuItemDefinition(
                 Id: SettingsLayoutArea.AccessControlTab,
@@ -132,7 +130,9 @@ public static class SettingsMenuItemsExtensions
                 Group: "Security",
                 Icon: FluentIcons.Shield(),
                 GroupIcon: FluentIcons.Shield(),
-                Order: 200),
+                Order: 200,
+                Keywords: ["access", "permissions", "roles", "assignments", "users",
+                    "sharing", "security", "grant", "deny"]),
 
             new SettingsMenuItemDefinition(
                 Id: SettingsLayoutArea.GroupsTab,
@@ -140,7 +140,8 @@ public static class SettingsMenuItemsExtensions
                 ContentBuilder: SettingsLayoutArea.BuildGroupsTab,
                 Group: "Security",
                 Icon: FluentIcons.People(),
-                Order: 210),
+                Order: 210,
+                Keywords: ["groups", "members", "membership", "teams", "roles"]),
 
             new SettingsMenuItemDefinition(
                 Id: SettingsLayoutArea.EffectiveAccessTab,
@@ -148,14 +149,18 @@ public static class SettingsMenuItemsExtensions
                 ContentBuilder: SettingsLayoutArea.BuildEffectiveAccessTab,
                 Group: "Security",
                 Icon: FluentIcons.PersonSearch(),
-                Order: 220),
+                Order: 220,
+                Keywords: ["effective access", "permissions", "test", "user", "check",
+                    "evaluate", "who can", "audit"]),
 
             new SettingsMenuItemDefinition(
                 Id: SettingsLayoutArea.AppearanceTab,
                 Label: "Appearance",
                 ContentBuilder: SettingsLayoutArea.BuildAppearanceTab,
                 Icon: FluentIcons.PaintBrush(),
-                Order: 900)
+                Order: 900,
+                Keywords: ["appearance", "theme", "color", "dark mode", "light mode",
+                    "display", "style", "layout"])
         );
     }
 }

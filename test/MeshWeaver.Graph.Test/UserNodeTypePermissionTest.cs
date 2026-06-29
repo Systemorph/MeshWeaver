@@ -1,5 +1,4 @@
-using System.Threading.Tasks;
-using FluentAssertions;
+using System.Reactive.Linq;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
@@ -75,8 +74,8 @@ public class UserNodeTypePermissionTest
         // Path = "User/Alice" (derived from ns/id)
         var context = ReadContext("Alice", "User");
 
-        var result = await accessRule.HasAccessAsync(context, "bob", TestContext.Current.CancellationToken);
-        result.Should().BeTrue("any authenticated user can read a direct User node");
+        await accessRule.HasAccess(context, "bob")
+            .Should().Be(true, "any authenticated user can read a direct User node");
     }
 
     [Fact]
@@ -88,11 +87,11 @@ public class UserNodeTypePermissionTest
 
         var context = ReadContext("Alice", "User");
 
-        var resultNull = await accessRule.HasAccessAsync(context, null, TestContext.Current.CancellationToken);
-        resultNull.Should().BeFalse("unauthenticated user (null) should be denied");
+        await accessRule.HasAccess(context, null)
+            .Should().Be(false, "unauthenticated user (null) should be denied");
 
-        var resultEmpty = await accessRule.HasAccessAsync(context, "", TestContext.Current.CancellationToken);
-        resultEmpty.Should().BeFalse("unauthenticated user (empty) should be denied");
+        await accessRule.HasAccess(context, "")
+            .Should().Be(false, "unauthenticated user (empty) should be denied");
     }
 
     [Fact]
@@ -105,8 +104,8 @@ public class UserNodeTypePermissionTest
         // Path = "User/Alice/thread1" (child node)
         var context = ReadContext("thread1", "User/Alice");
 
-        var result = await accessRule.HasAccessAsync(context, "bob", TestContext.Current.CancellationToken);
-        result.Should().BeFalse("child nodes (threads, activities) should not be publicly readable");
+        await accessRule.HasAccess(context, "bob")
+            .Should().Be(false, "child nodes (threads, activities) should not be publicly readable");
     }
 
     [Fact]
@@ -118,8 +117,8 @@ public class UserNodeTypePermissionTest
 
         var context = UpdateContext("Alice", "User");
 
-        var result = await accessRule.HasAccessAsync(context, "Alice", TestContext.Current.CancellationToken);
-        result.Should().BeTrue("users should be able to edit their own node");
+        await accessRule.HasAccess(context, "Alice")
+            .Should().Be(true, "users should be able to edit their own node");
     }
 
     [Fact]
@@ -131,8 +130,8 @@ public class UserNodeTypePermissionTest
 
         var context = UpdateContext("Alice", "User");
 
-        var result = await accessRule.HasAccessAsync(context, "Bob", TestContext.Current.CancellationToken);
-        result.Should().BeFalse("users should not be able to edit other users' nodes");
+        await accessRule.HasAccess(context, "Bob")
+            .Should().Be(false, "users should not be able to edit other users' nodes");
     }
 
     #endregion

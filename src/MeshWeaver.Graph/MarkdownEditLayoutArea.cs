@@ -7,6 +7,8 @@ using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.Domain;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Graph;
 
@@ -18,9 +20,21 @@ namespace MeshWeaver.Graph;
 /// </summary>
 public static class MarkdownEditLayoutArea
 {
+    /// <summary>
+    /// Renders the Edit layout area — a full-page Markdown editor without track changes.
+    /// </summary>
+    /// <param name="host">The layout area host rendering the area.</param>
+    /// <param name="_">The rendering context for the area.</param>
+    /// <returns>The view for the Edit layout area.</returns>
     public static UiControl Edit(LayoutAreaHost host, RenderingContext _)
         => BuildArea(host, trackChanges: false);
 
+    /// <summary>
+    /// Renders the Suggest layout area — a full-page Markdown editor with track changes enabled.
+    /// </summary>
+    /// <param name="host">The layout area host rendering the area.</param>
+    /// <param name="_">The rendering context for the area.</param>
+    /// <returns>The view for the Suggest layout area.</returns>
     public static UiControl Suggest(LayoutAreaHost host, RenderingContext _)
         => BuildArea(host, trackChanges: true);
 
@@ -29,15 +43,11 @@ public static class MarkdownEditLayoutArea
         var hubPath = host.Hub.Address.ToString();
         var hubAddress = host.Hub.Address;
 
-        var nodeStream = host.Workspace.GetStream<MeshNode>()
-            ?? Observable.Return<MeshNode[]?>(null);
-
         return Controls.Stack
             .WithWidth("100%")
             .WithStyle("height: calc(100vh - 100px); display: flex; flex-direction: column;")
-            .WithView((h, ctx) => nodeStream.Take(1).Select(nodes =>
+            .WithView((h, ctx) => host.Workspace.GetMeshNodeStream().Take(1).Select(node =>
             {
-                var node = nodes?.FirstOrDefault(n => n.Path == hubPath);
                 var content = MarkdownOverviewLayoutArea.GetMarkdownContent(node);
                 return BuildEditContent(host, node, hubPath, hubAddress, content, trackChanges);
             }));
@@ -58,16 +68,6 @@ public static class MarkdownEditLayoutArea
             .WithWidth("100%")
             .WithStyle("flex: 1; display: flex; flex-direction: column; min-height: 0;");
 
-        // Set up data binding for node name (used in title bar)
-        string? dataId = null;
-        if (node != null)
-        {
-            dataId = $"editTitle_{hubPath.Replace("/", "_")}";
-            var props = MeshNodeMetadata.FromNode(node);
-            host.UpdateData(dataId, props);
-            SetupNodeMetadataAutoSave(host, dataId, props, node);
-        }
-
         // Header row with back button and inline title editor
         var headerRow = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
@@ -82,14 +82,17 @@ public static class MarkdownEditLayoutArea
             .WithAppearance(Appearance.Stealth)
             .WithNavigateToHref(backHref));
 
-        // Title text field in the header bar
-        if (dataId != null)
+        // Title text field in the header bar — bound DIRECTLY to the node's Name field
+        // (node-bound DataContext, fields-mode). The edit writes straight back to the node stream;
+        // no /data replica, no metadata save subscription. The body is already node-bound via
+        // MarkdownEditorControl.WithAutoSave below. See Doc/GUI/DataBinding.
+        if (node != null)
         {
-            var titleField = new TextFieldControl(new JsonPointerReference("name"))
+            var titleField = new TextFieldControl(new JsonPointerReference(nameof(MeshNode.Name)))
             {
                 Immediate = true,
                 Placeholder = "Untitled",
-                DataContext = LayoutAreaReference.GetDataPointer(dataId)
+                DataContext = LayoutAreaReference.GetMeshNodeDataContext(node.Path, bindContent: false)
             }.WithStyle("flex: 1; font-size: 1.25rem; font-weight: 600;")
              .WithClass("title-bar-field");
 
@@ -123,34 +126,5 @@ public static class MarkdownEditLayoutArea
         container = container.WithView(editorWrapper);
 
         return container;
-    }
-
-    private static void SetupNodeMetadataAutoSave(
-        LayoutAreaHost host,
-        string dataId,
-        MeshNodeMetadata initial,
-        MeshNode node)
-    {
-        var current = (object)initial;
-
-        host.RegisterForDisposal($"autosave_{dataId}",
-            host.Stream.GetDataStream<object>(dataId)
-                .Throttle(TimeSpan.FromMilliseconds(300))
-                .Subscribe(updated =>
-                {
-                    if (object.Equals(current, updated))
-                        return;
-
-                    current = updated;
-
-                    if (updated is not MeshNodeMetadata updatedProps)
-                        return;
-
-                    var updatedNode = updatedProps.ApplyTo(node);
-
-                    host.Hub.Post(
-                        new DataChangeRequest { ChangedBy = host.Stream.ClientId }.WithUpdates(updatedNode),
-                        o => o.WithTarget(host.Hub.Address));
-                }));
     }
 }

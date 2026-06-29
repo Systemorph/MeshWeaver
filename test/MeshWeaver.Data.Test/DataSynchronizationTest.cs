@@ -1,8 +1,6 @@
 ﻿using System.Linq;
 using System.Reactive.Linq;
 using System.Threading.Tasks;
-using FluentAssertions;
-using FluentAssertions.Extensions;
 using Microsoft.Extensions.DependencyInjection;
 using MeshWeaver.Data.TestDomain;
 using MeshWeaver.Fixture;
@@ -64,7 +62,7 @@ public class DataSynchronizationTest(ITestOutputHelper output) : HubTestBase(out
     {
         var client = GetClient();
         var workspace = client.ServiceProvider.GetRequiredService<IWorkspace>();
-        var businessUnits = await workspace.GetObservable<BusinessUnit>().Timeout(3.Seconds()).FirstAsync();
+        var businessUnits = await workspace.GetObservable<BusinessUnit>().Should().Within(3.Seconds()).Emit();
         businessUnits.Should().HaveCountGreaterThan(1);
 
         var businessUnit = businessUnits.First();
@@ -75,19 +73,19 @@ public class DataSynchronizationTest(ITestOutputHelper output) : HubTestBase(out
         // get the data from the client again
         var loadedInstance = await workspace
             .GetObservable<BusinessUnit>(businessUnit.SystemName)
-            .Timeout(3.Seconds())
-            .FirstAsync(x => x!.DisplayName != oldName);
+            .Should().Within(3.Seconds())
+            .Match(x => x!.DisplayName != oldName);
         loadedInstance.Should().Be(businessUnit);
 
-        // data sync is happening async in order not to block the client ==> we need to give it
-        // some grace time for the sync to happen
-        await Task.Delay(100);
-
+        // The host workspace's stream surfaces the synced update reactively —
+        // Match(predicate) with a 3 s timeout waits for the DisplayName
+        // change to land. No grace-period Task.Delay needed (was a holdover
+        // from a non-reactive era).
         var hostWorkspace = GetHost().ServiceProvider.GetRequiredService<IWorkspace>();
         loadedInstance = await hostWorkspace
             .GetObservable<BusinessUnit>(businessUnit.SystemName)
-            .Timeout(3.Seconds())
-            .FirstAsync(x => x!.DisplayName != oldName);
+            .Should().Within(3.Seconds())
+            .Match(x => x!.DisplayName != oldName);
         loadedInstance.Should().Be(businessUnit);
     }
     /// <summary>
@@ -98,10 +96,10 @@ public class DataSynchronizationTest(ITestOutputHelper output) : HubTestBase(out
     {
         var host = GetHost();
         var workspace = host.GetWorkspace();
-        var businessUnits = await workspace.GetStream<BusinessUnit>()!.Timeout(3.Seconds()).FirstAsync();
+        var businessUnits = await workspace.GetStream<BusinessUnit>()!.Should().Within(3.Seconds()).Emit();
         businessUnits.Should().HaveCountGreaterThan(1);
 
-        var businessUnit = businessUnits.First();
+        var businessUnit = businessUnits!.First();
         var oldName = businessUnit.DisplayName;
         businessUnit = businessUnit with { DisplayName = NewName };
         host.Post(new DataChangeRequest { Updates = [businessUnit] });
@@ -109,11 +107,11 @@ public class DataSynchronizationTest(ITestOutputHelper output) : HubTestBase(out
         // get the data from the client again
         var loadedInstance = await workspace
             .GetObservable<BusinessUnit>(businessUnit.SystemName)
-            .Timeout(3.Seconds())
-            .FirstAsync(x => x!.DisplayName != oldName);
+            .Should().Within(3.Seconds())
+            .Match(x => x!.DisplayName != oldName);
         loadedInstance.Should().Be(businessUnit);
 
-        var linesOfBusiness = await workspace.GetStream<LineOfBusiness>()!.Timeout(3.Seconds()).FirstAsync();
-        linesOfBusiness.Should().NotBeNullOrEmpty();
+        var linesOfBusiness = await workspace.GetStream<LineOfBusiness>()!.Should().Within(3.Seconds()).Emit();
+        linesOfBusiness.Should().NotBeEmpty();
     }
 }

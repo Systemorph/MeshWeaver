@@ -1,0 +1,93 @@
+services:
+  self-host-dashboard:
+    image: "mcr.microsoft.com/dotnet/nightly/aspire-dashboard:latest"
+    ports:
+      - "18888"
+    expose:
+      - "18889"
+      - "18890"
+    networks:
+      - "aspire"
+    restart: "always"
+  memex-postgres:
+    image: "docker.io/pgvector/pgvector:pg17"
+    environment:
+      POSTGRES_HOST_AUTH_METHOD: "scram-sha-256"
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256 --auth-local=scram-sha-256"
+      POSTGRES_USER: "postgres"
+      POSTGRES_PASSWORD: "${MEMEX_POSTGRES_PASSWORD}"
+    expose:
+      - "5432"
+    volumes:
+      - type: "volume"
+        target: "/var/lib/postgresql/data"
+        source: "memex-pgdata"
+        read_only: false
+    networks:
+      - "aspire"
+  memex-migration:
+    image: "ghcr.io/systemorph/memex-migration:latest"
+    environment:
+      ConnectionStrings__memex: "Host=memex-postgres;Port=5432;Username=postgres;Password=${MEMEX_POSTGRES_PASSWORD};Database=memex"
+      MEMEX_HOST: "memex-postgres"
+      MEMEX_PORT: "5432"
+      MEMEX_USERNAME: "postgres"
+      MEMEX_PASSWORD: "${MEMEX_POSTGRES_PASSWORD}"
+      MEMEX_URI: "postgresql://postgres:${MEMEX_POSTGRES_PASSWORD}@memex-postgres:5432/memex"
+      MEMEX_JDBCCONNECTIONSTRING: "jdbc:postgresql://memex-postgres:5432/memex"
+      MEMEX_DATABASENAME: "memex"
+    depends_on:
+      memex-postgres:
+        condition: "service_started"
+    networks:
+      - "aspire"
+  memex-portal:
+    image: "ghcr.io/systemorph/memex-portal-ai:latest"
+    environment:
+      ConnectionStrings__memex: "Host=memex-postgres;Port=5432;Username=postgres;Password=${MEMEX_POSTGRES_PASSWORD};Database=memex"
+      MEMEX_HOST: "memex-postgres"
+      MEMEX_PORT: "5432"
+      MEMEX_USERNAME: "postgres"
+      MEMEX_PASSWORD: "${MEMEX_POSTGRES_PASSWORD}"
+      MEMEX_URI: "postgresql://postgres:${MEMEX_POSTGRES_PASSWORD}@memex-postgres:5432/memex"
+      MEMEX_JDBCCONNECTIONSTRING: "jdbc:postgresql://memex-postgres:5432/memex"
+      MEMEX_DATABASENAME: "memex"
+      ASPNETCORE_HTTP_PORTS: "8080"
+      Deployment__Backend: "Filesystem"
+      Deployment__DataRoot: "/data"
+      Deployment__Orleans__Clustering: "AdoNet"
+      Storage__Name: "content"
+      Storage__SourceType: "FileSystem"
+      Storage__BasePath: "/data/content"
+      Graph__Storage__Type: "PostgreSql"
+      Graph__Storage__BasePath: "/data/graph"
+      Mcp__BaseUrl: "http://memex-portal:8080"
+    ports:
+      - "8080"
+    volumes:
+      - type: "volume"
+        target: "/data"
+        source: "memex-data"
+        read_only: false
+      - type: "volume"
+        target: "/mnt/users"
+        source: "memex-users"
+        read_only: false
+    depends_on:
+      memex-postgres:
+        condition: "service_started"
+      memex-migration:
+        condition: "service_completed_successfully"
+    user: "root"
+    networks:
+      - "aspire"
+networks:
+  aspire:
+    driver: "bridge"
+volumes:
+  memex-pgdata:
+    driver: "local"
+  memex-data:
+    driver: "local"
+  memex-users:
+    driver: "local"

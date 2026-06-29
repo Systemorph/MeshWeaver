@@ -1,4 +1,4 @@
-using Memex.Portal.Shared;
+using MeshWeaver.Blazor.Portal;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -7,8 +7,7 @@ using System.Reactive.Linq;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
-using FluentAssertions;
-using FluentAssertions.Extensions;
+using System.Reactive.Threading.Tasks;
 using MeshWeaver.Acme.Test.TestHelpers;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
@@ -35,6 +34,8 @@ namespace MeshWeaver.Acme.Test;
 /// </summary>
 public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
+    // Stable cache directory — the timestamped-subdir cache (a3ab9909e)
+    // gives each compile its own subdir so prior-process DLLs aren't touched.
     private static readonly string SharedCacheDirectory = Path.Combine(
         Path.GetTempPath(),
         "MeshWeaverTodoCreateTests",
@@ -58,7 +59,7 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
             .UseMonolithMesh()
             .AddPartitionedFileSystemPersistence(dataDirectory)
             .AddAcme()
-            .AddOrganizationType()
+            .AddSpaceType()
             .ConfigureServices(services =>
             {
                 services.Configure<CompilationCacheOptions>(o =>
@@ -85,18 +86,11 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
     /// Test that the CreateChild form (with ?type= parameter) shows Name and Description fields.
     /// This is the first step of the create flow where user enters basic info.
     /// </summary>
-    [Fact(Timeout = 20000)]
+    [Fact(Timeout = 60000)]
     public async Task CreateChild_WithTodoType_ShowsNameDescriptionForm()
     {
         var client = GetClient();
         var parentAddress = new Address("ACME/ProductLaunch");
-
-        Output.WriteLine("Initializing hub for ACME/ProductLaunch...");
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(parentAddress),
-            TestContext.Current.CancellationToken);
-        Output.WriteLine("Hub initialized.");
 
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference(MeshNodeLayoutAreas.CreateNodeArea)
@@ -104,6 +98,8 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
             Id = "?type=ACME%2FProject%2FTodo"
         };
 
+        // No ping: the layout-area subscription itself activates the hub +
+        // triggers the cold NodeType compile. Budget covers the cold Roslyn build.
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             parentAddress,
             reference);
@@ -111,9 +107,7 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         Output.WriteLine("Waiting for CreateChild form to render...");
         var control = await stream
             .GetControlStream(reference.Area!)
-            .Where(c => c is StackControl)
-            .Timeout(TimeSpan.FromSeconds(10))
-            .FirstAsync();
+            .Should().Within(50.Seconds()).Match(c => c is StackControl);
 
         Output.WriteLine($"Received control: {control?.GetType().Name}");
         control.Should().NotBeNull("CreateChild form should render");
@@ -131,22 +125,17 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
     /// <summary>
     /// Test that CreateChild form shows type selection grid when no type parameter is provided.
     /// </summary>
-    [Fact(Timeout = 20000)]
+    [Fact(Timeout = 60000)]
     public async Task CreateArea_WithoutTypeParam_ShowsTypeSelection()
     {
         var client = GetClient();
         var parentAddress = new Address("ACME/ProductLaunch");
 
-        Output.WriteLine("Initializing hub...");
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(parentAddress),
-            TestContext.Current.CancellationToken);
-        Output.WriteLine("Hub initialized.");
-
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference(MeshNodeLayoutAreas.CreateNodeArea);
 
+        // No ping: the layout-area subscription itself activates the hub +
+        // triggers the cold NodeType compile. Budget covers the cold Roslyn build.
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             parentAddress,
             reference);
@@ -154,9 +143,7 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         Output.WriteLine("Waiting for type selection to render...");
         var control = await stream
             .GetControlStream(reference.Area!)
-            .Where(c => c != null)
-            .Timeout(TimeSpan.FromSeconds(10))
-            .FirstAsync();
+            .Should().Within(50.Seconds()).Match(c => c != null);
 
         Output.WriteLine($"Received control: {control?.GetType().Name}");
         control.Should().NotBeNull("Type selection should render");
@@ -177,7 +164,7 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
     /// with the expected structure (header, editor, buttons).
     /// Note: Buttons are rendered inside nested views, which we verify exist via area count.
     /// </summary>
-    [Fact(Timeout = 20000)]
+    [Fact(Timeout = 60000)]
     public async Task TransientTodo_CreateArea_ShowsContentTypeEditor()
     {
         var client = GetClient();
@@ -197,15 +184,16 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         try
         {
             // Create the transient node via NodeFactory
-            await NodeFactory.CreateTransientAsync(transientNode, ct: TestContext.Current.CancellationToken);
+            await NodeFactory.CreateTransient(transientNode).Should().Emit();
             Output.WriteLine("Transient node created.");
 
-            // Initialize the node's hub
+            // Initialize the node's hub. 30 s Ping budget — activating a brand-new
+            // per-instance NodeType hub kicks off a cold-cache dynamic compile that
+            // blocks the hub's first Ping response well past the default 10 s on slow
+            // CI runners (the same budget the sibling HasEditorStructure test uses).
+            // Outer [Fact(Timeout = 60000)] still bounds the whole test.
             var nodeAddress = new Address(nodePath);
-            await client.AwaitResponse(
-                new PingRequest(),
-                o => o.WithTarget(nodeAddress),
-                TestContext.Current.CancellationToken);
+            await client.Observe(new PingRequest(), o => o.WithTarget(nodeAddress)).Should().Within(30.Seconds()).Emit();
             Output.WriteLine("Node hub initialized.");
 
             // Transient nodes are auto-confirmed and redirected to Edit.
@@ -218,11 +206,12 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
                 reference);
 
             Output.WriteLine("Waiting for Edit area to render (transient auto-confirmed)...");
+            // 30 s budget: cold-cache dynamic NodeType compile + per-instance
+            // hub activation + Edit-area composition exceed 10 s on slow CI
+            // runners. The outer [Fact(Timeout = 60000)] still bounds the test.
             var control = await stream
                 .GetControlStream(reference.Area!)
-                .Where(c => c is StackControl)
-                .Timeout(TimeSpan.FromSeconds(10))
-                .FirstAsync();
+                .Should().Within(30.Seconds()).Match(c => c is StackControl);
 
             Output.WriteLine($"Received control: {control?.GetType().Name}");
             control.Should().NotBeNull("Edit area should render for confirmed transient node");
@@ -236,7 +225,7 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
             // Cleanup
             try
             {
-                await NodeFactory.DeleteNodeAsync(nodePath);
+                await NodeFactory.DeleteNode(nodePath).Should().Emit();
                 Output.WriteLine("Cleanup: transient node deleted.");
             }
             catch (Exception ex)
@@ -250,7 +239,7 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
     /// Test that creating a transient node and requesting its Create area
     /// returns an editor that includes the expected form structure.
     /// </summary>
-    [Fact(Timeout = 20000)]
+    [Fact(Timeout = 60000)]
     public async Task TransientTodo_CreateArea_HasEditorStructure()
     {
         var client = GetClient();
@@ -269,15 +258,17 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
 
         try
         {
-            await NodeFactory.CreateTransientAsync(transientNode, ct: TestContext.Current.CancellationToken);
+            await NodeFactory.CreateTransient(transientNode).Should().Emit();
             Output.WriteLine("Transient node created successfully");
 
             var nodeAddress = new Address(nodePath);
-            using var pingCts = new CancellationTokenSource(3.Seconds());
-            await client.AwaitResponse(
-                new PingRequest(),
-                o => o.WithTarget(nodeAddress),
-                pingCts.Token);
+            // 30 s Ping budget — a cold-cache dynamic NodeType compile takes
+            // longer than the original 3 s on slow CI runners. Outer
+            // [Fact(Timeout = 60000)] still bounds the whole test.
+            // 30 s ping budget — a cold-cache dynamic NodeType compile takes
+            // longer than the original 3 s on slow CI runners. Outer
+            // [Fact(Timeout = 60000)] still bounds the whole test.
+            await client.Observe(new PingRequest(), o => o.WithTarget(nodeAddress)).Should().Within(30.Seconds()).Emit();
             Output.WriteLine("Ping succeeded");
 
             var workspace = client.GetWorkspace();
@@ -287,12 +278,12 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
                 nodeAddress,
                 reference);
 
-            // First check what controls arrive (any type, not just StackControl)
+            // First check what controls arrive (any type, not just StackControl).
+            // 20 s budget — Create-area composition runs synchronously after
+            // hub activation; bumped from 5 s for CI runner headroom.
             var anyControl = await stream
                 .GetControlStream(reference.Area!)
-                .Where(c => c != null)
-                .Timeout(TimeSpan.FromSeconds(5))
-                .FirstOrDefaultAsync();
+                .Should().Within(20.Seconds()).Match(c => c != null);
 
             Output.WriteLine($"First control received: {anyControl?.GetType().Name ?? "null"}");
 
@@ -310,14 +301,14 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
             }
             else
             {
-                Output.WriteLine($"Create area returned {anyControl.GetType().Name} instead of StackControl — acceptable for custom NodeTypes");
+                Output.WriteLine($"Create area returned {anyControl!.GetType().Name} instead of StackControl â€” acceptable for custom NodeTypes");
             }
         }
         finally
         {
             try
             {
-                await NodeFactory.DeleteNodeAsync(nodePath);
+                await NodeFactory.DeleteNode(nodePath).Should().Emit();
             }
             catch { }
         }
@@ -332,7 +323,7 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
     /// This is what happens when user clicks "Create" button on a transient node.
     /// BUG: HandleCreateNodeRequest was calling CreateTransientNodeAsync again, causing "Node already exists" error.
     /// </summary>
-    [Fact(Timeout = 20000)]
+    [Fact(Timeout = 60000)]
     public async Task CreateNodeRequest_ForExistingTransientNode_ConfirmsNode()
     {
         var client = GetClient();
@@ -352,17 +343,22 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         try
         {
             // Step 1: Create transient node (simulates BuildCreateChildForm)
-            var createdNode = await NodeFactory.CreateTransientAsync(transientNode, ct: TestContext.Current.CancellationToken);
+            var createdNode = await NodeFactory.CreateTransient(transientNode).Should().Emit();
             createdNode.Should().NotBeNull("Transient node should be created");
             createdNode.State.Should().Be(MeshNodeState.Transient);
             Output.WriteLine($"Transient node created: {createdNode.Path}");
 
-            // Step 2: Initialize the node's hub (required for sending CreateNodeRequest)
+            // Step 2: Initialize the node's hub (required for sending CreateNodeRequest).
+            // The node's type is the DYNAMIC ACME/Project/Todo NodeType: routing the
+            // first message to it triggers the first-build kickoff compile, and a cold
+            // Roslyn compile takes 12-20s locally / up to 60-90s on CI Linux runners —
+            // the default 10s Emit budget only holds when an earlier test in the class
+            // already warmed the NodeType (msg-trace-verified: the ping parks behind
+            // ResolveHubConfiguration until CompilationStatus settles). Budget like
+            // NodeTypeReleaseTest does for the same cold path.
             var nodeAddress = new Address(nodePath);
-            await client.AwaitResponse(
-                new PingRequest(),
-                o => o.WithTarget(nodeAddress),
-                TestContext.Current.CancellationToken);
+            await client.Observe(new PingRequest(), o => o.WithTarget(nodeAddress))
+                .Should().Within(90.Seconds()).Emit();
             Output.WriteLine("Node hub initialized.");
 
             // Step 3: Send CreateNodeRequest with State=Active (simulates Create button click)
@@ -381,23 +377,19 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
                 new CreateNodeRequest(nodeWithContent),
                 o => o.WithTarget(nodeAddress));
 
-            // Use IMeshService.ObserveQuery to wait for the state change to be persisted
-            var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-            var query = MeshQueryRequest.FromQuery($"path:{nodePath}");
-
-            var confirmedNode = await meshQuery
-                .ObserveQuery<MeshNode>(query)
-                .SelectMany(change => change.Items)
-                .Where(node => node.State == MeshNodeState.Active)
-                .Timeout(TimeSpan.FromSeconds(10))
-                .FirstAsync();
-
-            Output.WriteLine($"Observed node state: {confirmedNode.State}");
-
-            // Verify success by checking persisted node state directly
-            var persistedNode = await MeshQuery.QueryAsync<MeshNode>($"path:{nodePath}").FirstOrDefaultAsync();
+            // 🚨 Wait for confirmation on the LIVE node stream — the canonical
+            // wait-for-state primitive (CqrsAndContentAccess.md). Neither of the two
+            // previous shapes can wait correctly here (msg-trace-verified): a
+            // Query<MeshNode>(path:X) snapshot races the persistence commit and never
+            // re-emits for this path, and a one-shot ReadNode catches the owner a few
+            // ms after the confirm — BEFORE the post-commit change-feed catch-up —
+            // then completes, so `.Within(...)` has nothing left to wait on. The live
+            // stream re-emits when the owner's state catches up, exactly like the GUI
+            // data binding observes the confirmation.
+            var persistedNode = await client.GetWorkspace().GetMeshNodeStream(nodePath)
+                .Should().Within(60.Seconds())
+                .Match(n => n is not null && n.State == MeshNodeState.Active);
             Output.WriteLine($"Persisted node state: {persistedNode?.State}");
-            persistedNode.Should().NotBeNull("Node should be persisted after CreateNodeRequest");
             persistedNode!.State.Should().Be(MeshNodeState.Active, "Node should be Active after confirmation");
 
             Output.WriteLine($"Node confirmed successfully: {persistedNode.Path}, State: {persistedNode.State}");
@@ -407,7 +399,7 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         {
             try
             {
-                await NodeFactory.DeleteNodeAsync(nodePath);
+                await NodeFactory.DeleteNode(nodePath).Should().Emit();
                 Output.WriteLine("Cleanup: node deleted.");
             }
             catch { }
@@ -417,7 +409,7 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
     /// <summary>
     /// Test the complete create flow: create transient node, verify it can be retrieved.
     /// </summary>
-    [Fact(Timeout = 20000)]
+    [Fact(Timeout = 60000)]
     public async Task EndToEnd_CreateTransientNode_CanBeRetrieved()
     {
         var uniqueId = Guid.NewGuid().ToString("N")[..8];
@@ -435,14 +427,15 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         try
         {
             // Step 1: Create transient node
-            var createdNode = await NodeFactory.CreateTransientAsync(transientNode, ct: TestContext.Current.CancellationToken);
+            var createdNode = await NodeFactory.CreateTransient(transientNode).Should().Emit();
             createdNode.Should().NotBeNull("Transient node should be created");
             createdNode.State.Should().Be(MeshNodeState.Transient, "Node should be in Transient state");
             createdNode.Name.Should().Be("E2E Test Task");
             Output.WriteLine($"Created transient node: {createdNode.Path}");
 
-            // Step 2: Retrieve the node
-            var retrievedNode = await MeshQuery.QueryAsync<MeshNode>($"path:{nodePath}").FirstOrDefaultAsync();
+            // Step 2: Retrieve the node via stream
+            var retrievedNode = await ReadNode(nodePath)
+                .Should().Within(60.Seconds()).Match(n => n is not null && n.State == MeshNodeState.Transient);
             retrievedNode.Should().NotBeNull("Transient node should be retrievable");
             retrievedNode!.State.Should().Be(MeshNodeState.Transient);
             retrievedNode.Name.Should().Be("E2E Test Task");
@@ -453,7 +446,7 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         {
             try
             {
-                await NodeFactory.DeleteNodeAsync(nodePath);
+                await NodeFactory.DeleteNode(nodePath).Should().Emit();
                 Output.WriteLine("Cleanup: node deleted.");
             }
             catch { }
@@ -463,15 +456,15 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
     /// <summary>
     /// Test that the catalog correctly handles node creation with all required services.
     /// </summary>
-    [Fact(Timeout = 20000)]
+    [Fact(Timeout = 60000)]
     public void Services_AreRegisteredForCreateFlow()
     {
         // Verify all required services are registered
         var nodeFactory = Mesh.ServiceProvider.GetService<IMeshService>();
         nodeFactory.Should().NotBeNull("IMeshService should be registered");
 
-        var nodeTypeService = Mesh.ServiceProvider.GetService<INodeTypeService>();
-        nodeTypeService.Should().NotBeNull("INodeTypeService should be registered");
+        var provider = Mesh.ServiceProvider.GetService<ICreatableTypesProvider>();
+        provider.Should().NotBeNull("ICreatableTypesProvider should be registered");
 
         var meshConfig = Mesh.ServiceProvider.GetRequiredService<MeshConfiguration>();
         meshConfig.DefaultNodeHubConfiguration.Should().NotBeNull("DefaultNodeHubConfiguration should be set");
@@ -480,16 +473,23 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
     }
 
     /// <summary>
-    /// Test that INodeTypeService returns creatable types for ProductLaunch.
+    /// Test that the synced-query CreatableTypes provider returns the
+    /// expected types for ProductLaunch.
     /// </summary>
-    [Fact(Timeout = 20000)]
-    public async Task NodeTypeService_ReturnsCreatableTypes()
+    [Fact(Timeout = 60000)]
+    public async Task CreatableTypesProvider_ReturnsCreatableTypes()
     {
-        var nodeTypeService = Mesh.ServiceProvider.GetRequiredService<INodeTypeService>();
+        var provider = Mesh.ServiceProvider.GetRequiredService<ICreatableTypesProvider>();
+        var workspace = Mesh.GetWorkspace();
+        var parent = await workspace.GetMeshNodeStream("ACME/ProductLaunch")
+            .Take(1)
+            .Timeout(TimeSpan.FromSeconds(5))
+            .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null))
+            .Should().Emit();
 
-        var creatableTypes = await nodeTypeService
-            .GetCreatableTypesAsync("ACME/ProductLaunch", TestContext.Current.CancellationToken)
-            .ToListAsync(TestContext.Current.CancellationToken);
+        var creatableTypes = await provider
+            .GetCreatableTypes("ACME/ProductLaunch", parent)
+            .Should().Emit();
 
         Output.WriteLine($"Found {creatableTypes.Count} creatable types:");
         foreach (var typeInfo in creatableTypes)
@@ -517,7 +517,7 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
     ///
     /// This reproduces the bug where content fields (category, priority, etc.) are empty after create.
     /// </summary>
-    [Fact(Timeout = 20000)]
+    [Fact(Timeout = 60000)]
     public async Task CreateFlow_TransientNodeWithoutContent_PreservesContentFieldsAfterConfirm()
     {
         var client = GetClient();
@@ -539,26 +539,21 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
 
         try
         {
-            await NodeFactory.CreateTransientAsync(transientNode, ct: TestContext.Current.CancellationToken);
+            await NodeFactory.CreateTransient(transientNode).Should().Emit();
             Output.WriteLine("Transient node created (without content).");
 
             // Step 2: Initialize the node's hub (this triggers MeshDataSource initialization)
             var nodeAddress = new Address(nodePath);
-            await client.AwaitResponse(
-                new PingRequest(),
-                o => o.WithTarget(nodeAddress),
-                TestContext.Current.CancellationToken);
+            await client.Observe(new PingRequest(), o => o.WithTarget(nodeAddress)).Should().Emit();
             Output.WriteLine("Node hub initialized.");
 
-            // Step 3: Get the node from workspace to see what content was created
-            var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-            var query = MeshQueryRequest.FromQuery($"path:{nodePath}");
-
-            var workspaceNode = await meshQuery
-                .ObserveQuery<MeshNode>(query)
-                .SelectMany(change => change.Items)
-                .Timeout(TimeSpan.FromSeconds(10))
-                .FirstAsync();
+            // Step 3: Get the node from workspace to see what content was created.
+            // 🚨 Live node stream, not Query<MeshNode>(path:X): a query snapshot races
+            // the just-committed write and never re-emits for this path (CQRS —
+            // CqrsAndContentAccess.md), which is exactly how this step timed out on
+            // cold/solo runs. The stream re-emits as the owner's state settles.
+            var workspaceNode = await client.GetWorkspace().GetMeshNodeStream(nodePath)
+                .Should().Within(30.Seconds()).Match(n => n is not null);
 
             Output.WriteLine($"Workspace node content type: {workspaceNode.Content?.GetType().Name ?? "null"}");
             if (workspaceNode.Content != null)
@@ -590,13 +585,10 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
                 new CreateNodeRequest(activeNode),
                 o => o.WithTarget(nodeAddress));
 
-            // Step 6: Wait for node to become Active
-            var confirmedNode = await meshQuery
-                .ObserveQuery<MeshNode>(query)
-                .SelectMany(change => change.Items)
-                .Where(node => node.State == MeshNodeState.Active)
-                .Timeout(TimeSpan.FromSeconds(10))
-                .FirstAsync();
+            // Step 6: Wait for node to become Active on the live stream (same
+            // rationale as step 3 — the canonical wait-for-state primitive).
+            var confirmedNode = await client.GetWorkspace().GetMeshNodeStream(nodePath)
+                .Should().Within(60.Seconds()).Match(node => node is not null && node.State == MeshNodeState.Active);
 
             Output.WriteLine($"Node confirmed. Content type: {confirmedNode.Content?.GetType().Name ?? "null"}");
             if (confirmedNode.Content != null)
@@ -628,7 +620,7 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         {
             try
             {
-                await NodeFactory.DeleteNodeAsync(nodePath);
+                await NodeFactory.DeleteNode(nodePath).Should().Emit();
                 Output.WriteLine("Cleanup: node deleted.");
             }
             catch { }
@@ -639,7 +631,7 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
     /// Test that GetDataRequest with EntityReference returns the correct Todo content.
     /// This is the primary mechanism to verify content retrieval after node creation.
     /// </summary>
-    [Fact(Timeout = 20000)]
+    [Fact(Timeout = 60000)]
     public async Task GetDataRequest_ForCreatedTodo_ReturnsCorrectContent()
     {
         var client = GetClient();
@@ -671,41 +663,40 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         try
         {
             // Step 1: Create transient node
-            await NodeFactory.CreateTransientAsync(transientNode, ct: TestContext.Current.CancellationToken);
+            await NodeFactory.CreateTransient(transientNode).Should().Emit();
             Output.WriteLine("Transient node created.");
 
-            // Step 2: Initialize the node's hub
+            // Step 2: Initialize the node's hub. 30 s Ping budget — activating a
+            // brand-new per-instance NodeType hub triggers a cold-cache dynamic
+            // compile that blocks the hub's first Ping response past the default
+            // 10 s on slow CI runners. Outer [Fact(Timeout = 60000)] still bounds it.
             var nodeAddress = new Address(nodePath);
-            await client.AwaitResponse(
-                new PingRequest(),
-                o => o.WithTarget(nodeAddress),
-                TestContext.Current.CancellationToken);
+            await client.Observe(new PingRequest(), o => o.WithTarget(nodeAddress)).Should().Within(30.Seconds()).Emit();
             Output.WriteLine("Node hub initialized.");
 
-            // Step 3: Confirm the node (make it Active)
+            // Step 3: Confirm the node (make it Active). Subscribe to drain the
+            // request's callback — `client.Post` alone registers a pending
+            // callback that never gets consumed (the response IS dispatched
+            // but no one's listening), which trips the quiesce-budget check
+            // at test dispose: "leaked callback — the test posted a request
+            // and never received (or never awaited) its reply". Observe +
+            // Subscribe consumes the response without blocking the next step.
             var activeNode = transientNode with { State = MeshNodeState.Active };
-            client.Post(
-                new CreateNodeRequest(activeNode),
-                o => o.WithTarget(nodeAddress));
+            client.Observe(new CreateNodeRequest(activeNode), o => o.WithTarget(nodeAddress))
+                .Subscribe(_ => { }, _ => { });
 
-            // Step 4: Wait for node to become Active using reactive query
-            var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-            var query = MeshQueryRequest.FromQuery($"path:{nodePath}");
-
-            await meshQuery
-                .ObserveQuery<MeshNode>(query)
-                .SelectMany(change => change.Items)
-                .Where(node => node.State == MeshNodeState.Active)
-                .Timeout(TimeSpan.FromSeconds(10))
-                .FirstAsync();
-            Output.WriteLine("Node confirmed as Active.");
-
-            // Step 5: Verify node was created correctly using IMeshService.QueryAsync
-            var retrievedNode = await meshQuery.QueryAsync<MeshNode>(
-                    MeshQueryRequest.FromQuery($"path:{nodePath}"), null, TestContext.Current.CancellationToken)
-                .FirstOrDefaultAsync(TestContext.Current.CancellationToken);
-
-            Output.WriteLine($"QueryAsync result received.");
+            // Step 4-5: Wait for node to become Active via the authoritative
+            // per-node hub stream (GetMeshNodeStream), then read the same
+            // emission for content verification. Using QueryAsync here would
+            // be eventually consistent — it hits the lagged read-side index,
+            // so the Transient→Active confirmation can race the query (see
+            // Doc/Architecture/CqrsAndContentAccess.md and the
+            // `cqrs_no_query_for_content` memory). One subscription, one
+            // .Where(Active), one Timeout.
+            var workspace = client.GetWorkspace();
+            var retrievedNode = await workspace.GetMeshNodeStream(nodePath)
+                .Should().Within(10.Seconds()).Match(n => n != null && n.State == MeshNodeState.Active);
+            Output.WriteLine("Node confirmed as Active (via GetMeshNodeStream).");
 
             // Step 6: Verify the retrieved node has the correct data
             retrievedNode.Should().NotBeNull("Node should be retrievable via QueryAsync");
@@ -747,7 +738,7 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         {
             try
             {
-                await NodeFactory.DeleteNodeAsync(nodePath);
+                await NodeFactory.DeleteNode(nodePath).Should().Emit();
                 Output.WriteLine("Cleanup: node deleted.");
             }
             catch { }
@@ -758,14 +749,13 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
     /// Test that existing Todo items can be queried and have the expected content structure.
     /// This verifies that the Todo ContentType is properly configured.
     /// </summary>
-    [Fact(Timeout = 20000)]
+    [Fact(Timeout = 60000)]
     public async Task ExistingTodo_HasExpectedContentStructure()
     {
-        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-
         var query = "path:ACME/ProductLaunch/Todo/DefinePersona";
-        var results = await meshQuery.QueryAsync<MeshNode>(MeshQueryRequest.FromQuery(query), null, TestContext.Current.CancellationToken)
-            .ToListAsync(TestContext.Current.CancellationToken);
+        var results = (await MeshQuery
+            .Query<MeshNode>(MeshQueryRequest.FromQuery(query))
+            .Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items;
 
         results.Should().HaveCount(1, "DefinePersona should exist");
         var node = results[0];
@@ -792,29 +782,24 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
     /// Test that the Overview area renders for ProductLaunch (baseline test).
     /// Ensures the test infrastructure is working correctly.
     /// </summary>
-    [Fact(Timeout = 20000)]
+    [Fact(Timeout = 60000)]
     public async Task Baseline_OverviewAreaRenders()
     {
         var client = GetClient();
         var parentAddress = new Address("ACME/ProductLaunch");
 
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(parentAddress),
-            TestContext.Current.CancellationToken);
-
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference(MeshNodeLayoutAreas.OverviewArea);
 
+        // No ping: the layout-area subscription itself activates the hub +
+        // triggers the cold NodeType compile. Budget covers the cold Roslyn build.
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             parentAddress,
             reference);
 
         var control = await stream
             .GetControlStream(reference.Area!)
-            .Where(c => c != null)
-            .Timeout(TimeSpan.FromSeconds(10))
-            .FirstAsync();
+            .Should().Within(50.Seconds()).Match(c => c != null);
 
         control.Should().NotBeNull("Overview area should render");
         Output.WriteLine($"Overview control type: {control?.GetType().Name}");

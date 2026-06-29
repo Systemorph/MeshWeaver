@@ -9,18 +9,116 @@
     <Authors>Systemorph</Authors>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <RepositoryUrl>https://github.com/Systemorph/MeshWeaver</RepositoryUrl>
-    <NoWarn>649;CA2255;NU5104;$(NoWarn)</NoWarn>
+    <!-- Suppress only doc-COMPLETENESS (CS1591 missing member doc, CS1573 missing param doc, CS1712
+         missing typeparam doc) — filling those is opportunistic, thousands of members. Doc-QUALITY
+         warnings (broken/ambiguous crefs, bad paramrefs, malformed XML) are real bugs and are fixed,
+         not suppressed. -->
+    <!-- NU1510: "PackageReference X will not be pruned / likely unnecessary" — fired for the three
+         security-override packages forced as direct refs below (so the Directory.Packages.props pin
+         applies). Removing them would regress the pinned-CVE fix, so the advisory is suppressed; it is
+         a restore advisory, not a code-quality warning, and must not fail the -warnaserror gate. -->
+    <NoWarn>649;CA2255;NU5104;NU1510;CS1591;CS1573;CS1712;$(NoWarn)</NoWarn>
+    <!-- The -warnaserror merge gate (ReleaseStrategy.md precondition a) targets CODE warnings. NuGet
+         dependency VULNERABILITY advisories (NU1901..NU1904 — a transitive CVE) are dependency-hygiene
+         signals, NOT code quality, and a newly-disclosed CVE on an existing transitive must not fail
+         every unrelated PR. NuGet replays these audit warnings from project.assets.json even on the
+         no-restore build, so they WOULD hit the gate; WarningsNotAsErrors (NOT NoWarn) keeps them
+         VISIBLE as warnings while preventing -warnaserror from promoting them to errors. Fix the CVE
+         with a version override (see the security-override ItemGroup below) or via Dependabot — not by
+         blocking merges. -->
+    <WarningsNotAsErrors>NU1901;NU1902;NU1903;NU1904;$(WarningsNotAsErrors)</WarningsNotAsErrors>
+
+    <!-- Generate XML doc files for all assemblies (IntelliSense + NuGet). The doc-completeness
+         warning family (CS1591 missing member doc, CS1573 missing param, CS1712 missing typeparam)
+         is suppressed centrally (NoWarn above) so enabling doc-gen does NOT cascade thousands of
+         warnings — docs are filled opportunistically, not enforced wholesale. Doc-QUALITY warnings
+         (CS1574 unresolved cref, CS0419 ambiguous cref, CS1570 malformed XML) are real bugs and are
+         FIXED, not suppressed — they fail the gate below. -->
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <!-- Release-governance gate A2: every CODE warning is an error (the merge-gate precondition).
+         Dependency-vulnerability advisories (NU1901..NU1904) stay warnings via WarningsNotAsErrors
+         above so a newly-disclosed transitive CVE doesn't fail every unrelated PR; the doc-
+         completeness family stays suppressed via NoWarn. Everything else must be clean. -->
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <DefineConstants Condition=" '$(CIRun)' == 'true' ">$(DefineConstants);CIRun</DefineConstants>
     <!-- Suppress FluentAssertions license warning for open source project -->
     <FLUENTASSERTIONS_SUPPRESS_WARNING>true</FLUENTASSERTIONS_SUPPRESS_WARNING>
+    <!-- Maintained platform version — the ONE number, set centrally here. Override at
+         build time (Docker image / CI) with -p:PlatformVersion=3.0.1 (the next patch) or
+         3.1.0-rc1 (to start the next pre-release line). Clean release; the per-build
+         +build.<ticks> suffix below keeps every build distinct (NodeType cache invalidation).
+         It is also the content-version for static-repo / GitHub data-sync
+         (Doc/Architecture/DataSyncSetup.md §3): a release tagged v$(PlatformVersion) is what
+         a deployed binary syncs from. -->
+    <PlatformVersion Condition="'$(PlatformVersion)' == ''">3.0.0</PlatformVersion>
+  </PropertyGroup>
+  <!-- Two version channels — CONTINUOUS (CI) vs RELEASED (CD):
+       • RELEASED  (-p:PublicRelease=true, the CD/release pipeline): clean $(PlatformVersion).
+         This is what NuGet packages AND the Docker image carry, e.g. 3.0.0-rc1. Tag the repo
+         v$(PlatformVersion); data-sync (DataSyncSetup.md §3) pulls content from that tag.
+       • CONTINUOUS (default — CI pipeline and local dev): append a build number, e.g.
+         3.0.0-rc1.ci.21901, so continuous packages are DISTINGUISHABLE from the release and a
+         local-deploy build always carries a build number.
+       InformationalVersion always carries +build.<ticks> so NodeTypeCompilationHelpers.FrameworkVersion
+       is distinct every build (NodeType cache invalidation), released or continuous. A direct
+       -p:Version=… still overrides everything (escape hatch). -->
+  <PropertyGroup Condition="'$(Version)' == ''">
+    <!-- Build number. CI (CIRun=true): seconds-since-midnight / 2 (~2s granularity) so continuous
+         packages are distinguishable. LOCAL DEV: a STABLE 0 — a per-build number re-stamps
+         AssemblyVersion/FileVersion/InformationalVersion every build, regenerating AssemblyInfo.cs
+         and DESTROYING incremental builds (full rebuild every time → hot machine). NodeType ABI
+         invalidation no longer depends on the version string (it uses the Graph assembly MVID —
+         NodeTypeCompilationHelpers.FrameworkVersion), so a stable local version is correct; CI does
+         clean builds so incremental doesn't apply there anyway. -->
+    <_SecondsToday>$([System.DateTime]::UtcNow.TimeOfDay.TotalSeconds.ToString("F0"))</_SecondsToday>
+    <_BuildNumber Condition="'$(CIRun)' == 'true'">$([MSBuild]::Divide($(_SecondsToday), 2).ToString("F0"))</_BuildNumber>
+    <_BuildNumber Condition="'$(CIRun)' != 'true'">0</_BuildNumber>
+    <!-- 🔴 MONOTONIC build number for the .ci.N pre-release suffix (and thus the image tag). The
+         self-updater (ReleaseStrategy.md) picks the NEWEST version off the registry, so the .ci.N
+         number MUST increase build-over-build — the seconds-since-midnight $(_BuildNumber) above
+         RESETS at midnight and would make a morning build sort BELOW the previous evening's. Use the
+         GitHub Actions run number ($(GITHUB_RUN_NUMBER), monotonic per workflow) when present; fall
+         back to the seconds value off-GHA; 0 locally. AssemblyVersion below keeps the bounded
+         seconds value (it only needs to change per build for the copy heuristic, not be monotonic,
+         and its UInt16 components can't hold an ever-growing run number). -->
+    <_CiBuildNumber Condition="'$(CIRun)' == 'true' and '$(GITHUB_RUN_NUMBER)' != ''">$(GITHUB_RUN_NUMBER)</_CiBuildNumber>
+    <_CiBuildNumber Condition="'$(CIRun)' == 'true' and '$(GITHUB_RUN_NUMBER)' == ''">$(_BuildNumber)</_CiBuildNumber>
+    <_CiBuildNumber Condition="'$(CIRun)' != 'true'">0</_CiBuildNumber>
+    <!-- Numeric version core: PlatformVersion with the -rc label stripped (3.0.0-rc1 → 3.0.0). -->
+    <_VersionDash>$(PlatformVersion.IndexOf('-'))</_VersionDash>
+    <_VersionNumeric Condition="'$(_VersionDash)' == '-1'">$(PlatformVersion)</_VersionNumeric>
+    <_VersionNumeric Condition="'$(_VersionDash)' != '-1'">$(PlatformVersion.Substring(0, $(_VersionDash)))</_VersionNumeric>
+    <!-- Pre-release separator for the .ci.N suffix: already a pre-release (3.0.0-rc1) → '.ci.N';
+         a clean release core (3.0.0) → start a pre-release with '-ci.N'. Both are valid SemVer. -->
+    <_CiSep Condition="'$(_VersionDash)' == '-1'">-</_CiSep>
+    <_CiSep Condition="'$(_VersionDash)' != '-1'">.</_CiSep>
+    <Version Condition="'$(PublicRelease)' == 'true'">$(PlatformVersion)</Version>
+    <Version Condition="'$(PublicRelease)' != 'true'">$(PlatformVersion)$(_CiSep)ci.$(_CiBuildNumber)</Version>
+    <!-- CI appends +build.<ticks> so each continuous build's InformationalVersion is unique; LOCAL
+         keeps it stable (= $(Version)) so AssemblyInfo isn't regenerated every build. ABI identity
+         is the Graph MVID now, not this string, so a stable local value is safe. -->
+    <InformationalVersion Condition="'$(CIRun)' == 'true'">$(Version)+build.$([System.DateTime]::UtcNow.Ticks)</InformationalVersion>
+    <InformationalVersion Condition="'$(CIRun)' != 'true'">$(Version)</InformationalVersion>
+    <!-- AssemblyVersion + FileVersion = 3.0.0.<build> (numeric only — the -rc1 label is not
+         allowed here); changes every build for MSBuild's CopyToOutputDirectory heuristic (else
+         test bins hold stale framework DLLs and re-runs exercise old code). -->
+    <AssemblyVersion>$(_VersionNumeric).$(_BuildNumber)</AssemblyVersion>
+    <FileVersion>$(_VersionNumeric).$(_BuildNumber)</FileVersion>
   </PropertyGroup>
   <ItemGroup>
     <None Include="README.md" Pack="true" PackagePath="\" />
   </ItemGroup>
-  <!-- Override vulnerable transitive dependency (CVE in 10.0.0).
+  <!-- Override vulnerable transitive dependencies. Forced as direct PackageReference so
+       the version pin in Directory.Packages.props actually applies (transitive deps
+       otherwise resolve to whatever a higher-up package requested).
+       - System.Security.Cryptography.Xml: CVE in 10.0.0 chain
+       - OpenTelemetry.Api: GHSA-g94r-2vxg-569j (1.13.1 vulnerable)
+       - Microsoft.AspNetCore.DataProtection: GHSA-9mv3-2cwr-p262 (10.0.0 vulnerable)
        Conditioned on net10.0 because netstandard2.0 projects (e.g. BusinessRules.Generator)
-       opt out of CPM and don't need this package. -->
+       opt out of CPM and don't need these packages. -->
   <ItemGroup Condition="'$(TargetFramework)' == 'net10.0'">
     <PackageReference Include="System.Security.Cryptography.Xml" />
+    <PackageReference Include="OpenTelemetry.Api" />
+    <PackageReference Include="Microsoft.AspNetCore.DataProtection" />
   </ItemGroup>
 </Project>

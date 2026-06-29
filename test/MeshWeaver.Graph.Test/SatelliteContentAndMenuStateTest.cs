@@ -1,4 +1,3 @@
-using FluentAssertions;
 using MeshWeaver.AI;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
@@ -147,13 +146,13 @@ public class SatelliteContentAndMenuStateTest
 
     #endregion
 
-    #region PermissionHelper.GetEffectivePermissionsForNodeAsync Tests
+    #region GetPrimaryPath Tests
 
     [Fact]
-    public void GetPrimaryPath_UsedByPermissionHelper_ResolvesCorrectly()
+    public void GetPrimaryPath_UsedByPermissionResolution_ResolvesCorrectly()
     {
         // Verifies that GetPrimaryPath correctly resolves satellite nodes
-        // so PermissionHelper.GetEffectivePermissionsForNodeAsync checks the right path
+        // so hub.CheckPermission checks the right primary-node path
         var commentNode = new MeshNode("c1", "org/doc/comments") { MainNode = "org/doc" };
 
         // Permission check should go to "org/doc", not "org/doc/comments/c1"

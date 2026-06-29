@@ -1,0 +1,93 @@
+using MeshWeaver.Data;
+using MeshWeaver.Hosting.Monolith.TestBase;
+using MeshWeaver.Mesh;
+using MeshWeaver.Messaging;
+using Xunit;
+
+namespace MeshWeaver.Query.Test;
+
+/// <summary>
+/// Pins down the workspace's per-<c>(address, reference)</c> remote-stream
+/// cache (<c>Workspace._remoteStreamCache</c>):
+///
+/// <list type="number">
+///   <item>Two consecutive
+///     <c>workspace.GetRemoteStream&lt;MeshNode, MeshNodeReference&gt;(addr, ref)</c>
+///     calls return the <b>same</b> <see cref="ISynchronizationStream{TStream}"/>
+///     instance — the workspace serves the cached one.</item>
+///   <item>After the cached stream is disposed (no remaining subscribers
+///     that need it), the next <c>GetRemoteStream(...)</c> call returns a
+///     <b>fresh</b> instance — the cache must not hand out a dead stream.</item>
+/// </list>
+///
+/// These guarantees are what every consumer of remote streams relies on:
+/// the synced query data source's read subscription and any external
+/// caller (e.g., a write through the same <c>(addr, ref)</c>) hit the
+/// same instance, but a torn-down subscription doesn't poison the next
+/// caller with a corpse.
+///
+/// <para>The tests do NOT wait for stream emission — the cache behavior is
+/// purely about object identity (same/different instance) and is independent
+/// of whether the owning hub emits within a given window. Emission correctness
+/// is covered by the per-node-hub activation and SyncedQuery tests.</para>
+/// </summary>
+public class RemoteStreamCacheTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
+{
+    private const string TargetNamespace = $"{TestPartition}/RemoteCache";
+
+    private static MeshNode MakeNode(string id, string name)
+        => new(id, TargetNamespace)
+        {
+            Name = name,
+            NodeType = "Markdown",
+            State = MeshNodeState.Active,
+        };
+
+    [Fact]
+    public async Task GetRemoteStream_TwiceForSameKey_ReturnsSameInstance()
+    {
+        var path = $"{TargetNamespace}/alpha";
+
+        await NodeFactory.CreateNode(MakeNode("alpha", "Alpha")).Should().Emit();
+
+        var workspace = Mesh.GetWorkspace();
+        var first = ((MeshWeaver.Data.Workspace)workspace).GetRemoteStreamUnchecked<MeshNode, MeshNodeReference>(
+            new Address(path), new MeshNodeReference());
+
+        var second = ((MeshWeaver.Data.Workspace)workspace).GetRemoteStreamUnchecked<MeshNode, MeshNodeReference>(
+            new Address(path), new MeshNodeReference());
+
+        ReferenceEquals(first, second).Should().BeTrue(
+            "the workspace caches per (address, reference); repeated GetRemoteStream calls return the cached instance");
+
+        // Clean up: dispose the stream so the hub's Observe subscription is
+        // released before quiescing checks run.
+        first.Dispose();
+    }
+
+    [Fact]
+    public async Task GetRemoteStream_AfterDispose_ReturnsFreshInstance()
+    {
+        var path = $"{TargetNamespace}/beta";
+
+        await NodeFactory.CreateNode(MakeNode("beta", "Beta")).Should().Emit();
+
+        var workspace = Mesh.GetWorkspace();
+
+        var stream = ((MeshWeaver.Data.Workspace)workspace).GetRemoteStreamUnchecked<MeshNode, MeshNodeReference>(
+            new Address(path), new MeshNodeReference());
+
+        // Dispose the stream — the cache must drop the entry so the next caller
+        // doesn't get a dead instance.
+        stream.Dispose();
+
+        var fresh = ((MeshWeaver.Data.Workspace)workspace).GetRemoteStreamUnchecked<MeshNode, MeshNodeReference>(
+            new Address(path), new MeshNodeReference());
+
+        ReferenceEquals(fresh, stream).Should().BeFalse(
+            "after disposal the cache must evict the dead stream and a subsequent GetRemoteStream must return a brand new one");
+
+        // Clean up.
+        fresh.Dispose();
+    }
+}

@@ -1,4 +1,6 @@
-﻿using MeshWeaver.Data;
+﻿using System.Reactive;
+using System.Reactive.Linq;
+using MeshWeaver.Data;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
@@ -14,7 +16,7 @@ public class MeshHubBuilder
 {
     private readonly MessageHubConfiguration _configuration;
     private readonly List<Func<MessageHubConfiguration, MessageHubConfiguration>> _hubConfigurations = new();
-    private Func<IMessageHub, CancellationToken, Task>? _initializationFunc;
+    private Func<IMessageHub, IObservable<Unit>>? _initializationFunc;
     private bool _addMeshNavigation = true;
     private Type? DataType { get; set; }
 
@@ -58,10 +60,12 @@ public class MeshHubBuilder
     }
 
     /// <summary>
-    /// Sets a custom initialization function.
-    /// By default, loads data from IMeshStorage for the hub's address.
+    /// Sets a custom reactive initialization function. Caller returns an
+    /// <see cref="IObservable{Unit}"/>; the mesh hub's Initialize gate opens
+    /// once the observable emits / completes. Wrap a Task-returning method via
+    /// <c>Observable.FromAsync(() =&gt; method())</c>.
     /// </summary>
-    public MeshHubBuilder WithInitialization(Func<IMessageHub, CancellationToken, Task>? initializationFunc)
+    public MeshHubBuilder WithInitialization(Func<IMessageHub, IObservable<Unit>>? initializationFunc)
     {
         _initializationFunc = initializationFunc;
         return this;
@@ -128,18 +132,13 @@ public class MeshHubBuilder
         if (_initializationFunc != null)
         {
             var initFunc = _initializationFunc;
-            config = config.WithInitialization(async (hub, ct) =>
-            {
-                try
-                {
-                    await initFunc(hub, ct);
-                }
-                catch (Exception ex)
+            config = config.WithInitialization(hub =>
+                initFunc(hub).Catch<Unit, Exception>(ex =>
                 {
                     var logger = hub.ServiceProvider.GetService<ILogger<MeshHubBuilder>>();
                     logger?.LogError(ex, "Error during mesh hub initialization for {Address}", hub.Address);
-                }
-            });
+                    return Observable.Return(Unit.Default);
+                }));
         }
 
         return config;

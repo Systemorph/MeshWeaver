@@ -20,11 +20,45 @@ namespace MeshWeaver.Data.Serialization;
 /// </summary>
 public sealed class StaleStreamStateException : InvalidOperationException
 {
+    /// <summary>
+    /// Initializes a new instance of the <see cref="StaleStreamStateException"/> class.
+    /// </summary>
+    /// <param name="message">A message describing the drift that was detected.</param>
     public StaleStreamStateException(string message) : base(message) { }
 }
 
+/// <summary>
+/// JSON-patch helpers that translate between an entity store's JSON projection and typed
+/// <see cref="ChangeItem{TStream}"/>/<see cref="EntityUpdate"/> changes, including RFC 6901 pointer
+/// encoding/decoding used to address entities by collection and id.
+/// </summary>
 public static class JsonSynchronizationStream
 {
+    // Mirror of MeshWeaver.Mesh.Security.WellKnownUsers.System — Data sits below
+    // Mesh.Contract in the project graph and cannot reference it. Same literal
+    // recognized by AccessService.ImpersonateAsSystem and PostgreSqlMeshQuery's
+    // System-bypass short-circuit.
+    private const string SystemUserId = "system-security";
+
+    // Hub-shaped principals leak from the workspace emission scheduler when an
+    // upstream notification fires under a hub's own AsyncLocal (e.g. a `sync/{guid}`
+    // inner sync hub stamped during its own initialization). Those addresses
+    // have no AccessAssignment → owner RLS denies for them with
+    // "user 'sync/…' lacks Read". When we detect one, we fall back to System
+    // (real infrastructure context with whitelisted Permission.All) instead of
+    // forwarding the hub-shape identity to the owner.
+    //
+    // ⚠️  Kept narrow on purpose: we MUST forward a real user identity through
+    // (`rbuergi`, an Entra OID GUID, an email, etc.) so the owner's per-user
+    // RLS gates correctly. This helper only neutralizes principals that are
+    // clearly mesh-internal hub addresses.
+    private static bool LooksLikeHubPrincipal(string objectId) =>
+        objectId.StartsWith("sync/", StringComparison.OrdinalIgnoreCase)
+        || objectId.StartsWith("mesh/", StringComparison.OrdinalIgnoreCase)
+        || objectId.StartsWith("node/", StringComparison.OrdinalIgnoreCase)
+        || objectId.StartsWith("activity/", StringComparison.OrdinalIgnoreCase)
+        || objectId.StartsWith("portal/", StringComparison.OrdinalIgnoreCase);
+
     private static ILogger GetLogger(IServiceProvider serviceProvider)
     {
         try
@@ -37,6 +71,64 @@ public static class JsonSynchronizationStream
         {
             return Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance.CreateLogger(typeof(JsonSynchronizationStream));
         }
+    }
+
+    /// <summary>
+    /// Subscribes to the mesh change feed (resolved via reflection to avoid a
+    /// Data → Mesh.Contract → Layout → Data project cycle) and invokes
+    /// <paramref name="onOwnerChanged"/> when an event's Path equals the owner's
+    /// bare path. Returns null if no change-feed service is registered.
+    /// </summary>
+    private static IDisposable? TrySubscribeOwnerPathChangeFeed(
+        IServiceProvider serviceProvider, ILogger logger, string ownerPath, Action onOwnerChanged)
+    {
+        try
+        {
+            var feedType = Type.GetType(
+                "MeshWeaver.Mesh.Services.IMeshChangeFeed, MeshWeaver.Mesh.Contract",
+                throwOnError: false);
+            if (feedType is null) return null;
+            var feed = serviceProvider.GetService(feedType);
+            if (feed is null) return null;
+
+            var eventType = Type.GetType(
+                "MeshWeaver.Mesh.Services.MeshChangeEvent, MeshWeaver.Mesh.Contract",
+                throwOnError: false);
+            if (eventType is null) return null;
+            var pathProp = eventType.GetProperty("Path");
+            if (pathProp is null) return null;
+
+            var helper = typeof(JsonSynchronizationStream).GetMethod(
+                nameof(SubscribeOwnerPathChangeFeedHelper),
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!
+                .MakeGenericMethod(eventType);
+            return (IDisposable?)helper.Invoke(null, [feed, pathProp, ownerPath, onOwnerChanged]);
+        }
+        catch (Exception ex)
+        {
+            logger.LogDebug(ex,
+                "Stream subscriber could not attach MeshChangeFeed listener for {Owner} — falling back to heartbeat-only resubscribe.",
+                ownerPath);
+            return null;
+        }
+    }
+
+    private static IDisposable? SubscribeOwnerPathChangeFeedHelper<TEvent>(
+        object feed, System.Reflection.PropertyInfo pathProperty, string ownerPath, Action onOwnerChanged)
+        where TEvent : class
+    {
+        Action<TEvent> handler = evt =>
+        {
+            try
+            {
+                if (pathProperty.GetValue(evt) is string p
+                    && string.Equals(p, ownerPath, StringComparison.OrdinalIgnoreCase))
+                    onOwnerChanged();
+            }
+            catch { /* keep change-feed alive on handler faults */ }
+        };
+        var subscribe = feed.GetType().GetMethod("Subscribe");
+        return (IDisposable?)subscribe!.Invoke(feed, [handler, null]);
     }
 
     internal static ISynchronizationStream CreateExternalClient<TReduced, TReference>(
@@ -54,6 +146,15 @@ public static class JsonSynchronizationStream
         var logger = GetLogger(hub.ServiceProvider);
         // link to deserialized world. Will also potentially link to workspace.
         var partition = reference is IPartitionedWorkspaceReference p ? p.Partition : null;
+
+        // Capture the caller's AccessContext at stream-creation time. The internal
+        // change-notification Subscribe (below) fires on the stream's emission scheduler,
+        // where AsyncLocal AccessContext does NOT match the user who created this stream
+        // — it would default to the per-cell hub's impersonated address and trigger
+        // "Access denied" on the owner. Stamping each post with the captured user
+        // context preserves authorship through the Update path.
+        var accessServiceForCapture = hub.ServiceProvider.GetService<AccessService>();
+        var capturedAccessContext = accessServiceForCapture?.Context;
 
         var reduced = new SynchronizationStream<TReduced>(
                 new(owner, partition),
@@ -75,7 +176,11 @@ public static class JsonSynchronizationStream
                     {
                         logger.LogDebug("Stream {streamId} sending change notification to owner {owner}",
                             reduced.StreamId, reduced.Owner);
-                        hub.Post(e, o => o.WithTarget(reduced.Owner));
+                        hub.Post(e, o =>
+                        {
+                            var opts = o.WithTarget(reduced.Owner);
+                            return capturedAccessContext != null ? opts.WithAccessContext(capturedAccessContext) : opts;
+                        });
                     },
                     ex => logger.LogDebug(ex, "Stream {streamId} errored", reduced.StreamId))
             );
@@ -91,23 +196,33 @@ public static class JsonSynchronizationStream
                         logger.LogDebug("Stream {streamId} sending change notification to owner {owner}",
                             reduced.StreamId, reduced.Owner);
                         e = e with { ClientId = reduced.StreamId };
-                        var delivery = hub.Post(e, o => o.WithTarget(reduced.Owner));
+                        var delivery = hub.Post(e, o =>
+                        {
+                            var opts = o.WithTarget(reduced.Owner);
+                            return capturedAccessContext != null ? opts.WithAccessContext(capturedAccessContext) : opts;
+                        });
                         if (delivery != null)
                         {
-                            _ = hub.RegisterCallback(delivery, (response, _) =>
-                            {
-                                if (response is IMessageDelivery<DataChangeResponse> { Message.Status: DataChangeStatus.Failed } failed)
-                                {
-                                    logger.LogError("Stream {streamId} DataChangeRequest failed: {Error}",
-                                        reduced.StreamId, failed.Message.Log?.Messages
-                                            .Where(m => m.LogLevel >= LogLevel.Error)
-                                            .Select(m => m.Message)
-                                            .FirstOrDefault() ?? "Unknown error");
-                                    reduced.OnError(new InvalidOperationException(
-                                        $"DataChangeRequest failed for stream {reduced.StreamId}"));
-                                }
-                                return Task.FromResult(response);
-                            }, CancellationToken.None);
+                            hub.Observe(delivery)
+                                .Subscribe(
+                                    response =>
+                                    {
+                                        if (response.Message is DataChangeResponse { Status: DataChangeStatus.Failed } failed)
+                                        {
+                                            var reason = DescribeFailure(failed.Log);
+                                            logger.LogError("Stream {streamId} DataChangeRequest failed: {Error}",
+                                                reduced.StreamId, reason);
+                                            reduced.OnError(new InvalidOperationException(
+                                                $"DataChangeRequest failed for stream {reduced.StreamId}: {reason}"));
+                                        }
+                                    },
+                                    ex =>
+                                    {
+                                        logger.LogError(ex, "Stream {streamId} DataChangeRequest failed",
+                                            reduced.StreamId);
+                                        reduced.OnError(new InvalidOperationException(
+                                            $"DataChangeRequest failed for stream {reduced.StreamId}", ex));
+                                    });
                         }
                     },
                     ex => logger.LogDebug(ex, "Stream {streamId} errored", reduced.StreamId))
@@ -115,31 +230,110 @@ public static class JsonSynchronizationStream
 
 
         var accessService = hub.ServiceProvider.GetService<AccessService>();
-        var identity = accessService?.Context?.ObjectId ?? accessService?.CircuitContext?.ObjectId;
-        var subscribeDelivery = reduced.Hub.Post(new SubscribeRequest(reduced.StreamId, reference) { Identity = identity },
-            o => impersonateAsHub ? o.WithTarget(owner).ImpersonateAsHub(hub.Address) : o.WithTarget(owner));
+        // Post from `hub` (outer hub), NOT `reduced.Hub` (inner sync hub).
+        // When the outer hub is the mesh hub, HierarchicalRouting skips sender-wrapping
+        // (parentHub.Address.Type == MeshType check), so posting from the inner hub
+        // would leave a bare `sync/{id}` subscriber. The owner hub then finds its OWN
+        // local inner hub at that address and delivers DataChangedEvent locally instead of
+        // routing it back. Posting from `hub` makes hub.Address the Subscriber, so
+        // RouteStreamMessage on the outer hub correctly routes to the inner sync hub.
+        //
+        // Use hub.Observe(object, opts) — the register-before-post overload — to avoid
+        // the race where the owner responds (first DataChangedEvent with ResponseFor) before
+        // hub.Observe(delivery) registers the subject in responseSubjects. The owner side
+        // sends the first DataChangedEvent as ResponseFor(subscribeDelivery), which causes
+        // HandleCallbacks to fire and close the responseSubjects entry cleanly. Subsequent
+        // DataChangedEvents flow through RouteStreamMessage as normal.
+        //
+        // 🚨 Identity selection: prefer the REAL user when the ambient AccessContext
+        // identifies one (the typical Blazor-circuit / API-token path — middleware
+        // set Context to the caller's identity before this Subscribe). Fall back to
+        // System ONLY when AsyncLocal carries no user — empty, anonymous, or a
+        // hub-shaped principal (`sync/`, `mesh/`, `node/`, `activity/`, …) that
+        // leaked from a workspace emission scheduler. The earlier blanket
+        // ImpersonateAsSystem here (88764f803) collapsed every Blazor LayoutArea
+        // subscription onto System, so the User-node hub's Activity area saw
+        // `system-security` instead of `rbuergi` and rendered the visitor profile
+        // for the page owner. Per-user identity must flow into the SubscribeRequest
+        // so the owner's RLS can enforce per-user reads; System fallback exists
+        // only for the bare-infrastructure paths where no user identity exists.
+        var ambient = accessService?.Context ?? accessService?.CircuitContext;
+        var isRealUser = ambient is not null
+            && !string.IsNullOrEmpty(ambient.ObjectId)
+            && !LooksLikeHubPrincipal(ambient.ObjectId);
+        var identityForSubscribe = isRealUser ? ambient!.ObjectId : SystemUserId;
 
-        // Register callback on parent hub to catch DeliveryFailure responses
-        // (e.g., from AccessControlPipeline rejecting the SubscribeRequest).
-        // The response routes through the parent hub first; without a callback here,
-        // the parent drops it (no matching callback), and the stream hangs forever.
-        if (subscribeDelivery != null)
-        {
-            hub.RegisterCallback(subscribeDelivery,
-                (delivery, _) =>
+        // Keep-alive machinery (the 45s heartbeat + the change-feed resubscribe) for a
+        // REMOTE owner is collected here so a TERMINAL failure of the initial
+        // SubscribeRequest — the owner ADDRESS DOES NOT EXIST (DeliveryFailure / NotFound) —
+        // can tear it ALL down. Without this, reduced.OnError only faults the SUBSCRIBERS;
+        // the stream object lingers "errored but undisposed", and the heartbeat (registered
+        // on the stream's DISPOSAL, not its error) keeps posting HeartBeatEvent to the
+        // non-existent owner FOREVER → "[ROUTE] NotFound" every heartbeat interval, one
+        // zombie subscription per open. Multiplied by Blazor re-render / per-cell fan-out
+        // that re-opens absent paths, that ramps into the resubscribe storm that pins the
+        // CPU. A terminal NotFound must STOP (the consumer re-asks if the node later appears,
+        // ideally via an empty-on-absent query) — it must never auto-heartbeat/resubscribe.
+        // CompositeDisposable is race-free: anything Add()ed after it is disposed is disposed
+        // immediately, so the async onError tearing it down can't lose to the synchronous
+        // heartbeat setup below (or vice-versa).
+        var keepAlive = new System.Reactive.Disposables.CompositeDisposable();
+        reduced.RegisterForDisposal(keepAlive);
+        // Initial SubscribeRequest — surface a terminal NotFound, nothing more.
+        //   • NO retry/resubscribe loop — a watchdog that re-posts SubscribeRequest is the forbidden
+        //     band-aid that stormed prod 2026-06-08.
+        //   • NO aggressive per-attempt timeout — a 20ms cap faulted legitimate slow / cold-activating
+        //     owners (a real per-node-hub subscribe needs SECONDS), which broke data sync across the
+        //     whole portal (CI 7→61). We don't race the owner; it replies when it's ready.
+        //   • NO caching of the not-found — a later real subscribe re-asks fresh.
+        // The owner replies with the first DataChangedEvent (already forwarded to the inner sync hub
+        // by RouteStreamMessage); a DeliveryFailure / NotFound — the owner ADDRESS DOES NOT EXIST —
+        // surfaces as OnError, so we fault subscribers and dispose the keep-alive so nothing
+        // heartbeats/resubscribes a non-existent owner. Reactive end-to-end: no await.
+        var observeSubscription = Observable
+            .Using(
+                // Apply an explicit identity SCOPE for the post — do NOT rely on the ambient AsyncLocal
+                // still being set. Observable.Using's factory runs at SUBSCRIBE time, and a sync
+                // re-subscribe / keep-alive / Blazor re-render fan-out fires on a background Rx
+                // scheduler where AsyncLocal is WIPED. Previously a real user applied no scope and
+                // trusted AsyncLocal: when it was wiped the SubscribeRequest delivery got a NULL
+                // AccessContext → PostPipeline fail-closed → owner DENIES the subscribe → the consumer
+                // re-opens it → flood of denied SubscribeRequests that wedged the Space hub
+                // (AgenticPension). Re-apply the CAPTURED user (SwitchAccessContext(ambient)) so the
+                // post carries the right identity regardless of thread; non-user → System. Either way
+                // AccessContext is NEVER null, so the subscribe is authorised (RLS still gates the
+                // user's actual Read) instead of fail-closed-denied.
+                () => (isRealUser ? accessService?.SwitchAccessContext(ambient) : accessService?.ImpersonateAsSystem())
+                      ?? (IDisposable)System.Reactive.Disposables.Disposable.Empty,
+                _ => hub.Observe(
+                        new SubscribeRequest(reduced.StreamId, reference) { Identity = identityForSubscribe },
+                        o => impersonateAsHub ? o.WithTarget(owner).ImpersonateAsHub(hub.Address) : o.WithTarget(owner))
+                    .Take(1))
+            .Subscribe(
+                _ =>
+                    // The owner sends the first DataChangedEvent as the response; it is already
+                    // forwarded to the inner sync hub by RouteStreamMessage. Just acknowledge.
+                    logger.LogDebug("SubscribeRequest for stream {StreamId} acknowledged by owner",
+                        reduced.StreamId),
+                ex =>
                 {
-                    if (delivery.Message is DeliveryFailure failure)
-                    {
-                        logger.LogWarning("SubscribeRequest for stream {StreamId} failed: {Message}",
-                            reduced.StreamId, failure.Message);
-                        reduced.OnError(new DeliveryFailureException(failure));
-                        return Task.FromResult(delivery.Processed());
-                    }
-                    // Non-failure responses: forward to stream hub
-                    reduced.Hub.DeliverMessage(delivery);
-                    return Task.FromResult(delivery.Processed());
-                }, default);
-        }
+                    // DeliveryFailure / NotFound — the owner address does not exist. Terminal: fault
+                    // subscribers + tear down the keep-alive so we NEVER heartbeat or resubscribe a
+                    // non-existent owner (the storm that wedges the session).
+                    // Debug, NOT Warning: this is the recoverable "subscribed to an absent path" case
+                    // (the consumer re-asks if the node later appears), and it is exactly the path that
+                    // can fire frequently under Blazor re-render fan-out — a Warning here ships to App
+                    // Insights on every miss and bleeds ingest budget. The fault below already surfaces
+                    // the error to the subscriber (the GUI renders it); this line is only diagnostics.
+                    logger.LogDebug(
+                        "SubscribeRequest for stream {StreamId} failed — owner {Owner} unreachable: {Message}",
+                        reduced.StreamId, owner, ex.Message);
+                    reduced.OnError(ex);
+                    keepAlive.Dispose();
+                });
+        reduced.RegisterForDisposal(observeSubscription);
+        // Belt-and-suspenders: dispose the subscription when the HUB tears down too (idempotent).
+        hub.RegisterForDisposal(observeSubscription);
 
         reduced.RegisterForDisposal(
             reduced.Hub.Register<UnsubscribeRequest>(
@@ -160,31 +354,141 @@ public static class JsonSynchronizationStream
 
 
         // Keep the remote owner grain alive while this subscription exists.
-        // HeartBeatEvent is a no-op in monolith mode (no GrainKeepAliveCallback).
-        // Stop sending after the first DeliveryFailure so we don't spam warnings when
-        // the owner hub has no HeartBeatEvent handler (e.g. non-grain event hubs).
+        // HeartBeatEvent is fire-and-forget — HandleHeartBeat returns Processed() but
+        // posts no response, so subscribing to a response would always time out and
+        // mis-trigger Resubscribe. Recycle/recreate detection runs through the mesh
+        // change feed below instead.
         if (!owner.Equals(hub.Address))
         {
-            var cts = new CancellationTokenSource();
-            IDisposable? sub = null;
-            sub = Observable.Interval(TimeSpan.FromSeconds(45))
+            var resubscribing = 0;
+
+            void Resubscribe(string reason)
+            {
+                if (Interlocked.Exchange(ref resubscribing, 1) != 0) return;
+
+                logger.LogInformation(
+                    "Stream {StreamId}: owner {Owner} {Reason} — resubscribing for fresh snapshot.",
+                    reduced.StreamId, owner, reason);
+
+                // Resubscribe is INFRASTRUCTURE (cache refresh after owner restart).
+                // The triggering event lands on the workspace's emission scheduler
+                // where AsyncLocal AccessContext is whatever was set when the
+                // upstream change was published — often a `sync/<streamId>` hub
+                // address from the inner sync hub's own startup impersonation.
+                // Stamping a sync hub as principal on the owner-side RLS check
+                // produces "Access denied: user 'sync/…' lacks Read" because no
+                // AccessAssignment exists for sync hub addresses. Same rule as
+                // the MeshNodeStreamCache and the stale-patch refresh in
+                // SynchronizationStream: resubscribes run as System; per-user
+                // enforcement happens at the consumer layer (cache.GetStream,
+                // application handlers), not at the sync-stream seam.
+                using (accessService?.ImpersonateAsSystem())
+                {
+                    // Use register-before-post overload to avoid the race where the owner
+                    // responds before the subject is registered in responseSubjects.
+                    hub.Observe(
+                            new SubscribeRequest(reduced.StreamId, reference) { Identity = SystemUserId },
+                            o => impersonateAsHub
+                                ? o.WithTarget(owner).ImpersonateAsHub(hub.Address)
+                                : o.WithTarget(owner))
+                        .Subscribe(
+                            _ =>
+                            {
+                                // Owner's first DataChangedEvent is already routed to the
+                                // inner hub by RouteStreamMessage; just clear the flag.
+                                Interlocked.Exchange(ref resubscribing, 0);
+                            },
+                            ex =>
+                            {
+                                logger.LogWarning(ex,
+                                    "Stream {StreamId}: resubscribe failed.",
+                                    reduced.StreamId);
+                                Interlocked.Exchange(ref resubscribing, 0);
+                            });
+                }
+            }
+
+            var heartbeatInterval = hub.ServiceProvider
+                .GetService<Microsoft.Extensions.Options.IOptions<SyncStreamOptions>>()
+                ?.Value?.HeartbeatInterval ?? TimeSpan.FromSeconds(45);
+            // 🚨 The heartbeat must NOT strongly pin `hub`. Observable.Interval's timer lives
+            // on the process-global Rx TimerQueue (a GC root); capturing `hub` in the tick
+            // closure keeps an ABANDONED hub alive forever — e.g. a RunLevel=1 partial
+            // activation that never reaches teardown, so `keepAlive` is never disposed. That is
+            // the recurring MeshHub_IsCollected leak whose GC chain reads
+            // ROOT→TimerQueue→ConcurrencyAbstractionLayerImpl+PeriodicTimer→hub. Hold the hub
+            // WEAKLY (same pattern as MessageHub.InstallStaleCallbackScanner): a live, in-use
+            // hub stays reachable via the mesh/cache so the heartbeat keeps firing normally;
+            // once the hub is unreferenced the next tick self-disposes the timer and releases it.
+            var weakHub = new WeakReference<IMessageHub>(hub);
+            var sub = new System.Reactive.Disposables.SingleAssignmentDisposable();
+            sub.Disposable = Observable.Interval(heartbeatInterval)
                 .Subscribe(_ =>
                 {
-                    if (hub.RunLevel > MessageHubRunLevel.Started) return;
-                    var delivery = hub.Post(new HeartBeatEvent(), o => o.WithTarget(owner));
-                    if (delivery == null) return;
-                    hub.RegisterCallback(delivery, (d, _) =>
+                    if (!weakHub.TryGetTarget(out var h)
+                        || h.RunLevel > MessageHubRunLevel.Started)
                     {
-                        if (d.Message is DeliveryFailure)
-                        {
-                            sub?.Dispose();
-                            cts.Cancel();
-                        }
-                        return Task.FromResult(d);
-                    }, cts.Token);
+                        // Hub collected, or past Started (Quiescing/Disposed/abandoned) — stop
+                        // ticking so the TimerQueue no longer roots anything through this closure.
+                        sub.Dispose();
+                        return;
+                    }
+                    // HeartBeatEvent is [SystemMessage] — PostPipeline accepts
+                    // null AccessContext without warning. No identity stamp
+                    // needed; receiver doesn't gate on principal.
+                    h.Post(new HeartBeatEvent(), o => o.WithTarget(owner));
                 });
-            reduced.RegisterForDisposal(sub);
-            reduced.RegisterForDisposal(new AnonymousDisposable(() => cts.Cancel()));
+            // On keepAlive (not directly on reduced): a terminal NotFound from the initial
+            // SubscribeRequest disposes keepAlive → stops this heartbeat. Normal teardown
+            // still reaches it because keepAlive is itself registered on reduced's disposal.
+            keepAlive.Add(sub);
+
+            // Resubscribe when the mesh change feed reports a Created/Deleted event
+            // on the owner's path. This is the sole recycled-grain detector now that
+            // heartbeats are fire-and-forget. Compare against Address.Path (segments
+            // only) — ToString() can include a "~host" suffix for hosted addresses
+            // which never matches MeshChangeEvent.Path (the bare node.Path).
+            //
+            // 🚨 COALESCE the change-feed-triggered resubscribe. The mesh change feed fires
+            // one event per owner write; high-frequency owner writes (e.g. a per-HTTP-request
+            // `_UserActivity` update) produce a BURST of events. A SINGLE resubscribe already
+            // fetches the LATEST owner snapshot regardless of how many writes fired, so a
+            // per-event resubscribe is redundant AND harmful: each resubscribe posts a fresh
+            // SubscribeRequest whose handling on the owner SYNCHRONOUSLY creates a
+            // `sync/{id}` hub on the owner's single-threaded action block (SynchronizationStream
+            // ctor → Host.GetHostedHub). A burst of those serial creations starves the owner's
+            // action block so it cannot ack OTHER subscribers' SubscribeRequests within the
+            // callback timeout — the cache-hub wedge. The in-flight guard inside Resubscribe
+            // only collapses events that arrive WHILE a resubscribe is mid-flight; the moment
+            // the owner acks one, the guard clears and the next settled event fires another
+            // resubscribe — so a stream of owner writes produces one resubscribe PER write.
+            // Push each change-feed pulse through a Subject and Throttle it: a burst within the
+            // window collapses to a SINGLE resubscribe (Throttle emits the last item only after
+            // a quiet period). Recreate detection is preserved — a genuine owner restart still
+            // triggers a resubscribe, just debounced by the window. Reactive only: no timer
+            // watchdog, no async/await.
+            var resubscribeWindow = hub.ServiceProvider
+                .GetService<Microsoft.Extensions.Options.IOptions<SyncStreamOptions>>()
+                ?.Value?.ChangeFeedResubscribeWindow ?? TimeSpan.FromSeconds(1);
+            var changeFeedPulses = new System.Reactive.Subjects.Subject<System.Reactive.Unit>();
+            // Throttle (debounce) collapses a burst to one trailing emission. Subscribe on
+            // keepAlive so a terminal NotFound tears it down with the heartbeat + change feed.
+            keepAlive.Add(
+                changeFeedPulses
+                    .Throttle(resubscribeWindow)
+                    .Subscribe(
+                        _ => Resubscribe("change feed event (coalesced)"),
+                        ex => logger.LogWarning(ex,
+                            "Stream {StreamId}: change-feed coalescing stream errored.",
+                            reduced.StreamId)));
+            keepAlive.Add(changeFeedPulses);
+
+            var ownerPath = owner.Path;
+            var changeFeedSub = TrySubscribeOwnerPathChangeFeed(
+                hub.ServiceProvider, logger, ownerPath,
+                () => changeFeedPulses.OnNext(System.Reactive.Unit.Default));
+            if (changeFeedSub != null)
+                keepAlive.Add(changeFeedSub); // torn down with the heartbeat on terminal NotFound
         }
 
         return reduced;
@@ -192,12 +496,13 @@ public static class JsonSynchronizationStream
 
     internal static ISynchronizationStream CreateSynchronizationStream<TReduced, TReference>(
         this IWorkspace workspace,
-        SubscribeRequest request
+        IMessageDelivery<SubscribeRequest> delivery
 )
     where TReference : WorkspaceReference
     {
         var hub = workspace.Hub;
         var logger = GetLogger(hub.ServiceProvider);
+        var request = delivery.Message with { Subscriber = delivery.Sender };
 
         var fromWorkspace = workspace
             .ReduceManager
@@ -213,34 +518,56 @@ public static class JsonSynchronizationStream
             );
 
 
-        // Use single synchronized subscription for both initial data and ongoing changes
-        var isFirst = true;
+        // Use single synchronized subscription for both initial data and ongoing changes.
+        // SubscribeAck is sent by HandleSubscribeRequest to close the hub.Observe(subscribeRequest)
+        // pending callback immediately — DataChangedEvents always use WithTarget so they
+        // flow via RouteStreamMessage to the inner sync hub regardless of callback state.
         reduced.RegisterForDisposal(
             reduced
-                .ToDataChanged<TReduced, DataChangedEvent>(c => isFirst || !reduced.ClientId.Equals(c.ChangedBy))
+                // 🚨 ALWAYS forward a FULL to the subscriber — a Full is the owner's complete
+                // authoritative snapshot (the initial subscribe state, or a re-assert/rollback),
+                // NEVER the subscriber's own echo (subscribers only ever send Patches via
+                // DataChangeRequest). The bare `!ClientId.Equals(ChangedBy)` echo-filter dropped
+                // the INITIAL Full whenever ChangedBy and the subscriber's ClientId collided —
+                // e.g. both empty (no StreamId on the SubscribeRequest) — leaving the subscriber
+                // dark until the next 45s heartbeat re-emitted. Only PATCHES are echo-suppressed.
+                // (The client side already applies Fulls unconditionally — UpdateStream's
+                // monotonicity guard is PATCHES-ONLY; this mirrors that contract on the owner.)
+                .ToDataChanged<TReduced, DataChangedEvent>(
+                    c => c.ChangeType == ChangeType.Full || !reduced.ClientId.Equals(c.ChangedBy))
                 .Synchronize()
                 .Where(x => x is not null)
                 .Select(x => x!)
                 .Subscribe(e =>
                 {
-                    if (isFirst)
+                    logger.LogDebug("Owner {owner} sending data to subscriber {subscriber}", reduced.Owner, request.Subscriber);
+                    // Attribute the fan-out to the SUBSCRIBER's subscribe-time identity, carried on
+                    // the SubscribeRequest delivery. The mesh-node cache hydrates every per-path
+                    // stream under MeshNodeCacheIdentity (Read-only) — so the owner's outbound
+                    // DataChangedEvent now carries that real principal instead of an empty
+                    // AccessContext that the PostPipeline would fail closed on and warn about
+                    // ("posted with no AccessContext"). A Blazor-client subscriber rides its own
+                    // user context the same way. A genuinely context-less subscribe still posts
+                    // unstamped and still warns — that correctly flags a missing identity rather
+                    // than inventing one (the deleted 2026-05-21 "stamp hub-self" prod bug).
+                    hub.Post(e, o =>
                     {
-                        isFirst = false;
-                        logger.LogDebug("Owner {owner} sending initial data to subscriber {subscriber}", reduced.Owner, request.Subscriber);
-                    }
-                    else
-                    {
-                        logger.LogDebug("Owner {owner} sending change notification to subscriber {subscriber}", reduced.Owner, request.Subscriber);
-                    }
-                    hub.Post(e, o => o.WithTarget(request.Subscriber));
+                        var opt = o.WithTarget(request.Subscriber);
+                        return delivery.AccessContext is not null
+                            ? opt.WithAccessContext(delivery.AccessContext)
+                            : opt;
+                    });
                 },
                 ex =>
                 {
-                    logger.LogWarning(ex, "Workspace stream error for subscriber {Subscriber}, propagating DeliveryFailure", request.Subscriber);
-                    hub.Post(new DeliveryFailure(null!, ex.Message)
-                    {
-                        ErrorType = ErrorType.Failed,
-                    }, o => o.WithTarget(request.Subscriber));
+                    logger.LogWarning(ex, "Workspace stream error for subscriber {Subscriber}, propagating StreamErrorEvent", request.Subscriber);
+                    // StreamErrorEvent (a StreamMessage) is routed via the subscriber
+                    // hub's RouteStreamMessage to the per-stream sub-hub, which
+                    // OnErrors the local SynchronizationStream. A plain
+                    // DeliveryFailure stops at the parent hub because it isn't a
+                    // StreamMessage — the subscriber would stay live forever.
+                    hub.Post(new StreamErrorEvent(request.StreamId, ex.Message),
+                        o => o.WithTarget(request.Subscriber));
                 })
         );
 
@@ -282,7 +609,14 @@ public static class JsonSynchronizationStream
                     logger.LogDebug("Processing full change for stream {StreamId}, currentJson is null: {IsNull}", stream.ClientId, currentJson is null);
                     var previousJson = currentJson;
                     currentJson = JsonSerializer.SerializeToElement(x.Value, x.Value?.GetType() ?? typeof(object), stream.Host.JsonSerializerOptions);
-                    if (Equals(previousJson, currentJson))
+                    // 🚨 A FULL data push ALWAYS goes out — it re-asserts the owner's
+                    // complete authoritative state (SetFull overwrite, rollback / resync)
+                    // and a subscriber that diverged optimistically only re-converges if
+                    // the Full reaches it. NEVER suppress a value-equal Full. (Re-entering
+                    // this branch with a populated cache requires ChangeType.Full, so the
+                    // equality short-circuit only ever fired for value-equal Fulls — this
+                    // restores the documented "a Full lands unconditionally" contract.)
+                    if (x.ChangeType != ChangeType.Full && Equals(previousJson, currentJson))
                     {
                         logger.LogDebug("Previous JSON equals current JSON for stream {StreamId}, returning null", stream.ClientId);
                         return null;
@@ -353,6 +687,16 @@ public static class JsonSynchronizationStream
 
 
 
+    /// <summary>
+    /// Applies the stream's registered patch function to produce a typed change from a JSON patch.
+    /// </summary>
+    /// <typeparam name="TReduced">The reduced stream's state type.</typeparam>
+    /// <param name="stream">The synchronization stream whose reduce manager supplies the patch function.</param>
+    /// <param name="currentState">The current typed state of the stream.</param>
+    /// <param name="currentJson">The current state serialized as JSON.</param>
+    /// <param name="patch">The JSON patch to apply, or null for a full update.</param>
+    /// <param name="changedBy">Identifier of the principal that made the change.</param>
+    /// <returns>The resulting change item, or null when no patch function is registered.</returns>
     public static ChangeItem<TReduced>? ToChangeItem<TReduced>(
         this ISynchronizationStream<TReduced> stream,
         TReduced currentState,
@@ -364,6 +708,17 @@ public static class JsonSynchronizationStream
     }
 
 
+    /// <summary>
+    /// Converts a JSON patch over a whole entity-store projection into per-entity
+    /// <see cref="EntityUpdate"/>s, normalizing collection names through the optional type registry and
+    /// capturing both the old and new value for each affected entity.
+    /// </summary>
+    /// <param name="current">The store projection before the patch (source of old values).</param>
+    /// <param name="updated">The store projection after the patch (source of new values).</param>
+    /// <param name="patch">The JSON patch describing the changes.</param>
+    /// <param name="options">Serializer options used to decode pointer segments.</param>
+    /// <param name="typeRegistry">Optional registry used to normalize raw collection names to their short form.</param>
+    /// <returns>One distinct update per affected entity (deduplicated by id and collection).</returns>
     public static IReadOnlyCollection<EntityUpdate> ToEntityUpdates(
         this JsonElement current,
         JsonElement updated,
@@ -606,6 +961,16 @@ public static class JsonSynchronizationStream
         }
         return current;
     }
+    /// <summary>
+    /// Converts a JSON patch scoped to a single collection into per-entity <see cref="EntityUpdate"/>s,
+    /// resolving each entity's old value from the supplied collection snapshot.
+    /// </summary>
+    /// <param name="current">The collection snapshot before the patch (source of old values).</param>
+    /// <param name="reference">The reference identifying the collection being patched.</param>
+    /// <param name="updated">The collection projection after the patch (source of new values).</param>
+    /// <param name="patch">The JSON patch describing the changes.</param>
+    /// <param name="options">Serializer options used to decode entity ids.</param>
+    /// <returns>One distinct update per affected entity (deduplicated by id and collection).</returns>
     public static IReadOnlyCollection<EntityUpdate> ToEntityUpdates(
         this InstanceCollection current,
         CollectionReference reference,
@@ -646,18 +1011,44 @@ public static class JsonSynchronizationStream
         return (updated!, patch);
     }
 
+    /// <summary>
+    /// Human-readable failure reason for a <see cref="DataChangeResponse"/> whose
+    /// <see cref="ActivityLog.Status"/> is Failed. The change-application path logs the real
+    /// error on a SUB-activity while the top-level status only rolls up — so this walks every
+    /// (sub-)activity, joins their error messages AND appends each one's activity path
+    /// (<c>{HubPath}/_activity/{Id}</c>) so the caller can open the persisted activity and
+    /// inspect the full detail instead of seeing a bare "Unknown error".
+    /// </summary>
+    private static string DescribeFailure(ActivityLog? log)
+    {
+        if (log is null)
+            return "Unknown error (no activity log)";
+        var failures = log.SelfAndDescendants()
+            .SelectMany(a => a.Messages
+                .Where(m => m.LogLevel >= LogLevel.Error)
+                .Select(m => string.IsNullOrEmpty(a.HubPath)
+                    ? $"{m.Message} [activity {a.Id}]"
+                    : $"{m.Message} [activity {a.HubPath}/_activity/{a.Id}]"))
+            .ToList();
+        return failures.Count > 0
+            ? string.Join("; ", failures)
+            : $"Failed with no error message (activity {log.Id}, status {log.Status})";
+    }
+
     internal static IObservable<DataChangeRequest> ToDataChangeRequest<TStream>(
         this ISynchronizationStream<TStream> stream, Func<ChangeItem<TStream>, bool> predicate)
         => stream
             .Synchronize()
             .Where(predicate)
-            .Select(x => x.Updates.ToDataChangeRequest(stream.ClientId));
+            .Select(x => x.Updates.ToDataChangeRequest(stream.ClientId, stream.Host));
 
 
 
     internal static DataChangeRequest ToDataChangeRequest(this IEnumerable<EntityUpdate> updates,
-        string clientId)
+        string clientId, IMessageHub host)
     {
+        var options = host.JsonSerializerOptions;
+        var workspace = host.GetWorkspace();
         return updates
             .GroupBy(x => new { x.Collection, x.Id })
             .Aggregate(new DataChangeRequest() { ChangedBy = clientId }, (e, g) =>
@@ -669,6 +1060,23 @@ public static class JsonSynchronizationStream
                     return e;
                 if (last == null)
                     return e.WithDeletions(first!);
+
+                // 🚨 Minimal-bytes: when we have a base (OldValue), a string key, and a
+                // matching type, ship a compact EntityDelta (the splice) instead of the
+                // whole entity for big string-heavy content (markdown / html). Only take
+                // the delta path when the PARTITION resolves the same way the owner will
+                // (non-partitioned type, or a resolved partition) — otherwise the owner
+                // would route the delta to the wrong stream and silently drop the update.
+                // EntityDelta.TryCompute also gates on size + only when the delta is
+                // smaller; any miss → fall through to the full whole-replace path.
+                if (first is not null && g.Key.Id is string idStr && first.GetType() == last.GetType())
+                {
+                    var partitioned = workspace.DataContext.GetTypeSource(last.GetType()) as IPartitionedTypeSource;
+                    var partition = partitioned?.GetPartition(last);
+                    if ((partitioned is null || partition is not null)
+                        && EntityDelta.TryCompute(g.Key.Collection, idStr, partition, first, last, options) is { } deltaUpdate)
+                        return e.WithUpdates(deltaUpdate);
+                }
 
                 // Treat as update regardless of OldValue — OldValue may be null
                 // when the change was deserialized from a remote stream (not serialized).
@@ -806,6 +1214,12 @@ public static class JsonSynchronizationStream
             _ => throw new InvalidOperationException($"Unsupported operation: {original.Op}")
         };
     }
+    /// <summary>
+    /// Encodes a key into a JSON-pointer path segment by serializing it to its JSON representation.
+    /// </summary>
+    /// <param name="segment">The key to encode; a null key yields an empty segment.</param>
+    /// <param name="options">Serializer options used to serialize the key.</param>
+    /// <returns>The encoded pointer segment.</returns>
     public static string EncodePointerSegment(string? segment, JsonSerializerOptions options)
     {
         if (segment is null) return string.Empty;
@@ -814,6 +1228,13 @@ public static class JsonSynchronizationStream
         // RFC 6901: escape ~ as ~0 and / as ~1
         return ret;
     }
+    /// <summary>
+    /// Decodes a JSON-pointer path segment back into a key object, unescaping RFC 6901 sequences
+    /// (<c>~0</c>, <c>~1</c>) and deserializing the JSON value.
+    /// </summary>
+    /// <param name="segment">The pointer segment to decode; a null segment yields null.</param>
+    /// <param name="options">Serializer options used to deserialize the key.</param>
+    /// <returns>The decoded key object, or null when the segment is null.</returns>
     public static object? DecodePointerSegment(string? segment, JsonSerializerOptions options)
     {
         if (segment is null) return null;

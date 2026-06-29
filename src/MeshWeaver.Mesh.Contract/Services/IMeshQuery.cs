@@ -11,50 +11,6 @@ namespace MeshWeaver.Mesh.Services;
 public interface IMeshQuery
 {
     /// <summary>
-    /// Query nodes and partition objects with full-text search, filtering, and scoping.
-    /// Uses GitHub-style query syntax (e.g., "nodeType:Story status:Open laptop").
-    /// </summary>
-    /// <param name="request">Query request with filters, path, and options</param>
-    /// <param name="ct">Cancellation token</param>
-    /// <returns>Matching objects (MeshNodes and partition objects)</returns>
-    IAsyncEnumerable<object> QueryAsync(MeshQueryRequest request, CancellationToken ct = default);
-
-    /// <summary>
-    /// Autocomplete query - given a namespace, find best matching subnodes.
-    /// Returns suggestions ordered by path length first (for path-based autocomplete).
-    /// </summary>
-    /// <param name="basePath">Base path to search from</param>
-    /// <param name="prefix">Prefix to match (partial name/path)</param>
-    /// <param name="limit">Maximum number of suggestions to return</param>
-    /// <param name="ct">Cancellation token</param>
-    /// <returns>Suggestions ordered by path length, then score, then name</returns>
-    IAsyncEnumerable<QuerySuggestion> AutocompleteAsync(
-        string basePath,
-        string prefix,
-        int limit = 10,
-        CancellationToken ct = default);
-
-    /// <summary>
-    /// Autocomplete query with specified ordering mode.
-    /// </summary>
-    /// <param name="basePath">Base path to search from</param>
-    /// <param name="prefix">Prefix to match (partial name/path)</param>
-    /// <param name="mode">Ordering mode (PathFirst or RelevanceFirst)</param>
-    /// <param name="limit">Maximum number of suggestions to return</param>
-    /// <param name="contextPath">Context path for proximity-based scoring (null for no proximity boost)</param>
-    /// <param name="context">Context for visibility filtering (e.g., "search"). Nodes excluded from this context are hidden.</param>
-    /// <param name="ct">Cancellation token</param>
-    /// <returns>Suggestions ordered according to mode</returns>
-    IAsyncEnumerable<QuerySuggestion> AutocompleteAsync(
-        string basePath,
-        string prefix,
-        AutocompleteMode mode,
-        int limit = 10,
-        string? contextPath = null,
-        string? context = null,
-        CancellationToken ct = default);
-
-    /// <summary>
     /// Creates an observable query that monitors data sources for changes and emits updates.
     /// The first emission contains the full initial result set (ChangeType = Initial).
     /// Subsequent emissions contain incremental changes (Added, Updated, Removed).
@@ -65,7 +21,7 @@ public interface IMeshQuery
     /// <example>
     /// <code>
     /// var subscription = meshQuery
-    ///     .ObserveQuery&lt;MeshNode&gt;(MeshQueryRequest.FromQuery("path:ACME nodeType:Story scope:descendants"))
+    ///     .Query&lt;MeshNode&gt;(MeshQueryRequest.FromQuery("path:ACME nodeType:Story scope:descendants"))
     ///     .Subscribe(change =&gt;
     ///     {
     ///         Console.WriteLine($"Change: {change.ChangeType}, Items: {change.Items.Count}");
@@ -74,26 +30,17 @@ public interface IMeshQuery
     /// subscription.Dispose();
     /// </code>
     /// </example>
-    IObservable<QueryResultChange<T>> ObserveQuery<T>(MeshQueryRequest request);
+    IObservable<QueryResultChange<T>> Query<T>(MeshQueryRequest request);
 
     /// <summary>
-    /// Selects a single property value from a node at the given path.
-    /// Efficient way to get one property without loading the full Content blob.
+    /// Selects a single property value from a node at the given path (single-emission
+    /// observable). Efficient way to get one property without loading the full Content blob.
     /// </summary>
     /// <typeparam name="T">The expected property type.</typeparam>
     /// <param name="path">The node path.</param>
     /// <param name="property">The property name on MeshNode.</param>
-    /// <param name="ct">Cancellation token.</param>
     /// <returns>The property value, or default if node not found or property is null.</returns>
-    Task<T?> SelectAsync<T>(string path, string property, CancellationToken ct = default);
-
-    /// <summary>
-    /// Returns an IMeshQuery that runs all queries with the node's own identity
-    /// as the AccessContext (same as IMeshNodePersistence.ImpersonateAsNode()).
-    /// Use this when infrastructure code needs read access without a user context
-    /// (e.g., VirtualUserMiddleware checking node existence before authentication).
-    /// </summary>
-    IMeshQuery ImpersonateAsNode();
+    IObservable<T?> Select<T>(string path, string property);
 }
 
 /// <summary>
@@ -110,8 +57,32 @@ public record MeshQueryRequest
     /// - "status:Open laptop" - filter + text search
     /// - "sort:lastAccessedAt-desc limit:20" - with ordering and limit
     /// - "source:activity" - query activity records
+    ///
+    /// <para>Single-query convenience. When <see cref="Queries"/> is also set,
+    /// it takes precedence and this property is ignored.</para>
     /// </summary>
     public string Query { get; init; } = "";
+
+    /// <summary>
+    /// Multi-query union: when set, the mesh query engine runs every query in
+    /// this list and yields the path-keyed union of their result sets as a
+    /// single combined snapshot (the same de-dup the per-result <c>Items</c>
+    /// list applies to a single query). Set this when you want a single live
+    /// snapshot whose membership is "matches query A OR matches query B OR ..."
+    /// without managing N parallel subscriptions in user code.
+    ///
+    /// <para>Sort/limit/skip are applied to the unioned result set using the
+    /// first query's parameters (the others contribute membership only).</para>
+    /// </summary>
+    public IReadOnlyList<string>? Queries { get; init; }
+
+    /// <summary>
+    /// All effective query strings — <see cref="Queries"/> when set, otherwise
+    /// a one-element view over <see cref="Query"/>. Engines that union over
+    /// multiple queries iterate this; single-query engines call <c>.First()</c>.
+    /// </summary>
+    public IReadOnlyList<string> EffectiveQueries =>
+        Queries is { Count: > 0 } qs ? qs : new[] { Query };
 
     /// <summary>
     /// User ID for access control filtering.
@@ -178,6 +149,18 @@ public record MeshQueryRequest
     /// </summary>
     public static MeshQueryRequest FromQuery(string query, string? userId, string? defaultPath)
         => new() { Query = query, UserId = userId, DefaultPath = defaultPath };
+
+    /// <summary>
+    /// Creates a multi-query union request. The engine runs every query and
+    /// returns the path-keyed union of matched nodes as a single snapshot.
+    /// Sort/limit/skip are taken from the first query.
+    /// </summary>
+    public static MeshQueryRequest FromQueries(IEnumerable<string> queries, string? userId = null)
+    {
+        var list = (queries ?? throw new ArgumentNullException(nameof(queries))).ToList();
+        if (list.Count == 0) throw new ArgumentException("At least one query required", nameof(queries));
+        return new MeshQueryRequest { Queries = list, Query = list[0], UserId = userId };
+    }
 }
 
 /// <summary>

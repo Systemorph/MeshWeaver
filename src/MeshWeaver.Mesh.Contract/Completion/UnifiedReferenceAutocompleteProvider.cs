@@ -1,8 +1,10 @@
-using System.Runtime.CompilerServices;
+using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.Data.Completion;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Mesh.Completion;
 
@@ -16,20 +18,30 @@ namespace MeshWeaver.Mesh.Completion;
 ///
 /// When no contextPath (top-level search):
 /// - "@" suggests top-level nodes globally (absolute paths)
+///
+/// SNAPSHOT contract (see <see cref="IAutocompleteProvider"/>): every branch returns an
+/// <c>IObservable&lt;IReadOnlyCollection&lt;AutocompleteItem&gt;&gt;</c>. Each sub-source (keywords,
+/// children via <c>meshQuery.Autocomplete</c>, the per-node delegation) is itself a snapshot stream;
+/// they are composed with <see cref="AutocompleteSnapshots.Combine"/> (CombineLatest + score-merge),
+/// so the merged snapshot appears as soon as the FIRST source returns and refines as the rest arrive
+/// — it never waits for the slowest. Empty results emit <see cref="AutocompleteSnapshots.Empty"/>,
+/// never <c>Observable.Empty</c> (which would stall the aggregator's CombineLatest).
 /// </summary>
 internal class UnifiedReferenceAutocompleteProvider(
-    IMeshCatalog? meshCatalog,
     IMeshService? meshQuery,
     INavigationService? navigationContext,
     IMessageHub hub,
     IAutocompletePrefixRegistry? prefixRegistry = null) : IAutocompleteProvider
 {
-    private JsonSerializerOptions JsonOptions => hub.JsonSerializerOptions;
-
     private const int ContextPriority = 2000;
     private const int PrefixPriority = 1800;
     private const int KeywordPriority = 1500;
     private const int ItemPriority = 1000;
+
+    // Per-branch merge cap — generous (display is ≤ ~15); the outer per-node aggregator caps again.
+    private const int CombineCap = 50;
+
+    private static readonly IReadOnlyList<QueryResult> EmptyRows = Array.Empty<QueryResult>();
 
     /// <summary>
     /// Reserved keywords for unified references.
@@ -44,13 +56,10 @@ internal class UnifiedReferenceAutocompleteProvider(
     };
 
     /// <inheritdoc />
-    public async IAsyncEnumerable<AutocompleteItem> GetItemsAsync(
-        string query,
-        string? contextPath = null,
-        [EnumeratorCancellation] CancellationToken ct = default)
+    public IObservable<IReadOnlyCollection<AutocompleteItem>> GetItems(string query, string? contextPath = null)
     {
         if (string.IsNullOrEmpty(query) || !query.StartsWith("@"))
-            yield break;
+            return Observable.Return(AutocompleteSnapshots.Empty);
 
         // Strip the @ prefix(es) - handle both @ and @@
         var path = query.TrimStart('@');
@@ -58,31 +67,21 @@ internal class UnifiedReferenceAutocompleteProvider(
         // If the path starts with (or contains) a UCR prefix segment (content/, data/, schema/, etc.),
         // skip — dedicated providers (ContentAutocompleteProvider, DataAutocompleteProvider) handle these.
         if (StartsWithUcrPrefix(path))
-            yield break;
+            return Observable.Return(AutocompleteSnapshots.Empty);
 
         // Determine effective context: prefer explicit contextPath, fall back to navigation context
         var effectiveContext = contextPath ?? navigationContext?.CurrentNamespace;
 
-        // Check for absolute mode: @/ means search globally
+        // Absolute mode: @/ means search globally
         if (path.StartsWith("/"))
-        {
-            var absolutePath = path[1..]; // strip leading /
-            await foreach (var item in GetAbsoluteSuggestions(absolutePath, ct))
-                yield return item;
-            yield break;
-        }
+            return GetAbsoluteSuggestions(path[1..]); // strip leading /
 
         // If we have context, use relative path mode
         if (!string.IsNullOrEmpty(effectiveContext))
-        {
-            await foreach (var item in GetRelativeSuggestions(path, effectiveContext, ct))
-                yield return item;
-            yield break;
-        }
+            return GetRelativeSuggestions(path, effectiveContext);
 
         // No context — fall back to global absolute mode
-        await foreach (var item in GetAbsoluteSuggestions(path, ct))
-            yield return item;
+        return GetAbsoluteSuggestions(path);
     }
 
     /// <summary>
@@ -104,13 +103,35 @@ internal class UnifiedReferenceAutocompleteProvider(
     }
 
     /// <summary>
+    /// Maps each <see cref="IMeshService.Autocomplete"/> snapshot (a score-sorted set of
+    /// <see cref="QueryResult"/>) directly to an <see cref="AutocompleteItem"/> snapshot — keeping the
+    /// progressive nature (one snapshot per provider advance) without flattening to items. Errors
+    /// collapse to an empty snapshot so a failing child can't stall the composing CombineLatest.
+    /// </summary>
+    private IObservable<IReadOnlyCollection<AutocompleteItem>> SnapshotItems(
+        IObservable<IReadOnlyCollection<QueryResult>> source,
+        Func<QueryResult, AutocompleteItem> toItem)
+        => source
+            .Select(rows => (IReadOnlyCollection<AutocompleteItem>)rows.Select(toItem).ToList())
+            // Collapse to empty so a failing child can't stall the composing
+            // CombineLatest — but keep the fault greppable (Debug: autocomplete
+            // is high-frequency; a down backend would otherwise spam Warning).
+            .Catch((Exception ex) =>
+            {
+                LogBranchFault(ex);
+                return Observable.Return(AutocompleteSnapshots.Empty);
+            });
+
+    private void LogBranchFault(Exception ex)
+        => hub.ServiceProvider.GetService<ILoggerFactory>()
+            ?.CreateLogger(typeof(UnifiedReferenceAutocompleteProvider))
+            .LogDebug(ex, "Autocomplete branch faulted — returning empty snapshot");
+
+    /// <summary>
     /// Provides suggestions using relative paths from the current node context.
     /// Handles: "@child", "@../sibling", "@../../ancestor/child"
     /// </summary>
-    private async IAsyncEnumerable<AutocompleteItem> GetRelativeSuggestions(
-        string path,
-        string contextPath,
-        [EnumeratorCancellation] CancellationToken ct)
+    private IObservable<IReadOnlyCollection<AutocompleteItem>> GetRelativeSuggestions(string path, string contextPath)
     {
         // Count and consume ../ prefixes to navigate up
         var relativePrefix = "";
@@ -144,58 +165,37 @@ internal class UnifiedReferenceAutocompleteProvider(
         }
 
         if (meshQuery == null)
-            yield break;
+            return Observable.Return(AutocompleteSnapshots.Empty);
 
-        // Check if current search base has a keyword prefix (data:, content:, etc.)
+        // Keyword-specific suggestions (data:, content:, etc.)
         var lastSegment = completedSegments.LastOrDefault()?.ToLowerInvariant();
         if (lastSegment != null && Keywords.ContainsKey(lastSegment + "/"))
-        {
-            // Keyword-specific suggestions
-            await foreach (var item in GetRelativeKeywordSuggestions(searchBase, lastSegment, relativePrefix, currentSegment, ct))
-                yield return item;
-            yield break;
-        }
+            return GetRelativeKeywordSuggestions(searchBase, lastSegment, relativePrefix, currentSegment);
+
+        var streams = new List<IObservable<IReadOnlyCollection<AutocompleteItem>>>();
 
         // Suggest keywords if we ended with a slash and have at least one completed segment
         if (endsWithSlash && completedSegments.Length > 0)
-        {
-            foreach (var item in GetRelativeKeywords(relativePrefix, currentSegment))
-                yield return item;
-        }
+            streams.Add(Observable.Return(
+                (IReadOnlyCollection<AutocompleteItem>)GetRelativeKeywords(relativePrefix, currentSegment).ToList()));
 
         // Suggest child nodes at the searchBase
-        IAsyncEnumerable<QuerySuggestion>? suggestions = null;
-        try
-        {
-            suggestions = meshQuery.AutocompleteAsync(searchBase ?? "", currentSegment, 15, ct);
-        }
-        catch { /* Ignore errors */ }
-
-        if (suggestions != null)
-        {
-            await foreach (var suggestion in suggestions.WithCancellation(ct))
-            {
-                // Get the child name (last segment of the suggestion path)
-                var childName = suggestion.Name;
-
-                yield return new AutocompleteItem(
-                    Label: childName,
-                    InsertText: $"@{relativePrefix}{childName}/",
-                    Description: suggestion.NodeType ?? "Node",
-                    Category: string.IsNullOrEmpty(relativePrefix) ? "Children" : "Nodes",
-                    Priority: ContextPriority,
-                    Kind: AutocompleteKind.Other
-                );
-            }
-        }
+        streams.Add(SnapshotItems(
+            meshQuery.Autocomplete(searchBase, currentSegment, AutocompleteMode.RelevanceFirst, 15),
+            s => new AutocompleteItem(
+                Label: s.Name ?? s.Path,
+                InsertText: $"@{relativePrefix}{s.Name}/",
+                Description: s.NodeType ?? "Node",
+                Category: string.IsNullOrEmpty(relativePrefix) ? "Children" : "Nodes",
+                Priority: ContextPriority,
+                Kind: AutocompleteKind.Other)));
 
         // Node delegation: ask the node at searchBase for its own completions
         // (layout areas, data collections, content files)
         if (endsWithSlash && !string.IsNullOrEmpty(searchBase))
-        {
-            await foreach (var item in GetNodeDelegatedCompletions(searchBase, relativePrefix, currentSegment, ct))
-                yield return item;
-        }
+            streams.Add(GetNodeDelegatedCompletions(searchBase, relativePrefix, currentSegment));
+
+        return AutocompleteSnapshots.Combine(streams, CombineCap);
     }
 
     private IEnumerable<AutocompleteItem> GetRelativeKeywords(string relativePrefix, string prefix)
@@ -213,167 +213,122 @@ internal class UnifiedReferenceAutocompleteProvider(
             ));
     }
 
-    private async IAsyncEnumerable<AutocompleteItem> GetRelativeKeywordSuggestions(
+    private IObservable<IReadOnlyCollection<AutocompleteItem>> GetRelativeKeywordSuggestions(
         string searchBase,
         string keyword,
         string relativePrefix,
-        string currentSegment,
-        [EnumeratorCancellation] CancellationToken ct)
+        string currentSegment)
     {
         if (meshQuery == null)
-            yield break;
+            return Observable.Return(AutocompleteSnapshots.Empty);
 
-        IAsyncEnumerable<QuerySuggestion>? suggestions = null;
-        try
-        {
-            suggestions = meshQuery.AutocompleteAsync(searchBase, currentSegment, 15, ct);
-        }
-        catch { /* Ignore errors */ }
-
-        if (suggestions != null)
-        {
-            await foreach (var suggestion in suggestions.WithCancellation(ct))
-            {
-                yield return new AutocompleteItem(
-                    Label: suggestion.Name,
-                    InsertText: $"@{relativePrefix}{suggestion.Name} ",
-                    Description: suggestion.NodeType ?? GetKeywordItemDescription(keyword),
-                    Category: GetKeywordCategory(keyword),
-                    Priority: ItemPriority,
-                    Kind: GetKeywordKind(keyword)
-                );
-            }
-        }
+        return SnapshotItems(
+            meshQuery.Autocomplete(searchBase, currentSegment, AutocompleteMode.RelevanceFirst, 15),
+            s => new AutocompleteItem(
+                Label: s.Name ?? s.Path,
+                InsertText: $"@{relativePrefix}{s.Name} ",
+                Description: s.NodeType ?? GetKeywordItemDescription(keyword),
+                Category: GetKeywordCategory(keyword),
+                Priority: ItemPriority,
+                Kind: GetKeywordKind(keyword)));
     }
 
     /// <summary>
     /// Provides suggestions using absolute paths (global search).
     /// Triggered by @/ or when no context is available.
     /// </summary>
-    private async IAsyncEnumerable<AutocompleteItem> GetAbsoluteSuggestions(
-        string path,
-        [EnumeratorCancellation] CancellationToken ct)
+    private IObservable<IReadOnlyCollection<AutocompleteItem>> GetAbsoluteSuggestions(string path)
     {
         var segments = path.Split('/', StringSplitOptions.None);
         var completedSegments = segments.SkipLast(1).ToArray();
         var currentSegment = segments.LastOrDefault() ?? "";
         var endsWithSlash = path.EndsWith("/");
 
-        await foreach (var item in GetAbsoluteSuggestionsForStage(completedSegments, currentSegment, endsWithSlash, ct))
-            yield return item;
+        return GetAbsoluteSuggestionsForStage(completedSegments, currentSegment, endsWithSlash);
     }
 
-    private async IAsyncEnumerable<AutocompleteItem> GetAbsoluteSuggestionsForStage(
+    private IObservable<IReadOnlyCollection<AutocompleteItem>> GetAbsoluteSuggestionsForStage(
         string[] completedSegments,
         string currentSegment,
-        bool endsWithSlash,
-        [EnumeratorCancellation] CancellationToken ct)
+        bool endsWithSlash)
     {
         // Stage 1: No completed segments yet - suggest top-level addresses
         if (completedSegments.Length == 0)
-        {
-            await foreach (var item in GetTopLevelSuggestions(currentSegment, ct))
-                yield return item;
-            yield break;
-        }
+            return GetTopLevelSuggestions(currentSegment);
 
         // Build the address from completed segments
         var address = string.Join("/", completedSegments);
+        var streams = new List<IObservable<IReadOnlyCollection<AutocompleteItem>>>();
 
         // If we ended with a slash after at least 2 segments, suggest keywords + children
         if (completedSegments.Length >= 2 && endsWithSlash)
-        {
-            foreach (var item in GetAbsoluteKeywordSuggestions(address, currentSegment))
-                yield return item;
-        }
+            streams.Add(Observable.Return(
+                (IReadOnlyCollection<AutocompleteItem>)GetAbsoluteKeywordSuggestions(address, currentSegment).ToList()));
 
-        // Check for keyword in segments
+        // Check for keyword in segments — keyword-specific suggestions replace children + delegation
         if (completedSegments.Length >= 3)
         {
             var potentialKeyword = completedSegments.Last().ToLowerInvariant();
             if (Keywords.ContainsKey(potentialKeyword + "/"))
             {
                 var keywordAddress = string.Join("/", completedSegments.SkipLast(1));
-                await foreach (var item in GetAbsoluteKeywordSpecificSuggestions(
-                    keywordAddress, potentialKeyword, currentSegment, ct))
-                    yield return item;
-                yield break;
+                streams.Add(GetAbsoluteKeywordSpecificSuggestions(keywordAddress, potentialKeyword, currentSegment));
+                return AutocompleteSnapshots.Combine(streams, CombineCap);
             }
         }
 
         // Suggest children at current path
         if (meshQuery != null)
-        {
-            IAsyncEnumerable<QuerySuggestion>? suggestions = null;
-            try
-            {
-                suggestions = meshQuery.AutocompleteAsync(address, currentSegment, 15, ct);
-            }
-            catch { /* Ignore errors */ }
-
-            if (suggestions != null)
-            {
-                await foreach (var suggestion in suggestions.WithCancellation(ct))
-                {
-                    yield return new AutocompleteItem(
-                        Label: $"{suggestion.Name}/",
-                        InsertText: $"@/{suggestion.Path}/",
-                        Description: suggestion.NodeType ?? "Node",
-                        Category: "Nodes",
-                        Priority: ItemPriority,
-                        Kind: AutocompleteKind.Other
-                    );
-                }
-            }
-        }
+            streams.Add(SnapshotItems(
+                meshQuery.Autocomplete(address, currentSegment, AutocompleteMode.RelevanceFirst, 15),
+                s => new AutocompleteItem(
+                    Label: $"{s.Name}/",
+                    InsertText: $"@/{s.Path}/",
+                    Description: s.NodeType ?? "Node",
+                    Category: "Nodes",
+                    Priority: ItemPriority,
+                    Kind: AutocompleteKind.Other)));
 
         // Node delegation for absolute paths
         if (endsWithSlash && completedSegments.Length >= 1)
-        {
-            await foreach (var item in GetNodeDelegatedCompletions(address, $"/{address}/", currentSegment, ct))
-                yield return item;
-        }
+            streams.Add(GetNodeDelegatedCompletions(address, $"/{address}/", currentSegment));
+
+        return AutocompleteSnapshots.Combine(streams, CombineCap);
     }
 
-    private async IAsyncEnumerable<AutocompleteItem> GetTopLevelSuggestions(
-        string prefix,
-        [EnumeratorCancellation] CancellationToken ct)
+    private IObservable<IReadOnlyCollection<AutocompleteItem>> GetTopLevelSuggestions(string prefix)
     {
-        var addedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-        // Top-level nodes from mesh query (root level)
-        if (meshQuery != null)
-        {
-            IAsyncEnumerable<QuerySuggestion>? suggestions = null;
-            try
-            {
-                suggestions = meshQuery.AutocompleteAsync("", prefix, 15, ct);
-            }
-            catch { /* Ignore errors */ }
-
-            if (suggestions != null)
-            {
-                await foreach (var suggestion in suggestions.WithCancellation(ct))
+        var meshRows = meshQuery != null
+            ? meshQuery.Autocomplete("", prefix, AutocompleteMode.RelevanceFirst, 15)
+                .Catch((Exception ex) =>
                 {
-                    if (addedPaths.Add(suggestion.Path))
-                    {
-                        yield return new AutocompleteItem(
-                            Label: $"{suggestion.Name}/",
-                            InsertText: $"@/{suggestion.Path}/",
-                            Description: suggestion.NodeType ?? suggestion.Name,
-                            Category: "Addresses",
-                            Priority: PrefixPriority,
-                            Kind: AutocompleteKind.Other
-                        );
-                    }
-                }
-            }
-        }
+                    LogBranchFault(ex);
+                    return Observable.Return(EmptyRows);
+                })
+            : Observable.Return(EmptyRows);
 
-        // Type definitions from mesh catalog configuration
-        if (meshCatalog != null)
+        // One snapshot per meshRows emission (progressive). Each snapshot is the FULL current set:
+        // mesh-query top-level rows + static-node type definitions, deduped by path.
+        return meshRows.Select(rows =>
         {
-            var topLevelNodes = meshCatalog.Configuration.Nodes.Values
+            var addedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var items = new List<AutocompleteItem>();
+
+            // Top-level nodes from mesh query (root level)
+            foreach (var suggestion in rows)
+            {
+                if (addedPaths.Add(suggestion.Path))
+                    items.Add(new AutocompleteItem(
+                        Label: $"{suggestion.Name}/",
+                        InsertText: $"@/{suggestion.Path}/",
+                        Description: suggestion.NodeType ?? suggestion.Name,
+                        Category: "Addresses",
+                        Priority: PrefixPriority,
+                        Kind: AutocompleteKind.Other));
+            }
+
+            // Type definitions from static node providers
+            var topLevelNodes = hub.ServiceProvider.EnumerateStaticNodes()
                 .Where(n => n.Segments.Count == 1)
                 .Where(n => string.IsNullOrEmpty(prefix) ||
                            n.Path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
@@ -384,18 +339,17 @@ internal class UnifiedReferenceAutocompleteProvider(
             foreach (var node in topLevelNodes)
             {
                 if (addedPaths.Add(node.Path))
-                {
-                    yield return new AutocompleteItem(
+                    items.Add(new AutocompleteItem(
                         Label: $"{node.Path}/",
                         InsertText: $"@/{node.Path}/",
                         Description: node.Name,
                         Category: "Types",
                         Priority: PrefixPriority - (node.Order ?? 0),
-                        Kind: AutocompleteKind.Other
-                    );
-                }
+                        Kind: AutocompleteKind.Other));
             }
-        }
+
+            return (IReadOnlyCollection<AutocompleteItem>)items;
+        });
     }
 
     private IEnumerable<AutocompleteItem> GetAbsoluteKeywordSuggestions(string address, string prefix)
@@ -413,36 +367,23 @@ internal class UnifiedReferenceAutocompleteProvider(
             ));
     }
 
-    private async IAsyncEnumerable<AutocompleteItem> GetAbsoluteKeywordSpecificSuggestions(
+    private IObservable<IReadOnlyCollection<AutocompleteItem>> GetAbsoluteKeywordSpecificSuggestions(
         string address,
         string keyword,
-        string prefix,
-        [EnumeratorCancellation] CancellationToken ct)
+        string prefix)
     {
         if (meshQuery == null)
-            yield break;
+            return Observable.Return(AutocompleteSnapshots.Empty);
 
-        IAsyncEnumerable<QuerySuggestion>? suggestions = null;
-        try
-        {
-            suggestions = meshQuery.AutocompleteAsync(address, prefix, 15, ct);
-        }
-        catch { /* Ignore errors */ }
-
-        if (suggestions != null)
-        {
-            await foreach (var suggestion in suggestions.WithCancellation(ct))
-            {
-                yield return new AutocompleteItem(
-                    Label: suggestion.Name,
-                    InsertText: $"@/{address}/{keyword}/{suggestion.Name} ",
-                    Description: suggestion.NodeType ?? GetKeywordItemDescription(keyword),
-                    Category: GetKeywordCategory(keyword),
-                    Priority: ItemPriority,
-                    Kind: GetKeywordKind(keyword)
-                );
-            }
-        }
+        return SnapshotItems(
+            meshQuery.Autocomplete(address, prefix, AutocompleteMode.RelevanceFirst, 15),
+            s => new AutocompleteItem(
+                Label: s.Name ?? s.Path,
+                InsertText: $"@/{address}/{keyword}/{s.Name} ",
+                Description: s.NodeType ?? GetKeywordItemDescription(keyword),
+                Category: GetKeywordCategory(keyword),
+                Priority: ItemPriority,
+                Kind: GetKeywordKind(keyword)));
     }
 
     private static string GetKeywordItemDescription(string keyword) => keyword switch
@@ -472,38 +413,49 @@ internal class UnifiedReferenceAutocompleteProvider(
     };
 
     /// <summary>
-    /// Asks the node at the given path for its own completions (layout areas, data collections, content files)
-    /// by sending an AutocompleteRequest to that node's hub.
+    /// Asks the node at the given path for its own completions (layout areas, data collections,
+    /// content files) by sending an AutocompleteRequest to that node's hub, and projects the single
+    /// response into one snapshot. Fully observable — no <c>await</c>, no <c>.ToTask()</c>.
+    /// See <c>Doc/Architecture/AsynchronousCalls.md</c>.
     /// </summary>
-    private async IAsyncEnumerable<AutocompleteItem> GetNodeDelegatedCompletions(
+    private IObservable<IReadOnlyCollection<AutocompleteItem>> GetNodeDelegatedCompletions(
         string nodePath,
         string insertPrefix,
-        string currentSegment,
-        [EnumeratorCancellation] CancellationToken ct)
+        string currentSegment)
     {
-        AutocompleteResponse? response = null;
-        try
-        {
-            // Send AutocompleteRequest to the hub — the handler aggregates all local IAutocompleteProvider instances
-            var request = new AutocompleteRequest($"@{currentSegment}", nodePath);
-            var delivery = await hub.AwaitResponse<AutocompleteResponse>(request, o => o, ct);
-            response = delivery.Message;
-        }
-        catch
-        {
-            // Hub may not have an AutocompleteRequest handler, or node may not exist
-        }
+        return GetCompletionsViaHub(nodePath, currentSegment)
+            .Select(response => (IReadOnlyCollection<AutocompleteItem>)
+                (response?.Items ?? Enumerable.Empty<AutocompleteItem>())
+                    .Select(item => item with { Priority = item.Priority > 0 ? item.Priority : ItemPriority })
+                    .ToList());
+    }
 
-        if (response?.Items == null)
-            yield break;
+    /// <summary>2-second cap on a delegated per-node round-trip. Without this we
+    /// inherit the framework's 30 s <c>RequestTimeout</c>, which means a hung /
+    /// non-responding remote node hub stalls the entire autocomplete result for
+    /// the whole 30 s.</summary>
+    private static readonly TimeSpan NodeDelegationTimeout = TimeSpan.FromSeconds(2);
 
-        foreach (var item in response.Items)
-        {
-            // Re-map insert text to use the relative prefix if needed
-            yield return item with
-            {
-                Priority = item.Priority > 0 ? item.Priority : ItemPriority
-            };
-        }
+    private IObservable<AutocompleteResponse?> GetCompletionsViaHub(string nodePath, string currentSegment)
+    {
+        // Target the per-node hub at nodePath. Without an explicit target, the
+        // request goes to the local hub which runs the AutocompleteRequest
+        // aggregator — and the aggregator re-invokes every IAutocompleteProvider
+        // including THIS one. Under any concurrent load that re-entrance
+        // deadlocks the ActionBlock (the original handler is still pumping when
+        // the delegated request arrives, action block has MaxDegreeOfParallelism=1).
+        // The dispatch *must* land on a different hub.
+        //
+        // STREAM the response into the parent CombineLatest — NO FirstAsync. FirstAsync gates the
+        // whole result on the node's single settled response: under load the response (and the
+        // Timeout timer) lag, so any consumer that waits for completion stalls. Instead the parent's
+        // per-source StartWith(empty) emits the overall snapshot immediately from the local sources
+        // and folds this delegated result in WHEN it arrives. A slow/unreachable node degrades to a
+        // null snapshot via the Timeout fallback observable (not an error, not a block).
+        var request = new AutocompleteRequest($"@{currentSegment}", nodePath);
+        return hub.Observe(request, o => o.WithTarget(new Address(nodePath)))
+            .Select(d => d.Message as AutocompleteResponse)
+            .Catch<AutocompleteResponse?, Exception>(_ => Observable.Return<AutocompleteResponse?>(null))
+            .Timeout(NodeDelegationTimeout, Observable.Return<AutocompleteResponse?>(null));
     }
 }

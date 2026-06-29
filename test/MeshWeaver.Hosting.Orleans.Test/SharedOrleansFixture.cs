@@ -1,5 +1,11 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Linq;
+using System.Reactive;
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
+using System.Reflection;
 using System.Threading.Tasks;
 using Microsoft.Agents.AI;
 using MeshWeaver.AI;
@@ -8,17 +14,18 @@ using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Security;
 using MeshWeaver.Mesh;
-using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Layout;
 using MeshWeaver.Messaging;
+using MeshWeaver.Hosting.Persistence;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Orleans.Hosting;
 using Orleans.TestingHost;
 using MeshWeaver.Fixture;
 using Xunit;
-using MeshThread = MeshWeaver.AI.Thread;
 
 namespace MeshWeaver.Hosting.Orleans.Test;
 
@@ -37,30 +44,121 @@ public class SharedOrleansFixture : IAsyncLifetime
     public IMessageHub ClientMesh => Cluster.Client.ServiceProvider.GetRequiredService<IMessageHub>();
 
     /// <summary>
+    /// Shared backing store for in-memory storage adapters across the silo +
+    /// Orleans client DI containers in the test cluster. Production runs PG
+    /// where multiple adapter instances point at the same DB; tests need the
+    /// same shape so a CreateNodeRequest handled on the client mesh hub is
+    /// visible to the silo's path resolver / routing grain. Without sharing,
+    /// each DI container builds its own dict and routing finds NotFound for
+    /// just-created paths (the rotate-test deadlock).
+    /// </summary>
+    internal static readonly System.Collections.Concurrent.ConcurrentDictionary<string, MeshNode> SharedNodes
+        = new(System.StringComparer.OrdinalIgnoreCase);
+
+    // Note: in prod every silo has its own per-process IStorageAdapter.Changes
+    // Subject (fed by PG LISTEN/NOTIFY or Cosmos change feed). Tests don't
+    // bridge those across processes — consumers that need to observe a
+    // specific node bind via workspace.GetMeshNodeStream(path) (same as
+    // the GUI), which routes through the owning per-node hub's workspace
+    // stream and works cross-process without a shared notifier.
+    internal static readonly System.Collections.Concurrent.ConcurrentDictionary<string, System.Collections.Generic.List<object>> SharedPartitionObjects
+        = new(System.StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
     /// The swappable chat factory. Tests replace this to use different fakes.
     /// </summary>
     internal static SwappableChatClientFactory SwappableFactory { get; } = new();
 
+    /// <summary>
+    /// Per-client tracker: every hub returned by <see cref="GetClient"/>
+    /// gets recorded along with its routing-stream subscriptions on both the
+    /// client mesh and the silo mesh. Tests dispose these in
+    /// <c>OrleansSharedTestBase.DisposeAsync</c> so the shared cluster's
+    /// stream registries and hosted-hub collection don't grow unboundedly
+    /// across the test run.
+    /// </summary>
+    private readonly ConcurrentDictionary<Address, ClientRegistration> _registrations = new();
+
+    private sealed record ClientRegistration(IMessageHub Hub, IReadOnlyList<IDisposable> Subscriptions);
+
+    /// <summary>
+    /// 🚨 Per-class isolation guard — call at the START of every cluster init (this
+    /// fixture AND <see cref="OrleansTestBase{TSiloConfigurator}"/>, which both wire
+    /// their <c>InMemoryStorageAdapter</c> to these statics).
+    ///
+    /// <para>Each Orleans test class boots its OWN cluster (see
+    /// <see cref="OrleansSharedTestBase"/>) for grain isolation — but
+    /// <see cref="SharedNodes"/>, <see cref="SharedPartitionObjects"/> and
+    /// <see cref="SwappableFactory"/> are process-wide STATICS. Orleans instantiates
+    /// the silo/client configurators via <c>new()</c>, so a per-cluster instance
+    /// can't be injected — the static is the only channel the silo + client DI
+    /// containers can both reach. Those statics defeat the per-class cluster
+    /// isolation unless reset: a prior class's leftover nodes, or a never-reset
+    /// swapped chat factory (a <c>finally</c> that was skipped, or method-order),
+    /// bleed into this class's fresh cluster. That is the root of the
+    /// "passes in isolation, 45 s observable timeout / catastrophic LifetimeScope
+    /// disposal in the full assembly" Orleans flake
+    /// (<c>Resubmit_AfterExecution_DoesNotDeadlock</c> et al.).</para>
+    ///
+    /// <para>Resetting at the START of init — before <c>DeployAsync</c> — gives every
+    /// class a clean slate. Safe because classes run strictly sequentially
+    /// (<c>xunit.runner.json</c>: <c>parallelizeAssembly:false</c>,
+    /// <c>maxParallelThreads:1</c>) and nothing depends on cross-class accumulation
+    /// (verified: no live <c>[Collection]</c> users, no reader of prior-class
+    /// <see cref="SharedNodes"/> data).</para>
+    /// </summary>
+    internal static void ResetSharedState()
+    {
+        SharedNodes.Clear();
+        SharedPartitionObjects.Clear();
+        SwappableFactory.Reset();
+    }
+
     public async ValueTask InitializeAsync()
     {
+        ResetSharedState();
+
         var builder = new TestClusterBuilder();
+        // Single-silo: avoids per-silo persistence isolation. Both writer (mesh hub)
+        // and reader (per-Thread/per-Message grain) share the same singleton
+        // InMemoryStorageAdapter so the grain's OnActivateAsync persistence
+        // lookup finds the node the mesh hub just saved. Production runs N silos
+        // with backend-shared persistence (PostgreSQL / Cosmos) which doesn't have
+        // this issue; the in-memory test cluster does.
+        builder.Options.InitialSilosCount = 1;
         builder.AddSiloBuilderConfigurator<SharedSiloConfigurator>();
         builder.AddClientBuilderConfigurator<TestClientConfigurator>();
         Cluster = builder.Build();
         await Cluster.DeployAsync();
+
+        // 🚨 Register the client's mesh hub as an Orleans memory-stream
+        // subscriber so the silo can route response messages back to it.
+        // The client mesh hub at `mesh/{guid}` isn't a grain — it's a
+        // hosted hub on the client process. Without this registration, a
+        // SubscribeRequest the client mesh posts to a remote path (e.g.
+        // GetMeshNodeStream(remotePath).Update) gets handled on the silo,
+        // but the response is targeted back to `mesh/{guid}` which the
+        // silo's RoutingGrain can't resolve → NotFound. RegisterStream
+        // subscribes the hub to the memory stream so the silo's RoutingGrain
+        // memory-stream fallback delivers responses correctly.
+        Cluster.Client.ServiceProvider.GetRequiredService<IRoutingService>()
+            .RegisterStream(ClientMesh.Address, ClientMesh.DeliverMessage);
     }
 
     public async ValueTask DisposeAsync()
     {
         if (Cluster is not null)
-            await Cluster.DisposeAsync();
+            OrleansClusterDisposal.DisposeInBackground(Cluster);
     }
 
     /// <summary>
     /// Creates a client hub with user identity — same as Blazor portal.
     /// Each test should use a unique clientId to avoid address collisions.
+    /// The returned hub is tracked; pass it to <see cref="CleanupClientAsync"/>
+    /// at test teardown so its routing registrations on the shared cluster
+    /// (client + silo mesh) and the hub itself are released.
     /// </summary>
-    public async Task<IMessageHub> GetClientAsync(string clientId, string userId = "Roland")
+    public IMessageHub GetClient(string clientId, string userId = "TestUser")
     {
         var client = ClientMesh.ServiceProvider.CreateMessageHub(
             new Address("client", clientId),
@@ -76,9 +174,13 @@ public class SharedOrleansFixture : IAsyncLifetime
             Name = userId,
             Email = $"{userId.ToLowerInvariant()}@test.com"
         });
+        var subscriptions = new List<IDisposable>(2);
+
         // Register on BOTH client and silo routing services so responses can route back
-        await Cluster.Client.ServiceProvider.GetRequiredService<IRoutingService>()
-            .RegisterStreamAsync(client.Address, client.DeliverMessage);
+        var clientSub = Cluster.Client.ServiceProvider.GetRequiredService<IRoutingService>()
+            .RegisterStream(client.Address, client.DeliverMessage);
+        subscriptions.Add(clientSub);
+
         // Register on the SILO's routing service so responses route back to client.
         // In prod, portal and silo share one IRoutingService. In TestCluster they're separate.
         // Without this, response routing tries to activate a grain for the client address → fails.
@@ -89,9 +191,84 @@ public class SharedOrleansFixture : IAsyncLifetime
         var siloRouting = siloHost?.Services.GetService<IRoutingService>()
             ?? siloHost?.Services.GetService<IMessageHub>()?.ServiceProvider.GetService<IRoutingService>();
         if (siloRouting != null)
-            await siloRouting.RegisterStreamAsync(client.Address,
-                (d, _) => Task.FromResult(client.DeliverMessage(d)));
+        {
+            var siloSub = siloRouting.RegisterStream(client.Address,
+                (d, _) => Observable.Return(client.DeliverMessage(d)));
+            subscriptions.Add(siloSub);
+        }
+
+        _registrations[client.Address] = new ClientRegistration(client, subscriptions);
         return client;
+    }
+
+    /// <summary>
+    /// Releases the routing-stream registrations and disposes the client hub
+    /// returned by <see cref="GetClient"/>. Idempotent: safe to call
+    /// twice and safe to call on an unknown client (e.g., after the fixture
+    /// itself disposed). Tests should call this from <c>DisposeAsync</c> for
+    /// every client they created so the shared cluster's stream maps and
+    /// hosted-hub collection don't accumulate dead entries between tests.
+    /// </summary>
+    public async Task CleanupClientAsync(IMessageHub client)
+    {
+        if (client is null) return;
+        if (!_registrations.TryRemove(client.Address, out var reg)) return;
+
+        foreach (var sub in reg.Subscriptions)
+        {
+            try { sub.Dispose(); }
+            catch { /* tearing-down — swallow so other cleanups still run */ }
+        }
+
+        try { reg.Hub.Dispose(); }
+        catch { /* same */ }
+        if (reg.Hub.IsDisposing)
+        {
+            // Bridge reactive completion → Task at this teardown edge; swallow faults/timeout.
+            try
+            {
+                await reg.Hub.DisposalCompleted
+                    .Catch<Unit, Exception>(_ => Observable.Return(Unit.Default))
+                    .FirstOrDefaultAsync()
+                    .ToTask()
+                    .WaitAsync(TimeSpan.FromSeconds(10));
+            }
+            catch { /* timeout / already-faulted — don't block teardown */ }
+        }
+    }
+
+    /// <summary>
+    /// Best-effort: disposes silo-side hosted hubs whose address path starts
+    /// with the given prefix. Used to deactivate the per-node grain hubs a
+    /// single test created (its unique <c>{prefix}</c> in test paths) so they
+    /// don't keep state alive into the next test.
+    /// <br/>
+    /// Grain disposal flows through <c>MessageHubGrain</c>: disposing the
+    /// hosted hub triggers <c>DeactivateOnIdle()</c> on the owning grain
+    /// (see <c>MessageHubGrain.OnActivateAsync</c>).
+    /// </summary>
+    public void CleanupSiloHubsWithPrefix(string pathPrefix)
+    {
+        if (string.IsNullOrEmpty(pathPrefix)) return;
+        foreach (var siloHandle in Cluster.Silos)
+        {
+            var siloHost = siloHandle.GetType().GetProperty("SiloHost")?.GetValue(siloHandle) as IHost;
+            var meshHub = siloHost?.Services.GetService<IMessageHub>();
+            if (meshHub is null) continue;
+
+            // hostedHubs is private; reach it via reflection (test-only).
+            var field = meshHub.GetType().GetField("hostedHubs", BindingFlags.Instance | BindingFlags.NonPublic);
+            var hosted = field?.GetValue(meshHub) as HostedHubsCollection;
+            if (hosted is null) continue;
+
+            foreach (var hub in hosted.Hubs.ToArray())
+            {
+                if (hub.Address.ToString().StartsWith(pathPrefix, StringComparison.Ordinal))
+                {
+                    try { hub.Dispose(); } catch { /* swallow */ }
+                }
+            }
+        }
     }
 }
 
@@ -136,7 +313,10 @@ internal class SwappableChatClientFactory : IChatClientFactory
 
 /// <summary>
 /// Production-like silo: Graph + AI + RLS + memory persistence.
-/// Pre-seeds Roland user and Public Editor access.
+/// Pre-seeds TestUser user, public access policy and chat history via
+/// <see cref="OrleansTestSeedProvider"/> (an <see cref="IStaticNodeProvider"/>)
+/// so the seeds are an immutable activation fallback rather than an initial
+/// snapshot that tests could mutate or rewrite via persistence.
 /// Uses SwappableChatClientFactory so tests can control agent behavior.
 /// </summary>
 public class SharedSiloConfigurator : ISiloConfigurator, IHostConfigurator
@@ -155,74 +335,24 @@ public class SharedSiloConfigurator : ISiloConfigurator, IHostConfigurator
             .AddGraph()
             .AddAI()
             .AddRowLevelSecurity()
-            .AddMeshNodes(
-                new MeshNode("Roland", "User") { Name = "Roland", NodeType = "User" })
-            .AddMeshNodes(ChatHistoryTestData())
-            .AddMeshNodes(PublicEditorAccess())
             .ConfigureServices(services =>
-                services.AddSingleton<IChatClientFactory>(SharedOrleansFixture.SwappableFactory))
+            {
+                services.AddSingleton<IChatClientFactory>(SharedOrleansFixture.SwappableFactory);
+                services.AddSingleton<IStaticNodeProvider, OrleansTestSeedProvider>();
+                // 🚨 Share the in-memory backing dicts with the Orleans client
+                // DI container — single-process test cluster mirrors prod's
+                // "multiple adapter instances, same PG backend" shape so a
+                // node created via the client mesh hub is visible to the
+                // silo's path resolver. Without this, each container builds
+                // its own dict and routing emits NotFound for just-created
+                // paths.
+                services.Replace(ServiceDescriptor.Singleton<InMemoryStorageAdapter>(sp =>
+                    new InMemoryStorageAdapter(
+                        SharedOrleansFixture.SharedNodes,
+                        SharedOrleansFixture.SharedPartitionObjects,
+                        sp.GetService<ILoggerFactory>()?.CreateLogger<InMemoryStorageAdapter>())));
+                return services;
+            })
             .ConfigureDefaultNodeHub(config => config.AddDefaultLayoutAreas());
-    }
-
-    /// <summary>
-    /// Pre-seeded thread with 4 messages for OrleansChatHistoryTest cold-start scenario.
-    /// </summary>
-    private static MeshNode[] ChatHistoryTestData()
-    {
-        const string tp = "User/Roland/_Thread/history-cold-start";
-        return
-        [
-            new("history-cold-start", "User/Roland/_Thread")
-            {
-                Name = "History cold start test", NodeType = ThreadNodeType.NodeType,
-                MainNode = "User/Roland",
-                Content = new MeshThread
-                {
-                    CreatedBy = "Roland",
-                    Messages = System.Collections.Immutable.ImmutableList.Create(
-                        "msg1-user", "msg1-assistant", "msg2-user", "msg2-assistant")
-                }
-            },
-            new("msg1-user", tp)
-            {
-                NodeType = ThreadMessageNodeType.NodeType, MainNode = "User/Roland",
-                Content = new ThreadMessage { Role = "user", Text = "First question", Type = ThreadMessageType.ExecutedInput }
-            },
-            new("msg1-assistant", tp)
-            {
-                NodeType = ThreadMessageNodeType.NodeType, MainNode = "User/Roland",
-                Content = new ThreadMessage { Role = "assistant", Text = "First answer.", Type = ThreadMessageType.AgentResponse }
-            },
-            new("msg2-user", tp)
-            {
-                NodeType = ThreadMessageNodeType.NodeType, MainNode = "User/Roland",
-                Content = new ThreadMessage { Role = "user", Text = "Second question", Type = ThreadMessageType.ExecutedInput }
-            },
-            new("msg2-assistant", tp)
-            {
-                NodeType = ThreadMessageNodeType.NodeType, MainNode = "User/Roland",
-                Content = new ThreadMessage { Role = "assistant", Text = "Second answer.", Type = ThreadMessageType.AgentResponse }
-            }
-        ];
-    }
-
-    private static MeshNode[] PublicEditorAccess()
-    {
-        var assignment = new AccessAssignment
-        {
-            AccessObject = "Public",
-            DisplayName = "Public",
-            Roles = [new RoleAssignment { Role = "Editor" }]
-        };
-        return
-        [
-            new("Public_Access", "User")
-            {
-                NodeType = "AccessAssignment",
-                Name = "Public Access",
-                Content = assignment,
-                MainNode = "User",
-            }
-        ];
     }
 }

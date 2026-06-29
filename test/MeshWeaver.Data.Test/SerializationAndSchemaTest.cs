@@ -6,13 +6,12 @@ using System.Reactive.Linq;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
-using FluentAssertions;
-using FluentAssertions.Extensions;
 using MeshWeaver.Fixture;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Logging;
 using Xunit;
 
+using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Data.Test;
 
 /// <summary>
@@ -147,14 +146,14 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
                 data.AddSource(dataSource =>
                     dataSource.WithType<SerializationTestData>(type =>
                         type.WithKey(instance => instance.Name)
-                            .WithInitialData(_ => Task.FromResult(new[] { SerializationTestData.CreateSample() }.AsEnumerable()))
+                            .WithInitialData(_ => Observable.Return(new[] { SerializationTestData.CreateSample() }.AsEnumerable()))
                     )
                     .WithType<NestedData>(type =>
                         type.WithKey(instance => instance.Value)
                     )
                     .WithType<PolymorphicContainer>(type =>
                         type.WithKey(instance => instance.Id)
-                            .WithInitialData(_ => Task.FromResult(new[] { PolymorphicContainer.CreateSample() }.AsEnumerable()))
+                            .WithInitialData(_ => Observable.Return(new[] { PolymorphicContainer.CreateSample() }.AsEnumerable()))
                     )
                     .WithType<BaseShape>(type =>
                         type.WithKey(instance => instance.Name)
@@ -200,11 +199,7 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
         var typeName = typeof(SerializationTestData).FullName;
 
         // act
-        var response = await client.AwaitResponse(
-            new GetDataRequest(new SchemaReference(typeName!)),
-            o => o.WithTarget(CreateClientAddress()),
-            new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
-        );
+        var response = await client.Observe(new GetDataRequest(new SchemaReference(typeName!)), o => o.WithTarget(CreateClientAddress())).Should().Within(10.Seconds()).Emit();
 
         // assert
         var schemaInfo = response.Message.Data.Should().BeOfType<SchemaInfo>().Which;
@@ -238,11 +233,7 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
         var typeName = typeof(SerializationTestData).FullName;
 
         // act
-        var response = await client.AwaitResponse(
-            new GetDataRequest(new SchemaReference(typeName!)),
-            o => o.WithTarget(CreateClientAddress()),
-            new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
-        );        // assert
+        var response = await client.Observe(new GetDataRequest(new SchemaReference(typeName!)), o => o.WithTarget(CreateClientAddress())).Should().Within(10.Seconds()).Emit();        // assert
         var schemaInfo = response.Message.Data.Should().BeOfType<SchemaInfo>().Which;
         var schemaJson = JsonDocument.Parse(schemaInfo.Schema);
         var properties = FindPropertiesInSchema(schemaJson);
@@ -272,11 +263,7 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
         var typeName = typeof(SerializationTestData).FullName;
 
         // act
-        var response = await client.AwaitResponse(
-            new GetDataRequest(new SchemaReference(typeName!)),
-            o => o.WithTarget(CreateClientAddress()),
-            new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
-        );        // assert
+        var response = await client.Observe(new GetDataRequest(new SchemaReference(typeName!)), o => o.WithTarget(CreateClientAddress())).Should().Within(10.Seconds()).Emit();        // assert
         var schemaInfo = response.Message.Data.Should().BeOfType<SchemaInfo>().Which;
         var schemaJson = JsonDocument.Parse(schemaInfo.Schema);
         var properties = FindPropertiesInSchema(schemaJson); var createdAtProperty = properties.GetProperty("createdAt");
@@ -295,11 +282,7 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
         var typeName = typeof(SerializationTestData).FullName;
 
         // act
-        var response = await client.AwaitResponse(
-            new GetDataRequest(new SchemaReference(typeName!)),
-            o => o.WithTarget(CreateClientAddress()),
-            new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
-        );
+        var response = await client.Observe(new GetDataRequest(new SchemaReference(typeName!)), o => o.WithTarget(CreateClientAddress())).Should().Within(10.Seconds()).Emit();
 
         // assert
         var schemaInfo = response.Message.Data.Should().BeOfType<SchemaInfo>().Which; var schemaJson = JsonDocument.Parse(schemaInfo.Schema);
@@ -328,11 +311,7 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
         var typeName = typeof(SerializationTestData).FullName;
 
         // act
-        var response = await client.AwaitResponse(
-            new GetDataRequest(new SchemaReference(typeName!)),
-            o => o.WithTarget(CreateClientAddress()),
-            new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
-        );        // assert
+        var response = await client.Observe(new GetDataRequest(new SchemaReference(typeName!)), o => o.WithTarget(CreateClientAddress())).Should().Within(10.Seconds()).Emit();        // assert
         var schemaInfo = response.Message.Data.Should().BeOfType<SchemaInfo>().Which;
         var schemaJson = JsonDocument.Parse(schemaInfo.Schema);
         var properties = FindPropertiesInSchema(schemaJson); var tagsProperty = properties.GetProperty("tags");
@@ -349,11 +328,7 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
         var client = GetClient();
 
         // act
-        var response = await client.AwaitResponse(
-            new GetDomainTypesRequest(),
-            o => o.WithTarget(CreateClientAddress()),
-            new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
-        );
+        var response = await client.Observe(new GetDomainTypesRequest(), o => o.WithTarget(CreateClientAddress())).Should().Within(10.Seconds()).Emit();
 
         // assert
         var typesResponse = response.Message.Should().BeOfType<DomainTypesResponse>().Which;
@@ -383,11 +358,7 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
         );
 
         // act
-        var response = await client.AwaitResponse(
-            DataChangeRequest.Update([testData]),
-            o => o.WithTarget(CreateClientAddress()),
-            new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
-        );
+        var response = await client.Observe(DataChangeRequest.Update([testData]), o => o.WithTarget(CreateClientAddress())).Should().Within(10.Seconds()).Emit();
 
         // assert
         response.Message.Should().BeOfType<DataChangeResponse>();
@@ -395,8 +366,8 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
         var retrievedData = await client
             .GetWorkspace()
             .GetObservable<SerializationTestData>()
-            .Timeout(10.Seconds())
-            .FirstOrDefaultAsync(items => items.Any(x => x.Name == "Serialization Test") == true);
+            .Should().Within(10.Seconds())
+            .Match(items => items.Any(x => x.Name == "Serialization Test") == true);
 
         var item = retrievedData.First(x => x.Name == "Serialization Test");
         item.NullableNumber.Should().BeNull();
@@ -417,11 +388,7 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
         var typeName = "InvalidType.That.DoesNot.Exist";
 
         // act
-        var response = await client.AwaitResponse(
-            new GetDataRequest(new SchemaReference(typeName!)),
-            o => o.WithTarget(CreateClientAddress()),
-            new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
-        );
+        var response = await client.Observe(new GetDataRequest(new SchemaReference(typeName!)), o => o.WithTarget(CreateClientAddress())).Should().Within(10.Seconds()).Emit();
 
         // assert
         var schemaInfo = response.Message.Data.Should().BeOfType<SchemaInfo>().Which;
@@ -439,11 +406,7 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
         var client = GetClient();
 
         // act
-        var response = await client.AwaitResponse(
-            new GetDomainTypesRequest(),
-            o => o.WithTarget(CreateClientAddress()),
-            new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
-        );
+        var response = await client.Observe(new GetDomainTypesRequest(), o => o.WithTarget(CreateClientAddress())).Should().Within(10.Seconds()).Emit();
 
         // assert
         var typesResponse = response.Message.Should().BeOfType<DomainTypesResponse>().Which; foreach (var typeDesc in typesResponse.Types)
@@ -470,12 +433,11 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
             Tags = ["updated", "complex"]
         };
 
-        // act
-        var response = await client.AwaitResponse(
-            DataChangeRequest.Update([updatedData]),
-            o => o.WithTarget(CreateClientAddress()),
-            new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
-        );
+        // act — target THIS client (not a fresh one). `CreateClientAddress()`
+        // returns a unique address per call since 8cc34791f, so it no longer
+        // matches `client.Address`; routing the update through `client` keeps
+        // the workspace we read from below subscribed to the same data path.
+        var response = await client.Observe(DataChangeRequest.Update([updatedData]), o => o.WithTarget(client.Address)).Should().Within(10.Seconds()).Emit();
 
         // assert
         response.Message.Should().BeOfType<DataChangeResponse>();
@@ -483,8 +445,8 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
         var retrievedData = await client
             .GetWorkspace()
             .GetObservable<SerializationTestData>()
-            .Timeout(10.Seconds())
-            .FirstAsync(items => items?.Any(x => x.Details.Flag == false) == true);
+            .Should().Within(10.Seconds())
+            .Match(items => items?.Any(x => x.Details.Flag == false) == true);
 
         var item = retrievedData.First(x => x.Name == originalData.Name);
         item.Details.Flag.Should().BeFalse();
@@ -503,10 +465,7 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
         var typeName = nameof(PolymorphicContainer);
 
         // act
-        var response = await client.AwaitResponse(
-            new GetDataRequest(new SchemaReference(typeName!)),
-            o => o.WithTarget(CreateClientAddress()),
-            new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);        // assert
+        var response = await client.Observe(new GetDataRequest(new SchemaReference(typeName!)), o => o.WithTarget(CreateClientAddress())).Should().Within(10.Seconds()).Emit();        // assert
         var schemaInfo = response.Message.Data.Should().BeOfType<SchemaInfo>().Which;
         schemaInfo.Schema.Should().NotBe("{}");
 
@@ -544,10 +503,7 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
         var typeName = nameof(BaseShape);
 
         // act
-        var response = await client.AwaitResponse(
-            new GetDataRequest(new SchemaReference(typeName!)),
-            o => o.WithTarget(CreateClientAddress()),
-            new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);        // assert
+        var response = await client.Observe(new GetDataRequest(new SchemaReference(typeName!)), o => o.WithTarget(CreateClientAddress())).Should().Within(10.Seconds()).Emit();        // assert
         var schemaInfo = response.Message.Data.Should().BeOfType<SchemaInfo>().Which;
         schemaInfo.Schema.Should().NotBe("{}");
 
@@ -574,10 +530,7 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
         var typeName = nameof(Circle);
 
         // act
-        var response = await client.AwaitResponse(
-            new GetDataRequest(new SchemaReference(typeName!)),
-            o => o.WithTarget(CreateClientAddress()),
-            new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);        // assert
+        var response = await client.Observe(new GetDataRequest(new SchemaReference(typeName!)), o => o.WithTarget(CreateClientAddress())).Should().Within(10.Seconds()).Emit();        // assert
         var schemaInfo = response.Message.Data.Should().BeOfType<SchemaInfo>().Which;
         schemaInfo.Schema.Should().NotBe("{}");
 
@@ -605,10 +558,7 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
         var typeName = nameof(Rectangle);
 
         // act
-        var response = await client.AwaitResponse(
-            new GetDataRequest(new SchemaReference(typeName!)),
-            o => o.WithTarget(CreateClientAddress()),
-            new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);        // assert
+        var response = await client.Observe(new GetDataRequest(new SchemaReference(typeName!)), o => o.WithTarget(CreateClientAddress())).Should().Within(10.Seconds()).Emit();        // assert
         var schemaInfo = response.Message.Data.Should().BeOfType<SchemaInfo>().Which;
         schemaInfo.Schema.Should().NotBe("{}");
 
@@ -638,11 +588,7 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
         var client = GetClient();
 
         // act
-        var response = await client.AwaitResponse(
-            new GetDomainTypesRequest(),
-            o => o.WithTarget(CreateClientAddress()),
-            new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
-        );
+        var response = await client.Observe(new GetDomainTypesRequest(), o => o.WithTarget(CreateClientAddress())).Should().Within(10.Seconds()).Emit();
 
         // assert
         var typesResponse = response.Message.Should().BeOfType<DomainTypesResponse>().Which;
@@ -682,11 +628,7 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
         };
 
         // act
-        var response = await client.AwaitResponse(
-            DataChangeRequest.Update(new object[] { container }),
-            o => o.WithTarget(CreateClientAddress()),
-            new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
-        );
+        var response = await client.Observe(DataChangeRequest.Update(new object[] { container }), o => o.WithTarget(CreateClientAddress())).Should().Within(10.Seconds()).Emit();
 
         // assert
         response.Message.Should().BeOfType<DataChangeResponse>();
@@ -694,8 +636,8 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
         var retrievedData = await client
             .GetWorkspace()
             .GetObservable<PolymorphicContainer>()
-            .Timeout(10.Seconds())
-            .FirstOrDefaultAsync(items => items?.Any(x => x.Id == "poly-test") == true);
+            .Should().Within(10.Seconds())
+            .Match(items => items?.Any(x => x.Id == "poly-test") == true);
 
         var item = retrievedData.First(x => x.Id == "poly-test");
 
@@ -738,10 +680,7 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
         var typeName = typeof(SerializationTestData).FullName;
 
         // act
-        var response = await client.AwaitResponse(
-            new GetDataRequest(new SchemaReference(typeName!)),
-            o => o.WithTarget(CreateClientAddress()),
-            new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);        // assert
+        var response = await client.Observe(new GetDataRequest(new SchemaReference(typeName!)), o => o.WithTarget(CreateClientAddress())).Should().Within(10.Seconds()).Emit();        // assert
         var schemaInfo = response.Message.Data.Should().BeOfType<SchemaInfo>().Which;
         schemaInfo.Schema.Should().NotBe("{}");
 
@@ -779,11 +718,7 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
         var typeName = nameof(BaseShape);
 
         // act
-        var response = await client.AwaitResponse(
-            new GetDataRequest(new SchemaReference(typeName!)),
-            o => o.WithTarget(CreateClientAddress()),
-            new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
-        );
+        var response = await client.Observe(new GetDataRequest(new SchemaReference(typeName!)), o => o.WithTarget(CreateClientAddress())).Should().Within(10.Seconds()).Emit();
 
         // assert
         var schemaInfo = response.Message.Data.Should().BeOfType<SchemaInfo>().Which;
@@ -801,9 +736,9 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
                 .Select(i => i.GetProperty("title").GetString())
                 .ToArray();
 
-            inheritorTitles.Should().Contain(title => title.Contains("Circle"));
-            inheritorTitles.Should().Contain(title => title.Contains("Rectangle"));
-            inheritorTitles.Should().Contain(title => title.Contains("Triangle"));
+            inheritorTitles.Should().Contain(title => title!.Contains("Circle"));
+            inheritorTitles.Should().Contain(title => title!.Contains("Rectangle"));
+            inheritorTitles.Should().Contain(title => title!.Contains("Triangle"));
         }
     }
 
@@ -818,11 +753,7 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
         var typeName = nameof(PolymorphicContainer);
 
         // act
-        var response = await client.AwaitResponse(
-            new GetDataRequest(new SchemaReference(typeName!)),
-            o => o.WithTarget(CreateClientAddress()),
-            new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
-        );        // assert
+        var response = await client.Observe(new GetDataRequest(new SchemaReference(typeName!)), o => o.WithTarget(CreateClientAddress())).Should().Within(10.Seconds()).Emit();        // assert
         var schemaInfo = response.Message.Data.Should().BeOfType<SchemaInfo>().Which;
         schemaInfo.Schema.Should().NotBe("{}");
 
@@ -854,10 +785,7 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
         var typeName = nameof(PolymorphicContainer);
 
         // act
-        var response = await client.AwaitResponse(
-            new GetDataRequest(new SchemaReference(typeName!)),
-            o => o.WithTarget(CreateClientAddress()),
-            new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);        // assert
+        var response = await client.Observe(new GetDataRequest(new SchemaReference(typeName!)), o => o.WithTarget(CreateClientAddress())).Should().Within(10.Seconds()).Emit();        // assert
         var schemaInfo = response.Message.Data.Should().BeOfType<SchemaInfo>().Which;
         schemaInfo.Schema.Should().NotBe("{}");
 
@@ -906,11 +834,7 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
         var typeName = nameof(PolymorphicContainer);
 
         // act
-        var response = await client.AwaitResponse(
-            new GetDataRequest(new SchemaReference(typeName!)),
-            o => o.WithTarget(CreateClientAddress()),
-            new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
-        );
+        var response = await client.Observe(new GetDataRequest(new SchemaReference(typeName!)), o => o.WithTarget(CreateClientAddress())).Should().Within(10.Seconds()).Emit();
 
         // assert
         var schemaInfo = response.Message.Data.Should().BeOfType<SchemaInfo>().Which;
@@ -985,7 +909,7 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
 
             // assert - verify deserialization worked correctly
             deserializedReference.Should().NotBeNull();
-            deserializedReference.Should().BeOfType(reference.GetType());
+            deserializedReference!.GetType().Should().Be(reference.GetType());
             deserializedReference.Should().Be(reference);
         }
     }
@@ -1039,7 +963,7 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
 
         // assert - verify deserialization worked correctly
         deserializedRequest.Should().NotBeNull();
-        deserializedRequest.StreamId.Should().Be("test-stream-id");
+        deserializedRequest!.StreamId.Should().Be("test-stream-id");
         deserializedRequest.Reference.Should().NotBeNull();
         deserializedRequest.Reference.Should().BeOfType<EntityReference>();
 
@@ -1084,9 +1008,9 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
 
             // assert - verify deserialization integrity
             deserializedRequest.Should().NotBeNull();
-            deserializedRequest.StreamId.Should().Be($"stream-{testCase.Name.ToLower()}");
+            deserializedRequest!.StreamId.Should().Be($"stream-{testCase.Name.ToLower()}");
             deserializedRequest.Reference.Should().NotBeNull();
-            deserializedRequest.Reference.Should().BeOfType(testCase.Reference.GetType());
+            deserializedRequest.Reference!.GetType().Should().Be(testCase.Reference.GetType());
             deserializedRequest.Reference.Should().Be(testCase.Reference);
         }
     }
@@ -1149,11 +1073,11 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
 
         // assert - verify deserialization integrity
         deserializedRequest.Should().NotBeNull();
-        deserializedRequest.StreamId.Should().Be("layout-stream-id");
+        deserializedRequest!.StreamId.Should().Be("layout-stream-id");
         deserializedRequest.Reference.Should().NotBeNull();
         deserializedRequest.Reference.Should().BeOfType<LayoutAreaReference>();
 
-        var deserializedLayoutRef = (LayoutAreaReference)deserializedRequest.Reference;
+        var deserializedLayoutRef = (LayoutAreaReference)deserializedRequest.Reference!;
         deserializedLayoutRef.Area.Should().Be("main-area");
         deserializedLayoutRef.Id.Should().Be("layout-123");
         deserializedLayoutRef.Layout.Should().Be("dashboard-layout");
@@ -1172,11 +1096,7 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
         var client = GetClient();
 
         // act - get all registered types
-        var response = await client.AwaitResponse(
-            new GetDomainTypesRequest(),
-            o => o.WithTarget(CreateClientAddress()),
-            new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
-        );
+        var response = await client.Observe(new GetDomainTypesRequest(), o => o.WithTarget(CreateClientAddress())).Should().Within(10.Seconds()).Emit();
 
         // assert
         var typesResponse = response.Message.Should().BeOfType<DomainTypesResponse>().Which;
@@ -1210,11 +1130,7 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
         var typeName = typeof(SerializationTestData).FullName;
 
         // act
-        var response = await client.AwaitResponse(
-            new GetDataRequest(new SchemaReference(typeName!)),
-            o => o.WithTarget(CreateClientAddress()),
-            new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
-        );
+        var response = await client.Observe(new GetDataRequest(new SchemaReference(typeName!)), o => o.WithTarget(CreateClientAddress())).Should().Within(10.Seconds()).Emit();
 
         // assert
         var schemaInfo = response.Message.Data.Should().BeOfType<SchemaInfo>().Which;
@@ -1247,11 +1163,7 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
         foreach (var typeName in typeNames)
         {
             // act
-            var response = await client.AwaitResponse(
-                new GetDataRequest(new SchemaReference(typeName)),
-                o => o.WithTarget(CreateClientAddress()),
-                new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
-            );
+            var response = await client.Observe(new GetDataRequest(new SchemaReference(typeName)), o => o.WithTarget(CreateClientAddress())).Should().Within(10.Seconds()).Emit();
 
             // assert
             var schemaInfo = response.Message.Data.Should().BeOfType<SchemaInfo>().Which;

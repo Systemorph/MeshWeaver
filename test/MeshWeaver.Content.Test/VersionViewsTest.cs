@@ -4,8 +4,7 @@ using System.Linq;
 using System.Reactive.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
-using FluentAssertions;
-using FluentAssertions.Extensions;
+using System.Reactive.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
@@ -65,14 +64,14 @@ public class VersionViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(o
     /// so that version snapshots are written by FileSystemVersionStore.
     /// Returns the created node's path.
     /// </summary>
-    private async Task<string> CreateNodeWithVersionsAsync(string path, int updateCount)
+    private async Task<string> CreateNodeWithVersions(string path, int updateCount)
     {
         var node = MeshNode.FromPath(path) with
         {
             Name = "Test Node v0",
             NodeType = "Markdown"
         };
-        await NodeFactory.CreateNodeAsync(node, TestContext.Current.CancellationToken);
+        await NodeFactory.CreateNode(node).Should().Emit();
 
         for (var i = 1; i <= updateCount; i++)
         {
@@ -81,7 +80,7 @@ public class VersionViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(o
                 Name = $"Test Node v{i}",
                 NodeType = "Markdown"
             };
-            await NodeFactory.UpdateNodeAsync(updated, TestContext.Current.CancellationToken);
+            await NodeFactory.UpdateNode(updated).Should().Emit();
         }
 
         return path;
@@ -96,14 +95,11 @@ public class VersionViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(o
     public async Task VersionsArea_RendersVersionList()
     {
         // Arrange: create node with 3 versions
-        var nodePath = await CreateNodeWithVersionsAsync("test/mynode", 2);
+        var nodePath = await CreateNodeWithVersions("test/mynode", 2);
         var nodeAddress = new Address(nodePath);
         var client = GetClient();
 
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(nodeAddress),
-            TestContext.Current.CancellationToken);
+        await client.Observe(new PingRequest(), o => o.WithTarget(nodeAddress)).Should().Emit();
 
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference(MeshNodeLayoutAreas.VersionsArea);
@@ -115,8 +111,9 @@ public class VersionViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(o
         Output.WriteLine("Waiting for Versions area to render...");
         var control = await stream
             .GetControlStream(reference.Area!)
-            .Timeout(TimeSpan.FromSeconds(10))
-            .FirstAsync(x => x is not null);
+            .Should()
+            .Within(TimeSpan.FromSeconds(10))
+            .Match(x => x is not null);
 
         // Assert
         Output.WriteLine($"Received control: {control?.GetType().Name}");
@@ -133,14 +130,11 @@ public class VersionViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(o
     public async Task VersionsArea_SingleVersion_RendersWithoutError()
     {
         // Arrange: create node with just 1 version
-        var nodePath = await CreateNodeWithVersionsAsync("test/singleversion", 0);
+        var nodePath = await CreateNodeWithVersions("test/singleversion", 0);
         var nodeAddress = new Address(nodePath);
         var client = GetClient();
 
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(nodeAddress),
-            TestContext.Current.CancellationToken);
+        await client.Observe(new PingRequest(), o => o.WithTarget(nodeAddress)).Should().Emit();
 
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference(MeshNodeLayoutAreas.VersionsArea);
@@ -152,8 +146,9 @@ public class VersionViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(o
         Output.WriteLine("Waiting for Versions area (single version) to render...");
         var control = await stream
             .GetControlStream(reference.Area!)
-            .Timeout(TimeSpan.FromSeconds(10))
-            .FirstAsync(x => x is not null);
+            .Should()
+            .Within(TimeSpan.FromSeconds(10))
+            .Match(x => x is not null);
 
         // Assert
         Output.WriteLine($"Received control: {control?.GetType().Name}");
@@ -171,22 +166,25 @@ public class VersionViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(o
     public async Task VersionDiffArea_RendersWithVersionParam()
     {
         // Arrange: create node with 2 versions (create + 1 update)
-        var nodePath = await CreateNodeWithVersionsAsync("test/diffnode", 1);
+        var nodePath = await CreateNodeWithVersions("test/diffnode", 1);
         var nodeAddress = new Address(nodePath);
         var client = GetClient();
 
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(nodeAddress),
-            TestContext.Current.CancellationToken);
+        await client.Observe(new PingRequest(), o => o.WithTarget(nodeAddress)).Should().Emit();
 
-        // Find the first version number via IVersionQuery
+        // Find the first version number via IVersionQuery — wait for snapshots to land.
+        // Treat GetVersions as a snapshot read and use Where() polling to avoid racing
+        // the version-writing storage decorator's async file I/O.
         var versionQuery = Mesh.ServiceProvider.GetService<IVersionQuery>();
         versionQuery.Should().NotBeNull("FileSystemVersionStore should be registered");
 
-        var versions = new System.Collections.Generic.List<MeshNodeVersion>();
-        await foreach (var v in versionQuery!.GetVersionsAsync(nodePath, TestContext.Current.CancellationToken))
-            versions.Add(v);
+        var versions = await Observable.Interval(TimeSpan.FromMilliseconds(50))
+            .StartWith(0L)
+            .SelectMany(_ => versionQuery!.GetVersions(nodePath).ToList())
+            .Where(v => v.Count >= 1)
+            .Should()
+            .Within(TimeSpan.FromSeconds(5))
+            .Emit();
 
         Output.WriteLine($"Found {versions.Count} versions");
         versions.Should().NotBeEmpty("at least one version snapshot should exist after updates");
@@ -208,8 +206,9 @@ public class VersionViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(o
         Output.WriteLine("Waiting for VersionDiff area to render...");
         var control = await stream
             .GetControlStream(reference.Area!)
-            .Timeout(TimeSpan.FromSeconds(10))
-            .FirstAsync(x => x is not null);
+            .Should()
+            .Within(TimeSpan.FromSeconds(10))
+            .Match(x => x is not null);
 
         // Assert
         Output.WriteLine($"Received control: {control?.GetType().Name}");
@@ -225,14 +224,11 @@ public class VersionViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(o
     public async Task VersionsMenu_AppearsInNodeMenu()
     {
         // Arrange: create a node
-        var nodePath = await CreateNodeWithVersionsAsync("test/menunode", 0);
+        var nodePath = await CreateNodeWithVersions("test/menunode", 0);
         var nodeAddress = new Address(nodePath);
         var client = GetClient();
 
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(nodeAddress),
-            TestContext.Current.CancellationToken);
+        await client.Observe(new PingRequest(), o => o.WithTarget(nodeAddress)).Should().Emit();
 
         var workspace = client.GetWorkspace();
         // Menu is rendered as part of any layout area via the predicate-based renderer;
@@ -245,11 +241,15 @@ public class VersionViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(o
         // Act: read the $Menu:Node control from the layout stream. Built-in
         // items (Edit, Versions, Delete, …) live in the "Node" context; the
         // default unnamed $Menu area is reserved for app-specific additions.
+        // The menu first renders empty and populates its items reactively, so
+        // wait for the emission that carries the built-in "Versions" item.
         Output.WriteLine("Waiting for $Menu:Node to render...");
         var menuControl = await stream
             .GetControlStream(MenuControl.GetMenuArea(NodeMenuItemsExtensions.NodeMenuContext))
-            .Timeout(TimeSpan.FromSeconds(10))
-            .FirstAsync(x => x is not null);
+            .Should()
+            .Within(TimeSpan.FromSeconds(10))
+            .Match(x => x is MenuControl m &&
+                        m.Items.Any(i => i.Label == "Versions" && i.Area == MeshNodeLayoutAreas.VersionsArea));
 
         // Assert
         Output.WriteLine($"Received menu control: {menuControl?.GetType().Name}");

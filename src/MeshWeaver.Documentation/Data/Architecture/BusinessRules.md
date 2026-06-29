@@ -1,35 +1,70 @@
 ---
 Name: Business Rules & Calculations
 Category: Architecture
-Description: Implementing domain logic with data import, cession calculations, and interactive chart layout areas
+Description: Building domain logic with pure calculation engines, reactive layout areas, and interactive charts — illustrated with a reinsurance cession example
 Icon: /static/DocContent/Architecture/BusinessRules/icon.svg
 ---
 
-MeshWeaver supports building domain-specific business logic with data import, calculation engines, and interactive chart layout areas. This guide walks through a **reinsurance cession example** — the same pattern applies to any domain.
+MeshWeaver lets you wire domain-specific business logic directly into reactive, chart-driven UI without any special framework scaffolding. Your calculation engine stays as plain C#; MeshWeaver handles the subscription plumbing and re-rendering.
 
-The complete example is the @Cession node type with source files, sample data, and a layout area with charts:
+This guide walks through a **reinsurance Excess-of-Loss cession** end to end. The same three-layer pattern — domain model, pure engine, reactive layout area — applies to any domain.
+
+The complete working example lives at the @Cession node type, including source files, sample data, and a chart layout area:
 
 @@Cession/MotorXL
 
-For the full production implementation, see the MeshWeaver.Reinsurance repository.
+For the full production implementation see the MeshWeaver.Reinsurance repository.
 
-# Overview
+---
 
-The pattern has three layers:
+## The Three-Layer Pattern
 
-1. **Domain Model** — immutable records for cashflows, contracts, and results
-2. **Business Rules** — pure C# operations (cession into layer, proportional split)
-3. **Layout Areas** — reactive charts with filters bound to the calculation output
+Every business rules module in MeshWeaver follows the same structure:
 
-# Example: Reinsurance Excess-of-Loss Cession
+| Layer | What it contains | Key trait |
+|---|---|---|
+| **Domain Model** | Immutable records for cashflows, contracts, results | Safe to use in reactive pipelines |
+| **Business Rules** | Pure C# functions with no side effects | Easy to unit-test in isolation |
+| **Layout Areas** | `IObservable<UiControl>` views bound to workspace streams | Re-render automatically when data changes |
+
+The layers are intentionally decoupled. The calculation engine has zero framework imports; the layout area knows nothing about persistence.
+<svg viewBox="0 0 760 260" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;" font-family="sans-serif" font-size="13">
+  <defs>
+    <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="3.5" orient="auto">
+      <path d="M0,0 L0,7 L8,3.5 Z" fill="#90a4ae"/>
+    </marker>
+  </defs>
+  <rect x="20" y="80" width="180" height="100" rx="10" fill="#1565c0" stroke="none"/>
+  <text x="110" y="118" text-anchor="middle" fill="#fff" font-weight="bold" font-size="14">Domain Model</text>
+  <text x="110" y="140" text-anchor="middle" fill="#bbdefb" font-size="11">Immutable records</text>
+  <text x="110" y="156" text-anchor="middle" fill="#bbdefb" font-size="11">Cashflow · Layer · Result</text>
+  <rect x="290" y="80" width="180" height="100" rx="10" fill="#2e7d32" stroke="none"/>
+  <text x="380" y="118" text-anchor="middle" fill="#fff" font-weight="bold" font-size="14">Business Rules</text>
+  <text x="380" y="140" text-anchor="middle" fill="#c8e6c9" font-size="11">Pure static functions</text>
+  <text x="380" y="156" text-anchor="middle" fill="#c8e6c9" font-size="11">CessionEngine.CedeIntoLayer</text>
+  <rect x="560" y="80" width="180" height="100" rx="10" fill="#6a1b9a" stroke="none"/>
+  <text x="650" y="118" text-anchor="middle" fill="#fff" font-weight="bold" font-size="14">Layout Area</text>
+  <text x="650" y="140" text-anchor="middle" fill="#e1bee7" font-size="11">IObservable&lt;UiControl&gt;</text>
+  <text x="650" y="156" text-anchor="middle" fill="#e1bee7" font-size="11">CombineLatest → Chart</text>
+  <line x1="200" y1="130" x2="288" y2="130" stroke="#90a4ae" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="470" y1="130" x2="558" y2="130" stroke="#90a4ae" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="244" y="120" text-anchor="middle" fill="#90a4ae" font-size="11">typed data</text>
+  <text x="514" y="120" text-anchor="middle" fill="#90a4ae" font-size="11">results</text>
+  <rect x="120" y="210" width="520" height="36" rx="8" fill="none" stroke="#37474f" stroke-width="1.5" stroke-dasharray="5,3"/>
+  <text x="380" y="232" text-anchor="middle" fill="currentColor" fill-opacity="0.55" font-size="12">Workspace streams feed typed data; reactive subscriptions propagate changes end-to-end</text>
+</svg>
+
+*Three-layer pattern: immutable domain model feeds a pure calculation engine whose results are consumed by a reactive layout area.*
+
+---
 
 ## 1. Domain Model
 
-Cashflows are simple records with an amount. A reinsurance layer defines the attachment point and limit:
+Cashflows and layers are simple records. Immutability makes them safe to pass through reactive pipelines without defensive copies.
 
 ```csharp
 /// <summary>
-/// A single claim cashflow with gross amount.
+/// A single claim cashflow with a gross amount.
 /// </summary>
 public record Cashflow(string ClaimId, string LineOfBusiness, double GrossAmount);
 
@@ -45,7 +80,7 @@ public record ExcessOfLossLayer(
 );
 
 /// <summary>
-/// Result of applying a layer to a cashflow.
+/// Result of applying a layer to a single cashflow.
 /// </summary>
 public record CededCashflow(
     string ClaimId,
@@ -56,16 +91,19 @@ public record CededCashflow(
 );
 ```
 
+---
+
 ## 2. Business Rules — Cession into Layer
 
-The core operation is a pure function. No framework dependencies:
+The core engine is a pure static class. No framework dependencies, no I/O — just math. This makes it trivially testable with standard xUnit assertions.
+
+The formula per claim is: `Ceded = min(Limit, max(0, Gross − AttachmentPoint))`
 
 ```csharp
 public static class CessionEngine
 {
     /// <summary>
     /// Applies an Excess-of-Loss layer to a set of cashflows.
-    /// Formula per claim: Ceded = min(Limit, max(0, Gross - AttachmentPoint))
     /// </summary>
     public static IReadOnlyList<CededCashflow> CedeIntoLayer(
         IEnumerable<Cashflow> cashflows,
@@ -108,9 +146,11 @@ public record CessionSummary(
 );
 ```
 
+---
+
 ## 3. Layout Area — Ceded Distribution Chart
 
-Layout areas are reactive: they subscribe to workspace data and re-render when filters change.
+Layout areas subscribe to workspace data and re-render whenever the underlying streams emit. The layout function returns `IObservable<UiControl>` — MeshWeaver drives the lifecycle.
 
 ```csharp
 using MeshWeaver.Charting;
@@ -191,9 +231,13 @@ public static class CessionResultsArea
 }
 ```
 
+> **Reactive re-rendering.** `CombineLatest` means the chart rebuilds automatically any time cashflows or the layer definition changes — a filter toolbar just needs to update the workspace stream and the chart follows.
+
+---
+
 ## 4. Wire It Together
 
-Register domain types, data, and layout in the hub configuration:
+Register domain types, initial data, and the layout area in the hub configuration:
 
 ```csharp
 public static MessageHubConfiguration AddReinsuranceExample(
@@ -212,7 +256,11 @@ public static MessageHubConfiguration AddReinsuranceExample(
 }
 ```
 
+---
+
 ## 5. Sample Data
+
+Ten motor claims spanning all three cession outcomes — below attachment, partial, and full-limit hits:
 
 ```csharp
 public static class SampleData
@@ -240,17 +288,71 @@ public static class SampleData
 }
 ```
 
-# Key Patterns
+---
 
-| Pattern | When to Use |
-|---------|-------------|
-| **Immutable Records** | All domain types — enables safe reactive pipelines |
-| **Pure Functions** | Business logic with no side effects — easy to test |
-| **`IObservable<UiControl>`** | Layout areas re-render when data changes |
+## Live Demo — Cession Calculation
+
+The interactive cell below runs the same `CessionEngine` logic inline. It shows how a Motor XL 500k xs 200k layer splits ten claims into ceded, retained, and below-attachment buckets.
+
+```csharp --render CessionDemo --show-code
+var attachmentPoint = 200_000.0;
+var limit = 500_000.0;
+
+var claims = new[]
+{
+    ("C001", 150_000.0),
+    ("C002", 350_000.0),
+    ("C003", 800_000.0),
+    ("C004",  50_000.0),
+    ("C005", 1_200_000.0),
+    ("C006", 250_000.0),
+    ("C007", 400_000.0),
+    ("C008", 180_000.0),
+    ("C009", 700_000.0),
+    ("C010", 300_000.0),
+};
+
+var rows = claims.Select(c =>
+{
+    var ceded   = Math.Min(limit, Math.Max(0, c.Item2 - attachmentPoint));
+    var retained = c.Item2 - ceded;
+    var outcome = ceded == 0   ? "Below attachment"
+                : ceded == limit ? "Full limit"
+                :                  "Partial";
+    return $"| {c.Item1} | {c.Item2,12:N0} | {ceded,10:N0} | {retained,12:N0} | {outcome} |";
+});
+
+var totalGross    = claims.Sum(c => c.Item2);
+var totalCeded    = claims.Sum(c => Math.Min(limit, Math.Max(0, c.Item2 - attachmentPoint)));
+var totalRetained = totalGross - totalCeded;
+var ratio         = totalCeded / totalGross;
+
+var header = "| Claim | Gross | Ceded | Retained | Outcome |\n|---|---:|---:|---:|---|";
+var footer = $"\n**Totals — Gross: {totalGross:N0} | Ceded: {totalCeded:N0} | Retained: {totalRetained:N0} | Ratio: {ratio:P1}**";
+
+MeshWeaver.Layout.Controls.Markdown(
+    $"### Motor XL 500k xs 200k\n\n{header}\n{string.Join("\n", rows)}\n{footer}"
+)
+```
+
+---
+
+## Pattern Reference
+
+| Pattern | When to use |
+|---|---|
+| **Immutable records** | All domain types — safe for reactive pipelines |
+| **Pure static functions** | Business logic with no side effects — trivial to unit-test |
+| **`IObservable<UiControl>`** | Layout areas that re-render when data changes |
 | **`Chart.Create(DataSet.Bar(...))`** | Histograms, scatter plots, line charts |
-| **`host.Workspace.GetStream<T>()`** | Subscribe to typed data collections |
-| **`.CombineLatest()`** | Merge multiple data streams for computed views |
+| **`host.Workspace.GetStream<T>()`** | Subscribe to typed data collections in the workspace |
+| **`.CombineLatest()`** | Merge multiple streams into a single computed view |
 
-For the full production implementation with Monte Carlo simulation, time series, proportional/non-proportional covers, and aggregate layers, see:
-- `src/MeshWeaver.Reinsurance/Cession/CededCashflows.cs` — cession calculation engine with proportional, non-proportional, and aggregate covers
+---
+
+## Further Reading
+
+For the full production implementation — Monte Carlo simulation, time series, proportional/non-proportional covers, and aggregate layers:
+
+- `src/MeshWeaver.Reinsurance/Cession/CededCashflows.cs` — full cession engine with proportional, non-proportional, and aggregate covers
 - `src/MeshWeaver.Reinsurance.Pricing/LayoutAreas/DistributionLayoutArea.cs` — PDF/CDF charts with filter toolbars

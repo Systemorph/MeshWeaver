@@ -1,12 +1,12 @@
 {
   "id": "MeshWeaver",
   "name": "MeshWeaver",
-  "nodeType": "Organization",
+  "nodeType": "Space",
   "description": "Open source platform for building modular, reactive applications",
   "icon": "/static/storage/content/MeshWeaver/logo.svg",
   "isPersistent": true,
   "content": {
-    "$type": "Organization",
+    "$type": "Space",
     "name": "MeshWeaver",
     "description": "Open source platform for building modular, reactive applications with a graph-based data model",
     "website": "https://github.com/systemorph/MeshWeaver",

@@ -1,0 +1,102 @@
+# ---------------------------------------------------------------------------
+# sidecar-patch.yaml — Add the pgBackRest sidecar + WAL-archive wiring to the
+#                      chart's Postgres StatefulSet.
+#
+# Strategic-merge patch applied AFTER helm install + postgres-pvc-patch.yaml:
+#
+#   kubectl patch statefulset memex-postgres-statefulset -n memex \
+#     --type strategic --patch-file pgbackrest/sidecar-patch.yaml
+#
+# What it adds:
+#   - serviceAccountName: pgbackrest-sa  (Workload Identity -> Blob, keyless)
+#   - an initContainer that appends postgres-archive.conf to postgresql.conf so
+#     the server runs archive_command = pgbackrest archive-push (idempotent)
+#   - shared volumes: the pgbackrest config, spool dir, log dir, and the data
+#     PVC (so the sidecar can read pg1-path for backups)
+#   - a long-running pgBackRest sidecar that hosts the async archive worker and
+#     is the exec target for ad-hoc backup/restore commands
+#
+# The scheduled full/diff backups themselves run as CronJobs (./cronjobs.yaml),
+# not in the sidecar, so a backup never competes with the live archive worker.
+# ---------------------------------------------------------------------------
+spec:
+  template:
+    metadata:
+      labels:
+        azure.workload.identity/use: "true"
+    spec:
+      serviceAccountName: pgbackrest-sa
+      initContainers:
+        # Enable WAL archiving on the data dir before postgres starts.
+        - name: enable-wal-archiving
+          image: docker.io/pgvector/pgvector:pg17
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              CONF=/var/lib/postgresql/data/postgresql.conf
+              MARK="# pgbackrest-archive (managed)"
+              if [ -f "$CONF" ] && ! grep -q "$MARK" "$CONF"; then
+                echo "" >> "$CONF"
+                echo "$MARK" >> "$CONF"
+                cat /etc/pgbackrest-archive/postgres-archive.conf >> "$CONF"
+                echo "appended WAL archiving config"
+              else
+                echo "WAL archiving config already present or data dir not initialized yet"
+              fi
+          volumeMounts:
+            - name: memex-pgdata
+              mountPath: /var/lib/postgresql/data
+            - name: pgbackrest-archive-conf
+              mountPath: /etc/pgbackrest-archive
+      containers:
+        # The sidecar: hosts the async WAL archive worker + exec target.
+        - name: pgbackrest
+          image: docker.io/woblerr/pgbackrest:2.54.2
+          command:
+            - /bin/sh
+            - -c
+            - |
+              # Render account/container into the config from env, then idle so
+              # the async archive-push worker (spawned by postgres) and exec'd
+              # backup commands share this container's filesystem + identity.
+              sed -e "s/__AZURE_ACCOUNT__/${PGBACKREST_AZURE_ACCOUNT}/" \
+                  -e "s/__AZURE_CONTAINER__/${PGBACKREST_AZURE_CONTAINER}/" \
+                  /etc/pgbackrest-src/pgbackrest.conf > /etc/pgbackrest/pgbackrest.conf
+              echo "pgbackrest sidecar ready"; exec sleep infinity
+          env:
+            - name: PGBACKREST_AZURE_ACCOUNT
+              value: "__AZURE_ACCOUNT__"        # replace or template from values
+            - name: PGBACKREST_AZURE_CONTAINER
+              value: "pgbackrest"
+          volumeMounts:
+            - name: memex-pgdata
+              mountPath: /var/lib/postgresql/data
+            - name: pgbackrest-src
+              mountPath: /etc/pgbackrest-src
+            - name: pgbackrest-conf
+              mountPath: /etc/pgbackrest
+            - name: pgbackrest-spool
+              mountPath: /var/spool/pgbackrest
+            - name: pgbackrest-log
+              mountPath: /var/log/pgbackrest
+      volumes:
+        - name: pgbackrest-src
+          configMap:
+            name: pgbackrest-config
+            items:
+              - key: pgbackrest.conf
+                path: pgbackrest.conf
+        - name: pgbackrest-archive-conf
+          configMap:
+            name: pgbackrest-config
+            items:
+              - key: postgres-archive.conf
+                path: postgres-archive.conf
+        - name: pgbackrest-conf
+          emptyDir: {}
+        - name: pgbackrest-spool
+          emptyDir: {}
+        - name: pgbackrest-log
+          emptyDir: {}

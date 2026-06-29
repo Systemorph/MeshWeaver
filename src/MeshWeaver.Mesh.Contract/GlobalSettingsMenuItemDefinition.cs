@@ -32,8 +32,10 @@ public delegate UiControl GlobalSettingsContentBuilder(
     LayoutAreaHost host, StackControl stack);
 
 /// <summary>
-/// Provider delegate that yields global settings menu items via IAsyncEnumerable.
-/// Providers are evaluated during global settings layout rendering.
+/// Provider delegate that yields global settings menu items reactively. Returns
+/// <see cref="IObservable{T}"/> (never Task) so a provider that needs a live permission check
+/// (e.g. the platform-admin Invitations/Inbox tabs) composes it reactively; a static provider
+/// just <c>Observable.Return</c>s its items.
 /// </summary>
-public delegate IAsyncEnumerable<GlobalSettingsMenuItemDefinition> GlobalSettingsMenuItemProvider(
+public delegate IObservable<IReadOnlyList<GlobalSettingsMenuItemDefinition>> GlobalSettingsMenuItemProvider(
     LayoutAreaHost host, RenderingContext context);

@@ -14,7 +14,13 @@ public interface IContentCollectionConfigProvider
     IEnumerable<ContentCollectionConfig> GetCollections();
 }
 
+/// <summary>
+/// Simple <see cref="IContentCollectionConfigProvider"/> that returns a fixed set of
+/// configurations supplied at construction.
+/// </summary>
+/// <param name="collections">The collection configurations to expose.</param>
 public class ContentCollectionConfigProvider(params IEnumerable<ContentCollectionConfig> collections) : IContentCollectionConfigProvider
 {
+    /// <inheritdoc />
     public IEnumerable<ContentCollectionConfig> GetCollections() => collections;
 }

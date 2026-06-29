@@ -33,4 +33,18 @@ public record ApiToken
 
     /// <summary>True if the token has been revoked.</summary>
     public bool IsRevoked { get; init; }
+
+    /// <summary>
+    /// Role IDs (e.g. "Admin", "Editor") captured at token-creation time from
+    /// the creating user's <c>AccessContext.Roles</c>. Returned in
+    /// <see cref="ValidateTokenResponse.Roles"/> at validation and stamped onto
+    /// the request's <c>AccessContext.Roles</c> by the auth middleware so that
+    /// SecurityService.GetEffectivePermissions can resolve them via the
+    /// claim-based role path on per-node hubs (where the synced
+    /// AccessAssignment query is intentionally not registered — see
+    /// SecurityServiceExtensions:44-50). Without this, API-token-bound requests
+    /// against per-node hubs see 0 roles → 0 perms → API gate strips, even
+    /// when the user is admin on the target scope.
+    /// </summary>
+    public IReadOnlyCollection<string> Roles { get; init; } = [];
 }

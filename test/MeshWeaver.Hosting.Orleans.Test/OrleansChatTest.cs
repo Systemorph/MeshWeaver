@@ -7,8 +7,6 @@ using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
-using FluentAssertions;
-using FluentAssertions.Extensions;
 using MeshWeaver.AI;
 using MeshWeaver.AI.Persistence;
 using MeshWeaver.Connection.Orleans;
@@ -30,65 +28,34 @@ using MeshThread = MeshWeaver.AI.Thread;
 
 namespace MeshWeaver.Hosting.Orleans.Test;
 
+// TODO: needs custom shared fixture â€” uses ChatSiloConfigurator with AddFileSystemPersistence(SamplesGraphData),
+// which the SharedOrleansFixture does not configure.
 /// <summary>
 /// End-to-end chat test on Orleans infrastructure with FileSystem persistence.
-/// Verifies CreateNodeRequest, SubmitMessageRequest, ThreadMessages streaming,
+/// Verifies CreateNodeRequest, ThreadInput.AppendUserInput, ThreadMessages streaming,
 /// and GetDataRequest on Thread + ThreadMessage nodes.
 /// </summary>
-public class OrleansChatTest(ITestOutputHelper output) : TestBase(output)
+public class OrleansChatTest(ITestOutputHelper output) : OrleansTestBase<ChatSiloConfigurator>(output)
 {
-    private const string ContextPath = "User/Roland";
-    private TestCluster Cluster { get; set; } = null!;
-    private IMessageHub ClientMesh => Cluster.Client.ServiceProvider.GetRequiredService<IMessageHub>();
+    private const string ContextPath = "TestUser";
 
-    public override async ValueTask InitializeAsync()
-    {
-        await base.InitializeAsync();
-        var builder = new TestClusterBuilder();
-        builder.AddSiloBuilderConfigurator<ChatSiloConfigurator>();
-        builder.AddClientBuilderConfigurator<TestClientConfigurator>();
-        Cluster = builder.Build();
-        await Cluster.DeployAsync();
-    }
-
-    public override async ValueTask DisposeAsync()
-    {
-        if (Cluster is not null)
-            await Cluster.DisposeAsync();
-        await base.DisposeAsync();
-    }
-
-    private async Task<IMessageHub> GetClientAsync()
-    {
-        MessageHubConfiguration ConfigureClient(MessageHubConfiguration config)
-        {
-            config.TypeRegistry.AddAITypes();
-            return config.AddLayoutClient();
-        }
-
-        var client = ClientMesh.ServiceProvider.CreateMessageHub(
-            new Address("client", "chat"), ConfigureClient);
-        await Cluster.Client.ServiceProvider.GetRequiredService<IRoutingService>()
-            .RegisterStreamAsync(client.Address, client.DeliverMessage);
-        return client;
-    }
+    // Cluster lifecycle, ClientMesh, GetClient, ConfigureClient, and the standard
+    // mesh-node handler chain are inherited from OrleansTestBase<TSiloConfigurator>.
 
     private async Task<string> CreateThreadAsync(IMessageHub client, string text, CancellationToken ct)
     {
-        var response = await client.AwaitResponse(
-            new CreateNodeRequest(ThreadNodeType.BuildThreadNode(ContextPath, text)),
-            o => o.WithTarget(new Address(ContextPath)), ct);
-        response.Message.Success.Should().BeTrue(response.Message.Error);
+        var response = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode(ContextPath, text)), o => o.WithTarget(new Address(ContextPath))).FirstAsync().ToTask(ct);
+        response.Message.Success.Should().BeTrue(response.Message.Error ?? "");
         return response.Message.Node!.Path!;
     }
 
     private IObservable<IReadOnlyList<string>> ObserveThreadMessages(IMessageHub client, string threadPath)
     {
         var workspace = client.GetWorkspace();
-        return workspace.GetRemoteStream<MeshNode>(new Address(threadPath))!
-            .Select(nodes =>
+        return workspace.GetMeshNodeStream(threadPath)
+            .Select(node =>
             {
-                var node = nodes?.FirstOrDefault(n => n.Path == threadPath);
+                
                 var content = node?.Content as MeshThread;
                 return (IReadOnlyList<string>)(content?.Messages ?? []);
             });
@@ -96,11 +63,10 @@ public class OrleansChatTest(ITestOutputHelper output) : TestBase(output)
 
     private async Task<T?> GetHubContentAsync<T>(IMessageHub client, string path, CancellationToken ct) where T : class
     {
-        // MeshNode key is Id (last segment), not full path
-        var nodeId = path.Contains('/') ? path[(path.LastIndexOf('/') + 1)..] : path;
-        var response = await client.AwaitResponse(
-            new GetDataRequest(new EntityReference(nameof(MeshNode), nodeId)),
-            o => o.WithTarget(new Address(path)), ct);
+        // Canonical CQRS-correct read: target the per-node hub's MeshNodeReference
+        // reducer, not an EntityCollection lookup. The owning hub is the source of
+        // truth for MeshNode content; this avoids any catalog / index lag.
+        var response = await client.Observe(new GetDataRequest(new MeshNodeReference()), o => o.WithTarget(new Address(path))).FirstAsync().ToTask(ct);
         var node = response.Message.Data as MeshNode;
         if (node == null && response.Message.Data is JsonElement je)
             node = je.Deserialize<MeshNode>(ClientMesh.JsonSerializerOptions);
@@ -114,7 +80,7 @@ public class OrleansChatTest(ITestOutputHelper output) : TestBase(output)
     public async Task CreateThread_AndSubmitMessage_ProducesThreadMessages()
     {
         var ct = new CancellationTokenSource(50.Seconds()).Token;
-        var client = await GetClientAsync();
+        var client = GetClient();
 
         // 1. Create thread
         Output.WriteLine("Creating thread...");
@@ -128,17 +94,12 @@ public class OrleansChatTest(ITestOutputHelper output) : TestBase(output)
             .FirstAsync()
             .ToTask(ct);
 
-        // 3. Submit message
+        // 3. Submit message via ThreadInput.AppendUserInput — see RequestViaStreamUpdate.md.
         Output.WriteLine("Submitting message...");
-        var submitResponse = await client.AwaitResponse(
-            new SubmitMessageRequest
-            {
-                ThreadPath = threadPath,
-                UserMessageText = "Hello from Orleans",
-                ContextPath = ContextPath
-            },
-            o => o.WithTarget(new Address(threadPath)), ct);
-        submitResponse.Message.Success.Should().BeTrue(submitResponse.Message.Error);
+        client.SubmitMessage(
+            threadPath,
+            "Hello from Orleans",
+            contextPath: ContextPath);
         Output.WriteLine("Message submitted");
 
         // 4. Wait for 2 message IDs
@@ -160,7 +121,7 @@ public class OrleansChatTest(ITestOutputHelper output) : TestBase(output)
         userContent.Text.Should().Be("Hello from Orleans");
         Output.WriteLine($"User message verified: '{userContent.Text}'");
 
-        // 7. Verify response message — poll until streaming completes
+        // 7. Verify response message â€” poll until streaming completes
         ThreadMessage? responseContent = null;
         var prevLen = 0;
         var stable = 0;
@@ -206,6 +167,7 @@ public class ChatSiloConfigurator : ISiloConfigurator, IHostConfigurator
             .ConfigureServices(services =>
             {
                 services.AddSingleton<IChatClientFactory>(new FakeChatClientFactory());
+                services.AddSingleton<IStaticNodeProvider, OrleansTestSeedProvider>();
                 return services;
             })
             .ConfigureDefaultNodeHub(config => config.AddDefaultLayoutAreas());

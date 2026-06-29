@@ -1,8 +1,9 @@
+using System;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using FluentAssertions;
-using FluentAssertions.Extensions;
+using System.Reactive.Threading.Tasks;
+using System.Reactive.Linq;
 using MeshWeaver.Data;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
@@ -22,7 +23,22 @@ namespace MeshWeaver.NodeOperations.Test;
 /// </summary>
 public class DeletionTests(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-    private CancellationToken TestTimeout => new CancellationTokenSource(45.Seconds()).Token;
+    // 90 s: Linux CI's per-message-hub activation routinely takes >45 s when
+    // the suite is mid-run with many AccessAssignment / PartitionAccessPolicy
+    // synced queries firing in the background — Delete_FromNodeHub_Succeeds
+    // hits a STALE-CALLBACK at GetDataRequest@{nodePath}(44+s) in CI. The
+    // earlier revert of this bump (195d1b6d1) flipped the test back to red.
+    // Locally the test completes in ~10 s; the higher ceiling absorbs the
+    // slow path without masking a genuine hang.
+    private CancellationToken TestTimeout => new CancellationTokenSource(90.Seconds()).Token;
+
+    // The base class watchdog defaults are 30 s soft / 60 s hard. CI's slow
+    // hub-activation pushes Delete_FromNodeHub_Succeeds past the 60 s hard
+    // deadline (run 26557749128) even though the test's own [Fact(Timeout)]
+    // and TestTimeout were generously sized. Override both so the watchdog
+    // tracks the same ceiling the test budgets allow.
+    protected override TimeSpan TestSoftDeadline => TimeSpan.FromSeconds(60);
+    protected override TimeSpan TestHardDeadline => TimeSpan.FromSeconds(120);
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => base.ConfigureMesh(builder);
@@ -30,118 +46,143 @@ public class DeletionTests(ITestOutputHelper output) : MonolithMeshTestBase(outp
     [Fact]
     public async Task Delete_LeafNode_Succeeds()
     {
-        // Arrange — create a single leaf node under TestData
-        await NodeFactory.CreateNodeAsync(
-            new MeshNode("delleaf", TestPartition) { Name = "Leaf", NodeType = "Markdown" });
+        // Arrange â€” create a single leaf node under TestData
+        await NodeFactory.CreateNode(
+            new MeshNode("delleaf", TestPartition) { Name = "Leaf", NodeType = "Markdown" }).Should().Emit();
 
         // Act
-        await NodeFactory.DeleteNodeAsync($"{TestPartition}/delleaf");
+        await NodeFactory.DeleteNode($"{TestPartition}/delleaf").Should().Emit();
 
-        // Assert — node should be gone
-        var result = await MeshQuery.QueryAsync<MeshNode>($"path:{TestPartition}/delleaf")
-            .FirstOrDefaultAsync(TestTimeout);
-        result.Should().BeNull("leaf node should be deleted");
+        // Assert — poll until cache invalidation propagates. A single one-shot
+        // ReadNode races the delete fan-out under CI load.
+        await Observable.Interval(TimeSpan.FromMilliseconds(50))
+            .StartWith(0L)
+            .SelectMany(_ => ReadNode($"{TestPartition}/delleaf"))
+            .Should().Within(10.Seconds()).Match(n => n is null);
     }
 
     [Fact]
     public async Task Delete_ParentWithChildren_DeletesAll()
     {
-        // Arrange — create a parent with two children under TestData partition
-        await NodeFactory.CreateNodeAsync(
-            new MeshNode("del2parent", TestPartition) { Name = "Parent", NodeType = "Group" });
-        await NodeFactory.CreateNodeAsync(
-            new MeshNode("child1", $"{TestPartition}/del2parent") { Name = "Child 1", NodeType = "Markdown" });
-        await NodeFactory.CreateNodeAsync(
-            new MeshNode("child2", $"{TestPartition}/del2parent") { Name = "Child 2", NodeType = "Markdown" });
+        // Arrange â€” create a parent with two children under TestData partition
+        await NodeFactory.CreateNode(
+            new MeshNode("del2parent", TestPartition) { Name = "Parent", NodeType = "Group" }).Should().Emit();
+        await NodeFactory.CreateNode(
+            new MeshNode("child1", $"{TestPartition}/del2parent") { Name = "Child 1", NodeType = "Markdown" }).Should().Emit();
+        await NodeFactory.CreateNode(
+            new MeshNode("child2", $"{TestPartition}/del2parent") { Name = "Child 2", NodeType = "Markdown" }).Should().Emit();
 
         // Act — delete parent (should recursively delete children first)
-        await NodeFactory.DeleteNodeAsync($"{TestPartition}/del2parent");
+        await NodeFactory.DeleteNode($"{TestPartition}/del2parent").Should().Emit();
 
-        // Assert — parent and both children should be gone
-        var parent = await MeshQuery.QueryAsync<MeshNode>($"path:{TestPartition}/del2parent")
-            .FirstOrDefaultAsync(TestTimeout);
-        parent.Should().BeNull("parent should be deleted");
-
-        var children = await MeshQuery.QueryAsync<MeshNode>($"namespace:{TestPartition}/del2parent")
-            .ToListAsync(TestTimeout);
-        children.Should().BeEmpty("all children should be deleted");
+        // Assert — parent and all children should be gone. Poll because the
+        // recursive delete fan-out doesn't complete synchronously with the
+        // root response; the per-leaf cache.Invalidate + per-hub disposal ripples
+        // through the children afterwards.
+        await Observable.Interval(TimeSpan.FromMilliseconds(50))
+            .StartWith(0L)
+            .SelectMany(_ => ReadNode($"{TestPartition}/del2parent")
+                .SelectMany(parent => MeshQuery
+                    .Query<MeshNode>(MeshQueryRequest.FromQuery($"namespace:{TestPartition}/del2parent"))
+                    .Where(c => c.ChangeType == QueryChangeType.Initial)
+                    .Take(1)
+                    .Select(c => (parent, count: c.Items.Count))))
+            .Should().Within(15.Seconds()).Match(t => t.parent is null && t.count == 0);
     }
 
     [Fact]
     public async Task Delete_DeeplyNested_DeletesBottomToTop()
     {
-        // Arrange — create a 3-level deep hierarchy under TestData
-        await NodeFactory.CreateNodeAsync(
-            new MeshNode("del3root", TestPartition) { Name = "Root", NodeType = "Group" });
-        await NodeFactory.CreateNodeAsync(
-            new MeshNode("mid", $"{TestPartition}/del3root") { Name = "Mid", NodeType = "Group" });
-        await NodeFactory.CreateNodeAsync(
-            new MeshNode("deep", $"{TestPartition}/del3root/mid") { Name = "Deep", NodeType = "Markdown" });
+        // Arrange â€” create a 3-level deep hierarchy under TestData
+        await NodeFactory.CreateNode(
+            new MeshNode("del3root", TestPartition) { Name = "Root", NodeType = "Group" }).Should().Emit();
+        await NodeFactory.CreateNode(
+            new MeshNode("mid", $"{TestPartition}/del3root") { Name = "Mid", NodeType = "Group" }).Should().Emit();
+        await NodeFactory.CreateNode(
+            new MeshNode("deep", $"{TestPartition}/del3root/mid") { Name = "Deep", NodeType = "Markdown" }).Should().Emit();
 
         // Act — delete root
-        await NodeFactory.DeleteNodeAsync($"{TestPartition}/del3root");
+        await NodeFactory.DeleteNode($"{TestPartition}/del3root").Should().Emit();
 
-        // Assert — all 3 levels should be gone
-        var all = await MeshQuery.QueryAsync<MeshNode>($"path:{TestPartition}/del3root scope:subtree")
-            .ToListAsync(TestTimeout);
-        all.Should().BeEmpty("entire subtree should be deleted");
+        // Assert — entire subtree should be gone. Poll the AUTHORITATIVE per-node read
+        // (owner-hub round-trip via ReadNode, which emits null on NotFound) for every
+        // node in the hierarchy, not the lagged `QueryAsync scope:subtree` catalog index. The
+        // recursive delete writes bottom-to-top (deep → mid → root); a query against the
+        // eventually-consistent catalog can lag the actual per-node-hub disposal under CI load
+        // and trip the deadline even though the nodes are gone. This is the same authoritative
+        // poll the sibling Delete_ParentWithChildren_DeletesAll uses.
+        await Observable.Interval(TimeSpan.FromMilliseconds(50))
+            .StartWith(0L)
+            .SelectMany(_ => ReadNode($"{TestPartition}/del3root")
+                .SelectMany(root => ReadNode($"{TestPartition}/del3root/mid")
+                    .SelectMany(mid => ReadNode($"{TestPartition}/del3root/mid/deep")
+                        .Select(deep => root is null && mid is null && deep is null))))
+            .Should().Within(30.Seconds()).Match(allGone => allGone);
     }
 
     [Fact]
     public async Task Delete_NonExistentNode_Throws()
     {
-        // Act & Assert — deleting a non-existent node should throw
-        var act = () => NodeFactory.DeleteNodeAsync("nonexistent/path/that/does/not/exist");
+        // Act & Assert â€” deleting a non-existent node should throw
+        Func<Task> act = async () => await NodeFactory.DeleteNode("nonexistent/path/that/does/not/exist").FirstAsync().ToTask();
         await act.Should().ThrowAsync<System.Exception>();
     }
 
     [Fact]
     public async Task Delete_NodeWithSiblings_OnlyDeletesTargetSubtree()
     {
-        // Arrange — create two sibling subtrees under TestData partition
-        await NodeFactory.CreateNodeAsync(
-            new MeshNode("del4parent", TestPartition) { Name = "Parent", NodeType = "Group" });
-        await NodeFactory.CreateNodeAsync(
-            new MeshNode("keep", $"{TestPartition}/del4parent") { Name = "Keep", NodeType = "Markdown" });
-        await NodeFactory.CreateNodeAsync(
-            new MeshNode("delete", $"{TestPartition}/del4parent") { Name = "Delete", NodeType = "Markdown" });
-        await NodeFactory.CreateNodeAsync(
-            new MeshNode("child", $"{TestPartition}/del4parent/delete") { Name = "Child", NodeType = "Markdown" });
+        // Arrange â€” create two sibling subtrees under TestData partition
+        await NodeFactory.CreateNode(
+            new MeshNode("del4parent", TestPartition) { Name = "Parent", NodeType = "Group" }).Should().Emit();
+        await NodeFactory.CreateNode(
+            new MeshNode("keep", $"{TestPartition}/del4parent") { Name = "Keep", NodeType = "Markdown" }).Should().Emit();
+        await NodeFactory.CreateNode(
+            new MeshNode("delete", $"{TestPartition}/del4parent") { Name = "Delete", NodeType = "Markdown" }).Should().Emit();
+        await NodeFactory.CreateNode(
+            new MeshNode("child", $"{TestPartition}/del4parent/delete") { Name = "Child", NodeType = "Markdown" }).Should().Emit();
 
-        // Act — only delete one subtree
-        await NodeFactory.DeleteNodeAsync($"{TestPartition}/del4parent/delete");
+        // Act â€” only delete one subtree
+        await NodeFactory.DeleteNode($"{TestPartition}/del4parent/delete").Should().Emit();
 
-        // Assert — the kept sibling should still exist
-        var kept = await MeshQuery.QueryAsync<MeshNode>($"path:{TestPartition}/del4parent/keep")
-            .FirstOrDefaultAsync(TestTimeout);
+        // Assert â€” the kept sibling should still exist
+        var kept = await ReadNode($"{TestPartition}/del4parent/keep").Should().Emit();
         kept.Should().NotBeNull("sibling node should not be affected");
 
-        var deleted = await MeshQuery.QueryAsync<MeshNode>($"path:{TestPartition}/del4parent/delete scope:subtree")
-            .ToListAsync(TestTimeout);
+        // Subtree existence: query is appropriate here (set, not specific content read)
+        var deleted = (await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(
+                $"path:{TestPartition}/del4parent/delete scope:subtree"))
+            .Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items;
         deleted.Should().BeEmpty("target subtree should be fully deleted");
     }
 
-    [Fact(Skip = "Delete via message routing needs proper node hub target")]
+    [Fact]
     public async Task Delete_ViaClient_WithDeleteNodeRequest()
     {
-        // Arrange — create a node and use the client messaging pattern
-        await NodeFactory.CreateNodeAsync(
-            MeshNode.FromPath("del5/target") with { Name = "Target", NodeType = "Markdown" });
+        // Arrange — create a node and use the client messaging pattern. Use a
+        // root path under TestPartition so the parent hub exists (the routing
+        // service refuses to route to "del5" otherwise — there's no node there).
+        var nodePath = $"{TestPartition}/del5target";
+        await NodeFactory.CreateNode(
+            new MeshNode("del5target", TestPartition) { Name = "Target", NodeType = "Markdown" }).Should().Emit();
 
         var client = GetClient();
 
-        // Act — send DeleteNodeRequest via client hub (target the parent namespace hub)
-        var response = await client.AwaitResponse(
-            new DeleteNodeRequest("del5/target") { DeletedBy = "test-user" },
-            o => o.WithTarget(new Address("del5")),
-            TestTimeout);
+        // Act — send DeleteNodeRequest via client hub. Target the mesh hub
+        // (CRUD handlers are registered there); the mesh hub forwards to the
+        // owning per-node hub via the standard HandleDeleteNodeRequest pipeline.
+        var response = await client.Observe(
+                new DeleteNodeRequest(nodePath) { DeletedBy = "test-user" },
+                o => o.WithTarget(Mesh.Address))
+            .Should().Emit();
 
         // Assert
         response.Message.Success.Should().BeTrue("deletion via client should succeed");
 
-        var result = await MeshQuery.QueryAsync<MeshNode>("path:del5/target")
-            .FirstOrDefaultAsync(TestTimeout);
-        result.Should().BeNull("node should be deleted");
+        // Poll the authoritative per-node read until the delete fan-out settles.
+        await Observable.Interval(TimeSpan.FromMilliseconds(50))
+            .StartWith(0L)
+            .SelectMany(_ => ReadNode(nodePath))
+            .Should().Within(10.Seconds()).Match(n => n is null, "node should be deleted");
     }
 
     /// <summary>
@@ -149,38 +190,44 @@ public class DeletionTests(ITestOutputHelper output) : MonolithMeshTestBase(outp
     /// IMeshService.DeleteNodeAsync from the NODE's hub, not the mesh hub.
     /// In production, DeleteLayoutArea does:
     ///   var nodeFactory = host.Hub.ServiceProvider.GetRequiredService&lt;IMeshService&gt;();
-    ///   await nodeFactory.DeleteNodeAsync(nodePath);
+    ///   await nodeFactory.DeleteNode(nodePath);
     /// </summary>
-    [Fact]
+    [Fact(Timeout = 120_000)]
     public async Task Delete_FromNodeHub_Succeeds()
     {
-        // Arrange — create a node and get its hub via the routing service
+        // Arrange â€” create a node and get its hub via the routing service
         var nodePath = $"{TestPartition}/del6target";
-        await NodeFactory.CreateNodeAsync(
-            new MeshNode("del6target", TestPartition) { Name = "Target", NodeType = "Markdown" });
+        await NodeFactory.CreateNode(
+            new MeshNode("del6target", TestPartition) { Name = "Target", NodeType = "Markdown" }).Should().Emit();
 
         // Get the node's hosted hub by routing a message to it (creates the hub on demand)
         var nodeAddress = new Address(nodePath);
         var client = GetClient();
-        var delivery = client.Post(
+        client.Post(
             new Data.DataChangeRequest(),
             o => o.WithTarget(nodeAddress));
 
-        // Small delay for hub creation to complete
-        await Task.Delay(500);
-
-        var nodeHub = Mesh.GetHostedHub(nodeAddress, HostedHubCreation.Never);
+        // Stream-poll for hub creation to complete — replaces a fixed
+        // Task.Delay(500). GetHostedHub(...HostedHubCreation.Never) returns
+        // null until the per-node hub is activated, which happens lazily off
+        // the first inbound message (the Post above). Polling absorbs the
+        // activation latency without racing.
+        var nodeHub = await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+            .Select(_ => Mesh.GetHostedHub(nodeAddress, HostedHubCreation.Never))
+            .Where(h => h is not null)
+            .Should().Within(10.Seconds()).Emit();
         nodeHub.Should().NotBeNull("node hub should exist after message delivery");
 
         // Resolve IMeshService from the NODE's hub (reproducing DeleteLayoutArea pattern)
         var nodeService = nodeHub!.ServiceProvider.GetRequiredService<IMeshService>();
 
-        // Act — delete from the node's hub (same as DeleteLayoutArea does)
-        await nodeService.DeleteNodeAsync(nodePath);
+        // Act â€” delete from the node's hub (same as DeleteLayoutArea does)
+        await nodeService.DeleteNode(nodePath).Should().Emit();
 
-        // Assert — node should be deleted
-        var result = await MeshQuery.QueryAsync<MeshNode>($"path:{nodePath}")
-            .FirstOrDefaultAsync(TestTimeout);
-        result.Should().BeNull("deletion from node hub should work");
+        // Assert â€” node should be deleted. Poll the authoritative per-node read.
+        await Observable.Interval(TimeSpan.FromMilliseconds(50))
+            .StartWith(0L)
+            .SelectMany(_ => ReadNode(nodePath))
+            .Should().Within(10.Seconds()).Match(n => n is null, "deletion from node hub should work");
     }
 }

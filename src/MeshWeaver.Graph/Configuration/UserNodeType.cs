@@ -1,4 +1,6 @@
 ﻿using MeshWeaver.Layout;
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
@@ -37,16 +39,29 @@ public static class UserNodeType
         {
             services.AddSingleton<IStaticNodeProvider, UserNodeProvider>();
             services.AddSingleton<INodeTypeAccessRule>(sp =>
-                new UserAccessRule(sp.GetService<ISecurityService>() ?? new NullSecurityService()));
+                new UserAccessRule(sp.GetRequiredService<IMessageHub>()));
             services.AddSingleton<INodePostCreationHandler>(sp =>
-                new UserScopeGrantHandler(
-                    sp.GetService<ISecurityService>() ?? new NullSecurityService()));
+                new UserScopeGrantHandler(sp.GetRequiredService<IMeshService>()));
             return services;
         });
         builder.ConfigureNodeTypeAccess(a => a.WithPublicRead(NodeType));
-        // nodeType:User → restrict to "User" partition (no fan-out needed)
+        // nodeType:User without a path constraint → restrict to the "Auth"
+        // partition (no fan-out needed). The "Auth" partition (formerly "User",
+        // renamed in V27 / DefaultPartitionProvider) mirrors User / Group /
+        // Role / VUser / ApiToken rows from every source partition via the
+        // auth-mirror trigger, so a single-partition query covers every User
+        // node in the mesh.
+        //
+        // Skip the override when the query targets a specific path
+        // (e.g. ACME/User/Oliver, sample-data layouts that load users from
+        // their source partition) — otherwise the Auth restriction would
+        // hijack legitimate per-partition reads. The mirror is a discovery
+        // index; queries that already know the path should follow the
+        // natural first-segment partition route.
         builder.AddQueryRoutingRule(query =>
-            query.ExtractNodeType() == NodeType ? new QueryRoutingHints { Partition = "User" } : null);
+            query.ExtractNodeType() == NodeType && string.IsNullOrEmpty(query.Path)
+                ? new QueryRoutingHints { Partition = "Auth" }
+                : null);
         return builder;
     }
 
@@ -74,8 +89,13 @@ public static class UserNodeType
         Icon = "/static/NodeTypeIcons/person.svg",
         NodeType = NodeType,
         ExcludeFromContext = new HashSet<string> { "search" },
-        AssemblyLocation = typeof(UserNodeType).Assembly.Location,
-        Content = new NodeTypeDefinition { DefaultNamespace = "User", RestrictedToNamespaces = ["User"] },
+        // Post-v10 design: User nodes live at the ROOT namespace (path={userId}),
+        // each user gets their own per-user partition. The previous design parked
+        // them under namespace="User" — now superseded; setting an empty default
+        // namespace + a single-element restriction list pinned to "" enforces the
+        // root placement at create time, so runtime onboarding writes cannot land
+        // a user node under "User/" by accident.
+        Content = new NodeTypeDefinition { DefaultNamespace = "", RestrictedToNamespaces = [""], OwnsPartition = true },
         HubConfiguration = config => config
             .AddMeshDataSource(source => source
                 .WithContentType<User>())
@@ -85,13 +105,16 @@ public static class UserNodeType
             .AddDefaultLayoutAreas()
             .AddUserActivityLayoutAreas()
             .AddGlobalAdminSettingsTab()
+            .AddPartitionSyncSettingsTab()
             .AddLayout(layout => layout.WithDefaultArea(UserActivityLayoutAreas.ActivityArea))
     };
 
     /// <summary>
-    /// Grants public read access ONLY on the User node itself (path == "User/{id}"),
+    /// Grants public read access ONLY on the User node itself (path == "{userId}"),
     /// not on its children (threads, activities, etc.). Children inherit normal
     /// access control — the user gets read access via UserScopeGrantHandler.
+    /// Post-v10 paths are root-level ({userId}); legacy "User/{userId}" still
+    /// matches so transitional data does not lose visibility before migration.
     /// </summary>
     private static MessageHubConfiguration WithUserNodePublicRead(this MessageHubConfiguration config)
         => config.AddAccessRule(
@@ -101,8 +124,10 @@ public static class UserNodeType
                 if (string.IsNullOrEmpty(userId)) return false;
                 var nodePath = context.Node.Path;
                 if (string.IsNullOrEmpty(nodePath)) return false;
-                // Only the User node itself is public, not children
-                // "User/Alice" is public, "User/Alice/SomeThread" is not
+                // Root-level user node ("Alice") with no namespace separator: public.
+                if (!nodePath.Contains('/'))
+                    return true;
+                // Legacy path "User/Alice" (single segment under "User/"): public.
                 return nodePath.StartsWith("User/", StringComparison.OrdinalIgnoreCase)
                        && !nodePath["User/".Length..].Contains('/');
             })
@@ -123,55 +148,56 @@ public static class UserNodeType
     /// DI-registered access rule for User nodes — reliable fallback when hub-config
     /// rules haven't been cached yet (e.g. during first onboarding).
     /// </summary>
-    private class UserAccessRule(ISecurityService securityService) : INodeTypeAccessRule
+    private class UserAccessRule(IMessageHub hub) : INodeTypeAccessRule
     {
         public string NodeType => UserNodeType.NodeType;
 
         public IReadOnlyCollection<NodeOperation> SupportedOperations =>
             [NodeOperation.Create, NodeOperation.Read, NodeOperation.Update];
 
-        public async Task<bool> HasAccessAsync(NodeValidationContext context, string? userId, CancellationToken ct = default)
+        public IObservable<bool> HasAccess(NodeValidationContext context, string? userId)
         {
-            // Read:
-            // - NodeType definition ("User"): always readable
-            // - Direct user nodes ("User/{id}"): publicly readable (any authenticated caller)
-            // - Children (threads, activities, etc.): delegate to ISecurityService
             if (context.Operation == NodeOperation.Read)
             {
                 var nodePath = context.Node.Path;
                 if (string.IsNullOrEmpty(nodePath))
-                    return false;
-                // NodeType definition
+                    return Observable.Return(false);
+                // Root-level user node ({userId}) — readable by any authenticated user.
+                if (!nodePath.Contains('/'))
+                    return Observable.Return(!string.IsNullOrEmpty(userId));
+                // Legacy "User" namespace passthrough (transitional).
                 if (nodePath.Equals("User", StringComparison.OrdinalIgnoreCase))
-                    return true;
-                // Direct user nodes are publicly readable
+                    return Observable.Return(true);
                 if (nodePath.StartsWith("User/", StringComparison.OrdinalIgnoreCase)
                     && !nodePath["User/".Length..].Contains('/'))
-                    return !string.IsNullOrEmpty(userId);
-                // Children: delegate to standard permission checks
+                    return Observable.Return(!string.IsNullOrEmpty(userId));
                 if (string.IsNullOrEmpty(userId))
-                    return false;
-                return await securityService.HasPermissionAsync(nodePath, userId, Permission.Read, ct);
+                    return Observable.Return(false);
+                return hub.CheckPermission(nodePath, userId, Permission.Read);
             }
 
             if (string.IsNullOrEmpty(userId))
-                return false;
+                return Observable.Return(false);
 
-            // Update: user can edit their own node
             if (context.Operation == NodeOperation.Update)
             {
                 var nodePath = context.Node.Path;
                 if (!string.IsNullOrEmpty(nodePath))
                 {
-                    var userScopePath = $"User/{userId}";
-                    if (nodePath.Equals(userScopePath, StringComparison.OrdinalIgnoreCase)
-                        || nodePath.StartsWith(userScopePath + "/", StringComparison.OrdinalIgnoreCase))
-                        return true;
+                    // Post-v10: user's partition is `{userId}` (root-level), not `User/{userId}`.
+                    if (nodePath.Equals(userId, StringComparison.OrdinalIgnoreCase)
+                        || nodePath.StartsWith(userId + "/", StringComparison.OrdinalIgnoreCase))
+                        return Observable.Return(true);
+                    // Legacy "User/{userId}" prefix — keep the rule honouring this
+                    // shape until all in-flight data is migrated to root namespace.
+                    var legacyPrefix = "User/" + userId;
+                    if (nodePath.Equals(legacyPrefix, StringComparison.OrdinalIgnoreCase)
+                        || nodePath.StartsWith(legacyPrefix + "/", StringComparison.OrdinalIgnoreCase))
+                        return Observable.Return(true);
                 }
             }
 
-            // Create/Update: portal namespace identities (onboarding flow)
-            return IsPortalIdentity(userId);
+            return Observable.Return(IsPortalIdentity(userId));
         }
     }
 
@@ -184,39 +210,50 @@ public static class UserNodeType
     /// </summary>
     private static MessageHubConfiguration AddGlobalAdminSettingsTab(this MessageHubConfiguration config)
         => config.AddSettingsMenuItems(
-            new SettingsMenuItemProvider(GetGlobalAdminTabAsync));
+            new SettingsMenuItemProvider(GetGlobalAdminTab));
 
-    private static async IAsyncEnumerable<SettingsMenuItemDefinition> GetGlobalAdminTabAsync(
+    private static IObservable<IReadOnlyList<SettingsMenuItemDefinition>> GetGlobalAdminTab(
         LayoutAreaHost host, RenderingContext ctx)
     {
-        // Check if the viewer is the node owner
+        IReadOnlyList<SettingsMenuItemDefinition> none = Array.Empty<SettingsMenuItemDefinition>();
+
+        // Check if the viewer is the node owner. Post-v10: per-user partition at root, so
+        // hubPath == userId. Strip the legacy "User/" prefix when present.
         var hubPath = host.Hub.Address.ToString();
-        var nodeOwnerId = hubPath.StartsWith("User/") ? hubPath[5..] : hubPath;
+        var nodeOwnerId = hubPath.StartsWith("User/", StringComparison.OrdinalIgnoreCase)
+            ? hubPath["User/".Length..]
+            : hubPath;
         var accessService = host.Hub.ServiceProvider.GetService<AccessService>();
         var viewerId = accessService?.Context?.ObjectId
                        ?? accessService?.CircuitContext?.ObjectId;
 
         if (string.IsNullOrEmpty(viewerId)
             || !string.Equals(viewerId, nodeOwnerId, StringComparison.OrdinalIgnoreCase))
-            yield break;
+            return Observable.Return(none);
 
-        // Check if the user has Admin permissions at root level
-        var securityService = host.Hub.ServiceProvider.GetService<ISecurityService>();
-        if (securityService == null)
-            yield break;
-
-        var rootPerms = await securityService.GetEffectivePermissionsAsync("", viewerId);
-        if (!rootPerms.HasFlag(Permission.All))
-            yield break;
-
-        yield return new SettingsMenuItemDefinition(
+        var tab = new SettingsMenuItemDefinition(
             Id: GlobalAdminTab,
             Label: "Global Administration",
             ContentBuilder: BuildGlobalAdminTab,
             Group: "Administration",
             Icon: Application.Styles.FluentIcons.Shield(),
             GroupIcon: Application.Styles.FluentIcons.Shield(),
-            Order: 300);
+            Order: 300,
+            Keywords: ["global admin", "platform admin", "administration", "invites",
+                "users", "onboarding", "system"]);
+
+        // Canonical platform-admin check: admin on the Admin partition (hub.IsGlobalAdmin →
+        // Permission.All at scope "Admin"). Pure reactive — wait for the POSITIVE (filter true)
+        // with a bounded timeout, NOT the first emission (which can be the premature empty static
+        // seed before the synced AccessAssignment query lands). StartWith(none) renders the menu
+        // immediately; the tab appears when admin is confirmed. Timeout/non-admin → stays hidden.
+        return host.Hub.IsGlobalAdmin(viewerId)
+            .Where(isAdmin => isAdmin)
+            .Take(1)
+            .Select(_ => (IReadOnlyList<SettingsMenuItemDefinition>)new[] { tab })
+            .Timeout(TimeSpan.FromSeconds(5))
+            .Catch<IReadOnlyList<SettingsMenuItemDefinition>, Exception>(_ => Observable.Return(none))
+            .StartWith(none);
     }
 
     private static UiControl BuildGlobalAdminTab(LayoutAreaHost host, StackControl stack, MeshNode? node)
@@ -227,15 +264,25 @@ public static class UserNodeType
             "<p style=\"color: var(--neutral-foreground-hint); margin-bottom: 16px;\">Manage who has administrative access across the platform.</p>"));
 
         stack = stack.WithView(Controls.MeshSearch
-            .WithHiddenQuery("namespace:_Access nodeType:AccessAssignment")
+            .WithHiddenQuery("namespace:Admin/_Access nodeType:AccessAssignment")
             .WithShowSearchBox(false)
             .WithShowEmptyMessage(true)
             .WithRenderMode(MeshSearchRenderMode.Flat)
             .WithCollapsibleSections(false)
             .WithSectionCounts(false)
-            .WithCreateNodeType("AccessAssignment")
-            .WithCreateNamespace("_Access")
+            .WithItemArea(MeshNodeLayoutAreas.ThumbnailArea)
+            .WithDisableNavigation()
+            .WithReactiveMode(true)
             .WithMaxColumns(2));
+
+        // + Add Admin — reuse the Access Control area's Subject/Role picker dialog,
+        // scoped to the "Admin" space so a new grant lands at
+        // Admin/_Access/{subject}_Access (MainNode = "Admin"), the platform-admin shape.
+        stack = stack.WithView(Controls.Button("+ Add Admin")
+            .WithAppearance(Appearance.Accent)
+            .WithStyle("align-self: flex-start; margin-top: 8px;")
+            .WithClickAction((Action<UiActionContext>)(addCtx =>
+                AccessControlLayoutArea.ShowAddAssignmentDialog(addCtx, "Admin"))));
 
         // Data Sources section
         stack = stack.WithView(Controls.Html(
@@ -273,21 +320,44 @@ public static class UserNodeType
     /// Materialized into user_effective_permissions so the standard access control SQL
     /// handles visibility for all satellite nodes (threads, activities, etc.) under the user.
     /// </summary>
-    private class UserScopeGrantHandler(ISecurityService securityService) : INodePostCreationHandler
+    private class UserScopeGrantHandler(IMeshService meshService) : INodePostCreationHandler
     {
         public string NodeType => UserNodeType.NodeType;
 
-        public async Task HandleAsync(MeshNode createdNode, string? createdBy, CancellationToken ct)
+        public IObservable<System.Reactive.Unit> Handle(MeshNode createdNode, string? createdBy)
         {
-            // Grant the user Admin role on their own User node path.
-            // This materializes into user_effective_permissions with full access on User/{userId}/...
-            // so the user can manage all their own content (threads, activities, etc.).
+            // Grant the user Admin role on their own User/{userId} scope by
+            // creating the AccessAssignment node directly via the mesh service.
+            // No SecurityService.AddUserRole — that surface was removed; mutations
+            // ride the standard data layer.
             var userId = createdNode.Id;
             if (string.IsNullOrEmpty(userId))
-                return;
+                return Observable.Empty<System.Reactive.Unit>();
 
-            var userPath = createdNode.Path ?? $"User/{userId}";
-            await securityService.AddUserRoleAsync(userId, Role.Admin.Id, userPath, assignedBy: "system", ct);
+            // Post-v10: User nodes live at the root namespace, so the user's
+            // self-scope path is just {userId}. Fall back to the explicit Id
+            // when Path is somehow unset rather than reverting to the legacy
+            // "User/{userId}" shape — that would seed AccessAssignments at the
+            // wrong scope and the user would have no permissions on their
+            // actual partition.
+            var userPath = !string.IsNullOrEmpty(createdNode.Path) ? createdNode.Path : userId;
+            var assignmentNode = new MeshNode($"{userId}_Access", $"{userPath}/_Access")
+            {
+                NodeType = "AccessAssignment",
+                Name = $"{userId} Access",
+                MainNode = userPath,
+                Content = new AccessAssignment
+                {
+                    AccessObject = userId,
+                    DisplayName = userId,
+                    Roles = System.Collections.Immutable.ImmutableList<RoleAssignment>.Empty
+                        .Add(new RoleAssignment { Role = Role.Admin.Id }),
+                },
+            };
+
+            // Reactive: return the create observable; the caller subscribes (the actor model
+            // serialises the per-node hub's writes). Map to Unit for the handler contract.
+            return meshService.CreateNode(assignmentNode).Select(_ => System.Reactive.Unit.Default);
         }
     }
 }

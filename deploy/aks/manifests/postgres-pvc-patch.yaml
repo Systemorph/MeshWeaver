@@ -1,0 +1,34 @@
+# ---------------------------------------------------------------------------
+# postgres-pvc-patch.yaml — Bind the Postgres StatefulSet to a real PVC and add
+#                           the pgBackRest WAL-archive volume + sidecar.
+#
+# The chart's StatefulSet uses emptyDir for /var/lib/postgresql/data (DATA LOSS
+# on restart). This patch:
+#   - replaces the data emptyDir with the memex-pgdata PVC (managed-csi, RWO)
+#   - mounts a shared "pgbackrest" emptyDir for the spool/socket so the sidecar
+#     and the postgres container share pgBackRest's stanza working dir
+#   - injects the pgbackrest config from the ConfigMap
+#   - adds the WAL archiving env so the chart's postgres container runs with
+#     archive_command pointing at pgbackrest (see configmap.yaml -> command)
+#
+# Apply with:
+#   kubectl patch statefulset memex-postgres-statefulset -n memex \
+#     --type strategic --patch-file postgres-pvc-patch.yaml
+#
+# NOTE: the pgBackRest *sidecar* and the WAL-archive wiring are in
+# ./pgbackrest/sidecar-patch.yaml — keep this file focused on persistence so you
+# can apply just the PVC binding even if you disable pgBackRest.
+# ---------------------------------------------------------------------------
+spec:
+  template:
+    spec:
+      containers:
+        - name: memex-postgres
+          volumeMounts:
+            - name: memex-pgdata
+              mountPath: /var/lib/postgresql/data
+      volumes:
+        # Drop the emptyDir; bind the real PVC created by portal-pvcs.yaml.
+        - name: memex-pgdata
+          persistentVolumeClaim:
+            claimName: memex-pgdata

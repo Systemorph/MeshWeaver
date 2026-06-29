@@ -1,0 +1,5 @@
+# Large packaged on-device model binaries are staged here locally and bundled into the MacCatalyst app
+# at build time (see Memex.Client.csproj + Doc/Architecture/OnDeviceVoice). They are runtime artifacts —
+# NEVER committed to git (hundreds of MB / GB). Keep the folder, ignore its contents.
+*
+!.gitignore

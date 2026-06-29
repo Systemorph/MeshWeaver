@@ -1,3 +1,5 @@
+using System.Reactive.Linq;
+
 namespace MeshWeaver.ContentCollections;
 
 /// <summary>
@@ -5,7 +7,14 @@ namespace MeshWeaver.ContentCollections;
 /// </summary>
 public class EmbeddedResourceStreamProviderFactory : IStreamProviderFactory
 {
-    public Task<IStreamProvider> CreateAsync(ContentCollectionConfig config, CancellationToken cancellationToken = default)
+    /// <summary>
+    /// Creates an <see cref="EmbeddedResourceStreamProvider"/> from the config's
+    /// <c>AssemblyName</c> and <c>ResourcePrefix</c> settings, resolving the assembly from the
+    /// current app domain.
+    /// </summary>
+    /// <param name="config">The collection configuration carrying the required settings.</param>
+    /// <returns>An observable that emits the constructed stream provider.</returns>
+    public IObservable<IStreamProvider> Create(ContentCollectionConfig config)
     {
         var assemblyName = config.Settings?.GetValueOrDefault("AssemblyName")
             ?? throw new ArgumentException("AssemblyName required for EmbeddedResource");
@@ -16,6 +25,6 @@ public class EmbeddedResourceStreamProviderFactory : IStreamProviderFactory
             .FirstOrDefault(a => a.GetName().Name == assemblyName)
             ?? throw new InvalidOperationException($"Assembly not found: {assemblyName}");
 
-        return Task.FromResult<IStreamProvider>(new EmbeddedResourceStreamProvider(assembly, resourcePrefix));
+        return Observable.Return<IStreamProvider>(new EmbeddedResourceStreamProvider(assembly, resourcePrefix));
     }
 }

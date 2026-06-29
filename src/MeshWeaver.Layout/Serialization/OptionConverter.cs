@@ -10,11 +10,24 @@ namespace MeshWeaver.Layout.Serialization;
 /// </summary>
 public class OptionConverter : JsonConverter<Option>
 {
+    /// <summary>
+    /// Returns true when <paramref name="typeToConvert"/> is <see cref="Option"/> or a subtype.
+    /// </summary>
+    /// <param name="typeToConvert">The type being inspected by the serializer.</param>
+    /// <returns>True if this converter handles the type; otherwise false.</returns>
     public override bool CanConvert(Type typeToConvert)
     {
         return typeof(Option).IsAssignableFrom(typeToConvert);
     }
 
+    /// <summary>
+    /// Reads an <see cref="Option"/> value from JSON, using the <c>$type</c> discriminator to
+    /// resolve the concrete <c>Option&lt;T&gt;</c> type before deserializing.
+    /// </summary>
+    /// <param name="reader">The JSON reader positioned at the start of the object.</param>
+    /// <param name="typeToConvert">The declared type; the actual type is resolved from <c>$type</c>.</param>
+    /// <param name="options">Serializer options (this converter removes itself to prevent recursion).</param>
+    /// <returns>The deserialized <see cref="Option"/> instance.</returns>
     public override Option Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
     {
         if (reader.TokenType != JsonTokenType.StartObject)
@@ -89,6 +102,13 @@ public class OptionConverter : JsonConverter<Option>
         return (Option)JsonSerializer.Deserialize(jsonObject.GetRawText(), concreteType, converterOptions)!;
     }
 
+    /// <summary>
+    /// Writes <paramref name="value"/> as JSON using its concrete runtime type so that the
+    /// <c>$type</c> discriminator is always emitted for correct round-trip deserialization.
+    /// </summary>
+    /// <param name="writer">The JSON writer to write to.</param>
+    /// <param name="value">The <see cref="Option"/> instance to serialize.</param>
+    /// <param name="options">Serializer options (this converter removes itself to prevent recursion).</param>
     public override void Write(Utf8JsonWriter writer, Option value, JsonSerializerOptions options)
     {
         if (value == null)

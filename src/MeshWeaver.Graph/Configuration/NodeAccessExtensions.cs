@@ -1,3 +1,4 @@
+using System.Reactive.Linq;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
@@ -40,7 +41,9 @@ public static class NodeAccessExtensions
                 (_, userId) => !string.IsNullOrEmpty(userId));
 
     /// <summary>
-    /// Allows users to edit nodes under their own User/{userId} scope.
+    /// Allows users to edit nodes under their own partition (path = userId or userId/...).
+    /// Post-v10: each user has their own root-level partition ({userId}). The legacy
+    /// "User/{userId}" prefix is still honoured for in-flight transitional data.
     /// </summary>
     public static MessageHubConfiguration WithSelfEdit(this MessageHubConfiguration config)
         => config.AddAccessRule(
@@ -50,9 +53,12 @@ public static class NodeAccessExtensions
                 if (string.IsNullOrEmpty(userId)) return false;
                 var nodePath = context.Node.Path;
                 if (string.IsNullOrEmpty(nodePath)) return false;
-                var userScopePath = $"User/{userId}";
-                return nodePath.Equals(userScopePath, StringComparison.OrdinalIgnoreCase)
-                       || nodePath.StartsWith(userScopePath + "/", StringComparison.OrdinalIgnoreCase);
+                if (nodePath.Equals(userId, StringComparison.OrdinalIgnoreCase)
+                    || nodePath.StartsWith(userId + "/", StringComparison.OrdinalIgnoreCase))
+                    return true;
+                var legacyPrefix = "User/" + userId;
+                return nodePath.Equals(legacyPrefix, StringComparison.OrdinalIgnoreCase)
+                       || nodePath.StartsWith(legacyPrefix + "/", StringComparison.OrdinalIgnoreCase);
             });
 
     /// <summary>
@@ -67,8 +73,18 @@ public static class NodeAccessExtensions
 /// </summary>
 public record NodeAccessRuleSet
 {
+    /// <summary>
+    /// The collected access rules, each pairing the operations it applies to with a check
+    /// predicate that returns true to allow access (false to fall through to the next rule).
+    /// </summary>
     public IReadOnlyList<(IReadOnlyCollection<NodeOperation> Operations, Func<NodeValidationContext, string?, bool> Check)> Rules { get; init; } = [];
 
+    /// <summary>
+    /// Returns a new rule set with an additional access rule appended.
+    /// </summary>
+    /// <param name="operations">The operations the rule applies to (empty means all operations).</param>
+    /// <param name="rule">The check predicate, given the validation context and the user id, returning true to allow access.</param>
+    /// <returns>A new rule set including the added rule.</returns>
     public NodeAccessRuleSet Add(IReadOnlyCollection<NodeOperation> operations, Func<NodeValidationContext, string?, bool> rule)
         => this with { Rules = [.. Rules, (operations, rule)] };
 
@@ -85,17 +101,17 @@ public record NodeAccessRuleSet
         public IReadOnlyCollection<NodeOperation> SupportedOperations =>
             ruleSet.Rules.SelectMany(r => r.Operations).Distinct().ToArray();
 
-        public Task<bool> HasAccessAsync(NodeValidationContext context, string? userId, CancellationToken ct = default)
+        public IObservable<bool> HasAccess(NodeValidationContext context, string? userId)
         {
             foreach (var (operations, check) in ruleSet.Rules)
             {
                 if (operations.Count == 0 || operations.Contains(context.Operation))
                 {
                     if (check(context, userId))
-                        return Task.FromResult(true);
+                        return Observable.Return(true);
                 }
             }
-            return Task.FromResult(false);
+            return Observable.Return(false);
         }
     }
 }

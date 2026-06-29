@@ -8,8 +8,6 @@ using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
-using FluentAssertions;
-using FluentAssertions.Extensions;
 using MeshWeaver.AI;
 using MeshWeaver.Connection.Orleans;
 using MeshWeaver.Data;
@@ -38,15 +36,15 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 ///
 /// Exercises the FULL production flow:
 /// 1. Client creates a thread (like ThreadChatView.SendMessageAsync)
-/// 2. Client submits a message (SubmitMessageRequest → thread grain)
+/// 2. Client submits a message (ThreadInput.AppendUserInput Ã¢â€ â€™ thread grain)
 /// 3. Thread grain creates user + response cells via Observable
 /// 4. Execution starts on _Exec hosted hub (streaming loop via InvokeAsync)
-/// 5. Top-level agent calls Create tool (MeshPlugin) → NodeChangeEntry generated
-/// 6. Top-level agent delegates to sub-agent → sub-thread created, SubmitMessage posted
-/// 7. Sub-agent calls Patch tool → NodeChangeEntry generated in sub-thread
-/// 8. Sub-thread completes → SubmitMessageResponse.UpdatedNodes propagates up
-/// 9. Parent merges node changes via ForwardNodeChange → aggregated with min/max versions
-/// 10. Parent completes → final NodeChangeEntry list on response message
+/// 5. Top-level agent calls Create tool (MeshPlugin) Ã¢â€ â€™ NodeChangeEntry generated
+/// 6. Top-level agent delegates to sub-agent Ã¢â€ â€™ sub-thread created, SubmitMessage posted
+/// 7. Sub-agent calls Patch tool Ã¢â€ â€™ NodeChangeEntry generated in sub-thread
+/// 8. Sub-thread completes Ã¢â€ â€™ server-internal SubmitMessageResponse.UpdatedNodes propagates up
+/// 9. Parent merges node changes via ForwardNodeChange Ã¢â€ â€™ aggregated with min/max versions
+/// 10. Parent completes Ã¢â€ â€™ final NodeChangeEntry list on response message
 ///
 /// This test specifically validates:
 /// - No deadlocks in the delegation chain (execution hub, TCS resolution, callbacks)
@@ -54,72 +52,28 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// - NodeChangeEntry aggregation across delegation boundaries
 /// - Correct routing of deeply nested sub-thread paths in Orleans
 /// </summary>
-public class OrleansNodeChangePropagationTest(ITestOutputHelper output) : TestBase(output)
+public class OrleansNodeChangePropagationTest(ITestOutputHelper output) : OrleansSharedTestBase(output)
 {
-    private TestCluster Cluster { get; set; } = null!;
-    private IMessageHub ClientMesh => Cluster.Client.ServiceProvider.GetRequiredService<IMessageHub>();
+    private IMessageHub GetClient([CallerMemberName] string? name = null)
+        => base.GetClient($"nodechange-{name}-{Guid.NewGuid():N}", "TestUser");
 
-    public override async ValueTask InitializeAsync()
-    {
-        await base.InitializeAsync();
-        var builder = new TestClusterBuilder();
-        builder.AddSiloBuilderConfigurator<RlsChatSiloConfigurator>();
-        builder.AddClientBuilderConfigurator<TestClientConfigurator>();
-        Cluster = builder.Build();
-        await Cluster.DeployAsync();
-    }
-
-    public override async ValueTask DisposeAsync()
-    {
-        if (Cluster is not null)
-            await Cluster.DisposeAsync();
-        await base.DisposeAsync();
-    }
-
-    /// <summary>
-    /// Creates a client hub with user identity — same as the Blazor portal does
-    /// when a user opens a chat panel.
-    /// </summary>
-    private async Task<IMessageHub> GetClientAsync()
-    {
-        var client = ClientMesh.ServiceProvider.CreateMessageHub(
-            new Address("client", "nodechange"),
-            config =>
-            {
-                config.TypeRegistry.AddAITypes();
-                return config.AddLayoutClient();
-            });
-        // Simulate Blazor CircuitContext — user identity for access control
-        var accessService = client.ServiceProvider.GetRequiredService<AccessService>();
-        accessService.SetCircuitContext(new AccessContext
-        {
-            ObjectId = "Roland",
-            Name = "Roland Buergi",
-            Email = "rbuergi@systemorph.com"
-        });
-        await Cluster.Client.ServiceProvider.GetRequiredService<IRoutingService>()
-            .RegisterStreamAsync(client.Address, client.DeliverMessage);
-        return client;
-    }
-
-    private async Task<string> CreateNodeAsync(IMessageHub client, MeshNode node, string targetAddress, CancellationToken ct)
+    private async Task<string> CreateNode(IMessageHub client, MeshNode node, string targetAddress)
     {
         Output.WriteLine($"CreateNodeRequest: id={node.Id}, path={node.Path}, target={targetAddress}");
-        var response = await client.AwaitResponse(
-            new CreateNodeRequest(node),
-            o => o.WithTarget(new Address(targetAddress)), ct);
+        var response = await client.Observe(new CreateNodeRequest(node), o => o.WithTarget(new Address(targetAddress)))
+            .Should().Within(45.Seconds()).Emit();
         Output.WriteLine($"CreateNodeResponse: success={response.Message.Success}, error={response.Message.Error ?? "(none)"}, path={response.Message.Node?.Path ?? "(null)"}, nodeType={response.Message.Node?.NodeType ?? "(null)"}");
-        response.Message.Success.Should().BeTrue(response.Message.Error);
+        response.Message.Success.Should().BeTrue(response.Message.Error ?? "");
         return response.Message.Node!.Path!;
     }
 
     private IObservable<IReadOnlyList<string>> ObserveThreadMessages(IMessageHub client, string threadPath)
     {
         var workspace = client.GetWorkspace();
-        return workspace.GetRemoteStream<MeshNode>(new Address(threadPath))!
-            .Select(nodes =>
+        return workspace.GetMeshNodeStream(threadPath)
+            .Select(node =>
             {
-                var node = nodes?.FirstOrDefault(n => n.Path == threadPath);
+                
                 var content = node?.Content as MeshThread;
                 var ids = content?.Messages ?? [];
                 Output.WriteLine($"[Stream] Thread {threadPath}: {ids.Count} message IDs");
@@ -127,84 +81,93 @@ public class OrleansNodeChangePropagationTest(ITestOutputHelper output) : TestBa
             });
     }
 
-    private async Task<T?> GetHubContentAsync<T>(IMessageHub client, string path, CancellationToken ct) where T : class
-    {
-        var nodeId = path.Contains('/') ? path[(path.LastIndexOf('/') + 1)..] : path;
-        var response = await client.AwaitResponse(
-            new GetDataRequest(new EntityReference(nameof(MeshNode), nodeId)),
-            o => o.WithTarget(new Address(path)), ct);
-        var node = response.Message.Data as MeshNode;
-        if (node == null && response.Message.Data is JsonElement je)
-            node = je.Deserialize<MeshNode>(ClientMesh.JsonSerializerOptions);
-        if (node?.Content is T typed) return typed;
-        if (node?.Content is JsonElement contentJe)
-            return contentJe.Deserialize<T>(ClientMesh.JsonSerializerOptions);
-        return null;
-    }
+    // Canonical CQRS-correct LIVE read via the per-node MeshNode stream. Returns an
+    // IObservable<T?> the caller asserts on with .Should().Within(...).Match(...) —
+    // no one-shot GetDataRequest, no await, no poll loop.
+    private IObservable<T?> GetContent<T>(IMessageHub client, string path) where T : class
+        => client.GetWorkspace().GetMeshNodeStream(path)
+            .Select(node =>
+            {
+                if (node?.Content is T typed) return typed;
+                if (node?.Content is JsonElement contentJe)
+                    return contentJe.Deserialize<T>(Fixture.ClientMesh.JsonSerializerOptions);
+                return null;
+            });
 
     /// <summary>
-    /// Full chain: top agent calls Create → delegates → sub-agent calls Patch → NodeChangeEntry propagates.
+    /// Full chain: top agent calls Create Ã¢â€ â€™ delegates Ã¢â€ â€™ sub-agent calls Patch Ã¢â€ â€™ NodeChangeEntry propagates.
     /// Tests for deadlocks: the execution hub (InvokeAsync) blocks during streaming;
     /// delegation TCS resolution must not require the blocked scheduler.
     /// </summary>
     [Fact(Timeout = 60000)]
     public async Task Delegation_NodeChanges_PropagateFromSubThread()
     {
-        var ct = new CancellationTokenSource(50.Seconds()).Token;
-        var client = await GetClientAsync();
+        // Pull IMessageHub from the silo's container â€” ChatClientAgentFactory needs it
+        // so MeshPlugin tools (Create/Patch/delegate_to_agent) get wired into every test agent.
+        var siloHub = ((InProcessSiloHandle)Fixture.Cluster.Silos[0]).SiloHost.Services
+            .GetRequiredService<IMessageHub>();
+        SharedOrleansFixture.SwappableFactory.SetInner(new NodeChangeTestChatClientFactory(siloHub));
+        try
+        {
+        var client = GetClient();
 
-        // 1. Create thread — exactly like ThreadChatView.SendMessageAsync does
-        var threadNode = ThreadNodeType.BuildThreadNode("User/Roland", "NodeChange propagation test", "Roland");
-        var threadPath = await CreateNodeAsync(client, threadNode, "User/Roland", ct);
+        // 1. Create thread Ã¢â‚¬â€ exactly like ThreadChatView.SendMessageAsync does
+        var threadNode = ThreadNodeType.BuildThreadNode("TestUser", "NodeChange propagation test", "TestUser");
+        var threadPath = await CreateNode(client, threadNode, "TestUser");
         Output.WriteLine($"Thread created: {threadPath}");
 
-        // 2. Subscribe to messages (like ThreadChatView data-binding)
-        var twoMessages = ObserveThreadMessages(client, threadPath)
-            .Where(ids => ids.Count >= 2)
-            .FirstAsync()
-            .ToTask(ct);
+        // 2. Messages observed reactively after submit (live replaying stream).
 
-        // 3. Submit message — triggers the ToolCallDelegatingChatClient which:
+        // 3. Submit message Ã¢â‚¬â€ triggers the ToolCallDelegatingChatClient which:
         //    Turn 1: calls Create (creates a Markdown node)
         //    Turn 2: calls delegate_to_agent (Executor)
         //    Turn 3: returns summary text after delegation completes
-        Output.WriteLine("Posting SubmitMessageRequest (Create + Delegate chain)...");
-        var submitResponse = await client.AwaitResponse(
-            new SubmitMessageRequest
-            {
-                ThreadPath = threadPath,
-                UserMessageText = "Create a doc and delegate updates to Executor",
-                ContextPath = "User/Roland"
-            },
-            o => o.WithTarget(new Address(threadPath)), ct);
-        submitResponse.Message.Success.Should().BeTrue(submitResponse.Message.Error);
-        Output.WriteLine("SubmitMessageRequest succeeded — cells created");
+        Output.WriteLine("Posting ThreadInput.AppendUserInput (Create + Delegate chain)...");
+        client.SubmitMessage(
+            threadPath,
+            "Create a doc and delegate updates to Executor",
+            contextPath: "TestUser");
+            Output.WriteLine("ThreadInput.AppendUserInput succeeded Ã¢â‚¬â€ submission queued");
 
-        // 4. Wait for message IDs
-        var msgIds = await twoMessages;
+        // 4. Wait for message IDs (live replaying stream — observe after submit)
+        var msgIds = await ObserveThreadMessages(client, threadPath)
+            .Should().Within(45.Seconds()).Match(ids => ids.Count >= 2);
         msgIds.Should().HaveCount(2);
         Output.WriteLine($"Message IDs: [{string.Join(", ", msgIds)}]");
 
-        // 5. Wait for execution to complete — poll response message
+        // 5. Wait for execution to complete Ã¢â‚¬â€ poll response message
         //    If the delegation chain deadlocks, this times out.
         var responsePath = $"{threadPath}/{msgIds[1]}";
-        ThreadMessage? responseMsg = null;
-        for (var i = 0; i < 60; i++)
-        {
-            responseMsg = await GetHubContentAsync<ThreadMessage>(client, responsePath, ct);
-            // Wait until we have tool calls AND text (execution complete)
-            if (responseMsg?.ToolCalls is { Count: >= 2 } && !string.IsNullOrEmpty(responseMsg.Text))
-            {
-                Output.WriteLine($"  Poll {i}: text='{responseMsg.Text?[..Math.Min(80, responseMsg.Text.Length)]}', toolCalls={responseMsg.ToolCalls.Count}, updatedNodes={responseMsg.UpdatedNodes.Count}");
-                break;
-            }
-            Output.WriteLine($"  Poll {i}: text len={responseMsg?.Text?.Length ?? 0}, toolCalls={responseMsg?.ToolCalls?.Count ?? 0}");
-            await Task.Delay(500, ct);
-        }
+        // Wait until the response cell has tool calls AND text AND the propagated
+        // node change. UpdatedNodes is populated by SEPARATE async writes from the
+        // terminal-text write: the sub-thread's Patch reaches the parent via
+        // client.ForwardNodeChange (ThreadExecution.cs:915), which can fire AFTER
+        // the snapshot that first satisfies ToolCalls+Text (see the
+        // "UpdateDelegationStatus can still fire after the await foreach exits"
+        // note at ThreadExecution.cs:1361). Waiting only on ToolCalls+Text and then
+        // asserting UpdatedNodes on that captured snapshot races the propagation and
+        // intermittently observes an empty list — so wait on the actual asserted
+        // state (the doc change present) instead of a proxy.
+        //
+        // Same reasoning applies to the delegation's DelegationPath: it is stamped onto the
+        // delegate_to tool-call entry by the asynchronous Dispatched event (AgentChatClient
+        // delegation lifecycle) and re-persisted via PushToResponseMessage's MergeToolCallEntries,
+        // which can land in a LATER write than the doc-change propagation. Asserting it on the
+        // snapshot that merely satisfies UpdatedNodes races that stamp and intermittently reads a
+        // null path (the Delegation_NodeChanges_PropagateFromSubThread red). Wait on the actual
+        // asserted state — the delegate entry carrying its sub-thread path — not a proxy.
+        var responseMsg = await GetContent<ThreadMessage>(client, responsePath)
+            .Should().Within(45.Seconds()).Match(m =>
+                m?.ToolCalls is { Count: >= 2 }
+                && !string.IsNullOrEmpty(m.Text)
+                && m.UpdatedNodes.Any(e => e.Path.Contains("test-doc-nodechange"))
+                && m.ToolCalls.Any(t => t.Name?.Contains("delegate") == true
+                    && !string.IsNullOrEmpty(t.DelegationPath)));
+        Output.WriteLine($"Response: text len={responseMsg!.Text?.Length ?? 0}, toolCalls={responseMsg.ToolCalls.Count}, updatedNodes={responseMsg.UpdatedNodes.Count}");
 
         // 6. Verify response message has tool calls
         responseMsg.Should().NotBeNull("response message should exist after execution");
-        responseMsg!.ToolCalls.Should().NotBeNullOrEmpty("agent should have made tool calls");
+        responseMsg!.ToolCalls.Should().NotBeEmpty("agent should have made tool calls");
 
         var createCall = responseMsg.ToolCalls.FirstOrDefault(t => t.Name == "Create");
         createCall.Should().NotBeNull("agent should have called Create tool");
@@ -216,41 +179,45 @@ public class OrleansNodeChangePropagationTest(ITestOutputHelper output) : TestBa
         delegateCall!.DelegationPath.Should().NotBeNullOrEmpty("delegation should have a sub-thread path");
         Output.WriteLine($"Delegation: path={delegateCall.DelegationPath}, success={delegateCall.IsSuccess}");
 
-        // 7. Verify the Markdown node was created by the Create tool
-        var meshService = Cluster.Client.ServiceProvider.GetRequiredService<IMeshService>();
-        var createdNodes = await meshService
-            .QueryAsync<MeshNode>("path:User/Roland/test-doc-nodechange", ct: ct)
-            .ToListAsync(ct);
-        createdNodes.Should().ContainSingle("Create tool should have created the Markdown node");
-        Output.WriteLine($"Created node: {createdNodes[0].Path}, name={createdNodes[0].Name}");
+        // 7. Verify the Markdown node was created by the Create tool.
+        // Use the silo's workspace-side MeshNodeStream (NOT Query) — per
+        // `feedback_cqrs_no_query_for_content.md`: Query is eventually-
+        // consistent against an in-memory index that's separate from the
+        // storage adapter's commit. After 27 in-flight DataChangeRequests
+        // stack up on the response message hub during delegation streaming,
+        // the index update can lag past the 10 s budget — the storage value
+        // is already there but the query stream hasn't emitted Added yet.
+        // GetMeshNodeStream reads the authoritative per-node stream directly.
+        var siloWorkspace = siloHub.GetWorkspace();
+        var createdNode = await siloWorkspace
+            .GetMeshNodeStream("TestUser/test-doc-nodechange")
+            .Should().Within(10.Seconds()).Match(n => n is not null);
+        createdNode.Should().NotBeNull("Create tool should have created the Markdown node");
+        Output.WriteLine($"Created node: {createdNode.Path}, name={createdNode.Name}");
 
         // 8. Verify sub-thread exists and completed
         var subThreadPath = delegateCall.DelegationPath!;
-        var subThread = await GetHubContentAsync<MeshThread>(client, subThreadPath, ct);
+        var subThread = await GetContent<MeshThread>(client, subThreadPath)
+            .Should().Within(45.Seconds()).Match(t => (t?.Messages.Count ?? 0) >= 2);
         subThread.Should().NotBeNull("sub-thread should exist");
         subThread!.Messages.Should().HaveCount(2, "sub-thread should have user + response messages");
         Output.WriteLine($"Sub-thread: {subThreadPath}, messages={subThread.Messages.Count}");
 
         // 9. Verify sub-thread response has Patch tool call
         var subResponsePath = $"{subThreadPath}/{subThread.Messages[1]}";
-        ThreadMessage? subResponseMsg = null;
-        for (var i = 0; i < 30; i++)
-        {
-            subResponseMsg = await GetHubContentAsync<ThreadMessage>(client, subResponsePath, ct);
-            if (subResponseMsg?.ToolCalls is { Count: > 0 }) break;
-            await Task.Delay(200, ct);
-        }
+        var subResponseMsg = await GetContent<ThreadMessage>(client, subResponsePath)
+            .Should().Within(45.Seconds()).Match(m => m?.ToolCalls is { Count: > 0 });
         subResponseMsg.Should().NotBeNull("sub-thread response should exist");
         var patchCall = subResponseMsg!.ToolCalls.FirstOrDefault(t => t.Name == "Patch");
         patchCall.Should().NotBeNull("sub-agent should have called Patch tool");
         Output.WriteLine($"Sub-thread Patch: success={patchCall!.IsSuccess}, args={patchCall.Arguments?[..Math.Min(60, patchCall.Arguments?.Length ?? 0)]}");
 
         // 10. Verify NodeChangeEntry propagated to parent response
-        responseMsg.UpdatedNodes.Should().NotBeNullOrEmpty(
+        responseMsg.UpdatedNodes.Should().NotBeEmpty(
             "parent response should have aggregated UpdatedNodes from both Create and sub-thread Patch");
         Output.WriteLine($"UpdatedNodes on parent response: {responseMsg.UpdatedNodes.Count} entries");
         foreach (var entry in responseMsg.UpdatedNodes)
-            Output.WriteLine($"  {entry.Operation}: {entry.Path} v{entry.VersionBefore}→v{entry.VersionAfter}");
+            Output.WriteLine($"  {entry.Operation}: {entry.Path} v{entry.VersionBefore}Ã¢â€ â€™v{entry.VersionAfter}");
 
         // The same node (test-doc-nodechange) was Created by parent and Patched by sub-thread.
         // Aggregation should give: min(VersionBefore), max(VersionAfter)
@@ -258,84 +225,19 @@ public class OrleansNodeChangePropagationTest(ITestOutputHelper output) : TestBa
         docChanges.Should().ContainSingle(
             "changes to same node should be aggregated into one entry");
         var docChange = docChanges[0];
-        docChange.VersionAfter.Should().BeGreaterThan(docChange.VersionBefore ?? 0,
+        (docChange.VersionAfter ?? 0).Should().BeGreaterThan(docChange.VersionBefore ?? 0,
             "aggregated version should show progression from create to patch");
-        Output.WriteLine($"Aggregated: {docChange.Path} {docChange.Operation} v{docChange.VersionBefore}→v{docChange.VersionAfter}");
-    }
-
-    /// <summary>
-    /// Resubmit test: after execution completes, click "Resubmit" (ArrowSync).
-    /// The HandleResubmitMessage handler must not deadlock — it uses
-    /// meshService.CreateNode (Observable) + workspace.UpdateMeshNode (non-blocking).
-    /// </summary>
-    [Fact(Timeout = 60000)]
-    public async Task Resubmit_AfterExecution_DoesNotDeadlock()
-    {
-        var ct = new CancellationTokenSource(50.Seconds()).Token;
-        var client = await GetClientAsync();
-
-        // 1. Create and execute a thread
-        var threadNode = ThreadNodeType.BuildThreadNode("User/Roland", "Resubmit deadlock test", "Roland");
-        var threadPath = await CreateNodeAsync(client, threadNode, "User/Roland", ct);
-
-        var twoMessages = ObserveThreadMessages(client, threadPath)
-            .Where(ids => ids.Count >= 2)
-            .FirstAsync()
-            .ToTask(ct);
-
-        await client.AwaitResponse(
-            new SubmitMessageRequest
-            {
-                ThreadPath = threadPath,
-                UserMessageText = "First message",
-                ContextPath = "User/Roland"
-            },
-            o => o.WithTarget(new Address(threadPath)), ct);
-
-        var msgIds = await twoMessages;
-        Output.WriteLine($"Initial messages: [{string.Join(", ", msgIds)}]");
-
-        // Wait for execution to complete
-        for (var i = 0; i < 30; i++)
-        {
-            var thread = await GetHubContentAsync<MeshThread>(client, threadPath, ct);
-            if (thread?.IsExecuting == false) break;
-            await Task.Delay(500, ct);
+        Output.WriteLine($"Aggregated: {docChange.Path} {docChange.Operation} v{docChange.VersionBefore}Ã¢â€ â€™v{docChange.VersionAfter}");
         }
-        Output.WriteLine("Initial execution complete");
-
-        // 2. Resubmit — sends ResubmitMessageRequest to the thread grain.
-        //    This was the original deadlock: the handler subscribed to workspace streams.
-        //    Now uses Observable + workspace.UpdateMeshNode.
-        // Resubmit keeps user message (index 0) + adds new response = 2 messages.
-        // But the IDs change (old response removed, new one added).
-        // Watch for the stream to show a DIFFERENT set of IDs than the initial ones.
-        var resubmittedMessages = ObserveThreadMessages(client, threadPath)
-            .Where(ids => ids.Count >= 2 && !ids.SequenceEqual(msgIds))
-            .FirstAsync()
-            .ToTask(ct);
-
-        Output.WriteLine("Posting ResubmitMessageRequest...");
-        var resubmitDelivery = client.Post(new ResubmitMessageRequest
+        finally
         {
-            ThreadPath = threadPath,
-            MessageId = msgIds[0],
-            UserMessageText = "Resubmitted message"
-        }, o => o.WithTarget(new Address(threadPath)));
-        Output.WriteLine($"ResubmitMessageRequest delivery: {resubmitDelivery != null}");
-
-        // 3. Wait for message IDs to change — if deadlocked, this times out
-        var newMsgIds = await resubmittedMessages;
-        newMsgIds.Should().HaveCount(2,
-            "resubmit should keep user message and replace response");
-        newMsgIds[0].Should().Be(msgIds[0], "user message should be preserved");
-        newMsgIds[1].Should().NotBe(msgIds[1], "response should be a new cell");
-        Output.WriteLine($"After resubmit: [{string.Join(", ", newMsgIds)}]");
-
-        // 4. Resubmit succeeded — messages changed, no deadlock.
-        // The execution will complete asynchronously (streaming on _Exec hub).
-        Output.WriteLine("Resubmit completed — messages updated, no deadlock!");
+            SharedOrleansFixture.SwappableFactory.Reset();
+        }
     }
+
+    // Resubmit_AfterExecution_DoesNotDeadlock was split out into its own class
+    // (OrleansResubmitDeadlockTest) so it no longer runs back-to-back with the
+    // heavy delegation chain above -- see that file's class summary for why.
 }
 
 /// <summary>
@@ -375,7 +277,7 @@ internal class ToolCallDelegatingChatClient : IChatClient
                 new Dictionary<string, object?>
                 {
                     ["agentName"] = "Worker",
-                    ["task"] = "Patch the node at User/Roland/test-doc-nodechange: set name to 'Updated by sub-agent'"
+                    ["task"] = "Patch the node at TestUser/test-doc-nodechange: set name to 'Updated by sub-agent'"
                 });
             return Task.FromResult(new ChatResponse(
                 new ChatMessage(ChatRole.Assistant, [delegateCall])));
@@ -387,7 +289,7 @@ internal class ToolCallDelegatingChatClient : IChatClient
             var nodeJson = JsonSerializer.Serialize(new
             {
                 id = "test-doc-nodechange",
-                @namespace = "User/Roland",
+                @namespace = "TestUser",
                 nodeType = "Markdown",
                 name = "Test Doc for NodeChange",
                 content = "# Initial Content"
@@ -407,7 +309,7 @@ internal class ToolCallDelegatingChatClient : IChatClient
         IEnumerable<ChatMessage> messages, ChatOptions? options = null,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        // Delegate to non-streaming for simplicity — the framework handles both
+        // Delegate to non-streaming for simplicity Ã¢â‚¬â€ the framework handles both
         var response = await GetResponseAsync(messages, options, cancellationToken);
         var msg = response.Messages.First();
         var functionCalls = msg.Contents.OfType<FunctionCallContent>().ToList();
@@ -465,7 +367,7 @@ internal class PatchToolChatClient : IChatClient
             var patchCall = new FunctionCallContent("call_patch", "Patch",
                 new Dictionary<string, object?>
                 {
-                    ["path"] = "User/Roland/test-doc-nodechange",
+                    ["path"] = "TestUser/test-doc-nodechange",
                     ["fields"] = fieldsJson
                 });
             return Task.FromResult(new ChatResponse(
@@ -506,42 +408,27 @@ internal class PatchToolChatClient : IChatClient
 }
 
 /// <summary>
-/// Factory: top-level agents (Navigator/Planner/Orchestrator) get ToolCallDelegatingChatClient;
-/// sub-agents (Worker/Executor/Coder) get PatchToolChatClient.
+/// Factory: top-level agents (Navigator/Orchestrator/IsDefault) get
+/// <see cref="ToolCallDelegatingChatClient"/>; sub-agents (Worker/Executor/Coder)
+/// get <see cref="PatchToolChatClient"/>. Extends <see cref="ChatClientAgentFactory"/>
+/// so MeshPlugin's Create/Patch/delegate_to_agent tools are wired into every agent â€”
+/// otherwise the fake chat clients stream <c>FunctionCallContent</c> for tools the
+/// agent doesn't have and <c>FunctionInvokingChatClient</c> never executes them
+/// (responseMsg.ToolCalls would stay empty).
 /// </summary>
-internal class NodeChangeTestChatClientFactory : IChatClientFactory
+internal class NodeChangeTestChatClientFactory(IMessageHub hub) : ChatClientAgentFactory(hub)
 {
-    public string Name => "NodeChangeTestFactory";
-    public IReadOnlyList<string> Models => ["fake-model"];
-    public int Order => 0;
+    public override string Name => "NodeChangeTestFactory";
+    public override IReadOnlyList<string> Models => ["fake-model"];
+    public override int Order => 0;
 
-    public ChatClientAgent CreateAgent(
-        AgentConfiguration config, IAgentChat chat,
-        IReadOnlyDictionary<string, ChatClientAgent> existingAgents,
-        IReadOnlyList<AgentConfiguration> hierarchyAgents,
-        string? modelName = null)
+    protected override IChatClient CreateChatClient(AgentConfiguration agentConfig)
     {
-        var isTopLevel = config.IsDefault || config.Id is "Navigator" or "Planner" or "Orchestrator";
-        IChatClient chatClient = isTopLevel
+        var isTopLevel = agentConfig.IsDefault || agentConfig.Id is "Navigator" or "Orchestrator";
+        return isTopLevel
             ? new ToolCallDelegatingChatClient()
             : new PatchToolChatClient();
-
-        return new ChatClientAgent(
-            chatClient: chatClient,
-            instructions: config.Instructions ?? "Test assistant with tools.",
-            name: config.Id,
-            description: config.Description ?? config.Id,
-            tools: [], // Tools added by ChatClientAgentFactory
-            loggerFactory: null,
-            services: null);
     }
-
-    public Task<ChatClientAgent> CreateAgentAsync(
-        AgentConfiguration config, IAgentChat chat,
-        IReadOnlyDictionary<string, ChatClientAgent> existingAgents,
-        IReadOnlyList<AgentConfiguration> hierarchyAgents,
-        string? modelName = null)
-        => Task.FromResult(CreateAgent(config, chat, existingAgents, hierarchyAgents, modelName));
 }
 
 /// <summary>
@@ -563,10 +450,11 @@ public class NodeChangePropagationSiloConfigurator : ISiloConfigurator, IHostCon
             .AddAI()
             .AddRowLevelSecurity()
             .AddMeshNodes(
-                new MeshNode("Roland", "User") { Name = "Roland", NodeType = "User" })
+                new MeshNode("TestUser", "User") { Name = "TestUser", NodeType = "User" })
             .AddMeshNodes(PublicEditorAccess())
             .ConfigureServices(services =>
-                services.AddSingleton<IChatClientFactory>(new NodeChangeTestChatClientFactory()))
+                services.AddSingleton<IChatClientFactory>(sp =>
+                    new NodeChangeTestChatClientFactory(sp.GetRequiredService<IMessageHub>())))
             .ConfigureDefaultNodeHub(config => config.AddDefaultLayoutAreas());
     }
 
@@ -576,11 +464,12 @@ public class NodeChangePropagationSiloConfigurator : ISiloConfigurator, IHostCon
         {
             AccessObject = "Public",
             DisplayName = "Public",
-            Roles = [new RoleAssignment { Role = "Editor" }]
+            Roles = [new RoleAssignment { Role = "Admin" }]
         };
         return
         [
-            new("Public_Access", "User")
+            // Namespace must end in "/_Access" â€” see SecurityService.ComputeScopeRoles.
+            new("Public_Access", "User/_Access")
             {
                 NodeType = "AccessAssignment",
                 Name = "Public Access",

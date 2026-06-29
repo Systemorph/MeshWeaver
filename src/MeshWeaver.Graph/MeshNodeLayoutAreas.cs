@@ -52,50 +52,116 @@ public record PageLayoutOptions
 /// </summary>
 public static class MeshNodeLayoutAreas
 {
+    /// <summary>Area name for the node Overview layout area (the default view showing main content and the action menu).</summary>
     public const string OverviewArea = "Overview";
+    /// <summary>Area name for the node Thumbnail layout area (compact card view for catalogs and lists).</summary>
     public const string ThumbnailArea = "Thumbnail";
+    /// <summary>Area name for the node Metadata layout area (name, type, path and related metadata).</summary>
     public const string MetadataArea = "Metadata";
+    /// <summary>Area name for the node Settings layout area.</summary>
     public const string SettingsArea = "Settings";
+    /// <summary>Area name for the node Comments layout area.</summary>
     public const string CommentsArea = "Comments";
+    /// <summary>Area name for the node Search layout area.</summary>
     public const string SearchArea = "Search";
+    /// <summary>Area name for the node Files layout area.</summary>
     public const string FilesArea = "Files";
-    public const string ChildrenArea = "Children";
+    /// <summary>Area name for the NodeTypes layout area.</summary>
     public const string NodeTypesArea = "NodeTypes";
+    /// <summary>Area name for the Access Control layout area.</summary>
     public const string AccessControlArea = "AccessControl";
+    /// <summary>Area name for the Groups layout area.</summary>
     public const string GroupsArea = "Groups";
+    /// <summary>Area name for the Create node layout area.</summary>
     public const string CreateNodeArea = "Create";
+    /// <summary>Area name for the Edit node layout area.</summary>
     public const string EditArea = "Edit";
+    /// <summary>Area name for the Delete node layout area.</summary>
     public const string DeleteArea = "Delete";
+    /// <summary>Area name for the Threads layout area.</summary>
     public const string ThreadsArea = "Threads";
+    /// <summary>Area name for the Chat layout area.</summary>
     public const string ChatArea = "Chat";
+    /// <summary>Area name for the Import mesh nodes layout area.</summary>
     public const string ImportMeshNodesArea = "ImportMeshNodes";
+    /// <summary>Area name for the Export layout area.</summary>
     public const string ExportArea = "Export";
+    /// <summary>Area name for the Copy node layout area.</summary>
     public const string CopyArea = "Copy";
+    /// <summary>Area name for the Move node layout area.</summary>
     public const string MoveArea = "Move";
+    /// <summary>Area name for the Recycle layout area.</summary>
     public const string RecycleArea = "Recycle";
+    /// <summary>Area name for the Versions layout area.</summary>
     public const string VersionsArea = "Versions";
+    /// <summary>Area name for the Version diff layout area.</summary>
     public const string VersionDiffArea = "VersionDiff";
 
     // UCR (Unified Content Reference) special areas
+    /// <summary>Area name for the UCR Content layout area.</summary>
     public const string ContentArea = "$Content";
+    /// <summary>Area name for the UCR Data layout area.</summary>
     public const string DataArea = "$Data";
+    /// <summary>Area name for the UCR Schema layout area.</summary>
     public const string SchemaArea = "$Schema";
+    /// <summary>Area name for the UCR Model layout area.</summary>
     public const string ModelArea = "$Model";
+
+    /// <summary>
+    /// Marker that records whether <see cref="AddDefaultLayoutAreas(MeshWeaver.Messaging.MessageHubConfiguration)"/> has
+    /// already run on this <see cref="MessageHubConfiguration"/>, so a second
+    /// call is a safe no-op. Necessary because <c>AddGraph</c> now applies
+    /// <c>AddDefaultLayoutAreas</c> via <c>ConfigureDefaultNodeHub</c>, and
+    /// many hard-coded NodeType <c>HubConfiguration</c>s also call it directly
+    /// — without dedup, the framework would register
+    /// <c>WithHandler&lt;RollbackNodeRequest&gt;</c> / <c>UndoActivityRequest</c>
+    /// twice, and AddDefaultMeshMenu / AddDefaultSettingsMenuItems would also
+    /// double-emit.
+    /// </summary>
+    private sealed record DefaultLayoutAreasMarker;
 
     /// <summary>
     /// Adds the mesh node views (Details, Thumbnail, Metadata, Settings, Catalog, Calendar) to the hub's layout.
     /// Requires AddMeshDataSource() to be called first to enable GetStream&lt;MeshNode&gt;() in views.
     /// Catalog is set as the default area for browsing children with search.
     /// For comments support, call AddComments() after this method.
+    ///
+    /// <para><b>Idempotent</b>: a second call on the same configuration is a
+    /// no-op. The marker is keyed on the <see cref="MessageHubConfiguration"/>
+    /// instance, so the default node hub config and a per-NodeType
+    /// <c>HubConfiguration</c> both calling this layer their respective
+    /// <c>AddLayout(WithView(...))</c> overrides on top of the same single
+    /// registration of the framework-level handlers/menus.</para>
     /// </summary>
     public static MessageHubConfiguration AddDefaultLayoutAreas(this MessageHubConfiguration configuration)
-        => configuration
+    {
+        if (configuration.Get<DefaultLayoutAreasMarker>() is not null)
+            return configuration;
+        return configuration
+            .Set(new DefaultLayoutAreasMarker())
+            // Always wire MeshDataSource so the canonical
+            // workspace.GetMeshNodeStream() / MeshNodeReference reducer is
+            // available even on hubs that don't declare a ContentType. Every
+            // default layout area (Overview, Thumbnail, Settings, …) reads the
+            // OWN MeshNode through this reducer; without it, GetDataRequest
+            // with MeshNodeReference fails with "Failed to create stream" and
+            // the layout area handler silently drops responses.
+            .AddMeshDataSource()
             .AddDefaultMeshMenu()
             .AddDefaultSettingsMenuItems()
             .WithHandler<RollbackNodeRequest>(VersionLayoutArea.HandleRollbackNodeRequest)
             .WithHandler<UndoActivityRequest>(VersionLayoutArea.HandleUndoActivityRequest)
             .AddLayout(layout => layout.AddDefaultLayoutAreas());
+    }
 
+    /// <summary>
+    /// Registers all default mesh node layout areas (Overview, Thumbnail, Settings, Search, Files, Children,
+    /// Threads, Chat, NodeTypes, Access Control, Groups, Create, Edit, Import, Export, Copy, Move, Recycle,
+    /// Versions, Delete, pinning, sync, and the UCR Data/Schema/Model areas) onto the given layout definition,
+    /// with Overview as the default area.
+    /// </summary>
+    /// <param name="layout">The layout definition to register the default areas onto.</param>
+    /// <returns>The same layout definition with the default areas registered.</returns>
     public static LayoutDefinition AddDefaultLayoutAreas(this LayoutDefinition layout)
         => layout
             .WithDefaultArea(OverviewArea)
@@ -104,7 +170,6 @@ public static class MeshNodeLayoutAreas
             .WithView(SettingsArea, SettingsLayoutArea.Settings)
             .WithView(SearchArea, Search)
             .WithView(FilesArea, Files)
-            .WithView(ChildrenArea, Children)
             .WithView(ThreadsArea, Threads)
             .WithView(ChatArea, Chat)
             .WithView(NodeTypesArea, NodeTypes)
@@ -123,6 +188,7 @@ public static class MeshNodeLayoutAreas
             .WithView(PinLayoutArea.PinArea, PinLayoutArea.Pin)
             .WithView(PinLayoutArea.UnpinArea, PinLayoutArea.Unpin)
             .WithView(PinLayoutArea.PinnedThumbnailArea, PinLayoutArea.PinnedThumbnail)
+            .WithView(StopSyncLayoutArea.StopSyncArea, StopSyncLayoutArea.StopSync)
             // UCR special areas
             .WithView(DataArea, Data)
             .WithView(SchemaArea, Schema)
@@ -138,27 +204,19 @@ public static class MeshNodeLayoutAreas
     public static IObservable<UiControl?> Overview(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
-
-        // Get the node from the workspace stream
-        var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
-            ?? Observable.Return(Array.Empty<MeshNode>());
-
-        // Map nodes to control - use SelectMany for async permission check
-        return nodeStream.SelectMany(async nodes =>
-        {
-            var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-            var permissions = await PermissionHelper.GetEffectivePermissionsAsync(host.Hub, hubPath);
-
-            // If user has no read permission, show access denied with request option
-            if (!permissions.HasFlag(Permission.Read))
-                return (UiControl?)BuildAccessDenied(hubPath);
-
-            var canEdit = permissions.HasFlag(Permission.Update);
-            return (UiControl?)host.BuildDetailsContent(node, null, canEdit);
-        });
+        // CombineLatest with permission stream — pure observable composition, no await.
+        return host.Workspace.GetMeshNodeStream().CombineLatest(
+            host.Hub.GetEffectivePermissions(hubPath),
+            (node, permissions) =>
+            {
+                if (!permissions.HasFlag(Permission.Read))
+                    return (UiControl?)BuildAccessDenied(hubPath);
+                var canEdit = permissions.HasFlag(Permission.Update);
+                return (UiControl?)host.BuildDetailsContent(node, null, canEdit);
+            });
     }
 
-    private static UiControl BuildAccessDenied(string nodePath)
+    internal static UiControl BuildAccessDenied(string nodePath)
     {
         var nodeName = nodePath.Split('/').LastOrDefault() ?? nodePath;
         return Controls.Stack.WithWidth("100%").WithStyle("padding: 48px 24px; align-items: center; text-align: center;")
@@ -186,9 +244,10 @@ public static class MeshNodeLayoutAreas
                 }));
     }
 
-    internal static string GetContainerStyle(LayoutAreaHost host, NodeTypeDefinition? typeDef = null)
+    internal static string GetContainerStyle(LayoutAreaHost host, NodeTypeDefinition? typeDef = null, string? maxWidthOverride = null)
     {
-        var pageMaxWidth = typeDef?.PageMaxWidth
+        var pageMaxWidth = maxWidthOverride
+            ?? typeDef?.PageMaxWidth
             ?? host.Hub.Configuration.Get<PageLayoutOptions>()?.MaxWidth
             ?? "1200px";
         return $"position: relative; max-width: {pageMaxWidth}; margin: 0 auto; padding: 0 24px;";
@@ -219,15 +278,20 @@ public static class MeshNodeLayoutAreas
 
         outer = outer.WithView(content);
 
-        // Children — full page width, outside the constrained container
-        if (typeDef?.ShowChildrenInDetails ?? true)
-        {
-            outer = outer.WithView(
-                Controls.Stack
-                    .WithWidth("100%")
-                    .WithStyle("margin-top: 32px; padding-top: 24px; border-top: 1px solid var(--neutral-stroke-rest);")
-                    .WithView(LayoutAreaControl.Children(host.Hub)));
-        }
+        // Markdown body (raw + pre-rendered). Hoisted out of BuildPropertyOverview
+        // so the markdown body is a DIRECT child of `outer` — agents and tests can
+        // locate it without walking through nested property-overview stacks, and
+        // the rendering surfaces the .md content even when the property summary is
+        // empty (e.g., a NodeType with only an `index.md`).
+        var markdownBody = OverviewLayoutArea.BuildMarkdownBody(host, node);
+        if (markdownBody != null)
+            outer = outer.WithView(markdownBody);
+
+        // No hardcoded children section. A node page is a MARKDOWN SPACE: it shows exactly what its
+        // body contains, and children (or any other content) are injected INLINE with the @@(query)
+        // operator. Appending a hardcoded LayoutAreaControl.Children here rendered the children twice
+        // on any page that already listed them inline (the Space/Doc double-content). Browsing child
+        // nodes is still available via the Catalog / Search areas.
 
         // Comments — back in constrained width
         if (host.Hub.Configuration.HasComments())
@@ -255,63 +319,31 @@ public static class MeshNodeLayoutAreas
     }
 
     /// <summary>
-    /// Builds the header with icon and click-to-edit title.
-    /// When canEdit is true, the icon is clickable to open a file browser for uploading a new icon/photo.
+    /// Builds the header: icon + title + identity action row (Move/Copy/Delete/Edit,
+    /// plus Configuration on NodeType nodes), followed by a meta row with the node-type
+    /// link and the Created/LastModified/LastModifiedBy timestamps.
+    /// Clicking the icon opens an icon-picker dialog; clicking the title (when the
+    /// content has a Title property and the user can edit) switches it to inline edit.
     /// </summary>
     internal static UiControl BuildHeader(LayoutAreaHost host, MeshNode? node, bool canEdit = true)
     {
-        var nodePath = node?.Namespace ?? host.Hub.Address.ToString();
-        var title = node?.Name ?? node?.Id ?? host.Hub.Address.ToString();
+        var hubPath = host.Hub.Address.ToString();
+        var nodePath = node?.Path ?? hubPath;
+        var title = node?.Name ?? node?.Id ?? hubPath;
         var iconValue = MeshNodeImageHelper.ResolveNodeIcon(node);
+        var rawIcon = node?.Icon;
 
-        // Build title with icon.
-        // Extra top margin separates the icon+title row from whatever sits above it
-        // (e.g. the parent back-link / breadcrumb rendered by the surrounding page).
-        var titleContent = Controls.Stack
+        // Row 1 — icon + title (+ action buttons on the right)
+        var identityRow = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
+            .WithWidth("100%")
             .WithStyle("align-items: center; gap: 20px; margin-top: 16px;");
 
-        // Add icon/image if available
-        if (!string.IsNullOrEmpty(iconValue))
-        {
-            UiControl iconControl;
-            if (iconValue.StartsWith("data:") || iconValue.StartsWith("http") || iconValue.StartsWith("/"))
-            {
-                iconControl = Controls.Html(
-                    $"<img src=\"{iconValue}\" alt=\"\" class=\"header-icon-img\" style=\"width: 48px; height: 48px; border-radius: 8px; object-fit: {(iconValue.EndsWith(".svg", StringComparison.OrdinalIgnoreCase) ? "contain" : "cover")};\" />");
-            }
-            else if (iconValue.TrimStart().StartsWith("<svg", StringComparison.OrdinalIgnoreCase))
-            {
-                iconControl = Controls.Html(
-                    $"<div style=\"width: 48px; height: 48px; display: flex; align-items: center; justify-content: center;\">{iconValue}</div>");
-            }
-            else if (MeshNodeImageHelper.IsFluentIconName(iconValue))
-            {
-                iconControl = Controls.Icon(new Icon(FluentIcons.Provider, iconValue)).WithStyle("font-size: 48px; color: var(--accent-fill-rest);");
-            }
-            else
-            {
-                // Emoji or other text — render as-is
-                iconControl = Controls.Html(
-                    $"<div style=\"width: 48px; height: 48px; display: flex; align-items: center; justify-content: center; font-size: 36px;\">{System.Web.HttpUtility.HtmlEncode(iconValue)}</div>");
-            }
+        identityRow = identityRow.WithView(BuildClickableIcon(host, node, iconValue, rawIcon, canEdit));
 
-            if (canEdit)
-                iconControl = BuildEditableIcon(host, node, iconControl);
+        // Title column takes remaining width so action buttons sit at the far right.
+        var titleColumn = Controls.Stack.WithStyle("flex: 1; min-width: 0;");
 
-            titleContent = titleContent.WithView(iconControl);
-        }
-        else if (canEdit)
-        {
-            // Show a placeholder icon that can be clicked to upload
-            var placeholderIcon = Controls.Html(
-                "<div style=\"width: 48px; height: 48px; border-radius: 8px; border: 2px dashed var(--neutral-stroke-rest); " +
-                "display: flex; align-items: center; justify-content: center; color: var(--neutral-foreground-hint); font-size: 20px; " +
-                "cursor: pointer;\" title=\"Click to set icon\">&#x1F4F7;</div>");
-            titleContent = titleContent.WithView(BuildEditableIcon(host, node, placeholderIcon));
-        }
-
-        // Check if content has Title property for click-to-edit
         bool hasTitleProperty = false;
         if (node?.Content is JsonElement jsonElement && jsonElement.TryGetProperty("$type", out var typeProperty))
         {
@@ -321,120 +353,172 @@ public static class MeshNodeLayoutAreas
             hasTitleProperty = contentType?.GetProperty("Title") != null;
         }
 
-        // Title - click-to-edit if we have Title property, otherwise static
         if (hasTitleProperty && node != null)
         {
-            var dataId = EditLayoutArea.GetDataId(nodePath);
-            // Data will be set up by OverviewLayoutArea.BuildPropertyOverview, just use the same ID
-            titleContent = titleContent.WithView(OverviewLayoutArea.BuildTitle(host, node, dataId, canEdit));
+            var dataId = EditLayoutArea.GetDataId(node.Namespace ?? hubPath);
+            titleColumn = titleColumn.WithView(OverviewLayoutArea.BuildTitle(host, node, dataId, canEdit));
         }
         else
         {
-            titleContent = titleContent.WithView(Controls.Html(
+            titleColumn = titleColumn.WithView(Controls.Html(
                 $"<h1 style=\"margin: 0; font-size: 2rem; font-weight: 700; letter-spacing: -0.02em; line-height: 1.15;\">" +
                 $"{System.Web.HttpUtility.HtmlEncode(title)}</h1>"));
         }
 
+        identityRow = identityRow.WithView(titleColumn);
+        identityRow = identityRow.WithView(BuildHeaderActionRow(host, node, nodePath, canEdit));
+
+        // Row 2 — node-type link + timestamps
+        var metaRow = BuildHeaderMetaRow(host, node);
+
         return Controls.Stack
-            .WithOrientation(Orientation.Horizontal)
             .WithWidth("100%")
-            .WithStyle("align-items: center; padding-bottom: 24px; margin-bottom: 24px; border-bottom: 1px solid var(--neutral-stroke-rest);")
-            .WithView(titleContent);
+            .WithStyle("padding-bottom: 20px; margin-bottom: 24px; border-bottom: 1px solid var(--neutral-stroke-rest); gap: 8px;")
+            .WithView(identityRow)
+            .WithView(metaRow);
     }
 
-
     /// <summary>
-    /// Wraps an icon control with a hover overlay and click handler to open a dialog
-    /// for uploading a new icon/photo. The dialog shows a file browser for the "content" collection
-    /// and a text field to set the icon path. Upload a file, then set the path to link it.
+    /// Renders the node icon as a clickable tile that opens the icon-picker dialog when the
+    /// user has edit rights. Falls back to a placeholder (dashed border) when no icon is set.
     /// </summary>
-    private static UiControl BuildEditableIcon(LayoutAreaHost host, MeshNode? node, UiControl iconControl)
+    private static UiControl BuildClickableIcon(
+        LayoutAreaHost host, MeshNode? node, string? iconValue, string? rawIcon, bool canEdit)
     {
-        var nodePath = node?.Path ?? host.Hub.Address.ToString();
+        const string tileStyle = "width: 56px; height: 56px; display: flex; align-items: center; justify-content: center; border-radius: 10px; background: var(--neutral-layer-2); flex-shrink: 0;";
 
-        // Wrap icon in a container with hover overlay
-        var wrapper = Controls.Stack
-            .WithStyle("position: relative; width: 48px; height: 48px; cursor: pointer; border-radius: 8px; overflow: hidden;")
-            .WithView(iconControl)
-            .WithView(Controls.Html(
-                "<div style=\"position: absolute; inset: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; " +
-                "justify-content: center; opacity: 0; transition: opacity 0.2s; border-radius: 8px;\" " +
-                "onmouseover=\"this.style.opacity='1'\" onmouseout=\"this.style.opacity='0'\">" +
-                "<span style=\"color: white; font-size: 18px;\">&#x270F;</span></div>"))
+        UiControl tile;
+        if (!string.IsNullOrEmpty(iconValue))
+        {
+            if (iconValue.StartsWith("data:") || iconValue.StartsWith("http") || iconValue.StartsWith("/"))
+            {
+                var fit = iconValue.EndsWith(".svg", StringComparison.OrdinalIgnoreCase) ? "contain" : "cover";
+                tile = Controls.Html(
+                    $"<div style=\"{tileStyle}\"><img src=\"{iconValue}\" alt=\"\" style=\"width: 48px; height: 48px; border-radius: 8px; object-fit: {fit};\" /></div>");
+            }
+            else if (iconValue.TrimStart().StartsWith("<svg", StringComparison.OrdinalIgnoreCase))
+            {
+                tile = Controls.Html($"<div style=\"{tileStyle}\">{iconValue}</div>");
+            }
+            else if (rawIcon != null && MeshNodeImageHelper.IsFluentIconName(rawIcon))
+            {
+                tile = Controls.Stack.WithStyle(tileStyle)
+                    .WithView(Controls.Icon(new Icon(FluentIcons.Provider, rawIcon))
+                        .WithStyle("font-size: 36px; color: var(--accent-fill-rest);"));
+            }
+            else
+            {
+                tile = Controls.Html(
+                    $"<div style=\"{tileStyle} font-size: 30px;\">{System.Web.HttpUtility.HtmlEncode(iconValue)}</div>");
+            }
+        }
+        else
+        {
+            tile = Controls.Html(
+                $"<div style=\"{tileStyle} border: 2px dashed var(--neutral-stroke-rest); background: transparent; color: var(--neutral-foreground-hint); font-size: 20px;\">+</div>");
+        }
+
+        if (!canEdit || node == null)
+            return tile;
+
+        // Wrap in a clickable stack that opens the icon-picker dialog.
+        return Controls.Stack
+            .WithStyle("cursor: pointer;")
+            .WithView(tile)
             .WithClickAction(ctx =>
             {
-                OpenChangeIconDialog(ctx.Host, node, nodePath);
+                ctx.Host.UpdateArea(DialogControl.DialogArea, NodeIconPickerDialog.Build(host, node));
+                return Task.CompletedTask;
             });
-
-        return wrapper;
     }
 
     /// <summary>
-    /// Opens a dialog to change the node's icon. Contains a file browser for uploading images
-    /// and a text field for setting the icon path. After uploading, the user enters the file path
-    /// and clicks Save to update the node's Icon.
-    /// Can be called from custom layout areas (e.g., Organization overview).
+    /// Builds the right-aligned button row: Edit, Move, Copy, Delete, plus Configuration on
+    /// NodeType nodes and a node-type Configuration link on instance nodes.
+    /// All buttons use anchor-style navigation (no <c>await</c>); Delete routes through the
+    /// dedicated Delete area which uses Post + RegisterCallback with a progress indicator.
     /// </summary>
-    public static void OpenChangeIconDialog(LayoutAreaHost host, MeshNode? node, string nodePath)
+    private static UiControl BuildHeaderActionRow(
+        LayoutAreaHost host, MeshNode? node, string nodePath, bool canEdit)
     {
-        var iconDataId = $"changeIcon_{nodePath.Replace("/", "_")}";
-        host.UpdateData(iconDataId, new Dictionary<string, object?> { ["iconPath"] = node?.Icon ?? "" });
-
-        var content = Controls.Stack.WithStyle("gap: 16px; padding: 8px;");
-
-        // Instructions
-        content = content.WithView(Controls.Html(
-            "<p style=\"color: var(--neutral-foreground-hint); font-size: 0.85rem; margin: 0;\">" +
-            "Upload an image using the file browser below, then enter or paste the file path and click Save.</p>"));
-
-        // Icon path text field
-        content = content.WithView(new TextFieldControl(new JsonPointerReference("iconPath"))
-        {
-            Label = "Icon Path",
-            Placeholder = "e.g., /static/storage/content/image.png",
-            Immediate = true,
-            DataContext = LayoutAreaReference.GetDataPointer(iconDataId)
-        });
-
-        // File browser for the first editable content collection
-        var iconContentService = host.Hub.ServiceProvider.GetService<IContentService>();
-        var iconCollection = iconContentService?.GetAllCollectionConfigs()?.FirstOrDefault(c => c.IsEditable);
-        if (iconCollection != null)
-            content = content.WithView(new FileBrowserControl(iconCollection.Name) { Path = "/" }
-                .WithTopLevel("/").WithCollectionConfiguration(iconCollection).CreatePath());
-
-        // Save button
-        var actions = Controls.Stack
+        var row = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
-            .WithStyle("gap: 8px; justify-content: flex-end;")
-            .WithView(Controls.Button("Save")
+            .WithStyle("align-items: center; gap: 8px; margin-left: auto; flex-wrap: wrap; justify-content: flex-end;");
+
+        // Configuration button for NodeType definition nodes — points at their own Configuration area.
+        if (node?.NodeType == MeshNode.NodeTypePath)
+        {
+            row = row.WithView(Controls.Button("Configuration")
                 .WithAppearance(Appearance.Accent)
-                .WithClickAction(ctx =>
-                {
-                    var iconPath = "";
-                    ctx.Host.Stream.GetDataStream<Dictionary<string, object?>>(iconDataId)
-                        .Take(1)
-                        .Subscribe(data => iconPath = data?.GetValueOrDefault("iconPath")?.ToString()?.Trim() ?? "");
+                .WithIconStart(FluentIcons.Settings())
+                .WithNavigateToHref(BuildUrl(nodePath, NodeTypeLayoutAreas.ConfigurationArea)));
+        }
 
-                    if (node != null && !string.IsNullOrEmpty(iconPath))
-                    {
-                        var updatedNode = node with { Icon = iconPath };
-                        ctx.Host.Hub.Post(
-                            new DataChangeRequest { ChangedBy = ctx.Host.Stream.ClientId }.WithUpdates(updatedNode),
-                            o => o.WithTarget(ctx.Host.Hub.Address));
-                    }
+        if (canEdit)
+        {
+            row = row.WithView(Controls.Button("Edit")
+                .WithAppearance(Appearance.Neutral)
+                .WithIconStart(FluentIcons.Edit())
+                .WithNavigateToHref(BuildUrl(nodePath, EditArea)));
 
-                    // Close dialog
-                    ctx.Host.UpdateArea(DialogControl.DialogArea, null);
-                }));
+            row = row.WithView(Controls.Button("Copy")
+                .WithAppearance(Appearance.Neutral)
+                .WithIconStart(FluentIcons.Copy())
+                .WithNavigateToHref(BuildUrl(nodePath, CopyArea)));
 
-        var dialog = Controls.Dialog(content, "Change Icon")
-            .WithSize("L")
-            .WithClosable(true)
-            .WithActions(actions);
+            row = row.WithView(Controls.Button("Move")
+                .WithAppearance(Appearance.Neutral)
+                .WithIconStart(FluentIcons.ArrowMove())
+                .WithNavigateToHref(BuildUrl(nodePath, MoveArea)));
 
-        host.UpdateArea(DialogControl.DialogArea, dialog);
+            row = row.WithView(Controls.Button("Delete")
+                .WithAppearance(Appearance.Neutral)
+                .WithStyle("color: var(--error, #d32f2f);")
+                .WithIconStart(FluentIcons.Delete())
+                .WithNavigateToHref(BuildUrl(nodePath, DeleteArea)));
+        }
+
+        return row;
     }
+
+    /// <summary>
+    /// Meta row under the identity row: shows node-type as a link to the type's Configuration
+    /// area and the Created / LastModified / LastModifiedBy timestamps when present.
+    /// </summary>
+    private static UiControl BuildHeaderMetaRow(LayoutAreaHost host, MeshNode? node)
+    {
+        var row = Controls.Stack
+            .WithOrientation(Orientation.Horizontal)
+            .WithStyle("align-items: center; gap: 24px; flex-wrap: wrap; font-size: 0.85rem; color: var(--neutral-foreground-hint);");
+
+        if (node != null && !string.IsNullOrEmpty(node.NodeType) && node.NodeType != MeshNode.NodeTypePath)
+        {
+            var typeHref = BuildUrl(node.NodeType, NodeTypeLayoutAreas.ConfigurationArea);
+            var typeLabel = node.NodeType.Contains('/') ? node.NodeType.Split('/').Last() : node.NodeType;
+            row = row.WithView(Controls.Html(
+                "<span style=\"display: inline-flex; align-items: center; gap: 6px;\">" +
+                "<span>Type:</span>" +
+                $"<a href=\"{typeHref}\" style=\"color: var(--accent-fill-rest); font-weight: 500;\">{System.Web.HttpUtility.HtmlEncode(typeLabel)}</a>" +
+                "</span>"));
+        }
+
+        if (node != null && node.CreatedDate != default)
+        {
+            var created = node.CreatedDate.ToLocalTime().ToString("yyyy-MM-dd HH:mm");
+            var createdBy = string.IsNullOrEmpty(node.CreatedBy) ? "" : $" by {System.Web.HttpUtility.HtmlEncode(node.CreatedBy)}";
+            row = row.WithView(Controls.Html($"<span><span style=\"color: var(--neutral-foreground-rest);\">Created:</span> {created}{createdBy}</span>"));
+        }
+
+        if (node != null && node.LastModified != default)
+        {
+            var modified = node.LastModified.ToLocalTime().ToString("yyyy-MM-dd HH:mm");
+            var modifiedBy = string.IsNullOrEmpty(node.LastModifiedBy) ? "" : $" by {System.Web.HttpUtility.HtmlEncode(node.LastModifiedBy)}";
+            row = row.WithView(Controls.Html($"<span><span style=\"color: var(--neutral-foreground-rest);\">Updated:</span> {modified}{modifiedBy}</span>"));
+        }
+
+        return row;
+    }
+
 
     /// <summary>
     /// Builds a content URL for navigating to a specific layout area of a node.
@@ -640,18 +724,23 @@ public static class MeshNodeLayoutAreas
     public static IObservable<UiControl?> Search(LayoutAreaHost host, RenderingContext ctx)
     {
         var hubPath = host.Hub.Address.ToString();
-        var isNodeTypeMode = host.Hub.Configuration.Get<NodeTypeCatalogMode>() != null;
+        var configuredNodeTypeMode = host.Hub.Configuration.Get<NodeTypeCatalogMode>() != null;
 
-        // Get search term from query string (if present)
-        var searchTerm = host.GetQueryStringParamValue("q")?.Trim();
-
-        // Get node stream to access node properties
-        var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
-            ?? Observable.Return<MeshNode[]>(Array.Empty<MeshNode>());
-
-        return nodeStream.Select(nodes =>
+        // Every catalog knob is URL-driven so one area serves every shape — read by
+        // ReadCatalogOptions (see the "Mesh Search" doc): ?groupBy ?subtree ?searchBar
+        // ?emptyMessage ?loading ?counts ?limit ?maxRows ?maxColumns ?collapsible ?reactive
+        // ?title ?placeholder ?q. The fallback render mode differs by branch (NodeType
+        // instances → Hierarchical, content catalog → NamespaceTree).
+        return host.Workspace.GetMeshNodeStream().Select(node =>
         {
-            var node = nodes.FirstOrDefault(n => n.Path == hubPath);
+            // NodeType catalog mode is used when either:
+            //  (a) the hub opts in via NodeTypeCatalogMode (e.g. AddNodeTypeView), or
+            //  (b) the node itself is a NodeType instance (NodeType = "NodeType") —
+            //      so types declared with only AddDefaultLayoutAreas still render as
+            //      catalogs of their instances instead of falling through to the
+            //      generic namespace search.
+            var isNodeTypeMode = configuredNodeTypeMode
+                || node?.NodeType == MeshNode.NodeTypePath;
 
             // For NodeType mode, query instances under this NodeType's namespace.
             // Uses the node's own path as namespace to correctly scope to local instances.
@@ -660,13 +749,29 @@ public static class MeshNodeLayoutAreas
             if (isNodeTypeMode && node != null)
             {
                 var nodeTypePath = node.Path;
-                var nodeTypeDefinition = node.Content as NodeTypeDefinition;
+                var nodeTypeDefinition = node.ContentAs<NodeTypeDefinition>(host.Hub.JsonSerializerOptions);
 
-                // Build query: always restrict to this nodeType.
-                // If DefaultNamespace is set, scope to that namespace; otherwise scope to current path descendants.
+                // Build query. If DefaultNamespace is set, scope to that namespace
+                // and filter by this NodeType (canonical group case — instances
+                // declare nodeType = path).
+                //
+                // Otherwise scope by namespace + descendants. The nodeType filter is
+                // dropped here because LOCAL NodeType nodes (e.g.
+                // FutuRe/EuropeRe/LineOfBusiness inside the FutuRe/LineOfBusiness root
+                // type) reuse the GROUP-level nodeType on their instances — filtering
+                // by the local NodeType node's own path matches zero instances.
+                //
+                // `is:main` drops satellites that carry an explicit MainNode pointer —
+                // _Activity compile-activity nodes (NodeType="Activity", MainNode=<owner>)
+                // are the case the old `-nodeType:Code` enumeration missed when
+                // compile-activity landed, surfacing a "Compile {path}" row. It does NOT
+                // catch Source/Code files: the file-system loader leaves their MainNode
+                // null, so they read as main nodes — hence `-nodeType:Code` stays.
+                // `-nodeType:NodeType -nodeType:Markdown` also stay: definition nodes
+                // are main nodes too.
                 var hiddenQuery = nodeTypeDefinition?.DefaultNamespace != null
                     ? $"nodeType:{nodeTypePath} namespace:{nodeTypeDefinition.DefaultNamespace}"
-                    : $"nodeType:{nodeTypePath} namespace:{nodeTypePath} scope:descendants";
+                    : $"namespace:{nodeTypePath} scope:subtree is:main -nodeType:Code -nodeType:NodeType -nodeType:Markdown";
                 var defaultNs = nodeTypeDefinition?.DefaultNamespace;
                 var createNs = !string.IsNullOrEmpty(defaultNs) ? defaultNs : hubPath;
 
@@ -678,56 +783,229 @@ public static class MeshNodeLayoutAreas
 
                 var createHref = $"/create?{createQs}";
 
-                return (UiControl?)Controls.MeshSearch
+                // Instances of a NodeType default to a hierarchical list; every knob is still
+                // ?param-overridable (?groupBy ?searchBar ?maxColumns ?emptyMessage ?title …).
+                var typeOpts = ReadCatalogOptions(host, MeshSearchRenderMode.Hierarchical);
+                var typeSearch = Controls.MeshSearch
                     .WithHiddenQuery(hiddenQuery)
-                    .WithVisibleQuery(searchTerm ?? "")
+                    .WithVisibleQuery(typeOpts.SearchTerm ?? "")
                     .WithNamespace(hubPath)
-                    .WithPlaceholder("Search... (use @ for references)")
-                    .WithRenderMode(MeshSearchRenderMode.Hierarchical)
-                    .WithMaxColumns(3)
+                    .WithPlaceholder(typeOpts.Placeholder)
+                    .WithRenderMode(typeOpts.Mode)
+                    .WithShowSearchBox(typeOpts.ShowSearchBox)
+                    .WithShowEmptyMessage(typeOpts.ShowEmptyMessage)
+                    .WithMaxColumns(typeOpts.MaxColumns)
                     .WithCreateHref(createHref);
+                if (!string.IsNullOrEmpty(typeOpts.GroupByProperty))
+                    typeSearch = typeSearch.WithGroupBy(typeOpts.GroupByProperty);
+                // Prepend the breadcrumb trail (ancestors → default pages, current node bold).
+                return (UiControl?)WithBreadcrumbs(typeSearch, hubPath);
             }
 
-            // Instance node catalog
-            var instanceHiddenQuery = $"namespace:{node?.Namespace ?? hubPath}";
-            var instanceNs = node?.Namespace ?? hubPath;
-
-            return Controls.MeshSearch
-                .WithHiddenQuery(instanceHiddenQuery)
-                .WithVisibleQuery(searchTerm ?? "")
-                .WithNamespace(hubPath)
-                .WithPlaceholder("Search... (use @ for references)")
-                .WithRenderMode(MeshSearchRenderMode.Hierarchical)
-                .WithMaxColumns(3)
-                .WithCreateHref($"/create?namespace={Uri.EscapeDataString(instanceNs)}");
+            // Instance node catalog — this node's own content. The Search area defaults to the
+            // re-rooting graph navigator: the next populated level below (skipping empty namespace
+            // segments) + the ancestors above, navigable along the graph's edges. Every knob is
+            // still ?param-overridable — ?groupBy=tree restores the lazy namespace tree, ?groupBy=flat
+            // the grid, etc. (The Space "Children" catalog stays on the namespace tree.)
+            return WithBreadcrumbs(
+                BuildCatalog(hubPath, ReadCatalogOptions(host, MeshSearchRenderMode.GraphNavigator)),
+                hubPath);
         });
     }
 
-    /// <summary>
-    /// Renders the Children view showing child nodes as thumbnails without search.
-    /// Groups children by NodeType (default) or Category if set, excludes NodeType nodes.
-    /// Uses MeshSearchControl for unified search/catalog functionality.
-    /// Includes a "Create Sub-Node" button when the user has Create permission.
-    /// </summary>
-    [Browsable(false)]
-    public static UiControl Children(LayoutAreaHost host, RenderingContext _)
-    {
-        var hubPath = host.Hub.Address.ToString();
+    /// <summary>Best-effort truthy parse for boolean query params (<c>true/1/yes/on</c>).</summary>
+    internal static bool ParseTruthy(string? value) =>
+        value is not null && (value.Equals("true", StringComparison.OrdinalIgnoreCase)
+            || value is "1" || value.Equals("yes", StringComparison.OrdinalIgnoreCase)
+            || value.Equals("on", StringComparison.OrdinalIgnoreCase));
 
-        return Controls.MeshSearch
-            .WithTitle("Associated")
-            .WithHiddenQuery($"namespace:{hubPath} is:main context:search")
-            .WithShowSearchBox(false)
-            .WithShowEmptyMessage(false)
-            .WithShowLoadingIndicator(false)
-            .WithRenderMode(MeshSearchRenderMode.Grouped)
-            // No explicit grouping - defaults to NodeType which gives meaningful labels
-            .WithSectionCounts(true)
-            .WithItemLimit(50)
-            .WithMaxRows(3)
-            .WithCollapsibleSections(true)
-            .WithCreateHref($"/{hubPath}/{CreateNodeArea}?namespace={Uri.EscapeDataString(hubPath)}");
+    /// <summary>
+    /// Maps the <c>?groupBy=</c> query value to a <see cref="MeshSearchRenderMode"/> and, for the
+    /// <see cref="MeshSearchRenderMode.Grouped"/> modes, the node property to group on. Unknown /
+    /// missing values fall back to <paramref name="fallback"/>.
+    /// <list type="bullet">
+    ///   <item><c>namespace</c> (a.k.a. <c>ns</c>, <c>tree</c>) → <see cref="MeshSearchRenderMode.NamespaceTree"/> — lazy per-level drilldown.</item>
+    ///   <item><c>type</c> (a.k.a. <c>nodeType</c>) → <see cref="MeshSearchRenderMode.Grouped"/> by <c>NodeType</c>.</item>
+    ///   <item><c>category</c> → <see cref="MeshSearchRenderMode.Grouped"/> by <c>Category</c>.</item>
+    ///   <item><c>flat</c> (a.k.a. <c>none</c>, <c>grid</c>) → <see cref="MeshSearchRenderMode.Flat"/>.</item>
+    ///   <item><c>hierarchy</c> (a.k.a. <c>hierarchical</c>) → <see cref="MeshSearchRenderMode.Hierarchical"/>.</item>
+    /// </list>
+    /// </summary>
+    internal static (MeshSearchRenderMode Mode, string? GroupByProperty) ResolveCatalogView(
+        string? groupBy, MeshSearchRenderMode fallback)
+        => groupBy?.ToLowerInvariant() switch
+        {
+            "namespace" or "ns" or "tree" => (MeshSearchRenderMode.NamespaceTree, null),
+            "graph" or "nav" or "navigator" => (MeshSearchRenderMode.GraphNavigator, null),
+            "type" or "nodetype" => (MeshSearchRenderMode.Grouped, "NodeType"),
+            "category" or "cat" => (MeshSearchRenderMode.Grouped, "Category"),
+            "flat" or "none" or "grid" => (MeshSearchRenderMode.Flat, null),
+            "hierarchy" or "hierarchical" => (MeshSearchRenderMode.Hierarchical, null),
+            _ => (fallback, null)
+        };
+
+    /// <summary>
+    /// Every catalog knob, each overridable via a query param so the single <see cref="Search"/>
+    /// area serves every shape. Defaults reproduce the classic namespace-tree catalog.
+    /// </summary>
+    internal sealed record CatalogOptions
+    {
+        /// <summary>Render mode — from <c>?groupBy</c> via <see cref="ResolveCatalogView"/>.</summary>
+        public MeshSearchRenderMode Mode { get; init; } = MeshSearchRenderMode.NamespaceTree;
+        /// <summary>Node property to group on for the Grouped modes (NodeType / Category), else null.</summary>
+        public string? GroupByProperty { get; init; }
+        /// <summary>Whether to query the whole descendant subtree (the default) vs only direct
+        /// children. <c>?subtree=false</c> restricts to direct children.</summary>
+        public bool IncludeSubtree { get; init; } = true;
+        /// <summary><c>?q=</c> — the initial search term (visible query).</summary>
+        public string? SearchTerm { get; init; }
+        /// <summary><c>?searchBar=false</c> hides the search box.</summary>
+        public bool ShowSearchBox { get; init; } = true;
+        /// <summary><c>?emptyMessage=true</c> shows the "No items found." message.</summary>
+        public bool ShowEmptyMessage { get; init; }
+        /// <summary><c>?loading=true</c> shows the skeleton loading indicator.</summary>
+        public bool ShowLoadingIndicator { get; init; }
+        /// <summary><c>?counts=false</c> hides the per-section counts.</summary>
+        public bool SectionCounts { get; init; } = true;
+        /// <summary><c>?limit=N</c> — items per section.</summary>
+        public int ItemLimit { get; init; } = 50;
+        /// <summary><c>?maxRows=N</c> — collapsed rows per section.</summary>
+        public int MaxRows { get; init; } = 3;
+        /// <summary><c>?maxColumns=N</c> — grid columns.</summary>
+        public int MaxColumns { get; init; } = 3;
+        /// <summary><c>?collapsible=false</c> keeps every section expanded.</summary>
+        public bool Collapsible { get; init; } = true;
+        /// <summary><c>?reactive=false</c> disables live updates on data change.</summary>
+        public bool Reactive { get; init; } = true;
+        /// <summary><c>?title=</c> — the section title.</summary>
+        public string Title { get; init; } = "Catalog";
+        /// <summary><c>?placeholder=</c> — the search box placeholder.</summary>
+        public string Placeholder { get; init; } = "Search... (use @ for references)";
     }
+
+    /// <summary>Reads every catalog knob from the layout area's query string (see <see cref="CatalogOptions"/>).
+    /// Booleans accept <c>true/1/yes/on</c> (and their negation by absence); ints must be positive.</summary>
+    private static CatalogOptions ReadCatalogOptions(LayoutAreaHost host, MeshSearchRenderMode fallbackMode)
+    {
+        var (mode, groupProp) = ResolveCatalogView(host.GetQueryStringParamValue("groupBy")?.Trim(), fallbackMode);
+        return new CatalogOptions
+        {
+            Mode = mode,
+            GroupByProperty = groupProp,
+            IncludeSubtree = ReadBool(host, "subtree", true),
+            SearchTerm = host.GetQueryStringParamValue("q")?.Trim(),
+            ShowSearchBox = ReadBool(host, "searchBar", true),
+            ShowEmptyMessage = ReadBool(host, "emptyMessage", false),
+            ShowLoadingIndicator = ReadBool(host, "loading", false),
+            SectionCounts = ReadBool(host, "counts", true),
+            ItemLimit = ReadInt(host, "limit", 50),
+            MaxRows = ReadInt(host, "maxRows", 3),
+            MaxColumns = ReadInt(host, "maxColumns", 3),
+            Collapsible = ReadBool(host, "collapsible", true),
+            Reactive = ReadBool(host, "reactive", true),
+            Title = host.GetQueryStringParamValue("title")?.Trim() is { Length: > 0 } t ? t : "Catalog",
+            Placeholder = host.GetQueryStringParamValue("placeholder")?.Trim() is { Length: > 0 } p
+                ? p : "Search... (use @ for references)",
+        };
+    }
+
+    /// <summary>Reads a boolean query param, falling back to <paramref name="fallback"/> when absent.</summary>
+    private static bool ReadBool(LayoutAreaHost host, string name, bool fallback)
+        => host.GetQueryStringParamValue(name) is { } v ? ParseTruthy(v) : fallback;
+
+    /// <summary>Reads a positive-int query param, falling back to <paramref name="fallback"/> when absent/invalid.</summary>
+    private static int ReadInt(LayoutAreaHost host, string name, int fallback)
+        => int.TryParse(host.GetQueryStringParamValue(name), out var v) && v > 0 ? v : fallback;
+
+    /// <summary>
+    /// Builds the node-content catalog (the shared body of the <see cref="Search"/> instance view and
+    /// the legacy <c>Children</c> area): a <see cref="MeshSearchControl"/> over
+    /// <c>namespace:{nodePath} scope:subtree</c> (the whole descendant subtree, the default) — or
+    /// just <c>namespace:{nodePath}</c> (direct children) when <c>?subtree=false</c> — excluding
+    /// NodeType definitions. Every display knob comes from <paramref name="o"/> (see
+    /// <see cref="CatalogOptions"/>). The subtree default is what lets the namespace tree reveal
+    /// deeper nodes (lazily, per level) instead of stopping at direct children.
+    /// </summary>
+    private static MeshSearchControl BuildCatalog(string nodePath, CatalogOptions o)
+    {
+        var scope = o.IncludeSubtree ? " scope:subtree" : "";
+        var search = Controls.MeshSearch
+            .WithTitle(o.Title)
+            // Exclude NodeType definitions — they belong to type admin, not the instance catalog.
+            .WithHiddenQuery($"namespace:{nodePath}{scope} is:main context:search -nodeType:NodeType")
+            .WithVisibleQuery(o.SearchTerm ?? "")
+            .WithNamespace(nodePath)
+            .WithPlaceholder(o.Placeholder)
+            .WithReactiveMode(o.Reactive)
+            .WithShowSearchBox(o.ShowSearchBox)
+            .WithShowEmptyMessage(o.ShowEmptyMessage)
+            .WithShowLoadingIndicator(o.ShowLoadingIndicator)
+            .WithRenderMode(o.Mode)
+            .WithSectionCounts(o.SectionCounts)
+            .WithItemLimit(o.ItemLimit)
+            .WithMaxRows(o.MaxRows)
+            .WithMaxColumns(o.MaxColumns)
+            .WithCollapsibleSections(o.Collapsible)
+            // Each card/folder gets a secondary "Drill down" link to /{path}/Search,
+            // so users keep browsing INTO a namespace; the primary click still opens
+            // the node's default page /{path} (empty area, never a hardcoded "Overview").
+            .WithDrillDownArea(SearchArea)
+            .WithCreateHref($"/{nodePath}/{CreateNodeArea}?namespace={Uri.EscapeDataString(nodePath)}");
+        return string.IsNullOrEmpty(o.GroupByProperty) ? search : search.WithGroupBy(o.GroupByProperty);
+    }
+
+    /// <summary>
+    /// Builds a breadcrumb trail for <paramref name="nodePath"/>: each ANCESTOR
+    /// segment is a <c>Controls.NavLink</c> to that ancestor's DEFAULT page
+    /// (<c>/{cumulative}</c> — empty area, never a hardcoded "Overview"), separated
+    /// by a "/" glyph; the LAST segment (the current node) is plain bold text.
+    /// Returns null when the path has no ancestors (single segment / empty) so the
+    /// caller can skip an empty row.
+    /// </summary>
+    private static UiControl? BuildBreadcrumbs(string nodePath)
+    {
+        var segments = (nodePath ?? "").Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (segments.Length <= 1)
+            return null;
+
+        var row = Controls.Stack
+            .WithOrientation(Orientation.Horizontal)
+            .WithStyle("align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; font-size: 0.9rem;");
+
+        var cumulative = "";
+        for (var i = 0; i < segments.Length; i++)
+        {
+            cumulative = i == 0 ? segments[i] : $"{cumulative}/{segments[i]}";
+            if (i > 0)
+                row = row.WithView(Controls.Html(
+                    "<span style=\"color: var(--neutral-foreground-hint); user-select: none;\">/</span>"));
+
+            if (i < segments.Length - 1)
+                // Ancestor → default page /{cumulative} (empty area).
+                row = row.WithView(Controls.NavLink(segments[i], $"/{cumulative}"));
+            else
+                // Current node — plain bold text, not a link.
+                row = row.WithView(Controls.Html(
+                    $"<span style=\"font-weight: 600;\">{System.Web.HttpUtility.HtmlEncode(segments[i])}</span>"));
+        }
+
+        return row;
+    }
+
+    /// <summary>
+    /// Prepends the <see cref="BuildBreadcrumbs"/> trail to a Search/catalog control so
+    /// every node's Search area shows where the user is and lets them step back up to any
+    /// ancestor's default page. When the path has no ancestors the catalog is returned
+    /// unchanged.
+    /// </summary>
+    private static UiControl WithBreadcrumbs(UiControl catalog, string nodePath)
+    {
+        var crumbs = BuildBreadcrumbs(nodePath);
+        return crumbs is null
+            ? catalog
+            : Controls.Stack.WithWidth("100%").WithView(crumbs).WithView(catalog);
+    }
+
 
     /// <summary>
     /// Renders the Threads catalog showing child Thread nodes using MeshSearchControl.
@@ -769,37 +1047,30 @@ public static class MeshNodeLayoutAreas
             return Observable.Return<UiControl?>(Controls.Html("<p style=\"color: #888;\">Query service not available.</p>"));
         }
 
-        var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
-            ?? Observable.Return<MeshNode[]>(Array.Empty<MeshNode>());
-
-        return nodeStream.SelectMany(async nodes =>
+        return host.Workspace.GetMeshNodeStream().SelectMany(node =>
         {
-            var node = nodes.FirstOrDefault(n => n.Path == hubPath);
+            // NodeType children: Query snapshot — listing observable, no await.
+            var children = meshQuery.Query<MeshNode>(
+                    MeshQueryRequest.FromQuery($"namespace:{hubPath} nodeType:NodeType"))
+                .Take(1)
+                .Select(c => (IReadOnlyList<MeshNode>)c.Items)
+                .Catch<IReadOnlyList<MeshNode>, Exception>(_ => Observable.Return<IReadOnlyList<MeshNode>>(Array.Empty<MeshNode>()));
 
-            // Query for NodeType children at this level
-            IReadOnlyList<MeshNode> nodeTypeChildren;
-            try
-            {
-                nodeTypeChildren = await meshQuery.QueryAsync<MeshNode>($"namespace:{hubPath} nodeType:NodeType").ToListAsync();
-            }
-            catch
-            {
-                nodeTypeChildren = Array.Empty<MeshNode>();
-            }
+            // Own NodeType definition by path (known-path lookup): one-shot GetDataRequest
+            // — true request/response, no SubscribeRequest+immediate-unsubscribe.
+            var ownTypeStream = node != null && !string.IsNullOrEmpty(node.NodeType)
+                ? host.Hub.GetMeshNode(node.NodeType)
+                : Observable.Return<MeshNode?>(null);
 
-            // Query for the node's own NodeType definition (if it has one)
-            MeshNode? ownType = null;
-            if (node != null && !string.IsNullOrEmpty(node.NodeType))
+            return children.CombineLatest(ownTypeStream, (nodeTypeChildren, ownType) =>
             {
-                try
-                {
-                    ownType = await meshQuery.QueryAsync<MeshNode>($"path:{node.NodeType}").FirstOrDefaultAsync();
-                }
-                catch { }
-            }
-
-            var hasOwnType = ownType != null;
-            var hasNodeTypeChildren = nodeTypeChildren.Count > 0;
+                var hasOwnType = ownType != null;
+                var hasNodeTypeChildren = nodeTypeChildren.Count > 0;
+                return (node, ownType, nodeTypeChildren, hasOwnType, hasNodeTypeChildren);
+            });
+        }).Select(tuple =>
+        {
+            var (node, ownType, nodeTypeChildren, hasOwnType, hasNodeTypeChildren) = tuple;
 
             if (!hasOwnType && !hasNodeTypeChildren)
             {
@@ -997,15 +1268,10 @@ public static class MeshNodeLayoutAreas
         if (string.IsNullOrEmpty(contentPath))
         {
             // Self-reference: show the node's icon/logo
-            var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
-                ?? Observable.Return<MeshNode[]>(Array.Empty<MeshNode>());
-
-            return nodeStream.Select(nodes =>
+            return host.Workspace.GetMeshNodeStream().Select(node =>
             {
-                var node = nodes.FirstOrDefault(n => n.Path == hubPath);
                 if (node == null)
                     return (UiControl?)Controls.Markdown($"*Node not found: {hubPath}*");
-
                 return (UiControl?)RenderNodeIcon(node, hubPath);
             });
         }
@@ -1124,16 +1390,11 @@ public static class MeshNodeLayoutAreas
 
         if (string.IsNullOrEmpty(dataPath))
         {
-            // Self-reference: show the current MeshNode data as JSON
-            var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
-                ?? Observable.Return<MeshNode[]>(Array.Empty<MeshNode>());
-
-            return nodeStream.Select(nodes =>
+            // Self-reference: show the current MeshNode data as JSON.
+            return host.Workspace.GetMeshNodeStream().Select(node =>
             {
-                var node = nodes.FirstOrDefault(n => n.Path == hubPath);
                 if (node == null)
                     return (UiControl?)Controls.Markdown($"*Node not found: {hubPath}*");
-
                 return (UiControl?)RenderMeshNodeData(node, host.Hub.JsonSerializerOptions);
             });
         }
@@ -1204,16 +1465,10 @@ public static class MeshNodeLayoutAreas
 
         if (string.IsNullOrEmpty(typeName))
         {
-            // Self-reference: show MeshNode schema and content type schema
+            // Self-reference: show MeshNode schema and content type schema.
             var jsonOptions = host.Hub.JsonSerializerOptions;
-            var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
-                ?? Observable.Return<MeshNode[]>(Array.Empty<MeshNode>());
-
-            return nodeStream.Select(nodes =>
-            {
-                var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-                return (UiControl?)RenderNodeSchema(node, hubPath, jsonOptions);
-            });
+            return host.Workspace.GetMeshNodeStream()
+                .Select(node => (UiControl?)RenderNodeSchema(node, hubPath, jsonOptions));
         }
 
         // Try to get the type from the registry
@@ -1396,19 +1651,14 @@ public static class MeshNodeLayoutAreas
     {
         var hubPath = host.Hub.Address.ToString();
 
-        var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
-            ?? Observable.Return(Array.Empty<MeshNode>());
-
-        return nodeStream.SelectMany(async nodes =>
-        {
-            var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-            var permissions = await PermissionHelper.GetEffectivePermissionsAsync(host.Hub, hubPath);
-
-            if (!permissions.HasFlag(Permission.Update))
-                return (UiControl?)BuildAccessDenied(hubPath);
-
-            return (UiControl?)BuildEditNodeContent(host, node);
-        });
+        return host.Workspace.GetMeshNodeStream().CombineLatest(
+            host.Hub.GetEffectivePermissions(hubPath),
+            (node, permissions) =>
+            {
+                if (!permissions.HasFlag(Permission.Update))
+                    return (UiControl?)BuildAccessDenied(hubPath);
+                return (UiControl?)BuildEditNodeContent(host, node);
+            });
     }
 
     private static UiControl BuildEditNodeContent(LayoutAreaHost host, MeshNode? node)
@@ -1436,10 +1686,17 @@ public static class MeshNodeLayoutAreas
         var contentType = instance.GetType();
         var nodePath = node.Path;
         var dataId = Layout.Domain.EditLayoutArea.GetDataId(nodePath);
-        host.UpdateData(dataId, instance);
 
-        // Setup auto-save (same mechanism as Overview)
-        OverviewLayoutArea.SetupAutoSave(host, dataId, instance, node);
+        // The form binds DIRECTLY to the node's Content (node-bound DataContext): each field reads
+        // from and writes straight back to the node stream — ONE source of truth, no /data replica,
+        // no SetupAutoSave save subscription. The one-way /data projection below keeps the
+        // derived-label read views (dimension/options/date) correct from the Layout layer.
+        var boundContext = LayoutAreaReference.GetMeshNodeDataContext(nodePath, bindContent: true);
+        host.RegisterForDisposal($"editnode-content-projection_{dataId}",
+            host.Workspace.GetMeshNodeStream(nodePath)
+                .Select(n => n?.Content)
+                .Where(c => c is not null)
+                .Subscribe(content => host.UpdateData(dataId, content!)));
 
         var container = Controls.Stack.WithWidth("100%").WithStyle(GetContainerStyle(host));
 
@@ -1448,7 +1705,7 @@ public static class MeshNodeLayoutAreas
 
         // Property form in pure edit mode (not toggleable)
         container = container.WithView(Layout.Domain.EditLayoutArea.BuildPropertyForm(
-            host, contentType, dataId, canEdit: true, isToggleable: false));
+            host, contentType, dataId, canEdit: true, isToggleable: false, boundDataContext: boundContext));
 
         return container;
     }
@@ -1462,13 +1719,20 @@ public static class MeshNodeLayoutAreas
 /// </summary>
 public record CommentViewModel
 {
+    /// <summary>The unique identifier of the comment.</summary>
     public string Id { get; init; } = string.Empty;
+    /// <summary>The display name of the comment's author.</summary>
     public string Author { get; init; } = string.Empty;
+    /// <summary>The comment body text.</summary>
     public string Text { get; init; } = string.Empty;
+    /// <summary>The comment creation timestamp, formatted for display.</summary>
     public string CreatedAt { get; init; } = string.Empty;
 
+    /// <summary>Initializes a new, empty instance of the CommentViewModel record.</summary>
     public CommentViewModel() { }
 
+    /// <summary>Initializes a new instance of the CommentViewModel record from a comment.</summary>
+    /// <param name="comment">The comment to project into the view model.</param>
     public CommentViewModel(Comment comment)
     {
         Id = comment.Id;

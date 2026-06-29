@@ -69,8 +69,22 @@ public record ContentViewOptions
     /// Optional padding for the entire view. Default is no padding.
     /// </summary>
     public string? Padding { get; init; }
+
+    /// <summary>
+    /// When set, the generated form controls bind their field VALUES against this node-bound
+    /// DataContext (see <see cref="LayoutAreaReference.MeshNodePrefix"/>) instead of the layout-area
+    /// <c>/data/{DataId}</c> replica — reads come straight off the node stream and edits write
+    /// straight back to it (ONE source of truth, no replicate-then-save). Edit-state (the
+    /// click-to-edit toggle) still lives in <c>/data</c> keyed by <see cref="DataId"/>. Leave null
+    /// for the create form (no node exists yet) and other transient editors.
+    /// </summary>
+    public string? BoundDataContext { get; init; }
 }
 
+/// <summary>
+/// Static helper that builds unified content view layouts (overview, edit, create) for domain types.
+/// Composes a header, a property form grid, and optional footer actions using the standard framework controls.
+/// </summary>
 public static class EditLayoutArea
 {
     /// <summary>
@@ -104,7 +118,7 @@ public static class EditLayoutArea
         }
 
         // Property form
-        stack = stack.WithView(BuildPropertyForm(host, options.ContentType, options.DataId, options.CanEdit, options.IsToggleable));
+        stack = stack.WithView(BuildPropertyForm(host, options.ContentType, options.DataId, options.CanEdit, options.IsToggleable, options.BoundDataContext));
 
         // Footer actions (buttons)
         if (options.FooterActions != null)
@@ -194,12 +208,17 @@ public static class EditLayoutArea
     /// <param name="dataId">The data ID used for data binding.</param>
     /// <param name="canEdit">Whether editing is allowed based on permissions.</param>
     /// <param name="isToggleable">If true (default), starts read-only and can toggle. If false, stays in edit mode.</param>
+    /// <param name="boundDataContext">
+    /// Optional node-bound data context path. When set, form controls bind their values directly to the mesh node stream
+    /// instead of the layout-area /data replica, providing a single source of truth. Leave null for create forms.
+    /// </param>
     public static UiControl BuildPropertyForm(
         LayoutAreaHost host,
         Type contentType,
         string dataId,
         bool canEdit,
-        bool isToggleable = true)
+        bool isToggleable = true,
+        string? boundDataContext = null)
     {
         // Get browsable properties (skip Title - shown in header)
         var properties = contentType.GetProperties()
@@ -230,7 +249,7 @@ public static class EditLayoutArea
 
             foreach (var prop in regularProps)
             {
-                var control = host.Hub.ServiceProvider.MapToToggleableControl(prop, dataId, canEdit, host, isToggleable);
+                var control = host.Hub.ServiceProvider.MapToToggleableControl(prop, dataId, canEdit, host, isToggleable, boundDataContext);
                 propsGrid = propsGrid.WithView(control, s => s.WithXs(12).WithMd(6).WithLg(4));
             }
 
@@ -240,14 +259,14 @@ public static class EditLayoutArea
         // Build markdown sections using MapToToggleableControl (full width)
         foreach (var prop in markdownProps)
         {
-            var control = host.Hub.ServiceProvider.MapToToggleableControl(prop, dataId, canEdit, host, isToggleable);
+            var control = host.Hub.ServiceProvider.MapToToggleableControl(prop, dataId, canEdit, host, isToggleable, boundDataContext);
             stack = stack.WithView(control);
         }
 
         // Build collection sections using MapToToggleableControl (full width)
         foreach (var prop in collectionProps)
         {
-            var control = host.Hub.ServiceProvider.MapToToggleableControl(prop, dataId, canEdit, host, isToggleable);
+            var control = host.Hub.ServiceProvider.MapToToggleableControl(prop, dataId, canEdit, host, isToggleable, boundDataContext);
             stack = stack.WithView(control);
         }
 

@@ -2,9 +2,11 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Reactive.Linq;
+using System.Threading;
 using System.Threading.Tasks;
-using FluentAssertions;
 using Memex.Portal.Shared;
+using MeshWeaver.Reactive;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting;
@@ -12,6 +14,7 @@ using MeshWeaver.Hosting.Monolith;
 using MeshWeaver.Hosting.Security;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Hosting.Persistence;
+using MeshWeaver.Data;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
@@ -24,18 +27,23 @@ namespace MeshWeaver.Autocomplete.Test;
 /// Tests for MeshNodeAutocomplete functionality including:
 /// 1. Basic autocomplete returns suggestions
 /// 2. Filtering by creatable type works correctly
-/// 3. Integration with INodeTypeService.GetCreatableTypesAsync
+/// 3. Integration with ICreatableTypesProvider
 /// </summary>
 [Collection("MeshNodeAutocompleteTest")]
 public class MeshNodeAutocompleteTest : MonolithMeshTestBase
 {
-    private readonly string _cacheDirectory;
+    // Class-static so the cache dir is stable across [Fact]s and survives the
+    // shared SP — ShareMeshAcrossTests => true.
+    private static readonly string _cacheDirectory =
+        Path.Combine(Path.GetTempPath(), "MeshWeaverAutocompleteTests", Guid.NewGuid().ToString());
+    static MeshNodeAutocompleteTest() => Directory.CreateDirectory(_cacheDirectory);
+
+    protected override bool ShareMeshAcrossTests => true;
+
     private IMessageHub Hub => Mesh.ServiceProvider.GetRequiredService<IMessageHub>();
 
     public MeshNodeAutocompleteTest(ITestOutputHelper output) : base(output)
     {
-        _cacheDirectory = Path.Combine(Path.GetTempPath(), "MeshWeaverAutocompleteTests", Guid.NewGuid().ToString());
-        Directory.CreateDirectory(_cacheDirectory);
     }
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
@@ -52,16 +60,7 @@ public class MeshNodeAutocompleteTest : MonolithMeshTestBase
             .ConfigureHub(hub => hub.AddMeshNavigation());
     }
 
-    public override async ValueTask DisposeAsync()
-    {
-        await base.DisposeAsync();
-
-        if (Directory.Exists(_cacheDirectory))
-        {
-            try { Directory.Delete(_cacheDirectory, recursive: true); }
-            catch { /* Ignore cleanup errors */ }
-        }
-    }
+    // Cache dir is class-static + shared SP — never deleted between tests.
 
     #region Basic Autocomplete Tests
 
@@ -74,7 +73,7 @@ public class MeshNodeAutocompleteTest : MonolithMeshTestBase
             prefix: "",
             mode: AutocompleteMode.RelevanceFirst,
             limit: 20
-        ).ToListAsync();
+        ).ToObservableSequence().ToList().Should().Within(10.Seconds()).Emit();
 
         // Assert
         Output.WriteLine($"Got {suggestions.Count} suggestions for empty prefix:");
@@ -95,7 +94,7 @@ public class MeshNodeAutocompleteTest : MonolithMeshTestBase
             prefix: "Sys",
             mode: AutocompleteMode.RelevanceFirst,
             limit: 10
-        ).ToListAsync();
+        ).ToObservableSequence().ToList().Should().Within(10.Seconds()).Emit();
 
         // Assert
         Output.WriteLine($"Got {suggestions.Count} suggestions for 'Sys':");
@@ -118,7 +117,7 @@ public class MeshNodeAutocompleteTest : MonolithMeshTestBase
             prefix: "sys",
             mode: AutocompleteMode.RelevanceFirst,
             limit: 10
-        ).ToListAsync();
+        ).ToObservableSequence().ToList().Should().Within(10.Seconds()).Emit();
 
         // Assert
         Output.WriteLine($"Got {suggestions.Count} suggestions for 'sys' (lowercase):");
@@ -140,7 +139,7 @@ public class MeshNodeAutocompleteTest : MonolithMeshTestBase
             prefix: "",
             mode: AutocompleteMode.RelevanceFirst,
             limit: 20
-        ).ToListAsync();
+        ).ToObservableSequence().ToList().Should().Within(10.Seconds()).Emit();
 
         // Assert
         Output.WriteLine($"Got {suggestions.Count} suggestions within 'Systemorph':");
@@ -165,7 +164,7 @@ public class MeshNodeAutocompleteTest : MonolithMeshTestBase
             prefix: "Mark",
             mode: AutocompleteMode.RelevanceFirst,
             limit: 10
-        ).ToListAsync();
+        ).ToObservableSequence().ToList().Should().Within(10.Seconds()).Emit();
 
         // Assert
         Output.WriteLine($"Got {suggestions.Count} suggestions for 'Mark' (RelevanceFirst):");
@@ -187,15 +186,32 @@ public class MeshNodeAutocompleteTest : MonolithMeshTestBase
 
     #region CreatableTypes Tests
 
+    private async Task<IReadOnlyList<CreatableTypeInfo>> GetCreatableTypesAt(string nodePath)
+    {
+        var provider = Hub.ServiceProvider.GetRequiredService<ICreatableTypesProvider>();
+        var workspace = Hub.GetWorkspace();
+        MeshNode? parent = null;
+        if (!string.IsNullOrEmpty(nodePath))
+        {
+            parent = await workspace.GetMeshNodeStream(nodePath)
+                .Take(1)
+                .Timeout(TimeSpan.FromSeconds(5))
+                .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null))
+                .Should().Within(10.Seconds()).Emit();
+        }
+        return await provider.GetCreatableTypes(nodePath, parent)
+            .Should().Within(10.Seconds()).Emit();
+    }
+
     [Fact(Timeout = 10000)]
     public async Task GetCreatableTypes_ReturnsTypesForNode()
     {
         // Arrange
-        var nodeTypeService = Hub.ServiceProvider.GetService<INodeTypeService>();
-        nodeTypeService.Should().NotBeNull("INodeTypeService should be registered");
+        var provider = Hub.ServiceProvider.GetService<ICreatableTypesProvider>();
+        provider.Should().NotBeNull("ICreatableTypesProvider should be registered");
 
-        // Act - get creatable types for Systemorph (should include types defined in ACME)
-        var creatableTypes = await nodeTypeService!.GetCreatableTypesAsync("Systemorph").ToListAsync();
+        // Act - get creatable types for Systemorph (should include types defined in ACME).
+        var creatableTypes = await GetCreatableTypesAt("Systemorph");
 
         // Assert
         Output.WriteLine($"Creatable types at 'Systemorph': {creatableTypes.Count}");
@@ -211,13 +227,9 @@ public class MeshNodeAutocompleteTest : MonolithMeshTestBase
     [Fact(Timeout = 10000)]
     public async Task GetCreatableTypes_DifferentNodesDifferentTypes()
     {
-        // Arrange
-        var nodeTypeService = Hub.ServiceProvider.GetService<INodeTypeService>();
-        nodeTypeService.Should().NotBeNull();
-
-        // Act - get creatable types for different nodes
-        var rootTypes = await nodeTypeService!.GetCreatableTypesAsync("").ToListAsync();
-        var systemorphTypes = await nodeTypeService.GetCreatableTypesAsync("Systemorph").ToListAsync();
+        // Act - get creatable types for different nodes.
+        var rootTypes = await GetCreatableTypesAt("");
+        var systemorphTypes = await GetCreatableTypesAt("Systemorph");
 
         // Assert
         Output.WriteLine($"Root creatable types: {rootTypes.Count}");
@@ -243,12 +255,9 @@ public class MeshNodeAutocompleteTest : MonolithMeshTestBase
     [Fact(Timeout = 10000)]
     public async Task FilterByCreatableType_ReturnsOnlyMatchingNodes()
     {
-        // Arrange
-        var nodeTypeService = Hub.ServiceProvider.GetService<INodeTypeService>();
-        nodeTypeService.Should().NotBeNull();
-
         // First, find a node type that exists
-        var allSuggestions = await MeshQuery.AutocompleteAsync("", "", AutocompleteMode.RelevanceFirst, 50).ToListAsync();
+        var allSuggestions = await MeshQuery.AutocompleteAsync("", "", AutocompleteMode.RelevanceFirst, 50)
+            .ToObservableSequence().ToList().Should().Within(10.Seconds()).Emit();
 
         Output.WriteLine($"All suggestions: {allSuggestions.Count}");
 
@@ -264,7 +273,7 @@ public class MeshNodeAutocompleteTest : MonolithMeshTestBase
 
         // Get creatable types for the first data node
         var firstDataNode = dataSuggestions.First();
-        var creatableTypes = await nodeTypeService!.GetCreatableTypesAsync(firstDataNode.Path).ToListAsync();
+        var creatableTypes = await GetCreatableTypesAt(firstDataNode.Path);
 
         Output.WriteLine($"\nCreatable types at '{firstDataNode.Path}': {creatableTypes.Count}");
         foreach (var t in creatableTypes.Take(5))
@@ -284,7 +293,7 @@ public class MeshNodeAutocompleteTest : MonolithMeshTestBase
 
         foreach (var suggestion in dataSuggestions.Take(10))
         {
-            var types = await nodeTypeService.GetCreatableTypesAsync(suggestion.Path).ToListAsync();
+            var types = await GetCreatableTypesAt(suggestion.Path);
             if (types.Any(t => t.NodeTypePath.Equals(targetType, StringComparison.OrdinalIgnoreCase)))
             {
                 filteredSuggestions.Add(suggestion);
@@ -307,18 +316,15 @@ public class MeshNodeAutocompleteTest : MonolithMeshTestBase
     [Fact(Timeout = 10000)]
     public async Task CanCreateTypeAtPath_ReturnsTrueForValidType()
     {
-        // Arrange
-        var nodeTypeService = Hub.ServiceProvider.GetService<INodeTypeService>();
-        nodeTypeService.Should().NotBeNull();
-
         // Get a node that has creatable types
-        var suggestions = await MeshQuery.AutocompleteAsync("", "", AutocompleteMode.RelevanceFirst, 20).ToListAsync();
+        var suggestions = await MeshQuery.AutocompleteAsync("", "", AutocompleteMode.RelevanceFirst, 20)
+            .ToObservableSequence().ToList().Should().Within(10.Seconds()).Emit();
         QuerySuggestion? nodeWithTypes = null;
-        List<CreatableTypeInfo> nodeCreatableTypes = new();
+        IReadOnlyList<CreatableTypeInfo> nodeCreatableTypes = [];
 
         foreach (var suggestion in suggestions)
         {
-            var types = await nodeTypeService!.GetCreatableTypesAsync(suggestion.Path).ToListAsync();
+            var types = await GetCreatableTypesAt(suggestion.Path);
             if (types.Count > 0)
             {
                 nodeWithTypes = suggestion;
@@ -338,7 +344,7 @@ public class MeshNodeAutocompleteTest : MonolithMeshTestBase
 
         // Act - check if the node can create one of its types
         var targetType = nodeCreatableTypes.First().NodeTypePath;
-        var canCreate = await CanCreateTypeAtPathAsync(nodeTypeService!, nodeWithTypes.Path, targetType);
+        var canCreate = await CanCreateTypeAtPath(nodeWithTypes.Path, targetType);
 
         // Assert
         canCreate.Should().BeTrue($"Node '{nodeWithTypes.Path}' should be able to create type '{targetType}'");
@@ -347,11 +353,8 @@ public class MeshNodeAutocompleteTest : MonolithMeshTestBase
     [Fact(Timeout = 10000)]
     public async Task CanCreateTypeAtPath_ReturnsFalseForInvalidType()
     {
-        // Arrange
-        var nodeTypeService = Hub.ServiceProvider.GetService<INodeTypeService>();
-        nodeTypeService.Should().NotBeNull();
-
-        var suggestions = await MeshQuery.AutocompleteAsync("", "", AutocompleteMode.RelevanceFirst, 10).ToListAsync();
+        var suggestions = await MeshQuery.AutocompleteAsync("", "", AutocompleteMode.RelevanceFirst, 10)
+            .ToObservableSequence().ToList().Should().Within(10.Seconds()).Emit();
         var firstSuggestion = suggestions.FirstOrDefault();
 
         if (firstSuggestion == null)
@@ -361,53 +364,44 @@ public class MeshNodeAutocompleteTest : MonolithMeshTestBase
         }
 
         // Act - check for a type that definitely doesn't exist
-        var canCreate = await CanCreateTypeAtPathAsync(nodeTypeService!, firstSuggestion.Path, "NonExistent/FakeType/ThatDoesNotExist");
+        var canCreate = await CanCreateTypeAtPath(firstSuggestion.Path, "NonExistent/FakeType/ThatDoesNotExist");
 
         // Assert
         canCreate.Should().BeFalse("Node should not be able to create a non-existent type");
     }
 
     /// <summary>
-    /// Helper method to check if a type can be created at a path.
-    /// This mirrors the logic in MeshNodeAutocomplete.
+    /// Mirror of <c>MeshNodeAutocomplete</c>'s reactive can-create check
+    /// against <see cref="ICreatableTypesProvider"/>.
     /// </summary>
-    private static async Task<bool> CanCreateTypeAtPathAsync(
-        INodeTypeService nodeTypeService,
-        string nodePath,
-        string nodeTypePath)
+    private async Task<bool> CanCreateTypeAtPath(
+        string nodePath, string nodeTypePath)
     {
-        await foreach (var creatableType in nodeTypeService.GetCreatableTypesAsync(nodePath))
-        {
-            if (creatableType.NodeTypePath.Equals(nodeTypePath, StringComparison.OrdinalIgnoreCase))
-            {
-                return true;
-            }
-        }
-        return false;
+        var types = await GetCreatableTypesAt(nodePath);
+        return types.Any(t => t.NodeTypePath.Equals(nodeTypePath, StringComparison.OrdinalIgnoreCase));
     }
 
     #endregion
 
     #region Integration Tests
 
-    [Fact(Timeout = 10000)]
+    [Fact]
     public async Task Integration_AutocompleteWithTypeFilter_WorksEndToEnd()
     {
         // This test simulates the full flow of:
         // 1. User selects a type to create
         // 2. Namespace autocomplete filters to nodes that support that type
+        // Limit kept low (10 instead of 50) to keep the nested loops within
+        // the suite-default 30s methodTimeout — each iteration is a synced-query
+        // CombineLatest gate and Cornerstone's cold cache hits all of them.
 
-        // Arrange
-        var nodeTypeService = Hub.ServiceProvider.GetService<INodeTypeService>();
-        nodeTypeService.Should().NotBeNull();
-
-        // Get all autocomplete suggestions
+        // Get autocomplete suggestions
         var allSuggestions = await MeshQuery.AutocompleteAsync(
             basePath: "",
             prefix: "",
             mode: AutocompleteMode.RelevanceFirst,
-            limit: 50
-        ).ToListAsync();
+            limit: 10
+        ).ToObservableSequence().ToList().Should().Within(30.Seconds()).Emit();
 
         Output.WriteLine($"Total suggestions: {allSuggestions.Count}");
 
@@ -417,7 +411,7 @@ public class MeshNodeAutocompleteTest : MonolithMeshTestBase
 
         foreach (var suggestion in allSuggestions)
         {
-            var types = await nodeTypeService!.GetCreatableTypesAsync(suggestion.Path).ToListAsync();
+            var types = await GetCreatableTypesAt(suggestion.Path);
             foreach (var type in types)
             {
                 if (targetType == null)
@@ -449,7 +443,7 @@ public class MeshNodeAutocompleteTest : MonolithMeshTestBase
         var filteredSuggestions = new List<QuerySuggestion>();
         foreach (var suggestion in allSuggestions)
         {
-            if (await CanCreateTypeAtPathAsync(nodeTypeService!, suggestion.Path, targetType))
+            if (await CanCreateTypeAtPath(suggestion.Path, targetType))
             {
                 filteredSuggestions.Add(suggestion);
             }

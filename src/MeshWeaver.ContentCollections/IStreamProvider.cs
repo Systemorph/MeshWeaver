@@ -39,14 +39,15 @@ public interface IStreamProvider
     IAsyncEnumerable<(Stream? Stream, string Path, DateTime LastModified)> GetStreamsAsync(Func<string, bool> filter, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Gets all folders in the specified path
+    /// Streams folders in the specified path. Hub-reachable callers consume via
+    /// <c>await foreach</c> or bridge with <c>.ToObservable()</c>.
     /// </summary>
-    Task<IReadOnlyCollection<FolderItem>> GetFoldersAsync(string path);
+    IAsyncEnumerable<FolderItem> GetFolders(string path, CancellationToken ct = default);
 
     /// <summary>
-    /// Gets all files in the specified path
+    /// Streams files in the specified path. See <see cref="GetFolders"/>.
     /// </summary>
-    Task<IReadOnlyCollection<FileItem>> GetFilesAsync(string path);
+    IAsyncEnumerable<FileItem> GetFiles(string path, CancellationToken ct = default);
 
     /// <summary>
     /// Saves a file to the provider

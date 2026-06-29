@@ -1,10 +1,13 @@
-﻿using MeshWeaver.ContentCollections;
+﻿using System.Reactive.Linq;
+using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
 using MeshWeaver.Domain;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Mesh.Services.LanguageServer;
 using MeshWeaver.Messaging;
+using MeshWeaver.NuGet;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Graph.Configuration;
@@ -25,6 +28,8 @@ public static class GraphConfigurationExtensions
             builder
                 .AddNodeTypeType()
                 .AddCodeType()
+                .AddScopeType()
+                .AddReleaseType()
                 .AddMarkdownType()
                 .AddHtmlType()
                 .AddCommentType()
@@ -38,6 +43,13 @@ public static class GraphConfigurationExtensions
                 .AddGroupMembershipType()
                 .AddApprovalType()
                 .AddNotificationType()
+                .AddNotificationRuleType()
+                .AddNotificationChannelType()
+                .AddInvitationType()
+                .AddEmailType()
+                .AddEaCredentialType()
+                .AddTeamsConversationType()
+                .AddGraphSubscriptionType()
                 .AddActivityType()
                 .AddUserActivityType()
                 .AddKernel()
@@ -45,6 +57,13 @@ public static class GraphConfigurationExtensions
                 .AddMeshDataSourceType()
                 .AddPartitionType()
                 .AddGlobalSettingsType();
+
+            // The static-repo importer runs its bulk create/upsert traffic on a DEDICATED
+            // hub (import/{meshHubId}) so it never floods the root mesh hub's action block —
+            // the router must stay free (atioz 2026-06-11 wedge). Declare its address-type as
+            // stream-routed here, where the importer's module is enabled, so the silo's
+            // RoutingGrain dispatches to it and its responses route back. See StaticRepoImporter.
+            builder.AddStreamRoutedAddressType(StaticRepoImporter.ImportAddressType);
 
             // Register query routing rules for partition + table resolution
             builder
@@ -85,17 +104,72 @@ public static class GraphConfigurationExtensions
                     return table != null ? new QueryRoutingHints { Table = table } : null;
                 });
 
-            // Register Graph content types in the hub's type registry for polymorphic JSON serialization
+            // Register Graph content types in the type registry for polymorphic
+            // JSON serialization — on the mesh hub AND on every per-node hub.
+            // The per-node overlay is essential: a NodeType definition hub posts
+            // RunCompileRequest to its compile-activity hub and must deserialise
+            // the RunCompileResponse that routes back; both hubs are per-node
+            // hubs, so without the ConfigureDefaultNodeHub overlay the compile
+            // round-trip fails with "type 'RunCompileResponse' is not registered
+            // in this hub's TypeRegistry" and the compile never settles.
             builder.ConfigureHub(config => config.WithGraphTypes());
+            // Every per-node hub gets MeshDataSource + Overview/Thumbnail/Settings/Search
+            // as a baseline. Compiled NodeType HubConfigurations layer on top
+            // (AddMeshDataSource is idempotent via its marker; WithView overrides
+            // the default Overview/Settings when the NodeType provides its own).
+            // Without this, per-instance hubs that activate before their NodeType
+            // is compiled (or whose NodeType never compiles — seeded test definitions,
+            // framework types that don't ship a Configuration string) get no
+            // GetDataRequest handler at all → GetDataRequest returns NotFound,
+            // ReadNodeAsync returns null. Repro: FileSystem_Organizations,
+            // LinkedInProfile_NodeType_CompilesAndRendersOverview.
+            builder.ConfigureDefaultNodeHub(config => config
+                .WithGraphTypes()
+                .AddDefaultLayoutAreas()
+                // Owner-injection at the sync chokepoint: lets SynchronizationStream.Update resolve the
+                // node OWNER (CreatedBy) from the node already in its Current when no live/creation
+                // context survives — the cold-start FIRST-write race (the owning hub establishes its
+                // standing identity asynchronously). Per-node hub so Host.ServiceProvider has it.
+                .WithServices(services => services
+                    .AddSingleton<MeshWeaver.Data.Serialization.IStreamOwnerResolver,
+                        MeshNodeStreamOwnerResolver>()));
+
+            // Seed the built-in NodeCopy + Mirror script templates as Code MeshNodes
+            // at Templates/Import/{NodeCopy,Mirror}. ImportLayoutArea fires
+            // ExecuteScriptRequest at these to drive copy / mirror operations.
+            // Stateless static helper, no DI provider — see
+            // Doc/Architecture/AsynchronousCalls.md → "Static handlers compose".
+            builder.AddMeshNodes(GraphImportTemplates.GetStaticNodes());
 
             // Register services that don't need hub-level dependencies at the mesh level
             builder.ConfigureServices(services =>
             {
+                // Content-integrity guard (app-integrity, not security — registered with
+                // AddGraph, independent of AddRowLevelSecurity): rejects Create/Update of a
+                // built-in-NodeType node whose Content carries a '$type' discriminator no
+                // registry will ever resolve. Without it, such content persists verbatim
+                // and every later load degrades it to an untyped JsonElement — the node
+                // renders empty and cannot be edited (atioz 2026-06-12: agent-authored
+                // Markdown nodes with '$type': 'MarkdownConfiguration'). Scoped, like the
+                // security validators: each hub scope resolves it with that hub's
+                // IMessageHub, so the registry checked is the validating hub's own chain.
+                services.AddScoped<INodeValidator, Security.ContentDiscriminatorValidator>();
+
                 // Register compilation cache options
                 services.AddOptions<CompilationCacheOptions>();
 
                 // Register compilation cache service
                 services.AddSingleton<ICompilationCacheService, CompilationCacheService>();
+
+                // NuGet package resolver for #r "nuget:..." directives
+                services.AddNuGetResolver();
+
+                // Make this assembly visible to kernel scripts so the
+                // NodeCopy + Mirror templates can resolve types from
+                // MeshWeaver.Graph (NodeCopyHelper, …) without depending
+                // on AppDomain having eagerly loaded them.
+                services.AddSingleton(new MeshWeaver.Kernel.Hub.KernelScriptAssembly(
+                    typeof(GraphImportTemplates).Assembly));
 
                 return services;
             });
@@ -111,15 +185,41 @@ public static class GraphConfigurationExtensions
                 .AddContentCollections()
                 .AddEmbeddedResourceContentCollection("NodeTypeIcons",
                     typeof(GraphConfigurationExtensions).Assembly, "Icons")
+                // High-level subtree-copy operation. Relays NodeCopyDispatchRequest
+                // through the Templates/Import/NodeCopy script template via
+                // ScriptDispatch.RelayToScript so callers see request/response
+                // semantics while the work runs as an Activity (live progress,
+                // cancellation via RequestedStatus). Same shape as
+                // ExportDocumentRequest. The legacy CopyNodeRequest stays for
+                // single-node / move-internal paths.
+                .AddNodeCopyDispatchHandler()
                 .WithServices(services =>
                 {
                     // Register MeshNodeCompilationService as both concrete and interface
-                    // NodeTypeService needs the concrete type for internal CompileToReleaseAsync method
+                    // for callers that need the concrete CompileAndGetConfigurations entry point.
                     services.AddSingleton<MeshNodeCompilationService>();
                     services.AddSingleton<IMeshNodeCompilationService>(sp => sp.GetRequiredService<MeshNodeCompilationService>());
-                    services.AddSingleton<INodeTypeService, NodeTypeService>();
+                    // 🅿️ Mesh-scoped park registry — one shared instance across every per-NodeType
+                    // hub. Contains a broken NodeType: a terminal compile failure parks (bounded +
+                    // terminal) so it can't drive an unbounded recompile storm, and emits one
+                    // user-visible notification. Instance maps only — no static state. See
+                    // NodeTypeCompileParkRegistry + InstallCompileWatcher's parked short-circuit.
+                    services.AddSingleton<NodeTypeCompileParkRegistry>();
+                    // Stage-1 LSP language services over a NodeType's live CSharpCompilation
+                    // — hover, completion, diagnostics, speculative pre-flight checks. Consumed
+                    // by the Lsp* MCP tools + Coder agent's Lsp plugin. SpeculativeCompilation
+                    // needs the NuGet resolver to handle #r directives in proposed source.
+                    services.AddSingleton<SpeculativeCompilation>();
+                    services.AddSingleton<IMeshLanguageService, MeshNodeLanguageService>();
                     services.AddSingleton<INodeConfigurationResolver, NodeConfigurationResolver>();
                     services.AddSingleton<IMeshNodeHubFactory, MeshNodeHubFactory>();
+                    // Synced-query / namespace-bounded creatable-types lookup.
+                    services.AddSingleton<ICreatableTypesProvider, CreatableTypesProvider>();
+                    // Replay-cached PartitionDefinition lookups, used by
+                    // CodeNodeType.HandleExecuteScript to resolve
+                    // PartitionDefinition.DefaultActivityParentPath without
+                    // bridging an async catalog query into the sync handler.
+                    services.AddSingleton<PartitionRegistry>();
                     return services;
                 })
                 .WithHandler<GetDataRequest>(HandleNodeTypeRequest));
@@ -132,44 +232,36 @@ public static class GraphConfigurationExtensions
     /// <summary>
     /// Handles GetDataRequest for NodeTypeReference.
     /// Returns CodeConfiguration from the node's partition.
-    /// The node type is encoded in the hub address.
+    /// Sync handler — composes via <c>IObservable</c>; no <c>await</c>.
     /// </summary>
-    private static async Task<IMessageDelivery> HandleNodeTypeRequest(
+    private static IMessageDelivery HandleNodeTypeRequest(
         IMessageHub hub,
-        IMessageDelivery<GetDataRequest> request,
-        CancellationToken ct)
+        IMessageDelivery<GetDataRequest> request)
     {
         // Only handle NodeTypeReference, let other references pass through
         if (request.Message.Reference is not NodeTypeReference)
             return request;
 
-        try
-        {
-            var meshQuery = hub.ServiceProvider.GetRequiredService<IMeshService>();
+        var meshQuery = hub.ServiceProvider.GetRequiredService<IMeshService>();
+        var nodeTypePath = hub.Address.ToString();
+        var codeParentPath = $"{nodeTypePath}/{CodeNodeType.SourceSubNamespace}";
 
-            // The node type path is the hub address (e.g., "type/Person")
-            var nodeTypePath = hub.Address.ToString();
+        meshQuery
+            .Query<MeshNode>(MeshQueryRequest.FromQuery(
+                $"namespace:{codeParentPath} scope:subtree"))
+            .Take(1).Timeout(TimeSpan.FromSeconds(30))
+            .Select(change => change.Items
+                .Select(n => n.Content)
+                .OfType<CodeConfiguration>()
+                .FirstOrDefault())
+            .Subscribe(
+                codeFile => hub.Post(
+                    new GetDataResponse(codeFile, hub.Version),
+                    o => o.ResponseFor(request)),
+                ex => hub.Post(
+                    new GetDataResponse(null, 0) { Error = ex.Message },
+                    o => o.ResponseFor(request)));
 
-            // Get CodeConfiguration from child MeshNodes under the _Source path
-            CodeConfiguration? codeFile = null;
-            var codeParentPath = $"{nodeTypePath}/_Source";
-            await foreach (var child in meshQuery.QueryAsync<MeshNode>($"namespace:{codeParentPath} scope:subtree").WithCancellation(ct))
-            {
-                if (child.Content is CodeConfiguration cf)
-                {
-                    codeFile = cf;
-                    break;
-                }
-            }
-
-            hub.Post(new GetDataResponse(codeFile, hub.Version), o => o.ResponseFor(request));
-            return request.Processed();
-        }
-        catch (Exception ex)
-        {
-            hub.Post(new GetDataResponse(null, 0) { Error = ex.Message },
-                o => o.ResponseFor(request));
-            return request.Processed();
-        }
+        return request.Processed();
     }
 }

@@ -4,7 +4,6 @@ using System.IO;
 using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
-using FluentAssertions;
 using Markdig;
 using Markdig.Syntax;
 using Markdig.Syntax.Inlines;
@@ -26,11 +25,17 @@ public class ContentReferenceIntegrityTest
         .UseYamlFrontMatter()
         .Build();
 
+    // Mirror of the embedded NodeTypeIcons collection (src/MeshWeaver.Graph/Icons/**.svg),
+    // served at /static/NodeTypeIcons/. Keep in sync when adding an icon file there — a
+    // reference to a name not present here (or not on disk) renders as a broken <img>.
     private static readonly HashSet<string> KnownNodeTypeIcons = new(StringComparer.OrdinalIgnoreCase)
     {
-        "bot.svg", "building.svg", "chat.svg", "code.svg", "comment.svg", "document.svg",
-        "message.svg", "people.svg", "person.svg", "rocket.svg", "shield.svg",
-        "shopping-bag.svg", "truck.svg"
+        "bell.svg", "bot.svg", "box.svg", "building.svg", "chart.svg", "chat.svg",
+        "checkmark.svg", "code.svg", "comment.svg", "database.svg", "document.svg",
+        "folder.svg", "key.svg", "mail.svg", "meshweaver-logo.svg", "message.svg",
+        "organization.svg", "people.svg", "person.svg", "rocket.svg", "satellite.svg",
+        "settings.svg", "shield.svg", "shopping-bag.svg", "sparkle.svg", "task-list.svg",
+        "truck.svg"
     };
 
     #region Markdown Thumbnails
@@ -48,7 +53,7 @@ public class ContentReferenceIntegrityTest
         {
             var relativePath = Path.GetRelativePath(contentDir, filePath).Replace('\\', '/');
             var fileContent = await File.ReadAllTextAsync(filePath);
-            var node = await _parser.ParseAsync(filePath, fileContent, relativePath);
+            var node = _parser.Parse(filePath, fileContent, relativePath);
 
             var thumbnail = (node?.Content as MarkdownContent)?.Thumbnail;
             if (string.IsNullOrEmpty(thumbnail))
@@ -84,7 +89,7 @@ public class ContentReferenceIntegrityTest
         {
             var relativePath = Path.GetRelativePath(contentDir, filePath).Replace('\\', '/');
             var fileContent = await File.ReadAllTextAsync(filePath);
-            var node = await _parser.ParseAsync(filePath, fileContent, relativePath);
+            var node = _parser.Parse(filePath, fileContent, relativePath);
 
             var thumbnail = (node?.Content as MarkdownContent)?.Thumbnail;
             if (string.IsNullOrEmpty(thumbnail))
@@ -135,7 +140,7 @@ public class ContentReferenceIntegrityTest
             var baseDir = filePath.StartsWith(contentDir) ? contentDir : dataDir;
             var relativePath = Path.GetRelativePath(baseDir, filePath).Replace('\\', '/');
             var fileContent = await File.ReadAllTextAsync(filePath);
-            var node = await _parser.ParseAsync(filePath, fileContent, relativePath);
+            var node = _parser.Parse(filePath, fileContent, relativePath);
 
             var icon = node?.Icon;
             if (string.IsNullOrEmpty(icon))
@@ -286,6 +291,17 @@ public class ContentReferenceIntegrityTest
         foreach (var filePath in jsonFiles)
         {
             var relativePath = Path.GetRelativePath(dataDir, filePath).Replace('\\', '/');
+
+            // Skip generated satellite artifacts (NodeType compile releases,
+            // activity logs, threads, …). These are produced at runtime — they
+            // are not hand-authored sample content, and their image refs are
+            // whatever the generator emitted, so validating them here is wrong
+            // (and flaky: a compile test running alongside this one drops fresh
+            // `Release/*.json` files into the sample tree).
+            if (relativePath.Contains("/Release/", StringComparison.Ordinal)
+                || relativePath.StartsWith("Release/", StringComparison.Ordinal))
+                continue;
+
             var fileContent = File.ReadAllText(filePath);
 
             using var doc = JsonDocument.Parse(fileContent, new JsonDocumentOptions

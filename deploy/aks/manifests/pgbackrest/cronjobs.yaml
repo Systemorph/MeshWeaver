@@ -1,0 +1,176 @@
+# ---------------------------------------------------------------------------
+# cronjobs.yaml — Scheduled pgBackRest backups + one-time stanza bootstrap.
+#
+# Three resources:
+#   1. Job  pgbackrest-stanza-create  — run ONCE after the DB is up + WAL
+#      archiving is enabled. Creates the stanza in the blob repo and runs an
+#      initial `check`. Re-runnable (idempotent).
+#   2. CronJob pgbackrest-full         — weekly full backup.
+#   3. CronJob pgbackrest-diff         — daily differential backup.
+#
+# All three exec pgBackRest against the SAME pg1-path/repo as the sidecar by
+# mounting the same config + the data PVC, and run as pgbackrest-sa for keyless
+# blob auth. They target the running postgres via the StatefulSet's headless
+# pod (memex-postgres-statefulset-0); pgBackRest needs the data dir locally,
+# hence they schedule onto the node holding the pgdata PVC by reusing it RWO —
+# in practice run them as `kubectl exec` into the sidecar (see README runbook)
+# OR rely on these Jobs which attach the same RWO PVC when the DB pod is
+# briefly drained. The exec-into-sidecar path (README) is the recommended,
+# zero-contention method; these CronJobs are the unattended fallback.
+#
+#   kubectl apply -n memex -f cronjobs.yaml
+#   kubectl create job --from=cronjob/pgbackrest-full pgbackrest-bootstrap -n memex  # optional manual full
+# ---------------------------------------------------------------------------
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: pgbackrest-stanza-create
+  namespace: memex
+  labels:
+    app.kubernetes.io/component: pgbackrest
+spec:
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        azure.workload.identity/use: "true"
+    spec:
+      serviceAccountName: pgbackrest-sa
+      restartPolicy: OnFailure
+      containers:
+        - name: stanza-create
+          image: docker.io/woblerr/pgbackrest:2.54.2
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              sed -e "s/__AZURE_ACCOUNT__/${PGBACKREST_AZURE_ACCOUNT}/" \
+                  -e "s/__AZURE_CONTAINER__/${PGBACKREST_AZURE_CONTAINER}/" \
+                  /etc/pgbackrest-src/pgbackrest.conf > /etc/pgbackrest/pgbackrest.conf
+              pgbackrest --config=/etc/pgbackrest/pgbackrest.conf --stanza=memex stanza-create
+              pgbackrest --config=/etc/pgbackrest/pgbackrest.conf --stanza=memex check
+          env:
+            - name: PGBACKREST_AZURE_ACCOUNT
+              value: "__AZURE_ACCOUNT__"
+            - name: PGBACKREST_AZURE_CONTAINER
+              value: "pgbackrest"
+          volumeMounts:
+            - { name: memex-pgdata, mountPath: /var/lib/postgresql/data }
+            - { name: pgbackrest-src, mountPath: /etc/pgbackrest-src }
+            - { name: pgbackrest-conf, mountPath: /etc/pgbackrest }
+      volumes:
+        - name: memex-pgdata
+          persistentVolumeClaim:
+            claimName: memex-pgdata
+        - name: pgbackrest-src
+          configMap:
+            name: pgbackrest-config
+            items: [{ key: pgbackrest.conf, path: pgbackrest.conf }]
+        - name: pgbackrest-conf
+          emptyDir: {}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: pgbackrest-full
+  namespace: memex
+  labels:
+    app.kubernetes.io/component: pgbackrest
+spec:
+  schedule: "0 2 * * 0"            # weekly full, Sunday 02:00 UTC
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        metadata:
+          labels:
+            azure.workload.identity/use: "true"
+        spec:
+          serviceAccountName: pgbackrest-sa
+          restartPolicy: OnFailure
+          containers:
+            - name: backup-full
+              image: docker.io/woblerr/pgbackrest:2.54.2
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  set -e
+                  sed -e "s/__AZURE_ACCOUNT__/${PGBACKREST_AZURE_ACCOUNT}/" \
+                      -e "s/__AZURE_CONTAINER__/${PGBACKREST_AZURE_CONTAINER}/" \
+                      /etc/pgbackrest-src/pgbackrest.conf > /etc/pgbackrest/pgbackrest.conf
+                  pgbackrest --config=/etc/pgbackrest/pgbackrest.conf --stanza=memex --type=full backup
+              env:
+                - { name: PGBACKREST_AZURE_ACCOUNT, value: "__AZURE_ACCOUNT__" }
+                - { name: PGBACKREST_AZURE_CONTAINER, value: "pgbackrest" }
+              volumeMounts:
+                - { name: memex-pgdata, mountPath: /var/lib/postgresql/data }
+                - { name: pgbackrest-src, mountPath: /etc/pgbackrest-src }
+                - { name: pgbackrest-conf, mountPath: /etc/pgbackrest }
+          volumes:
+            - name: memex-pgdata
+              persistentVolumeClaim:
+                claimName: memex-pgdata
+            - name: pgbackrest-src
+              configMap:
+                name: pgbackrest-config
+                items: [{ key: pgbackrest.conf, path: pgbackrest.conf }]
+            - name: pgbackrest-conf
+              emptyDir: {}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: pgbackrest-diff
+  namespace: memex
+  labels:
+    app.kubernetes.io/component: pgbackrest
+spec:
+  schedule: "0 2 * * 1-6"         # daily differential, Mon-Sat 02:00 UTC
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        metadata:
+          labels:
+            azure.workload.identity/use: "true"
+        spec:
+          serviceAccountName: pgbackrest-sa
+          restartPolicy: OnFailure
+          containers:
+            - name: backup-diff
+              image: docker.io/woblerr/pgbackrest:2.54.2
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  set -e
+                  sed -e "s/__AZURE_ACCOUNT__/${PGBACKREST_AZURE_ACCOUNT}/" \
+                      -e "s/__AZURE_CONTAINER__/${PGBACKREST_AZURE_CONTAINER}/" \
+                      /etc/pgbackrest-src/pgbackrest.conf > /etc/pgbackrest/pgbackrest.conf
+                  pgbackrest --config=/etc/pgbackrest/pgbackrest.conf --stanza=memex --type=diff backup
+              env:
+                - { name: PGBACKREST_AZURE_ACCOUNT, value: "__AZURE_ACCOUNT__" }
+                - { name: PGBACKREST_AZURE_CONTAINER, value: "pgbackrest" }
+              volumeMounts:
+                - { name: memex-pgdata, mountPath: /var/lib/postgresql/data }
+                - { name: pgbackrest-src, mountPath: /etc/pgbackrest-src }
+                - { name: pgbackrest-conf, mountPath: /etc/pgbackrest }
+          volumes:
+            - name: memex-pgdata
+              persistentVolumeClaim:
+                claimName: memex-pgdata
+            - name: pgbackrest-src
+              configMap:
+                name: pgbackrest-config
+                items: [{ key: pgbackrest.conf, path: pgbackrest.conf }]
+            - name: pgbackrest-conf
+              emptyDir: {}

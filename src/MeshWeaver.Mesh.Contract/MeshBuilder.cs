@@ -1,8 +1,10 @@
-﻿using System.Reflection;
+﻿using System.Reactive.Linq;
+using System.Reflection;
 using System.Runtime.CompilerServices;
 using MeshWeaver.Domain;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Mesh.Security;
+using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -138,6 +140,7 @@ public record MeshBuilder
         var excludedTypes = AutocompleteExcludedTypes;
         var accessConfig = NodeTypeAccessConfig;
         var routingRules = QueryRoutingRules;
+        var streamRoutedTypes = StreamRoutedAddressTypes;
 
         ConfigureServices(services => services
             .AddSingleton(_ =>
@@ -148,12 +151,23 @@ public record MeshBuilder
                         ? config => defaultNodeHubConfigs.Aggregate(config, (c, f) => f(c))
                         : null;
                 return new MeshConfiguration(
-                    MeshNodes.GroupBy(x => x.Path).ToDictionary(g => g.Key, g => g.Last()),
+                    // Internal-only list — MeshConfiguration uses it to compute
+                    // derived lazies (ContextExcludedTypes / SatelliteNodeTypes);
+                    // no public property exposes it. Application code reads
+                    // static nodes via serviceProvider.EnumerateStaticNodes().
+                    MeshNodes,
                     combinedDefaultConfig,
                     autocompleteExcludedNodeTypes: excludedTypes.Count > 0 ? excludedTypes : null,
                     nodeTypePermissions: accessConfig.Build(),
-                    queryRoutingRules: routingRules);
+                    queryRoutingRules: routingRules,
+                    streamRoutedAddressTypes: streamRoutedTypes);
             })
+            // Static nodes registered via AddMeshNodes(...) flow as an
+            // IStaticNodeProvider. Application code reads them via
+            // serviceProvider.EnumerateStaticNodes() — there is no Nodes
+            // dictionary on MeshConfiguration. Last-write-wins by Path is
+            // applied at iteration time inside the provider.
+            .AddSingleton<IStaticNodeProvider>(new StaticMeshNodeListProvider(MeshNodes))
             .AddSingleton<ITypeRegistry>(_ =>
             {
                 // Register core mesh types on the shared registry so they're available to ALL hubs
@@ -166,8 +180,8 @@ public record MeshBuilder
                 meshTypeRegistry.WithType(typeof(CreateNodeResponse), nameof(CreateNodeResponse));
                 meshTypeRegistry.WithType(typeof(DeleteNodeRequest), nameof(DeleteNodeRequest));
                 meshTypeRegistry.WithType(typeof(DeleteNodeResponse), nameof(DeleteNodeResponse));
-                meshTypeRegistry.WithType(typeof(UpdateNodeRequest), nameof(UpdateNodeRequest));
-                meshTypeRegistry.WithType(typeof(UpdateNodeResponse), nameof(UpdateNodeResponse));
+                meshTypeRegistry.WithType(typeof(ExecuteScriptRequest), nameof(ExecuteScriptRequest));
+                meshTypeRegistry.WithType(typeof(ExecuteScriptResponse), nameof(ExecuteScriptResponse));
 
                 // Register additional types added via WithMeshType()
                 foreach (var (type, name) in meshTypeRegs)
@@ -177,19 +191,29 @@ public record MeshBuilder
             })
             .AddSingleton(BuildHub)
             .AddSingleton<AccessService>()
+            // Controlled I/O pools — mesh-scoped governor over the shared
+            // ThreadPool for genuinely-async / sync-blocking leaves (file system,
+            // blob, …). Resolved by leaf adapters via IoPoolRegistry; dies with
+            // the mesh. See Doc/Architecture/ControlledIoPooling.md.
+            .AddIoPools()
             );
 
         IReadOnlyCollection<Func<MeshConfiguration, MeshConfiguration>> meshConfig = MeshConfiguration;
 
         ConfigureHub(conf => conf.WithRoutes(routes =>
-                routes.WithHandler((delivery, ct) =>
+                // Observable-shaped handler — no Task<T>, no .FirstAsync().ToTask()
+                // at the call site. The framework bridges once at the rule-chain
+                // edge inside RouteConfiguration.WithHandler. Per
+                // Doc/Architecture/AsynchronousCalls.md.
+                routes.WithHandler(delivery =>
                 {
                     // Compare without Host since Host tracks routing path
                     var targetWithoutHost = delivery.Target is not null ? delivery.Target with { Host = null } : null;
                     if (delivery.State != MessageDeliveryState.Submitted || targetWithoutHost == null || targetWithoutHost.Equals(Address))
-                        return Task.FromResult(delivery);
+                        return Observable.Return(delivery);
 
-                    return routes.Hub.ServiceProvider.GetRequiredService<IRoutingService>().DeliverMessageAsync(delivery.Package(), ct);
+                    return routes.Hub.ServiceProvider.GetRequiredService<IRoutingService>()
+                        .DeliverMessage(delivery.Package());
                 }))
             .Set(meshConfig)
         );
@@ -286,4 +310,23 @@ public record MeshBuilder
     }
 
     internal List<QueryRoutingRule> QueryRoutingRules { get; } = [];
+
+    /// <summary>
+    /// Declares an address-type prefix that routes via the cluster-wide
+    /// Orleans memory stream rather than grain activation. Hubs at such
+    /// addresses are expected to <see cref="IRoutingService.RegisterStream(IMessageHub)"/>
+    /// in their <c>WithInitialization</c>. Built-in defaults
+    /// (<c>portal</c>, <c>client</c>) come from
+    /// <see cref="MeshConfiguration.DefaultStreamRoutedAddressTypes"/>;
+    /// modules add their own (e.g. <c>cache</c> for the mesh-node-cache
+    /// hub) here. See <c>Doc/Architecture/OrleansTestRoutingPattern.md</c>.
+    /// </summary>
+    public MeshBuilder AddStreamRoutedAddressType(string addressType)
+    {
+        StreamRoutedAddressTypes.Add(addressType);
+        return this;
+    }
+
+    internal HashSet<string> StreamRoutedAddressTypes { get; } =
+        new(global::MeshWeaver.Mesh.MeshConfiguration.DefaultStreamRoutedAddressTypes, StringComparer.Ordinal);
 }

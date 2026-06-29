@@ -12,6 +12,15 @@ namespace MeshWeaver.Messaging.Serialization;
 /// </summary>
 public class PolymorphicTypeInfoResolver(ITypeRegistry typeRegistry) : DefaultJsonTypeInfoResolver
 {
+    /// <summary>
+    /// Resolves the <see cref="JsonTypeInfo"/> for <paramref name="type"/> and, for eligible object
+    /// types, augments it with polymorphism options whose derived types are discovered from the type
+    /// registry (and any <see cref="JsonPolymorphicAttribute"/>/<see cref="JsonDerivedTypeAttribute"/>),
+    /// using the mesh's $type discriminator property.
+    /// </summary>
+    /// <param name="type">The type to resolve metadata for.</param>
+    /// <param name="options">The serializer options in effect.</param>
+    /// <returns>The type info, with polymorphism configured when derived types are available.</returns>
     public override JsonTypeInfo GetTypeInfo(Type type, JsonSerializerOptions options)
     {
         var jsonTypeInfo = base.GetTypeInfo(type, options);        // Only configure polymorphism for supported types that need it

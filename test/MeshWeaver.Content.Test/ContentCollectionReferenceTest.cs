@@ -6,7 +6,6 @@ using System.Reactive.Linq;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
-using FluentAssertions;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
 using MeshWeaver.Documentation;
@@ -23,6 +22,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
+using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Content.Test;
 
 /// <summary>
@@ -31,6 +31,9 @@ namespace MeshWeaver.Content.Test;
 [Collection("SamplesGraphData")]
 public class ContentCollectionReferenceTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
+    /// <summary>Share Mesh/SP across [Fact]s — see MonolithMeshTestBase.ShareMeshAcrossTests.</summary>
+    protected override bool ShareMeshAcrossTests => true;
+
     private static string GetSamplesGraphPath()
     {
         var currentDir = Directory.GetCurrentDirectory();
@@ -42,7 +45,9 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
     {
         var graphPath = TestPaths.SamplesGraph;
         var dataDirectory = TestPaths.SamplesGraphData;
-        var cacheDirectory = Path.Combine(Path.GetTempPath(), "MeshWeaverContentCollectionTests", System.Guid.NewGuid().ToString(), ".mesh-cache");
+        // Stable cache directory — the timestamped-subdir cache (a3ab9909e)
+        // gives each compile its own subdir so prior-process DLLs aren't touched.
+        var cacheDirectory = Path.Combine(Path.GetTempPath(), "MeshWeaverContentCollectionTests", ".mesh-cache");
         Directory.CreateDirectory(cacheDirectory);
 
         var configuration = new ConfigurationBuilder()
@@ -53,12 +58,15 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
             })
             .Build();
 
-        // Create the "storage" collection config that node types (Organization, Person) will map from
+        // Create the "storage" collection config that node types (Organization, Person) will map from.
+        // ExposeInChildren=true so per-node MapContentCollection wrappers (which copy this flag
+        // from the source config) surface in GetAllCollectionConfigs after the default flip.
         var storageConfig = new ContentCollectionConfig
         {
             Name = "storage",
             SourceType = "FileSystem",
-            BasePath = graphPath
+            BasePath = graphPath,
+            ExposeInChildren = true
         };
 
         return builder
@@ -107,16 +115,10 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
         var client = GetClient(c => c.AddContentCollections());
 
         // Initialize Alice hub
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(aliceAddress),
-            TestContext.Current.CancellationToken);
+        await client.Observe(new PingRequest(), o => o.WithTarget(aliceAddress)).Should().Within(19.Seconds()).Emit();
 
         // Request the "attachments" collection configuration
-        var response = await client.AwaitResponse(
-            new GetDataRequest(new ContentCollectionReference(["attachments"])),
-            o => o.WithTarget(aliceAddress),
-            TestContext.Current.CancellationToken);
+        var response = await client.Observe(new GetDataRequest(new ContentCollectionReference(["attachments"])), o => o.WithTarget(aliceAddress)).Should().Emit();
 
         response.Should().NotBeNull();
         response.Message.Should().NotBeNull();
@@ -141,15 +143,9 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
         var aliceAddress = new Address("Cornerstone/Microsoft");
         var client = GetClient(c => c.AddContentCollections());
 
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(aliceAddress),
-            TestContext.Current.CancellationToken);
+        await client.Observe(new PingRequest(), o => o.WithTarget(aliceAddress)).Should().Within(19.Seconds()).Emit();
 
-        var response = await client.AwaitResponse(
-            new GetDataRequest(new ContentCollectionReference()),
-            o => o.WithTarget(aliceAddress),
-            TestContext.Current.CancellationToken);
+        var response = await client.Observe(new GetDataRequest(new ContentCollectionReference()), o => o.WithTarget(aliceAddress)).Should().Emit();
 
         response.Should().NotBeNull();
         response.Message.Data.Should().NotBeNull();
@@ -168,15 +164,9 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
         var acmeAddress = new Address("ACME");
         var client = GetClient(c => c.AddContentCollections());
 
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(acmeAddress),
-            TestContext.Current.CancellationToken);
+        await client.Observe(new PingRequest(), o => o.WithTarget(acmeAddress)).Should().Within(19.Seconds()).Emit();
 
-        var response = await client.AwaitResponse(
-            new GetDataRequest(new ContentCollectionReference(["attachments"])),
-            o => o.WithTarget(acmeAddress),
-            TestContext.Current.CancellationToken);
+        var response = await client.Observe(new GetDataRequest(new ContentCollectionReference(["attachments"])), o => o.WithTarget(acmeAddress)).Should().Emit();
 
         response.Should().NotBeNull();
         response.Message.Data.Should().NotBeNull();
@@ -200,16 +190,10 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
         var acmeAddress = new Address("ACME");
         var client = GetClient(c => c.AddContentCollections());
 
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(acmeAddress),
-            TestContext.Current.CancellationToken);
+        await client.Observe(new PingRequest(), o => o.WithTarget(acmeAddress)).Should().Within(19.Seconds()).Emit();
 
         // Request collection:attachments from ACME hub using prefix:path format
-        var response = await client.AwaitResponse(
-            new GetDataRequest(new UnifiedReference("collection:attachments")),
-            o => o.WithTarget(acmeAddress),
-            TestContext.Current.CancellationToken);
+        var response = await client.Observe(new GetDataRequest(new UnifiedReference("collection:attachments")), o => o.WithTarget(acmeAddress)).Should().Emit();
 
         response.Should().NotBeNull();
         response.Message.Data.Should().NotBeNull();
@@ -228,16 +212,10 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
         var acmeAddress = new Address("ACME");
         var client = GetClient(c => c.AddContentCollections());
 
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(acmeAddress),
-            TestContext.Current.CancellationToken);
+        await client.Observe(new PingRequest(), o => o.WithTarget(acmeAddress)).Should().Within(19.Seconds()).Emit();
 
         // Request content:attachments/test.txt from ACME hub using prefix:path format
-        var response = await client.AwaitResponse(
-            new GetDataRequest(new UnifiedReference("content:attachments/test.txt")),
-            o => o.WithTarget(acmeAddress),
-            TestContext.Current.CancellationToken);
+        var response = await client.Observe(new GetDataRequest(new UnifiedReference("content:attachments/test.txt")), o => o.WithTarget(acmeAddress)).Should().Emit();
 
         response.Should().NotBeNull();
         response.Message.Data.Should().NotBeNull();
@@ -256,16 +234,10 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
         var acmeAddress = new Address("ACME");
         var client = GetClient(c => c.AddContentCollections());
 
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(acmeAddress),
-            TestContext.Current.CancellationToken);
+        await client.Observe(new PingRequest(), o => o.WithTarget(acmeAddress)).Should().Within(19.Seconds()).Emit();
 
         // Request data without prefix (defaults to data:) from ACME hub
-        var response = await client.AwaitResponse(
-            new GetDataRequest(new UnifiedReference("data:")),
-            o => o.WithTarget(acmeAddress),
-            TestContext.Current.CancellationToken);
+        var response = await client.Observe(new GetDataRequest(new UnifiedReference("data:")), o => o.WithTarget(acmeAddress)).Should().Emit();
 
         // Should return default data (may be null or empty store)
         response.Should().NotBeNull();
@@ -284,37 +256,34 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
         var systemorphAddress = new Address("Systemorph");
         var client = GetClient(c => c.AddContentCollections());
 
-        // Launch concurrent requests to both organizations WITHOUT pre-initializing them
-        // This tests the race condition where multiple hubs are initialized simultaneously
-        // Uses collection:name format (UnifiedReference)
-        // Both ACME and Systemorph are Organizations which have "attachments" collection
-        var tasks = new List<Task<IMessageDelivery<GetDataResponse>>>();
+        // Launch concurrent requests to both organizations WITHOUT pre-initializing them.
+        // This tests the race condition where multiple hubs are initialized simultaneously.
+        // hub.Observe posts eagerly, so building the list fires all 10 requests at once;
+        // Observable.Merge then collects every response concurrently.
+        var observables = new List<IObservable<IMessageDelivery<GetDataResponse>>>();
 
         for (int i = 0; i < 10; i++)
         {
             // Alternate between ACME and Systemorph - both request attachments collection
             var address = i % 2 == 0 ? acmeAddress : systemorphAddress;
 
-            tasks.Add(client.AwaitResponse(
-                new GetDataRequest(new UnifiedReference("collection:attachments")),
-                o => o.WithTarget(address),
-                TestContext.Current.CancellationToken));
+            observables.Add(client.Observe(new GetDataRequest(new UnifiedReference("collection:attachments")), o => o.WithTarget(address)));
         }
 
         // Wait for all requests to complete
-        var responses = await Task.WhenAll(tasks);
+        var responses = await Observable.Merge(observables).Take(10).ToList().Should().Within(15.Seconds()).Emit();
 
         // Verify all requests succeeded
-        for (int i = 0; i < responses.Length; i++)
+        responses.Should().HaveCount(10, "all 10 concurrent requests should respond");
+        foreach (var response in responses)
         {
-            var response = responses[i];
-            response.Should().NotBeNull($"Request {i} should not be null");
-            response.Message.Should().NotBeNull($"Request {i} message should not be null");
-            response.Message.Data.Should().NotBeNull($"Request {i} data should not be null");
+            response.Should().NotBeNull("Request should not be null");
+            response.Message.Should().NotBeNull("Request message should not be null");
+            response.Message.Data.Should().NotBeNull("Request data should not be null");
 
             var configs = ParseCollectionConfigs(response.Message.Data);
-            configs.Should().NotBeNull($"Request {i} configs should not be null");
-            configs.Should().HaveCount(1, $"Request {i} should return exactly 1 config");
+            configs.Should().NotBeNull("Request configs should not be null");
+            configs.Should().HaveCount(1, "Request should return exactly 1 config");
         }
     }
 
@@ -327,21 +296,20 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
         var acmeAddress = new Address("ACME");
         var client = GetClient(c => c.AddContentCollections());
 
-        // Launch concurrent content requests WITHOUT pre-initializing
-        var tasks = new List<Task<IMessageDelivery<GetDataResponse>>>();
+        // Launch concurrent content requests WITHOUT pre-initializing.
+        // hub.Observe posts eagerly, so all 10 fire at build time; Merge collects them.
+        var observables = new List<IObservable<IMessageDelivery<GetDataResponse>>>();
 
         for (int i = 0; i < 10; i++)
         {
-            tasks.Add(client.AwaitResponse(
-                new GetDataRequest(new UnifiedReference("content:attachments/test.txt")),
-                o => o.WithTarget(acmeAddress),
-                TestContext.Current.CancellationToken));
+            observables.Add(client.Observe(new GetDataRequest(new UnifiedReference("content:attachments/test.txt")), o => o.WithTarget(acmeAddress)));
         }
 
         // Wait for all requests to complete
-        var responses = await Task.WhenAll(tasks);
+        var responses = await Observable.Merge(observables).Take(10).ToList().Should().Within(15.Seconds()).Emit();
 
         // Verify all requests succeeded with test content
+        responses.Should().HaveCount(10, "all 10 concurrent requests should respond");
         foreach (var response in responses)
         {
             response.Should().NotBeNull();
@@ -371,21 +339,12 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
         var client = GetClient(c => c.AddContentCollections());
 
         // Initialize both hubs
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(acmeAddress),
-            TestContext.Current.CancellationToken);
+        await client.Observe(new PingRequest(), o => o.WithTarget(acmeAddress)).Should().Within(19.Seconds()).Emit();
 
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(systemorphAddress),
-            TestContext.Current.CancellationToken);
+        await client.Observe(new PingRequest(), o => o.WithTarget(systemorphAddress)).Should().Within(19.Seconds()).Emit();
 
         // Step 1: Get collection config from ACME (like BlazorHostingExtensions does)
-        var acmeConfigResponse = await client.AwaitResponse(
-            new GetDataRequest(new ContentCollectionReference(["attachments"])),
-            o => o.WithTarget(acmeAddress),
-            TestContext.Current.CancellationToken);
+        var acmeConfigResponse = await client.Observe(new GetDataRequest(new ContentCollectionReference(["attachments"])), o => o.WithTarget(acmeAddress)).Should().Emit();
 
         var acmeConfigs = ParseCollectionConfigs(acmeConfigResponse.Message.Data);
         acmeConfigs.Should().NotBeNull();
@@ -393,10 +352,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
         Output.WriteLine($"ACME attachments config: Name={acmeLogosConfig.Name}, BasePath={acmeLogosConfig.BasePath}");
 
         // Step 2: Get collection config from Systemorph
-        var systemorphConfigResponse = await client.AwaitResponse(
-            new GetDataRequest(new ContentCollectionReference(["attachments"])),
-            o => o.WithTarget(systemorphAddress),
-            TestContext.Current.CancellationToken);
+        var systemorphConfigResponse = await client.Observe(new GetDataRequest(new ContentCollectionReference(["attachments"])), o => o.WithTarget(systemorphAddress)).Should().Emit();
 
         var systemorphConfigs = ParseCollectionConfigs(systemorphConfigResponse.Message.Data);
         systemorphConfigs.Should().NotBeNull();
@@ -431,11 +387,11 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
         Output.WriteLine($"Added Systemorph config with qualified name: {systemorphQualifiedConfig.Name}");
 
         // Verify we can get both collections separately
-        var acmeCollection = await contentService.GetCollectionAsync($"{acmeAddress}/attachments", TestContext.Current.CancellationToken);
+        var acmeCollection = await MeshWeaver.Mesh.Threading.IoPool.Unbounded.Invoke(ct => contentService.GetCollectionAsync($"{acmeAddress}/attachments", ct)).Should().Emit();
         acmeCollection.Should().NotBeNull("ACME attachments collection should be retrievable");
         Output.WriteLine($"ACME collection retrieved: {acmeCollection?.Collection}");
 
-        var systemorphCollection = await contentService.GetCollectionAsync($"{systemorphAddress}/attachments", TestContext.Current.CancellationToken);
+        var systemorphCollection = await MeshWeaver.Mesh.Threading.IoPool.Unbounded.Invoke(ct => contentService.GetCollectionAsync($"{systemorphAddress}/attachments", ct)).Should().Emit();
         systemorphCollection.Should().NotBeNull("Systemorph attachments collection should be retrievable");
         Output.WriteLine($"Systemorph collection retrieved: {systemorphCollection?.Collection}");
 
@@ -455,16 +411,10 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
         var client = GetClient(c => c.AddContentCollections());
 
         // Initialize the UCR node hub
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(ucrAddress),
-            TestContext.Current.CancellationToken);
+        await client.Observe(new PingRequest(), o => o.WithTarget(ucrAddress)).Should().Within(19.Seconds()).Emit();
 
         // Request the "content" collection configuration
-        var response = await client.AwaitResponse(
-            new GetDataRequest(new ContentCollectionReference(["content"])),
-            o => o.WithTarget(ucrAddress),
-            TestContext.Current.CancellationToken);
+        var response = await client.Observe(new GetDataRequest(new ContentCollectionReference(["content"])), o => o.WithTarget(ucrAddress)).Should().Emit();
 
         response.Should().NotBeNull();
         response.Message.Should().NotBeNull();
@@ -496,13 +446,8 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
 
         Output.WriteLine($"Testing $Content area for icon.svg on {ucrAddress}");
 
-        // Initialize the UCR node hub
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(ucrAddress),
-            TestContext.Current.CancellationToken);
-        Output.WriteLine("Hub initialized");
-
+        // No ping: the layout-area GetRemoteStream subscription below activates the
+        // hub + triggers the cold NodeType compile itself. The generous span covers it.
         // Request the $Content area with icon.svg as the id
         // This is what @@Doc/DataMesh/UnifiedPath/content:icon.svg does
         var workspace = client.GetWorkspace();
@@ -513,7 +458,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
 
         // Wait for the stream to emit a value - this is where eternal spinner would occur
         Output.WriteLine("Waiting for stream value...");
-        var changeItem = await stream.Timeout(TimeSpan.FromSeconds(10)).FirstAsync();
+        var changeItem = await stream.Should().Within(60.Seconds()).Emit();
         var value = changeItem.Value;
 
         var rawText = value.GetRawText();
@@ -537,13 +482,8 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
 
         Output.WriteLine($"Testing $Content area for sample.md on {ucrAddress}");
 
-        // Initialize the UCR node hub
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(ucrAddress),
-            TestContext.Current.CancellationToken);
-        Output.WriteLine("Hub initialized");
-
+        // No ping: the layout-area GetRemoteStream subscription below activates the
+        // hub + triggers the cold NodeType compile itself. The generous span covers it.
         // Request the $Content area with sample.md as the id
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference("$Content") { Id = "sample.md" };
@@ -553,7 +493,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
 
         // Wait for the stream to emit a value
         Output.WriteLine("Waiting for stream value...");
-        var changeItem = await stream.Timeout(TimeSpan.FromSeconds(10)).FirstAsync();
+        var changeItem = await stream.Should().Within(60.Seconds()).Emit();
         var value = changeItem.Value;
 
         var rawText = value.GetRawText();
@@ -576,13 +516,8 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
 
         Output.WriteLine($"Testing $Content area for non-existent file on {ucrAddress}");
 
-        // Initialize the UCR node hub
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(ucrAddress),
-            TestContext.Current.CancellationToken);
-        Output.WriteLine("Hub initialized");
-
+        // No ping: the layout-area GetRemoteStream subscription below activates the
+        // hub + triggers the cold NodeType compile itself. The generous span covers it.
         // Request the $Content area with a non-existent file
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference("$Content") { Id = "does-not-exist.txt" };
@@ -592,7 +527,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
 
         // Wait for the stream to emit a value - should return error message, not hang
         Output.WriteLine("Waiting for stream value...");
-        var changeItem = await stream.Timeout(TimeSpan.FromSeconds(10)).FirstAsync();
+        var changeItem = await stream.Should().Within(60.Seconds()).Emit();
         var value = changeItem.Value;
 
         var rawText = value.GetRawText();
@@ -616,13 +551,8 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
 
         Output.WriteLine($"Testing $Schema area on {ucrAddress}");
 
-        // Initialize the UCR node hub
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(ucrAddress),
-            TestContext.Current.CancellationToken);
-        Output.WriteLine("Hub initialized");
-
+        // No ping: the layout-area GetRemoteStream subscription below activates the
+        // hub + triggers the cold NodeType compile itself. The generous span covers it.
         // Request the $Schema area with empty id (self-reference)
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference("$Schema") { Id = "" };
@@ -632,7 +562,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
 
         // Wait for the stream to emit a value
         Output.WriteLine("Waiting for stream value...");
-        var changeItem = await stream.Timeout(TimeSpan.FromSeconds(10)).FirstAsync();
+        var changeItem = await stream.Should().Within(60.Seconds()).Emit();
         var value = changeItem.Value;
 
         var rawText = value.GetRawText();
@@ -656,13 +586,8 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
 
         Output.WriteLine($"Testing $Data area on {ucrAddress}");
 
-        // Initialize the UCR node hub
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(ucrAddress),
-            TestContext.Current.CancellationToken);
-        Output.WriteLine("Hub initialized");
-
+        // No ping: the layout-area GetRemoteStream subscription below activates the
+        // hub + triggers the cold NodeType compile itself. The generous span covers it.
         // Request the $Data area with empty id (self-reference)
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference("$Data") { Id = "" };
@@ -672,7 +597,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
 
         // Wait for the stream to emit a value
         Output.WriteLine("Waiting for stream value...");
-        var changeItem = await stream.Timeout(TimeSpan.FromSeconds(10)).FirstAsync();
+        var changeItem = await stream.Should().Within(60.Seconds()).Emit();
         var value = changeItem.Value;
 
         var rawText = value.GetRawText();
@@ -697,13 +622,8 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
 
         Output.WriteLine($"Testing default area for Markdown node at {ucrAddress}");
 
-        // Initialize the UCR node hub
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(ucrAddress),
-            TestContext.Current.CancellationToken);
-        Output.WriteLine("Hub initialized");
-
+        // No ping: the layout-area GetRemoteStream subscription below activates the
+        // hub + triggers the cold NodeType compile itself. The generous span covers it.
         // Request the default area (empty string) - should resolve to $Content for Markdown nodes
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference(""); // Empty area = default area
@@ -715,7 +635,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
         // The nodeType config (Markdown) should be compiled before hub creation,
         // so the first emission should already have $Content as default area
         Output.WriteLine("Waiting for stream value...");
-        var changeItem = await stream.Timeout(TimeSpan.FromSeconds(10)).FirstAsync();
+        var changeItem = await stream.Should().Within(60.Seconds()).Emit();
         var value = changeItem.Value;
 
         var rawText = value.GetRawText();

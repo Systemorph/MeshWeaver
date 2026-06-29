@@ -1,0 +1,78 @@
+using System.Collections.Immutable;
+using System.Text.Json;
+using MeshWeaver.Mesh.Security;
+using MeshWeaver.Messaging;
+using MeshWeaver.Messaging.Security;
+
+namespace MeshWeaver.Mesh;
+
+/// <summary>
+/// Asks a Code node's hub to run its own script. Posted to the Code node's address;
+/// the Code hub reads its own <c>CodeConfiguration</c> from its workspace, checks
+/// <c>IsExecutable</c>, and dispatches execution through its internal kernel. The
+/// kernel layer is intentionally NOT exposed in this request — callers (MCP,
+/// agents) never address the kernel directly; they only speak to the Code node.
+///
+/// Requires <see cref="Permission.Execute"/> on the Code node's path.
+/// </summary>
+[RequiresPermission(Permission.Execute)]
+public record ExecuteScriptRequest : IRequest<ExecuteScriptResponse>
+{
+    /// <summary>
+    /// Optional submission id. Used as the layout-area reference the kernel pushes
+    /// output into, so the caller can subscribe to live progress afterwards. Left
+    /// empty, the handler generates one and returns it in the response.
+    /// </summary>
+    public string? SubmissionId { get; init; }
+
+    /// <summary>
+    /// Optional input payload exposed to the script as the <c>Inputs</c> global
+    /// (an <c>IReadOnlyDictionary&lt;string, JsonElement&gt;</c>). Use this when an
+    /// operation is templated as a script — the form / caller patches the inputs
+    /// here and the script reads them as typed JSON values without round-tripping
+    /// through a side-channel MeshNode.
+    ///
+    /// <para>Encoded as <see cref="JsonElement"/> so any JSON-shaped value
+    /// (string, number, bool, array, object, null) survives serialization across
+    /// hub boundaries without a type-registry entry per shape. Scripts read with
+    /// e.g. <c>Inputs["title"].GetString()</c> or
+    /// <c>Inputs["options"].Deserialize&lt;ExportOptions&gt;()</c>.</para>
+    /// </summary>
+    public ImmutableDictionary<string, JsonElement> Inputs { get; init; } =
+        ImmutableDictionary<string, JsonElement>.Empty;
+}
+
+/// <summary>
+/// Response to <see cref="ExecuteScriptRequest"/>. Emitted by the Code node hub's
+/// handler after it has dispatched the code to its kernel. The response is a
+/// dispatch acknowledgement, not a run-completion signal — live progress and
+/// terminal status come through the kernel's layout-area stream at
+/// <see cref="OutputAreaReference"/>.
+/// </summary>
+public record ExecuteScriptResponse
+{
+    /// <summary>True if the node was executable and the dispatch succeeded.</summary>
+    public bool Success { get; init; }
+
+    /// <summary>The submission id the kernel is using for this run's output area.</summary>
+    public string? SubmissionId { get; init; }
+
+    /// <summary>
+    /// Layout-area reference (on the Code node hub) the caller can subscribe to
+    /// for live progress + stdout. Null when <c>Success == false</c>.
+    /// </summary>
+    public string? OutputAreaReference { get; init; }
+
+    /// <summary>
+    /// Path to the <c>ActivityLog</c> MeshNode created at dispatch time. Because
+    /// script execution is truly async (fires on the kernel; response returns on
+    /// submit, not on completion), the log is delivered by reference: callers
+    /// subscribe via <c>GetRemoteStream&lt;MeshNode, MeshNodeReference&gt;</c> to
+    /// watch progress messages land and the final status flip. Same pattern as
+    /// Thread streams.
+    /// </summary>
+    public string? ActivityLog { get; init; }
+
+    /// <summary>Human-readable error when <c>Success == false</c>.</summary>
+    public string? Error { get; init; }
+}

@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>MeshWeaver.NuGet</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+    <PackageReference Include="NuGet.Protocol" />
+    <PackageReference Include="NuGet.Packaging" />
+    <PackageReference Include="NuGet.Resolver" />
+    <PackageReference Include="NuGet.DependencyResolver.Core" />
+    <PackageReference Include="NuGet.Frameworks" />
+  </ItemGroup>
+
+</Project>

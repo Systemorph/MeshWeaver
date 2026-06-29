@@ -26,6 +26,25 @@ bld/
 [Oo]utput/
 [Dd]eploy/
 
+# MeshWeaver deployment artifacts (Aspire-generated compose/Helm, Marketplace ARM, the
+# co-hosted-CLI base image, env templates) live under /deploy — re-include them from the
+# Visual Studio "[Dd]eploy/" web-deploy-output rule above.
+!/deploy/
+!/deploy/**
+# ...but keep build outputs (the dedicated deploy AppHost compiles here) ignored.
+/deploy/**/bin/
+/deploy/**/obj/
+# ...except deploy/homebrew/bin holds the memex-local CLI *source* (the brew formula
+# installs it from here) — not build output. Re-include it.
+!/deploy/homebrew/bin/
+!/deploy/homebrew/bin/**
+# Per-tenant AKS deploy envs are PRIVATE — keep ONLY the memex-cloud reference example;
+# every other tenant env directory is ignored in full (directory names are tenant
+# identities and must not enter this public repo). Placed after the !/deploy/** re-include
+# above so this re-exclusion wins.
+/deploy/aks/envs/*/
+!/deploy/aks/envs/memex-cloud/
+
 # Visual Studio 2015/2017 cache/options directory
 .vs/
 .vscode
@@ -368,5 +387,19 @@ samples/Graph/Data/VUser/
 # User activity data
 **/_useractivity/
 
+# Runtime-generated notification satellites the framework writes into the
+# FileSystem-backed sample data during local runs (createdBy=system-security,
+# GUID ids, e.g. "Type 'X' failed to compile") — generated output, not source.
+**/_Notification/
+
+# Throwaway single-segment scratch partition roots from local sessions (c1, c2, …).
+/samples/Graph/Data/c[1-6].json
+
 # Claude Code per-user local state (settings.local.json, plans/, scheduled_tasks.lock, etc.)
-.claude/
+# — but DO track the shared team skills under .claude/skills/. The debug/ and release/
+# skills also need explicit negations because the generic [Dd]ebug/ / [Rr]elease/
+# build-output ignores above otherwise swallow them.
+.claude/*
+!.claude/skills/
+!.claude/skills/debug/
+!.claude/skills/release/

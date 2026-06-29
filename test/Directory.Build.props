@@ -3,17 +3,51 @@
     <IsPackable>false</IsPackable>
     <OutputType>Exe</OutputType>
     <TargetFramework>net10.0</TargetFramework>
-    <!-- Suppress FluentAssertions license warning for open source projects -->
-    <FLUENTASSERTIONS_SUPPRESS_WARNING>true</FLUENTASSERTIONS_SUPPRESS_WARNING>
     <Nullable>enable</Nullable>
+    <!-- Doc-COMPLETENESS suppression for the test tree. The root Directory.Build.props carries this
+         NoWarn for src/, but this test-tree props does NOT import the root, so without it every test
+         project that turns on GenerateDocumentationFile must remember to add CS1591 itself (some did,
+         some didn't → AI.Test surfaced 58 CS1591 under -warnaserror). Mirrors the central src policy:
+         missing member/param/typeparam docs on test types are not filled wholesale. Doc-QUALITY
+         warnings (broken/ambiguous crefs, malformed XML) are NOT here — those are real bugs, fixed. -->
+    <!-- xUnit1051 (pass TestContext.Current.CancellationToken to async calls) is an established
+         team decision to suppress in the test tree — 14 test csprojs already carried
+         `<NoWarn>$(NoWarn);xUnit1051</NoWarn>` individually; centralising it here removes the
+         per-project duplication and applies it uniformly (the remaining projects only ever lacked
+         it by omission). Tests use explicit `TestContext.Current.CancellationToken` + `.Timeout(...)`
+         where cancellation matters. NOT a code-quality suppression: xUnit1031 (blocking task ops →
+         deadlock risk) is deliberately NOT here and is fixed at the source instead. -->
+    <NoWarn>$(NoWarn);CS1591;CS1573;CS1712;xUnit1051</NoWarn>
+    <!-- Required so the global <Using> items below (incl. MeshWeaver.Reactive.Assertions)
+         are actually emitted. With ImplicitUsings disabled, <Using> is silently ignored,
+         and Should()/Seconds() fail to resolve across every test file. -->
+    <ImplicitUsings>enable</ImplicitUsings>
+    <!-- Always emit a TRX so every `dotnet test` invocation leaves a parseable
+         result file in TestResults/ — required for hang diagnosis (the only
+         place the per-test StdOut + outcome is recorded once the host crashes
+         or the runner is killed). Without this, local runs leave nothing
+         behind to inspect. CI passes `-l:trx` explicitly; this matches that
+         behavior for local. Path = `<project>/TestResults/_<machine>_<utc>.trx`. -->
+    <VSTestLogger>trx</VSTestLogger>
+    <!-- xUnit v3 → trx StdOut: anything written via ITestOutputHelper.WriteLine
+         (which the per-test ILogger redirects to at Information+ via xunit.runner.json
+         + appsettings.json's MeshWeaver=Information) flows into the trx's
+         <StdOut> element on the failing test result. No extra config needed
+         beyond keeping diagnosticMessages false (default) and writing logs
+         through the standard pipeline. -->
   </PropertyGroup>
 
   <ItemGroup>
     <Using Include="Xunit.ITestOutputHelper" Alias="ITestOutputHelper" />
+    <!-- In-house assertion library (replaced FluentAssertions). One global using
+         covers Should()/asserts + the Seconds()/Milliseconds()/… time helpers, so
+         test files need no per-file assertion import. -->
+    <Using Include="MeshWeaver.Reactive.Assertions" />
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="FluentAssertions" />
+    <!-- Global project reference: every test project gets the assertion library. -->
+    <ProjectReference Include="$(MSBuildThisFileDirectory)..\src\MeshWeaver.Reactive.Assertions\MeshWeaver.Reactive.Assertions.csproj" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
     <PackageReference Include="xunit.v3" />
     <PackageReference Include="xunit.runner.visualstudio">

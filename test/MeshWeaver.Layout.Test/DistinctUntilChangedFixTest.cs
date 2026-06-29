@@ -1,9 +1,9 @@
-using FluentAssertions;
 using MeshWeaver.Layout;
 using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
+using System.Threading.Tasks;
 using Xunit;
 
 namespace MeshWeaver.Layout.Test;
@@ -14,7 +14,7 @@ namespace MeshWeaver.Layout.Test;
 public class DistinctUntilChangedFixTest
 {
     [Fact]
-    public void DistinctUntilChanged_ShouldDetectContainerChanges()
+    public async Task DistinctUntilChanged_ShouldDetectContainerChanges()
     {
         // Arrange - Create a stream of container controls
         var containers = new[]
@@ -25,12 +25,18 @@ public class DistinctUntilChangedFixTest
             Controls.Stack.WithView(Controls.Html("Version 3"), "content")  // Different again
         };
 
-        var distinctContainers = new List<StackControl>();
-
-        // Act - Apply DistinctUntilChanged (simulating LayoutAreaHost behavior)
-        containers.ToObservable()
+        // Act - Apply DistinctUntilChanged (simulating LayoutAreaHost behavior) and
+        // materialize the FULL sequence before asserting. Subscribing and asserting on
+        // the side-effect list synchronously assumed ToObservable()'s CurrentThreadScheduler
+        // pushes every item before Subscribe returns — but the trampoline only guarantees
+        // that when it is idle at Subscribe time; under the xUnit single-threaded
+        // sync-context worker it can queue the emissions PAST the assert, yielding 0 items
+        // (the flaky CI failure). ToList() emits once on completion of the finite sequence,
+        // so awaiting it is deterministic regardless of trampoline state.
+        var distinctContainers = await containers.ToObservable()
             .DistinctUntilChanged()
-            .Subscribe(container => distinctContainers.Add(container));
+            .ToList()
+            .Should().Emit();
 
         // Assert - Should only get 3 distinct containers (not 4)
         // The duplicate "Version 2" should be filtered out

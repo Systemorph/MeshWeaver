@@ -1,15 +1,20 @@
-﻿using System.ComponentModel;
+using System.ComponentModel;
 using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.ContentCollections;
 
+/// <summary>
+/// Layout area that renders content-collection files (markdown, images, documents, and other
+/// text formats) into UI controls, resolving the collection and path from the area's reference.
+/// </summary>
 public static class ContentLayoutArea
 {
     private static UiControl RenderContent(string path, object content, bool isPresentationMode = false)
@@ -44,23 +49,32 @@ public static class ContentLayoutArea
     }
 
     /// <summary>
+    /// The genuine IO leaves (collection load, file streams, document transforms) bridge
+    /// through the FileSystem <see cref="IIoPool"/>; the layout area itself is fully
+    /// reactive — no async, no Task surface (Doc/Architecture/AsynchronousCalls.md,
+    /// ControlledIoPooling.md).
+    /// </summary>
+    private static IIoPool GetIoPool(IMessageHub hub)
+        => hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.FileSystem)
+           ?? IoPool.Unbounded;
+
+    /// <summary>
     /// Renders file content based on mime type.
     /// Handles unified content reference format where the path is passed via $Content area.
     /// Format: collection/path or collection@partition/path
     /// </summary>
     [Browsable(false)]
-    public static async Task<IObservable<UiControl?>> Content(LayoutAreaHost host, RenderingContext _, CancellationToken ct)
+    public static IObservable<UiControl?> Content(LayoutAreaHost host, RenderingContext _)
     {
         var idString = host.Reference.Id?.ToString() ?? "";
 
         // Format: collection/path or collection@partition/path
-        return await HandleContentReference(host, idString, ct);
+        return HandleContentReference(host, idString);
     }
 
-    private static async Task<IObservable<UiControl?>> HandleContentReference(
+    private static IObservable<UiControl?> HandleContentReference(
         LayoutAreaHost host,
-        string idString,
-        CancellationToken ct)
+        string idString)
     {
         // First split by ? to separate path from query parameters, then split path by /
         var pathPart = idString.Split('?')[0];
@@ -74,18 +88,22 @@ public static class ContentLayoutArea
                                  host.Reference.GetParameterValue("presentation")?.ToLower() == "true";
 
         var articleService = host.Hub.GetContentService();
-        var collection = await articleService.GetCollectionAsync(split[0], ct);
-        if (collection is null)
-            return Observable.Return<UiControl?>(new MarkdownControl($"Collection {split[0]} not found."));
-        var path = string.Join('/', split.Skip(1));
+        return GetIoPool(host.Hub)
+            .Invoke(ct => articleService.GetCollectionAsync(split[0], ct))
+            .SelectMany(collection =>
+            {
+                if (collection is null)
+                    return Observable.Return<UiControl?>(new MarkdownControl($"Collection {split[0]} not found."));
+                var path = string.Join('/', split.Skip(1));
 
-        var contentStream = collection.GetMarkdown(path);
-        if (contentStream is null)
-            return Observable.Return<UiControl?>(new MarkdownControl($"{path} not found in collection {collection}."));
+                var contentStream = collection.GetMarkdown(path);
+                if (contentStream is null)
+                    return Observable.Return<UiControl?>(new MarkdownControl($"{path} not found in collection {collection}."));
 
-        return contentStream.Select(a => a is null ?
-            new MarkdownControl($"{path} not found in collection {collection}")
-            : RenderContent(path, a, isPresentationMode));
+                return contentStream.Select(a => (UiControl?)(a is null
+                    ? new MarkdownControl($"{path} not found in collection {collection}")
+                    : RenderContent(path, a, isPresentationMode)));
+            });
     }
 
     private static bool IsImageFile(string extension) => extension switch
@@ -97,66 +115,65 @@ public static class ContentLayoutArea
 
     private static bool IsDocumentFile(string extension) => extension is ".docx";
 
-    private static async Task<IObservable<UiControl?>> RenderDocumentContent(
+    private static IObservable<UiControl?> RenderDocumentContent(
+        IIoPool ioPool,
         ContentCollection collection,
         IMessageHub hub,
-        string filePath,
-        CancellationToken ct)
+        string filePath)
     {
-        try
-        {
-            var ext = Path.GetExtension(filePath).ToLowerInvariant();
-            var transformer = hub.ServiceProvider.GetServices<IContentTransformer>()
-                .FirstOrDefault(t => t.SupportedExtensions.Contains(ext));
+        var ext = Path.GetExtension(filePath).ToLowerInvariant();
+        var transformer = hub.ServiceProvider.GetServices<IContentTransformer>()
+            .FirstOrDefault(t => t.SupportedExtensions.Contains(ext));
 
-            if (transformer == null)
-                return Observable.Return<UiControl?>(new MarkdownControl($"No converter available for {ext} files"));
+        if (transformer == null)
+            return Observable.Return<UiControl?>(new MarkdownControl($"No converter available for {ext} files"));
 
-            await using var stream = await collection.GetContentAsync(filePath, ct);
-            if (stream == null)
-                return Observable.Return<UiControl?>(new MarkdownControl($"Document not found: {filePath}"));
+        // The file stream + document→markdown transform is ONE pooled async leaf —
+        // async lives only inside the IIoPool bridge, never on the subscribing thread.
+        return ioPool.Invoke<UiControl?>(async ct =>
+            {
+                await using var stream = await collection.GetContentAsync(filePath, ct);
+                if (stream == null)
+                    return new MarkdownControl($"Document not found: {filePath}");
 
-            var markdown = await transformer.TransformToMarkdownAsync(stream, ct);
-            return Observable.Return<UiControl?>(new MarkdownControl(markdown));
-        }
-        catch (Exception ex)
-        {
-            return Observable.Return<UiControl?>(new MarkdownControl($"Error converting document {filePath}: {ex.Message}"));
-        }
+                var markdown = await transformer.TransformToMarkdownAsync(stream, ct);
+                return new MarkdownControl(markdown);
+            })
+            .Catch((Exception ex) => Observable.Return<UiControl?>(
+                new MarkdownControl($"Error converting document {filePath}: {ex.Message}")));
     }
 
-    private static async Task<IObservable<UiControl?>> RenderImageContent(
+    private static IObservable<UiControl?> RenderImageContent(
+        IIoPool ioPool,
         ContentCollection collection,
         string filePath,
-        string extension,
-        CancellationToken ct)
+        string extension)
     {
-        try
-        {
-            await using var stream = await collection.GetContentAsync(filePath, ct);
-            if (stream == null)
-                return Observable.Return<UiControl?>(new MarkdownControl($"Image not found: {filePath}"));
-
-            if (extension == ".svg")
+        // The file stream read + base64 conversion is ONE pooled async leaf.
+        return ioPool.Invoke<UiControl?>(async ct =>
             {
-                // SVG can be embedded as text
-                using var reader = new StreamReader(stream);
-                var svgContent = await reader.ReadToEndAsync(ct);
-                return Observable.Return<UiControl?>(new HtmlControl($"<div class='embedded-svg'>{svgContent}</div>"));
-            }
+                await using var stream = await collection.GetContentAsync(filePath, ct);
+                if (stream == null)
+                    return new MarkdownControl($"Image not found: {filePath}");
 
-            // For binary images, convert to base64 data URI
-            using var memoryStream = new MemoryStream();
-            await stream.CopyToAsync(memoryStream, ct);
-            var base64 = Convert.ToBase64String(memoryStream.ToArray());
-            var mimeType = GetMimeType(extension);
-            var imgHtml = $"<img src='data:{mimeType};base64,{base64}' alt='{Path.GetFileName(filePath)}' style='max-width: 100%;' />";
-            return Observable.Return<UiControl?>(new HtmlControl(imgHtml));
-        }
-        catch (Exception ex)
-        {
-            return Observable.Return<UiControl?>(new MarkdownControl($"Error loading image {filePath}: {ex.Message}"));
-        }
+                if (extension == ".svg")
+                {
+                    // SVG can be embedded as text
+                    using var reader = new StreamReader(stream);
+                    var svgContent = await reader.ReadToEndAsync(ct);
+                    return new HtmlControl($"<div class='embedded-svg'>{svgContent}</div>");
+                }
+
+                // For binary images, convert to base64 data URI
+                using var memoryStream = new MemoryStream();
+                await stream.CopyToAsync(memoryStream, ct);
+                var base64 = Convert.ToBase64String(memoryStream.ToArray());
+                var mimeType = GetMimeType(extension);
+                var imgHtml = $"<img src='data:{mimeType};base64,{base64}' alt='{Path.GetFileName(filePath)}' style='max-width: 100%;' />";
+                return new HtmlControl(imgHtml);
+            })
+            .Catch((Exception ex) => Observable.Return<UiControl?>(
+                new MarkdownControl($"Error loading image {filePath}: {ex.Message}")));
     }
 
     private static string GetMimeType(string extension) => extension switch
@@ -245,72 +262,72 @@ public static class ContentLayoutArea
     ///   - collection@partition/path
     /// </summary>
     [Browsable(false)]
-    public static async Task<IObservable<UiControl?>> UnifiedContent(LayoutAreaHost host, RenderingContext _, CancellationToken ct)
+    public static IObservable<UiControl?> UnifiedContent(LayoutAreaHost host, RenderingContext _)
+        // Defer so a synchronously-throwing prologue surfaces through the same
+        // rendered-error path the old try/catch produced.
+        => Observable.Defer(() => UnifiedContentCore(host))
+            .Catch((Exception ex) => Observable.Return<UiControl?>(
+                new MarkdownControl($"Error loading content: {ex.Message}")));
+
+    private static IObservable<UiControl?> UnifiedContentCore(LayoutAreaHost host)
     {
-        try
+        var contentPath = host.Reference.Id?.ToString() ?? "";
+
+        // If no path specified, render the node's own content from the MeshNode.Content property
+        if (string.IsNullOrEmpty(contentPath))
         {
-            var contentPath = host.Reference.Id?.ToString() ?? "";
-
-            // If no path specified, render the node's own content from the MeshNode.Content property
-            if (string.IsNullOrEmpty(contentPath))
-            {
-                return RenderNodeContent(host);
-            }
-
-            // Split collection from file path
-            // If no slash, use the default collection name
-            var firstSlash = contentPath.IndexOf('/');
-            string collectionPart;
-            string filePath;
-
-            if (firstSlash < 0)
-            {
-                // No slash - use default collection
-                collectionPart = ContentCollectionsExtensions.DefaultCollectionName;
-                filePath = contentPath;
-            }
-            else
-            {
-                collectionPart = contentPath[..firstSlash];
-                filePath = contentPath[(firstSlash + 1)..];
-            }
-
-            if (string.IsNullOrEmpty(filePath))
-                return Observable.Return<UiControl?>(new MarkdownControl($"Empty file path in: {contentPath}"));
-
-            // Get the collection (collectionPart may include @partition)
-            var articleService = host.Hub.GetContentService();
-            var collection = await articleService.GetCollectionAsync(collectionPart, ct);
-            if (collection is null)
-                return Observable.Return<UiControl?>(new MarkdownControl($"Collection '{collectionPart}' not found. Ensure the collection is mapped using MapContentCollection."));
-
-            var extension = Path.GetExtension(filePath).ToLowerInvariant();
-
-            // For images, get the raw content and render appropriately
-            if (IsImageFile(extension))
-            {
-                return await RenderImageContent(collection, filePath, extension, ct);
-            }
-
-            // For binary document formats, convert to markdown via IContentTransformer
-            if (IsDocumentFile(extension))
-            {
-                return await RenderDocumentContent(collection, host.Hub, filePath, ct);
-            }
-
-            // For other content types, use the existing GetMarkdown pipeline
-            var contentStream = collection.GetMarkdown(filePath);
-            if (contentStream is null)
-                return Observable.Return<UiControl?>(new MarkdownControl($"File '{filePath}' not found in collection '{collectionPart}'."));
-
-            return contentStream.Select(content => content is null
-                ? new MarkdownControl($"File '{filePath}' not found in collection '{collectionPart}'")
-                : RenderContent(filePath, content, false));
+            return RenderNodeContent(host);
         }
-        catch (Exception ex)
+
+        // Split collection from file path
+        // If no slash, use the default collection name
+        var firstSlash = contentPath.IndexOf('/');
+        string collectionPart;
+        string filePath;
+
+        if (firstSlash < 0)
         {
-            return Observable.Return<UiControl?>(new MarkdownControl($"Error loading content: {ex.Message}"));
+            // No slash - use default collection
+            collectionPart = ContentCollectionsExtensions.DefaultCollectionName;
+            filePath = contentPath;
         }
+        else
+        {
+            collectionPart = contentPath[..firstSlash];
+            filePath = contentPath[(firstSlash + 1)..];
+        }
+
+        if (string.IsNullOrEmpty(filePath))
+            return Observable.Return<UiControl?>(new MarkdownControl($"Empty file path in: {contentPath}"));
+
+        // Get the collection (collectionPart may include @partition)
+        var articleService = host.Hub.GetContentService();
+        var ioPool = GetIoPool(host.Hub);
+        return ioPool
+            .Invoke(ct => articleService.GetCollectionAsync(collectionPart, ct))
+            .SelectMany(collection =>
+            {
+                if (collection is null)
+                    return Observable.Return<UiControl?>(new MarkdownControl($"Collection '{collectionPart}' not found. Ensure the collection is mapped using MapContentCollection."));
+
+                var extension = Path.GetExtension(filePath).ToLowerInvariant();
+
+                // For images, get the raw content and render appropriately
+                if (IsImageFile(extension))
+                    return RenderImageContent(ioPool, collection, filePath, extension);
+
+                // For binary document formats, convert to markdown via IContentTransformer
+                if (IsDocumentFile(extension))
+                    return RenderDocumentContent(ioPool, collection, host.Hub, filePath);
+
+                // For other content types, use the existing GetMarkdown pipeline
+                var contentStream = collection.GetMarkdown(filePath);
+                if (contentStream is null)
+                    return Observable.Return<UiControl?>(new MarkdownControl($"File '{filePath}' not found in collection '{collectionPart}'."));
+
+                return contentStream.Select(content => (UiControl?)(content is null
+                    ? new MarkdownControl($"File '{filePath}' not found in collection '{collectionPart}'")
+                    : RenderContent(filePath, content, false)));
+            });
     }
-
 }

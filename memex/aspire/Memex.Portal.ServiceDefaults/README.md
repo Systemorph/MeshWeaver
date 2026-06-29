@@ -6,7 +6,7 @@ Memex.Portal.ServiceDefaults is a shared Aspire project that provides common cro
 ## Features
 - **Health checks** — `/health` (readiness) and `/alive` (liveness) endpoints with 20-second timeouts
 - **OpenTelemetry** — metrics (ASP.NET Core, HTTP, Orleans, runtime) and tracing with health endpoint filtering
-- **Exporters** — automatic Azure Monitor or OTLP exporter selection based on configuration
+- **Exporters** — OTLP exporter (to the Prometheus / Grafana / Loki stack) enabled when `OTEL_EXPORTER_OTLP_ENDPOINT` is configured
 - **Service discovery** — Aspire service discovery on all `HttpClient` instances
 - **HTTP resilience** — standard resilience handler on all outbound HTTP calls
 - **Cluster constants** — `MemexDistributedConstants` with shared `ClusterId` and `ServiceId`

@@ -5,10 +5,9 @@ using System.Reactive.Linq;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
-using FluentAssertions;
-using FluentAssertions.Extensions;
 using MeshWeaver.Connection.Orleans;
 using MeshWeaver.Data;
+using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Documentation;
 using MeshWeaver.Fixture;
 using MeshWeaver.Graph;
@@ -23,8 +22,11 @@ using Orleans.Hosting;
 using Orleans.TestingHost;
 using Xunit;
 
+using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Hosting.Orleans.Test;
 
+// TODO: needs custom shared fixture — uses DocSiloConfigurator with AddDocumentation(),
+// which the SharedOrleansFixture does not configure.
 /// <summary>
 /// Tests that Documentation static nodes (from DocumentationNodeProvider) work
 /// correctly with Orleans routing — same setup as the distributed portal.
@@ -38,10 +40,14 @@ public class OrleansDocumentationTest(ITestOutputHelper output) : TestBase(outpu
     {
         await base.InitializeAsync();
         var builder = new TestClusterBuilder();
+        builder.Options.InitialSilosCount = 1;
         builder.AddSiloBuilderConfigurator<DocSiloConfigurator>();
         builder.AddClientBuilderConfigurator<DocClientConfigurator>();
         Cluster = builder.Build();
         await Cluster.DeployAsync();
+        // Seed a default System circuit identity so portal-hub posts carry an
+        // identity (never-null AccessContext invariant). See OrleansTestIdentity.
+        OrleansTestIdentity.SeedDefaultIdentity(Cluster);
     }
 
     private async Task<IMessageHub> CreatePortalHubAsync()
@@ -53,11 +59,8 @@ public class OrleansDocumentationTest(ITestOutputHelper output) : TestBase(outpu
             AddressExtensions.CreatePortalAddress(),
             config => config
                 .AddLayoutClient()
-                .WithInitialization(async (hub, _) =>
-                {
-                    var registration = await routingService.RegisterStreamAsync(hub);
-                    hub.RegisterForDisposal(registration);
-                }))!;
+                .WithInitialization(hub =>
+                    hub.RegisterForDisposal(routingService.RegisterStream(hub))))!;
 
         await Task.Delay(500);
         return portalHub;
@@ -97,22 +100,19 @@ public class OrleansDocumentationTest(ITestOutputHelper output) : TestBase(outpu
     {
         var pathResolver = Cluster.Client.ServiceProvider.GetRequiredService<IPathResolver>();
 
-        var resolution = await pathResolver.ResolvePathAsync("Doc/Architecture/BusinessRules");
+        var resolution = await pathResolver.ResolvePath("Doc/Architecture/BusinessRules").FirstAsync().ToTask();
         Output.WriteLine($"Resolution: Prefix={resolution?.Prefix}, Remainder={resolution?.Remainder}");
         resolution.Should().NotBeNull("Doc/Architecture/BusinessRules should resolve");
     }
 
-    [Fact(Timeout = 120000)]
+    [Fact(Timeout = 60000)]
     public async Task BusinessRules_LayoutArea_Loads()
     {
         var portal = await CreatePortalHubAsync();
         var address = new Address("Doc/Architecture/BusinessRules");
 
         Output.WriteLine("Pinging Doc/Architecture/BusinessRules...");
-        var response = await portal.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(address),
-            new CancellationTokenSource(30.Seconds()).Token);
+        var response = await portal.Observe(new PingRequest(), o => o.WithTarget(address)).FirstAsync().ToTask(new CancellationTokenSource(30.Seconds()).Token);
         Output.WriteLine($"Ping: {response.Message.GetType().Name}");
 
         var workspace = portal.GetWorkspace();
@@ -130,7 +130,7 @@ public class OrleansDocumentationTest(ITestOutputHelper output) : TestBase(outpu
     public override async ValueTask DisposeAsync()
     {
         if (Cluster is not null)
-            await Cluster.DisposeAsync();
+            OrleansClusterDisposal.DisposeInBackground(Cluster);
         await base.DisposeAsync();
     }
 }
@@ -161,10 +161,17 @@ public class DocSiloConfigurator : ISiloConfigurator, IHostConfigurator
 
     public void Configure(IHostBuilder hostBuilder)
     {
+        // AddDocumentation registers an EmbeddedResource IPartitionStorageProvider
+        // for the "Doc" namespace; the routing-aware partitioned in-memory stack is
+        // required for that provider to actually serve reads. Plain AddInMemoryPersistence
+        // would register a single non-routing InMemoryStorageAdapter and the Doc
+        // namespace would be unreachable. See Doc/Architecture/PartitionedPersistence.md.
         hostBuilder.UseOrleansMeshServer()
+            .AddPartitionedInMemoryPersistence()
             .ConfigurePortalMesh()
             .AddDocumentation()
             .AddGraph()
             .ConfigureDefaultNodeHub(config => config.AddDefaultLayoutAreas());
     }
 }
+

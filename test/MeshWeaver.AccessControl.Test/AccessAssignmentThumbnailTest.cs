@@ -1,9 +1,6 @@
 using System.Linq;
 using System.Reactive.Linq;
 using System.Text.Json;
-using System.Threading.Tasks;
-using FluentAssertions;
-using FluentAssertions.Extensions;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Hosting.Monolith.TestBase;
@@ -31,7 +28,7 @@ public class AccessAssignmentThumbnailTest(ITestOutputHelper output) : MonolithM
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
         => base.ConfigureClient(configuration).AddLayoutClient(d => d);
 
-    private async Task<MeshNode> CreateAssignmentNodeAsync(
+    private async Task<MeshNode> CreateAssignmentNode(
         string id, AccessAssignment assignment)
     {
         var node = new MeshNode(id, TestNamespace)
@@ -41,7 +38,8 @@ public class AccessAssignmentThumbnailTest(ITestOutputHelper output) : MonolithM
             Content = assignment,
             MainNode = "Admin",
         };
-        return await NodeFactory.CreateNodeAsync(node);
+        // Cold observable — the create runs on the assertion's Subscribe.
+        return await NodeFactory.CreateNode(node).Should().Emit();
     }
 
     private static Address NodeAddress(string id)
@@ -103,7 +101,7 @@ public class AccessAssignmentThumbnailTest(ITestOutputHelper output) : MonolithM
             DisplayName = "Grace",
             Roles = [new RoleAssignment { Role = "Admin", Denied = false }]
         };
-        await CreateAssignmentNodeAsync("grace-access", assignment);
+        await CreateAssignmentNode("grace-access", assignment);
 
         var client = GetClient();
         var hostAddress = NodeAddress("grace-access");
@@ -115,92 +113,59 @@ public class AccessAssignmentThumbnailTest(ITestOutputHelper output) : MonolithM
 
         var control = await stream
             .GetControlStream(reference.Area!)
-            .Timeout(10.Seconds())
-            .FirstAsync(x => x != null);
+            .Should().Within(10.Seconds())
+            .Match(x => x != null);
 
         control.Should().BeOfType<StackControl>("Thumbnail should render a StackControl");
     }
 
     [Fact(Timeout = 30000)]
-    public async Task Thumbnail_ClickRoleChip_TogglesStrikethrough()
+    public async Task Thumbnail_ClickRemoveUser_DeletesAssignment()
     {
         var assignment = new AccessAssignment
         {
-            AccessObject = "User/hank",
-            DisplayName = "Hank",
+            AccessObject = "User/jack",
+            DisplayName = "Jack",
             Roles = [new RoleAssignment { Role = "Editor", Denied = false }]
         };
-        await CreateAssignmentNodeAsync("hank-access", assignment);
+        await CreateAssignmentNode("jack-access", assignment);
 
         var client = GetClient();
-        var hostAddress = NodeAddress("hank-access");
+        var hostAddress = NodeAddress("jack-access");
 
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference(MeshNodeLayoutAreas.ThumbnailArea);
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             hostAddress, reference);
 
-        // Wait for initial render
-        var initialControl = await stream
+        // Row structure: [subject thumbnail] [rolesBlock] [✕ remove-user button]
+        var outerStack = (await stream
             .GetControlStream(reference.Area!)
-            .Timeout(10.Seconds())
-            .FirstAsync(x => x != null);
+            .Should().Within(10.Seconds())
+            .Match(x => x is StackControl))!.Should().BeOfType<StackControl>().Subject;
 
-        var outerStack = initialControl.Should().BeOfType<StackControl>().Subject;
-
-        // Card structure: topRow (icon + name + "+" button), chipsRow (role buttons + × buttons)
         var outerAreas = outerStack.Areas.ToArray();
-        outerAreas.Length.Should().BeGreaterThanOrEqualTo(2, "should have topRow + chipsRow");
+        outerAreas.Length.Should().BeGreaterThanOrEqualTo(3,
+            "row has subject + rolesBlock + remove-user button for an admin");
 
-        // Get the chips row area
-        var chipsRowAreaName = outerAreas[1].Area?.ToString();
-        chipsRowAreaName.Should().NotBeNullOrEmpty("chipsRow area should have a name");
+        // The last area is the remove-user ✕ button.
+        var removeUserArea = outerAreas[^1].Area?.ToString();
+        removeUserArea.Should().NotBeNullOrEmpty();
 
-        var chipsRowControl = await stream
-            .GetControlStream(chipsRowAreaName!)
-            .Timeout(5.Seconds())
-            .FirstAsync(x => x != null);
-
-        var chipsRow = chipsRowControl.Should().BeOfType<StackControl>().Subject;
-        var chipAreas = chipsRow.Areas.ToArray();
-        chipAreas.Should().NotBeEmpty("should have at least one role chip");
-
-        // First chip area is the role toggle button
-        var roleChipArea = chipAreas[0].Area?.ToString();
-        roleChipArea.Should().NotBeNullOrEmpty();
-
-        // Verify initial button exists and has no line-through
-        var initialChip = await stream
-            .GetControlStream(roleChipArea!)
-            .Timeout(5.Seconds())
-            .FirstAsync(x => x != null);
-        initialChip.Should().BeOfType<ButtonControl>();
-        var initialStyle = ((ButtonControl)initialChip!).Style?.ToString() ?? "";
-        initialStyle.Should().NotContain("line-through", "initial state should NOT have strikethrough");
-
-        // Click the role chip to toggle denied
-        client.Post(new ClickedEvent(roleChipArea!, stream.StreamId),
+        client.Post(new ClickedEvent(removeUserArea!, stream.StreamId),
             o => o.WithTarget(hostAddress));
 
-        // Wait for re-render — button style should now have line-through
-        var updatedChip = await stream
-            .GetControlStream(roleChipArea!)
-            .Where(c =>
-            {
-                if (c is not ButtonControl btn) return false;
-                var style = btn.Style?.ToString() ?? "";
-                return style.Contains("line-through");
-            })
-            .Timeout(10.Seconds())
-            .FirstAsync();
+        // Re-read authoritatively (Mesh.GetMeshNode round-trip) until the node is gone.
+        var deleted = await Observable.Interval(100.Milliseconds()).StartWith(0L)
+            .SelectMany(_ => Mesh.GetMeshNode($"{TestNamespace}/jack-access"))
+            .Should().Within(10.Seconds())
+            .Match(n => n is null);
 
-        updatedChip.Should().NotBeNull("role chip should re-render with strikethrough after toggle");
-        var updatedStyle = ((ButtonControl)updatedChip!).Style?.ToString() ?? "";
-        updatedStyle.Should().Contain("line-through", "denied role should show strikethrough");
+        deleted.Should().BeNull("the whole assignment node should be deleted");
     }
 
     [Fact(Timeout = 30000)]
-    public async Task Thumbnail_ClickRemoveRole_RemovesChip()
+    public async Task Thumbnail_ClickRemoveRole_RemovesRole()
     {
         var assignment = new AccessAssignment
         {
@@ -212,7 +177,7 @@ public class AccessAssignmentThumbnailTest(ITestOutputHelper output) : MonolithM
                 new RoleAssignment { Role = "Editor", Denied = false }
             ]
         };
-        await CreateAssignmentNodeAsync("iris-access", assignment);
+        await CreateAssignmentNode("iris-access", assignment);
 
         var client = GetClient();
         var hostAddress = NodeAddress("iris-access");
@@ -222,56 +187,52 @@ public class AccessAssignmentThumbnailTest(ITestOutputHelper output) : MonolithM
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             hostAddress, reference);
 
-        // Wait for initial render
-        var initialControl = await stream
+        // Row structure: [subject] [rolesBlock] [✕]. rolesBlock = [roleRow0] [roleRow1] [+ Add role].
+        // Each roleRow = [role editor] [× remove-role].
+        var outerStack = (await stream
             .GetControlStream(reference.Area!)
-            .Timeout(10.Seconds())
-            .FirstAsync(x => x != null);
+            .Should().Within(10.Seconds())
+            .Match(x => x is StackControl))!.Should().BeOfType<StackControl>().Subject;
 
-        var outerStack = initialControl.Should().BeOfType<StackControl>().Subject;
         var outerAreas = outerStack.Areas.ToArray();
-        outerAreas.Length.Should().BeGreaterThanOrEqualTo(2);
+        outerAreas.Length.Should().BeGreaterThanOrEqualTo(2, "subject + rolesBlock");
 
-        // Get chips row
-        var chipsRowAreaName = outerAreas[1].Area?.ToString();
-        var chipsRowControl = await stream
-            .GetControlStream(chipsRowAreaName!)
-            .Timeout(5.Seconds())
-            .FirstAsync(x => x != null);
+        var rolesBlockArea = outerAreas[1].Area?.ToString();
+        var rolesBlock = (await stream
+            .GetControlStream(rolesBlockArea!)
+            .Should().Within(5.Seconds())
+            .Match(x => x is StackControl))!.Should().BeOfType<StackControl>().Subject;
 
-        var chipsRow = chipsRowControl.Should().BeOfType<StackControl>().Subject;
-        var chipAreas = chipsRow.Areas.ToArray();
-        // With 2 roles: (role1, ×1, role2, ×2) = 4 areas
-        chipAreas.Length.Should().BeGreaterThanOrEqualTo(4, "should have 2 role chips + 2 × buttons");
+        var roleRows = rolesBlock.Areas.ToArray();
+        roleRows.Length.Should().BeGreaterThanOrEqualTo(2, "two role rows (+ an Add role button)");
 
-        // Click the × button for the first role (index 1)
-        var removeButtonArea = chipAreas[1].Area?.ToString();
-        removeButtonArea.Should().NotBeNullOrEmpty();
+        // First role row → its remove-role × button (the role editor is at index 0).
+        var roleRow0Area = roleRows[0].Area?.ToString();
+        var roleRow0 = (await stream
+            .GetControlStream(roleRow0Area!)
+            .Should().Within(5.Seconds())
+            .Match(x => x is StackControl))!.Should().BeOfType<StackControl>().Subject;
 
-        client.Post(new ClickedEvent(removeButtonArea!, stream.StreamId),
+        var roleRow0Areas = roleRow0.Areas.ToArray();
+        roleRow0Areas.Length.Should().BeGreaterThanOrEqualTo(2, "role editor + remove-role button");
+
+        var removeRoleArea = roleRow0Areas[1].Area?.ToString();
+        removeRoleArea.Should().NotBeNullOrEmpty();
+
+        client.Post(new ClickedEvent(removeRoleArea!, stream.StreamId),
             o => o.WithTarget(hostAddress));
 
-        // Verify node updated — poll via MeshQuery until role count changes
-        MeshNode? updatedNode = null;
-        var ct = TestContext.Current.CancellationToken;
-        var deadline = System.DateTime.UtcNow.Add(10.Seconds());
-        while (System.DateTime.UtcNow < deadline)
-        {
-            updatedNode = await MeshQuery
-                .QueryAsync<MeshNode>($"path:{TestNamespace}/iris-access", ct: ct)
-                .FirstOrDefaultAsync(ct);
-
-            if (updatedNode?.Content is AccessAssignment a && a.Roles.Count == 1)
-                break;
-
-            await Task.Delay(100, ct);
-        }
+        // Re-read authoritatively until the first role (Admin) is removed.
+        var updatedNode = await Observable.Interval(100.Milliseconds()).StartWith(0L)
+            .SelectMany(_ => Mesh.GetMeshNode($"{TestNamespace}/iris-access"))
+            .Should().Within(10.Seconds())
+            .Match(n => n?.Content is AccessAssignment a && a.Roles.Count == 1);
 
         updatedNode.Should().NotBeNull();
         var result = updatedNode!.Content as AccessAssignment;
         result.Should().NotBeNull();
         result!.Roles.Should().HaveCount(1);
-        result.Roles[0].Role.Should().Be("Editor", "Admin should have been removed");
+        result.Roles[0].Role.Should().Be("Editor", "Admin (index 0) should have been removed");
     }
 
     [Fact(Timeout = 30000)]
@@ -283,7 +244,7 @@ public class AccessAssignmentThumbnailTest(ITestOutputHelper output) : MonolithM
             DisplayName = "Alice",
             Roles = [new RoleAssignment { Role = "Editor", Denied = false }]
         };
-        await CreateAssignmentNodeAsync("alice-access", assignment);
+        await CreateAssignmentNode("alice-access", assignment);
 
         var client = GetClient();
         var hostAddress = NodeAddress("alice-access");
@@ -293,15 +254,23 @@ public class AccessAssignmentThumbnailTest(ITestOutputHelper output) : MonolithM
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             hostAddress, reference);
 
-        // Wait for Overview to render with actual areas (skip progress-only emissions)
-        var item = await stream
-            .Where(i => i.Value.TryGetProperty("areas", out var areas)
-                && areas.EnumerateObject().Any())
-            .Timeout(10.Seconds())
-            .FirstAsync();
+        // Wait for the Overview area control itself to render. The prior
+        // shape ("first emission with any 'areas'") raced the menu burst —
+        // $Menu/$Menu:Node/$Menu:Mesh land before Overview, and matching on
+        // "any areas" would happily snap the menu-only frame and assert
+        // against menus that have no Change Subject button.
+        await stream
+            .GetControlStream(reference.Area!)
+            .Should().Within(10.Seconds())
+            .Match(x => x != null);
 
-        // Search through the raw JSON for a ButtonControl with label "Change Subject"
-        var json = item.Value.GetRawText();
+        // Read the assembled entity-store now that the Overview area exists.
+        var settled = await stream
+            .Should().Within(5.Seconds())
+            .Match(i => i.Value.TryGetProperty("areas", out var areas)
+                && areas.EnumerateObject().Any(a => a.Name.Contains("Overview")));
+
+        var json = settled.Value.GetRawText();
         json.Should().Contain("Change Subject",
             "Overview should contain a 'Change Subject' button for admins");
     }
@@ -334,28 +303,20 @@ public class AccessAssignmentThumbnailTest(ITestOutputHelper output) : MonolithM
             DisplayName = "Dave",
             Roles = [new RoleAssignment { Role = "Viewer", Denied = false }]
         };
-        var created = await CreateAssignmentNodeAsync("dave-access", assignment);
+        var created = await CreateAssignmentNode("dave-access", assignment);
 
-        // Update the node's AccessObject via NodeFactory
+        // Update the node's AccessObject via NodeFactory (cold — runs on Subscribe).
         var updatedAssignment = assignment with { AccessObject = "User/eve" };
         var updatedNode = created with { Content = updatedAssignment };
-        await NodeFactory.UpdateNodeAsync(updatedNode, TestContext.Current.CancellationToken);
+        await NodeFactory.UpdateNode(updatedNode).Should().Emit();
 
-        // Verify the update was persisted
-        var ct = TestContext.Current.CancellationToken;
-        var deadline = System.DateTime.UtcNow.Add(10.Seconds());
-        MeshNode? result = null;
-        while (System.DateTime.UtcNow < deadline)
-        {
-            result = await MeshQuery
-                .QueryAsync<MeshNode>($"path:{TestNamespace}/dave-access", ct: ct)
-                .FirstOrDefaultAsync(ct);
-
-            if (result?.Content is AccessAssignment a && a.AccessObject == "User/eve")
-                break;
-
-            await Task.Delay(100, ct);
-        }
+        // Re-read authoritatively (Mesh.GetMeshNode round-trip) until the
+        // subject change lands — same pattern as the sibling CanSelectAnyNodeType
+        // test. GetMeshNodeStream + Where does not surface the update reliably here.
+        var result = await Observable.Interval(100.Milliseconds()).StartWith(0L)
+            .SelectMany(_ => Mesh.GetMeshNode($"{TestNamespace}/dave-access"))
+            .Should().Within(10.Seconds())
+            .Match(n => n?.Content is AccessAssignment a && a.AccessObject == "User/eve");
 
         result.Should().NotBeNull();
         var resultAssignment = result!.Content as AccessAssignment;
@@ -392,36 +353,28 @@ public class AccessAssignmentThumbnailTest(ITestOutputHelper output) : MonolithM
             DisplayName = "George",
             Roles = [new RoleAssignment { Role = "Editor", Denied = false }]
         };
-        var created = await CreateAssignmentNodeAsync("george-access", assignment);
+        var created = await CreateAssignmentNode("george-access", assignment);
 
-        // Create a Group node as the new target
+        // Create a Group node as the new target (cold — runs on Subscribe).
         var groupNode = new MeshNode("engineering", "Admin")
         {
             Name = "Engineering",
             NodeType = "Group",
         };
-        await NodeFactory.CreateNodeAsync(groupNode, ct: TestContext.Current.CancellationToken);
+        await NodeFactory.CreateNode(groupNode).Should().Emit();
 
         // Change AccessObject from a User to a Group path
         var updatedAssignment = assignment with { AccessObject = "Admin/engineering" };
         var updatedNode = created with { Content = updatedAssignment };
-        await NodeFactory.UpdateNodeAsync(updatedNode, TestContext.Current.CancellationToken);
+        await NodeFactory.UpdateNode(updatedNode).Should().Emit();
 
-        // Verify the update was persisted — AccessObject can be any mesh node path
-        var ct = TestContext.Current.CancellationToken;
-        var deadline = System.DateTime.UtcNow.Add(10.Seconds());
-        MeshNode? result = null;
-        while (System.DateTime.UtcNow < deadline)
-        {
-            result = await MeshQuery
-                .QueryAsync<MeshNode>($"path:{TestNamespace}/george-access", ct: ct)
-                .FirstOrDefaultAsync(ct);
-
-            if (result?.Content is AccessAssignment a && a.AccessObject == "Admin/engineering")
-                break;
-
-            await Task.Delay(100, ct);
-        }
+        // Verify the update was persisted — AccessObject can be any mesh node
+        // path. Re-read authoritatively (Mesh.GetMeshNode round-trip) until the
+        // change lands.
+        var result = await Observable.Interval(100.Milliseconds()).StartWith(0L)
+            .SelectMany(_ => Mesh.GetMeshNode($"{TestNamespace}/george-access"))
+            .Should().Within(10.Seconds())
+            .Match(n => n?.Content is AccessAssignment a && a.AccessObject == "Admin/engineering");
 
         result.Should().NotBeNull();
         var resultAssignment = result!.Content as AccessAssignment;

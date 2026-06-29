@@ -1,140 +1,155 @@
-using System.Collections.Concurrent;
-using System.Runtime.CompilerServices;
+using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Mesh.Threading;
 
 namespace MeshWeaver.Hosting.Persistence;
 
 /// <summary>
-/// File system implementation of IVersionQuery.
-/// Writes versioned snapshots to a Versions folder alongside the data directory.
-/// File naming: {namespace}/{id}_{version}.json
-/// Deduplicates to avoid storing identical versions.
+/// File system implementation of <see cref="IVersionQuery"/>. Writes versioned
+/// snapshots to a <c>.versions</c> folder alongside the data directory; file
+/// naming is <c>{namespace}/{id}_{version}.json</c>.
+///
+/// <para>All public methods return <see cref="IObservable{T}"/> — see
+/// <c>Doc/Architecture/AsynchronousCalls.md</c>. The async file I/O is bridged
+/// to <see cref="IObservable{T}"/> via the <c>FileSystem</c> <see cref="IIoPool"/>
+/// (<c>IoPoolExtensions.Run</c>), which runs the leaf entirely on the pool with
+/// <c>ConfigureAwait(false)</c> behind a concurrency gate — never a bare
+/// <c>Observable.FromAsync</c>, which deadlocks under a blocking subscriber.
+/// Callers compose with <c>.SelectMany</c> / <c>.Subscribe</c> inside
+/// hub-reachable code without bridging to a Task.</para>
 /// </summary>
 public class FileSystemVersionStore : IVersionQuery
 {
     private readonly string _versionsDirectory;
     private readonly Func<JsonSerializerOptions, JsonSerializerOptions>? _writeOptionsModifier;
-    private readonly ConcurrentDictionary<string, string> _lastWrittenContent = new();
+    // Versioned-snapshot file I/O (WriteVersion / GetVersion) is bridged to
+    // IObservable through this pool — never via a bare Observable.FromAsync,
+    // which deadlocks under a blocking subscriber. See IoPoolExtensions and
+    // Doc/Architecture/AsynchronousCalls.md.
+    private readonly IIoPool _ioPool;
 
+    /// <summary>
+    /// Creates a version store rooted at a <c>.versions</c> folder under the
+    /// given data directory.
+    /// </summary>
+    /// <param name="baseDirectory">Data directory whose <c>.versions</c> subfolder holds the snapshots.</param>
+    /// <param name="writeOptionsModifier">Optional modifier for JsonSerializerOptions when writing snapshots (e.g., to enable WriteIndented).</param>
+    /// <param name="ioPoolRegistry">Optional I/O pool registry; the <c>FileSystem</c> pool bridges async file I/O to <c>IObservable</c>. When <c>null</c>, the unbounded pool is used.</param>
     public FileSystemVersionStore(
         string baseDirectory,
-        Func<JsonSerializerOptions, JsonSerializerOptions>? writeOptionsModifier = null)
+        Func<JsonSerializerOptions, JsonSerializerOptions>? writeOptionsModifier = null,
+        IoPoolRegistry? ioPoolRegistry = null)
     {
         _versionsDirectory = Path.Combine(baseDirectory, ".versions");
         _writeOptionsModifier = writeOptionsModifier;
+        _ioPool = ioPoolRegistry?.Get(IoPoolNames.FileSystem) ?? IoPool.Unbounded;
     }
 
     /// <summary>
-    /// Writes a versioned copy of a node. Called after save.
-    /// Deduplicates: skips write if serialized content is identical to last write for this path.
+    /// Writes a versioned snapshot. Every save gets its own snapshot file
+    /// keyed on the post-save Version — no dedup based on content. The
+    /// previous content-equality dedup interacted badly with the dual save
+    /// path (PersistenceService.SaveNode and MeshNodeTypeSource's persister)
+    /// where two saves with the same Name but different counter Versions
+    /// would race: the second save's WriteVersion saw the first's
+    /// _lastWrittenContent and skipped writing — leaving a version gap in
+    /// the snapshot history that <c>VersionQuery_GetVersionBefore</c> caught.
     /// </summary>
-    public async Task WriteVersionAsync(MeshNode node, JsonSerializerOptions options, CancellationToken ct = default)
-    {
-        if (node.Version <= 0) return;
-
-        var writeOptions = _writeOptionsModifier != null
-            ? _writeOptionsModifier(options)
-            : options;
-
-        // Deduplicate: compare content (excluding version/timestamp) to last write for this path
-        var normalizedNode = node with { Version = 0, LastModified = default };
-        var normalizedJson = JsonSerializer.Serialize(normalizedNode, writeOptions);
-        var nodePath = node.Path ?? "";
-
-        if (_lastWrittenContent.TryGetValue(nodePath, out var lastContent) && lastContent == normalizedJson)
-            return; // Same content as last write, skip duplicate
-        _lastWrittenContent[nodePath] = normalizedJson;
-
-        var ns = node.Namespace ?? "";
-        var dir = string.IsNullOrEmpty(ns)
-            ? _versionsDirectory
-            : Path.Combine(_versionsDirectory, ns.Replace('/', Path.DirectorySeparatorChar));
-        Directory.CreateDirectory(dir);
-
-        var fileName = $"{node.Id}_{node.Version}.json";
-        var filePath = Path.Combine(dir, fileName);
-
-        var json = JsonSerializer.Serialize(node, writeOptions);
-        await File.WriteAllTextAsync(filePath, json, ct);
-    }
-
-    public async IAsyncEnumerable<MeshNodeVersion> GetVersionsAsync(
-        string path, [EnumeratorCancellation] CancellationToken ct = default)
-    {
-        var (ns, id) = SplitPath(path);
-        var dir = string.IsNullOrEmpty(ns)
-            ? _versionsDirectory
-            : Path.Combine(_versionsDirectory, ns.Replace('/', Path.DirectorySeparatorChar));
-
-        if (!Directory.Exists(dir))
-            yield break;
-
-        var pattern = $"{id}_*.json";
-        var files = Directory.GetFiles(dir, pattern)
-            .Select(f =>
-            {
-                var name = Path.GetFileNameWithoutExtension(f);
-                var versionStr = name[(id.Length + 1)..];
-                return long.TryParse(versionStr, out var v) ? (File: f, Version: v) : default;
-            })
-            .Where(x => x.File != null)
-            .OrderByDescending(x => x.Version);
-
-        foreach (var (file, version) in files)
+    public IObservable<MeshNode> WriteVersion(MeshNode node, JsonSerializerOptions options)
+        => _ioPool.Run(async ct =>
         {
-            ct.ThrowIfCancellationRequested();
-            var info = new FileInfo(file);
-            yield return new MeshNodeVersion(
-                path, version, info.LastWriteTimeUtc,
-                null, null, null);
-        }
+            if (node.Version <= 0) return node;
 
-        await Task.CompletedTask; // Async enumerable requires at least one await
-    }
+            var writeOptions = _writeOptionsModifier != null
+                ? _writeOptionsModifier(options)
+                : options;
 
-    public async Task<MeshNode?> GetVersionAsync(
-        string path, long version, JsonSerializerOptions options,
-        CancellationToken ct = default)
-    {
-        var filePath = GetVersionFilePath(path, version);
-        if (filePath == null || !File.Exists(filePath))
-            return null;
+            var ns = node.Namespace ?? "";
+            var dir = string.IsNullOrEmpty(ns)
+                ? _versionsDirectory
+                : Path.Combine(_versionsDirectory, ns.Replace('/', Path.DirectorySeparatorChar));
+            Directory.CreateDirectory(dir);
 
-        var json = await File.ReadAllTextAsync(filePath, ct);
-        return JsonSerializer.Deserialize<MeshNode>(json, options);
-    }
+            var fileName = $"{node.Id}_{node.Version}.json";
+            var filePath = Path.Combine(dir, fileName);
 
-    public async Task<MeshNode?> GetVersionBeforeAsync(
-        string path, long beforeVersion, JsonSerializerOptions options,
-        CancellationToken ct = default)
-    {
-        var (ns, id) = SplitPath(path);
-        var dir = string.IsNullOrEmpty(ns)
-            ? _versionsDirectory
-            : Path.Combine(_versionsDirectory, ns.Replace('/', Path.DirectorySeparatorChar));
+            var json = JsonSerializer.Serialize(node, writeOptions);
+            await File.WriteAllTextAsync(filePath, json, ct).ConfigureAwait(false);
+            return node;
+        });
 
-        if (!Directory.Exists(dir))
-            return null;
+    /// <inheritdoc />
+    public IObservable<MeshNodeVersion> GetVersions(string path)
+        => Observable.Defer(() =>
+        {
+            var (ns, id) = SplitPath(path);
+            var dir = string.IsNullOrEmpty(ns)
+                ? _versionsDirectory
+                : Path.Combine(_versionsDirectory, ns.Replace('/', Path.DirectorySeparatorChar));
 
-        var pattern = $"{id}_*.json";
-        var bestVersion = Directory.GetFiles(dir, pattern)
-            .Select(f =>
-            {
-                var name = Path.GetFileNameWithoutExtension(f);
-                var versionStr = name[(id.Length + 1)..];
-                return long.TryParse(versionStr, out var v) ? v : -1;
-            })
-            .Where(v => v > 0 && v < beforeVersion)
-            .OrderByDescending(v => v)
-            .FirstOrDefault();
+            if (!Directory.Exists(dir))
+                return Observable.Empty<MeshNodeVersion>();
 
-        if (bestVersion <= 0)
-            return null;
+            var pattern = $"{id}_*.json";
+            var versions = Directory.GetFiles(dir, pattern)
+                .Select(f =>
+                {
+                    var name = Path.GetFileNameWithoutExtension(f);
+                    var versionStr = name[(id.Length + 1)..];
+                    return long.TryParse(versionStr, out var v) ? (File: f, Version: v) : default;
+                })
+                .Where(x => x.File != null)
+                .OrderByDescending(x => x.Version)
+                .Select(x => new MeshNodeVersion(
+                    path, x.Version, new FileInfo(x.File).LastWriteTimeUtc,
+                    null, null, null));
 
-        return await GetVersionAsync(path, bestVersion, options, ct);
-    }
+            return versions.ToObservable();
+        });
+
+    /// <inheritdoc />
+    public IObservable<MeshNode?> GetVersion(string path, long version, JsonSerializerOptions options)
+        => _ioPool.Run(async ct =>
+        {
+            var filePath = GetVersionFilePath(path, version);
+            if (filePath == null || !File.Exists(filePath))
+                return (MeshNode?)null;
+
+            var json = await File.ReadAllTextAsync(filePath, ct).ConfigureAwait(false);
+            return JsonSerializer.Deserialize<MeshNode>(json, options);
+        });
+
+    /// <inheritdoc />
+    public IObservable<MeshNode?> GetVersionBefore(string path, long beforeVersion, JsonSerializerOptions options)
+        => Observable.Defer(() =>
+        {
+            var (ns, id) = SplitPath(path);
+            var dir = string.IsNullOrEmpty(ns)
+                ? _versionsDirectory
+                : Path.Combine(_versionsDirectory, ns.Replace('/', Path.DirectorySeparatorChar));
+
+            if (!Directory.Exists(dir))
+                return Observable.Return<MeshNode?>(null);
+
+            var pattern = $"{id}_*.json";
+            var bestVersion = Directory.GetFiles(dir, pattern)
+                .Select(f =>
+                {
+                    var name = Path.GetFileNameWithoutExtension(f);
+                    var versionStr = name[(id.Length + 1)..];
+                    return long.TryParse(versionStr, out var v) ? v : -1;
+                })
+                .Where(v => v > 0 && v < beforeVersion)
+                .OrderByDescending(v => v)
+                .FirstOrDefault();
+
+            if (bestVersion <= 0)
+                return Observable.Return<MeshNode?>(null);
+
+            return GetVersion(path, bestVersion, options);
+        });
 
     private string? GetVersionFilePath(string path, long version)
     {

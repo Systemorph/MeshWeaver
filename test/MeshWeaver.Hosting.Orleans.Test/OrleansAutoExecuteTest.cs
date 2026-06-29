@@ -6,8 +6,6 @@ using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
-using FluentAssertions;
-using FluentAssertions.Extensions;
 using MeshWeaver.AI;
 using MeshWeaver.Data;
 using MeshWeaver.Fixture;
@@ -21,11 +19,12 @@ using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 using MeshThread = MeshWeaver.AI.Thread;
 
+using System.Reactive.Linq;
 namespace MeshWeaver.Hosting.Orleans.Test;
 
 /// <summary>
 /// Orleans integration test: BuildThreadWithMessages + AutoExecutePendingMessage.
-/// Creates a thread with pre-populated Messages + PendingUserMessage in one shot.
+/// Creates a thread with a pre-populated queued message (PendingUserMessages) in one shot.
 /// Verifies that:
 /// 1. AutoExecutePendingMessage creates the child ThreadMessage nodes
 /// 2. UpdateThreadMessageContent routes to the response grain
@@ -34,27 +33,33 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// This reproduces the production bug where UpdateThreadMessageContent
 /// went to the thread grain instead of the response message grain
 /// because the child nodes weren't created in persistence.
+///
+/// 🚨 Tests <c>await</c> the reactive assertions: each terminal
+/// <c>ObservableAssertions</c> method bridges the stream to a Task at the test
+/// edge (the sanctioned <c>.FirstAsync()/.ToTask()</c> bridge) — no blocking
+/// wait inside the test body. See ObservableAssertions remarks.
 /// </summary>
-[Collection(nameof(OrleansClusterCollection))]
-public class OrleansAutoExecuteTest(SharedOrleansFixture fixture, ITestOutputHelper output) : TestBase(output)
+public class OrleansAutoExecuteTest(ITestOutputHelper output) : OrleansSharedTestBase(output)
 {
-    private async Task<IMessageHub> GetClientAsync([CallerMemberName] string? name = null)
-        => await fixture.GetClientAsync($"autoexec-{name}-{Guid.NewGuid():N}", "Roland");
+    private IMessageHub GetClient([CallerMemberName] string? name = null)
+        => base.GetClient($"autoexec-{name}-{Guid.NewGuid():N}", "TestUser");
 
-    private async Task<T?> GetHubContentAsync<T>(IMessageHub client, string path, CancellationToken ct) where T : class
-    {
-        var nodeId = path.Contains('/') ? path[(path.LastIndexOf('/') + 1)..] : path;
-        var response = await client.AwaitResponse(
-            new GetDataRequest(new EntityReference(nameof(MeshNode), nodeId)),
-            o => o.WithTarget(new Address(path)), ct);
-        var node = response.Message.Data as MeshNode;
-        if (node == null && response.Message.Data is JsonElement je)
-            node = je.Deserialize<MeshNode>(fixture.ClientMesh.JsonSerializerOptions);
-        if (node?.Content is T typed) return typed;
-        if (node?.Content is JsonElement contentJe)
-            return contentJe.Deserialize<T>(fixture.ClientMesh.JsonSerializerOptions);
-        return null;
-    }
+    /// <summary>
+    /// Reactive single-node content read via the canonical
+    /// <see cref="MeshNodeStreamExtensions.GetMeshNodeStream(IWorkspace, string)"/>
+    /// path. Returns an <see cref="IObservable{T}"/> the caller asserts on with
+    /// <c>.Should().Match(...)</c>; the stream filters pre-load empty snapshots so
+    /// the first content-bearing emission carries the node.
+    /// </summary>
+    private static IObservable<T?> GetHubContent<T>(IMessageHub client, string path) where T : class
+        => client.GetWorkspace().GetMeshNodeStream(path)
+            .Select(node =>
+            {
+                if (node?.Content is T typed) return typed;
+                if (node?.Content is JsonElement contentJe)
+                    return contentJe.Deserialize<T>(client.JsonSerializerOptions);
+                return null;
+            });
 
     /// <summary>
     /// BuildThreadWithMessages creates thread + auto-executes.
@@ -67,48 +72,46 @@ public class OrleansAutoExecuteTest(SharedOrleansFixture fixture, ITestOutputHel
         SharedOrleansFixture.SwappableFactory.SetInner(new AutoExecEchoChatClientFactory());
         try
         {
-            var ct = new CancellationTokenSource(30.Seconds()).Token;
-            var client = await GetClientAsync();
+            var client = GetClient();
 
-            // Build thread with pre-populated messages (auto-execute on activation)
-            var (threadNode, userMsgId, responseMsgId) = ThreadNodeType.BuildThreadWithMessages(
-                "User/Roland", "Hello Orleans auto-execute!",
-                createdBy: "Roland", agentName: "Orchestrator");
+            // Build thread with pre-populated messages (auto-execute on activation).
+            // responseMsgId is allocated by DispatchAfterClaim (BuildThreadWithMessages
+            // returns ""), so we read the real id from Thread.Messages after the
+            // submission watcher claims — see ThreadNodeType.BuildThreadWithMessages.
+            var (threadNode, userMsgId, _) = ThreadNodeType.BuildThreadWithMessages(
+                "TestUser", "Hello Orleans auto-execute!",
+                createdBy: "TestUser", agentName: "Orchestrator");
             var threadPath = threadNode.Path!;
-            Output.WriteLine($"Thread: {threadPath}, user={userMsgId}, response={responseMsgId}");
+            Output.WriteLine($"Thread: {threadPath}, user={userMsgId}");
 
             // Create the thread — AutoExecutePendingMessage should fire on grain activation
-            var createResponse = await client.AwaitResponse(
-                new CreateNodeRequest(threadNode),
-                o => o.WithTarget(new Address("User/Roland")), ct);
-            createResponse.Message.Success.Should().BeTrue(createResponse.Message.Error);
+            var createResponse = await client.Observe(new CreateNodeRequest(threadNode), o => o.WithTarget(new Address("TestUser")))
+                .Should().Within(30.Seconds()).Emit();
+            createResponse.Message.Success.Should().BeTrue(createResponse.Message.Error ?? "");
             Output.WriteLine("Thread created, waiting for execution...");
 
-            // Poll for execution to complete
-            ThreadMessage? response = null;
+            // Subscribing to the thread stream also activates the per-thread hub
+            // (WatchForExecution → auto-execute dispatch). Wait for execution to settle.
+            var thread = await GetHubContent<MeshThread>(client, threadPath)
+                .Should().Within(30.Seconds())
+                .Match(t => t is { IsExecuting: false }
+                    && t.Messages.Count >= 2);
+            Output.WriteLine("Thread execution complete");
+
+            // Response cell id is Messages[1] (user is [0], response is [1]) — the id
+            // DispatchAfterClaim allocated for this round.
+            var responseMsgId = thread!.Messages[1];
             var responsePath = $"{threadPath}/{responseMsgId}";
-            for (var i = 0; i < 60; i++)
-            {
-                // Check thread state
-                var thread = await GetHubContentAsync<MeshThread>(client, threadPath, ct);
-                if (thread is { IsExecuting: false, PendingUserMessage: null })
-                {
-                    Output.WriteLine($"Thread execution complete after {i * 500}ms");
-
-                    // Verify response cell has content
-                    response = await GetHubContentAsync<ThreadMessage>(client, responsePath, ct);
-                    break;
-                }
-                await Task.Delay(500, ct);
-            }
-
-            response.Should().NotBeNull("response message must exist in persistence");
+            var response = await GetHubContent<ThreadMessage>(client, responsePath)
+                .Should().Within(30.Seconds())
+                .Match(m => !string.IsNullOrEmpty(m?.Text));
             response!.Text.Should().NotBeNullOrEmpty("agent should have written response text");
-            Output.WriteLine($"Response: {response.Text[..Math.Min(100, response.Text.Length)]}");
+            Output.WriteLine($"Response: {response.Text![..Math.Min(100, response.Text.Length)]}");
 
-            // Verify user cell exists
-            var userMsg = await GetHubContentAsync<ThreadMessage>(client, $"{threadPath}/{userMsgId}", ct);
-            userMsg.Should().NotBeNull("user message must exist in persistence");
+            // Verify user cell exists.
+            var userMsg = await GetHubContent<ThreadMessage>(client, $"{threadPath}/{userMsgId}")
+                .Should().Within(30.Seconds())
+                .Match(m => m is not null);
             userMsg!.Text.Should().Be("Hello Orleans auto-execute!");
             userMsg.Role.Should().Be("user");
 
@@ -130,31 +133,36 @@ public class OrleansAutoExecuteTest(SharedOrleansFixture fixture, ITestOutputHel
         SharedOrleansFixture.SwappableFactory.SetInner(new AutoExecEchoChatClientFactory());
         try
         {
-            var ct = new CancellationTokenSource(30.Seconds()).Token;
-            var client = await GetClientAsync();
+            var client = GetClient();
 
-            var (threadNode, _, responseMsgId) = ThreadNodeType.BuildThreadWithMessages(
-                "User/Roland", "Test routing to response grain",
-                createdBy: "Roland", agentName: "Orchestrator");
+            var (threadNode, _, _) = ThreadNodeType.BuildThreadWithMessages(
+                "TestUser", "Test routing to response grain",
+                createdBy: "TestUser", agentName: "Orchestrator");
             var threadPath = threadNode.Path!;
-            var responsePath = $"{threadPath}/{responseMsgId}";
 
-            await client.AwaitResponse(
-                new CreateNodeRequest(threadNode),
-                o => o.WithTarget(new Address("User/Roland")), ct);
+            await client.Observe(new CreateNodeRequest(threadNode), o => o.WithTarget(new Address("TestUser")))
+                .Should().Within(30.Seconds()).Emit();
 
-            // Poll for response cell to have final text (not empty, not "Allocating agent...")
-            for (var i = 0; i < 60; i++)
-            {
-                var msg = await GetHubContentAsync<ThreadMessage>(client, responsePath, ct);
-                if (msg?.Text is { Length: > 0 } text && !text.StartsWith("Allocating") && !text.StartsWith("Loading") && !text.StartsWith("Generating"))
-                {
-                    Output.WriteLine($"Response cell has final text after {i * 500}ms: {text[..Math.Min(80, text.Length)]}");
-                    return; // SUCCESS
-                }
-                await Task.Delay(500, ct);
-            }
-            throw new TimeoutException("UpdateThreadMessageContent never reached response cell with final text");
+            // Activate the per-thread hub by subscribing to its stream — CreateNodeRequest
+            // above landed at TestUser, the catalog has the node, but the per-thread grain
+            // is created lazily on its first inbound message. Without this the hub's
+            // WithInitialization callbacks (WatchForExecution that fires the auto-execute
+            // dispatch) never run and the response cell is never created.
+            // Wait for the watcher to claim and allocate the response cell — its id is
+            // Messages[1] (BuildThreadWithMessages returns "" for responseMsgId now;
+            // DispatchAfterClaim allocates the real id).
+            var claimed = await GetHubContent<MeshThread>(client, threadPath)
+                .Should().Within(30.Seconds()).Match(t => t is { Messages.Count: >= 2 });
+            var responsePath = $"{threadPath}/{claimed!.Messages[1]}";
+
+            // Wait for the response cell to have final text (not empty, not a placeholder).
+            var msg = await GetHubContent<ThreadMessage>(client, responsePath)
+                .Should().Within(30.Seconds())
+                .Match(m => m?.Text is { Length: > 0 } text
+                    && !text.StartsWith("Allocating")
+                    && !text.StartsWith("Loading")
+                    && !text.StartsWith("Generating"));
+            Output.WriteLine($"Response cell has final text: {msg!.Text![..Math.Min(80, msg.Text.Length)]}");
         }
         finally
         {

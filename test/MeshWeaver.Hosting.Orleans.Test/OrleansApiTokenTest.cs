@@ -1,9 +1,9 @@
 using System;
+using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using System.Threading;
 using System.Threading.Tasks;
-using FluentAssertions;
-using FluentAssertions.Extensions;
+using MeshWeaver.Fixture;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
@@ -12,37 +12,40 @@ using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Hosting.Orleans.Test;
 
 /// <summary>
 /// Orleans integration test for API token creation and validation.
-/// Uses standard CreateNodeRequest with nodeType=ApiToken — same satellite pattern
-/// as Thread/Comment. The RLS validator maps ApiToken → Permission.Api.
+/// Uses standard CreateNodeRequest with nodeType=ApiToken Ã¢â‚¬â€ same satellite pattern
+/// as Thread/Comment. The RLS validator maps ApiToken Ã¢â€ â€™ Permission.Api.
 /// </summary>
-public class OrleansApiTokenTest(ITestOutputHelper output) : OrleansTestBase(output)
+public class OrleansApiTokenTest(ITestOutputHelper output) : OrleansSharedTestBase(output)
 {
-    protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
+    private IMessageHub GetClient([CallerMemberName] string? name = null)
     {
-        configuration.TypeRegistry
+        var client = base.GetClient($"apitoken-{name}-{Guid.NewGuid():N}", "TestUser");
+        client.TypeRegistry
             .WithType(typeof(ValidateTokenRequest), nameof(ValidateTokenRequest))
             .WithType(typeof(ValidateTokenResponse), nameof(ValidateTokenResponse));
-        return base.ConfigureClient(configuration);
+        return client;
     }
 
     [Fact]
     public async Task CreateApiToken_ViaStandardCreateNodeRequest()
     {
         var ct = new CancellationTokenSource(30.Seconds()).Token;
-        var client = await GetClientAsync();
-        var meshAddress = ClientMesh.Address;
+        var client = GetClient();
+        var meshAddress = Fixture.ClientMesh.Address;
 
         // Generate token hash
         var rawToken = $"mw_{Convert.ToHexString(RandomNumberGenerator.GetBytes(32)).ToLowerInvariant()}";
         var hash = ValidateTokenRequest.HashToken(rawToken);
         var hashPrefix = hash[..12];
 
-        // Create token as satellite of User node — same pattern as Thread
-        var userId = "Roland";
+        // Create token as satellite of User node Ã¢â‚¬â€ same pattern as Thread
+        var userId = "TestUser";
         var tokenNode = new MeshNode(hashPrefix, $"User/{userId}/_Api")
         {
             Name = "Orleans Test Token",
@@ -51,20 +54,18 @@ public class OrleansApiTokenTest(ITestOutputHelper output) : OrleansTestBase(out
             Content = new ApiToken
             {
                 UserId = userId,
-                UserName = "Roland",
-                UserEmail = "rbuergi@systemorph.com",
+                UserName = "TestUser",
+                UserEmail = "testuser@meshweaver.io",
                 TokenHash = hash,
                 Label = "Orleans Test Token",
                 CreatedAt = DateTimeOffset.UtcNow,
             }
         };
 
-        // Act — standard CreateNodeRequest (same as Thread creation)
-        var response = await client.AwaitResponse(
-            new CreateNodeRequest(tokenNode),
-            o => o.WithTarget(meshAddress), ct);
+        // Act Ã¢â‚¬â€ standard CreateNodeRequest (same as Thread creation)
+        var response = await client.Observe(new CreateNodeRequest(tokenNode), o => o.WithTarget(meshAddress)).FirstAsync().ToTask(ct);
 
-        response.Message.Success.Should().BeTrue(response.Message.Error);
+        response.Message.Success.Should().BeTrue(response.Message.Error ?? "");
         response.Message.Node.Should().NotBeNull();
         response.Message.Node!.Path.Should().Be($"User/{userId}/_Api/{hashPrefix}");
         response.Message.Node.NodeType.Should().Be(ApiTokenNodeType.NodeType);
@@ -75,7 +76,7 @@ public class OrleansApiTokenTest(ITestOutputHelper output) : OrleansTestBase(out
     public async Task ValidateInvalidToken_Fails()
     {
         var ct = new CancellationTokenSource(15.Seconds()).Token;
-        var client = await GetClientAsync();
+        var client = GetClient();
 
         var fakeToken = "mw_0000000000000000000000000000000000000000000000000000000000000000";
         var hash = ValidateTokenRequest.HashToken(fakeToken);
@@ -83,9 +84,7 @@ public class OrleansApiTokenTest(ITestOutputHelper output) : OrleansTestBase(out
 
         try
         {
-            var response = await client.AwaitResponse(
-                new ValidateTokenRequest(fakeToken),
-                o => o.WithTarget(new Address("ApiToken", hashPrefix)), ct);
+            var response = await client.Observe(new ValidateTokenRequest(fakeToken), o => o.WithTarget(new Address("ApiToken", hashPrefix))).FirstAsync().ToTask(ct);
 
             // Either the response says failure, or the grain couldn't activate (token not found)
             if (response.Message != null)
@@ -93,7 +92,7 @@ public class OrleansApiTokenTest(ITestOutputHelper output) : OrleansTestBase(out
         }
         catch (Exception)
         {
-            // Expected — grain activation fails because node doesn't exist
+            // Expected Ã¢â‚¬â€ grain activation fails because node doesn't exist
         }
     }
 }

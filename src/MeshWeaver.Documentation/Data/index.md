@@ -1,19 +1,25 @@
 ---
 Name: Documentation
 Category: Documentation
-Description: Your AI-powered data mesh platform — explore, ask, build
+Description: Your AI-powered data mesh platform — explore the docs, or just ask the assistant
 Icon: /static/storage/content/MeshWeaver/logo.svg
 ---
 
-# Welcome to MeshWeaver
+<div style="background: linear-gradient(135deg, #1e88e5 0%, #6a1b9a 100%); border-radius: 18px; padding: 44px 36px; margin: 4px 0 32px 0; color: #fff;">
+  <div style="font-size: 2.3rem; font-weight: 800; letter-spacing: -0.025em; line-height: 1.1;">Welcome to MeshWeaver</div>
+  <div style="font-size: 1.1rem; opacity: 0.92; margin-top: 12px; max-width: 720px; line-height: 1.55;">
+    Your data, your mesh, your AI. Every piece of data is an addressable node you can query, transform, and collaborate on — with AI agents ready to help at every step.
+  </div>
+  <div style="margin-top: 18px; font-size: 0.95rem; opacity: 0.8;">New here? Open the chat and ask anything — the assistant knows the platform inside out.</div>
+</div>
 
-**Your data, your mesh, your AI.** MeshWeaver is a distributed data mesh platform where every piece of data is a node you can query, transform, and collaborate on — with AI agents ready to help at every step.
-
-> **New here?** Just open the chat below and ask anything. Our AI assistant knows the platform inside out and will guide you through whatever you need.
+> **The fastest way to learn MeshWeaver is to ask.** The chat connects you to an AI assistant that understands the entire platform. Try *"What is a data mesh?"*, *"How do node types work?"*, or *"Explain the query syntax."*
 
 ---
 
-## Platform Overview
+## Platform at a glance
+
+MeshWeaver is organized around four interconnected pillars. Each section below opens onto its own table of contents — pick a topic that interests you, or scroll down to browse everything.
 
 ```mermaid
 graph LR
@@ -30,36 +36,11 @@ graph LR
     click AI "AI"
 ```
 
----
+| Pillar | What you'll find |
+|---|---|
+| **[Architecture](Architecture)** | Message-based communication, the actor model, access control, and deployment patterns |
+| **[Data Mesh](DataMesh)** | Node types, the query syntax, collaborative editing, and data modeling |
+| **[GUI](GUI)** | Controls, layout areas, data binding, and reactive observables |
+| **[AI Integration](AI)** | Agents, MCP tools, and natural-language access to your mesh |
 
-## Explore by Topic
-
-### [Architecture](Architecture)
-The backbone of MeshWeaver: message-based communication, actor model, partitioned persistence, access control, and UI streaming. Start here to understand how the platform works under the hood.
-
-### [Data Mesh](DataMesh)
-Everything about nodes: node types, query syntax, unified content references, interactive markdown, collaborative editing, and CRUD operations. The data layer that powers all of MeshWeaver.
-
-### [GUI](GUI)
-Build reactive UIs from C# code: editors, data grids, layout areas, data binding, observables, container controls, and attributes. No frontend framework required.
-
-### [AI Integration](AI)
-MeshPlugin tools, agent definitions, model selection, remote control, and natural language interfaces. Let AI agents work alongside your data mesh.
-
----
-
-## Get Started in Seconds
-
-You don't need to read pages of documentation. Just **ask**. Here are some things you can try:
-
-- *"What is a data mesh?"*
-- *"Show me how node types work"*
-- *"How do I create a custom node type?"*
-- *"Explain the query syntax"*
-- *"How does access control work?"*
-
----
-
-## Ask Anything
-
-Don't search — just ask. The chat below connects you to an AI assistant that understands the entire MeshWeaver platform.
+New to the vocabulary? The **[Glossary](Glossary)** defines every core term in one breath each — mesh node, partition, satellite, hub, stream, and friends.

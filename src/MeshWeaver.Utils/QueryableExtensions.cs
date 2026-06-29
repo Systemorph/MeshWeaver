@@ -435,6 +435,13 @@ namespace MeshWeaver.Utils
 
         #endregion
 
+        /// <summary>
+        /// Exposes a queryable as an <see cref="IAsyncEnumerable{T}"/>. If the source already implements
+        /// <see cref="IAsyncEnumerable{T}"/> it is returned directly; otherwise it is enumerated synchronously.
+        /// </summary>
+        /// <typeparam name="T">The element type.</typeparam>
+        /// <param name="source">The queryable to adapt.</param>
+        /// <returns>An async-enumerable view over the source.</returns>
         [SuppressMessage("ReSharper", "SuspiciousTypeConversion.Global", Justification = "In other Repos/Solutions we might have classes that implement both IAsyncEnumerable and IQueryable")]
         public static IAsyncEnumerable<T> AsAsyncEnumerable<T>(this IQueryable<T> source)
         {
@@ -447,18 +454,30 @@ namespace MeshWeaver.Utils
                     return source.ConvertToAsyncEnumerable();
             }
         }
+#pragma warning disable CS1998 // async iterator with no await — the IAsyncEnumerable<T> shape is the contract; enumeration of a non-async IQueryable is synchronous
         private static async IAsyncEnumerable<T> ConvertToAsyncEnumerable<T>(this IQueryable<T> source)
         {
-            var res = await Task.FromResult(source.AsEnumerable());
-            foreach (var el in res)
+            // Non-async IQueryable: enumerate synchronously. The previous
+            // `await Task.FromResult(source.AsEnumerable())` was fake-async — it added a
+            // Task allocation and a continuation hop for zero real asynchrony.
+            foreach (var el in source.AsEnumerable())
             {
                 yield return el;
             }
         }
+#pragma warning restore CS1998
     }
 
+    /// <summary>
+    /// Lightweight argument-validation helpers.
+    /// </summary>
     public static class Check
     {
+        /// <summary>
+        /// Throws <see cref="ArgumentNullException"/> when <paramref name="source"/> is <c>null</c>.
+        /// </summary>
+        /// <param name="source">The argument value to validate.</param>
+        /// <param name="name">The parameter name reported in the exception.</param>
         public static void NotNull(object source, string name)
         {
             if(source == null)

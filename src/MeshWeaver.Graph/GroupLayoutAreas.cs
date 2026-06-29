@@ -21,8 +21,11 @@ namespace MeshWeaver.Graph;
 /// </summary>
 public static class GroupLayoutAreas
 {
+    /// <summary>Area name for the Overview layout area.</summary>
     public const string OverviewArea = "Overview";
+    /// <summary>Area name for the Edit layout area.</summary>
     public const string EditArea = "Edit";
+    /// <summary>Area name for the Memberships layout area.</summary>
     public const string MembershipsArea = "Memberships";
 
     /// <summary>
@@ -54,21 +57,23 @@ public static class GroupLayoutAreas
     public static IObservable<UiControl?> Overview(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
-        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshService>();
 
         var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? [])
             ?? Observable.Return<MeshNode[]>([]);
 
-        return nodeStream.SelectMany(async nodes =>
+        var membersStream = host.Workspace.GetQuery(
+            $"group-members:{hubPath}",
+            $"namespace:{hubPath} nodeType:GroupMembership");
+
+        return nodeStream.CombineLatest(membersStream, (nodes, members) =>
         {
             var node = nodes.FirstOrDefault(n => n.Path == hubPath);
             var stack = Controls.Stack.WithStyle("padding: 24px; gap: 16px;");
 
-            // Group header
             var groupName = node?.Name ?? hubPath;
             stack = stack.WithView(Controls.H2(groupName));
 
-            var accessObject = node?.Content as AccessObject
+            var accessObject = node.ContentAs<AccessObject>(host.Hub.JsonSerializerOptions)
                 ?? (node?.Content is System.Text.Json.JsonElement je
                     ? System.Text.Json.JsonSerializer.Deserialize<AccessObject>(je.GetRawText())
                     : null);
@@ -76,32 +81,25 @@ public static class GroupLayoutAreas
             if (!string.IsNullOrEmpty(accessObject?.Description))
                 stack = stack.WithView(Controls.Html($"<p>{System.Web.HttpUtility.HtmlEncode(accessObject.Description)}</p>"));
 
-            // Members section
             stack = stack.WithView(Controls.H3("Members").WithStyle("margin: 0;"));
 
-            if (meshQuery != null)
+            var memberList = members as IReadOnlyList<MeshNode> ?? members.ToList();
+            if (memberList.Count == 0)
             {
-                var members = await meshQuery
-                    .QueryAsync<MeshNode>($"namespace:{hubPath} nodeType:GroupMembership")
-                    .ToListAsync();
-
-                if (members.Count == 0)
+                stack = stack.WithView(Controls.Html("<p style=\"color: var(--neutral-foreground-hint);\">No members.</p>"));
+            }
+            else
+            {
+                foreach (var member in memberList)
                 {
-                    stack = stack.WithView(Controls.Html("<p style=\"color: var(--neutral-foreground-hint);\">No members.</p>"));
-                }
-                else
-                {
-                    foreach (var member in members)
-                    {
-                        var membership = DeserializeMembership(member);
-                        var memberDisplay = membership?.DisplayName ?? membership?.Member ?? member.Name ?? member.Id;
+                    var membership = DeserializeMembership(member);
+                    var memberDisplay = membership?.DisplayName ?? membership?.Member ?? member.Name ?? member.Id;
 
-                        stack = stack.WithView(Controls.Stack
-                            .WithOrientation(Orientation.Horizontal)
-                            .WithStyle("padding: 8px 16px; border-bottom: 1px solid var(--neutral-stroke-rest); align-items: center; gap: 12px;")
-                            .WithView(Controls.Icon(FluentIcons.Person()).WithStyle("font-size: 20px;"))
-                            .WithView(Controls.Label(memberDisplay)));
-                    }
+                    stack = stack.WithView(Controls.Stack
+                        .WithOrientation(Orientation.Horizontal)
+                        .WithStyle("padding: 8px 16px; border-bottom: 1px solid var(--neutral-stroke-rest); align-items: center; gap: 12px;")
+                        .WithView(Controls.Icon(FluentIcons.Person()).WithStyle("font-size: 20px;"))
+                        .WithView(Controls.Label(memberDisplay)));
                 }
             }
 
@@ -114,15 +112,18 @@ public static class GroupLayoutAreas
     /// Shows members with delete buttons and an Add Member button.
     /// </summary>
     [Browsable(false)]
-    public static IObservable<UiControl?> Edit(LayoutAreaHost host, RenderingContext _)
+    public static IObservable<UiControl?> Edit(LayoutAreaHost host, RenderingContext context)
     {
         var hubPath = host.Hub.Address.ToString();
-        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshService>();
 
         var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? [])
             ?? Observable.Return<MeshNode[]>([]);
 
-        return nodeStream.SelectMany(async nodes =>
+        var membersStream = host.Workspace.GetQuery(
+            $"group-members-edit:{hubPath}",
+            $"namespace:{hubPath} nodeType:GroupMembership");
+
+        return nodeStream.CombineLatest(membersStream, (nodes, members) =>
         {
             var node = nodes.FirstOrDefault(n => n.Path == hubPath);
             var stack = Controls.Stack.WithStyle("padding: 24px; gap: 16px;");
@@ -130,41 +131,39 @@ public static class GroupLayoutAreas
             var groupName = node?.Name ?? hubPath;
             stack = stack.WithView(Controls.H2($"Edit Group: {groupName}"));
 
-            // Members section
             stack = stack.WithView(Controls.H3("Members").WithStyle("margin: 0;"));
 
-            if (meshQuery != null)
+            foreach (var member in members)
             {
-                var members = await meshQuery
-                    .QueryAsync<MeshNode>($"namespace:{hubPath} nodeType:GroupMembership")
-                    .ToListAsync();
+                var membership = DeserializeMembership(member);
+                var memberDisplay = membership?.DisplayName ?? membership?.Member ?? member.Name ?? member.Id;
 
-                foreach (var member in members)
-                {
-                    var membership = DeserializeMembership(member);
-                    var memberDisplay = membership?.DisplayName ?? membership?.Member ?? member.Name ?? member.Id;
-
-                    stack = stack.WithView(Controls.Stack
-                        .WithOrientation(Orientation.Horizontal)
-                        .WithStyle("padding: 8px 16px; border-bottom: 1px solid var(--neutral-stroke-rest); align-items: center; gap: 12px;")
-                        .WithView(Controls.Icon(FluentIcons.Person()).WithStyle("font-size: 20px;"))
-                        .WithView(Controls.Label(memberDisplay).WithStyle("flex: 1;"))
-                        .WithView(Controls.Button("")
-                            .WithIconStart(FluentIcons.Delete())
-                            .WithAppearance(Appearance.Stealth)
-                            .WithClickAction(async ctx =>
-                            {
-                                var nodeFactory = ctx.Hub.ServiceProvider.GetRequiredService<IMeshService>();
-                                await nodeFactory.DeleteNodeAsync(member.Path);
-                            })));
-                }
+                stack = stack.WithView(Controls.Stack
+                    .WithOrientation(Orientation.Horizontal)
+                    .WithStyle("padding: 8px 16px; border-bottom: 1px solid var(--neutral-stroke-rest); align-items: center; gap: 12px;")
+                    .WithView(Controls.Icon(FluentIcons.Person()).WithStyle("font-size: 20px;"))
+                    .WithView(Controls.Label(memberDisplay).WithStyle("flex: 1;"))
+                    .WithView(Controls.Button("")
+                        .WithIconStart(FluentIcons.Delete())
+                        .WithAppearance(Appearance.Stealth)
+                        .WithClickAction(ctx =>
+                        {
+                            var nodeFactory = ctx.Hub.ServiceProvider.GetRequiredService<IMeshService>();
+                            nodeFactory.DeleteNode(member.Path).Subscribe(
+                                _ => { },
+                                _ => { });
+                            return Task.CompletedTask;
+                        })));
             }
 
-            // Add Member button
             stack = stack.WithView(Controls.Button("Add Member")
                 .WithAppearance(Appearance.Accent)
                 .WithIconStart(FluentIcons.PersonAdd())
-                .WithClickAction(async ctx => await ShowAddMemberDialog(ctx, hubPath)));
+                .WithClickAction(ctx =>
+                {
+                    ShowAddMemberDialog(ctx, hubPath);
+                    return Task.CompletedTask;
+                }));
 
             return (UiControl?)stack;
         });
@@ -179,7 +178,7 @@ public static class GroupLayoutAreas
         return null;
     }
 
-    private static async Task ShowAddMemberDialog(UiActionContext ctx, string groupPath)
+    private static void ShowAddMemberDialog(UiActionContext ctx, string groupPath)
     {
         var formId = $"add_member_{Guid.NewGuid().AsString()}";
         ctx.Host.UpdateData(formId, new Dictionary<string, object?>
@@ -187,19 +186,24 @@ public static class GroupLayoutAreas
             ["memberId"] = ""
         });
 
-        // Load user/group options for autocomplete
+        // Load user/group options for autocomplete — REACTIVELY. Never await / await-foreach
+        // a hub query on the action-block thread: that is the layout-area deadlock (the click
+        // runs on the hub, and the query response is queued behind the blocked await). The
+        // Autocomplete observable's first snapshot populates the combobox options; the combobox
+        // databinds to optionsId and refreshes when they arrive.
         var optionsId = $"member_options_{Guid.NewGuid().AsString()}";
-        var options = new List<Option>();
+        ctx.Host.UpdateData(optionsId, Array.Empty<Option>());
         var meshQuery = ctx.Hub.ServiceProvider.GetService<IMeshService>();
-        if (meshQuery != null)
-        {
-            await foreach (var suggestion in meshQuery.AutocompleteAsync(groupPath, "", limit: 50))
+        meshQuery?.Autocomplete(groupPath, "", limit: 50)
+            .Take(1)
+            .Subscribe(suggestions =>
             {
-                if (suggestion.NodeType is "User" or "Group")
-                    options.Add(new Option<string>(suggestion.Path, $"{suggestion.Name} ({suggestion.Path})"));
-            }
-        }
-        ctx.Host.UpdateData(optionsId, options.ToArray());
+                var options = new List<Option>();
+                foreach (var s in suggestions)
+                    if (s.NodeType is "User" or "Group")
+                        options.Add(new Option<string>(s.Path, $"{s.Name} ({s.Path})"));
+                ctx.Host.UpdateData(optionsId, options.ToArray());
+            });
 
         var formContent = Controls.Stack.WithStyle("gap: 16px; padding: 16px;")
             .WithView(new ComboboxControl(
@@ -217,39 +221,40 @@ public static class GroupLayoutAreas
                 .WithStyle("justify-content: flex-end; gap: 8px; margin-top: 16px;")
                 .WithView(Controls.Button("Save")
                     .WithAppearance(Appearance.Accent)
-                    .WithClickAction(async saveCtx =>
+                    .WithClickAction(saveCtx =>
                     {
-                        var formValues = await saveCtx.Host.Stream
-                            .GetDataStream<Dictionary<string, object?>>(formId).FirstAsync();
-
-                        var memberId = formValues.GetValueOrDefault("memberId")?.ToString()?.Trim();
-                        if (string.IsNullOrEmpty(memberId))
-                        {
-                            var errorDialog = Controls.Dialog(
-                                Controls.Markdown("Please select a **Member**."),
-                                "Validation Error"
-                            ).WithSize("S").WithClosable(true);
-                            saveCtx.Host.UpdateArea(DialogControl.DialogArea, errorDialog);
-                            return;
-                        }
-
-                        var nodeFactory = saveCtx.Hub.ServiceProvider.GetRequiredService<IMeshService>();
-                        {
-                            var memberName = memberId.Split('/').Last();
-                            var memberNode = new MeshNode($"{memberName}_Membership", groupPath)
+                        saveCtx.Host.Stream.GetDataStream<Dictionary<string, object?>>(formId)
+                            .Take(1)
+                            .Subscribe(formValues =>
                             {
-                                NodeType = Configuration.GroupMembershipNodeType.NodeType,
-                                Name = $"{memberName} Membership",
-                                Content = new GroupMembership
+                                var memberId = formValues.GetValueOrDefault("memberId")?.ToString()?.Trim();
+                                if (string.IsNullOrEmpty(memberId))
                                 {
-                                    Member = memberId,
-                                    Groups = [new MembershipEntry { Group = groupPath }]
+                                    var errorDialog = Controls.Dialog(
+                                        Controls.Markdown("Please select a **Member**."),
+                                        "Validation Error"
+                                    ).WithSize("S").WithClosable(true);
+                                    saveCtx.Host.UpdateArea(DialogControl.DialogArea, errorDialog);
+                                    return;
                                 }
-                            };
-                            await nodeFactory.CreateNodeAsync(memberNode);
-                        }
 
-                        saveCtx.Host.UpdateArea(DialogControl.DialogArea, null!);
+                                var nodeFactory = saveCtx.Hub.ServiceProvider.GetRequiredService<IMeshService>();
+                                var memberName = memberId.Split('/').Last();
+                                var memberNode = new MeshNode($"{memberName}_Membership", groupPath)
+                                {
+                                    NodeType = Configuration.GroupMembershipNodeType.NodeType,
+                                    Name = $"{memberName} Membership",
+                                    Content = new GroupMembership
+                                    {
+                                        Member = memberId,
+                                        Groups = [new MembershipEntry { Group = groupPath }]
+                                    }
+                                };
+                                nodeFactory.CreateNode(memberNode).Subscribe(
+                                    _ => saveCtx.Host.UpdateArea(DialogControl.DialogArea, null!),
+                                    _ => { });
+                            });
+                        return Task.CompletedTask;
                     })));
 
         var dialog = Controls.Dialog(formContent, "Add Member")

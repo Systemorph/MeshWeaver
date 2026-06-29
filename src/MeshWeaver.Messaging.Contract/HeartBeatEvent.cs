@@ -4,9 +4,13 @@ namespace MeshWeaver.Messaging;
 /// Published by executing hubs (e.g., _Exec during AI streaming) to their parent hub
 /// to signal that the grain should stay alive during long-running operations.
 /// Handled by every mesh node hub — calls GrainKeepAliveCallback if registered.
-/// Emitters should stop sending after the first DeliveryFailure response to avoid
-/// periodic warning spam when the owner has no handler.
+/// <para>Marked <see cref="CanBeIgnoredAttribute"/> so hubs without a handler
+/// (test clients, host hubs, monolith infrastructure) don't generate a
+/// DeliveryFailure response — the heartbeat is fire-and-forget liveness
+/// signal; the receiver's lack of handler is fine.</para>
 /// </summary>
+[SystemMessage]
+[CanBeIgnored]
 public record HeartBeatEvent;
 
 /// <summary>

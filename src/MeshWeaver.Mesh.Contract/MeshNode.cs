@@ -1,6 +1,7 @@
 ﻿using System.Collections.Immutable;
 using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
+using System.Text.Json;
 using System.Text.Json.Serialization;
 using MeshWeaver.Layout;
 using MeshWeaver.Messaging;
@@ -184,12 +185,27 @@ public record MeshNode([property: Key] string Id, [property: Editable(false)] st
     public DateTimeOffset CreatedDate { get; init; }
 
     /// <summary>
+    /// Identity (ObjectId / email) of the user or system that created this node.
+    /// Stamped at creation time and never changed. Null for nodes that pre-date
+    /// the field (e.g. seeded by file-system import without an authenticated user).
+    /// </summary>
+    [Editable(false)]
+    public string? CreatedBy { get; init; }
+
+    /// <summary>
     /// Timestamp when this node was last modified.
     /// Used for cache invalidation of dynamically compiled assemblies.
     /// When reading from file system, defaults to file's last modified time if not specified in JSON.
     /// </summary>
     [Editable(false)]
     public DateTimeOffset LastModified { get; init; }
+
+    /// <summary>
+    /// Identity (ObjectId / email) of the user or system that last modified this node.
+    /// Stamped at every successful update; equal to <see cref="CreatedBy"/> immediately after creation.
+    /// </summary>
+    [Editable(false)]
+    public string? LastModifiedBy { get; init; }
 
     /// <summary>
     /// The hub version when this node was last saved.
@@ -210,19 +226,50 @@ public record MeshNode([property: Key] string Id, [property: Editable(false)] st
     /// The data model content for this node.
     /// The type depends on NodeType (e.g., Organization, Project, Story).
     /// </summary>
+    /// <remarks>
+    /// We deliberately do NOT mark this with <see cref="PreventLoggingAttribute"/>.
+    /// Doing so caused validator pipelines (e.g. DeleteNode + INodeValidator) to
+    /// observe a MeshNode whose Content was stripped — root cause is the
+    /// <see cref="MeshWeaver.Messaging.Serialization.LoggingTypeInfoResolver"/>'s
+    /// mutation of the inner resolver's <c>JsonTypeInfo.Properties</c> bleeding
+    /// into the main serializer's view of MeshNode (an <c>object?</c> property
+    /// participating in polymorphic resolution). The content payload is still
+    /// large; if you turn on Debug, mind that. The catch-block in
+    /// <see cref="MessageService"/> logs deliveries via the LogText helper, which
+    /// still uses LoggingSerializerOptions for the envelope.
+    /// </remarks>
     [Editable(false)]
     public object? Content { get; init; }
 
-    /// <summary>
-    /// File path to the dynamically compiled assembly for this node type.
-    /// </summary>
-    [JsonIgnore, NotMapped]
-    public string? AssemblyLocation { get; init; }
     /// <summary>
     /// Hub configuration function that configures the message hub for this node.
     /// </summary>
     [JsonIgnore, NotMapped]
     public Func<MessageHubConfiguration, MessageHubConfiguration>? HubConfiguration { get; init; }
+
+    /// <summary>
+    /// Runtime-only marker for an in-memory static NodeType <b>definition</b> that has been
+    /// dissociated from runtime node-serving because its partition is a DB-synced
+    /// <i>NodeType catalog</i> (Harness, Agent, Skill — see
+    /// <c>Doc/Architecture/NodeTypeCatalogs.md</c>). When <c>true</c>, this node:
+    /// <list type="bullet">
+    ///   <item>is NOT served as the runtime node at its <see cref="Path"/> — Postgres owns the
+    ///     <c>nodeType:NodeType</c> partition root (the serve seams
+    ///     <c>MeshDataSource.WithMeshNodes</c> / <c>MessageHubGrain.TryResolveStaticNode</c> /
+    ///     the <c>CreateNode</c> existing-node probe skip it);</item>
+    ///   <item>is NOT returned as a query result (<c>StaticNodeQueryProvider</c> excludes it),
+    ///     so the bare partition path resolves to exactly one node;</item>
+    ///   <item>IS still consulted as a <i>definition</i> via
+    ///     <see cref="MeshWeaver.Mesh.Services.StaticNodeProviderExtensions.FindStaticNode"/> —
+    ///     it supplies <see cref="HubConfiguration"/> by type name (enrichment of the catalog's
+    ///     instances) and proves the type exists.</item>
+    /// </list>
+    /// <c>[JsonIgnore]/[NotMapped]</c>: it is never persisted (the in-memory definition node is
+    /// never written to a partition) and, like <see cref="HubConfiguration"/>, is excluded from
+    /// value equality.
+    /// </summary>
+    [JsonIgnore, NotMapped]
+    public bool IsDefinitionOnly { get; init; }
 
     /// <summary>
     /// Pre-rendered HTML for markdown nodes.
@@ -251,6 +298,16 @@ public record MeshNode([property: Key] string Id, [property: Editable(false)] st
     /// </summary>
     public IReadOnlyCollection<string>? ExcludeFromContext { get; init; }
 
+    /// <summary>
+    /// How this node participates in static-repo sync (import/export).
+    /// <see cref="SyncBehavior.Include"/> (default) → import overwrites it from the static repo.
+    /// <see cref="SyncBehavior.ExcludeThisOnly"/> → this node is skipped, its children still sync.
+    /// <see cref="SyncBehavior.ExcludeThisAndChildren"/> → this node and all descendants are
+    /// skipped. This is how a user "claims" an imported node/subtree by editing it so the next
+    /// import won't clobber it. See <c>Doc/Architecture/StaticRepoImport.md</c>.
+    /// </summary>
+    public SyncBehavior SyncBehavior { get; init; } = SyncBehavior.Include;
+
 
     /// <summary>
     /// Gets or sets the global service configurations for this mesh node.
@@ -266,5 +323,152 @@ public record MeshNode([property: Key] string Id, [property: Editable(false)] st
     /// <returns>A new MeshNode with the added service configuration.</returns>
     public MeshNode WithGlobalServiceRegistry(Func<IServiceCollection, IServiceCollection> services)
         => this with { GlobalServiceConfigurations = GlobalServiceConfigurations.Add(services) };
+
+    /// <summary>
+    /// Content-aware value equality. <see cref="Content"/> is an <c>object?</c> that —
+    /// after a cross-hub sync round-trip, AND in the <c>IMeshNodeStreamCache</c>
+    /// whose hub does not know domain types — is a <see cref="JsonElement"/>. A
+    /// <c>JsonElement</c> has NO structural equality: two elements with byte-identical
+    /// JSON are never <c>.Equals</c>. The compiler-synthesized record equality therefore
+    /// reports EVERY re-synced node as "changed", defeating the
+    /// <c>SynchronizationStream.SetCurrent</c> dedup so the whole node re-broadcasts on
+    /// every push — the sync fan-out storm (a single thread node taking ~130
+    /// <c>SetCurrentRequest</c>s for one streamed round). We compare <c>JsonElement</c>
+    /// content with <see cref="JsonElement.DeepEquals(JsonElement, JsonElement)"/>.
+    ///
+    /// <para>The runtime-only wiring (<see cref="HubConfiguration"/>,
+    /// <see cref="GlobalServiceConfigurations"/>) is <c>[JsonIgnore]/[NotMapped]</c>,
+    /// reference-typed (a <c>Func</c> / a list of <c>Func</c>), and not part of the
+    /// node's persisted value — it is deliberately EXCLUDED from value equality.
+    /// Including it would compare delegates by reference and defeat the dedup just as
+    /// surely as the JsonElement problem.</para>
+    /// </summary>
+    public virtual bool Equals(MeshNode? other)
+    {
+        if (other is null) return false;
+        if (ReferenceEquals(this, other)) return true;
+        return Id == other.Id
+               && Namespace == other.Namespace
+               && MainNode == other.MainNode
+               && Name == other.Name
+               && Description == other.Description
+               && NodeType == other.NodeType
+               && Category == other.Category
+               && Icon == other.Icon
+               && Order == other.Order
+               && CreatedDate.Equals(other.CreatedDate)
+               && CreatedBy == other.CreatedBy
+               && LastModified.Equals(other.LastModified)
+               && LastModifiedBy == other.LastModifiedBy
+               && Version == other.Version
+               && State == other.State
+               && PreRenderedHtml == other.PreRenderedHtml
+               && DesiredId == other.DesiredId
+               && IsSatelliteType == other.IsSatelliteType
+               && SyncBehavior == other.SyncBehavior
+               && SequenceEqualOrNull(ExcludeFromContext, other.ExcludeFromContext)
+               && ContentEquals(Content, other.Content);
+    }
+
+    /// <summary>
+    /// Hashes a cheap, stable subset of the equality fields (id, namespace, node type, version,
+    /// last-modified, state). The subset guarantees equal nodes always hash equal without paying
+    /// the cost of hashing the full <c>Content</c> payload on every lookup.
+    /// </summary>
+    /// <returns>A hash code consistent with the type's equality.</returns>
+    public override int GetHashCode()
+    {
+        // Cheap, stable SUBSET of the equality fields — must be a subset so equal nodes
+        // always hash equal (Content's precise compare lives in Equals; hashing a large
+        // JsonElement per lookup would be wasteful and is unnecessary for correctness).
+        var hash = new HashCode();
+        hash.Add(Id);
+        hash.Add(Namespace);
+        hash.Add(NodeType);
+        hash.Add(Version);
+        hash.Add(LastModified);
+        hash.Add(State);
+        return hash.ToHashCode();
+    }
+
+    private static bool SequenceEqualOrNull(IReadOnlyCollection<string>? a, IReadOnlyCollection<string>? b)
+    {
+        if (ReferenceEquals(a, b)) return true;
+        if (a is null || b is null) return false;
+        return a.Count == b.Count && a.SequenceEqual(b);
+    }
+
+    /// <summary>
+    /// Equality for the untyped <see cref="Content"/>: structural JSON compare when both
+    /// sides are <see cref="JsonElement"/> (the cache / cross-hub-sync representation);
+    /// otherwise the content type's own <c>Equals</c>. Mixed (one JsonElement, one typed)
+    /// falls through to <c>false</c> — no <see cref="JsonSerializerOptions"/> is available
+    /// here to bridge representations, and a missed dedup there is merely a wasted push,
+    /// never incorrect.
+    /// </summary>
+    private static bool ContentEquals(object? a, object? b)
+    {
+        if (ReferenceEquals(a, b)) return true;
+        if (a is null || b is null) return false;
+        if (a is JsonElement ea && b is JsonElement eb)
+            return JsonElement.DeepEquals(ea, eb);
+        return a.Equals(b);
+    }
+}
+
+/// <summary>
+/// Visibility conventions for mesh nodes — the single source of truth every query
+/// backend (Postgres, Cosmos, storage-adapter, static) consults to decide whether a
+/// node appears in a given UI/query <c>context</c> (e.g. <c>"search"</c>, <c>"create"</c>).
+///
+/// <para>Two independent mechanisms hide a node:</para>
+/// <list type="number">
+///   <item><b>Explicit opt-out</b> — <see cref="MeshNode.ExcludeFromContext"/> on the node
+///     (or, for type definitions, inherited by every instance) lists the contexts to hide
+///     from. This is the only way to hide from non-search contexts such as <c>"create"</c>.</item>
+///   <item><b>Dotfile convention</b> — any node whose path has a segment starting with
+///     <c>'_'</c> (<c>{user}/_Memex/ModelProvider</c>, <c>{p}/_Access/…</c>, <c>{p}/_Thread/ThreadComposer</c>)
+///     is a hidden/system ("dotfile") node and is excluded from <c>"search"</c>, exactly the
+///     way Unix hides dot-folders. The <c>'_'</c> prefix means <i>hidden</i> ONLY — it is
+///     decoupled from satellite-table routing (only the registered suffixes in
+///     <see cref="PartitionDefinition.TableMappings"/> route to satellite tables; a fresh
+///     segment like <c>_Memex</c> stays in <c>mesh_nodes</c>).</item>
+/// </list>
+/// </summary>
+public static class MeshNodeVisibility
+{
+    /// <summary>The search context — the one context the dotfile convention auto-hides from.</summary>
+    public const string SearchContext = "search";
+
+    /// <summary>
+    /// True when <paramref name="path"/> has any segment starting with <c>'_'</c> — a
+    /// hidden/system ("dotfile") path. Empty/null is not hidden.
+    /// </summary>
+    public static bool IsHiddenPath(string? path)
+    {
+        if (string.IsNullOrEmpty(path)) return false;
+        var start = 0;
+        for (var i = 0; i <= path.Length; i++)
+        {
+            if (i == path.Length || path[i] == '/')
+            {
+                if (i > start && path[start] == '_') return true;
+                start = i + 1;
+            }
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// True when <paramref name="node"/> must be hidden from <paramref name="context"/> —
+    /// either by its explicit <see cref="MeshNode.ExcludeFromContext"/> opt-out, or (for
+    /// the <see cref="SearchContext"/>) because it lives on a hidden dotfile path.
+    /// </summary>
+    public static bool IsExcludedFromContext(this MeshNode node, string? context)
+    {
+        if (string.IsNullOrEmpty(context)) return false;
+        if (node.ExcludeFromContext?.Contains(context) == true) return true;
+        return context == SearchContext && IsHiddenPath(node.Path);
+    }
 }
 

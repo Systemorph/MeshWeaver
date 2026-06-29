@@ -14,6 +14,10 @@ public class InProcessMeshChangeFeed : IMeshChangeFeed, IDisposable
     private readonly Subject<MeshChangeEvent> _subject = new();
     private bool _disposed;
 
+    /// <summary>
+    /// Publishes a mesh change event to all local subscribers (no-op once disposed).
+    /// </summary>
+    /// <param name="change">The change event to publish.</param>
     public void Publish(MeshChangeEvent change)
     {
         if (!_disposed)
@@ -31,6 +35,12 @@ public class InProcessMeshChangeFeed : IMeshChangeFeed, IDisposable
             _subject.OnNext(change);
     }
 
+    /// <summary>
+    /// Subscribes a handler to mesh change events, optionally filtered by change kind.
+    /// </summary>
+    /// <param name="handler">The callback invoked for each matching change event.</param>
+    /// <param name="filter">When set, only events of this kind are delivered; otherwise all events are delivered.</param>
+    /// <returns>A disposable that ends the subscription when disposed.</returns>
     public IDisposable Subscribe(Action<MeshChangeEvent> handler, MeshChangeKind? filter = null)
     {
         if (filter == null)
@@ -44,6 +54,7 @@ public class InProcessMeshChangeFeed : IMeshChangeFeed, IDisposable
         });
     }
 
+    /// <inheritdoc />
     public void Dispose()
     {
         if (_disposed) return;

@@ -1,0 +1,16 @@
+﻿{
+    "id":  "2025",
+    "namespace":  "PensionFund/Year",
+    "name":  "2025",
+    "nodeType":  "PensionFund/Year",
+    "category":  "Years",
+    "description":  "Reporting year 2025 (open)",
+    "order":  2,
+    "icon":  "\u003csvg xmlns=\u0027http://www.w3.org/2000/svg\u0027 viewBox=\u00270 0 24 24\u0027 fill=\u0027none\u0027 stroke=\u0027currentColor\u0027 stroke-width=\u00272\u0027\u003e\u003crect x=\u00273\u0027 y=\u00274\u0027 width=\u002718\u0027 height=\u002717\u0027 rx=\u00272\u0027/\u003e\u003cpath d=\u0027M3 9h18M8 2v4M16 2v4\u0027/\u003e\u003c/svg\u003e",
+    "isPersistent":  true,
+    "content":  {
+                    "$type":  "Year",
+                    "value":  2025,
+                    "closed":  false
+                }
+}

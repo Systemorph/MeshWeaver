@@ -3,8 +3,6 @@ using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Threading;
 using System.Threading.Tasks;
-using FluentAssertions;
-using FluentAssertions.Extensions;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
@@ -36,7 +34,7 @@ public class CessionLayoutAreaTest(ITestOutputHelper output) : MonolithMeshTestB
             });
 
     [Fact]
-    public async Task CessionEngine_ProducesCorrectResults()
+    public void CessionEngine_ProducesCorrectResults()
     {
         // This test verifies the business logic independently
         var layer = BusinessRules.CessionSampleData.Layer;

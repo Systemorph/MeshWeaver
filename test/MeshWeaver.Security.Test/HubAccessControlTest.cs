@@ -3,8 +3,7 @@ using System.Collections.Generic;
 using System.Reactive.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using FluentAssertions;
-using FluentAssertions.Extensions;
+using System.Reactive.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Data.Validation;
 using MeshWeaver.Graph;
@@ -25,6 +24,10 @@ namespace MeshWeaver.Security.Test;
 /// </summary>
 public class HubAccessControlTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
+    // Each [Fact] uses a distinct VUser name (testVUser / anonUser / guest42 /
+    // guest99); SecuredHub is fixture-time and never mutated. Safe to share.
+    protected override bool ShareMeshAcrossTests => true;
+
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => ConfigureMeshBase(builder)
             .AddRowLevelSecurity()
@@ -35,7 +38,7 @@ public class HubAccessControlTest(ITestOutputHelper output) : MonolithMeshTestBa
 
     /// <summary>
     /// When a subscriber sends a SubscribeRequest to a hub whose Read validator rejects it,
-    /// the error should propagate as an exception on the stream — not cause a silent timeout.
+    /// the error should propagate as an exception on the stream â€” not cause a silent timeout.
     /// </summary>
     [Fact(Timeout = 20000)]
     public async Task SubscribeRequest_RejectedByValidator_PropagatesException()
@@ -43,10 +46,7 @@ public class HubAccessControlTest(ITestOutputHelper output) : MonolithMeshTestBa
         var client = GetClient();
         var hubAddress = new Address("SecuredHub");
 
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(hubAddress),
-            TestContext.Current.CancellationToken);
+        await client.Observe(new PingRequest(), o => o.WithTarget(hubAddress)).Should().Emit();
 
         var subscriberHub = Mesh.ServiceProvider.CreateMessageHub(
             new Address("subscriber", "1"),
@@ -55,11 +55,12 @@ public class HubAccessControlTest(ITestOutputHelper output) : MonolithMeshTestBa
         var workspace = subscriberHub.GetWorkspace();
         var stream = workspace.GetRemoteStream<EntityStore>(hubAddress, new CollectionsReference("test"));
 
-        var act = async () => await stream
+        Func<Task> act = () => stream
+            .FirstAsync()
             .Timeout(5.Seconds())
-            .FirstAsync();
+            .ToTask();
 
-        var ex = await Assert.ThrowsAnyAsync<Exception>(act);
+        var ex = (await act.Should().ThrowAsync<Exception>()).Which;
         ex.Should().NotBeOfType<TimeoutException>(
             "subscription rejection should propagate as an exception, not cause a silent timeout");
         ex.ToString().Should().Contain("Access denied",
@@ -73,8 +74,6 @@ public class HubAccessControlTest(ITestOutputHelper output) : MonolithMeshTestBa
     [Fact(Timeout = 20000)]
     public async Task PortalHub_CanCreateVUserNode_WithImpersonateScope()
     {
-        var ct = TestContext.Current.CancellationToken;
-
         var portalHub = Mesh.ServiceProvider.CreateMessageHub(
             new Address("portal", "test1"),
             c => c);
@@ -95,7 +94,7 @@ public class HubAccessControlTest(ITestOutputHelper output) : MonolithMeshTestBa
 
         using (accessService.ImpersonateAsHub(portalHub))
         {
-            var created = await nodeFactory.CreateNodeAsync(vUserNode, ct);
+            var created = await nodeFactory.CreateNode(vUserNode).Should().Emit();
             created.Should().NotBeNull();
             created.Path.Should().Be("VUser/testVUser");
         }
@@ -108,8 +107,6 @@ public class HubAccessControlTest(ITestOutputHelper output) : MonolithMeshTestBa
     [Fact(Timeout = 20000)]
     public async Task NonPortalIdentity_CannotCreateVUserNode()
     {
-        var ct = TestContext.Current.CancellationToken;
-
         var nodeFactory = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
         var vUserNode = new MeshNode("anonUser", "VUser")
@@ -123,21 +120,19 @@ public class HubAccessControlTest(ITestOutputHelper output) : MonolithMeshTestBa
             }
         };
 
-        // "some-user" is not in the portal namespace — VUserAccessRule denies
-        var act = async () => await nodeFactory.CreateNodeAsync(vUserNode, ct);
+        // "some-user" is not in the portal namespace â€” VUserAccessRule denies
+        Func<Task> act = () => nodeFactory.CreateNode(vUserNode).FirstAsync().ToTask();
         await act.Should().ThrowAsync<Exception>();
     }
 
     /// <summary>
     /// A portal hub posts CreateNodeRequest directly with ImpersonateAsHub().
-    /// The hub's address becomes the identity via the post pipeline — no IMeshService needed.
+    /// The hub's address becomes the identity via the post pipeline â€” no IMeshService needed.
     /// This mirrors how VirtualUserMiddleware creates VUser nodes.
     /// </summary>
     [Fact(Timeout = 20000)]
     public async Task PortalHub_ImpersonateAsHub_CanCreateVUser()
     {
-        var ct = TestContext.Current.CancellationToken;
-
         // Create a portal hub
         var portalHub = Mesh.ServiceProvider.CreateMessageHub(
             new Address("portal", "mysite"),
@@ -154,12 +149,10 @@ public class HubAccessControlTest(ITestOutputHelper output) : MonolithMeshTestBa
             }
         };
 
-        // Post CreateNodeRequest directly with ImpersonateAsHub() — bypasses IMeshService.
+        // Post CreateNodeRequest directly with ImpersonateAsHub() â€” bypasses IMeshService.
         // Target the mesh hub where CreateNodeRequest handler is registered.
-        var response = await portalHub.AwaitResponse(
-            new CreateNodeRequest(vUserNode),
-            o => o.WithTarget(Mesh.Address).ImpersonateAsHub(),
-            ct);
+        var response = await portalHub.Observe(new CreateNodeRequest(vUserNode), o => o.WithTarget(Mesh.Address).ImpersonateAsHub())
+            .Should().Emit();
 
         response.Message.Success.Should().BeTrue(
             "portal hub should be allowed to create VUser nodes via ImpersonateAsHub()");
@@ -174,8 +167,6 @@ public class HubAccessControlTest(ITestOutputHelper output) : MonolithMeshTestBa
     [Fact(Timeout = 20000)]
     public async Task NonPortalHub_ImpersonateAsHub_CannotCreateVUser()
     {
-        var ct = TestContext.Current.CancellationToken;
-
         // Create a non-portal hub
         var analyticsHub = Mesh.ServiceProvider.CreateMessageHub(
             new Address("analytics", "hub1"),
@@ -192,12 +183,10 @@ public class HubAccessControlTest(ITestOutputHelper output) : MonolithMeshTestBa
             }
         };
 
-        // Post CreateNodeRequest with ImpersonateAsHub() — non-portal identity should be denied.
+        // Post CreateNodeRequest with ImpersonateAsHub() â€” non-portal identity should be denied.
         // Target the mesh hub where CreateNodeRequest handler is registered.
-        var response = await analyticsHub.AwaitResponse(
-            new CreateNodeRequest(vUserNode),
-            o => o.WithTarget(Mesh.Address).ImpersonateAsHub(),
-            ct);
+        var response = await analyticsHub.Observe(new CreateNodeRequest(vUserNode), o => o.WithTarget(Mesh.Address).ImpersonateAsHub())
+            .Should().Emit();
 
         response.Message.Success.Should().BeFalse(
             "non-portal hub should be denied when creating VUser nodes");
@@ -207,8 +196,8 @@ public class HubAccessControlTest(ITestOutputHelper output) : MonolithMeshTestBa
     {
         public IReadOnlyCollection<DataOperation> SupportedOperations => [DataOperation.Read];
 
-        public Task<DataValidationResult> ValidateAsync(DataValidationContext context, CancellationToken ct)
-            => Task.FromResult(DataValidationResult.Invalid(
+        public IObservable<DataValidationResult> Validate(DataValidationContext context)
+            => Observable.Return(DataValidationResult.Invalid(
                 "Access denied: no read permissions",
                 DataValidationRejectionReason.Unauthorized));
     }

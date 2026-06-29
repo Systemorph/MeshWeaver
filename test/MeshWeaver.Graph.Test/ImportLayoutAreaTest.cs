@@ -2,9 +2,6 @@ using System;
 using System.Linq;
 using System.Reactive.Linq;
 using System.Text.Json;
-using System.Threading.Tasks;
-using FluentAssertions;
-using FluentAssertions.Extensions;
 using MeshWeaver.Data;
 using MeshWeaver.Fixture;
 using MeshWeaver.Hosting.Persistence;
@@ -56,8 +53,7 @@ public class ImportLayoutAreaTest(ITestOutputHelper output) : HubTestBase(output
 
         var control = await stream
             .GetControlStream(reference.Area!)
-            .Timeout(5.Seconds())
-            .FirstAsync(x => x != null);
+            .Should().Within(5.Seconds()).Match(x => x != null);
 
         control.Should().BeOfType<StackControl>();
     }
@@ -72,8 +68,7 @@ public class ImportLayoutAreaTest(ITestOutputHelper output) : HubTestBase(output
 
         var control = await stream
             .GetControlStream(reference.Area!)
-            .Timeout(5.Seconds())
-            .FirstAsync(x => x != null);
+            .Should().Within(5.Seconds()).Match(x => x != null);
 
         var stack = control.Should().BeOfType<StackControl>().Subject;
         // Should have: H2 header, namespace picker, source radio group,
@@ -92,8 +87,7 @@ public class ImportLayoutAreaTest(ITestOutputHelper output) : HubTestBase(output
 
         var control = await stream
             .GetControlStream(reference.Area!)
-            .Timeout(5.Seconds())
-            .FirstAsync(x => x != null);
+            .Should().Within(5.Seconds()).Match(x => x != null);
 
         var stack = (StackControl)control!;
         var areas = stack.Areas.ToList();
@@ -107,8 +101,7 @@ public class ImportLayoutAreaTest(ITestOutputHelper output) : HubTestBase(output
 
             var areaControl = await stream
                 .GetControlStream(areaName)
-                .Timeout(3.Seconds())
-                .FirstAsync(x => x != null);
+                .Should().Within(3.Seconds()).Match(x => x != null);
 
             if (areaControl is MeshNodePickerControl picker && picker.Label?.ToString() == "Destination Namespace")
             {
@@ -130,8 +123,7 @@ public class ImportLayoutAreaTest(ITestOutputHelper output) : HubTestBase(output
 
         var control = await stream
             .GetControlStream(reference.Area!)
-            .Timeout(5.Seconds())
-            .FirstAsync(x => x != null);
+            .Should().Within(5.Seconds()).Match(x => x != null);
 
         var stack = (StackControl)control!;
         var areas = stack.Areas.ToList();
@@ -145,8 +137,7 @@ public class ImportLayoutAreaTest(ITestOutputHelper output) : HubTestBase(output
 
             var areaControl = await stream
                 .GetControlStream(areaName)
-                .Timeout(3.Seconds())
-                .FirstAsync(x => x != null);
+                .Should().Within(3.Seconds()).Match(x => x != null);
 
             if (areaControl is RadioGroupControl)
             {
@@ -164,8 +155,7 @@ public class ImportLayoutAreaTest(ITestOutputHelper output) : HubTestBase(output
 
                     var nestedControl = await stream
                         .GetControlStream(nestedName)
-                        .Timeout(3.Seconds())
-                        .FirstAsync(x => x != null);
+                        .Should().Within(3.Seconds()).Match(x => x != null);
 
                     if (nestedControl is RadioGroupControl)
                     {
@@ -190,8 +180,7 @@ public class ImportLayoutAreaTest(ITestOutputHelper output) : HubTestBase(output
 
         var control = await stream
             .GetControlStream(reference.Area!)
-            .Timeout(5.Seconds())
-            .FirstAsync(x => x != null);
+            .Should().Within(5.Seconds()).Match(x => x != null);
 
         var stack = (StackControl)control!;
         var areas = stack.Areas.ToList();
@@ -204,8 +193,7 @@ public class ImportLayoutAreaTest(ITestOutputHelper output) : HubTestBase(output
 
             var areaControl = await stream
                 .GetControlStream(areaName)
-                .Timeout(3.Seconds())
-                .FirstAsync(x => x != null);
+                .Should().Within(3.Seconds()).Match(x => x != null);
 
             if (areaControl is ButtonControl button && button.Data?.ToString() == "Cancel")
             {

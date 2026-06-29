@@ -6,7 +6,7 @@ Memex.Portal.Shared is a Razor class library containing the shared configuration
 ## Features
 - **Portal configuration** (`ConfigureMemexServices`, `ConfigureMemexMesh`, `ConfigureMemexPortal`) — wires up Blazor, AI providers, graph, documentation, persistence, and content collections
 - **Authentication** — supports dev login, Microsoft Identity (Entra ID), Google, LinkedIn, Apple, and API token auth for MCP
-- **Organization domain** — `Organization` content type with custom layout areas, access rules, partition provisioning, and post-creation handlers
+- **Space integration** — composes around the `Space` NodeType shipped by `MeshWeaver.Blazor.Portal` (custom layout areas, access rules, post-creation handlers); per-tenant partition schemas are auto-created lazily on first write via `public.ensure_partition_schema`
 - **UI pages** — Login, DevLogin, Onboarding, Welcome, Search, and the root `App.razor` / `Routes.razor`
 - **AI integration** — Azure Foundry Claude, Azure OpenAI, Copilot, Claude Code, and web search plugin registration
 

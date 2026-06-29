@@ -2,8 +2,6 @@ using System;
 using System.Reactive.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
-using FluentAssertions;
-using FluentAssertions.Extensions;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
@@ -18,6 +16,7 @@ using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
+using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Security.Test;
 
 /// <summary>
@@ -32,21 +31,19 @@ public class LayoutAreaIdentityTest(ITestOutputHelper output) : MonolithMeshTest
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => ConfigureMeshBase(builder)
             .AddMeshNodes(
-                new MeshNode("IdentityTest") { Name = "Identity Test" },
-                new MeshNode("Target", "IdentityTest") { Name = "Target Node" }
+                // Explicit HubConfiguration so the routing config resolver
+                // doesn't need to compile a NodeType — the default node hub
+                // pipeline (AddAccessControlPipeline + GetPermissionRequest
+                // handler) is applied via ConfigureDefaultNodeHub on top.
+                new MeshNode("IdentityTest") { Name = "Identity Test", HubConfiguration = c => c },
+                new MeshNode("Target", "IdentityTest") { Name = "Target Node", HubConfiguration = c => c },
+                // Pre-seeded role assignments (replaces SetupAccessRightsAsync mutations).
+                AssignmentNodeFactory.UserRole(TestUsers.Admin.ObjectId, "Admin", scope: "IdentityTest"),
+                AssignmentNodeFactory.UserRole("Viewer1", "Viewer", scope: "IdentityTest")
             )
             .ConfigureDefaultNodeHub(c => c.AddDefaultLayoutAreas());
 
-    protected override async Task SetupAccessRightsAsync()
-    {
-        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
-        await securityService.AddUserRoleAsync(
-            TestUsers.Admin.ObjectId, "Admin", "IdentityTest", "system",
-            TestContext.Current.CancellationToken);
-        await securityService.AddUserRoleAsync(
-            "Viewer1", "Viewer", "IdentityTest", "system",
-            TestContext.Current.CancellationToken);
-    }
+    protected override Task SetupAccessRightsAsync() => Task.CompletedTask;
 
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
         => base.ConfigureClient(configuration).AddLayoutClient();
@@ -65,15 +62,13 @@ public class LayoutAreaIdentityTest(ITestOutputHelper output) : MonolithMeshTest
         var client = GetClientWithUser("Viewer1");
         var nodeAddress = new Address(NodePath);
 
-        await client.AwaitResponse(
-            new PingRequest(), o => o.WithTarget(nodeAddress),
-            TestContext.Current.CancellationToken);
+        await client.Observe(new PingRequest(), o => o.WithTarget(nodeAddress)).Should().Emit();
 
         var workspace = client.GetWorkspace();
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             nodeAddress, new LayoutAreaReference(MeshNodeLayoutAreas.OverviewArea));
 
-        var result = await stream.Timeout(3.Seconds()).FirstAsync();
+        var result = await stream.Should().Within(3.Seconds()).Emit();
         result.Should().NotBeNull("Viewer1 has Read permission and should receive layout data");
     }
 
@@ -83,17 +78,15 @@ public class LayoutAreaIdentityTest(ITestOutputHelper output) : MonolithMeshTest
         var client = GetClientWithUser("NoAccess");
         var nodeAddress = new Address(NodePath);
 
-        await client.AwaitResponse(
-            new PingRequest(), o => o.WithTarget(nodeAddress),
-            TestContext.Current.CancellationToken);
+        await client.Observe(new PingRequest(), o => o.WithTarget(nodeAddress)).Should().Emit();
 
         var workspace = client.GetWorkspace();
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             nodeAddress, new LayoutAreaReference(MeshNodeLayoutAreas.OverviewArea));
 
-        Func<Task> act = async () => await stream.Timeout(3.Seconds()).FirstAsync();
+        Func<Task> act = () => stream.FirstAsync().Timeout(3.Seconds()).ToTask();
 
-        var ex = await Assert.ThrowsAsync<DeliveryFailureException>(act);
+        var ex = (await act.Should().ThrowAsync<DeliveryFailureException>()).Which;
         ex.Message.Should().Contain("Access denied");
         ex.Message.Should().Contain("NoAccess");
     }
@@ -112,16 +105,14 @@ public class LayoutAreaIdentityTest(ITestOutputHelper output) : MonolithMeshTest
         // When the client creates a remote stream, the SubscribeRequest
         // should have Identity = "Viewer1" (stamped from CircuitContext)
         var nodeAddress = new Address(NodePath);
-        await client.AwaitResponse(
-            new PingRequest(), o => o.WithTarget(nodeAddress),
-            TestContext.Current.CancellationToken);
+        await client.Observe(new PingRequest(), o => o.WithTarget(nodeAddress)).Should().Emit();
 
         var workspace = client.GetWorkspace();
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             nodeAddress, new LayoutAreaReference(MeshNodeLayoutAreas.OverviewArea));
 
         // If we get data (not access denied), the Identity was correctly resolved
-        var result = await stream.Timeout(3.Seconds()).FirstAsync();
+        var result = await stream.Should().Within(3.Seconds()).Emit();
         result.Should().NotBeNull(
             "SubscribeRequest.Identity should carry 'Viewer1' which has Read permission");
     }
@@ -129,10 +120,8 @@ public class LayoutAreaIdentityTest(ITestOutputHelper output) : MonolithMeshTest
     [Fact(Timeout = 10000)]
     public async Task ViewerUser_CannotUpdate()
     {
-        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
-
-        var perms = await securityService.GetEffectivePermissionsAsync(
-            "IdentityTest/Target", "Viewer1", TestContext.Current.CancellationToken);
+        var perms = await Mesh.GetEffectivePermissions("IdentityTest/Target", "Viewer1")
+            .Should().Match(p => p.HasFlag(Permission.Read));
 
         perms.HasFlag(Permission.Read).Should().BeTrue("Viewer1 has Read");
         perms.HasFlag(Permission.Update).Should().BeFalse("Viewer1 lacks Update");

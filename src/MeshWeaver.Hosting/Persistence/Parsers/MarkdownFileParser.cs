@@ -27,9 +27,11 @@ public partial class MarkdownFileParser : IFileFormatParser
         .ConfigureDefaultValuesHandling(DefaultValuesHandling.OmitNull | DefaultValuesHandling.OmitDefaults)
         .Build();
 
+    /// <inheritdoc />
     public IReadOnlyList<string> SupportedExtensions => [".md"];
 
-    public Task<MeshNode?> ParseAsync(string filePath, string content, string relativePath, CancellationToken ct = default)
+    /// <inheritdoc />
+    public MeshNode? Parse(string filePath, string content, string relativePath)
     {
         // Derive id and namespace from path
         var (id, ns) = DeriveIdAndNamespace(relativePath, filePath);
@@ -39,16 +41,102 @@ public partial class MarkdownFileParser : IFileFormatParser
         var yamlBlock = document.Descendants<YamlFrontMatterBlock>().FirstOrDefault();
 
         MarkdownFrontMatter? frontMatter = null;
+        string? rawYaml = null;
+        var yamlDeserializerThrew = false;
         if (yamlBlock != null)
         {
+            rawYaml = yamlBlock.Lines.ToString();
             try
             {
-                var yamlContent = yamlBlock.Lines.ToString();
-                frontMatter = YamlDeserializer.Deserialize<MarkdownFrontMatter>(yamlContent);
+                frontMatter = YamlDeserializer.Deserialize<MarkdownFrontMatter>(rawYaml);
+                frontMatter?.NormalizeAliases();
             }
             catch
             {
-                // If YAML parsing fails, use defaults
+                yamlDeserializerThrew = true;
+                // If YAML parsing fails, fall through to the regex-based extractor
+                // below — defensive against environment-specific YamlDotNet quirks
+                // (line endings, encoding, type-coercion edge cases) that would
+                // otherwise silently downgrade NodeType to "Markdown".
+            }
+        }
+
+        // Defensive frontmatter extractor: fires when (a) Markdig failed to
+        // detect the YamlFrontMatterBlock (rawYaml is null) — the CI-Linux
+        // case where Markdig silently misses a valid `---\nName: …\n---`
+        // block — OR (b) Markdig found the block but YamlDotNet threw on
+        // it (encoding / line-ending quirks). In both cases we fall back to
+        // a regex over the raw `---…---` region, but with a value-shape
+        // gate that rejects YAML sequence/mapping starters (`[`, `{`) so
+        // the <c>Parse_WithMalformedYaml_UsesDefaults</c> repro
+        // (<c>Name: [invalid yaml</c>) still hits id-fallback.
+        var needsDefensiveExtractor = rawYaml is null || yamlDeserializerThrew;
+        var defensiveSearchScope = needsDefensiveExtractor
+            ? (rawYaml ?? ExtractLeadingFrontmatter(content))
+            : null;
+        if (!string.IsNullOrEmpty(defensiveSearchScope))
+        {
+            string? RegexField(string fieldName)
+            {
+                var match = System.Text.RegularExpressions.Regex.Match(
+                    defensiveSearchScope,
+                    $@"^\s*{System.Text.RegularExpressions.Regex.Escape(fieldName)}\s*:\s*(?<value>[^\r\n#]+?)\s*$",
+                    System.Text.RegularExpressions.RegexOptions.Multiline
+                    | System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                if (!match.Success) return null;
+                var raw = match.Groups["value"].Value.Trim();
+                // Reject YAML sequence/mapping starters — these indicate the
+                // value is structured (and probably malformed since YamlDotNet
+                // either threw or skipped the field). Single scalar values
+                // never legitimately start with `[` or `{` in our frontmatter.
+                if (raw.Length > 0 && (raw[0] == '[' || raw[0] == '{')) return null;
+                return raw.Trim('"', '\'');
+            }
+
+            if (string.IsNullOrEmpty(frontMatter?.NodeType))
+            {
+                var v = RegexField("NodeType");
+                if (!string.IsNullOrEmpty(v))
+                {
+                    frontMatter ??= new MarkdownFrontMatter();
+                    frontMatter.NodeType = v;
+                }
+            }
+            if (string.IsNullOrEmpty(frontMatter?.Name))
+            {
+                var v = RegexField("Name") ?? RegexField("Title");
+                if (!string.IsNullOrEmpty(v))
+                {
+                    frontMatter ??= new MarkdownFrontMatter();
+                    frontMatter.Name = v;
+                }
+            }
+            if (string.IsNullOrEmpty(frontMatter?.Category))
+            {
+                var v = RegexField("Category");
+                if (!string.IsNullOrEmpty(v))
+                {
+                    frontMatter ??= new MarkdownFrontMatter();
+                    frontMatter.Category = v;
+                }
+            }
+            if (string.IsNullOrEmpty(frontMatter?.Icon))
+            {
+                var v = RegexField("Icon") ?? RegexField("Thumbnail");
+                if (!string.IsNullOrEmpty(v))
+                {
+                    frontMatter ??= new MarkdownFrontMatter();
+                    frontMatter.Icon = v;
+                }
+            }
+            if (string.IsNullOrEmpty(frontMatter?.State))
+            {
+                var v = RegexField("State");
+                if (!string.IsNullOrEmpty(v))
+                {
+                    frontMatter ??= new MarkdownFrontMatter();
+                    frontMatter.State = v;
+                }
             }
         }
 
@@ -71,12 +159,6 @@ public partial class MarkdownFileParser : IFileFormatParser
             lastModified = DateTimeOffset.UtcNow;
         }
 
-        // Use Published date if available, otherwise file last modified
-        if (frontMatter?.Published != null && DateTimeOffset.TryParse(frontMatter.Published, out var publishedDate))
-        {
-            lastModified = publishedDate;
-        }
-
         // Parse markdown and create MarkdownContent with pre-rendered HTML and code submissions
         var fullNodePath = string.IsNullOrEmpty(ns) ? id : $"{ns}/{id}";
         var markdownDocument = MarkdownContent.Parse(markdownContent, relativePath, fullNodePath) with
@@ -84,15 +166,18 @@ public partial class MarkdownFileParser : IFileFormatParser
             Authors = frontMatter?.Authors,
             Tags = frontMatter?.Tags,
             Thumbnail = frontMatter?.Thumbnail,
-            Abstract = frontMatter?.Abstract ?? frontMatter?.Description
+            Abstract = frontMatter?.Abstract
         };
 
         var node = new MeshNode(id, ns)
         {
             NodeType = frontMatter?.NodeType ?? "Markdown",
-            // Name: prefer Name, then Title (legacy), then id
-            Name = frontMatter?.Name ?? frontMatter?.Title ?? id,
+            Name = frontMatter?.Name ?? id,
             Category = frontMatter?.Category,
+            // Surface the YAML Abstract (aka the legacy `Description:` alias) on the
+            // node's Description column so catalog/TOC cards and Postgres search see
+            // a real one-line summary. The Abstract also stays inside MarkdownContent.
+            Description = frontMatter?.Abstract,
             // Icon: prefer Icon, then Thumbnail (fallback), resolve relative paths
             Icon = ResolveIcon(frontMatter?.Icon ?? frontMatter?.Thumbnail, ns),
             State = ParseState(frontMatter?.State),
@@ -101,10 +186,11 @@ public partial class MarkdownFileParser : IFileFormatParser
             PreRenderedHtml = markdownDocument.PrerenderedHtml
         };
 
-        return Task.FromResult<MeshNode?>(node);
+        return node;
     }
 
-    public Task<string> SerializeAsync(MeshNode node, CancellationToken ct = default)
+    /// <inheritdoc />
+    public string Serialize(MeshNode node)
     {
         var sb = new StringBuilder();
 
@@ -122,7 +208,9 @@ public partial class MarkdownFileParser : IFileFormatParser
             Authors = mdContent?.Authors?.ToList(),
             Tags = mdContent?.Tags?.ToList(),
             Thumbnail = mdContent?.Thumbnail,
-            Abstract = mdContent?.Abstract
+            // Prefer the Content abstract; fall back to the node Description so a
+            // Description set directly on the node still round-trips to frontmatter.
+            Abstract = mdContent?.Abstract ?? node.Description
         };
 
         // Only write YAML block if there's meaningful content
@@ -160,9 +248,10 @@ public partial class MarkdownFileParser : IFileFormatParser
             sb.Append(markdownText);
         }
 
-        return Task.FromResult(sb.ToString());
+        return sb.ToString();
     }
 
+    /// <inheritdoc />
     public bool CanSerialize(MeshNode node)
     {
         // Handle nodes with NodeType "Markdown", MarkdownContent content, string content,
@@ -272,8 +361,63 @@ public partial class MarkdownFileParser : IFileFormatParser
     }
 
     /// <summary>
-    /// YAML front matter model for markdown files.
-    /// Supports both new MeshNode properties and legacy Article properties for backwards compatibility.
+    /// Extracts the YAML frontmatter section from the start of a markdown file.
+    /// Returns the content between the first two `---` markers, or null if no
+    /// frontmatter block is found. Used as a Markdig-independent fallback when
+    /// the structured frontmatter detection silently fails (CI-Linux YAML
+    /// extension quirks vs. the structurally identical file on Windows).
+    /// </summary>
+    private static string? ExtractLeadingFrontmatter(string content)
+    {
+        if (string.IsNullOrEmpty(content)) return null;
+        // Skip an optional UTF-8 BOM, then leading whitespace.
+        var i = 0;
+        if (content.Length > 0 && content[0] == '﻿') i = 1;
+        while (i < content.Length && (content[i] == '\n' || content[i] == '\r' || content[i] == ' '))
+            i++;
+        // Must start with a `---` line.
+        if (i + 3 > content.Length || content[i] != '-' || content[i + 1] != '-' || content[i + 2] != '-')
+            return null;
+        // Advance past the `---` and any chars until the end of that line.
+        i += 3;
+        while (i < content.Length && content[i] != '\n') i++;
+        if (i >= content.Length) return null;
+        i++; // past the newline
+        var startOfYaml = i;
+        // Scan for a closing `---` on its own line.
+        while (i < content.Length)
+        {
+            // Find the start of a line.
+            var lineStart = i;
+            // Skip any leading spaces on the line.
+            while (i < content.Length && content[i] == ' ') i++;
+            if (i + 3 <= content.Length
+                && content[i] == '-' && content[i + 1] == '-' && content[i + 2] == '-')
+            {
+                // Confirm it's a closing marker (followed by EOL or whitespace+EOL).
+                var afterDashes = i + 3;
+                while (afterDashes < content.Length
+                    && (content[afterDashes] == ' ' || content[afterDashes] == '\t'))
+                    afterDashes++;
+                if (afterDashes >= content.Length
+                    || content[afterDashes] == '\n' || content[afterDashes] == '\r')
+                {
+                    return content.Substring(startOfYaml, lineStart - startOfYaml);
+                }
+            }
+            // Advance to next line.
+            while (i < content.Length && content[i] != '\n') i++;
+            if (i < content.Length) i++;
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// YAML front matter model for markdown files. Mirrors the canonical MeshNode
+    /// properties (Name, Category, Icon, State, NodeType) plus the markdown-specific
+    /// metadata captured on <see cref="MarkdownContent"/> (Authors, Tags, Thumbnail,
+    /// Abstract). Accepts the legacy aliases <c>Title</c> (→ Name) and
+    /// <c>Description</c> (→ Abstract) for files written before the field rename.
     /// </summary>
     private class MarkdownFrontMatter
     {
@@ -281,18 +425,28 @@ public partial class MarkdownFileParser : IFileFormatParser
         public string? NodeType { get; set; }
         public string? Name { get; set; }
         public string? Category { get; set; }
-        public string? Description { get; set; }
         public string? Icon { get; set; }
         public string? State { get; set; }
 
-        // Legacy Article properties (for backwards compatibility when reading)
-        public string? Title { get; set; }          // Maps to Name
-        public string? Abstract { get; set; }       // Maps to Description
-        public string? Published { get; set; }      // Maps to LastModified
-
-        // Article metadata (stored in MarkdownContent)
+        // MarkdownContent metadata
         public List<string>? Authors { get; set; }
         public List<string>? Tags { get; set; }
         public string? Thumbnail { get; set; }
+        public string? Abstract { get; set; }
+
+        // Legacy aliases. YamlDotNet doesn't follow C# property hierarchy, so we
+        // expose them as plain settable properties and fold them in below
+        // (NormalizeAliases) once deserialization completes. Pre-rename files
+        // (Title / Description) keep working without a one-shot migration script.
+        public string? Title { get; set; }
+        public string? Description { get; set; }
+
+        public void NormalizeAliases()
+        {
+            if (string.IsNullOrEmpty(Name) && !string.IsNullOrEmpty(Title))
+                Name = Title;
+            if (string.IsNullOrEmpty(Abstract) && !string.IsNullOrEmpty(Description))
+                Abstract = Description;
+        }
     }
 }

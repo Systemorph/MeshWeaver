@@ -1,0 +1,139 @@
+---
+apiVersion: "v1"
+kind: "ConfigMap"
+metadata:
+  name: "memex-portal-config"
+  labels:
+    app.kubernetes.io/name: "{{ .Chart.Name }}"
+    app.kubernetes.io/component: "memex-portal"
+    app.kubernetes.io/instance: "{{ .Release.Name }}"
+data:
+  MEMEX_HOST: "{{ .Values.config.memex_portal.MEMEX_HOST }}"
+  MEMEX_PORT: "{{ .Values.config.memex_portal.MEMEX_PORT }}"
+  MEMEX_USERNAME: "{{ .Values.config.memex_portal.MEMEX_USERNAME }}"
+  MEMEX_JDBCCONNECTIONSTRING: "{{ .Values.config.memex_portal.MEMEX_JDBCCONNECTIONSTRING }}"
+  MEMEX_DATABASENAME: "{{ .Values.config.memex_portal.MEMEX_DATABASENAME }}"
+  ASPNETCORE_HTTP_PORTS: "{{ .Values.config.memex_portal.ASPNETCORE_HTTP_PORTS }}"
+  Deployment__Backend: "{{ .Values.config.memex_portal.Deployment__Backend }}"
+  Deployment__DataRoot: "{{ .Values.config.memex_portal.Deployment__DataRoot }}"
+  Deployment__Orleans__Clustering: "{{ .Values.config.memex_portal.Deployment__Orleans__Clustering }}"
+  Storage__Name: "{{ .Values.config.memex_portal.Storage__Name }}"
+  Storage__SourceType: "{{ .Values.config.memex_portal.Storage__SourceType }}"
+  Storage__BasePath: "{{ .Values.config.memex_portal.Storage__BasePath }}"
+  Graph__Storage__Type: "{{ .Values.config.memex_portal.Graph__Storage__Type }}"
+  Graph__Storage__BasePath: "{{ .Values.config.memex_portal.Graph__Storage__BasePath }}"
+  Mcp__BaseUrl: "{{ .Values.config.memex_portal.Mcp__BaseUrl }}"
+  # ---- Instance identity (tab title + favicon badge) — optional -------------
+  # When InstanceName is set, the browser tab title becomes that name and the
+  # favicon becomes a distinct colored badge (instance initial), so Local / Test /
+  # Prod tabs are obvious at a glance. Empty (prod) = default Memex branding.
+  # InstanceColor is the badge fill (hex, e.g. "#f59e0b"); empty = amber default.
+  Portal__InstanceName: "{{ .Values.config.memex_portal.Portal__InstanceName | default "" }}"
+  Portal__InstanceColor: "{{ .Values.config.memex_portal.Portal__InstanceColor | default "" }}"
+  # ---- Embeddings (vector search + content indexing) — optional -------------
+  # With an Endpoint set, the portal registers the embedding provider: search-bar queries hit
+  # the HNSW vector index AND the content-indexing pipeline activates (chunk→embed→store in the
+  # SEPARATE `contentindex` database on the same Postgres server). Empty = full-text (ILIKE)
+  # search only, content indexing inert. See PostgreSqlExtensions.
+  #   Provider="AzureFoundry" (default) → Cohere embed-v4 (needs ApiKey from secrets.yaml).
+  #   Provider="Ollama"                 → local on-host /v1/embeddings (bge-m3 etc., no key).
+  # Dimensions auto-derive from the model (bge-m3=1024, nomic-embed-text=768, embed-v-4-0=1536);
+  # changing them re-migrates the pgvector column + HNSW index on next startup.
+  Embedding__Provider: "{{ .Values.config.memex_portal.Embedding__Provider | default "" }}"
+  Embedding__Endpoint: "{{ .Values.config.memex_portal.Embedding__Endpoint | default "" }}"
+  Embedding__Model: "{{ .Values.config.memex_portal.Embedding__Model | default "" }}"
+  # ---- AI model providers (non-secret: endpoints + model catalog) ----------
+  # BuiltInLanguageModelProvider scans {Section}:Models / :Endpoint and emits the
+  # nodeType:LanguageModel mesh nodes the chat picker shows. Section names are the
+  # ones the catalog sources actually bind: "Anthropic" (claude) and "AzureFoundry"
+  # (open-weight multi-model /models endpoint). NOTE: NOT "AzureAIS" — nothing binds
+  # that section (the AppHost's AzureAIS__* env is dead config). Keys come from
+  # secrets.yaml. Leave a Models slot blank to drop that model.
+  Anthropic__Endpoint: "{{ .Values.config.memex_portal.Anthropic__Endpoint }}"
+  Anthropic__Models__0: "{{ .Values.config.memex_portal.Anthropic__Models__0 }}"
+  Anthropic__Models__1: "{{ .Values.config.memex_portal.Anthropic__Models__1 }}"
+  Anthropic__Models__2: "{{ .Values.config.memex_portal.Anthropic__Models__2 }}"
+  AzureFoundry__Endpoint: "{{ .Values.config.memex_portal.AzureFoundry__Endpoint }}"
+  AzureFoundry__Models__0: "{{ .Values.config.memex_portal.AzureFoundry__Models__0 }}"
+  AzureFoundry__Models__1: "{{ .Values.config.memex_portal.AzureFoundry__Models__1 }}"
+  AzureFoundry__Models__2: "{{ .Values.config.memex_portal.AzureFoundry__Models__2 }}"
+  # ---- OpenAI-compatible provider (self-hosted / local: Ollama, vLLM, LM Studio, …) ----
+  # Generic OpenAI-wire endpoint. Set Endpoint + Models (+ ApiKey in secrets) to seed a
+  # provider + LanguageModel nodes pointing at any OpenAI-compatible gateway. Empty = inert.
+  OpenAICompatible__Endpoint: "{{ .Values.config.memex_portal.OpenAICompatible__Endpoint | default "" }}"
+  OpenAICompatible__Models__0: "{{ .Values.config.memex_portal.OpenAICompatible__Models__0 | default "" }}"
+  OpenAICompatible__Models__1: "{{ .Values.config.memex_portal.OpenAICompatible__Models__1 | default "" }}"
+  # Tier → concrete model id (agents that declare ModelTier resolve through these).
+  ModelTier__Heavy: "{{ .Values.config.memex_portal.ModelTier__Heavy }}"
+  ModelTier__Standard: "{{ .Values.config.memex_portal.ModelTier__Standard }}"
+  ModelTier__Light: "{{ .Values.config.memex_portal.ModelTier__Light }}"
+  ModelTier__Utility: "{{ .Values.config.memex_portal.ModelTier__Utility }}"
+  # Per-user co-hosted Claude Code config root (the /mnt/users RWX share): each user's `claude`
+  # login + .credentials.json live under {root}/{userId}/.claude. Drives the Connect login dir.
+  ClaudeCode__ConfigDirRoot: "{{ .Values.config.memex_portal.ClaudeCode__ConfigDirRoot }}"
+  # ---- AI provider feature flags --------------------------------------------
+  # Gate whether each provider's catalog source is registered at all
+  # (MemexConfiguration: `if (features.Ai.Providers.Anthropic) AddAnthropic()`).
+  # Default "true" (provider on) so existing envs are unchanged; set "false"
+  # per-env to drop the provider entirely — no catalog source → it vanishes from
+  # the model picker and its Model/<id> nodes never seed. atioz sets this false
+  # (Claude there is per-user Claude Code, NOT a wired API provider).
+  Features__Ai__Providers__Anthropic: "{{ .Values.config.memex_portal.Features__Ai__Providers__Anthropic | default "true" }}"
+  # Same gate for the AzureFoundry (open-weight /models, e.g. DeepSeek) chat provider.
+  # Default "true" so existing envs keep DeepSeek; set "false" per-env to drop it from
+  # the picker (catalog source not registered). Does NOT affect embeddings, which are
+  # wired separately from Embedding__* — see MemexConfiguration.
+  Features__Ai__Providers__AzureFoundry: "{{ .Values.config.memex_portal.Features__Ai__Providers__AzureFoundry | default "true" }}"
+  # ---- AI: extra non-secret knobs (optional; default empty) -----------------
+  # Order is an int — empty string fails Int32 binding, so default to "0" (NOT "").
+  Anthropic__Order: "{{ .Values.config.memex_portal.Anthropic__Order | default "0" }}"
+  AzureAIS__Endpoint: "{{ .Values.config.memex_portal.AzureAIS__Endpoint | default "" }}"
+  AzureAIS__Order: "{{ .Values.config.memex_portal.AzureAIS__Order | default "0" }}"
+  # ---- Observability (OTLP collector) — optional ----------------------------
+  OTEL_EXPORTER_OTLP_ENDPOINT: "{{ .Values.config.memex_portal.OTEL_EXPORTER_OTLP_ENDPOINT | default "" }}"
+  OTEL_EXPORTER_OTLP_PROTOCOL: "{{ .Values.config.memex_portal.OTEL_EXPORTER_OTLP_PROTOCOL | default "" }}"
+  # ---- Sign-in (non-secret: provider client ids + mode) ---------------------
+  # A provider's button shows iff its ClientId is non-empty (AuthenticationBuilder
+  # no-ops on empty). Set a ClientId to "" to DISABLE that provider even when the
+  # image's appsettings.json ships a default (env overrides appsettings). Secrets
+  # (client secrets) come from the SecretProviderClass, not here.
+  Authentication__Provider: "{{ .Values.config.memex_portal.Authentication__Provider | default "" }}"
+  Authentication__EnableDevLogin: "{{ .Values.config.memex_portal.Authentication__EnableDevLogin | default "false" }}"
+  Authentication__Microsoft__ClientId: "{{ .Values.config.memex_portal.Authentication__Microsoft__ClientId | default "" }}"
+  Authentication__Microsoft__TenantId: "{{ .Values.config.memex_portal.Authentication__Microsoft__TenantId | default "" }}"
+  Authentication__Google__ClientId: "{{ .Values.config.memex_portal.Authentication__Google__ClientId | default "" }}"
+  Authentication__LinkedIn__ClientId: "{{ .Values.config.memex_portal.Authentication__LinkedIn__ClientId | default "" }}"
+  Social__LinkedIn__ClientId: "{{ .Values.config.memex_portal.Social__LinkedIn__ClientId | default "" }}"
+  # ---- Onboarding: invitation-only gate (first user always bootstraps) ------
+  Features__Onboarding__InvitationOnly: "{{ .Values.config.memex_portal.Features__Onboarding__InvitationOnly | default "false" }}"
+  # One-shot first-admin bootstrap secret. Empty = endpoint disabled. Set it, POST
+  # /bootstrap/first-admin?secret=...&email=..., then clear it. (Self-host / local only.)
+  Bootstrap__Secret: "{{ .Values.config.memex_portal.Bootstrap__Secret | default "" }}"
+  # ---- Static-repo → DB sync: which partitions are materialized into + served from the DB
+  # (instead of the in-memory static provider). Default = Doc, Agent, Provider, Harness, Skill.
+  # (The model catalog — providers + models + policy — imports into the top-level "Provider"
+  # partition; "Model" is kept as a legacy alias slot for backwards-compatible configs.) Override
+  # per-env by setting these keys (empty string disables a slot). See Doc/Architecture/StaticRepoImport.md.
+  Features__StaticRepoSync__Partitions__0: "{{ .Values.config.memex_portal.Features__StaticRepoSync__Partitions__0 | default "Doc" }}"
+  Features__StaticRepoSync__Partitions__1: "{{ .Values.config.memex_portal.Features__StaticRepoSync__Partitions__1 | default "Agent" }}"
+  Features__StaticRepoSync__Partitions__2: "{{ .Values.config.memex_portal.Features__StaticRepoSync__Partitions__2 | default "Provider" }}"
+  Features__StaticRepoSync__Partitions__3: "{{ .Values.config.memex_portal.Features__StaticRepoSync__Partitions__3 | default "Harness" }}"
+  Features__StaticRepoSync__Partitions__4: "{{ .Values.config.memex_portal.Features__StaticRepoSync__Partitions__4 | default "Skill" }}"
+  # ---- System email (Microsoft Graph) — BIDIRECTIONAL. Outbound invitations + notifications
+  # (/sendMail, Mail.Send app permission) AND optional inbound email→agent channel (inbox
+  # change-notification subscription, Mail.ReadWrite app permission). Non-secret here;
+  # Email__ClientSecret comes from the SecretProviderClass. When Email__Enabled is empty/false
+  # the portal uses the NoOp sender (no mail sent).
+  Email__Enabled: "{{ .Values.config.memex_portal.Email__Enabled | default "false" }}"
+  # The mailbox the portal sends AND receives AS (a real/shared mailbox the app may send-as).
+  # NOTE: binds EmailOptions.MailboxAddress — the old key Email__NoReplyAddress no longer binds.
+  Email__MailboxAddress: "{{ .Values.config.memex_portal.Email__MailboxAddress | default "" }}"
+  Email__TenantId: "{{ .Values.config.memex_portal.Email__TenantId | default "" }}"
+  Email__ClientId: "{{ .Values.config.memex_portal.Email__ClientId | default "" }}"
+  Email__UseManagedIdentity: "{{ .Values.config.memex_portal.Email__UseManagedIdentity | default "false" }}"
+  # Inbound email→agent channel (optional). Requires Mail.ReadWrite + a public WebhookBaseUrl;
+  # the webhook is {WebhookBaseUrl}/api/email. SubscriptionClientState is a per-deployment random
+  # value echoed by Graph on every notification (the webhook rejects mismatches).
+  Email__InboundEnabled: "{{ .Values.config.memex_portal.Email__InboundEnabled | default "false" }}"
+  Email__WebhookBaseUrl: "{{ .Values.config.memex_portal.Email__WebhookBaseUrl | default "" }}"
+  Email__SubscriptionClientState: "{{ .Values.config.memex_portal.Email__SubscriptionClientState | default "" }}"

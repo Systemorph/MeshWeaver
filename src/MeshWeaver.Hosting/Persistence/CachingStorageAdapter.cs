@@ -1,10 +1,13 @@
 using System.Collections.Concurrent;
-using System.Runtime.CompilerServices;
+using System.Reactive;
+using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.Hosting.Persistence.Parsers;
 using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Mesh.Threading;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Hosting.Persistence;
 
@@ -20,33 +23,66 @@ public class CachingStorageAdapter : IStorageAdapter
     private readonly string _baseDirectory;
     private readonly Func<JsonSerializerOptions, JsonSerializerOptions>? _writeOptionsModifier;
     private readonly FileFormatParserRegistry _parserRegistry = new();
+    private readonly IoPoolRegistry? _ioPoolRegistry;
+    private readonly ILogger<CachingStorageAdapter>? _logger;
+    // The Read leaf is bridged to IObservable through this pool — never via a
+    // bare Observable.FromAsync, which deadlocks under a blocking subscriber.
+    // See IoPoolExtensions and Doc/Architecture/AsynchronousCalls.md.
+    private readonly IIoPool _ioPool;
 
-    // Static shared cache: keyed by base directory, shared across all instances with the same path
-    private static readonly ConcurrentDictionary<string, DirectorySnapshot> SharedSnapshots = new(StringComparer.OrdinalIgnoreCase);
-
+    // Per-adapter snapshot — NOT static. The adapter is registered AddSingleton<IStorageAdapter>
+    // per hub (PersistenceExtensions), so this instance field lives and dies with the mesh.
+    // (No cross-mesh static cache: that bled stale file state across test classes — see NoStaticState.md.)
     private readonly DirectorySnapshot _snapshot;
 
     private static readonly string[] SupportedExtensions = [".md", ".cs", ".json"];
 
+    /// <summary>
+    /// Absolute path of the directory tree this adapter caches and serves nodes from.
+    /// </summary>
     public string BaseDirectory => _baseDirectory;
 
+    /// <summary>
+    /// Creates a caching storage adapter over a directory tree, scanning its file
+    /// paths into an in-memory snapshot (file bytes are read lazily on first access).
+    /// </summary>
+    /// <param name="baseDirectory">Root directory to cache; created if it does not exist. Resolved to an absolute path.</param>
+    /// <param name="writeOptionsModifier">Optional transform applied to the <c>JsonSerializerOptions</c> used when writing nodes through the inner file-system adapter.</param>
+    /// <param name="ioPoolRegistry">Optional registry used to resolve the file-system <c>IIoPool</c> that bridges blocking reads to observables; falls back to an unbounded pool when null.</param>
+    /// <param name="logger">Optional logger for surfacing unparseable cached files.</param>
     public CachingStorageAdapter(
         string baseDirectory,
-        Func<JsonSerializerOptions, JsonSerializerOptions>? writeOptionsModifier = null)
+        Func<JsonSerializerOptions, JsonSerializerOptions>? writeOptionsModifier = null,
+        IoPoolRegistry? ioPoolRegistry = null,
+        ILogger<CachingStorageAdapter>? logger = null)
     {
         _baseDirectory = Path.GetFullPath(baseDirectory);
         _writeOptionsModifier = writeOptionsModifier;
+        _ioPoolRegistry = ioPoolRegistry;
+        _logger = logger;
+        _ioPool = ioPoolRegistry?.Get(IoPoolNames.FileSystem) ?? IoPool.Unbounded;
         Directory.CreateDirectory(_baseDirectory);
-        _snapshot = SharedSnapshots.GetOrAdd(_baseDirectory, static dir => new DirectorySnapshot(dir));
+        _snapshot = new DirectorySnapshot(_baseDirectory);
     }
 
     /// <summary>
-    /// Holds a pre-loaded snapshot of a directory tree. Shared across all CachingStorageAdapter
-    /// instances that point to the same base directory (e.g., across test classes in a test run).
+    /// Holds a pre-loaded snapshot of a directory tree, owned by a single CachingStorageAdapter
+    /// instance (which is itself a per-mesh singleton). The directory scan is cheap (path walk;
+    /// file bytes are read lazily on first access), so re-scanning per mesh is negligible — and
+    /// it keeps each mesh's view isolated instead of bleeding through a process-wide static cache.
     /// </summary>
     private class DirectorySnapshot
     {
-        public readonly ConcurrentDictionary<string, byte[]> Files = new(StringComparer.OrdinalIgnoreCase);
+        // Lazy<byte[]> per file: directory scan is eager (cheap — just walks
+        // file paths), bytes are deferred until first read. Tests that touch
+        // only a handful of files (e.g. a single OverviewArea render) save
+        // 90%+ of the prior eager-read cost; catalog-polling tests amortise
+        // the same total work across their queries with negligible per-query
+        // overhead (single Lazy.Value access). The previous "Parallel.ForEach
+        // + File.ReadAllBytes" upfront pre-load was paid in full even by
+        // tests that needed only a few dozen files out of hundreds — showed
+        // up at ~10% inclusive in TodoCreateFlowTest.Baseline_OverviewAreaRenders.
+        public readonly ConcurrentDictionary<string, Lazy<byte[]>> Files = new(StringComparer.OrdinalIgnoreCase);
         public readonly ConcurrentDictionary<string, HashSet<string>> Directories = new(StringComparer.OrdinalIgnoreCase);
 
         public DirectorySnapshot(string baseDirectory)
@@ -56,15 +92,22 @@ public class CachingStorageAdapter : IStorageAdapter
 
             Directories[""] = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-            foreach (var file in Directory.GetFiles(baseDirectory, "*.*", SearchOption.AllDirectories))
+            var supported = new HashSet<string>(SupportedExtensions, StringComparer.OrdinalIgnoreCase);
+            // Sequential path scan — no Parallel.ForEach because there's no
+            // I/O per entry to parallelise. The actual file bytes are read
+            // lazily through Lazy<byte[]> when ReadAsync first needs them.
+            foreach (var file in Directory.EnumerateFiles(baseDirectory, "*.*", SearchOption.AllDirectories))
             {
                 var ext = Path.GetExtension(file).ToLowerInvariant();
-                if (ext is not ".json" and not ".md" and not ".cs")
+                if (!supported.Contains(ext))
                     continue;
 
                 var relativePath = Path.GetRelativePath(baseDirectory, file)
                     .Replace(Path.DirectorySeparatorChar, '/');
-                Files[relativePath] = File.ReadAllBytes(file);
+                var capturedFile = file;
+                Files[relativePath] = new Lazy<byte[]>(
+                    () => File.ReadAllBytes(capturedFile),
+                    LazyThreadSafetyMode.ExecutionAndPublication);
 
                 var dir = Path.GetDirectoryName(relativePath)?.Replace(Path.DirectorySeparatorChar, '/') ?? "";
                 EnsureDirectoryEntry(dir, relativePath);
@@ -87,11 +130,12 @@ public class CachingStorageAdapter : IStorageAdapter
             var parts = dir;
             while (true)
             {
-                if (!Directories.TryGetValue(parts, out var entries))
-                {
-                    entries = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                    Directories[parts] = entries;
-                }
+                // GetOrAdd is atomic; the indexer/lock that followed the prior
+                // TryGetValue+set pattern only protected the AddItem, not the
+                // TryGetValue→assign window. Sequential ctor now means no race,
+                // but GetOrAdd is still the cleanest expression.
+                var entries = Directories.GetOrAdd(parts,
+                    static _ => new HashSet<string>(StringComparer.OrdinalIgnoreCase));
                 lock (entries) entries.Add(entry);
 
                 if (string.IsNullOrEmpty(parts)) break;
@@ -102,7 +146,14 @@ public class CachingStorageAdapter : IStorageAdapter
         }
     }
 
-    public async Task<MeshNode?> ReadAsync(string path, JsonSerializerOptions options, CancellationToken ct = default)
+    /// <inheritdoc />
+    public IObservable<MeshNode?> Read(string path, JsonSerializerOptions options)
+        // ReadCore is fully synchronous (the cached-bytes access triggers File.ReadAllBytes
+        // — genuine blocking I/O — and the parse is in-memory), so it runs on the blocking
+        // pool leg, not the async-Task leg.
+        => _ioPool.InvokeBlocking(ct => ReadCore(path, options, ct));
+
+    private MeshNode? ReadCore(string path, JsonSerializerOptions options, CancellationToken ct)
     {
         var normalizedPath = path?.Trim('/');
         if (string.IsNullOrEmpty(normalizedPath))
@@ -110,10 +161,12 @@ public class CachingStorageAdapter : IStorageAdapter
 
         // Find file with supported extensions
         var (relativePath, extension) = FindCachedFile(normalizedPath);
-        if (relativePath == null || !_snapshot.Files.TryGetValue(relativePath, out var bytes))
+        if (relativePath == null || !_snapshot.Files.TryGetValue(relativePath, out var lazyBytes))
             return null;
 
-        var content = System.Text.Encoding.UTF8.GetString(bytes);
+        // Lazy.Value triggers File.ReadAllBytes on first access for this file
+        // and caches the result for subsequent accesses across the process.
+        var content = System.Text.Encoding.UTF8.GetString(lazyBytes.Value);
         var filePath = Path.Combine(_baseDirectory, relativePath.Replace('/', Path.DirectorySeparatorChar));
 
         MeshNode? node;
@@ -121,7 +174,7 @@ public class CachingStorageAdapter : IStorageAdapter
         {
             var parsers = _parserRegistry.GetParsers(extension);
             if (parsers.Count > 0)
-                node = await _parserRegistry.TryParseAsync(extension, filePath, content, normalizedPath, ct);
+                node = _parserRegistry.TryParse(extension, filePath, content, normalizedPath);
             else
                 node = JsonSerializer.Deserialize<MeshNode>(content, options);
         }
@@ -168,45 +221,51 @@ public class CachingStorageAdapter : IStorageAdapter
 
         // Merge companion index.md
         if (extension == ".json" && node.Content is null)
-            node = await MergeIndexMarkdownAsync(node, normalizedPath, ct);
+            node = MergeIndexMarkdown(node, normalizedPath);
 
         return node;
     }
 
-    public async Task WriteAsync(MeshNode node, JsonSerializerOptions options, CancellationToken ct = default)
+    /// <inheritdoc />
+    public IObservable<MeshNode?> Write(MeshNode node, JsonSerializerOptions options)
     {
-        // Write to disk
-        var innerAdapter = new FileSystemStorageAdapter(_baseDirectory, _writeOptionsModifier);
-        await innerAdapter.WriteAsync(node, options, ct);
-
-        // Refresh cache for this path
-        RefreshCacheForPath(node.Path);
+        var innerAdapter = new FileSystemStorageAdapter(_baseDirectory, _writeOptionsModifier, _ioPoolRegistry);
+        return innerAdapter.Write(node, options)
+            .Do(written =>
+            {
+                if (written is not null) RefreshCacheForPath(written.Path);
+            });
     }
 
-    public async Task DeleteAsync(string path, CancellationToken ct = default)
+    /// <inheritdoc />
+    public IObservable<string> Delete(string path)
     {
-        var innerAdapter = new FileSystemStorageAdapter(_baseDirectory, _writeOptionsModifier);
-        await innerAdapter.DeleteAsync(path, ct);
-
-        // Remove from cache
-        var normalizedPath = path.Trim('/').Replace('/', '/');
-        foreach (var ext in SupportedExtensions)
-        {
-            var segments = normalizedPath.Split('/');
-            var relativePath = string.Join("/", segments) + ext;
-            _snapshot.Files.TryRemove(relativePath, out _);
-        }
+        var innerAdapter = new FileSystemStorageAdapter(_baseDirectory, _writeOptionsModifier, _ioPoolRegistry);
+        return innerAdapter.Delete(path)
+            .Do(deletedPath =>
+            {
+                var normalizedPath = deletedPath.Trim('/');
+                foreach (var ext in SupportedExtensions)
+                {
+                    var segments = normalizedPath.Split('/');
+                    var relativePath = string.Join("/", segments) + ext;
+                    _snapshot.Files.TryRemove(relativePath, out _);
+                }
+            });
     }
 
-    public Task<(IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths)> ListChildPathsAsync(
-        string? parentPath, CancellationToken ct = default)
+    /// <inheritdoc />
+    public IObservable<(IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths)> ListChildPaths(string? parentPath)
+        => Observable.Defer(() => Observable.Return(ListChildPathsCore(parentPath)));
+
+    private (IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths) ListChildPathsCore(string? parentPath)
     {
         var normalizedParent = parentPath?.Trim('/') ?? "";
 
         // Get directory for this parent
         var dirPath = normalizedParent;
         if (!_snapshot.Directories.TryGetValue(dirPath, out var entries))
-            return Task.FromResult<(IEnumerable<string>, IEnumerable<string>)>(([], []));
+            return ([], []);
 
         var nodePaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var directoryPaths = new List<string>();
@@ -255,20 +314,26 @@ public class CachingStorageAdapter : IStorageAdapter
             }
         }
 
-        return Task.FromResult<(IEnumerable<string>, IEnumerable<string>)>((nodePaths, directoryPaths));
+        return (nodePaths, directoryPaths);
     }
 
-    public Task<bool> ExistsAsync(string path, CancellationToken ct = default)
-    {
-        var (filePath, _) = FindCachedFile(path?.Trim('/') ?? "");
-        return Task.FromResult(filePath != null && _snapshot.Files.ContainsKey(filePath));
-    }
+    /// <inheritdoc />
+    public IObservable<bool> Exists(string path)
+        => Observable.Defer(() =>
+        {
+            var (filePath, _) = FindCachedFile(path?.Trim('/') ?? "");
+            return Observable.Return(filePath != null && _snapshot.Files.ContainsKey(filePath));
+        });
 
-    public Task<IEnumerable<string>> ListPartitionSubPathsAsync(string nodePath, CancellationToken ct = default)
+    /// <inheritdoc />
+    public IObservable<IEnumerable<string>> ListPartitionSubPaths(string nodePath)
+        => Observable.Defer(() => Observable.Return(ListPartitionSubPathsCore(nodePath)));
+
+    private IEnumerable<string> ListPartitionSubPathsCore(string nodePath)
     {
         var normalizedPath = nodePath.Trim('/');
         if (!_snapshot.Directories.TryGetValue(normalizedPath, out var entries))
-            return Task.FromResult<IEnumerable<string>>(Enumerable.Empty<string>());
+            return Enumerable.Empty<string>();
 
         var partitionSubPaths = new List<string>();
         foreach (var entry in entries)
@@ -289,14 +354,22 @@ public class CachingStorageAdapter : IStorageAdapter
                 partitionSubPaths.Add(subDirName);
         }
 
-        return Task.FromResult<IEnumerable<string>>(partitionSubPaths);
+        return partitionSubPaths;
     }
 
-    public async IAsyncEnumerable<object> GetPartitionObjectsAsync(
+    // Pump inside the IIoPool (InvokeStream) — never Observable.Create(async ...),
+    // which runs the pump on the subscriber's scheduler (the grain-wedge defect;
+    // see PartitionObjectsSubscriberIndependenceTest).
+    /// <inheritdoc />
+    public IObservable<object> GetPartitionObjects(
+        string nodePath, string? subPath, JsonSerializerOptions options)
+        => _ioPool.InvokeStream(ct => GetPartitionObjectsAsyncCore(nodePath, subPath, options, ct));
+
+    private async IAsyncEnumerable<object> GetPartitionObjectsAsyncCore(
         string nodePath,
         string? subPath,
         JsonSerializerOptions options,
-        [EnumeratorCancellation] CancellationToken ct = default)
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct)
     {
         var partitionDir = string.IsNullOrEmpty(subPath)
             ? nodePath.Trim('/')
@@ -324,7 +397,7 @@ public class CachingStorageAdapter : IStorageAdapter
                 object? obj = null;
                 try
                 {
-                    var json = System.Text.Encoding.UTF8.GetString(kvp.Value);
+                    var json = System.Text.Encoding.UTF8.GetString(kvp.Value.Value);
                     obj = JsonSerializer.Deserialize<object>(json, options);
                     if (obj != null)
                     {
@@ -333,7 +406,13 @@ public class CachingStorageAdapter : IStorageAdapter
                         obj = SetObjectId(obj, id);
                     }
                 }
-                catch (JsonException) { }
+                catch (JsonException ex)
+                {
+                    // A malformed cached file means this object silently vanishes
+                    // from the partition — that must be visible, not swallowed.
+                    _logger?.LogWarning(ex,
+                        "Skipping unparseable cached JSON object {Path}", cachedRelPath);
+                }
 
                 if (obj != null)
                     yield return obj;
@@ -343,11 +422,17 @@ public class CachingStorageAdapter : IStorageAdapter
                 CodeConfiguration? config = null;
                 try
                 {
-                    var content = System.Text.Encoding.UTF8.GetString(kvp.Value);
+                    var content = System.Text.Encoding.UTF8.GetString(kvp.Value.Value);
                     var filePath = Path.Combine(_baseDirectory, cachedRelPath.Replace('/', Path.DirectorySeparatorChar));
-                    config = await _parserRegistry.CSharpParser.ParseCodeConfigurationAsync(filePath, content, ct);
+                    config = _parserRegistry.CSharpParser.ParseCodeConfiguration(filePath, content);
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    // A failed code-config parse silently drops the node type from
+                    // the partition — log it so the absence is diagnosable.
+                    _logger?.LogWarning(ex,
+                        "Skipping unparseable cached code configuration {Path}", cachedRelPath);
+                }
 
                 if (config != null)
                     yield return config;
@@ -355,37 +440,37 @@ public class CachingStorageAdapter : IStorageAdapter
         }
     }
 
-    public Task SavePartitionObjectsAsync(
-        string nodePath, string? subPath, IReadOnlyCollection<object> objects,
-        JsonSerializerOptions options, CancellationToken ct = default)
+    /// <inheritdoc />
+    public IObservable<Unit> SavePartitionObjects(
+        string nodePath, string? subPath, IReadOnlyCollection<object> objects, JsonSerializerOptions options)
     {
-        // Delegate to file system, then refresh cache
-        var innerAdapter = new FileSystemStorageAdapter(_baseDirectory, _writeOptionsModifier);
-        var task = innerAdapter.SavePartitionObjectsAsync(nodePath, subPath, objects, options, ct);
-        // Refresh cache after write
-        return task.ContinueWith(_ => RefreshCacheForPartition(nodePath, subPath), ct);
+        var innerAdapter = new FileSystemStorageAdapter(_baseDirectory, _writeOptionsModifier, _ioPoolRegistry);
+        return innerAdapter.SavePartitionObjects(nodePath, subPath, objects, options)
+            .Do(_ => RefreshCacheForPartition(nodePath, subPath));
     }
 
-    public Task DeletePartitionObjectsAsync(string nodePath, string? subPath = null, CancellationToken ct = default)
+    /// <inheritdoc />
+    public IObservable<Unit> DeletePartitionObjects(string nodePath, string? subPath = null)
     {
-        var innerAdapter = new FileSystemStorageAdapter(_baseDirectory, _writeOptionsModifier);
-        return innerAdapter.DeletePartitionObjectsAsync(nodePath, subPath, ct);
+        var innerAdapter = new FileSystemStorageAdapter(_baseDirectory, _writeOptionsModifier, _ioPoolRegistry);
+        return innerAdapter.DeletePartitionObjects(nodePath, subPath);
     }
 
-    public Task<DateTimeOffset?> GetPartitionMaxTimestampAsync(
-        string nodePath, string? subPath = null, CancellationToken ct = default)
-    {
-        // For cached data, just return now (cache was loaded at startup)
-        var partitionDir = string.IsNullOrEmpty(subPath)
-            ? nodePath.Trim('/')
-            : nodePath.Trim('/') + "/" + subPath.Trim('/');
+    /// <inheritdoc />
+    public IObservable<DateTimeOffset?> GetPartitionMaxTimestamp(string nodePath, string? subPath = null)
+        => Observable.Defer(() =>
+        {
+            // For cached data, just return now (cache was loaded at startup)
+            var partitionDir = string.IsNullOrEmpty(subPath)
+                ? nodePath.Trim('/')
+                : nodePath.Trim('/') + "/" + subPath.Trim('/');
 
-        var prefix = partitionDir + "/";
-        var hasFiles = _snapshot.Files.Keys.Any(k =>
-            k.StartsWith(prefix, StringComparison.OrdinalIgnoreCase));
+            var prefix = partitionDir + "/";
+            var hasFiles = _snapshot.Files.Keys.Any(k =>
+                k.StartsWith(prefix, StringComparison.OrdinalIgnoreCase));
 
-        return Task.FromResult<DateTimeOffset?>(hasFiles ? DateTimeOffset.UtcNow : null);
-    }
+            return Observable.Return<DateTimeOffset?>(hasFiles ? DateTimeOffset.UtcNow : null);
+        });
 
     #region Helpers
 
@@ -415,17 +500,17 @@ public class CachingStorageAdapter : IStorageAdapter
         return (null, ".json");
     }
 
-    private async Task<MeshNode> MergeIndexMarkdownAsync(MeshNode node, string normalizedPath, CancellationToken ct)
+    private MeshNode MergeIndexMarkdown(MeshNode node, string normalizedPath)
     {
         var indexMdKey = normalizedPath + "/index.md";
-        if (!_snapshot.Files.TryGetValue(indexMdKey, out var mdBytes))
+        if (!_snapshot.Files.TryGetValue(indexMdKey, out var mdBytesLazy))
             return node;
 
-        var mdContent = System.Text.Encoding.UTF8.GetString(mdBytes);
+        var mdContent = System.Text.Encoding.UTF8.GetString(mdBytesLazy.Value);
         var filePath = Path.Combine(_baseDirectory, indexMdKey.Replace('/', Path.DirectorySeparatorChar));
 
-        var mdNode = await _parserRegistry.TryParseAsync(".md", filePath, mdContent,
-            normalizedPath + "/index", ct);
+        var mdNode = _parserRegistry.TryParse(".md", filePath, mdContent,
+            normalizedPath + "/index");
 
         if (mdNode?.Content is MarkdownContent markdownContent)
         {
@@ -487,9 +572,57 @@ public class CachingStorageAdapter : IStorageAdapter
             var filePath = diskPath + ext;
             var relativePath = normalizedPath + ext;
             if (File.Exists(filePath))
-                _snapshot.Files[relativePath] = File.ReadAllBytes(filePath);
+            {
+                // Refresh: file was just modified — defer the read like the
+                // initial scan does. Captures the path; the next ReadAsync
+                // for this entry triggers the actual byte read.
+                var capturedPath = filePath;
+                _snapshot.Files[relativePath] = new Lazy<byte[]>(
+                    () => File.ReadAllBytes(capturedPath),
+                    LazyThreadSafetyMode.ExecutionAndPublication);
+
+                // 🚨 Also update the parent-directory entry chain so
+                // ListChildPathsAsync(parentPath) sees the new file. Without
+                // this, the post-removal-of-_nodes-cache routing path
+                // (AdapterPersistenceService.WalkDescendants) iterates the
+                // stale Directories snapshot and never finds runtime-created
+                // nodes (cause of MoveNodeAsync_* and similar test hangs:
+                // CreateNode → file on disk + Files entry, but Directories
+                // entry missing → ListChildPathsAsync returns empty for the
+                // parent → subtree query is empty → CopyNode reports
+                // SourceNotFound → MoveNodeRequest never resolves).
+                AddToDirectoryChain(relativePath);
+            }
             else
+            {
                 _snapshot.Files.TryRemove(relativePath, out _);
+                RemoveFromDirectoryChain(relativePath);
+            }
+        }
+    }
+
+    private void AddToDirectoryChain(string relativeFilePath)
+    {
+        var dir = Path.GetDirectoryName(relativeFilePath)?.Replace(Path.DirectorySeparatorChar, '/') ?? "";
+        var entry = relativeFilePath;
+        while (true)
+        {
+            var entries = _snapshot.Directories.GetOrAdd(dir,
+                static _ => new HashSet<string>(StringComparer.OrdinalIgnoreCase));
+            lock (entries) entries.Add(entry);
+
+            if (string.IsNullOrEmpty(dir)) break;
+            entry = dir + "/";
+            dir = Path.GetDirectoryName(dir)?.Replace(Path.DirectorySeparatorChar, '/') ?? "";
+        }
+    }
+
+    private void RemoveFromDirectoryChain(string relativeFilePath)
+    {
+        var dir = Path.GetDirectoryName(relativeFilePath)?.Replace(Path.DirectorySeparatorChar, '/') ?? "";
+        if (_snapshot.Directories.TryGetValue(dir, out var entries))
+        {
+            lock (entries) entries.Remove(relativeFilePath);
         }
     }
 
@@ -511,12 +644,17 @@ public class CachingStorageAdapter : IStorageAdapter
 
             var relativePath = Path.GetRelativePath(_baseDirectory, file)
                 .Replace(Path.DirectorySeparatorChar, '/');
-            _snapshot.Files[relativePath] = File.ReadAllBytes(file);
+            var capturedFile = file;
+            _snapshot.Files[relativePath] = new Lazy<byte[]>(
+                () => File.ReadAllBytes(capturedFile),
+                LazyThreadSafetyMode.ExecutionAndPublication);
         }
     }
 
     private static bool IsCodeSubNamespace(string? name) =>
-        string.Equals(name, "_Source", StringComparison.OrdinalIgnoreCase)
+        string.Equals(name, "Source", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(name, "Test", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(name, "_Source", StringComparison.OrdinalIgnoreCase)
         || string.Equals(name, "_Test", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>

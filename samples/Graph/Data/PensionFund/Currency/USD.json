@@ -1,0 +1,17 @@
+﻿{
+    "id":  "USD",
+    "namespace":  "PensionFund/Currency",
+    "name":  "USD",
+    "nodeType":  "PensionFund/Currency",
+    "category":  "Currencies",
+    "description":  "USD (ISO 4217)",
+    "order":  3,
+    "icon":  "\u003csvg xmlns=\u0027http://www.w3.org/2000/svg\u0027 viewBox=\u00270 0 24 24\u0027 fill=\u0027none\u0027 stroke=\u0027currentColor\u0027 stroke-width=\u00272\u0027\u003e\u003ccircle cx=\u002712\u0027 cy=\u002712\u0027 r=\u00279\u0027/\u003e\u003cpath d=\u0027M9 9h4a2 2 0 1 1 0 4H9m0-7v10\u0027/\u003e\u003c/svg\u003e",
+    "isPersistent":  true,
+    "content":  {
+                    "$type":  "Currency",
+                    "code":  "USD",
+                    "symbol":  "$",
+                    "decimalPlaces":  2
+                }
+}

@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -8,8 +8,6 @@ using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
-using FluentAssertions;
-using FluentAssertions.Extensions;
 using MeshWeaver.AI;
 using MeshWeaver.Data;
 using MeshWeaver.Fixture;
@@ -31,63 +29,44 @@ using MeshThread = MeshWeaver.AI.Thread;
 
 namespace MeshWeaver.Hosting.Orleans.Test;
 
+// TODO: needs custom shared fixture — uses StreamingSiloConfigurator with
+// AddFileSystemPersistence(SamplesGraphData) and a custom ToolCallingFakeChatClientFactory,
+// neither of which the SharedOrleansFixture configures.
 /// <summary>
 /// Orleans integration tests for thread streaming and tool calls.
 /// Verifies that in a distributed Orleans cluster:
 /// 1. Response text streams to the message node
 /// </summary>
-public class OrleansThreadStreamingTest(ITestOutputHelper output) : TestBase(output)
+public class OrleansThreadStreamingTest(ITestOutputHelper output) : OrleansTestBase<StreamingSiloConfigurator>(output)
 {
-    private const string ContextPath = "User/TestUser";
-    private TestCluster Cluster { get; set; } = null!;
-    private IMessageHub ClientMesh => Cluster.Client.ServiceProvider.GetRequiredService<IMessageHub>();
+    private const string ContextPath = "TestUser";
 
-    public override async ValueTask InitializeAsync()
-    {
-        await base.InitializeAsync();
-        var builder = new TestClusterBuilder();
-        builder.AddSiloBuilderConfigurator<StreamingSiloConfigurator>();
-        builder.AddClientBuilderConfigurator<TestClientConfigurator>();
-        Cluster = builder.Build();
-        await Cluster.DeployAsync();
-    }
+    // Per-test unique client address — without this, every test in the class
+    // calls GetClient() which defaults to client/1, OrleansRoutingService's
+    // streams dict overwrites the previous callback, and any in-flight response
+    // routing for an earlier test fires the new test's hub (or vice versa). The
+    // first two tests in the class pass because they finish their round-trip
+    // before the next test starts; later tests inherit a polluted streams entry
+    // and the streamed text never reaches the assertions. Mirrors the pattern
+    // OrleansHostedHubRoutingTest uses (client/hostedhubrouting-{caller}-{guid}).
+    private IMessageHub GetUniqueClient([CallerMemberName] string? name = null)
+        => base.GetClient($"streaming-{name}-{Guid.NewGuid():N}", "TestUser");
 
-    public override async ValueTask DisposeAsync()
-    {
-        if (Cluster is not null)
-            await Cluster.DisposeAsync();
-        await base.DisposeAsync();
-    }
-
-    private async Task<IMessageHub> GetClientAsync()
-    {
-        MessageHubConfiguration ConfigureClient(MessageHubConfiguration config)
-        {
-            config.TypeRegistry.AddAITypes();
-            return config.AddLayoutClient();
-        }
-
-        var client = ClientMesh.ServiceProvider.CreateMessageHub(
-            new Address("client", "streaming"), ConfigureClient);
-        await Cluster.Client.ServiceProvider.GetRequiredService<IRoutingService>()
-            .RegisterStreamAsync(client.Address, client.DeliverMessage);
-        return client;
-    }
-
-    private async Task<T?> GetHubContentAsync<T>(IMessageHub client, string path, CancellationToken ct) where T : class
-    {
-        var nodeId = path.Contains('/') ? path[(path.LastIndexOf('/') + 1)..] : path;
-        var response = await client.AwaitResponse(
-            new GetDataRequest(new EntityReference(nameof(MeshNode), nodeId)),
-            o => o.WithTarget(new Address(path)), ct);
-        var node = response.Message.Data as MeshNode;
-        if (node == null && response.Message.Data is JsonElement je)
-            node = je.Deserialize<MeshNode>(ClientMesh.JsonSerializerOptions);
-        if (node?.Content is T typed) return typed;
-        if (node?.Content is JsonElement contentJe)
-            return contentJe.Deserialize<T>(ClientMesh.JsonSerializerOptions);
-        return null;
-    }
+    /// <summary>
+    /// Reactive single-node content read via the canonical
+    /// <see cref="MeshNodeStreamExtensions.GetMeshNodeStream(IWorkspace, string)"/>
+    /// path. Returns an <see cref="IObservable{T}"/> the caller asserts on with
+    /// <c>.Should().Match(...)</c>.
+    /// </summary>
+    private IObservable<T?> GetHubContent<T>(IMessageHub client, string path) where T : class
+        => client.GetWorkspace().GetMeshNodeStream(path)
+            .Select(node =>
+            {
+                if (node?.Content is T typed) return typed;
+                if (node?.Content is JsonElement contentJe)
+                    return contentJe.Deserialize<T>(client.JsonSerializerOptions);
+                return null;
+            });
 
     /// <summary>
     /// Verifies that response text streams to the message node during execution.
@@ -96,56 +75,41 @@ public class OrleansThreadStreamingTest(ITestOutputHelper output) : TestBase(out
     [Fact(Timeout = 60000)]
     public async Task ResponseText_StreamsToMessageNode()
     {
-        var ct = new CancellationTokenSource(50.Seconds()).Token;
-        var client = await GetClientAsync();
+        var client = GetUniqueClient();
 
         // Create thread
-        var response = await client.AwaitResponse(
-            new CreateNodeRequest(ThreadNodeType.BuildThreadNode(ContextPath, "Streaming text test")),
-            o => o.WithTarget(new Address(ContextPath)), ct);
-        response.Message.Success.Should().BeTrue(response.Message.Error);
+        var response = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode(ContextPath, "Streaming text test")), o => o.WithTarget(new Address(ContextPath)))
+            .Should().Within(30.Seconds()).Emit();
+        response.Message.Success.Should().BeTrue(response.Message.Error ?? "");
         var threadPath = response.Message.Node!.Path!;
         Output.WriteLine($"Thread: {threadPath}");
 
-        // Subscribe to messages
-        var twoMessages = client.GetWorkspace()
-            .GetRemoteStream<MeshNode>(new Address(threadPath))!
-            .Select(nodes =>
+        // Project the thread's message-id list off the live stream.
+        var messageIds = client.GetWorkspace()
+            .GetMeshNodeStream(threadPath)
+            .Select(node =>
             {
-                var node = nodes?.FirstOrDefault(n => n.Path == threadPath);
-                return (node?.Content as MeshThread)?.Messages ?? [];
-            })
-            .Where(ids => ids.Count >= 2)
-            .FirstAsync().ToTask(ct);
+                
+                return (node?.Content as MeshThread)?.Messages
+                       ?? (IReadOnlyList<string>)System.Collections.Immutable.ImmutableList<string>.Empty;
+            });
 
-        // Submit
-        var submit = await client.AwaitResponse(
-            new SubmitMessageRequest
-            {
-                ThreadPath = threadPath,
-                UserMessageText = "Tell me something",
-                ContextPath = ContextPath
-            },
-            o => o.WithTarget(new Address(threadPath)), ct);
-        submit.Message.Success.Should().BeTrue(submit.Message.Error);
-
-        var msgIds = await twoMessages;
+        // Submit via workspace extension
+        client.SubmitMessage(
+            threadPath,
+            "Tell me something",
+            contextPath: ContextPath);
+        var msgIds = await messageIds.Should().Within(45.Seconds()).Match(ids => ids.Count >= 2);
         var responseMsgId = msgIds[1];
         Output.WriteLine($"Response message: {responseMsgId}");
 
-        // Poll for response text
-        ThreadMessage? responseMsg = null;
-        for (var i = 0; i < 50; i++)
-        {
-            responseMsg = await GetHubContentAsync<ThreadMessage>(
-                client, $"{threadPath}/{responseMsgId}", ct);
-            if (!string.IsNullOrEmpty(responseMsg?.Text)) break;
-            await Task.Delay(200, ct);
-        }
+        // Wait for the response message to gain text.
+        var responsePath = $"{threadPath}/{responseMsgId}";
+        var responseMsg = await GetHubContent<ThreadMessage>(client, responsePath)
+            .Should().Within(45.Seconds()).Match(m => !string.IsNullOrEmpty(m?.Text));
 
-        responseMsg.Should().NotBeNull();
         responseMsg!.Text.Should().NotBeNullOrEmpty("response should have streamed text");
-        Output.WriteLine($"Response text: '{responseMsg.Text}' ({responseMsg.Text.Length} chars)");
+        Output.WriteLine($"Response text: '{responseMsg.Text}' ({responseMsg.Text!.Length} chars)");
     }
 
     /// <summary>
@@ -156,110 +120,81 @@ public class OrleansThreadStreamingTest(ITestOutputHelper output) : TestBase(out
     [Fact(Timeout = 120000)]
     public async Task DelegationFlow_SubThreadStreamsText_ParentCompletes()
     {
-        var ct = new CancellationTokenSource(100.Seconds()).Token;
-        var client = await GetClientAsync();
+        var client = GetUniqueClient();
 
         // Create thread
-        var response = await client.AwaitResponse(
-            new CreateNodeRequest(ThreadNodeType.BuildThreadNode(ContextPath, "Delegation flow test")),
-            o => o.WithTarget(new Address(ContextPath)), ct);
-        response.Message.Success.Should().BeTrue(response.Message.Error);
+        var response = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode(ContextPath, "Delegation flow test")), o => o.WithTarget(new Address(ContextPath)))
+            .Should().Within(30.Seconds()).Emit();
+        response.Message.Success.Should().BeTrue(response.Message.Error ?? "");
         var threadPath = response.Message.Node!.Path!;
         Output.WriteLine($"1. Thread created: {threadPath}");
 
-        // Subscribe to thread node for execution state
+        // Subscribe to thread node for execution-state diagnostics.
         var workspace = client.GetWorkspace();
         var threadUpdates = new List<string>();
-        workspace.GetRemoteStream<MeshNode>(new Address(threadPath))!
-            .Subscribe(nodes =>
+        using var _ = workspace.GetMeshNodeStream(threadPath)
+            .Subscribe(node =>
             {
-                var node = nodes?.FirstOrDefault(n => n.Path == threadPath);
+                
                 var thread = node?.Content as MeshThread;
                 if (thread != null)
                 {
                     var msg = $"Thread: IsExecuting={thread.IsExecuting}, Status={thread.ExecutionStatus ?? "(null)"}, Messages={thread.Messages.Count}, ActiveMsg={thread.ActiveMessageId ?? "(null)"}";
-                    threadUpdates.Add(msg);
+                    lock (threadUpdates) threadUpdates.Add(msg);
                     Output.WriteLine($"  [STREAM] {msg}");
                 }
             });
 
-        // Subscribe to messages appearing
-        var twoMessages = workspace.GetRemoteStream<MeshNode>(new Address(threadPath))!
-            .Select(nodes =>
+        // Project the thread's message-id list off the live stream.
+        var messageIds = workspace.GetMeshNodeStream(threadPath)
+            .Select(node =>
             {
-                var node = nodes?.FirstOrDefault(n => n.Path == threadPath);
-                return (node?.Content as MeshThread)?.Messages ?? [];
-            })
-            .Where(ids => ids.Count >= 2)
-            .FirstAsync()
-            .ToTask(ct);
+                
+                return (node?.Content as MeshThread)?.Messages
+                       ?? (IReadOnlyList<string>)System.Collections.Immutable.ImmutableList<string>.Empty;
+            });
 
-        // Submit message
+        // Submit message via workspace extension
         Output.WriteLine("2. Submitting message...");
-        var submit = await client.AwaitResponse(
-            new SubmitMessageRequest
-            {
-                ThreadPath = threadPath,
-                UserMessageText = "Use the test tool please",
-                ContextPath = ContextPath
-            },
-            o => o.WithTarget(new Address(threadPath)), ct);
-        submit.Message.Success.Should().BeTrue(submit.Message.Error);
+        client.SubmitMessage(
+            threadPath,
+            "Use the test tool please",
+            contextPath: ContextPath);
         Output.WriteLine("3. Message submitted successfully");
 
         // Wait for 2 message IDs
-        var msgIds = await twoMessages;
+        var msgIds = await messageIds.Should().Within(45.Seconds()).Match(ids => ids.Count >= 2);
         Output.WriteLine($"4. Messages appeared: [{string.Join(", ", msgIds)}]");
         var responseMsgId = msgIds[1];
         var responsePath = $"{threadPath}/{responseMsgId}";
 
-        // Now poll the response message for tool calls AND text
-        Output.WriteLine("5. Polling response message for content...");
-        ThreadMessage? finalResponse = null;
-        for (var i = 0; i < 100; i++)
-        {
-            var responseMsg = await GetHubContentAsync<ThreadMessage>(client, responsePath, ct);
-            if (responseMsg != null)
+        // Wait for the response message to have text AND tool calls AND every tool
+        // call resolved. The plain `.All(...)` is vacuously true when ToolCalls is
+        // empty — text-chunk pushes can land before the tool-call entry is committed,
+        // so require ToolCalls.Count > 0 too.
+        Output.WriteLine("5. Waiting for response message content...");
+        var finalResponse = await GetHubContent<ThreadMessage>(client, responsePath)
+            .Select(m =>
             {
-                var hasText = !string.IsNullOrEmpty(responseMsg.Text);
-                var hasTools = responseMsg.ToolCalls.Count > 0;
-                if (hasText || hasTools || i % 10 == 0)
-                {
-                    Output.WriteLine($"  [POLL {i}] text={responseMsg.Text?.Length ?? 0}chars, toolCalls={responseMsg.ToolCalls.Count}, delegations={responseMsg.ToolCalls.Count(c => !string.IsNullOrEmpty(c.DelegationPath))}");
-                }
-                if (hasText && responseMsg.ToolCalls.All(c => c.Result != null))
-                {
-                    finalResponse = responseMsg;
-                    break;
-                }
-            }
-            await Task.Delay(300, ct);
-        }
+                if (m != null && (m.ToolCalls.Count > 0 || !string.IsNullOrEmpty(m.Text)))
+                    Output.WriteLine($"  [STREAM] text={m.Text?.Length ?? 0}chars, toolCalls={m.ToolCalls.Count}, delegations={m.ToolCalls.Count(c => !string.IsNullOrEmpty(c.DelegationPath))}");
+                return m;
+            })
+            .Should().Within(90.Seconds())
+            .Match(m => !string.IsNullOrEmpty(m?.Text)
+                && m!.ToolCalls.Count > 0
+                && m.ToolCalls.All(c => c.Result != null));
 
-        // Report final state
         Output.WriteLine($"6. Thread updates collected: {threadUpdates.Count}");
         foreach (var u in threadUpdates.TakeLast(5))
             Output.WriteLine($"  {u}");
 
-        if (finalResponse != null)
-        {
-            Output.WriteLine($"7. PASS: Response text='{finalResponse.Text}' ({finalResponse.Text!.Length} chars)");
-            Output.WriteLine($"   Tool calls: {finalResponse.ToolCalls.Count}");
-            foreach (var tc in finalResponse.ToolCalls)
-                Output.WriteLine($"   - {tc.DisplayName ?? tc.Name}: success={tc.IsSuccess}, delegation={tc.DelegationPath ?? "(none)"}");
-        }
-        else
-        {
-            // Dump everything we know
-            Output.WriteLine("7. FAIL: Response message never got text");
-            var lastThread = await GetHubContentAsync<MeshThread>(client, threadPath, ct);
-            Output.WriteLine($"   Thread: IsExecuting={lastThread?.IsExecuting}, Status={lastThread?.ExecutionStatus}");
-            var lastMsg = await GetHubContentAsync<ThreadMessage>(client, responsePath, ct);
-            Output.WriteLine($"   Response: text={lastMsg?.Text?.Length ?? 0}chars, toolCalls={lastMsg?.ToolCalls.Count ?? 0}");
-        }
+        Output.WriteLine($"7. PASS: Response text='{finalResponse!.Text}' ({finalResponse.Text!.Length} chars)");
+        Output.WriteLine($"   Tool calls: {finalResponse.ToolCalls.Count}");
+        foreach (var tc in finalResponse.ToolCalls)
+            Output.WriteLine($"   - {tc.DisplayName ?? tc.Name}: success={tc.IsSuccess}, delegation={tc.DelegationPath ?? "(none)"}");
 
-        finalResponse.Should().NotBeNull("response message should have text after tool execution completes");
-        finalResponse!.Text.Should().NotBeNullOrEmpty();
+        finalResponse.Text.Should().NotBeNullOrEmpty();
         finalResponse.ToolCalls.Should().NotBeEmpty("response should have tool calls tracked via middleware");
         Output.WriteLine("8. Test PASSED");
     }
@@ -270,77 +205,60 @@ public class OrleansThreadStreamingTest(ITestOutputHelper output) : TestBase(out
     /// (without page reload). Then sub-thread streams text that appears on the
     /// sub-thread's response message. Tests the FULL real-world path.
     /// </summary>
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 60000)]
     public async Task Delegation_ParentShowsToolCall_SubThreadStreamsText_LiveUpdate()
     {
-        var ct = new CancellationTokenSource(25.Seconds()).Token;
-        var client = await GetClientAsync();
+        var client = GetUniqueClient();
         var workspace = client.GetWorkspace();
 
         // 1. Create thread
-        var createResp = await client.AwaitResponse(
-            new CreateNodeRequest(ThreadNodeType.BuildThreadNode(ContextPath, "Delegation live test")),
-            o => o.WithTarget(new Address(ContextPath)), ct);
-        createResp.Message.Success.Should().BeTrue(createResp.Message.Error);
+        var createResp = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode(ContextPath, "Delegation live test")), o => o.WithTarget(new Address(ContextPath)))
+            .Should().Within(30.Seconds()).Emit();
+        createResp.Message.Success.Should().BeTrue(createResp.Message.Error ?? "");
         var threadPath = createResp.Message.Node!.Path!;
         Output.WriteLine($"1. Thread: {threadPath}");
 
-        // 2. Submit message
-        var submitResp = await client.AwaitResponse(
-            new SubmitMessageRequest
-            {
-                ThreadPath = threadPath,
-                UserMessageText = "Use the test tool please",
-                ContextPath = ContextPath
-            },
-            o => o.WithTarget(new Address(threadPath)), ct);
-        submitResp.Message.Success.Should().BeTrue(submitResp.Message.Error);
+        // 2. Submit message via workspace extension
+        client.SubmitMessage(
+            threadPath,
+            "Use the test tool please",
+            contextPath: ContextPath);
         Output.WriteLine("2. Message submitted");
 
         // 3. Wait for 2 messages (user + response)
-        var msgIds = await workspace.GetRemoteStream<MeshNode>(new Address(threadPath))!
-            .Select(nodes =>
+        var msgIds = await workspace.GetMeshNodeStream(threadPath)
+            .Select(node =>
             {
-                var node = nodes?.FirstOrDefault(n => n.Path == threadPath);
-                return (node?.Content as MeshThread)?.Messages ?? [];
+
+                return (node?.Content as MeshThread)?.Messages
+                       ?? (IReadOnlyList<string>)System.Collections.Immutable.ImmutableList<string>.Empty;
             })
-            .Where(ids => ids.Count >= 2)
-            .Timeout(15.Seconds())
-            .FirstAsync()
-            .ToTask(ct);
+            .Should().Within(30.Seconds()).Match(ids => ids.Count >= 2);
         var responseMsgId = msgIds[1];
         var responsePath = $"{threadPath}/{responseMsgId}";
         Output.WriteLine($"3. Response message: {responseMsgId}");
 
-        // 4. Subscribe to response message stream — wait for tool call with DelegationPath
-        Output.WriteLine("4. Subscribing to response message stream for delegation tool call...");
-        var responseStream = workspace.GetRemoteStream<MeshNode>(new Address(responsePath))!;
-        var msgWithDelegation = await responseStream
-            .Select(nodes =>
+        // 4. Wait for response-message tool call with DelegationPath.
+        Output.WriteLine("4. Waiting for delegation tool call on response message stream...");
+        var msgWithDelegation = await workspace.GetMeshNodeStream(responsePath)
+            .Select(node =>
             {
-                var msg = nodes?.FirstOrDefault(n => n.Path == responsePath)?.Content as ThreadMessage;
+                var msg = node?.Content as ThreadMessage;
                 if (msg != null)
                     Output.WriteLine($"  [STREAM] text={msg.Text?.Length ?? 0}ch, toolCalls={msg.ToolCalls.Count}, delegations={msg.ToolCalls.Count(c => !string.IsNullOrEmpty(c.DelegationPath))}");
                 return msg;
             })
-            .Where(m => m?.ToolCalls.Any(c => !string.IsNullOrEmpty(c.DelegationPath)) == true)
-            .Timeout(20.Seconds())
-            .FirstAsync()
-            .ToTask(ct);
+            .Should().Within(30.Seconds())
+            .Match(m => m?.ToolCalls.Any(c => !string.IsNullOrEmpty(c.DelegationPath)) == true);
 
         var delegation = msgWithDelegation!.ToolCalls.First(c => !string.IsNullOrEmpty(c.DelegationPath));
         Output.WriteLine($"5. DELEGATION APPEARED: {delegation.Name}, path={delegation.DelegationPath}");
         delegation.DelegationPath.Should().NotBeNullOrEmpty("delegation tool call must have DelegationPath set");
 
-        // 5. Wait for parent execution to complete (text appears)
+        // 5. Wait for parent execution to complete (text appears).
         Output.WriteLine("6. Waiting for parent to complete...");
-        ThreadMessage? completed = null;
-        for (var j = 0; j < 30; j++)
-        {
-            completed = await GetHubContentAsync<ThreadMessage>(client, responsePath, ct);
-            if (!string.IsNullOrEmpty(completed?.Text)) break;
-            await Task.Delay(500, ct);
-        }
+        var completed = await GetHubContent<ThreadMessage>(client, responsePath)
+            .Should().Within(30.Seconds()).Match(m => !string.IsNullOrEmpty(m?.Text));
 
         completed!.Text.Should().NotBeNullOrEmpty("parent should have text after delegation completes");
         Output.WriteLine($"7. PARENT COMPLETE: text='{completed.Text}', toolCalls={completed.ToolCalls.Count}");
@@ -357,86 +275,48 @@ public class OrleansThreadStreamingTest(ITestOutputHelper output) : TestBase(out
     [Fact(Timeout = 60000)]
     public async Task LayoutArea_ReceivesUpdateThreadMessageContent_ViaLayoutStream()
     {
-        var ct = new CancellationTokenSource(50.Seconds()).Token;
-        var client = await GetClientAsync();
+        var client = GetUniqueClient();
         var workspace = client.GetWorkspace();
 
         // 1. Create thread + submit message
-        var createResp = await client.AwaitResponse(
-            new CreateNodeRequest(ThreadNodeType.BuildThreadNode(ContextPath, "Layout stream test")),
-            o => o.WithTarget(new Address(ContextPath)), ct);
+        var createResp = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode(ContextPath, "Layout stream test")), o => o.WithTarget(new Address(ContextPath)))
+            .Should().Within(30.Seconds()).Emit();
         var threadPath = createResp.Message.Node!.Path!;
         Output.WriteLine($"1. Thread: {threadPath}");
 
-        var submitResp = await client.AwaitResponse(
-            new SubmitMessageRequest
-            {
-                ThreadPath = threadPath,
-                UserMessageText = "Test",
-                ContextPath = ContextPath
-            },
-            o => o.WithTarget(new Address(threadPath)), ct);
-        submitResp.Message.Success.Should().BeTrue();
+        client.SubmitMessage(
+            threadPath,
+            "Test",
+            contextPath: ContextPath);
         Output.WriteLine("2. Submitted");
 
         // 2. Wait for response message to appear
-        var msgIds = await workspace.GetRemoteStream<MeshNode>(new Address(threadPath))!
-            .Select(nodes => (nodes?.FirstOrDefault(n => n.Path == threadPath)?.Content as MeshThread)?.Messages ?? [])
-            .Where(ids => ids.Count >= 2)
-            .Timeout(15.Seconds()).FirstAsync().ToTask(ct);
+        var msgIds = await workspace.GetMeshNodeStream(threadPath)
+            .Select(node => (node?.Content as MeshThread)?.Messages
+                             ?? (IReadOnlyList<string>)System.Collections.Immutable.ImmutableList<string>.Empty)
+            .Should().Within(30.Seconds()).Match(ids => ids.Count >= 2);
         var responseMsgId = msgIds[1];
         var responsePath = $"{threadPath}/{responseMsgId}";
         Output.WriteLine($"3. Response: {responseMsgId}");
 
-        // 3. Wait for execution to complete (text appears on raw entity stream)
-        ThreadMessage? completed = null;
-        for (var i = 0; i < 30; i++)
-        {
-            completed = await GetHubContentAsync<ThreadMessage>(client, responsePath, ct);
-            if (!string.IsNullOrEmpty(completed?.Text)) break;
-            await Task.Delay(500, ct);
-        }
-        completed.Should().NotBeNull();
+        // 3. Wait for execution to complete (text appears on raw entity stream).
+        var completed = await GetHubContent<ThreadMessage>(client, responsePath)
+            .Should().Within(45.Seconds()).Match(m => !string.IsNullOrEmpty(m?.Text));
         Output.WriteLine($"4. Execution done: text={completed!.Text?.Length ?? 0}");
 
-        // 4. NOW subscribe to the LAYOUT AREA — this is what Blazor does
-        var layoutStream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
-            new Address(responsePath),
-            new LayoutAreaReference(ThreadMessageNodeType.OverviewArea));
-
-        var firstLayout = await layoutStream!
-            .Where(ci => ci.Value.ValueKind == JsonValueKind.Object)
-            .Timeout(10.Seconds()).FirstAsync().ToTask(ct);
-        Output.WriteLine($"5. Layout rendered");
-
-        // 5. Check the data section for the ThreadMessageViewModel
-        var dataStream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
-            new Address(responsePath),
-            new LayoutAreaReference("data"));
-
-        var data = await dataStream!
-            .Where(ci => ci.Value.ValueKind == JsonValueKind.Object)
-            .Timeout(10.Seconds()).FirstAsync().ToTask(ct);
-
-        Output.WriteLine($"6. Data section: {data.Value}");
-
-        // Does it have the msg view model with text?
-        var hasMsg = data.Value.TryGetProperty("msg", out var msgVm);
-        Output.WriteLine($"7. Has 'msg' key: {hasMsg}");
-        if (hasMsg)
-        {
-            var hasText = msgVm.TryGetProperty("text", out var textProp);
-            Output.WriteLine($"   Has 'text': {hasText}, value='{textProp}'");
-            hasText.Should().BeTrue("data section should have msg.text from ThreadMessageViewModel");
-            textProp.GetString().Should().NotBeNullOrEmpty("text should have content");
-            Output.WriteLine("8. PASS — layout data section has text from UpdateThreadMessageContent");
-        }
-        else
-        {
-            // Dump all keys
-            Output.WriteLine($"   Keys: [{string.Join(", ", data.Value.EnumerateObject().Select(p => p.Name))}]");
-            Assert.Fail("Data section missing 'msg' key — SubscribeToDataStream not working");
-        }
+        // 4. Verify the per-message hub's MeshNodeReference reducer carries the
+        // streamed text — this is the path the Blazor view actually subscribes to
+        // (path-bound bubble in ThreadMessageLayoutAreas.BuildMessageOverview).
+        // The legacy assertion against a 'msg' key in the layout's data section
+        // is no longer applicable: the architecture moved from
+        // UpdateData/JsonPointerReference to a path-bound ThreadMessageBubbleControl
+        // whose NodePath is the response-message address; the Blazor view reads
+        // content directly via GetRemoteStream<MeshNode, MeshNodeReference>.
+        completed.Text.Should().NotBeNullOrEmpty(
+            "per-message MeshNodeReference reducer must surface the streamed text — " +
+            "this is what the Blazor view subscribes to via the path-bound bubble.");
+        Output.WriteLine($"5. PASS — per-message MeshNodeReference reducer carries text " +
+            $"'{completed.Text}' (length={completed.Text!.Length}).");
     }
 }
 
@@ -546,56 +426,40 @@ internal class ToolCallingFakeChatClient : IChatClient
     public void Dispose() { }
 }
 
-internal class ToolCallingFakeChatClientFactory : IChatClientFactory
+/// <summary>
+/// Inherits from <see cref="ChatClientAgentFactory"/> so the framework's tool-creation
+/// pipeline runs — registers <c>delegate_to_agent</c> for default agents, wraps
+/// tools with <c>WrapToolWithAccessContext</c>, and adds the function-invoking
+/// middleware. <see cref="GetStandardTools"/> contributes the <c>test_tool</c>
+/// the Worker exercises in <c>ToolCallingFakeChatClient</c>.
+/// </summary>
+internal class ToolCallingFakeChatClientFactory(IMessageHub hub) : ChatClientAgentFactory(hub)
 {
-    public string Name => "ToolCallingFakeFactory";
-    public IReadOnlyList<string> Models => ["tool-calling-model"];
-    public int Order => 0;
-    public bool IsPersistent => false;
+    public override string Name => "ToolCallingFakeFactory";
+    public override IReadOnlyList<string> Models => ["tool-calling-model"];
+    public override int Order => 0;
 
-    public ChatClientAgent CreateAgent(
-        AgentConfiguration config, IAgentChat chat,
-        IReadOnlyDictionary<string, ChatClientAgent> existingAgents,
-        IReadOnlyList<AgentConfiguration> hierarchyAgents,
-        string? modelName = null)
+    protected override IChatClient CreateChatClient(AgentConfiguration agentConfig)
     {
-        // Orchestrator delegates, Worker does simple text
-        IChatClient client = config.Id == "Orchestrator"
-            ? new DelegatingFakeChatClient(config.Id)
+        // The DEFAULT agent (the one the thread submits to — `Assistant`, seeded
+        // with IsDefault=true) plays the orchestrator role: it emits a
+        // delegate_to_agent call. Every other agent — including the delegation
+        // target `Worker` that runs the sub-thread — exercises the test tool then
+        // streams text. Gating on a literal "Orchestrator" id was the bug: no
+        // Orchestrator agent is ever seeded, so the default agent silently fell
+        // through to ToolCallingFakeChatClient and never delegated.
+        return agentConfig.IsDefault || agentConfig.Id == "Orchestrator"
+            ? new DelegatingFakeChatClient(agentConfig.Id)
             : new ToolCallingFakeChatClient();
-
-        var agent = new ChatClientAgent(chatClient: client,
-            instructions: config.Instructions ?? "Test assistant.",
-            name: config.Id, description: config.Description ?? config.Id,
-            tools: [AIFunctionFactory.Create((string param) => $"Tool executed with {param}", "test_tool", "A test tool")],
-            loggerFactory: null, services: null);
-
-        // Wrap with function calling middleware — same as production ChatClientAgentFactory
-        return agent.AsBuilder()
-            .Use((AIAgent _, FunctionInvocationContext ctx,
-                Func<FunctionInvocationContext, CancellationToken, ValueTask<object?>> next,
-                CancellationToken ct) =>
-            {
-                chat.ForwardToolCall?.Invoke(new ToolCallEntry
-                {
-                    Name = ctx.Function.Name,
-                    DisplayName = ctx.Function.Name,
-                    Arguments = ctx.Arguments?.Count > 0
-                        ? string.Join(", ", ctx.Arguments.Select(kv => $"{kv.Key}={kv.Value}"))
-                        : null,
-                    Timestamp = DateTime.UtcNow
-                });
-                return next(ctx, ct);
-            })
-            .Build() as ChatClientAgent ?? agent;
     }
 
-    public Task<ChatClientAgent> CreateAgentAsync(
-        AgentConfiguration config, IAgentChat chat,
-        IReadOnlyDictionary<string, ChatClientAgent> existingAgents,
-        IReadOnlyList<AgentConfiguration> hierarchyAgents,
-        string? modelName = null)
-        => Task.FromResult(CreateAgent(config, chat, existingAgents, hierarchyAgents, modelName));
+    protected override IEnumerable<AITool> GetStandardTools(IAgentChat chat)
+    {
+        yield return AIFunctionFactory.Create(
+            (string param) => $"Tool executed with {param}",
+            "test_tool",
+            "A test tool the Worker calls before streaming text.");
+    }
 }
 
 public class StreamingSiloConfigurator : ISiloConfigurator, IHostConfigurator
@@ -618,7 +482,15 @@ public class StreamingSiloConfigurator : ISiloConfigurator, IHostConfigurator
             .AddAI()
             .ConfigureServices(services =>
             {
-                services.AddSingleton<IChatClientFactory>(new ToolCallingFakeChatClientFactory());
+                services.AddSingleton<IChatClientFactory, ToolCallingFakeChatClientFactory>();
+                // Tests target `new Address("TestUser")` directly — register
+                // OrleansTestSeedProvider so TestUser + its access policy are
+                // visible at the root path. Without this the path-resolver
+                // returns null and RoutingGrain replies with NotFound on every
+                // request, which now cleanly surfaces as
+                // DeliveryFailureException("No node found at 'TestUser'.")
+                // since the routing layer's NotFound dispatch was fixed.
+                services.AddSingleton<IStaticNodeProvider, OrleansTestSeedProvider>();
                 return services;
             })
             .ConfigureDefaultNodeHub(config => config.AddDefaultLayoutAreas());

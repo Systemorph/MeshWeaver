@@ -14,5 +14,10 @@
     <ProjectReference Include="..\MeshWeaver.Markdown\MeshWeaver.Markdown.csproj" />
     <ProjectReference Include="..\MeshWeaver.ContentCollections\MeshWeaver.ContentCollections.csproj" />
     <ProjectReference Include="..\MeshWeaver.Hosting\MeshWeaver.Hosting.csproj" />
+    <!-- The DataCube example (Doc/DataMesh/DataCubes) evaluates its computed
+         balance-sheet positions through business-rules scopes; the generator
+         emits the scope implementations at build time. -->
+    <ProjectReference Include="..\MeshWeaver.BusinessRules\MeshWeaver.BusinessRules.csproj" />
+    <ProjectReference Include="..\MeshWeaver.BusinessRules.Generator\MeshWeaver.BusinessRules.Generator.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
   </ItemGroup>
 </Project>

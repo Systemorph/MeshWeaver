@@ -32,9 +32,16 @@ public record NavigationOptions(string Uri)
 public interface INavigationService : IDisposable
 {
     /// <summary>
-    /// Gets the current relative path from navigation.
+    /// Reactive stream of the current relative path. <c>ReplaySubject&lt;T&gt;(1)</c>
+    /// semantics — new subscribers immediately receive the last seen path, and every
+    /// subsequent location change emits again. Never emits null or empty: the first
+    /// emission is held back until the underlying <c>NavigationManager</c> has a
+    /// real URI (RemoteNavigationManager throws "...has not been initialized"
+    /// until the Blazor circuit's first JS interop tick — the previous
+    /// <c>string? CurrentPath { get; }</c> property surfaced that as a
+    /// caller-visible exception or a null fallback).
     /// </summary>
-    string? CurrentPath { get; }
+    IObservable<string> Path { get; }
 
     /// <summary>
     /// Gets the current namespace (resolved Address path).
@@ -43,21 +50,35 @@ public interface INavigationService : IDisposable
     string? CurrentNamespace { get; }
 
     /// <summary>
-    /// Gets the current navigation context containing resolved path information.
-    /// Null if the path could not be resolved.
+    /// Reactive: the navigation context stream — ReplaySubject(1) semantics.
+    /// Emits the latest value on subscribe and on every change. Emits
+    /// <c>null</c> for not-found / cleared state. Replaces the prior
+    /// <c>OnNavigationContextChanged</c> event — Blazor views subscribe and call
+    /// <c>StateHasChanged</c> on emit. See <c>Doc/Architecture/BlazorDataBinding.md</c>.
+    /// </summary>
+    IObservable<NavigationContext?> NavigationContext { get; }
+
+    /// <summary>
+    /// Snapshot of the latest <see cref="NavigationContext"/> — for sync read sites
+    /// (Razor markup conditions, helper methods that need a single check).
+    /// Reactive consumers should subscribe to <see cref="NavigationContext"/> instead.
     /// </summary>
     NavigationContext? Context { get; }
 
     /// <summary>
-    /// True while the service is resolving the current path.
-    /// When true, <see cref="Context"/> being null means "still loading", not "not found".
+    /// True while the service is resolving the current path. When true, the
+    /// current value of <see cref="NavigationContext"/> being <c>null</c> means
+    /// "still loading", not "not found".
     /// </summary>
     bool IsResolving { get; }
 
     /// <summary>
-    /// Event raised when the navigation context changes due to location change.
+    /// Observable stream of <see cref="NavigationStatus"/> values describing the
+    /// page-lookup pipeline. Always has a current value (BehaviorSubject semantics)
+    /// and every emitted <see cref="NavigationStatus.Message"/> is a non-empty,
+    /// human-readable string — this is the "no endless spinner" contract.
     /// </summary>
-    event Action<NavigationContext?>? OnNavigationContextChanged;
+    IObservable<NavigationStatus> Status { get; }
 
     /// <summary>
     /// Observable that emits the current creatable types snapshot for the current node path.
@@ -77,8 +98,14 @@ public interface INavigationService : IDisposable
     /// Initializes the service and subscribes to NavigationManager.LocationChanged.
     /// Should be called once during application startup or component initialization.
     /// Multiple calls are idempotent.
+    /// <para>Synchronous by design: it only wires Rx subscriptions and pushes the
+    /// current path onto a subject — there is NO async work. It must NOT return a
+    /// <see cref="Task"/>: a <c>Task</c>-returning method awaited from a Blazor view's
+    /// <c>OnInitializedAsync</c> is a deadlock surface (continuations captured on the
+    /// circuit's sync-context). Callers invoke it fire-and-forget; resolution flows
+    /// reactively through <see cref="NavigationContext"/>/<see cref="Status"/>.</para>
     /// </summary>
-    Task InitializeAsync();
+    void Initialize();
 
     /// <summary>
     /// Sets the current namespace from the resolved Address.

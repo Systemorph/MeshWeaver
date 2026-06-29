@@ -6,5 +6,8 @@
 [AttributeUsage(AttributeTargets.Class)]
 public class TargetTypeAttribute(Type type) : Attribute
 {
+    /// <summary>
+    /// The database type the annotated type is mapped to.
+    /// </summary>
     public Type Type { get; set; } = type;
 }

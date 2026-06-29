@@ -1,4 +1,7 @@
 ﻿using System.Collections.Immutable;
+using System.Reactive;
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using MeshWeaver.Domain;
 using MeshWeaver.Messaging.Serialization;
 using MeshWeaver.ServiceProvider;
@@ -8,12 +11,37 @@ using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Messaging;
 
+/// <summary>
+/// Immutable fluent builder for a message hub (actor). Each <c>With…</c> / <c>Add…</c>
+/// method returns a copy with the new setting applied, so a configuration can be composed
+/// across multiple layers (NodeType config, default node-hub config, module extensions)
+/// before <see cref="Build{TAddress}"/> materialises the hub. Carries the hub's address,
+/// service registrations, message handlers, initialization gates, post/delivery pipelines,
+/// posting identity and timeouts.
+/// </summary>
 public record MessageHubConfiguration
 {
+    /// <summary>
+    /// Name of the framework's built-in initialization gate that is opened once the
+    /// hub's <see cref="BuildupActions"/> complete. It admits only
+    /// <c>InitializeHubRequest</c> during initialization and otherwise marks the
+    /// completion of buildup.
+    /// </summary>
     public const string InitializeGateName = "Initialize";
 
+    /// <summary>The address (actor identity / routing key) of the hub this configuration builds.</summary>
     public Address Address { get; }
+    /// <summary>
+    /// Service provider of the parent scope, used to resolve the parent hub, an inherited
+    /// <c>ITypeRegistry</c>, and a shared <c>AccessService</c>. Null for a root hub with no parent.
+    /// </summary>
     protected readonly IServiceProvider? ParentServiceProvider;
+    /// <summary>
+    /// Creates a configuration rooted at the given address, seeding the type registry (inheriting
+    /// the parent's registry when available) and the default post / delivery pipelines.
+    /// </summary>
+    /// <param name="parentServiceProvider">Service provider of the parent scope, or null for a root hub.</param>
+    /// <param name="address">The address of the hub to build.</param>
     public MessageHubConfiguration(IServiceProvider? parentServiceProvider, Address address)
     {
         Address = address;
@@ -44,52 +72,142 @@ public record MessageHubConfiguration
     public MessageHubConfiguration WithInitializationGate(string name, Predicate<IMessageDelivery>? allowDuringInit = null)
         => this with { InitializationGates = InitializationGates.SetItem(name, allowDuringInit ?? (_ => false)) };
 
-    public IMessageHub? ParentHub
-    {
-        get
-        {
-            try
-            {
-                return ParentServiceProvider?.GetService<IMessageHub>();
-            }
-            catch
-            {
-                return null;
-            }
-        }
-    }
+    // Cache the resolved parent hub. Without this, every access went through an Autofac
+    // `GetService<IMessageHub>()` resolve — and DataExtensions.RouteStreamMessage reads
+    // ParentHub on EVERY routed stream message, so under a stream-message storm the
+    // per-message DI resolve dominated CPU (the 155%-CPU routing hot frame in the
+    // 2026-06-11 thread-execution wedge: RouteStreamMessage → get_ParentHub → GetService).
+    // The parent hub never changes for a given configuration, so resolve once and reuse.
+    // (Proven safe via the AccessContext-canary cache-revert diagnostic: the canary fails
+    // identically with or without this cache — the cache is not the cause.)
+    private IMessageHub? _parentHub;
+
+    /// <summary>
+    /// The parent hub, resolved once via DI on the parent scope and cached thereafter.
+    /// Do NOT call during disposal before it has been resolved — the parent scope may already
+    /// be disposed, and an ObjectDisposedException here pollutes test output. If you need
+    /// the parent hub at disposal time, capture it at construction (e.g.
+    /// <see cref="MessageService.ParentHub"/>).
+    /// </summary>
+    public IMessageHub? ParentHub => _parentHub ??= ParentServiceProvider?.GetService<IMessageHub>();
+
+    /// <summary>
+    /// TaskScheduler used by this hub's message-dispatch ActionBlocks. Each hub is
+    /// an actor and gets its own scheduler so async continuations don't serialise
+    /// through some other hub's single thread.
+    ///
+    /// <para>
+    /// <b>Default behaviour:</b> when unset, the hub uses <see cref="TaskScheduler.Default"/>
+    /// (the thread pool). The Orleans grain glue (<c>MessageHubGrain</c>) sets this
+    /// explicitly to the grain's scheduler for the root grain hub so Orleans can
+    /// attribute work to the grain (keep-alive, statistics, RequestContext flow).
+    /// Hosted hubs created via <c>GetHostedHub(...)</c> default to <c>TaskScheduler.Default</c> —
+    /// they are sibling actors, not extensions of the parent.
+    /// </para>
+    ///
+    /// <para>See <c>Doc/Architecture/OrleansTaskScheduler.md</c> for the threading model.</para>
+    /// </summary>
+    public TaskScheduler? TaskScheduler { get; init; }
+
+    /// <summary>
+    /// Sets the <see cref="TaskScheduler"/> this hub's ActionBlocks run on.
+    /// Use the grain's scheduler ONLY for the root grain hub; every other hub
+    /// (hosted hubs, per-node hubs, _Exec, kernel hubs) should use a separate
+    /// scheduler — usually leave it unset so the default <see cref="System.Threading.Tasks.TaskScheduler.Default"/>
+    /// applies. See <c>Doc/Architecture/OrleansTaskScheduler.md</c>.
+    /// </summary>
+    public MessageHubConfiguration WithTaskScheduler(TaskScheduler scheduler)
+        => this with { TaskScheduler = scheduler };
+
+    /// <summary>
+    /// Declares UNDER WHICH IDENTITY this hub posts — the never-null AccessContext
+    /// invariant made an explicit, per-hub configuration decision rather than a
+    /// per-callsite concern (<c>feedback_access_context_always_set</c>). See
+    /// <see cref="PostingIdentity"/> for the three-source contract.
+    ///
+    /// <para>Default <see cref="PostingIdentity.User"/>: the hub posts as the user and
+    /// is UNHAPPY (logs an error + fails the delivery) when it posts a non-exempt
+    /// application message with no ambient user context. Set
+    /// <see cref="PostingIdentity.System"/> for framework infrastructure (routing,
+    /// persistence) whose own posts run as System automatically.</para>
+    /// </summary>
+    public PostingIdentity PostingIdentity { get; init; } = PostingIdentity.User;
+
+    /// <summary>
+    /// Declares this hub's posting identity. See <see cref="PostingIdentity"/>.
+    /// </summary>
+    public MessageHubConfiguration WithPostingIdentity(PostingIdentity identity)
+        => this with { PostingIdentity = identity };
 
     internal Func<IServiceCollection, IServiceCollection> Services { get; init; } = x => x;
 
+    /// <summary>
+    /// The DI container backing the built hub. Null until <see cref="CreateServiceProvider"/>
+    /// runs (during <see cref="Build{TAddress}"/>); thereafter it is the hub's own scoped provider.
+    /// </summary>
     public IServiceProvider ServiceProvider { get; set; } = null!;
     private readonly Lock serviceProviderLock = new();
 
-    internal ImmutableList<Func<IMessageHub, CancellationToken, Task>> DisposeActions { get; init; } = [];
+    // Synchronous dispose actions seeded onto the hub at construction. Disposal at the
+    // hub level is purely synchronous (see MessageHub.DisposeImpl → disposables.Dispose)
+    // — nothing here is a Task or an IObservable. Anything genuinely async must be
+    // bridged onto the mesh IO pool by the layer that owns it.
+    internal ImmutableList<Action<IMessageHub>> DisposeActions { get; init; } = [];
 
     internal ImmutableList<MessageHandlerItem> MessageHandlers { get; init; } = ImmutableList<MessageHandlerItem>.Empty;
 
-    protected internal ImmutableList<Func<IMessageHub, CancellationToken, Task>> BuildupActions { get; init; } = ImmutableList<Func<IMessageHub, CancellationToken, Task>>.Empty;
+    // Observable buildup actions: each is a factory returning IObservable<Unit>. The hub composes them
+    // reactively (Observable.Concat) when it handles InitializeHubRequest and opens the Initialize gate on
+    // completion — the init path is observable end-to-end, no await. See MessageHub.HandleInitialize.
+    /// <summary>
+    /// Reactive initialization actions registered via the observable <c>WithInitialization</c>
+    /// overload. Each is a factory returning an <see cref="IObservable{Unit}"/> that the hub
+    /// composes (concatenated) when handling <c>InitializeHubRequest</c>, opening the Initialize
+    /// gate on completion. The init path is observable end-to-end — no await.
+    /// </summary>
+    protected internal ImmutableList<Func<IMessageHub, IObservable<Unit>>> BuildupActions { get; init; } = ImmutableList<Func<IMessageHub, IObservable<Unit>>>.Empty;
+    /// <summary>
+    /// Synchronous initialization actions run during <see cref="Build{TAddress}"/> BEFORE message
+    /// processing starts, so services such as the workspace / data context are fully configured
+    /// before any message arrives. Registered via the synchronous <c>WithInitialization</c> overload.
+    /// </summary>
     protected internal ImmutableList<Action<IMessageHub>> SyncBuildupActions { get; init; } = [];
 
     internal IMessageHub HubInstance { get; set; } = null!;
 
+    /// <summary>
+    /// Registers a synchronous action to run when the built hub is disposed. Hub-level disposal
+    /// is purely synchronous; anything genuinely async must be bridged onto the mesh IO pool by
+    /// the layer that owns it.
+    /// </summary>
+    /// <param name="disposeAction">Action invoked with the hub instance during disposal.</param>
+    /// <returns>A new configuration with the dispose action appended.</returns>
     public MessageHubConfiguration RegisterForDisposal(Action<IMessageHub> disposeAction)
-        => RegisterForDisposal((m, _) =>
-        {
-            disposeAction.Invoke(m);
-            return Task.CompletedTask;
-        });
-    public MessageHubConfiguration RegisterForDisposal(Func<IMessageHub, CancellationToken, Task> disposeAction) => this with { DisposeActions = DisposeActions.Add(disposeAction) };
+        => this with { DisposeActions = DisposeActions.Add(disposeAction) };
 
 
 
 
 
+    /// <summary>
+    /// Adds DI service registrations for the built hub. The supplied configurator is composed onto
+    /// any previously registered services and applied when the hub's service provider is created.
+    /// </summary>
+    /// <param name="configuration">Receives the service collection (already carrying prior registrations) and returns it with additions.</param>
+    /// <returns>A new configuration whose service-registration chain includes the configurator.</returns>
     public MessageHubConfiguration WithServices(Func<IServiceCollection, IServiceCollection> configuration)
     {
         return this with { Services = x => configuration(Services(x)) };
     }
 
+    /// <summary>
+    /// Declares a hosted (child) hub at the given address. Messages routed to that address are
+    /// delivered to a hosted hub lazily created from <paramref name="configuration"/>; the original
+    /// delivery is then marked forwarded.
+    /// </summary>
+    /// <param name="address">Address of the hosted hub.</param>
+    /// <param name="configuration">Builds the hosted hub's configuration.</param>
+    /// <returns>A new configuration with a route registered for the hosted address.</returns>
     public MessageHubConfiguration WithHostedHub(Address address,
         Func<MessageHubConfiguration, MessageHubConfiguration> configuration)
         =>
@@ -105,7 +223,19 @@ public record MessageHubConfiguration
         }));
 
 
+    /// <summary>
+    /// The type registry for this hub, mapping CLR types to their serialization type names. Seeded
+    /// from the parent's registry (when present) plus the address type; extended via
+    /// <see cref="WithType{T}"/> / <see cref="WithType"/> and the <c>WithHandler</c> registrations.
+    /// </summary>
     public ITypeRegistry TypeRegistry { get; }
+    /// <summary>
+    /// Builds the DI service collection for the hub: registers the <c>IMessageHub</c>, its hosted-hubs
+    /// collection, the type registry, the parent-hub reference, and an <c>AccessService</c> when the
+    /// parent scope has none, then applies the user-supplied <see cref="WithServices"/> registrations.
+    /// </summary>
+    /// <param name="parent">The parent hub, or null for a root hub.</param>
+    /// <returns>The populated service collection (not yet built into a provider).</returns>
     protected virtual ServiceCollection ConfigureServices(IMessageHub? parent)
     {
         var services = new ServiceCollection();
@@ -127,8 +257,45 @@ public record MessageHubConfiguration
     private record ParentMessageHub(IMessageHub Value);
 
 
-    public MessageHubConfiguration WithHandler<TMessage>(Func<IMessageHub, IMessageDelivery<TMessage>, IMessageDelivery> delivery, Func<IMessageHub, IMessageDelivery, bool>? filter = null) =>
-        WithHandler<TMessage>((h, d, _) => Task.FromResult(delivery.Invoke(h, d)), filter);
+    /// <summary>
+    /// Registers a synchronous handler for messages of type <typeparamref name="TMessage"/>. The
+    /// handler runs inline on the hub's single ActionBlock thread (preserving the actor-model
+    /// <c>TaskScheduler.Current</c> invariant) and its result is emitted reactively. Non-matching
+    /// deliveries (failing the type check or <paramref name="filter"/>) pass through unchanged.
+    /// </summary>
+    /// <typeparam name="TMessage">The message type this handler processes.</typeparam>
+    /// <param name="delivery">Handles a typed delivery and returns the resulting delivery (e.g. processed / forwarded).</param>
+    /// <param name="filter">Optional predicate gating which deliveries the handler accepts; defaults to a target-address match.</param>
+    /// <returns>A new configuration with the handler registered.</returns>
+    public MessageHubConfiguration WithHandler<TMessage>(Func<IMessageHub, IMessageDelivery<TMessage>, IMessageDelivery> delivery, Func<IMessageHub, IMessageDelivery, bool>? filter = null)
+    {
+        TypeRegistry.GetOrAddType(typeof(TMessage));
+        return this with
+        {
+            MessageHandlers = MessageHandlers.Add(
+                new(typeof(TMessage),
+                    (h, m, c) =>
+                        m is IMessageDelivery<TMessage> mdTyped &&
+                        (filter ?? DefaultFilter).Invoke(h, m)
+                            // Synchronous handler: run inline on the hub's ActionBlock
+                            // thread (preserves TaskScheduler.Current — the actor-model
+                            // invariant WithTaskScheduler relies on) and emit via
+                            // Observable.Return. No pool hop.
+                            ? Observable.Return(delivery.Invoke(h, mdTyped))
+                            : Observable.Return(m)))
+        };
+    }
+    /// <summary>
+    /// Registers an asynchronous handler for messages of type <typeparamref name="TMessage"/>. The
+    /// handler's synchronous prefix runs inline on the hub's ActionBlock scheduler (actor-model
+    /// invariant) and the returned <see cref="Task{T}"/> is bridged into the reactive rule chain — an
+    /// already-completed task emits inline; genuine async resumes on its own continuation.
+    /// Non-matching deliveries pass through unchanged.
+    /// </summary>
+    /// <typeparam name="TMessage">The message type this handler processes.</typeparam>
+    /// <param name="delivery">Handles a typed delivery (with a cancellation token) and returns a task producing the resulting delivery.</param>
+    /// <param name="filter">Optional predicate gating which deliveries the handler accepts; defaults to a target-address match.</param>
+    /// <returns>A new configuration with the handler registered.</returns>
     public MessageHubConfiguration WithHandler<TMessage>(Func<IMessageHub, IMessageDelivery<TMessage>, CancellationToken, Task<IMessageDelivery>> delivery, Func<IMessageHub, IMessageDelivery, bool>? filter = null)
     {
         TypeRegistry.GetOrAddType(typeof(TMessage));
@@ -139,8 +306,13 @@ public record MessageHubConfiguration
                     (h, m, c) =>
                         m is IMessageDelivery<TMessage> mdTyped &&
                         (filter ?? DefaultFilter).Invoke(h, m)
-                            ? delivery.Invoke(h, mdTyped, c)
-                            : Task.FromResult(m)))
+                            // Invoke inline so the handler's synchronous prefix runs on
+                            // the hub's ActionBlock scheduler (actor-model invariant);
+                            // bridge the resulting Task to the rule chain. An
+                            // already-completed Task emits inline; genuine async resumes
+                            // on its own continuation.
+                            ? delivery.Invoke(h, mdTyped, c).ToObservable()
+                            : Observable.Return(m)))
         };
     }
 
@@ -153,12 +325,57 @@ public record MessageHubConfiguration
         return targetWithoutHost.Equals(hub.Address);
     }
 
+    /// <summary>
+    /// Idempotent: re-adding the same delegate (method group / cached lambda)
+    /// is a no-op. Without this, a configurator composed through multiple layers
+    /// (e.g. NodeType <c>HubConfiguration</c> + <c>DefaultNodeHubConfiguration</c>
+    /// + module extensions) silently stacks duplicate init runs — each watcher /
+    /// subscription that runs in the init then fires N×, dispatching N rounds
+    /// per state change. Symptom: Resubmit test saw Thread.Messages accumulate
+    /// the same response id 3× because <c>ThreadSubmissionServer.InstallServerWatcher</c>
+    /// was running on N stacked subscriptions.
+    /// </summary>
     public MessageHubConfiguration WithInitialization(Action<IMessageHub> action) => this with
     {
-        SyncBuildupActions = SyncBuildupActions.Add(action)
+        SyncBuildupActions = SyncBuildupActions.Contains(action)
+            ? SyncBuildupActions
+            : SyncBuildupActions.Add(action)
     };
-    public MessageHubConfiguration WithInitialization(Func<IMessageHub, CancellationToken, Task> action) => this with { BuildupActions = BuildupActions.Add(action) };
 
+    /// <summary>
+    /// Reactive init overload — caller returns an <see cref="IObservable{Unit}"/> the hub
+    /// will Subscribe to during init. The Initialize gate opens after the observable
+    /// emits its first value or completes. Wrap a Task-returning method via
+    /// <c>Observable.FromAsync(() =&gt; method())</c> for the typical "load initial data
+    /// before processing messages" shape. Hub-reachable code returns
+    /// <see cref="IObservable{T}"/>, never <see cref="Task{T}"/>.
+    /// <para>Idempotent on the caller's delegate identity — the inner action is tracked
+    /// in <see cref="RegisteredObservableInits"/> so repeat <c>WithInitialization(F)</c>
+    /// calls (composed configurators) collapse to one Subscribe.</para>
+    /// </summary>
+    public MessageHubConfiguration WithInitialization(Func<IMessageHub, IObservable<Unit>> action)
+    {
+        if (RegisteredObservableInits.Contains(action))
+            return this;
+        // Store the observable directly — no Task bridge. HandleInitialize composes the BuildupActions
+        // reactively and opens the gate on completion.
+        return this with
+        {
+            RegisteredObservableInits = RegisteredObservableInits.Add(action),
+            BuildupActions = BuildupActions.Add(action),
+        };
+    }
+
+    /// <summary>Identity-tracking set for the observable <c>WithInitialization</c> overload.</summary>
+    internal ImmutableHashSet<Func<IMessageHub, IObservable<Unit>>> RegisteredObservableInits { get; init; } =
+        ImmutableHashSet<Func<IMessageHub, IObservable<Unit>>>.Empty;
+
+    /// <summary>
+    /// Builds and caches <see cref="ServiceProvider"/> from <see cref="ConfigureServices"/> (with
+    /// module setup applied) the first time it is called. Idempotent and thread-safe — a second call
+    /// is a no-op once the provider exists.
+    /// </summary>
+    /// <param name="parent">The parent hub passed to <see cref="ConfigureServices"/>, or null for a root hub.</param>
     protected void CreateServiceProvider(IMessageHub? parent)
     {
         lock (serviceProviderLock)
@@ -171,6 +388,15 @@ public record MessageHubConfiguration
         }
     }
 
+    /// <summary>
+    /// Materialises the hub: creates its service provider, resolves the <c>IMessageHub</c> instance,
+    /// registers it with the parent's hosted-hubs collection, runs the synchronous
+    /// <see cref="SyncBuildupActions"/>, then starts message processing.
+    /// </summary>
+    /// <typeparam name="TAddress">The address type of the hub being built.</typeparam>
+    /// <param name="serviceProvider">The ambient service provider (the configuration uses its own parent scope to resolve dependencies).</param>
+    /// <param name="address">The hub's address.</param>
+    /// <returns>The fully initialized hub instance.</returns>
     public virtual IMessageHub Build<TAddress>(IServiceProvider serviceProvider, TAddress address)
     {
         // TODO V10: Check whether this address is already built in hosted hubs collection, if not build. (18.01.2024, Roland Buergi)
@@ -198,14 +424,33 @@ public record MessageHubConfiguration
     internal ImmutableDictionary<(Type, string?), object> Properties { get; init; } = ImmutableDictionary<(Type, string?), object>.Empty;
     internal ImmutableList<Func<SyncPipelineConfig, SyncPipelineConfig>> PostPipeline { get; set; }
 
+    /// <summary>
+    /// Appends a synchronous post-pipeline step, run when a message is posted (the outbound side,
+    /// e.g. AccessContext stamping). Steps compose in registration order.
+    /// </summary>
+    /// <param name="pipeline">Extends a <see cref="SyncPipelineConfig"/> by adding a step to its synchronous delivery chain.</param>
+    /// <returns>A new configuration with the post-pipeline step appended.</returns>
     public MessageHubConfiguration AddPostPipeline(Func<SyncPipelineConfig, SyncPipelineConfig> pipeline) => this with { PostPipeline = PostPipeline.Add(pipeline) };
     private SyncPipelineConfig UserServicePostPipeline(SyncPipelineConfig syncPipeline)
     {
         var userService = syncPipeline.Hub.ServiceProvider.GetService<AccessService>();
         var logger = syncPipeline.Hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.AccessContext");
+        // The hub's declared posting identity (feedback_access_context_always_set):
+        //   User (default) → post as the ambient user; UNHAPPY (error + fail delivery)
+        //     when no user context is set for a non-exempt message.
+        //   System (routing, persistence) → the hub's own otherwise-unattributed posts
+        //     run as system-security automatically.
+        // 🚨 Read from the LIVE hub Configuration, NOT this instance's field: PostPipeline
+        // captured the UserServicePostPipeline method-group delegate against the
+        // configuration instance at constructor time, BEFORE any `with { PostingIdentity }`
+        // copy. syncPipeline.Hub.Configuration is the final, fully-`with`'d configuration,
+        // so it carries the declared value.
+        var postingIdentity = syncPipeline.Hub.Configuration.PostingIdentity;
         return syncPipeline.AddPipeline((d, next) =>
         {
-            // If AccessContext was pre-set by ImpersonateAsHub(), don't overwrite
+            // If AccessContext was pre-set by ImpersonateAsHub() / ImpersonateAsSystem()
+            // / WithAccessContext() / ResponseFor() / a forwarded user delivery, don't
+            // overwrite — that explicit identity wins over the hub's default mode.
             if (d.AccessContext is not null)
                 return next(d);
 
@@ -213,30 +458,193 @@ public record MessageHubConfiguration
             // CircuitContext = per-circuit AsyncLocal (set by CircuitAccessHandler).
             var context = userService?.Context ?? userService?.CircuitContext;
             if (context is not null)
-                d = d.SetAccessContext(context);
-            else
             {
-                // Hub-to-hub: identify as the hub itself using its full address path
-                var hubAddress = syncPipeline.Hub.Address;
+                d = d.SetAccessContext(context);
+            }
+            else if (postingIdentity == PostingIdentity.System && !IsAccessContextExempt(d.Message))
+            {
+                // 🚨 SYSTEM-IDENTITY HUB (routing / persistence — the courier and the
+                // store). Its own otherwise-unattributed posts run as System: stamp the
+                // well-known system-security identity (granted Permission.All) so the
+                // post is never null and never fail-closed. Declared once at hub startup
+                // via WithPostingIdentity(PostingIdentity.System) instead of every
+                // callsite remembering ImpersonateAsSystem. Exempt messages
+                // ([SystemMessage]/[CanBeIgnored]/DeliveryFailure) keep their null —
+                // they carry no security-relevant payload.
                 d = d.SetAccessContext(new AccessContext
                 {
-                    ObjectId = hubAddress.ToFullString(),
-                    Name = hubAddress.ToString()
+                    ObjectId = SystemSecurityObjectId,
+                    Name = SystemSecurityObjectId
                 });
             }
-            logger?.LogDebug(
-                "PostPipeline: hub={Hub}, message={MessageType}, user={User} (context={Context}, circuit={Circuit})",
-                syncPipeline.Hub.Address,
-                d.Message?.GetType().Name ?? "(null)",
-                d.AccessContext?.ObjectId ?? "(no-context)",
-                userService?.Context?.ObjectId ?? "(null)",
-                userService?.CircuitContext?.ObjectId ?? "(null)");
+            else if (!IsAccessContextExempt(d.Message))
+            {
+                // 🚨 NEVER-NULL INVARIANT (feedback_access_context_always_set):
+                // AccessContext must ALWAYS be set. Three sources, no fourth —
+                // infrastructure → System, user-contexts → the user,
+                // threads/activities → the owner. Once those sources are wired,
+                // there is no legitimate application post with a null resolved
+                // context — a null here is a GAP.
+                //
+                // NO IDENTITY, NO DELIVERY. We do NOT throw (this runs
+                // synchronously inside Post, called from countless fire-and-forget
+                // callsites where a synchronous throw would be unobserved or crash
+                // an unrelated path). Instead we LOG AN ERROR (naming the sending
+                // hub + target so the null source is identifiable) and FAIL THE
+                // DELIVERY immediately — return delivery.Failed(...) and short-
+                // circuit the rest of the pipeline. ScheduleNotify still enqueues
+                // the Failed delivery; NotifyAsync detects State == Failed and
+                // ReportFailure posts a DeliveryFailure back to the sender, so an
+                // awaiting hub.Observe(...) gets a clean OnError instead of a
+                // silent null-context delivery that fails closed deep in
+                // AccessControl. The error log is the tripwire — CI parses the
+                // `MeshWeaver.AccessContext` channel for `[Error]` lines, so every
+                // gap surfaces loudly and gets fixed at its source.
+                //
+                // Genuine identity-free framework traffic is EXEMPT (see
+                // IsAccessContextExempt): [SystemMessage] (heartbeats, hub-lifecycle,
+                // SetCurrentRequest, Save/DeleteMeshNodeRequest), [CanBeIgnored]
+                // (Shutdown/Dispose/HeartBeat), and DeliveryFailure (the courier's
+                // own error channel). Infrastructure that legitimately bypasses RLS
+                // opts in EXPLICITLY at the callsite via ImpersonateAsSystem /
+                // ImpersonateAsHub (routing's own posts, persistence, cache
+                // hydration) — that sets d.AccessContext before this pipeline runs,
+                // so it short-circuits above and never reaches here. The portal hub
+                // stamps the circuit user via its own PortalApplication PostPipeline
+                // step (the SOURCE fix), so its layout/agent/model subscribes carry
+                // the user and never trip this.
+                var failureReason =
+                    $"AccessContext must never be null for an application post — no identity, no delivery. " +
+                    $"hub={syncPipeline.Hub.Address}, message={d.Message?.GetType().Name ?? "(null)"}, " +
+                    $"target={d.Target?.ToString() ?? "(null)"} was posted with no AccessContext " +
+                    $"(no Context, no CircuitContext). The post lost the user identity. Wire its source: " +
+                    $"user-context from the circuit/HTTP user; infrastructure via " +
+                    $"AccessService.ImpersonateAsSystem / PostOptions.ImpersonateAsHub; threads/activities " +
+                    $"via AccessContextScope.FromNode. See AccessContextPropagation.md / " +
+                    $"feedback_access_context_always_set.";
+                logger?.LogError("PostPipeline: {FailureReason}", failureReason);
+                return d.Failed(failureReason);
+            }
+            // Per-message; gate on Debug so the 5 arg evaluations + boxing are
+            // skipped when not enabled.
+            if (logger?.IsEnabled(LogLevel.Debug) == true)
+                logger.LogDebug(
+                    "PostPipeline: hub={Hub}, message={MessageType}, user={User} (context={Context}, circuit={Circuit})",
+                    syncPipeline.Hub.Address,
+                    d.Message?.GetType().Name ?? "(null)",
+                    d.AccessContext?.ObjectId ?? "(no-context)",
+                    userService?.Context?.ObjectId ?? "(null)",
+                    userService?.CircuitContext?.ObjectId ?? "(null)");
             return next(d);
         });
     }
+
+    /// <summary>
+    /// True for messages marked <see cref="SystemMessageAttribute"/> — framework
+    /// infrastructure traffic (heartbeats, hub-lifecycle, subscription
+    /// management) that carries no security-relevant payload, so the mesh
+    /// hub's "posted with no AccessContext" warning would only be developer
+    /// noise. <b>Responses</b> (GetDataResponse, DeliveryFailure) are NOT
+    /// marked — they auto-inherit the request's AccessContext via
+    /// <see cref="PostOptions.ResponseFor"/>, so they get proper identity
+    /// without needing an exemption.
+    /// </summary>
+    // The well-known System identity. Must match
+    // AccessService.ImpersonateAsSystem's literal and
+    // MeshWeaver.Mesh.Security.WellKnownUsers.System; we don't reference that
+    // constant here because Messaging.Hub sits below Mesh.Contract in the project
+    // graph and adding the dep would invert it (same rationale as ImpersonateAsSystem).
+    private const string SystemSecurityObjectId = "system-security";
+
+    private static bool IsFrameworkLifecycleMessage(object? message)
+    {
+        if (message is null) return false;
+        var type = message.GetType();
+        return _systemMessageCache.GetOrAdd(type,
+            static t => t.GetCustomAttributes(typeof(SystemMessageAttribute), inherit: true).Length > 0);
+    }
+
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<Type, bool> _systemMessageCache = new();
+
+    /// <summary>
+    /// True when a null <c>AccessContext</c> is legitimate for this message and the
+    /// never-null tripwire (<see cref="UserServicePostPipeline"/>) must NOT throw.
+    /// The exempt set is exactly the genuinely identity-free framework traffic:
+    /// <list type="bullet">
+    /// <item><b><see cref="SystemMessageAttribute"/></b> — heartbeats, hub-lifecycle,
+    /// subscription management, <c>SetCurrentRequest</c>, <c>Save/DeleteMeshNodeRequest</c>
+    /// (per-node-hub self-writes). Carry no security-relevant payload.</item>
+    /// <item><b><see cref="CanBeIgnoredAttribute"/></b> — fire-and-forget control traffic
+    /// (Shutdown / Dispose / HeartBeat) with no awaiting requester.</item>
+    /// <item><b><see cref="DeliveryFailure"/></b> — the courier's OWN error channel. It
+    /// inherits the request's identity via <c>PostOptions.ResponseFor</c> when the request
+    /// had one; throwing here would turn a NACK into a NACK-of-a-NACK and break routing's
+    /// error reporting (it is already treated as non-NACKable in
+    /// <c>RoutingServiceBase</c> / <c>HierarchicalRouting</c>).</item>
+    /// </list>
+    /// Everything else is an application post and MUST carry an identity (user, System, or
+    /// owner) — a null is a real gap to fix at the source, surfaced by the throw.
+    /// </summary>
+    private static bool IsAccessContextExempt(object? message)
+    {
+        if (message is null) return true; // nothing to attribute
+        if (message is DeliveryFailure) return true;
+        if (IsFrameworkLifecycleMessage(message)) return true;
+        return _canBeIgnoredCache.GetOrAdd(message.GetType(),
+            static t => t.GetCustomAttributes(typeof(CanBeIgnoredAttribute), inherit: true).Length > 0);
+    }
+
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<Type, bool> _canBeIgnoredCache = new();
+
     internal ImmutableList<Func<AsyncPipelineConfig, AsyncPipelineConfig>> DeliveryPipeline { get; set; }
     internal TimeSpan? StartupTimeout { get; init; } //= new(0, 0, 30); // Default 10 seconds
-    internal TimeSpan RequestTimeout { get; init; } = new(0, 0, 30);
+    // Default 60s. The previous 30s default was hitting CI consistently on
+    // cross-hub forward chains (mesh hub → per-node hub → response) when the
+    // per-node hub's cold-cache initialization took >30s on slow Linux runners
+    // — a typical scenario for AcceMe TodoDataChangeWorkflowTest and Content
+    // tests where a Node's first activation reads + validates from persistence.
+    // The test client hub override (MonolithMeshTestBase.WithRequestTimeout(60s))
+    // covered the test-side post but intermediate sync/mesh hubs still
+    // followed the 30s default. 60s as a framework default matches that
+    // ceiling; anything genuinely longer than that is a real bug.
+    internal TimeSpan RequestTimeout { get; init; } = new(0, 1, 0);
+
+    /// <summary>
+    /// Quiescing-phase drain budget per hub. When <see cref="MessageHub.Dispose"/> fires,
+    /// the hub waits up to this long for in-flight response callbacks (registered via
+    /// <c>hub.Observe(...)</c>) to resolve naturally before forcibly cancelling them
+    /// with <see cref="ObjectDisposedException"/>.
+    /// <para>
+    /// Default: 2 s — enough headroom for a slow CI scheduler to deliver a legitimate
+    /// reply, low enough that a leaked callback fails fast.
+    /// </para>
+    /// <para>
+    /// Tests with deliberately abandoned callbacks (e.g. <c>client.Observe(req)</c> +
+    /// <c>Subscribe(...)</c> with no completion path) should call
+    /// <see cref="WithQuiesceTimeout"/> on their hub configuration to drop this to
+    /// ~100-500 ms — every leaked callback otherwise costs the full budget per
+    /// dispose, which compounds across N test classes.
+    /// </para>
+    /// </summary>
+    internal TimeSpan QuiesceTimeout { get; init; } = TimeSpan.FromSeconds(2);
+
+    /// <summary>
+    /// Sets the Quiescing-phase drain budget for this hub. See <see cref="QuiesceTimeout"/>.
+    /// </summary>
+    public MessageHubConfiguration WithQuiesceTimeout(TimeSpan timeout) => this with { QuiesceTimeout = timeout };
+
+    /// <summary>
+    /// Per-hub aggregate inbound-depth watermark for the storm breaker's Invariant-3 safety
+    /// net (see <c>Doc/Architecture/ActionBlockWedgePrevention.md</c>). Default
+    /// <see cref="MessageStormBreaker.DefaultAggregateWatermark"/>. When this hub's single
+    /// inbox crosses the watermark, sheddable ([CanBeIgnored], non-lifecycle) traffic is shed
+    /// at ingestion so the turn loop keeps draining user-facing + lifecycle work. Tests inject
+    /// a low value to drive a hub past the line deterministically.
+    /// </summary>
+    internal int AggregateWatermark { get; init; } = MessageStormBreaker.DefaultAggregateWatermark;
+
+    /// <summary>Sets the aggregate inbound-depth watermark. See <see cref="AggregateWatermark"/>.</summary>
+    public MessageHubConfiguration WithAggregateWatermark(int watermark) => this with { AggregateWatermark = watermark };
 
     /// <summary>
     /// When true, the hub will not automatically post InitializeHubRequest during construction.
@@ -268,36 +676,73 @@ public record MessageHubConfiguration
     public MessageHubConfiguration WithDeferredInitialization(bool deferred = true) =>
         this with { DeferredInitialization = deferred };
 
+    /// <summary>
+    /// Appends an asynchronous delivery-pipeline step, run when a message is delivered to its target
+    /// handler (the inbound side, e.g. propagating the user identity to AsyncLocal). Steps compose in
+    /// registration order.
+    /// </summary>
+    /// <param name="pipeline">Extends an <see cref="AsyncPipelineConfig"/> by adding a step to its asynchronous delivery chain.</param>
+    /// <returns>A new configuration with the delivery-pipeline step appended.</returns>
     public MessageHubConfiguration AddDeliveryPipeline(Func<AsyncPipelineConfig, AsyncPipelineConfig> pipeline) => this with { DeliveryPipeline = DeliveryPipeline.Add(pipeline) };
     private AsyncPipelineConfig UserServiceDeliveryPipeline(AsyncPipelineConfig asyncPipeline)
     {
         var userService = asyncPipeline.Hub.ServiceProvider.GetService<AccessService>();
         var logger = asyncPipeline.Hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.AccessContext");
-        return asyncPipeline.AddPipeline(async (d, ct, next) =>
+        return asyncPipeline.AddPipeline((d, ct, next) =>
         {
             var accessContext = d.AccessContext;
-            logger?.LogDebug(
-                "DeliveryPipeline: hub={Hub}, message={MessageType}, user={User}, sender={Sender}",
-                asyncPipeline.Hub.Address,
-                d.Message?.GetType().Name ?? "(null)",
-                accessContext?.ObjectId ?? "(no-context)",
-                d.Sender);
+            // Per-message; gate on Debug.
+            if (logger?.IsEnabled(LogLevel.Debug) == true)
+                logger.LogDebug(
+                    "DeliveryPipeline: hub={Hub}, message={MessageType}, user={User}, sender={Sender}",
+                    asyncPipeline.Hub.Address,
+                    d.Message?.GetType().Name ?? "(null)",
+                    accessContext?.ObjectId ?? "(no-context)",
+                    d.Sender);
+            // Only propagate USER identities to AsyncLocal. Hub-shaped principals
+            // may legitimately ride delivery.AccessContext (for AccessControl)
+            // but MUST NOT leak into AsyncLocal — see
+            // Doc/Architecture/AccessContextPropagation.md. The MessageHub.HandleMessageAsync
+            // hook applies the same guard for the rule-chain dispatch boundary.
+            var shouldStamp = accessContext is not null
+                && !AccessService.LooksLikeHubPrincipal(accessContext.ObjectId);
+            if (!shouldStamp)
+                return next.Invoke(d, ct);
+            // next() emits synchronously (terminates at ScheduleExecution); Finally
+            // clears the AsyncLocal stamp when that emission completes — the same
+            // set/clear window the old try/finally gave us, with no await.
             userService?.SetContext(accessContext);
-            try
-            {
-                return await next.Invoke(d, ct);
-            }
-            finally
-            {
-                userService?.SetContext(null);
-            }
+            return next.Invoke(d, ct).Finally(() => userService?.SetContext(null));
         });
     }
 
+    /// <summary>
+    /// Reads a configuration property previously stored via <see cref="Set{T}"/>, keyed by type
+    /// <typeparamref name="T"/> and an optional context discriminator.
+    /// </summary>
+    /// <typeparam name="T">The property type / key.</typeparam>
+    /// <param name="context">Optional discriminator allowing multiple values of the same type; null for the default slot.</param>
+    /// <returns>The stored value, or the default of <typeparamref name="T"/> when none is set.</returns>
     public T? Get<T>(string? context = null) => (T?)(Properties.GetValueOrDefault((typeof(T), context)) ?? default(T));
+    /// <summary>
+    /// Stores a configuration property keyed by type <typeparamref name="T"/> and an optional context
+    /// discriminator, replacing any existing value for that key.
+    /// </summary>
+    /// <typeparam name="T">The property type / key.</typeparam>
+    /// <param name="value">The value to store.</param>
+    /// <param name="context">Optional discriminator allowing multiple values of the same type; null for the default slot.</param>
+    /// <returns>A new configuration with the property set.</returns>
     public MessageHubConfiguration Set<T>(T value, string? context = null) => this with { Properties = Properties.SetItem((typeof(T), context), value!) };
 
 
+    /// <summary>
+    /// Registers type <typeparamref name="T"/> in this hub's <see cref="TypeRegistry"/> under the
+    /// given serialization name (defaulting to its full type name) so messages carrying it can be
+    /// (de)serialized. Mutates the shared registry in place and returns the same configuration.
+    /// </summary>
+    /// <typeparam name="T">The type to register.</typeparam>
+    /// <param name="name">Optional serialization type name; defaults to <c>typeof(T).FullName</c>.</param>
+    /// <returns>This configuration.</returns>
     public MessageHubConfiguration WithType<T>(string? name = null)
     {
         var typeName = name ?? typeof(T).FullName!;
@@ -305,6 +750,14 @@ public record MessageHubConfiguration
         TypeRegistry.WithType(typeof(T), typeName);
         return this;
     }
+    /// <summary>
+    /// Registers <paramref name="type"/> in this hub's <see cref="TypeRegistry"/> under the given
+    /// serialization name (defaulting to its full type name). The non-generic counterpart to
+    /// <see cref="WithType{T}"/>; mutates the shared registry in place and returns the same configuration.
+    /// </summary>
+    /// <param name="type">The type to register.</param>
+    /// <param name="name">Optional serialization type name; defaults to <c>type.FullName</c>.</param>
+    /// <returns>This configuration.</returns>
     public MessageHubConfiguration WithType(Type type, string? name = null)
     {
         TypeRegistry.WithType(type, name ?? type.FullName!);
@@ -313,8 +766,17 @@ public record MessageHubConfiguration
 
 }
 
+/// <summary>
+/// Builder for a hub's asynchronous delivery pipeline. Wraps the current delivery delegate and the
+/// owning hub; each <see cref="AddPipeline"/> nests a new step in front of the existing chain.
+/// </summary>
 public record AsyncPipelineConfig
 {
+    /// <summary>
+    /// Creates a pipeline configuration around the owning hub and an initial delivery delegate.
+    /// </summary>
+    /// <param name="Hub">The hub this pipeline belongs to.</param>
+    /// <param name="asyncDelivery">The initial (innermost) asynchronous delivery delegate.</param>
     public AsyncPipelineConfig(IMessageHub Hub, AsyncDelivery asyncDelivery)
     {
         this.Hub = Hub;
@@ -324,14 +786,30 @@ public record AsyncPipelineConfig
 
     internal AsyncDelivery AsyncDelivery { get; init; }
 
+    /// <summary>
+    /// Adds a step in front of the current delivery chain. The step receives the delivery, a
+    /// cancellation token, and the next delegate to invoke (the previously composed chain).
+    /// </summary>
+    /// <param name="pipeline">The step: given the delivery, token and next delegate, produces the resulting delivery stream.</param>
+    /// <returns>A new configuration whose delivery delegate runs the added step.</returns>
     public AsyncPipelineConfig AddPipeline(
-        Func<IMessageDelivery, CancellationToken, AsyncDelivery, Task<IMessageDelivery>> pipeline)
+        Func<IMessageDelivery, CancellationToken, AsyncDelivery, IObservable<IMessageDelivery>> pipeline)
         => this with { AsyncDelivery = (d, ct) => pipeline.Invoke(d, ct, AsyncDelivery) };
 
+    /// <summary>The hub that owns this delivery pipeline.</summary>
     public IMessageHub Hub { get; init; }
 }
+/// <summary>
+/// Builder for a hub's synchronous post pipeline. Wraps the current delivery delegate and the
+/// owning hub; each <see cref="AddPipeline"/> nests a new step in front of the existing chain.
+/// </summary>
 public record SyncPipelineConfig
 {
+    /// <summary>
+    /// Creates a pipeline configuration around the owning hub and an initial delivery delegate.
+    /// </summary>
+    /// <param name="Hub">The hub this pipeline belongs to.</param>
+    /// <param name="syncDelivery">The initial (innermost) synchronous delivery delegate.</param>
     public SyncPipelineConfig(IMessageHub Hub, SyncDelivery syncDelivery)
     {
         this.Hub = Hub;
@@ -341,11 +819,18 @@ public record SyncPipelineConfig
 
     internal SyncDelivery SyncDelivery { get; init; }
 
+    /// <summary>
+    /// Adds a step in front of the current post chain. The step receives the delivery and the next
+    /// delegate to invoke (the previously composed chain).
+    /// </summary>
+    /// <param name="pipeline">The step: given the delivery and next delegate, returns the resulting delivery.</param>
+    /// <returns>A new configuration whose post delegate runs the added step.</returns>
     public SyncPipelineConfig AddPipeline(
         Func<IMessageDelivery, SyncDelivery, IMessageDelivery> pipeline)
         => this with { SyncDelivery = d => pipeline.Invoke(d, SyncDelivery) };
 
+    /// <summary>The hub that owns this post pipeline.</summary>
     public IMessageHub Hub { get; init; }
 }
 
-internal record MessageHandlerItem(Type MessageType, Func<IMessageHub, IMessageDelivery, CancellationToken, Task<IMessageDelivery>> AsyncDelivery);
+internal record MessageHandlerItem(Type MessageType, Func<IMessageHub, IMessageDelivery, CancellationToken, IObservable<IMessageDelivery>> AsyncDelivery);

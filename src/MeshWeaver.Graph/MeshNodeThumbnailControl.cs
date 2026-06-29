@@ -25,14 +25,21 @@ public record MeshNodeThumbnailControl(
         var title = node?.Name ?? fallbackPath;
         var imageUrl = GetImageUrlForNode(node);
         var nodeType = node?.NodeType;
+        // GetAbstract handles BOTH typed MarkdownContent AND the degraded JsonElement frame —
+        // `as MarkdownContent` → null on JsonElement frames, so the description (and thus the whole
+        // control record) would alternate between Abstract and node.Description across frames →
+        // dedup never fires → thumbnail render storm.
+        var description = node?.Description ?? GetAbstract(node?.Content);
 
-        return new MeshNodeThumbnailControl(nodePath, title, null, imageUrl, nodeType);
+        return new MeshNodeThumbnailControl(nodePath, title, description, imageUrl, nodeType);
     }
 
     /// <summary>
     /// Gets the image URL for a node. Public so other builders can reuse.
     /// Priority: content.avatar > content.logo > node.Icon
     /// Handles both typed objects and JsonElement/Dictionary content.
+    /// User-entered paths starting with <c>content:</c> or <c>content/</c> are resolved
+    /// against the node's content collection.
     /// </summary>
     public static string? GetImageUrlForNode(MeshNode? node)
     {
@@ -45,78 +52,59 @@ public record MeshNodeThumbnailControl(
             // Try JsonElement first (common when deserializing from JSON)
             if (node.Content is System.Text.Json.JsonElement jsonElement)
             {
-                // Try avatar
-                if (jsonElement.TryGetProperty("avatar", out var avatarProp) && avatarProp.ValueKind == System.Text.Json.JsonValueKind.String)
-                {
-                    var avatar = avatarProp.GetString();
-                    if (!string.IsNullOrEmpty(avatar))
-                        return avatar;
-                }
-                // Try Avatar (PascalCase)
-                if (jsonElement.TryGetProperty("Avatar", out var avatarPascalProp) && avatarPascalProp.ValueKind == System.Text.Json.JsonValueKind.String)
-                {
-                    var avatar = avatarPascalProp.GetString();
-                    if (!string.IsNullOrEmpty(avatar))
-                        return avatar;
-                }
-                // Try logo
-                if (jsonElement.TryGetProperty("logo", out var logoProp) && logoProp.ValueKind == System.Text.Json.JsonValueKind.String)
-                {
-                    var logo = logoProp.GetString();
-                    if (!string.IsNullOrEmpty(logo))
-                        return logo;
-                }
-                // Try Logo (PascalCase)
-                if (jsonElement.TryGetProperty("Logo", out var logoPascalProp) && logoPascalProp.ValueKind == System.Text.Json.JsonValueKind.String)
-                {
-                    var logo = logoPascalProp.GetString();
-                    if (!string.IsNullOrEmpty(logo))
-                        return logo;
-                }
+                var resolved = TryResolveJsonProperty(jsonElement, "avatar", node.Path)
+                    ?? TryResolveJsonProperty(jsonElement, "Avatar", node.Path)
+                    ?? TryResolveJsonProperty(jsonElement, "logo", node.Path)
+                    ?? TryResolveJsonProperty(jsonElement, "Logo", node.Path);
+                if (resolved != null)
+                    return resolved;
             }
             // Try Dictionary<string, object>
             else if (node.Content is IDictionary<string, object> dict)
             {
                 if (dict.TryGetValue("avatar", out var avatar) || dict.TryGetValue("Avatar", out avatar))
                 {
-                    var avatarStr = avatar?.ToString();
-                    if (!string.IsNullOrEmpty(avatarStr))
-                        return avatarStr;
+                    var resolved = MeshNodeImageHelper.ResolveContentPath(avatar?.ToString(), node.Path);
+                    if (!string.IsNullOrEmpty(resolved))
+                        return resolved;
                 }
                 if (dict.TryGetValue("logo", out var logo) || dict.TryGetValue("Logo", out logo))
                 {
-                    var logoStr = logo?.ToString();
-                    if (!string.IsNullOrEmpty(logoStr))
-                        return logoStr;
+                    var resolved = MeshNodeImageHelper.ResolveContentPath(logo?.ToString(), node.Path);
+                    if (!string.IsNullOrEmpty(resolved))
+                        return resolved;
                 }
             }
             else
             {
                 // Fall back to reflection for typed objects
-                // Try to get Avatar property (for Person)
                 var avatarProperty = node.Content.GetType().GetProperty("Avatar");
                 if (avatarProperty != null)
                 {
-                    var avatarValue = avatarProperty.GetValue(node.Content) as string;
-                    if (!string.IsNullOrEmpty(avatarValue))
-                        return avatarValue;
+                    var resolved = MeshNodeImageHelper.ResolveContentPath(
+                        avatarProperty.GetValue(node.Content) as string, node.Path);
+                    if (!string.IsNullOrEmpty(resolved))
+                        return resolved;
                 }
 
-                // Try to get Logo property (for Organization)
                 var logoProperty = node.Content.GetType().GetProperty("Logo");
                 if (logoProperty != null)
                 {
-                    var logoValue = logoProperty.GetValue(node.Content) as string;
-                    if (!string.IsNullOrEmpty(logoValue))
-                        return logoValue;
+                    var resolved = MeshNodeImageHelper.ResolveContentPath(
+                        logoProperty.GetValue(node.Content) as string, node.Path);
+                    if (!string.IsNullOrEmpty(resolved))
+                        return resolved;
                 }
             }
         }
 
-        // Check MarkdownContent.Thumbnail — resolve relative path to absolute URL
-        if (node.Content is MarkdownContent mc && !string.IsNullOrEmpty(mc.Thumbnail))
+        // Check MarkdownContent.Thumbnail — resolve relative path to absolute URL. GetThumbnail
+        // reads the value from BOTH the typed MarkdownContent AND the degraded JsonElement frame,
+        // so the resolved image URL doesn't alternate (typed → thumbnail vs JsonElement → node.Icon)
+        // across frames and storm the card.
+        var thumbnail = GetThumbnail(node.Content);
+        if (!string.IsNullOrEmpty(thumbnail))
         {
-            var thumbnail = mc.Thumbnail;
             if (thumbnail.StartsWith("/") || thumbnail.StartsWith("http"))
                 return thumbnail;
             var ns = node.Namespace;
@@ -126,5 +114,46 @@ public record MeshNodeThumbnailControl(
 
         // Fall back to node.Icon — resolves content: references, URLs, inline SVG, emojis
         return MeshNodeImageHelper.ResolveNodeIcon(node);
+    }
+
+    /// <summary>
+    /// Reads <see cref="MarkdownContent.Abstract"/> from either a typed instance or a degraded
+    /// <see cref="System.Text.Json.JsonElement"/> frame (cache / cross-hub / change-feed reads). The
+    /// JsonElement branch mirrors the avatar/logo handling above so the projection is frame-stable.
+    /// </summary>
+    private static string? GetAbstract(object? content) => content switch
+    {
+        MarkdownContent mc => mc.Abstract,
+        System.Text.Json.JsonElement je => TryGetJsonString(je, "abstract") ?? TryGetJsonString(je, "Abstract"),
+        _ => null
+    };
+
+    /// <summary>
+    /// Reads <see cref="MarkdownContent.Thumbnail"/> from either a typed instance or a degraded
+    /// <see cref="System.Text.Json.JsonElement"/> frame, so the resolved image URL is frame-stable.
+    /// </summary>
+    private static string? GetThumbnail(object? content) => content switch
+    {
+        MarkdownContent mc => mc.Thumbnail,
+        System.Text.Json.JsonElement je => TryGetJsonString(je, "thumbnail") ?? TryGetJsonString(je, "Thumbnail"),
+        _ => null
+    };
+
+    private static string? TryGetJsonString(System.Text.Json.JsonElement element, string propertyName)
+    {
+        if (element.ValueKind != System.Text.Json.JsonValueKind.Object
+            || !element.TryGetProperty(propertyName, out var prop)
+            || prop.ValueKind != System.Text.Json.JsonValueKind.String)
+            return null;
+        var value = prop.GetString();
+        return string.IsNullOrEmpty(value) ? null : value;
+    }
+
+    private static string? TryResolveJsonProperty(System.Text.Json.JsonElement element, string propertyName, string nodePath)
+    {
+        if (!element.TryGetProperty(propertyName, out var prop) || prop.ValueKind != System.Text.Json.JsonValueKind.String)
+            return null;
+        var value = prop.GetString();
+        return string.IsNullOrEmpty(value) ? null : MeshNodeImageHelper.ResolveContentPath(value, nodePath);
     }
 }

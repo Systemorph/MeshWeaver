@@ -9,6 +9,7 @@ using MeshWeaver.Data.Persistence;
 using MeshWeaver.Data.Serialization;
 using MeshWeaver.Data.Validation;
 using MeshWeaver.Domain;
+using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using MeshWeaver.ShortGuid;
 using MeshWeaver.Utils;
@@ -19,6 +20,11 @@ using Namotion.Reflection;
 
 namespace MeshWeaver.Data;
 
+/// <summary>
+/// Extension methods that wire the data plugin onto a message hub (<c>AddData</c>) and register
+/// data sources on a <see cref="DataContext"/>, plus the unified-path/reference resolution and
+/// data-message handlers that back workspace reads, writes and patches.
+/// </summary>
 public static class DataExtensions
 {
     /// <summary>
@@ -60,9 +66,18 @@ public static class DataExtensions
 
     extension(MessageHubConfiguration config)
     {
+        /// <summary>Adds the data plugin to the hub configuration with no extra data-context configuration.</summary>
+        /// <returns>The updated hub configuration.</returns>
         public MessageHubConfiguration AddData() =>
             config.AddData(x => x);
 
+        /// <summary>
+        /// Adds the data plugin to the hub configuration. The first call installs the default
+        /// configuration (workspace registration, serialization, routing and handlers); each call
+        /// appends a data-context configurator that runs when the workspace is built.
+        /// </summary>
+        /// <param name="dataPluginConfiguration">Configurator applied to the data context (e.g. to register data sources).</param>
+        /// <returns>The updated hub configuration.</returns>
         public MessageHubConfiguration AddData(Func<DataContext, DataContext> dataPluginConfiguration)
         {
 
@@ -89,10 +104,9 @@ public static class DataExtensions
         return config
             .WithInitialization(h => h.GetWorkspace())
             // Initialize workspace and open gate after hub is fully constructed (handlers registered)
-            .WithInitialization((h, _) =>
+            .WithInitialization(h =>
             {
                 ((Workspace)h.GetWorkspace()).OpenInitializationGate();
-                return Task.CompletedTask;
             })
             .WithRoutes(routes => routes.WithHandler((delivery, _) => RouteStreamMessage(routes.Hub, delivery)))
             .WithServices(sc =>
@@ -146,8 +160,11 @@ public static class DataExtensions
                 typeof(DataChangedEvent),
                 typeof(DataChangeRequest),
                 typeof(DataChangeResponse),
+                typeof(EntityDeltaUpdate),
                 typeof(SubscribeRequest),
+                typeof(SubscribeAck),
                 typeof(UnsubscribeRequest),
+                typeof(StreamErrorEvent),
                 typeof(GetDomainTypesRequest),
                 typeof(DomainTypesResponse),
                 typeof(TypeDescription),
@@ -155,6 +172,8 @@ public static class DataExtensions
                 typeof(SchemaReference),
                 typeof(DataModelReference),
                 typeof(PatchDataChangeRequest),
+                typeof(PatchDataRequest),
+                typeof(PatchDataResponse),
                 typeof(GetDataRequest),
                 typeof(GetDataResponse),
                 typeof(UnifiedReference),
@@ -176,12 +195,12 @@ public static class DataExtensions
             .WithInitializationGate(DataContext.InitializationGateName, d => d.Message is PingRequest);
     }
 
-    private static Task<IMessageDelivery> RouteStreamMessage(IMessageHub hub, IMessageDelivery request)
+    private static IObservable<IMessageDelivery> RouteStreamMessage(IMessageHub hub, IMessageDelivery request)
     {
         // Check if we're at the target - compare without Host since Host tracks routing path
         var targetWithoutHost = request.Target is not null ? request.Target with { Host = null } : null;
         if (targetWithoutHost is not null && !targetWithoutHost.Equals(hub.Address))
-            return Task.FromResult(request);
+            return Observable.Return(request);
 
         var message = request.Message;
         if (message is RawJson rawJson)
@@ -190,24 +209,39 @@ public static class DataExtensions
             {
                 var deserialized = JsonNode.Parse(rawJson.Content).Deserialize<object>(hub.JsonSerializerOptions);
                 if (deserialized is null)
-                    return Task.FromResult(request.Failed("Error deserializing RawJson: Result is null"));
+                    return Observable.Return(request.Failed("Error deserializing RawJson: Result is null"));
                 request = request.WithMessage(deserialized);
                 message = deserialized;
             }
             catch (Exception ex)
             {
-                return Task.FromResult(request.Failed($"Error deserializing RawJson: {ex}"));
+                return Observable.Return(request.Failed($"Error deserializing RawJson: {ex}"));
             }
         }
         if (message is not StreamMessage streamMessage)
-            return Task.FromResult(request);
+            return Observable.Return(request);
 
         request = request.ForwardTo(SynchronizationAddress.Create(streamMessage.StreamId));
-        var syncHub = hub.GetHostedHub(request.Target!, create: HostedHubCreation.Never);
+
+        // Walk the parent chain looking for the sync sub-hub. The sync hub may
+        // have been created on a different hub than where this RouteStreamMessage
+        // fires — e.g., a cache/portal sub-hub opens a remote stream that creates
+        // its sync hub under itself, while an incoming DataChangedEvent targeted
+        // at a higher-level (parent) address triggers this handler on the parent.
+        // Without the walk, a single GetHostedHub(syncAddr, Never) at the current
+        // hub returns null → message silently dropped.
+        IMessageHub? syncHub = null;
+        var current = hub;
+        while (current is not null)
+        {
+            syncHub = current.GetHostedHub(request.Target!, create: HostedHubCreation.Never);
+            if (syncHub is not null) break;
+            current = current.Configuration.ParentHub;
+        }
         if (syncHub is null)
-            return Task.FromResult(request.Ignored());
+            return Observable.Return(request.Ignored());
         syncHub.DeliverMessage(request);
-        return Task.FromResult(request.Forwarded());
+        return Observable.Return(request.Forwarded());
     }
 
 
@@ -261,21 +295,35 @@ public static class DataExtensions
 
     extension(DataContext dataContext)
     {
+        /// <summary>Registers a partitioned, hub-backed data source on the data context.</summary>
+        /// <typeparam name="TPartition">The partition key type.</typeparam>
+        /// <param name="configuration">Configurator for the partitioned hub data source (e.g. to add types).</param>
+        /// <param name="id">Optional data-source id; a fresh <see cref="DefaultId"/> is used when null.</param>
+        /// <returns>The updated data context.</returns>
         public DataContext AddPartitionedHubSource<TPartition>(Func<PartitionedHubDataSource<TPartition>, PartitionedHubDataSource<TPartition>> configuration,
             object? id = null) =>
             dataContext.WithDataSource(_ => configuration.Invoke(new PartitionedHubDataSource<TPartition>(id ?? DefaultId, dataContext.Workspace)));
 
+        /// <summary>Registers an unpartitioned data source backed by a remote hub address.</summary>
+        /// <param name="address">The address of the hub that owns the source data.</param>
+        /// <param name="configuration">Configurator for the hub data source (e.g. to add types).</param>
+        /// <returns>The updated data context.</returns>
         public DataContext AddHubSource(Address address,
             Func<UnpartitionedHubDataSource, IUnpartitionedDataSource> configuration
         ) =>
             dataContext.WithDataSource(_ => configuration.Invoke(new UnpartitionedHubDataSource(address, dataContext.Workspace)));
 
+        /// <summary>Registers a generic, in-memory unpartitioned data source on the data context.</summary>
+        /// <param name="configuration">Configurator for the generic data source (e.g. to add types and initial data).</param>
+        /// <param name="id">Optional data-source id; a fresh <see cref="DefaultId"/> is used when null.</param>
+        /// <returns>The updated data context.</returns>
         public DataContext AddSource(Func<GenericUnpartitionedDataSource, IUnpartitionedDataSource> configuration,
             object? id = null
         ) =>
             dataContext.WithDataSource(_ => configuration.Invoke(new GenericUnpartitionedDataSource(id ?? DefaultId, dataContext.Workspace)));
     }
 
+    /// <summary>A freshly generated, unique data-source id (a new GUID rendered as a short string).</summary>
     public static object DefaultId => Guid.NewGuid().AsString();
 
     #region Workspace Reference Stream Factories
@@ -445,17 +493,12 @@ public static class DataExtensions
             configuration ?? (c => c)
         );
 
-        // Create an observable that loads the file content
-        var observable = Observable.FromAsync(async ct =>
-        {
-            var result = await fileContentProvider.GetFileContentAsync(reference.Collection, reference.Path, null, ct);
-            return result.Success ? (object?)result.Content : null;
-        });
-
+        // Reactive file read — provider returns IObservable<FileContentResult>.
         stream.RegisterForDisposal(
-            observable
+            fileContentProvider.GetFileContent(reference.Collection, reference.Path)
+                .Select(result => result.Success ? (object?)result.Content : null)
+                .Where(value => value != null)
                 .Select(value => new ChangeItem<object>(value!, stream.StreamId, workspace.Hub.Version))
-                .Where(x => x.Value != null)
                 .DistinctUntilChanged()
                 .Synchronize()
                 .Subscribe(stream)
@@ -469,12 +512,592 @@ public static class DataExtensions
     private static MessageHubConfiguration RegisterDataEvents(this MessageHubConfiguration configuration) =>
         configuration
             .WithHandler<DataChangeRequest>(HandleDataChangeRequest)
+            .WithHandler<PatchDataRequest>(HandlePatchDataRequest)
             .WithHandler<SubscribeRequest>(HandleSubscribeRequest)
             .WithHandler<GetDomainTypesRequest>(HandleGetDomainTypesRequest)
             .WithHandler<GetDataRequest>(HandleGetDataRequest)
             .WithHandler<UpdateUnifiedReferenceRequest>(HandleUpdateUnifiedReferenceRequest)
             .WithHandler<DeleteUnifiedReferenceRequest>(HandleDeleteUnifiedReferenceRequest)
             .WithHandler<AutocompleteRequest>(HandleAutocompleteRequest);
+
+    /// <summary>
+    /// Applies a JSON merge patch to the stream identified by the request's
+    /// <see cref="WorkspaceReference"/>. The workspace's own <c>GetStream</c> resolves
+    /// the stream; the current value is serialised, the patch is merged on top (RFC
+    /// 7396), the result is deserialised back, and <c>stream.Update</c> commits it —
+    /// which ticks any downstream subscribers (e.g. <c>MeshNodeReference</c>) so a
+    /// subsequent <see cref="GetDataRequest"/> sees the new value with no staleness.
+    /// </summary>
+    private static IMessageDelivery HandlePatchDataRequest(
+        IMessageHub hub, IMessageDelivery<PatchDataRequest> request)
+    {
+        var hubPath = hub.Address.ToString();
+        try
+        {
+            var reference = request.Message.Reference;
+
+            // Resolve TReduced from the reference's WorkspaceReference<T> base.
+            var tReduced = WalkBaseForGeneric(reference.GetType(), typeof(WorkspaceReference<>))
+                ?? throw new InvalidOperationException(
+                    $"Reference {reference.GetType().Name} does not inherit from WorkspaceReference<T>");
+
+            var getStream = typeof(IWorkspace).GetMethods()
+                .First(m => m.Name == nameof(IWorkspace.GetStream)
+                    && m.IsGenericMethodDefinition
+                    && m.GetParameters().Length == 2
+                    && m.GetParameters()[0].ParameterType.IsGenericType
+                    && m.GetParameters()[0].ParameterType.GetGenericTypeDefinition()
+                        == typeof(WorkspaceReference<>))
+                .MakeGenericMethod(tReduced);
+
+            dynamic? stream = getStream.Invoke(hub.GetWorkspace(), new object?[] { reference, null });
+            if (stream is null)
+            {
+                var nodeErr = new MeshNodeError(
+                    MeshNodeErrorCode.NotFound,
+                    hubPath,
+                    $"No stream resolved for reference {reference.GetType().Name}");
+                hub.Post(new PatchDataResponse(false, hub.Version)
+                    {
+                        Error = nodeErr.Message,
+                        NodeError = nodeErr,
+                    },
+                    o => o.ResponseFor(request));
+                return request.Processed();
+            }
+
+            // Applying the patch is fire-and-forget relative to the handler —
+            // the helper reads the stream reactively (.Take(1).Subscribe), merges,
+            // and commits via workspace.RequestChange. The response is posted from
+            // inside the subscribe callback so the caller's RegisterCallback fires
+            // AFTER the commit (otherwise a racing read sees pre-patch state).
+            var applyPatch = typeof(DataExtensions)
+                .GetMethod(nameof(ApplyJsonMergePatchAndUpdate),
+                    System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)!
+                .MakeGenericMethod(tReduced);
+            applyPatch.Invoke(null, new object?[]
+            {
+                stream,
+                request.Message.Patch.Content ?? "{}",
+                hub.JsonSerializerOptions,
+                (string?)stream.StreamId,
+                hub.Version,
+                hub,
+                request
+            });
+        }
+        catch (Exception ex)
+        {
+            var nodeErr = ClassifyPatchException(ex, hubPath);
+            hub.Post(new PatchDataResponse(false, hub.Version)
+                {
+                    Error = nodeErr.Message,
+                    NodeError = nodeErr,
+                },
+                o => o.ResponseFor(request));
+        }
+        return request.Processed();
+    }
+
+    /// <summary>
+    /// Maps owner-side patch exceptions to structured <see cref="MeshNodeError"/>
+    /// codes. Unknown exception types fall through as
+    /// <see cref="MeshNodeErrorCode.Unknown"/> with the exception type prefixed
+    /// — visible at the consumer GUI so the gap is diagnosable, not silent.
+    /// </summary>
+    private static MeshNodeError ClassifyPatchException(Exception ex, string path)
+    {
+        var (code, prefix) = ex switch
+        {
+            UnauthorizedAccessException => (MeshNodeErrorCode.AccessDenied, "Access denied"),
+            System.Text.Json.JsonException => (MeshNodeErrorCode.Deserialization, "Patch deserialization failed"),
+            InvalidOperationException ioe when ioe.Message.Contains("Patch must be a JSON object", StringComparison.OrdinalIgnoreCase)
+                => (MeshNodeErrorCode.Deserialization, "Patch deserialization failed"),
+            ArgumentException => (MeshNodeErrorCode.Validation, "Validation failed"),
+            _ => (MeshNodeErrorCode.Unknown, ex.GetType().Name),
+        };
+        return new MeshNodeError(code, path, $"{prefix}: {ex.Message}", ex.StackTrace);
+    }
+
+    /// <summary>
+    /// Typed helper for <see cref="HandlePatchDataRequest"/>. Reads the stream's
+    /// current value synchronously via <c>.Take(1)</c>, applies the JSON merge
+    /// patch, then posts the merged instance through the hub's regular
+    /// <see cref="DataChangeRequest"/> pipeline. This routes through the source
+    /// data-source stream (not the reduced reference stream), so the
+    /// <see cref="InstanceCollection"/> update + persistence + reduced-view
+    /// propagation all happen exactly once — same as a normal Update would do.
+    /// Subscribers to any reduced reference over the same data source see the
+    /// change tick on their stream for free.
+    /// </summary>
+    /// <summary>
+    /// Recursive JSON Merge Patch (RFC 7396) applied to <paramref name="current"/> in-place.
+    /// Patch semantics:
+    /// <list type="bullet">
+    ///   <item><c>null</c> in patch → remove the key from current.</item>
+    ///   <item>Object in patch AND object in current at same key → recurse (deep merge).</item>
+    ///   <item>Anything else → replace current's value with patch's value (deep clone).</item>
+    /// </list>
+    /// Crucial for eventual-consistency: a patch that only touches one nested field
+    /// (e.g. <c>{ "Content": { "RequestedCancellationAt": "..." } }</c>) leaves every
+    /// other nested field on the owner intact, instead of being overwritten by a
+    /// full-object replacement.
+    /// </summary>
+    internal static void MergePatchRecursive(
+        System.Text.Json.Nodes.JsonObject current,
+        System.Text.Json.Nodes.JsonObject patch)
+    {
+        foreach (var kvp in patch.ToArray())
+        {
+            if (kvp.Value is null)
+            {
+                current.Remove(kvp.Key);
+                continue;
+            }
+            if (kvp.Value is System.Text.Json.Nodes.JsonObject patchObj
+                && current[kvp.Key] is System.Text.Json.Nodes.JsonObject currentObj)
+            {
+                MergePatchRecursive(currentObj, patchObj);
+                continue;
+            }
+            current[kvp.Key] = kvp.Value.DeepClone();
+        }
+    }
+
+    /// <summary>
+    /// Merges a parsed cross-hub patch onto the LIVE node (<paramref name="currentNode"/>, mutated in
+    /// place). For a MeshNode whose <see cref="PatchDataRequest.BaseValues"/> are carried, this is a
+    /// type-aware THREE-WAY merge (<see cref="Serialization.MeshNodePatchMerge"/>) so a reordered/stale
+    /// patch can never flap a field — string edits merge by splice, conflicting scalars are refused.
+    /// Without base values (legacy / one-off senders) it falls back to the
+    /// <see cref="DropStaleMonotonicTriggers"/> guard + plain <see cref="MergePatchRecursive"/>.
+    /// </summary>
+    private static void ApplyMeshNodeMerge(
+        System.Text.Json.Nodes.JsonObject currentNode,
+        System.Text.Json.Nodes.JsonObject patchNode,
+        bool isMeshNode,
+        PatchDataRequest message,
+        System.Text.Json.JsonSerializerOptions jsonOpts,
+        ILogger? logger,
+        string hubPath)
+    {
+        if (isMeshNode)
+        {
+            var baseText = message.BaseValues?.Content;
+            if (!string.IsNullOrEmpty(baseText)
+                && System.Text.Json.Nodes.JsonNode.Parse(baseText)
+                    is System.Text.Json.Nodes.JsonObject baseValues)
+            {
+                Serialization.MeshNodePatchMerge.Apply(currentNode, patchNode, baseValues,
+                    onRefuse: key => logger?.LogWarning(
+                        "[MergeGuard] {HubPath}: refused stale/reordered cross-hub write to '{Key}' "
+                        + "(changed since the writer's base) — kept the newer live value.", hubPath, key));
+                return;
+            }
+            // No base carried (MCP one-off / legacy sender): keep the monotonic-trigger guard so a bare
+            // RequestedReleaseAt patch still can't flap, then merge last-write-wins.
+            DropStaleMonotonicTriggers(currentNode, patchNode, jsonOpts, logger, hubPath);
+        }
+        MergePatchRecursive(currentNode, patchNode);
+    }
+
+    /// <summary>
+    /// 🚨 Out-of-order / stale cross-hub patch guard for MeshNode MONOTONIC control fields.
+    /// Applied to the parsed patch (against the LIVE node) BEFORE <see cref="MergePatchRecursive"/>.
+    ///
+    /// <para>A cross-hub <c>stream.Update</c> ships an RFC 7396 merge patch that the owner applies
+    /// last-write-wins per field — correct for ordinary edits (two writers touching DIFFERENT fields
+    /// both land). But a STRICTLY-INCREASING control trigger
+    /// (<c>NodeTypeDefinition.RequestedReleaseAt</c> — every writer sets it to
+    /// <c>DateTimeOffset.UtcNow</c>; never backward, never null) breaks under that rule when two such
+    /// patches apply OUT OF ORDER at the owner under load: the later-arriving but chronologically
+    /// OLDER patch overwrites the newer trigger, the field FLAPS BACK, and the release watcher
+    /// (<c>NodeTypeCompilationHelpers.InstallReleaseRequestWatcher</c>) sees a value at/below its
+    /// last-handled stamp and SKIPS the recompile — the compile-heavy-test flake (and the dropped
+    /// FrameworkStale recompile so <c>CompiledFrameworkVersion</c> never lands).</para>
+    ///
+    /// <para>Surgical fix: for this ONE known monotonic field, DROP the patch's value when it would
+    /// move the live value BACKWARD, leaving the live (newer) value untouched. This changes NOTHING
+    /// for any other field (last-write-wins preserved), never affects a forward move, a first set
+    /// (no live value to compare), or a clear (null patch ⇒ RFC 7396 remove, handled by the merge).
+    /// Backward movement of a strictly-increasing trigger is ALWAYS a reordered/stale patch, never an
+    /// intentional write — so dropping it is the correct merge, not a band-aid. Scoped to MeshNode by
+    /// the caller; the field key is resolved through the same naming policy used elsewhere here.</para>
+    /// </summary>
+    internal static void DropStaleMonotonicTriggers(
+        System.Text.Json.Nodes.JsonObject currentNode,
+        System.Text.Json.Nodes.JsonObject patchNode,
+        System.Text.Json.JsonSerializerOptions jsonOpts,
+        ILogger? logger,
+        string hubPath)
+    {
+        var contentKey = jsonOpts.PropertyNamingPolicy?.ConvertName("Content") ?? "Content";
+        if (patchNode[contentKey] is not System.Text.Json.Nodes.JsonObject patchContent
+            || currentNode[contentKey] is not System.Text.Json.Nodes.JsonObject liveContent)
+            return;
+
+        var triggerKey = jsonOpts.PropertyNamingPolicy?.ConvertName("RequestedReleaseAt")
+            ?? "RequestedReleaseAt";
+        if (!TryReadDateTimeOffset(patchContent, triggerKey, out var patchAt)
+            || !TryReadDateTimeOffset(liveContent, triggerKey, out var liveAt))
+            return;
+
+        if (patchAt < liveAt)
+        {
+            logger?.LogWarning(
+                "[MergeGuard] {HubPath}: dropping stale/reordered {Key} patch ({PatchAt:o} < live {LiveAt:o}) — "
+                + "a strictly-increasing release trigger must not move backward; keeping the live value.",
+                hubPath, triggerKey, patchAt, liveAt);
+            patchContent.Remove(triggerKey);
+        }
+    }
+
+    /// <summary>Reads an ISO-8601 trigger timestamp from <paramref name="obj"/> at
+    /// <paramref name="key"/>. Robust across JsonValue backings (parsed JSON element vs CLR value):
+    /// tries the typed accessor first, falls back to a round-trip string parse. Absent / null /
+    /// unparsable ⇒ <c>false</c> (no guard — the field isn't a comparable trigger).</summary>
+    private static bool TryReadDateTimeOffset(
+        System.Text.Json.Nodes.JsonObject obj, string key, out DateTimeOffset value)
+    {
+        value = default;
+        if (!obj.TryGetPropertyValue(key, out var node) || node is null)
+            return false;
+        if (node is System.Text.Json.Nodes.JsonValue jv
+            && jv.TryGetValue<DateTimeOffset>(out var dto))
+        {
+            value = dto;
+            return true;
+        }
+        return DateTimeOffset.TryParse(node.ToString(),
+            System.Globalization.CultureInfo.InvariantCulture,
+            System.Globalization.DateTimeStyles.RoundtripKind, out value);
+    }
+
+    private static void ApplyJsonMergePatchAndUpdate<T>(
+        ISynchronizationStream<T> stream,
+        string patchText,
+        System.Text.Json.JsonSerializerOptions jsonOpts,
+        string? streamId,
+        long version,
+        IMessageHub hub,
+        IMessageDelivery<PatchDataRequest> request)
+    {
+        var hubPath = hub.Address.ToString();
+
+        // 🚨 MeshNode cross-hub patches apply the merge IN-TURN against LIVE state so two
+        // patches queued back-to-back at the owner (or a patch racing an own-write) each merge
+        // onto the freshest node instead of a stale handler-time snapshot — the deferred path
+        // below reads at handler time then writes the full merged node in a SEPARATE turn, so the
+        // later write drops the earlier writer's just-added field (the concurrent-submit
+        // message-loss race behind Cancel_WithMultiplePending / Hammer). Only the MERGE moves
+        // in-turn; ack/durability/feed stay on the deferred path's proven OFF-TURN shape (see
+        // ApplyMeshNodePatchInTurn). Other reduced types keep the (unchanged) deferred path.
+        if (typeof(T).FullName == "MeshWeaver.Mesh.MeshNode"
+            && hub.GetWorkspace().DataContext.GetDataSourceForType(typeof(T))
+                ?.GetStreamForPartition(null) is { } meshPrimary)
+        {
+            ApplyMeshNodePatchInTurn(stream, meshPrimary, patchText, jsonOpts, version, hub, request);
+            return;
+        }
+
+        stream
+            .Take(1)
+            .Subscribe(change =>
+            {
+                try
+                {
+                    var current = change.Value;
+                    var currentJson = System.Text.Json.JsonSerializer.Serialize(current, jsonOpts);
+                    var currentNode = System.Text.Json.Nodes.JsonNode.Parse(currentJson) as System.Text.Json.Nodes.JsonObject
+                        ?? new System.Text.Json.Nodes.JsonObject();
+                    var patchNode = System.Text.Json.Nodes.JsonNode.Parse(patchText) as System.Text.Json.Nodes.JsonObject
+                        ?? throw new InvalidOperationException("Patch must be a JSON object");
+
+                    // 🚨 Three-way merge for a cross-hub MeshNode patch (base values carried on the
+                    // request) so a reordered/stale write can't flap a field; falls back to the
+                    // monotonic-trigger guard + last-write-wins when no base is carried.
+                    ApplyMeshNodeMerge(currentNode, patchNode,
+                        typeof(T).FullName == "MeshWeaver.Mesh.MeshNode",
+                        request.Message, jsonOpts,
+                        hub.ServiceProvider.GetService<ILoggerFactory>()
+                            ?.CreateLogger("MeshWeaver.Data.MergeGuard"),
+                        hubPath);
+
+                    // 🚨 The OWNER mints the fresh monotonic Version on apply.
+                    // Per the owned-stream contract — SynchronizationStream
+                    // ("ONLY the owning hub sets Version", line ~255) and
+                    // NodeUpdatePipeline ("the OWNER assigns the fresh monotonic
+                    // version on apply") — a client/subscriber carries only the
+                    // BASE Version it observed, so the cross-hub JSON-merge patch
+                    // it computed never touches Version. The sync-stream
+                    // value-update path stamps Hub.Version on the owner; this
+                    // PatchDataRequest merge path must do the same, else every
+                    // cross-hub stream.Update reuses the base Version. For
+                    // MeshNode that collapses the version-history store (keyed on
+                    // {Id}_{Version}) onto a single snapshot — the
+                    // VersionHistoryTest regression after cross-hub Update moved
+                    // from UpdateViaSyncStream (which stamped the owner Version)
+                    // to UpdateRemote (this merge). `version` is hub.Version
+                    // captured for THIS patch message (monotonic, distinct per
+                    // patch).
+                    //
+                    // 🚨 Stamp UNCONDITIONALLY for MeshNode (the only versioned
+                    // reduced stream). The owner's IN-MEMORY MeshNode carries
+                    // Version=0 until a write stamps it (the create's Version=1
+                    // lands only in the persisted file, not the live collection),
+                    // and Version=0 is OMITTED from the serialized `currentNode`
+                    // by DefaultIgnoreCondition=WhenWritingDefault — so a
+                    // ContainsKey guard would never fire and every update would
+                    // keep Version=0, which FileSystemVersionStore.WriteVersion
+                    // skips (Version <= 0) → version-history collapse. Scope to
+                    // MeshNode by type name (this assembly can't reference the
+                    // type — same string-keyed approach used elsewhere here) so
+                    // version-less reduced streams stay untouched.
+                    if (typeof(T).FullName == "MeshWeaver.Mesh.MeshNode")
+                    {
+                        var versionKey = jsonOpts.PropertyNamingPolicy?.ConvertName("Version") ?? "Version";
+                        currentNode[versionKey] = version;
+                    }
+
+                    var mergedJson = currentNode.ToJsonString(jsonOpts);
+                    var merged = System.Text.Json.JsonSerializer.Deserialize<T>(mergedJson, jsonOpts);
+                    if (merged is null)
+                    {
+                        var nodeErr = new MeshNodeError(
+                            MeshNodeErrorCode.Deserialization,
+                            hubPath,
+                            "Merged value deserialised to null",
+                            patchText);
+                        hub.Post(new PatchDataResponse(false, hub.Version)
+                            {
+                                Error = nodeErr.Message,
+                                NodeError = nodeErr,
+                            },
+                            o => o.ResponseFor(request));
+                        return;
+                    }
+
+
+                    // Subscribe to the post-commit emission BEFORE issuing the
+                    // change so we never miss the tick. Post the response from
+                    // the subscription callback — non-blocking, no hub-thread
+                    // deadlock. Previous design used ManualResetEventSlim.Wait
+                    // which blocked the handler's action block; the reducer's
+                    // emission then couldn't be processed by the same hub →
+                    // deadlock under load. The post-commit response timing
+                    // is preserved (caller's RegisterCallback fires after the
+                    // commit lands, before any subsequent Get).
+                    var ackPosted = 0;
+                    void AckOnce(bool success, MeshNodeError? error = null)
+                    {
+                        if (System.Threading.Interlocked.Exchange(ref ackPosted, 1) != 0) return;
+                        var resp = new PatchDataResponse(success, hub.Version);
+                        if (error is not null)
+                            resp = resp with { Error = error.Message, NodeError = error };
+                        hub.Post(resp, o => o.ResponseFor(request));
+                    }
+
+                    var postSub = stream
+                        .Skip(1)
+                        .Take(1)
+                        .Timeout(TimeSpan.FromSeconds(5))
+                        .Subscribe(
+                            committed =>
+                            {
+                                // Chain the ack off DURABLE persistence (not just the
+                                // in-memory commit) so the owner's PatchDataResponse —
+                                // and therefore a cross-hub stream.Update completion —
+                                // guarantees read-after-write: a subsequent Query's
+                                // initial snapshot (which reads storage) reflects this
+                                // write instead of racing the per-node hub's ~200ms
+                                // persistence debounce. Mirrors the commit → persist →
+                                // Ok shape of the deleted UpdateNodeRequest handler.
+                                // No hook registered (non-MeshNode data hub) → ack on
+                                // the in-memory commit, unchanged.
+                                var flush = hub.ServiceProvider.GetService<IPostCommitFlush>();
+                                if (flush is null)
+                                {
+                                    AckOnce(true);
+                                    return;
+                                }
+                                var flushSub = flush.Flush(committed.Value!)
+                                    .Take(1)
+                                    .Timeout(TimeSpan.FromSeconds(10))
+                                    .Subscribe(
+                                        _ => AckOnce(true),
+                                        ex => AckOnce(false, ClassifyPatchException(ex, hubPath)));
+                                hub.RegisterForDisposal(flushSub);
+                            },
+                            ex => AckOnce(false, ClassifyPatchException(ex, hubPath)));
+                    hub.RegisterForDisposal(postSub);
+
+                    // Route via the hub's DataChangeRequest pipeline — the workspace
+                    // writes through the data-source stream (which owns the typed
+                    // InstanceCollection + persistence + reduction fan-out).
+                    hub.GetWorkspace().RequestChange(
+                        DataChangeRequest.Update([merged]), null, null);
+                }
+                catch (Exception ex)
+                {
+                    var nodeErr = ClassifyPatchException(ex, hubPath);
+                    hub.Post(new PatchDataResponse(false, hub.Version)
+                        {
+                            Error = nodeErr.Message,
+                            NodeError = nodeErr,
+                        },
+                        o => o.ResponseFor(request));
+                }
+            });
+    }
+
+    /// <summary>
+    /// In-turn atomic apply for a MeshNode cross-hub <see cref="PatchDataRequest"/>: reads the
+    /// LIVE node, applies the RFC 7396 merge, and writes the merged node back in ONE turn on the
+    /// PRIMARY data-source stream — so concurrent patches each merge onto the freshest state.
+    /// The deferred path reads at handler time then writes the full merged node in a SEPARATE
+    /// turn, so two back-to-back patches drop a sibling writer's just-added field (the
+    /// concurrent-submit message-loss race). Moving ONLY the merge in-turn closes that window.
+    /// <para>Ack/durability/feed are UNCHANGED from the deferred path — posted OFF-TURN on the
+    /// reduced stream's post-commit emission via <see cref="IPostCommitFlush.Flush"/> (durable
+    /// persist + IMeshChangeFeed.Updated cache-eviction publish), THEN ack. This is deliberately
+    /// NOT ack-on-accept (which raced read-after-write) and the flush never runs on the primary
+    /// action-block turn (which wedged SubscribeRequest). The merge lambda is a PURE, bounded
+    /// transform — no IO, no nested re-entrant subscribe.</para>
+    /// </summary>
+    private static void ApplyMeshNodePatchInTurn<T>(
+        ISynchronizationStream<T> stream,
+        ISynchronizationStream<EntityStore> primary,
+        string patchText,
+        System.Text.Json.JsonSerializerOptions jsonOpts,
+        long version,
+        IMessageHub hub,
+        IMessageDelivery<PatchDataRequest> request)
+    {
+        var hubPath = hub.Address.ToString();
+        var collectionName = typeof(T).Name; // "MeshNode"
+        var versionKey = jsonOpts.PropertyNamingPolicy?.ConvertName("Version") ?? "Version";
+        var idKey = jsonOpts.PropertyNamingPolicy?.ConvertName("Id") ?? "Id";
+        var mergeGuardLogger = hub.ServiceProvider.GetService<ILoggerFactory>()
+            ?.CreateLogger("MeshWeaver.Data.MergeGuard");
+
+        var ackPosted = 0;
+        void AckOnce(bool success, MeshNodeError? error = null)
+        {
+            if (System.Threading.Interlocked.Exchange(ref ackPosted, 1) != 0) return;
+            var resp = new PatchDataResponse(success, hub.Version);
+            if (error is not null)
+                resp = resp with { Error = error.Message, NodeError = error };
+            hub.Post(resp, o => o.ResponseFor(request));
+        }
+
+        // OFF-TURN ack — IDENTICAL shape to the deferred path: wait for the reduced stream's
+        // post-commit emission (off the action-block turn), durably Flush (persist + publish the
+        // cache-eviction feed event), then ack. Subscribed BEFORE the write so the tick is never
+        // missed. A no-op/NotFound write never emits → AckOnce already fired inside the lambda.
+        var postSub = stream
+            .Skip(1)
+            .Take(1)
+            .Timeout(TimeSpan.FromSeconds(5))
+            .Subscribe(
+                committed =>
+                {
+                    var flush = hub.ServiceProvider.GetService<IPostCommitFlush>();
+                    if (flush is null) { AckOnce(true); return; }
+                    var flushSub = flush.Flush(committed.Value!)
+                        .Take(1)
+                        .Timeout(TimeSpan.FromSeconds(10))
+                        .Subscribe(
+                            _ => AckOnce(true),
+                            ex => AckOnce(false, ClassifyPatchException(ex, hubPath)));
+                    hub.RegisterForDisposal(flushSub);
+                },
+                ex => AckOnce(false, ClassifyPatchException(ex, hubPath)));
+        hub.RegisterForDisposal(postSub);
+
+        // Resolve the target id SYNCHRONOUSLY from the reduced stream's Current (Id is immutable)
+        // — never a nested Take(1).Subscribe that re-enters the owner.
+        string? preReadId = null;
+        var currentSnapshot = stream.Current is { } cur ? cur.Value : default;
+        if (currentSnapshot is not null)
+        {
+            var snapObj = System.Text.Json.JsonSerializer
+                .SerializeToNode(currentSnapshot, currentSnapshot.GetType(), jsonOpts)
+                as System.Text.Json.Nodes.JsonObject;
+            preReadId = (snapObj?[idKey] ?? snapObj?["Id"] ?? snapObj?["id"])?.GetValue<string>();
+        }
+
+        // ATOMIC read-merge-write on the primary action-block turn — a PURE, bounded transform.
+        // No ack here (the off-turn flush above acks on success), no IO, no nested subscribe.
+        primary.Update(
+            store =>
+            {
+                try
+                {
+                    var s = store ?? new EntityStore();
+                    var collection = s.GetCollection(collectionName);
+                    var entityId = preReadId;
+                    object? liveEntity = string.IsNullOrEmpty(entityId)
+                        ? null
+                        : collection?.Instances.GetValueOrDefault(entityId);
+                    // Cold reduced stream (Current was null): the patch targets the per-node hub's
+                    // single own node — resolve it directly from the store.
+                    if (liveEntity is null && collection is { Instances.Count: 1 })
+                    {
+                        var only = collection.Instances.First();
+                        entityId = only.Key?.ToString();
+                        liveEntity = only.Value;
+                    }
+                    if (liveEntity is null || string.IsNullOrEmpty(entityId))
+                    {
+                        AckOnce(false, new MeshNodeError(
+                            MeshNodeErrorCode.NotFound, hubPath,
+                            "Target MeshNode not found for patch apply"));
+                        return null; // entity gone — no-op
+                    }
+
+                    var currentNode = System.Text.Json.JsonSerializer
+                        .SerializeToNode(liveEntity, liveEntity.GetType(), jsonOpts)
+                        as System.Text.Json.Nodes.JsonObject
+                        ?? new System.Text.Json.Nodes.JsonObject();
+                    var patchNode = System.Text.Json.Nodes.JsonNode.Parse(patchText)
+                        as System.Text.Json.Nodes.JsonObject
+                        ?? throw new InvalidOperationException("Patch must be a JSON object");
+                    // 🚨 Three-way merge (MeshNode-only path) — base values carried on the request let a
+                    // reordered/stale cross-hub patch merge instead of flapping; falls back to the
+                    // monotonic-trigger guard + last-write-wins when no base is carried.
+                    ApplyMeshNodeMerge(currentNode, patchNode, isMeshNode: true,
+                        request.Message, jsonOpts, mergeGuardLogger, hubPath);
+                    // The OWNER mints the monotonic Version on apply (same rule as the deferred path).
+                    currentNode[versionKey] = version;
+                    var merged = System.Text.Json.JsonSerializer
+                        .Deserialize<T>(currentNode.ToJsonString(jsonOpts), jsonOpts);
+                    if (merged is null)
+                        throw new System.Text.Json.JsonException("Merged value deserialised to null");
+
+                    var newStore = s.Update(collectionName, c => c.Update(entityId, merged));
+                    return primary.ApplyChanges(new EntityStoreAndUpdates(
+                        newStore,
+                        [new EntityUpdate(collectionName, entityId, merged) { OldValue = liveEntity }],
+                        primary.StreamId));
+                }
+                catch (Exception ex)
+                {
+                    AckOnce(false, ClassifyPatchException(ex, hubPath));
+                    return null;
+                }
+            },
+            ex => AckOnce(false, ClassifyPatchException(ex, hubPath)));
+    }
+
+    private static Type? WalkBaseForGeneric(Type type, Type genericDef)
+    {
+        for (var t = type; t is not null; t = t.BaseType)
+        {
+            if (t.IsGenericType && t.GetGenericTypeDefinition() == genericDef)
+                return t.GetGenericArguments()[0];
+        }
+        return null;
+    }
 
     private static IMessageDelivery HandleGetDomainTypesRequest(IMessageHub hub, IMessageDelivery<GetDomainTypesRequest> request)
     {
@@ -484,7 +1107,7 @@ public static class DataExtensions
     }
 
 
-    private static async Task<IMessageDelivery> HandleSubscribeRequest(IMessageHub hub, IMessageDelivery<SubscribeRequest> request, CancellationToken ct)
+    private static IMessageDelivery HandleSubscribeRequest(IMessageHub hub, IMessageDelivery<SubscribeRequest> request)
     {
         var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.Data.SubscribeHandler");
 
@@ -492,27 +1115,33 @@ public static class DataExtensions
         logger?.LogDebug("HandleSubscribeRequest: Hub={Hub}, Sender={Sender}, AccessContext.ObjectId={ObjectId}, Reference={Ref}",
             hub.Address, request.Sender, accessContext?.ObjectId, request.Message.Reference);
 
-        // Run read validators before subscribing
-        var validationResult = await RunReadValidatorsAsync(hub, request.Message.Reference, ct);
-        if (!validationResult.IsValid)
-        {
-            logger?.LogWarning("HandleSubscribeRequest: Access denied by validator for {Sender} at {Hub}: {Error}",
-                request.Sender, hub.Address, validationResult.ErrorMessage);
-            hub.Post(new DeliveryFailure(request)
+        var subscription = RunReadValidators(hub, request.Message.Reference)
+            .Subscribe(validationResult =>
+            {
+                if (!validationResult.IsValid)
                 {
-                    ErrorType = ErrorType.Unauthorized,
-                    Message = $"Access denied: {validationResult.ErrorMessage}"
-                },
-                o => o.ResponseFor(request));
-            return request.Processed();
-        }
+                    logger?.LogWarning("HandleSubscribeRequest: Access denied by validator for {Sender} at {Hub}: {Error}",
+                        request.Sender, hub.Address, validationResult.ErrorMessage);
+                    hub.Post(new DeliveryFailure(request)
+                    {
+                        ErrorType = ErrorType.Unauthorized,
+                        Message = $"Access denied: {validationResult.ErrorMessage}"
+                    }, o => o.ResponseFor(request));
+                    return;
+                }
 
-        // Identity flows through message-level AccessContext (stamped by PostPipeline).
-        // No need to set circuitContext on the hub — that would contaminate the shared
-        // AsyncLocal for other operations. Sub-hubs inherit identity from messages.
-        hub.GetWorkspace().SubscribeToClient(request.Message with { Subscriber = request.Sender });
-        logger?.LogDebug("HandleSubscribeRequest: Subscription created for {Sender} at {Hub}",
-            request.Sender, hub.Address);
+                // Identity flows through message-level AccessContext (stamped by PostPipeline).
+                hub.GetWorkspace().SubscribeToClient(request);
+                // Send SubscribeAck immediately to close the hub.Observe(subscribeRequest)
+                // pending callback on the subscriber side. Without this, the callback stays
+                // in responseSubjects until the 30-s RequestTimeout fires (DataChangedEvents
+                // are intercepted by RouteStreamMessage before HandleCallbacks can close it).
+                hub.Post(new SubscribeAck(), o => o.ResponseFor(request));
+                logger?.LogDebug("HandleSubscribeRequest: Subscription created for {Sender} at {Hub}",
+                    request.Sender, hub.Address);
+            });
+
+        hub.RegisterForDisposal(subscription);
         return request.Processed();
     }
 
@@ -528,348 +1157,241 @@ public static class DataExtensions
             e.GetType().GetProperty("PrimaryNodePath") != null);
     }
 
-    private static async Task<IMessageDelivery> HandleDataChangeRequest(IMessageHub hub,
-        IMessageDelivery<DataChangeRequest> request, CancellationToken ct)
+    private static IMessageDelivery HandleDataChangeRequest(IMessageHub hub,
+        IMessageDelivery<DataChangeRequest> request)
     {
         var changeRequest = request.Message;
         var dcLogger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.Data.DataChange");
         dcLogger?.LogDebug("[DataChange] RECEIVED: {Time:HH:mm:ss.fff} hub={Hub}, updates={Updates}, creates={Creates}, deletes={Deletes}",
             DateTime.UtcNow, hub.Address, changeRequest.Updates.Count, changeRequest.Creations.Count, changeRequest.Deletions.Count);
 
-        // Run validators for each type of operation
-        var validationResult = await RunChangeValidatorsAsync(hub, changeRequest, ct);
-        if (!validationResult.IsValid)
-        {
-            var failedLog = new ActivityLog(ActivityCategory.DataUpdate).Fail(validationResult.ErrorMessage ?? "Validation failed");
-            hub.Post(new DataChangeResponse(hub.Version, failedLog),
-                o => o.ResponseFor(request));
-            return request.Processed();
-        }
+        var subscription = RunChangeValidators(hub, changeRequest)
+            .Subscribe(validationResult =>
+            {
+                if (!validationResult.IsValid)
+                {
+                    var failedLog = new ActivityLog(ActivityCategory.DataUpdate).Fail(validationResult.ErrorMessage ?? "Validation failed");
+                    hub.Post(new DataChangeResponse(hub.Version, failedLog),
+                        o => o.ResponseFor(request));
+                    return;
+                }
 
-        // Record change in the bundler for debounced persistent logging.
-        // The Activity is still used for validation error reporting in the response.
-        // Skip activity tracking for activity hubs and for satellite content changes.
-        var isActivityHub = hub.Address.Type == AddressExtensions.ActivityType;
-        if (!isActivityHub && !IsSatelliteContentChange(changeRequest))
-        {
-            var bundler = hub.ServiceProvider.GetService<ActivityLogBundler>();
-            bundler?.RecordChange(changeRequest, ActivityCategory.DataUpdate);
-        }
+                var isActivityHub = hub.Address.Type == AddressExtensions.ActivityType;
+                if (!isActivityHub && !IsSatelliteContentChange(changeRequest))
+                {
+                    hub.ServiceProvider.GetService<ActivityLogBundler>()
+                        ?.RecordChange(changeRequest, ActivityCategory.DataUpdate);
+                }
 
-        var activity = isActivityHub ? null : new Activity(ActivityCategory.DataUpdate, hub);
+                var activity = isActivityHub ? null : new Activity(ActivityCategory.DataUpdate, hub);
 
-        // Capture affected entity paths for undo support (exclude satellite content)
-        if (activity != null && !IsSatelliteContentChange(changeRequest))
-        {
-            var hubPath = hub.Address.ToString();
-            if (!string.IsNullOrEmpty(hubPath))
-                activity.RecordAffectedPaths([hubPath]);
-        }
+                if (activity != null && !IsSatelliteContentChange(changeRequest))
+                {
+                    var hubPath = hub.Address.ToString();
+                    if (!string.IsNullOrEmpty(hubPath))
+                        activity.RecordAffectedPaths([hubPath]);
+                }
 
-        hub.GetWorkspace().RequestChange(changeRequest with { ChangedBy = changeRequest.ChangedBy }, activity, request);
-        if (activity is null)
-            hub.Post(new DataChangeResponse(hub.Version, new(ActivityCategory.DataUpdate) { Status = ActivityStatus.Succeeded }),
-                o => o.ResponseFor(request));
-        else activity.Complete(log =>
-        {
-            var logger2 = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.Data.ActivityCompletion");
-            logger2?.LogDebug("DataChangeRequest activity completed: Status={Status}, Messages={MsgCount}, SubActivities={SubCount}, SubStatuses=[{SubStatuses}]",
-                log.Status, log.Messages.Count, log.SubActivities.Count,
-                string.Join(", ", log.SubActivities.Select(s => $"{s.Category}:{s.Status}")));
-            hub.Post(new DataChangeResponse(hub.Version, log),
-                o => o.ResponseFor(request));
-        });
+                hub.GetWorkspace().RequestChange(changeRequest with { ChangedBy = changeRequest.ChangedBy }, activity, request);
+                if (activity is null)
+                    hub.Post(new DataChangeResponse(hub.Version, new(ActivityCategory.DataUpdate) { Status = ActivityStatus.Succeeded }),
+                        o => o.ResponseFor(request));
+                else activity.Complete(log =>
+                {
+                    var logger2 = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.Data.ActivityCompletion");
+                    logger2?.LogDebug("DataChangeRequest activity completed: Status={Status}, Messages={MsgCount}, SubActivities={SubCount}, SubStatuses=[{SubStatuses}]",
+                        log.Status, log.Messages.Count, log.SubActivities.Count,
+                        string.Join(", ", log.SubActivities.Select(s => $"{s.Category}:{s.Status}")));
+                    hub.Post(new DataChangeResponse(hub.Version, log),
+                        o => o.ResponseFor(request));
+                });
+            });
+
+        hub.RegisterForDisposal(subscription);
         return request.Processed();
     }
 
-    private static async Task<IMessageDelivery> HandleGetDataRequest(IMessageHub hub, IMessageDelivery<GetDataRequest> request, CancellationToken ct)
+    private static IMessageDelivery HandleGetDataRequest(IMessageHub hub, IMessageDelivery<GetDataRequest> request)
     {
-        // Run read validators before getting data
-        var validationResult = await RunReadValidatorsAsync(hub, request.Message.Reference, ct);
-        if (!validationResult.IsValid)
-        {
-            var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.Data.AccessControl");
-            logger?.LogWarning("HandleGetDataRequest: Access denied for {Sender} at {Hub}, ref={Ref}: {Error}",
-                request.Sender, hub.Address, request.Message.Reference, validationResult.ErrorMessage);
-            hub.Post(new GetDataResponse(null, 0) { Error = validationResult.ErrorMessage },
-                o => o.ResponseFor(request));
-            return request.Processed();
-        }
+        var subscription = RunReadValidators(hub, request.Message.Reference)
+            .SelectMany(validationResult =>
+            {
+                if (!validationResult.IsValid)
+                {
+                    var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.Data.AccessControl");
+                    logger?.LogWarning("HandleGetDataRequest: Access denied for {Sender} at {Hub}, ref={Ref}: {Error}",
+                        request.Sender, hub.Address, request.Message.Reference, validationResult.ErrorMessage);
+                    return Observable.Return(new GetDataResponse(null, 0) { Error = validationResult.ErrorMessage });
+                }
 
-        return await HandleGetDataRequestCore(hub, (dynamic)request.Message.Reference, request, ct);
-    }
+                return GetDataResponseObservable(hub, request.Message.Reference, request.Message);
+            })
+            .Catch<GetDataResponse, Exception>(ex =>
+                Observable.Return(new GetDataResponse(null, 0) { Error = ex.Message }))
+            .Subscribe(response => hub.Post(response, o => o.ResponseFor(request)));
 
-    private static Task<IMessageDelivery> HandleGetDataRequestCore(IMessageHub hub, WorkspaceReference reference, IMessageDelivery<GetDataRequest> request, CancellationToken ct)
-    {
-        return HandleGetDataRequestCore(hub, (dynamic)reference, request, ct);
+        hub.RegisterForDisposal(subscription);
+        return request.Processed();
     }
 
     /// <summary>
-    /// Handler for DataPathReference which resolves relative data paths.
-    /// Supports local resolution, virtual paths, or forwarding to remote addresses.
+    /// Generic dispatcher — routes by runtime type of <paramref name="reference"/>.
     /// </summary>
-    private static async Task<IMessageDelivery> HandleGetDataRequestCore(
+    private static IObservable<GetDataResponse> GetDataResponseObservable(IMessageHub hub, WorkspaceReference reference, GetDataRequest request)
+        => GetDataResponseObservable(hub, (dynamic)reference, request);
+
+    /// <summary>
+    /// Observable for DataPathReference — resolves relative data paths to workspace streams,
+    /// virtual handlers, or content-provider reads.
+    /// </summary>
+    private static IObservable<GetDataResponse> GetDataResponseObservable(
         IMessageHub hub,
         DataPathReference reference,
-        IMessageDelivery<GetDataRequest> request,
-        CancellationToken ct)
+        GetDataRequest _)
     {
-        try
+        var path = reference.Path;
+        if (string.IsNullOrEmpty(path))
+            return Observable.Return(new GetDataResponse(null, 0) { Error = "DataPathReference path cannot be empty" });
+
+        var parts = path.Split('/', 2, StringSplitOptions.RemoveEmptyEntries);
+        var pathPrefix = parts[0];
+        var entityId = parts.Length > 1 ? parts[1] : null;
+
+        var workspace = hub.GetWorkspace();
+        var dataContext = workspace.DataContext;
+
+        if (dataContext.VirtualPaths.TryGetValue(pathPrefix, out var virtualHandler))
         {
-            var path = reference.Path;
-            if (string.IsNullOrEmpty(path))
-            {
-                hub.Post(new GetDataResponse(null, 0) { Error = "DataPathReference path cannot be empty" },
-                    o => o.ResponseFor(request));
-                return request.Processed();
-            }
-
-            // Parse path: first segment is collection/prefix, rest is entityId
-            var parts = path.Split('/', 2, StringSplitOptions.RemoveEmptyEntries);
-            var pathPrefix = parts[0];
-            var entityId = parts.Length > 1 ? parts[1] : null;
-
-            // Check for virtual path first
-            var workspace = hub.GetWorkspace();
-            var dataContext = workspace.DataContext;
-
-            if (dataContext.VirtualPaths.TryGetValue(pathPrefix, out var virtualHandler))
-            {
-                // Use virtual path handler
-                var observable = virtualHandler(workspace, entityId);
-                var value = await observable.FirstAsync();
-                hub.Post(new GetDataResponse(value, hub.Version), o => o.ResponseFor(request));
-            }
-            else
-            {
-                // Resolve locally using standard workspace reference based on path structure
-                WorkspaceReference resolvedRef = entityId != null
-                    ? new EntityReference(pathPrefix, entityId)
-                    : new CollectionReference(pathPrefix);
-                var result = await GetDataFromWorkspaceAsync(hub, resolvedRef, ct);
-                hub.Post(result, o => o.ResponseFor(request));
-            }
-        }
-        catch (Exception ex)
-        {
-            hub.Post(new GetDataResponse(null, 0) { Error = ex.Message },
-                o => o.ResponseFor(request));
+            return virtualHandler(workspace, entityId)
+                .Select(value => new GetDataResponse(value, hub.Version));
         }
 
-        return request.Processed();
+        WorkspaceReference resolvedRef = entityId != null
+            ? new EntityReference(pathPrefix, entityId)
+            : new CollectionReference(pathPrefix);
+        return GetDataFromWorkspace(hub, resolvedRef);
     }
 
     /// <summary>
-    /// Handler for FileReference which retrieves file content from a content collection.
+    /// Observable for FileReference — retrieves file content from a content collection.
     /// </summary>
-    private static async Task<IMessageDelivery> HandleGetDataRequestCore(
+    private static IObservable<GetDataResponse> GetDataResponseObservable(
         IMessageHub hub,
         FileReference reference,
-        IMessageDelivery<GetDataRequest> request,
-        CancellationToken ct)
+        GetDataRequest _)
     {
-        try
-        {
-            var collectionName = reference.Partition != null
-                ? $"{reference.Collection}@{reference.Partition}"
-                : reference.Collection;
+        var collectionName = reference.Partition != null
+            ? $"{reference.Collection}@{reference.Partition}"
+            : reference.Collection;
 
-            var result = await GetFileContentAsync(hub, collectionName, reference.Path, reference.NumberOfRows, ct);
-            hub.Post(result, o => o.ResponseFor(request));
-        }
-        catch (Exception ex)
-        {
-            hub.Post(new GetDataResponse(null, 0) { Error = ex.ToString() }, o => o.ResponseFor(request));
-        }
-
-        return request.Processed();
+        return GetFileContent(hub, collectionName, reference.Path, reference.NumberOfRows);
     }
 
     /// <summary>
-    /// Handler for ContentWorkspaceReference which retrieves file content from a content collection.
+    /// Observable for ContentWorkspaceReference — retrieves file content from a content collection.
     /// </summary>
-    private static async Task<IMessageDelivery> HandleGetDataRequestCore(
+    private static IObservable<GetDataResponse> GetDataResponseObservable(
         IMessageHub hub,
         ContentWorkspaceReference reference,
-        IMessageDelivery<GetDataRequest> request,
-        CancellationToken ct)
+        GetDataRequest _)
     {
-        try
-        {
-            var collectionName = reference.Partition != null
-                ? $"{reference.Collection}@{reference.Partition}"
-                : reference.Collection;
+        var collectionName = reference.Partition != null
+            ? $"{reference.Collection}@{reference.Partition}"
+            : reference.Collection;
 
-            var result = await GetFileContentAsync(hub, collectionName, reference.Path, reference.NumberOfRows, ct);
-            hub.Post(result, o => o.ResponseFor(request));
-        }
-        catch (Exception ex)
-        {
-            hub.Post(new GetDataResponse(null, 0) { Error = ex.ToString() }, o => o.ResponseFor(request));
-        }
-
-        return request.Processed();
+        return GetFileContent(hub, collectionName, reference.Path, reference.NumberOfRows);
     }
 
     /// <summary>
-    /// Handler for SchemaReference which returns JSON schema for a type.
-    /// If Type is null/empty, returns schema for the hub's ContentType (first non-MeshNode type),
-    /// falling back to MeshNode if no other type is registered.
+    /// Observable for SchemaReference — synchronous schema generation.
     /// </summary>
-    private static Task<IMessageDelivery> HandleGetDataRequestCore(
+    private static IObservable<GetDataResponse> GetDataResponseObservable(
         IMessageHub hub,
         SchemaReference reference,
-        IMessageDelivery<GetDataRequest> request,
-        CancellationToken _)
+        GetDataRequest _)
     {
-        try
-        {
-            var typeName = reference.Type;
+        var typeName = reference.Type;
 
-            // If no type specified, prefer ContentType over MeshNode for default schema
-            if (string.IsNullOrWhiteSpace(typeName))
-            {
-                var workspace = hub.GetWorkspace();
-                // Find first non-MeshNode type source (the ContentType)
-                var contentTypeSource = workspace.DataContext.TypeSources.Values
-                    .FirstOrDefault(ts => ts.TypeDefinition.Type.FullName != "MeshWeaver.Mesh.MeshNode");
-
-                // Fall back to first type source if no ContentType found
-                var typeSource = contentTypeSource ?? workspace.DataContext.TypeSources.Values.FirstOrDefault();
-
-                if (typeSource != null)
-                {
-                    typeName = typeSource.TypeDefinition.CollectionName;
-                }
-                else
-                {
-                    // No types registered
-                    hub.Post(new GetDataResponse(new SchemaInfo("", "{}"), hub.Version), o => o.ResponseFor(request));
-                    return Task.FromResult(request.Processed());
-                }
-            }
-
-            var schema = GenerateJsonSchema(hub, typeName);
-            hub.Post(new GetDataResponse(new SchemaInfo(typeName, schema), hub.Version), o => o.ResponseFor(request));
-        }
-        catch (Exception ex)
-        {
-            hub.Post(new GetDataResponse(null, 0) { Error = ex.Message }, o => o.ResponseFor(request));
-        }
-
-        return Task.FromResult(request.Processed());
-    }
-
-    /// <summary>
-    /// Handler for DataModelReference which returns all available data types.
-    /// </summary>
-    private static Task<IMessageDelivery> HandleGetDataRequestCore(
-        IMessageHub hub,
-        DataModelReference _,
-        IMessageDelivery<GetDataRequest> request,
-        CancellationToken __)
-    {
-        try
-        {
-            var types = GetDomainTypes(hub).ToList();
-            hub.Post(new GetDataResponse(types, hub.Version), o => o.ResponseFor(request));
-        }
-        catch (Exception ex)
-        {
-            hub.Post(new GetDataResponse(null, 0) { Error = ex.Message }, o => o.ResponseFor(request));
-        }
-
-        return Task.FromResult(request.Processed());
-    }
-
-private static async Task<IMessageDelivery> HandleGetDataRequestCore<TReference>(IMessageHub hub,
-        WorkspaceReference<TReference> reference, IMessageDelivery<GetDataRequest> request, CancellationToken _)
-    {
-        try
+        if (string.IsNullOrWhiteSpace(typeName))
         {
             var workspace = hub.GetWorkspace();
-            var stream = workspace.GetStream(reference, x => x.ReturnNullWhenNotPresent());
+            var contentTypeSource = workspace.DataContext.TypeSources.Values
+                .FirstOrDefault(ts => ts.TypeDefinition.Type.FullName != "MeshWeaver.Mesh.MeshNode");
+            var typeSource = contentTypeSource ?? workspace.DataContext.TypeSources.Values.FirstOrDefault();
 
-            var val = stream == null ? null : await stream.FirstAsync();
-            object? result = val == null ? null : val.Value;
-            hub.Post(new GetDataResponse(result, hub.Version), o => o.ResponseFor(request));
-        }
-        catch (Exception ex)
-        {
-            // Handle any immediate exceptions
-            hub.Post(new GetDataResponse(null, 0) { Error = ex.ToString() }, o => o.ResponseFor(request));
+            if (typeSource != null)
+                typeName = typeSource.TypeDefinition.CollectionName;
+            else
+                return Observable.Return(new GetDataResponse(new SchemaInfo("", "{}"), hub.Version));
         }
 
-        return request.Processed();
-
+        var schema = GenerateJsonSchema(hub, typeName);
+        return Observable.Return(new GetDataResponse(new SchemaInfo(typeName, schema), hub.Version));
     }
 
     /// <summary>
-    /// Handler for UnifiedReference which resolves paths locally.
-    /// Format: prefix:path (e.g., "data:Collection/id", "content:logos/logo.svg")
-    /// The request is already routed to the correct hub via WithTarget().
+    /// Observable for DataModelReference — synchronous list of registered types.
     /// </summary>
-    private static async Task<IMessageDelivery> HandleGetDataRequestCore(
+    private static IObservable<GetDataResponse> GetDataResponseObservable(
+        IMessageHub hub,
+        DataModelReference _,
+        GetDataRequest __)
+    {
+        var types = GetDomainTypes(hub).ToList();
+        return Observable.Return(new GetDataResponse(types, hub.Version));
+    }
+
+    /// <summary>
+    /// Observable for typed <see cref="WorkspaceReference{T}"/> — subscribes to the
+    /// workspace stream and ships every emission as a <see cref="GetDataResponse"/>.
+    /// No <c>Take(1)</c>: updates flow continuously to the consumer.
+    /// </summary>
+    private static IObservable<GetDataResponse> GetDataResponseObservable<TReference>(
+        IMessageHub hub,
+        WorkspaceReference<TReference> reference,
+        GetDataRequest _)
+    {
+        var workspace = hub.GetWorkspace();
+        var stream = workspace.GetStream(reference, x => x.ReturnNullWhenNotPresent());
+
+        if (stream == null)
+            return Observable.Return(new GetDataResponse(null, 0));
+
+        return stream.Select(val => new GetDataResponse(val == null ? null : val.Value, hub.Version));
+    }
+
+    /// <summary>
+    /// Observable for UnifiedReference — resolves paths locally.
+    /// </summary>
+    private static IObservable<GetDataResponse> GetDataResponseObservable(
         IMessageHub hub,
         UnifiedReference reference,
-        IMessageDelivery<GetDataRequest> request,
-        CancellationToken ct)
+        GetDataRequest _)
     {
-        try
+        var (prefix, remainingPath) = ParseUnifiedPath(reference.Path);
+        var (wsRef, immediateResult) = ResolveUnifiedReference(hub, prefix, remainingPath);
+
+        if (immediateResult != null)
+            return Observable.Return(immediateResult);
+
+        if (wsRef == null)
         {
-            // Parse the path to get prefix and remaining path
-            var (prefix, remainingPath) = ParseUnifiedPath(reference.Path);
+            if (prefix == "data" && string.IsNullOrEmpty(remainingPath))
+                return GetDefaultData(hub);
 
-            // Resolve to appropriate workspace reference based on prefix
-            var (wsRef, immediateResult) = ResolveUnifiedReference(hub, prefix, remainingPath);
+            if (prefix == "content")
+                return HandleContentPath(hub, remainingPath, reference.NumberOfRows);
 
-            // If we got an immediate result (e.g., error), return it
-            if (immediateResult != null)
-            {
-                hub.Post(immediateResult, o => o.ResponseFor(request));
-                return request.Processed();
-            }
-
-            if (wsRef == null)
-            {
-                // For default data reference (no path), get the default data
-                if (prefix == "data" && string.IsNullOrEmpty(remainingPath))
-                {
-                    var defaultResult = await GetDefaultDataAsync(hub, ct);
-                    hub.Post(defaultResult, o => o.ResponseFor(request));
-                    return request.Processed();
-                }
-
-                // For content listing (empty path, collection root, subfolder browse)
-                if (prefix == "content")
-                {
-                    var contentResult = await HandleContentPathAsync(hub, remainingPath, reference.NumberOfRows, ct);
-                    hub.Post(contentResult, o => o.ResponseFor(request));
-                    return request.Processed();
-                }
-
-                hub.Post(new GetDataResponse(null, 0) { Error = "Could not resolve workspace reference" },
-                    o => o.ResponseFor(request));
-                return request.Processed();
-            }
-
-            // Resolve locally using prefix-specific handlers
-            var localResult = prefix switch
-            {
-                "data" => await HandleDataPathAsync(hub, remainingPath, reference.NumberOfRows, ct),
-                "area" => await HandleAreaPathAsync(hub, remainingPath, ct),
-                "content" => await HandleContentPathAsync(hub, remainingPath, reference.NumberOfRows, ct),
-                _ => await GetDataFromWorkspaceAsync(hub, wsRef, ct)
-            };
-            hub.Post(localResult, o => o.ResponseFor(request));
-        }
-        catch (Exception ex)
-        {
-            hub.Post(new GetDataResponse(null, 0) { Error = ex.Message },
-                o => o.ResponseFor(request));
+            return Observable.Return(new GetDataResponse(null, 0) { Error = "Could not resolve workspace reference" });
         }
 
-        return request.Processed();
+        return prefix switch
+        {
+            "data" => HandleDataPath(hub, remainingPath, reference.NumberOfRows),
+            "area" => HandleAreaPath(hub, remainingPath),
+            "content" => HandleContentPath(hub, remainingPath, reference.NumberOfRows),
+            _ => GetDataFromWorkspace(hub, wsRef)
+        };
     }
 
     /// <summary>
@@ -991,88 +1513,78 @@ private static async Task<IMessageDelivery> HandleGetDataRequestCore<TReference>
     }
 
     /// <summary>
-    /// Handles data path requests locally.
+    /// Reactive observable for a data path — resolves to a workspace stream, content
+    /// provider read, or default-data observable.
     /// </summary>
-    private static async Task<GetDataResponse> HandleDataPathAsync(
+    private static IObservable<GetDataResponse> HandleDataPath(
         IMessageHub hub,
         string? path,
-        int? numberOfRows,
-        CancellationToken ct)
+        int? numberOfRows)
     {
         var (collection, entityId) = ParseDataPath(path);
 
-        // Default reference (no path)
         if (collection == null)
-            return await GetDefaultDataAsync(hub, ct);
+            return GetDefaultData(hub);
 
-        // Check if collection is a content provider
         var workspace = hub.GetWorkspace();
         var dataContext = workspace.DataContext;
 
         if (dataContext.ContentProviders.TryGetValue(collection, out var contentCollectionName))
-            return await GetFileContentAsync(hub, contentCollectionName, entityId, numberOfRows, ct);
+            return GetFileContent(hub, contentCollectionName, entityId, numberOfRows);
 
-        // Build workspace reference for collection or entity
         WorkspaceReference wsRef = entityId != null
             ? new EntityReference(collection, entityId)
             : new CollectionReference(collection);
 
-        return await GetDataFromWorkspaceAsync(hub, wsRef, ct);
+        return GetDataFromWorkspace(hub, wsRef);
     }
 
     /// <summary>
-    /// Handles area path requests locally.
+    /// Reactive observable for an area path — resolves the area reference and ships
+    /// the workspace stream's emissions.
     /// </summary>
-    private static async Task<GetDataResponse> HandleAreaPathAsync(
+    private static IObservable<GetDataResponse> HandleAreaPath(
         IMessageHub hub,
-        string? remainingPath,
-        CancellationToken ct)
+        string? remainingPath)
     {
         var wsRef = ResolveAreaPath(remainingPath);
         if (wsRef == null)
-            return new GetDataResponse(null, 0) { Error = "Invalid area path" };
+            return Observable.Return(new GetDataResponse(null, 0) { Error = "Invalid area path" });
 
-        return await GetDataFromWorkspaceAsync(hub, wsRef, ct);
+        return GetDataFromWorkspace(hub, wsRef);
     }
 
     /// <summary>
-    /// Handles content path requests locally.
+    /// Reactive observable for a content path — resolves to a file read or a folder listing.
     /// </summary>
-    private static async Task<GetDataResponse> HandleContentPathAsync(
+    private static IObservable<GetDataResponse> HandleContentPath(
         IMessageHub hub,
         string? remainingPath,
-        int? numberOfRows,
-        CancellationToken ct)
+        int? numberOfRows)
     {
-        // Normalize: strip trailing slashes
         remainingPath = remainingPath?.TrimEnd('/');
 
-        // Empty path → list files in default "content" collection root
         if (string.IsNullOrEmpty(remainingPath))
-            return await ListCollectionItemsAsync(hub, "content", "/", ct);
+            return ListCollectionItems(hub, "content", "/");
 
         var slashIndex = remainingPath.IndexOf('/');
 
         if (slashIndex < 0)
         {
-            // No slash — could be a file in default collection or a collection name.
-            // Try as file in default "content" collection first, then as collection name.
-            var fileResult = await GetFileContentAsync(hub, "content", remainingPath, numberOfRows, ct);
-            if (fileResult.Error == null)
-                return fileResult;
-
-            // Try as collection name — list its root
-            var listResult = await ListCollectionItemsAsync(hub, remainingPath, "/", ct);
-            if (listResult.Error == null)
-                return listResult;
-
-            return fileResult;
+            var collectionForFallback = remainingPath;
+            return GetFileContent(hub, "content", collectionForFallback, numberOfRows)
+                .SelectMany(fileResult =>
+                {
+                    if (fileResult.Error == null)
+                        return Observable.Return(fileResult);
+                    return ListCollectionItems(hub, collectionForFallback, "/")
+                        .Select(listResult => listResult.Error == null ? listResult : fileResult);
+                });
         }
 
         var collectionPart = remainingPath[..slashIndex];
         var filePath = remainingPath[(slashIndex + 1)..];
 
-        // Check for partition
         var atIndex = collectionPart.IndexOf('@');
         string collectionName;
         if (atIndex > 0)
@@ -1086,41 +1598,36 @@ private static async Task<IMessageDelivery> HandleGetDataRequestCore<TReference>
             collectionName = collectionPart;
         }
 
-        // Empty filePath → list collection root
         if (string.IsNullOrEmpty(filePath))
-            return await ListCollectionItemsAsync(hub, collectionName, "/", ct);
+            return ListCollectionItems(hub, collectionName, "/");
 
-        // Try as file first; if not found, try as folder
-        var result = await GetFileContentAsync(hub, collectionName, filePath, numberOfRows, ct);
-        if (result.Error == null)
-            return result;
-
-        var folderResult = await ListCollectionItemsAsync(hub, collectionName, "/" + filePath, ct);
-        if (folderResult.Error == null)
-            return folderResult;
-
-        return result;
+        return GetFileContent(hub, collectionName, filePath, numberOfRows)
+            .SelectMany(fileResult =>
+            {
+                if (fileResult.Error == null)
+                    return Observable.Return(fileResult);
+                return ListCollectionItems(hub, collectionName, "/" + filePath)
+                    .Select(folderResult => folderResult.Error == null ? folderResult : fileResult);
+            });
     }
 
     /// <summary>
-    /// Lists files and folders in a content collection path.
+    /// Reactive observable that lists files and folders in a content collection path.
     /// </summary>
-    private static async Task<GetDataResponse> ListCollectionItemsAsync(
+    private static IObservable<GetDataResponse> ListCollectionItems(
         IMessageHub hub,
         string collectionName,
-        string path,
-        CancellationToken ct)
+        string path)
     {
         var fileContentProvider = hub.ServiceProvider.GetService<IFileContentProvider>();
         if (fileContentProvider == null)
-            return new GetDataResponse(null, 0)
-            { Error = "File content provider not available. Ensure AddContentCollections() is configured." };
+            return Observable.Return(new GetDataResponse(null, 0)
+            { Error = "File content provider not available. Ensure AddContentCollections() is configured." });
 
-        var result = await fileContentProvider.ListCollectionItemsAsync(collectionName, path, ct);
-        if (!result.Success)
-            return new GetDataResponse(null, 0) { Error = result.Error };
-
-        return new GetDataResponse(result.Items, hub.Version);
+        return fileContentProvider.ListCollectionItems(collectionName, path)
+            .Select(result => result.Success
+                ? new GetDataResponse(result.Items, hub.Version)
+                : new GetDataResponse(null, 0) { Error = result.Error });
     }
 
     /// <summary>
@@ -1143,119 +1650,70 @@ private static async Task<IMessageDelivery> HandleGetDataRequestCore<TReference>
 
 
     /// <summary>
-    /// Gets the default data reference from the workspace.
+    /// Reactive observable for the workspace's default data reference. Subscribes to
+    /// the configured factory's stream and ships every emission as <see cref="GetDataResponse"/>.
     /// </summary>
-    private static async Task<GetDataResponse> GetDefaultDataAsync(
-        IMessageHub hub,
-        CancellationToken _)
+    private static IObservable<GetDataResponse> GetDefaultData(IMessageHub hub)
     {
-        try
-        {
-            var workspace = hub.GetWorkspace();
-            var dataContext = workspace.DataContext;
+        var workspace = hub.GetWorkspace();
+        var dataContext = workspace.DataContext;
 
-            if (dataContext.DefaultDataReferenceFactory == null)
-            {
-                return new GetDataResponse(null, 0)
-                { Error = "No default data reference configured for this address" };
-            }
+        if (dataContext.DefaultDataReferenceFactory == null)
+            return Observable.Return(new GetDataResponse(null, 0)
+            { Error = "No default data reference configured for this address" });
 
-            var observable = dataContext.DefaultDataReferenceFactory(workspace);
-            var data = await observable.Timeout(TimeSpan.FromSeconds(30)).FirstAsync();
-
-            return new GetDataResponse(data, hub.Version);
-        }
-        catch (TimeoutException)
-        {
-            return new GetDataResponse(null, 0)
-            { Error = "Request timed out while accessing default data reference" };
-        }
-        catch (Exception ex)
-        {
-            return new GetDataResponse(null, 0)
-            { Error = $"Error accessing default data: {ex.Message}" };
-        }
+        return dataContext.DefaultDataReferenceFactory(workspace)
+            .Select(data => new GetDataResponse(data, hub.Version));
     }
 
     /// <summary>
-    /// Gets data from the workspace using a workspace reference.
+    /// Generic dispatcher — picks the typed overload based on the runtime type of <paramref name="reference"/>.
     /// </summary>
-    private static Task<GetDataResponse> GetDataFromWorkspaceAsync(
+    private static IObservable<GetDataResponse> GetDataFromWorkspace(
         IMessageHub hub,
-        WorkspaceReference reference,
-        CancellationToken ct)
-    {
-        return GetDataFromWorkspaceAsyncCore(hub, (dynamic)reference, ct);
-    }
+        WorkspaceReference reference)
+        => GetDataFromWorkspaceCore(hub, (dynamic)reference);
 
-    private static async Task<GetDataResponse> GetDataFromWorkspaceAsyncCore<TReference>(
+    /// <summary>
+    /// Reactive observable for a workspace stream — subscribes and ships every
+    /// emission as a <see cref="GetDataResponse"/>. No <c>Take(1)</c>: updates flow continuously.
+    /// </summary>
+    private static IObservable<GetDataResponse> GetDataFromWorkspaceCore<TReference>(
         IMessageHub hub,
-        WorkspaceReference<TReference> reference,
-        CancellationToken _)
+        WorkspaceReference<TReference> reference)
     {
-        try
-        {
-            var workspace = hub.GetWorkspace();
-            var stream = workspace.GetStream(reference, x => x.ReturnNullWhenNotPresent());
+        var workspace = hub.GetWorkspace();
+        var stream = workspace.GetStream(reference, x => x.ReturnNullWhenNotPresent());
 
-            if (stream == null)
-            {
-                return new GetDataResponse(null, 0)
-                { Error = $"No data found for reference: {reference}" };
-            }
+        if (stream == null)
+            return Observable.Return(new GetDataResponse(null, 0)
+            { Error = $"No data found for reference: {reference}" });
 
-            var data = await stream.Timeout(TimeSpan.FromSeconds(30)).FirstAsync();
-
-            return new GetDataResponse(data.Value, hub.Version);
-        }
-        catch (TimeoutException)
-        {
-            return new GetDataResponse(null, 0)
-            { Error = $"Request timed out while accessing data" };
-        }
-        catch (Exception ex)
-        {
-            return new GetDataResponse(null, 0)
-            { Error = $"Error accessing data: {ex.Message}" };
-        }
+        return stream.Select(data => new GetDataResponse(data.Value, hub.Version));
     }
 
     /// <summary>
-    /// Gets file content from a content collection.
+    /// Reactive observable that fetches file content from a content collection.
     /// </summary>
-    private static async Task<GetDataResponse> GetFileContentAsync(
+    private static IObservable<GetDataResponse> GetFileContent(
         IMessageHub hub,
         string contentCollectionName,
         string? filePath,
-        int? numberOfRows,
-        CancellationToken ct)
+        int? numberOfRows)
     {
         if (string.IsNullOrEmpty(filePath))
-        {
-            return new GetDataResponse(null, 0)
-            { Error = "File path cannot be empty" };
-        }
+            return Observable.Return(new GetDataResponse(null, 0)
+            { Error = "File path cannot be empty" });
 
         var fileContentProvider = hub.ServiceProvider.GetService<IFileContentProvider>();
         if (fileContentProvider == null)
-        {
-            return new GetDataResponse(null, 0)
-            { Error = "File content provider not available. Ensure AddContentCollections() is configured." };
-        }
+            return Observable.Return(new GetDataResponse(null, 0)
+            { Error = "File content provider not available. Ensure AddContentCollections() is configured." });
 
-        var result = await fileContentProvider.GetFileContentAsync(
-            contentCollectionName,
-            filePath,
-            numberOfRows,
-            ct);
-
-        if (!result.Success)
-        {
-            return new GetDataResponse(null, 0)
-            { Error = result.Error };
-        }
-
-        return new GetDataResponse(result.Content, hub.Version);
+        return fileContentProvider.GetFileContent(contentCollectionName, filePath, numberOfRows)
+            .Select(result => result.Success
+                ? new GetDataResponse(result.Content, hub.Version)
+                : new GetDataResponse(null, 0) { Error = result.Error });
     }
 
 
@@ -1354,118 +1812,128 @@ private static async Task<IMessageDelivery> HandleGetDataRequestCore<TReference>
         return types.OrderBy(t => t.DisplayName);
     }
 
-    private static async Task<IMessageDelivery> HandleUpdateUnifiedReferenceRequest(
+    private static IMessageDelivery HandleUpdateUnifiedReferenceRequest(
         IMessageHub hub,
-        IMessageDelivery<UpdateUnifiedReferenceRequest> request,
-        CancellationToken ct)
+        IMessageDelivery<UpdateUnifiedReferenceRequest> request)
     {
-        try
+        var path = request.Message.Path;
+        if (string.IsNullOrEmpty(path))
         {
-            var path = request.Message.Path;
-            if (string.IsNullOrEmpty(path))
-            {
-                hub.Post(UpdateUnifiedReferenceResponse.Fail("Path cannot be empty"),
-                    o => o.ResponseFor(request));
-                return request.Processed();
-            }
-
-            var (prefix, remainingPath) = ParseUnifiedPath(path);
-            var result = prefix switch
-            {
-                "data" => await HandleUpdateDataPathAsync(hub, remainingPath, request.Message.Content, request.Message.ChangedBy, ct),
-                "content" => await HandleUpdateContentPathAsync(hub, remainingPath, request.Message.Content, ct),
-                "area" => UpdateUnifiedReferenceResponse.Fail("Layout area updates are not supported via this API"),
-                _ => UpdateUnifiedReferenceResponse.Fail($"Unknown prefix: {prefix}")
-            };
-
-            hub.Post(result, o => o.ResponseFor(request));
-        }
-        catch (Exception ex)
-        {
-            hub.Post(UpdateUnifiedReferenceResponse.Fail(ex.Message),
+            hub.Post(UpdateUnifiedReferenceResponse.Fail("Path cannot be empty"),
                 o => o.ResponseFor(request));
+            return request.Processed();
         }
 
+        var (prefix, remainingPath) = ParseUnifiedPath(path);
+        var observable = prefix switch
+        {
+            "data" => UpdateDataPath(hub, remainingPath, request.Message.Content, request.Message.ChangedBy),
+            "content" => UpdateContentPath(hub, remainingPath, request.Message.Content),
+            "area" => Observable.Return(UpdateUnifiedReferenceResponse.Fail("Layout area updates are not supported via this API")),
+            _ => Observable.Return(UpdateUnifiedReferenceResponse.Fail($"Unknown prefix: {prefix}"))
+        };
+
+        var subscription = observable
+            .Catch<UpdateUnifiedReferenceResponse, Exception>(ex =>
+                Observable.Return(UpdateUnifiedReferenceResponse.Fail(ex.Message)))
+            .Subscribe(result => hub.Post(result, o => o.ResponseFor(request)));
+
+        hub.RegisterForDisposal(subscription);
         return request.Processed();
     }
 
-    private static async Task<UpdateUnifiedReferenceResponse> HandleUpdateDataPathAsync(
+    /// <summary>
+    /// Reactive update for a <c>data:</c> path. Content-provider paths write the file
+    /// directly; entity paths issue <see cref="DataChangeRequest"/> and observe the
+    /// <see cref="Activity"/> completion callback (no <see cref="TaskCompletionSource{TResult}"/>).
+    /// </summary>
+    private static IObservable<UpdateUnifiedReferenceResponse> UpdateDataPath(
         IMessageHub hub,
         string? path,
         object content,
-        string? changedBy,
-        CancellationToken ct)
+        string? changedBy)
     {
         var (collection, entityId) = ParseDataPath(path);
 
-        // Default reference (no path)
         if (collection == null)
-        {
-            return UpdateUnifiedReferenceResponse.Fail("Cannot update default data reference directly. Specify a collection and optionally an entity ID.");
-        }
+            return Observable.Return(UpdateUnifiedReferenceResponse.Fail(
+                "Cannot update default data reference directly. Specify a collection and optionally an entity ID."));
 
-        // Check if this is a content provider (file access via data: path)
         var workspace = hub.GetWorkspace();
         var dataContext = workspace.DataContext;
 
         if (dataContext.ContentProviders.TryGetValue(collection, out var contentCollectionName))
         {
-            // This is a file update via data: path
             if (string.IsNullOrEmpty(entityId))
-            {
-                return UpdateUnifiedReferenceResponse.Fail("File path must be specified for file updates");
-            }
-            return await HandleUpdateFileAsync(hub, contentCollectionName, entityId, content, ct);
+                return Observable.Return(UpdateUnifiedReferenceResponse.Fail("File path must be specified for file updates"));
+            return UpdateFile(hub, contentCollectionName, entityId, content);
         }
 
-        // Regular data update - use DataChangeRequest
+        // 🚨 Reject a collection that no registered type source owns. A no-scheme
+        // path defaults to the `data` prefix (ParseUnifiedPath → "No prefix - default
+        // to data"), so a bogus reference such as "invalid" arrives here as
+        // collection="invalid". Without this guard the DataChangeRequest below is
+        // issued against a collection nothing projects and the workspace commits it
+        // as a vacuous "success" — the handler then wrongly reports Success=true for a
+        // path that addresses no data (UpdateUnifiedReferenceRequest_InvalidPath_ReturnsError).
+        // A valid data collection is one a TypeSource projects; content collections
+        // were already handled above.
+        var isKnownCollection = dataContext.TypeSources.Values
+            .Any(ts => string.Equals(ts.TypeDefinition.CollectionName, collection, StringComparison.OrdinalIgnoreCase));
+        if (!isKnownCollection)
+            return Observable.Return(UpdateUnifiedReferenceResponse.Fail(
+                $"Unknown collection '{collection}': no registered data type source or content provider owns this path."));
+
         var changeRequest = new DataChangeRequest
         {
             Updates = [content],
             ChangedBy = changedBy
         };
 
-        // Use Activity for synchronization and validation feedback
         var activity = hub.Address.Type == AddressExtensions.ActivityType
             ? null
             : new Activity(ActivityCategory.DataUpdate, hub);
         workspace.RequestChange(changeRequest, activity, null);
 
-        if (activity != null)
+        if (activity == null)
+            return Observable.Return(UpdateUnifiedReferenceResponse.Ok(hub.Version));
+
+        return Observable.Create<UpdateUnifiedReferenceResponse>(observer =>
         {
-            var tcs = new TaskCompletionSource<DataChangeResponse>();
-            activity.Complete(log => tcs.SetResult(new DataChangeResponse(hub.Version, log)));
-            var response = await tcs.Task;
+            activity.Complete(log =>
+            {
+                hub.ServiceProvider.GetService<ActivityLogBundler>()
+                    ?.RecordChange(changeRequest, ActivityCategory.DataUpdate);
 
-            // Record in bundler for persistent logging
-            var bundler = hub.ServiceProvider.GetService<ActivityLogBundler>();
-            bundler?.RecordChange(changeRequest, ActivityCategory.DataUpdate);
-
-            return response.Status == DataChangeStatus.Committed
-                ? UpdateUnifiedReferenceResponse.Ok(response.Version)
-                : UpdateUnifiedReferenceResponse.Fail(response.Log.Messages.LastOrDefault()?.Message ?? "Update failed");
-        }
-
-        return UpdateUnifiedReferenceResponse.Ok(hub.Version);
+                var response = new DataChangeResponse(hub.Version, log);
+                observer.OnNext(response.Status == DataChangeStatus.Committed
+                    ? UpdateUnifiedReferenceResponse.Ok(response.Version)
+                    : UpdateUnifiedReferenceResponse.Fail(
+                        response.Log.Messages.LastOrDefault()?.Message ?? "Update failed"));
+                observer.OnCompleted();
+            });
+            return System.Reactive.Disposables.Disposable.Empty;
+        });
     }
 
-    private static async Task<UpdateUnifiedReferenceResponse> HandleUpdateContentPathAsync(
+    /// <summary>
+    /// Reactive update for a <c>content:</c> path — parses collection/file and writes via the file provider.
+    /// </summary>
+    private static IObservable<UpdateUnifiedReferenceResponse> UpdateContentPath(
         IMessageHub hub,
         string? remainingPath,
-        object content,
-        CancellationToken ct)
+        object content)
     {
         if (string.IsNullOrEmpty(remainingPath))
-            return UpdateUnifiedReferenceResponse.Fail("Invalid content path");
+            return Observable.Return(UpdateUnifiedReferenceResponse.Fail("Invalid content path"));
 
         var slashIndex = remainingPath.IndexOf('/');
         if (slashIndex < 0)
-            return UpdateUnifiedReferenceResponse.Fail("Invalid content path: missing file path");
+            return Observable.Return(UpdateUnifiedReferenceResponse.Fail("Invalid content path: missing file path"));
 
         var collectionPart = remainingPath[..slashIndex];
         var filePath = remainingPath[(slashIndex + 1)..];
 
-        // Check for partition
         var atIndex = collectionPart.IndexOf('@');
         string collectionName;
         if (atIndex > 0)
@@ -1479,164 +1947,159 @@ private static async Task<IMessageDelivery> HandleGetDataRequestCore<TReference>
             collectionName = collectionPart;
         }
 
-        return await HandleUpdateFileAsync(hub, collectionName, filePath, content, ct);
+        return UpdateFile(hub, collectionName, filePath, content);
     }
 
-    private static async Task<UpdateUnifiedReferenceResponse> HandleUpdateFileAsync(
+    /// <summary>
+    /// Reactive file save through <see cref="IFileContentProvider"/>.
+    /// </summary>
+    private static IObservable<UpdateUnifiedReferenceResponse> UpdateFile(
         IMessageHub hub,
         string collectionName,
         string filePath,
-        object content,
-        CancellationToken ct)
+        object content)
     {
         var fileContentProvider = hub.ServiceProvider.GetService<IFileContentProvider>();
         if (fileContentProvider == null)
-        {
-            return UpdateUnifiedReferenceResponse.Fail("File content provider not available. Ensure AddContentCollections() is configured.");
-        }
+            return Observable.Return(UpdateUnifiedReferenceResponse.Fail(
+                "File content provider not available. Ensure AddContentCollections() is configured."));
 
-        // Convert content to stream
         var contentString = content is string str ? str : content?.ToString() ?? "";
-        using var memoryStream = new MemoryStream(System.Text.Encoding.UTF8.GetBytes(contentString));
+        var bytes = System.Text.Encoding.UTF8.GetBytes(contentString);
+        var memoryStream = new MemoryStream(bytes);
 
-        var result = await fileContentProvider.SaveFileContentAsync(collectionName, filePath, memoryStream, ct);
-        if (!result.Success)
-        {
-            return UpdateUnifiedReferenceResponse.Fail(result.Error!);
-        }
-
-        return UpdateUnifiedReferenceResponse.Ok(hub.Version);
+        return fileContentProvider.SaveFileContent(collectionName, filePath, memoryStream)
+            .Select(result => result.Success
+                ? UpdateUnifiedReferenceResponse.Ok(hub.Version)
+                : UpdateUnifiedReferenceResponse.Fail(result.Error!))
+            .Finally(() => memoryStream.Dispose());
     }
 
-    private static async Task<IMessageDelivery> HandleDeleteUnifiedReferenceRequest(
+    private static IMessageDelivery HandleDeleteUnifiedReferenceRequest(
         IMessageHub hub,
-        IMessageDelivery<DeleteUnifiedReferenceRequest> request,
-        CancellationToken ct)
+        IMessageDelivery<DeleteUnifiedReferenceRequest> request)
     {
-        try
+        var path = request.Message.Path;
+        if (string.IsNullOrEmpty(path))
         {
-            var path = request.Message.Path;
-            if (string.IsNullOrEmpty(path))
-            {
-                hub.Post(DeleteUnifiedReferenceResponse.Fail("Path cannot be empty"),
-                    o => o.ResponseFor(request));
-                return request.Processed();
-            }
-
-            var (prefix, remainingPath) = ParseUnifiedPath(path);
-            var result = prefix switch
-            {
-                "data" => await HandleDeleteDataPathAsync(hub, remainingPath, request.Message.ChangedBy, ct),
-                "content" => await HandleDeleteContentPathAsync(hub, remainingPath, ct),
-                "area" => DeleteUnifiedReferenceResponse.Fail("Layout area deletion is not supported via this API"),
-                _ => DeleteUnifiedReferenceResponse.Fail($"Unknown prefix: {prefix}")
-            };
-
-            hub.Post(result, o => o.ResponseFor(request));
-        }
-        catch (Exception ex)
-        {
-            hub.Post(DeleteUnifiedReferenceResponse.Fail(ex.Message),
+            hub.Post(DeleteUnifiedReferenceResponse.Fail("Path cannot be empty"),
                 o => o.ResponseFor(request));
+            return request.Processed();
         }
 
+        var (prefix, remainingPath) = ParseUnifiedPath(path);
+        var observable = prefix switch
+        {
+            "data" => DeleteDataPath(hub, remainingPath, request.Message.ChangedBy),
+            "content" => DeleteContentPath(hub, remainingPath),
+            "area" => Observable.Return(DeleteUnifiedReferenceResponse.Fail("Layout area deletion is not supported via this API")),
+            _ => Observable.Return(DeleteUnifiedReferenceResponse.Fail($"Unknown prefix: {prefix}"))
+        };
+
+        var subscription = observable
+            .Catch<DeleteUnifiedReferenceResponse, Exception>(ex =>
+                Observable.Return(DeleteUnifiedReferenceResponse.Fail(ex.Message)))
+            .Subscribe(result => hub.Post(result, o => o.ResponseFor(request)));
+
+        hub.RegisterForDisposal(subscription);
         return request.Processed();
     }
 
-    private static async Task<DeleteUnifiedReferenceResponse> HandleDeleteDataPathAsync(
+    /// <summary>
+    /// Reactive delete for a <c>data:</c> path. Content-provider paths delete the file directly;
+    /// entity paths read the entity once via <see cref="System.Reactive.Linq.Observable.Take{TSource}(IObservable{TSource}, int)"/>,
+    /// then issue a <see cref="DataChangeRequest"/> and observe the activity completion callback.
+    /// </summary>
+    private static IObservable<DeleteUnifiedReferenceResponse> DeleteDataPath(
         IMessageHub hub,
         string? path,
-        string? changedBy,
-        CancellationToken ct)
+        string? changedBy)
     {
         var (collection, entityId) = ParseDataPath(path);
 
-        // Default reference (no path)
         if (collection == null)
-        {
-            return DeleteUnifiedReferenceResponse.Fail("Cannot delete default data reference. Specify a collection and entity ID.");
-        }
+            return Observable.Return(DeleteUnifiedReferenceResponse.Fail(
+                "Cannot delete default data reference. Specify a collection and entity ID."));
 
-        // Check if this is a content provider (file access via data: path)
         var workspace = hub.GetWorkspace();
         var dataContext = workspace.DataContext;
 
         if (dataContext.ContentProviders.TryGetValue(collection, out var contentCollectionName))
         {
-            // This is a file delete via data: path
             if (string.IsNullOrEmpty(entityId))
-            {
-                return DeleteUnifiedReferenceResponse.Fail("File path must be specified for file deletion");
-            }
-            return await HandleDeleteFileAsync(hub, contentCollectionName, entityId, ct);
+                return Observable.Return(DeleteUnifiedReferenceResponse.Fail("File path must be specified for file deletion"));
+            return DeleteFile(hub, contentCollectionName, entityId);
         }
 
-        // Entity ID is required for deletion
         if (entityId == null)
-        {
-            return DeleteUnifiedReferenceResponse.Fail("Entity ID must be specified for data deletion. Collection-level deletion is not supported.");
-        }
+            return Observable.Return(DeleteUnifiedReferenceResponse.Fail(
+                "Entity ID must be specified for data deletion. Collection-level deletion is not supported."));
 
-        // We need to get the entity first to delete it
         var entityRef = new EntityReference(collection, entityId);
         var stream = workspace.GetStream(entityRef, x => x.ReturnNullWhenNotPresent());
         if (stream == null)
-        {
-            return DeleteUnifiedReferenceResponse.Fail($"Entity not found: {collection}/{entityId}");
-        }
+            return Observable.Return(DeleteUnifiedReferenceResponse.Fail($"Entity not found: {collection}/{entityId}"));
 
-        var entityValue = await stream.Timeout(TimeSpan.FromSeconds(30)).FirstAsync();
-        if (entityValue.Value == null)
-        {
-            return DeleteUnifiedReferenceResponse.Fail($"Entity not found: {collection}/{entityId}");
-        }
+        // Read-modify-write: take the current entity snapshot once, then issue the deletion.
+        return stream
+            .Timeout(TimeSpan.FromSeconds(30))
+            .Take(1)
+            .SelectMany(entityValue =>
+            {
+                if (entityValue.Value == null)
+                    return Observable.Return(DeleteUnifiedReferenceResponse.Fail(
+                        $"Entity not found: {collection}/{entityId}"));
 
-        var changeRequest = new DataChangeRequest
-        {
-            Deletions = [entityValue.Value],
-            ChangedBy = changedBy
-        };
+                var changeRequest = new DataChangeRequest
+                {
+                    Deletions = [entityValue.Value],
+                    ChangedBy = changedBy
+                };
 
-        // Use Activity for synchronization and validation feedback
-        var activity = hub.Address.Type == AddressExtensions.ActivityType
-            ? null
-            : new Activity(ActivityCategory.DataUpdate, hub);
-        workspace.RequestChange(changeRequest, activity, null);
+                var activity = hub.Address.Type == AddressExtensions.ActivityType
+                    ? null
+                    : new Activity(ActivityCategory.DataUpdate, hub);
+                workspace.RequestChange(changeRequest, activity, null);
 
-        if (activity != null)
-        {
-            var tcs = new TaskCompletionSource<DataChangeResponse>();
-            activity.Complete(log => tcs.SetResult(new DataChangeResponse(hub.Version, log)));
-            var response = await tcs.Task;
+                if (activity == null)
+                    return Observable.Return(DeleteUnifiedReferenceResponse.Ok());
 
-            // Record in bundler for persistent logging
-            var bundler = hub.ServiceProvider.GetService<ActivityLogBundler>();
-            bundler?.RecordChange(changeRequest, ActivityCategory.DataUpdate);
+                return Observable.Create<DeleteUnifiedReferenceResponse>(observer =>
+                {
+                    activity.Complete(log =>
+                    {
+                        hub.ServiceProvider.GetService<ActivityLogBundler>()
+                            ?.RecordChange(changeRequest, ActivityCategory.DataUpdate);
 
-            return response.Status == DataChangeStatus.Committed
-                ? DeleteUnifiedReferenceResponse.Ok()
-                : DeleteUnifiedReferenceResponse.Fail(response.Log.Messages.LastOrDefault()?.Message ?? "Delete failed");
-        }
-
-        return DeleteUnifiedReferenceResponse.Ok();
+                        var response = new DataChangeResponse(hub.Version, log);
+                        observer.OnNext(response.Status == DataChangeStatus.Committed
+                            ? DeleteUnifiedReferenceResponse.Ok()
+                            : DeleteUnifiedReferenceResponse.Fail(
+                                response.Log.Messages.LastOrDefault()?.Message ?? "Delete failed"));
+                        observer.OnCompleted();
+                    });
+                    return System.Reactive.Disposables.Disposable.Empty;
+                });
+            });
     }
 
-    private static async Task<DeleteUnifiedReferenceResponse> HandleDeleteContentPathAsync(
+    /// <summary>
+    /// Reactive delete for a <c>content:</c> path — parses collection/file and dispatches to <see cref="DeleteFile"/>.
+    /// </summary>
+    private static IObservable<DeleteUnifiedReferenceResponse> DeleteContentPath(
         IMessageHub hub,
-        string? remainingPath,
-        CancellationToken ct)
+        string? remainingPath)
     {
         if (string.IsNullOrEmpty(remainingPath))
-            return DeleteUnifiedReferenceResponse.Fail("Invalid content path");
+            return Observable.Return(DeleteUnifiedReferenceResponse.Fail("Invalid content path"));
 
         var slashIndex = remainingPath.IndexOf('/');
         if (slashIndex < 0)
-            return DeleteUnifiedReferenceResponse.Fail("Invalid content path: missing file path");
+            return Observable.Return(DeleteUnifiedReferenceResponse.Fail("Invalid content path: missing file path"));
 
         var collectionPart = remainingPath[..slashIndex];
         var filePath = remainingPath[(slashIndex + 1)..];
 
-        // Check for partition
         var atIndex = collectionPart.IndexOf('@');
         string collectionName;
         if (atIndex > 0)
@@ -1650,28 +2113,26 @@ private static async Task<IMessageDelivery> HandleGetDataRequestCore<TReference>
             collectionName = collectionPart;
         }
 
-        return await HandleDeleteFileAsync(hub, collectionName, filePath, ct);
+        return DeleteFile(hub, collectionName, filePath);
     }
 
-    private static async Task<DeleteUnifiedReferenceResponse> HandleDeleteFileAsync(
+    /// <summary>
+    /// Reactive file delete through <see cref="IFileContentProvider"/>.
+    /// </summary>
+    private static IObservable<DeleteUnifiedReferenceResponse> DeleteFile(
         IMessageHub hub,
         string collectionName,
-        string filePath,
-        CancellationToken ct)
+        string filePath)
     {
         var fileContentProvider = hub.ServiceProvider.GetService<IFileContentProvider>();
         if (fileContentProvider == null)
-        {
-            return DeleteUnifiedReferenceResponse.Fail("File content provider not available. Ensure AddContentCollections() is configured.");
-        }
+            return Observable.Return(DeleteUnifiedReferenceResponse.Fail(
+                "File content provider not available. Ensure AddContentCollections() is configured."));
 
-        var result = await fileContentProvider.DeleteFileAsync(collectionName, filePath, ct);
-        if (!result.Success)
-        {
-            return DeleteUnifiedReferenceResponse.Fail(result.Error!);
-        }
-
-        return DeleteUnifiedReferenceResponse.Ok();
+        return fileContentProvider.DeleteFile(collectionName, filePath)
+            .Select(result => result.Success
+                ? DeleteUnifiedReferenceResponse.Ok()
+                : DeleteUnifiedReferenceResponse.Fail(result.Error!));
     }
 
     /// <summary>
@@ -1721,50 +2182,53 @@ private static async Task<IMessageDelivery> HandleGetDataRequestCore<TReference>
         return (ISynchronizationStream<object>?)typedStream;
     }
 
+    // Generous aggregate cap — autocomplete display is ≤ ~15, but we keep a wide window so the
+    // relevance re-scoring below (which lifts zero-priority items) isn't pre-truncated.
+    private const int AutocompleteAggregateTopN = 200;
+
     /// <summary>
-    /// Handles AutocompleteRequest by aggregating items from all registered IAutocompleteProvider services.
+    /// Handles the one-shot <see cref="AutocompleteRequest"/> by aggregating the SNAPSHOT streams of
+    /// every registered <see cref="IAutocompleteProvider"/>. CombineLatest + merge (see
+    /// <see cref="AutocompleteSnapshots.Combine"/>); the SETTLED snapshot is taken (LastAsync) and a
+    /// single <see cref="AutocompleteResponse"/> posted. Progressive consumers use the
+    /// <see cref="AutocompleteReference"/> workspace stream instead. Each provider's <c>OnError</c> is
+    /// swallowed to an empty snapshot so one bad provider doesn't stall the CombineLatest.
     /// </summary>
-    private static async Task<IMessageDelivery> HandleAutocompleteRequest(
+    private static IMessageDelivery HandleAutocompleteRequest(
         IMessageHub hub,
-        IMessageDelivery<AutocompleteRequest> request,
-        CancellationToken ct)
+        IMessageDelivery<AutocompleteRequest> request)
     {
         var providers = hub.ServiceProvider.GetServices<IAutocompleteProvider>();
         var query = request.Message.Query;
         var contextPath = request.Message.Context;
 
-        var allItems = new List<AutocompleteItem>();
-        foreach (var provider in providers)
-        {
-            try
-            {
-                await foreach (var item in provider.GetItemsAsync(query, contextPath, ct))
+        AutocompleteSnapshots.Combine(
+                providers.Select(p => p.GetItems(query, contextPath)
+                    .Catch<IReadOnlyCollection<AutocompleteItem>, Exception>(
+                        _ => Observable.Return(AutocompleteSnapshots.Empty))),
+                AutocompleteAggregateTopN)
+            .LastAsync()
+            .Subscribe(
+                snapshot =>
                 {
-                    allItems.Add(item);
-                }
-            }
-            catch
-            {
-                // Skip providers that fail
-            }
-        }
+                    // Apply relevance filtering: boost items that match the query text,
+                    // suppress zero-priority items that don't match.
+                    var searchText = ExtractAutocompleteSearchText(query);
+                    IEnumerable<AutocompleteItem> result = snapshot;
+                    if (!string.IsNullOrEmpty(searchText))
+                    {
+                        result = snapshot
+                            .Select(item => item.Priority > 0
+                                ? item // Provider already scored this item
+                                : item with { Priority = ScoreAutocompleteItem(item, searchText) })
+                            .Where(item => item.Priority > 0)
+                            .OrderByDescending(item => item.Priority);
+                    }
 
-        // Apply relevance filtering: boost items that match the query text,
-        // suppress items with zero priority that don't match
-        var searchText = ExtractAutocompleteSearchText(query);
-        if (!string.IsNullOrEmpty(searchText))
-        {
-            allItems = allItems
-                .Select(item => item.Priority > 0
-                    ? item // Provider already scored this item
-                    : item with { Priority = ScoreAutocompleteItem(item, searchText) })
-                .Where(item => item.Priority > 0)
-                .OrderByDescending(item => item.Priority)
-                .ToList();
-        }
+                    hub.Post(new AutocompleteResponse(result.ToList()), o => o.ResponseFor(request));
+                },
+                _ => hub.Post(new AutocompleteResponse([]), o => o.ResponseFor(request)));
 
-        var response = new AutocompleteResponse(allItems);
-        hub.Post(response, o => o.ResponseFor(request));
         return request.Processed();
     }
 
@@ -1833,116 +2297,95 @@ private static async Task<IMessageDelivery> HandleGetDataRequestCore<TReference>
     #region Data Validators
 
     /// <summary>
-    /// Runs all registered read validators for the given reference.
+    /// Reactive observable: emits the first invalid result from any registered read validator,
+    /// otherwise <see cref="DataValidationResult.Valid"/>. Validators are invoked sequentially
+    /// via recursive <c>SelectMany</c> — no <c>await</c>.
     /// </summary>
-    private static async Task<DataValidationResult> RunReadValidatorsAsync(
+    private static IObservable<DataValidationResult> RunReadValidators(
         IMessageHub hub,
-        WorkspaceReference reference,
-        CancellationToken ct)
+        WorkspaceReference reference)
     {
         var validators = hub.ServiceProvider.GetServices<IDataValidator>();
         var accessService = hub.ServiceProvider.GetService<AccessService>();
+        var accessContext = accessService?.Context ?? accessService?.CircuitContext;
 
-        foreach (var validator in validators)
-        {
-            if (!validator.SupportedOperations.Contains(DataOperation.Read) && validator.SupportedOperations.Count > 0)
-                continue;
-
-            var context = new DataValidationContext
+        var contexts = validators
+            .Where(v => v.SupportedOperations.Count == 0 || v.SupportedOperations.Contains(DataOperation.Read))
+            .Select(v => v.Validate(new DataValidationContext
             {
                 Operation = DataOperation.Read,
                 Entity = reference,
                 EntityType = reference.GetType(),
-                AccessContext = accessService?.Context ?? accessService?.CircuitContext,
+                AccessContext = accessContext,
                 ServiceProvider = hub.ServiceProvider
-            };
+            }));
 
-            var result = await validator.ValidateAsync(context, ct);
-            if (!result.IsValid)
-                return result;
-        }
-        return DataValidationResult.Valid();
+        return EvaluateValidatorChain(contexts);
     }
 
     /// <summary>
-    /// Runs all registered change validators for the given data change request.
+    /// Reactive validator runner for a <see cref="DataChangeRequest"/> — composes the
+    /// per-entity Create/Update/Delete validations and short-circuits on the first invalid result.
     /// </summary>
-    private static async Task<DataValidationResult> RunChangeValidatorsAsync(
+    private static IObservable<DataValidationResult> RunChangeValidators(
         IMessageHub hub,
-        DataChangeRequest request,
-        CancellationToken ct)
+        DataChangeRequest request)
     {
-        // Run unified IDataValidator instances
-        var unifiedValidators = hub.ServiceProvider.GetServices<IDataValidator>();
+        var validators = hub.ServiceProvider.GetServices<IDataValidator>().ToList();
         var accessService = hub.ServiceProvider.GetService<AccessService>();
+        var accessContext = accessService?.Context ?? accessService?.CircuitContext;
 
-        foreach (var validator in unifiedValidators)
+        IEnumerable<IObservable<DataValidationResult>> Build()
         {
-            // Check Creations
-            foreach (var entity in request.Creations)
+            foreach (var validator in validators)
             {
-                if (!validator.SupportedOperations.Contains(DataOperation.Create) && validator.SupportedOperations.Count > 0)
-                    continue;
-
-                var context = new DataValidationContext
+                foreach (var (op, entities) in new[]
                 {
-                    Operation = DataOperation.Create,
-                    Entity = entity,
-                    EntityType = entity.GetType(),
-                    Request = request,
-                    AccessContext = accessService?.Context ?? accessService?.CircuitContext,
-                    ServiceProvider = hub.ServiceProvider
-                };
-
-                var result = await validator.ValidateAsync(context, ct);
-                if (!result.IsValid)
-                    return result;
-            }
-
-            // Check Updates
-            foreach (var entity in request.Updates)
-            {
-                if (!validator.SupportedOperations.Contains(DataOperation.Update) && validator.SupportedOperations.Count > 0)
-                    continue;
-
-                var context = new DataValidationContext
+                    (DataOperation.Create, (IEnumerable<object>)request.Creations),
+                    (DataOperation.Update, request.Updates),
+                    (DataOperation.Delete, request.Deletions)
+                })
                 {
-                    Operation = DataOperation.Update,
-                    Entity = entity,
-                    EntityType = entity.GetType(),
-                    Request = request,
-                    AccessContext = accessService?.Context ?? accessService?.CircuitContext,
-                    ServiceProvider = hub.ServiceProvider
-                };
+                    if (validator.SupportedOperations.Count > 0 && !validator.SupportedOperations.Contains(op))
+                        continue;
 
-                var result = await validator.ValidateAsync(context, ct);
-                if (!result.IsValid)
-                    return result;
-            }
-
-            // Check Deletions
-            foreach (var entity in request.Deletions)
-            {
-                if (!validator.SupportedOperations.Contains(DataOperation.Delete) && validator.SupportedOperations.Count > 0)
-                    continue;
-
-                var context = new DataValidationContext
-                {
-                    Operation = DataOperation.Delete,
-                    Entity = entity,
-                    EntityType = entity.GetType(),
-                    Request = request,
-                    AccessContext = accessService?.Context ?? accessService?.CircuitContext,
-                    ServiceProvider = hub.ServiceProvider
-                };
-
-                var result = await validator.ValidateAsync(context, ct);
-                if (!result.IsValid)
-                    return result;
+                    foreach (var entity in entities)
+                    {
+                        yield return validator.Validate(new DataValidationContext
+                        {
+                            Operation = op,
+                            Entity = entity,
+                            EntityType = entity.GetType(),
+                            Request = request,
+                            AccessContext = accessContext,
+                            ServiceProvider = hub.ServiceProvider
+                        });
+                    }
+                }
             }
         }
 
-        return DataValidationResult.Valid();
+        return EvaluateValidatorChain(Build());
+    }
+
+    /// <summary>
+    /// Evaluates a sequence of validator observables sequentially. Returns the first
+    /// invalid result; otherwise emits <see cref="DataValidationResult.Valid"/>.
+    /// </summary>
+    private static IObservable<DataValidationResult> EvaluateValidatorChain(
+        IEnumerable<IObservable<DataValidationResult>> validators)
+        => EvaluateValidatorNext(validators.GetEnumerator());
+
+    private static IObservable<DataValidationResult> EvaluateValidatorNext(
+        IEnumerator<IObservable<DataValidationResult>> enumerator)
+    {
+        if (!enumerator.MoveNext())
+            return Observable.Return(DataValidationResult.Valid());
+
+        return enumerator.Current
+            .SelectMany(result => result.IsValid
+                ? EvaluateValidatorNext(enumerator)
+                : Observable.Return(result));
     }
 
     #endregion

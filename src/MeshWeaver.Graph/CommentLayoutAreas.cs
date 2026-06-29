@@ -1,4 +1,5 @@
 using System.Reactive.Linq;
+using System.Text.Json;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
 using MeshWeaver.Domain;
@@ -10,6 +11,7 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using MeshWeaver.ShortGuid;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Graph;
 
@@ -19,7 +21,9 @@ namespace MeshWeaver.Graph;
 /// </summary>
 public static class CommentLayoutAreas
 {
+    /// <summary>Area name for the Overview layout area.</summary>
     public const string OverviewArea = "Overview";
+    /// <summary>Area name for the Edit layout area.</summary>
     public const string EditArea = "Edit";
 
     /// <summary>
@@ -61,24 +65,20 @@ public static class CommentLayoutAreas
         var accessService = host.Hub.ServiceProvider.GetService<AccessService>();
         var currentUser = accessService?.Context?.Name ?? "";
 
-        var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
-            ?? Observable.Return<MeshNode[]>(Array.Empty<MeshNode>());
-
         var editStateId = $"editState_comment_{hubPath.Replace("/", "_")}";
-        var initialized = new[] { false, false }; // [0]=editState, [1]=repliesExpanded
+        var initialized = new[] { false, false, false }; // [0]=editState, [1]=repliesExpanded, [2]=replyForm
 
-        // Permissions checked once via Observable (no await, no blocking)
         var parentPath = hubPath.Contains('/') ? hubPath[..hubPath.LastIndexOf('/')] : hubPath;
-        var permissionsStream = PermissionHelper.ObservePermissions(host.Hub, parentPath);
+        var permissionsStream = host.Hub.GetEffectivePermissions(parentPath);
 
-        return nodeStream.CombineLatest(permissionsStream, (nodes, perms) =>
-        {
-            var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-            var canComment = perms.HasFlag(Permission.Comment) || perms.HasFlag(Permission.Update);
-            var canDelete = perms.HasFlag(Permission.Delete);
-            return (UiControl?)BuildOverview(host, node, hubPath, editStateId, initialized,
-                currentUser, canComment, canDelete);
-        });
+        return host.Workspace.GetMeshNodeStream()
+            .CombineLatest(permissionsStream, (node, perms) =>
+            {
+                var canComment = perms.HasFlag(Permission.Comment) || perms.HasFlag(Permission.Update);
+                var canDelete = perms.HasFlag(Permission.Delete);
+                return (UiControl?)BuildOverview(host, node, hubPath, editStateId, initialized,
+                    currentUser, canComment, canDelete);
+            });
     }
 
     /// <summary>
@@ -92,24 +92,25 @@ public static class CommentLayoutAreas
         var accessService = host.Hub.ServiceProvider.GetService<AccessService>();
         var currentUser = accessService?.Context?.Name ?? "";
 
-        var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
-            ?? Observable.Return<MeshNode[]>(Array.Empty<MeshNode>());
+        var permissionsStream = host.Hub.GetEffectivePermissions(hubPath);
 
-        var permissionsStream = PermissionHelper.ObservePermissions(host.Hub, hubPath);
-
-        return nodeStream.CombineLatest(permissionsStream, (nodes, perms) =>
-        {
-            var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-            var canComment = perms.HasFlag(Permission.Comment) || perms.HasFlag(Permission.Update);
-            return (UiControl?)BuildEditContent(host, node, hubPath, currentUser, canComment);
-        });
+        return host.Workspace.GetMeshNodeStream()
+            .CombineLatest(permissionsStream, (node, perms) =>
+            {
+                var canComment = perms.HasFlag(Permission.Comment) || perms.HasFlag(Permission.Update);
+                return (UiControl?)BuildEditContent(host, node, hubPath, currentUser, canComment);
+            });
     }
 
     internal static UiControl BuildOverview(LayoutAreaHost host, MeshNode? node, string hubPath,
         string editStateId, bool[] initialized, string currentUser,
         bool canComment = true, bool canDelete = true)
     {
-        var comment = node?.Content as Comment;
+        // ContentAs (deserialize), not `as Comment`: this view is data-bound via CombineLatest on
+        // GetMeshNodeStream, whose frames alternate typed↔JsonElement; `as` → null on JsonElement
+        // frames would flip the whole overview to the "No comment content" placeholder and back →
+        // render storm.
+        var comment = node.ContentAs<Comment>(host.Hub.JsonSerializerOptions);
         if (comment == null)
         {
             return Controls.Html("<div style=\"color: var(--neutral-foreground-hint); padding: 8px;\">No comment content</div>");
@@ -191,6 +192,31 @@ public static class CommentLayoutAreas
                 container = container.WithView(new MarkdownControl(comment.Text)
                     .WithStyle("font-size: 0.85rem; line-height: 1.4;"));
             }
+        }
+
+        // Inline reply create-form — surfaces when the ↩ Reply button writes the replyPath_* data item
+        // (see BuildReplyButton). Mirrors the edit toggle above: the click sets a data item, this view
+        // reacts and renders the editor. Without this wiring the ↩ click created a transient reply node
+        // but no editor ever rendered — BuildReplyCreateForm was orphaned (defined, never called). Gated
+        // on canAct (a logged-in user), matching the Reply button's own visibility gate. When no reply
+        // is in progress the view emits null → the area renders nothing (cleared after Cancel/Create).
+        if (canAct)
+        {
+            var replyPathStateId = $"replyPath_{hubPath.Replace("/", "_")}";
+            container = container.WithView((h, _) =>
+            {
+                if (!initialized[2])
+                {
+                    h.UpdateData(replyPathStateId, "");
+                    initialized[2] = true;
+                }
+
+                return h.Stream.GetDataStream<string>(replyPathStateId)
+                    .DistinctUntilChanged()
+                    .Select(replyPath => string.IsNullOrEmpty(replyPath)
+                        ? (UiControl?)null
+                        : BuildReplyCreateForm(h, replyPath, replyPathStateId));
+            });
         }
 
         // Replies section — data-bound from comment.Replies (same pattern as Thread.Messages)
@@ -307,25 +333,31 @@ public static class CommentLayoutAreas
             .WithStyle("justify-content: flex-end; margin-top: 4px;")
             .WithView(Controls.Button("Done")
                 .WithAppearance(Appearance.Accent)
-                .WithClickAction(async ctx =>
+                .WithClickAction(ctx =>
                 {
-                    // Read text from data area
-                    var newText = "";
+                    // Read text, then resolve the comment via MeshNodeReference on its own hub
+                    // (AsynchronousCalls.md: known-path read goes via MeshNodeReference, never QueryAsync).
                     ctx.Host.Stream.GetDataStream<Dictionary<string, object?>>(textDataId)
                         .Take(1)
-                        .Subscribe(data => newText = data?.GetValueOrDefault("text")?.ToString() ?? "");
+                        .Subscribe(data =>
+                        {
+                            var newText = data?.GetValueOrDefault("text")?.ToString() ?? "";
 
-                    // Save via message — update only the Text property of the Comment
-                    var meshQuery = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
-                    var node = await meshQuery.QueryAsync<MeshNode>($"path:{hubPath}").FirstOrDefaultAsync();
-                    if (node != null)
-                    {
-                        var comment = node.Content as Comment ?? new Comment();
-                        var updatedNode = node with { Content = comment with { Text = newText } };
-                        host.Hub.Post(new UpdateNodeRequest(updatedNode));
-                    }
-
-                    ctx.Host.UpdateData(editStateId, false);
+                            var ownPath = host.Hub.Address.Path;
+                            var cache = host.Hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
+                            cache.Update(ownPath, n =>
+                            {
+                                var existing = n.ContentAs<Comment>(host.Hub.JsonSerializerOptions);
+                                // Existing node whose content can't be recovered → leave it alone, NEVER clobber.
+                                if (n.Content is not null && existing is null)
+                                    return n;
+                                existing ??= new Comment();
+                                return n with { Content = existing with { Text = newText } };
+                            }, host.Hub.JsonSerializerOptions).Subscribe(
+                                _ => ctx.Host.UpdateData(editStateId, false),
+                                _ => ctx.Host.UpdateData(editStateId, false));
+                        });
+                    return Task.CompletedTask;
                 })));
 
         return stack;
@@ -365,35 +397,44 @@ public static class CommentLayoutAreas
             .WithStyle("margin-top: 8px; justify-content: flex-end;")
             .WithView(Controls.Button("Cancel")
                 .WithAppearance(Appearance.Neutral)
-                .WithClickAction(async _ =>
+                .WithClickAction(_ =>
                 {
-                    try { await nodeFactory.DeleteNodeAsync(replyPath); } catch { }
-                    host.UpdateData(replyPathStateId, "");
+                    nodeFactory.DeleteNode(replyPath).Subscribe(
+                        __ => host.UpdateData(replyPathStateId, ""),
+                        _  => host.UpdateData(replyPathStateId, ""));
+                    return Task.CompletedTask;
                 }))
             .WithView(Controls.Button("Create")
                 .WithAppearance(Appearance.Accent)
                 .WithIconStart(FluentIcons.Add())
-                .WithClickAction(async ctx =>
+                .WithClickAction(ctx =>
                 {
-                    // Read text from data area
-                    var text = "";
+                    // Read text, then look up the transient reply in the workspace stream
+                    // (not QueryAsync — AsynchronousCalls.md) and flip it to Active with the text.
                     ctx.Host.Stream.GetDataStream<Dictionary<string, object?>>(replyTextDataId)
                         .Take(1)
-                        .Subscribe(data => text = data?.GetValueOrDefault("text")?.ToString() ?? "");
-
-                    var node = await meshQuery.QueryAsync<MeshNode>($"path:{replyPath}").FirstOrDefaultAsync();
-                    if (node != null)
-                    {
-                        var replyComment = node.Content as Comment ?? new Comment();
-                        var activeNode = node with
+                        .Subscribe(data =>
                         {
-                            State = MeshNodeState.Active,
-                            Content = replyComment with { Text = text }
-                        };
-                        host.Hub.Post(new UpdateNodeRequest(activeNode));
-                    }
+                            var text = data?.GetValueOrDefault("text")?.ToString() ?? "";
 
-                    host.UpdateData(replyPathStateId, "");
+                            var cache = host.Hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
+                            cache.Update(replyPath, n =>
+                            {
+                                var replyComment = n.ContentAs<Comment>(host.Hub.JsonSerializerOptions);
+                                // Existing node whose content can't be recovered → leave it alone, NEVER clobber.
+                                if (n.Content is not null && replyComment is null)
+                                    return n;
+                                replyComment ??= new Comment();
+                                return n with
+                                {
+                                    State = MeshNodeState.Active,
+                                    Content = replyComment with { Text = text }
+                                };
+                            }, host.Hub.JsonSerializerOptions).Subscribe(
+                                _ => host.UpdateData(replyPathStateId, ""),
+                                _ => host.UpdateData(replyPathStateId, ""));
+                        });
+                    return Task.CompletedTask;
                 })));
 
         return stack;
@@ -405,7 +446,7 @@ public static class CommentLayoutAreas
     private static UiControl BuildReplyButton(LayoutAreaHost host, string hubPath, Comment comment, string currentUser)
     {
         return Controls.Html("<span style=\"cursor: pointer; font-size: 0.8rem; color: var(--accent-fill-rest);\" title=\"Reply\">↩</span>")
-            .WithClickAction(async _ =>
+            .WithClickAction(_ =>
             {
                 var replyId = Guid.NewGuid().AsString();
                 var replyPath = $"{hubPath}/{replyId}";
@@ -426,13 +467,15 @@ public static class CommentLayoutAreas
                 };
 
                 var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
-                await nodeFactory.CreateTransientAsync(replyNode);
-
-                // Expand the replies section so the new reply is visible
-                var expandedStateId = $"replies_expanded_{hubPath.Replace("/", "_")}";
-                host.UpdateData(expandedStateId, true);
-
-                host.UpdateData(replyPathStateId, replyPath);
+                nodeFactory.CreateTransient(replyNode).Subscribe(
+                    _ =>
+                    {
+                        var expandedStateId = $"replies_expanded_{hubPath.Replace("/", "_")}";
+                        host.UpdateData(expandedStateId, true);
+                        host.UpdateData(replyPathStateId, replyPath);
+                    },
+                    _ => { });
+                return Task.CompletedTask;
             });
     }
 
@@ -443,17 +486,22 @@ public static class CommentLayoutAreas
     private static UiControl BuildResolveButton(LayoutAreaHost host, string hubPath, Comment comment)
     {
         return Controls.Html("<span style=\"cursor: pointer; font-size: 0.8rem; color: #4ade80;\" title=\"Resolve\">✓</span>")
-            .WithClickAction(async _ =>
+            .WithClickAction(_ =>
             {
-                var meshQuery = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
-
-                // Update comment status to Resolved
-                var node = await meshQuery.QueryAsync<MeshNode>($"path:{hubPath}").FirstOrDefaultAsync();
-                if (node != null)
+                // Resolve comment — write through the shared cache so every
+                // reader of the comment's stream sees the status flip.
+                var ownPath = host.Hub.Address.Path;
+                var cache = host.Hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
+                cache.Update(ownPath, n =>
                 {
-                    var updatedNode = node with { Content = comment with { Status = CommentStatus.Resolved } };
-                    host.Hub.Post(new UpdateNodeRequest(updatedNode));
-                }
+                    var c = n.ContentAs<Comment>(host.Hub.JsonSerializerOptions) ?? comment;
+                    return n with { Content = c with { Status = CommentStatus.Resolved } };
+                }, host.Hub.JsonSerializerOptions).Subscribe(
+                    _ => { },
+                    ex => host.Hub.ServiceProvider.GetService<Microsoft.Extensions.Logging.ILoggerFactory>()
+                        ?.CreateLogger(typeof(CommentLayoutAreas).FullName!)
+                        .LogWarning(ex, "Comment resolve failed for {Path}", ownPath));
+                return Task.CompletedTask;
             });
     }
 
@@ -478,10 +526,13 @@ public static class CommentLayoutAreas
     private static UiControl BuildDeleteButton(LayoutAreaHost host, string hubPath)
     {
         return Controls.Html("<span style=\"cursor: pointer; font-size: 0.8rem; color: #f87171;\" title=\"Delete\">✕</span>")
-            .WithClickAction(async _ =>
+            .WithClickAction(_ =>
             {
                 var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
-                await nodeFactory.DeleteNodeAsync(hubPath);
+                nodeFactory.DeleteNode(hubPath).Subscribe(
+                    __ => { },
+                    _ => { });
+                return Task.CompletedTask;
             });
     }
 
@@ -506,10 +557,13 @@ public static class CommentLayoutAreas
         {
             menu = menu.WithView(
                 Controls.MenuItem("Delete", FluentIcons.Delete(IconSize.Size16))
-                    .WithClickAction(async _ =>
+                    .WithClickAction(_ =>
                     {
                         var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
-                        await nodeFactory.DeleteNodeAsync(hubPath);
+                        nodeFactory.DeleteNode(hubPath).Subscribe(
+                            __ => { },
+                            _ => { });
+                        return Task.CompletedTask;
                     }));
         }
 
@@ -529,7 +583,10 @@ public static class CommentLayoutAreas
             return stack.WithView(Controls.Html("<p style=\"color: var(--warning-color);\">Comment not found.</p>"));
         }
 
-        var comment = node.Content as Comment;
+        // ContentAs (deserialize), not `as Comment`: this view is data-bound via CombineLatest on
+        // GetMeshNodeStream; `as` → null on the JsonElement frames flips the author/permission gates
+        // and re-renders → storm.
+        var comment = node.ContentAs<Comment>(host.Hub.JsonSerializerOptions);
 
         // Permission check — need Comment permission
         if (!canComment)
@@ -583,21 +640,16 @@ public static class CommentLayoutAreas
     /// </summary>
     public static IObservable<UiControl?> Thumbnail(LayoutAreaHost host, RenderingContext _)
     {
-        var hubPath = host.Hub.Address.ToString();
-
-        var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
-            ?? Observable.Return<MeshNode[]>(Array.Empty<MeshNode>());
-
-        return nodeStream.Select(nodes =>
-        {
-            var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-            return BuildThumbnail(node);
-        });
+        return host.Workspace.GetMeshNodeStream()
+            .Select(node => BuildThumbnail(node, host.Hub.JsonSerializerOptions));
     }
 
-    internal static UiControl BuildThumbnail(MeshNode? node)
+    internal static UiControl BuildThumbnail(MeshNode? node, JsonSerializerOptions options)
     {
-        var comment = node?.Content as Comment;
+        // ContentAs (deserialize), not `as Comment`: data-bound via .Select on GetMeshNodeStream,
+        // whose frames alternate typed↔JsonElement; `as` → null on JsonElement frames would flip the
+        // author/preview text to "Unknown"/empty and back → thumbnail render storm.
+        var comment = node.ContentAs<Comment>(options);
         var author = comment?.Author ?? "Unknown";
         var preview = comment?.Text ?? "";
         if (preview.Length > 50) preview = preview[..47] + "...";

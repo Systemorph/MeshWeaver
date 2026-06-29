@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
+using System.Text.Json.Serialization;
 using MeshWeaver.Layout;
 
 namespace MeshWeaver.Mesh;
@@ -51,10 +52,67 @@ public record Comment
     public string? MarkerId { get; init; }
 
     /// <summary>
-    /// The original text that was highlighted when the comment was created.
+    /// The exact text that was highlighted when the comment was created. Kept for display (the quote
+    /// shown on the card) and as a sanity check / fallback when re-anchoring.
     /// </summary>
     [Browsable(false)]
     public string? HighlightedText { get; init; }
+
+    /// <summary>
+    /// The document <see cref="MeshNode.Version"/> the capture (<see cref="Start"/>/<see cref="Length"/>/
+    /// <see cref="AnchorText"/>) was taken against. The comment is NOT stored inside the document text;
+    /// the inline highlight is re-derived. While the document is still at this version the captured
+    /// offsets are exact; once it is ahead the range is recomputed by diffing <see cref="AnchorText"/>
+    /// against the current text (see AnchorMath). Zero for page-level comments.
+    /// </summary>
+    [Browsable(false)]
+    public long Version { get; init; }
+
+    /// <summary>
+    /// Start offset of the highlight in the document's clean text at <see cref="Version"/>.
+    /// Page-level comments have no anchor — detected via an empty <see cref="HighlightedText"/>.
+    /// (Defaults to 0, not -1: the serializer omits the int default 0 when writing, so a -1 default
+    /// would turn an anchor at offset 0 into a phantom "unanchored" on read.)
+    /// </summary>
+    [Browsable(false)]
+    public int Start { get; init; }
+
+    /// <summary>
+    /// Length (in characters) of the highlight at <see cref="Version"/>.
+    /// </summary>
+    [Browsable(false)]
+    public int Length { get; init; }
+
+    /// <summary>
+    /// The document's clean text at <see cref="Version"/> — the "anchor" the capture was taken
+    /// against. Diffed against the current text to recompute the effective range when the document
+    /// has moved on. Null for page-level comments.
+    /// </summary>
+    [Browsable(false)]
+    public string? AnchorText { get; init; }
+
+    /// <summary>
+    /// Effective start of the highlight in the CURRENT document text, recomputed at display time.
+    /// Not persisted — derived from the capture via the version delta. <c>-1</c> when not resolved.
+    /// </summary>
+    [Browsable(false)]
+    [JsonIgnore]
+    public int EffectiveStart { get; init; } = -1;
+
+    /// <summary>
+    /// Effective end (exclusive) of the highlight in the CURRENT document text. Not persisted.
+    /// </summary>
+    [Browsable(false)]
+    [JsonIgnore]
+    public int EffectiveEnd { get; init; } = -1;
+
+    /// <summary>
+    /// The document version the <see cref="EffectiveStart"/>/<see cref="EffectiveEnd"/> were resolved
+    /// against (the current version at display time). Not persisted.
+    /// </summary>
+    [Browsable(false)]
+    [JsonIgnore]
+    public long EffectiveVersion { get; init; }
 
     /// <summary>
     /// Author of the comment (username or display name).
@@ -90,10 +148,15 @@ public record Comment
 }
 
 /// <summary>
-/// Represents a tracked change (insertion or deletion) in a collaborative document.
-/// Tracked changes are satellite entities — permissions delegate to the primary document node.
-/// The actual text content stays in the markers within the markdown;
-/// this entity only tracks location and metadata.
+/// Represents a tracked change (a suggested edit) in a collaborative document.
+/// <para>
+/// Tracked changes are satellite entities at <c>{doc}/_Tracking/{id}</c> — permissions delegate to
+/// the primary document node. Like comments, a change is NOT woven into the document text: it
+/// captures the character range (<see cref="Start"/>/<see cref="Length"/>) in the document's clean
+/// text at a known <see cref="Version"/> plus that text (<see cref="AnchorText"/>), and the diff view
+/// is re-derived at render time against the current text (see AnchorMath). Accepting applies
+/// <see cref="NewText"/> to the document; rejecting just drops the satellite.
+/// </para>
 /// </summary>
 public record TrackedChange
 {
@@ -112,7 +175,13 @@ public record TrackedChange
     public string? PrimaryNodePath { get; init; }
 
     /// <summary>
-    /// Type of change (Insertion or Deletion).
+    /// Id linking the change to its inline diff span (<c>data-change-id</c>).
+    /// </summary>
+    [Browsable(false)]
+    public string? MarkerId { get; init; }
+
+    /// <summary>
+    /// Type of change (Insertion, Deletion or Replacement).
     /// </summary>
     [Browsable(false)]
     public TrackedChangeType ChangeType { get; init; }
@@ -134,6 +203,62 @@ public record TrackedChange
     /// </summary>
     [Browsable(false)]
     public TrackedChangeStatus Status { get; init; } = TrackedChangeStatus.Pending;
+
+    /// <summary>
+    /// The document <see cref="MeshNode.Version"/> the capture was taken against.
+    /// </summary>
+    [Browsable(false)]
+    public long Version { get; init; }
+
+    /// <summary>
+    /// Start offset of the affected range in the document's clean text at <see cref="Version"/>
+    /// (the insertion point for a pure insertion). Defaults to 0 (see <see cref="Comment.Start"/> for
+    /// why not -1).
+    /// </summary>
+    [Browsable(false)]
+    public int Start { get; init; }
+
+    /// <summary>
+    /// Length of the affected (deleted/replaced) range at <see cref="Version"/>. Zero for a pure
+    /// insertion.
+    /// </summary>
+    [Browsable(false)]
+    public int Length { get; init; }
+
+    /// <summary>
+    /// The document's clean text at <see cref="Version"/> — diffed against the current text to
+    /// recompute the effective range when the document has moved on.
+    /// </summary>
+    [Browsable(false)]
+    public string? AnchorText { get; init; }
+
+    /// <summary>
+    /// The original text being deleted or replaced (empty for a pure insertion). Kept for display
+    /// and verification.
+    /// </summary>
+    [Browsable(false)]
+    public string? OriginalText { get; init; }
+
+    /// <summary>
+    /// The suggested replacement / inserted text (empty for a pure deletion).
+    /// </summary>
+    [Browsable(false)]
+    public string? NewText { get; init; }
+
+    /// <summary>Effective start in the CURRENT document text, recomputed at display time. Not persisted.</summary>
+    [Browsable(false)]
+    [JsonIgnore]
+    public int EffectiveStart { get; init; } = -1;
+
+    /// <summary>Effective end (exclusive) in the CURRENT document text. Not persisted.</summary>
+    [Browsable(false)]
+    [JsonIgnore]
+    public int EffectiveEnd { get; init; } = -1;
+
+    /// <summary>The document version the effective range was resolved against. Not persisted.</summary>
+    [Browsable(false)]
+    [JsonIgnore]
+    public long EffectiveVersion { get; init; }
 }
 
 /// <summary>
@@ -149,7 +274,12 @@ public enum TrackedChangeType
     /// <summary>
     /// Text was deleted from the document.
     /// </summary>
-    Deletion
+    Deletion,
+
+    /// <summary>
+    /// Text was replaced (delete + insert at the same place).
+    /// </summary>
+    Replacement
 }
 
 /// <summary>

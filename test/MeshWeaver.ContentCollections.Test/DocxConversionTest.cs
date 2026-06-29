@@ -2,12 +2,14 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Threading;
 using System.Threading.Tasks;
+using MeshWeaver.Reactive;
 using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Wordprocessing;
-using FluentAssertions;
 using MeshWeaver.Data;
 using MeshWeaver.Data.Completion;
 using MeshWeaver.Fixture;
@@ -38,11 +40,9 @@ public class DocxConversionTest(ITestOutputHelper output) : HubTestBase(output)
                 Name = "content",
                 SourceType = "FileSystem",
                 IsEditable = true,
+                ExposeInChildren = true,
                 BasePath = _contentBasePath,
-                Settings = new Dictionary<string, string>
-                {
-                    ["BasePath"] = _contentBasePath
-                }
+                Settings = new Dictionary<string, string> { ["BasePath"] = _contentBasePath }
             });
     }
 
@@ -74,7 +74,8 @@ public class DocxConversionTest(ITestOutputHelper output) : HubTestBase(output)
         var fileContentProvider = hub.ServiceProvider.GetRequiredService<IFileContentProvider>();
 
         // Act — requesting a .docx file should auto-convert to markdown
-        var result = await fileContentProvider.GetFileContentAsync("content", "sample.docx", ct: TestContext.Current.CancellationToken);
+        var result = await fileContentProvider.GetFileContent("content", "sample.docx")
+            .Should().Emit();
 
         // Assert
         Output.WriteLine($"Content result:\n{result.Content}");
@@ -92,7 +93,8 @@ public class DocxConversionTest(ITestOutputHelper output) : HubTestBase(output)
         var fileContentProvider = hub.ServiceProvider.GetRequiredService<IFileContentProvider>();
 
         // Act — requesting a .md file should return as-is
-        var result = await fileContentProvider.GetFileContentAsync("content", "readme.md", ct: TestContext.Current.CancellationToken);
+        var result = await fileContentProvider.GetFileContent("content", "readme.md")
+            .Should().Emit();
 
         // Assert
         result.Success.Should().BeTrue();
@@ -111,12 +113,10 @@ public class DocxConversionTest(ITestOutputHelper output) : HubTestBase(output)
             .FirstOrDefault();
         contentProvider.Should().NotBeNull("ContentAutocompleteProvider should be registered");
 
-        // Act — query "sample" should match sample.docx but NOT readme.md
-        var items = new List<AutocompleteItem>();
-        await foreach (var item in contentProvider!.GetItemsAsync("sample", ct: TestContext.Current.CancellationToken))
-        {
-            items.Add(item);
-        }
+        // Act — query "sample" should match sample.docx but NOT readme.md.
+        // Wait for the first snapshot that carries the matching file.
+        var items = await contentProvider!.GetItems("sample")
+            .Should().Match(snap => snap.Any(i => i.Label == "sample.docx"));
 
         // Assert — only matching files returned
         Output.WriteLine($"Autocomplete items for 'sample': {items.Count}");
@@ -145,12 +145,9 @@ public class DocxConversionTest(ITestOutputHelper output) : HubTestBase(output)
             .FirstOrDefault();
         contentProvider.Should().NotBeNull();
 
-        // Act — exact name match
-        var items = new List<AutocompleteItem>();
-        await foreach (var item in contentProvider!.GetItemsAsync("sample.docx", ct: TestContext.Current.CancellationToken))
-        {
-            items.Add(item);
-        }
+        // Act — exact name match; wait for the first snapshot carrying it
+        var items = await contentProvider!.GetItems("sample.docx")
+            .Should().Match(snap => snap.Any(i => i.Label == "sample.docx"));
 
         // Assert — exact match should score 3000
         var docxItem = items.First(i => i.Label == "sample.docx");
@@ -160,23 +157,25 @@ public class DocxConversionTest(ITestOutputHelper output) : HubTestBase(output)
     [Fact]
     public async Task ContentAutocomplete_Wraps_Spaces_In_Quotes()
     {
-        // Arrange — create a file with spaces in the name
-        File.WriteAllText(Path.Combine(_contentBasePath, "my document.docx"), "");
-        // Create a valid docx instead
+        // Arrange — GetClient() runs ConfigureClient, which creates the content
+        // directory (Directory.CreateDirectory(_contentBasePath)). It MUST precede the
+        // file write below: on a fresh CI checkout the bin/.../Files/DocxTest folder
+        // does not exist until ConfigureClient creates it (else DirectoryNotFoundException).
+        // The content provider walks the filesystem live per query, so a docx created
+        // after the client is obtained still surfaces in autocomplete.
+        var hub = GetClient();
+
+        // Create a file with spaces in the name.
         CreateTestDocx(Path.Combine(_contentBasePath, "my document.docx"), "Spaced Doc", "Content");
 
-        var hub = GetClient();
         var providers = hub.ServiceProvider.GetServices<IAutocompleteProvider>();
         var contentProvider = providers
             .OfType<ContentCollections.Completion.ContentAutocompleteProvider>()
             .FirstOrDefault();
 
-        // Act
-        var items = new List<AutocompleteItem>();
-        await foreach (var item in contentProvider!.GetItemsAsync("my doc", ct: TestContext.Current.CancellationToken))
-        {
-            items.Add(item);
-        }
+        // Act — wait for the first snapshot carrying the spaced file
+        var items = await contentProvider!.GetItems("my doc")
+            .Should().Match(snap => snap.Any(i => i.Label == "my document.docx"));
 
         // Assert
         Output.WriteLine($"Items for 'my doc': {items.Count}");
@@ -194,16 +193,14 @@ public class DocxConversionTest(ITestOutputHelper output) : HubTestBase(output)
     {
         // Arrange — the unified path content:content/sample.docx should auto-convert
         var hub = GetClient();
-        var request = new GetDataRequest(new UnifiedReference("content:content/sample.docx"));
-        var delivery = hub.Post(request, o => o.WithTarget(hub.Address))!;
 
         // Act
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-        var response = await hub.RegisterCallback(delivery, (d, _) => Task.FromResult(d), cts.Token);
+        var response = await hub.Observe(
+            new GetDataRequest(new UnifiedReference("content:content/sample.docx")),
+            o => o.WithTarget(hub.Address)).Should().Within(10.Seconds()).Emit();
 
         // Assert
-        response.Should().BeAssignableTo<IMessageDelivery<GetDataResponse>>();
-        var dataResponse = ((IMessageDelivery<GetDataResponse>)response).Message;
+        var dataResponse = response.Message;
         Output.WriteLine($"Response data: {dataResponse.Data}");
         dataResponse.Error.Should().BeNull();
         dataResponse.Data.Should().NotBeNull();

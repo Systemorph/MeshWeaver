@@ -12,8 +12,14 @@ namespace MeshWeaver.Graph;
 /// </summary>
 public static class HtmlLayoutAreas
 {
+    /// <summary>Area name for the Overview layout area.</summary>
     public const string OverviewArea = "Overview";
 
+    /// <summary>
+    /// Registers the HTML layout-area views (Overview, Thumbnail, Create, Delete) on the hub configuration.
+    /// </summary>
+    /// <param name="configuration">The message hub configuration to register the views on.</param>
+    /// <returns>The same configuration with the HTML views added, for chaining.</returns>
     public static MessageHubConfiguration AddHtmlViews(this MessageHubConfiguration configuration)
         => configuration
             .AddLayout(layout => layout
@@ -23,18 +29,16 @@ public static class HtmlLayoutAreas
                 .WithView(MeshNodeLayoutAreas.CreateNodeArea, CreateLayoutArea.Create)
                 .WithView(MeshNodeLayoutAreas.DeleteArea, DeleteLayoutArea.Delete));
 
+    /// <summary>
+    /// Renders the Overview area for an HTML node: a standard header followed by the stored HTML/SVG content and the children section.
+    /// </summary>
+    /// <param name="host">The layout area host rendering the area.</param>
+    /// <param name="_">The rendering context for the area.</param>
+    /// <returns>An observable stream of the Overview view for the HTML node.</returns>
     public static IObservable<UiControl?> Overview(LayoutAreaHost host, RenderingContext _)
     {
-        var hubPath = host.Hub.Address.ToString();
-
-        var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
-            ?? Observable.Return(Array.Empty<MeshNode>());
-
-        return nodeStream.Select(nodes =>
-        {
-            var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-            return (UiControl?)BuildOverview(host, node);
-        });
+        return host.Workspace.GetMeshNodeStream()
+            .Select(node => (UiControl?)BuildOverview(host, node));
     }
 
     private static UiControl BuildOverview(LayoutAreaHost host, MeshNode? node)
@@ -56,8 +60,7 @@ public static class HtmlLayoutAreas
                 Controls.Html("<p style=\"color: var(--neutral-foreground-hint); font-style: italic;\">No content yet.</p>"));
         }
 
-        // Standard children section
-        container = container.WithView(LayoutAreaControl.Children(host.Hub).WithShowProgress(false));
+        // No hardcoded children section — children are injected inline with @@(query), never auto-listed.
 
         return container;
     }
@@ -65,16 +68,9 @@ public static class HtmlLayoutAreas
     private static UiControl Thumbnail(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
-
-        var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
-            ?? Observable.Return(Array.Empty<MeshNode>());
-
         return Controls.Stack
-            .WithView((h, c) => nodeStream.Select(nodes =>
-            {
-                var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-                return MeshNodeThumbnailControl.FromNode(node, hubPath);
-            }));
+            .WithView((h, c) => host.Workspace.GetMeshNodeStream()
+                .Select(node => MeshNodeThumbnailControl.FromNode(node, hubPath)));
     }
 
     internal static string GetHtmlContent(MeshNode? node)

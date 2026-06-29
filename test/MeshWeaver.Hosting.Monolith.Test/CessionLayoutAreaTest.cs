@@ -1,11 +1,10 @@
-using System;
+﻿using System;
 using System.IO;
 using System.Linq;
+using System.Reactive;
 using System.Reactive.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
-using FluentAssertions;
-using FluentAssertions.Extensions;
 using MeshWeaver.Data;
 using MeshWeaver.Documentation;
 using MeshWeaver.Graph;
@@ -37,7 +36,9 @@ public class CessionLayoutAreaTest : MonolithMeshTestBase
 
     public CessionLayoutAreaTest(ITestOutputHelper output) : base(output)
     {
-        _cacheDirectory = Path.Combine(Path.GetTempPath(), "MeshWeaverCessionTests", Guid.NewGuid().ToString());
+        // Stable cache directory — the timestamped-subdir cache (a3ab9909e)
+        // gives each compile its own subdir so prior-process DLLs aren't touched.
+        _cacheDirectory = Path.Combine(Path.GetTempPath(), "MeshWeaverCessionTests");
         Directory.CreateDirectory(_cacheDirectory);
     }
 
@@ -45,7 +46,10 @@ public class CessionLayoutAreaTest : MonolithMeshTestBase
     {
         return builder
             .UseMonolithMesh()
-            .AddInMemoryPersistence()
+            // AddDocumentation registers an embedded-resource partition under
+            // the "Doc" namespace; partition-routing persistence is required
+            // for that provider to actually serve reads.
+            .AddPartitionedInMemoryPersistence()
             .AddDocumentation()
             .ConfigureServices(services =>
                 services.Configure<CompilationCacheOptions>(o => o.CacheDirectory = _cacheDirectory))
@@ -64,7 +68,7 @@ public class CessionLayoutAreaTest : MonolithMeshTestBase
     [Fact(Timeout = 60000)]
     public async Task MotorXL_PathResolves()
     {
-        var resolution = await PathResolver.ResolvePathAsync(MotorXLPath);
+        var resolution = await PathResolver.ResolvePath(MotorXLPath).Should().Emit();
         resolution.Should().NotBeNull($"Path '{MotorXLPath}' should resolve");
         Output.WriteLine($"Resolved: Prefix={resolution!.Prefix}, Remainder={resolution.Remainder}");
     }
@@ -72,24 +76,19 @@ public class CessionLayoutAreaTest : MonolithMeshTestBase
     [Fact(Timeout = 60000)]
     public async Task MotorXL_LayoutArea_ReturnsContent()
     {
-        var resolution = await PathResolver.ResolvePathAsync(MotorXLPath);
+        var resolution = await PathResolver.ResolvePath(MotorXLPath).Should().Emit();
         resolution.Should().NotBeNull();
 
         var address = new Address(resolution!.Prefix.ToString()!);
         var client = GetClient(c => c.AddData(data => data));
 
-        // Initialize hub (triggers NodeType compilation)
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(address),
-            TestContext.Current.CancellationToken);
-
-        // Request default layout area
+        // No ping: the layout-area subscription activates the hub + triggers the
+        // cold Cession NodeType compile itself. Budget covers the cold Roslyn build.
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference(MeshNodeLayoutAreas.OverviewArea);
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(address, reference);
 
-        var value = await stream.Timeout(30.Seconds()).FirstAsync();
+        var value = await stream.Should().Within(50.Seconds()).Emit();
         value.Should().NotBe(default(JsonElement), "Layout area should return content, not spin forever");
     }
 
@@ -99,7 +98,7 @@ public class CessionLayoutAreaTest : MonolithMeshTestBase
         var client = GetClient();
 
         // Resolve path first to get the actual hub address
-        var resolution = await PathResolver.ResolvePathAsync(MotorXLPath);
+        var resolution = await PathResolver.ResolvePath(MotorXLPath).Should().Emit();
         resolution.Should().NotBeNull($"Path '{MotorXLPath}' should resolve");
         Output.WriteLine($"Resolved: Prefix={resolution!.Prefix}, Remainder={resolution.Remainder}");
 
@@ -107,10 +106,7 @@ public class CessionLayoutAreaTest : MonolithMeshTestBase
         Output.WriteLine($"Hub address: {address}");
 
         Output.WriteLine($"Initializing hub for {address}...");
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(address),
-            TestContext.Current.CancellationToken);
+        await client.Observe(new PingRequest(), o => o.WithTarget(address)).Should().Within(50.Seconds()).Emit();
         Output.WriteLine("Hub initialized.");
 
         var hostedHub = Mesh.GetHostedHub(address, HostedHubCreation.Never);
@@ -119,7 +115,7 @@ public class CessionLayoutAreaTest : MonolithMeshTestBase
         var workspace = hostedHub!.GetWorkspace();
         Output.WriteLine($"Workspace exists: {workspace != null}");
 
-        var uiControlService = hostedHub.ServiceProvider.GetService<IUiControlService>();
+        var uiControlService = hostedHub!.ServiceProvider.GetService<IUiControlService>();
         Output.WriteLine($"IUiControlService exists: {uiControlService != null}");
         Output.WriteLine($"LayoutDefinition renderer count: {uiControlService?.LayoutDefinition.Count ?? 0}");
 
@@ -134,24 +130,57 @@ public class CessionLayoutAreaTest : MonolithMeshTestBase
         var client = GetClient(c => c.AddData(data => data));
         var address = new Address(MotorXLPath);
 
-        Output.WriteLine($"Initializing hub for {MotorXLPath}...");
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(address),
-            TestContext.Current.CancellationToken);
-        Output.WriteLine("Hub initialized.");
-
+        // No ping: the layout-area subscription activates the hub + triggers the
+        // cold Cession NodeType compile itself.
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference(MeshNodeLayoutAreas.OverviewArea);
 
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(address, reference);
 
         Output.WriteLine("Waiting for Overview area...");
-        var rawValue = await stream.Timeout(TimeSpan.FromSeconds(20)).FirstAsync();
+        var rawValue = await stream.Should().Within(50.Seconds()).Emit();
         Output.WriteLine($"Received raw value: {rawValue.Value.ValueKind}");
 
         rawValue.Value.ValueKind.Should().NotBe(JsonValueKind.Undefined,
             "Overview area should return a response for MotorXL");
+    }
+
+    /// <summary>
+    /// Negative case: pinging a path that doesn't exist must surface as a clear
+    /// "node does not exist" error — not a 30s ping timeout. The chain:
+    ///   1. PathResolver.ResolvePath returns null (or a resolution with a
+    ///      non-empty Remainder) for the missing path.
+    ///   2. RoutingServiceBase.PostNotFound returns a DeliveryFailure with
+    ///      ErrorType.NotFound + a message naming the missing path.
+    ///   3. client.Observe(...) propagates that failure as an exception on the
+    ///      Task — callers don't see a generic timeout.
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task NonExistentPath_Failure()
+    {
+        const string missingPath = "Doc/Architecture/BusinessRules/Cession/Nonexistent";
+
+        // 1+2: path resolution does NOT find a complete prefix match —
+        //      either resolution is null or has a non-empty Remainder.
+        var resolution = await PathResolver.ResolvePath(missingPath).Should().Within(20.Seconds()).Emit();
+        if (resolution is not null)
+            resolution.Remainder.Should().NotBeNullOrEmpty(
+                $"Path '{missingPath}' should not resolve completely; closest ancestor + remainder is expected");
+        Output.WriteLine($"Resolution: {(resolution is null ? "(null)" : $"Prefix={resolution.Prefix} Remainder={resolution.Remainder}")}");
+
+        // 3+4: PingRequest fails with a DeliveryFailure(NotFound) — the
+        //      observable's OnError carries the failure as an exception.
+        var address = new Address(missingPath);
+        var client = GetClient();
+        var notification = await client.Observe(new PingRequest(), o => o.WithTarget(address))
+            .Materialize()
+            .Should().Within(20.Seconds()).Match(n => n.Kind == NotificationKind.OnError);
+        var ex = notification.Exception!;
+        Output.WriteLine($"Got exception: {ex.GetType().Name}: {ex.Message}");
+        new[] { "No node found", "NotFound", "does not exist" }
+            .Any(s => ex.Message.Contains(s, StringComparison.Ordinal))
+            .Should().BeTrue(
+                $"Expected a NotFound-style failure naming '{missingPath}', but got: {ex.Message}");
     }
 
     [Fact(Timeout = 60000)]
@@ -159,10 +188,7 @@ public class CessionLayoutAreaTest : MonolithMeshTestBase
     {
         // The BusinessRules.md contains @@Cession/MotorXL which should resolve
         // relative to its own path Doc/Architecture/BusinessRules
-        var ct = TestContext.Current.CancellationToken;
-        var docNode = await MeshQuery
-            .QueryAsync<MeshNode>($"path:{BusinessRulesDocPath}", ct: ct)
-            .FirstOrDefaultAsync(ct);
+        var docNode = await ReadNode(BusinessRulesDocPath).Should().Match(n => n is not null);
 
         docNode.Should().NotBeNull("BusinessRules doc node should exist");
 
@@ -175,7 +201,8 @@ public class CessionLayoutAreaTest : MonolithMeshTestBase
         resolvedPath.Should().Be(MotorXLPath);
 
         // And the resolved path actually finds a node
-        var resolution = await PathResolver.ResolvePathAsync(resolvedPath);
+        var resolution = await PathResolver.ResolvePath(resolvedPath).Should().Emit();
         resolution.Should().NotBeNull($"Resolved path '{resolvedPath}' should find the MotorXL node");
     }
 }
+

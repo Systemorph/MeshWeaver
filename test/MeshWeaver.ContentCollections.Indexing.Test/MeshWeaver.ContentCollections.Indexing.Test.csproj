@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <!-- UglyToad.PdfPig is used in TextExtractorTest to GENERATE a one-page fixture PDF
+         (PdfDocumentBuilder) before asserting extraction. -->
+    <PackageReference Include="UglyToad.PdfPig" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\MeshWeaver.ContentCollections.Indexing\MeshWeaver.ContentCollections.Indexing.csproj" />
+  </ItemGroup>
+
+</Project>

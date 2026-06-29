@@ -1,11 +1,9 @@
-using System;
+﻿using System;
 using System.IO;
 using System.Reactive.Linq;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
-using FluentAssertions;
-using FluentAssertions.Extensions;
 using MeshWeaver.Connection.Orleans;
 using MeshWeaver.Data;
 using MeshWeaver.Fixture;
@@ -23,8 +21,11 @@ using Orleans.TestingHost;
 using Orleans.TestingHost.InProcess;
 using Xunit;
 
+using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Hosting.Orleans.Test;
 
+// TODO: needs custom shared fixture Ã¢â‚¬â€ uses GraphDataSiloConfigurator with
+// AddFileSystemPersistence(SamplesGraphData), which the SharedOrleansFixture does not configure.
 /// <summary>
 /// Integration tests that verify Orleans routing works end-to-end
 /// with FileSystem persistence and graph data from samples/Graph/Data.
@@ -42,10 +43,14 @@ public class OrleansGraphDataTest(ITestOutputHelper output) : TestBase(output)
         await base.InitializeAsync();
 
         var builder = new TestClusterBuilder();
+        builder.Options.InitialSilosCount = 1;
         builder.AddSiloBuilderConfigurator<GraphDataSiloConfigurator>();
         builder.AddClientBuilderConfigurator<TestClientConfigurator>();
         Cluster = builder.Build();
         await Cluster.DeployAsync();
+        // Seed a default System circuit identity so portal-hub posts carry an
+        // identity (never-null AccessContext invariant). See OrleansTestIdentity.
+        OrleansTestIdentity.SeedDefaultIdentity(Cluster);
     }
 
     /// <summary>
@@ -62,18 +67,15 @@ public class OrleansGraphDataTest(ITestOutputHelper output) : TestBase(output)
             AddressExtensions.CreatePortalAddress(),
             config => config
                 .AddLayoutClient()
-                .WithInitialization(async (hub, _) =>
-                {
-                    var registration = await routingService.RegisterStreamAsync(hub);
-                    hub.RegisterForDisposal(registration);
-                }))!;
+                .WithInitialization(hub =>
+                    hub.RegisterForDisposal(routingService.RegisterStream(hub))))!;
 
         // Wait briefly for initialization to complete
         await Task.Delay(500);
         return portalHub;
     }
 
-    [Fact(Timeout = 120000)]
+    [Fact(Timeout = 60000)]
     public async Task OrganizationSearch_ShouldRender()
     {
         var portal = await CreatePortalHubAsync();
@@ -81,9 +83,7 @@ public class OrleansGraphDataTest(ITestOutputHelper output) : TestBase(output)
 
         // First ping to ensure Organization grain is activated and compiled
         var pingResponse = await portal
-            .AwaitResponse(new PingRequest(),
-                o => o.WithTarget(organizationAddress),
-                new CancellationTokenSource(45.Seconds()).Token);
+            .Observe(new PingRequest(), o => o.WithTarget(organizationAddress)).FirstAsync().ToTask(new CancellationTokenSource(45.Seconds()).Token);
         Output.WriteLine($"Ping response: {pingResponse.Message.GetType().Name}");
 
         var workspace = portal.GetWorkspace();
@@ -98,16 +98,14 @@ public class OrleansGraphDataTest(ITestOutputHelper output) : TestBase(output)
         value.Should().NotBe(default(JsonElement), "Search view should render for Kernel");
     }
 
-    [Fact(Timeout = 120000)]
+    [Fact(Timeout = 60000)]
     public async Task OrganizationDefault_ShouldRender()
     {
         var portal = await CreatePortalHubAsync();
         var organizationAddress = AddressExtensions.CreateAppAddress("Kernel");
 
         var pingResponse = await portal
-            .AwaitResponse(new PingRequest(),
-                o => o.WithTarget(organizationAddress),
-                new CancellationTokenSource(45.Seconds()).Token);
+            .Observe(new PingRequest(), o => o.WithTarget(organizationAddress)).FirstAsync().ToTask(new CancellationTokenSource(45.Seconds()).Token);
         Output.WriteLine($"Ping response: {pingResponse.Message.GetType().Name}");
 
         var workspace = portal.GetWorkspace();
@@ -135,12 +133,12 @@ public class OrleansGraphDataTest(ITestOutputHelper output) : TestBase(output)
 
         // Check the path resolution (verifies both persistence and catalog are working)
         var pathResolver = siloServiceProvider.GetRequiredService<IPathResolver>();
-        var resolution = await pathResolver.ResolvePathAsync("app/Kernel");
+        var resolution = await pathResolver.ResolvePath("app/Kernel").FirstAsync().ToTask();
         Output.WriteLine($"ResolvePathAsync('app/Kernel'): Prefix={resolution?.Prefix}, Remainder={resolution?.Remainder}");
         resolution.Should().NotBeNull("app/Kernel path should resolve");
     }
 
-    [Fact(Timeout = 120000)]
+    [Fact(Timeout = 60000)]
     public async Task PingOrganization()
     {
         var portal = await CreatePortalHubAsync();
@@ -148,9 +146,7 @@ public class OrleansGraphDataTest(ITestOutputHelper output) : TestBase(output)
 
         Output.WriteLine("Sending PingRequest to Organization via Orleans routing...");
         var response = await portal
-            .AwaitResponse(new PingRequest(),
-                o => o.WithTarget(organizationAddress),
-                new CancellationTokenSource(45.Seconds()).Token);
+            .Observe(new PingRequest(), o => o.WithTarget(organizationAddress)).FirstAsync().ToTask(new CancellationTokenSource(45.Seconds()).Token);
 
         Output.WriteLine($"Received response: {response.Message.GetType().Name}");
         response.Should().NotBeNull();
@@ -160,7 +156,7 @@ public class OrleansGraphDataTest(ITestOutputHelper output) : TestBase(output)
     public override async ValueTask DisposeAsync()
     {
         if (Cluster is not null)
-            await Cluster.DisposeAsync();
+            OrleansClusterDisposal.DisposeInBackground(Cluster);
         await base.DisposeAsync();
     }
 }
@@ -189,3 +185,4 @@ public class GraphDataSiloConfigurator : ISiloConfigurator, IHostConfigurator
             .ConfigureDefaultNodeHub(config => config.AddDefaultLayoutAreas());
     }
 }
+

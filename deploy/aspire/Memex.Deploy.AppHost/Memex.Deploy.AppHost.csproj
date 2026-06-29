@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <Sdk Name="Aspire.AppHost.Sdk" Version="13.3.5" />
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsAspireHost>true</IsAspireHost>
+    <UserSecretsId>memex-deploy-apphost</UserSecretsId>
+    <NoWarn>$(NoWarn);ASPIRECOSMOSDB001;ASPIREACADOMAINS001</NoWarn>
+  </PropertyGroup>
+
+  <!-- The Memex Aspire integration (builder.AddMemex). Project-referenced from the monorepo
+       here; a true standalone customer solution swaps this for the published
+       <PackageReference Include="Aspire.Hosting.Memex" />. -->
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\memex\aspire\Memex.Aspire.Hosting\Memex.Aspire.Hosting.csproj"
+                      IsAspireProjectResource="false" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Aspire.Hosting.AppHost" />
+    <PackageReference Include="Aspire.Hosting.Docker" />
+    <PackageReference Include="Aspire.Hosting.Kubernetes" />
+    <PackageReference Include="Aspire.Hosting.Azure.AppContainers" />
+  </ItemGroup>
+</Project>

@@ -1,4 +1,4 @@
-using MeshWeaver.Data;
+﻿using MeshWeaver.Data;
 using MeshWeaver.Mesh;
 
 namespace MeshWeaver.Graph.Configuration;
@@ -33,7 +33,6 @@ public static class NodeTypeNodeType
         Name = "Node Type",
         Icon = "/static/NodeTypeIcons/code.svg",
         ExcludeFromContext = new HashSet<string> { "search" },
-        AssemblyLocation = typeof(NodeTypeNodeType).Assembly.Location,
         HubConfiguration = config => config
             .AddMeshDataSource(source => source
                 .WithContentType<NodeTypeDefinition>())

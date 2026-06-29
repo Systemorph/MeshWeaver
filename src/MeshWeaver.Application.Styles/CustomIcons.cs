@@ -7,6 +7,7 @@ namespace MeshWeaver.Application.Styles;
 /// </summary>
 public static class CustomIcons
 {
+    /// <summary>The icon-provider key for the custom SVG icon set.</summary>
     public const string Provider = "custom-svg";
 
     /// <summary>

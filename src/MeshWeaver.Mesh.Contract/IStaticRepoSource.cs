@@ -1,0 +1,79 @@
+namespace MeshWeaver.Mesh;
+
+/// <summary>
+/// A <em>static repository</em> that ships with the build (embedded docs, sample graphs, seed
+/// data) and is materialized into its partition by the static-repo import on portal boot. The
+/// repo is the <b>source</b>; the live serving copy is the materialized partition. One
+/// implementation is registered per partition that should be DB-materialized.
+///
+/// <para>See <c>Doc/Architecture/StaticRepoImport.md</c>. The importer enumerates
+/// <see cref="EnumerateSourceNodes"/>, fingerprints them via
+/// <see cref="PartitionSourceFingerprint"/>, and — when the fingerprint differs from the one
+/// recorded on the partition main node — materializes the nodes (content + prerender) through the
+/// canonical create pipeline, tracked as a content-addressed <c>Activity</c>.</para>
+/// </summary>
+public interface IStaticRepoSource
+{
+    /// <summary>
+    /// The top-level partition this repo materializes into (the partition namespace and the
+    /// partition-root id), e.g. <c>"Doc"</c>. The materialized nodes live under this partition;
+    /// the partition main node (<c>namespace="", id={Partition}</c>) records the imported
+    /// fingerprint.
+    /// </summary>
+    string Partition { get; }
+
+    /// <summary>
+    /// Whether this repo's nodes carry meaningful versions. Selects the fingerprint mode:
+    /// <c>true</c> → <c>(path, version)</c> (cheap); <c>false</c> → <c>(path, contentHash)</c>
+    /// (embedded docs ship <c>Versioned=false</c>, so content is what changes).
+    /// </summary>
+    bool Versioned { get; }
+
+    /// <summary>
+    /// All source nodes <b>with full content</b> (e.g. <c>MarkdownContent</c>), in any order
+    /// (the fingerprint + import are order-independent). This is the authored content, read
+    /// straight from the assembly — never from the live mesh.
+    ///
+    /// <para>These are the partition's <b>children</b> only — never the partition root. The
+    /// <c>namespace=""</c> root is created as a proper <c>Space</c> by the importer as a standard
+    /// step (see <see cref="PartitionRoot"/>); shipping it here would break the importer's
+    /// descendants-scoped existing-read and prune logic.</para>
+    /// </summary>
+    IReadOnlyList<MeshNode> EnumerateSourceNodes();
+
+    /// <summary>
+    /// Optional customization of the partition <b>root</b> node (<c>namespace="", id={Partition}</c>).
+    /// The importer always ensures a proper <c>Space</c> root exists for the partition as a standard
+    /// step; when this returns <c>null</c> it synthesizes a generic <c>Space</c> root. Override it to
+    /// ship a curated landing page (e.g. the Doc welcome page) — typically
+    /// <c>new MeshNode(Partition) { NodeType = "Space", Content = new MarkdownContent { … } }</c>.
+    ///
+    /// <para>Use <c>NodeType = "Space"</c> as a string and <c>MarkdownContent</c> for the body — do
+    /// NOT reference the <c>Space</c> record (it lives in the portal assembly). The importer
+    /// prerenders the markdown into <c>PreRenderedHtml</c>, which the Space Overview renders.</para>
+    /// </summary>
+    MeshNode? PartitionRoot => null;
+
+    /// <summary>
+    /// Optional content-collection <b>imports</b> — assets a node references through its content
+    /// collection (e.g. an <c>@@content/logo.svg</c> embed) that ship in an embedded source
+    /// collection (e.g. <c>DocContent</c>) and must be copied into the owning node's runtime content
+    /// collection. After the node upsert the importer posts an <see cref="ImportContentRequest"/> per
+    /// entry (under System) to the owning node's hub, which copies the source folder
+    /// collection→collection, stream-to-stream. Default empty.
+    /// </summary>
+    IReadOnlyList<StaticContentImport> EnumerateContentImports() => [];
+}
+
+/// <summary>
+/// A content-collection import shipped by an <see cref="IStaticRepoSource"/>: copy the
+/// <paramref name="SourcePath"/> folder of <paramref name="SourceCollection"/> into
+/// <paramref name="TargetCollection"/>/<paramref name="TargetPath"/> on the node at
+/// <paramref name="NodePath"/>. Maps directly onto <see cref="ImportContentRequest"/>.
+/// </summary>
+public record StaticContentImport(
+    string NodePath,
+    string SourceCollection,
+    string SourcePath,
+    string TargetCollection = "content",
+    string TargetPath = "");

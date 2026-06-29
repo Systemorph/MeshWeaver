@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+    <RootNamespace>MeshWeaver.Cli</RootNamespace>
+    <AssemblyName>memex</AssemblyName>
+
+    <!-- Tool packaging — ships alongside the framework NuGet packages. -->
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>memex</ToolCommandName>
+    <PackageId>MeshWeaver.Cli</PackageId>
+    <IsPackable>true</IsPackable>
+    <Authors>MeshWeaver</Authors>
+    <Description>Command-line interface for MeshWeaver / Memex — operates the mesh over the REST API (get, upload, patch, compile, mirror, …).</Description>
+    <PackageProjectUrl>https://github.com/meshweaver/meshweaver</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/meshweaver/meshweaver</RepositoryUrl>
+    <PackageTags>meshweaver;memex;cli;mesh;cms</PackageTags>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="System.CommandLine" />
+  </ItemGroup>
+</Project>

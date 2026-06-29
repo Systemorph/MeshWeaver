@@ -1,9 +1,8 @@
 using System;
+using System.Reactive;
 using System.Reactive.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using FluentAssertions;
-using FluentAssertions.Extensions;
 using MeshWeaver.Data;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Hosting.Security;
@@ -24,19 +23,28 @@ namespace MeshWeaver.Security.Test;
 /// </summary>
 public class HubSubscriptionSecurityTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
+    // NOTE: NOT opted into ShareMeshAcrossTests — second test fails under
+    // shared SP, likely due to subscription state accumulating.
+
     private CancellationToken TestTimeout => new CancellationTokenSource(10.Seconds()).Token;
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => ConfigureMeshBase(builder)
             .AddRowLevelSecurity()
-            .AddMeshNodes(new MeshNode("SecuredHub") { Name = "Secured Hub" })
+            .AddMeshNodes(
+                new MeshNode("SecuredHub") { Name = "Secured Hub" },
+                // Pre-seed admin's Viewer access on SecuredHub for the
+                // "Subscription_WithReadAccess_PassesAccessCheck" test — static
+                // node provider seeds AccessAssignment at hub init time.
+                AssignmentNodeFactory.UserRole(TestUsers.Admin.ObjectId, "Viewer", scope: "SecuredHub")
+            )
             .ConfigureDefaultNodeHub(c => c.AddData(d => d));
 
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
         => base.ConfigureClient(configuration).AddData(d => d);
 
     /// <summary>
-    /// Skip PublicAdminAccess — security tests need granular permissions.
+    /// Skip PublicAdminAccess â€” security tests need granular permissions.
     /// </summary>
     protected override Task SetupAccessRightsAsync() => Task.CompletedTask;
 
@@ -46,13 +54,9 @@ public class HubSubscriptionSecurityTest(ITestOutputHelper output) : MonolithMes
     [Fact(Timeout = 20000)]
     public async Task UnauthorizedUser_HasNoReadPermission()
     {
-        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
-
-        var permissions = await securityService.GetEffectivePermissionsAsync(
-            "SecuredHub", "NobodyUser", TestTimeout);
-
-        permissions.Should().Be(Permission.None,
-            "user with no role assignments should have zero permissions");
+        await Mesh.GetEffectivePermissions("SecuredHub", "NobodyUser")
+            .Should().Be(Permission.None,
+                "user with no role assignments should have zero permissions");
     }
 
     /// <summary>
@@ -62,30 +66,28 @@ public class HubSubscriptionSecurityTest(ITestOutputHelper output) : MonolithMes
     [Fact(Timeout = 20000)]
     public async Task Subscription_WithReadAccess_PassesAccessCheck()
     {
-        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+        // Admin's Viewer access on SecuredHub is pre-seeded via the static
+        // AccessAssignment in ConfigureMesh — no runtime mutation needed.
         var hubAddress = new Address("SecuredHub");
-
-        // Grant Read access to the admin user on SecuredHub
-        await securityService.AddUserRoleAsync(
-            TestUsers.Admin.ObjectId, "Viewer", "SecuredHub", "system", TestTimeout);
 
         // Ensure hub is started
         var client = GetClient();
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(hubAddress),
-            TestContext.Current.CancellationToken);
+        await client.Observe(new PingRequest(), o => o.WithTarget(hubAddress))
+            .Should().Within(20.Seconds()).Emit();
 
         var workspace = client.GetWorkspace();
         var stream = workspace.GetRemoteStream<EntityStore>(hubAddress, new CollectionsReference("test"));
 
-        var act = async () => await stream
+        // The stream must ERROR (about unmapped collections) rather than emit — with
+        // read access the error must NOT be "Access denied". Materialize folds the
+        // OnError into a value so we assert it reactively (no await, no ThrowsAnyAsync).
+        var notification = await stream
             .Timeout(5.Seconds())
-            .FirstAsync();
+            .Take(1)
+            .Materialize()
+            .Should().Within(20.Seconds()).Match(n => n.Kind == NotificationKind.OnError);
 
-        // With access, we don't get "Access denied" — the error is about unmapped collections
-        var ex = await Assert.ThrowsAnyAsync<Exception>(act);
-        ex.ToString().Should().NotContain("Access denied",
+        notification.Exception!.ToString().Should().NotContain("Access denied",
             "with read access, the error should NOT be about access denial");
     }
 }

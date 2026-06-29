@@ -14,6 +14,9 @@ namespace MeshWeaver.Messaging.Security;
 [AttributeUsage(AttributeTargets.Class, Inherited = true, AllowMultiple = false)]
 public class RequiresPermissionAttribute(Permission permission) : Attribute
 {
+    /// <summary>
+    /// The permission required to deliver the marked message to a hub.
+    /// </summary>
     public Permission Permission { get; } = permission;
 
     /// <summary>

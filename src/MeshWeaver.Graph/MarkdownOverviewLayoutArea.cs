@@ -14,23 +14,25 @@ namespace MeshWeaver.Graph;
 /// </summary>
 public static class MarkdownOverviewLayoutArea
 {
+    /// <summary>
+    /// Renders the read-only Overview layout area for a Markdown node, including the
+    /// collaborative markdown body, children, approvals, and inline comments.
+    /// </summary>
+    /// <param name="host">The layout area host rendering the area.</param>
+    /// <param name="_">The rendering context for the area.</param>
+    /// <returns>An observable stream of the view for the Overview layout area.</returns>
     public static IObservable<UiControl?> Overview(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
+        var permissionsStream = host.Hub.GetEffectivePermissions(hubPath);
 
-        var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
-            ?? Observable.Return(Array.Empty<MeshNode>());
-
-        // Permissions checked once via Observable (no await, no blocking)
-        var permissionsStream = PermissionHelper.ObservePermissions(host.Hub, hubPath);
-
-        return nodeStream.CombineLatest(permissionsStream, (nodes, perms) =>
-        {
-            var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-            var canComment = perms.HasFlag(Permission.Comment) || perms.HasFlag(Permission.Update);
-            var canEdit = perms.HasFlag(Permission.Update);
-            return (UiControl?)BuildOverview(host, node, canComment, canEdit);
-        });
+        return host.Workspace.GetMeshNodeStream()
+            .CombineLatest(permissionsStream, (node, perms) =>
+            {
+                var canComment = perms.HasFlag(Permission.Comment) || perms.HasFlag(Permission.Update);
+                var canEdit = perms.HasFlag(Permission.Update);
+                return (UiControl?)BuildOverview(host, node, canComment, canEdit);
+            });
     }
 
     private static UiControl BuildOverview(LayoutAreaHost host, MeshNode? node, bool canComment, bool canEdit)
@@ -38,20 +40,20 @@ public static class MarkdownOverviewLayoutArea
         var nodePath = node?.Path ?? host.Hub.Address.ToString();
         var rawContent = GetMarkdownContent(node);
 
-        var container = Controls.Stack.WithWidth("100%").WithStyle(MeshNodeLayoutAreas.GetContainerStyle(host));
+        // Markdown pages render full width (max-width: 100%), not the centered 1200px reading column.
+        var container = Controls.Stack.WithWidth("100%").WithStyle(MeshNodeLayoutAreas.GetContainerStyle(host, maxWidthOverride: "100%"));
 
         // Standard header with title/icon
         container = container.WithView(MeshNodeLayoutAreas.BuildHeader(host, node, false));
 
-        // Read-only markdown content
-        container = container.WithView(BuildReadOnlyView(host, nodePath, rawContent, canComment, canEdit));
+        // Read-only markdown content — the CollaborativeMarkdownControl is added as
+        // a DIRECT child of `container` so agents and tests can locate it without
+        // walking through an intermediate Stack wrapper.
+        container = container.WithView(BuildMarkdownReadView(host, nodePath, rawContent, canComment, canEdit));
 
-        // Standard children section — separated from main content
-        container = container.WithView(
-            Controls.Stack
-                .WithWidth("100%")
-                .WithStyle("margin-top: 48px; padding-top: 24px; border-top: 1px solid var(--neutral-stroke-rest);")
-                .WithView(LayoutAreaControl.Children(host.Hub).WithShowProgress(false)));
+        // No hardcoded children section: a node page is a markdown space — children (or any other
+        // content) are injected INLINE with the @@(query) operator, never auto-listed (that doubled
+        // the children on every page that already referenced them).
 
         // Approvals section (only if enabled and approvals exist)
         if (host.Hub.Configuration.HasApprovals())
@@ -66,43 +68,40 @@ public static class MarkdownOverviewLayoutArea
         return container;
     }
 
-    private static UiControl BuildReadOnlyView(
+    /// <summary>
+    /// Returns the actual markdown body control (a <see cref="CollaborativeMarkdownControl"/>
+    /// when there is content, an HTML placeholder when empty) — NOT wrapped in an extra
+    /// Stack. The caller is expected to add this directly to its container so consumers
+    /// can identify the markdown body via <c>OfType&lt;CollaborativeMarkdownControl&gt;</c>
+    /// without skipping a wrapper layer.
+    /// </summary>
+    private static UiControl BuildMarkdownReadView(
         LayoutAreaHost host, string nodePath, string rawContent, bool canComment, bool canEdit)
     {
-        var view = Controls.Stack.WithWidth("100%");
-
         if (!string.IsNullOrWhiteSpace(rawContent))
         {
-            view = view.WithView(
-                new CollaborativeMarkdownControl()
-                    .WithValue(rawContent)
-                    .WithNodePath(nodePath)
-                    .WithHubAddress(host.Hub.Address.ToString())
-                    .WithCanComment(canComment)
-                    .WithCanEdit(canEdit));
+            return new CollaborativeMarkdownControl()
+                .WithValue(rawContent)
+                .WithNodePath(nodePath)
+                .WithHubAddress(host.Hub.Address.ToString())
+                .WithCanComment(canComment)
+                .WithCanEdit(canEdit);
         }
-        else
-        {
-            view = view.WithView(
-                Controls.Html("<p style=\"color: var(--neutral-foreground-hint); font-style: italic;\">No content yet. Use the menu to start editing.</p>"));
-        }
-
-        return view;
+        return Controls.Html("<p style=\"color: var(--neutral-foreground-hint); font-style: italic;\">No content yet. Use the menu to start editing.</p>");
     }
 
+    /// <summary>
+    /// Renders the Thumbnail layout area — a compact card representation of the Markdown node.
+    /// </summary>
+    /// <param name="host">The layout area host rendering the area.</param>
+    /// <param name="_">The rendering context for the area.</param>
+    /// <returns>The view for the Thumbnail layout area.</returns>
     public static UiControl Thumbnail(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
-
-        var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
-            ?? Observable.Return(Array.Empty<MeshNode>());
-
         return Controls.Stack
-            .WithView((h, c) => nodeStream.Select(nodes =>
-            {
-                var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-                return MeshNodeThumbnailControl.FromNode(node, hubPath);
-            }));
+            .WithView((h, c) => host.Workspace.GetMeshNodeStream()
+                .Select(node => MeshNodeThumbnailControl.FromNode(node, hubPath)));
     }
 
     /// <summary>

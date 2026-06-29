@@ -187,11 +187,26 @@ public record CatalogSkin : Skin<CatalogSkin>
     /// </summary>
     public int CardHeight { get; init; } = 140;
 
+    /// <summary>Returns a copy with <paramref name="value"/> controlling whether catalog sections can be collapsed.</summary>
+    /// <param name="value">When <c>true</c>, each section header is clickable to collapse/expand its cards.</param>
     public CatalogSkin WithCollapsibleSections(bool value) => this with { CollapsibleSections = value };
+    /// <summary>Returns a copy with <paramref name="value"/> controlling whether item counts are shown on section headers.</summary>
+    /// <param name="value">When <c>true</c>, the item count is displayed next to each section title.</param>
     public CatalogSkin WithShowCounts(bool value) => this with { ShowCounts = value };
+    /// <summary>Returns a copy with the responsive grid column widths set for each breakpoint.</summary>
+    /// <param name="xs">Column span at xs (mobile) — default 12 (full width).</param>
+    /// <param name="sm">Column span at sm — default 6 (half width).</param>
+    /// <param name="md">Column span at md — default 4 (one-third).</param>
+    /// <param name="lg">Column span at lg — default 3 (one-quarter).</param>
     public CatalogSkin WithGridBreakpoints(int xs = 12, int sm = 6, int md = 4, int lg = 3) =>
         this with { Xs = xs, Sm = sm, Md = md, Lg = lg };
+    /// <summary>Returns a copy with <paramref name="value"/> as the MUI grid spacing between cards (in MUI spacing units).</summary>
+    /// <param name="value">Grid spacing value applied between card cells.</param>
     public CatalogSkin WithSpacing(int value) => this with { Spacing = value };
+    /// <summary>Returns a copy with <paramref name="value"/> as the vertical gap between sections in pixels.</summary>
+    /// <param name="value">Gap in pixels between adjacent catalog sections.</param>
     public CatalogSkin WithSectionGap(int value) => this with { SectionGap = value };
+    /// <summary>Returns a copy with <paramref name="value"/> as the fixed height for each catalog card in pixels.</summary>
+    /// <param name="value">Card height in pixels.</param>
     public CatalogSkin WithCardHeight(int value) => this with { CardHeight = value };
 }

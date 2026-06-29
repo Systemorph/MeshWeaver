@@ -1,13 +1,13 @@
 {
   "id": "Systemorph",
   "name": "Systemorph",
-  "nodeType": "Organization",
+  "nodeType": "Space",
   "description": "The company behind MeshWeaver",
   "icon": "/static/storage/content/Systemorph/logo_t.png",
   "addressSegments": 0,
   "isPersistent": true,
   "content": {
-    "$type": "Organization",
+    "$type": "Space",
     "name": "Systemorph",
     "description": "Systemorph Cloud",
     "website": "https://systemorph.cloud",

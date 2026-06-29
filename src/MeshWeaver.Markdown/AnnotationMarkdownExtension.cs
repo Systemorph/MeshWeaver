@@ -322,11 +322,21 @@ public class AnnotationMarkdownExtension : IMarkdownExtension
         return result;
     }
 
+    /// <summary>
+    /// No-op: annotations are handled by pre-processing markdown text (see
+    /// <see cref="TransformAnnotations"/>), so no Markdig block/inline parser is registered.
+    /// </summary>
+    /// <param name="pipeline">The pipeline builder being configured.</param>
     public void Setup(MarkdownPipelineBuilder pipeline)
     {
         // No parser setup needed - we use pre-processing
     }
 
+    /// <summary>
+    /// No-op: annotation rendering is performed via pre-processing, not a custom renderer.
+    /// </summary>
+    /// <param name="pipeline">The built pipeline.</param>
+    /// <param name="renderer">The renderer being configured.</param>
     public void Setup(MarkdownPipeline pipeline, IMarkdownRenderer renderer)
     {
         // No renderer setup needed - we use pre-processing
@@ -403,11 +413,17 @@ public record ParsedAnnotation
 /// </summary>
 public enum AnnotationType
 {
+    /// <summary>A reviewer comment highlighting a span of text.</summary>
     Comment,
+    /// <summary>A tracked-change insertion of new text.</summary>
     Insert,
+    /// <summary>A tracked-change deletion of existing text.</summary>
     Delete
 }
 
+/// <summary>
+/// Parses annotation markers out of markdown content into structured <see cref="ParsedAnnotation"/> entries.
+/// </summary>
 public static partial class AnnotationParser
 {
     /// <summary>

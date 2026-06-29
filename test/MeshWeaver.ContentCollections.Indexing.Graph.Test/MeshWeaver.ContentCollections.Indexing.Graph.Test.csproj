@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <!-- System under test: the mesh Document NodeType + MeshDocumentSink + DocumentPaths. -->
+    <ProjectReference Include="..\..\src\MeshWeaver.ContentCollections.Indexing.Graph\MeshWeaver.ContentCollections.Indexing.Graph.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.ContentCollections.Indexing\MeshWeaver.ContentCollections.Indexing.csproj" />
+    <!-- The content-collection service + ContentCollectionConfig / FileSystemStreamProvider /
+         ContentUploadObserverExtensions used directly by the pipeline test. -->
+    <ProjectReference Include="..\..\src\MeshWeaver.ContentCollections\MeshWeaver.ContentCollections.csproj" />
+    <!-- Real workspace + mesh: MonolithMeshTestBase. -->
+    <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Monolith\MeshWeaver.Hosting.Monolith.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Monolith.TestBase\MeshWeaver.Hosting.Monolith.TestBase.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.Graph\MeshWeaver.Graph.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.Mesh.Contract\MeshWeaver.Mesh.Contract.csproj" />
+  </ItemGroup>
+
+</Project>

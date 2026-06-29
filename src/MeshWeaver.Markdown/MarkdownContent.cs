@@ -52,6 +52,7 @@ public record MarkdownContent
     /// </summary>
     /// <param name="content">The raw markdown content (without YAML front matter).</param>
     /// <param name="hubPath">Optional hub path for the markdown pipeline configuration.</param>
+    /// <param name="currentNodePath">Optional current node path used to resolve relative references in the content.</param>
     /// <returns>A fully populated MarkdownContent.</returns>
     public static MarkdownContent Parse(string content, string? hubPath = null, string? currentNodePath = null)
     {

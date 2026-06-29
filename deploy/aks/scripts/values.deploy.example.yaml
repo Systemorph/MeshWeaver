@@ -1,0 +1,41 @@
+# Copy to values.deploy.yaml, fill in REAL values, and keep it OUT of git (it holds secrets —
+# stage it under artifacts/ or source the secrets from Key Vault via CSI in production).
+# Layered last by deploy.sh: helm ... -f values.yaml -f values.aks.yaml -f values.deploy.yaml
+
+# --- Self-update / ACR polling (Workload Identity) --------------------------
+# Client id of the shared portal UAMI federated to system:serviceaccount:memex:memex-portal-sa and
+# granted AcrPull on the registry — the `portalIdentityClientId` output of infra/main.bicep. Arms the
+# in-pod self-updater's ACR tag-list call (the in-cluster deployment PATCH works without it). Leave it
+# in this git-ignored deploy file (not values.aks.yaml) since the id is deployment-specific.
+selfUpdate:
+  azureClientId: "<PORTAL_UAMI_CLIENT_ID>"
+
+secrets:
+  memex_migration:
+    memex_postgres_password: "<PG_PASSWORD>"
+    # NOTE: the chart hardcodes the in-cluster pg in ConnectionStrings__memex; deploy.sh patches
+    # the rendered secret with $MEMEX_PG_CONN afterwards, so the value here is not authoritative.
+  memex_portal:
+    memex_postgres_password: "<PG_PASSWORD>"
+    # base64 of 32 random bytes — envelope key for stored provider credentials at rest
+    Ai__KeyProtection__MasterKey: "<BASE64_32_BYTE_KEY>"
+    # OAuth client SECRETS (the ClientIds are non-secret -> config below)
+    Authentication__Microsoft__ClientSecret: "<ENTRA_CLIENT_SECRET>"
+    Authentication__Google__ClientSecret: "<GOOGLE_CLIENT_SECRET>"
+    Authentication__LinkedIn__ClientSecret: "<LINKEDIN_CLIENT_SECRET>"
+config:
+  memex_portal:
+    # 1 replica => Localhost. For >1 replica use AzureTables clustering (follow-up).
+    Deployment__Orleans__Clustering: "Localhost"
+    Authentication__Provider: "Custom"
+    Authentication__EnableDevLogin: "false"
+    # Microsoft/Entra single-tenant home directory
+    Authentication__Microsoft__ClientId: "<ENTRA_APP_ID>"
+    Authentication__Microsoft__TenantId: "<TENANT_GUID>"
+    # Leave a provider's ClientId empty to NOT offer it on the login page
+    Authentication__Google__ClientId: "<GOOGLE_CLIENT_ID>"
+    Authentication__LinkedIn__ClientId: "<LINKEDIN_CLIENT_ID>"
+    # Observability: logs ship to Loki via Promtail (the cluster log agent) with NO portal config —
+    # run deploy.sh with GRAFANA_PW set to fold Grafana + Loki + Prometheus into the deploy.
+    # Only set the OTLP endpoint below if you run an OpenTelemetry collector (traces/metrics):
+    # OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector.monitoring:4317"

@@ -12,6 +12,11 @@ public class AutoTestLoggingAttribute : BeforeAfterTestAttribute
 {
    
     
+    /// <summary>
+    /// Runs before each test method, writing a "TEST START" marker to the active file output helper.
+    /// </summary>
+    /// <param name="methodUnderTest">The test method that is about to run.</param>
+    /// <param name="test">The xUnit test being executed.</param>
     public override void Before(MethodInfo methodUnderTest, IXunitTest test)
     {
         var testName = $"{methodUnderTest.DeclaringType?.Name}.{methodUnderTest.Name}";
@@ -24,6 +29,12 @@ public class AutoTestLoggingAttribute : BeforeAfterTestAttribute
         fileOutput?.WriteLine(logMessage);
     }
 
+    /// <summary>
+    /// Runs after each test method, writing any failure details and a "TEST END" marker
+    /// to the active file output helper, then clearing the current test method.
+    /// </summary>
+    /// <param name="methodUnderTest">The test method that just ran.</param>
+    /// <param name="test">The xUnit test that was executed.</param>
     public override void After(MethodInfo methodUnderTest, IXunitTest test)
     {
         // Also log to file output if available

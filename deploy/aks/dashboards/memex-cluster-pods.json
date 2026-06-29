@@ -1,0 +1,73 @@
+{
+  "dashboard": {
+    "uid": "memex-cluster-pods",
+    "title": "Memex Cluster & Pods",
+    "tags": ["memex", "infra"],
+    "schemaVersion": 39,
+    "refresh": "30s",
+    "time": { "from": "now-6h", "to": "now" },
+    "templating": { "list": [] },
+    "panels": [
+      {
+        "type": "timeseries",
+        "title": "Node CPU used (%)",
+        "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+        "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+        "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 15 }, "unit": "percent", "min": 0, "max": 100 }, "overrides": [] },
+        "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+        "targets": [{ "refId": "A", "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "expr": "100 * (1 - avg by (instance) (rate(node_cpu_seconds_total{mode=\"idle\"}[5m])))", "legendFormat": "{{instance}}" }]
+      },
+      {
+        "type": "timeseries",
+        "title": "Node memory available (%)",
+        "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+        "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+        "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 15 }, "unit": "percent", "min": 0, "max": 100 }, "overrides": [] },
+        "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+        "targets": [{ "refId": "A", "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "expr": "100 * node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes", "legendFormat": "{{instance}}" }]
+      },
+      {
+        "type": "table",
+        "title": "Pods (memex namespace)",
+        "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+        "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+        "fieldConfig": { "defaults": { "custom": { "align": "auto" } }, "overrides": [] },
+        "options": { "showHeader": true },
+        "targets": [{ "refId": "A", "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "expr": "kube_pod_status_phase{namespace=\"memex\"} == 1", "format": "table", "instant": true }],
+        "transformations": [
+          { "id": "organize", "options": { "excludeByName": { "Time": true, "Value": true, "__name__": true, "container": true, "endpoint": true, "job": true, "instance": true, "service": true, "uid": true, "namespace": true }, "renameByName": { "pod": "Pod", "phase": "Phase" } } }
+        ]
+      },
+      {
+        "type": "timeseries",
+        "title": "Pod container restarts (memex)",
+        "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+        "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+        "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 10 }, "unit": "short" }, "overrides": [] },
+        "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+        "targets": [{ "refId": "A", "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "expr": "sum by (pod) (kube_pod_container_status_restarts_total{namespace=\"memex\"})", "legendFormat": "{{pod}}" }]
+      },
+      {
+        "type": "timeseries",
+        "title": "Container CPU by pod (cores)",
+        "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+        "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+        "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 15 }, "unit": "short" }, "overrides": [] },
+        "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+        "targets": [{ "refId": "A", "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "expr": "sum by (pod) (rate(container_cpu_usage_seconds_total{namespace=\"memex\",container!=\"\",container!=\"POD\"}[5m]))", "legendFormat": "{{pod}}" }]
+      },
+      {
+        "type": "timeseries",
+        "title": "Container memory by pod (MiB)",
+        "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+        "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+        "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 15 }, "unit": "decmbytes" }, "overrides": [] },
+        "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+        "targets": [{ "refId": "A", "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "expr": "sum by (pod) (container_memory_working_set_bytes{namespace=\"memex\",container!=\"\",container!=\"POD\"}) / 1024 / 1024", "legendFormat": "{{pod}}" }]
+      }
+    ]
+  },
+  "overwrite": true,
+  "folderId": 0,
+  "message": "Provisioned by Claude Code"
+}

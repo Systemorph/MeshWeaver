@@ -10,6 +10,7 @@ namespace MeshWeaver.ContentCollections;
 /// </summary>
 public class AzureBlobStreamProvider(BlobServiceClient blobServiceClient, string containerName, string basePrefix = "") : IStreamProvider
 {
+    /// <inheritdoc />
     public string ProviderType => "AzureBlob";
 
     /// <summary>
@@ -37,6 +38,7 @@ public class AzureBlobStreamProvider(BlobServiceClient blobServiceClient, string
             : "/" + fullPath;
     }
 
+    /// <inheritdoc />
     public async Task<Stream?> GetStreamAsync(string reference, CancellationToken cancellationToken = default)
     {
         var containerClient = blobServiceClient.GetBlobContainerClient(containerName);
@@ -50,6 +52,7 @@ public class AzureBlobStreamProvider(BlobServiceClient blobServiceClient, string
         return await blobClient.OpenReadAsync(cancellationToken: cancellationToken);
     }
 
+    /// <inheritdoc />
     public async Task<(Stream? Stream, string Path, DateTime LastModified)> GetStreamWithMetadataAsync(string path, CancellationToken cancellationToken = default)
     {
         var containerClient = blobServiceClient.GetBlobContainerClient(containerName);
@@ -66,6 +69,7 @@ public class AzureBlobStreamProvider(BlobServiceClient blobServiceClient, string
         return (stream, path, properties.Value.LastModified.DateTime);
     }
 
+    /// <inheritdoc />
     public async Task WriteStreamAsync(string reference, Stream content, CancellationToken cancellationToken = default)
     {
         var containerClient = blobServiceClient.GetBlobContainerClient(containerName);
@@ -81,6 +85,7 @@ public class AzureBlobStreamProvider(BlobServiceClient blobServiceClient, string
         await blobClient.UploadAsync(content, overwrite: true, cancellationToken: cancellationToken);
     }
 
+    /// <inheritdoc />
     public async IAsyncEnumerable<(Stream? Stream, string Path, DateTime LastModified)> GetStreamsAsync(Func<string, bool> filter, [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         var containerClient = blobServiceClient.GetBlobContainerClient(containerName);
@@ -96,59 +101,53 @@ public class AzureBlobStreamProvider(BlobServiceClient blobServiceClient, string
         }
     }
 
-    public async Task<IReadOnlyCollection<FolderItem>> GetFoldersAsync(string path)
-    {
-        // Azure Blob Storage doesn't have true folders, but we can simulate them using blob prefixes
-        var containerClient = blobServiceClient.GetBlobContainerClient(containerName);
-        var fullPath = ToFullPath(path);
-        if (!string.IsNullOrEmpty(fullPath) && !fullPath.EndsWith('/'))
-        {
-            fullPath += '/';
-        }
-
-        var folders = new HashSet<string>();
-        await foreach (var blobItem in containerClient.GetBlobsByHierarchyAsync(BlobTraits.None, BlobStates.None, "/", fullPath, default))
-        {
-            if (blobItem.IsPrefix)
-            {
-                var folderName = blobItem.Prefix.TrimEnd('/');
-                var lastSegment = folderName.Split('/').Last();
-                folders.Add(lastSegment);
-            }
-        }
-
-        return folders.Select(name => new FolderItem($"{path.TrimEnd('/')}/{name}", name, 0)).ToArray();
-    }
-
-    public async Task<IReadOnlyCollection<FileItem>> GetFilesAsync(string path)
+    /// <inheritdoc />
+    public async IAsyncEnumerable<FolderItem> GetFolders(
+        string path,
+        [EnumeratorCancellation] CancellationToken ct = default)
     {
         var containerClient = blobServiceClient.GetBlobContainerClient(containerName);
         var fullPath = ToFullPath(path);
         if (!string.IsNullOrEmpty(fullPath) && !fullPath.EndsWith('/'))
-        {
             fullPath += '/';
-        }
 
-        var files = new List<FileItem>();
-        await foreach (var blobItem in containerClient.GetBlobsByHierarchyAsync(BlobTraits.None, BlobStates.None, "/", fullPath, default))
+        var seen = new HashSet<string>();
+        await foreach (var blobItem in containerClient.GetBlobsByHierarchyAsync(BlobTraits.None, BlobStates.None, "/", fullPath, ct))
         {
-            if (blobItem.IsBlob)
-            {
-                var fileName = blobItem.Blob.Name.Split('/').Last();
-                // Skip .folder placeholder markers used for empty folder creation
-                if (fileName == ".folder")
-                    continue;
-                files.Add(new FileItem(
-                    ToRelativePath(blobItem.Blob.Name),
-                    fileName,
-                    blobItem.Blob.Properties.LastModified?.DateTime ?? DateTime.UtcNow
-                ));
-            }
+            if (!blobItem.IsPrefix)
+                continue;
+            var folderName = blobItem.Prefix.TrimEnd('/');
+            var lastSegment = folderName.Split('/').Last();
+            if (seen.Add(lastSegment))
+                yield return new FolderItem($"{path.TrimEnd('/')}/{lastSegment}", lastSegment, 0);
         }
-
-        return files;
     }
 
+    /// <inheritdoc />
+    public async IAsyncEnumerable<FileItem> GetFiles(
+        string path,
+        [EnumeratorCancellation] CancellationToken ct = default)
+    {
+        var containerClient = blobServiceClient.GetBlobContainerClient(containerName);
+        var fullPath = ToFullPath(path);
+        if (!string.IsNullOrEmpty(fullPath) && !fullPath.EndsWith('/'))
+            fullPath += '/';
+
+        await foreach (var blobItem in containerClient.GetBlobsByHierarchyAsync(BlobTraits.None, BlobStates.None, "/", fullPath, ct))
+        {
+            if (!blobItem.IsBlob)
+                continue;
+            var fileName = blobItem.Blob.Name.Split('/').Last();
+            if (fileName == ".folder")
+                continue;
+            yield return new FileItem(
+                ToRelativePath(blobItem.Blob.Name),
+                fileName,
+                blobItem.Blob.Properties.LastModified?.DateTime ?? DateTime.UtcNow);
+        }
+    }
+
+    /// <inheritdoc />
     public async Task SaveFileAsync(string path, string fileName, Stream content, CancellationToken cancellationToken = default)
     {
         var relativePath = $"{path.TrimStart('/').TrimEnd('/')}/{fileName}".TrimStart('/');
@@ -161,6 +160,7 @@ public class AzureBlobStreamProvider(BlobServiceClient blobServiceClient, string
         await blobClient.UploadAsync(content, overwrite: true, cancellationToken: cancellationToken);
     }
 
+    /// <inheritdoc />
     public async Task CreateFolderAsync(string folderPath)
     {
         // Azure Blob Storage uses virtual folders — create a zero-byte placeholder
@@ -174,6 +174,7 @@ public class AzureBlobStreamProvider(BlobServiceClient blobServiceClient, string
         await blobClient.UploadAsync(new BinaryData(Array.Empty<byte>()), overwrite: true);
     }
 
+    /// <inheritdoc />
     public async Task DeleteFolderAsync(string folderPath)
     {
         var containerClient = blobServiceClient.GetBlobContainerClient(containerName);
@@ -189,12 +190,14 @@ public class AzureBlobStreamProvider(BlobServiceClient blobServiceClient, string
         }
     }
 
+    /// <inheritdoc />
     public async Task DeleteFileAsync(string filePath)
     {
         var containerClient = blobServiceClient.GetBlobContainerClient(containerName);
         await containerClient.DeleteBlobAsync(ToFullPath(filePath));
     }
 
+    /// <inheritdoc />
     public IDisposable? AttachMonitor(Action<string> onChanged)
     {
         // Azure Blob Storage doesn't support file system watching
@@ -202,6 +205,7 @@ public class AzureBlobStreamProvider(BlobServiceClient blobServiceClient, string
         return null;
     }
 
+    /// <inheritdoc />
     public async Task<ImmutableDictionary<string, Author>> LoadAuthorsAsync(CancellationToken cancellationToken = default)
     {
         try

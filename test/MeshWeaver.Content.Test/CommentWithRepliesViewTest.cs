@@ -5,7 +5,6 @@ using System.Linq;
 using System.Reactive.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
-using FluentAssertions;
 using MeshWeaver.Data;
 using MeshWeaver.Documentation;
 using MeshWeaver.Graph;
@@ -23,6 +22,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
+using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Content.Test;
 
 /// <summary>
@@ -35,6 +35,9 @@ namespace MeshWeaver.Content.Test;
 [Collection("SamplesGraphData")]
 public class CommentWithRepliesViewTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
+    /// <summary>Share Mesh/SP across [Fact]s — see MonolithMeshTestBase.ShareMeshAcrossTests.</summary>
+    protected override bool ShareMeshAcrossTests => true;
+
     private const string DocPath = "Doc/DataMesh/CollaborativeEditing";
     private const string CommentC1Path = DocPath + "/_Comment/c1";
     private const string ReplyPath = CommentC1Path + "/reply1";
@@ -87,7 +90,7 @@ public class CommentWithRepliesViewTest(ITestOutputHelper output) : MonolithMesh
     /// <summary>
     /// Loads the CollaborativeEditing.md document's Overview area.
     /// This triggers the full rendering pipeline including comments sidebar
-    /// where comment c1 has a reply — the scenario that caused OperationCanceledException.
+    /// where comment c1 has a reply â€” the scenario that caused OperationCanceledException.
     /// </summary>
     [Fact(Timeout = 20000)]
     public async Task CollaborativeEditingDocument_Overview_ShouldRender()
@@ -96,10 +99,7 @@ public class CommentWithRepliesViewTest(ITestOutputHelper output) : MonolithMesh
         var docAddress = new Address(DocPath);
 
         Output.WriteLine("Initializing hub for CollaborativeEditing.md...");
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(docAddress),
-            TestContext.Current.CancellationToken);
+        await client.Observe(new PingRequest(), o => o.WithTarget(docAddress)).Should().Emit();
         Output.WriteLine("Hub initialized.");
 
         var workspace = client.GetWorkspace();
@@ -110,7 +110,7 @@ public class CommentWithRepliesViewTest(ITestOutputHelper output) : MonolithMesh
             reference);
 
         Output.WriteLine("Waiting for document Overview to render...");
-        var value = await stream.Timeout(TimeSpan.FromSeconds(20)).FirstAsync();
+        var value = await stream.Should().Within(TimeSpan.FromSeconds(20)).Emit();
 
         Output.WriteLine($"Received value: {value.Value.ValueKind}");
         value.Should().NotBe(default(JsonElement),
@@ -128,10 +128,7 @@ public class CommentWithRepliesViewTest(ITestOutputHelper output) : MonolithMesh
         var docAddress = new Address(DocPath);
 
         Output.WriteLine("Initializing hub for document...");
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(docAddress),
-            TestContext.Current.CancellationToken);
+        await client.Observe(new PingRequest(), o => o.WithTarget(docAddress)).Should().Emit();
         Output.WriteLine("Hub initialized.");
 
         var workspace = client.GetWorkspace();
@@ -142,7 +139,7 @@ public class CommentWithRepliesViewTest(ITestOutputHelper output) : MonolithMesh
             reference);
 
         Output.WriteLine("Waiting for Comments area to render...");
-        var value = await stream.Timeout(TimeSpan.FromSeconds(15)).FirstAsync();
+        var value = await stream.Should().Within(TimeSpan.FromSeconds(15)).Emit();
 
         Output.WriteLine($"Received value: {value.Value.ValueKind}");
         value.Should().NotBe(default(JsonElement),
@@ -159,10 +156,7 @@ public class CommentWithRepliesViewTest(ITestOutputHelper output) : MonolithMesh
         var commentAddress = new Address(CommentC1Path);
 
         Output.WriteLine("Initializing hub for comment c1 (has reply)...");
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(commentAddress),
-            TestContext.Current.CancellationToken);
+        await client.Observe(new PingRequest(), o => o.WithTarget(commentAddress)).Should().Emit();
         Output.WriteLine("Hub initialized.");
 
         var workspace = client.GetWorkspace();
@@ -173,7 +167,7 @@ public class CommentWithRepliesViewTest(ITestOutputHelper output) : MonolithMesh
             reference);
 
         Output.WriteLine("Waiting for Overview to render (comment with reply)...");
-        var value = await stream.Timeout(TimeSpan.FromSeconds(15)).FirstAsync();
+        var value = await stream.Should().Within(TimeSpan.FromSeconds(15)).Emit();
 
         Output.WriteLine($"Received value: {value.Value.ValueKind}");
         value.Should().NotBe(default(JsonElement),
@@ -191,10 +185,7 @@ public class CommentWithRepliesViewTest(ITestOutputHelper output) : MonolithMesh
         var replyAddress = new Address(ReplyPath);
 
         Output.WriteLine("Initializing hub for reply node directly...");
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(replyAddress),
-            TestContext.Current.CancellationToken);
+        await client.Observe(new PingRequest(), o => o.WithTarget(replyAddress)).Should().Emit();
         Output.WriteLine("Hub initialized.");
 
         var workspace = client.GetWorkspace();
@@ -205,27 +196,26 @@ public class CommentWithRepliesViewTest(ITestOutputHelper output) : MonolithMesh
             reference);
 
         Output.WriteLine("Waiting for Reply Overview to render...");
-        var value = await stream.Timeout(TimeSpan.FromSeconds(10)).FirstAsync();
+        var value = await stream.Should().Within(TimeSpan.FromSeconds(10)).Emit();
 
         Output.WriteLine($"Received value: {value.Value.ValueKind}");
         value.Should().NotBe(default(JsonElement), "Reply node Overview should render");
     }
 
     /// <summary>
-    /// Renders the Overview area for a comment (c2) that has NO replies.
-    /// Baseline test — should always work.
+    /// Renders the Overview area for a comment (c6) that has NO replies.
+    /// Baseline test â€” should always work. (c2 has replies in the sample data
+    /// even though the original test name suggested otherwise — c6 is the only
+    /// genuinely childless comment.)
     /// </summary>
     [Fact(Timeout = 20000)]
     public async Task CommentWithoutReplies_Overview_ShouldRender()
     {
         var client = GetClient();
-        var commentAddress = new Address(DocPath + "/c2");
+        var commentAddress = new Address(DocPath + "/_Comment/c6");
 
-        Output.WriteLine("Initializing hub for comment c2 (no replies)...");
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(commentAddress),
-            TestContext.Current.CancellationToken);
+        Output.WriteLine("Initializing hub for comment c6 (no replies)...");
+        await client.Observe(new PingRequest(), o => o.WithTarget(commentAddress)).Should().Emit();
         Output.WriteLine("Hub initialized.");
 
         var workspace = client.GetWorkspace();
@@ -236,7 +226,7 @@ public class CommentWithRepliesViewTest(ITestOutputHelper output) : MonolithMesh
             reference);
 
         Output.WriteLine("Waiting for Overview to render...");
-        var value = await stream.Timeout(TimeSpan.FromSeconds(10)).FirstAsync();
+        var value = await stream.Should().Within(TimeSpan.FromSeconds(10)).Emit();
 
         Output.WriteLine($"Received value: {value.Value.ValueKind}");
         value.Should().NotBe(default(JsonElement), "Comment Overview should render for comment without replies");
@@ -249,11 +239,12 @@ public class CommentWithRepliesViewTest(ITestOutputHelper output) : MonolithMesh
     [Fact(Timeout = 30000)]
     public async Task Persistence_CommentWithReply_ShouldLoadCorrectly()
     {
-        // No hub initialization needed — RoutingMeshQueryProvider discovers
+        // No hub initialization needed â€” RoutingMeshQueryProvider discovers
         // partitions via DiscoverNewProvidersAsync during the query.
 
-        // Load parent comment
-        var parentNode = await MeshQuery.QueryAsync<MeshNode>($"path:{CommentC1Path}").FirstOrDefaultAsync();
+        // Static node read â€” no write before, catalog read is correct (no CQRS lag).
+        var parentNode = (await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{CommentC1Path}"))
+            .Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items.FirstOrDefault();
         parentNode.Should().NotBeNull("Parent comment c1 should exist");
         parentNode!.Id.Should().Be("c1");
         parentNode.Namespace.Should().Be(DocPath + "/_Comment");
@@ -262,8 +253,10 @@ public class CommentWithRepliesViewTest(ITestOutputHelper output) : MonolithMesh
         parentComment.Should().NotBeNull();
         Output.WriteLine($"Parent: Id={parentNode.Id}, Path={parentNode.Path}, Author={parentComment!.Author}");
 
-        // Load reply — verify Id is the local name, not the full path
-        var replyNode = await MeshQuery.QueryAsync<MeshNode>($"path:{ReplyPath}").FirstOrDefaultAsync();
+        // Static node read â€” no write before, catalog read is correct (no CQRS lag).
+        // (Per-node hub routing for nested replies returns the parent c1, not reply1.)
+        var replyNode = (await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{ReplyPath}"))
+            .Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items.FirstOrDefault();
         replyNode.Should().NotBeNull("Reply node should exist");
         replyNode!.Id.Should().Be("reply1", "Reply Id should be the local file name, not the full path");
         replyNode.Namespace.Should().Be(CommentC1Path);
@@ -273,7 +266,8 @@ public class CommentWithRepliesViewTest(ITestOutputHelper output) : MonolithMesh
         Output.WriteLine($"Reply: Id={replyNode.Id}, Path={replyNode.Path}, Author={replyComment!.Author}");
 
         // Load children of c1 via subtree query
-        var children = await MeshQuery.QueryAsync<MeshNode>($"path:{CommentC1Path} scope:subtree").ToListAsync();
+        var children = (await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{CommentC1Path} scope:subtree"))
+            .Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items;
         foreach (var child in children)
         {
             Output.WriteLine($"Subtree: Id={child.Id}, Path={child.Path}, NodeType={child.NodeType}");

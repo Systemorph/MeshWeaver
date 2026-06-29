@@ -1,3 +1,4 @@
+﻿using System.Reactive.Linq;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
@@ -48,7 +49,6 @@ public static class VUserNodeType
         Icon = "/static/NodeTypeIcons/person.svg",
         NodeType = NodeType,
         ExcludeFromContext = new HashSet<string> { "search" },
-        AssemblyLocation = typeof(VUserNodeType).Assembly.Location,
         Content = new NodeTypeDefinition { DefaultNamespace = "VUser", RestrictedToNamespaces = ["VUser"] },
         HubConfiguration = config => config
             .AddMeshDataSource(source => source
@@ -68,11 +68,8 @@ public static class VUserNodeType
         public IReadOnlyCollection<NodeOperation> SupportedOperations =>
             [NodeOperation.Create, NodeOperation.Read, NodeOperation.Update];
 
-        public Task<bool> HasAccessAsync(NodeValidationContext context, string? userId, CancellationToken ct = default)
+        public IObservable<bool> HasAccess(NodeValidationContext context, string? userId)
         {
-            // Allow if the identity is in the portal namespace.
-            // userId may be a full address like "_graph~portal/abc123" (hosted hub)
-            // or just "portal/abc123" (direct). Extract the inner address after last '~'.
             if (!string.IsNullOrEmpty(userId))
             {
                 var innerAddress = userId;
@@ -81,11 +78,9 @@ public static class VUserNodeType
                     innerAddress = userId[(tildeIndex + 1)..];
 
                 if (innerAddress.StartsWith(PortalNamespace + "/", StringComparison.OrdinalIgnoreCase))
-                    return Task.FromResult(true);
+                    return Observable.Return(true);
             }
-
-            // Deny all others
-            return Task.FromResult(false);
+            return Observable.Return(false);
         }
     }
 }

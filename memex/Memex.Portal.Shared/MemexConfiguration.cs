@@ -1,9 +1,14 @@
 ﻿using System.IdentityModel.Tokens.Jwt;
+using Memex.Portal.Shared.Api;
 using Memex.Portal.Shared.Authentication;
+using Memex.Portal.Shared.Email;
+using Memex.Portal.Shared.SelfUpdate;
 using Memex.Portal.Shared.Settings;
+using Memex.Portal.Shared.Social;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using MeshWeaver.AI;
 using MeshWeaver.AI.AzureFoundry;
-using MeshWeaver.AI.AzureOpenAI;
+using MeshWeaver.AI.OpenAI;
 using MeshWeaver.AI.ClaudeCode;
 using MeshWeaver.AI.Copilot;
 using MeshWeaver.Blazor.AI;
@@ -15,10 +20,16 @@ using MeshWeaver.Blazor.Portal;
 using MeshWeaver.Blazor.Portal.Authentication;
 using MeshWeaver.Blazor.Portal.Chat;
 using MeshWeaver.Blazor.Portal.Components;
+using MeshWeaver.Blazor.Portal.Layout;
 using MeshWeaver.Blazor.Radzen;
 using MeshWeaver.ContentCollections;
+using MeshWeaver.ContentCollections.Indexing;
+using MeshWeaver.ContentCollections.Indexing.Graph;
+using MeshWeaver.ContentCollections.Indexing.PostgreSql;
 using MeshWeaver.Documentation;
 using MeshWeaver.GoogleMaps;
+using MeshWeaver.Data;
+using MeshWeaver.GitSync;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Markdown.Export.Configuration;
@@ -26,9 +37,12 @@ using MeshWeaver.Hosting.Activity;
 using MeshWeaver.Hosting.AzureBlob;
 using MeshWeaver.Hosting.Blazor;
 using MeshWeaver.Hosting.Persistence;
+using MeshWeaver.Hosting.PostgreSql;
 using MeshWeaver.Hosting.Security;
+using MeshWeaver.Hosting.SignalR;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Mesh.Threading;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
@@ -42,8 +56,6 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Identity.Web;
 using Microsoft.Identity.Web.UI;
-using ModelContextProtocol.AspNetCore.Authentication;
-using ModelContextProtocol.Authentication;
 using PortalAuthOptions = MeshWeaver.Blazor.Portal.Authentication.AuthenticationOptions;
 
 namespace Memex.Portal.Shared;
@@ -83,26 +95,129 @@ public static class MemexConfiguration
             })
             .AddBlazorPortalServices();
 
+        // Onboarding service — pulls the three-row dual-write out of
+        // Onboarding.razor so it's unit-testable end-to-end.
+        services.AddScoped<Memex.Portal.Shared.Authentication.UserOnboardingService>();
+        // Invitation service — reads/writes Invitation nodes for invitation-only onboarding.
+        services.AddScoped<Memex.Portal.Shared.Authentication.InvitationService>();
+
         // Configure Radzen
         services.AddRadzenServices();
 
-        // AI services — thread persistence is handled via MeshNodes
+        // AI services — thread persistence is handled via MeshNodes.
+        // Anthropic / AzureFoundry / AzureOpenAI registration is now a
+        // single per-provider builder extension (.AddAnthropic() etc.)
+        // wired in ConfigureMemexMesh — that one call registers the catalog
+        // source + IOptions binding + IChatClientFactory.
+        //
+        // Deploy-time feature flags gate which providers/CLIs ship. Defaults are
+        // all-on (an absent Features section = current behaviour, no regression).
+        // A disabled flag is the operator's intent and wins even if a key is
+        // configured. Both the services-tier factory registration here AND the
+        // mesh-tier catalog source in ConfigureMemexMesh are gated symmetrically
+        // so a provider can't half-register.
+        var features = builder.Configuration
+            .GetSection(MemexFeatureOptions.SectionName)
+            .Get<MemexFeatureOptions>() ?? new MemexFeatureOptions();
 
-        // Configure AI factories (read from appsettings, including Order)
-        services.AddAzureFoundryClaude(config =>
-            builder.Configuration.GetSection("Anthropic").Bind(config));
+        // Bind Features as IOptions so application code (e.g. the onboarding flow's
+        // self-provisioning gate) resolves the toggles through standard DI rather
+        // than re-reading the configuration section ad hoc.
+        services.Configure<MemexFeatureOptions>(
+            builder.Configuration.GetSection(MemexFeatureOptions.SectionName));
 
-        services.AddAzureFoundry(config =>
-            builder.Configuration.GetSection("AzureAIS").Bind(config));
+        // System email (Microsoft Graph /sendMail). Disabled by default → NoOp sender so
+        // local dev and tests never send. When Email:Enabled=true, GraphEmailSender sends as
+        // the configured no-reply mailbox using the Mail.Send application permission. Backs the
+        // invitation flow (admin Invitations settings tab).
+        var emailOptions = builder.Configuration
+            .GetSection(EmailOptions.SectionName)
+            .Get<EmailOptions>() ?? new EmailOptions();
+        services.AddSingleton(emailOptions);
+        if (emailOptions.Enabled)
+        {
+            services.AddSingleton<IEmailSender, GraphEmailSender>();
+            // Executive Assistant: per-user JUST-IN-TIME delegated Graph access (the user consents to the
+            // EA touching THEIR OWN mailbox/calendar only when they first use the tool — no standing app
+            // permission). EaGraphAuth drives the consent/token flow; the plugin uses the per-user token.
+            services.AddHttpClient<Authentication.IEaGraphAuth, Authentication.EaGraphAuth>();
+            services.AddSingleton<MeshWeaver.AI.Plugins.IAgentPlugin, ExecutiveAssistantPlugin>();
+            // Notification triage runner — escalates in-app notifications to email/Teams per each
+            // recipient's NotificationRules, via the cheap triage agent (only fires for users with rules).
+            services.AddHostedService<Memex.Portal.Shared.Notifications.NotificationTriageService>();
+        }
+        else
+            services.AddSingleton<IEmailSender, NoOpEmailSender>();
 
-        services.AddAzureOpenAI(config =>
-            builder.Configuration.GetSection("AzureOpenAIS").Bind(config));
+        // Inbound email→agent channel (intake). Mail is treated as a chat device: each inbound email
+        // finds-or-creates a conversation thread and appends its latest message (referencing the email
+        // by path). The Graph subscription self-skips unless Email:Enabled && Email:InboundEnabled.
+        services.AddSingleton<GraphMail>(sp => new GraphMail(
+            sp.GetRequiredService<EmailOptions>()));
+        services.AddSingleton<EmailInboundProcessor>(sp => new EmailInboundProcessor(
+            sp.GetRequiredService<PortalApplication>().Hub,
+            sp.GetRequiredService<GraphMail>(),
+            sp.GetService<Microsoft.Extensions.Logging.ILogger<EmailInboundProcessor>>()));
+        services.AddHostedService<GraphSubscriptionService>();
+        // Mesh-driven reply sender: drains agent-emitted Outbound Email nodes (Status=New) via Graph.
+        services.AddHostedService<OutboundEmailSender>();
+        // Mesh-driven invitation emailer: emails any Pending Invitation node not yet emailed
+        // (EmailSentAt==null), from ANY entry point (Invitations tab, MCP, REST). Self-skips
+        // unless Email:Enabled. Decouples the invite email from the UI handler.
+        services.AddHostedService<Email.InvitationEmailSender>();
 
-        services.AddCopilot(config =>
-            builder.Configuration.GetSection("Copilot").Bind(config));
+        // Microsoft Teams bot channel (bidirectional). Registered always but INERT unless Teams:Enabled
+        // and Bot credentials are set (TeamsClient.IsConfigured gates the endpoint + sender). Activate by
+        // provisioning an Azure Bot resource + Teams app and setting the Teams config.
+        var teamsOptions = builder.Configuration.GetSection(MeshWeaver.Mesh.TeamsOptions.SectionName)
+            .Get<MeshWeaver.Mesh.TeamsOptions>() ?? new MeshWeaver.Mesh.TeamsOptions();
+        services.AddSingleton(teamsOptions);
+        services.AddHttpClient<Teams.ITeamsClient, Teams.TeamsClient>();
+        services.AddSingleton<Teams.TeamsInboundProcessor>(sp => new Teams.TeamsInboundProcessor(
+            sp.GetRequiredService<PortalApplication>().Hub,
+            sp.GetRequiredService<Teams.ITeamsClient>(),
+            sp.GetService<Microsoft.Extensions.Logging.ILogger<Teams.TeamsInboundProcessor>>()));
+        if (teamsOptions.Enabled)
+            // Delivers agent replies back into Teams, reading them via the shared
+            // ThreadFlow.ObserveResponses abstraction (same read-side primitive the GUI uses).
+            // Only the hosted service is feature-gated; the client + inbound processor stay registered
+            // so the messaging endpoint can resolve them and return NotFound when disabled.
+            services.AddHostedService<Teams.TeamsReplySender>();
 
-        services.AddClaudeCode(config =>
-            builder.Configuration.GetSection("ClaudeCode").Bind(config));
+        // Shared on-disk WORKSPACE dir the agent→skill sync maintains (.claude/skills + AGENTS.md); both
+        // CLI harnesses set it as the session's working directory so every session sees the MeshWeaver
+        // agents/skills + the mesh-is-via-MCP base instructions. Defaults to a sibling of the per-user
+        // .claude root (e.g. /mnt/users → /mnt/users/_skills) when not explicitly configured.
+        var skillsDir = builder.Configuration["Skills:Directory"];
+        if (string.IsNullOrWhiteSpace(skillsDir))
+        {
+            var claudeRoot = builder.Configuration["ClaudeCode:ConfigDirRoot"]?.TrimEnd('/', '\\');
+            skillsDir = string.IsNullOrEmpty(claudeRoot) ? null : $"{claudeRoot}/_skills";
+        }
+
+        if (features.Ai.Clis.Copilot)
+            services.AddCopilot(config =>
+            {
+                builder.Configuration.GetSection("Copilot").Bind(config);
+                config.SkillsDirectory = skillsDir;
+            });
+
+        if (features.Ai.Clis.ClaudeCode)
+            services.AddClaudeCode(config =>
+            {
+                builder.Configuration.GetSection("ClaudeCode").Bind(config);
+                config.SkillsDirectory = skillsDir;
+            });
+
+        // Reactive skill→file sync: writes AGENTS.md (the base "mesh-is-via-MCP" instructions + a LISTING
+        // of the platform nodeType:Skill catalog — name, description, load path) to the shared volume and
+        // keeps it in sync as skill nodes change (observable query). Skill BODIES are never written to
+        // disk — the harness reads each on demand via the meshweaver MCP `get`. Runs for the process lifetime.
+        if ((features.Ai.Clis.ClaudeCode || features.Ai.Clis.Copilot) && !string.IsNullOrWhiteSpace(skillsDir))
+        {
+            services.Configure<Skills.AgentSkillSyncOptions>(o => o.Directory = skillsDir);
+            services.AddHostedService<Skills.AgentSkillSyncService>();
+        }
 
         // Register the AI chat services (must be after all factory registrations)
         services.AddAgentChatServices();
@@ -125,6 +240,80 @@ public static class MemexConfiguration
         // Register API token service for MCP bearer auth and OAuth code store
         services.AddSingleton<ApiTokenService>();
         services.AddSingleton<OAuthCodeStore>();
+        // Automatic, token-based MCP back-connection for the co-hosted Claude Code / Copilot CLIs.
+        // The chat clients resolve this at spawn to mint/reuse the per-user MCP ApiToken + URL.
+        services.AddSingleton<MeshWeaver.AI.Connect.IMcpBackConnection, McpBackConnectionService>();
+        // ModelProviderService backs the Models settings tab — users store
+        // their own AI provider credentials as MeshNodes in their namespace.
+        services.AddSingleton<Memex.Portal.Shared.Models.ModelProviderService>();
+        // ProviderModelLister fetches a provider's live model list (HTTP /models via
+        // the I/O pool) so the add-provider flow lets users pick which models to bring.
+        services.AddSingleton<Memex.Portal.Shared.Models.ProviderModelLister>();
+
+        // GitHub sync — per-user OAuth credential (device flow) + bidirectional
+        // Space ↔ GitHub sync (export = "sync back"; import = create / re-import a
+        // Space at any commit). The OAuth client id is bound from GitHub:OAuth;
+        // absent a client id the Connect flow is gracefully disabled.
+        services.AddGitHubSyncServices();
+        services.Configure<GitHubOAuthOptions>(builder.Configuration.GetSection("GitHub:OAuth"));
+
+        // Per-user CLI Connect (Settings → Models, CLI providers). The
+        // ConnectSessionManager is a mesh-scoped singleton holding the live
+        // login Process between "show URL" and "paste code" (instance dict,
+        // 5-min timeout). Each gated CLI registers its IConnectStrategy. The
+        // captured token is persisted as an encrypted ModelProvider via the
+        // ConnectTokenSink (seam over ModelProviderService, so the AI layer
+        // never references the portal assembly).
+        services.AddSingleton<MeshWeaver.AI.Connect.IConnectTokenSink, Memex.Portal.Shared.Models.ConnectTokenSink>();
+        services.AddSingleton<MeshWeaver.AI.Connect.ConnectSessionManager>();
+        if (features.Ai.Clis.ClaudeCode)
+        {
+            services.AddSingleton<MeshWeaver.AI.Connect.IConnectStrategy, MeshWeaver.AI.Connect.ClaudeConnectStrategy>();
+            // Wire the Connect login: bind ClaudeConnect:* overrides, default the PTY wrapper ON for
+            // the co-hosted Linux portal (claude setup-token renders an Ink UI that needs a real TTY —
+            // see ClaudeConnectStrategy), and mirror the per-user .claude root the co-hosted client uses
+            // (ClaudeCode:ConfigDirRoot, e.g. /mnt/users) so each user logs in under their own dir.
+            services.Configure<MeshWeaver.AI.Connect.ClaudeConnectOptions>(o =>
+            {
+                builder.Configuration.GetSection("ClaudeConnect").Bind(o);
+                if (builder.Configuration["ClaudeConnect:UsePseudoTerminal"] is null && !OperatingSystem.IsWindows())
+                    o.UsePseudoTerminal = true;
+                if (string.IsNullOrEmpty(o.ConfigDirRoot))
+                    o.ConfigDirRoot = builder.Configuration["ClaudeCode:ConfigDirRoot"];
+            });
+        }
+        if (features.Ai.Clis.Copilot)
+            services.AddSingleton<MeshWeaver.AI.Connect.IConnectStrategy, MeshWeaver.AI.Copilot.CopilotConnectStrategy>();
+
+        // Social publishing — minimal registration for the LinkedIn connect + pull endpoints.
+        // (The full hosted-service pipeline is gated behind AddSocialPublishing which needs
+        // IApprovalPublishBridge / IStatsRefreshSource / IPastPostIngestSource — those come
+        // in Phase 4. For now the publisher is enough for /connect/linkedin/pull to work.)
+        var linkedInClientId = builder.Configuration["Social:LinkedIn:ClientId"];
+        if (!string.IsNullOrEmpty(linkedInClientId))
+        {
+            services.AddHttpClient<MeshWeaver.Social.LinkedInPublisher>();
+            services.AddSingleton(new MeshWeaver.Social.LinkedInOptions
+            {
+                ClientId = linkedInClientId!,
+                ClientSecret = builder.Configuration["Social:LinkedIn:ClientSecret"] ?? ""
+            });
+
+            // Add the menu provider so "Connect LinkedIn" + "Pull LinkedIn posts"
+            // appear on the viewer's own user page.
+            services.TryAddEnumerable(
+                Microsoft.Extensions.DependencyInjection.ServiceDescriptor.Scoped<
+                    MeshWeaver.Mesh.INodeMenuProvider,
+                    Memex.Portal.Shared.Social.LinkedInCredentialMenuProvider>());
+
+            // (Removed: SocialMediaUserMenuProvider — hardcoded a NodeType
+            // ("Systemorph/SocialMediaHub") that isn't registered anywhere in
+            // the codebase. NodeTypes belong in the database (NodeTypeDefinition
+            // MeshNodes), not as DLL-side string constants. The SocialMedia
+            // hub feature should be added back when its NodeType is defined
+            // through the regular mesh node creation flow rather than wired
+            // through a DLL-time CreateNode that fails on the receiver.)
+        }
 
         // Configure authentication
         var authSection = builder.Configuration.GetSection(PortalAuthOptions.SectionName);
@@ -167,10 +356,6 @@ public static class MemexConfiguration
             JwtSecurityTokenHandler.DefaultMapInboundClaims = false;
             services.AddAuthentication(OpenIdConnectDefaults.AuthenticationScheme)
                 .AddMicrosoftIdentityWebApp(entraIdConfig);
-            services.AddAuthentication()
-                .AddScheme<AuthenticationSchemeOptions, ApiTokenAuthenticationHandler>(
-                    ApiTokenAuthenticationHandler.SchemeName, _ => { })
-                .AddMcp(ConfigureMcpResourceMetadata);
             services.AddControllersWithViews()
                 .AddMicrosoftIdentityUI();
         }
@@ -200,68 +385,17 @@ public static class MemexConfiguration
                 .AddGoogleAuthentication(builder.Configuration)
                 .AddLinkedInAuthentication(builder.Configuration)
                 .AddAppleAuthentication(builder.Configuration);
-
-            // Add API token auth scheme for MCP bearer authentication
-            authBuilder.AddScheme<AuthenticationSchemeOptions, ApiTokenAuthenticationHandler>(
-                ApiTokenAuthenticationHandler.SchemeName, _ => { })
-                .AddMcp(ConfigureMcpResourceMetadata);
         }
 
-        // Add authorization with McpAuth policy (MCP scheme forwards to ApiToken or Cookie)
-        services.AddAuthorization(options =>
-        {
-            options.AddPolicy("McpAuth", policy =>
-            {
-                policy.AddAuthenticationSchemes(McpAuthenticationDefaults.AuthenticationScheme);
-                policy.RequireAuthenticatedUser();
-            });
-        });
-    }
+        // MCP auth is deliberately separate from the Blazor cookie pipeline above —
+        // see McpAuthenticationExtensions for the "why". Bearer-only, no cookie leakage,
+        // proper 401 + WWW-Authenticate on anonymous requests so MCP clients can
+        // discover the auth server.
+        services.AddMcpAuthentication();
 
-    /// <summary>
-    /// Configures the MCP authentication scheme with OAuth resource metadata discovery
-    /// and request-based forwarding to the appropriate authentication handler.
-    /// </summary>
-    private static void ConfigureMcpResourceMetadata(McpAuthenticationOptions options)
-    {
-        // CRITICAL: SDK constructor sets ForwardAuthenticate = "Bearer" which takes
-        // priority over ForwardDefaultSelector in ASP.NET Core's ResolveTarget().
-        // Clear it so our selector works.
-        options.ForwardAuthenticate = null;
-
-        // Route Bearer tokens to ApiToken handler, everything else to Cookie
-        options.ForwardDefaultSelector = ctx =>
-        {
-            var authHeader = ctx.Request.Headers.Authorization.ToString();
-            if (!string.IsNullOrEmpty(authHeader) &&
-                authHeader.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
-                return ApiTokenAuthenticationHandler.SchemeName;
-            return CookieAuthenticationDefaults.AuthenticationScheme;
-        };
-
-        // Fallback resource metadata (overridden per-request by Events)
-        options.ResourceMetadata = new ProtectedResourceMetadata
-        {
-            BearerMethodsSupported = { "header" },
-            ScopesSupported = { "mcp" },
-        };
-
-        options.Events = new McpAuthenticationEvents
-        {
-            OnResourceMetadataRequest = ctx =>
-            {
-                var req = ctx.HttpContext.Request;
-                var origin = $"{req.Scheme}://{req.Host}";
-                ctx.ResourceMetadata = new ProtectedResourceMetadata
-                {
-                    Resource = $"{origin}/mcp",
-                    BearerMethodsSupported = { "header" },
-                    ScopesSupported = { "mcp" },
-                    AuthorizationServers = { $"{origin}/connect" },
-                };
-                return Task.CompletedTask;
-            }
-        };
+        // REST surface for the mesh — same Bearer-token policy as MCP, lifts the
+        // multipart upload size cap. See MeshApiEndpoints.
+        services.AddMeshApi();
     }
 
     extension<TBuilder>(TBuilder builder) where TBuilder : MeshBuilder
@@ -320,7 +454,9 @@ public static class MemexConfiguration
                 // Ensure Settings are populated for AzureBlob source type
                 if (contentStorageConfig.SourceType == "AzureBlob")
                 {
-                    var settings = contentStorageConfig.Settings ?? new Dictionary<string, string>();
+                    var settings = contentStorageConfig.Settings is { } existing
+                        ? new Dictionary<string, string>(existing)
+                        : new Dictionary<string, string>();
                     if (!settings.ContainsKey("ContainerName"))
                         settings["ContainerName"] = "content";
                     if (!settings.ContainsKey("ClientName"))
@@ -333,12 +469,26 @@ public static class MemexConfiguration
             var usePartitioned = string.Equals(graphStorageConfig.Type, "FileSystem", StringComparison.OrdinalIgnoreCase)
                 && !string.IsNullOrEmpty(graphStorageConfig.BasePath);
 
-            return (TBuilder)builder
+            // Deploy-time feature flags (symmetric with ConfigureMemexServices).
+            var features = configuration
+                .GetSection(MemexFeatureOptions.SectionName)
+                .Get<MemexFeatureOptions>() ?? new MemexFeatureOptions();
+
+            // Static-repo → DB sync: partitions to materialize into + serve from the DB. For a
+            // synced partition the read-only in-memory static provider is skipped (PG serves it)
+            // and the import runs on boot. Empty (default) = in-memory serving everywhere, no
+            // import — no regression. Default Helm sets ["Doc","Agent","Provider","Harness","Skill"].
+            var syncPartitions = features.StaticRepoSync.Partitions
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            IReadOnlySet<string> serveFromPartition = syncPartitions;
+
+            MeshBuilder mb = builder
                 // Configure persistence from Graph:Storage section.
-                // Skip if IPartitionedStoreFactory already registered (e.g., PostgreSQL from Program.cs)
+                // Skip if any IPartitionStorageProvider was already registered upstream
+                // (e.g., AddPartitionedPostgreSqlPersistence in Memex.Portal.Distributed/Program.cs).
                 .ConfigureServices(services =>
                 {
-                    if (services.Any(sd => sd.ServiceType == typeof(IPartitionedStoreFactory)))
+                    if (services.Any(sd => sd.ServiceType == typeof(IPartitionStorageProvider)))
                         return services;
 
                     return usePartitioned
@@ -349,14 +499,80 @@ public static class MemexConfiguration
                 .AddRowLevelSecurity()
                 // Configure graph from the same base path
                 .AddGraph()
-                .AddOrganizationType()
+                // Register GitHub-sync content types (GitHubCredential / GitHubSyncConfig)
+                // on the mesh + per-node hubs so their config nodes (de)serialize.
+                .AddGitHubSyncTypes()
+                // Seed root-scope Admin AccessAssignments for users listed under
+                // `Auth:GlobalAdmins` so configured admins bypass per-partition
+                // RLS for cross-partition operations (list Spaces, create
+                // a new Space, etc.). Empty / missing section = no-op.
+                .AddMeshNodes(Authentication.GlobalAdminSeed.Build(configuration))
+                .AddSpaceType()
                 .AddPortalType()
-                .AddAI()
+                .AddAI(serveFromPartition);
+
+            // Each AI provider self-registers everything (catalog source +
+            // IOptions binding + IChatClientFactory) via one builder extension.
+            // The Models settings tab + the ModelProviderService read these out
+            // of the live LanguageModelCatalogOptions — no central registry.
+            // Gated by deploy-time feature flags (symmetric with the services-tier
+            // AddCopilot/AddClaudeCode in ConfigureMemexServices). A disabled flag
+            // drops the catalog source → the provider vanishes from the model
+            // picker and its Model/<id> nodes never seed.
+            if (features.Ai.Providers.Anthropic) mb = mb.AddAnthropic();
+            if (features.Ai.Providers.AzureFoundry) mb = mb.AddAzureFoundry();
+            if (features.Ai.Providers.AzureOpenAI) mb = mb.AddAzureOpenAI();
+            if (features.Ai.Providers.OpenAI) mb = mb.AddOpenAI();
+            if (features.Ai.Providers.OpenAICompatible) mb = mb.AddOpenAICompatible();
+            if (features.Ai.Providers.OpenRouter) mb = mb.AddOpenRouter();
+            if (features.Ai.Clis.ClaudeCode) mb = mb.AddClaudeCode();   // catalog source (factory + config via services.AddClaudeCode)
+            if (features.Ai.Clis.Copilot) mb = mb.AddCopilot();         // catalog source (factory + config via services.AddCopilot)
+
+            // Content → vector index (core tech). When embeddings are configured, wire the
+            // upload→Activity indexing pipeline (extract→chunk→embed→store), per-file Document nodes
+            // (extractive summary by default — swap in a chat client for AI summaries), and chunk-search
+            // @-autocomplete. The vector store lives IN THE MESH DATABASE, in each partition's OWN schema
+            // (content_chunks/content_files alongside that partition's mesh_nodes) — no separate database.
+            // Inert when there's no mesh Postgres connection (e.g. the FileSystem monolith) or embeddings
+            // aren't set: it compiles in but never activates.
+            var meshConnectionString = configuration.GetConnectionString("memex");
+            var embeddingsConfigured = !string.IsNullOrWhiteSpace(configuration["Embedding:Endpoint"])
+                && !string.IsNullOrWhiteSpace(configuration["Embedding:ApiKey"]);
+            if (!string.IsNullOrWhiteSpace(meshConnectionString) && embeddingsConfigured)
+            {
+                mb = mb
+                    .AddContentIndexingPipeline(
+                        storeFactory: sp => new PostgreSqlChunkedContentVectorStore(
+                            meshConnectionString,
+                            sp.GetService<IoPoolRegistry>(),
+                            sp.GetRequiredService<IEmbeddingProvider>().Dimensions),
+                        embedderFactory: sp => new EmbeddingProviderChunkEmbedder(
+                            sp.GetRequiredService<IEmbeddingProvider>(),
+                            sp.GetService<IoPoolRegistry>()),
+                        summarizerFactory: _ => new ExtractiveSummarizer())
+                    .AddContentSearch();
+            }
+
+            return (TBuilder)mb
                 .AddSelfRegistry()
-                .AddDocumentation()
+                .AddDocumentation(serveFromPartition)
+                .AddStaticRepoSync(serveFromPartition)
+                // Ship compiled releases WHEREVER we ship code NodeTypes — Doc AND the sample
+                // partitions (ACME, FutuRe, Northwind, Cornerstone, MeshWeaver). Pre-build every
+                // shipped code NodeType's release at boot, as System, so the runtime path is a
+                // cache hit and no user navigation ever triggers an on-demand compile (the atioz
+                // 2026-06-18 phantom _Activity/compile-* storm). Idempotent (skips already-built
+                // types); off the thread pool so it never blocks startup.
+                .ConfigureServices(services =>
+                    services.AddHostedService<ShippedReleaseSeedHostedService>())
                 .AddMarkdownExport()
                 // Register Azure Blob support for content collections.
                 .ConfigureServices(services => services.AddAzureBlob())
+                // Shared NodeType assembly cache (versioned, cross-replica consistent).
+                // Requires `AddKeyedAzureBlobServiceClient("nodetype-cache")` to have
+                // registered a keyed BlobServiceClient — Aspire wires this via the
+                // `nodetype-cache` container reference on the portal resource.
+                .ConfigureServices(services => services.AddBlobAssemblyStore())
                 // Register the mesh catalog and its public interfaces
                 .ConfigureServices(services => services.AddMeshCatalog())
                 // Configure default views and content collections for each node hub
@@ -367,10 +583,15 @@ public static class MemexConfiguration
                     // collection mapping below and the "attachments" mapping further down.
                     var nodePath = config.Address.ToString();
 
-                    if (contentStorageConfig != null)
+                    // Content lives ONCE per Space (partition root), NOT on every node. A child-node
+                    // path (e.g. "AgenticPension/Dokument") must not get its own content collection —
+                    // it inherits the Space's via ExposeInChildren below. Mounting per-child created
+                    // overlapping/orphaned collections (content/{space}/{child}/…) and node-level content
+                    // refs; indexing is likewise per-Space (one content_chunks table per partition schema).
+                    // Gate on the partition root: a single-segment node path (no '/').
+                    if (contentStorageConfig != null && !nodePath.Contains('/'))
                     {
-                        // Scope static media (SVG, PNG, JPG) to a per-node subdirectory
-                        // so each hub serves only its own content files.
+                        // Scope static media (SVG, PNG, JPG) to the Space's content subdirectory.
                         var contentSubdir = $"content/{nodePath}";
                         // Combine with original BasePath for FileSystem; for AzureBlob, subdirectory is the blob prefix
                         var basePath = string.IsNullOrEmpty(contentStorageConfig.BasePath)
@@ -380,11 +601,11 @@ public static class MemexConfiguration
                         {
                             Name = "content",
                             IsEditable = true,
+                            ExposeInChildren = true,
                             BasePath = basePath,
-                            Settings = new Dictionary<string, string>(contentStorageConfig.Settings ?? new())
-                            {
-                                ["BasePath"] = basePath
-                            }
+                            Settings = contentStorageConfig.Settings is { } src
+                                ? new Dictionary<string, string>(src) { ["BasePath"] = basePath }
+                                : new Dictionary<string, string> { ["BasePath"] = basePath }
                         };
                         config = config.AddContentCollection(_ => nodeContentConfig);
                     }
@@ -393,14 +614,82 @@ public static class MemexConfiguration
                     // (needed by FutuRe and other samples that store datacube.csv, etc.)
                     config = config.MapContentCollection("attachments", "storage", $"attachments/{nodePath}");
 
+                    // Shared large static assets (e.g. the on-device Whisper models the native client
+                    // downloads) live in a FileSystem content collection on the MeshWeaver space, backed
+                    // by a read-only AKS file-share mount (StaticAssets:Path). This is the framework-native
+                    // way — it gives the upload UI + get/list + content serving for free, and the native
+                    // VoiceModelCatalog downloads from the content URL (…/MeshWeaver/static/Speech/…). It's
+                    // a no-op when the mount isn't configured (local dev, tests).
+                    var staticAssetsMount = configuration["StaticAssets:Path"];
+                    if (!string.IsNullOrWhiteSpace(staticAssetsMount) && nodePath == "MeshWeaver")
+                        config = config.AddContentCollection(_ => new ContentCollectionConfig
+                        {
+                            Name = "static",
+                            SourceType = "FileSystem",
+                            BasePath = staticAssetsMount,
+                            Address = config.Address,
+                            IsEditable = true,
+                            ExposeInChildren = true,
+                            Settings = new Dictionary<string, string> { ["BasePath"] = staticAssetsMount },
+                        });
+
                     return config
                         .WithHeartBeatHandler() // silently ack heartbeats on every per-node hub
                         .AddDefaultLayoutAreas()
                         .AddThreadsLayoutArea()
-                        .AddApiTokensSettingsTab();
+                        .AddApiTokensSettingsTab()
+                        // AI menu (top bar) — replaces the retired Models + AI Settings tabs. Each entry
+                        // opens mesh search grouped by namespace, so every tier (global / space / user)
+                        // where the concern is defined shows as its own section. Per-item configurable
+                        // (label / icon / order / tooltip / href); register more under the same AI context.
+                        .AddNodeMenuItems(NodeMenuItemsExtensions.AiMenuContext,
+                            // "New thread" — opens the chat side panel ready for a brand-new conversation.
+                            // The Area is a sentinel handled imperatively in PortalLayoutBase.HandleMenuItemClick
+                            // (no Href → no navigation): it opens the panel + signals new-thread mode.
+                            new NodeMenuItemDefinition("New thread", PortalLayoutBase.AiNewThreadAction,
+                                Icon: "/static/NodeTypeIcons/chat.svg", Order: 0,
+                                Tooltip: "Start a new conversation in the chat panel"),
+                            new NodeMenuItemDefinition("Threads", "AiThreads", Icon: "/static/NodeTypeIcons/chat.svg", Order: 10,
+                                Href: "/search?q=nodeType%3AThread&groupBy=Namespace",
+                                Tooltip: "Conversation threads across every namespace"),
+                            new NodeMenuItemDefinition("Models", "AiModels", Icon: "/static/NodeTypeIcons/sparkle.svg", Order: 20,
+                                Href: "/search?q=nodeType%3ALanguageModel&groupBy=Namespace",
+                                Tooltip: "Language models, grouped by provider"),
+                            new NodeMenuItemDefinition("Agents", "AiAgents", Icon: "/static/NodeTypeIcons/bot.svg", Order: 30,
+                                Href: "/search?q=nodeType%3AAgent&groupBy=Namespace",
+                                Tooltip: "AI agents — global, space, and user"),
+                            new NodeMenuItemDefinition("Skills", "AiSkills", Icon: "/static/NodeTypeIcons/rocket.svg", Order: 40,
+                                Href: "/search?q=nodeType%3ASkill&groupBy=Namespace",
+                                Tooltip: "Reusable skills"),
+                            new NodeMenuItemDefinition("Providers", "AiProviders", Icon: "/static/NodeTypeIcons/key.svg", Order: 25,
+                                Href: "/search?q=nodeType%3AModelProvider&groupBy=Namespace",
+                                Tooltip: "AI providers — endpoints + keys"))
+                        // Dedicated Admin menu (platform-wide GlobalSettings area), gated on root
+                        // Permission.All: Invitations + Inbox.
+                        .AddInvitationsSettingsTab()
+                        .AddInboxSettingsTab()
+                        // Platform auto-update strategy (Admin/UpdatePolicy) — stable/continuous/none.
+                        .AddUpdatePolicySettingsTab()
+                        // Token-usage analytics (per-model _Usage satellites): filter by period,
+                        // group by model / person / thread, cost from ModelPricing.
+                        .AddTokenUsageSettingsTab()
+                        // GitHub Sync tab — shows only on Space nodes (self-filtered).
+                        .AddGitHubSyncSettingsTab()
+                        // Code workspace tab — on-disk working-tree editor (checkout/edit/commit/push).
+                        .AddWorkingTreeTab()
+                        // Content Indexing tab — Space nodes, only when the indexing pipeline is active.
+                        .AddContentIndexSettingsTab();
                 })
                 // Add activity tracking to record user access patterns via ActivityLogBundler
-                .AddActivityTracking();
+                .AddActivityTracking()
+                // SignalR mesh transport — external participants (native clients) join over a WebSocket.
+                .AddSignalRHub()
+                // MemexClient node type — per-installation client config under {user}/Client/{id}.
+                .AddMemexClientType()
+                // Platform self-update: the Admin/UpdatePolicy node + the poller that watches ACR and
+                // (on Kubernetes) patches the portal+migration deployments to the newest version per
+                // policy. On a non-k8s host it degrades to detect-and-notify. See ReleaseStrategy.md.
+                .AddSelfUpdate();
         }
 
         /// <summary>
@@ -417,7 +706,30 @@ public static class MemexConfiguration
                 .AddUserProfileViews() // Register UserProfilePageView
             )
             .AddBlazor(layoutClient => layoutClient
-                .WithPortalConfiguration(c => c)
+                // 🚨 The portal hub is the per-user sub-hub that hosts the
+                // Blazor circuit's chat input, autocomplete, navigation
+                // tracking, etc. Without these registrations:
+                //   • Chat: AppendUserMessageResponse arrives as RawJson and the
+                //     original Observe() hangs forever ("Allocating agent…"
+                //     spinner). Need AI types in the portal's TypeRegistry.
+                //   • Activity tracking: TrackActivityRequest emits
+                //     "No handler found for delivery TrackActivityRequest in
+                //     portal/<userId>" on every login + navigation. Need the
+                //     graph-types handler chain (which includes
+                //     HandleTrackActivity) registered on the portal.
+                //   • Data layer: layout areas hosted in the portal (e.g. chat
+                //     view) hold remote streams that depend on workspace +
+                //     EntityStore serialisation; .AddData() wires that.
+                //
+                // Lives here in MemexConfiguration (not in MeshWeaver.Blazor's
+                // PortalApplication.DefaultPortalConfig) so the base portal
+                // library doesn't take a hard dependency on MeshWeaver.AI /
+                // MeshWeaver.Graph.
+                .WithPortalConfiguration(c =>
+                {
+                    c.TypeRegistry.AddAITypes();
+                    return c.AddData().WithGraphTypes();
+                })
             );
     }
 
@@ -431,6 +743,17 @@ public static class MemexConfiguration
 #pragma warning disable CA1416
         logger.LogInformation("Starting Memex portal on PID: {PID}", Environment.ProcessId);
 #pragma warning restore CA1416
+
+        // Startup capability guard: if every AI provider AND every co-hosted CLI is
+        // disabled via Features:Ai, the model picker is empty unless users bring
+        // their own keys. Warn (not fail) — a pure data portal is a valid config.
+        var features = app.Configuration
+            .GetSection(MemexFeatureOptions.SectionName)
+            .Get<MemexFeatureOptions>() ?? new MemexFeatureOptions();
+        if (!features.HasAnyChatCapability)
+            logger.LogWarning(
+                "No AI chat capability is enabled (Features:Ai has all providers and CLIs disabled). " +
+                "The model picker will be empty unless users add their own provider keys via ModelProviders.");
 
         // Configure the HTTP request pipeline.
         if (!app.Environment.IsDevelopment())
@@ -446,6 +769,42 @@ public static class MemexConfiguration
         // in local dev it's a no-op since no proxy sets those headers.
         app.UseForwardedHeaders();
 
+        // 🚨 /healthz MUST short-circuit before the identity pipeline and before
+        // any Blazor page rendering. Kubernetes probes used to hit "/" — every
+        // probe request carries no cookies, so VirtualUserMiddleware minted a
+        // fresh guest VUser (mesh node + per-node hub graph) AND the probe
+        // forced a full server-side page prerender (layout-area sync hubs that
+        // no circuit ever disposes). At readiness-probe cadence (5 s) the portal
+        // accumulated 10,000+ leaked MessageHubs in ~25 minutes, the hosted-hub
+        // collection lock became the hot path of every routed stream message,
+        // and the instance wedged at 100% CPU — the 2026-06-12 atioz outage.
+        // Point ALL probes here; the endpoint answers without touching identity,
+        // the mesh, or the renderer.
+        app.Use((ctx, next) =>
+        {
+            if (ctx.Request.Path.Equals("/healthz", StringComparison.OrdinalIgnoreCase))
+            {
+                ctx.Response.StatusCode = StatusCodes.Status200OK;
+                return ctx.Response.WriteAsync("ok");
+            }
+            return next();
+        });
+
+        // `@/` is a markdown-authoring / autocomplete prefix — not a URL segment.
+        // Authors occasionally leak `@/` into raw HTML hrefs or users paste broken links.
+        // Permanent-redirect `/@/X` → `/X` so those never 404.
+        app.Use((ctx, next) =>
+        {
+            var path = ctx.Request.Path.Value;
+            if (path != null && path.StartsWith("/@/", StringComparison.Ordinal))
+            {
+                var target = path.Substring(2) + ctx.Request.QueryString;
+                ctx.Response.Redirect(target, permanent: true);
+                return Task.CompletedTask;
+            }
+            return next();
+        });
+
         // Static files middleware must run before routing to serve _content/* paths from RCLs
         app.UseStaticFiles();
 
@@ -455,15 +814,57 @@ public static class MemexConfiguration
         app.UseAntiforgery();
         app.UseCookiePolicy();
 
-        //app.MapMeshWeaverSignalRHubs();
+        // User-context middleware MUST run BEFORE the terminal endpoint maps
+        // (MapMeshMcp / MapMeshWeaver / MapLinkedInConnect). Once a request
+        // matches a terminal endpoint, no further `app.UseMiddleware<…>()`
+        // registered AFTER the Map* call ever sees it. With UserContextMiddleware
+        // after MapMeshMcp, MCP-Bearer requests skipped it entirely →
+        // accessService.Context stayed null → PostPipeline fell through to its
+        // hub-address fallback and stamped the message identity as
+        // `mesh/<guid>`. SecurityService then matched accessObject="mesh/<guid>"
+        // (no match) instead of accessObject="rbuergi" (Admin) → cross-partition
+        // writes denied while same-partition self-rule writes still passed.
+        //
+        // Order: UserContext → VirtualUser → Onboarding. UserContext extracts
+        // the real-user identity from OAuth claims / Bearer token first. Only
+        // if AccessService.Context is still null afterwards (no auth on the
+        // request) does VirtualUserMiddleware fall through to the cookie-backed
+        // guest identity. Before this swap, VirtualUserMiddleware ran first
+        // and bypassed VUser only on HttpContext.User.IsAuthenticated — but
+        // some flows (Bearer-token resolution inside UserContext) set the
+        // identity later in the pipeline, so VirtualUserMiddleware was
+        // wastefully creating a guest VUser node on legitimately-authed
+        // requests and the page crashed on
+        // "No handler found for CreateNodeRequest in portal/anonymous"
+        // when the create-request was posted to the portal hub instead of
+        // the mesh hub. See VUserHelper.EnsureVUserNode for the matching
+        // mesh-hub target fix.
+        app.UseMiddleware<UserContextMiddleware>();
+        app.UseMiddleware<VirtualUserMiddleware>();
+        app.UseMiddleware<OnboardingMiddleware>();
+
+        // SignalR mesh transport endpoint (/signalr) — external participants join the mesh.
+        // Gated by Features:SignalR (on by default); routes: signalr client ⇒ portal hub ⇒ rest of mesh.
+        if (features.SignalR)
+            app.MapMeshWeaverSignalRHubs();
 
         // Map MCP endpoint
         app.MapMeshMcp();
 
+        // REST surface that mirrors MCP — POST /api/mesh/* (1:1 with MCP tools).
+        // Same Bearer auth policy as /mcp; multipart upload at /api/mesh/upload.
+        app.MapMeshApi();
+
         app.MapMeshWeaver();
-        app.UseMiddleware<VirtualUserMiddleware>();
-        app.UseMiddleware<UserContextMiddleware>();
-        app.UseMiddleware<OnboardingMiddleware>();
+
+        // Social publishing — LinkedIn connect/pull endpoints. Must be AFTER
+        // UseAuthentication so HttpContext.User is populated.
+        app.MapLinkedInConnect();
+
+        // GitHub Sync — OAuth authorization-code connect endpoints (same ordering
+        // requirement: needs HttpContext.User). Stores the per-user token at
+        // {userId}/_Provider/GitHub. See Doc/Architecture/GitHubSync.
+        app.MapGitHubConnect();
 
         // Use HTTPS redirection only for non-MCP paths (MCP needs HTTP for Claude Code)
         app.UseWhen(

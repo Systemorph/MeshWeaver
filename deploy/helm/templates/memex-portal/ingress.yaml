@@ -1,0 +1,38 @@
+{{- if .Values.ingress.enabled }}
+# ---- Portal Ingress (TLS termination at the ingress controller) ------------
+# A standard k8s Ingress fronting memex-portal-service. The controller (e.g.
+# ingress-nginx) terminates TLS for `host` using `tlsSecret` and proxies HTTP to
+# the pod, setting X-Forwarded-Proto/Host — the portal clears KnownProxies and
+# trusts those, so OAuth redirect_uri is built as https://<host>/signin-*.
+# Disabled by default (neutral chart); an overlay sets host + tlsSecret + class.
+---
+apiVersion: "networking.k8s.io/v1"
+kind: "Ingress"
+metadata:
+  name: "memex-portal-ingress"
+  labels:
+    app.kubernetes.io/name: "{{ .Chart.Name }}"
+    app.kubernetes.io/component: "memex-portal"
+    app.kubernetes.io/instance: "{{ .Release.Name }}"
+  annotations:
+    {{- with .Values.ingress.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  ingressClassName: {{ .Values.ingress.className | quote }}
+  tls:
+    - hosts:
+        - {{ .Values.ingress.host | quote }}
+      secretName: {{ .Values.ingress.tlsSecret | quote }}
+  rules:
+    - host: {{ .Values.ingress.host | quote }}
+      http:
+        paths:
+          - path: "/"
+            pathType: "Prefix"
+            backend:
+              service:
+                name: "memex-portal-service"
+                port:
+                  number: {{ .Values.config.memex_portal.ASPNETCORE_HTTP_PORTS | default 8080 }}
+{{- end }}

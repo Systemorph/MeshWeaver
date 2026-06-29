@@ -5,14 +5,38 @@ using MeshWeaver.Utils;
 
 namespace MeshWeaver.Layout.DataBinding;
 
+/// <summary>
+/// Attribute applied to methods that should be substituted during expression-tree template compilation.
+/// The template visitor replaces calls to the annotated method with the result of <see cref="Replace"/>.
+/// </summary>
 [AttributeUsage(AttributeTargets.Method)]
 public abstract class ReplaceMethodInTemplateAttribute : Attribute
 {
+    /// <summary>
+    /// Returns the <see cref="MethodInfo"/> that should replace <paramref name="expression"/> during template building.
+    /// </summary>
+    /// <param name="expression">The original method found in the expression tree.</param>
+    /// <returns>The substitute method to call instead.</returns>
     public abstract MethodInfo Replace(MethodInfo expression);
 }
 
+/// <summary>
+/// Compiles a typed expression-tree data template into a <see cref="UiControl"/> by replacing
+/// property-access nodes with JSON-Pointer binding references.
+/// </summary>
 public static class TemplateBuilder
 {
+    /// <summary>
+    /// Walks the expression tree <paramref name="layout"/>, replaces property accesses with
+    /// <see cref="MeshWeaver.Data.JsonPointerReference"/> bindings, and compiles the result into a
+    /// <typeparamref name="TView"/> whose <c>DataContext</c> is set to <paramref name="dataContext"/>.
+    /// </summary>
+    /// <typeparam name="T">The data type the template binds to.</typeparam>
+    /// <typeparam name="TView">The UI control type produced by the template.</typeparam>
+    /// <param name="layout">The expression tree template; throws if null.</param>
+    /// <param name="dataContext">JSON Pointer string that identifies the data root for the rendered control.</param>
+    /// <param name="types">Receives the set of data-bound types discovered while walking the expression.</param>
+    /// <returns>The compiled, data-bound UI control.</returns>
     public static TView Build<T, TView>(
         this Expression<Func<T, TView>>? layout,
         string dataContext,

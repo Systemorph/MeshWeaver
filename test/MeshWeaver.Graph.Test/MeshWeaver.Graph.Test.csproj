@@ -13,6 +13,7 @@
     <ProjectReference Include="..\..\src\MeshWeaver.Hosting\MeshWeaver.Hosting.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Layout\MeshWeaver.Layout.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Fixture\MeshWeaver.Fixture.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.NuGet\MeshWeaver.NuGet.csproj" />
   </ItemGroup>
 
 </Project>

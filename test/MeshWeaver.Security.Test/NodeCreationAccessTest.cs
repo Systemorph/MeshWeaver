@@ -2,8 +2,8 @@ using System;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using FluentAssertions;
-using FluentAssertions.Extensions;
+using System.Reactive.Threading.Tasks;
+using System.Reactive.Linq;
 using MeshWeaver.AI;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
@@ -59,8 +59,8 @@ public class NodeCreationAccessTest(ITestOutputHelper output) : MonolithMeshTest
 
         try
         {
-            // Act & Assert - CreateNodeAsync should throw UnauthorizedAccessException
-            var act = async () => await NodeFactory.CreateNodeAsync(node, TestTimeout);
+            // Act & Assert - CreateNode should throw UnauthorizedAccessException
+            Func<Task> act = () => NodeFactory.CreateNode(node).FirstAsync().ToTask();
             var exception = await act.Should().ThrowAsync<UnauthorizedAccessException>();
             exception.Which.Message.Should().Contain("Access denied", "Should indicate authorization failure");
             Output.WriteLine($"Exception thrown as expected: {exception.Which.Message}");
@@ -73,21 +73,22 @@ public class NodeCreationAccessTest(ITestOutputHelper output) : MonolithMeshTest
     }
 
     /// <summary>
-    /// Tests that creating a node with Create permission succeeds via IMeshService.CreateNodeAsync.
+    /// Tests that creating a node with Create permission succeeds via IMeshService.CreateNode.
     /// </summary>
     [Fact(Timeout = 20000)]
     public async Task CreateNode_WithPermission_Succeeds()
     {
         // Arrange
-        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
         const string userId = "authorized-user";
         const string parentPath = "Authorized/Parent";
         var nodeId = $"TestNode_{Guid.NewGuid().AsString()}";
         var nodePath = $"{parentPath}/{nodeId}";
 
-        // Grant Editor role (includes Create permission)
-        await securityService.AddUserRoleAsync(userId, "Editor", parentPath, "system", TestTimeout);
+        // Grant Editor role (includes Create permission) — runtime AccessAssignment node.
+        await meshService.CreateNode(AssignmentNodeFactory.UserRole(userId, "Editor", parentPath))
+            .Should().Emit();
 
         var node = MeshNode.FromPath(nodePath) with
         {
@@ -96,8 +97,8 @@ public class NodeCreationAccessTest(ITestOutputHelper output) : MonolithMeshTest
             DesiredId = "MyDesiredId" // User's intended final Id
         };
 
-        // Act - Use public CreateNodeAsync which goes through message-based validation
-        var createdNode = await NodeFactory.CreateNodeAsync(node, TestTimeout);
+        // Act - Use public CreateNode which goes through message-based validation
+        var createdNode = await NodeFactory.CreateNode(node).Should().Emit();
 
         // Assert
         createdNode.Should().NotBeNull("Node should be created");
@@ -106,13 +107,13 @@ public class NodeCreationAccessTest(ITestOutputHelper output) : MonolithMeshTest
         createdNode.Name.Should().Be("Test Node With Permission");
         createdNode.DesiredId.Should().Be("MyDesiredId", "DesiredId should be preserved");
 
-        // Verify node exists via query
-        var fetchedNode = await MeshQuery.QueryAsync<MeshNode>($"path:{nodePath}").FirstOrDefaultAsync();
-        fetchedNode.Should().NotBeNull("Node should be retrievable from query");
+        // Verify node exists via per-node stream
+        var fetchedNode = await ReadNode(nodePath).Should().Emit();
+        fetchedNode.Should().NotBeNull("Node should be retrievable");
         fetchedNode!.State.Should().Be(MeshNodeState.Active);
 
         // Cleanup
-        await NodeFactory.DeleteNodeAsync(nodePath, ct: TestTimeout);
+        await NodeFactory.DeleteNode(nodePath).Should().Emit();
     }
 
     /// <summary>
@@ -123,7 +124,7 @@ public class NodeCreationAccessTest(ITestOutputHelper output) : MonolithMeshTest
     public async Task CreateNode_IdChanged_CreatesNewNodeAndDeletesTransient()
     {
         // Arrange
-        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
         const string userId = "editor-user";
         const string parentNamespace = "Editor/Projects";
@@ -132,8 +133,9 @@ public class NodeCreationAccessTest(ITestOutputHelper output) : MonolithMeshTest
         var transientPath = $"{parentNamespace}/{transientId}";
         var finalPath = $"{parentNamespace}/{desiredId}";
 
-        // Grant Editor role
-        await securityService.AddUserRoleAsync(userId, "Editor", parentNamespace, "system", TestTimeout);
+        // Grant Editor role — runtime AccessAssignment node.
+        await meshService.CreateNode(AssignmentNodeFactory.UserRole(userId, "Editor", parentNamespace))
+            .Should().Emit();
 
         // Step 1: Create transient node with GUID-based Id
         var transientNode = MeshNode.FromPath(transientPath) with
@@ -144,7 +146,7 @@ public class NodeCreationAccessTest(ITestOutputHelper output) : MonolithMeshTest
             DesiredId = desiredId // User wants this as final Id
         };
 
-        var createdTransient = await NodeFactory.CreateTransientAsync(transientNode, TestTimeout);
+        var createdTransient = await NodeFactory.CreateTransient(transientNode).Should().Emit();
         createdTransient.Should().NotBeNull("Transient node should be created");
         Output.WriteLine($"Transient node created at: {createdTransient.Path}");
 
@@ -157,25 +159,25 @@ public class NodeCreationAccessTest(ITestOutputHelper output) : MonolithMeshTest
         };
 
         // Create the final node
-        var createdFinal = await NodeFactory.CreateNodeAsync(finalNode, TestTimeout);
+        var createdFinal = await NodeFactory.CreateNode(finalNode).Should().Emit();
         createdFinal.Should().NotBeNull("Final node should be created");
         createdFinal.State.Should().Be(MeshNodeState.Active, "Final node should be Active");
         createdFinal.Path.Should().Be(finalPath, "Final node should be at desired path");
         Output.WriteLine($"Final node created at: {createdFinal.Path}");
 
         // Step 3: Delete the transient node
-        await NodeFactory.DeleteNodeAsync(transientPath, ct: TestTimeout);
+        await NodeFactory.DeleteNode(transientPath).Should().Emit();
 
-        // Verify: Transient should be gone, final should exist
-        var transientAfterDelete = await MeshQuery.QueryAsync<MeshNode>($"path:{transientPath}").FirstOrDefaultAsync();
+        // Verify: Transient should be gone, final should exist (stream reads)
+        var transientAfterDelete = await ReadNode(transientPath).Should().Emit();
         transientAfterDelete.Should().BeNull("Transient node should be deleted");
 
-        var finalAfterCreate = await MeshQuery.QueryAsync<MeshNode>($"path:{finalPath}").FirstOrDefaultAsync();
+        var finalAfterCreate = await ReadNode(finalPath).Should().Emit();
         finalAfterCreate.Should().NotBeNull("Final node should exist");
         finalAfterCreate!.State.Should().Be(MeshNodeState.Active);
 
         // Cleanup
-        await NodeFactory.DeleteNodeAsync(finalPath, ct: TestTimeout);
+        await NodeFactory.DeleteNode(finalPath).Should().Emit();
     }
 
     /// <summary>
@@ -185,7 +187,7 @@ public class NodeCreationAccessTest(ITestOutputHelper output) : MonolithMeshTest
     public async Task CreateTransientNode_PreservesDesiredId()
     {
         // Arrange
-        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
         const string userId = "test-user";
         const string parentPath = "Test/DesiredId";
@@ -193,8 +195,9 @@ public class NodeCreationAccessTest(ITestOutputHelper output) : MonolithMeshTest
         var desiredId = "UserPreferredId";
         var nodePath = $"{parentPath}/{transientId}";
 
-        // Grant permissions
-        await securityService.AddUserRoleAsync(userId, "Admin", parentPath, "system", TestTimeout);
+        // Grant Admin role — runtime AccessAssignment node.
+        await meshService.CreateNode(AssignmentNodeFactory.UserRole(userId, "Admin", parentPath))
+            .Should().Emit();
 
         var node = MeshNode.FromPath(nodePath) with
         {
@@ -205,19 +208,19 @@ public class NodeCreationAccessTest(ITestOutputHelper output) : MonolithMeshTest
         };
 
         // Act
-        var createdNode = await NodeFactory.CreateTransientAsync(node, TestTimeout);
+        var createdNode = await NodeFactory.CreateTransient(node).Should().Emit();
 
         // Assert
         createdNode.Should().NotBeNull();
         createdNode.DesiredId.Should().Be(desiredId, "DesiredId should be preserved after creation");
 
-        // Verify it can be retrieved
-        var fetchedNode = await MeshQuery.QueryAsync<MeshNode>($"path:{nodePath}").FirstOrDefaultAsync();
+        // Verify it can be retrieved (stream read)
+        var fetchedNode = await ReadNode(nodePath).Should().Emit();
         fetchedNode.Should().NotBeNull();
         fetchedNode!.DesiredId.Should().Be(desiredId, "DesiredId should be preserved after fetch");
 
         // Cleanup
-        await NodeFactory.DeleteNodeAsync(nodePath, ct: TestTimeout);
+        await NodeFactory.DeleteNode(nodePath).Should().Emit();
     }
 
     /// <summary>
@@ -228,15 +231,16 @@ public class NodeCreationAccessTest(ITestOutputHelper output) : MonolithMeshTest
     public async Task ConfirmTransientNode_UpdatesStateToActive()
     {
         // Arrange
-        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
         const string userId = "confirm-user";
         const string parentPath = "Confirm/Parent";
         var nodeId = $"ConfirmTest_{Guid.NewGuid().AsString()}";
         var nodePath = $"{parentPath}/{nodeId}";
 
-        // Grant permissions
-        await securityService.AddUserRoleAsync(userId, "Admin", parentPath, "system", TestTimeout);
+        // Grant Admin role — runtime AccessAssignment node.
+        await meshService.CreateNode(AssignmentNodeFactory.UserRole(userId, "Admin", parentPath))
+            .Should().Emit();
 
         // Step 1: Create transient node via NodeFactory
         var transientNode = MeshNode.FromPath(nodePath) with
@@ -246,10 +250,10 @@ public class NodeCreationAccessTest(ITestOutputHelper output) : MonolithMeshTest
             State = MeshNodeState.Transient
         };
 
-        var createdTransient = await NodeFactory.CreateTransientAsync(transientNode, TestTimeout);
+        var createdTransient = await NodeFactory.CreateTransient(transientNode).Should().Emit();
         createdTransient.State.Should().Be(MeshNodeState.Transient);
 
-        // Step 2: Confirm by creating with Active state via CreateNodeAsync
+        // Step 2: Confirm by creating with Active state via CreateNode
         // Re-create the node at the same path - the handler will confirm it
         var activeNode = MeshNode.FromPath(nodePath) with
         {
@@ -258,20 +262,20 @@ public class NodeCreationAccessTest(ITestOutputHelper output) : MonolithMeshTest
             State = MeshNodeState.Active
         };
 
-        var confirmedNode = await NodeFactory.CreateNodeAsync(activeNode, TestTimeout);
+        var confirmedNode = await NodeFactory.CreateNode(activeNode).Should().Emit();
 
         // Assert
         confirmedNode.Should().NotBeNull("Confirmed node should be returned");
         confirmedNode.State.Should().Be(MeshNodeState.Active, "Node should be Active after confirmation");
         confirmedNode.Path.Should().Be(nodePath, "Path should remain the same");
 
-        // Verify persistence
-        var fetchedNode = await MeshQuery.QueryAsync<MeshNode>($"path:{nodePath}").FirstOrDefaultAsync();
+        // Verify persistence (stream read)
+        var fetchedNode = await ReadNode(nodePath).Should().Emit();
         fetchedNode.Should().NotBeNull();
         fetchedNode!.State.Should().Be(MeshNodeState.Active);
 
         // Cleanup
-        await NodeFactory.DeleteNodeAsync(nodePath, ct: TestTimeout);
+        await NodeFactory.DeleteNode(nodePath).Should().Emit();
     }
 
     /// <summary>
@@ -291,21 +295,23 @@ public class NodeCreationAccessTest(ITestOutputHelper output) : MonolithMeshTest
 
         try
         {
-            // Act — create a Thread under User/{userId} (self-access should grant permission)
-            var threadPath = $"User/{userId}/TestThread_{Guid.NewGuid().AsString()}";
+            // Act — create a Thread under {userId} (self-access should grant permission).
+            // Post-v10: per-user partition lives at root namespace, so the user's
+            // own scope is just "{userId}" rather than the legacy "User/{userId}".
+            var threadPath = $"{userId}/TestThread_{Guid.NewGuid().AsString()}";
             var threadNode = MeshNode.FromPath(threadPath) with
             {
                 Name = "Test Chat Thread",
                 NodeType = ThreadNodeType.NodeType
             };
 
-            var created = await NodeFactory.CreateNodeAsync(threadNode, TestTimeout);
+            var created = await NodeFactory.CreateNode(threadNode).Should().Emit();
 
             // Assert
             created.Should().NotBeNull("User should be able to create threads under their own User node");
             created.State.Should().Be(MeshNodeState.Active);
             created.Path.Should().Be(threadPath);
-            created.MainNode.Should().Be($"User/{userId}", "Satellite thread MainNode should point to parent node");
+            created.MainNode.Should().Be(userId, "Satellite thread MainNode should point to parent node");
             Output.WriteLine($"Thread created successfully at: {created.Path}, MainNode: {created.MainNode}");
         }
         finally
@@ -336,7 +342,7 @@ public class NodeCreationAccessTest(ITestOutputHelper output) : MonolithMeshTest
                 NodeType = ThreadNodeType.NodeType
             };
 
-            var act = async () => await NodeFactory.CreateNodeAsync(threadNode, TestTimeout);
+            Func<Task> act = () => NodeFactory.CreateNode(threadNode).FirstAsync().ToTask();
 
             // Assert
             await act.Should().ThrowAsync<UnauthorizedAccessException>(

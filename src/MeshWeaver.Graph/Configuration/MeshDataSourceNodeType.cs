@@ -1,4 +1,4 @@
-using MeshWeaver.Data;
+﻿using MeshWeaver.Data;
 using MeshWeaver.Mesh;
 
 namespace MeshWeaver.Graph.Configuration;
@@ -18,7 +18,7 @@ public static class MeshDataSourceNodeType
     /// <summary>
     /// The namespace under which data source nodes are stored.
     /// </summary>
-    public const string SourcesNamespace = "_Source";
+    public const string SourcesNamespace = "Source";
 
     /// <summary>
     /// Registers the built-in "MeshDataSource" MeshNode on the mesh builder.
@@ -39,7 +39,6 @@ public static class MeshDataSourceNodeType
         Icon = "/static/NodeTypeIcons/database.svg",
         IsSatelliteType = false,
         ExcludeFromContext = new HashSet<string> { "search", "create" },
-        AssemblyLocation = typeof(MeshDataSourceNodeType).Assembly.Location,
         HubConfiguration = config => config
             .AddMeshDataSourceViews()
             .AddMeshDataSource(source => source.WithContentType<MeshDataSourceConfiguration>())

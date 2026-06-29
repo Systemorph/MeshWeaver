@@ -1,6 +1,7 @@
 ﻿using System.Text.Json;
 using System.Text.Json.Serialization;
 using MeshWeaver.Domain;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Messaging.Serialization;
 
@@ -8,13 +9,29 @@ namespace MeshWeaver.Messaging.Serialization;
 /// Custom converter for object types that handles polymorphic serialization/deserialization
 /// using the type registry and $type discriminator.
 /// </summary>
-public class ObjectPolymorphicConverter(ITypeRegistry typeRegistry) : JsonConverter<object>
+public class ObjectPolymorphicConverter(ITypeRegistry typeRegistry, ILogger? logger = null) : JsonConverter<object>
 {
+    /// <summary>
+    /// Determines whether this converter applies. It only handles the open <see langword="object"/>
+    /// type; concrete types are handled by their own type info.
+    /// </summary>
+    /// <param name="typeToConvert">The type being considered for conversion.</param>
+    /// <returns><c>true</c> only when <paramref name="typeToConvert"/> is exactly <see langword="object"/>.</returns>
     public override bool CanConvert(Type typeToConvert)
     {
         return typeToConvert == typeof(object);
     }
 
+    /// <summary>
+    /// Reads a value typed as <see langword="object"/>. Scalars (string, number, bool, null) are
+    /// materialized as their CLR primitives, arrays as a cloned <see cref="JsonElement"/>, and objects
+    /// are resolved via the $type discriminator against the type registry (falling back to a cloned
+    /// <see cref="JsonElement"/> when no/unknown discriminator is present).
+    /// </summary>
+    /// <param name="reader">The reader positioned at the value to deserialize.</param>
+    /// <param name="typeToConvert">The declared target type (<see langword="object"/>).</param>
+    /// <param name="options">The serializer options in effect.</param>
+    /// <returns>The materialized value, or <c>null</c> for a JSON null token.</returns>
     public override object? Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
     {
         // Handle different JSON token types
@@ -68,8 +85,18 @@ public class ObjectPolymorphicConverter(ITypeRegistry typeRegistry) : JsonConver
                     var json = JsonElementNormalizer.GetNormalizedRawText(cleanedElement);
                     return JsonSerializer.Deserialize(json, typeInfo!.Type, options)!;
                 }
-                catch (NotSupportedException ex) when (ex.Message.StartsWith("Deserialization of interface or abstract"))
+                catch (Exception ex) when (
+                    ex is JsonException
+                    or NotSupportedException
+                    or InvalidOperationException
+                    or ArgumentException)
                 {
+                    // Registered type but the stored JSON no longer fits it. Don't throw
+                    // (a throw faults the node read → wedged grain); preserve the raw JSON
+                    // so the node stays readable/repairable. Logged loud, not swallowed.
+                    logger?.LogWarning(ex,
+                        "Content for '{TypeName}' could not be deserialized; preserving raw JSON",
+                        typeName);
                     return cleanedElement.Clone();
                 }
             }
@@ -119,6 +146,15 @@ public class ObjectPolymorphicConverter(ITypeRegistry typeRegistry) : JsonConver
         return doc.RootElement.Clone();
     }
 
+    /// <summary>
+    /// Writes a value typed as <see langword="object"/>. Primitives are written directly; ValueTuples
+    /// and registered complex types are wrapped with a $type discriminator so they can be read back
+    /// polymorphically; types with a dedicated converter are delegated to it; unregistered types are
+    /// serialized without a discriminator.
+    /// </summary>
+    /// <param name="writer">The writer to emit JSON to.</param>
+    /// <param name="value">The value to serialize; <c>null</c> is written as a JSON null.</param>
+    /// <param name="options">The serializer options in effect.</param>
     public override void Write(Utf8JsonWriter writer, object? value, JsonSerializerOptions options)
     {
         if (value == null)

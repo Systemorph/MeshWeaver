@@ -1,0 +1,22 @@
+---
+apiVersion: "v1"
+kind: "ConfigMap"
+metadata:
+  name: "memex-migration-config"
+  labels:
+    app.kubernetes.io/name: "{{ .Chart.Name }}"
+    app.kubernetes.io/component: "memex-migration"
+    app.kubernetes.io/instance: "{{ .Release.Name }}"
+data:
+  MEMEX_HOST: "{{ .Values.config.memex_migration.MEMEX_HOST }}"
+  MEMEX_PORT: "{{ .Values.config.memex_migration.MEMEX_PORT }}"
+  MEMEX_USERNAME: "{{ .Values.config.memex_migration.MEMEX_USERNAME }}"
+  MEMEX_JDBCCONNECTIONSTRING: "{{ .Values.config.memex_migration.MEMEX_JDBCCONNECTIONSTRING }}"
+  MEMEX_DATABASENAME: "{{ .Values.config.memex_migration.MEMEX_DATABASENAME }}"
+  # ---- Embeddings — MUST match the portal's Embedding__* ---------------------
+  # The migration derives the pgvector column dimension from Embedding__Model and
+  # embeds the `doc` schema via the provider (DocumentationBackfill). If these drift
+  # from the portal's, the column dimension and the query-time vectors mismatch.
+  Embedding__Provider: "{{ .Values.config.memex_migration.Embedding__Provider | default "" }}"
+  Embedding__Endpoint: "{{ .Values.config.memex_migration.Embedding__Endpoint | default "" }}"
+  Embedding__Model: "{{ .Values.config.memex_migration.Embedding__Model | default "" }}"

@@ -6,11 +6,24 @@ using System.Text.Json.Serialization.Metadata;
 using MeshWeaver.Domain;
 using MeshWeaver.Messaging.Serialization;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Messaging;
 
+/// <summary>
+/// Extension methods that wire up JSON serialization for a message hub: registering serialization
+/// configuration lambdas and types, resolving type names, and building the hub's
+/// <see cref="JsonSerializerOptions"/> with the mesh's standard converters and polymorphic resolver.
+/// </summary>
 public static class SerializationExtensions
 {
+    /// <summary>
+    /// Registers a serialization configuration step that is applied when the hub's serializer options
+    /// are built.
+    /// </summary>
+    /// <param name="hubConf">The hub configuration to extend.</param>
+    /// <param name="configure">A function that transforms the <see cref="SerializationConfiguration"/>.</param>
+    /// <returns>The updated hub configuration.</returns>
     public static MessageHubConfiguration WithSerialization(this MessageHubConfiguration hubConf,
         Func<SerializationConfiguration, SerializationConfiguration> configure)
     {
@@ -23,21 +36,49 @@ public static class SerializationExtensions
         => config.Get<ImmutableList<Func<SerializationConfiguration, SerializationConfiguration>>>() ??
            ImmutableList<Func<SerializationConfiguration, SerializationConfiguration>>.Empty;
 
+    /// <summary>
+    /// Registers the given types with the hub configuration's type registry.
+    /// </summary>
+    /// <param name="configuration">The hub configuration to extend.</param>
+    /// <param name="types">The types to register.</param>
+    /// <returns>The updated hub configuration.</returns>
     public static MessageHubConfiguration WithTypes(this MessageHubConfiguration configuration, params IEnumerable<Type> types)
     {
         configuration.TypeRegistry.WithTypes(types);
         return configuration;
     }
+    /// <summary>
+    /// Registers the given types under explicit collection names with the hub configuration's type registry.
+    /// </summary>
+    /// <param name="configuration">The hub configuration to extend.</param>
+    /// <param name="types">The name-to-type pairs to register.</param>
+    /// <returns>The updated hub configuration.</returns>
     public static MessageHubConfiguration WithTypes(this MessageHubConfiguration configuration, IEnumerable<KeyValuePair<string, Type>> types)
     {
         configuration.TypeRegistry.WithTypes(types);
         return configuration;
     }
+    /// <summary>
+    /// Resolves the serialization type name for an instance: an existing $type value when the instance is
+    /// a <see cref="JsonObject"/> carrying one, otherwise the registry name for the instance's runtime type
+    /// (registering it if needed).
+    /// </summary>
+    /// <param name="typeRegistry">The type registry to resolve against.</param>
+    /// <param name="instance">The instance whose type name is requested.</param>
+    /// <returns>The resolved type name.</returns>
     public static string GetTypeName(this ITypeRegistry typeRegistry, object instance)
     => instance is JsonObject obj && obj.TryGetPropertyValue(EntitySerializationExtensions.TypeProperty, out var type)
         ? type!.ToString()
         : typeRegistry.GetOrAddType(instance.GetType());
 
+    /// <summary>
+    /// Builds the <see cref="JsonSerializerOptions"/> for a hub: applies the registered serialization
+    /// configuration lambdas, inherits non-standard converters from the parent hub (if any), appends the
+    /// mesh's standard converters, and installs the <see cref="PolymorphicTypeInfoResolver"/>.
+    /// </summary>
+    /// <param name="hub">The hub whose serializer options are being built.</param>
+    /// <param name="parent">The parent hub to inherit converters from, or <c>null</c> if there is none.</param>
+    /// <returns>The fully configured serializer options.</returns>
     public static JsonSerializerOptions CreateJsonSerializationOptions(this IMessageHub hub, IMessageHub? parent)
     {
 
@@ -66,7 +107,8 @@ public static class SerializationExtensions
     private static IEnumerable<JsonConverter> GetStandardConverters(IMessageHub hub)
     {
         yield return new AddressConverter();
-        yield return new ObjectPolymorphicConverter(hub.TypeRegistry);
+        yield return new ObjectPolymorphicConverter(hub.TypeRegistry,
+            hub.ServiceProvider.GetService<ILogger<ObjectPolymorphicConverter>>());
         yield return new MessageDeliveryConverter(hub.TypeRegistry);
         yield return new ReadOnlyCollectionConverterFactory();
         yield return new JsonNodeConverter();
@@ -84,6 +126,15 @@ public static class SerializationExtensions
             o.ReadCommentHandling = JsonCommentHandling.Skip;
             o.AllowTrailingCommas = true;
             o.IncludeFields = true; // Enable field serialization for ValueTuple support
+            // Per System.Text.Json default rules a polymorphic discriminator
+            // ($type) must be the FIRST property in the JSON object — otherwise
+            // the deserializer throws "metadata property must be the first
+            // property" and the whole read fails. We have legacy persisted rows
+            // (Thread.pendingUserMessages.{id}.$type after other fields) that
+            // pre-date this rule, plus future migrations risk hitting it again
+            // if a property reorder happens. Opt into the tolerant mode so a
+            // discriminator anywhere in the object is accepted.
+            o.AllowOutOfOrderMetadataProperties = true;
             o.Converters.Add(new EnumMemberJsonStringEnumConverter());
         });
     }

@@ -1,3 +1,5 @@
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Domain;
 using MeshWeaver.Mesh.Services;
@@ -16,7 +18,7 @@ namespace MeshWeaver.Graph;
 /// </summary>
 public record PartitionTypeSource<T> : TypeSourceWithType<T, PartitionTypeSource<T>> where T : class
 {
-    private readonly IStorageService _persistenceCore;
+    private readonly IStorageAdapter _persistenceCore;
     private readonly string _partitionPath;
     private readonly IWorkspace _workspace;
     private readonly ILogger? _logger;
@@ -29,9 +31,9 @@ public record PartitionTypeSource<T> : TypeSourceWithType<T, PartitionTypeSource
     /// <param name="dataSource">The data source identifier.</param>
     /// <param name="persistenceCore">The persistence core service (unsecured, for internal state loading).</param>
     /// <param name="hubPath">The hub's path (e.g., "Type/Organizations").</param>
-    /// <param name="subPartition">The relative sub-partition name (e.g., "_Source"). If null, uses hubPath directly.</param>
+    /// <param name="subPartition">The relative sub-partition name (e.g., "Source"). If null, uses hubPath directly.</param>
     /// <param name="collectionName">The collection name to use. If null, uses subPartition or type name.</param>
-    internal PartitionTypeSource(IWorkspace workspace, object dataSource, IStorageService persistenceCore, string hubPath, string? subPartition = null, string? collectionName = null)
+    internal PartitionTypeSource(IWorkspace workspace, object dataSource, IStorageAdapter persistenceCore, string hubPath, string? subPartition = null, string? collectionName = null)
         : base(workspace, dataSource)
     {
         _workspace = workspace;
@@ -53,6 +55,13 @@ public record PartitionTypeSource<T> : TypeSourceWithType<T, PartitionTypeSource
         }
     }
 
+    /// <summary>
+    /// Diffs the incoming instance collection against the last-saved snapshot and syncs
+    /// adds and updates back to the persistence partition (deletes are not yet supported).
+    /// Returns the supplied collection as the new authoritative snapshot.
+    /// </summary>
+    /// <param name="instances">The instance collection to persist/update.</param>
+    /// <returns>The instance collection to store as the new authoritative snapshot.</returns>
     protected override InstanceCollection UpdateImpl(InstanceCollection instances)
     {
         _logger?.LogDebug("PartitionTypeSource<{Type}>.UpdateImpl: Called with {Count} instances",
@@ -80,42 +89,51 @@ public record PartitionTypeSource<T> : TypeSourceWithType<T, PartitionTypeSource
         _logger?.LogDebug("PartitionTypeSource<{Type}>.UpdateImpl: adds={Adds}, updates={Updates}, deletes={Deletes}",
             typeof(T).Name, adds.Length, updates.Length, deletes.Length);
 
-        // Sync to persistence partition
+        // Sync to persistence partition. Subscribe is mandatory — SavePartitionObjects
+        // is a cold IObservable; the side effect runs only on Subscribe.
         foreach (var obj in adds.Concat(updates))
         {
             _logger?.LogDebug("PartitionTypeSource<{Type}>.UpdateImpl: Saving object to partition {PartitionPath}",
                 typeof(T).Name, _partitionPath);
-            _ = _persistenceCore.SavePartitionObjectsAsync(_partitionPath, null, [obj], _workspace.Hub.JsonSerializerOptions);
+            _persistenceCore.SavePartitionObjects(_partitionPath, null, [obj], _workspace.Hub.JsonSerializerOptions)
+                .Subscribe(
+                    _ => { },
+                    ex => _logger?.LogWarning(ex,
+                        "PartitionTypeSource<{Type}>.UpdateImpl: SavePartitionObjects failed for {PartitionPath}",
+                        typeof(T).Name, _partitionPath));
         }
 
         // Note: Delete of partition objects is not yet supported
-        // If needed, we could add DeletePartitionObjectAsync to IMeshStorage
+        // If needed, we could add DeletePartitionObjectAsync to IStorageAdapter
 
         _lastSaved = instances;
         return instances;
     }
 
-    protected override async Task<InstanceCollection> InitializeAsync(
+    /// <summary>
+    /// Pure reactive composition: <c>IMeshNodePersistenceCore.GetPartitionObjects</c>
+    /// already returns an <c>IObservable</c> (the async DB leaf is bridged through
+    /// <c>IIoPool</c> inside the persistence core — see
+    /// <c>Doc/Architecture/ControlledIoPooling.md</c>). The framework subscribes to
+    /// the returned observable; the gate opens on emission.
+    /// </summary>
+    protected override IObservable<InstanceCollection> Initialize(
         WorkspaceReference<InstanceCollection> reference,
-        CancellationToken ct)
-    {
-        _logger?.LogDebug("PartitionTypeSource<{Type}>.InitializeAsync: Loading from partition {PartitionPath}",
-            typeof(T).Name, _partitionPath);
-
-        var items = new List<T>();
-
-        await foreach (var obj in _persistenceCore.GetPartitionObjectsAsync(_partitionPath, null, _workspace.Hub.JsonSerializerOptions).WithCancellation(ct))
+        CancellationToken cancellationToken)
+        => Observable.Defer(() =>
         {
-            if (obj is T typedObj)
-            {
-                items.Add(typedObj);
-            }
-        }
+            _logger?.LogDebug("PartitionTypeSource<{Type}>.Initialize: Loading from partition {PartitionPath}",
+                typeof(T).Name, _partitionPath);
 
-        _logger?.LogDebug("PartitionTypeSource<{Type}>.InitializeAsync: Loaded {Count} items from {PartitionPath}",
-            typeof(T).Name, items.Count, _partitionPath);
-
-        _lastSaved = new InstanceCollection(items.Cast<object>(), TypeDefinition.GetKey);
-        return _lastSaved;
-    }
+            return _persistenceCore.GetPartitionObjects(_partitionPath, null, _workspace.Hub.JsonSerializerOptions)
+                .OfType<T>()
+                .ToArray()
+                .Select(items =>
+                {
+                    _logger?.LogDebug("PartitionTypeSource<{Type}>.Initialize: Loaded {Count} items from {PartitionPath}",
+                        typeof(T).Name, items.Length, _partitionPath);
+                    _lastSaved = new InstanceCollection(items.Cast<object>(), TypeDefinition.GetKey);
+                    return _lastSaved;
+                });
+        });
 }

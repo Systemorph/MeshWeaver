@@ -97,9 +97,18 @@ public record BadgeControl(object Data)
     /// <param name="dismissTitle">The dismiss title to set.</param>
     /// <returns>A new <see cref="BadgeControl"/> instance with the specified dismiss title.</returns>
     public BadgeControl WithDismissTitle(object dismissTitle) => this with { DismissTitle = dismissTitle };
+    /// <summary>Returns a copy with <paramref name="fill"/> as its fill color token.</summary>
+    /// <param name="fill">The fill value to set.</param>
+    /// <returns>A new <see cref="BadgeControl"/> instance with the specified fill.</returns>
     public BadgeControl WithFill(object fill) => This with { Fill = fill };
 
+    /// <summary>Returns a copy with <paramref name="height"/> as its CSS height.</summary>
+    /// <param name="height">The height value to set.</param>
+    /// <returns>A new <see cref="BadgeControl"/> instance with the specified height.</returns>
     public BadgeControl WithHeight(object height) => This with { Height = height };
 
+    /// <summary>Returns a copy with <paramref name="width"/> as its CSS width.</summary>
+    /// <param name="width">The width value to set.</param>
+    /// <returns>A new <see cref="BadgeControl"/> instance with the specified width.</returns>
     public BadgeControl WithWidth(object width) => This with { Width = width };
 }

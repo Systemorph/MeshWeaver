@@ -1,9 +1,8 @@
 ---
-NodeType: "Doc/Article"
-Title: "Agents are also just Humans"
-Abstract: "Agentic AI represents a paradigm shift in artificial intelligence, moving beyond passive response systems to proactive, goal-oriented agents capable of autonomous decision-making and action."
-Icon: "Document"
-Published: "2025-11-09"
+NodeType: Markdown
+Name: "Agents are also just Humans"
+Abstract: "Agentic AI moves beyond passive question-answering to proactive, goal-oriented systems that act autonomously — yet work best when humans remain in the loop. This page covers the philosophy, the common traps, and the concrete patterns MeshWeaver uses to wire agents together."
+Icon: "<svg viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'><rect width='24' height='24' rx='4' fill='#e65100'/><rect x='5' y='9' width='14' height='11' rx='2' fill='white'/><circle cx='9' cy='14' r='1.3' fill='#e65100'/><circle cx='15' cy='14' r='1.3' fill='#e65100'/><rect x='11' y='4' width='2' height='5' fill='white'/></svg>"
 Thumbnail: "images/agenticai.svg"
 Authors:
   - "Roland Buergi"
@@ -13,45 +12,43 @@ Tags:
   - "Automation"
 ---
 
-## Introduction
-
-Agentic AI represents a paradigm shift in artificial intelligence, moving beyond passive response systems to proactive, goal-oriented agents capable of autonomous decision-making and action.
+> **Scope:** this page is the *concepts and philosophy* of agentic AI — what it is, where it goes wrong, and the human-in-the-loop principles MeshWeaver builds on. For the *technical implementation* (agent definitions, MeshPlugin tools, orchestration, MCP integration), see [Agentic AI Architecture](/Doc/Architecture/AgenticAI).
 
 ## What is Agentic AI?
 
-Agentic AI refers to AI systems that can:
+Agentic AI is the shift from AI that *responds* to AI that *acts*. Rather than waiting to answer a prompt, an agentic system pursues goals, makes decisions, and uses tools — all with varying degrees of autonomy.
 
-- **Set and pursue goals autonomously** - Rather than simply responding to prompts, these systems can formulate objectives and work towards them
-- **Make decisions independently** - They can evaluate options and choose actions without constant human intervention
-- **Adapt to changing environments** - Agentic systems can modify their strategies based on feedback and new information
-- **Take meaningful actions** - They can interact with their environment through tool use, API calls, and other interfaces
+Four capabilities define the category:
+
+| Capability | What it means in practice |
+|---|---|
+| **Goal pursuit** | Formulates objectives and works toward them across multiple steps |
+| **Independent decision-making** | Evaluates options and selects actions without constant human prompts |
+| **Environmental adaptation** | Adjusts strategy based on feedback and new information |
+| **Meaningful action** | Calls APIs, invokes tools, writes to data stores — not just text output |
+
+---
 
 ## Common Misbeliefs
 
-- **"Agents don't require human input"**
-  - Agents work best with humans in the loop
-  - Require guidance, oversight, and intervention
-  - Humans provide direction and validate outputs
+A handful of myths regularly derail agentic AI projects. Knowing them upfront saves a lot of pain.
 
-- **"We can prove that agents' work is correct"**
-  - Agents cannot actually think or reason like humans
-  - Generate outputs based on patterns, not understanding
-  - Humans must judge correctness and quality
+> **"Agents don't require human input"**  
+> Agents work *best* with humans in the loop. They need guidance, oversight, and intervention. Humans provide direction and validate outputs — the agent handles execution.
 
-- **"Agents will replace human workers"**
-  - Agents are augmentation tools, not replacements
-  - Lack contextual understanding and emotional intelligence
-  - Excel at repetitive tasks, humans handle creative problem-solving
+> **"We can prove the agent's work is correct"**  
+> Agents generate outputs based on patterns, not genuine understanding. They cannot reason like humans. Correctness and quality judgments remain human responsibilities.
 
-- **"More autonomous means better"**
-  - Optimal autonomy depends on task and stakes
-  - High-stakes decisions need human oversight
-  - Goal is balance, not maximum autonomy
+> **"Agents will replace human workers"**  
+> Agents are augmentation tools. They lack contextual understanding and emotional intelligence. They excel at repetitive, high-volume tasks; humans handle creative problem-solving and judgment calls.
 
-- **"Agents learn and improve on their own"**
-  - Require intentional design and training data
-  - Need human curation to improve meaningfully
-  - Don't develop genuine understanding without guidance
+> **"More autonomous means better"**  
+> Optimal autonomy is task- and stakes-dependent. High-stakes decisions need human oversight. The goal is balance, not maximum autonomy.
+
+> **"Agents learn and improve on their own"**  
+> Improvement requires intentional design and curated training data. Agents do not develop genuine understanding without human guidance.
+
+---
 
 ## Who is the Human, Who is the Agent?
 
@@ -59,15 +56,16 @@ Agentic AI refers to AI systems that can:
   <img src="/static/DocContent/images/Human_vs_bot.png" alt="Human looking in mirror sees robot" style="width: 100%; height: 450px; object-fit: cover; object-position: center top;" />
 </div>
 
-Finding the right work distribution between humans and agents is critical. When misaligned, we risk reversing roles - with humans doing the repetitive work while agents handle creative tasks.
+Getting the division of labor right is the single most important design decision in any agentic system. When it is misaligned, the roles reverse: humans do the repetitive mechanical work while the agent handles the creative parts. That is the opposite of the intended value.
 
-**Ideal Division of Labor:**
-- Humans should do the intelligent work
-- Agents handle the repetitive tasks
-- Humans provide judgment and strategic direction
-- Agents execute, format, and process
+**The ideal split:**
 
-**Common Anti-Pattern:**
+- Humans own strategy, judgment, and quality assessment.
+- Agents handle execution, formatting, and high-volume processing.
+
+### Anti-pattern vs. better pattern
+
+**Anti-pattern** — human ends up doing mechanical work:
 
 ```mermaid
 graph LR
@@ -75,9 +73,9 @@ graph LR
     B --> C["Human<br/>copy/pastes & formats"]
 ```
 
-*Problem: Human does mechanical work, Agent does creative work*
+*Problem: the agent does the creative work; the human does the drudge work.*
 
-**Better Pattern:**
+**Better pattern** — agent handles all repetitive steps:
 
 ```mermaid
 graph LR
@@ -86,85 +84,74 @@ graph LR
     C -->|"iterate"| A
 ```
 
-*Solution: Agent handles all repetitive tasks, Human focuses on strategy and quality judgment*
+*Solution: the human focuses entirely on strategy and quality judgment.*
+
+---
 
 ## Agentic AI in Applications
 
 ### Data Ingestion
 
-Understanding file content used to be extremely difficult for automated systems. The fundamental challenge is that humans and agents have opposite strengths:
+Automated data ingestion used to be extremely difficult because humans and agents have *opposite* strengths:
 
-- **Human-readable formats are machine-hostile** - Documents designed for human comprehension (PDFs, spreadsheets with merged or additional cells, narrative reports) are notoriously difficult for machines to parse
-- **Agents struggle with "easy" operations** - While agents excel at understanding context and meaning, they can stumble on simple tasks like reliably adding up numbers or maintaining exact precision
-- **Hybrid approach required** - We need to combine new AI capabilities (content discovery, semantic understanding) with traditional methods (structured imports when we know data location)
+- **Human-readable formats are machine-hostile.** Documents designed for human comprehension — PDFs, spreadsheets with merged cells, narrative reports — are notoriously hard for machines to parse reliably.
+- **Agents stumble on "easy" operations.** An agent that understands nuanced context can still fail at reliably summing a column or maintaining exact numeric precision.
+- **A hybrid approach is required.** Combine AI capabilities (content discovery, semantic understanding) with traditional structured imports for data whose location and format you already know.
 
-**The Key to Effective Data Ingestion:**
+**What makes ingestion succeed:**
 
-Success requires many small, focused pieces of text that work together to map data accurately:
+Many small, focused pieces of text that work together to map data accurately:
 
-- **Data model descriptions** - Clear documentation of your data structures
-- **Dimension value descriptions** - For categorical data (Line of Business, Product Category, etc.), provide descriptions for each possible value
-- **System prompt instructions** - Explicit guidance on how to map and transform data
+- *Data model descriptions* — clear documentation of your data structures.
+- *Dimension value descriptions* — for categorical data (line of business, product category, etc.), provide a description for every possible value.
+- *System prompt instructions* — explicit guidance on how to map and transform data.
 
-**Agent Specialization:**
+For complex ingestion tasks, create **dedicated agents for each partial aspect** rather than one monolithic system. Each specialized agent becomes an expert in its narrow domain.
 
-For complex ingestion tasks, create dedicated agents for each partial aspect rather than one monolithic system. Each specialized agent becomes an expert in its domain.
+---
 
 ### Reporting
 
-Traditional reporting faces fundamental limitations that AI can address:
+Traditional reporting has a structural limitation that AI can address.
 
-**The Dashboard Paradox:**
+**The dashboard paradox:** dashboards represent a well-intentioned but often futile attempt to compress business complexity onto a single screen. In practice, they rarely deliver the promised "single pane of glass," and report menus become unwieldy as counts grow.
 
-- Dashboards represent a well-intentioned but often futile attempt to compress business complexity onto a single screen
-- In practice, they rarely deliver the promised "single pane of glass" experience
-- Menu organization becomes unwieldy as report counts grow
+**The information bottleneck:** C-suite executives historically could not retrieve information themselves. They relied on intermediary layers to produce PowerPoint slides — introducing delays and the risk of miscommunication at every handoff.
 
-**The Information Bottleneck:**
+**LLM-enabled reporting changes the equation:**
 
-- C-suite executives traditionally couldn't retrieve information themselves
-- Required intermediary layers to create PowerPoint presentations
-- Created delays and potential for miscommunication
+- Chat interfaces accept natural language: *"Show me Q3 revenue by region."*
+- Executives can explore data directly without technical barriers.
+- Agents retrieve and present reports — they **do not execute business logic**.
 
-**LLM-Enabled Reporting:**
+> The agent is an **interface layer**, not a decision-making system.
 
-- Chat interfaces allow natural language queries: "Show me Q3 revenue by region"
-- Executives can explore data directly without technical barriers
-- Important: Agents retrieve and present reports, but **don't execute business logic**
-- The agent is an interface layer, not a decision-making system
+---
 
 ### New Forms of User Interaction
 
-Current business applications reflect historical constraints, not ideal design:
+Current business application UIs reflect historical constraints, not ideal design.
 
-**Legacy of Limitation:**
+**Legacy of limitation:** traditional UIs were designed by humans, for humans, within tight constraints. Menu hierarchies and information architecture were necessary compromises. We built what was *possible*, not what was *ideal*.
 
-- Traditional UIs were designed by humans, for humans, within tight constraints
-- Menu hierarchies and information architecture were necessary compromises
-- Limited navigation options led to uninspiring but functional designs
-- We built what was possible, not what was ideal
+**The chat revolution:** conversational interfaces let users express intent directly rather than navigating complex menu trees. Information is dynamically assembled based on context rather than pre-defined views.
 
-**The Chat Revolution:**
+**The hybrid future** is not pure chat or pure traditional UI — it is an intelligent blend:
 
-- Conversational interfaces provide more natural ways to interact with business systems
-- Users can express intent directly rather than navigating complex menu trees
-- Information can be dynamically assembled based on context rather than pre-defined views
+| Mode | Best for |
+|---|---|
+| Chat | Discovery, open-ended queries, exploration |
+| Traditional UI | Precision input, repeatable workflows, exact values |
+| Context-aware presentation | Systems that choose the right interface for the task |
+| Collaborative design | Applications that adapt to how users actually work |
 
-**The Hybrid Future:**
+This evolution represents not just new technology, but a fundamental rethinking of how humans and systems collaborate.
 
-The future isn't pure chat or pure traditional UI - it's an intelligent blend:
-
-- **Chat for discovery and exploration** - Natural language for open-ended queries
-- **Traditional UI for precision and repeatability** - Forms and controls for exact input
-- **Context-aware presentation** - Systems that choose the right interface for the task
-- **Collaborative design** - Applications that adapt to how users actually work
-
-This evolution represents not just new technology, but a fundamental rethinking of how humans and systems collaborate in business contexts.
-
+---
 
 ## Agent Communication Patterns
 
-MeshWeaver supports two patterns for agent-to-agent communication: **delegation** and **handoff**.
+MeshWeaver supports two patterns for agent-to-agent communication: **delegation** and **handoff**. Choosing the right one makes the difference between a clean architecture and a tangled one.
 
 ### Delegation
 
@@ -184,9 +171,9 @@ sequenceDiagram
 ```
 
 **Use delegation when:**
-- You need information back to continue your response
-- The target agent's work is a subtask within a larger response
-- You want to maintain control of the conversation
+- You need information back to continue your response.
+- The target agent's work is a subtask within a larger response.
+- You want to maintain control of the conversation.
 
 **Configuration:**
 ```yaml
@@ -194,6 +181,8 @@ delegations:
   - agentPath: Agent/Research
     instructions: "Information lookup, web search"
 ```
+
+---
 
 ### Handoff
 
@@ -203,47 +192,125 @@ Handoff **transfers control entirely** to the target agent. The source agent sto
 sequenceDiagram
     participant User
     participant AgentA as Navigator
-    participant AgentB as Planner
+    participant AgentB as Specialist
 
-    User->>AgentA: "Plan a product launch"
-    AgentA->>AgentB: handoff_to_agent("Planner", "Plan product launch")
+    User->>AgentA: "Help me with claims triage"
+    AgentA->>AgentB: handoff_to_agent("ClaimsSpecialist", "Triage incoming claims")
     Note over AgentA: Stops responding
     Note over AgentB: Takes over on shared thread
-    AgentB-->>User: "Here's my plan: 1. ..."
+    AgentB-->>User: "Here's the triage: 1. ..."
 ```
 
 **Use handoff when:**
-- The target agent should interact with the user directly
-- The task is better handled entirely by a specialist
-- You don't need to process the result yourself
+- The target agent should interact with the user directly.
+- The task is better handled entirely by a specialist.
+- You do not need to process the result yourself.
 
-**Chained handoffs** are supported (A hands off to B, B hands off to C):
+**Chained handoffs** are supported — A hands off to B, B hands off to C:
+
 ```yaml
 # Navigator.md
 handoffs:
-  - agentPath: Agent/Planner
-    instructions: Complex multi-step tasks
+  - agentPath: Agent/ClaimsSpecialist
+    instructions: Claims triage and follow-up questions
 
-# Planner.md
+# ClaimsSpecialist.md
 handoffs:
-  - agentPath: Agent/Executor
-    instructions: Execute the planned tasks
+  - agentPath: Agent/Worker
+    instructions: Execute the resulting actions
 ```
+
+---
+
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 320" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;">
+  <defs>
+    <marker id="arr" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#90a4ae"/>
+    </marker>
+    <marker id="arr-blue" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#1e88e5"/>
+    </marker>
+    <marker id="arr-orange" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#f57c00"/>
+    </marker>
+  </defs>
+  <rect x="0" y="0" width="760" height="320" rx="14" fill="currentColor" fill-opacity=".04"/>
+  <text x="190" y="30" text-anchor="middle" fill="currentColor" fill-opacity=".9" font-family="sans-serif" font-size="15" font-weight="700">Delegation</text>
+  <text x="570" y="30" text-anchor="middle" fill="currentColor" fill-opacity=".9" font-family="sans-serif" font-size="15" font-weight="700">Handoff</text>
+  <line x1="380" y1="10" x2="380" y2="310" stroke="currentColor" stroke-opacity=".15" stroke-width="1" stroke-dasharray="5 3"/>
+  <rect x="30" y="50" width="80" height="36" rx="10" fill="#5c6bc0"/>
+  <text x="70" y="73" text-anchor="middle" fill="#fff" font-family="sans-serif" font-size="13" font-weight="600">User</text>
+  <rect x="130" y="50" width="100" height="36" rx="10" fill="#1e88e5"/>
+  <text x="180" y="68" text-anchor="middle" fill="#fff" font-family="sans-serif" font-size="12" font-weight="600">Navigator</text>
+  <text x="180" y="81" text-anchor="middle" fill="#fff" font-family="sans-serif" font-size="10">(Agent A)</text>
+  <rect x="255" y="50" width="100" height="36" rx="10" fill="#26a69a"/>
+  <text x="305" y="68" text-anchor="middle" fill="#fff" font-family="sans-serif" font-size="12" font-weight="600">Research</text>
+  <text x="305" y="81" text-anchor="middle" fill="#fff" font-family="sans-serif" font-size="10">(Agent B)</text>
+  <line x1="110" y1="68" x2="128" y2="68" stroke="#90a4ae" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="232" y1="61" x2="253" y2="61" stroke="#1e88e5" stroke-width="1.5" marker-end="url(#arr-blue)"/>
+  <text x="242" y="57" text-anchor="middle" fill="currentColor" fill-opacity=".5" font-family="sans-serif" font-size="9">delegate</text>
+  <line x1="253" y1="75" x2="232" y2="75" stroke="#26a69a" stroke-width="1.5" stroke-dasharray="4 2" marker-end="url(#arr-blue)"/>
+  <text x="242" y="87" text-anchor="middle" fill="currentColor" fill-opacity=".5" font-family="sans-serif" font-size="9">result</text>
+  <rect x="145" y="115" width="150" height="30" rx="8" fill="#1e88e5" fill-opacity=".15"/>
+  <text x="220" y="135" text-anchor="middle" fill="currentColor" fill-opacity=".7" font-family="sans-serif" font-size="11">Agent B runs in isolation</text>
+  <rect x="130" y="160" width="100" height="36" rx="10" fill="#1e88e5"/>
+  <text x="180" y="178" text-anchor="middle" fill="#fff" font-family="sans-serif" font-size="12" font-weight="600">Navigator</text>
+  <text x="180" y="191" text-anchor="middle" fill="#fff" font-family="sans-serif" font-size="10">composes reply</text>
+  <line x1="180" y1="152" x2="180" y2="158" stroke="#90a4ae" stroke-width="1.5" stroke-dasharray="3 2"/>
+  <line x1="128" y1="178" x2="110" y2="178" stroke="#90a4ae" stroke-width="1.5" marker-end="url(#arr)"/>
+  <text x="119" y="172" text-anchor="middle" fill="currentColor" fill-opacity=".5" font-family="sans-serif" font-size="9">reply</text>
+  <rect x="30" y="160" width="80" height="36" rx="10" fill="#5c6bc0"/>
+  <text x="70" y="183" text-anchor="middle" fill="#fff" font-family="sans-serif" font-size="13" font-weight="600">User</text>
+  <rect x="50" y="228" width="280" height="56" rx="10" fill="#1e88e5" fill-opacity=".08"/>
+  <text x="190" y="250" text-anchor="middle" fill="currentColor" fill-opacity=".6" font-family="sans-serif" font-size="11" font-weight="600">A stays in control</text>
+  <text x="190" y="266" text-anchor="middle" fill="currentColor" fill-opacity=".5" font-family="sans-serif" font-size="11">B returns result; A synthesises the final reply</text>
+  <text x="190" y="282" text-anchor="middle" fill="currentColor" fill-opacity=".5" font-family="sans-serif" font-size="11">Shared thread history: No</text>
+  <rect x="410" y="50" width="80" height="36" rx="10" fill="#5c6bc0"/>
+  <text x="450" y="73" text-anchor="middle" fill="#fff" font-family="sans-serif" font-size="13" font-weight="600">User</text>
+  <rect x="510" y="50" width="100" height="36" rx="10" fill="#f57c00"/>
+  <text x="560" y="68" text-anchor="middle" fill="#fff" font-family="sans-serif" font-size="12" font-weight="600">Navigator</text>
+  <text x="560" y="81" text-anchor="middle" fill="#fff" font-family="sans-serif" font-size="10">(Agent A)</text>
+  <rect x="630" y="50" width="100" height="36" rx="10" fill="#e53935"/>
+  <text x="680" y="68" text-anchor="middle" fill="#fff" font-family="sans-serif" font-size="12" font-weight="600">Specialist</text>
+  <text x="680" y="81" text-anchor="middle" fill="#fff" font-family="sans-serif" font-size="10">(Agent B)</text>
+  <line x1="490" y1="68" x2="508" y2="68" stroke="#90a4ae" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="612" y1="61" x2="628" y2="61" stroke="#f57c00" stroke-width="1.5" marker-end="url(#arr-orange)"/>
+  <text x="620" y="57" text-anchor="middle" fill="currentColor" fill-opacity=".5" font-family="sans-serif" font-size="9">handoff</text>
+  <rect x="520" y="115" width="100" height="30" rx="8" fill="#f57c00" fill-opacity=".2"/>
+  <text x="570" y="130" text-anchor="middle" fill="currentColor" fill-opacity=".6" font-family="sans-serif" font-size="11">A stops</text>
+  <rect x="630" y="115" width="100" height="30" rx="8" fill="#e53935" fill-opacity=".2"/>
+  <text x="680" y="130" text-anchor="middle" fill="currentColor" fill-opacity=".6" font-family="sans-serif" font-size="11">B takes over</text>
+  <rect x="630" y="160" width="100" height="36" rx="10" fill="#e53935"/>
+  <text x="680" y="178" text-anchor="middle" fill="#fff" font-family="sans-serif" font-size="12" font-weight="600">Specialist</text>
+  <text x="680" y="191" text-anchor="middle" fill="#fff" font-family="sans-serif" font-size="10">owns thread</text>
+  <line x1="628" y1="178" x2="492" y2="178" stroke="#e53935" stroke-width="1.5" stroke-dasharray="4 2" marker-end="url(#arr-orange)"/>
+  <text x="560" y="173" text-anchor="middle" fill="currentColor" fill-opacity=".5" font-family="sans-serif" font-size="9">replies directly</text>
+  <rect x="410" y="160" width="80" height="36" rx="10" fill="#5c6bc0"/>
+  <text x="450" y="183" text-anchor="middle" fill="#fff" font-family="sans-serif" font-size="13" font-weight="600">User</text>
+  <rect x="430" y="228" width="300" height="56" rx="10" fill="#e53935" fill-opacity=".08"/>
+  <text x="580" y="250" text-anchor="middle" fill="currentColor" fill-opacity=".6" font-family="sans-serif" font-size="11" font-weight="600">B owns the conversation</text>
+  <text x="580" y="266" text-anchor="middle" fill="currentColor" fill-opacity=".5" font-family="sans-serif" font-size="11">Full thread history passed to B; A is done</text>
+  <text x="580" y="282" text-anchor="middle" fill="currentColor" fill-opacity=".5" font-family="sans-serif" font-size="11">Shared thread history: Yes</text>
+</svg>
+
+*Delegation keeps the calling agent in control and waits for a sub-result; Handoff transfers full ownership of the conversation to the target agent.*
+
+---
 
 ### Choosing Between Delegation and Handoff
 
 | Scenario | Pattern | Why |
-|----------|---------|-----|
-| Need research results to formulate answer | Delegation | Navigator needs the data back |
-| Complex planning task | Handoff | Planner should own the conversation |
-| Quick data lookup | Delegation | Small subtask within larger response |
-| Execute a multi-step plan | Handoff | Executor should report progress directly |
+|---|---|---|
+| Need research results to formulate an answer | Delegation | Navigator needs the data back |
+| Domain-specific long conversation | Handoff | The specialist should own the conversation |
+| Quick data lookup | Delegation | Small subtask within a larger response |
+| Execute a multi-step plan | Handoff | Worker should report progress directly |
 | Domain-specific question | Delegation | Route and relay the answer |
 
-## The Future
+---
 
-As agentic AI continues to evolve, we can expect to see increasingly sophisticated systems that can handle more complex tasks, collaborate more effectively with humans, and operate across broader domains. The key will be developing these capabilities responsibly while maintaining human oversight and control.
+## Looking Ahead
 
-## Conclusion
+As agentic AI continues to evolve, systems will handle more complex tasks, collaborate more naturally with humans, and operate across broader domains. The key is developing these capabilities responsibly — maintaining human oversight and control as the foundation, not an afterthought.
 
-Agentic AI represents a significant step forward in artificial intelligence, enabling systems that can act more independently and intelligently to solve real-world problems. As we continue to develop and deploy these technologies, the focus must remain on creating safe, reliable, and beneficial AI agents that augment human capabilities rather than replace them.
+Agentic AI augments human capabilities. The measure of a well-designed agentic system is not how autonomous it is, but how well it keeps humans focused on the work that genuinely requires human judgment.

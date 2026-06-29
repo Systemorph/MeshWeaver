@@ -17,8 +17,27 @@
     <Router AppAssembly="@typeof(Routes).Assembly"
             AdditionalAssemblies="@(new[] { typeof(ApplicationPage).Assembly, typeof(MeshNodeEditorView).Assembly, typeof(CreateNode).Assembly })">
         <Found Context="routeData">
-            <RouteView RouteData="@routeData" DefaultLayout="@typeof(MainLayout)" />
-            <FocusOnNavigate RouteData="@routeData" Selector="h1" />
+            @* Global last-resort ErrorBoundary. The per-control (DispatchView) and per-area
+               (LayoutAreaView) boundaries contain layout-area render throws, but a throw in the
+               page/layout shell ABOVE them (a page's own @code lifecycle, a non-area component)
+               would otherwise tear down the whole circuit. Contained here it shows a full-page error
+               inside the normal layout. @key=routeData recreates the boundary on each navigation, so
+               navigating away from a broken page is a clean retry (no manual Recover()). *@
+            <ErrorBoundary @key="@routeData">
+                <ChildContent>
+                    <RouteView RouteData="@routeData" DefaultLayout="@typeof(MainLayout)" />
+                    <FocusOnNavigate RouteData="@routeData" Selector="h1" />
+                </ChildContent>
+                <ErrorContent Context="pageError">
+                    <LayoutView Layout="@typeof(MainLayout)">
+                        <div class="meshweaver-render-error" role="alert"
+                             style="margin:1rem;padding:1rem;border:1px solid var(--error,#d13438);border-radius:6px;background:rgba(209,52,56,0.08);color:var(--error,#d13438)">
+                            <strong>Something went wrong on this page.</strong>
+                            <div style="margin-top:0.5rem;white-space:pre-wrap;font-family:monospace;font-size:0.875rem">@pageError.Message</div>
+                        </div>
+                    </LayoutView>
+                </ErrorContent>
+            </ErrorBoundary>
         </Found>
         <NotFound>
             <PageTitle>Not found</PageTitle>

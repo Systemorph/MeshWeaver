@@ -79,9 +79,16 @@ public record ComboboxControl(object Data, object Options) : ListControlBase<Com
     }
 }
 
+/// <summary>
+/// Controls how the combobox autocomplete behaves when the user types.
+/// Maps to the ARIA combobox autocomplete attribute.
+/// </summary>
 public enum ComboboxAutocomplete
 {
+    /// <summary>Autocompletes the text field inline as the user types.</summary>
     Inline,
+    /// <summary>Shows a list of suggestions below the input.</summary>
     List,
+    /// <summary>Applies both inline completion and a dropdown suggestion list.</summary>
     Both
 }

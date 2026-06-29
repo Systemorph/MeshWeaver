@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
-using FluentAssertions;
 using MeshWeaver.Fixture;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Client;
@@ -45,16 +44,14 @@ public class NodeHubContentCollectionTest(ITestOutputHelper output) : HubTestBas
                 Name = "content",
                 SourceType = "FileSystem",
                 IsEditable = true,
+                ExposeInChildren = true,
                 BasePath = contentPath,
-                Settings = new Dictionary<string, string>
-                {
-                    ["BasePath"] = contentPath
-                }
+                Settings = new Dictionary<string, string> { ["BasePath"] = contentPath }
             });
     }
 
     [Fact]
-    public async Task NodeHub_Content_Collection_Is_Discoverable()
+    public void NodeHub_Content_Collection_Is_Discoverable()
     {
         var hub = GetClient();
         var contentService = hub.ServiceProvider.GetRequiredService<IContentService>();
@@ -67,7 +64,7 @@ public class NodeHubContentCollectionTest(ITestOutputHelper output) : HubTestBas
     }
 
     [Fact]
-    public async Task NodeHub_Content_Collection_Appears_In_GetAllCollectionConfigs()
+    public void NodeHub_Content_Collection_Appears_In_GetAllCollectionConfigs()
     {
         var hub = GetClient();
         var contentService = hub.ServiceProvider.GetRequiredService<IContentService>();
@@ -102,7 +99,8 @@ public class NodeHubContentCollectionTest(ITestOutputHelper output) : HubTestBas
         await collection!.SaveFileAsync("/", "test.txt", stream);
 
         // Verify it was saved
-        var items = await collection.GetCollectionItemsAsync("/");
+        var ct = TestContext.Current.CancellationToken;
+        var items = await collection.GetCollectionItems("/", ct).ToListAsync(ct);
         items.Should().Contain(i => i.Name == "test.txt");
 
         // Clean up
@@ -110,25 +108,25 @@ public class NodeHubContentCollectionTest(ITestOutputHelper output) : HubTestBas
     }
 
     [Fact]
-    public async Task Hidden_Storage_Collection_Not_In_GetAllCollectionConfigs()
+    public void Hidden_Storage_Collection_Not_In_GetAllCollectionConfigs()
     {
         // Simulate the scenario where storage is registered but hidden
         var hub = GetClient();
 
-        // Register a hidden storage collection (ExposeInChildren = false)
+        // Register a hidden storage collection (ExposeInChildren = false, the default)
         var contentService = hub.ServiceProvider.GetRequiredService<IContentService>();
         contentService.AddConfiguration(new ContentCollectionConfig
         {
             Name = "storage",
             SourceType = "FileSystem",
             IsEditable = true,
-            ExposeInChildren = false,
+            // ExposeInChildren defaults to false — collection is hidden from children.
             BasePath = _contentBasePath
         });
 
         var allConfigs = contentService.GetAllCollectionConfigs();
 
-        // "storage" should NOT appear (ExposeInChildren = false)
+        // "storage" should NOT appear (ExposeInChildren = false, the default)
         allConfigs.Should().NotContain(c => c.Name == "storage",
             "hidden storage collection should not appear in GetAllCollectionConfigs");
 

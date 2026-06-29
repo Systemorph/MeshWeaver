@@ -11,30 +11,37 @@ public class JsonFileParser : IFileFormatParser
 {
     private readonly JsonSerializerOptions _options;
 
+    /// <summary>
+    /// Creates a JSON parser that serializes and deserializes MeshNode objects.
+    /// </summary>
+    /// <param name="options">Serializer options carrying the $type discriminator and converter configuration used for polymorphic content.</param>
     public JsonFileParser(JsonSerializerOptions options)
     {
         _options = options;
     }
 
+    /// <inheritdoc />
     public IReadOnlyList<string> SupportedExtensions => [".json"];
 
-    public Task<MeshNode?> ParseAsync(string filePath, string content, string relativePath, CancellationToken ct = default)
+    /// <inheritdoc />
+    public MeshNode? Parse(string filePath, string content, string relativePath)
     {
         try
         {
-            var node = JsonSerializer.Deserialize<MeshNode>(content, _options);
-            return Task.FromResult(node);
+            return JsonSerializer.Deserialize<MeshNode>(content, _options);
         }
         catch
         {
-            return Task.FromResult<MeshNode?>(null);
+            return null;
         }
     }
 
-    public Task<string> SerializeAsync(MeshNode node, CancellationToken ct = default)
+    /// <inheritdoc />
+    public string Serialize(MeshNode node)
     {
-        return Task.FromResult(JsonSerializer.Serialize(node, _options));
+        return JsonSerializer.Serialize(node, _options);
     }
 
+    /// <inheritdoc />
     public bool CanSerialize(MeshNode node) => true;
 }

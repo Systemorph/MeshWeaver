@@ -1,46 +1,85 @@
 ---
 Name: CRUD Operations
 Category: Documentation
-Description: Create, Read, Update, and Delete operations in MeshWeaver
+Description: Create, Read, Update, and Delete operations on entities in the MeshWeaver DataMesh workspace.
 Icon: /static/DocContent/DataMesh/CRUD/icon.svg
 ---
 
-MeshWeaver provides a reactive, type-safe approach to data operations. This guide explains how Create, Read, Update, and Delete (CRUD) operations work in the DataMesh.
+MeshWeaver models data mutations as reactive messages flowing through a typed workspace. Rather than imperative method calls, you describe *what changed* and the workspace propagates the delta to every subscriber automatically — no polling, no manual refresh.
 
-# Overview
+> **Scope: this page covers typed-entity CRUD** — instances (`TodoItem`, `Project`, …) living in a workspace's **EntityStore** collections. It is **not** the API for mutating MeshNodes. A MeshNode's lifecycle goes through `CreateNodeRequest`/`DeleteNodeRequest`/`MoveNodeRequest`, and a MeshNode's content is mutated exclusively via `workspace.GetMeshNodeStream(path).Update(current => modified).Subscribe(...)` — see [Node Operations](/Doc/DataMesh/NodeOperations) and [CQRS — Queries vs. Content Access](/Doc/Architecture/CqrsAndContentAccess).
 
-CRUD operations in MeshWeaver are built on three core concepts:
+<svg viewBox="0 0 760 260" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;" font-family="sans-serif" font-size="13">
+  <defs>
+    <marker id="crud-arrow" markerWidth="8" markerHeight="8" refX="7" refY="3.5" orient="auto">
+      <path d="M0,0 L0,7 L8,3.5 Z" fill="#90a4ae"/>
+    </marker>
+    <marker id="crud-arrow-fan" markerWidth="8" markerHeight="8" refX="7" refY="3.5" orient="auto">
+      <path d="M0,0 L0,7 L8,3.5 Z" fill="#43a047"/>
+    </marker>
+  </defs>
+  <rect x="0" y="0" width="760" height="260" rx="12" fill="#1a1f2e" opacity="0.7"/>
+  <rect x="20" y="100" width="110" height="60" rx="10" fill="#1e88e5"/>
+  <text x="75" y="126" text-anchor="middle" fill="#fff" font-weight="bold">Client</text>
+  <text x="75" y="144" text-anchor="middle" fill="#fff" font-size="11">DataChangeRequest</text>
+  <rect x="180" y="100" width="110" height="60" rx="10" fill="#e53935"/>
+  <text x="235" y="126" text-anchor="middle" fill="#fff" font-weight="bold">Access</text>
+  <text x="235" y="144" text-anchor="middle" fill="#fff" font-size="11">Control</text>
+  <rect x="340" y="100" width="110" height="60" rx="10" fill="#f57c00"/>
+  <text x="395" y="126" text-anchor="middle" fill="#fff" font-weight="bold">Validator</text>
+  <text x="395" y="144" text-anchor="middle" fill="#fff" font-size="11">Business Rules</text>
+  <rect x="500" y="100" width="110" height="60" rx="10" fill="#5c6bc0"/>
+  <text x="555" y="126" text-anchor="middle" fill="#fff" font-weight="bold">Workspace</text>
+  <text x="555" y="144" text-anchor="middle" fill="#fff" font-size="11">EntityStore</text>
+  <rect x="660" y="100" width="80" height="60" rx="10" fill="#26a69a"/>
+  <text x="700" y="126" text-anchor="middle" fill="#fff" font-weight="bold">Storage</text>
+  <text x="700" y="144" text-anchor="middle" fill="#fff" font-size="11">Persist</text>
+  <line x1="130" y1="130" x2="178" y2="130" stroke="#90a4ae" stroke-width="1.5" marker-end="url(#crud-arrow)"/>
+  <line x1="290" y1="130" x2="338" y2="130" stroke="#90a4ae" stroke-width="1.5" marker-end="url(#crud-arrow)"/>
+  <line x1="450" y1="130" x2="498" y2="130" stroke="#90a4ae" stroke-width="1.5" marker-end="url(#crud-arrow)"/>
+  <line x1="610" y1="130" x2="658" y2="130" stroke="#90a4ae" stroke-width="1.5" marker-end="url(#crud-arrow)"/>
+  <text x="154" y="122" text-anchor="middle" fill="#90a4ae" font-size="10" opacity="0.8">check</text>
+  <text x="314" y="122" text-anchor="middle" fill="#90a4ae" font-size="10" opacity="0.8">validate</text>
+  <text x="474" y="122" text-anchor="middle" fill="#90a4ae" font-size="10" opacity="0.8">apply</text>
+  <text x="634" y="122" text-anchor="middle" fill="#90a4ae" font-size="10" opacity="0.8">persist</text>
+  <rect x="430" y="195" width="100" height="40" rx="8" fill="#43a047" opacity="0.9"/>
+  <text x="480" y="220" text-anchor="middle" fill="#fff" font-size="12">Subscriber A</text>
+  <rect x="560" y="195" width="100" height="40" rx="8" fill="#43a047" opacity="0.9"/>
+  <text x="610" y="220" text-anchor="middle" fill="#fff" font-size="12">Subscriber B</text>
+  <rect x="300" y="195" width="100" height="40" rx="8" fill="#43a047" opacity="0.9"/>
+  <text x="350" y="220" text-anchor="middle" fill="#fff" font-size="12">Subscriber C</text>
+  <line x1="555" y1="160" x2="480" y2="195" stroke="#43a047" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#crud-arrow-fan)"/>
+  <line x1="555" y1="160" x2="610" y2="195" stroke="#43a047" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#crud-arrow-fan)"/>
+  <line x1="555" y1="160" x2="350" y2="195" stroke="#43a047" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#crud-arrow-fan)"/>
+  <text x="380" y="186" text-anchor="middle" fill="#43a047" font-size="10" opacity="0.9">real-time fan-out</text>
+</svg>
 
-- **DataChangeRequest**: A message that encapsulates create, update, and delete operations
-- **Workspace**: The reactive data context that manages entity state
-- **Unified References**: A path-based system for addressing data (`data:Collection/EntityId`)
+*CRUD pipeline: every mutation passes through Access Control and Validation before reaching the Workspace, which persists the change and fans it out to all subscribers in real time.*
+
+---
 
 # Data Model
 
-## EntityStore
-
-The root container holding all collections of entities:
+Every workspace maintains an **EntityStore**: a map of named collections, each holding a set of typed entity instances keyed by their ID.
 
 ```
 EntityStore
 ├── Collections["TodoItems"] = InstanceCollection
 │   ├── Instances["todo-1"] = TodoItem { Id: "todo-1", Title: "Task 1" }
-│   ├── Instances["todo-2"] = TodoItem { Id: "todo-2", Title: "Task 2" }
-├── Collections["Projects"] = InstanceCollection
-│   ├── Instances["proj-1"] = Project { Id: "proj-1", Name: "Alpha" }
+│   └── Instances["todo-2"] = TodoItem { Id: "todo-2", Title: "Task 2" }
+└── Collections["Projects"] = InstanceCollection
+    └── Instances["proj-1"] = Project { Id: "proj-1", Name: "Alpha" }
 ```
 
-## InstanceCollection
-
-A container for instances of a specific entity type, mapping IDs to objects.
+An `InstanceCollection` is a container for instances of a specific entity type, mapping IDs to objects.
 
 ---
 
-# Create Operations
+# Create
 
-## Using DataChangeRequest
+## DataChangeRequest
 
-Create new entities by sending a `DataChangeRequest` with the `Creations` collection:
+The primary way to add new entities is to send a `DataChangeRequest` with the `Creations` payload:
 
 ```csharp
 var newTodo = new TodoItem
@@ -52,18 +91,6 @@ var newTodo = new TodoItem
 
 var request = DataChangeRequest.Create([newTodo], changedBy: "user-123");
 workspace.RequestChange(request, activity, delivery);
-```
-
-## Via Unified Reference API
-
-Create entities using the unified reference path format:
-
-```csharp
-var request = new UpdateUnifiedReferenceRequest(
-    Reference: "data:TodoItems/" + newTodo.Id,
-    Data: newTodo
-);
-await hub.InvokeAsync(request);
 ```
 
 ## Create Flow
@@ -88,16 +115,39 @@ sequenceDiagram
 
 ---
 
-# Read Operations
+# Read
 
-MeshWeaver provides multiple ways to read data, supporting both one-time queries and real-time subscriptions.
+Everything is a live stream. The same primitive serves both "keep me updated" and "give me the current state" — there is no separate snapshot API to keep consistent.
 
-## Subscription-based Reading
+## Canonical node access — `GetMeshNodeStream(path)`
 
-Get a reactive stream that updates automatically when data changes:
+Any node — own, local, or remote — is read through `workspace.GetMeshNodeStream(path)`. It is live and authoritative (served by the owning hub, no index lag), and the **same handle accepts writes** via `.Update(...)`:
 
 ```csharp
-// Get all todos as an observable stream
+// Live subscription — emits the current node, then every subsequent change:
+workspace.GetMeshNodeStream("acme/TodoLists/work")
+    .Where(node => node is not null)
+    .Subscribe(node =>
+    {
+        var list = node.ContentAs<TodoList>(hub.JsonSerializerOptions, logger);
+        // render / react
+    });
+
+// One-shot read — same primitive, complete after the first emission:
+workspace.GetMeshNodeStream(path)
+    .Where(node => node is not null)
+    .Take(1)
+    .Timeout(TimeSpan.FromSeconds(10))
+    .Subscribe(node => /* use the snapshot */);
+```
+
+Never read a known node through `QueryAsync` — queries are an eventually-consistent index for *sets*, stale right after a write. See [CQRS — Queries vs. Content Access](/Doc/Architecture/CqrsAndContentAccess).
+
+## Reactive Subscription — typed collections
+
+Subscribe to a typed collection as an `IObservable` that emits the full current set on every change:
+
+```csharp
 workspace.GetObservable<TodoItem>()
     .Subscribe(todos =>
     {
@@ -107,47 +157,32 @@ workspace.GetObservable<TodoItem>()
     });
 ```
 
-## One-time Data Retrieval
-
-Fetch data once without subscribing to updates:
-
-```csharp
-var request = new GetDataRequest(new CollectionReference("TodoItems"));
-var response = await hub.InvokeAsync<GetDataResponse>(request);
-var todos = response.Data as IEnumerable<TodoItem>;
-```
+For a one-shot collection snapshot, compose on the same stream — `workspace.GetObservable<TodoItem>().Take(1).Timeout(...)` — instead of a request/response round-trip.
 
 ## Reference Types
 
-Different reference types support various query patterns:
+Choose the right reference type for your query pattern:
 
 | Reference Type | Purpose | Example |
-|----------------|---------|---------|
+|---|---|---|
 | `EntityReference` | Single entity by ID | `new EntityReference("TodoItems", "todo-1")` |
-| `CollectionReference` | All entities in collection | `new CollectionReference("TodoItems")` |
-| `CollectionsReference` | Multiple collections | `new CollectionsReference("TodoItems", "Projects")` |
+| `CollectionReference` | All entities in a collection | `new CollectionReference("TodoItems")` |
+| `CollectionsReference` | Multiple collections at once | `new CollectionsReference("TodoItems", "Projects")` |
 
-## Using Unified References
+## Unified Reference Paths
 
-Query data using path-based references:
+Path-based references give a uniform addressing scheme across entity, content, and schema resources:
 
 ```csharp
-// Get a specific entity
-var todoRef = "data:TodoItems/todo-1";
-
-// Get entire collection
-var allTodosRef = "data/TodoItems";
-
-// Get file content
-var fileRef = "content/uploads/document.pdf";
-
-// Get schema
-var schemaRef = "schema/TodoItem";
+var todoRef       = "data:TodoItems/todo-1";   // specific entity
+var allTodosRef   = "data/TodoItems";           // entire collection
+var fileRef       = "content/uploads/doc.pdf";  // file content
+var schemaRef     = "schema/TodoItem";          // JSON schema
 ```
 
 ## Virtual Paths
 
-Define computed data sources that combine or transform data:
+Define computed data sources that combine or transform real collections:
 
 ```csharp
 .WithVirtualPath("TodoSummary", (workspace, entityId) =>
@@ -163,13 +198,15 @@ Define computed data sources that combine or transform data:
 })
 ```
 
+Virtual paths participate in real-time propagation just like ordinary collections.
+
 ---
 
-# Update Operations
+# Update
 
-## Using DataChangeRequest
+## DataChangeRequest
 
-Update existing entities:
+Pass updated entity instances in the `Updates` payload. By default, changes are *merged* into the existing record:
 
 ```csharp
 var updatedTodo = existingTodo with
@@ -184,79 +221,79 @@ workspace.RequestChange(request, activity, delivery);
 
 ## Update Options
 
-Control how updates are applied:
+Control whether a change merges or replaces the entire collection:
 
 ```csharp
-var request = DataChangeRequest.Update(
+// Merge (default) — only the supplied instances change
+var mergeRequest = DataChangeRequest.Update(
     updates: [updatedTodo],
     changedBy: "user-123",
-    options: new UpdateOptions { Snapshot = false }  // Merge (default)
+    options: new UpdateOptions { Snapshot = false }
 );
 
-// With Snapshot = true, the entire collection is replaced
+// Snapshot — the entire collection is replaced by the supplied list
 var snapshotRequest = DataChangeRequest.Update(
     updates: allTodos,
-    options: new UpdateOptions { Snapshot = true }  // Replace all
+    options: new UpdateOptions { Snapshot = true }
 );
 ```
 
-## Via Unified Reference API
+## Updating node content — `GetMeshNodeStream(path).Update(...)`
+
+When the thing you are updating is a **node's content** (not an entity inside a collection), use the canonical mutation API — the same handle you read from:
 
 ```csharp
-var request = new UpdateUnifiedReferenceRequest(
-    Reference: "data:TodoItems/todo-1",
-    Data: updatedTodo
-);
-await hub.InvokeAsync(request);
+workspace.GetMeshNodeStream("acme/TodoLists/work").Update(node =>
+{
+    var list = node.ContentAs<TodoList>(hub.JsonSerializerOptions, logger);
+    if (node.Content is not null && list is null) return node;  // never clobber unreadable content
+    list ??= new TodoList();
+    return node with { Content = list with { Title = "Updated Title" } };
+})
+.Subscribe(_ => { }, ex => logger.LogWarning(ex, "update failed"));
 ```
+
+`Update` is **cold** — the write only happens on `Subscribe`. Cross-hub writes ship an RFC 7396 JSON-merge patch to the owning hub, so concurrent writers touching different fields both land.
 
 ## Workspace Extension Methods
 
-Convenient methods for common operations:
+Convenience wrappers for the most common patterns:
 
 ```csharp
-// Update single entity
+// Single entity
 workspace.Update(updatedTodo, activity, delivery);
 
-// Update multiple entities
+// Multiple entities
 workspace.Update([todo1, todo2, todo3], activity, delivery);
 ```
 
 ---
 
-# Delete Operations
+# Delete
 
-## Using DataChangeRequest
+## DataChangeRequest
 
-Delete entities by passing the full entity object:
+Pass the full entity object (not just the ID) so the workspace can resolve and remove the correct instance:
 
 ```csharp
 var request = DataChangeRequest.Delete([todoToDelete], changedBy: "user-123");
 workspace.RequestChange(request, activity, delivery);
 ```
 
-## Via Unified Reference API
-
-```csharp
-var request = new DeleteUnifiedReferenceRequest("data:TodoItems/todo-1");
-await hub.InvokeAsync(request);
-```
-
 ## Workspace Extension Methods
 
 ```csharp
-// Delete single entity
 workspace.Delete(todoToDelete, activity, delivery);
-
-// Delete multiple entities
 workspace.Delete([todo1, todo2], activity, delivery);
 ```
+
+Deleting a **node** (as opposed to an entity in a collection) is a lifecycle operation: `hub.Observe<DeleteNodeResponse>(new DeleteNodeRequest(path)).Subscribe(...)` — see [Node Operations](/Doc/DataMesh/NodeOperations).
 
 ---
 
 # Data Validation
 
-Configure validators to enforce business rules:
+Attach validators to enforce business rules before any change is applied. The workspace calls every registered validator and returns `DataValidationResult.Failed(...)` to the caller if any rule is violated.
 
 ```csharp
 public class TodoValidator : IDataValidator
@@ -268,18 +305,16 @@ public class TodoValidator : IDataValidator
         DataValidationContext context,
         CancellationToken ct)
     {
-        if (context.Entity is TodoItem todo)
-        {
-            if (string.IsNullOrEmpty(todo.Title))
-                return Task.FromResult(
-                    DataValidationResult.Failed("Title is required"));
-        }
+        if (context.Entity is TodoItem todo && string.IsNullOrEmpty(todo.Title))
+            return Task.FromResult(
+                DataValidationResult.Failed("Title is required"));
+
         return Task.FromResult(DataValidationResult.Success());
     }
 }
 ```
 
-Register validators in configuration:
+Register validators in the data configuration:
 
 ```csharp
 .AddData(data => data
@@ -287,28 +322,30 @@ Register validators in configuration:
 )
 ```
 
+---
+
 # Access Control
 
-Restrict CRUD operations based on user context:
+Restrict operations based on user context. Access restrictions run before validation, so unauthorized requests are rejected early.
+
+**Global restriction** — apply a rule to all operations in a data source:
 
 ```csharp
 .AddData(data => data
     .WithAccessRestriction(
         (action, context, accessCtx) =>
         {
-            // Allow reads for everyone
             if (action == AccessAction.Read)
-                return Task.FromResult(true);
+                return Task.FromResult(true);          // anyone can read
 
-            // Require authentication for writes
-            return Task.FromResult(accessCtx.UserContext != null);
+            return Task.FromResult(accessCtx.UserContext != null); // writes require login
         },
         "RequireAuthForWrites"
     )
 )
 ```
 
-Type-specific restrictions:
+**Type-specific restriction** — limit access at the entity level:
 
 ```csharp
 .AddSource(src => src
@@ -316,7 +353,7 @@ Type-specific restrictions:
         .WithAccessRestriction((action, ctx, accessCtx) =>
         {
             var todo = ctx as TodoItem;
-            // Only owner can modify
+            // Only the owner may modify their own todos
             return Task.FromResult(
                 todo?.OwnerId == accessCtx.UserContext?.UserId
             );
@@ -325,9 +362,11 @@ Type-specific restrictions:
 )
 ```
 
+---
+
 # Configuration Example
 
-Complete data configuration with CRUD support:
+A complete data source setup showing multiple types, a virtual path, a validator, and an access rule:
 
 ```csharp
 .AddData(data => data
@@ -347,9 +386,11 @@ Complete data configuration with CRUD support:
 )
 ```
 
-# Real-time Synchronization
+---
 
-All CRUD operations automatically propagate to subscribers:
+# Real-Time Synchronization
+
+Every CRUD operation automatically propagates to all current subscribers. Clients never need to re-query; the workspace pushes the updated collection as soon as the change is applied.
 
 ```mermaid
 sequenceDiagram
@@ -370,30 +411,58 @@ sequenceDiagram
     Workspace-->>ClientA: Update: [todo-1*, todo-3]
 ```
 
-# Best Practices
+---
 
-1. **Use typed references**: Prefer `GetObservable<T>()` over raw streams for type safety
-2. **Handle errors**: Check `DataChangeResponse.Error` for validation failures
-3. **Batch operations**: Group related changes in a single `DataChangeRequest`
-4. **Configure validators**: Enforce data integrity at the data layer
-5. **Use access restrictions**: Protect sensitive operations
-6. **Leverage subscriptions**: Use reactive streams for real-time UIs instead of polling
+# Quick Reference
 
-# Message Types Reference
+## Message Types
 
 | Message | Purpose |
-|---------|---------|
+|---|---|
 | `DataChangeRequest` | Create, update, or delete entities |
-| `DataChangeResponse` | Result of a change operation |
+| `DataChangeResponse` | Outcome of a change operation |
 | `GetDataRequest` | One-time data retrieval |
 | `GetDataResponse` | Data retrieval result |
-| `SubscribeRequest` | Subscribe to data changes |
-| `UpdateUnifiedReferenceRequest` | Create/update via unified reference |
-| `DeleteUnifiedReferenceRequest` | Delete via unified reference |
+| `SubscribeRequest` | Subscribe to live data changes |
+| `UpdateUnifiedReferenceRequest` | Create/update via path reference |
+| `DeleteUnifiedReferenceRequest` | Delete via path reference |
+
+## Best Practices
+
+1. **Use typed observables** — prefer `GetObservable<T>()` over raw streams for compile-time safety.
+2. **Check the response** — inspect `DataChangeResponse.Error` for validation failures before assuming success.
+3. **Batch related changes** — group inserts, updates, and deletes into a single `DataChangeRequest` for atomic delivery.
+4. **Register validators** — enforce data integrity at the data layer rather than in each call site.
+5. **Protect with access restrictions** — declare who may read or write each type alongside the type configuration.
+6. **Prefer subscriptions over polling** — reactive streams keep UIs in sync with zero manual refresh logic.
+
+---
+
+# Live Demo
+
+The cell below builds a small in-memory summary table using the reference types described above, rendered directly in this page:
+
+```csharp --render CrudReferenceDemo --show-code
+var rows = new[]
+{
+    new { Type = "EntityReference",      Purpose = "Single entity by ID",         Example = "new EntityReference(\"TodoItems\", \"todo-1\")" },
+    new { Type = "CollectionReference",  Purpose = "All entities in collection",   Example = "new CollectionReference(\"TodoItems\")" },
+    new { Type = "CollectionsReference", Purpose = "Multiple collections at once", Example = "new CollectionsReference(\"TodoItems\", \"Projects\")" },
+};
+
+var header = "<thead><tr><th>Reference Type</th><th>Purpose</th><th>Example</th></tr></thead>";
+var bodyRows = string.Join("", rows.Select(r =>
+    $"<tr><td><code>{r.Type}</code></td><td>{r.Purpose}</td><td><code>{r.Example}</code></td></tr>"));
+
+MeshWeaver.Layout.Controls.Html(
+    $"<table style='width:100%;border-collapse:collapse'>{header}<tbody>{bodyRows}</tbody></table>");
+```
+
+---
 
 # See Also
 
-- [Query Syntax](../QuerySyntax) - Search and filter nodes
-- [Unified Path](../UnifiedPath) - Path-based data addressing
-- [Data Binding](../../GUI/DataBinding) - Connect UI controls to data
-- [Editor Control](../../GUI/Editor) - Generate forms from records
+- [Query Syntax](../QuerySyntax) — Search and filter nodes
+- [Unified Path](../UnifiedPath) — Path-based data addressing
+- [Data Binding](../../GUI/DataBinding) — Connect UI controls to data
+- [Editor Control](../../GUI/Editor) — Generate forms from records

@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
-using FluentAssertions;
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
 
@@ -121,7 +120,10 @@ public static class LayoutTestExtensions
     {
         var control = root.FindControlForProperty(propertyName);
         control.Should().NotBeNull($"Control for property '{propertyName}' should exist");
-        control.Should().BeOfType(expectedControlType, $"Property '{propertyName}' should use {expectedControlType.Name}");
+        // The reactive assertion library exposes only the generic BeOfType<T>(); there is no
+        // non-generic BeOfType(Type) overload taking a runtime Type. Assert the exact runtime
+        // type via Type equality, which matches FA's BeOfType(Type) (exact, not assignable).
+        control!.GetType().Should().Be(expectedControlType, $"Property '{propertyName}' should use {expectedControlType.Name}");
     }
 
     /// <summary>

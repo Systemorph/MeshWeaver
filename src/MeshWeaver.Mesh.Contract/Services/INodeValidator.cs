@@ -1,3 +1,4 @@
+using System.Reactive;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Messaging;
 
@@ -10,12 +11,11 @@ namespace MeshWeaver.Mesh.Services;
 public interface INodeValidator
 {
     /// <summary>
-    /// Validates a node operation.
+    /// Validates a node operation. Returns an observable that emits exactly one
+    /// <see cref="NodeValidationResult"/> and completes — reactive surface, no
+    /// <c>await</c>/<c>ToTask</c> in consumers (composes via SelectMany / Concat).
     /// </summary>
-    /// <param name="context">Context containing the operation, node(s), and optional request</param>
-    /// <param name="ct">Cancellation token</param>
-    /// <returns>Validation result</returns>
-    Task<NodeValidationResult> ValidateAsync(NodeValidationContext context, CancellationToken ct = default);
+    IObservable<NodeValidationResult> Validate(NodeValidationContext context);
 
     /// <summary>
     /// Operations this validator handles. Empty collection means all operations.
@@ -23,6 +23,19 @@ public interface INodeValidator
     /// </summary>
     IReadOnlyCollection<NodeOperation> SupportedOperations { get; }
 }
+
+/// <summary>
+/// Marker for <see cref="INodeValidator"/>s whose enforcement is authoritative ONLY on
+/// the owning per-node hub — RLS and structural-partition guards, re-checked there via the
+/// <c>[RequiresPermission]</c> pipeline and the Create/Delete handlers. The client-side
+/// update pipeline (<c>IMeshService.UpdateNode</c>) SKIPS these: running a permission /
+/// partition check on the <em>caller's</em> hub is both redundant with the owner's check
+/// and unreliable (the caller may not resolve the owner's effective permissions — the
+/// cause of the cache-only-write-gate CI flakes). App-integrity validators (version,
+/// name, …) do NOT implement this marker and therefore run client-side, so
+/// <c>UpdateNode</c> surfaces their rejection before issuing the write.
+/// </summary>
+public interface IOwnerEnforcedNodeValidator { }
 
 /// <summary>
 /// Context for node validation containing all relevant information.
@@ -50,8 +63,9 @@ public record NodeValidationContext
     public MeshNode? ExistingNode { get; init; }
 
     /// <summary>
-    /// The original request object (CreateNodeRequest, DeleteNodeRequest, UpdateNodeRequest).
-    /// Null for Read operations.
+    /// The original request object (CreateNodeRequest, DeleteNodeRequest).
+    /// Null for Read operations and for the canonical stream.Update write path
+    /// (which carries no request object — RLS runs on the patch via RlsDataValidator).
     /// </summary>
     public object? Request { get; init; }
 
@@ -60,17 +74,47 @@ public record NodeValidationContext
     /// May be null for anonymous operations.
     /// </summary>
     public AccessContext? AccessContext { get; init; }
+
+    /// <summary>
+    /// For Delete operations, the root path of the cascade this node is being deleted as
+    /// part of — the original <c>DeleteNodeRequest.Path</c>. Equal to <see cref="Node"/>'s
+    /// path when the node is the delete root; an ancestor path when the node is a descendant
+    /// pulled in by a recursive delete; null when unknown (e.g. a standalone
+    /// <c>ValidateDeleteRequest</c> with no cascade context). Invariant validators use this
+    /// to tell "the whole partition is going away" apart from "this single node is being
+    /// removed while its partition stays".
+    /// </summary>
+    public string? DeleteCascadeRootPath { get; init; }
 }
 
 /// <summary>
-/// Unified validation result for all node operations.
+/// Unified validation result for all node operations. A result carries either an error
+/// (<see cref="IsValid"/>=false + <see cref="ErrorMessage"/>) or an advisory warning
+/// (<see cref="IsValid"/>=true + non-null <see cref="Warning"/>) — the latter is used
+/// by delete handlers to require explicit user confirmation via
+/// <c>DeleteNodeRequest.ConfirmWarnings</c>.
 /// </summary>
 public record NodeValidationResult(bool IsValid, string? ErrorMessage = null, NodeRejectionReason Reason = NodeRejectionReason.Unknown)
 {
     /// <summary>
+    /// Advisory message from a validator that accepts the operation but wants the caller
+    /// to be aware of a condition (e.g., "the subtree contains 50 nodes — proceed?").
+    /// Only meaningful when <see cref="IsValid"/> is true. Delete handlers gate warnings
+    /// behind <c>DeleteNodeRequest.ConfirmWarnings</c> — first request returns the
+    /// warnings so the UI can confirm, second request (with flag set) proceeds.
+    /// </summary>
+    public string? Warning { get; init; }
+
+    /// <summary>
     /// Creates a successful validation result.
     /// </summary>
     public static NodeValidationResult Valid() => new(true);
+
+    /// <summary>
+    /// Creates a successful validation result carrying an advisory warning.
+    /// </summary>
+    public static NodeValidationResult ValidWithWarning(string warning) =>
+        new(true) { Warning = warning };
 
     /// <summary>
     /// Creates a failed validation result with an error message.
@@ -111,9 +155,11 @@ public interface INodeTypeAccessRule
 
     /// <summary>
     /// Checks whether the given user/context has access for the operation.
-    /// Returns true to allow, false to deny.
+    /// Returns an observable that emits <c>true</c> to allow / <c>false</c> to deny.
+    /// Reactive surface — composes with the rest of the data-layer chain without
+    /// awaiting hub round-trips.
     /// </summary>
-    Task<bool> HasAccessAsync(NodeValidationContext context, string? userId, CancellationToken ct = default);
+    IObservable<bool> HasAccess(NodeValidationContext context, string? userId);
 }
 
 /// <summary>
@@ -185,13 +231,13 @@ public interface INodePostCreationHandler
     string NodeType { get; }
 
     /// <summary>
-    /// Executes after the node has been saved to persistence.
-    /// Failures are logged but do not prevent the creation response.
+    /// Executes after the node has been saved to persistence. Reactive — returns
+    /// <see cref="IObservable{T}"/> (never Task); compose any mesh writes with the reactive
+    /// primitives. Failures are logged but do not prevent the creation response.
     /// </summary>
     /// <param name="createdNode">The persisted node</param>
     /// <param name="createdBy">The ObjectId of the creating user (may be null)</param>
-    /// <param name="ct">Cancellation token</param>
-    Task HandleAsync(MeshNode createdNode, string? createdBy, CancellationToken ct);
+    IObservable<Unit> Handle(MeshNode createdNode, string? createdBy);
 
     /// <summary>
     /// Returns additional nodes that should be created as side effects of the primary node creation.

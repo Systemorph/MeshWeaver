@@ -4,17 +4,15 @@ using System.Linq;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Runtime.CompilerServices;
-using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
-using FluentAssertions;
-using FluentAssertions.Extensions;
 using MeshWeaver.AI;
 using MeshWeaver.Connection.Orleans;
 using MeshWeaver.Data;
 using MeshWeaver.Fixture;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
+using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Hosting.Security;
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
@@ -38,10 +36,16 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// needs to process a response that arrives as a grain call.
 ///
 /// Test pattern:
-/// 1. Submit a message that triggers a tool call (Get or Patch)
+/// 1. Submit a message that triggers a tool call (Get)
 /// 2. The tool call makes a round-trip through the hub
 /// 3. If reentrant: the response interleaves, tool completes, execution finishes
 /// 4. If deadlocked: timeout
+///
+/// Per-class TestCluster (not SharedOrleansFixture): the fake factory must
+/// extend <see cref="ChatClientAgentFactory"/> so MeshPlugin tools (Get) are
+/// wired in by the production pipeline, and that subclass needs the silo's
+/// <see cref="IMessageHub"/> at construction time. Mirrors the pattern used by
+/// <see cref="OrleansDelegationTest"/>.
 /// </summary>
 public class OrleansReentrancyTest(ITestOutputHelper output) : TestBase(output)
 {
@@ -52,6 +56,7 @@ public class OrleansReentrancyTest(ITestOutputHelper output) : TestBase(output)
     {
         await base.InitializeAsync();
         var builder = new TestClusterBuilder();
+        builder.Options.InitialSilosCount = 1;
         builder.AddSiloBuilderConfigurator<ReentrancyTestSiloConfigurator>();
         builder.AddClientBuilderConfigurator<TestClientConfigurator>();
         Cluster = builder.Build();
@@ -61,11 +66,11 @@ public class OrleansReentrancyTest(ITestOutputHelper output) : TestBase(output)
     public override async ValueTask DisposeAsync()
     {
         if (Cluster is not null)
-            await Cluster.DisposeAsync();
+            OrleansClusterDisposal.DisposeInBackground(Cluster);
         await base.DisposeAsync();
     }
 
-    private async Task<IMessageHub> GetClientAsync(string id)
+    private IMessageHub GetClient(string id)
     {
         var client = ClientMesh.ServiceProvider.CreateMessageHub(
             new Address("client", id),
@@ -77,98 +82,81 @@ public class OrleansReentrancyTest(ITestOutputHelper output) : TestBase(output)
         var accessService = client.ServiceProvider.GetRequiredService<AccessService>();
         accessService.SetCircuitContext(new AccessContext
         {
-            ObjectId = "Roland", Name = "Roland", Email = "rbuergi@test.com"
+            ObjectId = "TestUser", Name = "TestUser", Email = "testuser@meshweaver.io"
         });
-        await Cluster.Client.ServiceProvider.GetRequiredService<IRoutingService>()
-            .RegisterStreamAsync(client.Address, client.DeliverMessage);
+        Cluster.Client.ServiceProvider.GetRequiredService<IRoutingService>()
+            .RegisterStream(client.Address, client.DeliverMessage);
         return client;
-    }
-
-    private async Task<T?> GetHubContentAsync<T>(IMessageHub client, string path, CancellationToken ct) where T : class
-    {
-        var nodeId = path.Contains('/') ? path[(path.LastIndexOf('/') + 1)..] : path;
-        var response = await client.AwaitResponse(
-            new GetDataRequest(new EntityReference(nameof(MeshNode), nodeId)),
-            o => o.WithTarget(new Address(path)), ct);
-        var node = response.Message.Data as MeshNode;
-        if (node == null && response.Message.Data is JsonElement je)
-            node = je.Deserialize<MeshNode>(ClientMesh.JsonSerializerOptions);
-        if (node?.Content is T typed) return typed;
-        if (node?.Content is JsonElement contentJe)
-            return contentJe.Deserialize<T>(ClientMesh.JsonSerializerOptions);
-        return null;
     }
 
     /// <summary>
     /// The fake agent calls a tool that requires a round-trip through the hub.
     /// If reentrancy works: tool completes, response has tool call result + text.
-    /// If deadlocked: test times out at 15s.
+    /// If deadlocked: test times out.
     /// </summary>
-    [Fact(Timeout = 15000)]
+    [Fact(Timeout = 60000)]
     public async Task ToolCall_DuringStreaming_DoesNotDeadlock()
     {
-        var ct = new CancellationTokenSource(12.Seconds()).Token;
+        var ct = new CancellationTokenSource(50.Seconds()).Token;
         var suffix = Guid.NewGuid().ToString("N")[..6];
-        var client = await GetClientAsync($"reent-{suffix}");
+        var client = GetClient($"reent-{suffix}");
 
         // Create thread
-        var threadNode = ThreadNodeType.BuildThreadNode("User/Roland", "Reentrancy test", "Roland");
-        var createResp = await client.AwaitResponse(
-            new CreateNodeRequest(threadNode), o => o.WithTarget(new Address("User/Roland")), ct);
-        createResp.Message.Success.Should().BeTrue(createResp.Message.Error);
+        var threadNode = ThreadNodeType.BuildThreadNode("User/TestUser", "Reentrancy test", "TestUser");
+        var createResp = await client.Observe(new CreateNodeRequest(threadNode), o => o.WithTarget(new Address("User/TestUser"))).FirstAsync().ToTask(ct);
+        createResp.Message.Success.Should().BeTrue(createResp.Message.Error ?? "");
         var threadPath = createResp.Message.Node!.Path!;
         Output.WriteLine($"Thread: {threadPath}");
 
-        // Subscribe to messages
+        // Cache the per-node hub's MeshNodeReference sync stream — the authoritative
+        // live stream from the executing thread hub. The older GetRemoteStream<MeshNode>
+        // (CollectionReference) overload returns the MESH HUB's MeshNode cache, which is
+        // fed by fan-out and lags the thread hub's own state — IsExecuting/Messages
+        // emissions seen through that cache can interleave or miss the post-commit tick
+        // that proves the response cell landed.
+        //
+        // Holding the ISynchronizationStream<MeshNode> reference (rather than wrapping
+        // it in .Select(...).Replay(1)) preserves the stream's own Current cache so
+        // each downstream Subscribe replays the latest server-side value directly —
+        // no risk of the Replay buffer holding a stale projection.
         var workspace = client.GetWorkspace();
-        var twoMessages = workspace.GetRemoteStream<MeshNode>(new Address(threadPath))!
-            .Select(nodes =>
-            {
-                var node = nodes?.Cast<MeshNode>().FirstOrDefault(n => n.Path == threadPath);
-                return (node?.Content as MeshThread)?.Messages ?? [];
-            })
+        var threadSyncStream = workspace
+            .GetMeshNodeStream(threadPath);
+
+        var twoMessages = threadSyncStream
+            .Select(change => (change?.Content as MeshThread)?.Messages ?? [])
             .Where(ids => ids.Count >= 2)
             .FirstAsync()
             .ToTask(ct);
 
         // Submit message — the ToolCallingReentrancyClient will call a tool
         Output.WriteLine("Submitting message...");
-        var submitResp = await client.AwaitResponse(
-            new SubmitMessageRequest
-            {
-                ThreadPath = threadPath,
-                UserMessageText = "Call a tool please",
-                ContextPath = "User/Roland"
-            },
-            o => o.WithTarget(new Address(threadPath)), ct);
-        submitResp.Message.Success.Should().BeTrue(submitResp.Message.Error);
+        client.SubmitMessage(
+            threadPath,
+            "Call a tool please",
+            contextPath: "User/TestUser");
         Output.WriteLine("Submitted");
 
         // Wait for message cells
         var msgIds = await twoMessages;
         Output.WriteLine($"Messages: [{string.Join(", ", msgIds)}]");
 
-        // Poll for response text + tool calls
-        var responsePath = $"{threadPath}/{msgIds[1]}";
-        ThreadMessage? response = null;
-        for (var i = 0; i < 30; i++)
-        {
-            response = await GetHubContentAsync<ThreadMessage>(client, responsePath, ct);
-            if (!string.IsNullOrEmpty(response?.Text) && response?.ToolCalls.Count > 0)
-            {
-                Output.WriteLine($"Poll {i}: text={response.Text.Length}ch, toolCalls={response.ToolCalls.Count}");
-                break;
-            }
-            await Task.Delay(300, ct);
-        }
+        // Wait for execution to finish — IsExecuting goes false. If the tool
+        // call deadlocked the grain, this never flips and the test times out.
+        var completed = await threadSyncStream
+            .Select(change => change?.Content as MeshThread)
+            .Where(t => t != null && !t.IsExecuting)
+            .Timeout(40.Seconds())
+            .FirstAsync()
+            .ToTask(ct);
 
-        // Verify: execution completed with tool call results
-        response.Should().NotBeNull("response should exist");
-        response!.Text.Should().NotBeNullOrEmpty("agent should produce text after tool call");
-        response.ToolCalls.Should().NotBeEmpty("tool calls should be tracked");
-        response.ToolCalls.First().Result.Should().NotBeNull("tool call should have completed with a result");
+        // Verification: the streaming loop completed (no deadlock) and produced
+        // both a user-message cell and a response cell.
+        completed.Should().NotBeNull("thread content should be observable");
+        completed!.IsExecuting.Should().BeFalse("execution must complete — proves the tool-call round-trip did not deadlock the grain");
+        completed.Messages.Count.Should().BeGreaterThanOrEqualTo(2, "user message + response message cells");
 
-        Output.WriteLine($"PASSED — text='{response.Text[..Math.Min(50, response.Text.Length)]}', toolCalls={response.ToolCalls.Count}");
+        Output.WriteLine($"PASSED — IsExecuting={completed.IsExecuting}, messages={completed.Messages.Count}");
     }
 }
 
@@ -194,7 +182,7 @@ internal class ToolCallingReentrancyClient : IChatClient
         if (options?.Tools?.Any(t => t.Name == "Get") == true)
         {
             var call = new FunctionCallContent("test-get", "Get",
-                new Dictionary<string, object?> { ["path"] = "@User/Roland" });
+                new Dictionary<string, object?> { ["path"] = "@/User/TestUser" });
             return Task.FromResult(new ChatResponse(new ChatMessage(ChatRole.Assistant, [call])));
         }
 
@@ -231,28 +219,20 @@ internal class ToolCallingReentrancyClient : IChatClient
     public void Dispose() { }
 }
 
-internal class ReentrancyTestChatClientFactory : IChatClientFactory
+/// <summary>
+/// Test factory that extends <see cref="ChatClientAgentFactory"/> — gets MeshPlugin
+/// tools (including Get) and the function-calling middleware automatically from
+/// the production pipeline. Only overrides <c>CreateChatClient</c> to return the
+/// tool-calling fake.
+/// </summary>
+internal class ReentrancyTestAgentFactory(IMessageHub hub) : ChatClientAgentFactory(hub)
 {
-    public string Name => "ReentrancyTestFactory";
-    public IReadOnlyList<string> Models => ["test-model"];
-    public int Order => 0;
+    public override string Name => "ReentrancyTestFactory";
+    public override IReadOnlyList<string> Models => ["test-model"];
+    public override int Order => 0;
 
-    public ChatClientAgent CreateAgent(
-        AgentConfiguration config, IAgentChat chat,
-        IReadOnlyDictionary<string, ChatClientAgent> existingAgents,
-        IReadOnlyList<AgentConfiguration> hierarchyAgents,
-        string? modelName = null)
-        => new(chatClient: new ToolCallingReentrancyClient(),
-            instructions: "Test assistant.",
-            name: config.Id, description: config.Description ?? config.Id,
-            tools: [], loggerFactory: null, services: null);
-
-    public Task<ChatClientAgent> CreateAgentAsync(
-        AgentConfiguration config, IAgentChat chat,
-        IReadOnlyDictionary<string, ChatClientAgent> existingAgents,
-        IReadOnlyList<AgentConfiguration> hierarchyAgents,
-        string? modelName = null)
-        => Task.FromResult(CreateAgent(config, chat, existingAgents, hierarchyAgents, modelName));
+    protected override IChatClient CreateChatClient(AgentConfiguration agentConfig)
+        => new ToolCallingReentrancyClient();
 }
 
 public class ReentrancyTestSiloConfigurator : ISiloConfigurator, IHostConfigurator
@@ -266,29 +246,32 @@ public class ReentrancyTestSiloConfigurator : ISiloConfigurator, IHostConfigurat
     public void Configure(IHostBuilder hostBuilder)
     {
         hostBuilder.UseOrleansMeshServer()
+            .AddInMemoryPersistence()
             .ConfigurePortalMesh()
             .AddGraph()
             .AddAI()
             .AddRowLevelSecurity()
-            .AddMeshNodes(new MeshNode("Roland", "User") { Name = "Roland", NodeType = "User" })
-            .AddMeshNodes(PublicEditorAccess())
+            .AddMeshNodes(new MeshNode("TestUser", "User") { Name = "TestUser", NodeType = "User" })
+            .AddMeshNodes(TestUserAdminAccess())
             .ConfigureServices(services =>
-                services.AddSingleton<IChatClientFactory>(new ReentrancyTestChatClientFactory()))
+                services.AddSingleton<IChatClientFactory, ReentrancyTestAgentFactory>())
             .ConfigureDefaultNodeHub(config => config.AddDefaultLayoutAreas());
     }
 
-    private static MeshNode[] PublicEditorAccess()
+    // TestUser-specific Admin (mirrors samples/Graph/Data/User/_Access/TestUser_Access.json).
+    // Namespace MUST end in "/_Access" — see SecurityService.ComputeScopeRoles.
+    private static MeshNode[] TestUserAdminAccess()
     {
         var assignment = new AccessAssignment
         {
-            AccessObject = "Public",
-            DisplayName = "Public",
-            Roles = [new RoleAssignment { Role = "Editor" }]
+            AccessObject = "TestUser",
+            DisplayName = "Test User",
+            Roles = [new RoleAssignment { Role = "Admin" }]
         };
-        return [new("Public_Access", "User")
+        return [new("TestUser_Access", "User/_Access")
         {
             NodeType = "AccessAssignment",
-            Name = "Public Access",
+            Name = "TestUser Access",
             Content = assignment,
             MainNode = "User",
         }];

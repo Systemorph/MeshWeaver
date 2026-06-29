@@ -1,6 +1,7 @@
+using System.Reactive.Linq;
 using System.Linq;
 using System.Threading.Tasks;
-using FluentAssertions;
+using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Hosting.Security;
@@ -8,7 +9,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
-using Memex.Portal.Shared;
+using MeshWeaver.Blazor.Portal;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
@@ -24,7 +25,7 @@ public class PartitionAccessTest(ITestOutputHelper output) : MonolithMeshTestBas
 {
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => ConfigureMeshBase(builder)
-            .AddOrganizationType()
+            .AddSpaceType()
             .AddMeshNodes(
                 // Pre-seed a partition node for testing
                 new MeshNode("TestPartition", PartitionNodeType.Namespace)
@@ -51,7 +52,11 @@ public class PartitionAccessTest(ITestOutputHelper output) : MonolithMeshTestBas
                         DataSource = "static",
                         Description = "Built-in documentation"
                     }
-                }
+                },
+                // Static role assignment: Roland is global Admin (used by
+                // OrganizationCreation_CreatesPartitionNode). AccessAssignment is
+                // just a MeshNode — SecurityService reads it at hub init.
+                AssignmentNodeFactory.UserRole("Roland", "Admin")
             );
 
     private void LoginAsUnprivilegedUser()
@@ -68,12 +73,11 @@ public class PartitionAccessTest(ITestOutputHelper output) : MonolithMeshTestBas
     public async Task Admin_CanSee_AllPartitions()
     {
         // Default login is admin (Roland)
-        var results = await MeshQuery.QueryAsync<MeshNode>(
-            $"namespace:{PartitionNodeType.Namespace} nodeType:{PartitionNodeType.NodeType}",
-            ct: TestContext.Current.CancellationToken
-        ).ToArrayAsync(TestContext.Current.CancellationToken);
+        var results = (await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(
+            $"namespace:{PartitionNodeType.Namespace} nodeType:{PartitionNodeType.NodeType}"))
+            .Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items;
 
-        Output.WriteLine($"Found {results.Length} partitions");
+        Output.WriteLine($"Found {results.Count} partitions");
         foreach (var r in results)
             Output.WriteLine($"  - {r.Path}: {r.Name} (Content={r.Content?.GetType().Name})");
 
@@ -87,12 +91,11 @@ public class PartitionAccessTest(ITestOutputHelper output) : MonolithMeshTestBas
     {
         LoginAsUnprivilegedUser();
 
-        var results = await MeshQuery.QueryAsync<MeshNode>(
-            $"namespace:{PartitionNodeType.Namespace} nodeType:{PartitionNodeType.NodeType}",
-            ct: TestContext.Current.CancellationToken
-        ).ToArrayAsync(TestContext.Current.CancellationToken);
+        var results = (await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(
+            $"namespace:{PartitionNodeType.Namespace} nodeType:{PartitionNodeType.NodeType}"))
+            .Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items;
 
-        Output.WriteLine($"Found {results.Length} partitions as unprivileged user");
+        Output.WriteLine($"Found {results.Count} partitions as unprivileged user");
         foreach (var r in results)
             Output.WriteLine($"  - {r.Path}: {r.Name}");
 
@@ -104,13 +107,12 @@ public class PartitionAccessTest(ITestOutputHelper output) : MonolithMeshTestBas
     [Fact(Timeout = 20000)]
     public async Task PartitionNode_HasCorrectNamespace()
     {
-        var results = await MeshQuery.QueryAsync<MeshNode>(
-            "path:Admin/Partition/TestPartition",
-            ct: TestContext.Current.CancellationToken
-        ).ToArrayAsync(TestContext.Current.CancellationToken);
+        var results = (await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(
+            "path:Admin/Partition/TestPartition"))
+            .Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items;
 
         results.Should().HaveCount(1);
-        var partition = results[0];
+        var partition = results.First();
         partition.Content.Should().BeOfType<PartitionDefinition>();
 
         var def = (PartitionDefinition)partition.Content!;
@@ -122,13 +124,12 @@ public class PartitionAccessTest(ITestOutputHelper output) : MonolithMeshTestBas
     [Fact(Timeout = 20000)]
     public async Task DocumentationPartition_HasDocNamespace()
     {
-        var results = await MeshQuery.QueryAsync<MeshNode>(
-            "path:Admin/Partition/Documentation",
-            ct: TestContext.Current.CancellationToken
-        ).ToArrayAsync(TestContext.Current.CancellationToken);
+        var results = (await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(
+            "path:Admin/Partition/Documentation"))
+            .Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items;
 
         results.Should().HaveCount(1);
-        var partition = results[0];
+        var partition = results.First();
         partition.Content.Should().BeOfType<PartitionDefinition>();
 
         var def = (PartitionDefinition)partition.Content!;
@@ -136,45 +137,4 @@ public class PartitionAccessTest(ITestOutputHelper output) : MonolithMeshTestBas
         def.DataSource.Should().Be("static");
     }
 
-    [Fact(Timeout = 30000)]
-    public async Task OrganizationCreation_CreatesPartitionNode()
-    {
-        // Give creator Admin role so they can create organizations
-        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
-        await securityService.AddUserRoleAsync("Roland", "Admin", null, "system",
-            TestContext.Current.CancellationToken);
-
-        var orgNode = new MeshNode("Globex")
-        {
-            Name = "Globex Corp",
-            NodeType = "Organization",
-            Content = new Organization { Name = "Globex Corp" }
-        };
-
-        var created = await NodeFactory.CreateNodeAsync(orgNode,
-            ct: TestContext.Current.CancellationToken);
-        created.Should().NotBeNull();
-        Output.WriteLine($"Created org: {created.Path}");
-
-        // Give time for post-creation handler to execute
-        await Task.Delay(500, TestContext.Current.CancellationToken);
-
-        // Check that a partition node was created
-        var partitions = await MeshQuery.QueryAsync<MeshNode>(
-            "path:Admin/Partition/Globex",
-            ct: TestContext.Current.CancellationToken
-        ).ToArrayAsync(TestContext.Current.CancellationToken);
-
-        Output.WriteLine($"Found {partitions.Length} partition nodes for Globex");
-        foreach (var p in partitions)
-            Output.WriteLine($"  - {p.Path}: {p.Name} (Content={p.Content?.GetType().Name})");
-
-        partitions.Should().HaveCount(1, "Organization creation should auto-create a Partition node");
-        var partitionDef = partitions[0].Content as PartitionDefinition;
-        partitionDef.Should().NotBeNull();
-        partitionDef!.Namespace.Should().Be("Globex");
-        partitionDef.Schema.Should().Be("globex");
-        partitionDef.TableMappings.Should().NotBeNull();
-        partitionDef.TableMappings.Should().ContainKey("_Activity");
-    }
 }

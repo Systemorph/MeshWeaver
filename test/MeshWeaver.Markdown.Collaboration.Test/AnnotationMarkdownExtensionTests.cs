@@ -1,4 +1,3 @@
-using FluentAssertions;
 using MeshWeaver.Markdown;
 using Xunit;
 using MarkdownAnnotationType = MeshWeaver.Markdown.AnnotationType;

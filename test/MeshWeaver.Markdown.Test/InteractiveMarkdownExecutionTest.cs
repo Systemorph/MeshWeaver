@@ -2,18 +2,19 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
-using FluentAssertions;
-using FluentAssertions.Extensions;
 using MeshWeaver.Data;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Kernel;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Client;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace MeshWeaver.Markdown.Test;
@@ -37,11 +38,34 @@ public class InteractiveMarkdownExecutionTest(ITestOutputHelper output) : Monoli
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
         => base.ConfigureClient(configuration).AddLayoutClient();
 
+    /// <summary>
+    /// Materialises a per-test Activity MeshNode whose hub hosts the kernel
+    /// handlers (post-migration: kernel runs inside ActivityNodeType's hub).
+    /// </summary>
+    private async Task<Address> CreateKernelSession()
+    {
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        var kernelId = Guid.NewGuid().ToString("N");
+        const string ownerPath = "rbuergi";
+        var activityNamespace = $"{ownerPath}/_Activity";
+        var activityNode = new MeshNode($"markdown-{kernelId}", activityNamespace)
+        {
+            Name = "Test markdown kernel",
+            NodeType = "Activity",
+            MainNode = ownerPath,
+            State = MeshNodeState.Active,
+            Content = new ActivityLog("MarkdownExecution") { Status = ActivityStatus.Running }
+        };
+        // Cold observable — the assertion's Subscribe drives the create.
+        await meshService.CreateNode(activityNode).Should().Emit();
+        return new Address($"{activityNamespace}/markdown-{kernelId}");
+    }
+
     [Fact(Timeout = DefaultTimeoutMs)]
     public async Task ExecuteBlock_RoutesThroughMarkdownViewLogic_ReachesKernel()
     {
         var client = GetClient();
-        var kernelAddress = AddressExtensions.CreateKernelAddress();
+        var kernelAddress = await CreateKernelSession();
 
         const string markdown = """
             ```csharp --render demo-area
@@ -52,7 +76,7 @@ public class InteractiveMarkdownExecutionTest(ITestOutputHelper output) : Monoli
         var rendered = MarkdownViewLogic.Render(markdown, null, null);
         rendered.CodeSubmissions.Should().NotBeNull();
         rendered.CodeSubmissions!.Should().HaveCount(1);
-        rendered.CodeSubmissions[0].Id.Should().Be("demo-area");
+        rendered.CodeSubmissions![0].Id.Should().Be("demo-area");
 
         MarkdownViewLogic.SubmitCode(client, kernelAddress, rendered.CodeSubmissions);
 
@@ -60,8 +84,8 @@ public class InteractiveMarkdownExecutionTest(ITestOutputHelper output) : Monoli
             .GetRemoteStream<JsonElement, LayoutAreaReference>(
                 kernelAddress, new LayoutAreaReference("demo-area"));
         var control = await stream.GetControlStream("demo-area")
-            .Timeout(15.Seconds())
-            .FirstAsync(x => x is not null);
+            .Should().Within(15.Seconds())
+            .Match(x => x is not null);
 
         control.Should().BeOfType<MarkdownControl>();
         (control as MarkdownControl)!.Markdown!.ToString().Should().Contain("Executed: hello");
@@ -71,7 +95,7 @@ public class InteractiveMarkdownExecutionTest(ITestOutputHelper output) : Monoli
     public async Task MultipleBlocks_ShareKernelState_ViaSharedAddress()
     {
         var client = GetClient();
-        var kernelAddress = AddressExtensions.CreateKernelAddress();
+        var kernelAddress = await CreateKernelSession();
 
         const string markdown = """
             ```csharp --execute
@@ -88,16 +112,16 @@ public class InteractiveMarkdownExecutionTest(ITestOutputHelper output) : Monoli
         rendered.CodeSubmissions!.Should().HaveCount(2);
 
         // Second submission is --render with id "result"
-        rendered.CodeSubmissions.Last().Id.Should().Be("result");
+        rendered.CodeSubmissions!.Last().Id.Should().Be("result");
 
-        MarkdownViewLogic.SubmitCode(client, kernelAddress, rendered.CodeSubmissions);
+        MarkdownViewLogic.SubmitCode(client, kernelAddress, rendered.CodeSubmissions!);
 
         var stream = client.GetWorkspace()
             .GetRemoteStream<JsonElement, LayoutAreaReference>(
                 kernelAddress, new LayoutAreaReference("result"));
         var control = await stream.GetControlStream("result")
-            .Timeout(15.Seconds())
-            .FirstAsync(x => x is not null);
+            .Should().Within(15.Seconds())
+            .Match(x => x is not null);
 
         (control as MarkdownControl)!.Markdown!.ToString().Should().Contain("Answer: 42",
             "block #2 must see `counter` defined in block #1 — proves submissions reach the same kernel");
@@ -113,7 +137,7 @@ public class InteractiveMarkdownExecutionTest(ITestOutputHelper output) : Monoli
     public async Task CodeSubmissions_SurviveJsonElementRoundTripAndDispatch()
     {
         var client = GetClient();
-        var kernelAddress = AddressExtensions.CreateKernelAddress();
+        var kernelAddress = await CreateKernelSession();
 
         const string markdown = """
             ```csharp --render wire-test
@@ -136,7 +160,7 @@ public class InteractiveMarkdownExecutionTest(ITestOutputHelper output) : Monoli
             asJsonElement, client.JsonSerializerOptions);
         recovered.Should().NotBeNull();
         recovered!.Should().HaveCount(1);
-        recovered[0].Id.Should().Be("wire-test");
+        recovered![0].Id.Should().Be("wire-test");
 
         // The recovered list must still dispatch and produce output.
         MarkdownViewLogic.SubmitCode(client, kernelAddress, recovered);
@@ -145,8 +169,8 @@ public class InteractiveMarkdownExecutionTest(ITestOutputHelper output) : Monoli
             .GetRemoteStream<JsonElement, LayoutAreaReference>(
                 kernelAddress, new LayoutAreaReference("wire-test"));
         var control = await stream.GetControlStream("wire-test")
-            .Timeout(15.Seconds())
-            .FirstAsync(x => x is not null);
+            .Should().Within(15.Seconds())
+            .Match(x => x is not null);
 
         (control as MarkdownControl)!.Markdown!.ToString().Should().Contain("Survived the wire");
     }
@@ -161,7 +185,7 @@ public class InteractiveMarkdownExecutionTest(ITestOutputHelper output) : Monoli
     public async Task ExtractCodeSubmissions_Fallback_DispatchesCorrectly()
     {
         var client = GetClient();
-        var kernelAddress = AddressExtensions.CreateKernelAddress();
+        var kernelAddress = await CreateKernelSession();
 
         const string markdown = """
             ```csharp --render fallback
@@ -178,8 +202,8 @@ public class InteractiveMarkdownExecutionTest(ITestOutputHelper output) : Monoli
             .GetRemoteStream<JsonElement, LayoutAreaReference>(
                 kernelAddress, new LayoutAreaReference("fallback"));
         var control = await stream.GetControlStream("fallback")
-            .Timeout(15.Seconds())
-            .FirstAsync(x => x is not null);
+            .Should().Within(15.Seconds())
+            .Match(x => x is not null);
 
         (control as MarkdownControl)!.Markdown!.ToString().Should().Contain("Fallback path works");
     }

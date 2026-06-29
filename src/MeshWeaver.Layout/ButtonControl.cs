@@ -42,6 +42,9 @@
         /// </summary>
         public object? NavigateToHref { get; set; }
 
+        /// <summary>Returns a copy with <paramref name="navigateToHref"/> as the navigation target.</summary>
+        /// <param name="navigateToHref">The href the button navigates to when clicked.</param>
+        /// <returns>A new <see cref="ButtonControl"/> with the updated navigation href.</returns>
         public ButtonControl WithNavigateToHref(object navigateToHref)
             => this with { NavigateToHref = navigateToHref };
 

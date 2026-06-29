@@ -4,6 +4,11 @@ using System.Reactive.Linq;
 
 namespace MeshWeaver.Layout.DataBinding
 {
+    /// <summary>
+    /// Provides custom Rx extension methods for time-based filtering: a trailing-edge debounce that
+    /// always delivers the final value, and a leading-edge throttle that emits immediately then suppresses
+    /// for a cooldown period while guaranteeing the last suppressed value is eventually delivered.
+    /// </summary>
     public static class ReactiveExtensions
     {
         /// <summary>
@@ -82,6 +87,18 @@ namespace MeshWeaver.Layout.DataBinding
             });
         }
         /// <summary>
+        /// Leading-edge throttle using the default scheduler.
+        /// </summary>
+        /// <typeparam name="T">The type of the elements in the source sequence.</typeparam>
+        /// <param name="source">The source observable sequence.</param>
+        /// <param name="interval">The cooldown interval after each emission.</param>
+        /// <returns>An observable sequence with leading-edge throttle behavior.</returns>
+        public static IObservable<T> ThrottleImmediate<T>(
+            this IObservable<T> source,
+            TimeSpan interval)
+            => ThrottleImmediate(source, interval, DefaultScheduler.Instance);
+
+        /// <summary>
         /// Leading-edge throttle: emits the first value immediately, then suppresses subsequent values
         /// for the specified interval. After the interval expires, if a value was suppressed during
         /// the cooldown, it is emitted (guaranteeing the final state is always delivered).
@@ -91,14 +108,6 @@ namespace MeshWeaver.Layout.DataBinding
         /// <param name="interval">The cooldown interval after each emission.</param>
         /// <param name="scheduler">The scheduler to use for timing.</param>
         /// <returns>An observable sequence with leading-edge throttle behavior.</returns>
-        /// <summary>
-        /// Leading-edge throttle using the default scheduler.
-        /// </summary>
-        public static IObservable<T> ThrottleImmediate<T>(
-            this IObservable<T> source,
-            TimeSpan interval)
-            => ThrottleImmediate(source, interval, DefaultScheduler.Instance);
-
         public static IObservable<T> ThrottleImmediate<T>(
             this IObservable<T> source,
             TimeSpan interval,

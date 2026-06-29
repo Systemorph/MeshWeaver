@@ -1,0 +1,17 @@
+{
+  "id": "Matrix",
+  "namespace": "MathDemo",
+  "name": "Matrix",
+  "nodeType": "NodeType",
+  "category": "Types",
+  "description": "A 2x2 matrix rendered with MathNet.Numerics (loaded via #r \"nuget:...\")",
+  "isPersistent": true,
+  "content": {
+    "$type": "NodeTypeDefinition",
+    "namespace": "MathDemo",
+    "displayName": "Matrix",
+    "iconName": "Grid",
+    "description": "A 2x2 matrix rendered with MathNet.Numerics",
+    "configuration": "config => config.WithContentType<Matrix>().AddLayout(layout => layout.AddMatrixLayoutAreas().WithDefaultArea(\"Inverse\"))"
+  }
+}

@@ -34,7 +34,7 @@ Northwind/                           # Root namespace
 │   ├── regions.csv                  # Geographic regions
 │   ├── territories.csv              # Sales territories
 │   └── shippers.csv                 # Shipping companies
-└── AnalyticsCatalog/_Source/            # View implementations
+└── AnalyticsCatalog/Source/            # View implementations
     ├── Order.cs                     # Order entity
     ├── OrderDetails.cs              # OrderDetails entity
     ├── Product.cs                   # Product entity
@@ -69,40 +69,52 @@ The AnalyticsCatalog NodeType configures multiple data sources:
 
 ```csharp
 config.AddData(data => data
-    .AddSource(source => source
-        // All entity data loaded from CSV files via NorthwindDataLoader
-        .WithType<Order>(t => t.WithInitialData(NorthwindDataLoader.LoadOrdersAsync))
-        .WithType<OrderDetails>(t => t.WithInitialData(NorthwindDataLoader.LoadOrderDetailsAsync))
-        .WithType<Product>(t => t.WithInitialData(NorthwindDataLoader.LoadProductsAsync))
-        .WithType<Customer>(t => t.WithInitialData(NorthwindDataLoader.LoadCustomersAsync))
-        .WithType<Employee>(t => t.WithInitialData(NorthwindDataLoader.LoadEmployeesAsync))
-        .WithType<Supplier>(t => t.WithInitialData(NorthwindDataLoader.LoadSuppliersAsync))
-        .WithType<Category>(t => t.WithInitialData(NorthwindDataLoader.LoadCategoriesAsync))
-        .WithType<Region>(t => t.WithInitialData(NorthwindDataLoader.LoadRegionsAsync))
-        .WithType<Territory>(t => t.WithInitialData(NorthwindDataLoader.LoadTerritoriesAsync))
-        .WithType<Shipper>(t => t.WithInitialData(NorthwindDataLoader.LoadShippersAsync)))
+    .AddSource(source =>
+    {
+        var hub = source.Workspace.Hub;
+        return source
+            // All entity data loaded from CSV files via NorthwindDataLoader —
+            // reactive loaders (IObservable), file I/O on the FileSystem I/O pool
+            .WithType<Order>(t => t.WithInitialData(() => NorthwindDataLoader.LoadOrders(hub)))
+            .WithType<OrderDetails>(t => t.WithInitialData(() => NorthwindDataLoader.LoadOrderDetails(hub)))
+            .WithType<Category>(t => t.WithInitialData(() => NorthwindDataLoader.LoadCategories(hub)))
+            .WithType<Region>(t => t.WithInitialData(() => NorthwindDataLoader.LoadRegions(hub)))
+            .WithType<Territory>(t => t.WithInitialData(() => NorthwindDataLoader.LoadTerritories(hub)))
+            .WithType<Shipper>(t => t.WithInitialData(() => NorthwindDataLoader.LoadShippers(hub)));
+    })
+    // Master data (Product, Customer, Employee, Supplier) from MeshNodes
+    .WithVirtualDataSource("MasterData", ...)
     // Virtual data cube
     .WithVirtualDataSource("NorthwindDataCube", ...))
 ```
 
 ## CSV Loading (`NorthwindDataLoader.cs`)
 
+Loaders are reactive — they return `IObservable<IEnumerable<T>>` (the shape
+`WithInitialData` takes) and run the blocking CSV read + parse on the bounded
+FileSystem I/O pool via `InvokeBlocking`. No `async`/`await`, no
+`Task.FromResult`, and the file read never runs on the configuring hub's thread:
+
 ```csharp
-public static IEnumerable<Order> LoadOrders(string csvPath)
-{
-    return File.ReadLines(csvPath)
-        .Skip(1) // Header
-        .Select(line => line.Split(','))
-        .Select(parts => new Order
-        {
-            OrderId = int.Parse(parts[0]),
-            CustomerId = parts[1],
-            EmployeeId = int.Parse(parts[2]),
-            OrderDate = DateTime.Parse(parts[3]),
-            Freight = decimal.Parse(parts[7]),
-            ShipCountry = parts[13]
-        });
-}
+private static IIoPool FileSystemPool(IMessageHub hub) =>
+    hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.FileSystem)
+    ?? IoPool.Unbounded;
+
+private static IObservable<IEnumerable<T>> LoadCsv<T>(
+    IMessageHub hub, string fileName, Func<string[], T> factory) =>
+    FileSystemPool(hub).InvokeBlocking(_ =>
+        (IEnumerable<T>)ParseCsv(File.ReadAllLines(Path.Combine(BasePath, fileName)), factory).ToList());
+
+public static IObservable<IEnumerable<Order>> LoadOrders(IMessageHub hub)
+    => LoadCsv(hub, "orders.csv", parts => new Order
+    {
+        OrderId = ParseInt(parts[0]),
+        CustomerId = parts[1],
+        EmployeeId = ParseInt(parts[2]),
+        OrderDate = DateTime.Parse(parts[3], CultureInfo.InvariantCulture),
+        Freight = decimal.Parse(parts[7], CultureInfo.InvariantCulture),
+        ShipCountry = Get(parts, 12),
+    });
 ```
 
 ## Reference Data (CSV-based)
@@ -110,17 +122,14 @@ public static IEnumerable<Order> LoadOrders(string csvPath)
 All reference data is loaded from CSV files via `NorthwindDataLoader.cs`, following the same pattern as transactional data:
 
 ```csharp
-public static Task<IEnumerable<Category>> LoadCategoriesAsync(CancellationToken ct)
-{
+public static IObservable<IEnumerable<Category>> LoadCategories(IMessageHub hub)
     // CSV: categoryid,categoryname,description,picture
-    var lines = File.ReadAllLines(Path.Combine(BasePath, "categories.csv"));
-    return Task.FromResult(ParseCsv(lines, parts => new Category
+    => LoadCsv(hub, "categories.csv", parts => new Category
     {
         CategoryId = ParseInt(parts[0]),
         CategoryName = parts[1],
         Description = Get(parts, 2),
-    }));
-}
+    });
 ```
 
 # Virtual Data Cube

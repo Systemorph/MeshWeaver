@@ -4,7 +4,6 @@ using System.IO;
 using System.Linq;
 using System.Text.Json;
 using System.Text.RegularExpressions;
-using FluentAssertions;
 using Xunit;
 
 namespace MeshWeaver.Content.Test;

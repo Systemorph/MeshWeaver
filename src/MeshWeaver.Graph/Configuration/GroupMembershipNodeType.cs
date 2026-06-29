@@ -1,4 +1,4 @@
-using MeshWeaver.Data;
+﻿using MeshWeaver.Data;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 
@@ -33,7 +33,6 @@ public static class GroupMembershipNodeType
         Name = "Group Membership",
         Icon = "/static/NodeTypeIcons/person.svg",
         ExcludeFromContext = new HashSet<string> { "search", "create" },
-        AssemblyLocation = typeof(GroupMembershipNodeType).Assembly.Location,
         HubConfiguration = config => config
             .AddGroupMembershipViews()
             .AddMeshDataSource(source => source

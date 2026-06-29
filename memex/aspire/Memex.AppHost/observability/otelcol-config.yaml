@@ -1,0 +1,43 @@
+# OpenTelemetry Collector — receives OTLP from the Memex portal + db-migration (which already emit
+# logs/metrics/traces via ServiceDefaults.ConfigureOpenTelemetry) and fans out to the local LGTM stack:
+#   logs    -> Loki        (native OTLP ingest, /otlp/v1/logs)
+#   traces  -> Tempo       (OTLP gRPC)
+#   metrics -> Prometheus  (remote-write)
+# Containers reach each other by Aspire resource name on the shared network (loki / tempo / prometheus).
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch: {}
+
+exporters:
+  otlphttp/loki:
+    endpoint: http://loki:3100/otlp
+  otlp/tempo:
+    endpoint: http://tempo:4317
+    tls:
+      insecure: true
+  prometheusremotewrite:
+    endpoint: http://prometheus:9090/api/v1/write
+    tls:
+      insecure: true
+
+service:
+  pipelines:
+    logs:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlphttp/loki]
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlp/tempo]
+    metrics:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [prometheusremotewrite]

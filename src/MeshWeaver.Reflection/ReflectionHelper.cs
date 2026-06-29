@@ -10,13 +10,31 @@ namespace MeshWeaver.Reflection
     /// </summary>
     public static class ReflectionHelper
     {
+        /// <summary>
+        /// The name prefix the compiler gives to property getter accessor methods (<c>get_</c>).
+        /// </summary>
         public const string GetterPrefix = "get_";
+
+        /// <summary>
+        /// The name prefix the compiler gives to property setter accessor methods (<c>set_</c>).
+        /// </summary>
         public const string SetterPrefix = "set_";
         private static readonly int PrefixLength = GetterPrefix.Length;
 
 
+        /// <summary>
+        /// Binding flags selecting public instance members.
+        /// </summary>
         public const BindingFlags PublicInstanceBindingFlags = BindingFlags.Instance | BindingFlags.Public;
+
+        /// <summary>
+        /// Binding flags selecting non-public instance members.
+        /// </summary>
         public const BindingFlags PrivateInstanceBindingFlags = BindingFlags.Instance | BindingFlags.NonPublic;
+
+        /// <summary>
+        /// Binding flags selecting all instance members, both public and non-public.
+        /// </summary>
         public const BindingFlags AnyInstanceBindingFlags = PublicInstanceBindingFlags | PrivateInstanceBindingFlags;
 
         #region Extensions
@@ -88,6 +106,12 @@ namespace MeshWeaver.Reflection
                                                       null);
         }
 
+        /// <summary>
+        /// Builds the <see cref="Signature"/> (name plus parameter types) for the given <paramref name="member"/>.
+        /// </summary>
+        /// <param name="member">The member to build a signature for.</param>
+        /// <returns>The signature of the member.</returns>
+        /// <exception cref="ArgumentNullException">Thrown when <paramref name="member"/> is <c>null</c>.</exception>
         public static Signature GetSignature(this MemberInfo member)
         {
             if (member == null)
@@ -524,6 +548,11 @@ namespace MeshWeaver.Reflection
             return Enum.GetValues(typeof(TEnum)).Cast<TEnum>();
         }
 
+        /// <summary>
+        /// Tests whether the <paramref name="type"/> is the open or closed generic <see cref="IDictionary{TKey,TValue}"/> interface.
+        /// </summary>
+        /// <param name="type">The type to test.</param>
+        /// <returns><c>true</c> if the type is a constructed <see cref="IDictionary{TKey,TValue}"/>.</returns>
         public static bool IsDictionary(this Type type)
         {
             return type.IsGenericType && type.GetGenericTypeDefinition() == typeof(IDictionary<,>);

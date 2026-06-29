@@ -12,14 +12,14 @@ namespace MeshWeaver.Mesh.Security;
 public record AccessAssignment
 {
     /// <summary>Subject identifier (User or Group path) for this assignment.</summary>
-    [MeshNode("namespace:User nodeType:User", "namespace:{node.namespace} nodeType:Group scope:subtree")]
+    [MeshNode("nodeType:User namespace:\"\"", "nodeType:Group namespace:{node.namespace} scope:subtree")]
     public string AccessObject { get; init; } = "";
 
     /// <summary>Optional display name for the subject.</summary>
     public string? DisplayName { get; init; }
 
     /// <summary>Role assignments for this subject at this scope.</summary>
-    [MeshNodeCollection("namespace:Role nodeType:Role", "namespace:{node.namespace} nodeType:Role scope:selfAndAncestors")]
+    [MeshNodeCollection("nodeType:Role namespace:\"\"", "nodeType:Role namespace:{node.namespace} scope:selfAndAncestors")]
     public IReadOnlyList<RoleAssignment> Roles { get; init; } = [];
 }
 
@@ -71,6 +71,18 @@ public record PartitionAccessPolicy
     public bool? Api { get; init; }
 
     /// <summary>
+    /// When true, GRANTS Read to ALL users at this scope and below — a public-read
+    /// override with precedence over the role-based grant computation (it is ORed in
+    /// AFTER the per-user roles ∩ cap, so a user needs no role at this scope to read).
+    /// This is the policy-driven way to publish a read-only catalog (e.g. the built-in
+    /// Agent / Model / Documentation namespaces): the owning static node provider seeds
+    /// one <c>_Policy</c> with <c>PublicRead = true</c> and the whole subtree becomes
+    /// world-readable immediately (static = no synced-query cold-start race). Distinct
+    /// from <see cref="Read"/>, which only *caps* (false = deny) and never grants.
+    /// </summary>
+    public bool PublicRead { get; init; }
+
+    /// <summary>
     /// When true, role assignments from ancestor scopes are discarded at this
     /// namespace boundary. Only roles assigned at this scope or deeper take effect
     /// (still subject to permission caps).
@@ -83,7 +95,11 @@ public record PartitionAccessPolicy
     /// </summary>
     public Permission GetPermissionCap()
     {
-        var cap = Permission.All;
+        // Start from ALL BITS SET, not Permission.All. A policy only RESTRICTS the permissions
+        // it explicitly lists below; it must never implicitly strip a permission outside that
+        // list — Permission.All excludes the privileged grants (Sync, Compile) and any future
+        // bit, so using it as the base silently capped Compile/Sync out of every effective set.
+        var cap = (Permission)~0;
         if (Read == false) cap &= ~Permission.Read;
         if (Create == false) cap &= ~Permission.Create;
         if (Update == false) cap &= ~Permission.Update;
@@ -92,6 +108,16 @@ public record PartitionAccessPolicy
         if (Execute == false) cap &= ~Permission.Execute;
         if (Thread == false) cap &= ~Permission.Thread;
         if (Api == false) cap &= ~Permission.Api;
+        // 🚨 Compile (create a NodeType release) and Sync (static-repo overwrite) are CREATE-class
+        // privileged WRITES — there is no per-policy flag for them, so they ride the ~0 base. A
+        // partition that denies Create must deny them too: otherwise an Admin/Editor (whose ROLE
+        // grants Compile) would retain release-creation on a READ-ONLY partition (Doc / Agent / Role),
+        // writing a Release node the policy forbids. Gating on the Create flag keeps them on writable
+        // policies (the reason the base is ~0, not Permission.All) while capping them on read-only ones.
+        // On a read-only partition the legitimate compile runs as System, never the user
+        // (NodeTypeReleaseGateTest.SystemCompile_FillsCache_OnReadOnlyPartition). Without this, the 16
+        // PartitionAccessPolicy/StaticNamespacePolicy "capped to Read…" tests see Compile leak through.
+        if (Create == false) cap &= ~(Permission.Compile | Permission.Sync);
         return cap;
     }
 }

@@ -31,7 +31,7 @@ public static class ApiTokensSettingsTab
                 Group: "Security",
                 Icon: FluentIcons.Key(),
                 Order: 230,
-                RequiredPermission: Permission.Read));
+                RequiredPermission: Permission.None));
     }
 
     internal static UiControl BuildApiTokensContent(
@@ -51,18 +51,22 @@ public static class ApiTokensSettingsTab
 
         const string createDataId = "apiTokenCreate";
         const string resultDataId = "apiTokenResult";
-        const string tokenListRefreshId = "apiTokenListRefresh";
 
         host.UpdateData(createDataId, new Dictionary<string, object?>
         {
             ["label"] = "",
             ["expiryDays"] = 365
         });
-        // NOTE: Do NOT initialize resultDataId here — CreateTokenAsync saves a MeshNode
+        // NOTE: Do NOT initialize resultDataId here — CreateToken saves a MeshNode
         // which triggers the workspace stream, causing the Settings page to rebuild.
         // If we set resultDataId="" here, the rebuild would overwrite the token display
         // that the click handler just set. Instead, the reactive view uses .StartWith().
-        host.UpdateData(tokenListRefreshId, DateTimeOffset.UtcNow.Ticks);
+        //
+        // The token list below subscribes to `tokenService.GetTokensForUser(userId)`
+        // — a live synced query (workspace.GetQuery under the hood). New tokens
+        // appear on CreateNode commit, revokes flip rows to "Revoked" on
+        // workspace.GetMeshNodeStream(...).Update commit, deletes drop rows on
+        // DeleteNode commit. No refresh trigger needed.
 
         // Create token form
         var createSection = Controls.Stack.WithWidth("100%")
@@ -157,7 +161,9 @@ public static class ApiTokensSettingsTab
 
                                     ctx.Host.UpdateData(resultDataId, tokenHtml);
                                     ctx.Host.UpdateData(tokenRenderKey, DateTimeOffset.UtcNow.Ticks);
-                                    ctx.Host.UpdateData(tokenListRefreshId, DateTimeOffset.UtcNow.Ticks);
+                                    // No list refresh trigger — the synced query
+                                    // below re-emits automatically when the new
+                                    // node commits to the workspace.
                                 },
                                 ex => ctx.Host.UpdateData(resultDataId,
                                     "<p style=\"padding: 8px 12px; color: #f87171; background: var(--neutral-layer-2); " +
@@ -182,30 +188,27 @@ public static class ApiTokensSettingsTab
         stack = stack.WithView(
             Controls.Html("<h3 style=\"margin: 0 0 12px 0; font-size: 1rem;\">Your Tokens</h3>"));
 
+        // Live token list — bound directly to the synced query. The view
+        // re-renders whenever the underlying mesh-query collection changes
+        // (token created, revoked, deleted). No refresh trigger pattern;
+        // see Doc/Architecture/SyncedMeshNodeQueries.md for the canonical
+        // shape — every emission is a complete snapshot.
         stack = stack.WithView((h, _) =>
-            h.Stream.GetDataStream<long>(tokenListRefreshId)
-                .SelectMany(async _ =>
-                {
-                    if (string.IsNullOrEmpty(userId))
-                        return (UiControl?)Controls.Html(
-                            "<p style=\"color: var(--neutral-foreground-hint);\">No user identity found.</p>");
-
-                    var tokens = await tokenService.GetTokensForUserAsync(userId);
-
-                    if (tokens.Count == 0)
-                        return (UiControl?)Controls.Html(
-                            "<p style=\"color: var(--neutral-foreground-hint);\">No tokens yet. Create one above.</p>");
-
-                    return (UiControl?)BuildTokenList(tokens, tokenService, tokenListRefreshId, resultDataId);
-                }));
+            string.IsNullOrEmpty(userId)
+                ? Observable.Return<UiControl?>(Controls.Html(
+                    "<p style=\"color: var(--neutral-foreground-hint);\">No user identity found.</p>"))
+                : tokenService.GetTokensForUser(userId)
+                    .Select(tokens => tokens.Count == 0
+                        ? (UiControl?)Controls.Html(
+                            "<p style=\"color: var(--neutral-foreground-hint);\">No tokens yet. Create one above.</p>")
+                        : BuildTokenList(tokens, tokenService, resultDataId)));
 
         return stack;
     }
 
     private static UiControl BuildTokenList(
-        List<ApiTokenInfo> tokens,
+        IReadOnlyList<ApiTokenInfo> tokens,
         ApiTokenService tokenService,
-        string tokenListRefreshId,
         string resultDataId)
     {
         var container = Controls.Stack.WithWidth("100%").WithStyle("gap: 8px;");
@@ -247,15 +250,14 @@ public static class ApiTokensSettingsTab
                             "<p style=\"padding: 8px 12px; color: var(--neutral-foreground-hint); " +
                             $"background: var(--neutral-layer-2); border-radius: 6px;\">Deleting '{Esc(capturedForDelete.Label)}'…</p>");
 
-                        // Reactive: Subscribe to the service observable (hub.Post + RegisterCallback under the hood).
+                        // Reactive: Subscribe to the service observable
+                        // (hub.Post + RegisterCallback under the hood). The
+                        // list re-renders automatically when the synced
+                        // query above sees the deletion.
                         tokenService.DeleteToken(capturedForDelete.NodePath).Subscribe(
-                            _ =>
-                            {
-                                ctx.Host.UpdateData(resultDataId,
-                                    "<p style=\"padding: 8px 12px; color: #4ade80; background: var(--neutral-layer-2); " +
-                                    $"border-radius: 6px;\">Token '{Esc(capturedForDelete.Label)}' deleted.</p>");
-                                ctx.Host.UpdateData(tokenListRefreshId, DateTimeOffset.UtcNow.Ticks);
-                            },
+                            _ => ctx.Host.UpdateData(resultDataId,
+                                "<p style=\"padding: 8px 12px; color: #4ade80; background: var(--neutral-layer-2); " +
+                                $"border-radius: 6px;\">Token '{Esc(capturedForDelete.Label)}' deleted.</p>"),
                             ex => ctx.Host.UpdateData(resultDataId,
                                 "<p style=\"padding: 8px 12px; color: #f87171; background: var(--neutral-layer-2); " +
                                 $"border-radius: 6px;\">Failed to delete: {Esc(ex.Message)}</p>"));
@@ -270,24 +272,16 @@ public static class ApiTokensSettingsTab
                     .WithAppearance(Appearance.Outline)
                     .WithClickAction(ctx =>
                     {
-                        ctx.Host.UpdateData(resultDataId,
-                            "<p style=\"padding: 8px 12px; color: var(--neutral-foreground-hint); " +
-                            $"background: var(--neutral-layer-2); border-radius: 6px;\">Revoking '{Esc(captured.Label)}'…</p>");
+                        ctx.Host.UpdateData(resultDataId, BuildPendingHtml($"Revoking '{Esc(captured.Label)}'…"));
 
-                        // Reactive: Subscribe to the service observable — no await, no Task.Run.
-                        tokenService.RevokeToken(captured.NodePath).Subscribe(
-                            success =>
-                            {
-                                ctx.Host.UpdateData(resultDataId, success
-                                    ? "<p style=\"padding: 8px 12px; color: #4ade80; background: var(--neutral-layer-2); " +
-                                      $"border-radius: 6px;\">Token '{Esc(captured.Label)}' revoked.</p>"
-                                    : "<p style=\"padding: 8px 12px; color: #f87171; background: var(--neutral-layer-2); " +
-                                      "border-radius: 6px;\">Failed to revoke token.</p>");
-                                ctx.Host.UpdateData(tokenListRefreshId, DateTimeOffset.UtcNow.Ticks);
-                            },
-                            ex => ctx.Host.UpdateData(resultDataId,
-                                "<p style=\"padding: 8px 12px; color: #f87171; background: var(--neutral-layer-2); " +
-                                $"border-radius: 6px;\">Failed to revoke: {Esc(ex.Message)}</p>"));
+                        // Reactive: subscribe to the factored-out observable.
+                        // Revoke(...) bridges the service call to a single outcome
+                        // record so the test can assert on the same composition
+                        // the UI subscribes to — no await, no Task.Run. The
+                        // list row flips to "Revoked" automatically when the
+                        // synced query sees the IsRevoked change.
+                        Revoke(tokenService, captured.NodePath, captured.Label).Subscribe(
+                            outcome => ctx.Host.UpdateData(resultDataId, BuildOutcomeHtml(outcome)));
                         return Task.CompletedTask;
                     }));
             }
@@ -299,4 +293,46 @@ public static class ApiTokensSettingsTab
     }
 
     private static string Esc(string s) => System.Web.HttpUtility.HtmlEncode(s);
+
+    /// <summary>
+    /// Outcome of a token revoke/delete invocation — surfaced to both the
+    /// click handler and the test. <see cref="Success"/> is the user-facing
+    /// pass/fail; <see cref="Message"/> carries the optional error detail to
+    /// embed in the result HTML. Kept internal so it stays a presentation-
+    /// layer concern, not an exported API.
+    /// </summary>
+    internal record TokenActionOutcome(bool Success, string Label, string? Message = null);
+
+    /// <summary>
+    /// Factored-out revoke pipeline — single observable composition shared by
+    /// the click handler and the test. Bridges
+    /// <see cref="ApiTokenService.RevokeToken"/> to an outcome that includes
+    /// the label (so the message can be rendered without recapturing it) and
+    /// folds the OnError path into a successful emission of
+    /// <c>(Success=false, Message=...)</c> so the test never has to assert on
+    /// observable termination semantics. Subscribe once — Take(1)-equivalent
+    /// shape because the underlying service emits exactly one value.
+    /// </summary>
+    internal static IObservable<TokenActionOutcome> Revoke(
+        ApiTokenService tokenService, string nodePath, string label)
+        => tokenService.RevokeToken(nodePath)
+            .Select(success => new TokenActionOutcome(success, label))
+            .Catch<TokenActionOutcome, Exception>(ex =>
+                Observable.Return(new TokenActionOutcome(false, label, ex.Message)));
+
+    private static string BuildPendingHtml(string message) =>
+        "<p style=\"padding: 8px 12px; color: var(--neutral-foreground-hint); " +
+        $"background: var(--neutral-layer-2); border-radius: 6px;\">{Esc(message)}</p>";
+
+    private static string BuildOutcomeHtml(TokenActionOutcome outcome)
+    {
+        if (outcome.Success)
+            return "<p style=\"padding: 8px 12px; color: #4ade80; background: var(--neutral-layer-2); " +
+                $"border-radius: 6px;\">Token '{Esc(outcome.Label)}' revoked.</p>";
+        var detail = string.IsNullOrEmpty(outcome.Message)
+            ? "Failed to revoke token."
+            : $"Failed to revoke: {Esc(outcome.Message)}";
+        return "<p style=\"padding: 8px 12px; color: #f87171; background: var(--neutral-layer-2); " +
+            $"border-radius: 6px;\">{detail}</p>";
+    }
 }

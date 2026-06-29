@@ -22,6 +22,7 @@
     <ProjectReference Include="..\..\src\MeshWeaver.Graph\MeshWeaver.Graph.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Mesh.Contract\MeshWeaver.Mesh.Contract.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Messaging.Hub\MeshWeaver.Messaging.Hub.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.Blazor.Portal\MeshWeaver.Blazor.Portal.csproj" />
     <ProjectReference Include="..\..\memex\Memex.Portal.Shared\Memex.Portal.Shared.csproj" />
   </ItemGroup>
 </Project>

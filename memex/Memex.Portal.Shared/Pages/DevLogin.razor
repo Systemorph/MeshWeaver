@@ -82,27 +82,37 @@
     private bool isLoading = true;
     private string? error;
 
-    protected override async Task OnInitializedAsync()
+    private IDisposable? _personsSubscription;
+
+    protected override void OnInitialized()
     {
-        try
-        {
-            var nodes = await MeshQuery.QueryAsync<MeshNode>("nodeType:User namespace:User").ToListAsync();
-            persons = nodes
-                .Select(n => ExtractPersonInfo(n))
-                .Where(p => p != null)
-                .Select(p => p!)
-                .OrderBy(p => p.Name)
-                .ToList();
-        }
-        catch (Exception ex)
-        {
-            error = $"Error loading persons: {ex.Message}";
-        }
-        finally
-        {
-            isLoading = false;
-        }
+        _personsSubscription = MeshQuery
+            .Query<MeshNode>(MeshQueryRequest.FromQuery("nodeType:User namespace:User"))
+            .Subscribe(
+                change =>
+                {
+                    var items = change.Items
+                        .Select(n => ExtractPersonInfo(n))
+                        .Where(p => p != null)
+                        .Select(p => p!)
+                        .OrderBy(p => p.Name)
+                        .ToList();
+                    InvokeAsync(() =>
+                    {
+                        persons = items;
+                        isLoading = false;
+                        StateHasChanged();
+                    });
+                },
+                ex => InvokeAsync(() =>
+                {
+                    error = $"Error loading persons: {ex.Message}";
+                    isLoading = false;
+                    StateHasChanged();
+                }));
     }
+
+    public void Dispose() => _personsSubscription?.Dispose();
 
     private static PersonInfo? ExtractPersonInfo(MeshNode node)
     {

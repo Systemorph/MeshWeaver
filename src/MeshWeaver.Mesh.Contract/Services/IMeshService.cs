@@ -25,9 +25,22 @@ public interface IMeshService
 
     /// <summary>
     /// Updates an existing node with validation.
-    /// Routes through UpdateNodeRequest for proper security enforcement.
+    /// Routes through the canonical <c>GetMeshNodeStream(path).Update</c> write path;
+    /// the owning per-node hub re-validates RLS on the merge patch and stamps auditing.
     /// </summary>
     IObservable<MeshNode> UpdateNode(MeshNode node);
+
+    /// <summary>
+    /// ATOMIC create-or-update: routes through the single <c>CreateOrUpdateNodeRequest</c> verb so the
+    /// OWNING hub decides create-vs-update by existence (and checks Create or Update permission
+    /// accordingly). Use this — NOT a client-side <c>CreateNode().Catch(already-exists → UpdateNode())</c>
+    /// — for idempotent writes that may run concurrently or re-run: the hand-rolled split races (the
+    /// create's exists-check lags a concurrent create → the update patches a not-yet-materialized node →
+    /// "NotFound … for patch apply" → error storm). The owner serialises both branches, so the upsert is
+    /// race-free. Identity is captured eagerly at call time (as <c>RequestedBy</c>). Same path
+    /// <c>StaticRepoImporter</c>/<c>NodeCopyHelper</c> use.
+    /// </summary>
+    IObservable<MeshNode> CreateOrUpdateNode(MeshNode node);
 
     /// <summary>
     /// Deletes a node and all its descendants (bottom to top).
@@ -42,54 +55,64 @@ public interface IMeshService
     /// </summary>
     IObservable<MeshNode> CreateTransient(MeshNode node);
 
-    // === Query ===
-
     /// <summary>
-    /// Query nodes and partition objects with full-text search, filtering, and scoping.
-    /// Uses GitHub-style query syntax (e.g., "nodeType:Story status:Open laptop").
+    /// Copies a node (and optionally its subtree and satellites) to a new path.
+    /// By default copies descendants but NOT satellites. Set
+    /// <see cref="CopyNodeRequest.IncludeSatellites"/> on a custom request to also copy satellites.
+    /// Routes through <see cref="CopyNodeRequest"/>; emits the root node at the new target path.
     /// </summary>
-    IAsyncEnumerable<object> QueryAsync(MeshQueryRequest request, CancellationToken ct = default);
+    IObservable<MeshNode> CopyNode(string sourcePath, string targetPath,
+        bool includeDescendants = true, bool includeSatellites = false);
 
-    /// <summary>
-    /// Autocomplete query - given a namespace, find best matching subnodes.
-    /// Returns suggestions ordered by path length first (for path-based autocomplete).
-    /// </summary>
-    IAsyncEnumerable<QuerySuggestion> AutocompleteAsync(
-        string basePath,
-        string prefix,
-        int limit = 10,
-        CancellationToken ct = default);
-
-    /// <summary>
-    /// Autocomplete query with specified ordering mode.
-    /// </summary>
-    IAsyncEnumerable<QuerySuggestion> AutocompleteAsync(
-        string basePath,
-        string prefix,
-        AutocompleteMode mode,
-        int limit = 10,
-        string? contextPath = null,
-        string? context = null,
-        CancellationToken ct = default);
+    // === Query (IObservable only — no async surface) ===
 
     /// <summary>
     /// Creates an observable query that monitors data sources for changes and emits updates.
     /// The first emission contains the full initial result set (ChangeType = Initial).
     /// Subsequent emissions contain incremental changes (Added, Updated, Removed).
     /// </summary>
-    IObservable<QueryResultChange<T>> ObserveQuery<T>(MeshQueryRequest request);
+    IObservable<QueryResultChange<T>> Query<T>(MeshQueryRequest request);
 
     /// <summary>
-    /// Selects a single property value from a node at the given path.
-    /// Efficient way to get one property without loading the full Content blob.
+    /// Unified query surface — each registered <see cref="IMeshQueryProvider"/>
+    /// emits a LIVE snapshot of <see cref="QueryResult"/> rows; the aggregator combines
+    /// via <see cref="System.Reactive.Linq.Observable.CombineLatest{TSource}(IEnumerable{IObservable{TSource}})"/>,
+    /// dedupes by <see cref="QueryResult.Path"/>, and orders by score. Each emission is the
+    /// full current result set (updates until disposed). Providers run their I/O leaf inside
+    /// the IIoPool — the call here never blocks the mesh hub's action block.
+    /// <para>Progressive: every provider stream is seeded with <c>.StartWith(empty)</c>,
+    /// so the snapshot emits as soon as the FIRST source converges (the others contribute
+    /// their empty seed) and re-emits — re-merged + re-ordered by score — as each remaining
+    /// source returns. Consumers bind the whole collection per emission.</para>
     /// </summary>
-    Task<T?> SelectAsync<T>(string path, string property, CancellationToken ct = default);
+    IObservable<IReadOnlyCollection<QueryResult>> Query(MeshQueryRequest request);
 
     /// <summary>
-    /// Tries to look up a MeshNode at the exact path and return its PreRenderedHtml.
-    /// Used during Blazor prerender for instant display without full path resolution.
-    /// Returns null if no node exists or no pre-rendered HTML is available.
+    /// Unified autocomplete surface — same shape as <see cref="Query"/>
+    /// but each provider's stream is wrapped with <c>.StartWith(empty)</c> so
+    /// partial autocomplete results render immediately without waiting for slow
+    /// providers. Live snapshot set; updates until disposed.
     /// </summary>
-    Task<string?> GetPreRenderedHtmlAsync(string path, CancellationToken ct = default);
+    IObservable<IReadOnlyCollection<QueryResult>> Autocomplete(
+        string basePath, string prefix,
+        AutocompleteMode mode = AutocompleteMode.RelevanceFirst,
+        int limit = 10,
+        string? contextPath = null,
+        string? context = null);
+
+    /// <summary>
+    /// Selects a single property value from a node at the given path (single-emission
+    /// observable). Efficient way to get one property without loading the full Content blob.
+    /// </summary>
+    IObservable<T?> Select<T>(string path, string property);
+
+    /// <summary>
+    /// Looks up a MeshNode at the exact path and emits its PreRenderedHtml.
+    /// Used during Blazor prerender for instant display. Returns an observable
+    /// of the latest <see cref="MeshNode.PreRenderedHtml"/> (or <c>null</c> when
+    /// no node exists or no HTML is cached). Subscribers compose with
+    /// <c>Select</c>/<c>Subscribe</c> — no await, no <see cref="Task"/> bridge.
+    /// </summary>
+    IObservable<string?> GetPreRenderedHtml(string path);
 
 }

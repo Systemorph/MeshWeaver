@@ -1,41 +1,88 @@
 ---
 Name: Creating Node Types
 Category: Documentation
-Description: Step-by-step guide to creating custom node types with _Source code, data models, layout areas, and CSV data loading
+Description: Step-by-step guide to defining custom node types with C# content models, reference data, layout areas, and CSV data loading
 Icon: Code
 ---
 
 # Creating Node Types
 
-This guide walks through creating a custom NodeType with compiled source code, layout areas, reference data, and CSV data loading.
+MeshWeaver's NodeType system lets you define richly typed data models — complete with custom UI, reference lookups, and CSV-backed data — entirely from source files that live alongside your data. This guide walks you through building a complete NodeType from scratch.
 
-## Folder Structure
+---
 
-A NodeType lives in a folder under a namespace. Source code goes in `_Source/` and tests in `_Test/`:
+## How a NodeType Is Structured
+
+Every NodeType lives in its own namespace. Source code goes in the `Source/` namespace and xUnit tests in `Test/`. The JSON definition file sits at the same level as the namespace it describes:
+
+<svg viewBox="0 0 760 300" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;">
+  <defs>
+    <marker id="arr" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="#90a4ae"/>
+    </marker>
+  </defs>
+  <rect x="20" y="20" width="160" height="260" rx="10" fill="#263238" stroke="#546e7a" stroke-width="1.5"/>
+  <text x="100" y="46" text-anchor="middle" font-family="sans-serif" font-size="12" font-weight="bold" fill="#eceff1">Source/ Namespace</text>
+  <rect x="34" y="58" width="132" height="30" rx="6" fill="#1e88e5"/>
+  <text x="100" y="78" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#fff">Content Record</text>
+  <rect x="34" y="98" width="132" height="30" rx="6" fill="#43a047"/>
+  <text x="100" y="118" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#fff">Reference Data</text>
+  <rect x="34" y="138" width="132" height="30" rx="6" fill="#f57c00"/>
+  <text x="100" y="158" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#fff">Layout Areas</text>
+  <rect x="34" y="178" width="132" height="30" rx="6" fill="#8e24aa"/>
+  <text x="100" y="198" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#fff">CSV Data Loader</text>
+  <rect x="34" y="218" width="132" height="30" rx="6" fill="#546e7a"/>
+  <text x="100" y="238" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#fff">Unit Tests</text>
+  <rect x="290" y="80" width="170" height="60" rx="10" fill="#37474f" stroke="#78909c" stroke-width="1.5"/>
+  <text x="375" y="106" text-anchor="middle" font-family="sans-serif" font-size="12" font-weight="bold" fill="#eceff1">NodeType JSON</text>
+  <text x="375" y="126" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#b0bec5">Project.json</text>
+  <rect x="540" y="40" width="185" height="220" rx="10" fill="#1b2838" stroke="#546e7a" stroke-width="1.5"/>
+  <text x="632" y="68" text-anchor="middle" font-family="sans-serif" font-size="12" font-weight="bold" fill="#eceff1">Runtime NodeType</text>
+  <rect x="555" y="78" width="155" height="26" rx="6" fill="#1e88e5"/>
+  <text x="632" y="96" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#fff">WithContentType&lt;T&gt;()</text>
+  <rect x="555" y="112" width="155" height="26" rx="6" fill="#43a047"/>
+  <text x="632" y="130" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#fff">AddData() + WithType&lt;T&gt;()</text>
+  <rect x="555" y="146" width="155" height="26" rx="6" fill="#f57c00"/>
+  <text x="632" y="164" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#fff">AddLayout() + Views</text>
+  <rect x="555" y="180" width="155" height="26" rx="6" fill="#8e24aa"/>
+  <text x="632" y="198" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#fff">WithInitialData(loader)</text>
+  <rect x="555" y="214" width="155" height="26" rx="6" fill="#26a69a"/>
+  <text x="632" y="232" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#fff">AddHubSource() (children)</text>
+  <line x1="180" y1="110" x2="285" y2="110" stroke="#90a4ae" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="464" y1="110" x2="535" y2="110" stroke="#90a4ae" stroke-width="1.5" marker-end="url(#arr)"/>
+  <text x="220" y="103" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#b0bec5" fill-opacity="0.8">defines</text>
+  <text x="498" y="103" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#b0bec5" fill-opacity="0.8">wires</text>
+</svg>
+
+*Source files in `Source/` are compiled at startup; the JSON definition wires them into the running NodeType configuration.*
 
 ```
 samples/Graph/Data/
   ACME/
     Project.json              # NodeType definition (nodeType: "NodeType")
     Project/
-      _Source/                # C# code compiled at startup
-        Project.cs            # Content type (record)
+      Source/                 # C# code compiled at startup
+        Project.cs            # Content record
         Status.cs             # Reference data type
         Category.cs           # Reference data type
         Priority.cs           # Reference data type
-        ProjectLayoutAreas.cs # Custom views
-      _Test/                  # xUnit tests for the source code
+        ProjectLayoutAreas.cs # Custom layout areas
+      Test/                   # xUnit tests
         ProjectTests.cs
       Todo.json               # Child NodeType definition
       Todo/
-        _Source/
-          Todo.cs             # Child content type
-          TodoLayoutAreas.cs  # Child views
+        Source/
+          Todo.cs             # Child content record
+          TodoLayoutAreas.cs  # Child layout areas
 ```
+
+> **Key idea**: the `Source/` namespace is compiled at startup. Every `.cs` Code node you put there becomes live code — content types, dimension types, layout areas, and data loaders all coexist in this single namespace.
+
+---
 
 ## Step 1: Define the Content Type
 
-Create a C# record in `_Source/` with the `<meshweaver>` frontmatter:
+The content type is a C# `record` that describes the fields of one node instance. Place it in `Source/` with a `<meshweaver>` frontmatter comment so the compiler knows its identity:
 
 ```csharp
 // <meshweaver>
@@ -69,23 +116,24 @@ public enum ProjectStatus
 }
 ```
 
-### Key Attributes
+### Available Attributes
 
 | Attribute | Purpose |
 |-----------|---------|
 | `[Key]` | Primary identifier field |
-| `[Required]` | Validation: field must be set |
-| `[MeshNodeProperty(nameof(MeshNode.Name))]` | Maps to the MeshNode's Name property |
-| `[MeshNodeProperty(nameof(MeshNode.Icon))]` | Maps to the MeshNode's Icon property |
-| `[Dimension<Category>]` | References a lookup/dimension type |
-| `[Markdown(EditorHeight = "200px")]` | Rich text editor for this field |
-| `[UiControl(Style = "width: 200px;")]` | Controls form layout |
-| `[Browsable(false)]` | Hides from UI |
-| `[DisplayName("Due Date")]` | Custom label in forms |
+| `[Required]` | Validation — field must be set |
+| `[MeshNodeProperty(nameof(MeshNode.Name))]` | Maps the field to the MeshNode's `Name` property |
+| `[MeshNodeProperty(nameof(MeshNode.Icon))]` | Maps the field to the MeshNode's `Icon` property |
+| `[MeshNode("nodeType:ACME/Category")]` | References another mesh node — renders a `MeshNodePicker`, stores the node's PATH. The query always uses the **full path of the referenced NodeType** (see [Data Cubes](/Doc/DataMesh/DataCubes)) |
+| `[Dimension<Category>]` | References an in-hub lookup / dimension type seeded via `WithType<T>(t => t.WithInitialData(...))` |
+| `[Markdown(EditorHeight = "200px")]` | Renders a rich text editor for this field |
+| `[UiControl(Style = "width: 200px;")]` | Controls form layout width |
+| `[Browsable(false)]` | Hides the field from all UI |
+| `[DisplayName("Due Date")]` | Custom label in generated forms |
 
 ### Content Type with Dimensions
 
-For a child type that references lookup data:
+When a child type needs to reference lookup data from its parent, implement `IContentInitializable` to resolve dynamic defaults at creation time:
 
 ```csharp
 // <meshweaver>
@@ -133,9 +181,11 @@ public record Todo : IContentInitializable
 }
 ```
 
+---
+
 ## Step 2: Define Reference Data Types
 
-Reference data types provide lookup values for `[Dimension<T>]` fields:
+Reference data types supply the dropdown values for `[Dimension<T>]` fields. They follow the same `<meshweaver>` frontmatter convention and expose a static `All` array so the NodeType configuration can seed them at startup:
 
 ```csharp
 // <meshweaver>
@@ -159,17 +209,17 @@ public record Status
 
     public static readonly Status Pending = new()
     {
-        Id = "Pending", Name = "Pending", Emoji = "\u23f3", Order = 0
+        Id = "Pending", Name = "Pending", Emoji = "⏳", Order = 0
     };
 
     public static readonly Status InProgress = new()
     {
-        Id = "InProgress", Name = "In Progress", Emoji = "\ud83d\udd04", Order = 1
+        Id = "InProgress", Name = "In Progress", Emoji = "🔄", Order = 1
     };
 
     public static readonly Status Completed = new()
     {
-        Id = "Completed", Name = "Completed", Emoji = "\u2705", Order = 4,
+        Id = "Completed", Name = "Completed", Emoji = "✅", Order = 4,
         IsExpandedByDefault = false
     };
 
@@ -180,9 +230,11 @@ public record Status
 }
 ```
 
+---
+
 ## Step 3: Create the NodeType Definition (JSON)
 
-The NodeType definition is a JSON file at the parent level. The `configuration` field contains a C# lambda expression that wires up the content type, data sources, and layout:
+The JSON file in the parent namespace wires everything together. The `configuration` field holds a C# lambda expression that is compiled and executed at startup:
 
 ```json
 {
@@ -214,18 +266,22 @@ The NodeType definition is a JSON file at the parent level. The `configuration` 
 }
 ```
 
-### Configuration Explained
+### What each builder call does
 
-- **`WithContentType<T>()`** registers the content record type for the editor form
-- **`AddData()`** configures the `MeshDataSource` with reference data and virtual types
-- **`AddSource(source => source.WithType<T>(...))`** registers types in the data source
-- **`WithInitialData(T[] items)`** seeds reference data from static arrays
-- **`WithInitialData(Func<CancellationToken, Task<IEnumerable<T>>>)`** seeds data from async loaders (e.g., CSV)
-- **`AddLayout()`** configures views and layout areas
+| Builder call | Purpose |
+|---|---|
+| `WithContentType<T>()` | Registers the content record for the editor form |
+| `AddData(...)` | Configures the `MeshDataSource` with reference data and virtual types |
+| `AddSource(source => source.WithType<T>(...))` | Registers types in the data source |
+| `WithInitialData(T[] items)` | Seeds reference data from a static array |
+| `WithInitialData(Func<CancellationToken, Task<IEnumerable<T>>>)` | Seeds data from an async loader (e.g., CSV) |
+| `AddLayout(...)` | Configures views and layout areas |
+
+---
 
 ## Step 4: Loading Data from CSV Files
 
-For types that load data from CSV files (like Northwind), define a loader in `_Source/`:
+When data comes from CSV files rather than static arrays — as in the Northwind sample — define a loader in `Source/` and wire it up with `WithInitialData`.
 
 ### Define the Type
 
@@ -260,6 +316,11 @@ public record Product : INamed
 
 ### Create the CSV Loader
 
+Loaders are reactive — **never `async`/`await`/`Task<T>`/`Task.FromResult`**. Return
+`IObservable<IEnumerable<T>>` (the shape `WithInitialData` takes) and run the
+blocking CSV read + parse on the bounded FileSystem I/O pool via `InvokeBlocking`,
+so the file read never executes on the configuring hub's thread:
+
 ```csharp
 // <meshweaver>
 // Id: DataLoader
@@ -267,25 +328,34 @@ public record Product : INamed
 // </meshweaver>
 
 using System.Globalization;
+using MeshWeaver.Messaging;
+using MeshWeaver.Mesh.Threading;
+using Microsoft.Extensions.DependencyInjection;
 
 public static class DataLoader
 {
     private static readonly string BasePath =
         Path.Combine("../../samples/Graph/attachments/MyData");
 
-    public static Task<IEnumerable<Product>> LoadProductsAsync(CancellationToken ct)
-    {
-        var lines = File.ReadAllLines(Path.Combine(BasePath, "products.csv"));
-        return Task.FromResult(ParseCsv(lines, parts => new Product
-        {
-            ProductId = int.Parse(parts[0]),
-            ProductName = parts[1],
-            SupplierId = int.Parse(parts[2]),
-            CategoryId = int.Parse(parts[3]),
-            UnitPrice = double.Parse(parts[4], CultureInfo.InvariantCulture),
-            UnitsInStock = short.Parse(parts[5]),
-        }));
-    }
+    private static IIoPool FileSystemPool(IMessageHub hub) =>
+        hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.FileSystem)
+        ?? IoPool.Unbounded;
+
+    public static IObservable<IEnumerable<Product>> LoadProducts(IMessageHub hub)
+        // The .ToList() INSIDE the pool slot matters: ParseCsv is lazy, and
+        // without it the parse would run later on whatever thread enumerates.
+        => FileSystemPool(hub).InvokeBlocking(_ =>
+            (IEnumerable<Product>)ParseCsv(
+                File.ReadAllLines(Path.Combine(BasePath, "products.csv")),
+                parts => new Product
+                {
+                    ProductId = int.Parse(parts[0]),
+                    ProductName = parts[1],
+                    SupplierId = int.Parse(parts[2]),
+                    CategoryId = int.Parse(parts[3]),
+                    UnitPrice = double.Parse(parts[4], CultureInfo.InvariantCulture),
+                    UnitsInStock = short.Parse(parts[5]),
+                }).ToList());
 
     private static IEnumerable<T> ParseCsv<T>(
         string[] lines, Func<string[], T> factory)
@@ -314,28 +384,32 @@ public static class DataLoader
         DisplayName = \"Data Files\"
       })
       .AddData(data => data
-        .AddSource(source => source
-          .WithType<Category>(t => t.WithInitialData(DataLoader.LoadCategoriesAsync))
-          .WithType<Product>(t => t.WithInitialData(DataLoader.LoadProductsAsync))
-          .WithType<Order>(t => t.WithInitialData(DataLoader.LoadOrdersAsync))))
+        .AddSource(source => {
+          var hub = source.Workspace.Hub;
+          return source
+            .WithType<Category>(t => t.WithInitialData(() => DataLoader.LoadCategories(hub)))
+            .WithType<Product>(t => t.WithInitialData(() => DataLoader.LoadProducts(hub)))
+            .WithType<Order>(t => t.WithInitialData(() => DataLoader.LoadOrders(hub)));
+        }))
       .AddDefaultLayoutAreas()
       .AddLayout(layout => layout.WithDefaultArea(\"LayoutAreas\"))"
   }
 }
 ```
 
-### Key Points for CSV Data
+> **Key points for CSV data:**
+> - Place CSV files in an `attachments/` folder and reference them via `AddContentCollection`.
+> - The loader reads the CSV, skips the header row, and maps columns to record properties.
+> - Use `WithInitialData(Func<IObservable<IEnumerable<T>>>)` for loaded data — the loader bridges its file I/O through the FileSystem `IIoPool`; grab `var hub = source.Workspace.Hub;` in the `AddSource` lambda to resolve the pool.
+> - Use `WithInitialData(T[])` for static in-memory reference data.
+> - `[Dimension(typeof(T))]` declares a relationship between types so the query engine can perform join operations.
+> - Implement `INamed` to provide a display name for lookup columns in the UI.
 
-- Place CSV files in an `attachments/` folder and reference via `AddContentCollection`
-- The loader reads CSV, skips the header row, and maps columns to record properties
-- Use `WithInitialData(Func<CancellationToken, Task<IEnumerable<T>>>)` for async CSV loading
-- Use `WithInitialData(T[])` for static in-memory reference data
-- `[Dimension(typeof(T))]` creates relationships between types for join operations
-- Implement `INamed` to provide a display name for lookup columns
+---
 
 ## Step 5: Create Layout Areas
 
-Define custom views in `_Source/` as static classes:
+Layout areas define what users see when they open a node. Register them as extension methods on `MessageHubConfiguration` so the NodeType configuration lambda can call `AddProjectLayoutAreas()`:
 
 ```csharp
 // <meshweaver>
@@ -362,7 +436,7 @@ public static class ProjectLayoutAreas
                 host.Workspace.GetObservable<Todo>(),
                 (statuses, todos) =>
                 {
-                    // Build view from data
+                    // Build view from live data
                     return Controls.Stack
                         .WithView(Controls.Html("<h2>Dashboard</h2>"));
                 });
@@ -370,9 +444,11 @@ public static class ProjectLayoutAreas
 }
 ```
 
+---
+
 ## Child NodeType Definitions
 
-Child types are defined in subfolders. Their configuration references the parent's data via `AddHubSource`:
+Child types are defined in subfolders and follow the same pattern. The key difference is `AddHubSource`, which imports reference types from the parent node's data source — so child instances automatically share the parent's lookup data without re-declaring it:
 
 ```json
 {
@@ -399,16 +475,65 @@ Child types are defined in subfolders. Their configuration references the parent
 }
 ```
 
-The `AddHubSource(parentAddress, ...)` imports types from the parent node's data source, so child instances can use the same reference data.
+`AddHubSource(parentAddress, ...)` opens a live subscription to the parent node's data source, so any updates to the parent's reference data are immediately visible to child instances.
+
+---
+
+## Live Example: Attribute Reference
+
+The table below summarises which attribute to reach for at each stage of model definition. It is rendered live from a small in-kernel data table:
+
+```csharp --render NodeTypeAttributeRef --show-code
+var rows = new[]
+{
+    ("[Key]",                                       "Record identity", "Primary key field for dimension types"),
+    ("[Required]",                                  "Validation",      "Field must be non-null / non-empty"),
+    ("[MeshNodeProperty(nameof(MeshNode.Name))]",   "Node mapping",    "Binds the field to the MeshNode Name shown in navigation"),
+    ("[MeshNodeProperty(nameof(MeshNode.Icon))]",   "Node mapping",    "Binds the field to the MeshNode Icon"),
+    ("[Dimension&lt;T&gt;]",                        "Relationships",   "Declares a lookup relationship to dimension type T"),
+    ("[Dimension(typeof(T))]",                      "Relationships",   "Alternative syntax for non-generic dimension reference"),
+    ("[Markdown(...)]",                             "Editor control",  "Renders a rich Markdown editor for the field"),
+    ("[UiControl(Style = &quot;...&quot;)]",        "Layout",          "Applies inline CSS to the form control"),
+    ("[Browsable(false)]",                          "Visibility",      "Excludes the field from all generated UI"),
+    ("[DisplayName(&quot;...&quot;)]",              "Labels",          "Custom label in generated forms"),
+};
+
+var bodyRows = string.Join("", rows.Select((r, i) =>
+{
+    var bg = i % 2 == 0 ? "#f9f9f9" : "white";
+    return $"<tr style='background:{bg}'>" +
+           $"<td style='padding:5px 10px;font-family:monospace;font-size:0.85em'>{r.Item1}</td>" +
+           $"<td style='padding:5px 10px'>{r.Item2}</td>" +
+           $"<td style='padding:5px 10px'>{r.Item3}</td>" +
+           "</tr>";
+}));
+
+MeshWeaver.Layout.Controls.Stack
+    .WithView(MeshWeaver.Layout.Controls.Markdown("### Content Type Attribute Reference"))
+    .WithView(MeshWeaver.Layout.Controls.Html(
+        "<table style='width:100%;border-collapse:collapse'>" +
+        "<thead><tr>" +
+        "<th style='text-align:left;padding:6px 10px;border-bottom:2px solid #ccc'>Attribute</th>" +
+        "<th style='text-align:left;padding:6px 10px;border-bottom:2px solid #ccc'>Category</th>" +
+        "<th style='text-align:left;padding:6px 10px;border-bottom:2px solid #ccc'>Effect</th>" +
+        "</tr></thead><tbody>" +
+        bodyRows +
+        "</tbody></table>"
+    ))
+```
+
+---
 
 ## Summary
 
-| Step | What | Where |
-|------|------|-------|
-| 1 | Content type (record) | `_Source/MyType.cs` |
-| 2 | Reference data types | `_Source/Status.cs`, etc. |
-| 3 | CSV data loaders | `_Source/DataLoader.cs` |
-| 4 | Layout areas | `_Source/MyTypeLayoutAreas.cs` |
-| 5 | NodeType JSON | `MyType.json` in parent folder |
-| 6 | Tests | `_Test/MyTypeTests.cs` |
-| 7 | CSV files | `attachments/` folder |
+Here is the complete checklist for a new NodeType:
+
+| Step | What to create | Where |
+|------|---------------|-------|
+| 1 | Content record (`Project.cs`) | `Source/` |
+| 2 | Reference data types (`Status.cs`, `Category.cs`, …) | `Source/` |
+| 3 | CSV data loaders (optional) | `Source/DataLoader.cs` |
+| 4 | Layout areas | `Source/ProjectLayoutAreas.cs` |
+| 5 | NodeType JSON definition | `Project.json` in the parent folder |
+| 6 | Unit tests | `Test/ProjectTests.cs` |
+| 7 | CSV data files (optional) | `attachments/` folder |

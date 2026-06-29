@@ -4,9 +4,6 @@ using System.ComponentModel.DataAnnotations;
 using System.Linq;
 using System.Reactive.Linq;
 using System.Text.Json;
-using System.Threading.Tasks;
-using FluentAssertions;
-using FluentAssertions.Extensions;
 using MeshWeaver.Data;
 using MeshWeaver.Domain;
 using MeshWeaver.Fixture;
@@ -97,8 +94,7 @@ public class OverviewLayoutAreaTest(ITestOutputHelper output) : HubTestBase(outp
 
         var control = await stream
             .GetControlStream(reference.Area!)
-            .Timeout(5.Seconds())
-            .FirstAsync(x => x != null);
+            .Should().Within(5.Seconds()).Match(x => x != null);
 
         control.Should().BeOfType<StackControl>();
     }
@@ -113,8 +109,7 @@ public class OverviewLayoutAreaTest(ITestOutputHelper output) : HubTestBase(outp
 
         var control = await stream
             .GetControlStream(reference.Area!)
-            .Timeout(5.Seconds())
-            .FirstAsync(x => x != null);
+            .Should().Within(5.Seconds()).Match(x => x != null);
 
         var stack = control.Should().BeOfType<StackControl>().Subject;
         stack.Areas.Should().NotBeEmpty();
@@ -125,8 +120,7 @@ public class OverviewLayoutAreaTest(ITestOutputHelper output) : HubTestBase(outp
 
         var gridControl = await stream
             .GetControlStream(firstAreaName!)
-            .Timeout(5.Seconds())
-            .FirstAsync(x => x != null);
+            .Should().Within(5.Seconds()).Match(x => x != null);
 
         gridControl.Should().BeOfType<LayoutGridControl>();
     }
@@ -142,8 +136,7 @@ public class OverviewLayoutAreaTest(ITestOutputHelper output) : HubTestBase(outp
         // Get data from stream
         var data = await stream
             .GetDataStream<TestTodo>(new JsonPointerReference($"/data/\"{TestDataId}\""))
-            .Timeout(5.Seconds())
-            .FirstAsync(x => x != null);
+            .Should().Within(5.Seconds()).Match(x => x != null);
 
         data.Should().NotBeNull();
         data!.Category.Should().Be("Work");
@@ -162,8 +155,7 @@ public class OverviewLayoutAreaTest(ITestOutputHelper output) : HubTestBase(outp
         // Get the initial control - should be a Stack with Label
         var control = await stream
             .GetControlStream(reference.Area!)
-            .Timeout(5.Seconds())
-            .FirstAsync(x => x != null);
+            .Should().Within(5.Seconds()).Match(x => x != null);
 
         control.Should().BeOfType<StackControl>();
         var stack = (StackControl)control!;
@@ -181,9 +173,7 @@ public class OverviewLayoutAreaTest(ITestOutputHelper output) : HubTestBase(outp
         // Wait for edit control to appear
         var editControl = await stream
             .GetControlStream(clickableArea!)
-            .Where(c => c is TextFieldControl or NumberFieldControl or SelectControl)
-            .Timeout(3.Seconds())
-            .FirstAsync();
+            .Should().Within(3.Seconds()).Match(c => c is TextFieldControl or NumberFieldControl or SelectControl);
 
         editControl.Should().NotBeNull("should switch to an edit control");
     }
@@ -198,8 +188,7 @@ public class OverviewLayoutAreaTest(ITestOutputHelper output) : HubTestBase(outp
 
         var control = await stream
             .GetControlStream(reference.Area!)
-            .Timeout(5.Seconds())
-            .FirstAsync(x => x != null);
+            .Should().Within(5.Seconds()).Match(x => x != null);
 
         control.Should().BeOfType<StackControl>();
     }
@@ -214,8 +203,7 @@ public class OverviewLayoutAreaTest(ITestOutputHelper output) : HubTestBase(outp
 
         var control = await stream
             .GetControlStream(reference.Area!)
-            .Timeout(5.Seconds())
-            .FirstAsync(x => x != null);
+            .Should().Within(5.Seconds()).Match(x => x != null);
 
         // Root should be a Stack
         var stack = control.Should().BeOfType<StackControl>().Subject;
@@ -228,8 +216,7 @@ public class OverviewLayoutAreaTest(ITestOutputHelper output) : HubTestBase(outp
 
         var markdownControl = await stream
             .GetControlStream(lastAreaName!)
-            .Timeout(5.Seconds())
-            .FirstAsync(x => x != null);
+            .Should().Within(5.Seconds()).Match(x => x != null);
 
         markdownControl.Should().BeOfType<MarkdownControl>()
             .Which.Html.Should().NotBeNull();
@@ -248,8 +235,7 @@ public class OverviewLayoutAreaTest(ITestOutputHelper output) : HubTestBase(outp
 
         var control = await stream
             .GetControlStream(reference.Area!)
-            .Timeout(5.Seconds())
-            .FirstAsync(x => x != null);
+            .Should().Within(5.Seconds()).Match(x => x != null);
 
         // Root should be a Stack with just the property grid (no markdown area)
         var stack = control.Should().BeOfType<StackControl>().Subject;
@@ -258,7 +244,7 @@ public class OverviewLayoutAreaTest(ITestOutputHelper output) : HubTestBase(outp
     }
 
     [HubFact]
-    public async Task IsTitleProperty_FiltersCorrectly()
+    public void IsTitleProperty_FiltersCorrectly()
     {
         // Unit test for the static helper
         EditLayoutArea.IsTitleProperty("Title").Should().BeTrue();
@@ -267,21 +253,18 @@ public class OverviewLayoutAreaTest(ITestOutputHelper output) : HubTestBase(outp
         EditLayoutArea.IsTitleProperty("DisplayName").Should().BeTrue();
         EditLayoutArea.IsTitleProperty("Category").Should().BeFalse();
         EditLayoutArea.IsTitleProperty("Description").Should().BeFalse();
-
-        await Task.CompletedTask;
     }
 
     [HubFact]
-    public async Task GetDataId_GeneratesConsistentId()
+    public void GetDataId_GeneratesConsistentId()
     {
         EditLayoutArea.GetDataId("ACME/Project/Todo").Should().Be("content_ACME_Project_Todo");
         EditLayoutArea.GetDataId("path/with/slashes").Should().Be("content_path_with_slashes");
-
-        await Task.CompletedTask;
     }
 
     /// <summary>
-    /// View that uses BuildPropertyOverview with a MeshNode that has PreRenderedHtml set.
+    /// View composing BuildPropertyOverview + BuildMarkdownBody, mirroring how
+    /// MeshNodeLayoutAreas.BuildDetailsContent assembles a node detail page.
     /// </summary>
     private static UiControl PreRenderedHtmlView(LayoutAreaHost host, RenderingContext ctx)
     {
@@ -293,11 +276,17 @@ public class OverviewLayoutAreaTest(ITestOutputHelper output) : HubTestBase(outp
             PreRenderedHtml = "<h1>FutuRe Group</h1><pre class=\"mermaid\">graph TD\n    A-->B</pre>"
         };
 
-        return OverviewLayoutArea.BuildPropertyOverview(host, node, canEdit: true);
+        var stack = Controls.Stack.WithWidth("100%")
+            .WithView(OverviewLayoutArea.BuildPropertyOverview(host, node, canEdit: true));
+        var markdown = OverviewLayoutArea.BuildMarkdownBody(host, node);
+        if (markdown != null)
+            stack = stack.WithView(markdown);
+        return stack;
     }
 
     /// <summary>
-    /// View that uses BuildPropertyOverview with a MeshNode that has no PreRenderedHtml.
+    /// View composing BuildPropertyOverview + BuildMarkdownBody when PreRenderedHtml
+    /// is null — markdown body is omitted, leaving only the property overview.
     /// </summary>
     private static UiControl NoPreRenderedHtmlView(LayoutAreaHost host, RenderingContext ctx)
     {
@@ -309,7 +298,12 @@ public class OverviewLayoutAreaTest(ITestOutputHelper output) : HubTestBase(outp
             PreRenderedHtml = null
         };
 
-        return OverviewLayoutArea.BuildPropertyOverview(host, node, canEdit: true);
+        var stack = Controls.Stack.WithWidth("100%")
+            .WithView(OverviewLayoutArea.BuildPropertyOverview(host, node, canEdit: true));
+        var markdown = OverviewLayoutArea.BuildMarkdownBody(host, node);
+        if (markdown != null)
+            stack = stack.WithView(markdown);
+        return stack;
     }
 }
 
