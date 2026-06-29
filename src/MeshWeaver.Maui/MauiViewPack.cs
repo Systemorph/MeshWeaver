@@ -219,6 +219,15 @@ public abstract class MauiView : IDisposable
             : o.WithTarget(Stream.Owner));
     }
 
+    /// <summary>
+    /// Surfaces a write/IO failure on the shared logger instead of swallowing it in a
+    /// <c>Subscribe(_ => {}, _ => {})</c> — the convention for every cold-observable write in the pack, so a
+    /// denied/failed mesh write is visible rather than silent. Use as the onError of any write Subscribe.
+    /// </summary>
+    protected void LogWrite(Exception ex, string what, string? path = null) =>
+        Stream?.Hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.Maui.View")
+            .LogWarning(ex, "MAUI view write '{What}' failed for {Path}", what, path ?? "(n/a)");
+
     public void Dispose()
     {
         foreach (var d in Disposables) d.Dispose();
@@ -812,11 +821,9 @@ public sealed class MauiCollaborativeMarkdownView : MauiView<CollaborativeMarkdo
         }
     }
 
-    // Surfaces a collaborative write failure (RLS/routing/access) instead of swallowing it — mirrors the
-    // LogWarning-on-update-failure convention the other views use.
-    private void Log(Exception ex, string what) =>
-        Stream?.Hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.Maui.Collaborative")
-            .LogWarning(ex, "Collaborative {What} failed for {Path}", what, Model.NodePath);
+    // Surfaces a collaborative write failure (RLS/routing/access) instead of swallowing it — delegates to the
+    // shared base helper, stamping this node's path for context.
+    private void Log(Exception ex, string what) => LogWrite(ex, what, Model.NodePath);
 
     // Resolve a comment: flip its Content.Status → Resolved via the canonical external-node stream update.
     private void ResolveComment(string path)
@@ -1281,7 +1288,7 @@ public sealed class MeshNodeCollectionView : MauiView<MeshNodeCollectionControl>
             {
                 var del = new Button { Text = "🗑", BackgroundColor = Colors.Transparent, Padding = 0 };
                 del.Clicked += (_, _) => Stream?.Hub.ServiceProvider.GetService<IMeshService>()?.DeleteNode(n.Path)
-                    .Subscribe(_ => { }, _ => { });
+                    .Subscribe(_ => { }, ex => LogWrite(ex, "delete node", n.Path));
                 row.Children.Add(del);
             }
             _root.Children.Add(row);
@@ -1681,7 +1688,8 @@ public sealed class MeshNodeEditorView : MauiView<MeshNodeEditorControl>
     private void Persist(string? name)
     {
         if (Stream is null || string.IsNullOrEmpty(Model.NodePath)) return;
-        Stream.Hub.GetMeshNodeStream(Model.NodePath).Update(n => n with { Name = name }).Subscribe(_ => { }, _ => { });
+        Stream.Hub.GetMeshNodeStream(Model.NodePath).Update(n => n with { Name = name })
+            .Subscribe(_ => { }, ex => LogWrite(ex, "rename node", Model.NodePath));
     }
 }
 
