@@ -77,12 +77,12 @@ jobs:
         run: >
           dotnet publish memex/aspire/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj
           -c Release --no-self-contained -t:PublishContainer -p:PublishProfile=
-          -p:RuntimeIdentifiers="linux-x64;linux-arm64"
-          -p:ContainerRuntimeIdentifiers="linux-x64;linux-arm64"
+          -p:RuntimeIdentifiers="linux-x64%3Blinux-arm64"
+          -p:ContainerRuntimeIdentifiers="linux-x64%3Blinux-arm64"
           -p:Version=$VERSION
           -p:ContainerRegistry=ghcr.io
           -p:ContainerRepository=$IMAGE_NS/memex-portal-ai
-          -p:ContainerImageTags="$VERSION;latest"
+          -p:ContainerImageTags="$VERSION%3Blatest"
           -p:ContainerBaseImage=ghcr.io/$IMAGE_NS/memex-portal-ai-base:$VERSION
 
       # 3. lean portal app image (default — already multi-arch — SDK aspnet base, no co-hosted CLIs).
@@ -90,24 +90,24 @@ jobs:
         run: >
           dotnet publish memex/aspire/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj
           -c Release --no-self-contained -t:PublishContainer -p:PublishProfile=
-          -p:RuntimeIdentifiers="linux-x64;linux-arm64"
-          -p:ContainerRuntimeIdentifiers="linux-x64;linux-arm64"
+          -p:RuntimeIdentifiers="linux-x64%3Blinux-arm64"
+          -p:ContainerRuntimeIdentifiers="linux-x64%3Blinux-arm64"
           -p:Version=$VERSION
           -p:ContainerRegistry=ghcr.io
           -p:ContainerRepository=$IMAGE_NS/memex-portal
-          -p:ContainerImageTags="$VERSION;latest"
+          -p:ContainerImageTags="$VERSION%3Blatest"
 
       # 4. db-migration image (SDK container build, default — already multi-arch — base).
       - name: Build + push migration
         run: >
           dotnet publish memex/aspire/Memex.Database.Migration/Memex.Database.Migration.csproj
           -c Release --no-self-contained -t:PublishContainer -p:PublishProfile=
-          -p:RuntimeIdentifiers="linux-x64;linux-arm64"
-          -p:ContainerRuntimeIdentifiers="linux-x64;linux-arm64"
+          -p:RuntimeIdentifiers="linux-x64%3Blinux-arm64"
+          -p:ContainerRuntimeIdentifiers="linux-x64%3Blinux-arm64"
           -p:Version=$VERSION
           -p:ContainerRegistry=ghcr.io
           -p:ContainerRepository=$IMAGE_NS/memex-migration
-          -p:ContainerImageTags="$VERSION;latest"
+          -p:ContainerImageTags="$VERSION%3Blatest"
 
       # 5. Mirror the released (clean-version) images into ACR (meshweaver.azurecr.io). The continuous
       #    channel ships to ACR (main-cd.yml); mirroring the official release there too means an
