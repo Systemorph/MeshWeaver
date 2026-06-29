@@ -434,6 +434,27 @@ internal static class MauiHtmlDocument
 {
     public static HtmlWebViewSource ForBody(string bodyHtml) => new() { Html = Wrap(bodyHtml) };
 
+    /// <summary>
+    /// Makes a content <see cref="WebView"/> grow to fit its rendered HTML (JS <c>document.body.scrollHeight</c>),
+    /// re-measured on every navigation/content change. Without this a content WebView stays at its fixed
+    /// <c>HeightRequest</c> and CLIPS anything taller (the space-home / Doc markdown cut-off). The outer
+    /// <see cref="ScrollView"/> then scrolls the whole area. Mirrors the interactive-markdown chunk sizing.
+    /// </summary>
+    public static void AutoSizeToContent(WebView web)
+    {
+        web.Navigated += async (_, _) =>
+        {
+            try
+            {
+                var h = await web.EvaluateJavaScriptAsync("document.body.scrollHeight");
+                if (double.TryParse(h, System.Globalization.NumberStyles.Any,
+                        System.Globalization.CultureInfo.InvariantCulture, out var px) && px > 0)
+                    MainThread.BeginInvokeOnMainThread(() => web.HeightRequest = px + 8);
+            }
+            catch { /* keep the current height on a measurement failure */ }
+        };
+    }
+
     // $$"""…""" raw interpolation: single { } are LITERAL CSS braces; {{bodyHtml}} is the one interpolation.
     private static string Wrap(string bodyHtml) => $$"""
         <!DOCTYPE html>
@@ -464,8 +485,12 @@ internal static class MauiHtmlDocument
 public sealed class HtmlView : MauiView<HtmlControl>
 {
     private WebView _web = null!;
-    protected override View CreateView() =>
-        _web = new WebView { HeightRequest = 120, BackgroundColor = Colors.Transparent };
+    protected override View CreateView()
+    {
+        _web = new WebView { HeightRequest = 40, BackgroundColor = Colors.Transparent };
+        MauiHtmlDocument.AutoSizeToContent(_web);   // grow to content; never clip at a fixed height
+        return _web;
+    }
     protected override void Bind() =>
         Bind<object>(Model.Data, v => _web.Source = MauiHtmlDocument.ForBody(v?.ToString() ?? ""));
 }
@@ -488,7 +513,11 @@ public sealed class MarkdownView : MauiView<MarkdownControl>
     {
         // Relative @@ embeds resolve against the authoring node's path (mirrors MarkdownView.razor.cs).
         _nodePath = Model.NodePath;
-        return _web = new WebView { HeightRequest = 240, BackgroundColor = Colors.Transparent };
+        _web = new WebView { HeightRequest = 40, BackgroundColor = Colors.Transparent };
+        // Grow to fit the rendered markdown — a fixed 240px clipped the space-home / Doc content
+        // ("cut off at Bring in existing files"). The node area's outer ScrollView scrolls the whole page.
+        MauiHtmlDocument.AutoSizeToContent(_web);
+        return _web;
     }
 
     protected override void Bind() =>
@@ -603,19 +632,9 @@ public sealed class MauiCollaborativeMarkdownView : MauiView<CollaborativeMarkdo
     // A WebView chunk in MarkdownView's dark/sans shell, auto-sized to its content (JS scrollHeight).
     private static View NewHtmlChunk(string bodyHtml)
     {
-        var web = new WebView { HeightRequest = 80, BackgroundColor = Colors.Transparent };
+        var web = new WebView { HeightRequest = 40, BackgroundColor = Colors.Transparent };
+        MauiHtmlDocument.AutoSizeToContent(web);
         web.Source = MauiHtmlDocument.ForBody(bodyHtml);
-        web.Navigated += async (_, _) =>
-        {
-            try
-            {
-                var h = await web.EvaluateJavaScriptAsync("document.body.scrollHeight");
-                if (double.TryParse(h, System.Globalization.NumberStyles.Any,
-                        System.Globalization.CultureInfo.InvariantCulture, out var px) && px > 0)
-                    MainThread.BeginInvokeOnMainThread(() => web.HeightRequest = px + 8);
-            }
-            catch { /* keep the fallback height */ }
-        };
         return web;
     }
 
