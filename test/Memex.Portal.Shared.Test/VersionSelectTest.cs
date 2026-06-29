@@ -32,6 +32,15 @@ public class VersionSelectTest
     public void PickTarget_NoParseableTags_ReturnsNull()
         => Assert.Null(VersionSelect.PickTarget(["latest", "main", "garbage"], UpdatePolicyKind.Continuous));
 
+    [Fact]
+    public void Continuous_IgnoresPerArchRidTags_PrefersManifestList()
+        // The multi-arch CD pushes the manifest list (3.0.0-ci.43) alongside per-RID image tags whose
+        // suffix parses as an extra pre-release identifier that sorts ABOVE it. The poller must roll to the
+        // manifest list, never the x64-only image (which would be wrong-arch on an arm64 node).
+        => Assert.Equal("3.0.0-ci.43", VersionSelect.PickTarget(
+            ["3.0.0-ci.43", "3.0.0-ci.43-linux-x64", "3.0.0-ci.43-linux-arm64", "main", "main-linux-x64"],
+            UpdatePolicyKind.Continuous));
+
     // CI-green gate: a `-edge.N` build is UNVERIFIED. Default (RequireCiGreen=true) must skip it even
     // though it is the newest; opting into "any" (RequireCiGreen=false) rolls to it.
     [Fact]
