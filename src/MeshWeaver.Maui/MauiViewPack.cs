@@ -1654,12 +1654,61 @@ public sealed class AppearanceView : MauiView<AppearanceControl>
     }
 }
 
-/// <summary>Item template → renders the control's <c>View</c> child area (the per-item template area). True
-/// per-item iteration with item data-contexts is a later wave; this renders the template area natively.</summary>
+/// <summary>Item template → iterates the bound <c>Data</c> collection, rendering the template control once per
+/// item with each item's DataContext (<c>{DataContext}{Data}/{i}</c>) — faithful to the Blazor ItemTemplate:
+/// the server renders the template once into <c>{Area}/View</c>; the client repeats it per index. Orientation
+/// is honoured; Wrap is a later refinement (native StackLayout doesn't wrap).</summary>
 public sealed class ItemTemplateView : MauiView<ItemTemplateControl>
 {
-    protected override View CreateView() =>
-        Stream is not null ? (View)Renderer.RenderArea(Stream, "View") : new ContentView();
+    private StackLayout _root = null!;
+    private int _count;
+    private UiControl? _template;
+
+    protected override View CreateView() => _root = new StackLayout
+    {
+        Spacing = 6,
+        Orientation = Model.Orientation == MeshWeaver.Layout.Orientation.Horizontal
+            ? StackOrientation.Horizontal : StackOrientation.Vertical,
+    };
+
+    protected override void Bind()
+    {
+        if (Stream is null) return;
+        var viewArea = $"{Area}/{ItemTemplateControl.ViewArea}";
+        // The server renders the template once into {Area}/View — keep the latest rendered template control.
+        var tpl = Stream.GetControlStream(viewArea)
+            .Subscribe(c => MainThread.BeginInvokeOnMainThread(() => { _template = c as UiControl; Rebuild(); }),
+                       ex => LogWrite(ex, "item-template control stream"));
+        Disposables.Add(tpl);
+        // Item count from the bound data collection (pointer → JSON array, or a literal collection).
+        Bind<object>(Model.Data, v =>
+        {
+            _count = v switch
+            {
+                JsonElement je when je.ValueKind == JsonValueKind.Array => je.GetArrayLength(),
+                System.Collections.ICollection c => c.Count,
+                System.Collections.IEnumerable e => e.Cast<object>().Count(),
+                _ => 0,
+            };
+            Rebuild();
+        });
+    }
+
+    // Repeat the template per index, pointing each item's DataContext into the collection — identical path
+    // construction to the Blazor GetViewWithPath(i); the shared renderer binds each item against the stream.
+    private void Rebuild()
+    {
+        if (Stream is null) return;
+        _root.Children.Clear();
+        var template = _template ?? Model.View;
+        if (template is null || _count <= 0) return;
+        var viewArea = $"{Area}/{ItemTemplateControl.ViewArea}";
+        for (var i = 0; i < _count; i++)
+        {
+            var item = template with { DataContext = $"{Model.DataContext}{Model.Data}/{i}" };
+            _root.Children.Add(Renderer.RenderControl(item, Stream, viewArea));
+        }
+    }
 }
 
 /// <summary>Layout-area definition → a tappable card with the area's thumbnail (light variant). Links to the
