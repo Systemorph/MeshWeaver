@@ -368,6 +368,10 @@ public static class MauiViewPackExtensions
         .Register<DialogControl, DialogView>()
         // Phase 4 — charts via LiveCharts2 (OSS/MIT).
         .Register<ChartControl, ChartView>()
+        // Phase 4 — editors (markdown / code / diff) — native Editor-based.
+        .Register<MarkdownEditorControl, MarkdownEditorView>()
+        .Register<CodeEditorControl, CodeEditorView>()
+        .Register<DiffEditorControl, DiffEditorView>()
         // Embedded remote area (e.g. the home page's bottom chat composer) → the existing LayoutAreaView.
         .Register<LayoutAreaControl, LayoutAreaControlView>()
         // Wave 2 — nav + badges.
@@ -1210,6 +1214,77 @@ public sealed class ChartView : MauiView<ChartControl>
             JsonElement je when je.ValueKind == JsonValueKind.Number => je.GetDouble(),
             _ => double.TryParse(v.ToString(), out var p) ? p : dflt,
         };
+}
+
+/// <summary>Markdown editor → a native multi-line <see cref="Editor"/> bound to <c>Value</c> (writes back
+/// through the pointer; honours Readonly). The Monaco preview/comments/track-changes panels are a later
+/// wave — this gives native markdown editing.</summary>
+public sealed class MarkdownEditorView : FormMauiView<MarkdownEditorControl>
+{
+    private Editor _editor = null!;
+    protected override View CreateView()
+    {
+        _editor = new Editor
+        {
+            AutoSize = EditorAutoSizeOption.TextChanges, FontSize = 14, TextColor = Colors.White,
+            Placeholder = MarkdownViewLogic.CoerceString(Model.Placeholder), IsReadOnly = AsFlag(Model.Readonly),
+        };
+        _editor.TextChanged += (_, _) => Write(Model.Value, _editor.Text);
+        return _editor;
+    }
+    protected override void Bind() => BindValue<string>(Model.Value, v => _editor.Text = v ?? "");
+    internal static bool AsFlag(object? v) => v is true || (v is JsonElement je && je.ValueKind == JsonValueKind.True);
+}
+
+/// <summary>Code editor → a native monospace <see cref="Editor"/> bound to <c>Value</c> with a language
+/// caption (writes back through the pointer; honours Readonly). Monaco LSP/minimap are a later wave.</summary>
+public sealed class CodeEditorView : FormMauiView<CodeEditorControl>
+{
+    private Editor _editor = null!;
+    protected override View CreateView()
+    {
+        var lang = MarkdownViewLogic.CoerceString(Model.Language);
+        _editor = new Editor
+        {
+            FontFamily = "Menlo", FontSize = 13, TextColor = Color.FromArgb("#E0E0E0"),
+            AutoSize = EditorAutoSizeOption.TextChanges, IsReadOnly = MarkdownEditorView.AsFlag(Model.Readonly),
+        };
+        _editor.TextChanged += (_, _) => Write(Model.Value, _editor.Text);
+        var caption = new Label { Text = string.IsNullOrWhiteSpace(lang) ? "code" : lang, FontSize = 10, TextColor = Color.FromArgb("#9A9A9A") };
+        return new VerticalStackLayout { Spacing = 2, Children = { caption, _editor } };
+    }
+    protected override void Bind() => BindValue<string>(Model.Value, v => _editor.Text = v ?? "");
+}
+
+/// <summary>Diff editor → two side-by-side read-only monospace panels (original | modified) with labels —
+/// the native counterpart of the Monaco side-by-side diff.</summary>
+public sealed class DiffEditorView : MauiView<DiffEditorControl>
+{
+    protected override View CreateView()
+    {
+        var grid = new Grid { ColumnSpacing = 8, ColumnDefinitions = { new(GridLength.Star), new(GridLength.Star) } };
+        grid.Add(Pane(Model.OriginalLabel, Model.OriginalContent), 0, 0);
+        grid.Add(Pane(Model.ModifiedLabel, Model.ModifiedContent), 1, 0);
+        return grid;
+    }
+    private static View Pane(string label, string content)
+    {
+        var stack = new VerticalStackLayout
+        {
+            Spacing = 4,
+            Children =
+            {
+                new Label { Text = label, FontSize = 11, FontAttributes = FontAttributes.Bold, TextColor = Color.FromArgb("#C0C0C0") },
+                new Label { Text = content, FontFamily = "Menlo", FontSize = 12, TextColor = Color.FromArgb("#E0E0E0") },
+            },
+        };
+        return new Border
+        {
+            Padding = 8, BackgroundColor = Color.FromArgb("#1E1E1E"), StrokeThickness = 0,
+            StrokeShape = new Microsoft.Maui.Controls.Shapes.RoundRectangle { CornerRadius = 6 },
+            Content = new ScrollView { Orientation = ScrollOrientation.Horizontal, Content = stack },
+        };
+    }
 }
 
 /// <summary>Tabular data → a header + rows (read-only this wave; sorting/virtualization later).</summary>

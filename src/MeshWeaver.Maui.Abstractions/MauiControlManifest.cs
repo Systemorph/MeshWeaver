@@ -39,8 +39,8 @@ public static class MauiControlManifest
         "SearchBoxControl",
         // Phase 3 — redirect + code sample + dialog
         "RedirectControl", "CodeSampleControl", "DialogControl",
-        // Phase 4 — charts (LiveCharts2)
-        "ChartControl",
+        // Phase 4 — charts (LiveCharts2) + editors (markdown/code/diff)
+        "ChartControl", "MarkdownEditorControl", "CodeEditorControl", "DiffEditorControl",
     };
 
     /// <summary>Concrete controls not yet given a native view — the remaining parity work (Phases 3-5).</summary>
@@ -51,9 +51,8 @@ public static class MauiControlManifest
         "EditorControl", "ItemTemplateControl", "AppearanceControl",
         "UserProfileControl", "FileBrowserControl", "NodeImportControl", "NodeExportControl",
         "ExportDocumentControl", "LayoutAreaDefinitionControl",
-        // Phase 4 — rich data + editors (OSS libs)
-        "PivotGridControl", "CodeEditorControl", "DiffEditorControl",
-        "MarkdownEditorControl",
+        // Phase 4 — rich data (OSS libs)
+        "PivotGridControl",
         // DataGrid column control (rendered by the grid, not standalone). PropertyColumnControl is
         // generic (PropertyColumnControl<T>) so it isn't a concrete control in the coverage scan.
         "TemplateColumnControl",
