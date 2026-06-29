@@ -1,0 +1,16 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Tier-3 of the MAUI test layer: native end-to-end UI tests that DRIVE the running maccatalyst app via
+    Appium's Mac2 driver (the Playwright-equivalent for native MAUI — Playwright only drives the Blazor web
+    portal). Unlike Tiers 1/2 these need a live stack: a running `appium` server, the `mac2` driver, the
+    built Memex.Client.app, and a one-time macOS Accessibility grant. Tests SKIP themselves when the Appium
+    server isn't reachable, so a normal `dotnet test` / CI run stays green; they execute only when the local
+    Appium stack is up. Drives over HTTP — no reference to the view pack.
+  -->
+
+  <ItemGroup>
+    <PackageReference Include="Appium.WebDriver" />
+  </ItemGroup>
+
+</Project>

@@ -5,6 +5,7 @@
   </PropertyGroup>
   <ItemGroup>
     <PackageVersion Include="AngleSharp" Version="1.4.0" />
+    <PackageVersion Include="Appium.WebDriver" Version="8.3.0" />
     <PackageVersion Include="AspectCore.Extensions.Reflection" Version="2.4.0" />
     <PackageVersion Include="Aspire.Azure.Npgsql" Version="13.4.5" />
     <PackageVersion Include="Aspire.Azure.Storage.Blobs" Version="13.4.5" />

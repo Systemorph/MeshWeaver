@@ -135,6 +135,7 @@
     <Project Path="test/MeshWeaver.Markdown.Test/MeshWeaver.Markdown.Test.csproj" />
     <Project Path="test/MeshWeaver.MathDemo.Test/MeshWeaver.MathDemo.Test.csproj" />
     <Project Path="test/MeshWeaver.Maui.Abstractions.Test/MeshWeaver.Maui.Abstractions.Test.csproj" />
+    <Project Path="test/MeshWeaver.Maui.E2E.Test/MeshWeaver.Maui.E2E.Test.csproj" />
     <Project Path="test/MeshWeaver.Maui.Integration.Test/MeshWeaver.Maui.Integration.Test.csproj" />
     <Project Path="test/MeshWeaver.Messaging.Hub.Test/MeshWeaver.Messaging.Hub.Test.csproj" />
     <Project Path="test/MeshWeaver.NodeOperations.Test/MeshWeaver.NodeOperations.Test.csproj" />

@@ -1666,8 +1666,9 @@ public sealed class ThreadChatView : MauiView<ThreadChatControl>
         {
             Placeholder = "Message…", FontSize = 15, TextColor = Colors.White,
             AutoSize = EditorAutoSizeOption.TextChanges, MinimumHeightRequest = 64,
+            AutomationId = "chat-composer",   // stable selector for the Appium E2E
         };
-        _send = new Button { Text = "Send", BackgroundColor = Colors.RoyalBlue, TextColor = Colors.White, CornerRadius = 8 };
+        _send = new Button { Text = "Send", BackgroundColor = Colors.RoyalBlue, TextColor = Colors.White, CornerRadius = 8, AutomationId = "chat-send" };
         _send.Clicked += (_, _) => Submit();
         var composerRow = new VerticalStackLayout
         {
