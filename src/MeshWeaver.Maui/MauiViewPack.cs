@@ -5,6 +5,7 @@ using MeshWeaver.AI;
 using MeshWeaver.Data;
 using MeshWeaver.GoogleMaps;
 using MeshWeaver.Graph;
+using MeshWeaver.Kernel;
 using MeshWeaver.Maui.Abstractions;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Catalog;
@@ -373,6 +374,8 @@ public static class MauiViewPackExtensions
         .Register<ChartControl, ChartView>()
         // Phase 5 — native map (MAUI Map / MapKit).
         .Register<GoogleMapControl, GoogleMapView>()
+        // Phase 4 — notebook cell (notebook itself is an IContainerControl → ContainerView).
+        .Register<NotebookCellControl, NotebookCellView>()
         // Phase 4 — editors (markdown / code / diff) — native Editor-based.
         .Register<MarkdownEditorControl, MarkdownEditorView>()
         .Register<CodeEditorControl, CodeEditorView>()
@@ -1780,6 +1783,36 @@ public sealed class GoogleMapView : MauiView<GoogleMapControl>
                 });
         return map;
     }
+}
+
+/// <summary>A notebook cell → native: the cell content (input) on a dark panel + its output below (green).
+/// The notebook itself is an IContainerControl that renders these cells via the generic ContainerView.
+/// Cell execution (run) + markdown-cell rendering (cell-type rides the skin) are later waves.</summary>
+public sealed class NotebookCellView : MauiView<NotebookCellControl>
+{
+    protected override View CreateView()
+    {
+        // The cell carries Content (input) + Output (result); cell-type/language ride the skin.
+        var content = MarkdownViewLogic.CoerceString(Model.Content) ?? "";
+        var stack = new VerticalStackLayout { Spacing = 4 };
+        if (!string.IsNullOrWhiteSpace(content))
+            stack.Children.Add(MonoPanel(content, "#1E1E1E", "#E0E0E0"));
+        var output = MarkdownViewLogic.CoerceString(Model.Output);
+        if (!string.IsNullOrWhiteSpace(output))
+            stack.Children.Add(MonoPanel(output!, "#16201A", "#98C379"));
+        return stack;
+    }
+
+    private static View MonoPanel(string text, string bg, string fg) => new Border
+    {
+        Padding = 8, BackgroundColor = Color.FromArgb(bg), StrokeThickness = 0,
+        StrokeShape = new Microsoft.Maui.Controls.Shapes.RoundRectangle { CornerRadius = 6 },
+        Content = new ScrollView
+        {
+            Orientation = ScrollOrientation.Horizontal,
+            Content = new Label { Text = text, FontFamily = "Menlo", FontSize = 12, TextColor = Color.FromArgb(fg) },
+        },
+    };
 }
 
 /// <summary>Tabular data → a header + rows (read-only this wave; sorting/virtualization later).</summary>
