@@ -66,23 +66,28 @@ jobs:
             -t "$BASE:$VERSION" -t "$BASE:latest" \
             --push deploy/base-images/portal-ai
 
-      # MULTI-ARCH (steps 2-4): drop `-r linux-x64`; set RuntimeIdentifiers + ContainerRuntimeIdentifiers
-      # to "linux-x64;linux-arm64". With no single RID, the SDK (>= 8.0.405; we're on .NET 10) publishes
-      # per-RID and combines them into an OCI Image Index (manifest list) — one tag, both architectures.
-      # ContainerRuntimeIdentifiers MUST be a subset of RuntimeIdentifiers (we set them equal). The arm64
-      # leg pulls the arm64 layer from the multi-arch base built above.
+      # MULTI-ARCH (steps 2-4): drop `-r linux-x64`; set ContainerRuntimeIdentifiers to "linux-x64;linux-arm64".
+      # With no single RID, the SDK (>= 8.0.405; we're on .NET 10) publishes per-RID and combines them into an
+      # OCI Image Index (manifest list) — one tag, both architectures. ContainerRuntimeIdentifiers MUST be a
+      # subset of RuntimeIdentifiers — that subset requirement is why <RuntimeIdentifiers>linux-x64;linux-arm64
+      # </RuntimeIdentifiers> is declared INSIDE the csprojs (project-local), NOT as a global `-p:RuntimeIdentifiers`
+      # (a global `-p:` propagates to every ProjectReference → ~6 libs fail `NETSDK1083: RuntimeIdentifier
+      # 'linux-x64;linux-arm64' is not recognized`). The arm64 leg pulls the arm64 layer from the multi-arch base above.
+      # 🚨 List-valued `-p:` props use REAL `;` kept as ONE CLI switch, NOT `%3B`: `%3B` is an MSBuild-ESCAPED
+      # (literal) semicolon, so a%3Bb is a SINGLE bogus RID "a;b" that never splits → build fails. Static lists use
+      # '"a;b"' (single-quoted double-quotes); lists containing a bash var ($VERSION) use "\"$VERSION;latest\"" so
+      # bash expands the var while MSBuild still gets the value as one switch with a splittable real `;`.
 
       # 2. portal-ai app image (SDK container build, layered on the multi-arch base; CLIs baked in).
       - name: Build + push portal-ai
         run: >
           dotnet publish memex/aspire/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj
           -c Release --no-self-contained -t:PublishContainer -p:PublishProfile=
-          -p:RuntimeIdentifiers="linux-x64%3Blinux-arm64"
-          -p:ContainerRuntimeIdentifiers="linux-x64%3Blinux-arm64"
+          -p:ContainerRuntimeIdentifiers='"linux-x64;linux-arm64"'
           -p:Version=$VERSION
           -p:ContainerRegistry=ghcr.io
           -p:ContainerRepository=$IMAGE_NS/memex-portal-ai
-          -p:ContainerImageTags="$VERSION%3Blatest"
+          -p:ContainerImageTags="\"$VERSION;latest\""
           -p:ContainerBaseImage=ghcr.io/$IMAGE_NS/memex-portal-ai-base:$VERSION
 
       # 3. lean portal app image (default — already multi-arch — SDK aspnet base, no co-hosted CLIs).
@@ -90,24 +95,22 @@ jobs:
         run: >
           dotnet publish memex/aspire/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj
           -c Release --no-self-contained -t:PublishContainer -p:PublishProfile=
-          -p:RuntimeIdentifiers="linux-x64%3Blinux-arm64"
-          -p:ContainerRuntimeIdentifiers="linux-x64%3Blinux-arm64"
+          -p:ContainerRuntimeIdentifiers='"linux-x64;linux-arm64"'
           -p:Version=$VERSION
           -p:ContainerRegistry=ghcr.io
           -p:ContainerRepository=$IMAGE_NS/memex-portal
-          -p:ContainerImageTags="$VERSION%3Blatest"
+          -p:ContainerImageTags="\"$VERSION;latest\""
 
       # 4. db-migration image (SDK container build, default — already multi-arch — base).
       - name: Build + push migration
         run: >
           dotnet publish memex/aspire/Memex.Database.Migration/Memex.Database.Migration.csproj
           -c Release --no-self-contained -t:PublishContainer -p:PublishProfile=
-          -p:RuntimeIdentifiers="linux-x64%3Blinux-arm64"
-          -p:ContainerRuntimeIdentifiers="linux-x64%3Blinux-arm64"
+          -p:ContainerRuntimeIdentifiers='"linux-x64;linux-arm64"'
           -p:Version=$VERSION
           -p:ContainerRegistry=ghcr.io
           -p:ContainerRepository=$IMAGE_NS/memex-migration
-          -p:ContainerImageTags="$VERSION%3Blatest"
+          -p:ContainerImageTags="\"$VERSION;latest\""
 
       # 5. Mirror the released (clean-version) images into ACR (meshweaver.azurecr.io). The continuous
       #    channel ships to ACR (main-cd.yml); mirroring the official release there too means an
