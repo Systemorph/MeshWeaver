@@ -361,6 +361,9 @@ public static class MauiViewPackExtensions
         .Register<CatalogControl, CatalogView>()
         .Register<MeshNodeCollectionControl, MeshNodeCollectionView>()
         .Register<SearchBoxControl, SearchBoxView>()
+        // Phase 3 — redirect (navigate-on-render) + code sample.
+        .Register<RedirectControl, RedirectView>()
+        .Register<CodeSampleControl, CodeSampleView>()
         // Embedded remote area (e.g. the home page's bottom chat composer) → the existing LayoutAreaView.
         .Register<LayoutAreaControl, LayoutAreaControlView>()
         // Wave 2 — nav + badges.
@@ -1062,6 +1065,37 @@ public sealed class SearchBoxView : MauiView<SearchBoxControl>
             _results.Children.Add(lbl);
         }
     }
+}
+
+/// <summary>A redirect → navigates the shell to <see cref="RedirectControl.Href"/> on render (via
+/// <see cref="IMauiNavigator"/>); renders nothing itself. The native counterpart of the portal's redirect.</summary>
+public sealed class RedirectView : MauiView<RedirectControl>
+{
+    protected override View CreateView() => new ContentView();
+    protected override void Bind()
+    {
+        var href = MarkdownViewLogic.CoerceString(Model.Href);
+        if (!string.IsNullOrWhiteSpace(href) && Stream is not null)
+            MainThread.BeginInvokeOnMainThread(() =>
+                Stream.Hub.ServiceProvider.GetService<IMauiNavigator>()?.NavigateTo(href!));
+    }
+}
+
+/// <summary>A code sample → a monospace, horizontally-scrollable code block on a dark panel.</summary>
+public sealed class CodeSampleView : MauiView<CodeSampleControl>
+{
+    private Label _code = null!;
+    protected override View CreateView()
+    {
+        _code = new Label { FontFamily = "Menlo", FontSize = 13, TextColor = Color.FromArgb("#E0E0E0") };
+        return new Border
+        {
+            Padding = 10, BackgroundColor = Color.FromArgb("#1E1E1E"), StrokeThickness = 0,
+            StrokeShape = new Microsoft.Maui.Controls.Shapes.RoundRectangle { CornerRadius = 6 },
+            Content = new ScrollView { Orientation = ScrollOrientation.Horizontal, Content = _code },
+        };
+    }
+    protected override void Bind() => Bind<object>(Model.Data, v => _code.Text = MarkdownViewLogic.CoerceString(v) ?? "");
 }
 
 /// <summary>Tabular data → a header + rows (read-only this wave; sorting/virtualization later).</summary>

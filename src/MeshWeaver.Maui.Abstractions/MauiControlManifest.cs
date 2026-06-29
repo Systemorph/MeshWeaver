@@ -37,6 +37,8 @@ public static class MauiControlManifest
         // Phase 3 — node display cards + grouped catalog + query-driven collection + search box
         "MeshNodeCardControl", "MeshNodeThumbnailControl", "CatalogControl", "MeshNodeCollectionControl",
         "SearchBoxControl",
+        // Phase 3 — redirect + code sample
+        "RedirectControl", "CodeSampleControl",
     };
 
     /// <summary>Concrete controls not yet given a native view — the remaining parity work (Phases 3-5).</summary>
@@ -44,12 +46,12 @@ public static class MauiControlManifest
     {
         // Phase 3 — node management / misc
         "MeshNodeEditorControl", "MeshNodeRoleEditorControl", "DialogControl", "EditFormControl",
-        "EditorControl", "ItemTemplateControl", "RedirectControl", "AppearanceControl",
+        "EditorControl", "ItemTemplateControl", "AppearanceControl",
         "UserProfileControl", "FileBrowserControl", "NodeImportControl", "NodeExportControl",
         "ExportDocumentControl", "LayoutAreaDefinitionControl",
         // Phase 4 — rich data + editors (OSS libs)
         "ChartControl", "PivotGridControl", "CodeEditorControl", "DiffEditorControl",
-        "MarkdownEditorControl", "CodeSampleControl",
+        "MarkdownEditorControl",
         // DataGrid column control (rendered by the grid, not standalone). PropertyColumnControl is
         // generic (PropertyColumnControl<T>) so it isn't a concrete control in the coverage scan.
         "TemplateColumnControl",
