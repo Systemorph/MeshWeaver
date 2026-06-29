@@ -20,7 +20,7 @@ namespace Memex.Portal.Shared.Teams;
 /// <summary>
 /// Delivers agent replies back into Teams. Watches the <see cref="TeamsConversation"/> link nodes; for
 /// each, observes its thread the <b>exact same way the GUI and tests do</b>
-/// (<c>workspace.GetMeshNodeStream(threadPath)</c> → <see cref="MeshThread"/>, wait for
+/// (<c>workspace.GetMeshNodeStream(threadPath)</c> → <c>MeshThread</c>, wait for
 /// <c>!IsExecuting</c> with a new <c>Messages[^1]</c>), reads that response message node at
 /// <c>{threadPath}/{messageId}</c> (<see cref="ThreadMessage"/>, public <c>Text</c>), and posts it via
 /// <see cref="ITeamsClient"/>. Send-once is tracked by <see cref="TeamsConversation.LastDeliveredMessageId"/>

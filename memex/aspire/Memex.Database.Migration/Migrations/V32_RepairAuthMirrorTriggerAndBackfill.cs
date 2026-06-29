@@ -16,7 +16,7 @@ namespace Memex.Database.Migration.Migrations;
 /// on a fresh DB. So fresh deployments ended up at <c>db_version=31</c> with no mirror
 /// function, no triggers on any partition, and an empty <c>auth</c> schema — every auth
 /// lookup silently fell back to a cross-partition fan-out. (Confirmed on
-/// <c>memex.systemorph.com</c> 2026-06-02: <c>FUNC=0</c>, triggers <c>NONE</c>, <c>auth=0</c>.)
+/// <c>memex.systemorph.com</c> 2026-06-02: <c>FUNC=0</c>, triggers <c>NONE</c>, <c>auth=0</c>.)</para>
 ///
 /// <para><b>The repair (idempotent).</b>
 /// <list type="number">

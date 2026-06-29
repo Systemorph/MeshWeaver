@@ -8,7 +8,7 @@ namespace Memex.Database.Migration.Migrations;
 ///
 ///   1. <b>Stale ApiToken duplicates</b> — rows like
 ///      <c>(ns='User/&lt;userid&gt;/ApiToken', id=&lt;hashPrefix&gt;)</c> written by the
-///      pre-fix <see cref="Memex.Portal.Shared.Authentication.ApiTokenService"/>
+///      pre-fix <c>ApiTokenService</c>
 ///      whose post-fix replacements already exist at
 ///      <c>(ns='&lt;userid&gt;/ApiToken', id=&lt;hashPrefix&gt;)</c> in the user partition.
 ///      We move the row into the user partition under the correct namespace; if a
