@@ -141,6 +141,13 @@ public static class AIExtensions
             .WithType(typeof(MeshWeaver.Mesh.Security.User), nameof(MeshWeaver.Mesh.Security.User))
             .WithType(typeof(MeshWeaver.Mesh.Activity.UserActivityRecord), typeof(MeshWeaver.Mesh.Activity.UserActivityRecord).FullName!)
             .WithType(typeof(MeshWeaver.Mesh.Activity.UserActivityRecord), nameof(MeshWeaver.Mesh.Activity.UserActivityRecord))
+            // ThreadViewModel: the thread per-node hub serialises it with the FULL-name $type when its
+            // registry lacks it; a hub that registered it under the short name then reads it back as an
+            // untyped JsonElement → renders empty / reactive waits time out → the chat circuit drops (the
+            // "GUI vanishes after a round" wedge, measured by SidePanelChatTenMessagesTest). Register BOTH
+            // names so it resolves regardless of which $type form arrives (same dual-registration as User).
+            .WithType(typeof(ThreadViewModel), typeof(ThreadViewModel).FullName!)
+            .WithType(typeof(ThreadViewModel), nameof(ThreadViewModel))
             // MessageViewModel is not registered — handled as JsonElement on the wire.
             // SubmitMessageRequest / SubmitMessageResponse deleted 2026-05-25:
             // the only mutation API is workspace.GetMeshNodeStream(path).Update(...).
