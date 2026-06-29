@@ -1,5 +1,6 @@
 using System.Reactive.Linq;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Layout;
@@ -377,6 +378,8 @@ public static class MauiViewPackExtensions
         // Wave 2 — query-driven: mesh node picker + catalog search.
         .Register<MeshNodePickerControl, MeshNodePickerView>()
         .Register<MeshSearchControl, MeshSearchView>()
+        // Node-bound editor: edits a node's content directly via GetMeshNodeStream(path).Update(...).
+        .Register<MeshNodeContentEditorControl, MeshNodeContentEditorView>()
         // Embedded remote area (e.g. the home page's bottom chat composer) → the existing LayoutAreaView.
         .Register<LayoutAreaControl, LayoutAreaControlView>()
         // Wave 2 — nav + badges.
@@ -1202,6 +1205,143 @@ public sealed class LayoutAreaControlView : MauiView<LayoutAreaControl>
         return address.Equals(workspace.Hub.Address)
             ? new LayoutAreaView(workspace, Model.Reference, Renderer)
             : new LayoutAreaView(workspace, address, Model.Reference, Renderer);
+    }
+}
+
+// ---- Wave 2 control views: node-bound editor --------------------------------------------------------
+
+/// <summary>
+/// Native, cache-bound editor for a mesh node's content — the AspNetCore-free counterpart of Blazor's
+/// <c>MeshNodeContentEditorView</c>. Binds DIRECTLY to the node stream (<c>Hub.GetMeshNodeStream(NodePath)</c>):
+/// reads stay live with the node and every field edit writes back through <c>GetMeshNodeStream(NodePath)
+/// .Update(...)</c> as a per-field read-modify-write patch. ONE source of truth (the node stream) — NO
+/// <c>/data</c> replica, NO debounced save loop (the forbidden replicate-then-save antipattern). The fields
+/// are declared on the control (reflected on the backend), so the view needs no client type registry.
+/// </summary>
+public sealed class MeshNodeContentEditorView : MauiView<MeshNodeContentEditorControl>
+{
+    private VerticalStackLayout _root = null!;
+    private string _path = "";
+    private bool _canEdit = true;
+    private bool _suppress;          // true while loading echoed node state → don't re-persist
+    private string? _focusedKey;     // the field the user is actively typing → don't clobber it
+    // One loader per field key: applies the latest node content to that field's native control.
+    private readonly Dictionary<string, Action<MeshNode>> _loaders = new();
+
+    protected override View CreateView()
+    {
+        _path = Model.NodePath ?? "";
+        _canEdit = Model.CanEdit;
+        _root = new VerticalStackLayout { Spacing = 8 };
+        foreach (var f in Model.Fields)
+            _root.Children.Add(BuildField(f));
+        return _root;
+    }
+
+    protected override void Bind()
+    {
+        if (Stream is null || string.IsNullOrEmpty(_path)) return;
+        // Bind to the node stream — reads stay live; reuse the shared cache handle.
+        var sub = Stream.Hub.GetMeshNodeStream(_path)
+            .Where(n => n is not null)
+            .Subscribe(node => MainThread.BeginInvokeOnMainThread(() =>
+            {
+                _suppress = true;
+                try { foreach (var load in _loaders.Values) load(node!); }
+                finally { _suppress = false; }
+            }));
+        Disposables.Add(sub);
+    }
+
+    private View BuildField(MeshNodeEditorField f)
+    {
+        var label = new Label { Text = f.Label, FontSize = 12, TextColor = Colors.Gray };
+        View input;
+        switch (f.Kind)
+        {
+            case MeshNodeEditorFieldKind.Bool:
+            {
+                var cb = new CheckBox { IsEnabled = _canEdit };
+                cb.CheckedChanged += (_, e) => { if (!_suppress) Persist(f.Key, JsonValue.Create(e.Value)); };
+                _loaders[f.Key] = node =>
+                {
+                    var v = FieldValue(node, f.Key);
+                    cb.IsChecked = v is JsonValue jb && jb.TryGetValue<bool>(out var b) && b;
+                };
+                input = cb;
+                break;
+            }
+            case MeshNodeEditorFieldKind.Enum:
+            {
+                var picker = new Picker { IsEnabled = _canEdit };
+                foreach (var o in f.Options) picker.Items.Add(o);
+                picker.SelectedIndexChanged += (_, _) =>
+                {
+                    if (_suppress) return;
+                    var val = picker.SelectedIndex >= 0 ? f.Options[picker.SelectedIndex] : null;
+                    Persist(f.Key, val is null ? null : JsonValue.Create(val));
+                };
+                _loaders[f.Key] = node =>
+                {
+                    var v = FieldValue(node, f.Key)?.ToString();
+                    picker.SelectedIndex = v is null ? -1 : f.Options.IndexOf(v);
+                };
+                input = picker;
+                break;
+            }
+            default: // Text
+            {
+                var entry = new Entry { IsEnabled = _canEdit };
+                entry.Focused += (_, _) => _focusedKey = f.Key;
+                entry.Unfocused += (_, _) => { if (_focusedKey == f.Key) _focusedKey = null; };
+                entry.TextChanged += (_, e) =>
+                {
+                    if (!_suppress)
+                        Persist(f.Key, string.IsNullOrEmpty(e.NewTextValue) ? null : JsonValue.Create(e.NewTextValue));
+                };
+                _loaders[f.Key] = node =>
+                {
+                    if (f.Key == _focusedKey) return; // don't clobber the active edit with an echo
+                    var v = FieldValue(node, f.Key);
+                    entry.Text = v is JsonValue js ? js.ToString() : v?.ToString() ?? "";
+                };
+                input = entry;
+                break;
+            }
+        }
+        return new VerticalStackLayout { Spacing = 2, Children = { label, input } };
+    }
+
+    private JsonNode? FieldValue(MeshNode node, string key) => ToJsonObject(node.Content)?[key];
+
+    /// <summary>Per-field read-modify-write straight to the node via the cache: re-read the latest content
+    /// inside the lambda and set ONLY this field, so concurrent writers / hidden fields aren't clobbered.</summary>
+    private void Persist(string key, JsonNode? value)
+    {
+        if (!_canEdit || Stream is null || string.IsNullOrEmpty(_path)) return;
+        var opts = Stream.Hub.JsonSerializerOptions;
+        var logger = Stream.Hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger<MeshNodeContentEditorView>();
+        Stream.Hub.GetMeshNodeStream(_path)
+            .Update(node =>
+            {
+                var obj = ToJsonObject(node.Content) ?? new JsonObject();
+                obj[key] = value is null ? null : JsonNode.Parse(value.ToJsonString());
+                return node with { Content = JsonSerializer.SerializeToElement<object>(obj, opts) };
+            })
+            .Subscribe(_ => { }, ex => logger?.LogWarning(ex,
+                "MeshNodeContentEditor: persist failed for {Path} field {Key}", _path, key));
+    }
+
+    private JsonObject? ToJsonObject(object? content)
+    {
+        if (content is null) return null;
+        try
+        {
+            return content is JsonElement je
+                ? JsonNode.Parse(je.GetRawText()) as JsonObject
+                : JsonSerializer.SerializeToNode(content, Stream!.Hub.JsonSerializerOptions) as JsonObject;
+        }
+        catch { return null; }
     }
 }
 
