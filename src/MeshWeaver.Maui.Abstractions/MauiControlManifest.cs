@@ -34,8 +34,9 @@ public static class MauiControlManifest
         "LayoutAreaControl", "BadgeControl", "NavLinkControl", "MenuItemControl",
         // Agent-backed chat
         "ThreadChatControl", "ThreadMessageBubbleControl",
-        // Phase 3 — node display cards + grouped catalog + query-driven collection
+        // Phase 3 — node display cards + grouped catalog + query-driven collection + search box
         "MeshNodeCardControl", "MeshNodeThumbnailControl", "CatalogControl", "MeshNodeCollectionControl",
+        "SearchBoxControl",
     };
 
     /// <summary>Concrete controls not yet given a native view — the remaining parity work (Phases 3-5).</summary>
@@ -43,7 +44,7 @@ public static class MauiControlManifest
     {
         // Phase 3 — node management / misc
         "MeshNodeEditorControl", "MeshNodeRoleEditorControl", "DialogControl", "EditFormControl",
-        "EditorControl", "ItemTemplateControl", "SearchBoxControl", "RedirectControl", "AppearanceControl",
+        "EditorControl", "ItemTemplateControl", "RedirectControl", "AppearanceControl",
         "UserProfileControl", "FileBrowserControl", "NodeImportControl", "NodeExportControl",
         "ExportDocumentControl", "LayoutAreaDefinitionControl",
         // Phase 4 — rich data + editors (OSS libs)

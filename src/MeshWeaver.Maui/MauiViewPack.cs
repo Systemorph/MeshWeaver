@@ -357,9 +357,10 @@ public static class MauiViewPackExtensions
         // Phase 3 — node display cards (tappable → navigate via IMauiNavigator).
         .Register<MeshNodeCardControl, MeshNodeCardView>()
         .Register<MeshNodeThumbnailControl, MeshNodeThumbnailView>()
-        // Phase 3 — grouped catalog + query-driven node collection.
+        // Phase 3 — grouped catalog + query-driven node collection + search box.
         .Register<CatalogControl, CatalogView>()
         .Register<MeshNodeCollectionControl, MeshNodeCollectionView>()
+        .Register<SearchBoxControl, SearchBoxView>()
         // Embedded remote area (e.g. the home page's bottom chat composer) → the existing LayoutAreaView.
         .Register<LayoutAreaControl, LayoutAreaControlView>()
         // Wave 2 — nav + badges.
@@ -997,6 +998,68 @@ public sealed class MeshNodeCollectionView : MauiView<MeshNodeCollectionControl>
                 row.Children.Add(del);
             }
             _root.Children.Add(row);
+        }
+    }
+}
+
+/// <summary>
+/// A search box → a native <see cref="Entry"/> + Search button that runs the (namespace-scoped) query via
+/// the shared synced query (<c>hub.GetQuery</c>) and lists tappable results that navigate via
+/// <see cref="IMauiNavigator"/>. The AspNetCore-free counterpart of Blazor's SearchBox (its Monaco
+/// <c>@</c>-autocomplete is a later wave); enough to make a space's embedded "Search" area work natively.
+/// </summary>
+public sealed class SearchBoxView : MauiView<SearchBoxControl>
+{
+    private Entry _entry = null!;
+    private VerticalStackLayout _results = null!;
+
+    protected override View CreateView()
+    {
+        _entry = new Entry
+        {
+            Placeholder = MarkdownViewLogic.CoerceString(Model.Placeholder) ?? "Search…",
+            ReturnType = ReturnType.Search, TextColor = Colors.White,
+        };
+        _entry.Completed += (_, _) => RunSearch(_entry.Text);
+        var button = new Button { Text = "Search", BackgroundColor = Colors.RoyalBlue, TextColor = Colors.White, CornerRadius = 8 };
+        button.Clicked += (_, _) => RunSearch(_entry.Text);
+
+        var bar = new Grid { ColumnSpacing = 8, ColumnDefinitions = { new(GridLength.Star), new(GridLength.Auto) } };
+        bar.Add(_entry, 0, 0);
+        bar.Add(button, 1, 0);
+
+        _results = new VerticalStackLayout { Spacing = 2 };
+        return new VerticalStackLayout { Spacing = 8, Children = { bar, _results } };
+    }
+
+    protected override void Bind()
+    {
+        var preset = MarkdownViewLogic.CoerceString(Model.Value);
+        if (!string.IsNullOrWhiteSpace(preset)) _entry.Text = preset;
+    }
+
+    private void RunSearch(string? text)
+    {
+        if (Stream is null || string.IsNullOrWhiteSpace(text)) return;
+        var ns = MarkdownViewLogic.CoerceString(Model.Namespace);
+        var query = string.IsNullOrWhiteSpace(ns) ? text!.Trim() : $"namespace:{ns} {text}".Trim();
+        var sub = Stream.Hub.GetQuery("searchbox:" + query, query).Take(1)
+            .Subscribe(nodes => MainThread.BeginInvokeOnMainThread(() => RenderResults(nodes)));
+        Disposables.Add(sub);
+    }
+
+    private void RenderResults(IEnumerable<MeshNode> nodes)
+    {
+        _results.Children.Clear();
+        var max = int.TryParse(MarkdownViewLogic.CoerceString(Model.MaxSuggestions), out var m) && m > 0 ? m : 20;
+        foreach (var node in nodes.DistinctBy(n => n.Path).Take(max))
+        {
+            var n = node;
+            var lbl = new Label { Text = n.Name ?? n.Path, TextColor = Color.FromArgb("#4ea1ff"), Padding = new Thickness(4, 2) };
+            var tap = new TapGestureRecognizer();
+            tap.Tapped += (_, _) => Stream?.Hub.ServiceProvider.GetService<IMauiNavigator>()?.NavigateTo(n.Path, n.Name);
+            lbl.GestureRecognizers.Add(tap);
+            _results.Children.Add(lbl);
         }
     }
 }
