@@ -156,6 +156,14 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
         return QualifyTable(table);
     }
 
+    // Projection for the node-level sync claim: the real column when reading mesh_nodes (the
+    // only decouplable table), else the Include (0) default so single-table reads and UNION
+    // branches over satellite tables — which don't carry the column — keep a stable shape.
+    private static string SyncBehaviorCol(string qualifiedTable) =>
+        qualifiedTable.Contains("mesh_nodes", StringComparison.OrdinalIgnoreCase)
+            ? "sync_behavior"
+            : "0 AS sync_behavior";
+
     private static string NormalizePath(string? path) =>
         path?.Trim('/') ?? "";
 
@@ -203,7 +211,7 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
         {
             await using var cmd = _dataSource.CreateCommand(
                 $"SELECT id, namespace, name, description, node_type, category, icon, display_order, " +
-                $"last_modified, version, state, content, desired_id, main_node " +
+                $"last_modified, version, state, content, desired_id, main_node, {SyncBehaviorCol(table)} " +
                 $"FROM {table} WHERE namespace = $1 AND id = $2");
             cmd.Parameters.AddWithValue(ns);
             cmd.Parameters.AddWithValue(id);
@@ -282,7 +290,7 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
                 Enumerable.Range(2, ids.Length).Select(i => $"${i}"));
             await using var cmd = _dataSource.CreateCommand(
                 $"SELECT id, namespace, name, description, node_type, category, icon, display_order, " +
-                $"last_modified, version, state, content, desired_id, main_node " +
+                $"last_modified, version, state, content, desired_id, main_node, {SyncBehaviorCol(table)} " +
                 $"FROM {table} WHERE namespace = $1 AND id IN ({placeholders})");
             cmd.Parameters.AddWithValue(ns);
             foreach (var id in ids)
@@ -330,11 +338,17 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
             : null;
 
         var table = ResolveTable(node.Path, node.NodeType);
+        // sync_behavior lives only on mesh_nodes (the sole decouplable table); satellite
+        // tables don't carry it, so write/update it only when targeting mesh_nodes.
+        var writeSync = table.Contains("mesh_nodes", StringComparison.OrdinalIgnoreCase);
+        var syncInsertCol = writeSync ? ", sync_behavior" : "";
+        var syncInsertVal = writeSync ? ", $16" : "";
+        var syncUpdate = writeSync ? ",\n                sync_behavior = EXCLUDED.sync_behavior" : "";
         await using var cmd = _dataSource.CreateCommand(
             $"""
             INSERT INTO {table} (namespace, id, name, description, node_type, category, icon, display_order,
-                                    last_modified, version, state, content, desired_id, embedding, main_node)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13, $14, $15)
+                                    last_modified, version, state, content, desired_id, embedding, main_node{syncInsertCol})
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13, $14, $15{syncInsertVal})
             ON CONFLICT (namespace, id) DO UPDATE SET
                 name = EXCLUDED.name,
                 description = EXCLUDED.description,
@@ -348,7 +362,7 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
                 content = EXCLUDED.content,
                 desired_id = EXCLUDED.desired_id,
                 embedding = EXCLUDED.embedding,
-                main_node = EXCLUDED.main_node
+                main_node = EXCLUDED.main_node{syncUpdate}
             """);
 
         cmd.Parameters.AddWithValue(ns);
@@ -371,6 +385,10 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
             cmd.Parameters.AddWithValue(DBNull.Value);
 
         cmd.Parameters.AddWithValue(node.MainNode);
+
+        // $16 — only bound when the target is mesh_nodes (see writeSync above).
+        if (writeSync)
+            cmd.Parameters.AddWithValue((short)node.SyncBehavior);
 
         await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
     }
@@ -481,7 +499,7 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
         var table = ResolveTable(normalizedPath);
         await using var cmd = _dataSource.CreateCommand(
             $"SELECT id, namespace, name, description, node_type, category, icon, display_order, " +
-            $"last_modified, version, state, content, desired_id, main_node " +
+            $"last_modified, version, state, content, desired_id, main_node, {SyncBehaviorCol(table)} " +
             $"FROM {table} WHERE $1 = path OR $1 LIKE path || '/%' " +
             $"ORDER BY LENGTH(path) DESC LIMIT 1");
         cmd.Parameters.AddWithValue(normalizedPath);
@@ -541,7 +559,7 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
                 : $"\"{_schemaName}\".\"{t}\"";
             unionBranches.Add(
                 $"SELECT id, namespace, name, description, node_type, category, icon, display_order, " +
-                $"last_modified, version, state, content, desired_id, main_node " +
+                $"last_modified, version, state, content, desired_id, main_node, {SyncBehaviorCol(qualified)} " +
                 $"FROM {qualified} " +
                 $"WHERE $1 = path OR $1 LIKE path || '/%'");
         }
@@ -1242,6 +1260,7 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
             LastModified = new DateTimeOffset(reader.GetDateTime(reader.GetOrdinal("last_modified")), TimeSpan.Zero),
             Version = reader.GetInt64(reader.GetOrdinal("version")),
             State = (MeshNodeState)reader.GetInt16(reader.GetOrdinal("state")),
+            SyncBehavior = PgMeshNodeReader.ReadSyncBehavior(reader),
             Content = content,
             // Mirror the prerendered HTML onto the top-level field, like the FileSystem/Caching
             // adapters do (CachingStorageAdapter.MergeIndexMarkdownAsync). Consumers that render
