@@ -99,6 +99,28 @@ jobs:
             -c Release --no-build --no-restore -o dist/packages --nologo
           dotnet pack src/MeshWeaver.BusinessRules.Generator/MeshWeaver.BusinessRules.Generator.csproj \
             -c Release --no-build --no-restore -o dist/packages --nologo
+      # 🚨 Crank the compile/release-watcher log categories in the RUNTIME bin appsettings
+      # ONLY (never the committed src appsettings — that's production cost contract; AGENTS.md
+      # sanctions editing the bin/ copy for a debug run). The committed test appsettings pins
+      # these to Warning, which suppressed the "[ReleaseRequestWatcher] handling…" Information
+      # line that tells us whether the watcher even fired. Debug here surfaces the full
+      # compile→release trace into the failing test's trx Output + the test-logs file.
+      - name: Crank watcher log levels (bin runtime config only)
+        run: |
+          set -euo pipefail
+          app="$REPRO_PROJECT/bin/Release/net10.0/appsettings.json"
+          if [ -f "$app" ]; then
+            tmp="$(mktemp)"
+            jq '.Logging.LogLevel.Default = "Information"
+                | .Logging.LogLevel["MeshWeaver.Graph.CompileWatcher"] = "Debug"
+                | .Logging.LogLevel["MeshWeaver.Graph.HandleCreateRelease"] = "Debug"
+                | .Logging.LogLevel["MeshWeaver.Graph.NodeTypeCompileActivity"] = "Debug"
+                | .Logging.LogLevel["MeshWeaver.Data"] = "Debug"' \
+              "$app" > "$tmp" && mv "$tmp" "$app"
+            echo "Cranked $app:"; cat "$app"
+          else
+            echo "::warning::$app not found — watcher logs will stay at the committed Warning level."
+          fi
       - name: Loop the suspect test until it fails
         run: |
           set -uo pipefail
@@ -144,8 +166,10 @@ jobs:
           for f in meshweaver-test-trace meshweaver-dispose-trace meshweaver-memory-delta; do
             [ -f "/tmp/$f.log" ] && cp "/tmp/$f.log" "repro-diagnostics/_$f.log" || true
           done
-          # Per-test debug logs some test bases write under bin/.../test-logs.
-          find "$REPRO_PROJECT" -path '*/test-logs/*.log' -exec cp {} repro-diagnostics/ \; 2>/dev/null || true
+          # XUnitFileOutputHelper writes per-test/background-hub logs under bin/.../test-logs
+          # (the cranked watcher trace lands here when no test is the active ITestOutputHelper).
+          # Search repo-wide — background-hub logs can land outside the suspect project dir.
+          find . -path '*/test-logs/*.log' -exec cp {} repro-diagnostics/ \; 2>/dev/null || true
           echo "Collected:"; ls -lh repro-diagnostics/ || true
       - name: Upload repro diagnostics
         if: always()
