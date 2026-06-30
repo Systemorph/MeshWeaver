@@ -99,28 +99,12 @@ jobs:
             -c Release --no-build --no-restore -o dist/packages --nologo
           dotnet pack src/MeshWeaver.BusinessRules.Generator/MeshWeaver.BusinessRules.Generator.csproj \
             -c Release --no-build --no-restore -o dist/packages --nologo
-      # 🚨 Crank the compile/release-watcher log categories in the RUNTIME bin appsettings
-      # ONLY (never the committed src appsettings — that's production cost contract; AGENTS.md
-      # sanctions editing the bin/ copy for a debug run). The committed test appsettings pins
-      # these to Warning, which suppressed the "[ReleaseRequestWatcher] handling…" Information
-      # line that tells us whether the watcher even fired. Debug here surfaces the full
-      # compile→release trace into the failing test's trx Output + the test-logs file.
-      - name: Crank watcher log levels (bin runtime config only)
-        run: |
-          set -euo pipefail
-          app="$REPRO_PROJECT/bin/Release/net10.0/appsettings.json"
-          if [ -f "$app" ]; then
-            tmp="$(mktemp)"
-            jq '.Logging.LogLevel.Default = "Information"
-                | .Logging.LogLevel["MeshWeaver.Graph.CompileWatcher"] = "Debug"
-                | .Logging.LogLevel["MeshWeaver.Graph.HandleCreateRelease"] = "Debug"
-                | .Logging.LogLevel["MeshWeaver.Graph.NodeTypeCompileActivity"] = "Debug"
-                | .Logging.LogLevel["MeshWeaver.Data"] = "Debug"' \
-              "$app" > "$tmp" && mv "$tmp" "$app"
-            echo "Cranked $app:"; cat "$app"
-          else
-            echo "::warning::$app not found — watcher logs will stay at the committed Warning level."
-          fi
+      # 🚨 DO NOT crank the CompileWatcher log levels here. Repro #3/#4 proved it's a HEISENBUG:
+      # Debug logging in the watcher hot path changes the scheduling enough to MASK the race
+      # (runs #1/#2 caught it at iter 19/4 at the committed Warning level; runs #3/#4 with the
+      # categories at Debug missed it across 40+80 iters). So we keep production-like timing and
+      # rely on the timing-NEUTRAL stuck-state diagnostic in WaitForLatestRelease (it runs only
+      # on the 50s timeout, never during the race) to pin the stalled stage.
       - name: Loop the suspect test until it fails
         run: |
           set -uo pipefail
