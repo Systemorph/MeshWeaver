@@ -58,7 +58,7 @@ jobs:
     env:
       REPRO_PROJECT: ${{ inputs.project || 'test/MeshWeaver.Hosting.Monolith.Test' }}
       REPRO_FILTER: ${{ inputs.filter || 'FullyQualifiedName~CodeEditRecompileTest.PressingCompileButton_SetsRequestedReleaseAt_AndProducesNewRelease' }}
-      REPRO_ITERS: ${{ inputs.iterations || '40' }}
+      REPRO_ITERS: ${{ inputs.iterations || '80' }}
       DOTNET_ENVIRONMENT: Development
       # 🚨 Logging cranked via ENV only — never a committed appsettings/Log* change
       # (those are production cost contract). Surfaces the watcher/messaging trace.
