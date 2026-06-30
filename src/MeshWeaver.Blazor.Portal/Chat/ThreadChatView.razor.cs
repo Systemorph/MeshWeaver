@@ -133,6 +133,12 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
 
 
     private ThreadViewModel? _threadViewModel;
+    // The best-ever NON-EMPTY thread viewmodel seen for THIS thread (set only when Messages is non-empty,
+    // so it can never be poisoned by a transient empty). ConvertThreadViewModel falls back to it whenever the
+    // data-bind transiently yields null/empty (the cross-hub node stream momentarily reduces to an empty
+    // node), so an open chat never flaps to the empty state mid-conversation (the round-N "vanish"). Reset
+    // when the bound thread PATH actually changes (a different thread legitimately has its own messages).
+    private ThreadViewModel? _lastNonEmptyThreadVm;
     private ThreadViewModel? ThreadViewModel
     {
         get => _threadViewModel;
@@ -2608,7 +2614,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     /// <see cref="ThreadChatView"/>'s Razor template gets live ThreadMessage
     /// content via <see cref="messageStates"/>.
     /// </summary>
-    private ThreadViewModel? ConvertThreadViewModel(object? value, ThreadViewModel? _)
+    private ThreadViewModel? ConvertThreadViewModel(object? value, ThreadViewModel? previous)
     {
         var result = value switch
         {
@@ -2617,6 +2623,25 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             AI.ThreadViewModel m => m,
             _ => throw new ArgumentException($"Cannot convert type {value.GetType().Name}.")
         };
+        // 🎯 BEST-EVER keep-last-good. The data-bound value transiently arrives null (a JsonElement that
+        // deserialises to null) or as an empty/default ThreadViewModel — the cross-hub node stream
+        // momentarily reduces to an empty node. Binding that empties the conversation → HasNoMessages → the
+        // composer blanks mid-chat: the intermittent round-N "chat vanishes" (footer-gate createdBy=<null>
+        // noMsgs=True). A LIVE thread never loses its content, so remember the last viewmodel that HAD
+        // content and fall back to it on any transient empty/null. Unlike a 'previous'-value guard this
+        // CANNOT be poisoned — the field is ONLY ever assigned a content-bearing value, so one empty slipping
+        // through never defeats it. "Content" counts BOTH committed Messages AND PendingMessageTexts (the
+        // just-sent optimistic user message): a flap that coincides with a fresh submission has Messages=0
+        // but Pending=[text], and masking that would HIDE the new user bubble (the "saw N-1" failure). A new
+        // thread re-creates this component (field resets); we also guard on ThreadPath against a thread switch.
+        static bool HasContent(ThreadViewModel? vm)
+            => vm is not null && (vm.Messages.Count > 0 || vm.PendingMessageTexts.Count > 0);
+        if (HasContent(result))
+            _lastNonEmptyThreadVm = result;
+        else if (HasContent(_lastNonEmptyThreadVm)
+                 && (result is null || string.IsNullOrEmpty(result.ThreadPath)
+                     || string.Equals(result.ThreadPath, _lastNonEmptyThreadVm!.ThreadPath, StringComparison.Ordinal)))
+            return _lastNonEmptyThreadVm;
         Logger.LogDebug("[ThreadChat:{InstanceId}] ConvertThreadViewModel: input={InputType}, msgs={MsgCount}",
             _instanceId, value?.GetType().Name ?? "null", result?.Messages?.Count ?? 0);
         // SyncMessageSubscriptions runs in the property setter (below) — calling

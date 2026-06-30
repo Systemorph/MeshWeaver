@@ -159,8 +159,7 @@ public static class ThreadLayoutAreas
 
         // OWN MeshNode stream — push ThreadViewModel to data section; contains all
         // thread state for the Blazor view.
-        var vmStream = host.Workspace.GetMeshNodeStream().Select(node => BuildThreadViewModel(node, hubPath, host.Hub.JsonSerializerOptions));
-        host.RegisterForDisposal(vmStream.DistinctUntilChanged().Subscribe(vm => host.UpdateData(ThreadDataKey, vm)));
+        SubscribeThreadVm(host, hubPath);
 
         // Static container — never rebuilt
         return Controls.Stack
@@ -177,6 +176,39 @@ public static class ThreadLayoutAreas
     /// from the thread's own MeshNode. Shared by <see cref="ThreadView"/> and
     /// <see cref="ThreadChatView"/> (the latter in its <c>WithShowFullHeader()</c> mode).
     /// </summary>
+    /// <summary>
+    /// Subscribes the OWN MeshNode stream → <see cref="ThreadViewModel"/> → the data section, with a
+    /// KEEP-LAST-GOOD guard. The stream alternates between the typed MeshThread (the owning hub's own write)
+    /// and a cross-hub / change-feed representation that can momentarily emit a NULL or message-empty node;
+    /// projecting that yields an empty viewmodel (Messages=[]) that flaps the data section to the empty state
+    /// — HasNoMessages → the composer blanks: the intermittent round-N "chat vanishes" (confirmed by the
+    /// footer-gate diagnostic, createdBy=&lt;null&gt; noMsgs=True at the blank). A new thread legitimately
+    /// STARTS empty (the first emission passes; lastVm is null), so the discriminator is a REGRESSION to
+    /// empty AFTER we have shown messages — that is the transient. Drop only those and keep the last-good.
+    /// Subscribe callbacks are serialized, so the closure state is race-free.
+    /// </summary>
+    private static void SubscribeThreadVm(LayoutAreaHost host, string hubPath)
+    {
+        ThreadViewModel? lastVm = null;
+        var sub = host.Workspace.GetMeshNodeStream()
+            .Select(node => BuildThreadViewModel(node, hubPath, host.Hub.JsonSerializerOptions))
+            .DistinctUntilChanged()
+            .Subscribe(vm =>
+            {
+                // Keep the last-good: skip a transient TRULY-empty emission (no committed Messages AND no
+                // pending user text) after we had content — it would blank the data section → the round-N
+                // "vanish". A Pending-only emission (the just-sent optimistic user message: Messages=0 but
+                // PendingMessageTexts=[text]) IS content and MUST pass, else the new user bubble is dropped
+                // server-side before it reaches the client (the "saw N-1" failure).
+                static bool HasContent(ThreadViewModel v) => v.Messages.Count > 0 || v.PendingMessageTexts.Count > 0;
+                if (lastVm is not null && HasContent(lastVm) && !HasContent(vm))
+                    return;
+                lastVm = vm;
+                host.UpdateData(ThreadDataKey, vm);
+            });
+        host.RegisterForDisposal(sub);
+    }
+
     internal static ThreadViewModel BuildThreadViewModel(MeshNode? node, string hubPath, JsonSerializerOptions options)
     {
         // 🚨 ContentAs (DESERIALIZE), never `as MeshThread`. The node stream alternates between the
@@ -219,8 +251,7 @@ public static class ThreadLayoutAreas
         var hubPath = host.Hub.Address.ToString();
         var ownNodeStream = host.Workspace.GetMeshNodeStream();
 
-        var vmStream = ownNodeStream.Select(node => BuildThreadViewModel(node, hubPath, host.Hub.JsonSerializerOptions));
-        host.RegisterForDisposal(vmStream.DistinctUntilChanged().Subscribe(vm => host.UpdateData(ThreadDataKey, vm)));
+        SubscribeThreadVm(host, hubPath);
 
         // Push title to data section so the side panel header can read it.
         var titleStream = ownNodeStream
