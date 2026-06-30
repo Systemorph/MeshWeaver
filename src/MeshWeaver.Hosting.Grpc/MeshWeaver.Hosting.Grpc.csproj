@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Grpc.AspNetCore" />
+  </ItemGroup>
+
+  <!-- Apple Silicon: Grpc.Tools ships no macOS-arm64 protoc / grpc_csharp_plugin (only macosx_x64,
+       which needs Rosetta). When a native arm64 toolchain is installed (`brew install grpc protobuf`),
+       point codegen at it. Guarded by Exists() so CI (Linux) and machines without brew are untouched
+       and fall back to the bundled tools. -->
+  <PropertyGroup Condition="$([MSBuild]::IsOSPlatform('OSX')) AND '$([System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture)' == 'Arm64'">
+    <Protobuf_ProtocFullPath Condition="Exists('/opt/homebrew/bin/protoc')">/opt/homebrew/bin/protoc</Protobuf_ProtocFullPath>
+    <gRPC_PluginFullPath Condition="Exists('/opt/homebrew/bin/grpc_csharp_plugin')">/opt/homebrew/bin/grpc_csharp_plugin</gRPC_PluginFullPath>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Protobuf Include="Protos/mesh.proto" GrpcServices="Both" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\MeshWeaver.Mesh.Contract\MeshWeaver.Mesh.Contract.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Messaging.Hub\MeshWeaver.Messaging.Hub.csproj" />
+  </ItemGroup>
+
+</Project>

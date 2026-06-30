@@ -1,0 +1,38 @@
+syntax = "proto3";
+
+option csharp_namespace = "MeshWeaver.Hosting.Grpc.Protocol";
+
+package meshweaver.v1;
+
+// A single long-lived bidirectional stream IS one mesh participant connection — the gRPC
+// counterpart of MeshWeaver.Hosting.SignalR's SignalRConnectionHub:
+//
+//   client -> mesh : Connect(addressJson)  + DeliverMessage(deliveryJson)
+//   mesh -> client : ReceiveMessage(deliveryJson)
+//
+// The message BODY stays the existing System.Text.Json IMessageDelivery JSON (RawJson,
+// $type-discriminated). Protobuf only FRAMES and STREAMS it, so the entire mesh
+// serialization / type-registry / AccessContext machinery is reused unchanged and never
+// drifts. The Bearer API token travels in gRPC call metadata ("authorization"), never in a
+// frame — the server validates it and stamps identity (see GrpcConnectionRegistry).
+service Mesh {
+  rpc Open(stream ClientFrame) returns (stream ServerFrame);
+}
+
+message ClientFrame {
+  oneof kind {
+    string connect = 1; // participant Address as JSON   (== SignalR Connect(addressJson))
+    string deliver = 2; // IMessageDelivery as JSON       (== SignalR DeliverMessage(json))
+  }
+}
+
+message ServerFrame {
+  oneof kind {
+    ConnectAck ack     = 1; // sent once, right after the connect frame is registered
+    string     receive = 2; // IMessageDelivery as JSON   (== SignalR ReceiveMessage(json))
+  }
+}
+
+message ConnectAck {
+  string address = 1; // the address the server registered this participant's inbound route for
+}
