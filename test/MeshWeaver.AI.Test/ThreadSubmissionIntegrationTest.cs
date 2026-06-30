@@ -616,8 +616,10 @@ public class ThreadSubmissionIntegrationTest : AITestBase
             IEnumerable<ChatMessage> messages, ChatOptions? options = null,
             [EnumeratorCancellation] CancellationToken cancellationToken = default)
         {
-            // Long enough for tests to race in a few more submits; short enough to keep CI fast.
-            await Task.Delay(1000, cancellationToken);
+            // Long enough for the mid-round submits to all register even under 2-core CI load —
+            // 1s under-budgeted the runner, so u4 landed after round 1 ended and the batch split
+            // into 3 response cells instead of 2. Still short enough to keep CI fast.
+            await Task.Delay(3000, cancellationToken);
             yield return new ChatResponseUpdate(ChatRole.Assistant, "slow ack");
         }
 
