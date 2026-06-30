@@ -1,0 +1,21 @@
+{
+  "version": "1.0",
+  "defaultProvider": "jsdelivr",
+  "libraries": [
+    {
+      "library": "pdfjs-dist@4.7.76",
+      "destination": "wwwroot/lib/pdfjs-dist/",
+      "files": [
+        "build/pdf.mjs",
+        "build/pdf.worker.mjs"
+      ]
+    },
+    {
+      "library": "mammoth@1.8.0",
+      "destination": "wwwroot/lib/mammoth/",
+      "files": [
+        "mammoth.browser.min.js"
+      ]
+    }
+  ]
+}

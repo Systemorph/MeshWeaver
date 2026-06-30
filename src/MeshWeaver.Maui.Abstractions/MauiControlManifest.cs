@@ -60,5 +60,8 @@ public static class MauiControlManifest
         // DataGrid column control (rendered by the grid, not standalone). PropertyColumnControl is
         // generic (PropertyColumnControl<T>) so it isn't a concrete control in the coverage scan.
         "TemplateColumnControl",
+        // Content vector-index viewer controls — highlighted text + the inline PDF/DOCX viewer; not yet
+        // rendered natively in the MAUI client.
+        "HighlightControl", "DocumentSourceControl",
     }.ToImmutableHashSet(StringComparer.Ordinal);
 }

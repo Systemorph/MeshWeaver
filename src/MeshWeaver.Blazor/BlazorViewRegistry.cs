@@ -139,6 +139,8 @@ public static class BlazorViewRegistry
                 MeshNodeCollectionControl collection => StandardView<MeshNodeCollectionControl, MeshNodeCollectionView>(collection, stream, area),
                 MeshSearchControl meshSearch => StandardView<MeshSearchControl, MeshSearchView>(meshSearch, stream, area),
                 MeshNodeCardControl card => StandardView<MeshNodeCardControl, MeshNodeCardView>(card, stream, area),
+                HighlightControl highlight => StandardView<HighlightControl, HighlightView>(highlight, stream, area),
+                DocumentSourceControl docSource => StandardView<DocumentSourceControl, DocumentSourceView>(docSource, stream, area),
                 AppearanceControl appearance => StandardView<AppearanceControl, AppearanceView>(appearance, stream, area),
                 ThreadMessageBubbleControl bubble => StandardView<ThreadMessageBubbleControl, ThreadMessageBubbleView>(bubble, stream, area),
                 _ => FallbackHtml(instance, stream, area),
