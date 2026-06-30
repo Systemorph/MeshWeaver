@@ -47,21 +47,24 @@ Both embed forms resolve:
 - **Pre-resolved** (`@@/Acme/area/Search` → `data-address`/`data-area`) → `LayoutAreaView` over that address directly.
 - **Bare path** (`@@Cession/MotorXL` → `data-raw-path`, already absolutised against the authoring node at parse time) → resolved exactly as Blazor's `PathBasedLayoutArea`: `IPathResolver.ResolvePath` matches the longest existing node prefix to an `Address`, `LayoutAreaMarkdownParser.ParseAreaAndId` splits the remainder into area/id, then the same `LayoutAreaView` renders it (reactive — `Subscribe`, resolve once, never await).
 
-The segment-level wiring is done; an embedded area's **own nested sub-areas** still ride the keystone below (the injected `LayoutAreaView` renders its top control but lazily-rendered sub-areas don't resolve across the sync boundary).
+The segment-level wiring is done. An embedded area's **own within-host nested sub-areas** DO resolve over the synced stream (proven below); a **cross-host** embed (a child pointing at a *different* address) is handled by the injected `LayoutAreaView` opening its own per-address remote stream.
 
-## 🔑 The keystone gap — nested/remote sub-areas don't resolve
+## 🔑 The keystone — what was claimed vs. what is proven
 
-**Symptom:** a remote framework area (e.g. the user's `Activity` home) renders its **top control** (banner + tab bar) but its **nested sub-areas** (the selected tab's `MeshSearch`, an embedded composer) spin forever, then time out. No sub-area query ever appears in the log.
+**The original claim (now falsified for within-host areas):** a remote framework area renders its **top control** but its **nested sub-areas** spin forever, because the node hub renders sub-areas **lazily** (only on a subscription to its *own* stream) and the MAUI client's read of the `GetRemoteStream` synced *copy* never travels back to trigger that lazy render.
 
-**Cause:** the area lives on the **`device-user` node hub** (a separate per-node hub, even in-process). The MAUI client reads it via `GetRemoteStream` — a **synced *copy*** of that hub's store. The node hub renders nested sub-areas **lazily** — only when something subscribes to them **on that hub's own stream**. Blazor works because its `NamedAreaView` subscribes on the **same in-process stream** the node hub writes to, triggering the lazy render. The MAUI client's `GetControlStream(subArea)` reads the **local synced copy**; that read never travels back to the node hub, so the lazy render is never triggered and the sub-area control is never produced.
+**What the code actually does (and a deterministic test proves):** a container renders its child areas **EAGERLY and RECURSIVELY** at parent-render time — `ContainerControl.Render` iterates its renderers and calls `host.RenderArea` for every child, landing each at `/areas/{parent}/{child}` in the SAME store; an async (data-driven) child lands via a later `UpdateArea` Full. Both flavours are carried to the synced remote copy. So the documented "lazy render never triggers across the sync boundary" is **not** the cause for within-host nesting:
 
-This is why `RetryAreaWithBackoff` (the shared retry Blazor's `NamedAreaView` uses, now also in MAUI's `RenderArea`) **resolves the top level** (it errors transiently and retries) but **cannot fix the nested areas** (they never *emit* and never *error* — there's nothing to retry).
+- `test/MeshWeaver.Layout.Test/MauiViewDataPathTest.cs` — a container's **one-level** children all resolve via `GetRemoteStream` + `GetControlStream`.
+- `test/MeshWeaver.Layout.Test/MauiNestedSubAreaSyncTest.cs` — a **two-levels-deep** nested container (`A/Inner/Leaf`) AND an **async** sub-area (emitted on the thread pool, after the initial Full) BOTH resolve over the same remote-stream path the MAUI `NamedAreaView`/`RenderArea` use. No hang.
 
-**The fix (a framework change to the layout/sync layer), one of:**
-1. **Render sub-areas eagerly** for remote/synced consumers — the node hub renders the area's full sub-tree into the synced store when the area is requested. *(More tractable.)*
-2. **Propagate the sub-area subscription back** to the node hub — the remote stream requests the named area, the way Blazor's in-process subscription does.
+These run the EXACT Blazor-agnostic data path the native views consume (no Xcode/MAUI runtime), so a regression in what the views would render is caught in CI.
 
-This single fix unblocks **the framework home, the `MeshSearch` catalog, AND live recursive `@@` embedding** — they all route through the same nested-area resolution. Until it lands, the home runs on a **native hand-built dashboard** (`ActivityDashboardView`: a tab strip + `NodeCardListView` cards over `hub.GetQuery`, a composer, error-surfacing) which works today.
+**What genuinely remains (needs a running maccatalyst app or a two-host repro — not yet pinned):**
+1. **On-device render verification** — the data path resolves the control tree; whether every native `MauiView` paints it correctly is a runtime check (no UI access from CI).
+2. **Cross-host embedded areas** — a sub-area that is a `LayoutAreaControl` pointing at a *different* node hub renders by opening a separate per-address remote stream (`LayoutAreaControlView` → `LayoutAreaView`); a within-host test doesn't cover the two-hub round-trip, and any residual "spins forever" symptom most likely lives here (or in an access gate on the sub-area), NOT in within-host lazy rendering. A two-host data-path test is the next repro to add before any sync-layer change.
+
+The home currently runs on a **native hand-built dashboard** (`ActivityDashboardView`: a tab strip + `NodeCardListView` cards over `hub.GetQuery`, a composer, error-surfacing) which works today; the declarative catalog below is wired and, given the proven within-host sub-area sync, is a candidate to replace it once the on-device render is verified.
 
 ## The declarative catalog (ready, pending the keystone)
 
