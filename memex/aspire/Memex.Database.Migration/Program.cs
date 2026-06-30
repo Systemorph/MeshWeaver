@@ -149,6 +149,7 @@ var migrations = new IMigration[]
     new V36_MoveAgentsToPerPartitionAgentNamespace(),
     new V37_MoveAgentsToAgentNamespaceBySchema(),
     new V38_DropLegacyProviderSchema(),
+    new V39_AddSyncBehaviorColumn(),
 };
 
 var ctx = new MigrationContext(dataSource, connectionString, options, logger, initResult.IsFreshDb);
