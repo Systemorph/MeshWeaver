@@ -1,8 +1,8 @@
 # Generated gRPC stubs (run scripts/gen_proto.sh)
-meshweaver/_generated/*_pb2.py
-meshweaver/_generated/*_pb2_grpc.py
-meshweaver/_generated/*_pb2.pyi
+meshweaver/_generated/
 
+.venv/
+venv/
 __pycache__/
 *.egg-info/
 .pytest_cache/

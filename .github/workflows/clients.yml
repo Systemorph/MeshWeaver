@@ -29,6 +29,21 @@ jobs:
       - run: npm run typecheck
       - run: npm test
 
+  python-sdk:
+    name: "meshweaver (Python test)"
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: clients/python
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[dev]"
+      - run: bash scripts/gen_proto.sh # generate stubs from the canonical mesh.proto
+      - run: pytest -q
+
   node-sdk:
     name: "@meshweaver/client (typecheck)"
     runs-on: ubuntu-latest

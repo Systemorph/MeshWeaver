@@ -47,8 +47,8 @@ class Mesh:
 
     async def get(self, path: str) -> MeshNode:
         """Read a single node's current state (one snapshot off its live stream)."""
-        async for delivery in self.watch(path):
-            return MeshNode.from_change(delivery.message)
+        async for node in self.watch(path):  # watch() already yields MeshNode (applies from_change)
+            return node
         raise RuntimeError("stream closed before first state")
 
     async def watch(self, path: str) -> AsyncIterator[MeshNode]:
