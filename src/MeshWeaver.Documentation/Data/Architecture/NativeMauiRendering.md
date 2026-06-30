@@ -39,11 +39,15 @@ GetRemoteStream(address, LayoutAreaReference(area))   // the node hub's area str
 
 Markdown is **not** homebrewed. `MarkdownView`/`HtmlView` build HTML with the **official** `MeshWeaver.Markdown` Markdig pipeline (`MarkdownExtensions.CreateMarkdownPipeline`, the same one `MemexConfiguration`/Blazor use) and render it in a **plain `WebView`** (`HtmlWebViewSource` — NOT BlazorWebView, so no AspNetCore). A small injected CSS sets a system sans-serif font (fixing serif headings) and dark colors.
 
-The `@@` operator (inline layout-area injection; `@@path` vs `@path` link) is **recognized + generated** correctly — `LayoutAreaMarkdownParser` emits a `layout-area` element, verified by `test/MeshWeaver.Markdown.Test/MauiMarkdownAtAtOperatorTest.cs`. But a **static WebView can't hydrate** that placeholder into a live area. The native equivalent of Blazor's div-hydration is **recursive view injection through the registry**:
+The `@@` operator (inline layout-area injection; `@@path` vs `@path` link) is **recognized + generated** correctly — `LayoutAreaMarkdownParser` emits a `layout-area` element, verified by `test/MeshWeaver.Markdown.Test/MauiMarkdownAtAtOperatorTest.cs`. A **static WebView can't hydrate** that placeholder into a live area, so the native equivalent of Blazor's div-hydration — **the segmenter** — is now implemented:
 
-> `MarkdownView` should become a **segmenter**: split the markdown AST into prose runs (a small WebView / native labels) and `@@` refs; for each `@@`, build a `LayoutAreaControl` model and `RenderControl` it (→ `LayoutAreaView`), stacking the segments. An embedded area with its own `@@` recurses through the same map. No div, no hydration — just the model→view tree.
+> `MarkdownView`/`MauiCollaborativeMarkdownView` **segments** the rendered HTML: `MarkdownViewLogic.SplitLayoutAreaRefs` (pinned by `test/MeshWeaver.Markdown.Test/MarkdownSplitLayoutAreaRefsTest.cs`) splits it into prose runs (a small WebView per run) and `@@` embeds; for each embed, `BuildEmbeddedArea` builds a native `LayoutAreaView`, stacking the segments. No div, no hydration — just the model→view tree.
 
-This is small **once the keystone below is fixed** (the injected `LayoutAreaView` hits the same nested-area gap).
+Both embed forms resolve:
+- **Pre-resolved** (`@@/Acme/area/Search` → `data-address`/`data-area`) → `LayoutAreaView` over that address directly.
+- **Bare path** (`@@Cession/MotorXL` → `data-raw-path`, already absolutised against the authoring node at parse time) → resolved exactly as Blazor's `PathBasedLayoutArea`: `IPathResolver.ResolvePath` matches the longest existing node prefix to an `Address`, `LayoutAreaMarkdownParser.ParseAreaAndId` splits the remainder into area/id, then the same `LayoutAreaView` renders it (reactive — `Subscribe`, resolve once, never await).
+
+The segment-level wiring is done; an embedded area's **own nested sub-areas** still ride the keystone below (the injected `LayoutAreaView` renders its top control but lazily-rendered sub-areas don't resolve across the sync boundary).
 
 ## 🔑 The keystone gap — nested/remote sub-areas don't resolve
 

@@ -783,10 +783,39 @@ public sealed class MauiCollaborativeMarkdownView : MauiView<CollaborativeMarkdo
         if (!string.IsNullOrEmpty(e.Address))
             return new LayoutAreaView(
                 workspace, new Address(e.Address!), new LayoutAreaReference(e.Area) { Id = e.AreaId }, Renderer);
-        // Bare @@path embed (e.g. @@Cession/MotorXL): the address/area boundary needs UCR catalog resolution
-        // against the authoring node — not yet wired natively. Surface a labelled placeholder instead of
-        // silently dropping it into an inert WebView (the old behaviour).
-        return Notice($"⧉ embedded area: @@{e.RawPath} (native resolution pending)", Colors.Gray);
+
+        // Bare @@path embed (e.g. @@Cession/MotorXL). The raw path is already absolutised against the
+        // authoring node at parse time, so resolve it exactly as Blazor's PathBasedLayoutArea does:
+        // IPathResolver matches the longest existing node prefix → an Address, leaving an area/id remainder
+        // (ParseAreaAndId honours the area/data/schema/model verbs), then render the live remote area through
+        // the same proven LayoutAreaView. ResolvePath is reactive — Subscribe, never await (deadlock surface,
+        // AsynchronousCalls.md). We resolve ONCE (Take(1)): for a documentation embed the referenced area
+        // already exists so the first emission is authoritative, and recreating the live LayoutAreaView on a
+        // later catalog re-emission would reset its own subscription (Blazor avoids this via keyed diffing).
+        if (string.IsNullOrEmpty(e.RawPath))
+            return Notice("(embedded area unavailable — no path)", Colors.Gray);
+        var resolver = Stream.Hub.ServiceProvider.GetService<IPathResolver>();
+        if (resolver is null)
+            return Notice($"⧉ embedded area: @@{e.RawPath} (path resolver unavailable)", Colors.Gray);
+
+        var rawPath = e.RawPath!;
+        var host = new ContentView { Content = Notice($"⧉ resolving @@{rawPath}…", Colors.Gray) };
+        var sub = resolver.ResolvePath(rawPath)
+            .Catch<AddressResolution?, Exception>(_ => Observable.Return<AddressResolution?>(null))
+            .Take(1)
+            .Subscribe(resolution => MainThread.BeginInvokeOnMainThread(() =>
+            {
+                if (resolution is null)
+                {
+                    host.Content = Notice($"⧉ embedded area not found: @@{rawPath}", Colors.OrangeRed);
+                    return;
+                }
+                var (area, id) = LayoutAreaMarkdownParser.ParseAreaAndId(resolution.Remainder);
+                host.Content = new LayoutAreaView(
+                    workspace, new Address(resolution.Prefix), new LayoutAreaReference(area) { Id = id }, Renderer);
+            }));
+        Disposables.Add(sub);
+        return host;
     }
 
     // Comments panel: a LIVE list of the node's _Comment satellites (author + quoted text + body) plus, when
