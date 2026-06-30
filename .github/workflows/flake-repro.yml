@@ -1,0 +1,148 @@
+# Manually-triggered flake REPRODUCER. The CI-only concurrency flakes
+# (ThreadSubmissionIntegrationTest, CodeEditRecompileTest, …) are positive-wait
+# timeouts of the "race-the-watcher → wedged hub / dropped cross-mirror write"
+# class — they pass in isolation, as a full class, and under DOTNET_PROCESSOR_COUNT=2
+# locally, but trip under the real 2-vCPU CI runner. This workflow loops one
+# suspect test ON THAT RUNNER until it fails, with logging cranked up via ENV
+# (never by editing a committed appsettings/Log* level), and uploads the FAILING
+# iteration's trx + MonolithMeshTestBase traces + blame hang-dump so the actual
+# wedge is diagnosable — i.e. it manufactures the repro the fix must be proven against.
+#
+# Run it from the Actions tab (workflow_dispatch). Defaults target CodeEditRecompile;
+# re-dispatch with project=test/MeshWeaver.AI.Test filter=FullyQualifiedName~ThreadSubmissionIntegrationTest
+# (etc.) for the others.
+name: Flake repro (manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      project:
+        description: "Test project to loop"
+        type: string
+        default: "test/MeshWeaver.Hosting.Monolith.Test"
+      filter:
+        description: "dotnet test --filter expression (the suspect test)"
+        type: string
+        default: "FullyQualifiedName~CodeEditRecompileTest.PressingCompileButton_SetsRequestedReleaseAt_AndProducesNewRelease"
+      iterations:
+        description: "Max loop iterations (stops on first failure)"
+        type: string
+        default: "25"
+      loglevel:
+        description: "Default log level for the looped runs (Debug/Trace to surface the watcher race)"
+        type: string
+        default: "Debug"
+
+permissions:
+  contents: read
+
+env:
+  # Same workspace-pinned NuGet cache as dotnet-test.yml so a --no-build/--no-restore
+  # loop resolves packages offline.
+  NUGET_PACKAGES: ${{ github.workspace }}/.nuget/packages
+
+jobs:
+  repro:
+    name: "Loop ${{ inputs.filter }} until fail"
+    # ubuntu-latest == the 2-vCPU GitHub-hosted runner the real flake needs.
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+      # Mirror dotnet-test.yml: reclaim preinstalled tooling a .NET+Postgres run never
+      # touches so the build output + Testcontainers image fit the ~14 GB runner disk.
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          dotnet: false
+          android: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+      - name: Restore workloads
+        run: dotnet workload restore
+      - name: Restore dependencies
+        run: dotnet restore
+      # Build the whole solution in Release EXACTLY as the real CI build job does, so
+      # the looped --no-build runs execute the identical binaries that flake in CI
+      # (Release, same warnings-as-errors gate). Faithful repro > speed.
+      - name: Build
+        run: dotnet build --no-restore -c Release -p:CIRun=true -warnaserror
+      # The mesh-local #r feed some dynamic-compilation tests resolve at runtime
+      # (version-less `#r "nuget:MeshWeaver.X"`), packed exactly as dotnet-test.yml does.
+      - name: Pack mesh-local #r packages
+        run: |
+          set -euo pipefail
+          dotnet pack src/MeshWeaver.BusinessRules/MeshWeaver.BusinessRules.csproj \
+            -c Release --no-build --no-restore -o dist/packages --nologo
+          dotnet pack src/MeshWeaver.BusinessRules.Generator/MeshWeaver.BusinessRules.Generator.csproj \
+            -c Release --no-build --no-restore -o dist/packages --nologo
+      - name: Loop the suspect test until it fails
+        env:
+          DOTNET_ENVIRONMENT: Development
+          # 🚨 Logging cranked HERE via env only — never by editing a committed
+          # appsettings.json or a Log* call (those are production cost contract). This
+          # is a dispatch-only debug workflow, so Default=Debug/Trace is free here and
+          # surfaces the watcher/messaging trace that pins the wedge.
+          Logging__LogLevel__Default: ${{ inputs.loglevel }}
+        run: |
+          set -uo pipefail
+          iters="${{ inputs.iterations }}"
+          proj="${{ inputs.project }}"
+          filt="${{ inputs.filter }}"
+          echo "Looping '$filt' in $proj up to $iters× on a 2-vCPU runner (nproc=$(nproc))."
+          failed=0
+          for i in $(seq 1 "$iters"); do
+            echo "::group::iteration $i / $iters"
+            # --no-build --no-restore: run the Release binaries built above, exactly
+            # like the CI shards. blame-hang-* captures a mini-dump if the host wedges
+            # (the "unresponsive after the second compile" symptom) instead of just
+            # timing out opaquely.
+            dotnet test "$proj" -c Release --no-build --no-restore \
+              --filter "$filt" -l:trx \
+              --blame-hang-timeout 120s --blame-hang-dump-type mini
+            rc=$?
+            echo "::endgroup::"
+            if [ "$rc" -ne 0 ]; then
+              echo "::error::REPRO on iteration $i (exit $rc) — diagnostics uploaded below."
+              failed=1
+              break
+            fi
+            echo "iteration $i passed"
+          done
+          if [ "$failed" = "0" ]; then
+            echo "No repro in $iters iterations (the flake did not surface this run)."
+          fi
+          # Always exit 0 so the diagnostics-collection + upload steps run; the
+          # ::error:: above marks the run, and the uploaded trx records the failure.
+          exit 0
+      - name: Collect diagnostics
+        if: always()
+        run: |
+          mkdir -p repro-diagnostics
+          # trx (per-iteration; the last one is the failing run since we break on fail).
+          find "${{ inputs.project }}" -name '*.trx' -exec cp {} repro-diagnostics/ \; 2>/dev/null || true
+          # blame hang mini-dump (written when the test host wedged, not just timed out).
+          find "${{ inputs.project }}" -name 'blame-*.dmp' -exec cp {} repro-diagnostics/ \; 2>/dev/null || true
+          # MonolithMeshTestBase phase/dispose/memory traces (the watcher + INIT/DISPOSE
+          # trace that pinpoints the wedge), written to the process tempdir.
+          for f in meshweaver-test-trace meshweaver-dispose-trace meshweaver-memory-delta; do
+            [ -f "/tmp/$f.log" ] && cp "/tmp/$f.log" "repro-diagnostics/_$f.log" || true
+          done
+          # Per-test debug logs some test bases write under bin/.../test-logs.
+          find "${{ inputs.project }}" -path '*/test-logs/*.log' -exec cp {} repro-diagnostics/ \; 2>/dev/null || true
+          echo "Collected:"; ls -lh repro-diagnostics/ || true
+      - name: Upload repro diagnostics
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: flake-repro-diagnostics
+          path: repro-diagnostics/
+          retention-days: 15
+          compression-level: 9
