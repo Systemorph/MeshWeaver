@@ -440,18 +440,23 @@ public class InboxToolIntegrationTest : AITestBase
         var afterCancel = await WaitForThreadAsync(threadPath,
             t => !t.IsExecuting, 30_000, ct);
 
-        // No pending → the watcher must NOT fire a phantom round. Watch the stream (the
-        // watcher's source) for the bad signal — a re-dispatch: IsExecuting flipping back to
-        // true, a new cell appended, or a second ingest — and assert it never arrives within a
-        // bounded window. This is the reactive form of the sanctioned "confirm nothing happened"
-        // negative wait (matches Submit_SingleSubmit's NotEmit), so a phantom that fires anywhere
-        // in the window is caught — not just at one fixed Task.Delay-then-read instant.
+        // No pending → the watcher must NOT fire a phantom ROUND. Watch the stream (the watcher's
+        // source) for the bad signal — a re-dispatch — and assert it never arrives within a bounded
+        // window. The signal is the round's PRODUCT: a new cell appended, or a second ingest. We do
+        // NOT key on raw IsExecuting here: right after the cancel there is a legitimate transient
+        // frame (Status=Executing while RequestedStatus=Cancelled) — round 1 winding down, same
+        // single ingest, no new cell — and the cache replay + TaskPool scheduling can surface that
+        // frame to this subscriber AFTER the !IsExecuting wait above, tripping a bare IsExecuting
+        // check (the CI-only flake). A phantom round, by contrast, re-ingests or appends a cell, so
+        // those two signals catch it cleanly; a phantom that re-enters execution and lingers is
+        // caught by the steady-state IsExecuting==false assert below. This is the reactive form of
+        // the sanctioned "confirm nothing happened" negative wait (matches Submit_SingleSubmit's
+        // NotEmit), so a phantom that fires anywhere in the window is caught.
         await Mesh.GetWorkspace().GetMeshNodeStream(threadPath)
             .SubscribeOn(TaskPoolScheduler.Default)
             .Select(n => n.Content as MeshThread)
             .Where(t => t is not null
-                        && (t!.IsExecuting
-                            || t.Messages.Count > initialMsgsCount
+                        && (t!.Messages.Count > initialMsgsCount
                             || t.IngestedMessageIds.Count > 1))
             .Should().NotEmit(1500.Milliseconds());
 
