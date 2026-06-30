@@ -1137,14 +1137,25 @@ public static class MeshDataSourceExtensions
             return new(node, current.StreamId, current.Version);
 
         // Patch path: take the EntityUpdate whose Value is the targeted MeshNode.
-        // If reference.Path is set, prefer the update whose payload matches that
-        // path so a same-frame multi-entity update doesn't emit a sibling's value
-        // here. Falls back to FirstOrDefault for the no-path case.
+        // If reference.Path is set, take ONLY the update whose payload matches that path.
+        //
+        // 🚨 NO fallback to current.Updates.FirstOrDefault() for the path-specific (own-node)
+        // case. The per-NodeType hub's InstanceCollection holds the def PLUS its Release/* and
+        // _Activity/* satellites (all created during a compile), so a frame can carry satellite
+        // updates with NO update for OUR node. The old `?? current.Updates.FirstOrDefault()`
+        // then emitted a SATELLITE as if it were the own node — re-introducing exactly the
+        // cross-satellite non-determinism the own-path stamp (MeshDataSource ~:160) was added to
+        // kill. On such a frame the release watcher's `Content is NodeTypeDefinition` Where
+        // rejected the satellite, so a RequestedReleaseAt trigger that landed in/around that
+        // frame was NEVER delivered to the watcher → no recompile → WaitForLatestRelease 50s
+        // timeout (the owner-side CodeEditRecompile flake, repro-proven on the 2-vCPU runner;
+        // the re-trigger 50s later recovers because by then no satellite churn races it). With
+        // no match, `change` stays null and we emit the own node's CURRENT full value (`node`,
+        // already filtered to reference.Path above) — always the def, never a satellite.
         var change = !string.IsNullOrEmpty(reference.Path)
             ? current.Updates.FirstOrDefault(u =>
                 u.Value is MeshNode m
                 && string.Equals(m.Path, reference.Path, StringComparison.OrdinalIgnoreCase))
-                ?? current.Updates.FirstOrDefault()
             : current.Updates.FirstOrDefault();
         if (change == null)
         {
