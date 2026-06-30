@@ -1138,50 +1138,74 @@ internal static class NodeTypeCompilationHelpers
                         {
                             logger?.LogInformation("Compile success for {HubPath} → {Assembly}",
                                 hubPath, outcome.Result!.AssemblyLocation);
-                            return curr with
+                            var succeeded = def with
                             {
-                                Content = def with
-                                {
-                                    CompilationStatus = CompilationStatus.Ok,
-                                    CompilationError = null,
-                                    CompilationDiagnostics = null,
-                                    LastCompileSucceededAt = DateTimeOffset.UtcNow,
-                                    // Stamp LastCompiledVersion to MATCH the version the
-                                    // IAssemblyStore upload used (set by
-                                    // UploadToStoreIfNeeded — the captured pendingNode.Version
-                                    // at compile kickoff). Using curr.Version here would
-                                    // point activation at a different version than the one
-                                    // the store actually has — TryGetAssemblyPath miss,
-                                    // activation falls back to default config without
-                                    // AddMeshDataSource, IWorkspace fails to activate.
-                                    LastCompiledVersion = outcome.Result.Version ?? curr.Version,
-                                    LastCompilationActivityPath = resolvedActivityPath,
-                                    LatestReleasePath = newReleasePath ?? def.LatestReleasePath,
-                                    ReleaseNotes = newReleasePath is not null ? null : def.ReleaseNotes,
-                                    CompiledSources = outcome.Result.CompiledSources
-                                        ?? System.Collections.Immutable.ImmutableDictionary<string, long>.Empty,
-                                    // Cross-silo durable assembly reference. Populated from
-                                    // the IAssemblyStore upload during compile (see
-                                    // MeshNodeCompilationService.UploadToStoreIfNeeded).
-                                    // Falls back to the previous values on a producer that
-                                    // hasn't wired a store yet (Null store keeps the new
-                                    // fields null and consumers still fall through to the
-                                    // legacy AssemblyLocation path during Stage 0/1).
-                                    LatestAssemblyCollection = outcome.Result.Collection ?? def.LatestAssemblyCollection,
-                                    LatestAssemblyPath = outcome.Result.ContentPath ?? def.LatestAssemblyPath,
-                                    // Stamp the framework version the assembly bound
-                                    // against — HasUsableBuild compares this to the live
-                                    // FrameworkVersion so a MeshWeaver redeploy forces a
-                                    // recompile instead of loading an ABI-stale DLL.
-                                    CompiledFrameworkVersion = FrameworkVersion,
-                                    // Clear the consumed release-requester. TryCreateReleaseNode
-                                    // already read it (off pendingNode) to stamp this release's
-                                    // owner; clearing it here ensures a SUBSEQUENT System-only
-                                    // recompile (first-build kickoff / framework-stale self-heal)
-                                    // doesn't mis-attribute its release to a stale prior user.
-                                    RequestedReleaseBy = null
-                                }
+                                CompilationStatus = CompilationStatus.Ok,
+                                CompilationError = null,
+                                CompilationDiagnostics = null,
+                                LastCompileSucceededAt = DateTimeOffset.UtcNow,
+                                // Stamp LastCompiledVersion to MATCH the version the
+                                // IAssemblyStore upload used (set by
+                                // UploadToStoreIfNeeded — the captured pendingNode.Version
+                                // at compile kickoff). Using curr.Version here would
+                                // point activation at a different version than the one
+                                // the store actually has — TryGetAssemblyPath miss,
+                                // activation falls back to default config without
+                                // AddMeshDataSource, IWorkspace fails to activate.
+                                LastCompiledVersion = outcome.Result.Version ?? curr.Version,
+                                LastCompilationActivityPath = resolvedActivityPath,
+                                LatestReleasePath = newReleasePath ?? def.LatestReleasePath,
+                                ReleaseNotes = newReleasePath is not null ? null : def.ReleaseNotes,
+                                CompiledSources = outcome.Result.CompiledSources
+                                    ?? System.Collections.Immutable.ImmutableDictionary<string, long>.Empty,
+                                // Cross-silo durable assembly reference. Populated from
+                                // the IAssemblyStore upload during compile (see
+                                // MeshNodeCompilationService.UploadToStoreIfNeeded).
+                                // Falls back to the previous values on a producer that
+                                // hasn't wired a store yet (Null store keeps the new
+                                // fields null and consumers still fall through to the
+                                // legacy AssemblyLocation path during Stage 0/1).
+                                LatestAssemblyCollection = outcome.Result.Collection ?? def.LatestAssemblyCollection,
+                                LatestAssemblyPath = outcome.Result.ContentPath ?? def.LatestAssemblyPath,
+                                // Stamp the framework version the assembly bound
+                                // against — HasUsableBuild compares this to the live
+                                // FrameworkVersion so a MeshWeaver redeploy forces a
+                                // recompile instead of loading an ABI-stale DLL.
+                                CompiledFrameworkVersion = FrameworkVersion,
+                                // Clear the consumed release-requester. TryCreateReleaseNode
+                                // already read it (off pendingNode) to stamp this release's
+                                // owner; clearing it here ensures a SUBSEQUENT System-only
+                                // recompile (first-build kickoff / framework-stale self-heal)
+                                // doesn't mis-attribute its release to a stale prior user.
+                                RequestedReleaseBy = null
                             };
+                            // 🚨 MISSED-EMISSION BACKSTOP (repro-proven OWNER-SIDE, 2026-06-30 via the 2-vCPU
+                            // flake-repro + an (a)/(b) re-trigger discriminator). A user release trigger
+                            // (RequestedReleaseAt) that arrives DURING this compile can have its reactive
+                            // InstallReleaseRequestWatcher emission LOST when it races this terminal own-stream
+                            // write: the node ends Status=Ok with RequestedReleaseAt set but
+                            // LastReleaseRequestHandledAt=null, and NO fresh release ever runs
+                            // (CodeEditRecompileTest.WaitForLatestRelease 50s timeout). The watcher subscription
+                            // is alive — a later re-trigger recovers (sub-case a) — so this is a one-time missed
+                            // emission, not a dead/clobbered watcher. Fix: if the trigger is still unhandled at
+                            // compile completion, settle to Pending instead of Ok and stamp Handled HERE, INLINE
+                            // on the just-read state — immune to the missed reactive emission. The compile watcher
+                            // then runs the requested recompile. IDEMPOTENT + loop-free: on the normal path the
+                            // watcher already stamped Handled>=req so this never fires; after it fires once,
+                            // req<=Handled on the next terminal write.
+                            if (succeeded.RequestedReleaseAt is { } req
+                                && (succeeded.LastReleaseRequestHandledAt is not { } handled || req > handled))
+                            {
+                                logger?.LogInformation(
+                                    "[CompileComplete] {HubPath}: unhandled RequestedReleaseAt={Req} after compile — "
+                                    + "re-flipping Pending (missed-emission backstop)", hubPath, req);
+                                succeeded = succeeded with
+                                {
+                                    CompilationStatus = CompilationStatus.Pending,
+                                    LastReleaseRequestHandledAt = req
+                                };
+                            }
+                            return curr with { Content = succeeded };
                         }
 
                         var errorSummary = outcome.Error?.Message
