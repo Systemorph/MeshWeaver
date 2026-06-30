@@ -103,8 +103,10 @@ public class StaticRepoImporterTests(PostgreSqlFixture fixture, ITestOutputHelpe
     public async Task Import_CreatesSpaceRoot_AndChildContent_LowercaseSchemaOnly()
     {
         var ct = TestContext.Current.CancellationToken;
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
-        (await Import()).Single(r => r.Partition == _partition).Outcome.Should().Be("Imported");
+        var first = (await Import()).Single(r => r.Partition == _partition);
+        first.Outcome.Should().Be("Imported");
 
         // Space root persisted, welcome reconstructed onto PreRenderedHtml (PG read mirror).
         var root = await Mesh.GetMeshNodeStream(_partition).Where(n => n is { NodeType: "Space" })
@@ -121,7 +123,20 @@ public class StaticRepoImporterTests(PostgreSqlFixture fixture, ITestOutputHelpe
         await SchemaCount(_partition.ToLowerInvariant(), ct).Should().Within(30.Seconds()).Be(1L);
         await SchemaCount(_partition, ct).Should().Within(30.Seconds()).Be(0L);
 
-        // Idempotent re-run = no re-import.
+        // Idempotent re-run = no re-import — but ONLY once the import-activity marker has propagated to
+        // the importer's read path. The short-circuit reads the {partition}/_Activity/import-{fingerprint}
+        // marker via the EVENTUALLY-CONSISTENT query (meshService.Query — the correct read for an
+        // optional/maybe-absent node; GetMeshNodeStream point-access would NotFound-storm on first import).
+        // Two back-to-back imports can race that propagation (CI-only; in prod boots are far apart), so the
+        // 2nd Import re-imports off a stale miss → Outcome="Imported". Wait for the marker to be visible via
+        // the same query the importer uses, THEN assert the strict skip — testing the real contract instead
+        // of strict read-after-write the optional-node query pattern doesn't provide.
+        var markerPath = $"{_partition}/_Activity/import-{first.Fingerprint}";
+        await Observable.Interval(TimeSpan.FromMilliseconds(100)).StartWith(0L)
+            .SelectMany(_ => meshService.Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{markerPath}")).Take(1))
+            .Where(c => c.Items.Any(n => n.Content is ActivityLog { Status: ActivityStatus.Succeeded }))
+            .Take(1).Should().Within(30.Seconds()).Emit();
+
         (await Import()).Single(r => r.Partition == _partition).Outcome.Should().NotBe("Imported");
     }
 
