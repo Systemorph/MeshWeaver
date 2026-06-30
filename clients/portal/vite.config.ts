@@ -10,6 +10,9 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 export default defineConfig({
   plugins: [react()],
   resolve: {
+    // The renderer source resolves its deps from clients/react/node_modules; dedupe so a single React
+    // instance is used at runtime (the source alias can otherwise pull two copies).
+    dedupe: ["react", "react-dom", "@fluentui/react-components"],
     alias: {
       "@meshweaver/react/core": path.resolve(here, "../react/src/core.ts"),
       "@meshweaver/react": path.resolve(here, "../react/src/index.tsx"),
