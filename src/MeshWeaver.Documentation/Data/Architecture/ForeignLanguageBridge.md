@@ -81,6 +81,6 @@ The server registers a participant's inbound route with `routingService.Register
 
 1. `mesh.proto` + `MeshWeaver.Hosting.Grpc` (transport + hosted-participant response path) + a network-free **full round-trip** test (drives the service over in-memory duplex streams against a real mesh). ← **done**
 2. Python `meshweaver`: transport + correlation + `get`/`search`/`watch`. ← **skeleton done; wire-shape pinned against a captured sample**
-3. `@meshweaver/client` (Bun/Node) — port the surface.
-4. A live end-to-end test over a real Kestrel gRPC endpoint (h2c) + an Orleans round-trip, to confirm the wire path beyond the in-memory harness.
+3. `@meshweaver/client` (Bun/Node) — same surface, `AsyncIterable` streams, proto loaded at runtime. ← **skeleton done**
+4. A **live** end-to-end test over a real Kestrel gRPC endpoint (HTTP/2 cleartext) with a real `GrpcChannel`. ← **done** (`MeshGrpcLiveTest`). Still open: an Orleans round-trip to confirm the `RoutingGrain` path.
 5. Widen operations (move/copy/execute/threads) + the hosted-Code-node subprocess path (the kernel spawns `python`/`bun` for an executable Code node and hands it `MESH_GRPC_URL` + a scoped token, so in-mesh scripts reach back through the same SDK over loopback).
