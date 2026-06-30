@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using MeshWeaver.Mesh;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -21,14 +22,13 @@ public static class AiContentSources
     /// The partitions whose content is the built-in AI catalog: <c>Agent</c>, <c>Provider</c>,
     /// <c>Harness</c>, <c>Skill</c>. Served from the DB (and imported) as a UNIT — never partially.
     /// </summary>
-    public static readonly IReadOnlySet<string> ContentPartitions =
-        new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-        {
+    public static readonly ImmutableHashSet<string> ContentPartitions =
+        ImmutableHashSet.Create(
+            StringComparer.OrdinalIgnoreCase,
             "Agent",                             // AgentStaticRepoSource.Partition
             ModelProviderNodeType.RootNamespace, // "Provider"
             HarnessNodeType.RootNamespace,       // "Harness"
-            SkillNodeType.RootNamespace,         // "Skill"
-        };
+            SkillNodeType.RootNamespace);        // "Skill"
 
     /// <summary>
     /// Registers EVERY built-in AI <see cref="IStaticRepoSource"/> (Agent, Model/Provider, Harness,
