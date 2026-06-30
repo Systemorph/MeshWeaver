@@ -6,6 +6,14 @@
     <PublishProfile>DefaultContainer</PublishProfile>
     <BlazorDisableThrowNavigationException>true</BlazorDisableThrowNavigationException>
     <RequiresAspNetWebAssets>true</RequiresAspNetWebAssets>
+    <!-- Multi-arch container publish: declare the RID set HERE (project-local), NOT as a global
+         `-p:RuntimeIdentifiers=` on the CLI. The container publish (`-t:PublishContainer
+         -p:ContainerRuntimeIdentifiers=linux-x64;linux-arm64`) requires RuntimeIdentifiers to be
+         declared so the SDK drives a per-RID inner build and assembles an OCI image index. A global
+         `-p:RuntimeIdentifiers` would propagate to every ProjectReference and make the libraries fail
+         `NETSDK1083: RuntimeIdentifier 'linux-x64;linux-arm64' is not recognized`; a project-local
+         property does not propagate, so the libraries are built per-RID with a single valid RID. -->
+    <RuntimeIdentifiers>linux-x64;linux-arm64</RuntimeIdentifiers>
   </PropertyGroup>
 
   <ItemGroup>
@@ -59,11 +67,20 @@
       <_MeshLocalFeedStage>$([System.IO.Path]::GetFullPath('$(IntermediateOutputPath)meshlocalfeed'))</_MeshLocalFeedStage>
     </PropertyGroup>
     <RemoveDir Directories="$(_MeshLocalFeedStage)" />
+    <!-- 🚨 RemoveProperties="RuntimeIdentifier;RuntimeIdentifiers;..." is load-bearing for the MULTI-ARCH
+         publish. During a multi-RID container publish the SDK runs a per-RID inner build with a concrete
+         global RuntimeIdentifier (linux-x64, then linux-arm64). The <MSBuild> task inherits the parent's
+         global properties, so without RemoveProperties these Pack calls would inherit RuntimeIdentifier=
+         linux-x64 and try to pack the RID-AGNOSTIC BusinessRules/Generator libraries for that RID — which
+         were restored without it → NETSDK1047 "assets file doesn't have a target for 'net10.0/linux-x64'".
+         These are plain (RID-agnostic) NuGet packages; strip the RID so Pack runs RID-agnostic. -->
     <MSBuild Projects="$(MSBuildThisFileDirectory)..\..\..\src\MeshWeaver.BusinessRules\MeshWeaver.BusinessRules.csproj"
              Targets="Pack"
+             RemoveProperties="RuntimeIdentifier;RuntimeIdentifiers;SelfContained;PublishSelfContained"
              Properties="Configuration=$(Configuration);PackageOutputPath=$(_MeshLocalFeedStage)" />
     <MSBuild Projects="$(MSBuildThisFileDirectory)..\..\..\src\MeshWeaver.BusinessRules.Generator\MeshWeaver.BusinessRules.Generator.csproj"
              Targets="Pack"
+             RemoveProperties="RuntimeIdentifier;RuntimeIdentifiers;SelfContained;PublishSelfContained"
              Properties="Configuration=$(Configuration);PackageOutputPath=$(_MeshLocalFeedStage)" />
     <!-- Inject via ResolvedFileToPublish, NOT Content. A <Content> item added inside a
          BeforeTargets="ComputeFilesToPublish" hook arrives TOO LATE: the SDK chain

@@ -1,0 +1,13 @@
+.mw-highlight {
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+/* Search-match passages. Themed via design tokens so it reads in light + dark. */
+.mw-highlight-mark {
+    background-color: var(--accent-fill-rest, #ffd54f);
+    color: var(--accent-foreground-cut-rest, inherit);
+    border-radius: 2px;
+    padding: 0 1px;
+    font-weight: 600;
+}

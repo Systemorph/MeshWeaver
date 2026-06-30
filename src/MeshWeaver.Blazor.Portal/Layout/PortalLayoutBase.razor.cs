@@ -735,32 +735,39 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
 
         // Reactive — Subscribe, never await on PathResolver chain (deadlock surface;
         // see Doc/Architecture/AsynchronousCalls.md).
-        PathResolver.ResolvePath(contentPath).Subscribe(resolution =>
-        {
-            if (resolution == null)
-            {
-                sidePanelViewModel = null;
-                SidePanelState.SetContentPath(null);
-                resolvedSidePanelPath = null;
-                InvokeAsync(StateHasChanged);
-                return;
-            }
-
-            if (!string.Equals(resolution.Prefix, contentPath, StringComparison.OrdinalIgnoreCase)
-                && !string.IsNullOrEmpty(resolution.Remainder))
-            {
-                sidePanelViewModel = null;
-                SidePanelState.SetContentPath(null);
-                resolvedSidePanelPath = null;
-                InvokeAsync(StateHasChanged);
-                return;
-            }
-
-            var (area, id) = ParseSidePanelRemainder(resolution.Remainder);
-            var reference = new LayoutAreaReference(area) { Id = id ?? "" };
-            sidePanelViewModel = Controls.LayoutArea((Address)resolution.Prefix, reference);
-            InvokeAsync(StateHasChanged);
-        });
+        // 🎯 Wait for a VALID resolution, then take exactly one. ResolvePath is a LIVE stream that re-emits
+        // whenever the resolved node changes. Right after a thread is CREATED its node is not yet readable,
+        // so the first emissions are transient null / split-onto-the-parent-partition states; and it re-emits
+        // again on every chat round as the thread node updates. The old code wiped the side panel to an empty
+        // "New Thread" on ANY null/split emission → it BOTH failed a just-created thread (the initial
+        // not-ready null wiped it) AND wiped a healthy open thread mid-session (the SidePanelChatTenMessages-
+        // Test round-4 vanish). Filtering to the FIRST valid resolution skips the transient states (no wipe
+        // on a mid-update re-emit) yet still resolves once the node is readable; a genuinely unresolvable
+        // path (a deleted thread) never yields a valid resolution, so the Timeout clears it.
+        PathResolver.ResolvePath(contentPath)
+            .Where(resolution => resolution != null
+                && (string.Equals(resolution.Prefix, contentPath, StringComparison.OrdinalIgnoreCase)
+                    || string.IsNullOrEmpty(resolution.Remainder)))
+            .Take(1)
+            .Timeout(TimeSpan.FromSeconds(10))
+            .Subscribe(
+                resolution =>
+                {
+                    var (area, id) = ParseSidePanelRemainder(resolution!.Remainder);
+                    var reference = new LayoutAreaReference(area) { Id = id ?? "" };
+                    sidePanelViewModel = Controls.LayoutArea((Address)resolution.Prefix, reference);
+                    InvokeAsync(StateHasChanged);
+                },
+                _ =>
+                {
+                    // No valid resolution within the window → the content path is genuinely unresolvable
+                    // (e.g. a deleted thread, or a path that resolves only onto its parent partition). Clear
+                    // back to the new-chat state.
+                    sidePanelViewModel = null;
+                    SidePanelState.SetContentPath(null);
+                    resolvedSidePanelPath = null;
+                    InvokeAsync(StateHasChanged);
+                });
     }
 
     private static (string? Area, string? Id) ParseSidePanelRemainder(string? remainder)

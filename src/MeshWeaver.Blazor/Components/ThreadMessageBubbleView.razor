@@ -48,23 +48,28 @@
         }
     }
 
-    @* Tool calls — shown inline, each as a compact entry *@
+    @* Tool calls — compact window: running on top, then pending, capped at 5
+       (ToolCallVisibility). Completed backfill the leftover slots and a just-finished
+       call lingers ~5s before collapsing; the remainder folds behind a
+       "running · pending · completed" toggle. *@
     @if (HasToolCalls)
     {
-        <div class="thread-msg-tool-calls">
-            @foreach (var call in toolCalls!)
-            {
-                var isDelegation = !string.IsNullOrEmpty(call.DelegationPath);
-                var isPending = call.Result == null;
-                var summary = FormatToolCallSummary(call);
+        var toolView = ToolCallVisibility.Partition(toolCalls, DateTime.UtcNow);
 
+        RenderFragment<ToolCallEntry> renderToolCall = call =>
+            @<text>
+                @{
+                    var isDelegation = !string.IsNullOrEmpty(call.DelegationPath);
+                    var isPending = call.Result == null;
+                    var callSummary = FormatToolCallSummary(call);
+                }
                 @if (isDelegation && isPending)
                 {
                     @* Executing delegation: embed the sub-thread's Streaming area *@
                     <div class="thread-msg-delegation-entry">
                         <div class="thread-msg-delegation-header">
                             <span class="thread-msg-delegation-pulse">✹</span>
-                            <a href="/@call.DelegationPath" class="thread-msg-delegation-link">@summary</a>
+                            <a href="/@call.DelegationPath" class="thread-msg-delegation-link">@callSummary</a>
                         </div>
                         <div class="thread-msg-delegation-stream">
                             <LayoutAreaView ViewModel="@(new LayoutAreaControl(call.DelegationPath!, new LayoutAreaReference("Streaming")).WithSpinnerType(SpinnerType.None))" Stream="@Stream" Area="@($"{Area}/del-{call.DelegationPath}")" />
@@ -81,7 +86,7 @@
                             <span class="thread-msg-tool-done @(call.IsSuccess ? "" : "thread-msg-tool-error")">@(call.IsSuccess ? "✓" : "✗")</span>
                             @if (isDelegation)
                             {
-                                <a href="/@call.DelegationPath" class="thread-msg-delegation-link" @onclick:stopPropagation>@summary</a>
+                                <a href="/@call.DelegationPath" class="thread-msg-delegation-link" @onclick:stopPropagation>@callSummary</a>
                             }
                             else
                             {
@@ -117,6 +122,39 @@
                             <pre class="thread-msg-tool-result">@call.Result</pre>
                         }
                     </details>
+                }
+            </text>;
+
+        <div class="thread-msg-tool-calls">
+            @foreach (var call in toolView.Visible)
+            {
+                @renderToolCall(call)
+            }
+            @if (toolView.HasHidden)
+            {
+                <button type="button" class="thread-msg-tool-more@(toolCallsExpanded ? " expanded" : "")"
+                        @onclick="ToggleToolCalls"
+                        title="@(toolCallsExpanded ? "Hide finished tool calls" : "Show all tool calls")">
+                    <span class="thread-msg-tool-more-caret">@(toolCallsExpanded ? "▾" : "▸")</span>
+                    @if (toolView.RunningCount > 0)
+                    {
+                        <span class="thread-msg-tool-more-count running">@toolView.RunningCount running</span>
+                    }
+                    @if (toolView.PendingCount > 0)
+                    {
+                        <span class="thread-msg-tool-more-count pending">@toolView.PendingCount pending</span>
+                    }
+                    @if (toolView.CompletedCount > 0)
+                    {
+                        <span class="thread-msg-tool-more-count completed">@toolView.CompletedCount completed</span>
+                    }
+                </button>
+                @if (toolCallsExpanded)
+                {
+                    @foreach (var call in toolView.Hidden)
+                    {
+                        @renderToolCall(call)
+                    }
                 }
             }
         </div>
@@ -375,6 +413,43 @@
     }
     .thread-msg-tool-error {
         color: var(--error);
+    }
+    /* "Show all" toggle for the collapsed tool-call remainder. */
+    .thread-msg-tool-more {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        align-self: flex-start;
+        border: none;
+        background: transparent;
+        cursor: pointer;
+        padding: 2px 4px;
+        border-radius: 6px;
+        font: inherit;
+        font-size: 0.74rem;
+        color: var(--neutral-foreground-hint);
+    }
+    .thread-msg-tool-more:hover {
+        background: var(--neutral-layer-3);
+        color: var(--neutral-foreground-rest);
+    }
+    .thread-msg-tool-more-caret {
+        flex: 0 0 auto;
+        font-size: 0.66rem;
+        opacity: 0.8;
+    }
+    .thread-msg-tool-more-count {
+        padding: 1px 6px;
+        border-radius: 999px;
+        background: var(--neutral-layer-3);
+        white-space: nowrap;
+    }
+    .thread-msg-tool-more-count.running {
+        color: var(--accent-fill-rest);
+        background: color-mix(in srgb, var(--accent-fill-rest) 14%, transparent);
+    }
+    .thread-msg-tool-more-count.completed {
+        opacity: 0.8;
     }
     .thread-msg-delegation-entry {
         border-left: 2px solid var(--accent-fill-rest);

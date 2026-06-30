@@ -133,6 +133,12 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
 
 
     private ThreadViewModel? _threadViewModel;
+    // The best-ever NON-EMPTY thread viewmodel seen for THIS thread (set only when Messages is non-empty,
+    // so it can never be poisoned by a transient empty). ConvertThreadViewModel falls back to it whenever the
+    // data-bind transiently yields null/empty (the cross-hub node stream momentarily reduces to an empty
+    // node), so an open chat never flaps to the empty state mid-conversation (the round-N "vanish"). Reset
+    // when the bound thread PATH actually changes (a different thread legitimately has its own messages).
+    private ThreadViewModel? _lastNonEmptyThreadVm;
     private ThreadViewModel? ThreadViewModel
     {
         get => _threadViewModel;
@@ -147,11 +153,17 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             Logger.LogDebug("[ThreadChat:{InstanceId}] ThreadViewModel setter: old={OldCount} msgs, new={NewCount} msgs, equal={Equal}, stream={HasStream}",
                 _instanceId, oldMsgs.Count, newMsgs.Count, Equals(old, value), Stream != null);
 
-            // Sync threadPath and initialContext from the view model
+            // Sync threadPath and initialContext from the view model.
             if (value != null)
             {
-                threadPath = value.ThreadPath ?? threadPath;
-                initialContext = value.InitialContext ?? initialContext;
+                // 🎯 EMPTY means "no change", not "clear it". The side-panel control rebuilds with
+                // ThreadPath = ContentPath ?? "" — i.e. an EMPTY STRING — on every re-render BEFORE the
+                // just-created thread's SetContentPath lands. `?? ` only coalesces null, so an empty string
+                // would CLOBBER a threadPath we just set in StartThread.onCreated → the next send sees an
+                // empty threadPath and re-StartThreads a SECOND thread (the SidePanelChatTenMessagesTest
+                // "2nd user bubble never appears" bug). Guard on IsNullOrEmpty, exactly like lines below.
+                threadPath = string.IsNullOrEmpty(value.ThreadPath) ? threadPath : value.ThreadPath;
+                initialContext = string.IsNullOrEmpty(value.InitialContext) ? initialContext : value.InitialContext;
 
                 // Inside a thread the composer lives ON the thread node (Thread.Composer) —
                 // bind the embedded selectors area + the selection projection to the THREAD
@@ -969,13 +981,18 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             var contextReference = navReference is null
                 ? null
                 : System.Text.Json.JsonSerializer.Serialize(navReference, Hub.JsonSerializerOptions);
-            var ns = !string.IsNullOrEmpty(navNs)
-                ? navNs
-                : !string.IsNullOrEmpty(safeContext)
-                    ? safeContext
-                    : !string.IsNullOrEmpty(createdBy)
-                        ? createdBy
-                        : "";
+            // 🎯 Normalize EACH candidate and take the first that survives, not the first non-empty RAW one.
+            // safeContext (= initialContext, e.g. "User/Roland" or bare "User" when the side panel is opened
+            // on a user home) and createdBy are raw; NormalizeContextPath maps User/{id} → {id} and bare
+            // User / reserved partitions → "". If we picked the first raw non-empty value and normalized
+            // ONCE, a safeContext of bare "User" would normalize to "" and we'd anchor on an empty namespace
+            // — skipping createdBy (the owner's writable partition). Normalizing each and taking the first
+            // non-empty result lands on createdBy="Roland", so the StartThread never targets the un-writable
+            // 'User' partition (whose denial surfaces a blocking "Something went wrong" modal that breaks the
+            // composer — the SidePanelChatTenMessagesTest "2nd message never lands" cause).
+            var ns = new[] { navNs, safeContext, createdBy }
+                .Select(c => NormalizeContextPath(c ?? string.Empty))
+                .FirstOrDefault(c => !string.IsNullOrEmpty(c)) ?? string.Empty;
 
             Action<string> onError = err => InvokeAsync(() =>
             {
@@ -1026,6 +1043,15 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                     {
                         var path = node.Path;
                         if (string.IsNullOrEmpty(path)) { onError("Thread created with no path"); return; }
+                        // 🎯 Route subsequent sends to SubmitComposer IMMEDIATELY: the thread node now
+                        // exists (CreateNodeResponse succeeded), so message 2+ must drain through the
+                        // existing thread (GetMeshNodeStream(threadPath).Update → PendingUserMessages), NOT
+                        // re-StartThread (which would create a SECOND thread — and on the user home routes
+                        // to the un-writable 'User' partition → denied → the message silently drops, the
+                        // SidePanelChatTenMessagesTest "2nd user bubble never appears" bug). The submit
+                        // decision (line ~998 `if (string.IsNullOrEmpty(threadPath))`) reads this field, so
+                        // it must be set the moment the node exists — NOT gated on the readability wait below.
+                        threadPath = path;
                         // 🚨 Redirect ONLY once the thread node is actually READABLE on its own stream.
                         // Navigating on the bare CreateNode ack races the thread's per-node hub
                         // activation: the target page subscribes to a not-yet-ready node, the render
@@ -1876,6 +1902,17 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                 break;
             }
         }
+        // 🎯 The user's home is addressed `User/{id}` (the User catalog entry), but a thread started
+        // there belongs in the OWNER's writable partition `{id}` — NEVER the system-managed `User`
+        // partition, which the user lacks Thread permission on (StartThread there is denied → the denial
+        // is a DeliveryFailure that the global portal error handler surfaces as a BLOCKING "Something went
+        // wrong" modal that overlays + breaks the composer, and on Postgres the `user` schema may not even
+        // exist → 42P01). Map `User/{id}[/…]` → `{id}`; bare `User` (no id) → "" so the ns derivation falls
+        // through to createdBy (the owner's own partition). Both forms must leave the `User` partition.
+        var ownerSegments = normalized.Split('/');
+        if (string.Equals(ownerSegments[0], "User", StringComparison.OrdinalIgnoreCase))
+            normalized = ownerSegments.Length >= 2 ? ownerSegments[1] : "";
+
         // A rogue/reserved ROUTE partition (login, welcome, settings, …) is NOT a real node — never use
         // it as a chat context. Reading it sends a GetDataRequest to a hub that never opens its init
         // gates (DataContextInit/MeshNodeInit) and the read hangs >30s. Treat a reserved context as none.
@@ -2577,7 +2614,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     /// <see cref="ThreadChatView"/>'s Razor template gets live ThreadMessage
     /// content via <see cref="messageStates"/>.
     /// </summary>
-    private ThreadViewModel? ConvertThreadViewModel(object? value, ThreadViewModel? _)
+    private ThreadViewModel? ConvertThreadViewModel(object? value, ThreadViewModel? previous)
     {
         var result = value switch
         {
@@ -2586,6 +2623,25 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             AI.ThreadViewModel m => m,
             _ => throw new ArgumentException($"Cannot convert type {value.GetType().Name}.")
         };
+        // 🎯 BEST-EVER keep-last-good. The data-bound value transiently arrives null (a JsonElement that
+        // deserialises to null) or as an empty/default ThreadViewModel — the cross-hub node stream
+        // momentarily reduces to an empty node. Binding that empties the conversation → HasNoMessages → the
+        // composer blanks mid-chat: the intermittent round-N "chat vanishes" (footer-gate createdBy=<null>
+        // noMsgs=True). A LIVE thread never loses its content, so remember the last viewmodel that HAD
+        // content and fall back to it on any transient empty/null. Unlike a 'previous'-value guard this
+        // CANNOT be poisoned — the field is ONLY ever assigned a content-bearing value, so one empty slipping
+        // through never defeats it. "Content" counts BOTH committed Messages AND PendingMessageTexts (the
+        // just-sent optimistic user message): a flap that coincides with a fresh submission has Messages=0
+        // but Pending=[text], and masking that would HIDE the new user bubble (the "saw N-1" failure). A new
+        // thread re-creates this component (field resets); we also guard on ThreadPath against a thread switch.
+        static bool HasContent(ThreadViewModel? vm)
+            => vm is not null && (vm.Messages.Count > 0 || vm.PendingMessageTexts.Count > 0);
+        if (HasContent(result))
+            _lastNonEmptyThreadVm = result;
+        else if (HasContent(_lastNonEmptyThreadVm)
+                 && (result is null || string.IsNullOrEmpty(result.ThreadPath)
+                     || string.Equals(result.ThreadPath, _lastNonEmptyThreadVm!.ThreadPath, StringComparison.Ordinal)))
+            return _lastNonEmptyThreadVm;
         Logger.LogDebug("[ThreadChat:{InstanceId}] ConvertThreadViewModel: input={InputType}, msgs={MsgCount}",
             _instanceId, value?.GetType().Name ?? "null", result?.Messages?.Count ?? 0);
         // SyncMessageSubscriptions runs in the property setter (below) — calling
@@ -2605,6 +2661,10 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     private readonly Dictionary<string, MessageBubbleState> messageStates = new();
     private readonly Dictionary<string, IDisposable> messageSubs = new();
     private readonly HashSet<string> editingMessages = new();
+    /// <summary>Message ids whose tool-calls section is expanded to show the collapsed
+    /// (finished / overflow) entries. Per-message UI toggle — same circuit-scoped HashSet
+    /// idiom as <see cref="editingMessages"/>.</summary>
+    private readonly HashSet<string> expandedToolCalls = new();
     /// <summary>Message ids whose satellite cell did NOT emit within the cache
     /// settle window — surfaced as "Missing message" in the bubble instead of
     /// the loading skeleton. A deleted-by-someone-else or never-materialised
@@ -2949,6 +3009,15 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     private bool IsMissing(string id) => missingMessages.Contains(id);
 
     private bool IsEditing(string id) => editingMessages.Contains(id);
+
+    private bool IsToolCallsExpanded(string id) => expandedToolCalls.Contains(id);
+
+    private void ToggleToolCalls(string id)
+    {
+        if (!expandedToolCalls.Remove(id))
+            expandedToolCalls.Add(id);
+        StateHasChanged();
+    }
 
     private void StartEdit(string id)
     {

@@ -125,6 +125,9 @@ public static class AIExtensions
             // ("awaiting first data"). Registered with nameof so the stored "$type":"PartitionAccessPolicy"
             // resolves — a redeploy/next sync then reads every AI partition's policy correctly. Mirrors
             // MeshNodeExtensions' registration for the Graph/Doc hubs.
+            // Full-name READ alias FIRST (legacy data persisted with a full-name $type), short nameof
+            // LAST so this hub keeps WRITING the short name. See WithGraphTypes for the full rationale.
+            .WithType(typeof(MeshWeaver.Mesh.Security.PartitionAccessPolicy), typeof(MeshWeaver.Mesh.Security.PartitionAccessPolicy).FullName!)
             .WithType(typeof(MeshWeaver.Mesh.Security.PartitionAccessPolicy), nameof(MeshWeaver.Mesh.Security.PartitionAccessPolicy))
             // User + UserActivityRecord: the chat composer reads the caller's user-partition root node
             // ({user}, NodeType "User") for _userHome + onboarding, and its _UserActivity satellite. The
@@ -134,8 +137,20 @@ public static class AIExtensions
             // $type discriminator)" → "renders empty, reactive waits time out": the composer never binds
             // and the chat window DISAPPEARS on submit (and home areas hang "awaiting first data"). Same
             // class as PartitionAccessPolicy above. Also added to AddMeshTypes (their core home).
+            .WithType(typeof(MeshWeaver.Mesh.Security.User), typeof(MeshWeaver.Mesh.Security.User).FullName!)
             .WithType(typeof(MeshWeaver.Mesh.Security.User), nameof(MeshWeaver.Mesh.Security.User))
+            .WithType(typeof(MeshWeaver.Mesh.Activity.UserActivityRecord), typeof(MeshWeaver.Mesh.Activity.UserActivityRecord).FullName!)
             .WithType(typeof(MeshWeaver.Mesh.Activity.UserActivityRecord), nameof(MeshWeaver.Mesh.Activity.UserActivityRecord))
+            // ThreadViewModel: the thread per-node hub serialises it with the FULL-name $type when its
+            // registry lacks it; a hub that registered it under the short name then reads it back as an
+            // untyped JsonElement → renders empty / reactive waits time out → the chat circuit drops (the
+            // "GUI vanishes after a round" wedge, measured by SidePanelChatTenMessagesTest). Register BOTH
+            // names so it resolves regardless of which $type form arrives (same dual-registration as User).
+            .WithType(typeof(ThreadViewModel), typeof(ThreadViewModel).FullName!)
+            .WithType(typeof(ThreadViewModel), nameof(ThreadViewModel))
+            // AgentConfiguration content children — serialised inside an Agent node's content.
+            .WithType(typeof(AgentPluginReference), nameof(AgentPluginReference))
+            .WithType(typeof(AgentHandoff), nameof(AgentHandoff))
             // MessageViewModel is not registered — handled as JsonElement on the wire.
             // SubmitMessageRequest / SubmitMessageResponse deleted 2026-05-25:
             // the only mutation API is workspace.GetMeshNodeStream(path).Update(...).

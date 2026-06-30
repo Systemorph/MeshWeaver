@@ -27,7 +27,7 @@ namespace Memex.Portal.Shared.Api;
 /// </para>
 ///
 /// <para>
-/// <b>Auth</b>: gated by the existing <see cref="McpAuthenticationExtensions.PolicyName"/>
+/// <b>Auth</b>: gated by the existing <c>McpAuthenticationExtensions.PolicyName</c>
 /// policy — same <c>Authorization: Bearer mw_…</c> token format as <c>/mcp</c>, validated
 /// by <c>ApiTokenAuthenticationHandler</c>.
 /// </para>

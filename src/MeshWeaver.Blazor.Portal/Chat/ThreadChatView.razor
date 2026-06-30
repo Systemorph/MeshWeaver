@@ -320,21 +320,24 @@ else
 
                         @if (state.ToolCalls is { Count: > 0 })
                         {
-                            <div class="thread-msg-tool-calls">
-                                @foreach (var call in state.ToolCalls)
-                                {
-                                    var isDelegation = !string.IsNullOrEmpty(call.DelegationPath);
-                                    var isPending = call.Result == null;
-                                    var summary = FormatToolCallSummary(call);
+                            @* Compact tool-call window: running on top, then pending, capped at 5
+                               (ToolCallVisibility); completed backfill the leftover slots and a just-
+                               finished call lingers ~5s before collapsing. The remainder folds behind a
+                               "running · pending · completed" toggle. *@
+                            var toolView = ToolCallVisibility.Partition(state.ToolCalls, DateTime.UtcNow);
+                            var toolExpanded = IsToolCallsExpanded(msgId);
 
+                            RenderFragment<ToolCallEntry> renderToolCall = call =>
+                                @<text>
+                                    @{
+                                        var isDelegation = !string.IsNullOrEmpty(call.DelegationPath);
+                                        var isPending = call.Result == null;
+                                        var callSummary = FormatToolCallSummary(call);
+                                    }
                                     @if (isDelegation)
                                     {
-                                        @* Inline link only — sub-thread progress + status lives in the
-                                           runtime panel below the chat (anchored near the input). Keeps
-                                           the bubble compact and avoids the duplicate "tool call + embedded
-                                           streaming area" the user flagged. *@
                                         var delHeader = GetDelegationHeader(call.DelegationPath);
-                                        var title = delHeader?.Title ?? summary;
+                                        var title = delHeader?.Title ?? callSummary;
                                         var icon = delHeader?.Icon ?? "/static/NodeTypeIcons/chat.svg";
                                         var stateIcon = isPending
                                             ? "↗"
@@ -342,20 +345,23 @@ else
                                         var stateClass = isPending
                                             ? "thread-msg-tool-delegation-pending"
                                             : (call.IsSuccess ? "thread-msg-tool-delegation-ok" : "thread-msg-tool-delegation-error");
+                                        @* Inline link only — sub-thread progress + status lives in the
+                                           runtime panel below the chat (anchored near the input). Keeps
+                                           the bubble compact and avoids the duplicate "tool call + embedded
+                                           streaming area" the user flagged. *@
                                         <a href="/@call.DelegationPath"
                                            class="thread-msg-tool-delegation @stateClass"
                                            title="@title">
                                             <span class="thread-msg-tool-delegation-state">@stateIcon</span>
                                             <img src="@icon" alt="" class="thread-msg-tool-delegation-icon" />
                                             <span class="thread-msg-tool-delegation-title">@title</span>
-                                            <span class="thread-msg-tool-delegation-agent">@summary</span>
+                                            <span class="thread-msg-tool-delegation-agent">@callSummary</span>
                                         </a>
                                     }
                                     else
                                     {
                                         var display = FormatToolCallDisplay(call);
                                         var change = display.IsNodeModifying ? FindChange(state.UpdatedNodes, display.Path) : null;
-
                                         <details class="thread-msg-tool-entry">
                                             <summary class="thread-msg-tool-entry-name">
                                                 <span class="thread-msg-tool-done @(call.IsSuccess ? "" : "thread-msg-tool-error")">@(call.IsSuccess ? "✓" : "✗")</span>
@@ -390,6 +396,39 @@ else
                                                 <pre class="thread-msg-tool-result">@call.Result</pre>
                                             }
                                         </details>
+                                    }
+                                </text>;
+
+                            <div class="thread-msg-tool-calls">
+                                @foreach (var call in toolView.Visible)
+                                {
+                                    @renderToolCall(call)
+                                }
+                                @if (toolView.HasHidden)
+                                {
+                                    <button type="button" class="thread-msg-tool-more@(toolExpanded ? " expanded" : "")"
+                                            @onclick="() => ToggleToolCalls(msgId)"
+                                            title="@(toolExpanded ? "Hide finished tool calls" : "Show all tool calls")">
+                                        <span class="thread-msg-tool-more-caret">@(toolExpanded ? "▾" : "▸")</span>
+                                        @if (toolView.RunningCount > 0)
+                                        {
+                                            <span class="thread-msg-tool-more-count running">@toolView.RunningCount running</span>
+                                        }
+                                        @if (toolView.PendingCount > 0)
+                                        {
+                                            <span class="thread-msg-tool-more-count pending">@toolView.PendingCount pending</span>
+                                        }
+                                        @if (toolView.CompletedCount > 0)
+                                        {
+                                            <span class="thread-msg-tool-more-count completed">@toolView.CompletedCount completed</span>
+                                        }
+                                    </button>
+                                    @if (toolExpanded)
+                                    {
+                                        @foreach (var call in toolView.Hidden)
+                                        {
+                                            @renderToolCall(call)
+                                        }
                                     }
                                 }
                             </div>

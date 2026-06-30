@@ -230,17 +230,32 @@
                             : group.Items;
                         var hiddenCount = group.Items.Count - visibleItems.Count;
 
-                        <div class="mesh-search-grid-wrapper">
-                            <div class="mesh-search-area-grid" style="@CardGridStyle">
+                        @if (IsListMode)
+                        {
+                            <div class="mesh-search-list">
                                 @foreach (var item in visibleItems)
                                 {
                                     if (item is MeshNode node)
                                     {
-                                        @RenderCard(node)
+                                        @RenderRow(node)
                                     }
                                 }
                             </div>
-                        </div>
+                        }
+                        else
+                        {
+                            <div class="mesh-search-grid-wrapper">
+                                <div class="mesh-search-area-grid" style="@CardGridStyle">
+                                    @foreach (var item in visibleItems)
+                                    {
+                                        if (item is MeshNode node)
+                                        {
+                                            @RenderCard(node)
+                                        }
+                                    }
+                                </div>
+                            </div>
+                        }
 
                         @if (hiddenCount > 0)
                         {
@@ -326,6 +341,82 @@
             {
                 @RenderDeleteAffordance(node)
             }
+        </div>
+    };
+
+    /// <summary>
+    /// One search result rendered as a full-width row (icon · title · description) for List mode.
+    /// Reuses the same navigation semantics as <see cref="RenderCard"/> (picker select / click-message
+    /// / anchor) and keyboard-selection highlight, but lays the node out horizontally and always shows
+    /// a description line — the node's, or a prompt to create one when it has none.
+    /// </summary>
+    private RenderFragment RenderRow(MeshNode node) => __builder =>
+    {
+        var isPicker = OnNodeSelected.HasDelegate;
+        var clickAddress = ViewModel?.ClickMessageAddress?.ToString();
+        var showDelete = !isPicker && CanDelete(node.Path);
+        var isSelected = !isPicker
+            && !string.IsNullOrEmpty(_keyboardSelectedPath)
+            && string.Equals(node.Path, _keyboardSelectedPath, StringComparison.OrdinalIgnoreCase);
+        var wrapClass = isSelected ? "mesh-search-row mesh-search-row-selected" : "mesh-search-row";
+
+        <div class="@wrapClass">
+            @if (isPicker)
+            {
+                <div class="mesh-search-row-link" style="cursor: pointer;" @onclick="() => OnNodeSelected.InvokeAsync(node)">
+                    @RowBody(node)
+                </div>
+            }
+            else if (!string.IsNullOrEmpty(clickAddress))
+            {
+                <div class="mesh-search-row-link" style="cursor: pointer;" @onclick="() => PostClickMessage(node, clickAddress)">
+                    @RowBody(node)
+                </div>
+            }
+            else
+            {
+                <a class="mesh-search-row-link" href="/@node.Path">
+                    @RowBody(node)
+                </a>
+            }
+            @if (showDelete)
+            {
+                @RenderDeleteAffordance(node)
+            }
+        </div>
+    };
+
+    /// <summary>The icon + title + description content of a List-mode row.</summary>
+    private RenderFragment RowBody(MeshNode node) => __builder =>
+    {
+        var imageUrl = MeshNodeThumbnailControl.GetImageUrlForNode(node);
+        var title = node.Name ?? node.Path;
+        var hasDescription = !string.IsNullOrWhiteSpace(node.Description);
+        var description = hasDescription ? node.Description : NoDescriptionPrompt;
+        var isInlineSvg = imageUrl?.TrimStart().StartsWith("<svg", StringComparison.OrdinalIgnoreCase) == true;
+        var isEmoji = !string.IsNullOrEmpty(imageUrl) && !isInlineSvg && !imageUrl.Contains('/') && !imageUrl.StartsWith("data:");
+
+        <div class="mesh-search-row-icon">
+            @if (isInlineSvg)
+            {
+                @((MarkupString)imageUrl!)
+            }
+            else if (isEmoji)
+            {
+                <span class="mesh-search-row-emoji">@imageUrl</span>
+            }
+            else if (!string.IsNullOrEmpty(imageUrl))
+            {
+                <img src="@imageUrl" alt="@title" />
+            }
+            else
+            {
+                <span class="mesh-search-row-initial">@(string.IsNullOrEmpty(title) ? "?" : title[..1].ToUpperInvariant())</span>
+            }
+        </div>
+        <div class="mesh-search-row-text">
+            <div class="mesh-search-row-title" title="@title">@title</div>
+            <div class="mesh-search-row-desc @(hasDescription ? "" : "mesh-search-row-desc-empty")">@description</div>
         </div>
     };
 

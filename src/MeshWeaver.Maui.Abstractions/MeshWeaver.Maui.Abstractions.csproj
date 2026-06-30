@@ -1,0 +1,19 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    MAUI-FREE logic shared by the native MAUI view pack (MeshWeaver.Maui).
+
+    The view pack itself targets platform TFMs (maccatalyst/ios/android) and references
+    Microsoft.Maui.Controls, so its types cannot be unit-tested under a plain net10.0 test host
+    (and not at all while the Xcode toolchain is blocked). Everything in HERE is pure C# over the
+    framework control models + System.Text.Json — NO Microsoft.Maui — so the view pack's option
+    coercion, href parsing, and chat/thread JSON projection have ONE implementation that a normal
+    net10.0 xUnit project can exercise. The view pack calls into these; the tests target these.
+  -->
+
+  <ItemGroup>
+    <!-- UiControl + Option (for option coercion). AspNetCore-free. -->
+    <ProjectReference Include="..\MeshWeaver.Layout\MeshWeaver.Layout.csproj" />
+  </ItemGroup>
+
+</Project>
