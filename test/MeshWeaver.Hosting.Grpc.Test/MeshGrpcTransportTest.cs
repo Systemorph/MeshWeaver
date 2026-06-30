@@ -16,16 +16,17 @@ using Xunit;
 namespace MeshWeaver.Hosting.Grpc.Test;
 
 /// <summary>
-/// Network-free proof of the gRPC mesh transport: drives <see cref="MeshGrpcService.Open"/> over
-/// in-memory duplex streams against a REAL mesh — no Kestrel, no h2c, deterministic. It pins the
-/// transport layer: <c>connect</c> frame → address registered → <c>ack</c> frame back (outbound
-/// framing), then a <c>deliver</c> frame carrying a real <see cref="MessageDelivery{T}"/> →
-/// re-stamped, injected, routed, and dispatched to the mesh hub's handler with its payload intact
-/// (inbound framing + routing).
+/// Network-free end-to-end proof of the gRPC mesh transport: drives <see cref="MeshGrpcService.Open"/>
+/// over in-memory duplex streams against a REAL mesh — no Kestrel, no h2c, deterministic. It exercises
+/// the full path a foreign-language participant takes: <c>connect</c> frame → participant registered
+/// (route + hosted proxy hub) → <c>ack</c> frame; then a <c>deliver</c> frame carrying a real
+/// <see cref="MessageDelivery{T}"/> → re-stamped, injected, routed, dispatched to the mesh hub's
+/// handler → response addressed back to the participant → routed to its hosted hub → forwarded as a
+/// <c>receive</c> frame.
 ///
 /// <para>The wire delivery is produced/consumed by the framework's own <c>JsonSerializerOptions</c>,
-/// reusing the entire mesh serialization stack unchanged. The mesh→participant response frame is a
-/// separate routing concern (see the note in the test body and ForeignLanguageBridge.md).</para>
+/// reusing the entire mesh serialization stack unchanged — so this also emits the canonical envelope
+/// sample the Python/Node SDKs pin their <c>envelope.py</c> against (inspect <c>received.Receive</c>).</para>
 /// </summary>
 public class MeshGrpcTransportTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
@@ -92,15 +93,22 @@ public class MeshGrpcTransportTest(ITestOutputHelper output) : MonolithMeshTestB
         var handled = await handlerHit.Task.WaitAsync(TimeSpan.FromSeconds(10));
         Assert.Equal("hello mesh", handled);
 
-        // NOTE — the mesh→participant RESPONSE frame is NOT asserted here. The handler posts a
-        // response addressed to the participant, but delivery back to a bare RegisterStream'd
-        // address depends on mesh routing reaching it: under Orleans the RoutingGrain consults
-        // StreamRoutedAddressTypes (the SignalR-parity target); the monolith reaches such an
-        // address only via a hosted hub (as Blazor circuits do). RouteMessage→ResolvePath returns
-        // NotFound before RouteImpl's stream check for an address with no backing node. The
-        // response path (hosted-participant hub OR an Orleans round-trip test) is the next step —
-        // see Doc/Architecture/ForeignLanguageBridge.md "Phasing". This test pins the transport:
-        // inbound request routing + outbound framing.
+        // 3) receive: the echo response, routed by the mesh back to the participant (reached via its
+        // hosted proxy hub) and framed onto the gRPC stream. Closes the full round trip.
+        string? received = null;
+        for (var i = 0; i < 20 && received is null; i++)
+        {
+            ServerFrame f;
+            try { f = await NextFrame(writer, "response", TimeSpan.FromSeconds(10)); }
+            catch (TimeoutException) { break; }
+            if (f.KindCase == ServerFrame.KindOneofCase.Receive && f.Receive.Contains("hello mesh"))
+                received = f.Receive;
+        }
+
+        output.WriteLine($"canonical wire delivery:\n{received}");
+        Assert.NotNull(received);
+        Assert.Contains("hello mesh", received!);  // response payload round-tripped to the participant
+        Assert.Contains(delivery.Id, received);    // correlated to the request (RequestId == request delivery id)
 
         inbound.Writer.Complete();
         await open;

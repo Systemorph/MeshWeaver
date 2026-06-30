@@ -56,7 +56,11 @@ public sealed class GrpcConnectionRegistry : IDisposable
         Name = WellKnownUsers.Anonymous,
     };
 
-    private sealed record ConnectionState(AccessContext User, ChannelWriter<ServerFrame> Outbound, IDisposable? Route = null);
+    private sealed record ConnectionState(
+        AccessContext User,
+        ChannelWriter<ServerFrame> Outbound,
+        IDisposable? Route = null,
+        IMessageHub? ParticipantHub = null);
     private readonly ConcurrentDictionary<string, ConnectionState> connections = new();
 
     /// <summary>Register the per-connection outbound channel (the <c>Open</c> call drains it to the wire).
@@ -106,14 +110,39 @@ public sealed class GrpcConnectionRegistry : IDisposable
             });
     }
 
-    /// <summary>Register a route for the participant's address so mesh deliveries push down this stream.</summary>
+    /// <summary>
+    /// Make the participant reachable by mesh routing so deliveries addressed to it push down this
+    /// stream. Two complementary registrations cover both runtimes:
+    /// <list type="bullet">
+    ///   <item><b>Orleans</b>: <c>RegisterStream</c> — the RoutingGrain consults the stream-routed
+    ///     address types (declared by <c>AddGrpcHub</c>) and delivers to the callback.</item>
+    ///   <item><b>Monolith</b>: a hosted proxy hub at the participant address. <c>RouteInMesh</c>
+    ///     short-circuits on <c>GetHostedHub</c> (the same path a Blazor circuit receives on); a bare
+    ///     <c>RegisterStream</c>'d address is otherwise NotFound'd before the stream check. The proxy's
+    ///     catch-all route forwards every delivery to this connection's gRPC stream.</item>
+    /// </list>
+    /// </summary>
     public void Connect(Address address, string connectionId)
     {
         var route = routingService.RegisterStream(address, (delivery, ct) => PushToClient(connectionId, delivery, ct));
+        var participantHub = hub.GetHostedHub(address, config =>
+            config.WithRoutes(routes =>
+                routes.WithHandler((delivery, ct) =>
+                    // Forward messages addressed to the participant FROM elsewhere (responses, stream
+                    // changes). Leave the proxy hub's own self/lifecycle messages (InitializeHubRequest,
+                    // disposal — sender == the participant) for the hub to process normally.
+                    delivery.Sender is not null && delivery.Sender.Equals(address)
+                        ? Observable.Return(delivery)
+                        : PushToClient(connectionId, delivery, ct))));
         connections.AddOrUpdate(connectionId,
             // Begin() always runs first, so the "add" branch is a defensive fallback only.
-            _ => new ConnectionState(Anonymous, Channel.CreateUnbounded<ServerFrame>().Writer, route),
-            (_, s) => { s.Route?.Dispose(); return s with { Route = route }; });
+            _ => new ConnectionState(Anonymous, Channel.CreateUnbounded<ServerFrame>().Writer, route, participantHub),
+            (_, s) =>
+            {
+                s.Route?.Dispose();
+                s.ParticipantHub?.Dispose();
+                return s with { Route = route, ParticipantHub = participantHub };
+            });
     }
 
     /// <summary>Inject a participant message into the mesh, stamped with the connection's validated identity.</summary>
@@ -130,6 +159,7 @@ public sealed class GrpcConnectionRegistry : IDisposable
         if (connections.TryRemove(connectionId, out var s))
         {
             s.Route?.Dispose();
+            s.ParticipantHub?.Dispose();
             s.Outbound.TryComplete();
         }
     }
@@ -162,6 +192,7 @@ public sealed class GrpcConnectionRegistry : IDisposable
         foreach (var s in connections.Values)
         {
             s.Route?.Dispose();
+            s.ParticipantHub?.Dispose();
             s.Outbound.TryComplete();
         }
     }
