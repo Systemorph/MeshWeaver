@@ -767,8 +767,25 @@ public static class MeshDataSourceExtensions
                     cache.IsDeleted = false;
                     try
                     {
+                        // 🚨 FORWARD-ONLY refresh — never move the in-RAM node BACKWARD.
+                        // `notification.Entity` is the node as PERSISTED. The durable write + its
+                        // change notification are OFF-TURN, so under a write burst this notification
+                        // LAGS the in-RAM stream: by the time it arrives, the in-RAM commit may already
+                        // carry many newer writes. A blind `_ => newNode` overwrite re-applied that
+                        // STALE persisted snapshot over fresher in-RAM state and silently dropped every
+                        // field added since it was persisted — the concurrent cross-hub-write data-loss
+                        // bug (CrossHubPatchAtomicityTest: a burst of cross-mirror dict-adds settling
+                        // with entries permanently lost). The single-write echo-suppression above only
+                        // skips the EXACT latest version, not the older lagging echoes. The IN-RAM
+                        // commit is authoritative (the owner's monotonic Version is the one clock); a
+                        // persisted snapshot may only REPLACE it when it is STRICTLY NEWER (a genuine
+                        // out-of-band external write). A lagged own-write echo (version <= live) is a
+                        // no-op, so the in-RAM stream only ever moves forward.
                         hub.GetWorkspace().GetMeshNodeStream()
-                            .Update(_ => newNode)
+                            .Update(current =>
+                                current is not null && current.Version >= newNode.Version
+                                    ? current
+                                    : newNode)
                             .Subscribe(
                                 _ => { },
                                 ex => hub.ServiceProvider.GetService<ILoggerFactory>()
