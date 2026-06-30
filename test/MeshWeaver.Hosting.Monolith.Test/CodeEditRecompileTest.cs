@@ -663,13 +663,31 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
     private async Task<string> WaitForLatestRelease(string nodeTypePath, string? knownRelease)
     {
         var workspace = Mesh.GetWorkspace();
-        var node = await workspace.GetMeshNodeStream(nodeTypePath)
-            .Should().Within(50.Seconds())
-            .Match(n => n?.Content is NodeTypeDefinition def
-                && def.CompilationStatus == CompilationStatus.Ok
-                && !string.IsNullOrEmpty(def.LatestReleasePath)
-                && def.LatestReleasePath != knownRelease);
-        return ((NodeTypeDefinition)node.Content!).LatestReleasePath!;
+        try
+        {
+            var node = await workspace.GetMeshNodeStream(nodeTypePath)
+                .Should().Within(50.Seconds())
+                .Match(n => n?.Content is NodeTypeDefinition def
+                    && def.CompilationStatus == CompilationStatus.Ok
+                    && !string.IsNullOrEmpty(def.LatestReleasePath)
+                    && def.LatestReleasePath != knownRelease);
+            return ((NodeTypeDefinition)node.Content!).LatestReleasePath!;
+        }
+        catch (Exception ex)
+        {
+            // Diagnostic: on timeout, surface the node's STUCK state so the failure pins the
+            // stalled stage — watcher never fired (Status settled + ReqAt > Handled), compile
+            // never ran (Status=Pending), compile never finished (Compiling), or the release
+            // was never written (Status=Ok but Latest == known). Captured in the failure message.
+            var cur = await workspace.GetMeshNodeStream(nodeTypePath)
+                .Where(n => n is not null).Take(1).Timeout(5.Seconds());
+            var d = cur?.Content as NodeTypeDefinition;
+            throw new Exception(
+                $"WaitForLatestRelease stuck for {nodeTypePath}: Status={d?.CompilationStatus}, " +
+                $"Latest={d?.LatestReleasePath ?? "(null)"}, known={knownRelease ?? "(null)"}, " +
+                $"ReqAt={d?.RequestedReleaseAt:O}, Handled={d?.LastReleaseRequestHandledAt:O}, " +
+                $"Force={d?.RequestedReleaseForce}", ex);
+        }
     }
 
     private async Task<CreateReleaseResponse> SendCreateRelease(string nodeTypePath, bool force)
