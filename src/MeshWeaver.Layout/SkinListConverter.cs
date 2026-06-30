@@ -84,26 +84,46 @@ public class SkinListConverter : JsonConverter<ImmutableList<Skin>>
                     var typeName = typeElement.GetString();
                     if (!string.IsNullOrEmpty(typeName))
                     {
-                        Type? skinType = null;
+                        // Resolve the concrete skin type from its $type discriminator. The discriminator now
+                        // defaults to the SHORT type name (TypeRegistry.FormatType, fb2ee677d), which is
+                        // resolvable ONLY through the type registry — so a skin's type MUST be registered on
+                        // BOTH the sending and receiving hub. Resolution order:
+                        //   1. this converter's registry (short names, and legacy full names via the registry
+                        //      alias) — used by the options-registered instance (LayoutExtensions.AddLayoutTypes);
+                        //   2. Type.GetType — the [JsonConverter]-attribute instance has no registry, but a legacy
+                        //      namespace-qualified FULL name still resolves by reflection;
+                        //   3. STJ's registry-backed polymorphism on the base Skin — the attribute path's
+                        //      short-name case: the hub's PolymorphicTypeInfoResolver keys Skin's derived types
+                        //      by the same short names, so resolution still flows through the registry.
+                        var json = root.GetRawText();
+                        Type? skinType =
+                            _typeRegistry?.TryGetType(typeName, out var typeInfo) == true
+                                ? typeInfo!.Type
+                                : Type.GetType(typeName!);
 
-                        // Try to get type from registry first, then fall back to Type.GetType
-                        if (_typeRegistry?.TryGetType(typeName, out var typeInfo) == true)
+                        Skin? skin = null;
+                        if (skinType != null && typeof(Skin).IsAssignableFrom(skinType))
                         {
-                            skinType = typeInfo!.Type;
+                            skin = (Skin?)JsonSerializer.Deserialize(json, skinType, options);
                         }
                         else
                         {
-                            skinType = Type.GetType(typeName!);
+                            // No registry on this instance and not a full name → resolve the SHORT name through
+                            // the hub's polymorphism resolver. An unregistered skin stays unresolved and is
+                            // skipped (the same graceful degradation as a missing $type — the serialize side
+                            // already warns loudly on unregistered types via WarnUnregisteredSerialization).
+                            try
+                            {
+                                skin = (Skin?)JsonSerializer.Deserialize(json, typeof(Skin), options);
+                            }
+                            catch (NotSupportedException)
+                            {
+                                // Abstract Skin + unrecognized discriminator (unregistered on this hub) → skip.
+                            }
                         }
 
-                        if (skinType != null && typeof(Skin).IsAssignableFrom(skinType))
-                        {
-                            // Deserialize to the specific skin type
-                            var json = root.GetRawText();
-                            var skin = (Skin?)JsonSerializer.Deserialize(json, skinType, options);
-                            if (skin != null)
-                                result.Add(skin);
-                        }
+                        if (skin != null)
+                            result.Add(skin);
                     }
                 }
                 // If no type discriminator or unknown type, skip the item
