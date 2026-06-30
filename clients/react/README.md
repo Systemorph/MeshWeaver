@@ -5,6 +5,12 @@ counterpart of the MAUI `MauiViewPack`. It walks the **same `UiControl` JSON tre
 MAUI render, mapping each control to a Fluent UI React v9 component (the Blazor portal renders with Fluent
 UI Blazor, so the mapping is near 1:1).
 
+![A MeshWeaver layout area rendered by @meshweaver/react with Fluent UI](docs/demo.png)
+
+*The demo area above — page title, metric cards, tabs, a data-bound editable form, a chart, a nav menu,
+and feedback controls — is a single `{areas,data}` UiControl tree, the same one the Blazor portal and MAUI
+render.*
+
 ## Why this shape
 
 ```
