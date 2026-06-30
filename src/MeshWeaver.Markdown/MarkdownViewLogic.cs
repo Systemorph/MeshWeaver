@@ -296,6 +296,64 @@ public static class MarkdownViewLogic
         return segments;
     }
 
+    /// <summary>A live layout-area embed parsed out of the rendered markdown HTML — the native counterpart
+    /// of Blazor's inline area injection. Carries whichever attributes the <c>@@</c> renderer emitted:
+    /// the pre-parsed <see cref="Address"/>/<see cref="Area"/>/<see cref="AreaId"/> (e.g.
+    /// <c>@@/Acme/area/Search</c>) and/or the unresolved <see cref="RawPath"/> (e.g. <c>@@Cession/MotorXL</c>,
+    /// which the host resolves against the authoring node at render time).</summary>
+    public readonly record struct EmbeddedAreaRef(string? RawPath, string? Address, string? Area, string? AreaId);
+
+    /// <summary>
+    /// Splits the rendered markdown HTML into ordered (html | <see cref="EmbeddedAreaRef"/>) segments,
+    /// pulling out every <c>@@</c> layout-area embed (the <c>&lt;div class='layout-area' …&gt;&lt;/div&gt;</c>
+    /// the <c>@@</c> operator emits via <see cref="MeshWeaver.Markdown.LayoutAreaMarkdownRenderer"/>). The
+    /// KERNEL result placeholder (<see cref="ExecutableCodeBlockRenderer.KernelAddressPlaceholder"/>) is the
+    /// concern of <see cref="SplitKernelResultAreas"/> and is left in the html runs here. A native view pack
+    /// (MAUI) can't hydrate the placeholder inside a WebView, so it renders the html runs as WebView chunks
+    /// and each embed as a real native area view between them. Pure + unit-testable. No embed ⇒ a single
+    /// <c>(html, null)</c> segment; empty input ⇒ empty list.
+    /// </summary>
+    public static IReadOnlyList<(string? Html, EmbeddedAreaRef? Embed)> SplitLayoutAreaRefs(string? html)
+    {
+        if (string.IsNullOrEmpty(html))
+            return Array.Empty<(string?, EmbeddedAreaRef?)>();
+
+        var divRx = new System.Text.RegularExpressions.Regex(
+            "<div class='" + LayoutAreaMarkdownRenderer.LayoutArea + "'(?<attrs>[^>]*)></div>");
+        var matches = divRx.Matches(html);
+        if (matches.Count == 0)
+            return new (string?, EmbeddedAreaRef?)[] { (html, null) };
+
+        static string? Attr(string attrs, string name)
+        {
+            var m = System.Text.RegularExpressions.Regex.Match(attrs, "data-" + name + "='([^']*)'");
+            return m.Success ? System.Net.WebUtility.HtmlDecode(m.Groups[1].Value) : null;
+        }
+
+        var segments = new List<(string? Html, EmbeddedAreaRef?)>();
+        var last = 0;
+        foreach (System.Text.RegularExpressions.Match m in matches)
+        {
+            var attrs = m.Groups["attrs"].Value;
+            var address = Attr(attrs, LayoutAreaMarkdownRenderer.Address);
+            // Kernel result placeholder → not an @@ embed; leave it in the html run (SplitKernelResultAreas owns it).
+            if (address == ExecutableCodeBlockRenderer.KernelAddressPlaceholder)
+                continue;
+            if (m.Index > last)
+                segments.Add((html[last..m.Index], null));
+            segments.Add((null, new EmbeddedAreaRef(
+                Attr(attrs, LayoutAreaMarkdownRenderer.RawPath),
+                address,
+                Attr(attrs, LayoutAreaMarkdownRenderer.Area),
+                Attr(attrs, LayoutAreaMarkdownRenderer.AreaId))));
+            last = m.Index + m.Length;
+        }
+        if (last < html.Length)
+            segments.Add((html[last..], null));
+        // Only the kernel placeholder matched (all skipped) ⇒ a single html segment.
+        return segments.Count == 0 ? new (string?, EmbeddedAreaRef?)[] { (html, null) } : segments;
+    }
+
     /// <summary>
     /// Submits each code block to the target hub <em>in order</em>, waiting for
     /// the previous submission's <see cref="SubmitCodeResponse"/> before posting

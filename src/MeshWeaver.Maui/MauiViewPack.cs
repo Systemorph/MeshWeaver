@@ -694,10 +694,20 @@ public sealed class MauiCollaborativeMarkdownView : MauiView<CollaborativeMarkdo
         // Same framework pipeline the Blazor views use: HTML (kernel placeholders intact) + typed submissions.
         var result = MarkdownViewLogic.Render(markdown, collection: null, currentNodePath: Model.NodePath);
 
-        // No executable blocks (the common + all read-only case) → one WebView for the whole doc.
+        // No executable blocks (the common + all read-only case). Segment the HTML so any @@ live-area
+        // embeds become native LayoutAreaViews BETWEEN the WebView chunks — a static WebView cannot hydrate
+        // the @@ placeholder (the NativeMauiRendering.md keystone). Pre-resolved embeds render the live area
+        // via the same LayoutAreaView the interactive-kernel path uses; a bare @@path embed (which needs
+        // UCR catalog resolution) shows a labelled placeholder until that lands.
         if (result.CodeSubmissions is not { Count: > 0 })
         {
-            _root.Children.Add(NewHtmlChunk(result.Html));
+            foreach (var (htmlPart, embed) in MarkdownViewLogic.SplitLayoutAreaRefs(result.Html))
+            {
+                if (embed is { } e)
+                    _root.Children.Add(BuildEmbeddedArea(e));
+                else if (!string.IsNullOrEmpty(htmlPart))
+                    _root.Children.Add(NewHtmlChunk(htmlPart!));
+            }
             AddCommentsPanel();
             AddTrackedChangesPanel();
             return;
@@ -760,6 +770,23 @@ public sealed class MauiCollaborativeMarkdownView : MauiView<CollaborativeMarkdo
             onError: ex => MainThread.BeginInvokeOnMainThread(() =>
                 SetAll(pending, $"⚠ Could not start interactive kernel — {ex.GetType().Name}: {ex.Message}",
                     Colors.OrangeRed)));
+    }
+
+    // Renders an @@ live-area embed natively — the SAME LayoutAreaView the interactive-kernel result path
+    // uses (proven to render a remote area), now reused for documentation @@ embeds.
+    private View BuildEmbeddedArea(MarkdownViewLogic.EmbeddedAreaRef e)
+    {
+        if (Stream is null)
+            return Notice("(embedded area unavailable — no stream)", Colors.Gray);
+        var workspace = Stream.Hub.GetWorkspace();
+        // Pre-resolved embed (e.g. @@/Acme/area/Search) → render the live remote area directly.
+        if (!string.IsNullOrEmpty(e.Address))
+            return new LayoutAreaView(
+                workspace, new Address(e.Address!), new LayoutAreaReference(e.Area) { Id = e.AreaId }, Renderer);
+        // Bare @@path embed (e.g. @@Cession/MotorXL): the address/area boundary needs UCR catalog resolution
+        // against the authoring node — not yet wired natively. Surface a labelled placeholder instead of
+        // silently dropping it into an inert WebView (the old behaviour).
+        return Notice($"⧉ embedded area: @@{e.RawPath} (native resolution pending)", Colors.Gray);
     }
 
     // Comments panel: a LIVE list of the node's _Comment satellites (author + quoted text + body) plus, when
