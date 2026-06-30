@@ -1,0 +1,30 @@
+name: Clients
+
+# CI for the foreign-language client packages under clients/. The .NET solution CI does not cover
+# these, so typecheck + test them here on any PR that touches them.
+on:
+  pull_request:
+    paths:
+      - "clients/**"
+      - ".github/workflows/clients.yml"
+  push:
+    branches: [main]
+    paths:
+      - "clients/**"
+      - ".github/workflows/clients.yml"
+
+jobs:
+  react:
+    name: "@meshweaver/react (typecheck + test)"
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: clients/react
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm install --no-audit --no-fund
+      - run: npm run typecheck
+      - run: npm test
