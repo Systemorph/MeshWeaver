@@ -411,7 +411,10 @@ public static class MauiViewPackExtensions
         .Register<MenuItemControl, MenuItemView>()
         // Phase 2 — agent-backed chat: the thread chat (message list + composer) + its message bubble.
         .Register<ThreadChatControl, ThreadChatView>()
-        .Register<ThreadMessageBubbleControl, ThreadMessageBubbleView>();
+        .Register<ThreadMessageBubbleControl, ThreadMessageBubbleView>()
+        // Phase 5 — content vector-search viewers: marked search-match text + the inline document fallback.
+        .Register<HighlightControl, HighlightView>()
+        .Register<DocumentSourceControl, DocumentSourceView>();
 }
 
 // ---- Wave 1 control views -------------------------------------------------------------------------
@@ -1006,6 +1009,95 @@ public sealed class MauiCollaborativeMarkdownView : MauiView<CollaborativeMarkdo
         Text = text, FontSize = 12, TextColor = color,
         Margin = new Thickness(8), LineBreakMode = LineBreakMode.WordWrap,
     };
+}
+
+/// <summary>
+/// <see cref="HighlightControl"/> → a native <see cref="Label"/> whose <see cref="FormattedString"/> wraps
+/// every search-matched run in a marked <see cref="Span"/> — the native equivalent of Blazor's
+/// <c>&lt;mark&gt;</c> (yellow accent fill, bold). Reuses the framework <see cref="HighlightControl.FreeTextTerms"/>
+/// + <see cref="HighlightControl.Segment"/> so the match logic is byte-identical across packs; no HTML, no WebView.
+/// </summary>
+public sealed class HighlightView : MauiView<HighlightControl>
+{
+    private Label _label = null!;
+    private string? _text;
+    private string? _terms;
+
+    protected override View CreateView() =>
+        _label = new Label { TextColor = Colors.White, LineBreakMode = LineBreakMode.WordWrap };
+
+    protected override void Bind()
+    {
+        // Both Text and Terms can be a literal or a data-bound pointer; recompute the marked runs on either.
+        Bind<object>(Model.Text, v => { _text = MarkdownViewLogic.CoerceString(v); Rebuild(); });
+        Bind<object>(Model.Terms, v => { _terms = MarkdownViewLogic.CoerceString(v); Rebuild(); });
+    }
+
+    private void Rebuild()
+    {
+        var terms = HighlightControl.FreeTextTerms(_terms);
+        var fs = new FormattedString();
+        foreach (var seg in HighlightControl.Segment(_text, terms))
+            fs.Spans.Add(seg.IsMatch
+                ? new Span { Text = seg.Text, BackgroundColor = Color.FromArgb("#FFD54F"), TextColor = Colors.Black, FontAttributes = FontAttributes.Bold }
+                : new Span { Text = seg.Text, TextColor = Colors.White });
+        _label.FormattedText = fs;
+    }
+}
+
+/// <summary>
+/// <see cref="DocumentSourceControl"/> → the native degrade path. The inline original (PDF/DOCX) needs
+/// PDF.js/mammoth (browser-only) AND a static-file server the local-first client doesn't run, so — exactly as
+/// Blazor's documented fallback — we render the file name, an "Open original" launcher for an absolute URL
+/// (WKWebView/Safari renders the file), and the highlighted passage so the matched text is never lost. A
+/// relative <c>/static/…</c> route has no server here, so the dead link is omitted but the passage stays.
+/// Never a blank pane.
+/// </summary>
+public sealed class DocumentSourceView : MauiView<DocumentSourceControl>
+{
+    private VerticalStackLayout _root = null!;
+    private string? _fileUrl;
+    private string? _fileName;
+    private string? _highlight;
+
+    protected override View CreateView() => _root = new VerticalStackLayout { Spacing = 8 };
+
+    protected override void Bind()
+    {
+        Bind<object>(Model.FileUrl, v => { _fileUrl = MarkdownViewLogic.CoerceString(v); Rebuild(); });
+        Bind<object>(Model.FileName, v => { _fileName = MarkdownViewLogic.CoerceString(v); Rebuild(); });
+        Bind<object>(Model.Highlight, v => { _highlight = MarkdownViewLogic.CoerceString(v); Rebuild(); });
+    }
+
+    private void Rebuild()
+    {
+        _root.Children.Clear();
+        var name = !string.IsNullOrWhiteSpace(_fileName) ? _fileName!
+            : string.IsNullOrWhiteSpace(_fileUrl) ? "Document" : System.IO.Path.GetFileName(_fileUrl);
+        _root.Children.Add(new Label { Text = name, FontAttributes = FontAttributes.Bold, TextColor = Colors.White });
+
+        // Absolute http(s) URL → open in the system browser (renders the PDF/DOCX). Fire-and-forget: a UI
+        // gesture into the OS launcher, not hub/observable code — discard the Task (no await, no hub thread).
+        if (Uri.TryCreate(_fileUrl, UriKind.Absolute, out var uri)
+            && (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps))
+        {
+            var open = new Button
+            {
+                Text = "Open original", FontSize = 12, BackgroundColor = Colors.RoyalBlue, TextColor = Colors.White,
+                CornerRadius = 6, Padding = new Thickness(10, 4), HorizontalOptions = LayoutOptions.Start,
+            };
+            open.Clicked += (_, _) => _ = Launcher.Default.OpenAsync(uri);
+            _root.Children.Add(open);
+        }
+
+        if (!string.IsNullOrWhiteSpace(_highlight))
+            _root.Children.Add(new Border
+            {
+                Padding = 8, BackgroundColor = Color.FromArgb("#2A2A2C"), StrokeThickness = 0,
+                StrokeShape = new Microsoft.Maui.Controls.Shapes.RoundRectangle { CornerRadius = 8 },
+                Content = new Label { Text = _highlight, TextColor = Colors.White, LineBreakMode = LineBreakMode.WordWrap, FontSize = 13 },
+            });
+    }
 }
 
 /// <summary>Badge → a pill-styled <see cref="Label"/> in a <see cref="Border"/>.</summary>

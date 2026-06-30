@@ -49,6 +49,9 @@ public static class MauiControlManifest
         "MeshNodeEditorControl", "MeshNodeRoleEditorControl",
         // Phase 3/4 — operations + file browser + pivot grid
         "NodeImportControl", "NodeExportControl", "ExportDocumentControl", "FileBrowserControl", "PivotGridControl",
+        // Phase 5 — content vector-search viewers: marked search-match text (native FormattedString/Span) +
+        // the inline-document native degrade (file name + open-original launcher + highlighted passage).
+        "HighlightControl", "DocumentSourceControl",
     }.ToImmutableHashSet(StringComparer.Ordinal);
 
     /// <summary>Concrete controls not yet given a native view — the remaining parity work (Phases 3-5).</summary>
@@ -60,8 +63,5 @@ public static class MauiControlManifest
         // DataGrid column control (rendered by the grid, not standalone). PropertyColumnControl is
         // generic (PropertyColumnControl<T>) so it isn't a concrete control in the coverage scan.
         "TemplateColumnControl",
-        // Content vector-index viewer controls — highlighted text + the inline PDF/DOCX viewer; not yet
-        // rendered natively in the MAUI client.
-        "HighlightControl", "DocumentSourceControl",
     }.ToImmutableHashSet(StringComparer.Ordinal);
 }
