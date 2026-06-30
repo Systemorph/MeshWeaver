@@ -17,15 +17,18 @@
   },
   "files": [
     "dist",
+    "docs",
     "README.md"
   ],
+  "sideEffects": false,
   "scripts": {
     "build": "tsc -p tsconfig.lib.json",
     "dev": "vite",
     "demo:build": "vite build",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "electron": "electron electron/main.cjs"
+    "electron": "electron electron/main.cjs",
+    "prepack": "npm run build"
   },
   "peerDependencies": {
     "react": "^18.3.0",

@@ -11,6 +11,16 @@ UI Blazor, so the mapping is near 1:1).
 and feedback controls — is a single `{areas,data}` UiControl tree, the same one the Blazor portal and MAUI
 render.*
 
+## Install
+
+```bash
+npm install @meshweaver/react      # or: bun add @meshweaver/react · pnpm add · yarn add
+```
+
+A standard ESM package — npm, pnpm, yarn, **and Bun** install it identically (Bun consumes npm packages;
+there is no separate "bun package"). `@meshweaver/react` is the web entry (Fluent pack pre-wired);
+`@meshweaver/react/core` is the Fluent-free core for React Native / custom leaf packs.
+
 ## Why this shape
 
 ```
@@ -76,7 +86,9 @@ change + one round-trip. Once pinned, the same renderer drives web, Electron, an
 
 ## Targets
 
-- **Web / Vite / Next.js** — the demo as-is (`npm run dev`).
+- **Web / Vite** — the demo as-is (`npm run dev`).
+- **Next.js** — the *easiest* target: same package + same Fluent pack, just `"use client"` + Fluent's SSR
+  wiring (~10 lines). No new leaf pack. Guide: [docs/nextjs.md](docs/nextjs.md).
 - **Electron (desktop)** — `electron/main.cjs` opens the same renderer in a native window:
   `npm i -D electron && npm run dev` (in one terminal) then `npm run electron`. Point it at any served
   renderer with `MESH_URL`. The web/Electron targets share the renderer core **and** the Fluent DOM leaf
