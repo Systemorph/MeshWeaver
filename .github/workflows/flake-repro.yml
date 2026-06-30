@@ -32,13 +32,6 @@ on:
         description: "Default log level for the looped runs (Debug/Trace to surface the watcher race)"
         type: string
         default: "Debug"
-  # TEMPORARY self-serve trigger: a workflow_dispatch workflow can only be dispatched
-  # once it's on the default branch, but the whole point is to catch the repro BEFORE
-  # merging a fix. A push-triggered run executes immediately on THIS branch (no merge
-  # needed). Scoped to the repro branch so it never fires elsewhere. Removed before
-  # this PR merges — the merged tool is workflow_dispatch-only.
-  push:
-    branches: [ "ci/flake-repro-workflow" ]
 
 permissions:
   contents: read
@@ -58,7 +51,7 @@ jobs:
     env:
       REPRO_PROJECT: ${{ inputs.project || 'test/MeshWeaver.Hosting.Monolith.Test' }}
       REPRO_FILTER: ${{ inputs.filter || 'FullyQualifiedName~CodeEditRecompileTest.PressingCompileButton_SetsRequestedReleaseAt_AndProducesNewRelease' }}
-      REPRO_ITERS: ${{ inputs.iterations || '80' }}
+      REPRO_ITERS: ${{ inputs.iterations || '40' }}
       DOTNET_ENVIRONMENT: Development
       # 🚨 Logging cranked via ENV only — never a committed appsettings/Log* change
       # (those are production cost contract). Surfaces the watcher/messaging trace.
