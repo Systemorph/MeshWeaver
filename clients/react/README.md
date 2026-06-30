@@ -54,10 +54,22 @@ mesh controls. Unknown `$type`s render a clearly-labeled fallback; extend or ove
 
 ## Wiring to a live mesh
 
-Implement `AreaSource` over `@meshweaver/client`'s `watch` (subscribe to `@addr/area/id`, fold the
-RFC-7396 patches into `{areas,data}`, route `emit` to `ClickedEvent`/`UpdatePointer`). The layout-area
-subscription is the one `WIRE:`-level piece still to validate against a running portal — once pinned, the
-same renderer drives web, Electron, and React Native.
+`GrpcAreaSource` does this — subscribe to a layout area over `@meshweaver/client`, fold the RFC-7396
+patches into `{areas,data}`, and route `emit` back (clicks + edits):
+
+```ts
+import { connect } from "@meshweaver/client";
+import { GrpcAreaSource, MeshAreaView } from "@meshweaver/react";
+
+const conn = await connect("https://atioz.meshweaver.cloud", { token: "mw_..." });
+const source = new GrpcAreaSource(conn, "ACME/MyApp", { area: "Overview" });
+source.start(); // begins folding the area stream into {areas,data}
+// <MeshAreaView source={source} rootArea="Overview" />
+```
+
+The layout-area protocol (`SubscribeRequest` / `DataChangedEvent` / the click/edit messages, marked
+`🔬 WIRE:` in `live/grpcSource.ts`) is the one piece still to pin against a running portal — capture one
+change + one round-trip. Once pinned, the same renderer drives web, Electron, and React Native.
 
 ## Targets
 

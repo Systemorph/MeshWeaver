@@ -30,6 +30,12 @@ export { ControlRenderer, RenderArea, RenderChildren, useChildAreas } from "./re
 export { controlRegistry, FallbackControl, type ControlComponent } from "./render/registry.js";
 export { skinRegistry } from "./render/skins.js";
 export { StaticAreaSource } from "./area/source.js";
+export {
+  GrpcAreaSource,
+  type MeshConnectionLike,
+  type LayoutAreaReference,
+  type GrpcAreaOptions,
+} from "./live/grpcSource.js";
 export { ScopeProvider, useAreaState, useResolve, useEmit, useScope } from "./area/context.js";
 export { getPointer, setPointer, mergePatch, resolve } from "./area/pointer.js";
 export type { AreaSource, AreaTree, UiControl, Skin, NamedArea, MeshEvent, Json } from "./area/types.js";
