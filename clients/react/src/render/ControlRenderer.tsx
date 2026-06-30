@@ -1,8 +1,7 @@
 import type { ReactNode } from "react";
 import type { NamedArea, UiControl } from "../area/types.js";
 import { ScopeProvider, useAreaState, useScope } from "../area/context.js";
-import { controlRegistry, FallbackControl } from "./registry.js";
-import { skinRegistry, DefaultStackSkin } from "./skins.js";
+import { useLeafPack } from "./registryContext.js";
 
 export interface ControlProps {
   control: UiControl;
@@ -10,24 +9,27 @@ export interface ControlProps {
 
 /**
  * Render one control. Skins are popped LIFO and wrap (or, for layout skins, lay out) the control;
- * a container with no remaining skin defaults to a vertical stack; a leaf dispatches on `$type`.
+ * a container with no remaining skin defaults to a stack; a leaf dispatches on `$type`. Components come
+ * from the active leaf pack (see registryContext) — this core imports no concrete component.
  */
 export function ControlRenderer({ control }: { control?: UiControl | null }): ReactNode {
+  const pack = useLeafPack();
   if (control == null) return null;
 
   const skins = control.skins ?? [];
   if (skins.length > 0) {
     const skin = skins[skins.length - 1];
     const rest: UiControl = { ...control, skins: skins.slice(0, -1) };
-    const Wrapper = skinRegistry[skin.$type] ?? skinRegistry.__default;
+    const Wrapper = pack.skins[skin.$type] ?? pack.skins.__default ?? pack.defaultContainer;
     return <Wrapper skin={skin} control={rest} />;
   }
 
   if (Array.isArray(control.areas)) {
-    return <DefaultStackSkin skin={{ $type: "LayoutStack" }} control={control} />;
+    const Default = pack.defaultContainer;
+    return <Default skin={{ $type: "LayoutStack" }} control={control} />;
   }
 
-  const Comp = controlRegistry[control.$type] ?? FallbackControl;
+  const Comp = pack.controls[control.$type] ?? pack.fallback;
   return <Comp control={control} />;
 }
 

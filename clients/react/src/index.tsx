@@ -7,6 +7,8 @@ import { FluentProvider, webLightTheme, type Theme } from "@fluentui/react-compo
 import type { AreaSource } from "./area/types.js";
 import { ScopeProvider } from "./area/context.js";
 import { RenderArea } from "./render/ControlRenderer.js";
+import { RegistryProvider } from "./render/registryContext.js";
+import { fluentPack } from "./render/registry.js";
 
 export interface MeshAreaViewProps {
   source: AreaSource;
@@ -19,16 +21,19 @@ export interface MeshAreaViewProps {
 export function MeshAreaView({ source, rootArea, theme }: MeshAreaViewProps) {
   return (
     <FluentProvider theme={theme ?? webLightTheme}>
-      <ScopeProvider source={source} area={rootArea}>
-        <RenderArea areaKey={rootArea} />
-      </ScopeProvider>
+      <RegistryProvider pack={fluentPack}>
+        <ScopeProvider source={source} area={rootArea}>
+          <RenderArea areaKey={rootArea} />
+        </ScopeProvider>
+      </RegistryProvider>
     </FluentProvider>
   );
 }
 
 export { ControlRenderer, RenderArea, RenderChildren, useChildAreas } from "./render/ControlRenderer.js";
-export { controlRegistry, FallbackControl, type ControlComponent } from "./render/registry.js";
+export { controlRegistry, FallbackControl, fluentPack, type ControlComponent } from "./render/registry.js";
 export { skinRegistry } from "./render/skins.js";
+export { RegistryProvider, useLeafPack, type LeafPack, type SkinComponent } from "./render/registryContext.js";
 export { StaticAreaSource } from "./area/source.js";
 export {
   GrpcAreaSource,

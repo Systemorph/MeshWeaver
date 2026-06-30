@@ -1,6 +1,8 @@
 import type { ReactNode } from "react";
 import { Text } from "@fluentui/react-components";
 import type { UiControl } from "../area/types.js";
+import type { LeafPack, ControlComponent } from "./registryContext.js";
+import { skinRegistry, DefaultStackSkin } from "./skins.js";
 import { displayControls } from "../controls/display.js";
 import { inputControls } from "../controls/inputs.js";
 import { dataControls } from "../controls/data.js";
@@ -10,7 +12,7 @@ import { containerControls } from "../controls/containers.js";
 import { editorControls } from "../controls/editors.js";
 import { meshControls } from "../controls/mesh.js";
 
-export type ControlComponent = (props: { control: UiControl }) => ReactNode;
+export type { ControlComponent };
 
 /** `$type` → React component. Spread your own entries to extend or override. */
 export const controlRegistry: Record<string, ControlComponent> = {
@@ -31,3 +33,11 @@ export function FallbackControl({ control }: { control: UiControl }): ReactNode 
     </Text>
   );
 }
+
+/** The Fluent UI (web/DOM) leaf pack — what `<MeshAreaView>` installs into the renderer. */
+export const fluentPack: LeafPack = {
+  controls: controlRegistry,
+  skins: skinRegistry,
+  fallback: FallbackControl,
+  defaultContainer: DefaultStackSkin,
+};
