@@ -75,12 +75,12 @@ The server registers a participant's inbound route with `routingService.Register
 - **Orleans** (the production / SignalR-parity target): `RoutingGrain` consults `StreamRoutedAddressTypes`, so a `RegisterStream`'d participant is reachable. `AddGrpcHub` declares `py`/`node` there.
 - **Monolith**: a participant is reached via a **hosted hub** (how Blazor circuits receive — `RouteInMesh` short-circuits on `GetHostedHub`). A bare `RegisterStream` alone is not enough.
 
-The current transport proves inbound (request → mesh → handler) and outbound framing (the ack). Completing the mesh→participant **response** path under the monolith means giving the participant a hosted hub whose `DeliverMessage` forwards to its gRPC `Open` stream — the next step.
+`GrpcConnectionRegistry.Connect` does **both**: it `RegisterStream`s the address (Orleans) AND hosts a proxy hub at the participant address (monolith). The proxy installs a catch-all `WithRoutes` handler — routes run for every delivery a hub receives — that forwards each message addressed to the participant *from elsewhere* to its gRPC `Open` stream; the hub's own self/lifecycle messages (`InitializeHubRequest`, disposal — `sender == participant`) are left for the hub to process. This closes the full mesh→participant response path; the round-trip test verifies it end-to-end.
 
 ## Phasing
 
-1. `mesh.proto` + `MeshWeaver.Hosting.Grpc` + a network-free transport test (drives the service over in-memory duplex streams against a real mesh; pins inbound routing + outbound framing). ← **this change**
-2. Python `meshweaver`: transport + correlation + `get`/`search`/`watch`. ← **this change (skeleton; wire-shape pinned against a captured sample)**
-3. Close the response path: a hosted participant hub (monolith) and/or an Orleans round-trip test (see "Participant reachability").
-4. `@meshweaver/client` (Bun/Node) — port the surface.
+1. `mesh.proto` + `MeshWeaver.Hosting.Grpc` (transport + hosted-participant response path) + a network-free **full round-trip** test (drives the service over in-memory duplex streams against a real mesh). ← **done**
+2. Python `meshweaver`: transport + correlation + `get`/`search`/`watch`. ← **skeleton done; wire-shape pinned against a captured sample**
+3. `@meshweaver/client` (Bun/Node) — port the surface.
+4. A live end-to-end test over a real Kestrel gRPC endpoint (h2c) + an Orleans round-trip, to confirm the wire path beyond the in-memory harness.
 5. Widen operations (move/copy/execute/threads) + the hosted-Code-node subprocess path (the kernel spawns `python`/`bun` for an executable Code node and hands it `MESH_GRPC_URL` + a scoped token, so in-mesh scripts reach back through the same SDK over loopback).
