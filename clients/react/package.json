@@ -19,7 +19,8 @@
     "build": "tsc -p tsconfig.lib.json",
     "dev": "vite",
     "demo:build": "vite build",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "electron": "electron electron/main.cjs"
   },
   "peerDependencies": {
     "react": "^18.3.0",

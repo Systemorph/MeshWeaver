@@ -73,7 +73,11 @@ change + one round-trip. Once pinned, the same renderer drives web, Electron, an
 
 ## Targets
 
-- **Web / Vite / Next.js** — the demo as-is.
-- **Electron** — wrap the built web app in a BrowserWindow (desktop).
+- **Web / Vite / Next.js** — the demo as-is (`npm run dev`).
+- **Electron (desktop)** — `electron/main.cjs` opens the same renderer in a native window:
+  `npm i -D electron && npm run dev` (in one terminal) then `npm run electron`. Point it at any served
+  renderer with `MESH_URL`. The web/Electron targets share the renderer core **and** the Fluent DOM leaf
+  pack unchanged — only the host differs.
 - **React Native / Expo (iOS, the MAUI peer)** — reuse `area/` + `render/` (dispatch, binding, skins) and
-  provide an RN leaf pack (`<View>`/`<Text>`/RN inputs) instead of the Fluent DOM components.
+  provide an RN leaf pack (`<View>`/`<Text>`/RN inputs) instead of the Fluent DOM components. This is the
+  direct analog of MAUI's native `MauiViewPack`: same `UiControl` tree, a native leaf pack.
