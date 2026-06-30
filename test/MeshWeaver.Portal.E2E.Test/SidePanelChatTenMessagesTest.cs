@@ -92,18 +92,32 @@ public class SidePanelChatTenMessagesTest(PortalFixture fixture)
 
         for (var i = 0; i < MessageCount; i++)
         {
-            // Re-resolve the Monaco editor each turn (the side panel rebinds to the freshly-created thread
-            // after the first message). Escape closes any open suggest widget, select-all+backspace clears
-            // any residual text, then type. Force the click past Playwright's "stable" actionability check —
-            // Monaco re-lays-out continuously, which is cosmetic; the keyboard typing lands in the focused
-            // editor regardless (mirrors the robust pattern in ChatRepeatedlyNoVanishTest).
-            var editor = page.Locator(".thread-chat-footer .monaco-editor").Last;
+            // 🔬 DEBUG: sample the composer/editor over ~2s BEFORE interacting — is the GUI stable, or is
+            // the editor disappearing / being recreated (a re-render that "vanishes" the composer)?
+            var dbg = new System.Text.StringBuilder();
+            for (var s = 0; s < 9; s++)
+            {
+                var footerN = await composerFooter.CountAsync();
+                var editorN = await page.Locator(".thread-chat-footer .monaco-editor").CountAsync();
+                var textareaN = await page.Locator(".thread-chat-footer .monaco-editor textarea").CountAsync();
+                var footerVis = footerN > 0 && await composerFooter.First.IsVisibleAsync();
+                var lineText = editorN > 0 ? (await page.Locator(".thread-chat-footer .monaco-editor .view-lines").Last.InnerTextAsync()).Replace("\n", "⏎") : "<none>";
+                dbg.AppendLine($"[gui] round{i + 1} t+{s * 250}ms footer={footerN}(vis={footerVis}) editor={editorN} textarea={textareaN} lines='{lineText}'");
+                await page.WaitForTimeoutAsync(250);
+            }
+            System.IO.File.AppendAllText("/tmp/gui-samples.txt", dbg.ToString());
+            await page.ScreenshotAsync(new PageScreenshotOptions { Path = $"/tmp/ten-msg-round-{i + 1}.png", FullPage = true });
+
+            var viewLines = page.Locator(".thread-chat-footer .monaco-editor .view-lines").Last;
             await page.Keyboard.PressAsync("Escape");
-            await editor.ClickAsync(new LocatorClickOptions { Force = true });
+            await viewLines.ClickAsync(new LocatorClickOptions { Force = true });
             await page.Keyboard.PressAsync("ControlOrMeta+A");
             await page.Keyboard.PressAsync("Backspace");
             await page.Keyboard.TypeAsync($"This is message number {i + 1}. Reply with only the digit {i + 1}.");
 
+            // The composer must actually hold the text before we send (else the send button is disabled).
+            await Assertions.Expect(page.Locator(".thread-chat-footer .monaco-editor .view-lines").Last)
+                .ToContainTextAsync($"message number {i + 1}", new() { Timeout = 10_000 });
             var send = page.Locator(".thread-chat-footer .selector-bar fluent-button").Last;
             await send.ClickAsync(new LocatorClickOptions { Timeout = 30_000 });
 
