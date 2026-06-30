@@ -105,7 +105,7 @@ public class MeshGrpcTransportTest(ITestOutputHelper output) : MonolithMeshTestB
                 received = f.Receive;
         }
 
-        output.WriteLine($"canonical wire delivery:\n{received}");
+        Output.WriteLine($"canonical wire delivery:\n{received}");
         Assert.NotNull(received);
         Assert.Contains("hello mesh", received!);  // response payload round-tripped to the participant
         Assert.Contains(delivery.Id, received);    // correlated to the request (RequestId == request delivery id)
