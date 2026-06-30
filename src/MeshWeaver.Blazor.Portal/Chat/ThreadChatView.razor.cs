@@ -1229,6 +1229,10 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     private string? _connectHarnessLabel;
     private MeshWeaver.AI.Connect.ConnectStatus? _connectStatus;
     private string _connectCode = "";
+    // Claude Code: the user pastes the token from `claude setup-token` directly. `setup-token` MASKS its
+    // token in stdout (CLI issue #19274), so the server can't scrape/drive the OAuth — the widget shows a
+    // paste-token field instead of the URL flow, and SubmitConnectToken stores it (no CLI spawn).
+    private bool _connectPasteToken;
     private bool _connectBusy;
     private IDisposable? _connectSub;
 
@@ -1298,6 +1302,15 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         _connectBusy = false;
         _connectSub?.Dispose();
         var ownerPath = _userHome!;
+        // Claude Code can't be driven server-side: `claude setup-token` masks its token in stdout, so there
+        // is nothing to scrape. Show a paste-token field — the user runs setup-token locally and pastes the
+        // sk-ant-oat01 token, which SubmitConnectToken stores directly. Other providers keep the live flow.
+        _connectPasteToken = provider.Value == MeshWeaver.AI.Connect.ConnectProvider.ClaudeCode;
+        if (_connectPasteToken)
+        {
+            StateHasChanged();
+            return;
+        }
         var configDir = ResolveHarnessConfigDir(provider.Value);
         _connectSub = sessionManager.StartConnect(ownerPath, provider.Value, configDir)
             .Subscribe(
@@ -1357,10 +1370,52 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         StateHasChanged();
     }
 
-    /// <summary>Enter in the paste-code field submits the code.</summary>
+    /// <summary>
+    /// Stores the pasted Claude subscription token directly (no CLI spawn, no scrape). The user ran
+    /// <c>claude setup-token</c> themselves and pasted the <c>sk-ant-oat01-…</c> result;
+    /// <c>ConnectSessionManager.SubmitToken</c> persists it as the encrypted ModelProvider node the
+    /// harness reads. The masked CLI stdout makes server-side capture impossible (CLI issue #19274).
+    /// </summary>
+    private void SubmitConnectToken()
+    {
+        if (_connectProvider is not { } provider || string.IsNullOrWhiteSpace(_connectCode) || string.IsNullOrEmpty(_userHome))
+            return;
+        var sessionManager = Hub.ServiceProvider.GetService<MeshWeaver.AI.Connect.ConnectSessionManager>();
+        if (sessionManager is null)
+            return;
+        var ownerPath = _userHome!;
+        var token = _connectCode.Trim();
+        _connectBusy = true;
+        _connectSub?.Dispose();
+        _connectSub = sessionManager.SubmitToken(ownerPath, provider, token)
+            .Subscribe(
+                status => InvokeAsync(() =>
+                {
+                    if (_isDisposed) return;
+                    _connectStatus = status;
+                    _connectBusy = false;
+                    StateHasChanged();
+                    if (status is MeshWeaver.AI.Connect.ConnectStatus.Connected)
+                        ScheduleConnectAutoClose();
+                }),
+                ex => InvokeAsync(() =>
+                {
+                    if (_isDisposed) return;
+                    _connectStatus = new MeshWeaver.AI.Connect.ConnectStatus.Error(ex.Message);
+                    _connectBusy = false;
+                    StateHasChanged();
+                }));
+        StateHasChanged();
+    }
+
+    /// <summary>Enter in the paste field submits — the token (Claude Code) or the device code (others).</summary>
     private void OnConnectInputKeyDown(Microsoft.AspNetCore.Components.Web.KeyboardEventArgs e)
     {
-        if (e.Key == "Enter")
+        if (e.Key != "Enter")
+            return;
+        if (_connectPasteToken)
+            SubmitConnectToken();
+        else
             SubmitConnectCode();
     }
 
