@@ -30,16 +30,20 @@ REQUEST_ID = "RequestId"
 
 
 def build_deliver(
-    *, delivery_id: str, sender: str, target: str, message_type: str, message: dict[str, Any]
+    *, delivery_id: str, sender: str, target: str, message_type: str, message: dict[str, Any],
+    request_id: Optional[str] = None,
 ) -> str:
-    """Serialize a participant->mesh delivery to the JSON the server deserializes."""
+    """Serialize a participant->mesh delivery to the JSON the server deserializes.
+
+    ``request_id`` set => this is a RESPONSE: the server correlates it back to the original request by
+    ``properties.RequestId`` (the same key ``observe`` keys responses on)."""
     envelope = {
         TYPE_KEY: DELIVERY_TYPE,
         "id": delivery_id,
         "sender": sender,
         "target": target,
         "message": {TYPE_KEY: message_type, **message},
-        "properties": {},
+        "properties": {REQUEST_ID: request_id} if request_id else {},
     }
     return json.dumps(envelope)
 

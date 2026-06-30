@@ -206,5 +206,14 @@ wired into the RN app's `src/live.ts`), and the portal (builds + rendered). CI t
 - An Orleans round-trip test (the `RoutingGrain` path), complementing the monolith Kestrel test.
 - A live run of `@meshweaver/client-web` against a running portal (browser + an iOS-simulator Expo run);
   the code typechecks/builds, and RN needs a streaming-`fetch` polyfill for the `Connect` server-stream.
-- Widen the operation surface (move/copy/execute/threads) and the hosted-Code-node subprocess path
-  (the kernel spawns `python`/`bun` for an executable Code node, reaching back through the same SDK).
+- Widen the operation surface further (threads) — `move`/`copy`/`execute` and node-lifecycle ops now ship
+  across all three SDKs.
+
+**Python Code nodes — running Python through the bridge** (built here; see `PythonCodeNodes.md`): the
+in-process kernel runs only C# (Roslyn), so a Code node with `Language == "python"` is routed over the mesh
+to a connected Python **worker** (`clients/python`: `python -m meshweaver.worker`), which executes the
+script and patches the run's Activity node — output surfaces identically to a C# run. The worker
+(`execute_python` + `CodeWorker`) is unit-tested; the .NET side (`SubmitCodeRequest.Language`, `CodeNodeType`
+re-targeting `python`, the markdown block forwarding its fence language) compiles under `-warnaserror`.
+Remaining: a live portal+worker run, the `WIRE:`-marked `ActivityLog`/`SubmitCodeResponse` shapes, and a
+worker **pool** (plus a `node`/`bun` worker — the routing branch is the one place that grows).

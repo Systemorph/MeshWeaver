@@ -11,6 +11,7 @@ The split, mirroring the C# side:
 |---|---|---|
 | Transport (participant connection) | `MeshWeaver.Connection.SignalR` | `meshweaver.connection.MeshConnection` |
 | Operations (mesh features) | `MeshWeaver.AI.MeshOperations` | `meshweaver.mesh.Mesh` |
+| Code execution (the kernel) | Roslyn `KernelExecutor` (C#) | `meshweaver.worker.CodeWorker` (Python) |
 
 ## Setup
 
@@ -37,6 +38,20 @@ async def main():
 
 asyncio.run(main())
 ```
+
+## Run Python Code nodes (the kernel worker)
+
+The mesh's in-process kernel runs only C# (Roslyn). A Code node whose `Language == "python"` is routed
+over the bridge to a connected **Python worker** — this package is that worker. It executes the submitted
+script and writes the result onto the run's Activity node, so Python runs surface exactly like C# ones.
+
+```bash
+python -m meshweaver.worker --url https://atioz.meshweaver.cloud --token mw_… --address py/python-kernel
+```
+
+`execute_python(code, inputs)` is the pure execution core (captures stdout + the trailing expression's
+value, REPL-style; exposes `Inputs`); `CodeWorker` is the thin mesh shell around it. Full architecture +
+how to author a Python Code node: `Doc/Architecture/PythonCodeNodes`.
 
 ## Status
 
