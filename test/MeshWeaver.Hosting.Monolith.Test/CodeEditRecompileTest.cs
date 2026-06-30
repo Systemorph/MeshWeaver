@@ -711,12 +711,35 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
                 catch (Exception qx) { releases = $"(query failed: {qx.GetType().Name})"; }
             }
 
+            // (a) vs (b): re-trigger with a FRESH timestamp. If the watcher is alive and merely MISSED
+            // the first settled-trigger emission, this second trigger produces v2 → "RECOVERED" (sub-case a:
+            // a one-time missed/lost emission). If it stays stuck, the watcher/state is persistently
+            // clobbered or the subscription is dead (sub-case b). Decisive + repro-cheap.
+            string retrigger;
+            try
+            {
+                var t2 = DateTimeOffset.UtcNow.AddMilliseconds(1);
+                await workspace.GetMeshNodeStream(nodeTypePath).Update(curr =>
+                    curr?.Content is NodeTypeDefinition cd
+                        ? curr with { Content = cd with { RequestedReleaseAt = t2, RequestedReleaseForce = true } }
+                        : curr!).Should().Within(10.Seconds()).Emit();
+                var v2 = await workspace.GetMeshNodeStream(nodeTypePath)
+                    .Where(n => n?.Content is NodeTypeDefinition d2
+                        && d2.CompilationStatus == CompilationStatus.Ok
+                        && !string.IsNullOrEmpty(d2.LatestReleasePath)
+                        && d2.LatestReleasePath != knownRelease)
+                    .Take(1).Timeout(25.Seconds());
+                retrigger = $"RECOVERED via re-trigger → v2={((NodeTypeDefinition)v2.Content!).LatestReleasePath} (sub-case a: first emission missed)";
+            }
+            catch (Exception rx) { retrigger = $"STILL STUCK after re-trigger ({rx.GetType().Name}) (sub-case b: persistent clobber / dead subscription)"; }
+
             throw new Exception(
                 $"WaitForLatestRelease stuck for {nodeTypePath}: known={knownRelease ?? "(null)"}\n" +
                 $"  MIRROR: Status={m?.CompilationStatus}, Latest={m?.LatestReleasePath ?? "(null)"}, " +
                 $"ReqAt={m?.RequestedReleaseAt:O}, Handled={m?.LastReleaseRequestHandledAt:O}, Force={m?.RequestedReleaseForce}\n" +
                 $"  INDEX node: {indexNode}\n" +
-                $"  INDEX Release children: [{releases}]", ex);
+                $"  INDEX Release children: [{releases}]\n" +
+                $"  RE-TRIGGER: {retrigger}", ex);
         }
     }
 
