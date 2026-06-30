@@ -71,3 +71,27 @@ class Mesh:
             message_type="PatchDataRequest",  # WIRE: confirm partial-update request type
             message={"path": path, "change": fields},
         )
+
+    # ---- node lifecycle (routes through the mesh hub) --------------------
+
+    async def create(self, node: dict[str, Any]) -> dict[str, Any]:
+        """Create a node (node-lifecycle on the mesh hub — routes, doesn't mutate)."""
+        resp = await self._c.observe(self._mesh, "CreateNodeRequest", {"node": node})  # WIRE: create request shape
+        return resp.message
+
+    async def delete(self, path: str) -> None:
+        """Delete a node by path."""
+        await self._c.observe(self._mesh, "DeleteNodeRequest", {"path": path})  # WIRE: delete request shape
+
+    async def move(self, source: str, target: str) -> None:
+        """Move a node (and its satellites) from one path to another."""
+        await self._c.observe(self._mesh, "MoveNodeRequest", {"source": source, "target": target})  # WIRE: MoveNodeRequest fields
+
+    async def copy(self, source: str, target: str) -> None:
+        """Copy a node to a new path."""
+        await self._c.observe(self._mesh, "CopyNodeRequest", {"source": source, "target": target})  # WIRE: CopyNodeRequest fields
+
+    async def execute(self, path: str) -> None:
+        """Run an executable Code/activity node by flipping its control-plane trigger to Running
+        (operations-as-scripts — the owning hub's watcher reacts). Use ``watch(path)`` to follow Status."""
+        await self.patch(path, {"requestedStatus": "Running"})  # WIRE: confirm the activity control-plane field

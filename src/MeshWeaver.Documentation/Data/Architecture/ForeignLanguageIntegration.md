@@ -67,7 +67,10 @@ stream. All build on **three primitives**, and every mesh operation is a thin co
 | `post(target, type, msg)` | fire-and-forget |
 | `watch(target, streamId, …)` | live stream — subscribe, demux change events by `streamId` |
 
-`get` / `search` / `patch` / `watch` are compositions of these over the existing mesh request types.
+`search` / `get` / `watch` / `patch` and the node-lifecycle ops `create` / `delete` / `move` / `copy` /
+`execute` are all compositions of these over the existing mesh request types — the **same surface across
+all three SDKs** (Python, Node, and the browser/RN `client-web`). The lifecycle ops are `WIRE:`-annotated
+where the exact request `$type` awaits a live capture.
 
 - **Python — `clients/python` (`meshweaver`)**: `grpc.aio` transport + a `Mesh` operations surface.
   ```python
