@@ -975,21 +975,18 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             var contextReference = navReference is null
                 ? null
                 : System.Text.Json.JsonSerializer.Serialize(navReference, Hub.JsonSerializerOptions);
-            // 🎯 Normalize the FINAL resolved namespace, not just navNs. The fallbacks — safeContext
-            // (= initialContext, e.g. "User/Roland" when the side panel is opened on a user home) and
-            // createdBy — are RAW: an un-normalized "User/{id}" routes the StartThread to the system-managed,
-            // un-writable 'User' partition → AccessControlPipeline denies the CreateNodeRequest → the message
-            // silently drops (the SidePanelChatTenMessagesTest "2nd user bubble never appears" denial).
-            // NormalizeContextPath maps User/{id} → {id} (and drops reserved route partitions to ""), so the
-            // thread always anchors in the owner's writable partition regardless of which source ns came from.
-            var ns = NormalizeContextPath(
-                !string.IsNullOrEmpty(navNs)
-                    ? navNs
-                    : !string.IsNullOrEmpty(safeContext)
-                        ? safeContext
-                        : !string.IsNullOrEmpty(createdBy)
-                            ? createdBy
-                            : "");
+            // 🎯 Normalize EACH candidate and take the first that survives, not the first non-empty RAW one.
+            // safeContext (= initialContext, e.g. "User/Roland" or bare "User" when the side panel is opened
+            // on a user home) and createdBy are raw; NormalizeContextPath maps User/{id} → {id} and bare
+            // User / reserved partitions → "". If we picked the first raw non-empty value and normalized
+            // ONCE, a safeContext of bare "User" would normalize to "" and we'd anchor on an empty namespace
+            // — skipping createdBy (the owner's writable partition). Normalizing each and taking the first
+            // non-empty result lands on createdBy="Roland", so the StartThread never targets the un-writable
+            // 'User' partition (whose denial surfaces a blocking "Something went wrong" modal that breaks the
+            // composer — the SidePanelChatTenMessagesTest "2nd message never lands" cause).
+            var ns = new[] { navNs, safeContext, createdBy }
+                .Select(c => NormalizeContextPath(c ?? string.Empty))
+                .FirstOrDefault(c => !string.IsNullOrEmpty(c)) ?? string.Empty;
 
             Action<string> onError = err => InvokeAsync(() =>
             {
@@ -1901,12 +1898,14 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         }
         // 🎯 The user's home is addressed `User/{id}` (the User catalog entry), but a thread started
         // there belongs in the OWNER's writable partition `{id}` — NEVER the system-managed `User`
-        // partition, which the user lacks Thread permission on (StartThread there is denied → no thread
-        // → the side-panel chat tears down, and on Postgres the `user` schema may not even exist → 42P01).
-        // Map `User/{id}[/…]` → `{id}` so the thread anchors in the user's own partition.
+        // partition, which the user lacks Thread permission on (StartThread there is denied → the denial
+        // is a DeliveryFailure that the global portal error handler surfaces as a BLOCKING "Something went
+        // wrong" modal that overlays + breaks the composer, and on Postgres the `user` schema may not even
+        // exist → 42P01). Map `User/{id}[/…]` → `{id}`; bare `User` (no id) → "" so the ns derivation falls
+        // through to createdBy (the owner's own partition). Both forms must leave the `User` partition.
         var ownerSegments = normalized.Split('/');
-        if (ownerSegments.Length >= 2 && string.Equals(ownerSegments[0], "User", StringComparison.OrdinalIgnoreCase))
-            normalized = ownerSegments[1];
+        if (string.Equals(ownerSegments[0], "User", StringComparison.OrdinalIgnoreCase))
+            normalized = ownerSegments.Length >= 2 ? ownerSegments[1] : "";
 
         // A rogue/reserved ROUTE partition (login, welcome, settings, …) is NOT a real node — never use
         // it as a chat context. Reading it sends a GetDataRequest to a hub that never opens its init
