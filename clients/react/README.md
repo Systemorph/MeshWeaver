@@ -78,6 +78,6 @@ change + one round-trip. Once pinned, the same renderer drives web, Electron, an
   `npm i -D electron && npm run dev` (in one terminal) then `npm run electron`. Point it at any served
   renderer with `MESH_URL`. The web/Electron targets share the renderer core **and** the Fluent DOM leaf
   pack unchanged — only the host differs.
-- **React Native / Expo (iOS, the MAUI peer)** — reuse `area/` + `render/` (dispatch, binding, skins) and
-  provide an RN leaf pack (`<View>`/`<Text>`/RN inputs) instead of the Fluent DOM components. This is the
-  direct analog of MAUI's native `MauiViewPack`: same `UiControl` tree, a native leaf pack.
+- **React Native / Expo (iOS, the MAUI peer)** — import the Fluent-free `@meshweaver/react/core` and supply
+  an RN `<View>`/`<Text>` leaf pack instead of the Fluent DOM pack. Same `UiControl` tree, a native leaf
+  pack — the direct analog of MAUI's `MauiViewPack`. **Recipe + starter pack: [docs/react-native.md](docs/react-native.md).**
