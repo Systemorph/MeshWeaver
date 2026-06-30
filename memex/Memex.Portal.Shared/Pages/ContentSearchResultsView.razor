@@ -1,0 +1,133 @@
+@using System.Reactive.Linq
+@using System.Text.RegularExpressions
+@using MeshWeaver.ContentCollections.Indexing
+@using MeshWeaver.ContentCollections.Indexing.Graph
+@using MeshWeaver.Layout
+@using MeshWeaver.Mesh.Services
+@using MeshWeaver.Messaging
+@using Microsoft.Extensions.DependencyInjection
+@implements IDisposable
+@inject IMessageHub Hub
+
+@*
+    The "In documents" section of the global search results: live content-chunk matches for the query,
+    each shown as a row with the matched passage highlighted, linking into the Document Blocks reader
+    (deep-linked to the matching block + the query, so the block + the original both highlight).
+
+    Scoped to a namespace (one partition schema per partition — cross-partition content search is not a
+    single query): the ns query param, a namespace: token in the query, or the current namespace.
+*@
+
+@if (_hits.Count > 0)
+{
+    <div class="content-results">
+        <h3 class="content-results-title">In documents</h3>
+        @foreach (var hit in _hits)
+        {
+            <a class="content-results-row" href="@BlockHref(hit)">
+                <div class="content-results-file">@FileLabel(hit)</div>
+                <div class="content-results-snippet">
+                    @foreach (var seg in HighlightControl.Segment(hit.Snippet, _terms))
+                    {
+                        if (seg.IsMatch)
+                        {
+                            <mark class="content-results-mark">@seg.Text</mark>
+                        }
+                        else
+                        {
+                            @seg.Text
+                        }
+                    }
+                </div>
+            </a>
+        }
+    </div>
+}
+
+@code {
+    /// <summary>The visible query (the words typed in the search box, possibly with mesh grammar).</summary>
+    [Parameter] public string? Query { get; set; }
+
+    /// <summary>Explicit namespace scope (the <c>?ns=</c> param), if any.</summary>
+    [Parameter] public string? Namespace { get; set; }
+
+    [Inject] private INavigationService? NavigationService { get; set; }
+
+    private IReadOnlyList<ChunkHit> _hits = Array.Empty<ChunkHit>();
+    private IReadOnlyList<string> _terms = Array.Empty<string>();
+    private string _termsQuery = "";
+    private IDisposable? _subscription;
+    private string _lastKey = "";
+
+    protected override void OnParametersSet()
+    {
+        var terms = HighlightControl.FreeTextTerms(Query);
+        var ns = ResolveNamespace();
+
+        // Re-run only when the inputs that drive the search actually change.
+        var key = $"{ns}{string.Join(' ', terms)}";
+        if (key == _lastKey)
+            return;
+        _lastKey = key;
+
+        _subscription?.Dispose();
+        _hits = Array.Empty<ChunkHit>();
+        _terms = terms;
+        _termsQuery = string.Join(' ', terms);
+
+        var store = Hub.ServiceProvider.GetService<IChunkedContentVectorStore>();
+        var embedder = Hub.ServiceProvider.GetService<IChunkEmbedder>();
+        if (store is null || embedder is null || terms.Count == 0 || string.IsNullOrWhiteSpace(ns))
+        {
+            StateHasChanged();
+            return;
+        }
+
+        // The same engine the agent / MCP search_chunks tool uses, scoped to this namespace's subtree.
+        var contentQuery = $"namespace:{ns} scope:subtree {_termsQuery}";
+        _subscription = ContentChunkSearch
+            .SearchContent(store, embedder, contentQuery, limit: 10, defaultNamespace: ns)
+            .Subscribe(
+                result => InvokeAsync(() =>
+                {
+                    _hits = result.Hits;
+                    StateHasChanged();
+                }),
+                _ => InvokeAsync(() =>
+                {
+                    _hits = Array.Empty<ChunkHit>();
+                    StateHasChanged();
+                }));
+    }
+
+    private string? ResolveNamespace()
+    {
+        if (!string.IsNullOrWhiteSpace(Namespace))
+            return Namespace.Trim('/');
+
+        // A namespace: token in the typed query wins next (the user scoped it explicitly).
+        var match = Regex.Match(Query ?? "", @"namespace:(\S+)");
+        if (match.Success)
+            return match.Groups[1].Value.Trim('/');
+
+        return NavigationService?.CurrentNamespace?.Trim('/');
+    }
+
+    private string BlockHref(ChunkHit hit)
+    {
+        var href = $"/{hit.DocumentPath}/{DocumentLayoutAreas.BlocksArea}?index={hit.ChunkIndex}";
+        if (!string.IsNullOrWhiteSpace(_termsQuery))
+            href += $"&q={Uri.EscapeDataString(_termsQuery)}";
+        return href;
+    }
+
+    private static string FileLabel(ChunkHit hit)
+    {
+        var file = hit.FilePath;
+        var slash = file.LastIndexOfAny(new[] { '/', '\\' });
+        var name = slash >= 0 ? file[(slash + 1)..] : file;
+        return $"{name} · block {hit.ChunkIndex + 1}";
+    }
+
+    public void Dispose() => _subscription?.Dispose();
+}

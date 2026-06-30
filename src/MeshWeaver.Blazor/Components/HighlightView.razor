@@ -1,0 +1,46 @@
+@using System.Text.Json
+@using MeshWeaver.Layout
+@inherits BlazorView<HighlightControl, HighlightView>
+
+<span class="mw-highlight @Class" style="@Style">
+    @foreach (var segment in Segments)
+    {
+        if (segment.IsMatch)
+        {
+            <mark class="mw-highlight-mark">@segment.Text</mark>
+        }
+        else
+        {
+            @segment.Text
+        }
+    }
+</span>
+
+@code {
+    private object? TextRaw { get; set; }
+    private object? TermsRaw { get; set; }
+
+    /// <summary>The computed text/mark segments rendered above. Never null (empty when there is no text).</summary>
+    private IReadOnlyList<HighlightSegment> Segments { get; set; } = Array.Empty<HighlightSegment>();
+
+    /// <inheritdoc />
+    protected override void BindData()
+    {
+        base.BindData();
+        DataBind(ViewModel.Text, x => x.TextRaw);
+        DataBind(ViewModel.Terms, x => x.TermsRaw);
+
+        var text = Coerce(TextRaw);
+        var terms = HighlightControl.FreeTextTerms(Coerce(TermsRaw));
+        Segments = HighlightControl.Segment(text, terms);
+    }
+
+    private static string? Coerce(object? value) => value switch
+    {
+        null => null,
+        string s => s,
+        JsonElement { ValueKind: JsonValueKind.String } je => je.GetString(),
+        JsonElement je => je.ToString(),
+        _ => value.ToString(),
+    };
+}
