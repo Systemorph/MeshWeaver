@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
-from typing import Any, AsyncIterator, Optional
+from typing import Any, AsyncIterator, Awaitable, Callable, Optional
 
 import grpc
 
@@ -30,6 +30,7 @@ class MeshConnection:
         self._send_q: asyncio.Queue = asyncio.Queue()
         self._pending: dict[str, asyncio.Future] = {}            # delivery.id -> response future
         self._subscriptions: dict[str, asyncio.Queue] = {}       # stream_id -> live change queue
+        self._handler: Optional[Callable[["envelope.Delivery"], Awaitable[None]]] = None  # inbound requests
         self._ack = asyncio.Event()
         self._reader: Optional[asyncio.Task] = None
         self._writer: Optional[asyncio.Task] = None
@@ -90,6 +91,11 @@ class MeshConnection:
         stream_id = delivery.message.get("streamId") or delivery.message.get("StreamId")
         if stream_id and stream_id in self._subscriptions:
             self._subscriptions[stream_id].put_nowait(delivery)
+            return
+        # 3) inbound request (not a response, not a stream change) → the registered worker handler.
+        #    Each runs as its own task so one slow handler can't stall the read loop.
+        if self._handler is not None:
+            asyncio.create_task(self._handler(delivery))
 
     # ---- primitives (mesh features build on these) -----------------------
 
@@ -115,6 +121,22 @@ class MeshConnection:
             message_type=message_type, message=message,
         )
         await self._send_q.put(mesh_pb2.ClientFrame(deliver=payload))
+
+    async def respond(self, to: "envelope.Delivery", message_type: str, message: dict[str, Any]) -> None:
+        """Reply to an inbound request — addressed back to its sender, correlated by its delivery id."""
+        payload = envelope.build_deliver(
+            delivery_id=uuid.uuid4().hex, sender=self.address, target=to.sender or "",
+            message_type=message_type, message=message, request_id=to.id,
+        )
+        await self._send_q.put(mesh_pb2.ClientFrame(deliver=payload))
+
+    def serve(self, handler: Callable[["envelope.Delivery"], Awaitable[None]]) -> None:
+        """Register a handler for inbound requests addressed to this participant (the worker role).
+
+        Deliveries that are neither a correlated response nor a live-stream change are dispatched here —
+        e.g. a ``SubmitCodeRequest`` the mesh routes to this ``py/*`` worker. Reply with :meth:`respond`,
+        or write results straight to a node via the ergonomic ``Mesh`` ops."""
+        self._handler = handler
 
     async def subscribe(self, target: str, stream_id: str, subscribe_type: str, subscribe_msg: dict[str, Any]) -> AsyncIterator[envelope.Delivery]:
         """Open a live stream: post a subscribe request, then yield each change addressed back to us."""

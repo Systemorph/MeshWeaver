@@ -22,6 +22,7 @@ Run ``scripts/gen_proto.sh`` once to generate the gRPC stubs from the canonical 
 from .connection import MeshConnection, connect
 from .mesh import Mesh
 from .types import MeshNode
+from .worker import CodeWorker, ExecResult, execute_python, serve
 
-__all__ = ["Mesh", "MeshConnection", "MeshNode", "connect"]
+__all__ = ["Mesh", "MeshConnection", "MeshNode", "connect", "CodeWorker", "ExecResult", "execute_python", "serve"]
 __version__ = "0.1.0"
