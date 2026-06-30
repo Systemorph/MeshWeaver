@@ -41,6 +41,9 @@ nav, feedback) from a single `{areas,data}` tree. Edit a field — the binding w
 `/data` pointer (optimistically applied, exactly as a live stream would echo the merge-patch). Click events
 print at the bottom.
 
+`npm test` runs the renderer-core suite (vitest): JSON pointer, RFC-7396 merge-patch, binding resolution,
+and a jsdom render harness covering dispatch / skin popping / bindings / optimistic updates (11 tests).
+
 ## Coverage
 
 `controlRegistry` maps the full vocabulary: layout (`Stack`/`LayoutGrid`/`Tabs`/`Toolbar`/`Splitter` via
