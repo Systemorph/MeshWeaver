@@ -675,18 +675,48 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
         }
         catch (Exception ex)
         {
-            // Diagnostic: on timeout, surface the node's STUCK state so the failure pins the
-            // stalled stage — watcher never fired (Status settled + ReqAt > Handled), compile
-            // never ran (Status=Pending), compile never finished (Compiling), or the release
-            // was never written (Status=Ok but Latest == known). Captured in the failure message.
+            // Diagnostic: on timeout, discriminate OWNER-side (never produced v2) from a
+            // DELIVERY / mirror-staleness race (owner produced v2 but the cross-hub mirror the test
+            // reads never received it). Compare two INDEPENDENT views of the SAME node:
+            //   MIRROR — the single-node cross-hub cache handle the test/watcher read.
+            //   INDEX  — the mesh query (a DIFFERENT path: the owner's persisted+indexed state),
+            //            plus the Release children. If INDEX shows a fresh v2 / Handled while MIRROR
+            //            is stale at v1 / Handled=null → delivery race confirmed (owner did the work).
+            //            If BOTH are stale → owner-side (the watcher/compile never produced v2).
             var cur = await workspace.GetMeshNodeStream(nodeTypePath)
                 .Where(n => n is not null).Take(1).Timeout(5.Seconds());
-            var d = cur?.Content as NodeTypeDefinition;
+            var m = cur?.Content as NodeTypeDefinition;
+
+            var meshService = Mesh.ServiceProvider.GetService<IMeshService>();
+            string indexNode = "(no IMeshService)", releases = "(no IMeshService)";
+            if (meshService is not null)
+            {
+                try
+                {
+                    var idx = await meshService.Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{nodeTypePath}"))
+                        .Where(c => c.Items.Count > 0).Take(1).Timeout(10.Seconds());
+                    var id = idx.Items.FirstOrDefault()?.Content as NodeTypeDefinition;
+                    indexNode = id is null ? "(not in index)"
+                        : $"Status={id.CompilationStatus}, Latest={id.LatestReleasePath ?? "(null)"}, " +
+                          $"Handled={id.LastReleaseRequestHandledAt:O}";
+                }
+                catch (Exception qx) { indexNode = $"(query failed: {qx.GetType().Name})"; }
+                try
+                {
+                    var rel = await meshService.Query<MeshNode>(
+                            MeshQueryRequest.FromQuery($"path:{nodeTypePath}/Release scope:descendants"))
+                        .Take(1).Timeout(10.Seconds());
+                    releases = rel.Items.Count == 0 ? "(none)" : string.Join(", ", rel.Items.Select(r => r.Path));
+                }
+                catch (Exception qx) { releases = $"(query failed: {qx.GetType().Name})"; }
+            }
+
             throw new Exception(
-                $"WaitForLatestRelease stuck for {nodeTypePath}: Status={d?.CompilationStatus}, " +
-                $"Latest={d?.LatestReleasePath ?? "(null)"}, known={knownRelease ?? "(null)"}, " +
-                $"ReqAt={d?.RequestedReleaseAt:O}, Handled={d?.LastReleaseRequestHandledAt:O}, " +
-                $"Force={d?.RequestedReleaseForce}", ex);
+                $"WaitForLatestRelease stuck for {nodeTypePath}: known={knownRelease ?? "(null)"}\n" +
+                $"  MIRROR: Status={m?.CompilationStatus}, Latest={m?.LatestReleasePath ?? "(null)"}, " +
+                $"ReqAt={m?.RequestedReleaseAt:O}, Handled={m?.LastReleaseRequestHandledAt:O}, Force={m?.RequestedReleaseForce}\n" +
+                $"  INDEX node: {indexNode}\n" +
+                $"  INDEX Release children: [{releases}]", ex);
         }
     }
 
