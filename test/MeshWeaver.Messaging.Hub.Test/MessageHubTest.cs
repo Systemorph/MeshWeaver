@@ -3,6 +3,7 @@ using System.Threading.Tasks;
 using MeshWeaver.Fixture;
 using Xunit;
 
+using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Messaging.Hub.Test;
@@ -305,6 +306,66 @@ public class MessageHubTest(ITestOutputHelper output) : HubTestBase(output)
             "the aggregate watermark shed the excess sheddable traffic");
         victim.StormBreaker.TripCount.Should().Be(0,
             "the per-key breaker must NOT be what saved the hub — this isolates the aggregate path");
+    }
+
+    /// <summary>
+    /// The portal-wedge root cause (memory <c>wedge-reproduced-local-k3s-e2e-portal</c>): the reactive
+    /// disposal state machine (Quiescing → DisposeHostedHubs → ShutDown) runs <c>DisposeImpl</c> and
+    /// <c>hostedHubs.Dispose()</c> ONLY in its final phases. If the action block is wedged, the posted
+    /// <c>ShutdownRequest</c> is starved (RunLevel stays Started), the state machine never advances, and
+    /// the 8s watchdog used to only signal completion — unblocking the caller while LEAKING every hosted
+    /// sync-stream hub and its <c>Observable.Interval</c> keep-alive heartbeat. Those orphaned heartbeats
+    /// accumulate run-over-run until the portal pegs CPU and <c>/healthz</c> times out. This pins the fix:
+    /// when the watchdog fires it must actually tear the children + subscriptions down. RED before the
+    /// fix (both probes leak → time out); GREEN after.
+    /// </summary>
+    [Fact]
+    public async Task Dispose_WhenActionBlockWedged_WatchdogTearsDownChildrenAndDisposables()
+    {
+        using var blockHandlerEntered = new ManualResetEventSlim(false);
+        using var releaseBlock = new ManualResetEventSlim(false);
+        using var ownDisposed = new ManualResetEventSlim(false);
+        using var childDisposed = new ManualResetEventSlim(false);
+
+        var victim = (MessageHub)Mesh.GetHostedHub(new Address("victim", "wedged-dispose"), c => c
+            .WithPostingIdentity(PostingIdentity.System)
+            .WithHandler<BlockTurnRequest>((_, d) =>
+            {
+                blockHandlerEntered.Set();
+                releaseBlock.Wait(TimeSpan.FromSeconds(30)); // hold the single turn thread → starve ShutdownRequest
+                return d.Processed();
+            }));
+
+        // Stands in for a sync-stream subscription that DisposeImpl tears down.
+        victim.RegisterForDisposal(Disposable.Create(ownDisposed.Set));
+        // Stands in for a hosted sync-stream hub whose keep-alive heartbeat is stopped by hostedHubs.Dispose().
+        var child = victim.GetHostedHub(new Address("child", "1"),
+            cc => cc.WithPostingIdentity(PostingIdentity.System), HostedHubCreation.Always)!;
+        child.RegisterForDisposal(Disposable.Create(childDisposed.Set));
+
+        try
+        {
+            // 1) Wedge the victim's action block so its ShutdownRequest can never get a turn.
+            victim.Post(new BlockTurnRequest(), o => o.WithTarget(victim.Address));
+            blockHandlerEntered.Wait(TimeSpan.FromSeconds(10))
+                .Should().BeTrue("the block handler must occupy the turn thread before we dispose");
+
+            // 2) Dispose — the state machine is starved; only the 8s watchdog can complete it.
+            victim.Dispose();
+
+            // 3) The watchdog (8s) must force the real teardown, not just signal completion.
+            ownDisposed.Wait(TimeSpan.FromSeconds(20))
+                .Should().BeTrue("the watchdog must run DisposeImpl so the hub's own subscriptions don't leak when disposal wedges");
+            childDisposed.Wait(TimeSpan.FromSeconds(20))
+                .Should().BeTrue("the watchdog must dispose hosted hubs so their keep-alive heartbeats don't leak forever");
+        }
+        finally
+        {
+            // Always release the held turn — even if an assertion fails — so the blocking handler
+            // can't pin a thread for 30s and bleed into other tests.
+            releaseBlock.Set();
+        }
+        await Task.Yield();
     }
 
     [Fact]
