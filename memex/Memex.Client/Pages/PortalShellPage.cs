@@ -73,6 +73,7 @@ public sealed class PortalShellPage : ContentPage
     {
         Placeholder = "Search the mesh…", ReturnType = ReturnType.Search, FontSize = 14,
         TextColor = Colors.White, VerticalOptions = LayoutOptions.Center,
+        AutomationId = "mesh-search",   // stable selector for the Appium smoke E2E
     };
 
     // The reflowing menu-button area (group buttons ↔ "☰" hamburger), rebuilt on every menu change / resize.

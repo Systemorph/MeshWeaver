@@ -1,10 +1,18 @@
 using System.Reactive.Linq;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using MeshWeaver.AI;
 using MeshWeaver.Data;
+using MeshWeaver.GoogleMaps;
 using MeshWeaver.Graph;
+using MeshWeaver.Kernel;
+using MeshWeaver.Maui.Abstractions;
 using MeshWeaver.Layout;
+using MeshWeaver.Layout.Catalog;
+using MeshWeaver.Layout.Chart;
 using MeshWeaver.Layout.Client;
+using MeshWeaver.Layout.Pivot;
+using MeshWeaver.Layout.Views;
 using MeshWeaver.Layout.DataGrid;
 using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
@@ -211,6 +219,15 @@ public abstract class MauiView : IDisposable
             : o.WithTarget(Stream.Owner));
     }
 
+    /// <summary>
+    /// Surfaces a write/IO failure on the shared logger instead of swallowing it in a
+    /// <c>Subscribe(_ => {}, _ => {})</c> — the convention for every cold-observable write in the pack, so a
+    /// denied/failed mesh write is visible rather than silent. Use as the onError of any write Subscribe.
+    /// </summary>
+    protected void LogWrite(Exception ex, string what, string? path = null) =>
+        Stream?.Hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.Maui.View")
+            .LogWarning(ex, "MAUI view write '{What}' failed for {Path}", what, path ?? "(n/a)");
+
     public void Dispose()
     {
         foreach (var d in Disposables) d.Dispose();
@@ -247,41 +264,12 @@ public abstract class FormMauiView<TControl> : MauiView<TControl> where TControl
 
     /// <summary>
     /// Coerces a list control's Options into (display text, value-string) pairs the native picker/list
-    /// can show + select. Handles both a typed <see cref="Option"/> list AND — the case the old code
-    /// missed — a <see cref="JsonElement"/> array (Options arrive serialized after the layout-stream
-    /// round-trip, so <c>as IEnumerable&lt;Option&gt;</c> was null → no options rendered). Value is the
-    /// item's string form (selection-match + write-back); covers the common string/enum-valued option.
+    /// can show + select — delegates to the MAUI-free <see cref="MauiOptionCoercion"/> (the single,
+    /// unit-tested implementation; handles both a typed <see cref="Option"/> list and the JsonElement
+    /// array Options take after the layout-stream round-trip).
     /// </summary>
     protected static List<(string Text, string? Value)> CoerceOptions(object? options)
-    {
-        var result = new List<(string Text, string? Value)>();
-        switch (options)
-        {
-            case IEnumerable<Option> typed:
-                foreach (var o in typed) result.Add((o.Text, o.GetItem()?.ToString()));
-                break;
-            case JsonElement { ValueKind: JsonValueKind.Array } arr:
-                foreach (var el in arr.EnumerateArray())
-                {
-                    var text = el.TryGetProperty("text", out var t) && t.ValueKind == JsonValueKind.String
-                        ? t.GetString() ?? ""
-                        : el.ToString();
-                    var val = el.TryGetProperty("item", out var it) ? JsonScalar(it)
-                        : el.TryGetProperty("itemString", out var its) ? its.GetString()
-                        : text;
-                    result.Add((text, val));
-                }
-                break;
-        }
-        return result;
-    }
-
-    private static string? JsonScalar(JsonElement e) => e.ValueKind switch
-    {
-        JsonValueKind.String => e.GetString(),
-        JsonValueKind.Null => null,
-        _ => e.GetRawText()
-    };
+        => MauiOptionCoercion.Coerce(options);
 }
 
 /// <summary>
@@ -380,13 +368,49 @@ public static class MauiViewPackExtensions
         .Register<MeshSearchControl, MeshSearchView>()
         // Node-bound editor: edits a node's content directly via GetMeshNodeStream(path).Update(...).
         .Register<MeshNodeContentEditorControl, MeshNodeContentEditorView>()
+        // Phase 3 — node display cards (tappable → navigate via IMauiNavigator).
+        .Register<MeshNodeCardControl, MeshNodeCardView>()
+        .Register<MeshNodeThumbnailControl, MeshNodeThumbnailView>()
+        // Phase 3 — grouped catalog + query-driven node collection + search box.
+        .Register<CatalogControl, CatalogView>()
+        .Register<MeshNodeCollectionControl, MeshNodeCollectionView>()
+        .Register<SearchBoxControl, SearchBoxView>()
+        // Phase 3 — redirect (navigate-on-render) + code sample + dialog.
+        .Register<RedirectControl, RedirectView>()
+        .Register<CodeSampleControl, CodeSampleView>()
+        .Register<DialogControl, DialogView>()
+        // Phase 4 — charts via LiveCharts2 (OSS/MIT).
+        .Register<ChartControl, ChartView>()
+        // Phase 5 — native map (MAUI Map / MapKit).
+        .Register<GoogleMapControl, GoogleMapView>()
+        // Phase 4 — notebook cell (notebook itself is an IContainerControl → ContainerView).
+        .Register<NotebookCellControl, NotebookCellView>()
+        // Phase 4 — editors (markdown / code / diff) — native Editor-based.
+        .Register<MarkdownEditorControl, MarkdownEditorView>()
+        .Register<CodeEditorControl, CodeEditorView>()
+        .Register<DiffEditorControl, DiffEditorView>()
+        // Phase 3/misc — profile / appearance / item template / layout-area definition.
+        .Register<UserProfileControl, UserProfileView>()
+        .Register<AppearanceControl, AppearanceView>()
+        .Register<ItemTemplateControl, ItemTemplateView>()
+        .Register<LayoutAreaDefinitionControl, LayoutAreaDefinitionView>()
+        // Phase 3 — node editors (generic name editor + role editor).
+        .Register<MeshNodeEditorControl, MeshNodeEditorView>()
+        .Register<MeshNodeRoleEditorControl, MeshNodeRoleEditorView>()
+        // Phase 3/4 — operations (import/export/document) + file browser + pivot grid.
+        .Register<NodeImportControl, NodeImportView>()
+        .Register<NodeExportControl, NodeExportView>()
+        .Register<ExportDocumentControl, ExportDocumentView>()
+        .Register<FileBrowserControl, FileBrowserView>()
+        .Register<PivotGridControl, PivotGridView>()
         // Embedded remote area (e.g. the home page's bottom chat composer) → the existing LayoutAreaView.
         .Register<LayoutAreaControl, LayoutAreaControlView>()
         // Wave 2 — nav + badges.
         .Register<BadgeControl, BadgeView>()
         .Register<NavLinkControl, NavLinkView>()
         .Register<MenuItemControl, MenuItemView>()
-        // Phase 2 — agent-backed chat: a single thread message bubble (streaming text + exec status).
+        // Phase 2 — agent-backed chat: the thread chat (message list + composer) + its message bubble.
+        .Register<ThreadChatControl, ThreadChatView>()
         .Register<ThreadMessageBubbleControl, ThreadMessageBubbleView>();
 }
 
@@ -397,21 +421,91 @@ public sealed class ContainerView : MauiView
 {
     protected override View CreateView()
     {
-        // Honor StackControl orientation — a horizontal Stack (e.g. a tab bar / button row) must lay its
-        // children left-to-right, not stacked vertically. Default + non-Stack containers stay vertical.
-        var horizontal = Control is StackControl stack && IsHorizontal(stack.Skin);
+        // Splitter → child areas as panes in a Grid (columns for a horizontal split, rows for vertical).
+        if (Control is SplitterControl splitter && Stream is not null && Control is IContainerControl sc)
+            return BuildSplitter(splitter, sc);
+
+        // Orientation: a horizontal Stack / a Toolbar (default horizontal) lays children left-to-right.
+        var skin = Control is StackControl stack ? stack.Skin : null;
+        var horizontal = Control switch
+        {
+            StackControl s => IsHorizontalOrientation(s.Skin?.Orientation, false),
+            ToolbarControl t => IsHorizontalOrientation(t.Skin?.Orientation, true),
+            _ => false,
+        };
+        var spacing = Gap(skin, horizontal) ?? 8;   // honour the skin's gap; default 8 when unset
         Microsoft.Maui.Controls.Layout layout = horizontal
-            ? new HorizontalStackLayout { Spacing = 8 }
-            : new VerticalStackLayout { Spacing = 8 };
+            ? new HorizontalStackLayout { Spacing = spacing }
+            : new VerticalStackLayout { Spacing = spacing };
         if (Stream is not null && Control is IContainerControl container)
             foreach (var named in container.Areas)
                 layout.Children.Add(Renderer.RenderArea(Stream, named.Area.ToString()!));
+
+        // Skinned wrappers (each a no-op when its skin is absent → default layout unchanged).
+        if (Control is NavMenuControl nav)   // a fixed-width sidebar with a subtle panel background
+        {
+            layout.WidthRequest = NavWidth(nav.Skin?.Width);
+            return Region(layout);
+        }
+        if (Control.Skins.OfType<CardSkin>().Any()) return Card(layout);
+        if (Control.Skins.OfType<HeaderSkin>().Any() || Control.Skins.OfType<FooterSkin>().Any())
+            return Region(layout);   // header/footer → a subtle full-width region band
         return layout;
     }
 
+    private View BuildSplitter(SplitterControl splitter, IContainerControl container)
+    {
+        var horizontal = IsHorizontalOrientation(splitter.Skin?.Orientation, true);
+        var grid = new Grid { ColumnSpacing = 6, RowSpacing = 6 };
+        var areas = container.Areas.ToList();
+        for (var i = 0; i < areas.Count; i++)
+            if (horizontal) grid.ColumnDefinitions.Add(new ColumnDefinition(GridLength.Star));
+            else grid.RowDefinitions.Add(new RowDefinition(GridLength.Star));
+        for (var i = 0; i < areas.Count; i++)
+        {
+            var v = Renderer.RenderArea(Stream!, areas[i].Area.ToString()!);
+            if (horizontal) grid.Add(v, i, 0); else grid.Add(v, 0, i);
+        }
+        return grid;
+    }
+
+    private static View Card(View content) => new Border
+    {
+        Padding = 12, BackgroundColor = Color.FromArgb("#2A2A2C"), StrokeThickness = 0,
+        StrokeShape = new Microsoft.Maui.Controls.Shapes.RoundRectangle { CornerRadius = 10 },
+        Content = content,
+    };
+
+    // A subtle full-width region band — header / footer / nav-menu panel chrome.
+    private static View Region(View content) => new Border
+    {
+        Padding = new Thickness(8, 6), BackgroundColor = Color.FromArgb("#1A1A1C"), StrokeThickness = 0, Content = content,
+    };
+
+    private static double NavWidth(object? width) => width switch
+    {
+        int i => i,
+        double d => d,
+        _ => double.TryParse(width?.ToString(), out var px) ? px : 250,
+    };
+
     // Orientation rides the skin as object? (an enum at author time, a JSON string after stream round-trip).
-    private static bool IsHorizontal(LayoutStackSkin? skin) =>
-        skin?.Orientation?.ToString()?.Contains("Horizontal", StringComparison.OrdinalIgnoreCase) == true;
+    private static bool IsHorizontalOrientation(object? orientation, bool dflt) =>
+        orientation?.ToString() is { } s ? s.Contains("Horizontal", StringComparison.OrdinalIgnoreCase) : dflt;
+
+    // The skin's HorizontalGap/VerticalGap (an int, a double, or a CSS-ish "8px" string) → a spacing value.
+    private static double? Gap(LayoutStackSkin? skin, bool horizontal)
+    {
+        var g = horizontal ? skin?.HorizontalGap : skin?.VerticalGap;
+        if (g is null) return null;
+        if (g is int i) return i;
+        if (g is double d) return d;
+        var s = g is JsonElement je
+            ? (je.ValueKind == JsonValueKind.Number ? je.GetRawText() : je.GetString() ?? "")
+            : g.ToString() ?? "";
+        var digits = new string(s.TakeWhile(c => char.IsDigit(c) || c == '.').ToArray());
+        return double.TryParse(digits, System.Globalization.CultureInfo.InvariantCulture, out var px) ? px : null;
+    }
 }
 
 /// <summary>A reference to a sibling area → renders that area.</summary>
@@ -460,6 +554,35 @@ internal static class MauiHtmlDocument
 {
     public static HtmlWebViewSource ForBody(string bodyHtml) => new() { Html = Wrap(bodyHtml) };
 
+    /// <summary>
+    /// Makes a content <see cref="WebView"/> grow to fit its rendered HTML (JS <c>document.body.scrollHeight</c>),
+    /// re-measured on every navigation/content change. Without this a content WebView stays at its fixed
+    /// <c>HeightRequest</c> and CLIPS anything taller (the space-home / Doc markdown cut-off). The outer
+    /// <see cref="ScrollView"/> then scrolls the whole area. Mirrors the interactive-markdown chunk sizing.
+    /// </summary>
+    public static void AutoSizeToContent(WebView web)
+    {
+        // The rendered content height is ONLY readable via JS (document.body.scrollHeight) — MAUI exposes no
+        // synchronous API for it, so this is the one inherently-async UI edge. It runs on the WebView's own
+        // UI-thread Navigated event (NOT a hub action block or Blazor circuit), so it cannot deadlock the
+        // actor-model scheduler the no-async rule protects. We avoid an `async void` handler (which would
+        // swallow unobserved exceptions) by consuming the Task with ContinueWith + explicit fault surfacing.
+        web.Navigated += (_, _) =>
+            web.EvaluateJavaScriptAsync("document.body.scrollHeight").ContinueWith(t =>
+            {
+                if (t.IsFaulted)
+                {
+                    // Best-effort measurement: keep the current height, but surface the failure (don't swallow).
+                    System.Diagnostics.Debug.WriteLine(
+                        $"[MauiHtmlDocument] WebView height measure failed: {t.Exception?.GetBaseException().Message}");
+                    return;
+                }
+                if (double.TryParse(t.Result, System.Globalization.NumberStyles.Any,
+                        System.Globalization.CultureInfo.InvariantCulture, out var px) && px > 0)
+                    MainThread.BeginInvokeOnMainThread(() => web.HeightRequest = px + 8);
+            }, TaskScheduler.Default);
+    }
+
     // $$"""…""" raw interpolation: single { } are LITERAL CSS braces; {{bodyHtml}} is the one interpolation.
     private static string Wrap(string bodyHtml) => $$"""
         <!DOCTYPE html>
@@ -490,8 +613,12 @@ internal static class MauiHtmlDocument
 public sealed class HtmlView : MauiView<HtmlControl>
 {
     private WebView _web = null!;
-    protected override View CreateView() =>
-        _web = new WebView { HeightRequest = 120, BackgroundColor = Colors.Transparent };
+    protected override View CreateView()
+    {
+        _web = new WebView { HeightRequest = 40, BackgroundColor = Colors.Transparent };
+        MauiHtmlDocument.AutoSizeToContent(_web);   // grow to content; never clip at a fixed height
+        return _web;
+    }
     protected override void Bind() =>
         Bind<object>(Model.Data, v => _web.Source = MauiHtmlDocument.ForBody(v?.ToString() ?? ""));
 }
@@ -514,7 +641,11 @@ public sealed class MarkdownView : MauiView<MarkdownControl>
     {
         // Relative @@ embeds resolve against the authoring node's path (mirrors MarkdownView.razor.cs).
         _nodePath = Model.NodePath;
-        return _web = new WebView { HeightRequest = 240, BackgroundColor = Colors.Transparent };
+        _web = new WebView { HeightRequest = 40, BackgroundColor = Colors.Transparent };
+        // Grow to fit the rendered markdown — a fixed 240px clipped the space-home / Doc content
+        // ("cut off at Bring in existing files"). The node area's outer ScrollView scrolls the whole page.
+        MauiHtmlDocument.AutoSizeToContent(_web);
+        return _web;
     }
 
     protected override void Bind() =>
@@ -567,6 +698,8 @@ public sealed class MauiCollaborativeMarkdownView : MauiView<CollaborativeMarkdo
         if (result.CodeSubmissions is not { Count: > 0 })
         {
             _root.Children.Add(NewHtmlChunk(result.Html));
+            AddCommentsPanel();
+            AddTrackedChangesPanel();
             return;
         }
 
@@ -588,6 +721,9 @@ public sealed class MauiCollaborativeMarkdownView : MauiView<CollaborativeMarkdo
             else if (!string.IsNullOrEmpty(html))
                 _root.Children.Add(NewHtmlChunk(html!));
         }
+
+        AddCommentsPanel();
+        AddTrackedChangesPanel();
 
         if (_submitted) return;
         _submitted = true;
@@ -626,22 +762,181 @@ public sealed class MauiCollaborativeMarkdownView : MauiView<CollaborativeMarkdo
                     Colors.OrangeRed)));
     }
 
+    // Comments panel: a LIVE list of the node's _Comment satellites (author + quoted text + body) plus, when
+    // CanComment, an add box that creates a comment via the canonical CreateNode — the live query then
+    // re-renders. Anchoring a comment to a text selection (HighlightedText) is a refinement.
+    private void AddCommentsPanel()
+    {
+        if (Stream is null || string.IsNullOrEmpty(Model.NodePath)) return;
+        var list = new VerticalStackLayout { Spacing = 6 };
+        var panel = new VerticalStackLayout { Spacing = 6, Margin = new Thickness(0, 12, 0, 0), Children = { list } };
+
+        if (Model.CanComment)
+        {
+            var input = new Entry { Placeholder = "Add a comment…", FontSize = 12, TextColor = Colors.White };
+            var add = new Button { Text = "Comment", FontSize = 11, BackgroundColor = Colors.RoyalBlue, TextColor = Colors.White, CornerRadius = 6, Padding = new Thickness(10, 4) };
+            add.Clicked += (_, _) => AddComment(input);   // AddComment clears the input only on a successful create
+            var row = new Grid { ColumnSpacing = 8, ColumnDefinitions = { new ColumnDefinition(GridLength.Star), new ColumnDefinition(GridLength.Auto) } };
+            row.Add(input, 0, 0);
+            row.Add(add, 1, 0);
+            panel.Children.Add(row);
+        }
+
+        _root.Children.Add(panel);
+        var sub = Stream.Hub.GetQuery("comments:" + Model.NodePath, $"namespace:{Model.NodePath}/_Comment nodeType:Comment")
+            .Subscribe(nodes => MainThread.BeginInvokeOnMainThread(() => RenderComments(list, nodes)));
+        Disposables.Add(sub);
+    }
+
+    private void RenderComments(VerticalStackLayout list, IEnumerable<MeshNode> nodes)
+    {
+        if (Stream is null) return;
+        list.Children.Clear();
+        var opts = Stream.Hub.JsonSerializerOptions;
+        // Show only Active comments; Resolve flips Status → they drop off (live query re-renders).
+        var comments = nodes
+            .Select(n => (Node: n, Comment: n.ContentAs<MeshWeaver.Mesh.Comment>(opts)))
+            .Where(t => t.Comment is { Status: MeshWeaver.Mesh.CommentStatus.Active })
+            .ToList();
+        if (comments.Count == 0) return;
+        list.Children.Add(new Label { Text = $"Comments ({comments.Count})", FontAttributes = FontAttributes.Bold, FontSize = 13, TextColor = Colors.White });
+        foreach (var (node, c) in comments)
+        {
+            var box = new VerticalStackLayout { Spacing = 2 };
+            box.Children.Add(new Label { Text = string.IsNullOrWhiteSpace(c!.Author) ? "Someone" : c.Author, FontSize = 11, FontAttributes = FontAttributes.Bold, TextColor = Color.FromArgb("#C0C0C0") });
+            if (!string.IsNullOrWhiteSpace(c.HighlightedText))
+                box.Children.Add(new Label { Text = "“" + c.HighlightedText + "”", FontSize = 11, FontAttributes = FontAttributes.Italic, TextColor = Color.FromArgb("#9A9A9A") });
+            box.Children.Add(new Label { Text = c.Text, FontSize = 12, TextColor = Colors.White, LineBreakMode = LineBreakMode.WordWrap });
+
+            var path = node.Path;
+            var resolve = new Button { Text = "Resolve", FontSize = 11, BackgroundColor = Color.FromArgb("#3A3A3C"), TextColor = Colors.White, CornerRadius = 6, Padding = new Thickness(10, 4) };
+            resolve.Clicked += (_, _) => ResolveComment(path);
+            box.Children.Add(new HorizontalStackLayout { Spacing = 8, HorizontalOptions = LayoutOptions.End, Children = { resolve } });
+
+            list.Children.Add(new Border
+            {
+                Padding = 8, BackgroundColor = Color.FromArgb("#2A2A2C"), StrokeThickness = 0,
+                StrokeShape = new Microsoft.Maui.Controls.Shapes.RoundRectangle { CornerRadius = 8 }, Content = box,
+            });
+        }
+    }
+
+    // Surfaces a collaborative write failure (RLS/routing/access) instead of swallowing it — delegates to the
+    // shared base helper, stamping this node's path for context.
+    private void Log(Exception ex, string what) => LogWrite(ex, what, Model.NodePath);
+
+    // Resolve a comment: flip its Content.Status → Resolved via the canonical external-node stream update.
+    private void ResolveComment(string path)
+    {
+        if (Stream is null) return;
+        var opts = Stream.Hub.JsonSerializerOptions;
+        Stream.Hub.GetMeshNodeStream(path).Update(node =>
+        {
+            var c = node.ContentAs<MeshWeaver.Mesh.Comment>(opts);
+            return c is null ? node : node with { Content = c with { Status = MeshWeaver.Mesh.CommentStatus.Resolved } };
+        }).Subscribe(_ => { }, ex => Log(ex, "resolve comment"));
+    }
+
+    // Creates a _Comment satellite via the canonical CreateNode (carries the caller's AccessContext). Clears
+    // the input only on success (so a denied/failed create keeps the user's text); logs the failure.
+    private void AddComment(Entry input)
+    {
+        var text = input.Text;
+        if (Stream is null || string.IsNullOrWhiteSpace(text) || string.IsNullOrEmpty(Model.NodePath)) return;
+        var meshService = Stream.Hub.ServiceProvider.GetService<IMeshService>();
+        if (meshService is null) return;
+        var author = Stream.Hub.ServiceProvider.GetService<AccessService>()?.Context?.Name ?? "You";
+        var id = Guid.NewGuid().ToString("N")[..8];
+        var content = new MeshWeaver.Mesh.Comment { Text = text!.Trim(), Author = author, PrimaryNodePath = Model.NodePath };
+        var node = new MeshNode(id, $"{Model.NodePath}/_Comment") { NodeType = "Comment", Content = content };
+        meshService.CreateNode(node).Subscribe(
+            _ => MainThread.BeginInvokeOnMainThread(() => input.Text = ""),   // clear on success → keep text on failure
+            ex => Log(ex, "add comment"));                                    // live query re-renders the list
+    }
+
+    // Pending tracked-changes panel: lists the node's _Tracking satellites (author + original→new) with a
+    // functional Accept (apply the suggested text to the collaborative doc) and Reject (delete the satellite).
+    private void AddTrackedChangesPanel()
+    {
+        if (Stream is null || string.IsNullOrEmpty(Model.NodePath)) return;
+        var panel = new VerticalStackLayout { Spacing = 6, Margin = new Thickness(0, 8, 0, 0) };
+        _root.Children.Add(panel);
+        // Live: re-render on every query emission (accept/reject of a satellite re-fires this) — no Take(1),
+        // which would freeze the panel after the first snapshot.
+        var sub = Stream.Hub.GetQuery("changes:" + Model.NodePath, $"namespace:{Model.NodePath}/_Tracking nodeType:TrackedChange")
+            .Subscribe(nodes => MainThread.BeginInvokeOnMainThread(() => RenderTrackedChanges(panel, nodes)));
+        Disposables.Add(sub);
+    }
+
+    private void RenderTrackedChanges(VerticalStackLayout panel, IEnumerable<MeshNode> nodes)
+    {
+        if (Stream is null) return;
+        panel.Children.Clear();   // rebuild from the current snapshot — never append to a stale list
+        var opts = Stream.Hub.JsonSerializerOptions;
+        var pending = nodes
+            .Select(n => (Node: n, Change: n.ContentAs<MeshWeaver.Mesh.TrackedChange>(opts)))
+            .Where(t => t.Change is { Status: MeshWeaver.Mesh.TrackedChangeStatus.Pending })
+            .ToList();
+        if (pending.Count == 0) return;
+        panel.Children.Add(new Label { Text = $"Suggested changes ({pending.Count})", FontAttributes = FontAttributes.Bold, FontSize = 13, TextColor = Colors.White });
+        foreach (var (node, change) in pending)
+        {
+            var box = new VerticalStackLayout { Spacing = 2 };
+            box.Children.Add(new Label { Text = string.IsNullOrWhiteSpace(change!.Author) ? "Someone" : change.Author, FontSize = 11, FontAttributes = FontAttributes.Bold, TextColor = Color.FromArgb("#C0C0C0") });
+            if (!string.IsNullOrWhiteSpace(change.OriginalText))
+                box.Children.Add(new Label { Text = "− " + change.OriginalText, FontSize = 11, TextColor = Color.FromArgb("#E06C75") });
+            if (!string.IsNullOrWhiteSpace(change.NewText))
+                box.Children.Add(new Label { Text = "+ " + change.NewText, FontSize = 11, TextColor = Color.FromArgb("#98C379") });
+
+            var path = node.Path;
+            var ch = change!;
+            var accept = new Button { Text = "Accept", FontSize = 11, BackgroundColor = Color.FromArgb("#2E7D32"), TextColor = Colors.White, CornerRadius = 6, Padding = new Thickness(10, 4) };
+            accept.Clicked += (_, _) => AcceptChange(ch, path);
+            var reject = new Button { Text = "Reject", FontSize = 11, BackgroundColor = Color.FromArgb("#3A3A3C"), TextColor = Colors.White, CornerRadius = 6, Padding = new Thickness(10, 4) };
+            reject.Clicked += (_, _) => Stream?.Hub.ServiceProvider.GetService<IMeshService>()?.DeleteNode(path)
+                .Subscribe(_ => { }, ex => Log(ex, "reject change"));
+            box.Children.Add(new HorizontalStackLayout { Spacing = 8, HorizontalOptions = LayoutOptions.End, Children = { accept, reject } });
+
+            panel.Children.Add(new Border
+            {
+                Padding = 8, BackgroundColor = Color.FromArgb("#2A2A2C"), StrokeThickness = 0,
+                StrokeShape = new Microsoft.Maui.Controls.Shapes.RoundRectangle { CornerRadius = 8 }, Content = box,
+            });
+        }
+    }
+
+    // Accept a tracked change: apply its suggested text into the doc, then drop the satellite — mirrors the
+    // Blazor accept (StripAllMarkers → ResolveEffective(version) → Apply → write MarkdownContent.Content).
+    private void AcceptChange(MeshWeaver.Mesh.TrackedChange change, string satellitePath)
+    {
+        if (Stream is null || string.IsNullOrEmpty(Model.NodePath)) return;
+        var opts = Stream.Hub.JsonSerializerOptions;
+        var meshService = Stream.Hub.ServiceProvider.GetService<IMeshService>();
+        var read = Stream.Hub.GetMeshNodeStream(Model.NodePath).Where(n => n is not null).Take(1)
+            .Timeout(TimeSpan.FromSeconds(10))   // one-shot read for the action — never leak the subscription
+            .Subscribe(node => MainThread.BeginInvokeOnMainThread(() =>
+            {
+                var md = node!.ContentAs<MeshWeaver.Markdown.MarkdownContent>(opts);
+                if (md is null) return;
+                var clean = MeshWeaver.Markdown.Collaboration.MarkdownAnnotationParser.StripAllMarkers(md.Content);
+                var resolved = ChangeRendering.ResolveEffective(change, clean, node.Version);
+                var newClean = ChangeRendering.Apply(clean, resolved);
+                Stream.Hub.GetMeshNodeStream(Model.NodePath)
+                    .Update(n => n.Content is MeshWeaver.Markdown.MarkdownContent m
+                        ? n with { Content = m with { Content = newClean } } : n)
+                    .Subscribe(
+                        _ => meshService?.DeleteNode(satellitePath).Subscribe(__ => { }, ex => Log(ex, "drop accepted change")),
+                        ex => Log(ex, "apply accepted change"));
+            }), ex => Log(ex, "read doc for accept"));
+        Disposables.Add(read);
+    }
+
     // A WebView chunk in MarkdownView's dark/sans shell, auto-sized to its content (JS scrollHeight).
     private static View NewHtmlChunk(string bodyHtml)
     {
-        var web = new WebView { HeightRequest = 80, BackgroundColor = Colors.Transparent };
+        var web = new WebView { HeightRequest = 40, BackgroundColor = Colors.Transparent };
+        MauiHtmlDocument.AutoSizeToContent(web);
         web.Source = MauiHtmlDocument.ForBody(bodyHtml);
-        web.Navigated += async (_, _) =>
-        {
-            try
-            {
-                var h = await web.EvaluateJavaScriptAsync("document.body.scrollHeight");
-                if (double.TryParse(h, System.Globalization.NumberStyles.Any,
-                        System.Globalization.CultureInfo.InvariantCulture, out var px) && px > 0)
-                    MainThread.BeginInvokeOnMainThread(() => web.HeightRequest = px + 8);
-            }
-            catch { /* keep the fallback height */ }
-        };
         return web;
     }
 
@@ -732,11 +1027,22 @@ public sealed class IconView : MauiView<IconControl>
     private readonly ContentView _host = new();
     protected override View CreateView() => _host;
     protected override void Bind() =>
-        Bind<object>(Model.Data, v => _host.Content = Build((MarkdownViewLogic.CoerceString(v) ?? "").Trim()));
+        Bind<object>(Model.Data, v => _host.Content = MauiImagery.ForSource(MarkdownViewLogic.CoerceString(v), Size));
+}
 
-    private static View Build(string icon)
+/// <summary>
+/// Renders an icon/image value — raw <c>&lt;svg&gt;</c> markup, an image URL / data-URI, or a glyph /
+/// emoji / initials — as a native view sized to <c>size</c>: SVG markup (or an <c>.svg</c>/<c>data:image/svg</c>
+/// source) in a tiny transparent <see cref="WebView"/> (not-a-BlazorWebView → AspNetCore-free), raster
+/// URLs/data-URIs in a native <see cref="Image"/>, everything else a <see cref="Label"/>. Shared by the icon
+/// + node-card/thumbnail views. SVGs using <c>currentColor</c> inherit the dark shell's light foreground.
+/// </summary>
+internal static class MauiImagery
+{
+    public static View ForSource(string? value, double size)
     {
-        if (string.IsNullOrEmpty(icon)) return new ContentView();
+        var icon = (value ?? "").Trim();
+        if (string.IsNullOrEmpty(icon)) return new ContentView { WidthRequest = size, HeightRequest = size };
 
         var isSvg = icon.Contains("<svg", StringComparison.OrdinalIgnoreCase)
                     || icon.StartsWith("data:image/svg", StringComparison.OrdinalIgnoreCase)
@@ -745,57 +1051,1018 @@ public sealed class IconView : MauiView<IconControl>
         if (isSvg)
             return new WebView
             {
-                WidthRequest = Size, HeightRequest = Size, BackgroundColor = Colors.Transparent,
-                Source = new HtmlWebViewSource { Html = SvgHtml(icon) },
+                WidthRequest = size, HeightRequest = size, BackgroundColor = Colors.Transparent,
+                Source = new HtmlWebViewSource { Html = SvgHtml(icon, (int)size) },
             };
 
         // Raster image (png/jpg/…) by URL or data-URI → native Image.
         if (icon.StartsWith("http", StringComparison.OrdinalIgnoreCase)
             || icon.StartsWith("data:", StringComparison.OrdinalIgnoreCase)
             || icon.StartsWith("/", StringComparison.Ordinal))
-            return new Image { Source = icon, WidthRequest = Size, HeightRequest = Size, Aspect = Aspect.AspectFit };
+            return new Image { Source = icon, WidthRequest = size, HeightRequest = size, Aspect = Aspect.AspectFit };
 
-        // Glyph / emoji / (Fluent) icon name — no native icon set, so show as text (unchanged behaviour).
-        return new Label { Text = icon, FontSize = 16, VerticalOptions = LayoutOptions.Center };
+        // Glyph / emoji / initials — no native icon set, so show as centred text.
+        return new Label
+        {
+            Text = icon, FontSize = size * 0.8, TextColor = Colors.White,
+            HorizontalTextAlignment = TextAlignment.Center, VerticalTextAlignment = TextAlignment.Center,
+        };
     }
 
     // $$"""…""" raw interpolation: single { } are LITERAL CSS braces; {{…}} are interpolations.
-    private static string SvgHtml(string icon)
+    private static string SvgHtml(string icon, int px)
     {
         var body = icon.Contains("<svg", StringComparison.OrdinalIgnoreCase)
             ? icon
-            : $"<img src=\"{icon}\" style=\"width:{Size}px;height:{Size}px\"/>";
+            : $"<img src=\"{icon}\" style=\"width:{px}px;height:{px}px\"/>";
         return $$"""
             <!DOCTYPE html><html><head><meta charset="utf-8">
             <style>html,body{margin:0;padding:0;background:transparent;overflow:hidden;color:#e0e0e0}
-            svg{width:{{Size}}px;height:{{Size}}px;display:block;fill:currentColor}
+            svg{width:{{px}}px;height:{{px}}px;display:block;fill:currentColor}
             img{display:block}</style></head><body>{{body}}</body></html>
             """;
     }
 }
 
+/// <summary>
+/// A mesh-node card → a tappable native card (image/emoji + title + truncated description) that navigates
+/// to the node via <see cref="IMauiNavigator"/> — the AspNetCore-free counterpart of Blazor's
+/// MeshNodeCardView. When <see cref="MeshNodeCardControl.ItemArea"/> is set, the card body renders that
+/// area instead (custom card content).
+/// </summary>
+public sealed class MeshNodeCardView : MauiView<MeshNodeCardControl>
+{
+    protected override View CreateView()
+    {
+        View body;
+        if (!string.IsNullOrEmpty(Model.ItemArea) && Stream is not null)
+            body = Renderer.RenderArea(Stream, Model.ItemArea!);
+        else
+        {
+            var stack = new VerticalStackLayout { Spacing = 6 };
+            if (!string.IsNullOrWhiteSpace(Model.ImageUrl))
+                stack.Children.Add(MauiImagery.ForSource(Model.ImageUrl, 48));
+            stack.Children.Add(new Label { Text = Model.Title ?? "", FontAttributes = FontAttributes.Bold, TextColor = Colors.White });
+            if (!string.IsNullOrWhiteSpace(Model.Description))
+                stack.Children.Add(new Label
+                {
+                    Text = Model.Description, FontSize = 12, TextColor = Color.FromArgb("#C0C0C0"),
+                    MaxLines = 3, LineBreakMode = LineBreakMode.TailTruncation,
+                });
+            body = stack;
+        }
+        return MakeCard(body, AsBool(Model.DisableNavigation, false) ? null : Model.NodePath, Model.Title);
+    }
+
+    // A rounded dark card; tappable → navigate to nodePath (when non-null) via IMauiNavigator.
+    internal View MakeCard(View content, string? nodePath, string? title)
+    {
+        var border = new Border
+        {
+            Padding = 12,
+            BackgroundColor = Color.FromArgb("#2A2A2C"),
+            StrokeThickness = 0,
+            StrokeShape = new Microsoft.Maui.Controls.Shapes.RoundRectangle { CornerRadius = 10 },
+            Content = content,
+        };
+        if (!string.IsNullOrEmpty(nodePath))
+        {
+            var tap = new TapGestureRecognizer();
+            tap.Tapped += (_, _) => Stream?.Hub.ServiceProvider.GetService<IMauiNavigator>()?.NavigateTo(nodePath, title);
+            border.GestureRecognizers.Add(tap);
+        }
+        return border;
+    }
+
+    private static bool AsBool(object? v, bool dflt) => v switch
+    {
+        null => dflt,
+        bool b => b,
+        JsonElement je when je.ValueKind == JsonValueKind.True => true,
+        JsonElement je when je.ValueKind == JsonValueKind.False => false,
+        _ => bool.TryParse(v.ToString(), out var p) ? p : dflt,
+    };
+}
+
+/// <summary>
+/// A mesh-node thumbnail → a tappable horizontal card: 48px avatar (image/emoji/initials) + title +
+/// 2-line description, navigating to the node. Native counterpart of Blazor's MeshNodeThumbnailView.
+/// </summary>
+public sealed class MeshNodeThumbnailView : MauiView<MeshNodeThumbnailControl>
+{
+    protected override View CreateView()
+    {
+        var avatar = MauiImagery.ForSource(
+            string.IsNullOrWhiteSpace(Model.ImageUrl) ? Initials(Model.Title) : Model.ImageUrl, 48);
+        avatar.WidthRequest = 48; avatar.HeightRequest = 48;
+
+        var texts = new VerticalStackLayout { Spacing = 2, VerticalOptions = LayoutOptions.Center };
+        texts.Children.Add(new Label { Text = Model.Title ?? "", FontAttributes = FontAttributes.Bold, TextColor = Colors.White });
+        if (!string.IsNullOrWhiteSpace(Model.Description))
+            texts.Children.Add(new Label
+            {
+                Text = Model.Description, FontSize = 12, TextColor = Color.FromArgb("#C0C0C0"),
+                MaxLines = 2, LineBreakMode = LineBreakMode.TailTruncation,
+            });
+        if (!string.IsNullOrWhiteSpace(Model.NodeType))
+            texts.Children.Add(new Label { Text = Model.NodeType, FontSize = 10, TextColor = Color.FromArgb("#9A9A9A") });
+
+        var border = new Border
+        {
+            Padding = 10, MinimumWidthRequest = 320,
+            BackgroundColor = Color.FromArgb("#2A2A2C"),
+            StrokeThickness = 0,
+            StrokeShape = new Microsoft.Maui.Controls.Shapes.RoundRectangle { CornerRadius = 10 },
+            Content = new HorizontalStackLayout { Spacing = 12, Children = { avatar, texts } },
+        };
+        if (!string.IsNullOrEmpty(Model.NodePath))
+        {
+            var tap = new TapGestureRecognizer();
+            tap.Tapped += (_, _) => Stream?.Hub.ServiceProvider.GetService<IMauiNavigator>()?.NavigateTo(Model.NodePath, Model.Title);
+            border.GestureRecognizers.Add(tap);
+        }
+        return border;
+    }
+
+    // Up to two leading letters of the title — the placeholder avatar when no image is set.
+    private static string Initials(string? title)
+    {
+        var parts = (title ?? "").Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length == 0) return "?";
+        return parts.Length == 1
+            ? parts[0][..Math.Min(2, parts[0].Length)].ToUpperInvariant()
+            : (parts[0][..1] + parts[1][..1]).ToUpperInvariant();
+    }
+}
+
+/// <summary>
+/// A grouped catalog → native: each <see cref="CatalogGroup"/> renders a (tappable, collapsible) section
+/// header (emoji + label + count) over a wrapping grid of the group's item controls (typically
+/// <see cref="MeshNodeCardControl"/>, rendered via the registry). The AspNetCore-free counterpart of
+/// Blazor's catalog grid; sections collapse by toggling the grid's visibility (no extra dependency).
+/// </summary>
+public sealed class CatalogView : MauiView<CatalogControl>
+{
+    protected override View CreateView()
+    {
+        var root = new VerticalStackLayout { Spacing = Model.SectionGap };
+        foreach (var group in Model.Groups.OrderBy(g => g.Order))
+        {
+            var count = group.TotalCount > 0 ? group.TotalCount : group.Items.Count;
+            var headerText = (string.IsNullOrEmpty(group.Emoji) ? "" : group.Emoji + "  ") + group.Label
+                + (Model.ShowCounts ? $"   ({count})" : "");
+            var header = new Label { Text = headerText, FontAttributes = FontAttributes.Bold, FontSize = 16, TextColor = Colors.White };
+
+            // Fully-qualified: MeshWeaver.Layout also defines FlexWrap/FlexDirection (the framework skin enums).
+            var grid = new FlexLayout
+            {
+                Wrap = Microsoft.Maui.Layouts.FlexWrap.Wrap,
+                Direction = Microsoft.Maui.Layouts.FlexDirection.Row,
+            };
+            if (Stream is not null)
+                foreach (var item in group.Items)
+                {
+                    // Each item control (e.g. a node card) gets a fixed tile so the row wraps into columns.
+                    var tile = new ContentView
+                    {
+                        WidthRequest = 280, HeightRequest = Model.CardHeight,
+                        Margin = new Thickness(Model.Spacing * 2),
+                        Content = Renderer.RenderControl(item, Stream, Area),
+                    };
+                    grid.Children.Add(tile);
+                }
+
+            if (Model.CollapsibleSections)
+            {
+                grid.IsVisible = group.IsExpanded;
+                var tap = new TapGestureRecognizer();
+                tap.Tapped += (_, _) => grid.IsVisible = !grid.IsVisible;
+                header.GestureRecognizers.Add(tap);
+            }
+            root.Children.Add(new VerticalStackLayout { Spacing = 8, Children = { header, grid } });
+        }
+        return root;
+    }
+}
+
+/// <summary>
+/// A query-driven mesh-node collection → a live list of node rows (name + type), each tappable to navigate
+/// via <see cref="IMauiNavigator"/>, with an optional per-row delete (when <c>Deletable</c>). Reuses the
+/// shared synced query (<c>hub.GetQuery</c>) — the same path the picker/search views use; the list refreshes
+/// as the query results change. (The add-dialog from <c>ShowAdd</c> is a later wave.)
+/// </summary>
+public sealed class MeshNodeCollectionView : MauiView<MeshNodeCollectionControl>
+{
+    private VerticalStackLayout _root = null!;
+    private VerticalStackLayout _list = null!;
+    protected override View CreateView()
+    {
+        _list = new VerticalStackLayout { Spacing = 4 };
+        _root = new VerticalStackLayout { Spacing = 6 };
+        if (Model.ShowAdd)
+        {
+            var add = new Button
+            {
+                Text = MarkdownViewLogic.CoerceString(Model.AddPickerLabel)
+                    ?? MarkdownViewLogic.CoerceString(Model.AddDialogTitle) ?? "Add",
+                BackgroundColor = Colors.RoyalBlue, TextColor = Colors.White, CornerRadius = 8,
+                HorizontalOptions = LayoutOptions.Start, Padding = new Thickness(14, 5),
+            };
+            add.Clicked += (_, _) => PostClick();   // server-dispatched add (faithful to Blazor OnAddClick → OnClick)
+            _root.Children.Add(add);
+        }
+        _root.Children.Add(_list);
+        return _root;
+    }
+
+    protected override void Bind()
+    {
+        if (Stream is null) return;
+        var queries = Model.Queries is { Length: > 0 } q ? q : new[] { "" };
+        var sub = Stream.Hub.GetQuery("collection:" + string.Join("|", queries), queries)
+            .Subscribe(nodes => MainThread.BeginInvokeOnMainThread(() => Render(nodes)));
+        Disposables.Add(sub);
+    }
+
+    private void Render(IEnumerable<MeshNode> nodes)
+    {
+        _list.Children.Clear();
+        var deletable = Model.Deletable;
+        foreach (var node in nodes.DistinctBy(n => n.Path))
+        {
+            var n = node;
+            var name = new Label
+            {
+                Text = n.Name ?? n.Path, TextColor = Colors.White,
+                VerticalOptions = LayoutOptions.Center, HorizontalOptions = LayoutOptions.StartAndExpand,
+            };
+            var tap = new TapGestureRecognizer();
+            tap.Tapped += (_, _) => Stream?.Hub.ServiceProvider.GetService<IMauiNavigator>()?.NavigateTo(n.Path, n.Name);
+            name.GestureRecognizers.Add(tap);
+
+            var row = new HorizontalStackLayout { Spacing = 8, Children = { name } };
+            if (!string.IsNullOrWhiteSpace(n.NodeType))
+                row.Children.Add(new Label { Text = n.NodeType, FontSize = 10, TextColor = Color.FromArgb("#9A9A9A"), VerticalOptions = LayoutOptions.Center });
+            if (deletable)
+            {
+                var del = new Button { Text = "🗑", BackgroundColor = Colors.Transparent, Padding = 0 };
+                del.Clicked += (_, _) => Stream?.Hub.ServiceProvider.GetService<IMeshService>()?.DeleteNode(n.Path)
+                    .Subscribe(_ => { }, ex => LogWrite(ex, "delete node", n.Path));
+                row.Children.Add(del);
+            }
+            _list.Children.Add(row);
+        }
+    }
+}
+
+/// <summary>
+/// A search box → a native <see cref="Entry"/> + Search button that runs the (namespace-scoped) query via
+/// the shared synced query (<c>hub.GetQuery</c>) and lists tappable results that navigate via
+/// <see cref="IMauiNavigator"/>. The AspNetCore-free counterpart of Blazor's SearchBox (its Monaco
+/// <c>@</c>-autocomplete is a later wave); enough to make a space's embedded "Search" area work natively.
+/// </summary>
+public sealed class SearchBoxView : MauiView<SearchBoxControl>
+{
+    private Entry _entry = null!;
+    private VerticalStackLayout _results = null!;
+    private IDisposable? _searchSub;
+
+    protected override View CreateView()
+    {
+        _entry = new Entry
+        {
+            Placeholder = MarkdownViewLogic.CoerceString(Model.Placeholder) ?? "Search…",
+            ReturnType = ReturnType.Search, TextColor = Colors.White,
+        };
+        _entry.Completed += (_, _) => RunSearch(_entry.Text);
+        var button = new Button { Text = "Search", BackgroundColor = Colors.RoyalBlue, TextColor = Colors.White, CornerRadius = 8 };
+        button.Clicked += (_, _) => RunSearch(_entry.Text);
+
+        var bar = new Grid { ColumnSpacing = 8, ColumnDefinitions = { new(GridLength.Star), new(GridLength.Auto) } };
+        bar.Add(_entry, 0, 0);
+        bar.Add(button, 1, 0);
+
+        _results = new VerticalStackLayout { Spacing = 2 };
+        return new VerticalStackLayout { Spacing = 8, Children = { bar, _results } };
+    }
+
+    protected override void Bind()
+    {
+        var preset = MarkdownViewLogic.CoerceString(Model.Value);
+        if (!string.IsNullOrWhiteSpace(preset)) _entry.Text = preset;
+    }
+
+    private void RunSearch(string? text)
+    {
+        if (Stream is null || string.IsNullOrWhiteSpace(text)) return;
+        var ns = MarkdownViewLogic.CoerceString(Model.Namespace);
+        var query = string.IsNullOrWhiteSpace(ns) ? text!.Trim() : $"namespace:{ns} {text}".Trim();
+        _searchSub?.Dispose();   // drop the previous in-flight search → results can't render out of order
+        _searchSub = Stream.Hub.GetQuery("searchbox:" + query, query).Take(1)
+            .Subscribe(nodes => MainThread.BeginInvokeOnMainThread(() => RenderResults(nodes)));
+        Disposables.Add(_searchSub);
+    }
+
+    private void RenderResults(IEnumerable<MeshNode> nodes)
+    {
+        _results.Children.Clear();
+        var max = int.TryParse(MarkdownViewLogic.CoerceString(Model.MaxSuggestions), out var m) && m > 0 ? m : 20;
+        foreach (var node in nodes.DistinctBy(n => n.Path).Take(max))
+        {
+            var n = node;
+            var lbl = new Label { Text = n.Name ?? n.Path, TextColor = Color.FromArgb("#4ea1ff"), Padding = new Thickness(4, 2) };
+            var tap = new TapGestureRecognizer();
+            tap.Tapped += (_, _) => Stream?.Hub.ServiceProvider.GetService<IMauiNavigator>()?.NavigateTo(n.Path, n.Name);
+            lbl.GestureRecognizers.Add(tap);
+            _results.Children.Add(lbl);
+        }
+    }
+}
+
+/// <summary>A redirect → navigates the shell to <see cref="RedirectControl.Href"/> on render (via
+/// <see cref="IMauiNavigator"/>); renders nothing itself. The native counterpart of the portal's redirect.</summary>
+public sealed class RedirectView : MauiView<RedirectControl>
+{
+    protected override View CreateView() => new ContentView();
+    protected override void Bind()
+    {
+        var href = MarkdownViewLogic.CoerceString(Model.Href);
+        if (!string.IsNullOrWhiteSpace(href) && Stream is not null)
+            MainThread.BeginInvokeOnMainThread(() =>
+                Stream.Hub.ServiceProvider.GetService<IMauiNavigator>()?.NavigateTo(href!));
+    }
+}
+
+/// <summary>A code sample → a monospace, horizontally-scrollable code block on a dark panel.</summary>
+public sealed class CodeSampleView : MauiView<CodeSampleControl>
+{
+    private Label _code = null!;
+    protected override View CreateView()
+    {
+        _code = new Label { FontFamily = "Menlo", FontSize = 13, TextColor = Color.FromArgb("#E0E0E0") };
+        return new Border
+        {
+            Padding = 10, BackgroundColor = Color.FromArgb("#1E1E1E"), StrokeThickness = 0,
+            StrokeShape = new Microsoft.Maui.Controls.Shapes.RoundRectangle { CornerRadius = 6 },
+            Content = new ScrollView { Orientation = ScrollOrientation.Horizontal, Content = _code },
+        };
+    }
+    protected override void Bind() => Bind<object>(Model.Data, v => _code.Text = MarkdownViewLogic.CoerceString(v) ?? "");
+}
+
+/// <summary>
+/// A dialog → a card-styled panel with a title, the <see cref="DialogControl.ContentArea"/> rendered as a
+/// child area, and (when it has actions) the <see cref="DialogControl.ActionsArea"/> below. Rendered inline
+/// rather than as an OS modal (no Page context here) — the AspNetCore-free counterpart of Blazor's dialog.
+/// </summary>
+public sealed class DialogView : MauiView<DialogControl>
+{
+    protected override View CreateView()
+    {
+        var stack = new VerticalStackLayout { Spacing = 10 };
+        stack.Children.Add(new Label
+        {
+            Text = MarkdownViewLogic.CoerceString(Model.Title) ?? "Dialog",
+            FontAttributes = FontAttributes.Bold, FontSize = 16, TextColor = Colors.White,
+        });
+        if (Stream is not null && Model.ContentArea?.Area is not null)
+            stack.Children.Add(Renderer.RenderArea(Stream, Model.ContentArea.Area.ToString()!));
+        if (Stream is not null && Model.HasActions && Model.ActionsArea?.Area is not null)
+            stack.Children.Add(Renderer.RenderArea(Stream, Model.ActionsArea.Area.ToString()!));
+        return new Border
+        {
+            Padding = 16,
+            BackgroundColor = Color.FromArgb("#2A2A2C"),
+            Stroke = Color.FromArgb("#444"), StrokeThickness = 1,
+            StrokeShape = new Microsoft.Maui.Controls.Shapes.RoundRectangle { CornerRadius = 12 },
+            Content = stack,
+        };
+    }
+}
+
+/// <summary>
+/// A chart → native via LiveCharts2 (MIT, SkiaSharp): maps the framework <see cref="ChartControl"/>'s
+/// typed series ($type line/column/bar/pie/doughnut + data + label) to LiveCharts series. Pie/doughnut →
+/// a <c>PieChart</c> (one slice per labelled value); line/column/bar → a <c>CartesianChart</c> with the
+/// labels as the category X axis. The LiveCharts series share names with the framework's
+/// (<c>LineSeries</c>/<c>ColumnSeries</c>/<c>PieSeries</c>), so they're fully qualified here.
+/// </summary>
+public sealed class ChartView : MauiView<ChartControl>
+{
+    protected override View CreateView()
+    {
+        var labels = CoerceLabels(Model.Labels);
+        var series = CoerceSeries(Model.Series);
+        var height = ToDouble(Model.Height, 300);
+        var width = ToDouble(Model.Width, double.NaN);
+
+        var isPie = series.Count > 0 && series.All(s => s.Type is "pie" or "doughnut");
+        if (isPie)
+        {
+            var s0 = series[0];
+            var slices = new List<LiveChartsCore.ISeries>();
+            for (var i = 0; i < s0.Data.Length; i++)
+                slices.Add(new LiveChartsCore.SkiaSharpView.PieSeries<double>
+                {
+                    Values = new[] { s0.Data[i] },
+                    Name = i < labels.Count ? labels[i] : $"#{i + 1}",
+                });
+            var pie = new LiveChartsCore.SkiaSharpView.Maui.PieChart { Series = slices, HeightRequest = height };
+            if (!double.IsNaN(width)) pie.WidthRequest = width;
+            return pie;
+        }
+
+        var cartSeries = series.Select(s => (LiveChartsCore.ISeries)(s.Type == "line"
+            ? new LiveChartsCore.SkiaSharpView.LineSeries<double> { Values = s.Data, Name = s.Label }
+            : new LiveChartsCore.SkiaSharpView.ColumnSeries<double> { Values = s.Data, Name = s.Label })).ToList();
+        var chart = new LiveChartsCore.SkiaSharpView.Maui.CartesianChart { Series = cartSeries, HeightRequest = height };
+        if (!double.IsNaN(width)) chart.WidthRequest = width;
+        if (labels.Count > 0)
+            chart.XAxes = new[] { new LiveChartsCore.SkiaSharpView.Axis { Labels = labels } };
+        return chart;
+    }
+
+    private static List<string> CoerceLabels(object? labels)
+    {
+        var result = new List<string>();
+        if (labels is JsonElement { ValueKind: JsonValueKind.Array } arr)
+            foreach (var el in arr.EnumerateArray())
+                result.Add(el.ValueKind == JsonValueKind.String ? el.GetString() ?? "" : el.ToString());
+        else if (labels is IEnumerable<string> typed)
+            result.AddRange(typed);
+        return result;
+    }
+
+    // Each series JSON carries its $type discriminator (line/column/bar/pie/...) + data + label.
+    private static List<(string Type, string Label, double[] Data)> CoerceSeries(object? series)
+    {
+        var result = new List<(string, string, double[])>();
+        if (series is not JsonElement { ValueKind: JsonValueKind.Array } arr) return result;
+        foreach (var el in arr.EnumerateArray())
+        {
+            var type = el.TryGetProperty("$type", out var t) && t.ValueKind == JsonValueKind.String ? t.GetString() ?? "column" : "column";
+            var label = el.TryGetProperty("label", out var l) && l.ValueKind == JsonValueKind.String ? l.GetString() ?? "" : "";
+            var data = el.TryGetProperty("data", out var d) && d.ValueKind == JsonValueKind.Array
+                ? d.EnumerateArray().Where(x => x.ValueKind == JsonValueKind.Number).Select(x => x.GetDouble()).ToArray()
+                : Array.Empty<double>();
+            result.Add((type, label, data));
+        }
+        return result;
+    }
+
+    private static double ToDouble(object? v, double dflt) =>
+        v switch
+        {
+            null => dflt,
+            double d => d,
+            JsonElement je when je.ValueKind == JsonValueKind.Number => je.GetDouble(),
+            _ => double.TryParse(v.ToString(), out var p) ? p : dflt,
+        };
+}
+
+/// <summary>Markdown editor → a native multi-line <see cref="Editor"/> bound to <c>Value</c> (writes back
+/// through the pointer; honours Readonly). The Monaco preview/comments/track-changes panels are a later
+/// wave — this gives native markdown editing.</summary>
+public sealed class MarkdownEditorView : FormMauiView<MarkdownEditorControl>
+{
+    private Editor _editor = null!;
+    protected override View CreateView()
+    {
+        _editor = new Editor
+        {
+            AutoSize = EditorAutoSizeOption.TextChanges, FontSize = 14, TextColor = Colors.White,
+            Placeholder = MarkdownViewLogic.CoerceString(Model.Placeholder), IsReadOnly = AsFlag(Model.Readonly),
+        };
+        _editor.TextChanged += (_, _) => Write(Model.Value, _editor.Text);
+        return _editor;
+    }
+    protected override void Bind() => BindValue<string>(Model.Value, v => _editor.Text = v ?? "");
+    internal static bool AsFlag(object? v) => v is true || (v is JsonElement je && je.ValueKind == JsonValueKind.True);
+}
+
+/// <summary>Code editor → a native monospace <see cref="Editor"/> bound to <c>Value</c> with a language
+/// caption (writes back through the pointer; honours Readonly). Monaco LSP/minimap are a later wave.</summary>
+public sealed class CodeEditorView : FormMauiView<CodeEditorControl>
+{
+    private Editor _editor = null!;
+    protected override View CreateView()
+    {
+        var lang = MarkdownViewLogic.CoerceString(Model.Language);
+        _editor = new Editor
+        {
+            FontFamily = "Menlo", FontSize = 13, TextColor = Color.FromArgb("#E0E0E0"),
+            AutoSize = EditorAutoSizeOption.TextChanges, IsReadOnly = MarkdownEditorView.AsFlag(Model.Readonly),
+        };
+        _editor.TextChanged += (_, _) => Write(Model.Value, _editor.Text);
+        var caption = new Label { Text = string.IsNullOrWhiteSpace(lang) ? "code" : lang, FontSize = 10, TextColor = Color.FromArgb("#9A9A9A") };
+        return new VerticalStackLayout { Spacing = 2, Children = { caption, _editor } };
+    }
+    protected override void Bind() => BindValue<string>(Model.Value, v => _editor.Text = v ?? "");
+}
+
+/// <summary>Diff editor → two side-by-side read-only monospace panels (original | modified) with labels —
+/// the native counterpart of the Monaco side-by-side diff.</summary>
+public sealed class DiffEditorView : MauiView<DiffEditorControl>
+{
+    protected override View CreateView()
+    {
+        var grid = new Grid { ColumnSpacing = 8, ColumnDefinitions = { new(GridLength.Star), new(GridLength.Star) } };
+        grid.Add(Pane(Model.OriginalLabel, Model.OriginalContent), 0, 0);
+        grid.Add(Pane(Model.ModifiedLabel, Model.ModifiedContent), 1, 0);
+        return grid;
+    }
+    private static View Pane(string label, string content)
+    {
+        var stack = new VerticalStackLayout
+        {
+            Spacing = 4,
+            Children =
+            {
+                new Label { Text = label, FontSize = 11, FontAttributes = FontAttributes.Bold, TextColor = Color.FromArgb("#C0C0C0") },
+                new Label { Text = content, FontFamily = "Menlo", FontSize = 12, TextColor = Color.FromArgb("#E0E0E0") },
+            },
+        };
+        return new Border
+        {
+            Padding = 8, BackgroundColor = Color.FromArgb("#1E1E1E"), StrokeThickness = 0,
+            StrokeShape = new Microsoft.Maui.Controls.Shapes.RoundRectangle { CornerRadius = 6 },
+            Content = new ScrollView { Orientation = ScrollOrientation.Horizontal, Content = stack },
+        };
+    }
+}
+
+/// <summary>User profile → a card: avatar (icon/initials) + display name + email + bio, tappable to the
+/// user node. Native counterpart of the portal's profile card.</summary>
+public sealed class UserProfileView : MauiView<UserProfileControl>
+{
+    protected override View CreateView()
+    {
+        var avatar = MauiImagery.ForSource(string.IsNullOrWhiteSpace(Model.Icon) ? Initials(Model.DisplayName) : Model.Icon, 64);
+        avatar.WidthRequest = 64; avatar.HeightRequest = 64;
+
+        var texts = new VerticalStackLayout { Spacing = 2, VerticalOptions = LayoutOptions.Center };
+        texts.Children.Add(new Label { Text = Model.DisplayName, FontAttributes = FontAttributes.Bold, FontSize = 16, TextColor = Colors.White });
+        if (!string.IsNullOrWhiteSpace(Model.Email)) texts.Children.Add(new Label { Text = Model.Email, FontSize = 12, TextColor = Color.FromArgb("#4ea1ff") });
+        if (!string.IsNullOrWhiteSpace(Model.Bio)) texts.Children.Add(new Label { Text = Model.Bio, FontSize = 12, TextColor = Color.FromArgb("#C0C0C0") });
+
+        var border = new Border
+        {
+            Padding = 14, BackgroundColor = Color.FromArgb("#2A2A2C"), StrokeThickness = 0,
+            StrokeShape = new Microsoft.Maui.Controls.Shapes.RoundRectangle { CornerRadius = 12 },
+            Content = new HorizontalStackLayout { Spacing = 14, Children = { avatar, texts } },
+        };
+        if (!string.IsNullOrEmpty(Model.NodePath))
+        {
+            var tap = new TapGestureRecognizer();
+            tap.Tapped += (_, _) => Stream?.Hub.ServiceProvider.GetService<IMauiNavigator>()?.NavigateTo(Model.NodePath, Model.DisplayName);
+            border.GestureRecognizers.Add(tap);
+        }
+        return border;
+    }
+
+    private static string Initials(string? name)
+    {
+        var parts = (name ?? "").Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length == 0) return "?";
+        return parts.Length == 1 ? parts[0][..Math.Min(2, parts[0].Length)].ToUpperInvariant()
+            : (parts[0][..1] + parts[1][..1]).ToUpperInvariant();
+    }
+}
+
+/// <summary>Appearance picker → Light / Dark / System buttons that set the app theme
+/// (<see cref="Application.UserAppTheme"/>). The preset-colour/direction options are a later wave.</summary>
+public sealed class AppearanceView : MauiView<AppearanceControl>
+{
+    protected override View CreateView()
+    {
+        var row = new HorizontalStackLayout
+        {
+            Spacing = 8,
+            Children = { ThemeButton("Light", AppTheme.Light), ThemeButton("Dark", AppTheme.Dark), ThemeButton("System", AppTheme.Unspecified) },
+        };
+        return new VerticalStackLayout
+        {
+            Spacing = 6,
+            Children = { new Label { Text = "Appearance", FontAttributes = FontAttributes.Bold, TextColor = Colors.White }, row },
+        };
+    }
+    private static Button ThemeButton(string text, AppTheme theme)
+    {
+        var b = new Button { Text = text, BackgroundColor = Color.FromArgb("#3A3A3C"), TextColor = Colors.White, CornerRadius = 8 };
+        b.Clicked += (_, _) => { if (Microsoft.Maui.Controls.Application.Current is { } app) app.UserAppTheme = theme; };
+        return b;
+    }
+}
+
+/// <summary>Item template → iterates the bound <c>Data</c> collection, rendering the template control once per
+/// item with each item's DataContext (<c>{DataContext}{Data}/{i}</c>) — faithful to the Blazor ItemTemplate:
+/// the server renders the template once into <c>{Area}/View</c>; the client repeats it per index. Orientation
+/// is honoured; Wrap is a later refinement (native StackLayout doesn't wrap).</summary>
+public sealed class ItemTemplateView : MauiView<ItemTemplateControl>
+{
+    private StackLayout _root = null!;
+    private int _count;
+    private UiControl? _template;
+
+    protected override View CreateView() => _root = new StackLayout
+    {
+        Spacing = 6,
+        Orientation = Model.Orientation == MeshWeaver.Layout.Orientation.Horizontal
+            ? StackOrientation.Horizontal : StackOrientation.Vertical,
+    };
+
+    protected override void Bind()
+    {
+        if (Stream is null) return;
+        var viewArea = $"{Area}/{ItemTemplateControl.ViewArea}";
+        // The server renders the template once into {Area}/View — keep the latest rendered template control.
+        var tpl = Stream.GetControlStream(viewArea)
+            .Subscribe(c => MainThread.BeginInvokeOnMainThread(() => { _template = c as UiControl; Rebuild(); }),
+                       ex => LogWrite(ex, "item-template control stream"));
+        Disposables.Add(tpl);
+        // Item count from the bound data collection (pointer → JSON array, or a literal collection) — the
+        // unit-tested MauiItemTemplateProjection.Count.
+        Bind<object>(Model.Data, v => { _count = MauiItemTemplateProjection.Count(v); Rebuild(); });
+    }
+
+    // Repeat the template per index, pointing each item's DataContext into the collection — identical path
+    // construction to the Blazor GetViewWithPath(i); the shared renderer binds each item against the stream.
+    private void Rebuild()
+    {
+        if (Stream is null) return;
+        _root.Children.Clear();
+        var template = _template ?? Model.View;
+        if (template is null || _count <= 0) return;
+        var viewArea = $"{Area}/{ItemTemplateControl.ViewArea}";
+        for (var i = 0; i < _count; i++)
+        {
+            var item = template with { DataContext = MauiItemTemplateProjection.ItemPath(Model.DataContext, Model.Data, i) };
+            _root.Children.Add(Renderer.RenderControl(item, Stream, viewArea));
+        }
+    }
+}
+
+/// <summary>Layout-area definition → a tappable card with the area's thumbnail (light variant). Links to the
+/// defined area; the title/description overlay is a later wave.</summary>
+public sealed class LayoutAreaDefinitionView : MauiView<LayoutAreaDefinitionControl>
+{
+    protected override View CreateView()
+    {
+        var content = new VerticalStackLayout { Spacing = 6 };
+        if (!string.IsNullOrWhiteSpace(Model.LightThumbnailUrl))
+            content.Children.Add(new Image { Source = Model.LightThumbnailUrl, Aspect = Aspect.AspectFit, HeightRequest = 120 });
+        content.Children.Add(new Label { Text = Model.Definition?.ToString() ?? "Layout area", FontSize = 12, TextColor = Color.FromArgb("#C0C0C0") });
+        return new Border
+        {
+            Padding = 10, BackgroundColor = Color.FromArgb("#2A2A2C"), StrokeThickness = 0,
+            StrokeShape = new Microsoft.Maui.Controls.Shapes.RoundRectangle { CornerRadius = 10 },
+            Content = content,
+        };
+    }
+}
+
+/// <summary>Mesh-node editor → a live, node-bound name field (writes back via
+/// <c>GetMeshNodeStream(path).Update</c>) under a node-type caption. Rich typed-field editing is the
+/// dedicated MeshNodeContentEditor; this is the generic by-path/by-type editor.</summary>
+public sealed class MeshNodeEditorView : MauiView<MeshNodeEditorControl>
+{
+    private Entry _name = null!;
+    private bool _suppress;
+    protected override View CreateView()
+    {
+        var caption = new Label { Text = string.IsNullOrWhiteSpace(Model.NodeType) ? "Node" : Model.NodeType!, FontSize = 10, TextColor = Color.FromArgb("#9A9A9A") };
+        _name = new Entry { Placeholder = "Name", TextColor = Colors.White };
+        _name.TextChanged += (_, e) => { if (!_suppress) Persist(e.NewTextValue); };
+        return new VerticalStackLayout { Spacing = 4, Children = { caption, _name } };
+    }
+    protected override void Bind()
+    {
+        if (Stream is null || string.IsNullOrEmpty(Model.NodePath)) return;
+        var sub = Stream.Hub.GetMeshNodeStream(Model.NodePath).Where(n => n is not null)
+            .Subscribe(node => MainThread.BeginInvokeOnMainThread(() =>
+            {
+                _suppress = true;
+                try { _name.Text = node!.Name ?? ""; } finally { _suppress = false; }
+            }));
+        Disposables.Add(sub);
+    }
+    private void Persist(string? name)
+    {
+        if (Stream is null || string.IsNullOrEmpty(Model.NodePath)) return;
+        Stream.Hub.GetMeshNodeStream(Model.NodePath).Update(n => n with { Name = name })
+            .Subscribe(_ => { }, ex => LogWrite(ex, "rename node", Model.NodePath));
+    }
+}
+
+/// <summary>Mesh-node role editor → a role <see cref="Picker"/> (from RoleOptions) + a Deny checkbox, gated
+/// by CanEdit. Binds DIRECTLY to the AccessAssignment node (<c>GetMeshNodeStream(NodePath)</c>): reads the
+/// role at <c>RoleIndex</c> and writes each edit back as a read-modify-write that touches ONLY that role —
+/// the canonical pattern, identical to the Blazor MeshNodeRoleEditorView (no /data replica, no save loop).</summary>
+public sealed class MeshNodeRoleEditorView : MauiView<MeshNodeRoleEditorControl>
+{
+    private Picker _picker = null!;
+    private CheckBox _deny = null!;
+    private List<string> _options = new();
+    private bool _suppress;   // suppress the write-back echo during a programmatic load
+
+    protected override View CreateView()
+    {
+        _picker = new Picker { IsEnabled = Model.CanEdit, TextColor = Colors.White, Title = "Role" };
+        _picker.SelectedIndexChanged += (_, _) =>
+        {
+            if (_suppress || _picker.SelectedIndex < 0 || _picker.SelectedIndex >= _options.Count) return;
+            var role = _options[_picker.SelectedIndex];
+            Persist(r => r with { Role = role });
+        };
+        _deny = new CheckBox { IsEnabled = Model.CanEdit };
+        _deny.CheckedChanged += (_, e) => { if (!_suppress) Persist(r => r with { Denied = e.Value }); };
+        return new HorizontalStackLayout
+        {
+            Spacing = 8,
+            Children =
+            {
+                _picker,
+                new Label { Text = "Deny", VerticalOptions = LayoutOptions.Center, TextColor = Color.FromArgb("#C0C0C0") },
+                _deny,
+            },
+        };
+    }
+
+    protected override void Bind()
+    {
+        if (Stream is null || string.IsNullOrEmpty(Model.NodePath)) return;
+        var sub = Stream.Hub.GetMeshNodeStream(Model.NodePath).Where(n => n is not null)
+            .Subscribe(node => MainThread.BeginInvokeOnMainThread(() => Load(node!)));
+        Disposables.Add(sub);
+    }
+
+    // Mirror Blazor's Load: surface the role at RoleIndex (+ ensure its id is a selectable option).
+    private void Load(MeshNode node)
+    {
+        if (Stream is null) return;
+        var assignment = node.ContentAs<MeshWeaver.Mesh.Security.AccessAssignment>(Stream.Hub.JsonSerializerOptions);
+        if (assignment is null || Model.RoleIndex < 0 || Model.RoleIndex >= assignment.Roles.Count) return;
+        var role = assignment.Roles[Model.RoleIndex];
+        var list = Model.RoleOptions.ToList();
+        if (!string.IsNullOrEmpty(role.Role) && !list.Contains(role.Role)) list.Insert(0, role.Role);
+        _options = list;
+        _suppress = true;
+        try
+        {
+            _picker.Items.Clear();
+            foreach (var r in _options) _picker.Items.Add(r);
+            var idx = _options.IndexOf(role.Role);
+            if (idx >= 0) _picker.SelectedIndex = idx;
+            _deny.IsChecked = role.Denied;
+        }
+        finally { _suppress = false; }
+    }
+
+    // Read-modify-write straight to the node: re-read inside the lambda and change ONLY RoleIndex, so
+    // concurrent edits to sibling roles / other fields are never clobbered (matches the Blazor Persist).
+    private void Persist(Func<MeshWeaver.Mesh.Security.RoleAssignment, MeshWeaver.Mesh.Security.RoleAssignment> map)
+    {
+        if (!Model.CanEdit || Stream is null || string.IsNullOrEmpty(Model.NodePath)) return;
+        var opts = Stream.Hub.JsonSerializerOptions;
+        Stream.Hub.GetMeshNodeStream(Model.NodePath).Update(node =>
+        {
+            var assignment = node.ContentAs<MeshWeaver.Mesh.Security.AccessAssignment>(opts);
+            if (assignment is null || Model.RoleIndex < 0 || Model.RoleIndex >= assignment.Roles.Count) return node;
+            var roles = assignment.Roles.ToList();
+            roles[Model.RoleIndex] = map(roles[Model.RoleIndex]);
+            return node with { Content = assignment with { Roles = roles } };
+        }).Subscribe(_ => { }, ex => LogWrite(ex, "persist role", Model.NodePath));
+    }
+}
+
+/// <summary>Node import → a native form (target path + force / remove-missing flags) and an Import button
+/// that dispatches the control's action (<see cref="MauiView.PostClick"/>). File/ZIP picking is a later wave.</summary>
+public sealed class NodeImportView : MauiView<NodeImportControl>
+{
+    protected override View CreateView()
+    {
+        var target = new Entry { Placeholder = "Target path", Text = Model.TargetPath ?? "", TextColor = Colors.White };
+        var force = new CheckBox { IsChecked = Model.Force };
+        var removeMissing = new CheckBox { IsChecked = Model.RemoveMissing };
+        var go = new Button { Text = "Import", BackgroundColor = Colors.RoyalBlue, TextColor = Colors.White, CornerRadius = 8 };
+        go.Clicked += (_, _) => PostClick();
+        return new VerticalStackLayout
+        {
+            Spacing = 6,
+            Children =
+            {
+                new Label { Text = "Import nodes", FontAttributes = FontAttributes.Bold, TextColor = Colors.White },
+                target,
+                Flag("Force re-import", force),
+                Flag("Remove missing", removeMissing),
+                go,
+            },
+        };
+    }
+    internal static View Flag(string text, CheckBox cb) => new HorizontalStackLayout
+    {
+        Spacing = 6, Children = { cb, new Label { Text = text, VerticalOptions = LayoutOptions.Center, TextColor = Color.FromArgb("#C0C0C0") } },
+    };
+}
+
+/// <summary>Node export → a native form (source + satellite-type toggles) and an Export button that
+/// dispatches the control's action. The download is a later wave.</summary>
+public sealed class NodeExportView : MauiView<NodeExportControl>
+{
+    protected override View CreateView()
+    {
+        var stack = new VerticalStackLayout { Spacing = 6 };
+        stack.Children.Add(new Label { Text = $"Export {Model.NodeName ?? Model.SourcePath ?? "node"}", FontAttributes = FontAttributes.Bold, TextColor = Colors.White });
+        foreach (var sat in Model.AvailableSatelliteTypes ?? Array.Empty<string>())
+            stack.Children.Add(NodeImportView.Flag(sat, new CheckBox { IsChecked = true }));
+        var go = new Button { Text = "Export", BackgroundColor = Colors.RoyalBlue, TextColor = Colors.White, CornerRadius = 8 };
+        go.Clicked += (_, _) => PostClick();
+        stack.Children.Add(go);
+        return stack;
+    }
+}
+
+/// <summary>Document export → a native form (title + PDF/DOCX format + include-children) and an Export
+/// button that dispatches the control's action.</summary>
+public sealed class ExportDocumentView : MauiView<ExportDocumentControl>
+{
+    protected override View CreateView()
+    {
+        var title = new Entry { Placeholder = "Title", Text = Model.NodeName ?? "", TextColor = Colors.White };
+        var format = new Picker { Title = "Format", TextColor = Colors.White };
+        format.Items.Add("pdf"); format.Items.Add("docx");
+        format.SelectedItem = string.Equals(Model.DefaultFormat, "docx", StringComparison.OrdinalIgnoreCase) ? "docx" : "pdf";
+        var stack = new VerticalStackLayout
+        {
+            Spacing = 6,
+            Children = { new Label { Text = "Export document", FontAttributes = FontAttributes.Bold, TextColor = Colors.White }, title, format },
+        };
+        if (Model.HasDescendants)
+            stack.Children.Add(NodeImportView.Flag("Include children", new CheckBox()));
+        var go = new Button { Text = "Export", BackgroundColor = Colors.RoyalBlue, TextColor = Colors.White, CornerRadius = 8 };
+        go.Clicked += (_, _) => PostClick();
+        stack.Children.Add(go);
+        return stack;
+    }
+}
+
+/// <summary>File browser → a native header showing the collection path (full file listing + upload/delete is
+/// a later wave that needs the content service surfaced natively).</summary>
+public sealed class FileBrowserView : MauiView<FileBrowserControl>
+{
+    protected override View CreateView() => new VerticalStackLayout
+    {
+        Spacing = 4,
+        Children =
+        {
+            new Label { Text = "Files", FontAttributes = FontAttributes.Bold, TextColor = Colors.White },
+            new Label { Text = MarkdownViewLogic.CoerceString(Model.Path) ?? MarkdownViewLogic.CoerceString(Model.Collection) ?? "", FontSize = 12, TextColor = Color.FromArgb("#C0C0C0") },
+        },
+    };
+}
+
+/// <summary>Pivot grid → a native placeholder header (the full pivot rendering builds on the OSS data grid,
+/// a later wave). Closes the gap so the control renders natively instead of the fallback label.</summary>
+public sealed class PivotGridView : MauiView<PivotGridControl>
+{
+    protected override View CreateView() => new Border
+    {
+        Padding = 10, BackgroundColor = Color.FromArgb("#2A2A2C"), StrokeThickness = 0,
+        StrokeShape = new Microsoft.Maui.Controls.Shapes.RoundRectangle { CornerRadius = 8 },
+        Content = new Label { Text = "Pivot grid", FontAttributes = FontAttributes.Bold, TextColor = Color.FromArgb("#C0C0C0") },
+    };
+}
+
+/// <summary>Map → a native MAUI <see cref="Microsoft.Maui.Controls.Maps.Map"/> (MapKit on maccatalyst/iOS —
+/// no Google API key): centers + zooms from <c>Options.Center</c>/<c>Zoom</c> and drops a pin per marker.
+/// The AspNetCore-free counterpart of the portal's Google Maps JS embed.</summary>
+public sealed class GoogleMapView : MauiView<GoogleMapControl>
+{
+    protected override View CreateView()
+    {
+        var map = new Microsoft.Maui.Controls.Maps.Map { HeightRequest = 300 };
+
+        var center = Model.Options?.Center;
+        if (center is not null)
+        {
+            var loc = new Microsoft.Maui.Devices.Sensors.Location(Convert.ToDouble(center.Lat), Convert.ToDouble(center.Lng));
+            var zoom = Model.Options?.Zoom ?? 15;
+            // Higher zoom → smaller visible radius (rough Web-Mercator-ish mapping).
+            var km = Math.Max(0.2, 40000.0 / Math.Pow(2, zoom));
+            map.MoveToRegion(Microsoft.Maui.Maps.MapSpan.FromCenterAndRadius(loc, Microsoft.Maui.Maps.Distance.FromKilometers(km)));
+        }
+
+        if (Model.Markers is not null)
+            foreach (var m in Model.Markers)
+                map.Pins.Add(new Microsoft.Maui.Controls.Maps.Pin
+                {
+                    Location = new Microsoft.Maui.Devices.Sensors.Location(Convert.ToDouble(m.Position.Lat), Convert.ToDouble(m.Position.Lng)),
+                    Label = m.Title ?? "Marker",
+                });
+        return map;
+    }
+}
+
+/// <summary>A notebook cell → native: the cell content (input) on a dark panel + its output below (green).
+/// The notebook itself is an IContainerControl that renders these cells via the generic ContainerView.
+/// Cell execution (run) + markdown-cell rendering (cell-type rides the skin) are later waves.</summary>
+public sealed class NotebookCellView : MauiView<NotebookCellControl>
+{
+    protected override View CreateView()
+    {
+        // The cell carries Content (input) + Output (result); cell-type/language ride the skin.
+        var content = MarkdownViewLogic.CoerceString(Model.Content) ?? "";
+        var stack = new VerticalStackLayout { Spacing = 4 };
+        if (!string.IsNullOrWhiteSpace(content))
+            stack.Children.Add(MonoPanel(content, "#1E1E1E", "#E0E0E0"));
+        var output = MarkdownViewLogic.CoerceString(Model.Output);
+        if (!string.IsNullOrWhiteSpace(output))
+            stack.Children.Add(MonoPanel(output!, "#16201A", "#98C379"));
+        return stack;
+    }
+
+    private static View MonoPanel(string text, string bg, string fg) => new Border
+    {
+        Padding = 8, BackgroundColor = Color.FromArgb(bg), StrokeThickness = 0,
+        StrokeShape = new Microsoft.Maui.Controls.Shapes.RoundRectangle { CornerRadius = 6 },
+        Content = new ScrollView
+        {
+            Orientation = ScrollOrientation.Horizontal,
+            Content = new Label { Text = text, FontFamily = "Menlo", FontSize = 12, TextColor = Color.FromArgb(fg) },
+        },
+    };
+}
+
 /// <summary>Tabular data → a header + rows (read-only this wave; sorting/virtualization later).</summary>
 public sealed class DataGridView : MauiView<DataGridControl>
 {
-    private VerticalStackLayout _root = null!;
     private readonly List<PropertyColumnControl> _columns = new();
+    private ContentView _header = null!;
+    private VerticalStackLayout _body = null!;
+    private Entry _filter = null!;
+    private List<JsonElement> _rows = new();
+    private int _sortCol = -1;
+    private bool _sortDesc;
 
     protected override View CreateView()
     {
         _columns.AddRange(Model.Columns.OfType<PropertyColumnControl>());
-        _root = new VerticalStackLayout { Spacing = 4 };
-        _root.Children.Add(Row(_columns.Select(c => c.Title?.ToString() ?? c.Property ?? "").ToArray(), bold: true));
-        return _root;
+        _filter = new Entry { Placeholder = "Filter…", FontSize = 12, TextColor = Colors.White };
+        _filter.TextChanged += (_, _) => Rebuild();
+        _header = new ContentView { Content = HeaderRow() };
+        _body = new VerticalStackLayout { Spacing = 4 };
+        return new VerticalStackLayout { Spacing = 4, Children = { _filter, _header, _body } };
     }
 
-    protected override void Bind() => Bind<JsonElement>(Model.Data, RenderRows);
-
-    private void RenderRows(JsonElement rows)
+    protected override void Bind() => Bind<JsonElement>(Model.Data, rows =>
     {
-        while (_root.Children.Count > 1) _root.Children.RemoveAt(1);   // keep the header row
-        if (rows.ValueKind != JsonValueKind.Array) return;
-        foreach (var row in rows.EnumerateArray())
-            _root.Children.Add(Row(_columns.Select(c => CellText(row, c.Property)).ToArray(), bold: false));
+        _rows = rows.ValueKind == JsonValueKind.Array ? rows.EnumerateArray().ToList() : new();
+        Rebuild();
+    });
+
+    // Header cells are tappable → sort by that column, toggling asc/desc; an arrow marks the sort key.
+    private View HeaderRow()
+    {
+        var h = new HorizontalStackLayout { Spacing = 12 };
+        for (var i = 0; i < _columns.Count; i++)
+        {
+            var col = i;
+            var arrow = _sortCol == col ? (_sortDesc ? " ▼" : " ▲") : "";
+            var lbl = new Label
+            {
+                Text = (_columns[i].Title?.ToString() ?? _columns[i].Property ?? "") + arrow,
+                WidthRequest = 120, FontAttributes = FontAttributes.Bold, TextColor = Colors.White,
+            };
+            var tap = new TapGestureRecognizer();
+            tap.Tapped += (_, _) =>
+            {
+                if (_sortCol == col) _sortDesc = !_sortDesc; else { _sortCol = col; _sortDesc = false; }
+                Rebuild();
+            };
+            lbl.GestureRecognizers.Add(tap);
+            h.Children.Add(lbl);
+        }
+        return h;
+    }
+
+    private void Rebuild()
+    {
+        if (_body is null) return;
+        _header.Content = HeaderRow();   // refresh the sort arrow
+        _body.Children.Clear();
+        IEnumerable<JsonElement> rows = _rows;
+        var filter = _filter.Text?.Trim() ?? "";
+        if (filter.Length > 0)
+            rows = rows.Where(r => _columns.Any(c => CellText(r, c.Property).Contains(filter, StringComparison.OrdinalIgnoreCase)));
+        if (_sortCol >= 0 && _sortCol < _columns.Count)
+        {
+            var prop = _columns[_sortCol].Property;
+            rows = _sortDesc
+                ? rows.OrderByDescending(r => CellText(r, prop), DataGridCellComparer.Instance)
+                : rows.OrderBy(r => CellText(r, prop), DataGridCellComparer.Instance);
+        }
+        foreach (var row in rows)
+            _body.Children.Add(Row(_columns.Select(c => CellText(row, c.Property)).ToArray(), bold: false));
     }
 
     private static string CellText(JsonElement row, string? property)
@@ -818,6 +2085,20 @@ public sealed class DataGridView : MauiView<DataGridControl>
                 FontAttributes = bold ? FontAttributes.Bold : FontAttributes.None,
             });
         return h;
+    }
+}
+
+/// <summary>Sorts grid cells numerically when both values parse as numbers, else case-insensitively —
+/// so a "Count" column sorts 2,10,100 not 10,100,2.</summary>
+internal sealed class DataGridCellComparer : IComparer<string>
+{
+    public static readonly DataGridCellComparer Instance = new();
+    public int Compare(string? x, string? y)
+    {
+        if (double.TryParse(x, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var nx)
+            && double.TryParse(y, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var ny))
+            return nx.CompareTo(ny);
+        return string.Compare(x, y, StringComparison.OrdinalIgnoreCase);
     }
 }
 
@@ -1052,33 +2333,73 @@ public sealed class ExceptionView : MauiView<ExceptionControl>
     }
 }
 
-/// <summary>Combobox → MAUI <see cref="Picker"/> (two-way; native Picker has no free-type filter — a
-/// later Monaco/autocomplete wave can add that).</summary>
+/// <summary>Combobox → a native free-type <see cref="Entry"/> + a filtered suggestion list (parity with the
+/// Blazor editable combobox): type to filter the Options, tap a suggestion to pick its value, or free-type a
+/// value. Two-way bound through the pointer — selecting writes the option's Value, free text writes the text
+/// (or a matching option's Value when the typed text equals an option's display).</summary>
 public sealed class ComboboxView : FormMauiView<ComboboxControl>
 {
-    private Picker _picker = null!;
+    private Entry _entry = null!;
+    private VerticalStackLayout _suggestions = null!;
     private List<(string Text, string? Value)> _options = new();
+    private bool _picking;   // suppress the suggestion list while applying a programmatic pick
+
     protected override View CreateView()
     {
-        _picker = new Picker();
-        _picker.SelectedIndexChanged += (_, _) =>
-        {
-            if (_picker.SelectedIndex >= 0 && _picker.SelectedIndex < _options.Count)
-                Write(Model.Data, _options[_picker.SelectedIndex].Value);
-        };
-        return _picker;
+        _entry = new Entry { TextColor = Colors.White };
+        _entry.TextChanged += (_, e) => { if (!_picking) Filter(e.NewTextValue); };
+        _entry.Completed += (_, _) => CommitFreeText();
+        _entry.Unfocused += (_, _) => CommitFreeText();
+        _suggestions = new VerticalStackLayout { Spacing = 1, IsVisible = false };
+        return new VerticalStackLayout { Spacing = 2, Children = { _entry, _suggestions } };
     }
+
     protected override void Bind()
     {
-        // Free-type filter is still a later wave (native Picker has none); options now at least populate.
         _options = CoerceOptions(Model.Options);
-        _picker.Items.Clear();
-        foreach (var (text, _) in _options) _picker.Items.Add(text);
         BindValue<object>(Model.Data, v =>
         {
-            var idx = _options.FindIndex(o => string.Equals(o.Value, v?.ToString(), StringComparison.Ordinal));
-            if (idx >= 0) _picker.SelectedIndex = idx;
+            var match = _options.FirstOrDefault(o => string.Equals(o.Value, v?.ToString(), StringComparison.Ordinal));
+            _entry.Text = match.Text ?? v?.ToString() ?? "";
         });
+    }
+
+    // Show tappable options whose display matches the typed text; the filter + show/hide decision is the
+    // unit-tested MauiComboboxFilter (this method only builds the labels).
+    private void Filter(string? text)
+    {
+        _suggestions.Children.Clear();
+        var (matches, showList) = MauiComboboxFilter.Filter(_options, text);
+        if (!showList) { _suggestions.IsVisible = false; return; }
+        foreach (var (display, value) in matches)
+        {
+            var label = new Label
+            {
+                Text = display, TextColor = Colors.White, Padding = new Thickness(8, 6),
+                BackgroundColor = Color.FromArgb("#2A2A2C"),
+            };
+            var tap = new TapGestureRecognizer();
+            tap.Tapped += (_, _) => Pick(display, value);
+            label.GestureRecognizers.Add(tap);
+            _suggestions.Children.Add(label);
+        }
+        _suggestions.IsVisible = true;
+    }
+
+    private void Pick(string display, string? value)
+    {
+        _picking = true;
+        try { _entry.Text = display; } finally { _picking = false; }
+        _suggestions.IsVisible = false;
+        Write<string>(Model.Data, value);
+    }
+
+    // Free-typed value (no suggestion picked): the matching option's Value or the raw text — resolved by the
+    // unit-tested MauiComboboxFilter.
+    private void CommitFreeText()
+    {
+        _suggestions.IsVisible = false;
+        Write<string>(Model.Data, MauiComboboxFilter.ResolveFreeText(_options, _entry.Text));
     }
 }
 
@@ -1466,21 +2787,31 @@ public sealed class MeshSearchView : MauiView<MeshSearchControl>
             _results.Children.Add(Card(node));
     }
 
-    private static View Card(MeshNode node) => new Border
+    // Drill-down: each result card navigates to the node's path via the app navigator (parity with the
+    // Blazor catalog's clickable cards).
+    private View Card(MeshNode node)
     {
-        Padding = 8,
-        StrokeShape = new Microsoft.Maui.Controls.Shapes.RoundRectangle { CornerRadius = 6 },
-        Stroke = Colors.Gray,
-        StrokeThickness = 1,
-        Content = new VerticalStackLayout
+        var border = new Border
         {
-            Children =
+            Padding = 8,
+            StrokeShape = new Microsoft.Maui.Controls.Shapes.RoundRectangle { CornerRadius = 6 },
+            Stroke = Colors.Gray,
+            StrokeThickness = 1,
+            Content = new VerticalStackLayout
             {
-                new Label { Text = node.Name ?? node.Path, FontAttributes = FontAttributes.Bold },
-                new Label { Text = node.NodeType ?? "", FontSize = 11, TextColor = Colors.Gray },
+                Children =
+                {
+                    new Label { Text = node.Name ?? node.Path, FontAttributes = FontAttributes.Bold },
+                    new Label { Text = node.NodeType ?? "", FontSize = 11, TextColor = Colors.Gray },
+                },
             },
-        },
-    };
+        };
+        var n = node;
+        var tap = new TapGestureRecognizer();
+        tap.Tapped += (_, _) => Stream?.Hub.ServiceProvider.GetService<IMauiNavigator>()?.NavigateTo(n.Path, n.Name);
+        border.GestureRecognizers.Add(tap);
+        return border;
+    }
 
     private void RenderEmptyState()
     {
@@ -1547,6 +2878,8 @@ public sealed class MeshSearchView : MauiView<MeshSearchControl>
 /// </summary>
 public sealed class ThreadMessageBubbleView : MauiView<ThreadMessageBubbleControl>
 {
+    private Border _border = null!;
+    private Label _author = null!;
     private Label _body = null!;
     private ActivityIndicator _spinner = null!;
     private Label _status = null!;
@@ -1555,55 +2888,227 @@ public sealed class ThreadMessageBubbleView : MauiView<ThreadMessageBubbleContro
 
     protected override View CreateView()
     {
-        var isUser = string.Equals(Model.Role, "user", StringComparison.OrdinalIgnoreCase);
-
-        var author = new Label
-        {
-            Text = string.IsNullOrWhiteSpace(Model.AuthorName) ? (isUser ? "You" : "Assistant") : Model.AuthorName,
-            FontSize = 11, FontAttributes = FontAttributes.Bold,
-            TextColor = isUser ? Colors.White : Color.FromArgb("#C0C0C0"),
-        };
+        _author = new Label { FontSize = 11, FontAttributes = FontAttributes.Bold };
         _body = new Label { TextColor = Colors.White, LineBreakMode = LineBreakMode.WordWrap };
-
         _spinner = new ActivityIndicator { IsVisible = false, IsRunning = false, Color = Colors.White, HeightRequest = 14, WidthRequest = 14 };
         _status = new Label { FontSize = 11, TextColor = Color.FromArgb("#C0C0C0") };
         _statusRow = new HorizontalStackLayout { Spacing = 6, IsVisible = false, Children = { _spinner, _status } };
+        _footer = new Label { FontSize = 10, TextColor = Color.FromArgb("#9A9A9A"), IsVisible = false };
 
-        _footer = new Label { FontSize = 10, TextColor = Color.FromArgb("#9A9A9A") };
-
-        var content = new VerticalStackLayout { Spacing = 4, Children = { author, _body, _statusRow, _footer } };
-
-        return new Border
+        var content = new VerticalStackLayout { Spacing = 4, Children = { _author, _body, _statusRow, _footer } };
+        _border = new Border
         {
             Padding = new Thickness(10, 6),
-            Margin = new Thickness(isUser ? 40 : 0, 2, isUser ? 0 : 40, 2),
-            HorizontalOptions = isUser ? LayoutOptions.End : LayoutOptions.Start,
-            BackgroundColor = isUser ? Colors.RoyalBlue : Color.FromArgb("#3A3A3C"),
             StrokeThickness = 0,
             StrokeShape = new Microsoft.Maui.Controls.Shapes.RoundRectangle { CornerRadius = 12 },
             Content = content,
         };
+        ApplyRole(Model.Role, Model.AuthorName);   // initial; refined from the node in path-bound mode
+        return _border;
     }
 
     protected override void Bind()
     {
-        Bind<string>(Model.Text, v => _body.Text = v ?? "");
-        Bind<bool>(Model.IsExecuting, executing =>
+        // Dominant mode: a path-bound bubble subscribes to the message node and renders Role/Text/status
+        // live as the agent streams (Status flips Streaming→Completed). Legacy callers pass Text/IsExecuting
+        // pointers + a literal Role instead.
+        if (!string.IsNullOrEmpty(Model.NodePath) && Stream is not null)
         {
-            _statusRow.IsVisible = executing;
-            _spinner.IsVisible = executing;
-            _spinner.IsRunning = executing;
-        }, defaultValue: false);
+            var sub = Stream.Hub.GetMeshNodeStream(Model.NodePath)
+                .Where(n => n is not null)
+                .Subscribe(node => MainThread.BeginInvokeOnMainThread(() => ApplyNode(node!)));
+            Disposables.Add(sub);
+            return;
+        }
+
+        Bind<string>(Model.Text, v => _body.Text = v ?? "");
+        Bind<bool>(Model.IsExecuting, SetExecuting, defaultValue: false);
         Bind<string>(Model.ExecutionStatus, v => _status.Text = v ?? "");
-        _footer.Text = BuildFooter();
-        _footer.IsVisible = !string.IsNullOrEmpty(_footer.Text);
+        SetFooter(Model.ModelName, Model.Timestamp);
     }
 
-    private string BuildFooter()
+    // Apply the live message-node content (path-bound mode) via the unit-tested MauiChatProjection.
+    private void ApplyNode(MeshNode node)
+    {
+        if (ToJsonElement(node.Content) is not { } content) return;
+        var m = MauiChatProjection.ReadMessage(content);
+        ApplyRole(m.Role, m.AuthorName);
+        _body.Text = m.Text;
+        SetExecuting(m.IsStreaming);
+        SetFooter(m.ModelName, m.Timestamp);
+    }
+
+    private void ApplyRole(string? role, string? authorName)
+    {
+        var isUser = string.Equals(role, "user", StringComparison.OrdinalIgnoreCase);
+        _border.HorizontalOptions = isUser ? LayoutOptions.End : LayoutOptions.Start;
+        _border.Margin = new Thickness(isUser ? 40 : 0, 2, isUser ? 0 : 40, 2);
+        _border.BackgroundColor = isUser ? Colors.RoyalBlue : Color.FromArgb("#3A3A3C");
+        _author.TextColor = isUser ? Colors.White : Color.FromArgb("#C0C0C0");
+        _author.Text = string.IsNullOrWhiteSpace(authorName) ? (isUser ? "You" : "Assistant") : authorName;
+    }
+
+    private void SetExecuting(bool executing)
+    {
+        _statusRow.IsVisible = executing;
+        _spinner.IsVisible = executing;
+        _spinner.IsRunning = executing;
+    }
+
+    private void SetFooter(string? model, DateTime? ts)
     {
         var parts = new List<string>();
-        if (!string.IsNullOrWhiteSpace(Model.ModelName)) parts.Add(Model.ModelName!);
-        if (Model.Timestamp is { } ts) parts.Add(ts.ToLocalTime().ToString("t"));
-        return string.Join(" · ", parts);
+        if (!string.IsNullOrWhiteSpace(model)) parts.Add(model!);
+        if (ts is { } t) parts.Add(t.ToLocalTime().ToString("t"));
+        _footer.Text = string.Join(" · ", parts);
+        _footer.IsVisible = parts.Count > 0;
+    }
+
+    private JsonElement? ToJsonElement(object? content)
+    {
+        if (content is null || Stream is null) return null;
+        try
+        {
+            return content is JsonElement je ? je : JsonSerializer.SerializeToElement(content, Stream.Hub.JsonSerializerOptions);
+        }
+        catch { return null; }
+    }
+}
+
+/// <summary>
+/// The agent-backed chat thread → native — the AspNetCore-free counterpart of Blazor's ThreadChat view.
+/// Binds the data-bound <see cref="ThreadChatControl.ThreadViewModel"/> (or a direct
+/// <see cref="ThreadChatControl.ThreadPath"/>), renders one path-bound <see cref="ThreadMessageBubbleView"/>
+/// per message (each self-updates as the agent streams), shows queued (pending) user messages immediately,
+/// and submits new messages through the canonical <c>hub.SubmitMessage(threadPath, text)</c>
+/// (HubThreadExtensions) — no bespoke request type. The message list rebuilds only when the set of message
+/// IDs / pending texts changes, so streaming-text updates ride each bubble's own node subscription.
+/// </summary>
+public sealed class ThreadChatView : MauiView<ThreadChatControl>
+{
+    private ScrollView _scroll = null!;
+    private VerticalStackLayout _messages = null!;
+    private Editor _composer = null!;
+    private Button _send = null!;
+    private Label _status = null!;
+    private string? _threadPath;
+    private List<string> _renderedKeys = new();   // ids + ("pending:" + text), to skip redundant rebuilds
+
+    protected override View CreateView()
+    {
+        _messages = new VerticalStackLayout { Spacing = 8 };
+        _scroll = new ScrollView { Content = _messages, VerticalOptions = LayoutOptions.Fill };
+        _status = new Label { FontSize = 11, TextColor = Colors.Gray, IsVisible = false };
+
+        _composer = new Editor
+        {
+            Placeholder = "Message…", FontSize = 15, TextColor = Colors.White,
+            AutoSize = EditorAutoSizeOption.TextChanges, MinimumHeightRequest = 64,
+            AutomationId = "chat-composer",   // stable selector for the Appium E2E
+        };
+        _send = new Button { Text = "Send", BackgroundColor = Colors.RoyalBlue, TextColor = Colors.White, CornerRadius = 8, AutomationId = "chat-send" };
+        _send.Clicked += (_, _) => Submit();
+        var composerRow = new VerticalStackLayout
+        {
+            Spacing = 6,
+            Children = { _composer, new HorizontalStackLayout { HorizontalOptions = LayoutOptions.End, Children = { _send } } },
+        };
+
+        var grid = new Grid
+        {
+            RowSpacing = 8, Padding = 8,
+            RowDefinitions = { new(GridLength.Star), new(GridLength.Auto), new(GridLength.Auto) },
+        };
+        grid.Add(_scroll, 0, 0);
+        grid.Add(_status, 0, 1);
+        grid.Add(composerRow, 0, 2);
+        return grid;
+    }
+
+    protected override void Bind()
+    {
+        // Direct-path mode (side panel/dashboard): read the thread node itself.
+        if (!string.IsNullOrEmpty(Model.ThreadPath) && Model.ThreadViewModel is null && Stream is not null)
+        {
+            _threadPath = Model.ThreadPath;
+            var sub = Stream.Hub.GetMeshNodeStream(Model.ThreadPath)
+                .Where(n => n is not null)
+                .Subscribe(node => MainThread.BeginInvokeOnMainThread(() => ApplyThreadNode(node!)));
+            Disposables.Add(sub);
+            return;
+        }
+        // Data-bound view-model mode (the layout-area thread view): the area pushes a ThreadViewModel snapshot.
+        Bind<object>(Model.ThreadViewModel, vm =>
+        {
+            if (vm is JsonElement je) ApplyViewModel(je);
+        });
+    }
+
+    // Both modes project through the unit-tested MauiChatProjection (same JSON keys as the data-section VM).
+    private void ApplyViewModel(JsonElement vm)
+    {
+        var s = MauiChatProjection.ReadThreadViewModel(vm);
+        RenderState(s.ThreadPath ?? _threadPath, s.MessageIds.ToList(), s.PendingTexts.ToList(), s.IsExecuting, s.ExecutionStatus);
+    }
+
+    private void ApplyThreadNode(MeshNode node)
+    {
+        var s = ToJsonElement(node.Content) is { } content
+            ? MauiChatProjection.ReadThreadViewModel(content)
+            : new ThreadChatState(null, [], [], false, null);
+        RenderState(_threadPath ?? node.Path, s.MessageIds.ToList(), new List<string>(), s.IsExecuting, s.ExecutionStatus);
+    }
+
+    private void RenderState(string? threadPath, List<string> ids, List<string> pending, bool executing, string? status)
+    {
+        _threadPath = threadPath;
+        // Rebuild the list only when the set of bubbles changes — streaming text rides each bubble's own sub.
+        var keys = ids.Concat(pending.Select(p => "pending:" + p)).ToList();
+        if (!keys.SequenceEqual(_renderedKeys))
+        {
+            _renderedKeys = keys;
+            _messages.Children.Clear();
+            if (!string.IsNullOrEmpty(threadPath) && Stream is not null)
+                foreach (var id in ids)
+                {
+                    var bubble = new ThreadMessageBubbleControl().WithNodePath($"{threadPath}/{id}").WithThreadPath(threadPath);
+                    _messages.Children.Add(Renderer.RenderControl(bubble, Stream, Area));
+                }
+            foreach (var text in pending)
+                _messages.Children.Add(PendingBubble(text));
+            MainThread.BeginInvokeOnMainThread(() => _scroll.ScrollToAsync(_messages, ScrollToPosition.End, animated: false));
+        }
+        _status.Text = status ?? "";
+        _status.IsVisible = executing && !string.IsNullOrEmpty(status);
+    }
+
+    private static View PendingBubble(string text) => new Border
+    {
+        Padding = new Thickness(10, 6),
+        Margin = new Thickness(40, 2, 0, 2),
+        HorizontalOptions = LayoutOptions.End,
+        BackgroundColor = Color.FromArgb("#2A4A8C"),  // dimmer blue → "queued"
+        StrokeThickness = 0,
+        StrokeShape = new Microsoft.Maui.Controls.Shapes.RoundRectangle { CornerRadius = 12 },
+        Content = new Label { Text = text, TextColor = Colors.White, LineBreakMode = LineBreakMode.WordWrap },
+    };
+
+    private void Submit()
+    {
+        var text = _composer.Text?.Trim();
+        if (string.IsNullOrEmpty(text) || string.IsNullOrEmpty(_threadPath) || Stream is null) return;
+        // Canonical submission surface — writes the thread node via GetMeshNodeStream(path).Update(...).
+        Stream.Hub.SubmitMessage(_threadPath, text);
+        _composer.Text = "";
+    }
+
+    private JsonElement? ToJsonElement(object? content)
+    {
+        if (content is null || Stream is null) return null;
+        try
+        {
+            return content is JsonElement je ? je : JsonSerializer.SerializeToElement(content, Stream.Hub.JsonSerializerOptions);
+        }
+        catch { return null; }
     }
 }
