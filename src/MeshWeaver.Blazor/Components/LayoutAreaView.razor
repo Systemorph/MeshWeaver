@@ -28,7 +28,15 @@
            new parameter shows the error again rather than spinning a retry loop. (Async stream
            OnErrors are surfaced separately by the subscription onError handlers — an ErrorBoundary
            only catches synchronous render/lifecycle throws.) *@
-        <ErrorBoundary @key="@($"{Address}|{ViewModel.Reference}")">
+        @* @key on the area's NORMALIZED identity, not its ToString. LayoutAreaReference.ToString() renders a
+           string Id as `v12` but a round-tripped JsonElement Id as `"v12"` (quoted), so an interpolated string
+           @key FLAPS between the two representations even though LayoutAreaReference.Equals normalizes them
+           equal. That flap re-creates the ErrorBoundary → the child ThreadChatView → resets its keep-last-good
+           field → the intermittent round-N "chat vanishes". GetHashCode is computed from the SAME normalized
+           Area/Id/Layout as Equals, so it is stable across a representation flip while still changing for a
+           genuine area switch (different Area/Id/Layout) → clean auto-recovery. Kept as a STRING key (not the
+           reference object / an anonymous type) — Blazor's @key reuse misbehaves with those here. *@
+        <ErrorBoundary @key="@($"{Address}|{ViewModel.Reference.GetHashCode()}")">
             <ChildContent>
                 <NamedAreaView Stream="@AreaStream" ViewModel="@NamedArea" Area="@NamedArea.GetArea()" Top="@Top" />
             </ChildContent>

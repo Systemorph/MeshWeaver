@@ -160,10 +160,12 @@ public class PolymorphicTypeInfoResolver(ITypeRegistry typeRegistry, string? own
         if (logger is null || !warnedUnregistered.TryAdd(type, 0))
             return;
         logger.LogWarning(
-            "Unregistered type {Type} (de)serialised on hub {Hub} with full-name $type='{Discriminator}': "
-            + "this hub's TypeRegistry lacks it, so a hub that registered it under its short name reads it "
-            + "back as an untyped JsonElement (renders empty / reactive waits time out). Register it via "
-            + "WithType(typeof(...), nameof(...)) where this hub is configured, or serialise it from a hub that has it.",
+            "Unregistered type {Type} (de)serialised on hub {Hub} with auto short-name $type='{Discriminator}': "
+            + "the hub's TypeRegistry lacks it, so it is auto-registered under its SHORT name. That short name "
+            + "resolves on any hub that registered the type under the same short name (the default that cures "
+            + "the untyped-JsonElement read), but register it explicitly via WithType(typeof(...), nameof(...)) "
+            + "where this hub is configured — explicit registration avoids short-name collisions across "
+            + "namespaces and documents the contract.",
             type.FullName, owner ?? "(unknown)", discriminator);
     }
 

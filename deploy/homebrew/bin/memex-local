@@ -231,11 +231,33 @@ image_build_local() {                                  # §3 Option B
   repo="$(resolve_repo)" || die "local build (Option B) needs the repo — set MEMEX_REPO to your MeshWeaver checkout, or use 'up --from-acr'"
   need dotnet "--cask dotnet-sdk"
   need docker docker
+
+  # ── WEDGE FIX: serialize image builds across concurrent memex-local invocations. Two agents each running
+  #    `dotnet publish` (portal + 11 dependents) saturate the host's cores (load → 20+, the machine goes
+  #    unresponsive). A lockdir mutex runs builds ONE-AT-A-TIME at full speed instead of contending — far
+  #    better than capping parallelism (which just makes every build slow). Self-heals a leaked lock via a
+  #    liveness check on the holder PID; 20-min hard ceiling so a truly stuck holder can't block forever.
+  #    Opt out with MEMEX_NO_BUILD_LOCK=1.
+  local _bl="${TMPDIR:-/tmp}/memex-build.lock"
+  if [ -z "${MEMEX_NO_BUILD_LOCK:-}" ]; then
+    local _w=0
+    while ! mkdir "$_bl" 2>/dev/null; do
+      local _p; _p="$(cat "$_bl/pid" 2>/dev/null || true)"
+      if { [ -n "$_p" ] && ! kill -0 "$_p" 2>/dev/null; } || [ "$_w" -ge 1200 ]; then rm -rf "$_bl" 2>/dev/null; continue; fi
+      [ "$_w" -eq 0 ] && step "Build lock held by another memex-local build (pid ${_p:-?}) — waiting to avoid wedging the host…"
+      sleep 5; _w=$((_w + 5))
+    done
+    echo "$$" > "$_bl/pid"
+    trap "rm -rf '$_bl' 2>/dev/null" RETURN
+    ok "Acquired build lock — building serially (set MEMEX_NO_BUILD_LOCK=1 to disable)"
+  fi
+
   base_build_local "${1:-}"                            # ensure the CLI-bearing base exists FIRST
   step "Building native arm64 portal image (layered on the CLI base) into Colima's Docker store (§3 Option B)"
   dotnet publish "$repo/memex/aspire/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj" \
     -c Release -t:PublishContainer -p:ContainerRepository=memex-portal-ai-local \
-    -p:ContainerBaseImage="$PORTAL_BASE_REF"
+    -p:ContainerBaseImage="$PORTAL_BASE_REF" \
+    -maxcpucount:"${MEMEX_BUILD_CPUS:-6}"   # WEDGE FIX: cap parallelism so ONE build can't saturate the host
   # Fail LOUD if the publish lost the co-hosted CLIs (e.g. the ContainerBaseImage didn't layer in
   # because the local registry was empty). A CLI-less portal silently ships a broken Claude Code /
   # Copilot harness: /login's `claude setup-token` hits "claude: not found" and exits → the portal
@@ -248,7 +270,8 @@ image_build_local() {                                  # §3 Option B
   ok "Portal image verified: claude + node CLIs are baked in"
   step "Building migration image (§3 Option B)"
   dotnet publish "$repo/memex/aspire/Memex.Database.Migration/Memex.Database.Migration.csproj" \
-    -c Release -t:PublishContainer -p:ContainerRepository=memex-migration-local
+    -c Release -t:PublishContainer -p:ContainerRepository=memex-migration-local \
+    -maxcpucount:"${MEMEX_BUILD_CPUS:-6}"   # WEDGE FIX: cap parallelism (see portal publish above)
   docker tag memex-migration-local:latest "$MIGRATION_IMAGE"
   ok "Images tagged $PORTAL_IMAGE / $MIGRATION_IMAGE (visible to k3s via IfNotPresent)"
 }

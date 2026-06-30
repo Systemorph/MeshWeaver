@@ -32,6 +32,8 @@ public partial class ThreadMessageBubbleView : BlazorView<ThreadMessageBubbleCon
     private IReadOnlyList<ToolCallEntry>? toolCalls;
     private IReadOnlyList<NodeChangeEntry>? updatedNodes;
     private bool isEditing;
+    // Expands the tool-calls section to show the collapsed (finished / overflow) entries.
+    private bool toolCallsExpanded;
 
     private bool IsUser => Role.Equals("user", StringComparison.OrdinalIgnoreCase);
     private bool CanEdit => !string.IsNullOrEmpty(ViewModel.ThreadPath) && !string.IsNullOrEmpty(ViewModel.MessageId);
@@ -57,6 +59,8 @@ public partial class ThreadMessageBubbleView : BlazorView<ThreadMessageBubbleCon
     private void StartEdit() => isEditing = true;
 
     private void CancelEdit() => isEditing = false;
+
+    private void ToggleToolCalls() => toolCallsExpanded = !toolCallsExpanded;
 
     /// <summary>
     /// When <c>NodePath</c> is non-empty, subscribes to the per-message node stream (bypassing
