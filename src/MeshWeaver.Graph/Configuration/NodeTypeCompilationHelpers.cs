@@ -649,17 +649,6 @@ internal static class NodeTypeCompilationHelpers
                     // action block (see the high-water comment above).
                     if (node.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions)?.RequestedReleaseAt
                         is not { } triggerAt) return;
-                    // Advance the high-water monotonically. The Where already proved
-                    // triggerAt > dispatchHighWater, so this only ever moves forward.
-                    dispatchHighWater = triggerAt;
-                    // 🅿️ Deliberate retry → un-park so the explicit rebuild is allowed through
-                    // the compile watcher's parked short-circuit (and the attempt budget resets).
-                    parkRegistry?.Unpark(hubPath);
-                    logger?.LogInformation(
-                        "[ReleaseRequestWatcher] {HubPath}: handling RequestedReleaseAt={Req} (force={Force}, lastHandled={Handled})",
-                        hubPath, triggerAt,
-                        node.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions)?.RequestedReleaseForce,
-                        node.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions)?.LastReleaseRequestHandledAt);
                     workspace.GetMeshNodeStream().Update(curr =>
                     {
                         if (curr.Content is not NodeTypeDefinition def) return curr;
@@ -678,6 +667,31 @@ internal static class NodeTypeCompilationHelpers
                         if (def.CompilationStatus is CompilationStatus.Pending
                                                   or CompilationStatus.Compiling)
                             return curr;
+                        // 🚨 COMMITTING to handle THIS trigger — advance the process-local
+                        // high-water + un-park + log ONLY here, atomically with stamping
+                        // Handled + flipping Pending (all on the owner's action block).
+                        //
+                        // The CI-only flake (pinned via the 2-vCPU repro, 2026-06-30) was advancing
+                        // dispatchHighWater EAGERLY before this Update: when the status had
+                        // transitioned to Pending/Compiling between the Where matching and this
+                        // lambda (an in-flight kickoff/framework compile), the lambda bailed at the
+                        // status check above WITHOUT stamping Handled — but the high-water was
+                        // already at triggerAt, so the subsequent settled re-emission failed the
+                        // outer `req > dispatchHighWater` gate and the trigger was LOST FOREVER
+                        // (observed stuck state: Status=Ok, RequestedReleaseAt set, Handled=null,
+                        // no new release → WaitForLatestRelease 50s timeout). Advancing only on the
+                        // commit path means a bail leaves the high-water untouched, so the trigger
+                        // re-fires on the next settled emission. Flap-back protection is preserved:
+                        // a successful handle still advances the high-water (and stamps the on-node
+                        // monotonic LastReleaseRequestHandledAt), so an older flapped-back value can
+                        // never re-trigger.
+                        dispatchHighWater = triggerAt;
+                        // 🅿️ Deliberate retry → un-park so the explicit rebuild is allowed through
+                        // the compile watcher's parked short-circuit (and the attempt budget resets).
+                        parkRegistry?.Unpark(hubPath);
+                        logger?.LogInformation(
+                            "[ReleaseRequestWatcher] {HubPath}: handling RequestedReleaseAt={Req} (force={Force}, lastHandled={Handled})",
+                            hubPath, triggerAt, def.RequestedReleaseForce, def.LastReleaseRequestHandledAt);
                         return curr with
                         {
                             Content = def with
