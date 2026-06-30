@@ -101,7 +101,9 @@ public static class MeshDataSourceExtensions
                 return data
                     .Configure(rm => rm
                         .ForReducedStream<InstanceCollection>(reduced => reduced
-                            .AddWorkspaceReference<MeshNodeReference, MeshNode>(ReduceToMeshNode))
+                            .AddWorkspaceReference<MeshNodeReference, MeshNode>(
+                                (ci, r, initial) => ReduceToMeshNode(
+                                    ci, r, initial, data.Workspace.Hub.JsonSerializerOptions)))
                         .ForReducedStream<MeshNode>(reduced => reduced
                             .AddPatchFunction(PatchMeshNode))
                         .AddWorkspaceReferenceStream<MeshNode>(
@@ -1125,8 +1127,9 @@ public static class MeshDataSourceExtensions
     /// stale snapshot) and instances to bind to the wrong assembly.
     /// </para>
     /// </summary>
-    private static ChangeItem<MeshNode> ReduceToMeshNode(
-        ChangeItem<InstanceCollection> current, MeshNodeReference reference, bool initial)
+    internal static ChangeItem<MeshNode> ReduceToMeshNode(
+        ChangeItem<InstanceCollection> current, MeshNodeReference reference, bool initial,
+        JsonSerializerOptions options)
     {
         var instances = current.Value?.Instances.Values.OfType<MeshNode>();
         var node = !string.IsNullOrEmpty(reference.Path)
@@ -1152,7 +1155,17 @@ public static class MeshDataSourceExtensions
             // returning null (which silently drops the emission and blocks live updates).
             return new(node, current.StreamId, current.Version);
         }
-        return new(change.Value as MeshNode, current.ChangedBy, current.StreamId,
+        // change.Value is a JsonElement when the update was derived from a JSON
+        // patch (cross-hub / mirror path) — `as MeshNode` would silently null it
+        // out, dropping a null-content ChangeItem into the mirror. Deserialize it
+        // the same way the sibling PatchMeshNode does.
+        var changedNode = change.Value switch
+        {
+            MeshNode m => m,
+            JsonElement je => je.Deserialize<MeshNode>(options),
+            _ => null
+        };
+        return new(changedNode, current.ChangedBy, current.StreamId,
             ChangeType.Patch, current.Version, [change]);
     }
 
