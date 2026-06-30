@@ -53,11 +53,17 @@ public class OptionConverter : JsonConverter<Option>
         // Parse the type name to determine the concrete Option<T> type
         Type? concreteType = null;
 
-        // Handle both simple type names and full type names
-        if (typeName.StartsWith("MeshWeaver.Layout.Option`1[") && typeName.EndsWith("]"))
+        // Handle BOTH the full ("MeshWeaver.Layout.Option`1[…]") and the short-$type ("Option`1[…]")
+        // forms. The short-name $type discriminator drops the namespace, so the converter must accept
+        // both prefixes — otherwise generic Option deserialization fails with "Unable to resolve Option
+        // type from 'Option`1[Int32]'" (the short form fell through to Type.GetType, which returns null).
+        var optPrefix = typeName.StartsWith("MeshWeaver.Layout.Option`1[") ? "MeshWeaver.Layout.Option`1["
+                      : typeName.StartsWith("Option`1[") ? "Option`1["
+                      : null;
+        if (optPrefix is not null && typeName.EndsWith("]"))
         {
             // Extract the generic type argument from the type name
-            var genericArg = typeName.Substring("MeshWeaver.Layout.Option`1[".Length);
+            var genericArg = typeName.Substring(optPrefix.Length);
             genericArg = genericArg.Substring(0, genericArg.Length - 1); // Remove the closing ]
 
             // Map common type names
