@@ -44,12 +44,27 @@ public static class GrpcHostingExtensions
         return services;
     }
 
-    /// <summary>Maps the <see cref="MeshGrpcService"/> endpoint on the application's endpoint routing.</summary>
+    /// <summary>
+    /// Maps the <see cref="MeshGrpcService"/> endpoint and enables gRPC-web on it (so browsers / React
+    /// Native can use the <c>Connect</c>+<c>Deliver</c> split). Pair with <see cref="UseMeshWeaverGrpcWeb"/>
+    /// in the request pipeline.
+    /// </summary>
     /// <param name="endpoints">The endpoint route builder to map the gRPC service on.</param>
     /// <returns>The same <paramref name="endpoints"/> for chaining.</returns>
     public static IEndpointRouteBuilder MapMeshWeaverGrpc(this IEndpointRouteBuilder endpoints)
     {
-        endpoints.MapGrpcService<MeshGrpcService>();
+        endpoints.MapGrpcService<MeshGrpcService>().EnableGrpcWeb();
         return endpoints;
+    }
+
+    /// <summary>Adds the gRPC-web middleware so the <c>Connect</c>/<c>Deliver</c> split is reachable from
+    /// browsers and React Native (which can't do bidi/HTTP-2 gRPC). Call before mapping endpoints; configure
+    /// CORS separately for cross-origin browser callers.</summary>
+    /// <param name="app">The application builder.</param>
+    /// <returns>The same <paramref name="app"/> for chaining.</returns>
+    public static IApplicationBuilder UseMeshWeaverGrpcWeb(this IApplicationBuilder app)
+    {
+        app.UseGrpcWeb();
+        return app;
     }
 }

@@ -114,6 +114,57 @@ public class MeshGrpcTransportTest(ITestOutputHelper output) : MonolithMeshTestB
         await open;
     }
 
+    [Fact]
+    public async Task WebSplit_request_round_trips_via_connect_and_deliver()
+    {
+        // The gRPC-web split (browsers / React Native — no bidi, no http2): a server-streaming Connect
+        // (mesh→client) + a unary Deliver (client→mesh), driven over in-memory streams.
+        var hub = Mesh;
+        var registry = hub.ServiceProvider.GetRequiredService<GrpcConnectionRegistry>();
+        var service = new MeshGrpcService(hub, registry);
+
+        var stream = new CapturingStreamWriter<ServerFrame>();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+        var participant = new Address(GrpcHostingExtensions.NodeAddressType, Guid.NewGuid().ToString("N"));
+
+        // Connect: server-streaming. Its ack carries the connection id the client passes to Deliver.
+        var connect = service.Connect(
+            new ConnectRequest { Address = JsonSerializer.Serialize(participant, hub.JsonSerializerOptions) },
+            stream,
+            new FakeServerCallContext(new Metadata(), cts.Token));
+        var ack = await NextFrame(stream, "ack", TimeSpan.FromSeconds(10));
+        Assert.Equal(ServerFrame.KindOneofCase.Ack, ack.KindCase);
+        Assert.False(string.IsNullOrEmpty(ack.Ack.ConnectionId));
+
+        // Deliver: unary. Injects the participant's request, tied to the connection id.
+        var delivery = new MessageDelivery<EchoRequest>(
+            participant, hub.Address, new EchoRequest("hello web split"), hub.JsonSerializerOptions);
+        await service.Deliver(
+            new DeliverRequest
+            {
+                ConnectionId = ack.Ack.ConnectionId,
+                Delivery = JsonSerializer.Serialize<IMessageDelivery>(delivery, hub.JsonSerializerOptions),
+            },
+            new FakeServerCallContext(new Metadata(), cts.Token));
+
+        // The echo response routes back over the Connect server-stream.
+        string? received = null;
+        for (var i = 0; i < 20 && received is null; i++)
+        {
+            ServerFrame f;
+            try { f = await NextFrame(stream, "response", TimeSpan.FromSeconds(10)); }
+            catch (TimeoutException) { break; }
+            if (f.KindCase == ServerFrame.KindOneofCase.Receive && f.Receive.Contains("hello web split"))
+                received = f.Receive;
+        }
+        Assert.NotNull(received);
+        Assert.Contains("hello web split", received!); // payload round-tripped over the split transport
+        Assert.Contains(delivery.Id, received);        // correlated (RequestId == request id)
+
+        cts.Cancel();
+        await connect;
+    }
+
     // Read the next outbound frame, failing fast with a clear locus instead of hanging to the watchdog.
     private static async Task<ServerFrame> NextFrame(CapturingStreamWriter<ServerFrame> writer, string step, TimeSpan timeout)
     {

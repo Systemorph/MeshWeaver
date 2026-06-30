@@ -78,6 +78,61 @@ public sealed class MeshGrpcService(IMessageHub hub, GrpcConnectionRegistry regi
         }
     }
 
+    /// <summary>
+    /// gRPC-web entry (browsers / React Native, which can't do bidi or Node http2): the server-streaming
+    /// half of the split — register the participant and stream mesh→client frames. Client→mesh deliveries
+    /// arrive on separate unary <see cref="Deliver"/> calls keyed by the connection id sent in the ack.
+    /// </summary>
+    public override async Task Connect(
+        ConnectRequest request,
+        IServerStreamWriter<ServerFrame> responseStream,
+        ServerCallContext context)
+    {
+        var connectionId = Guid.NewGuid().ToString("N");
+        var outbound = Channel.CreateUnbounded<ServerFrame>(new UnboundedChannelOptions { SingleReader = true });
+        registry.Begin(connectionId, outbound.Writer);
+
+        var pump = WritePumpAsync(outbound.Reader, responseStream);
+        try
+        {
+            await registry.Authenticate(connectionId, ExtractBearerToken(context))
+                .FirstAsync().ToTask(context.CancellationToken);
+            var address = JsonSerializer.Deserialize<Address>(request.Address, hub.JsonSerializerOptions)
+                ?? throw new RpcException(new Status(StatusCode.InvalidArgument, "Address did not deserialize."));
+            registry.Connect(address, connectionId);
+            await outbound.Writer.WriteAsync(
+                new ServerFrame { Ack = new ConnectAck { Address = address.ToString(), ConnectionId = connectionId } },
+                context.CancellationToken);
+
+            // Server-streaming has no inbound on this call; hold it open until the client cancels while the
+            // pump drains mesh→client frames. (Transport-boundary await, like Open's foreach.)
+            await Task.Delay(System.Threading.Timeout.Infinite, context.CancellationToken);
+        }
+        catch (OperationCanceledException) when (context.CancellationToken.IsCancellationRequested)
+        {
+            // Client disconnected — normal teardown.
+        }
+        finally
+        {
+            outbound.Writer.TryComplete();
+            registry.Disconnect(connectionId);
+            await pump;
+        }
+    }
+
+    /// <summary>
+    /// gRPC-web entry: inject one client→mesh delivery for the connection established by <see cref="Connect"/>.
+    /// The connection id is a server-issued capability (returned only on that client's Connect stream); the
+    /// delivery is re-stamped with the connection's validated identity inside the registry.
+    /// </summary>
+    public override Task<DeliverAck> Deliver(DeliverRequest request, ServerCallContext context)
+    {
+        var delivery = JsonSerializer.Deserialize<IMessageDelivery>(request.Delivery, hub.JsonSerializerOptions);
+        if (delivery is not null)
+            registry.Deliver(request.ConnectionId, delivery);
+        return Task.FromResult(new DeliverAck());
+    }
+
     private static async Task WritePumpAsync(ChannelReader<ServerFrame> reader, IServerStreamWriter<ServerFrame> responseStream)
     {
         try

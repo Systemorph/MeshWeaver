@@ -44,9 +44,15 @@ A single gRPC **bidirectional stream IS one mesh participant connection** — th
   (monolith — `RouteInMesh` short-circuits on `GetHostedHub`, the same way a Blazor circuit receives). The
   proxy's catch-all route forwards messages addressed to the participant onto its gRPC stream and leaves its
   own lifecycle messages alone.
+- **Two RPC shapes.** `Open` is a single bidi stream — the natural shape for HTTP/2 clients (Node, Python,
+  .NET). Browsers and React Native can't do bidi (and can't use Node's `http2`), so the service also offers a
+  **gRPC-web split**: a server-streaming `Connect` (mesh→client) + a unary `Deliver` (client→mesh), enabled
+  with `Grpc.AspNetCore.Web` (`app.UseMeshWeaverGrpcWeb()`). `Connect`'s ack returns a `connection_id` the
+  client passes back on each `Deliver`.
 
-The transport is proven by a network-free in-memory round-trip test and a **live Kestrel (h2c) round-trip**
-with a real `GrpcChannel`. Full detail + diagrams: `ForeignLanguageBridge.md`.
+The transport is proven by network-free in-memory round-trip tests (the bidi `Open` AND the `Connect`/
+`Deliver` split) and a **live Kestrel (h2c) round-trip** with a real `GrpcChannel`. Full detail + diagrams:
+`ForeignLanguageBridge.md`.
 
 ---
 
@@ -150,10 +156,11 @@ the binding's pointer (optimistically applied, exactly as the live stream echoes
 | **Portal example** | Fluent (shipped) | an app shell (shipped) | `clients/portal`, builds, screenshot |
 
 Next.js is the *easiest* target (React-on-the-web → same package, same Fluent pack). React Native is the
-"vs MAUI" peer — same core, a native leaf pack. **Live transport in RN needs gRPC-web** (RN lacks Node's
-`http2`, so `@grpc/grpc-js` doesn't run): implement `GrpcAreaSource`'s `MeshConnectionLike` over a gRPC-web
-client, with the portal exposing gRPC-web (`Grpc.AspNetCore.Web` on `MeshGrpcService`, or an Envoy
-`grpc_web` filter).
+"vs MAUI" peer — same core, a native leaf pack. **Live data in a browser or React Native** uses the
+**gRPC-web split** (`Connect`+`Deliver`, shipped + tested server-side) — `@grpc/grpc-js` is Node-only and
+gRPC-web can't do the bidi `Open`. The one remaining client-side piece is a `MeshConnectionLike` over a
+gRPC-web client (`grpc-web` / `connect-web`); `GrpcAreaSource` is otherwise ready. Node, Electron-main, and
+Next.js-server use the bidi `Open` directly via `@meshweaver/client`.
 
 ---
 
@@ -186,6 +193,7 @@ rendered). CI typechecks/tests all of it.
 - Pin the SDK envelope wire-shape + the layout-area subscription protocol (`SubscribeRequest` /
   `DataChangedEvent` / click-edit messages) against a live portal — capture one change + one round-trip.
 - An Orleans round-trip test (the `RoutingGrain` path), complementing the monolith Kestrel test.
-- gRPC-web for React Native live data, and an iOS-simulator run of the Expo app.
+- A gRPC-web client (`MeshConnectionLike` over `grpc-web`/`connect-web`) for browser + React Native live
+  data — the server-side `Connect`/`Deliver` split is shipped + tested — and an iOS-simulator run of the Expo app.
 - Widen the operation surface (move/copy/execute/threads) and the hosted-Code-node subprocess path
   (the kernel spawns `python`/`bun` for an executable Code node, reaching back through the same SDK).

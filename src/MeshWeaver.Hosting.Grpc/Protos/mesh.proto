@@ -16,7 +16,14 @@ package meshweaver.v1;
 // drifts. The Bearer API token travels in gRPC call metadata ("authorization"), never in a
 // frame — the server validates it and stamps identity (see GrpcConnectionRegistry).
 service Mesh {
+  // Bidi — the natural shape for HTTP/2 clients (Node @grpc/grpc-js, Python grpc.aio, .NET).
   rpc Open(stream ClientFrame) returns (stream ServerFrame);
+
+  // gRPC-web split — browsers and React Native can't do bidi (and can't use Node http2), so the
+  // duplex is split into a server-streaming Connect (mesh -> client) + unary Deliver (client -> mesh),
+  // both gRPC-web-compatible. Connect returns a connection_id in its ack; Deliver carries it back.
+  rpc Connect(ConnectRequest) returns (stream ServerFrame);
+  rpc Deliver(DeliverRequest) returns (DeliverAck);
 }
 
 message ClientFrame {
@@ -34,5 +41,19 @@ message ServerFrame {
 }
 
 message ConnectAck {
-  string address = 1; // the address the server registered this participant's inbound route for
+  string address = 1;       // the address the server registered this participant's inbound route for
+  string connection_id = 2; // gRPC-web: the id the client passes to Deliver (empty for the bidi Open path)
 }
+
+// gRPC-web server-streaming entry: register the participant + stream mesh->client frames.
+message ConnectRequest {
+  string address = 1; // participant Address as JSON
+}
+
+// gRPC-web unary entry: inject one client->mesh delivery, tied to the Connect's connection_id.
+message DeliverRequest {
+  string connection_id = 1;
+  string delivery = 2; // IMessageDelivery as JSON
+}
+
+message DeliverAck {}

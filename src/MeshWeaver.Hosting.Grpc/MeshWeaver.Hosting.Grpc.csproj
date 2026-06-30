@@ -6,6 +6,7 @@
 
   <ItemGroup>
     <PackageReference Include="Grpc.AspNetCore" />
+    <PackageReference Include="Grpc.AspNetCore.Web" />
   </ItemGroup>
 
   <!-- Apple Silicon: Grpc.Tools ships no macOS-arm64 protoc / grpc_csharp_plugin (only macosx_x64,
