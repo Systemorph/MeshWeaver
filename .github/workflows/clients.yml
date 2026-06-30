@@ -28,3 +28,18 @@ jobs:
       - run: npm install --no-audit --no-fund
       - run: npm run typecheck
       - run: npm test
+
+  react-native:
+    name: "RN connector (typecheck)"
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: clients/react-native
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      # Targeted install (RN types only) — the pack typechecks against @meshweaver/react/core via tsconfig path.
+      - run: npm install --no-save --no-audit --no-fund react-native@0.76.5 react@18.3.1 @types/react@18.3.12 typescript@5.6.3
+      - run: npx tsc --noEmit
