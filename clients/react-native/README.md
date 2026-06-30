@@ -41,8 +41,17 @@ plus a unary `Deliver` (client→mesh). **The server side is shipped** — `Mesh
 `Grpc.AspNetCore.Web` (call `app.UseMeshWeaverGrpcWeb()`); `Connect`'s ack returns a `connection_id` the
 client passes to each `Deliver`.
 
-To go live, implement `GrpcAreaSource`'s `MeshConnectionLike` over a gRPC-web client
-(`grpc-web` / `@connectrpc/connect-web`): `Connect` feeds the receive stream (demux by `streamId`), `Deliver`
-sends each delivery. Until that client lands, `StaticAreaSource` drives the app from a literal area tree (as
-in `App.tsx`). The same client unblocks live data in a **browser** web app too (`@meshweaver/client` is
-Node-only).
+**The client side is shipped too** — [`@meshweaver/client-web`](../grpc-web) implements `GrpcAreaSource`'s
+`MeshConnectionLike` over Connect-ES (`@connectrpc/connect-web`): `Connect` feeds the receive stream (demux
+by `streamId`), `Deliver` sends each delivery. Wire it in with [`src/live.ts`](src/live.ts) — fill in the
+`LIVE` config in `App.tsx` and the app renders a real portal layout area instead of the bundled sample:
+
+```ts
+// App.tsx
+const LIVE: LiveOptions = { url: "https://atioz.meshweaver.cloud", token: "mw_…", address: "@app/Home", area: "main" };
+```
+
+`createLiveSource` connects over gRPC-web and feeds a `GrpcAreaSource`; left `null`, `StaticAreaSource` drives
+the app offline from a literal area tree. The same client unblocks live data in a **browser** web app too
+(`@meshweaver/client` is Node-only). One runtime caveat on RN: gRPC-web server-streaming needs a streaming
+`fetch` — install a streaming-fetch polyfill before `connect()` (see the client's README).

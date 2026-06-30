@@ -78,6 +78,9 @@ stream. All build on **three primitives**, and every mesh operation is a thin co
   ```
 - **Node / Bun — `clients/typescript` (`@meshweaver/client`)**: `@grpc/grpc-js` transport (proto loaded at
   runtime via `@grpc/proto-loader` — no codegen step), `AsyncIterable` streams, same surface.
+- **Browser / React Native — `clients/grpc-web` (`@meshweaver/client-web`)**: the same `observe`/`post`/`watch`
+  surface over the **gRPC-web split** (Connect-ES), for platforms that can't do the bidi `Open` (no HTTP/2
+  duplex / no Node `http2`). It's a `MeshConnectionLike`, so it feeds the renderer's `GrpcAreaSource` directly.
 
 **Security**: the bearer token travels in gRPC call metadata; the server validates it and stamps every
 write with the caller's identity. A forged client-side identity is never trusted.
@@ -152,14 +155,16 @@ the binding's pointer (optimistically applied, exactly as the live stream echoes
 | **Web / Vite** | Fluent (shipped) | none | demo + 11 vitest tests, screenshot |
 | **Next.js** | Fluent (shipped) | `"use client"` + Fluent SSR (~10 lines) | guide (`clients/react/docs/nextjs.md`) |
 | **Electron (desktop)** | Fluent (shipped) | a `BrowserWindow` (shipped) | `clients/react/electron/main.cjs` |
-| **React Native / Expo (the MAUI peer)** | **RN pack (shipped)** | Expo project + gRPC-web transport | `clients/react-native`, typechecks |
+| **React Native / Expo (the MAUI peer)** | **RN pack (shipped)** | Expo project + gRPC-web transport (both **shipped**) | `clients/react-native` (+ `src/live.ts`), typechecks |
+| **Browser / RN live transport** | n/a (transport) | none | **`@meshweaver/client-web`** (`clients/grpc-web`), typechecks + builds |
 | **Portal example** | Fluent (shipped) | an app shell (shipped) | `clients/portal`, builds, screenshot |
 
 Next.js is the *easiest* target (React-on-the-web → same package, same Fluent pack). React Native is the
 "vs MAUI" peer — same core, a native leaf pack. **Live data in a browser or React Native** uses the
-**gRPC-web split** (`Connect`+`Deliver`, shipped + tested server-side) — `@grpc/grpc-js` is Node-only and
-gRPC-web can't do the bidi `Open`. The one remaining client-side piece is a `MeshConnectionLike` over a
-gRPC-web client (`grpc-web` / `connect-web`); `GrpcAreaSource` is otherwise ready. Node, Electron-main, and
+**gRPC-web split** (`Connect`+`Deliver`) — `@grpc/grpc-js` is Node-only and gRPC-web can't do the bidi
+`Open`. Both halves are shipped: the server (`MeshGrpcService.Connect`/`Deliver`, tested) AND the client —
+**`@meshweaver/client-web`** (`clients/grpc-web`), a `MeshConnectionLike` over Connect-ES that drops straight
+into `GrpcAreaSource`. The RN app wires it via `clients/react-native/src/live.ts`. Node, Electron-main, and
 Next.js-server use the bidi `Open` directly via `@meshweaver/client`.
 
 ---
@@ -169,14 +174,15 @@ Next.js-server use the bidi `Open` directly via `@meshweaver/client`.
 ```
 clients/
   python/         meshweaver — Python SDK (transport + ops)
-  typescript/     @meshweaver/client — Node/Bun SDK
+  typescript/     @meshweaver/client — Node/Bun SDK (bidi Open)
+  grpc-web/       @meshweaver/client-web — browser + RN client (Connect+Deliver split)
   react/          @meshweaver/react — Fluent UI renderer (core + web pack) + GrpcAreaSource
     docs/         react-native.md · nextjs.md · demo.png
-  react-native/   meshweaver-mobile — Expo app + RN leaf pack (the MAUI peer)
+  react-native/   meshweaver-mobile — Expo app + RN leaf pack (the MAUI peer) + src/live.ts
   portal/         @meshweaver/portal-example — a web portal built from the renderer
 src/MeshWeaver.Hosting.Grpc/   the gRPC mesh transport (server)
 src/MeshWeaver.Documentation/Data/Architecture/ForeignLanguageBridge.md   transport deep-dive
-.github/workflows/clients.yml  CI: react (typecheck+test) · RN (typecheck) · portal (build)
+.github/workflows/clients.yml  CI: react (typecheck+test) · client-web (typecheck) · RN (typecheck) · portal (build)
 ```
 
 ---
@@ -185,15 +191,16 @@ src/MeshWeaver.Documentation/Data/Architecture/ForeignLanguageBridge.md   transp
 
 **Verified here:** the C# transport (in-memory + live Kestrel h2c round-trips), the React renderer
 (pixel-verified web render, 11 vitest tests, 0.9 MB bundle), the RN connector (typechecks against real
-react-native types — proving the core compiles with zero DOM/Fluent runtime), and the portal (builds +
-rendered). CI typechecks/tests all of it.
+react-native types — proving the core compiles with zero DOM/Fluent runtime), the gRPC-web client
+(`@meshweaver/client-web` typechecks + builds from the canonical `mesh.proto`, wired into the RN app's
+`src/live.ts`), and the portal (builds + rendered). CI typechecks/tests all of it.
 
 **Needs your hardware / a running portal (the `WIRE:` follow-ups):**
 
 - Pin the SDK envelope wire-shape + the layout-area subscription protocol (`SubscribeRequest` /
   `DataChangedEvent` / click-edit messages) against a live portal — capture one change + one round-trip.
 - An Orleans round-trip test (the `RoutingGrain` path), complementing the monolith Kestrel test.
-- A gRPC-web client (`MeshConnectionLike` over `grpc-web`/`connect-web`) for browser + React Native live
-  data — the server-side `Connect`/`Deliver` split is shipped + tested — and an iOS-simulator run of the Expo app.
+- A live run of `@meshweaver/client-web` against a running portal (browser + an iOS-simulator Expo run);
+  the code typechecks/builds, and RN needs a streaming-`fetch` polyfill for the `Connect` server-stream.
 - Widen the operation surface (move/copy/execute/threads) and the hosted-Code-node subprocess path
   (the kernel spawns `python`/`bun` for an executable Code node, reaching back through the same SDK).

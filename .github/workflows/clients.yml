@@ -29,6 +29,20 @@ jobs:
       - run: npm run typecheck
       - run: npm test
 
+  grpc-web:
+    name: "@meshweaver/client-web (typecheck)"
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: clients/grpc-web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm install --no-audit --no-fund
+      - run: npm run typecheck # runs buf generate (from the canonical mesh.proto) then tsc
+
   react-native:
     name: "RN connector (typecheck)"
     runs-on: ubuntu-latest
@@ -44,6 +58,11 @@ jobs:
       - name: Install renderer deps
         working-directory: clients/react
         run: npm install --no-audit --no-fund
+      # The live path source-aliases @meshweaver/client-web (../grpc-web/src) — install its deps and
+      # generate src/gen so RN's tsc can follow the alias.
+      - name: Install + generate grpc-web client
+        working-directory: clients/grpc-web
+        run: npm install --no-audit --no-fund && npm run gen
       # Targeted install (RN types only) — the pack typechecks against @meshweaver/react/core via tsconfig path.
       - run: npm install --no-save --no-audit --no-fund react-native@0.76.5 react@18.3.1 @types/react@18.3.12 typescript@5.6.3
       - run: npx tsc --noEmit

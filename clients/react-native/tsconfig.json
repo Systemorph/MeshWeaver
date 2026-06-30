@@ -12,7 +12,8 @@
     "resolveJsonModule": true,
     "baseUrl": ".",
     "paths": {
-      "@meshweaver/react/core": ["../react/src/core.ts"]
+      "@meshweaver/react/core": ["../react/src/core.ts"],
+      "@meshweaver/client-web": ["../grpc-web/src/index.ts"]
     }
   },
   "include": ["App.tsx", "src"]

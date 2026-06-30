@@ -12,9 +12,10 @@ Full architecture: `src/MeshWeaver.Documentation/Data/Architecture/ForeignLangua
 | Path | Package | What it is |
 |---|---|---|
 | [`python/`](python/) | `meshweaver` | Python SDK — `grpc.aio` transport + mesh operations |
-| [`typescript/`](typescript/) | `@meshweaver/client` | Node/Bun SDK — `@grpc/grpc-js`, `AsyncIterable` streams |
+| [`typescript/`](typescript/) | `@meshweaver/client` | Node/Bun SDK — `@grpc/grpc-js`, bidi `Open`, `AsyncIterable` streams |
+| [`grpc-web/`](grpc-web/) | `@meshweaver/client-web` | Browser + React Native client — gRPC-web `Connect`+`Deliver` split (Connect-ES) |
 | [`react/`](react/) | `@meshweaver/react` | Fluent UI renderer — swappable core + web pack + `GrpcAreaSource` |
-| [`react-native/`](react-native/) | `meshweaver-mobile` | Expo app + native leaf pack — the MAUI peer |
+| [`react-native/`](react-native/) | `meshweaver-mobile` | Expo app + native leaf pack — the MAUI peer (live via `client-web`) |
 | [`portal/`](portal/) | `@meshweaver/portal-example` | a web portal built from the renderer |
 
 ## The two ideas
@@ -30,4 +31,5 @@ Full architecture: `src/MeshWeaver.Documentation/Data/Architecture/ForeignLangua
 ## CI
 
 `.github/workflows/clients.yml` runs on any PR touching `clients/`: `@meshweaver/react` typecheck + vitest,
-the RN connector typecheck, and the portal build.
+the `@meshweaver/client-web` typecheck (buf-generates from the canonical `mesh.proto`), the RN connector
+typecheck, and the portal build.
