@@ -32,6 +32,13 @@ on:
         description: "Default log level for the looped runs (Debug/Trace to surface the watcher race)"
         type: string
         default: "Debug"
+  # TEMPORARY self-serve trigger: a workflow_dispatch workflow can only be dispatched
+  # once it's on the default branch, but the whole point is to catch the repro BEFORE
+  # merging a fix. A push-triggered run executes immediately on THIS branch (no merge
+  # needed). Scoped to the repro branch so it never fires elsewhere. Removed before
+  # this PR merges — the merged tool is workflow_dispatch-only.
+  push:
+    branches: [ "ci/flake-repro-workflow" ]
 
 permissions:
   contents: read
@@ -43,10 +50,19 @@ env:
 
 jobs:
   repro:
-    name: "Loop ${{ inputs.filter }} until fail"
+    name: "Loop suspect test until fail"
     # ubuntu-latest == the 2-vCPU GitHub-hosted runner the real flake needs.
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    # Effective params: workflow_dispatch inputs when present, else push-trigger defaults.
+    env:
+      REPRO_PROJECT: ${{ inputs.project || 'test/MeshWeaver.Hosting.Monolith.Test' }}
+      REPRO_FILTER: ${{ inputs.filter || 'FullyQualifiedName~CodeEditRecompileTest.PressingCompileButton_SetsRequestedReleaseAt_AndProducesNewRelease' }}
+      REPRO_ITERS: ${{ inputs.iterations || '40' }}
+      DOTNET_ENVIRONMENT: Development
+      # 🚨 Logging cranked via ENV only — never a committed appsettings/Log* change
+      # (those are production cost contract). Surfaces the watcher/messaging trace.
+      Logging__LogLevel__Default: ${{ inputs.loglevel || 'Debug' }}
     steps:
       - uses: actions/checkout@v6
       # Mirror dotnet-test.yml: reclaim preinstalled tooling a .NET+Postgres run never
@@ -84,18 +100,11 @@ jobs:
           dotnet pack src/MeshWeaver.BusinessRules.Generator/MeshWeaver.BusinessRules.Generator.csproj \
             -c Release --no-build --no-restore -o dist/packages --nologo
       - name: Loop the suspect test until it fails
-        env:
-          DOTNET_ENVIRONMENT: Development
-          # 🚨 Logging cranked HERE via env only — never by editing a committed
-          # appsettings.json or a Log* call (those are production cost contract). This
-          # is a dispatch-only debug workflow, so Default=Debug/Trace is free here and
-          # surfaces the watcher/messaging trace that pins the wedge.
-          Logging__LogLevel__Default: ${{ inputs.loglevel }}
         run: |
           set -uo pipefail
-          iters="${{ inputs.iterations }}"
-          proj="${{ inputs.project }}"
-          filt="${{ inputs.filter }}"
+          iters="$REPRO_ITERS"
+          proj="$REPRO_PROJECT"
+          filt="$REPRO_FILTER"
           echo "Looping '$filt' in $proj up to $iters× on a 2-vCPU runner (nproc=$(nproc))."
           failed=0
           for i in $(seq 1 "$iters"); do
@@ -127,16 +136,16 @@ jobs:
         run: |
           mkdir -p repro-diagnostics
           # trx (per-iteration; the last one is the failing run since we break on fail).
-          find "${{ inputs.project }}" -name '*.trx' -exec cp {} repro-diagnostics/ \; 2>/dev/null || true
+          find "$REPRO_PROJECT" -name '*.trx' -exec cp {} repro-diagnostics/ \; 2>/dev/null || true
           # blame hang mini-dump (written when the test host wedged, not just timed out).
-          find "${{ inputs.project }}" -name 'blame-*.dmp' -exec cp {} repro-diagnostics/ \; 2>/dev/null || true
+          find "$REPRO_PROJECT" -name 'blame-*.dmp' -exec cp {} repro-diagnostics/ \; 2>/dev/null || true
           # MonolithMeshTestBase phase/dispose/memory traces (the watcher + INIT/DISPOSE
           # trace that pinpoints the wedge), written to the process tempdir.
           for f in meshweaver-test-trace meshweaver-dispose-trace meshweaver-memory-delta; do
             [ -f "/tmp/$f.log" ] && cp "/tmp/$f.log" "repro-diagnostics/_$f.log" || true
           done
           # Per-test debug logs some test bases write under bin/.../test-logs.
-          find "${{ inputs.project }}" -path '*/test-logs/*.log' -exec cp {} repro-diagnostics/ \; 2>/dev/null || true
+          find "$REPRO_PROJECT" -path '*/test-logs/*.log' -exec cp {} repro-diagnostics/ \; 2>/dev/null || true
           echo "Collected:"; ls -lh repro-diagnostics/ || true
       - name: Upload repro diagnostics
         if: always()
