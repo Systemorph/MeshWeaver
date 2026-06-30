@@ -31,5 +31,5 @@ Full architecture: `src/MeshWeaver.Documentation/Data/Architecture/ForeignLangua
 ## CI
 
 `.github/workflows/clients.yml` runs on any PR touching `clients/`: `@meshweaver/react` typecheck + vitest,
-the `@meshweaver/client-web` typecheck (buf-generates from the canonical `mesh.proto`), the RN connector
+`@meshweaver/client-web` typecheck + vitest (buf-generates from the canonical `mesh.proto`), the RN connector
 typecheck, and the portal build.

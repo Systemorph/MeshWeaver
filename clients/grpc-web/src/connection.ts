@@ -6,7 +6,7 @@
 // Node SDK exposes — observe / post / watch — so it drops straight into the renderer's GrpcAreaSource
 // as a `MeshConnectionLike`. See mesh.proto, MeshGrpcService.Connect/Deliver, and the C# WebSplit test.
 
-import { createClient, type Client, type Interceptor } from "@connectrpc/connect";
+import { createClient, type Client, type Interceptor, type Transport } from "@connectrpc/connect";
 import { createGrpcWebTransport } from "@connectrpc/connect-web";
 import { Mesh } from "./gen/mesh_pb";
 import { buildDeliver, newId, parseDelivery, type Delivery } from "./envelope";
@@ -18,6 +18,12 @@ export interface ConnectOptions {
   address?: string;
   /** Sink for background send/stream faults that have no awaiting caller (default `console.error`). */
   onError?: (error: unknown) => void;
+  /**
+   * Inject the Connect transport instead of the default gRPC-web one. Use to supply a custom `fetch`
+   * (e.g. a streaming-fetch polyfill on React Native) or an in-memory transport for tests. When set,
+   * `token` is ignored — add your own auth interceptor to the transport.
+   */
+  transport?: Transport;
 }
 
 /** Bearer-token interceptor — the token rides in gRPC-web call metadata, exactly like the Node SDK. */
@@ -45,10 +51,9 @@ export class MeshWebConnection {
 
   static connect(url: string, opts: ConnectOptions = {}): Promise<MeshWebConnection> {
     const address = opts.address ?? `node/${newId()}`;
-    const transport = createGrpcWebTransport({
-      baseUrl: url,
-      interceptors: opts.token ? [bearer(opts.token)] : [],
-    });
+    const transport =
+      opts.transport ??
+      createGrpcWebTransport({ baseUrl: url, interceptors: opts.token ? [bearer(opts.token)] : [] });
     const conn = new MeshWebConnection(address, createClient(Mesh, transport), opts.onError ?? console.error);
     return conn.open();
   }

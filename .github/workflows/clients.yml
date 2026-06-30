@@ -30,7 +30,7 @@ jobs:
       - run: npm test
 
   grpc-web:
-    name: "@meshweaver/client-web (typecheck)"
+    name: "@meshweaver/client-web (typecheck + test)"
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -42,6 +42,7 @@ jobs:
           node-version: 20
       - run: npm install --no-audit --no-fund
       - run: npm run typecheck # runs buf generate (from the canonical mesh.proto) then tsc
+      - run: npm test # vitest: envelope round-trip + in-memory Connect/Deliver correlation & demux
 
   react-native:
     name: "RN connector (typecheck)"

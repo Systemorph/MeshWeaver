@@ -75,11 +75,14 @@ The client is generated from the **one canonical** `mesh.proto` that lives with 
 
 ```bash
 npm run gen      # buf generate ../../src/MeshWeaver.Hosting.Grpc/Protos  →  src/gen/mesh_pb.ts
-npm run build    # gen + tsc
+npm run build    # gen + tsc (dist, tests excluded)
+npm test         # vitest: envelope round-trip + in-memory Connect/Deliver correlation & demux
 ```
 
-`src/gen/` is git-ignored (a build artifact); `gen` runs automatically before `build` / `typecheck` / `prepack`.
-Uses Connect-ES (`@connectrpc/connect`, `@connectrpc/connect-web`) + protobuf-es (`@bufbuild/protoc-gen-es`).
+`src/gen/` is git-ignored (a build artifact); `gen` runs automatically before `build` / `typecheck` / `test`
+/ `prepack`. Uses Connect-ES (`@connectrpc/connect`, `@connectrpc/connect-web`) + protobuf-es
+(`@bufbuild/protoc-gen-es`). The tests drive the real `MeshWebConnection` against an **in-memory** Connect+Deliver
+service (`createRouterTransport`) — no network — proving ack, RequestId correlation, and streamId demux.
 
 ## Runtime requirement on React Native
 

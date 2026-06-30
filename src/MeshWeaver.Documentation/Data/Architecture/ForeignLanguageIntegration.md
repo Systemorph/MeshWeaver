@@ -192,8 +192,9 @@ src/MeshWeaver.Documentation/Data/Architecture/ForeignLanguageBridge.md   transp
 **Verified here:** the C# transport (in-memory + live Kestrel h2c round-trips), the React renderer
 (pixel-verified web render, 11 vitest tests, 0.9 MB bundle), the RN connector (typechecks against real
 react-native types — proving the core compiles with zero DOM/Fluent runtime), the gRPC-web client
-(`@meshweaver/client-web` typechecks + builds from the canonical `mesh.proto`, wired into the RN app's
-`src/live.ts`), and the portal (builds + rendered). CI typechecks/tests all of it.
+(`@meshweaver/client-web` typechecks + builds from the canonical `mesh.proto`, **8 vitest tests** driving the
+real connection against an in-memory Connect+Deliver service — ack, RequestId correlation, streamId demux —
+wired into the RN app's `src/live.ts`), and the portal (builds + rendered). CI typechecks/tests all of it.
 
 **Needs your hardware / a running portal (the `WIRE:` follow-ups):**
 
