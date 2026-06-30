@@ -40,7 +40,9 @@ public class TypeRegistryTest(ITestOutputHelper output) : HubTestBase(output)
         var typeRegistry = host.ServiceProvider.GetRequiredService<ITypeRegistry>();
         var canMap = typeRegistry.TryGetCollectionName(typeof(GenericRequest<int>), out var typeName);
         canMap.Should().BeTrue();
-        typeName.Should().Be("MeshWeaver.Messaging.Hub.Test.TypeRegistryTest.GenericRequest`1[Int32]");
+        // Short-name default: the outer generic type uses its short name `GenericRequest`1`, not the
+        // namespace-qualified full name. Round-trips back to the same type.
+        typeName.Should().Be("GenericRequest`1[Int32]");
 
         canMap = typeRegistry.TryGetType(typeName!, out var mappedType);
         canMap.Should().BeTrue();
@@ -56,7 +58,7 @@ public class TypeRegistryTest(ITestOutputHelper output) : HubTestBase(output)
         // Test List<int?>
         var canMap = typeRegistry.TryGetCollectionName(typeof(List<int?>), out var typeName);
         canMap.Should().BeTrue();
-        typeName.Should().Be("System.Collections.Generic.List`1[Int32?]");
+        typeName.Should().Be("List`1[Int32?]");
 
         canMap = typeRegistry.TryGetType(typeName!, out var mappedType);
         canMap.Should().BeTrue();
@@ -65,7 +67,7 @@ public class TypeRegistryTest(ITestOutputHelper output) : HubTestBase(output)
         // Test GenericRequest<int?>
         canMap = typeRegistry.TryGetCollectionName(typeof(GenericRequest<int?>), out typeName);
         canMap.Should().BeTrue();
-        typeName.Should().Be("MeshWeaver.Messaging.Hub.Test.TypeRegistryTest.GenericRequest`1[Int32?]");
+        typeName.Should().Be("GenericRequest`1[Int32?]");
 
         canMap = typeRegistry.TryGetType(typeName!, out mappedType);
         canMap.Should().BeTrue();
@@ -94,11 +96,15 @@ public class TypeRegistryTest(ITestOutputHelper output) : HubTestBase(output)
         // Serialize through the open `object` door so the polymorphic path (and the resolver) runs.
         var json = JsonSerializer.Serialize((object)new UnregisteredPayload("hi"), typeof(object), options);
 
-        // It WAS written with the namespace-qualified full name (the latent cross-hub-read defect).
-        // FormatType normalizes the nested-type '+' separator to '.', matching what gets persisted.
-        var persistedDiscriminator = typeof(UnregisteredPayload).FullName!.Replace('+', '.');
-        json.Should().Contain(persistedDiscriminator);
-        // ...and the resolver surfaced exactly one warning naming the type + the publishing hub.
+        // Short-name default (the CURE): an unregistered type is now written with its SHORT-name $type
+        // ("UnregisteredPayload"), which a reading hub that registered it under its short name RESOLVES —
+        // instead of the namespace-qualified full name that used to read back as an untyped JsonElement.
+        json.Should().Contain($"\"{nameof(UnregisteredPayload)}\"",
+            "the short-name default writes the $type as the bare type name, which reading hubs resolve");
+        json.Should().NotContain(typeof(UnregisteredPayload).FullName!,
+            "the namespace-qualified full name must no longer be emitted as the $type discriminator");
+        // ...and the resolver STILL surfaces exactly one warning naming the type + the publishing hub, so
+        // an unregistered type is still flagged for explicit registration (collision-safety + clarity).
         var warnings = captured.Where(m =>
             m.Contains("Unregistered type") &&
             m.Contains(typeof(UnregisteredPayload).FullName!) &&
