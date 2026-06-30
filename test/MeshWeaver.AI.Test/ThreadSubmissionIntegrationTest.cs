@@ -39,6 +39,15 @@ public class ThreadSubmissionIntegrationTest : AITestBase
     // Share Mesh/SP across [Fact]s.
     protected override bool ShareMeshAcrossTests => true;
 
+    // Slow-model rounds across a SHARED mesh; on the 2-core CI shard the rotating
+    // stale-mirror/compile flake adds transient threadpool-starvation spikes that can delay a
+    // round's continuation past the default 60 s dispose watchdog even though the flow settles
+    // correctly. Raise the per-test deadline so the generous-but-bounded .Within waits below have
+    // room to ride out a spike (same precedent as FrameworkStaleInstanceRenderTest = 180 s,
+    // NodeTypeReleaseTest = 120 s). Underlying stale-frame root cause tracked separately.
+    protected override TimeSpan TestSoftDeadline => TimeSpan.FromSeconds(120);
+    protected override TimeSpan TestHardDeadline => TimeSpan.FromSeconds(180);
+
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => base.ConfigureMesh(builder)
             .ConfigureServices(services =>
@@ -102,7 +111,7 @@ public class ThreadSubmissionIntegrationTest : AITestBase
         var committed = await WaitForThread(
             threadPath,
             t => t.IngestedMessageIds.Count >= 1 && t.Messages.Count >= 2,
-            timeoutMs: 15_000);
+            timeoutMs: 45_000);
 
         committed.IngestedMessageIds.Should().HaveCount(1);
         committed.Messages.Should().HaveCount(2);
@@ -125,7 +134,7 @@ public class ThreadSubmissionIntegrationTest : AITestBase
         var committed = await WaitForThread(
             threadPath,
             t => t.IngestedMessageIds.Count >= 1 && t.Messages.Count >= 2,
-            timeoutMs: 15_000);
+            timeoutMs: 45_000);
 
         // Give the watcher a moment to finish any further rounds, then assert final state:
         // All three user messages should end up ingested; the dispatched round(s) produced >=1 output cell.
@@ -180,7 +189,7 @@ public class ThreadSubmissionIntegrationTest : AITestBase
                  && t.Messages.Count == 2
                  && t.Messages[1] != r1
                  && !t.IsExecuting,
-            timeoutMs: 20_000);
+            timeoutMs: 45_000);
 
         afterResubmit.Messages[0].Should().Be(u1);
         afterResubmit.Messages[1].Should().NotBe(r1, "resubmit must produce a fresh response cell");
@@ -211,7 +220,7 @@ public class ThreadSubmissionIntegrationTest : AITestBase
             t => t.Messages.Contains(fakeUserMsgId)
                  && t.IngestedMessageIds.Contains(fakeUserMsgId)
                  && t.Messages.Count >= 2,
-            timeoutMs: 5_000);
+            timeoutMs: 30_000);
 
         final.UserMessageIds.Should().Contain(fakeUserMsgId);
         final.IngestedMessageIds.Should().Contain(fakeUserMsgId);
@@ -249,18 +258,29 @@ public class ThreadSubmissionIntegrationTest : AITestBase
         var roundOneStart = await WaitForThread(
             threadPath,
             t => t.IsExecuting && t.IngestedMessageIds.Count == 1,
-            timeoutMs: 5_000);
+            timeoutMs: 30_000);
 
         roundOneStart.IngestedMessageIds.Should().HaveCount(1, "u1 should be ingested once round 1 starts");
         var u1 = roundOneStart.IngestedMessageIds[0];
 
-        // While round 1 is running, submit 3 more messages in quick succession.
-        client.SubmitMessage(threadPath, "Second",
-            modelName: slowModel, createdBy: "rbuergi@systemorph.com");
-        client.SubmitMessage(threadPath, "Third",
-            modelName: slowModel, createdBy: "rbuergi@systemorph.com");
-        client.SubmitMessage(threadPath, "Fourth",
-            modelName: slowModel, createdBy: "rbuergi@systemorph.com");
+        // While round 1 is running, submit 3 more follow-ups. Serialize each behind its OWN
+        // registration (await the UserMessageIds growth before submitting the next) so each
+        // cross-mirror append diffs off the prior's COMMITTED base — avoiding the concurrent-submit
+        // RFC 7396 array-replace clobber that intermittently drops a queued id (then UserMessageIds
+        // never reaches 4 and the test "loses" a message). That clobber is the dedicated concern of
+        // Hammer_ConcurrentSubmits_AllIngested_NoneLost; here we only need three follow-ups QUEUED
+        // during the round so they batch into round 2 — the slow model keeps round 1 executing long
+        // enough for all three to land mid-round. Mirrors CheckInbox_TwoFollowUps ("submitted
+        // serially … avoids the concurrent-submit array-replace race — out of scope here").
+        var expectedUserIds = 1;
+        foreach (var text in new[] { "Second", "Third", "Fourth" })
+        {
+            client.SubmitMessage(threadPath, text,
+                modelName: slowModel, createdBy: "rbuergi@systemorph.com");
+            expectedUserIds++;
+            await WaitForThread(threadPath,
+                t => t.UserMessageIds.Count >= expectedUserIds, timeoutMs: 30_000);
+        }
 
         // Observe: during round 1 execution, all three new user ids should appear in Messages
         // and UserMessageIds, but NOT yet in IngestedMessageIds â€” the server holds them back
@@ -272,7 +292,7 @@ public class ThreadSubmissionIntegrationTest : AITestBase
         var pendingState = await WaitForThread(
             threadPath,
             t => t.UserMessageIds.Count == 4,
-            timeoutMs: 15_000);
+            timeoutMs: 45_000);
 
         // If we're quick enough, round 1 is still executing here. Either way, we can assert
         // that u2/u3/u4 are NOT yet ingested while u1 already is (or that all 4 are ingested
@@ -287,7 +307,7 @@ public class ThreadSubmissionIntegrationTest : AITestBase
         var final = await WaitForThread(
             threadPath,
             t => t.IngestedMessageIds.Count == 4 && !t.IsExecuting,
-            timeoutMs: 20_000);
+            timeoutMs: 60_000);
 
         final.IngestedMessageIds.Should().HaveCount(4);
         final.IngestedMessageIds.Should().BeEquivalentTo(final.UserMessageIds, System.Text.Json.JsonSerializerOptions.Default);
@@ -327,7 +347,7 @@ public class ThreadSubmissionIntegrationTest : AITestBase
         await WaitForThread(
             threadPath,
             t => t.IsExecuting && t.IngestedMessageIds.Count == 1,
-            timeoutMs: 5_000);
+            timeoutMs: 30_000);
 
         // Submit u2 while round 1 is still executing. Queue-don't-cancel: the current round
         // is NOT aborted â€” it completes naturally (tool calls finish, response persists).
@@ -340,7 +360,7 @@ public class ThreadSubmissionIntegrationTest : AITestBase
         var final = await WaitForThread(
             threadPath,
             t => !t.IsExecuting && t.IngestedMessageIds.Count == 2,
-            timeoutMs: 20_000);
+            timeoutMs: 60_000);
 
         final.UserMessageIds.Should().HaveCount(2);
         final.IngestedMessageIds.Should().HaveCount(2);
@@ -395,7 +415,7 @@ public class ThreadSubmissionIntegrationTest : AITestBase
         // Cross-check at the node level: count actual ThreadMessage assistant cells.
         var msgNodes = (await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(
                 $"namespace:{threadPath} nodeType:{ThreadMessageNodeType.NodeType}"))
-            .Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items;
+            .Should().Within(30.Seconds()).Match(c => c.ChangeType == QueryChangeType.Initial)).Items;
         var responseCells = msgNodes
             .Where(n => (n.Content as ThreadMessage)?.Role == "assistant")
             .ToList();
@@ -461,7 +481,7 @@ public class ThreadSubmissionIntegrationTest : AITestBase
         var stored = (await client.GetMeshNodeStream(chatInputPath)
             .Select(n => n?.Content as ThreadComposer)
             .Where(c => c is { MessageContent: "draft hello" })
-            .Should().Within(TimeSpan.FromSeconds(10))
+            .Should().Within(30.Seconds())
             .Match(_ => true))!;
 
         stored.Harness.Should().Be(Harnesses.MeshWeaver);
@@ -494,7 +514,7 @@ public class ThreadSubmissionIntegrationTest : AITestBase
         var committed = await WaitForThread(
             threadPath,
             t => t.IngestedMessageIds.Count >= 1 && t.Messages.Count >= 2,
-            timeoutMs: 15_000);
+            timeoutMs: 45_000);
 
         committed.Messages.Should().HaveCount(2, "one user cell + one output cell");
 

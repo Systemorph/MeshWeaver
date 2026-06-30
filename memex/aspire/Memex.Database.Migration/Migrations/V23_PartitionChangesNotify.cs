@@ -7,9 +7,9 @@ namespace Memex.Database.Migration.Migrations;
 /// an <c>Admin/Partition/*</c> row is inserted, updated, or deleted in
 /// <c>admin.mesh_nodes</c>. The payload is a small JSON document
 /// (<c>{"op":"INSERT","namespace":"acme"}</c>) consumed by
-/// <see cref="MeshWeaver.Hosting.PostgreSql.PgPartitionNotifyListener"/>
+/// <c>PgPartitionNotifyListener</c>
 /// on every silo. Each listener invalidates its
-/// <see cref="MeshWeaver.Hosting.PostgreSql.PgPartitionCache"/> entry for the
+/// <c>PgPartitionCache</c> entry for the
 /// affected namespace so the next access re-probes
 /// <c>information_schema.schemata</c> and picks up the new/dropped state.
 ///
