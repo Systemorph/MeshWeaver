@@ -5,7 +5,16 @@
   </PropertyGroup>
   <ItemGroup>
     <PackageVersion Include="AngleSharp" Version="1.4.0" />
+    <PackageVersion Include="Appium.WebDriver" Version="8.3.0" />
     <PackageVersion Include="AspectCore.Extensions.Reflection" Version="2.4.0" />
+    <!-- Open-source (MIT) MAUI UI libraries for the native view pack's rich controls (Phase 4+):
+         charts, full data grid, and popups/expanders. All MIT-licensed — no Syncfusion/DevExpress/
+         Telerik (commercial). Referenced by MeshWeaver.Maui / Memex.Client as the controls land. -->
+    <PackageVersion Include="LiveChartsCore.SkiaSharpView.Maui" Version="2.0.5" /><!-- MIT — ChartControl -->
+    <PackageVersion Include="CommunityToolkit.Maui" Version="14.2.0" /><!-- MIT — Popup/Expander/behaviors -->
+    <PackageVersion Include="akgul.Maui.DataGrid" Version="4.0.6" /><!-- MIT — DataGrid/PivotGrid -->
+    <PackageVersion Include="OxyPlot.Maui.Skia" Version="1.2.0" /><!-- MIT — charts alternative -->
+    <PackageVersion Include="Microcharts.Maui" Version="0.9.5.9" /><!-- MIT — lightweight sparkline charts -->
     <PackageVersion Include="Aspire.Azure.Npgsql" Version="13.4.5" />
     <PackageVersion Include="Aspire.Azure.Storage.Blobs" Version="13.4.5" />
     <PackageVersion Include="Aspire.Hosting" Version="13.4.5" />
