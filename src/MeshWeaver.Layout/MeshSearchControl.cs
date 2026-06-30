@@ -13,6 +13,13 @@ public enum MeshSearchRenderMode
     Flat,
 
     /// <summary>
+    /// One result per row — a vertical list (icon · title · description), ordered by relevance.
+    /// The row shows the node's description, falling back to a "create a description" prompt when
+    /// none exists. Used by the global search results page.
+    /// </summary>
+    List,
+
+    /// <summary>
     /// Hierarchical display - tree structure with parent-child indentation.
     /// Each root node and its subtree kept in a single grid cell.
     /// </summary>

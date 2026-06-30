@@ -40,6 +40,17 @@ public record UpdatePolicyContent
     [Description("Update strategy")]
     public UpdatePolicyKind Policy { get; init; } = UpdatePolicyKind.Continuous;
 
+    /// <summary>
+    /// When <c>true</c> (default) the install only rolls to builds that PASSED CI ("green").
+    /// The continuous-delivery pipeline already publishes an image ONLY when "MeshWeaver Build and
+    /// Test" succeeds, so the verified channel contains green builds exclusively; this flag is the
+    /// forward-looking guard that keeps that guarantee if an "edge" channel (publish-on-every-build,
+    /// tags carrying the <c>edge</c> pre-release label) is ever added — green-only ignores those.
+    /// Set <c>false</c> to also accept unverified edge builds (bleeding-edge / pre-merge testing).
+    /// </summary>
+    [Description("Only update to CI-verified (green) builds")]
+    public bool RequireCiGreen { get; init; } = true;
+
     /// <summary>The newest image tag the poller has found on the registry (for the admin UI /
     /// detect-and-notify). Written by the poller; not user-editable.</summary>
     [Browsable(false)]

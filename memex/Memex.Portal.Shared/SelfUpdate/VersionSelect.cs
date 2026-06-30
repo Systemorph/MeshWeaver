@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using NuGet.Versioning;
 
 namespace Memex.Portal.Shared.SelfUpdate;
@@ -15,6 +16,14 @@ namespace Memex.Portal.Shared.SelfUpdate;
 /// </summary>
 public static class VersionSelect
 {
+    // The multi-arch container build publishes, per version, a manifest-list tag (e.g. 3.0.0-ci.43) PLUS
+    // one image per RID (3.0.0-ci.43-linux-x64, 3.0.0-ci.43-linux-arm64). The RID suffix parses as an extra
+    // SemVer pre-release identifier that sorts ABOVE the clean tag (numeric 43 < alphanumeric 43-linux-x64),
+    // so without this filter PickTarget rolls to the x64-only image — wrong arch on an arm64 node, and never
+    // the intended manifest list. Drop RID-suffixed tags; the manifest list is the canonical deploy tag.
+    private static readonly Regex RuntimeIdentifierSuffix =
+        new(@"-(linux|win|osx)-(x64|x86|arm|arm64)$", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
     /// <summary>
     /// The best tag to roll to under <paramref name="policy"/>, or <c>null</c> when nothing qualifies.
     /// <see cref="UpdatePolicyKind.Continuous"/> considers every parseable tag (incl. build-numbered
@@ -22,12 +31,13 @@ public static class VersionSelect
     /// (<c>!IsPrerelease</c>); <see cref="UpdatePolicyKind.None"/> always returns <c>null</c>.
     /// Returns the ORIGINAL tag string (so the image patch uses the exact registry tag).
     /// </summary>
-    public static string? PickTarget(IEnumerable<string> tags, UpdatePolicyKind policy)
+    public static string? PickTarget(IEnumerable<string> tags, UpdatePolicyKind policy, bool requireCiGreen = true)
     {
         if (policy == UpdatePolicyKind.None)
             return null;
 
         var parsed = tags
+            .Where(t => !RuntimeIdentifierSuffix.IsMatch(t))   // exclude per-RID image tags; keep the manifest list
             .Select(t => (tag: t, ver: NuGetVersion.TryParse(t, out var v) ? v : null))
             .Where(x => x.ver is not null)
             .Select(x => (x.tag, ver: x.ver!));
@@ -35,11 +45,24 @@ public static class VersionSelect
         if (policy == UpdatePolicyKind.Stable)
             parsed = parsed.Where(x => !x.ver.IsPrerelease);
 
+        // CI-green gate: the verified channel (continuous delivery, which builds+pushes ONLY when the
+        // test workflow is green) never carries the `edge` pre-release label. An unverified "edge"
+        // channel (publish-on-every-build, e.g. `3.0.0-edge.51`) would. requireCiGreen excludes those,
+        // so the install never auto-rolls to a build that hasn't passed CI. Off => edge builds eligible.
+        if (requireCiGreen)
+            parsed = parsed.Where(x => !IsEdge(x.ver));
+
         return parsed
             .OrderByDescending(x => x.ver)
             .Select(x => x.tag)
             .FirstOrDefault();
     }
+
+    /// <summary>An UNVERIFIED edge/pre-merge build — identified by an <c>edge</c> SemVer pre-release
+    /// label (e.g. <c>3.0.0-edge.51</c>). Verified CD builds use <c>-ci.&lt;n&gt;</c> or a clean release,
+    /// never <c>edge</c>.</summary>
+    private static bool IsEdge(NuGetVersion version) =>
+        version.ReleaseLabels.Any(label => string.Equals(label, "edge", StringComparison.OrdinalIgnoreCase));
 
     /// <summary>
     /// True if <paramref name="targetTag"/> is strictly newer than <paramref name="currentVersion"/>.

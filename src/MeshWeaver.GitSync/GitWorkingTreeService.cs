@@ -160,6 +160,52 @@ public sealed class GitWorkingTreeService(
                 .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
     }
 
+    // ── git browser (read-only history) ──────────────────────────────────────────────────────
+
+    /// <summary>
+    /// The latest <paramref name="maxCount"/> commits on the working tree's current branch (newest
+    /// first) — the commit log the git browser renders. Fields are unit-separator delimited so a
+    /// subject containing any other character parses cleanly.
+    /// </summary>
+    public IObservable<IReadOnlyList<GitCommit>> Log(string userId, string repoSlug, int maxCount = 100)
+    {
+        var dest = PathFor(userId, repoSlug);
+        return Expect(git.Run(dest,
+        [
+            "log", $"-n{maxCount}", "--date=format:%Y-%m-%d %H:%M",
+            // %H %h %ad %an %s, separated by the 0x1f unit separator (%x1f).
+            "--pretty=format:%H%x1f%h%x1f%ad%x1f%an%x1f%s",
+        ])).Select(ParseLog);
+    }
+
+    /// <summary>
+    /// The files changed by <paramref name="commitHash"/> against its parent (status + repo-relative
+    /// path). <c>--root</c> makes the initial commit list its files as added rather than empty;
+    /// <c>--no-renames</c> keeps every line a simple <c>STATUS\tpath</c> (a rename shows as D + A).
+    /// </summary>
+    public IObservable<IReadOnlyList<GitFileChange>> CommitChanges(string userId, string repoSlug, string commitHash)
+    {
+        var dest = PathFor(userId, repoSlug);
+        return Expect(git.Run(dest,
+            ["diff-tree", "--no-commit-id", "--name-status", "--no-renames", "-r", "--root", commitHash]))
+            .Select(ParseNameStatus);
+    }
+
+    /// <summary>
+    /// The content of <paramref name="relativePath"/> at git revision <paramref name="rev"/> (e.g.
+    /// <c>"HEAD"</c>, a commit hash, or <c>"{hash}^"</c> for a parent) — the two sides a diff needs.
+    /// Returns <c>""</c> when the path did not exist at that revision (an added or deleted file): that
+    /// empty side is a legitimate diff input, not an error, so this does NOT go through <see cref="Expect"/>.
+    /// </summary>
+    public IObservable<string> ShowFile(string userId, string repoSlug, string rev, string relativePath)
+    {
+        if (relativePath.StartsWith('-'))
+            return Observable.Throw<string>(new GitWorkingTreeException($"Invalid path '{relativePath}'."));
+        var dest = PathFor(userId, repoSlug);
+        return git.Run(dest, ["show", $"{rev}:{relativePath}"])
+            .Select(r => r.Ok ? r.StdOut : "");
+    }
+
     // ── internals ─────────────────────────────────────────────────────────────────────────
 
     private IObservable<string> CurrentBranch(string dest) =>
@@ -189,6 +235,34 @@ public sealed class GitWorkingTreeService(
             changes.Add(new GitFileChange(line[3..].Trim(), line[..2].Trim()));
         }
         return new WorkingTreeStatus(branch, changes.Count == 0, changes);
+    }
+
+    /// <summary>The 0x1f unit separator that delimits <c>git log</c> fields (can't occur in commit text).</summary>
+    private const char LogFieldSeparator = '\x1f';
+
+    private static IReadOnlyList<GitCommit> ParseLog(GitCommandResult r)
+    {
+        var commits = new List<GitCommit>();
+        foreach (var line in r.StdOut.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+        {
+            // count: 5 → the subject keeps everything after the 4th separator even if it held one.
+            var f = line.Split(LogFieldSeparator, 5);
+            if (f.Length < 5) continue;
+            commits.Add(new GitCommit(f[0], f[1], f[2], f[3], f[4]));
+        }
+        return commits;
+    }
+
+    private static IReadOnlyList<GitFileChange> ParseNameStatus(GitCommandResult r)
+    {
+        var changes = new List<GitFileChange>();
+        foreach (var line in r.StdOut.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var tab = line.IndexOf('\t');
+            if (tab < 0) continue;
+            changes.Add(new GitFileChange(line[(tab + 1)..].Trim(), line[..tab].Trim()));
+        }
+        return changes;
     }
 
     /// <summary>The credential-helper config that reads the token from <c>$GW_TOKEN</c> (token never in argv).</summary>

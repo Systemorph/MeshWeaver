@@ -433,10 +433,47 @@ public static class JsonSynchronizationStream
                         sub.Dispose();
                         return;
                     }
-                    // HeartBeatEvent is [SystemMessage] — PostPipeline accepts
-                    // null AccessContext without warning. No identity stamp
-                    // needed; receiver doesn't gate on principal.
-                    h.Post(new HeartBeatEvent(), o => o.WithTarget(owner));
+                    // HeartBeatEvent is [SystemMessage] — PostPipeline accepts null AccessContext
+                    // without warning. No identity stamp needed; receiver doesn't gate on principal.
+                    //
+                    // 🚨 OBSERVE the delivery — do NOT fire-and-forget. The heartbeat has no ack, so a
+                    // HEALTHY owner never responds and the Observe simply times out (the normal case,
+                    // ignored below). But a terminal NotFound DeliveryFailure means the owner ADDRESS
+                    // NO LONGER EXISTS: a recycled/deactivated grain REACTIVATES on the heartbeat post
+                    // and acks, so only a PERMANENTLY-GONE owner NotFounds — e.g. a one-shot
+                    // {Partition}/_Activity/import-{fingerprint} lock whose dedicated off-router import
+                    // hub was disposed when the import completed (the node persists as history, so the
+                    // change feed never fires a Created/Deleted pulse to drive resubscribe). When the
+                    // owner is gone we must STOP: tear the keep-alive down. Fire-and-forget left that
+                    // dead owner heart-beaten every interval forever → "[ROUTE] NotFound" per partition
+                    // for the life of the silo — the recurring import-activity NotFound storm that pegs
+                    // the CPU and trips the liveness probe. (Pinned by
+                    // HeartbeatStopsWhenOwnerDiesAfterSubscribeTest.)
+                    // Post the heartbeat (still keeps the grain alive) and OBSERVE its delivery. The
+                    // post is async-queued and the Observe registers synchronously right after, before
+                    // any response can land — no race. A healthy owner has no ack, so the Observe just
+                    // times out (the normal case, ignored). A terminal NotFound means the owner ADDRESS
+                    // is gone — only a permanently-gone owner NotFounds (a recycled grain reactivates on
+                    // the post and acks) — so STOP: tear the keep-alive down.
+                    var hbDelivery = h.Post(new HeartBeatEvent(), o => o.WithTarget(owner));
+                    if (hbDelivery is not null)
+                        h.Observe(hbDelivery)
+                            .Take(1)
+                            // A healthy owner sends no heartbeat ack, so the observe never emits — switch
+                            // to Empty (COMPLETES) instead of the throwing Timeout overload: the normal
+                            // case must not route through the error path every interval (exceptions-as-
+                            // control-flow is a real CPU/alloc cost given how many heartbeats run). A
+                            // terminal NotFound still arrives FAST as an OnError before this fires.
+                            .Timeout(heartbeatInterval, Observable.Empty<IMessageDelivery>())
+                            .Subscribe(
+                                _ => { },   // no ack to consume
+                                ex =>
+                                {
+                                    // Owner address gone (a recycled grain reactivates on the post and
+                                    // acks — only a permanently-gone owner NotFounds): STOP heart-beating.
+                                    if (ex is DeliveryFailureException { Failure.ErrorType: ErrorType.NotFound })
+                                        keepAlive.Dispose();
+                                });
                 });
             // On keepAlive (not directly on reduced): a terminal NotFound from the initial
             // SubscribeRequest disposes keepAlive → stops this heartbeat. Normal teardown
@@ -745,7 +782,7 @@ public static class JsonSynchronizationStream
                     )
                 { OldValue = pointer.Evaluate(current) };
             })
-            .DistinctBy(x => new { x.Id, x.Collection })
+            .DistinctBy(x => new { Id = x.Id is JsonElement je ? je.GetRawText() : x.Id?.ToString(), x.Collection })
             .ToArray();
 
     internal static (JsonElement, JsonPatch) UpdateJsonElement<TChange>(this TChange request, JsonElement? currentJson, JsonSerializerOptions options) where TChange : JsonChange
@@ -991,7 +1028,7 @@ public static class JsonSynchronizationStream
             )
             { OldValue = idSegment == null ? current.Instances : current.Instances.GetValueOrDefault(idSegment) };
         })
-        .DistinctBy(x => new { x.Id, x.Collection })
+        .DistinctBy(x => new { Id = x.Id is JsonElement je ? je.GetRawText() : x.Id?.ToString(), x.Collection })
         .ToArray();
 
     internal static (InstanceCollection, JsonPatch) UpdateJsonElement(this DataChangedEvent request, InstanceCollection current, JsonSerializerOptions options)

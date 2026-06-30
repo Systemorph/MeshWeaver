@@ -191,6 +191,9 @@ public static class DataExtensions
             )
             .WithType(typeof(Address), nameof(Address))
             .WithType(typeof(ActivityLog), nameof(ActivityLog))
+            // ActivityLog content children — serialised inside log entries / user attribution.
+            .WithType(typeof(LogMessage), nameof(LogMessage))
+            .WithType(typeof(UserInfo), nameof(UserInfo))
             .RegisterDataEvents()
             .WithInitializationGate(DataContext.InitializationGateName, d => d.Message is PingRequest);
     }

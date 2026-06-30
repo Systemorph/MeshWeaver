@@ -677,6 +677,8 @@ public static class MemexConfiguration
                         .AddGitHubSyncSettingsTab()
                         // Code workspace tab — on-disk working-tree editor (checkout/edit/commit/push).
                         .AddWorkingTreeTab()
+                        // Git history tab — read-only git browser (commit log + changes + diffs) over the same working tree.
+                        .AddGitHistoryTab()
                         // Content Indexing tab — Space nodes, only when the indexing pipeline is active.
                         .AddContentIndexSettingsTab();
                 })

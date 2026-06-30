@@ -53,8 +53,10 @@ public static class UpdatePolicySettingsTab
         stack = stack.WithView(Controls.Markdown(
             "The platform self-updates per the strategy below. **Continuous** rolls to the newest build " +
             "(including build-numbered continuous builds); **Stable** rolls only to clean releases; " +
-            "**None** disables auto-update. On Kubernetes the portal patches its own deployment; elsewhere " +
-            "the latest version is surfaced for a manual update."));
+            "**None** disables auto-update. **Only update to CI-verified (green) builds** (default on) " +
+            "keeps the install on builds that passed CI — turn it off to also accept unverified edge builds. " +
+            "On Kubernetes the portal patches its own deployment; elsewhere the latest version is surfaced " +
+            "for a manual update."));
 
         // Running version (the installed platform version baked into the binary).
         stack = stack.WithView(Controls.Markdown(
