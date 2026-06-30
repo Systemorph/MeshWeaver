@@ -745,7 +745,7 @@ public static class JsonSynchronizationStream
                     )
                 { OldValue = pointer.Evaluate(current) };
             })
-            .DistinctBy(x => new { x.Id, x.Collection })
+            .DistinctBy(x => new { Id = x.Id is JsonElement je ? je.GetRawText() : x.Id?.ToString(), x.Collection })
             .ToArray();
 
     internal static (JsonElement, JsonPatch) UpdateJsonElement<TChange>(this TChange request, JsonElement? currentJson, JsonSerializerOptions options) where TChange : JsonChange
@@ -991,7 +991,7 @@ public static class JsonSynchronizationStream
             )
             { OldValue = idSegment == null ? current.Instances : current.Instances.GetValueOrDefault(idSegment) };
         })
-        .DistinctBy(x => new { x.Id, x.Collection })
+        .DistinctBy(x => new { Id = x.Id is JsonElement je ? je.GetRawText() : x.Id?.ToString(), x.Collection })
         .ToArray();
 
     internal static (InstanceCollection, JsonPatch) UpdateJsonElement(this DataChangedEvent request, InstanceCollection current, JsonSerializerOptions options)
