@@ -147,11 +147,17 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             Logger.LogDebug("[ThreadChat:{InstanceId}] ThreadViewModel setter: old={OldCount} msgs, new={NewCount} msgs, equal={Equal}, stream={HasStream}",
                 _instanceId, oldMsgs.Count, newMsgs.Count, Equals(old, value), Stream != null);
 
-            // Sync threadPath and initialContext from the view model
+            // Sync threadPath and initialContext from the view model.
             if (value != null)
             {
-                threadPath = value.ThreadPath ?? threadPath;
-                initialContext = value.InitialContext ?? initialContext;
+                // 🎯 EMPTY means "no change", not "clear it". The side-panel control rebuilds with
+                // ThreadPath = ContentPath ?? "" — i.e. an EMPTY STRING — on every re-render BEFORE the
+                // just-created thread's SetContentPath lands. `?? ` only coalesces null, so an empty string
+                // would CLOBBER a threadPath we just set in StartThread.onCreated → the next send sees an
+                // empty threadPath and re-StartThreads a SECOND thread (the SidePanelChatTenMessagesTest
+                // "2nd user bubble never appears" bug). Guard on IsNullOrEmpty, exactly like lines below.
+                threadPath = string.IsNullOrEmpty(value.ThreadPath) ? threadPath : value.ThreadPath;
+                initialContext = string.IsNullOrEmpty(value.InitialContext) ? initialContext : value.InitialContext;
 
                 // Inside a thread the composer lives ON the thread node (Thread.Composer) —
                 // bind the embedded selectors area + the selection projection to the THREAD
@@ -969,13 +975,21 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             var contextReference = navReference is null
                 ? null
                 : System.Text.Json.JsonSerializer.Serialize(navReference, Hub.JsonSerializerOptions);
-            var ns = !string.IsNullOrEmpty(navNs)
-                ? navNs
-                : !string.IsNullOrEmpty(safeContext)
-                    ? safeContext
-                    : !string.IsNullOrEmpty(createdBy)
-                        ? createdBy
-                        : "";
+            // 🎯 Normalize the FINAL resolved namespace, not just navNs. The fallbacks — safeContext
+            // (= initialContext, e.g. "User/Roland" when the side panel is opened on a user home) and
+            // createdBy — are RAW: an un-normalized "User/{id}" routes the StartThread to the system-managed,
+            // un-writable 'User' partition → AccessControlPipeline denies the CreateNodeRequest → the message
+            // silently drops (the SidePanelChatTenMessagesTest "2nd user bubble never appears" denial).
+            // NormalizeContextPath maps User/{id} → {id} (and drops reserved route partitions to ""), so the
+            // thread always anchors in the owner's writable partition regardless of which source ns came from.
+            var ns = NormalizeContextPath(
+                !string.IsNullOrEmpty(navNs)
+                    ? navNs
+                    : !string.IsNullOrEmpty(safeContext)
+                        ? safeContext
+                        : !string.IsNullOrEmpty(createdBy)
+                            ? createdBy
+                            : "");
 
             Action<string> onError = err => InvokeAsync(() =>
             {
