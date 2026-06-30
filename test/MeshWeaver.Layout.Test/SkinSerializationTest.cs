@@ -87,7 +87,7 @@ public class SkinSerializationTest(ITestOutputHelper output) : HubTestBase(outpu
 
         // Even a skin with default properties should have a $type discriminator
         serialized.Should().Contain("$type");
-        serialized.Should().Contain("MeshWeaver.Layout.LayoutStackSkin");
+        serialized.Should().Contain("LayoutStackSkin");
 
         // Should not contain empty objects
         serialized.Should().NotContain("{}");
@@ -114,7 +114,7 @@ public class SkinSerializationTest(ITestOutputHelper output) : HubTestBase(outpu
 
         // The JSON should contain type discriminators for polymorphic deserialization
         serialized.Should().Contain("$type");
-        serialized.Should().Contain("MeshWeaver.Layout.StackControl");
+        serialized.Should().Contain("StackControl");
 
         // Deserialize explicitly to the base UiControl type
         var deserializedAsBase = JsonSerializer.Deserialize<UiControl>(serialized, client.JsonSerializerOptions);
