@@ -49,6 +49,29 @@ for await (const change of mesh.watch("@app/Home", "s1", "SubscribeRequest", { r
 mesh.close();
 ```
 
+### Ergonomic ops (`Mesh`)
+
+Above the raw transport, `Mesh` is the in-language port of `MeshWeaver.AI.MeshOperations` — the same
+surface as the Python and Node SDKs, now on the web client too:
+
+```ts
+import { Mesh } from "@meshweaver/client-web";
+
+const mesh = await Mesh.connect(url, { token });
+const stories = await mesh.search("nodeType:Story namespace:ACME"); // reads
+const node = await mesh.get("ACME/Stories/42");
+for await (const n of mesh.watch("ACME/Backlog")) handle(n);        // live
+
+mesh.patch("ACME/Stories/42", { content: { done: true } });        // writes
+await mesh.create({ path: "ACME/New", nodeType: "Story" });          // node lifecycle
+await mesh.move("ACME/A", "ACME/B");
+await mesh.copy("ACME/A", "ACME/C");
+await mesh.delete("ACME/Old");
+mesh.execute("ACME/Jobs/import");                                    // run a Code/activity node
+```
+
+`mesh.connection` is the `MeshConnectionLike` you hand to `GrpcAreaSource` for rendering.
+
 ### Rendering a live layout area
 
 The whole point: feed `@meshweaver/react`'s renderer. `MeshWebConnection` *is* a `MeshConnectionLike`, so:
