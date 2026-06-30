@@ -256,7 +256,8 @@ image_build_local() {                                  # §3 Option B
   step "Building native arm64 portal image (layered on the CLI base) into Colima's Docker store (§3 Option B)"
   dotnet publish "$repo/memex/aspire/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj" \
     -c Release -t:PublishContainer -p:ContainerRepository=memex-portal-ai-local \
-    -p:ContainerBaseImage="$PORTAL_BASE_REF"
+    -p:ContainerBaseImage="$PORTAL_BASE_REF" \
+    -maxcpucount:"${MEMEX_BUILD_CPUS:-6}"   # WEDGE FIX: cap parallelism so ONE build can't saturate the host
   # Fail LOUD if the publish lost the co-hosted CLIs (e.g. the ContainerBaseImage didn't layer in
   # because the local registry was empty). A CLI-less portal silently ships a broken Claude Code /
   # Copilot harness: /login's `claude setup-token` hits "claude: not found" and exits → the portal
@@ -269,7 +270,8 @@ image_build_local() {                                  # §3 Option B
   ok "Portal image verified: claude + node CLIs are baked in"
   step "Building migration image (§3 Option B)"
   dotnet publish "$repo/memex/aspire/Memex.Database.Migration/Memex.Database.Migration.csproj" \
-    -c Release -t:PublishContainer -p:ContainerRepository=memex-migration-local
+    -c Release -t:PublishContainer -p:ContainerRepository=memex-migration-local \
+    -maxcpucount:"${MEMEX_BUILD_CPUS:-6}"   # WEDGE FIX: cap parallelism (see portal publish above)
   docker tag memex-migration-local:latest "$MIGRATION_IMAGE"
   ok "Images tagged $PORTAL_IMAGE / $MIGRATION_IMAGE (visible to k3s via IfNotPresent)"
 }
