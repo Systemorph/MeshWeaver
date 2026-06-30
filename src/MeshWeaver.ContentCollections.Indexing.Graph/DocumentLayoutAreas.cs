@@ -1,3 +1,4 @@
+using System.Linq;
 using System.Reactive.Linq;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
@@ -5,6 +6,7 @@ using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.ContentCollections.Indexing.Graph;
 
@@ -188,8 +190,16 @@ public static class DocumentLayoutAreas
         return store.GetChunkCount(document.CollectionPath, document.FilePath)
             .SelectMany(total => store.GetChunk(document.CollectionPath, document.FilePath, index)
                 .Select(chunk => (UiControl?)BuildBlockView(document, nodePath, index, total, chunk, terms)))
-            .Catch<UiControl?, Exception>(ex => Observable.Return(
-                (UiControl?)Controls.Markdown($"_Could not load block: {ex.Message}_")));
+            // Surface a generic message to the user; the exception (which may carry internal detail) is
+            // logged, not rendered.
+            .Catch<UiControl?, Exception>(ex =>
+            {
+                host.Hub.ServiceProvider.GetService<ILoggerFactory>()?
+                    .CreateLogger(typeof(DocumentLayoutAreas))
+                    .LogWarning(ex, "Failed to load content block {Index} for {Collection}/{File}",
+                        index, document.CollectionPath, document.FilePath);
+                return Observable.Return((UiControl?)Controls.Markdown("_Could not load this block._"));
+            });
     }
 
     private static UiControl BuildBlockView(
@@ -267,13 +277,23 @@ public static class DocumentLayoutAreas
         return container;
     }
 
-    /// <summary>The <c>/static/…</c> URL that serves the raw original file for a collection-relative path.</summary>
+    /// <summary>
+    /// The <c>/static/…</c> URL that serves the raw original file for a collection-relative path. Each
+    /// path segment is URL-encoded (so spaces, <c>#</c>, <c>?</c>, unicode in a file name don't break or
+    /// truncate the URL) while the <c>/</c> separators are preserved.
+    /// </summary>
     private static string BuildStaticUrl(string collectionPath, string filePath)
     {
-        var collection = collectionPath.Trim('/');
-        var file = filePath.Replace('\\', '/').TrimStart('/');
+        var collection = EncodeSegments(collectionPath);
+        var file = EncodeSegments(filePath.Replace('\\', '/'));
         return string.IsNullOrEmpty(collection) ? $"/static/{file}" : $"/static/{collection}/{file}";
     }
+
+    /// <summary>URL-encodes each <c>/</c>-delimited segment of <paramref name="path"/>, preserving the slashes.</summary>
+    private static string EncodeSegments(string path) =>
+        string.Join('/', path.Trim('/')
+            .Split('/', StringSplitOptions.RemoveEmptyEntries)
+            .Select(Uri.EscapeDataString));
 
     /// <summary>Builds <c>/{nodePath}/{area}?index=N[&amp;q=terms]</c> for navigating between Blocks and Source.</summary>
     private static string BuildAreaHref(string nodePath, string area, int index, string terms)

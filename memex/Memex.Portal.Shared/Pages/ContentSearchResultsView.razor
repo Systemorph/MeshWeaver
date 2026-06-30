@@ -105,8 +105,9 @@
         if (!string.IsNullOrWhiteSpace(Namespace))
             return Namespace.Trim('/');
 
-        // A namespace: token in the typed query wins next (the user scoped it explicitly).
-        var match = Regex.Match(Query ?? "", @"namespace:(\S+)");
+        // A namespace: token in the typed query wins next (the user scoped it explicitly). Mesh
+        // grammar is case-insensitive, so match Namespace:/NAMESPACE: too.
+        var match = Regex.Match(Query ?? "", @"namespace:(\S+)", RegexOptions.IgnoreCase);
         if (match.Success)
             return match.Groups[1].Value.Trim('/');
 

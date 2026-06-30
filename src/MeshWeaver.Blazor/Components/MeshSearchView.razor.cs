@@ -218,15 +218,16 @@ public partial class MeshSearchView : IDisposable
         }
     }
 
-    /// <summary>The combobox only toggles Flat ↔ Grouped; the tree / navigator modes manage their
-    /// own browse surface, so the selector is hidden there.</summary>
+    /// <summary>The combobox only toggles the non-grouped presentation (Flat/List) ↔ Grouped; the
+    /// tree / navigator modes manage their own browse surface, so the selector is hidden there. List is
+    /// eligible so the global search page (which defaults to List) keeps its view-options bar.</summary>
     private bool SelectorEligible =>
-        BoundRenderMode is MeshSearchRenderMode.Flat or MeshSearchRenderMode.Grouped;
+        BoundRenderMode is MeshSearchRenderMode.Flat or MeshSearchRenderMode.List or MeshSearchRenderMode.Grouped;
 
     /// <summary>
-    /// The render mode after applying the combobox choice: None ⇒ Flat, a property ⇒ Grouped.
-    /// Falls back to the ViewModel's render mode when the user hasn't touched the selector
-    /// (or when the mode isn't selector-eligible).
+    /// The render mode after applying the combobox choice: None ⇒ the page's non-grouped presentation
+    /// (List or Flat, whichever the ViewModel set), a property ⇒ Grouped. Falls back to the ViewModel's
+    /// render mode when the user hasn't touched the selector (or when the mode isn't selector-eligible).
     /// </summary>
     private MeshSearchRenderMode EffectiveRenderMode
     {
@@ -235,7 +236,10 @@ public partial class MeshSearchView : IDisposable
             if (!SelectorEligible || _viewGroupBy is null)
                 return BoundRenderMode;
             return string.IsNullOrEmpty(_viewGroupBy)
-                ? MeshSearchRenderMode.Flat
+                // "None" keeps the page's own non-grouped layout — rows when it defaults to List.
+                ? (BoundRenderMode == MeshSearchRenderMode.List
+                    ? MeshSearchRenderMode.List
+                    : MeshSearchRenderMode.Flat)
                 : MeshSearchRenderMode.Grouped;
         }
     }
