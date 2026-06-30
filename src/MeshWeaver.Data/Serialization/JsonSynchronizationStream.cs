@@ -459,14 +459,20 @@ public static class JsonSynchronizationStream
                     if (hbDelivery is not null)
                         h.Observe(hbDelivery)
                             .Take(1)
-                            .Timeout(heartbeatInterval)
+                            // A healthy owner sends no heartbeat ack, so the observe never emits — switch
+                            // to Empty (COMPLETES) instead of the throwing Timeout overload: the normal
+                            // case must not route through the error path every interval (exceptions-as-
+                            // control-flow is a real CPU/alloc cost given how many heartbeats run). A
+                            // terminal NotFound still arrives FAST as an OnError before this fires.
+                            .Timeout(heartbeatInterval, Observable.Empty<IMessageDelivery>())
                             .Subscribe(
-                                _ => { },   // a healthy owner has no heartbeat ack to send
+                                _ => { },   // no ack to consume
                                 ex =>
                                 {
+                                    // Owner address gone (a recycled grain reactivates on the post and
+                                    // acks — only a permanently-gone owner NotFounds): STOP heart-beating.
                                     if (ex is DeliveryFailureException { Failure.ErrorType: ErrorType.NotFound })
                                         keepAlive.Dispose();
-                                    // else: TimeoutException (no ack from a healthy owner) — ignore.
                                 });
                 });
             // On keepAlive (not directly on reduced): a terminal NotFound from the initial
