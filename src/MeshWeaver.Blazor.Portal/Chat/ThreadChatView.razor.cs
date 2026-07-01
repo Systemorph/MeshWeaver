@@ -1137,6 +1137,47 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     }
 
     /// <summary>
+    /// A status-bar chip was clicked — do exactly what typing the matching slash-command does:
+    /// <list type="bullet">
+    /// <item><c>harness</c> / mesh <c>agent</c> / mesh <c>model</c> → <see cref="HandleSlashCommandAsync"/>,
+    /// which resolves the skill and pops the SAME <c>OpenPicker</c> combobox (no hand-rolled dropdown).</item>
+    /// <item>a CLI harness's OWN model/effort (ClaudeCode / Copilot) → forward <c>/{command}</c> 1:1 to the
+    /// CLI, exactly as the FORWARD dispatch does for a typed command.</item>
+    /// </list>
+    /// </summary>
+    private Task OnStatusChipClick(string commandName, bool cliOwned)
+    {
+        if (cliOwned)
+        {
+            // The model/effort belong to the user's OWN CLI subscription — forward, don't pop a mesh picker.
+            if (!string.IsNullOrEmpty(threadPath))
+                Hub.SubmitMessage(threadPath, $"/{commandName}");
+            return Task.CompletedTask;
+        }
+        var parsed = ChatParser.Parse($"/{commandName}").Command;
+        return parsed is not null ? HandleSlashCommandAsync(parsed) : Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// Inline SVG glyph for a status chip / completion category — crisp + themeable (currentColor),
+    /// replacing the emoji. 16×16, single path. Kinds: harness, model, effort, agent, skill.
+    /// </summary>
+    private static MarkupString ChipSvg(string kind)
+    {
+        var path = kind switch
+        {
+            "harness" => "M8 1.2 14 4.6v6.8L8 14.8 2 11.4V4.6z",                                  // hexagon
+            "model"   => "M8 1.3l1.7 4.4 4.6.3-3.5 3 1.1 4.5L8 11l-3.9 2.5 1.1-4.5-3.5-3 4.6-.3z", // sparkle/star
+            "effort"  => "M9.2 1 3.4 9.1H7l-1 5.9 5.9-8.4H8.2z",                                    // lightning bolt
+            "agent"   => "M5 3h6a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2zm.8 4.2a1 1 0 1 0 0 2 1 1 0 0 0 0-2zm4.4 0a1 1 0 1 0 0 2 1 1 0 0 0 0-2z", // chip/robot
+            "skill"   => "M8 1l2 4 4.4.5-3.2 3 .9 4.4L8 10.8 3.9 12.9l.9-4.4L1.6 5.5 6 5z",         // ribbon
+            _         => "M8 2a6 6 0 1 0 0 12A6 6 0 0 0 8 2z",                                       // dot
+        };
+        return new MarkupString(
+            $"<svg class=\"chip-svg\" viewBox=\"0 0 16 16\" width=\"12\" height=\"12\" fill=\"currentColor\" aria-hidden=\"true\"><path d=\"{path}\"/></svg>");
+    }
+
+    /// <summary>
     /// Resolves a <c>nodeType:Skill</c> mesh node by its slash word and runs its action. Built-in
     /// skills (/agent, /model, /harness — Pick behaviours shipped by
     /// <see cref="MeshWeaver.AI.BuiltInSkillProvider"/>) AND any Space/NodeType/user-defined skill
