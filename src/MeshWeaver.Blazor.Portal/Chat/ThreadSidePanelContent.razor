@@ -54,8 +54,8 @@
         else
         {
             @* Fallback while the user identity is still resolving (no home path yet). *@
-            <ThreadChatView @key="@($"newchat-{lastPrimaryPath ?? string.Empty}")"
-                            ViewModel="@GetNewChatControl()" />
+            <ChatErrorBoundary @key="@($"newchat-{lastPrimaryPath ?? string.Empty}")"><ThreadChatView @key="@($"newchat-{lastPrimaryPath ?? string.Empty}")"
+                            ViewModel="@GetNewChatControl()" /></ChatErrorBoundary>
         }
     </ChildContent>
 </ChatSidePanel>

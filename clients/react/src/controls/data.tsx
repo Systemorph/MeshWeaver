@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { useState } from "react";
 import {
   Card,
   DataGrid,
@@ -11,6 +12,7 @@ import {
   createTableColumn,
   type TableColumnDefinition,
 } from "@fluentui/react-components";
+import { ChevronDown20Regular, ChevronRight20Regular } from "@fluentui/react-icons";
 import type { Json, UiControl } from "../area/types.js";
 import { useResolve } from "../area/context.js";
 import { ControlRenderer } from "../render/ControlRenderer.js";
@@ -18,10 +20,12 @@ import { str } from "./common.js";
 
 type Row = Record<string, Json> & { __id: string };
 
-function formatValue(v: Json, format?: string): string {
+/** .NET-style numeric formatting ("N0", "C2", "P1"; "{0:N2}" tolerated). Shared with PivotGrid. */
+export function formatValue(v: Json, format?: string): string {
   if (v == null) return "";
-  if (format && typeof v === "number") {
-    const m = /^([NCP])(\d+)?$/i.exec(format);
+  const f = format?.replace(/^\{0:(.+)\}$/, "$1");
+  if (f && typeof v === "number") {
+    const m = /^([NCP])(\d+)?$/i.exec(f);
     if (m) {
       const digits = m[2] ? Number(m[2]) : m[1].toUpperCase() === "N" ? 0 : 2;
       const n = v.toLocaleString(undefined, { minimumFractionDigits: digits, maximumFractionDigits: digits });
@@ -75,9 +79,79 @@ function DataGridView({ control }: { control: UiControl }): ReactNode {
   );
 }
 
+// ---- Catalog ------------------------------------------------------------------------------------
+// CatalogControl wire (src/MeshWeaver.Layout/Catalog/CatalogControl.cs):
+//   { groups: [{ key, label, emoji, order, isExpanded, items: UiControl[], totalCount }],
+//     collapsibleSections, showCounts, sectionGap, cardHeight, ... }
+// Each item is a full UiControl tree — rendered through the registry, exactly like Blazor's
+// CatalogView dispatches each item view.
+
+interface CatalogGroupWire {
+  key?: string;
+  label?: string;
+  emoji?: string;
+  order?: number;
+  isExpanded?: boolean;
+  items?: UiControl[];
+  totalCount?: number;
+}
+
+function CatalogSection({ group, collapsible, showCounts, cardHeight }: { group: CatalogGroupWire; collapsible: boolean; showCounts: boolean; cardHeight: number }): ReactNode {
+  const [open, setOpen] = useState(group.isExpanded !== false);
+  const items = Array.isArray(group.items) ? group.items : [];
+  const count = group.totalCount || items.length;
+  return (
+    <section>
+      <div
+        role={collapsible ? "button" : undefined}
+        onClick={collapsible ? () => setOpen((o) => !o) : undefined}
+        style={{ display: "flex", alignItems: "center", gap: 6, cursor: collapsible ? "pointer" : "default", padding: "4px 0" }}
+      >
+        {collapsible ? (open ? <ChevronDown20Regular /> : <ChevronRight20Regular />) : null}
+        <Text weight="semibold" size={400}>
+          {group.emoji ? `${group.emoji} ` : ""}
+          {str(group.label ?? group.key)}
+        </Text>
+        {showCounts ? (
+          <Text size={200} style={{ color: "var(--colorNeutralForeground3)" }}>
+            ({count})
+          </Text>
+        ) : null}
+      </div>
+      {open ? (
+        <div style={{ display: "grid", gap: 12, gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))" }}>
+          {items.map((item, i) => (
+            <div key={i} style={{ minHeight: cardHeight }}>
+              <ControlRenderer control={item} />
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
 function CatalogView({ control }: { control: UiControl }): ReactNode {
-  const items = useResolve(control.data);
-  const arr = Array.isArray(items) ? items : [];
+  const groups = (useResolve(control.groups) as CatalogGroupWire[]) ?? [];
+  const legacyItems = useResolve(control.data);
+  const collapsible = control.collapsibleSections !== false;
+  const showCounts = control.showCounts !== false;
+  const sectionGap = Number(control.sectionGap ?? 16) || 16;
+  const cardHeight = Number(control.cardHeight ?? 140) || 140;
+
+  if (Array.isArray(groups) && groups.length > 0) {
+    const ordered = [...groups].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+    return (
+      <div style={{ display: "flex", flexDirection: "column", gap: sectionGap }}>
+        {ordered.map((g, i) => (
+          <CatalogSection key={g.key ?? i} group={g} collapsible={collapsible} showCounts={showCounts} cardHeight={cardHeight} />
+        ))}
+      </div>
+    );
+  }
+
+  // Legacy/demo shape: a flat `data` array of {name,title,description} records.
+  const arr = Array.isArray(legacyItems) ? legacyItems : [];
   return (
     <div style={{ display: "grid", gap: 12, gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))" }}>
       {arr.map((it, i) => (
@@ -92,7 +166,5 @@ function CatalogView({ control }: { control: UiControl }): ReactNode {
 
 export const dataControls = {
   DataGrid: DataGridView,
-  PivotGrid: DataGridView,
   Catalog: CatalogView,
-  MeshNodeCollection: CatalogView,
 };

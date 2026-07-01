@@ -19,7 +19,7 @@
 }
 else
 {
-    <ThreadChatView ViewModel="@chatControl" />
+    <ChatErrorBoundary><ThreadChatView ViewModel="@chatControl" /></ChatErrorBoundary>
 }
 
 @code {

@@ -1,7 +1,9 @@
 using System;
+using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Threading;
 using System.Threading.Tasks;
+using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Blazor.Portal;
 using MeshWeaver.Hosting.Monolith.TestBase;
@@ -48,6 +50,16 @@ public class CreateSpaceTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
         await Mesh.GetEffectivePermissions(spaceId, TestUsers.Admin.ObjectId)
             .Should().Within(90.Seconds()).Match(p => p.HasFlag(Permission.Update),
                 "Creator should have Admin permissions on the space");
+
+        // ...and the creator-owner grant is a concrete AccessAssignment node at
+        // {space}/_Access/{creator}_Access (owner = creator). This is the node the owner-grant
+        // MUST produce; the create now FAULTS rather than returning a silent Ok if it is missing
+        // (SpacePostCreationHandler.FailsCreateOnError), so a created Space is never ownerless.
+        var grantPath = $"{spaceId}/_Access/{TestUsers.Admin.ObjectId}_Access";
+        var grant = await Mesh.GetWorkspace().GetMeshNodeStream(grantPath)
+            .Where(n => n is not null)
+            .FirstAsync().Timeout(30.Seconds()).ToTask();
+        grant!.NodeType.Should().Be("AccessAssignment", "the creator-owner grant is an AccessAssignment");
 
         await NodeFactory.DeleteNode(spaceId).Should().Emit();
     }

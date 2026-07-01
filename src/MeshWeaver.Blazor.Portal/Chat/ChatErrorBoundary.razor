@@ -1,0 +1,25 @@
+@using Microsoft.AspNetCore.Components.Web
+
+@* Contains a ThreadChatView render/lifecycle exception IN PLACE instead of letting it tear down the whole
+   Blazor circuit (the "screen disappeared, have to refresh" symptom). The built-in ErrorBoundary logs the
+   exception at Error level (surfaced, not swallowed); the chat area shows an inline error + Reload, and the
+   surrounding GUI stays alive. Wraps ThreadChatView at every mount via <ChatErrorBoundary>. *@
+<ErrorBoundary @ref="_boundary">
+    <ChildContent>
+        @ChildContent
+    </ChildContent>
+    <ErrorContent Context="ex">
+        <div class="chat-error-surface"
+             style="padding:16px;display:flex;flex-direction:column;gap:8px;color:var(--error-foreground,#b3261e);">
+            <strong>The chat hit an error — contained here so the rest of the app keeps working.</strong>
+            <div style="font-size:12px;opacity:0.85;white-space:pre-wrap;">@ex.GetType().Name: @ex.Message</div>
+            <button class="chat-error-reload" style="align-self:flex-start;"
+                    @onclick="() => _boundary?.Recover()">Reload chat</button>
+        </div>
+    </ErrorContent>
+</ErrorBoundary>
+
+@code {
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+    private ErrorBoundary? _boundary;
+}
