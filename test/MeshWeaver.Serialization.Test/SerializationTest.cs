@@ -20,6 +20,9 @@ public class SerializationTest(ITestOutputHelper output) : HubTestBase(output)
     protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration c)
     {
         return base.ConfigureHost(c)
+            // Plumbing fixture with no user → post as infrastructure (System), per the
+            // never-null AccessContext invariant (feedback_access_context_always_set).
+            .WithPostingIdentity(PostingIdentity.System)
             .WithTypes(typeof(BoomerangResponse), typeof(GetDataRequest), typeof(GetDataResponse))
             .WithRoutes(f => f.RouteAddress(ClientType,
                     (routedAddress, d) =>
@@ -47,6 +50,8 @@ public class SerializationTest(ITestOutputHelper output) : HubTestBase(output)
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
     {
         return base.ConfigureClient(configuration)
+            // Plumbing fixture with no user → post as infrastructure (System).
+            .WithPostingIdentity(PostingIdentity.System)
             .WithTypes(typeof(BoomerangResponse), typeof(MyEvent), typeof(GetDataRequest), typeof(GetDataResponse))
             .WithRoutes(f =>
             f.RouteAddress(HostType,
