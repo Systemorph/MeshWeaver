@@ -88,7 +88,18 @@ spec:
             failureThreshold: 6
       volumes:
         - name: "memex-data"
+{{- if .Values.persistDataVolume }}
+          # Local dev only: keep /data (the DataProtection keys under /data/dataprotection-keys, plus the
+          # nuget/compile caches) on a node hostPath so a pod restart does NOT wipe the keys and invalidate
+          # every session (the "have to refresh / Anonymous resubscribe loop" churn). Single-node k3s;
+          # multiple pods during a rollout share the same node dir. Prod (AKS) leaves this false and
+          # persists keys to Azure Blob instead, so /data can stay ephemeral there.
+          hostPath:
+            path: /var/lib/memex-portal-data
+            type: DirectoryOrCreate
+{{- else }}
           emptyDir: {}
+{{- end }}
         - name: "memex-users"
           emptyDir: {}
   selector:

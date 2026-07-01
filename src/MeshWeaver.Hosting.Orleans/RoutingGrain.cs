@@ -5,6 +5,7 @@ using MeshWeaver.Connection.Orleans;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using MeshWeaver.Reflection;
 using Microsoft.Extensions.Logging;
 using Orleans.Concurrency;
 using Orleans.Streams;
@@ -118,6 +119,14 @@ internal class RoutingGrain(
         void PostFailureToSender(string failureMessage, ErrorType errorType)
         {
             if (delivery.Sender == null) return;
+            // [CanBeIgnored] messages (HeartBeatEvent, Shutdown/Dispose) are fire-and-forget: there is NO
+            // awaiting Observe callback to fail, so a DeliveryFailure for them is meaningless. It would be
+            // dropped as unhandled at the sender, or — for a permanently-gone owner that is heart-beaten
+            // every interval — re-posted forever, which IS the NotFound storm. Silently ignore, matching
+            // the monolith RoutingServiceBase.PostNotFound / NackRouteFailure guard so both routers agree.
+            if (delivery.Message is DeliveryFailure
+                || delivery.Message?.GetType().HasAttribute<CanBeIgnoredAttribute>() == true)
+                return;
             var failureDelivery = new MessageDelivery<DeliveryFailure>(
                 new DeliveryFailure(delivery, failureMessage) { ErrorType = errorType },
                 new PostOptions(address)
