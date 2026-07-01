@@ -132,7 +132,7 @@ public class Workspace : IWorkspace
                 // disposed → TimerQueue-pinned forever). Only a materialised stream
                 // has a hub to dispose.
                 if (removed.IsValueCreated)
-                    _evictedRemoteStreams.Add(removed.Value);
+                    _evictedRemoteStreams[removed.Value] = 0;
                 _logger.LogDebug(
                     "Evicted remote stream cache for {Address} after change event.",
                     key.Item1);
@@ -285,8 +285,90 @@ public class Workspace : IWorkspace
     // in the global TimerQueue, so an evicted-and-never-disposed stream leaks its hub
     // forever (the RunLevel=1 MeshHub_IsCollected failure). Disposed in DisposeAsync
     // alongside the still-cached streams, re-establishing the workspace-rooted
-    // disposal that eviction severed.
-    private readonly ConcurrentBag<ISynchronizationStream> _evictedRemoteStreams = new();
+    // disposal that eviction severed — OR earlier, per identity, by
+    // <see cref="DetachRemoteStreams"/> when the shared mesh-node cache idle-releases a
+    // path (the idle release proves no consumer remains attached, so waiting for
+    // workspace disposal would leak the stream's heartbeat for the process lifetime).
+    // Keyed set (value unused) rather than a bag so a per-identity release can remove
+    // matching entries without the drain-and-re-add race a ConcurrentBag would force.
+    // 🚨 MUST hash by REFERENCE: SynchronizationStream is a record whose generated
+    // GetHashCode recurses into StreamConfiguration (which holds the stream back) —
+    // value-hashing a stream instance stack-overflows the process. Stream identity
+    // here IS the instance, so reference semantics is also the correct semantics.
+    private readonly ConcurrentDictionary<ISynchronizationStream, byte> _evictedRemoteStreams =
+        new(StreamReferenceComparer.Instance);
+
+    /// <summary>Reference-identity comparer for stream instances — see the
+    /// <see cref="_evictedRemoteStreams"/> field note (record GetHashCode recursion).</summary>
+    private sealed class StreamReferenceComparer : IEqualityComparer<ISynchronizationStream>
+    {
+        public static readonly StreamReferenceComparer Instance = new();
+        public bool Equals(ISynchronizationStream? x, ISynchronizationStream? y) => ReferenceEquals(x, y);
+        public int GetHashCode(ISynchronizationStream obj) =>
+            System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(obj);
+    }
+
+    /// <summary>
+    /// Atomically removes every remote synchronization stream for
+    /// (<paramref name="owner"/>, <paramref name="reference"/>) from BOTH the live cache
+    /// (<see cref="_remoteStreamCache"/>) and the change-feed-evicted parking set
+    /// (<see cref="_evictedRemoteStreams"/>), WITHOUT disposing them, and returns them.
+    /// From the moment this returns, a concurrent <c>GetRemoteStream</c> for the same
+    /// identity builds a FRESH stream — it can no longer adopt a detached instance, so
+    /// the caller may safely dispose the returned streams once it has proven no
+    /// consumer is attached (the shared mesh-node cache's idle release does exactly
+    /// that: detach → re-verify zero subscribers under its entry gate → dispose; on a
+    /// lost race it puts them back via <see cref="ParkRemoteStreams"/>).
+    /// Disposing a detached stream posts <c>UnsubscribeRequest</c> to the owner (the
+    /// owner-side mirror unsubscribes) and disposes the per-stream <c>sync/</c> hub —
+    /// its 45s heartbeat dies with it. This method itself only DETACHES, never closes
+    /// and never re-subscribes.
+    /// </summary>
+    internal IReadOnlyList<ISynchronizationStream> DetachRemoteStreams(
+        Address owner, WorkspaceReference reference)
+    {
+        var detached = new List<ISynchronizationStream>();
+        if (_remoteStreamCache.TryRemove((owner, reference), out var cached))
+        {
+            // A cached Lazy is materialised immediately by its creator
+            // (GetExternalClientSynchronizationStream calls .Value right after
+            // GetOrAdd); taking .Value here at worst briefly waits for that
+            // factory so the instance is never orphaned half-created.
+            try
+            {
+                detached.Add(cached.Value);
+            }
+            catch (Exception ex)
+            {
+                // Factory faulted — there is no stream to own; the creator saw
+                // the same exception on its own .Value access.
+                _logger.LogDebug(ex,
+                    "Workspace {WorkspaceId} skipped detaching faulted remote stream for {Owner}",
+                    Id, owner);
+            }
+        }
+        foreach (var parked in _evictedRemoteStreams.Keys)
+        {
+            if (parked.Owner.Equals(owner)
+                && Equals(parked.Reference, reference)
+                && _evictedRemoteStreams.TryRemove(parked, out _))
+                detached.Add(parked);
+        }
+        return detached;
+    }
+
+    /// <summary>
+    /// Returns streams obtained from <see cref="DetachRemoteStreams"/> to the
+    /// evicted-stream parking set when the caller lost its release race (a consumer
+    /// re-attached between detach and the final zero-subscriber check). The workspace
+    /// re-owns their lifetime: they stay live for their attached subscribers and are
+    /// disposed by a later successful release or by <see cref="DisposeAsync"/>.
+    /// </summary>
+    internal void ParkRemoteStreams(IReadOnlyList<ISynchronizationStream> streams)
+    {
+        foreach (var stream in streams)
+            _evictedRemoteStreams[stream] = 0;
+    }
 
     private ISynchronizationStream<TReduced> GetExternalClientSynchronizationStream<
         TReduced,
@@ -475,8 +557,10 @@ public class Workspace : IWorkspace
         // hubs (and the TimerQueue-rooting stale-callback scanner) are torn down.
         // Idempotent with subscriber-driven disposal: SynchronizationStream.Dispose
         // is safe to call twice.
-        while (_evictedRemoteStreams.TryTake(out var evicted))
+        foreach (var evicted in _evictedRemoteStreams.Keys)
         {
+            if (!_evictedRemoteStreams.TryRemove(evicted, out _))
+                continue;
             try { evicted.Dispose(); }
             catch (Exception ex)
             {
