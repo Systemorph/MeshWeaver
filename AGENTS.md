@@ -6,6 +6,16 @@ This file provides guidance to AI agents working with this repository.
 
 **NEVER commit or push automatically.** Always wait for the user to explicitly ask.
 
+### 🚨 Before you push: make CI green LOCALLY first — don't discover red on CI
+
+CI builds **Release with warnings-as-errors**: `dotnet build --no-restore -c Release -p:CIRun=true -warnaserror`. A plain local `dotnet build` (Debug, no `-warnaserror`) passes while CI fails — warnings are promoted to errors there. Pushing a red branch wastes a CI cycle and, per the green-merge gate, blocks the pull-based self-update if it reaches main. So **before every push**:
+
+1. **Sync with `main` first.** `git fetch origin main && git merge origin/main` (or rebase). A PR check builds your branch **merged with current main** — a stale branch inherits main's state (including any half-committed-WIP red, e.g. a `.razor` referencing a type whose `.cs` wasn't committed), and you discover it only on CI. Build what CI builds.
+2. **Build with CI's flags**: `dotnet build -c Release -warnaserror` for at least the projects you touched and their dependents. Green here ⇒ green there for compile/warning errors. The classic miss: **CS9107** — a primary-constructor parameter captured *and* passed to a base ctor (warning in Debug, ERROR under `-warnaserror`). Fix it at the root: use the base's exposed member (e.g. `protected Output`) instead of capturing the param; do NOT just `NoWarn` it.
+3. **Only push when that Release/`-warnaserror` build is clean.** Then verify the PR check went green (`gh pr checks`) before declaring done.
+
+Full PR/merge gate: the `pullrequest` skill (CI must be GREEN before merge — main's image feeds the self-update).
+
 ## 🚨🚨🚨 ABSOLUTE: No band-aids — root cause only, literally always
 
 **The user is LITERALLY NEVER interested in a band-aid, workaround, mitigation, or symptom-suppression.** When something hangs, deadlocks, flakes, or errors, find the EXACT defect and fix THAT — never paper over it.
