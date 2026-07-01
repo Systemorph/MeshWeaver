@@ -1368,13 +1368,52 @@ public sealed class MessageHub : IMessageHub
                         return;
                     logger.LogError(
                         "DISPOSAL DEADLOCK DETECTED: Hub {Address} did not complete shutdown within {Timeout}. " +
-                        "RunLevel={RunLevel}. Force-completing disposal to prevent hang.",
+                        "RunLevel={RunLevel}. Force-tearing-down children + disposables to prevent a heartbeat/stream leak.",
                         Address, DisposalWatchdogTimeout, RunLevel);
+                    // 🚨 The watchdog fires because the reactive shutdown state machine
+                    // (Quiescing → DisposeHostedHubs → ShutDown) never advanced — the posted
+                    // ShutdownRequest was starved on a wedged/flooded action block (RunLevel stays
+                    // Started). DisposeImpl + hostedHubs.Dispose run ONLY inside that state machine's
+                    // ShutDown/DisposeHostedHubs phases, so a watchdog that merely SignalDisposal
+                    // Completed() would unblock the caller while LEAKING every hosted sync-stream hub
+                    // and its Observable.Interval heartbeat timer — they keep heart-beating forever.
+                    // That accumulation IS the portal wedge (236+ orphaned heartbeats → 2 cores →
+                    // /healthz timeout). So force the teardown here too: dispose the hosted hubs (stops
+                    // their heartbeats) and this hub's own subscriptions. Both are thread-safe and
+                    // idempotent (HostedHubsCollection.Dispose is lock+CAS guarded; DisposeImpl nulls
+                    // its reactive actions under lock and disposes an idempotent CompositeDisposable),
+                    // so the normal ShutDown phase running later is a harmless no-op.
+                    ForceTeardownAfterWatchdog();
                     SignalDisposalCompleted();
                 },
                 // disposalCompleted faulting (SignalDisposalFaulted) propagates through TakeUntil;
                 // the watchdog is no longer needed — swallow so it isn't an unobserved error.
                 _ => { });
+    }
+
+    /// <summary>
+    /// Best-effort teardown invoked by the disposal watchdog when the reactive shutdown state machine
+    /// wedged (the ShutdownRequest never got a turn). Runs OFF the action block, so it touches only
+    /// thread-safe, idempotent surfaces: <see cref="HostedHubsCollection.Dispose"/> (lock+CAS) to stop
+    /// every hosted sync-stream hub's keep-alive heartbeat, and <see cref="DisposeImpl"/> for this hub's
+    /// own registered subscriptions. Each step is independently guarded so one fault can't strand the
+    /// other. <c>messageService.Dispose()</c> is deliberately NOT called here — it may block on the
+    /// wedged turn; abandoning one wedged turn-task is far cheaper than leaking all the heartbeats.
+    /// </summary>
+    private void ForceTeardownAfterWatchdog()
+    {
+        try { hostedHubs.Dispose(); }
+        catch (Exception ex)
+        {
+            TryLog(LogLevel.Warning, "[DISPOSE-WATCHDOG] {Address}: hosted-hub force-dispose faulted: {Type}: {Message}",
+                Address, ex.GetType().Name, ex.Message);
+        }
+        try { DisposeImpl(); }
+        catch (Exception ex)
+        {
+            TryLog(LogLevel.Warning, "[DISPOSE-WATCHDOG] {Address}: DisposeImpl force faulted: {Type}: {Message}",
+                Address, ex.GetType().Name, ex.Message);
+        }
     }
 
     private void DisposeImpl()
