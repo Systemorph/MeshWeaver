@@ -42,7 +42,7 @@ public sealed class AgentSkillSyncOptions
 ///
 /// <para><b>Live</b>, not one-shot: the platform skill catalog (the PublicRead <c>Skill</c> namespace) is
 /// observed with a synced query, so <c>AGENTS.md</c> is re-rendered whenever a skill node is added /
-/// changed / removed. The background subscription carries no <see cref="MeshWeaver.Mesh.Security.AccessContext"/>,
+/// changed / removed. The background subscription carries no <c>AccessContext</c>,
 /// so the synced query short-circuits to the System-loaded snapshot (no per-user RLS filter) and sees every
 /// platform skill. The (small, infrequent) file write runs on the <see cref="IoPoolNames.FileSystem"/> I/O
 /// pool so the synced-query emission thread never blocks on disk.</para>

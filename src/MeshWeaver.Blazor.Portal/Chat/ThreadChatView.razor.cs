@@ -16,6 +16,7 @@ using MeshWeaver.Messaging;
 using MeshWeaver.Reactive;
 using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.Configuration;
+using Microsoft.FluentUI.AspNetCore.Components;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -61,6 +62,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
 {
     [Inject] private INavigationService NavigationService { get; set; } = null!;
     [Inject] private SidePanelStateService SidePanelState { get; set; } = null!;
+    [Inject] private IDialogService DialogService { get; set; } = null!;
     [Inject] private IMeshService MeshQuery { get; set; } = null!;
     [Inject] private IChatCompletionOrchestrator CompletionOrchestrator { get; set; } = null!;
     [Inject] private IConfiguration Configuration { get; set; } = null!;
@@ -133,6 +135,12 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
 
 
     private ThreadViewModel? _threadViewModel;
+    // The best-ever NON-EMPTY thread viewmodel seen for THIS thread (set only when Messages is non-empty,
+    // so it can never be poisoned by a transient empty). ConvertThreadViewModel falls back to it whenever the
+    // data-bind transiently yields null/empty (the cross-hub node stream momentarily reduces to an empty
+    // node), so an open chat never flaps to the empty state mid-conversation (the round-N "vanish"). Reset
+    // when the bound thread PATH actually changes (a different thread legitimately has its own messages).
+    private ThreadViewModel? _lastNonEmptyThreadVm;
     private ThreadViewModel? ThreadViewModel
     {
         get => _threadViewModel;
@@ -147,11 +155,17 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             Logger.LogDebug("[ThreadChat:{InstanceId}] ThreadViewModel setter: old={OldCount} msgs, new={NewCount} msgs, equal={Equal}, stream={HasStream}",
                 _instanceId, oldMsgs.Count, newMsgs.Count, Equals(old, value), Stream != null);
 
-            // Sync threadPath and initialContext from the view model
+            // Sync threadPath and initialContext from the view model.
             if (value != null)
             {
-                threadPath = value.ThreadPath ?? threadPath;
-                initialContext = value.InitialContext ?? initialContext;
+                // 🎯 EMPTY means "no change", not "clear it". The side-panel control rebuilds with
+                // ThreadPath = ContentPath ?? "" — i.e. an EMPTY STRING — on every re-render BEFORE the
+                // just-created thread's SetContentPath lands. `?? ` only coalesces null, so an empty string
+                // would CLOBBER a threadPath we just set in StartThread.onCreated → the next send sees an
+                // empty threadPath and re-StartThreads a SECOND thread (the SidePanelChatTenMessagesTest
+                // "2nd user bubble never appears" bug). Guard on IsNullOrEmpty, exactly like lines below.
+                threadPath = string.IsNullOrEmpty(value.ThreadPath) ? threadPath : value.ThreadPath;
+                initialContext = string.IsNullOrEmpty(value.InitialContext) ? initialContext : value.InitialContext;
 
                 // Inside a thread the composer lives ON the thread node (Thread.Composer) —
                 // bind the embedded selectors area + the selection projection to the THREAD
@@ -192,13 +206,10 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                     submissionHandler.OnResponseAppeared();
                     isCancelling = false;
                 }
-                // Force re-render and auto-scroll to bottom
-                InvokeAsync(async () =>
-                {
-                    StateHasChanged();
-                    await Task.Yield(); // Let render complete
-                    await ScrollToBottomAsync();
-                });
+                // Re-render. Auto-scroll is handled entirely by the JS MutationObserver attached in
+                // OnAfterRenderAsync (#128) — it fires post-paint on every DOM mutation, including
+                // streamed text, so no Task.Yield timing guess or explicit scroll call is needed here.
+                InvokeAsync(StateHasChanged);
             }
         }
     }
@@ -216,6 +227,9 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     // Input state
     private MonacoEditorView? monacoEditor;
     private ElementReference messagesContainer;
+    // #128 auto-scroll: the JS module + the per-container handle it returns (disposed on teardown).
+    private IJSObjectReference? _scrollModule;
+    private IJSObjectReference? _scrollHandle;
     private string? MessageText;
     private readonly bool isCreatingThread;
     private bool isCancelling;
@@ -969,13 +983,18 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             var contextReference = navReference is null
                 ? null
                 : System.Text.Json.JsonSerializer.Serialize(navReference, Hub.JsonSerializerOptions);
-            var ns = !string.IsNullOrEmpty(navNs)
-                ? navNs
-                : !string.IsNullOrEmpty(safeContext)
-                    ? safeContext
-                    : !string.IsNullOrEmpty(createdBy)
-                        ? createdBy
-                        : "";
+            // 🎯 Normalize EACH candidate and take the first that survives, not the first non-empty RAW one.
+            // safeContext (= initialContext, e.g. "User/Roland" or bare "User" when the side panel is opened
+            // on a user home) and createdBy are raw; NormalizeContextPath maps User/{id} → {id} and bare
+            // User / reserved partitions → "". If we picked the first raw non-empty value and normalized
+            // ONCE, a safeContext of bare "User" would normalize to "" and we'd anchor on an empty namespace
+            // — skipping createdBy (the owner's writable partition). Normalizing each and taking the first
+            // non-empty result lands on createdBy="Roland", so the StartThread never targets the un-writable
+            // 'User' partition (whose denial surfaces a blocking "Something went wrong" modal that breaks the
+            // composer — the SidePanelChatTenMessagesTest "2nd message never lands" cause).
+            var ns = new[] { navNs, safeContext, createdBy }
+                .Select(c => NormalizeContextPath(c ?? string.Empty))
+                .FirstOrDefault(c => !string.IsNullOrEmpty(c)) ?? string.Empty;
 
             Action<string> onError = err => InvokeAsync(() =>
             {
@@ -1026,6 +1045,15 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                     {
                         var path = node.Path;
                         if (string.IsNullOrEmpty(path)) { onError("Thread created with no path"); return; }
+                        // 🎯 Route subsequent sends to SubmitComposer IMMEDIATELY: the thread node now
+                        // exists (CreateNodeResponse succeeded), so message 2+ must drain through the
+                        // existing thread (GetMeshNodeStream(threadPath).Update → PendingUserMessages), NOT
+                        // re-StartThread (which would create a SECOND thread — and on the user home routes
+                        // to the un-writable 'User' partition → denied → the message silently drops, the
+                        // SidePanelChatTenMessagesTest "2nd user bubble never appears" bug). The submit
+                        // decision (line ~998 `if (string.IsNullOrEmpty(threadPath))`) reads this field, so
+                        // it must be set the moment the node exists — NOT gated on the readability wait below.
+                        threadPath = path;
                         // 🚨 Redirect ONLY once the thread node is actually READABLE on its own stream.
                         // Navigating on the bare CreateNode ack races the thread's per-node hub
                         // activation: the target page subscribes to a not-yet-ready node, the render
@@ -1203,6 +1231,10 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     private string? _connectHarnessLabel;
     private MeshWeaver.AI.Connect.ConnectStatus? _connectStatus;
     private string _connectCode = "";
+    // Claude Code: the user pastes the token from `claude setup-token` directly. `setup-token` MASKS its
+    // token in stdout (CLI issue #19274), so the server can't scrape/drive the OAuth — the widget shows a
+    // paste-token field instead of the URL flow, and SubmitConnectToken stores it (no CLI spawn).
+    private bool _connectPasteToken;
     private bool _connectBusy;
     private IDisposable? _connectSub;
 
@@ -1272,6 +1304,15 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         _connectBusy = false;
         _connectSub?.Dispose();
         var ownerPath = _userHome!;
+        // Claude Code can't be driven server-side: `claude setup-token` masks its token in stdout, so there
+        // is nothing to scrape. Show a paste-token field — the user runs setup-token locally and pastes the
+        // sk-ant-oat01 token, which SubmitConnectToken stores directly. Other providers keep the live flow.
+        _connectPasteToken = provider.Value == MeshWeaver.AI.Connect.ConnectProvider.ClaudeCode;
+        if (_connectPasteToken)
+        {
+            StateHasChanged();
+            return;
+        }
         var configDir = ResolveHarnessConfigDir(provider.Value);
         _connectSub = sessionManager.StartConnect(ownerPath, provider.Value, configDir)
             .Subscribe(
@@ -1331,10 +1372,52 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         StateHasChanged();
     }
 
-    /// <summary>Enter in the paste-code field submits the code.</summary>
+    /// <summary>
+    /// Stores the pasted Claude subscription token directly (no CLI spawn, no scrape). The user ran
+    /// <c>claude setup-token</c> themselves and pasted the <c>sk-ant-oat01-…</c> result;
+    /// <c>ConnectSessionManager.SubmitToken</c> persists it as the encrypted ModelProvider node the
+    /// harness reads. The masked CLI stdout makes server-side capture impossible (CLI issue #19274).
+    /// </summary>
+    private void SubmitConnectToken()
+    {
+        if (_connectProvider is not { } provider || string.IsNullOrWhiteSpace(_connectCode) || string.IsNullOrEmpty(_userHome))
+            return;
+        var sessionManager = Hub.ServiceProvider.GetService<MeshWeaver.AI.Connect.ConnectSessionManager>();
+        if (sessionManager is null)
+            return;
+        var ownerPath = _userHome!;
+        var token = _connectCode.Trim();
+        _connectBusy = true;
+        _connectSub?.Dispose();
+        _connectSub = sessionManager.SubmitToken(ownerPath, provider, token)
+            .Subscribe(
+                status => InvokeAsync(() =>
+                {
+                    if (_isDisposed) return;
+                    _connectStatus = status;
+                    _connectBusy = false;
+                    StateHasChanged();
+                    if (status is MeshWeaver.AI.Connect.ConnectStatus.Connected)
+                        ScheduleConnectAutoClose();
+                }),
+                ex => InvokeAsync(() =>
+                {
+                    if (_isDisposed) return;
+                    _connectStatus = new MeshWeaver.AI.Connect.ConnectStatus.Error(ex.Message);
+                    _connectBusy = false;
+                    StateHasChanged();
+                }));
+        StateHasChanged();
+    }
+
+    /// <summary>Enter in the paste field submits — the token (Claude Code) or the device code (others).</summary>
     private void OnConnectInputKeyDown(Microsoft.AspNetCore.Components.Web.KeyboardEventArgs e)
     {
-        if (e.Key == "Enter")
+        if (e.Key != "Enter")
+            return;
+        if (_connectPasteToken)
+            SubmitConnectToken();
+        else
             SubmitConnectCode();
     }
 
@@ -1446,6 +1529,25 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         await base.OnAfterRenderAsync(firstRender);
+
+        // #128 auto-scroll: attach the MutationObserver-based stick-to-bottom module to the message
+        // container once it exists. HideEmptyState omits the container (compact/dashboard mode), so
+        // guard on the module not yet being attached rather than firstRender alone — the container may
+        // first appear on a later render when a thread loads.
+        if (_scrollHandle is null && !_isDisposed && !ViewModel.HideEmptyState)
+        {
+            try
+            {
+                _scrollModule ??= await JSRuntime.InvokeAsync<IJSObjectReference>(
+                    "import", "./_content/MeshWeaver.Blazor.Portal/Chat/ThreadChatView.razor.js");
+                _scrollHandle = await _scrollModule.InvokeAsync<IJSObjectReference>("attach", messagesContainer);
+            }
+            catch (Exception ex) when (!_isDisposed)
+            {
+                Logger.LogDebug(ex, "[ThreadChat:{InstanceId}] Failed to attach auto-scroll module", _instanceId);
+            }
+        }
+
         if (_focusPickerOnRender && pendingPicker is not null)
         {
             _focusPickerOnRender = false;
@@ -1757,19 +1859,6 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         }
     }
 
-    private async Task ScrollToBottomAsync()
-    {
-        try
-        {
-            await JSRuntime.InvokeVoidAsync("eval",
-                "document.querySelector('.thread-chat-messages')?.scrollTo({top: 999999, behavior: 'smooth'})");
-        }
-        catch (Exception) when (!_isDisposed)
-        {
-            // Ignore JS interop failures
-        }
-    }
-
     private void CancelSubmission()
     {
         if (submissionHandler.IsInputEnabled || isCancelling)
@@ -1876,6 +1965,17 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                 break;
             }
         }
+        // 🎯 The user's home is addressed `User/{id}` (the User catalog entry), but a thread started
+        // there belongs in the OWNER's writable partition `{id}` — NEVER the system-managed `User`
+        // partition, which the user lacks Thread permission on (StartThread there is denied → the denial
+        // is a DeliveryFailure that the global portal error handler surfaces as a BLOCKING "Something went
+        // wrong" modal that overlays + breaks the composer, and on Postgres the `user` schema may not even
+        // exist → 42P01). Map `User/{id}[/…]` → `{id}`; bare `User` (no id) → "" so the ns derivation falls
+        // through to createdBy (the owner's own partition). Both forms must leave the `User` partition.
+        var ownerSegments = normalized.Split('/');
+        if (string.Equals(ownerSegments[0], "User", StringComparison.OrdinalIgnoreCase))
+            normalized = ownerSegments.Length >= 2 ? ownerSegments[1] : "";
+
         // A rogue/reserved ROUTE partition (login, welcome, settings, …) is NOT a real node — never use
         // it as a chat context. Reading it sends a GetDataRequest to a hub that never opens its init
         // gates (DataContextInit/MeshNodeInit) and the read hangs >30s. Treat a reserved context as none.
@@ -2005,23 +2105,40 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         StateHasChanged();
     }
 
-    private void OnChipClicked(string path)
-    {
-        // Navigate to the referenced node
-        NavigationManager.NavigateTo($"/{path}");
-    }
+    // Both chip kinds — plain @-reference chips and the context chip — open the referenced node in a
+    // modal preview LAYERED OVER the thread (issue #131), never navigating the main view away or
+    // replacing the side-panel thread. The old behaviour (NavigateTo for @-chips, OpenWithContent for
+    // context chips) left the conversation with no way back.
+    private Task OnChipClicked(string path) => OpenNodePreviewAsync(path);
+
+    private Task OnContextChipClicked(string? path) => OpenNodePreviewAsync(path);
 
     /// <summary>
-    /// Click on a context chip (the hero header's chip + the composer's context chip) — peeks the
-    /// thread's starting-point ("main") node in the SIDE PANEL so the user can see the entire context
-    /// object WITHOUT leaving the conversation. Distinct from <see cref="OnChipClicked"/> (used by plain
-    /// @-reference chips), which navigates the main view.
+    /// Opens <paramref name="path"/> in a modal dialog on top of the thread so the user can inspect the
+    /// full node — its own default layout area, exactly as its page renders it — without leaving the
+    /// conversation. The thread stays mounted underneath; dismissing the dialog returns to it untouched.
     /// </summary>
-    private void OnContextChipClicked(string? path)
+    private async Task OpenNodePreviewAsync(string? path)
     {
         if (string.IsNullOrEmpty(path)) return;
-        SidePanelState.SetTitle(LastSegment(path));
-        SidePanelState.OpenWithContent(path);
+        var parameters = new DialogParameters<string>
+        {
+            Title = LastSegment(path),
+            PrimaryAction = string.Empty,   // no primary/confirm button — this is a read-only preview
+            SecondaryAction = "Close",
+            Width = "min(1100px, 90vw)",
+            TrapFocus = true,
+            Modal = true,
+            PreventScroll = true,
+        };
+        try
+        {
+            await DialogService.ShowDialogAsync<NodePreviewDialog, string>(path, parameters);
+        }
+        catch (Exception ex) when (!_isDisposed)
+        {
+            Logger.LogDebug(ex, "[ThreadChat:{InstanceId}] Failed to open node preview for {Path}", _instanceId, path);
+        }
     }
 
     // ─── Hero-header: inline title / description editing + Mark Done ───
@@ -2449,16 +2566,30 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         if (string.IsNullOrWhiteSpace(query) || !query.StartsWith("@"))
             return Observable.Return<IReadOnlyList<CompletionItem>>(Array.Empty<CompletionItem>());
 
-        var currentAddress = NavigationService.CurrentNamespace ?? initialContext ?? "";
+        // 🎯 Autocomplete context = the SPACE root, never a satellite. When viewing a thread at
+        // {space}/_Thread/abc, NavigationService.CurrentNamespace resolves to that FULL thread path;
+        // passed verbatim it points the orchestrator's Source A/B at the thread hub → a 2s per-source
+        // timeout and no space-level suggestions. NormalizeContextPath strips the satellite suffix
+        // (_Thread/_Activity/_Access/…) so the query targets the owning space.
+        var currentAddress = NormalizeContextPath(NavigationService.CurrentNamespace ?? initialContext ?? "");
 
         return Observable.Defer(() =>
         {
             SetCompletionsInflight(true);
+            var lastSnapshot = (IReadOnlyList<CompletionItem>)Array.Empty<CompletionItem>();
             return RunUnderCircuitUser(CompletionOrchestrator.GetCompletions(query, currentAddress)
                 .SelectMany(batch => batch.Items
                     .Select(item => AutocompleteToCompletion(item, batch.Category, batch.CategoryPriority)))
                 .ScanTopN(CompletionTopN, CompletionBySortKey)
                 .DistinctUntilChanged(SnapshotKey)
+                .Do(snapshot => lastSnapshot = snapshot)
+                // When the search finishes with nothing, surface a single non-interactive "No results"
+                // row rather than an empty list (Monaco hides an empty suggest widget). This confirms to
+                // the user that the @ trigger DID fire and the search ran — distinguishing it from a
+                // suppressed trigger. Emitted only at completion, so real results never flash a placeholder.
+                .Concat(Observable.Defer(() => lastSnapshot.Count == 0
+                    ? Observable.Return(NoResultsPlaceholder(query))
+                    : Observable.Empty<IReadOnlyList<CompletionItem>>()))
                 .Catch<IReadOnlyList<CompletionItem>, Exception>(ex =>
                 {
                     Logger.LogError(ex, "Error streaming completions for query: {Query}", query);
@@ -2467,6 +2598,27 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                 .Finally(() => SetCompletionsInflight(false)));
         });
     }
+
+    /// <summary>
+    /// A single non-interactive placeholder row shown when an @-query returns no matches.
+    /// <c>filterText</c> resolves to the query (MonacoEditorView.razor.js sets filterText ← insertText),
+    /// so Monaco does not fuzzy-filter it away; <c>InsertText</c> = the query makes accidental acceptance
+    /// a no-op (the typed text is left untouched), and the empty <c>Path</c> makes
+    /// <see cref="OnCompletionItemAccepted"/> return early without adding a chip.
+    /// </summary>
+    private static IReadOnlyList<CompletionItem> NoResultsPlaceholder(string query) =>
+        new[]
+        {
+            new CompletionItem
+            {
+                Label = $"No results for '{query}'",
+                InsertText = query,
+                Path = string.Empty,
+                Kind = CompletionItemKind.Text,
+                Category = "No results",
+                SortKey = "9999_noresults",
+            }
+        };
 
     /// <summary>
     /// Slash-skill completions: lists <c>nodeType:Skill</c> nodes (built-ins imported to PG plus any
@@ -2577,7 +2729,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     /// <see cref="ThreadChatView"/>'s Razor template gets live ThreadMessage
     /// content via <see cref="messageStates"/>.
     /// </summary>
-    private ThreadViewModel? ConvertThreadViewModel(object? value, ThreadViewModel? _)
+    private ThreadViewModel? ConvertThreadViewModel(object? value, ThreadViewModel? previous)
     {
         var result = value switch
         {
@@ -2586,6 +2738,25 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             AI.ThreadViewModel m => m,
             _ => throw new ArgumentException($"Cannot convert type {value.GetType().Name}.")
         };
+        // 🎯 BEST-EVER keep-last-good. The data-bound value transiently arrives null (a JsonElement that
+        // deserialises to null) or as an empty/default ThreadViewModel — the cross-hub node stream
+        // momentarily reduces to an empty node. Binding that empties the conversation → HasNoMessages → the
+        // composer blanks mid-chat: the intermittent round-N "chat vanishes" (footer-gate createdBy=<null>
+        // noMsgs=True). A LIVE thread never loses its content, so remember the last viewmodel that HAD
+        // content and fall back to it on any transient empty/null. Unlike a 'previous'-value guard this
+        // CANNOT be poisoned — the field is ONLY ever assigned a content-bearing value, so one empty slipping
+        // through never defeats it. "Content" counts BOTH committed Messages AND PendingMessageTexts (the
+        // just-sent optimistic user message): a flap that coincides with a fresh submission has Messages=0
+        // but Pending=[text], and masking that would HIDE the new user bubble (the "saw N-1" failure). A new
+        // thread re-creates this component (field resets); we also guard on ThreadPath against a thread switch.
+        static bool HasContent(ThreadViewModel? vm)
+            => vm is not null && (vm.Messages.Count > 0 || vm.PendingMessageTexts.Count > 0);
+        if (HasContent(result))
+            _lastNonEmptyThreadVm = result;
+        else if (HasContent(_lastNonEmptyThreadVm)
+                 && (result is null || string.IsNullOrEmpty(result.ThreadPath)
+                     || string.Equals(result.ThreadPath, _lastNonEmptyThreadVm!.ThreadPath, StringComparison.Ordinal)))
+            return _lastNonEmptyThreadVm;
         Logger.LogDebug("[ThreadChat:{InstanceId}] ConvertThreadViewModel: input={InputType}, msgs={MsgCount}",
             _instanceId, value?.GetType().Name ?? "null", result?.Messages?.Count ?? 0);
         // SyncMessageSubscriptions runs in the property setter (below) — calling
@@ -2605,6 +2776,10 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     private readonly Dictionary<string, MessageBubbleState> messageStates = new();
     private readonly Dictionary<string, IDisposable> messageSubs = new();
     private readonly HashSet<string> editingMessages = new();
+    /// <summary>Message ids whose tool-calls section is expanded to show the collapsed
+    /// (finished / overflow) entries. Per-message UI toggle — same circuit-scoped HashSet
+    /// idiom as <see cref="editingMessages"/>.</summary>
+    private readonly HashSet<string> expandedToolCalls = new();
     /// <summary>Message ids whose satellite cell did NOT emit within the cache
     /// settle window — surfaced as "Missing message" in the bubble instead of
     /// the loading skeleton. A deleted-by-someone-else or never-materialised
@@ -2950,6 +3125,15 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
 
     private bool IsEditing(string id) => editingMessages.Contains(id);
 
+    private bool IsToolCallsExpanded(string id) => expandedToolCalls.Contains(id);
+
+    private void ToggleToolCalls(string id)
+    {
+        if (!expandedToolCalls.Remove(id))
+            expandedToolCalls.Add(id);
+        StateHasChanged();
+    }
+
     private void StartEdit(string id)
     {
         editingMessages.Add(id);
@@ -3100,7 +3284,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     /// per-message / missing-probe / delegation streams), clears the tracking dictionaries, and unhooks
     /// the side-panel action handler before delegating to the base implementation.
     /// </summary>
-    public override ValueTask DisposeAsync()
+    public override async ValueTask DisposeAsync()
     {
         if (!_isDisposed)
         {
@@ -3128,8 +3312,24 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             delegationSubs.Clear();
             delegationHeaders.Clear();
             SidePanelState.OnActionRequested -= OnSidePanelAction;
+
+            // #128: tear down the JS auto-scroll observer, then release the interop references.
+            // On a full circuit teardown the JS side is already gone (JSDisconnectedException) —
+            // that is expected and needs no cleanup.
+            try
+            {
+                if (_scrollHandle is not null)
+                {
+                    await _scrollHandle.InvokeVoidAsync("dispose");
+                    await _scrollHandle.DisposeAsync();
+                }
+                if (_scrollModule is not null)
+                    await _scrollModule.DisposeAsync();
+            }
+            catch (JSDisconnectedException) { /* circuit already gone — nothing to tear down */ }
+            catch (Exception) { /* best-effort cleanup on teardown */ }
         }
 
-        return base.DisposeAsync();
+        await base.DisposeAsync();
     }
 }

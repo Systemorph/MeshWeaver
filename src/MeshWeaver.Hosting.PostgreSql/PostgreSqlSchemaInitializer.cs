@@ -630,6 +630,10 @@ public static class PostgreSqlSchemaInitializer
                 last_modified   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                 version         BIGINT      NOT NULL DEFAULT 0,
                 state           SMALLINT    NOT NULL DEFAULT 0,
+                -- node-level static-repo sync claim (0=Include, 1=ExcludeThisOnly,
+                -- 2=ExcludeThisAndChildren). Persists the "Not synced" decouple so an
+                -- admin-claimed node/partition survives restart + the next import.
+                sync_behavior   SMALLINT    NOT NULL DEFAULT 0,
                 content         JSONB,
                 desired_id      TEXT,
                 main_node       TEXT,
@@ -930,6 +934,10 @@ public static class PostgreSqlSchemaInitializer
                 last_modified   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                 version         BIGINT      NOT NULL DEFAULT 0,
                 state           SMALLINT    NOT NULL DEFAULT 0,
+                -- node-level static-repo sync claim (0=Include, 1=ExcludeThisOnly,
+                -- 2=ExcludeThisAndChildren). Persists the "Not synced" decouple so an
+                -- admin-claimed node/partition survives restart + the next import.
+                sync_behavior   SMALLINT    NOT NULL DEFAULT 0,
                 content         JSONB,
                 desired_id      TEXT,
                 main_node       TEXT,
@@ -1301,6 +1309,10 @@ public static class PostgreSqlSchemaInitializer
                 last_modified   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                 version         BIGINT      NOT NULL DEFAULT 0,
                 state           SMALLINT    NOT NULL DEFAULT 0,
+                -- node-level static-repo sync claim (0=Include, 1=ExcludeThisOnly,
+                -- 2=ExcludeThisAndChildren). Persists the "Not synced" decouple so an
+                -- admin-claimed node/partition survives restart + the next import.
+                sync_behavior   SMALLINT    NOT NULL DEFAULT 0,
                 content         JSONB,
                 desired_id      TEXT,
                 main_node       TEXT,
@@ -1607,6 +1619,10 @@ public static class PostgreSqlSchemaInitializer
                 last_modified   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                 version         BIGINT      NOT NULL DEFAULT 0,
                 state           SMALLINT    NOT NULL DEFAULT 0,
+                -- node-level static-repo sync claim (0=Include, 1=ExcludeThisOnly,
+                -- 2=ExcludeThisAndChildren). Persists the "Not synced" decouple so an
+                -- admin-claimed node/partition survives restart + the next import.
+                sync_behavior   SMALLINT    NOT NULL DEFAULT 0,
                 content         JSONB,
                 desired_id      TEXT,
                 main_node       TEXT,
@@ -1968,6 +1984,10 @@ public static class PostgreSqlSchemaInitializer
                 last_modified   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                 version         BIGINT      NOT NULL DEFAULT 0,
                 state           SMALLINT    NOT NULL DEFAULT 0,
+                -- node-level static-repo sync claim (0=Include, 1=ExcludeThisOnly,
+                -- 2=ExcludeThisAndChildren). Persists the "Not synced" decouple so an
+                -- admin-claimed node/partition survives restart + the next import.
+                sync_behavior   SMALLINT    NOT NULL DEFAULT 0,
                 content         JSONB,
                 desired_id      TEXT,
                 main_node       TEXT,

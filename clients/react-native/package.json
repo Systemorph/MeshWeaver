@@ -1,0 +1,27 @@
+{
+  "name": "meshweaver-mobile",
+  "version": "0.1.0",
+  "private": true,
+  "description": "MeshWeaver on React Native / Expo — the native leaf pack over @meshweaver/react/core. The MAUI peer.",
+  "main": "expo/AppEntry.js",
+  "scripts": {
+    "start": "expo start",
+    "ios": "expo start --ios",
+    "android": "expo start --android",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "expo": "~52.0.0",
+    "expo-status-bar": "~2.0.0",
+    "react": "18.3.1",
+    "react-native": "0.76.5"
+  },
+  "devDependencies": {
+    "@types/react": "~18.3.0",
+    "@types/react-test-renderer": "~18.3.0",
+    "react-test-renderer": "18.3.1",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  }
+}

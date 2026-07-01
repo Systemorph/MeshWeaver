@@ -64,20 +64,20 @@ public sealed class SelfUpdateHostedService : IHostedService
             // a maybe-absent node (NotFound storm).
             .EnsureExists(_hub, accessService, _options.DefaultPolicy, _logger)
             .SelectMany(_ => workspace.GetMeshNodeStream(UpdatePolicyNodeType.NodePath)
-                .Select(node => UpdatePolicyNodeType.Parse(node, jsonOptions).Policy)
-                .DistinctUntilChanged()                               // <-- only re-switch on a REAL policy change
-                .StartWith(_options.DefaultPolicy))
+                .Select(node => UpdatePolicyNodeType.Parse(node, jsonOptions))
+                .DistinctUntilChanged(c => (c.Policy, c.RequireCiGreen)) // <-- re-switch only on a REAL policy change
+                .StartWith(new UpdatePolicyContent { Policy = _options.DefaultPolicy }))
             // The policy re-drives the poller via Switch. With DistinctUntilChanged the timer is only
             // re-subscribed when the admin ACTUALLY changes the policy (human-rare) — not a storm.
-            .Select(policy => policy == UpdatePolicyKind.None
+            .Select(content => content.Policy == UpdatePolicyKind.None
                 ? Observable.Empty<Unit>()                            // None => never poll
                 : Observable.Interval(_options.PollInterval).StartWith(-1L)
-                    .SelectMany(_ => RunOnce(policy)
+                    .SelectMany(_ => RunOnce(content)
                         .Catch((Exception ex) =>
                         {
                             // wedges-to-zero: a tick error (ACR outage, k8s 403) logs and the poller
                             // keeps ticking. No outer .Retry (that would be a resubscribe storm).
-                            _logger?.LogWarning(ex, "[SelfUpdate] check failed (policy={Policy}).", policy);
+                            _logger?.LogWarning(ex, "[SelfUpdate] check failed (policy={Policy}).", content.Policy);
                             return Observable.Empty<Unit>();
                         })))
             .Switch()
@@ -96,9 +96,9 @@ public sealed class SelfUpdateHostedService : IHostedService
 
     /// <summary>One evaluation: list tags → pick target per policy → gate target &gt; current →
     /// record availability → (if armed) patch the workloads.</summary>
-    private IObservable<Unit> RunOnce(UpdatePolicyKind policy) =>
+    private IObservable<Unit> RunOnce(UpdatePolicyContent policy) =>
         _http.Invoke(ct => _acr.ListTagsAsync(_options.PortalRepository, ct))
-            .Select(tags => VersionSelect.PickTarget(tags, policy))
+            .Select(tags => VersionSelect.PickTarget(tags, policy.Policy, policy.RequireCiGreen))
             .Where(target => !string.IsNullOrEmpty(target)
                           && VersionSelect.IsNewer(target!, ShippedReleaseSeed.InstalledPlatformVersion))
             .SelectMany(target => RecordAvailable(target!)

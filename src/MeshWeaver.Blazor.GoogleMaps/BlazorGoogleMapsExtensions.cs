@@ -17,7 +17,14 @@ namespace MeshWeaver.Blazor.GoogleMaps
         public static MessageHubConfiguration AddGoogleMaps(this MessageHubConfiguration configuration)
         {
             return configuration
-                .WithTypes(typeof(GoogleMapControl))
+                // The control + the content/config records serialised inside it (Options, markers, circles)
+                // — the reflection sweep in AddLayoutTypes only covers the MeshWeaver.Layout assembly.
+                .WithTypes(
+                    typeof(GoogleMapControl),
+                    typeof(MeshWeaver.GoogleMaps.MapOptions),
+                    typeof(MeshWeaver.GoogleMaps.LatLng),
+                    typeof(MeshWeaver.GoogleMaps.MapMarker),
+                    typeof(MeshWeaver.GoogleMaps.MapCircle))
                 .AddViews(registry => registry.WithView<GoogleMapControl, GoogleMapView>());
         }
     }

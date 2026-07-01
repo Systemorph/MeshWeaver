@@ -250,7 +250,7 @@ public class OnboardingMiddleware(RequestDelegate next, ILogger<OnboardingMiddle
     /// <summary>
     /// Reactive load of the user's role names from AccessAssignment nodes via the
     /// canonical synced query (<c>workspace.GetQuery</c>). Same machinery as
-    /// <see cref="FindUserByEmail"/> — bypasses RLS, dedupes, gates on Initial,
+    /// <c>FindUserByEmail</c> — bypasses RLS, dedupes, gates on Initial,
     /// includes static providers. Bearer auth uses this via
     /// <see cref="UserRoleResolver.LoadDbRolesAsync"/> to enrich principals with
     /// DB-resolved roles rather than only the roles stamped on the API token at

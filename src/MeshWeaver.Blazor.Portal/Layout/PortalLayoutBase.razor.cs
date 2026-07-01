@@ -13,6 +13,7 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.Authorization;
+using Microsoft.Extensions.Logging;
 using Microsoft.JSInterop;
 
 namespace MeshWeaver.Blazor.Portal.Layout;
@@ -28,6 +29,9 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     /// JS runtime used for side-panel persistence, sizing, and resize dispatch.
     /// </summary>
     [Inject] protected IJSRuntime JSRuntime { get; set; } = null!;
+
+    /// <summary>Logs notable side-panel lifecycle events (e.g. auto-hiding an active chat).</summary>
+    [Inject] protected ILogger<PortalLayoutBase> Logger { get; set; } = null!;
 
     /// <summary>
     /// Manages URL navigation in response to menu clicks and panel actions.
@@ -534,6 +538,13 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
             && SidePanelChatKeying.ShouldHideSidePanelOnThreadNavigation(
                 ctx.Node.NodeType, ctx.Node.Path, SidePanelState.ContentPath, SidePanelState.IsVisible))
         {
+            // Notable: collapsing a VISIBLE side panel because the main view opened a DIFFERENT thread.
+            // If navNode and ContentPath are actually the SAME thread this is the vanish bug — the log
+            // makes it visible instead of silent (SameThreadIdentity above should already prevent it).
+            Logger.LogWarning(
+                "[SidePanel] Auto-hiding side panel on thread nav: navNode='{NavPath}' (type {NavType}) "
+                + "vs contentPath='{ContentPath}'.",
+                ctx.Node.Path, ctx.Node.NodeType, SidePanelState.ContentPath);
             SidePanelState.SetVisible(false);
         }
 
@@ -733,34 +744,59 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
             return;
         }
 
+        // 🎯 A thread path IS its own node address — it resolves to itself (Prefix=path,
+        // Remainder=empty). Render it DIRECTLY and skip PathResolver. Round-tripping a
+        // FRESHLY-created thread through the eventually-consistent resolver (IMeshQueryCore
+        // .Query) LAGS: the just-created node isn't indexed yet, so ResolvePath emits
+        // split-onto-parent states that fail the validity filter below, and under load the
+        // first VALID resolution can exceed the 10 s Timeout → onError → SetContentPath(null)
+        // NUKES the live side-panel chat ("disappears after it starts executing"). The thread
+        // address is authoritative and known here — there is nothing to resolve, so build the
+        // SAME LayoutAreaControl a successful resolution would (area null ⇒ the thread's
+        // default chat area), synchronously, with no query and no timeout. CQRS: never
+        // round-trip a single known node through the lagging query index.
+        if (IsThreadPath(contentPath))
+        {
+            sidePanelViewModel = Controls.LayoutArea(
+                (Address)contentPath, new LayoutAreaReference(null) { Id = "" });
+            return;
+        }
+
         // Reactive — Subscribe, never await on PathResolver chain (deadlock surface;
         // see Doc/Architecture/AsynchronousCalls.md).
-        PathResolver.ResolvePath(contentPath).Subscribe(resolution =>
-        {
-            if (resolution == null)
-            {
-                sidePanelViewModel = null;
-                SidePanelState.SetContentPath(null);
-                resolvedSidePanelPath = null;
-                InvokeAsync(StateHasChanged);
-                return;
-            }
-
-            if (!string.Equals(resolution.Prefix, contentPath, StringComparison.OrdinalIgnoreCase)
-                && !string.IsNullOrEmpty(resolution.Remainder))
-            {
-                sidePanelViewModel = null;
-                SidePanelState.SetContentPath(null);
-                resolvedSidePanelPath = null;
-                InvokeAsync(StateHasChanged);
-                return;
-            }
-
-            var (area, id) = ParseSidePanelRemainder(resolution.Remainder);
-            var reference = new LayoutAreaReference(area) { Id = id ?? "" };
-            sidePanelViewModel = Controls.LayoutArea((Address)resolution.Prefix, reference);
-            InvokeAsync(StateHasChanged);
-        });
+        // 🎯 Wait for a VALID resolution, then take exactly one. ResolvePath is a LIVE stream that re-emits
+        // whenever the resolved node changes. Right after a thread is CREATED its node is not yet readable,
+        // so the first emissions are transient null / split-onto-the-parent-partition states; and it re-emits
+        // again on every chat round as the thread node updates. The old code wiped the side panel to an empty
+        // "New Thread" on ANY null/split emission → it BOTH failed a just-created thread (the initial
+        // not-ready null wiped it) AND wiped a healthy open thread mid-session (the SidePanelChatTenMessages-
+        // Test round-4 vanish). Filtering to the FIRST valid resolution skips the transient states (no wipe
+        // on a mid-update re-emit) yet still resolves once the node is readable; a genuinely unresolvable
+        // path (a deleted thread) never yields a valid resolution, so the Timeout clears it.
+        PathResolver.ResolvePath(contentPath)
+            .Where(resolution => resolution != null
+                && (string.Equals(resolution.Prefix, contentPath, StringComparison.OrdinalIgnoreCase)
+                    || string.IsNullOrEmpty(resolution.Remainder)))
+            .Take(1)
+            .Timeout(TimeSpan.FromSeconds(10))
+            .Subscribe(
+                resolution =>
+                {
+                    var (area, id) = ParseSidePanelRemainder(resolution!.Remainder);
+                    var reference = new LayoutAreaReference(area) { Id = id ?? "" };
+                    sidePanelViewModel = Controls.LayoutArea((Address)resolution.Prefix, reference);
+                    InvokeAsync(StateHasChanged);
+                },
+                _ =>
+                {
+                    // No valid resolution within the window → the content path is genuinely unresolvable
+                    // (e.g. a deleted thread, or a path that resolves only onto its parent partition). Clear
+                    // back to the new-chat state.
+                    sidePanelViewModel = null;
+                    SidePanelState.SetContentPath(null);
+                    resolvedSidePanelPath = null;
+                    InvokeAsync(StateHasChanged);
+                });
     }
 
     private static (string? Area, string? Id) ParseSidePanelRemainder(string? remainder)

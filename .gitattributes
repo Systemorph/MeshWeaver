@@ -1,3 +1,7 @@
 *.verified.txt text eol=lf working-tree-encoding=UTF-8
 *.verified.xml text eol=lf working-tree-encoding=UTF-8
 *.verified.json text eol=lf working-tree-encoding=UTF-8
+
+# Vendored third-party browser libraries for the document viewer (PDF.js, mammoth).
+# Committed for offline/prod builds; collapsed in diffs + review (regenerate via libman.json).
+src/MeshWeaver.Blazor/wwwroot/lib/** linguist-vendored linguist-generated -diff

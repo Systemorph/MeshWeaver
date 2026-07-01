@@ -32,6 +32,41 @@ public class VersionSelectTest
     public void PickTarget_NoParseableTags_ReturnsNull()
         => Assert.Null(VersionSelect.PickTarget(["latest", "main", "garbage"], UpdatePolicyKind.Continuous));
 
+    [Fact]
+    public void Continuous_IgnoresPerArchRidTags_PrefersManifestList()
+        // The multi-arch CD pushes the manifest list (3.0.0-ci.43) alongside per-RID image tags whose
+        // suffix parses as an extra pre-release identifier that sorts ABOVE it. The poller must roll to the
+        // manifest list, never the x64-only image (which would be wrong-arch on an arm64 node).
+        => Assert.Equal("3.0.0-ci.43", VersionSelect.PickTarget(
+            ["3.0.0-ci.43", "3.0.0-ci.43-linux-x64", "3.0.0-ci.43-linux-arm64", "main", "main-linux-x64"],
+            UpdatePolicyKind.Continuous));
+
+    [Fact]
+    public void Continuous_IgnoresBareGitShaTags_EvenAllDigitOnes()
+        // The CD pushes a 7-char git-sha tag per version alongside the ci.N tag. An ALL-DIGIT sha like
+        // "6943991" NuGet-parses as version 6943991.0.0 and outranks every real 3.x release — the prod bug
+        // that froze every portal on ci.122 (whose sha, 6943991, is all digits) and reverted rolls to a
+        // newer ci.N. Only a real MAJOR.MINOR.PATCH tag may be picked; git-shas (digit- or letter-) are out.
+        => Assert.Equal("3.0.0-ci.133", VersionSelect.PickTarget(
+            ["3.0.0-ci.122", "6943991", "3.0.0-ci.133", "4779b4e", "main"],
+            UpdatePolicyKind.Continuous));
+
+    // CI-green gate: a `-edge.N` build is UNVERIFIED. Default (RequireCiGreen=true) must skip it even
+    // though it is the newest; opting into "any" (RequireCiGreen=false) rolls to it.
+    [Fact]
+    public void GreenOnly_Default_ExcludesEdgeBuilds_EvenWhenNewest()
+        => Assert.Equal("3.0.0-ci.51",
+            VersionSelect.PickTarget(["3.0.0-ci.51", "3.1.0-edge.7"], UpdatePolicyKind.Continuous));
+
+    [Fact]
+    public void Any_RequireCiGreenFalse_IncludesEdgeBuilds()
+        => Assert.Equal("3.1.0-edge.7",
+            VersionSelect.PickTarget(["3.0.0-ci.51", "3.1.0-edge.7"], UpdatePolicyKind.Continuous, requireCiGreen: false));
+
+    [Fact]
+    public void UpdatePolicyContent_DefaultsToRequireCiGreen()
+        => Assert.True(new UpdatePolicyContent().RequireCiGreen, "green-only must be the safe default");
+
     [Theory]
     [InlineData("3.1.0-ci.5", "3.0.0-ci.51", true)]   // higher base wins
     [InlineData("3.0.0-ci.51", "3.0.0-ci.40", true)]  // monotonic ci number

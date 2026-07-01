@@ -422,6 +422,7 @@ public class PostgreSqlCrossSchemaQueryProvider : ICrossSchemaQueryProvider
             LastModified = new DateTimeOffset(reader.GetDateTime(reader.GetOrdinal("last_modified")), TimeSpan.Zero),
             Version = reader.GetInt64(reader.GetOrdinal("version")),
             State = (MeshNodeState)reader.GetInt16(reader.GetOrdinal("state")),
+            SyncBehavior = PgMeshNodeReader.ReadSyncBehavior(reader),
             Content = content,
             DesiredId = reader.IsDBNull(reader.GetOrdinal("desired_id")) ? null : reader.GetString(reader.GetOrdinal("desired_id")),
             MainNode = reader.IsDBNull(reader.GetOrdinal("main_node"))

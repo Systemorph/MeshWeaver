@@ -104,85 +104,56 @@ jobs:
       # rebuilt by the release path / runbook §1, NOT on every main merge.
       # CIRun=true → continuous version 3.0.0-ci.<build> baked in; image tagged <sha> + moving `main`.
       #
-      # MULTI-ARCH: we drop `-r linux-x64` and instead set RuntimeIdentifiers + ContainerRuntimeIdentifiers
-      # to "linux-x64;linux-arm64". With no single RID set, the SDK (>= 8.0.405; we're on .NET 10)
+      # MULTI-ARCH: we drop `-r linux-x64` and instead set ContainerRuntimeIdentifiers to
+      # "linux-x64;linux-arm64". With no single RID set, the SDK (>= 8.0.405; we're on .NET 10)
       # publishes per-RID and combines the results into an OCI Image Index (manifest list) — so one tag
       # serves both x86 cloud nodes AND Apple-silicon (arm64) local k3s, which can then pull-and-self-
       # update natively from ACR instead of hand-building locally. ContainerRuntimeIdentifiers MUST be a
-      # subset of RuntimeIdentifiers (we set them equal). No Docker is needed: pushing the index straight
-      # to a remote registry (ContainerRegistry set) is fully Docker-free.
+      # subset of RuntimeIdentifiers — that subset requirement is why <RuntimeIdentifiers>linux-x64;linux-arm64
+      # </RuntimeIdentifiers> is declared INSIDE Memex.Portal.Distributed.csproj (project-local), NOT as a
+      # global `-p:RuntimeIdentifiers` here: a global `-p:` propagates to every ProjectReference and makes
+      # ~6 referenced libraries fail `NETSDK1083: RuntimeIdentifier 'linux-x64;linux-arm64' is not recognized`.
+      # No Docker is needed: pushing the index straight to a remote registry (ContainerRegistry set) is Docker-free.
       # 🚨 PREREQUISITE: memex-portal-ai-base:latest in ACR must itself be MULTI-ARCH, else the arm64 leg
       # has no base layer and this step fails. base-image-acr.yml (workflow_dispatch) builds it multi-arch
       # (buildx → ACR); operators doing the first multi-arch roll run that once (see LocalColimaMac.md).
-      # 🚨 The ;-separated property LISTS are %3B-escaped, NOT raw `;`: a raw `;` in a `-p:Foo=a;b` arg is
-      # parsed by MSBuild's command-line property splitter as the START OF A NEW PROPERTY (`b`), which it
-      # then rejects — `MSBUILD : error MSB1006: Property is not valid. Switch: linux-arm64`. `%3B` is the
-      # MSBuild escape for a literal semicolon inside a value. Applies to RuntimeIdentifiers,
-      # ContainerRuntimeIdentifiers AND ContainerImageTags (every `-p:` whose value is a `;`-list).
+      # 🚨 List-valued `-p:` props are wrapped '"a;b"' — single-quoted DOUBLE-quotes around a REAL `;`, NOT
+      # `%3B`. `%3B` is an MSBuild-ESCAPED (literal) semicolon, so `-p:ContainerRuntimeIdentifiers=a%3Bb` is a
+      # SINGLE RID value "a;b" that NEVER splits into a list — the SDK then builds ONE image with the bogus RID
+      # "linux-x64;linux-arm64" and fails (OutputPath MSB4115 / NETSDK1083). The '"…"' form (the SDK's own
+      # documented Bash escaping) keeps the value one CLI switch while letting MSBuild split the real `;` into a
+      # 2-item list. Applies to ContainerRuntimeIdentifiers AND ContainerImageTags (every `-p:` whose value is a `;`-list).
       - name: Build + push portal-ai
         run: >
           dotnet publish memex/aspire/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj
           -c Release --no-self-contained -t:PublishContainer -p:PublishProfile=
-          -p:RuntimeIdentifiers="linux-x64%3Blinux-arm64"
-          -p:ContainerRuntimeIdentifiers="linux-x64%3Blinux-arm64"
+          -p:ContainerRuntimeIdentifiers='"linux-x64;linux-arm64"'
           -p:CIRun=true
           -p:ContainerRegistry=${{ env.ACR }}
           -p:ContainerRepository=memex-portal-ai
-          -p:ContainerImageTags="${{ steps.vars.outputs.version }}%3B${{ steps.vars.outputs.sha }}%3Bmain"
+          -p:ContainerImageTags='"${{ steps.vars.outputs.version }};${{ steps.vars.outputs.sha }};main"'
           -p:ContainerBaseImage=${{ env.ACR }}/memex-portal-ai-base:latest
       # migration — lean image on the standard (already multi-arch) aspnet base; same multi-arch publish.
+      # <RuntimeIdentifiers> lives in Memex.Database.Migration.csproj (project-local, same reason as above).
       - name: Build + push migration
         run: >
           dotnet publish memex/aspire/Memex.Database.Migration/Memex.Database.Migration.csproj
           -c Release --no-self-contained -t:PublishContainer -p:PublishProfile=
-          -p:RuntimeIdentifiers="linux-x64%3Blinux-arm64"
-          -p:ContainerRuntimeIdentifiers="linux-x64%3Blinux-arm64"
+          -p:ContainerRuntimeIdentifiers='"linux-x64;linux-arm64"'
           -p:CIRun=true
           -p:ContainerRegistry=${{ env.ACR }}
           -p:ContainerRepository=memex-migration
-          -p:ContainerImageTags="${{ steps.vars.outputs.version }}%3B${{ steps.vars.outputs.sha }}%3Bmain"
+          -p:ContainerImageTags='"${{ steps.vars.outputs.version }};${{ steps.vars.outputs.sha }};main"'
 
-  # ───────────────────────────────── DEPLOY ──────────────────────────────────
-  # One leg per environment (namespace) on the shared private cluster. Each leg points the
-  # deployment at the freshly-pushed SHA tag and restarts — the documented code-update flow
-  # (kubectl set image + rollout restart + rollout status), NOT deploy.sh (env setup).
-  # fail-fast:false so one environment failing doesn't abort the rollout to the others.
-  deploy:
-    name: "Deploy ${{ matrix.ns }}"
-    needs: images
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    strategy:
-      fail-fast: false
-      matrix:
-        ns: [memex, atioz, memex-cloud]
-    # Map each namespace to a GitHub Environment so prod (memex-cloud) CAN be given a required-
-    # reviewer / wait-timer protection rule later without touching this file. No rule = auto-deploy.
-    environment: ${{ matrix.ns }}
-    steps:
-      - name: Ensure Azure CLI
-        # GitHub's ubuntu-latest no longer ships the Azure CLI on PATH for azure/login@v2
-        # ("Unable to locate executable file: az"). Install it if missing (idempotent).
-        run: command -v az >/dev/null || curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
-      - name: Azure login (OIDC)
-        uses: azure/login@v2
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-      # Private cluster → kubectl ONLY via `az aks command invoke`. $NS/$TAG are expanded by the
-      # runner shell here, so the resolved namespace + tag are baked into the command string the
-      # cluster runs. migration + portal are set + restarted together (matches AGENTS.md); we then
-      # WAIT on the portal rollout so an unhealthy image fails this job loudly instead of going green.
-      - name: Roll out to ${{ matrix.ns }}
-        env:
-          NS: ${{ matrix.ns }}
-          TAG: ${{ needs.images.outputs.tag }}
-        run: |
-          set -euo pipefail
-          az aks command invoke -g "$AKS_RG" -n "$AKS_CLUSTER" --command "
-            kubectl -n $NS set image deployment/memex-portal-deployment memex-portal=$ACR/memex-portal-ai:$TAG;
-            kubectl -n $NS set image deployment/memex-migration-deployment memex-migration=$ACR/memex-migration:$TAG;
-            kubectl -n $NS rollout restart deployment/memex-migration-deployment deployment/memex-portal-deployment;
-            kubectl -n $NS rollout status deployment/memex-portal-deployment --timeout=300s
-          "
+  # ─────────────────────────────── NO DEPLOY JOB ─────────────────────────────
+  # Deployment is PULL-BASED, not push. CI's job ends at "publish the image to ACR" (the `images`
+  # job above). Each installation — memex / atioz / memex-cloud AND every external install in the
+  # world that prod knows nothing about — runs the in-portal self-updater
+  # (memex/Memex.Portal.Shared/SelfUpdate): it polls ACR with its OWN workload identity, and, per its
+  # own Admin/UpdatePolicy (Continuous/Stable/None + the CI-green gate), patches its OWN portal +
+  # migration Deployments via its OWN in-cluster ServiceAccount token. So CI needs NO cluster
+  # credentials — which is also why the old `az aks command invoke` deploy job was deleted: it
+  # required a central service principal with per-cluster Azure RBAC (the `commandResults/read`
+  # authorization failure on 2026-06-29), a model that cannot scale to installs prod doesn't manage.
+  # See SelfUpdate.md / DEPLOY-RUNBOOK.md for enabling self-update on an environment (the SA + RBAC are
+  # in the Helm chart; set selfUpdate.azureClientId and grant the UAMI AcrPull).

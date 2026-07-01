@@ -35,6 +35,9 @@ public static class ThreadLayoutAreas
     /// </summary>
     public static MessageHubConfiguration AddThreadLayoutAreas(this MessageHubConfiguration configuration)
         => configuration
+            // Per-thread-hub last-good holder — survives area/component re-creation so the fresh data section
+            // can be seeded immediately (see SubscribeThreadVm / ThreadVmHolder).
+            .WithServices(services => services.AddSingleton<ThreadVmHolder>())
             // Legacy ThreadSubmission.ApplyResubmit / ThreadSubmission.ApplyDeleteFromMessage handlers
             // removed — click actions now call ThreadSubmission.ApplyResubmit /
             // ApplyDeleteFromMessage directly. See RequestViaStreamUpdate.md.
@@ -159,8 +162,7 @@ public static class ThreadLayoutAreas
 
         // OWN MeshNode stream — push ThreadViewModel to data section; contains all
         // thread state for the Blazor view.
-        var vmStream = host.Workspace.GetMeshNodeStream().Select(node => BuildThreadViewModel(node, hubPath, host.Hub.JsonSerializerOptions));
-        host.RegisterForDisposal(vmStream.DistinctUntilChanged().Subscribe(vm => host.UpdateData(ThreadDataKey, vm)));
+        SubscribeThreadVm(host, hubPath);
 
         // Static container — never rebuilt
         return Controls.Stack
@@ -177,6 +179,61 @@ public static class ThreadLayoutAreas
     /// from the thread's own MeshNode. Shared by <see cref="ThreadView"/> and
     /// <see cref="ThreadChatView"/> (the latter in its <c>WithShowFullHeader()</c> mode).
     /// </summary>
+    /// <summary>
+    /// Subscribes the OWN MeshNode stream → <see cref="ThreadViewModel"/> → the data section, with a
+    /// KEEP-LAST-GOOD guard. The stream alternates between the typed MeshThread (the owning hub's own write)
+    /// and a cross-hub / change-feed representation that can momentarily emit a NULL or message-empty node;
+    /// projecting that yields an empty viewmodel (Messages=[]) that flaps the data section to the empty state
+    /// — HasNoMessages → the composer blanks: the intermittent round-N "chat vanishes" (confirmed by the
+    /// footer-gate diagnostic, createdBy=&lt;null&gt; noMsgs=True at the blank). A new thread legitimately
+    /// STARTS empty (the first emission passes; lastVm is null), so the discriminator is a REGRESSION to
+    /// empty AFTER we have shown messages — that is the transient. Drop only those and keep the last-good.
+    /// Subscribe callbacks are serialized, so the closure state is race-free.
+    /// </summary>
+    private static void SubscribeThreadVm(LayoutAreaHost host, string hubPath)
+    {
+        // The last-good lives on a per-thread-HUB holder, not a local closure: the ThreadChatView (and its
+        // LayoutAreaHost) re-creates ~1-2× per conversation on a legitimate thread rebind, which would reset
+        // a closure/component field to null — and the fresh GetMeshNodeStream emits null before the node
+        // loads, so the re-created component would bind a null data section → blank (the residual round-N
+        // "chat vanishes", pinned by TCV-INIT/TCV-EMPTY fieldNull=True). The hub OUTLIVES the area, so seed
+        // the fresh data section with the holder's last-good IMMEDIATELY, before the stream's first emission.
+        var holder = host.Hub.ServiceProvider.GetRequiredService<ThreadVmHolder>();
+        if (holder.LastGood is not null)
+            host.UpdateData(ThreadDataKey, holder.LastGood);
+        var sub = host.Workspace.GetMeshNodeStream()
+            .Select(node => BuildThreadViewModel(node, hubPath, host.Hub.JsonSerializerOptions))
+            .DistinctUntilChanged()
+            .Subscribe(vm =>
+            {
+                // Keep the last-good: skip a transient TRULY-empty emission (no committed Messages AND no
+                // pending user text) after we had content — it would blank the data section → the round-N
+                // "vanish". A Pending-only emission (the just-sent optimistic user message: Messages=0 but
+                // PendingMessageTexts=[text]) IS content and MUST pass, else the new user bubble is dropped
+                // server-side before it reaches the client (the "saw N-1" failure).
+                static bool HasContent(ThreadViewModel v) => v.Messages.Count > 0 || v.PendingMessageTexts.Count > 0;
+                if (holder.LastGood is { } last && HasContent(last) && !HasContent(vm))
+                    return;
+                if (HasContent(vm))
+                    holder.LastGood = vm;
+                host.UpdateData(ThreadDataKey, vm);
+            });
+        host.RegisterForDisposal(sub);
+    }
+
+    /// <summary>
+    /// Per-thread-hub holder for the last content-bearing <see cref="ThreadViewModel"/>. The thread hub
+    /// OUTLIVES the per-render LayoutAreaHost / ThreadChatView, so this survives an area+component
+    /// re-creation (a legitimate thread rebind) where a closure/component field would reset to null. It lets
+    /// a freshly re-created area SEED its empty data section with the last-good immediately — instead of
+    /// binding the null that GetMeshNodeStream emits before the node loads, which is the residual
+    /// intermittent "chat vanishes". Registered per thread hub as a singleton (lifetime = the hub).
+    /// </summary>
+    public sealed class ThreadVmHolder
+    {
+        public ThreadViewModel? LastGood { get; set; }
+    }
+
     internal static ThreadViewModel BuildThreadViewModel(MeshNode? node, string hubPath, JsonSerializerOptions options)
     {
         // 🚨 ContentAs (DESERIALIZE), never `as MeshThread`. The node stream alternates between the
@@ -219,8 +276,7 @@ public static class ThreadLayoutAreas
         var hubPath = host.Hub.Address.ToString();
         var ownNodeStream = host.Workspace.GetMeshNodeStream();
 
-        var vmStream = ownNodeStream.Select(node => BuildThreadViewModel(node, hubPath, host.Hub.JsonSerializerOptions));
-        host.RegisterForDisposal(vmStream.DistinctUntilChanged().Subscribe(vm => host.UpdateData(ThreadDataKey, vm)));
+        SubscribeThreadVm(host, hubPath);
 
         // Push title to data section so the side panel header can read it.
         var titleStream = ownNodeStream

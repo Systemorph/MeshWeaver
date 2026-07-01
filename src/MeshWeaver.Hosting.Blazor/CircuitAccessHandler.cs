@@ -30,6 +30,10 @@ public class CircuitAccessHandler : CircuitHandler
     private readonly AuthenticationStateProvider _authStateProvider;
     private readonly ICircuitContextAccessor _circuitContextAccessor;
     private readonly ILogger _logger;
+    // Dedicated low-volume category for circuit lifecycle (open/close/up/down) so it can be made
+    // visible (Information) independently of the chatty MeshWeaver.AccessContext channel — these are
+    // the "what's going on in Blazor" signals: a connection-down is the literal transport flake.
+    private readonly ILogger _circuitLogger;
     private AccessContext? _userContext;
 
     /// <summary>
@@ -49,6 +53,7 @@ public class CircuitAccessHandler : CircuitHandler
         _authStateProvider = authStateProvider;
         _circuitContextAccessor = circuitContextAccessor;
         _logger = loggerFactory.CreateLogger("MeshWeaver.AccessContext");
+        _circuitLogger = loggerFactory.CreateLogger("MeshWeaver.Blazor.Circuit");
     }
 
     /// <summary>
@@ -100,8 +105,32 @@ public class CircuitAccessHandler : CircuitHandler
             accessService?.SetCircuitContext(_userContext);
         }
 
-        _logger.LogDebug("Circuit opened: id={CircuitId}, user={UserId}",
+        // Information (was Debug): one line per circuit — cheap, and the anchor for correlating a
+        // user's session with the connection up/down churn below and any anonymous-gate redirect.
+        _circuitLogger.LogInformation("Circuit opened: id={CircuitId}, user={UserId}",
             circuit.Id, _userContext?.ObjectId ?? "(anonymous)");
+    }
+
+    /// <summary>
+    /// The SignalR transport for this circuit dropped (network blip, tab backgrounded, server
+    /// pressure, deploy). Logged at Warning because a repeated up/down churn for one user IS the
+    /// "flaky" symptom — this is the server-side trace that was previously missing entirely
+    /// (OnConnectionDownAsync was never overridden, so a flapping circuit left no record).
+    /// </summary>
+    public override Task OnConnectionDownAsync(Circuit circuit, CancellationToken ct)
+    {
+        _circuitLogger.LogWarning("Circuit connection DOWN: id={CircuitId}, user={UserId}",
+            circuit.Id, _userContext?.ObjectId ?? "(anonymous)");
+        return Task.CompletedTask;
+    }
+
+    /// <summary>The SignalR transport re-established (reconnect succeeded). Pairs with
+    /// <see cref="OnConnectionDownAsync"/> so a down→up gap is measurable in the logs.</summary>
+    public override Task OnConnectionUpAsync(Circuit circuit, CancellationToken ct)
+    {
+        _circuitLogger.LogInformation("Circuit connection UP: id={CircuitId}, user={UserId}",
+            circuit.Id, _userContext?.ObjectId ?? "(anonymous)");
+        return Task.CompletedTask;
     }
 
     /// <inheritdoc />
@@ -127,13 +156,34 @@ public class CircuitAccessHandler : CircuitHandler
     /// <inheritdoc />
     public override Task OnCircuitClosedAsync(Circuit circuit, CancellationToken ct)
     {
-        _logger.LogDebug("Circuit closed: id={CircuitId}, user={UserId}",
+        _circuitLogger.LogInformation("Circuit closed: id={CircuitId}, user={UserId}",
             circuit.Id, _userContext?.ObjectId ?? "(anonymous)");
         // Clear the persistent fallback to prevent stale context
         var accessService = _hub.ServiceProvider.GetService<AccessService>();
         accessService?.ClearPersistentCircuitContext();
         _circuitContextAccessor.SetUserContext(null);
         _userContext = null;
+
+        // 🚨 Dispose the per-circuit portal hub (portal/<circuitId>) — this is the ONE
+        // exactly-once teardown point for it. Circuit close is terminal for the id (Blazor
+        // never reuses a closed circuit; reconnects keep the circuit alive and don't land
+        // here), and PortalApplication.Dispose deliberately does NOT dispose the hub (many
+        // wrapper instances share it within a circuit). Without this, every closed circuit
+        // (tab close, refresh, transport death, each E2E browser context) leaves a ZOMBIE
+        // portal hub whose hosted sync-stream children keep heartbeating and fanning out
+        // DataChangedEvents forever — the accumulation that saturated the routing thread,
+        // starved live circuits' SignalR keepalive (the chat-vanish), and pegged the e2e
+        // portal at ~1.2 cores with 7k leaked sync hubs (2026-07-01). Disposing the portal
+        // hub disposes its sync children; each child's teardown posts UnsubscribeRequest to
+        // its owner node, so the owner-side mirrors close too.
+        var portalHub = _hub.GetHostedHub(
+            AddressExtensions.CreatePortalAddress(circuit.Id), HostedHubCreation.Never);
+        if (portalHub is not null)
+        {
+            _circuitLogger.LogInformation(
+                "Disposing per-circuit portal hub {Address} on circuit close", portalHub.Address);
+            portalHub.Dispose();
+        }
         return Task.CompletedTask;
     }
 

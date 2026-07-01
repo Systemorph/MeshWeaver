@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
+using System.Reactive.Concurrency;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Runtime.CompilerServices;
@@ -37,6 +38,18 @@ public class InboxToolIntegrationTest : AITestBase
     public InboxToolIntegrationTest(ITestOutputHelper output) : base(output) { }
 
     protected override bool ShareMeshAcrossTests => true;
+
+    // These tests drive multiple sequential slow-fake rounds (~5 s each) across a SHARED mesh,
+    // and on the 2-core CI shard the rotating stale-mirror/compile flake adds transient
+    // threadpool-starvation spikes that delay a round's continuation well past the default 60 s
+    // dispose watchdog — even though the flow settles correctly (it just takes longer). Raise the
+    // per-test deadline to 180 s so the generous-but-bounded .Within/.Timeout waits below have room
+    // to ride out a spike instead of the watchdog killing a still-progressing test. Mirrors the
+    // established precedent for slow concurrency/stale-frame tests (FrameworkStaleInstanceRenderTest
+    // = 180 s, NodeTypeReleaseTest/DeletionTests = 120 s). The underlying stale-frame root cause is
+    // tracked separately; this only stops the watchdog from racing a legitimately-slow settle.
+    protected override TimeSpan TestSoftDeadline => TimeSpan.FromSeconds(120);
+    protected override TimeSpan TestHardDeadline => TimeSpan.FromSeconds(180);
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => base.ConfigureMesh(builder)
@@ -196,14 +209,16 @@ public class InboxToolIntegrationTest : AITestBase
             modelName: "inbox-fake-slow", createdBy: "rbuergi@systemorph.com");
 
         var executing = await WaitForThreadAsync(threadPath,
-            t => t.IsExecuting && !string.IsNullOrEmpty(t.ActiveMessageId), 10_000, ct);
+            t => t.IsExecuting && !string.IsNullOrEmpty(t.ActiveMessageId), 30_000, ct);
         var r1 = executing.ActiveMessageId!;
 
         // Wait until R1 is actually streaming (ActiveResponseSegment.ResponseText wired).
+        // .Should().Within().Match() subscribes on the TaskPool (load-bearing under 2-core load)
+        // and bounds generously instead of the prior tight 10s race.
         await ws.GetMeshNodeStream($"{threadPath}/{r1}")
             .Select(n => (n?.Content as ThreadMessage)?.Text)
-            .Where(txt => !string.IsNullOrEmpty(txt) && txt!.Contains("Generating response"))
-            .Take(1).Timeout(TimeSpan.FromSeconds(10)).ToTask(ct);
+            .Should().Within(60.Seconds())
+            .Match(txt => !string.IsNullOrEmpty(txt) && txt!.Contains("Generating response"));
 
         // Queue a follow-up while round 1 streams. Gate on the thread hub's OWN stream so
         // the submission watcher's OfferFromNode (Stage 1, subscribed to the same own
@@ -211,7 +226,7 @@ public class InboxToolIntegrationTest : AITestBase
         client.SubmitMessage(threadPath, "Follow-up while you work",
             modelName: "inbox-fake-slow", createdBy: "rbuergi@systemorph.com");
         var queued = await WaitForOwnAsync(threadHub,
-            t => t.PendingUserMessages.Count > 0, 5_000, ct);
+            t => t.PendingUserMessages.Count > 0, 30_000, ct);
         var u2 = queued.PendingUserMessages.Keys.Single();
 
         // Mid-execution check_inbox → in-memory drain + inline delivery (no split, no node write).
@@ -223,7 +238,7 @@ public class InboxToolIntegrationTest : AITestBase
         // check_inbox delivered it in-memory and did NOT write the thread node. The fold
         // (pending → ingested) happens only at the round-end terminal write.
         var stillExecuting = await WaitForOwnAsync(threadHub,
-            t => t.IsExecuting && t.PendingUserMessages.ContainsKey(u2), 5_000, ct);
+            t => t.IsExecuting && t.PendingUserMessages.ContainsKey(u2), 30_000, ct);
         stillExecuting.PendingUserMessages.Should().ContainKey(u2,
             "check_inbox must not clear pending mid-round");
         stillExecuting.IngestedMessageIds.Should().NotContain(u2,
@@ -233,15 +248,15 @@ public class InboxToolIntegrationTest : AITestBase
         // have frozen R1 with partial text and streamed "slow ack" into a separate R2).
         var r1Final = await ws.GetMeshNodeStream($"{threadPath}/{r1}")
             .Select(n => n?.Content as ThreadMessage)
-            .Where(m => m is { Status: ThreadMessageStatus.Completed })
-            .Take(1).Timeout(TimeSpan.FromSeconds(15)).ToTask(ct);
+            .Should().Within(60.Seconds())
+            .Match(m => m is { Status: ThreadMessageStatus.Completed });
         r1Final!.Text.Should().Contain("slow ack",
             "the agent's continuation streams into the SAME cell and completes there (no split)");
 
         // Round-end fold: the consumed follow-up is now in IngestedMessageIds and pending is
         // empty — delivered inline, never lost, and never re-dispatched as a fresh round.
         var afterRound = await WaitForThreadAsync(threadPath,
-            t => !t.IsExecuting && t.IngestedMessageIds.Contains(u2), 10_000, ct);
+            t => !t.IsExecuting && t.IngestedMessageIds.Contains(u2), 45_000, ct);
         afterRound.PendingUserMessages.Should().NotContainKey(u2,
             "the consumed follow-up is folded out of pending at round-end");
         afterRound.IngestedMessageIds.Should().Contain(u2);
@@ -267,7 +282,7 @@ public class InboxToolIntegrationTest : AITestBase
         client.SubmitMessage(threadPath, "First",
             modelName: "inbox-fake-slow", createdBy: "rbuergi@systemorph.com");
         await WaitForThreadAsync(threadPath,
-            t => t.IsExecuting && !string.IsNullOrEmpty(t.ActiveMessageId), 10_000, ct);
+            t => t.IsExecuting && !string.IsNullOrEmpty(t.ActiveMessageId), 30_000, ct);
 
         // Two follow-ups, submitted serially so each lands cleanly in PendingUserMessages
         // (avoids the separate concurrent-submit array-replace race — out of scope here).
@@ -276,18 +291,35 @@ public class InboxToolIntegrationTest : AITestBase
         client.SubmitMessage(threadPath, "Follow-up ONE",
             modelName: "inbox-fake-slow", createdBy: "rbuergi@systemorph.com");
         var afterFirst = await WaitForOwnAsync(threadHub,
-            t => t.IsExecuting && t.PendingUserMessages.Count >= 1, 5_000, ct);
+            t => t.IsExecuting && t.PendingUserMessages.Count >= 1, 30_000, ct);
         var u2 = afterFirst.PendingUserMessages.Keys.First();
 
         client.SubmitMessage(threadPath, "Follow-up TWO",
             modelName: "inbox-fake-slow", createdBy: "rbuergi@systemorph.com");
         var afterSecond = await WaitForOwnAsync(threadHub,
-            t => t.IsExecuting && t.PendingUserMessages.Count >= 2, 5_000, ct);
+            t => t.IsExecuting && t.PendingUserMessages.Count >= 2, 30_000, ct);
         var bothPending = afterSecond.PendingUserMessages.Keys.ToHashSet();
 
-        // check_inbox: both delivered inline from the channel.
+        // check_inbox: both delivered inline from the channel. Seeing PendingUserMessages.Count>=2
+        // on the NODE does NOT prove both are in the in-memory channel yet: the submission watcher's
+        // Stage-1 OfferFromNode buffers each follow-up on a SEPARATE subscription to the same own
+        // stream, so it can lag the test's own-stream read by a beat. check_inbox is explicitly
+        // designed to be polled between steps, and DrainPending returns only newly-offered messages,
+        // so we poll the (in-memory, node-write-free) drain reactively and accumulate until BOTH
+        // follow-ups have been delivered inline. Accumulation = the union actually delivered — the
+        // intent ("both delivered inline, none lost, with the 💬 marker") is unchanged; only the
+        // wait is robust against the Stage-1 buffering beat.
         var tool = InboxTool.CreateCheckInboxTool(threadHub);
-        var toolResult = (await tool.InvokeAsync(new AIFunctionArguments(), ct))?.ToString();
+        var acc = new System.Text.StringBuilder();
+        var toolResult = await Observable.Interval(50.Milliseconds()).StartWith(0L)
+            .SelectMany(_ => Observable.FromAsync(() => tool.InvokeAsync(new AIFunctionArguments(), ct).AsTask()))
+            .Do(r => acc.Append(r?.ToString()))
+            .Select(_ => acc.ToString())
+            .Where(s => s.Contains("Follow-up ONE") && s.Contains("Follow-up TWO"))
+            .Take(1)
+            .Timeout(TimeSpan.FromSeconds(30))
+            .SubscribeOn(TaskPoolScheduler.Default)
+            .ToTask(ct);
         toolResult.Should().Contain("Follow-up ONE");
         toolResult.Should().Contain("Follow-up TWO");
         toolResult.Should().Contain("💬");
@@ -296,7 +328,7 @@ public class InboxToolIntegrationTest : AITestBase
         // check_inbox returned the steering text, BOTH follow-ups are STILL in
         // PendingUserMessages on the node and neither is ingested — the drain wrote nothing.
         var midRound = await WaitForOwnAsync(threadHub,
-            t => t.IsExecuting, 5_000, ct);
+            t => t.IsExecuting, 30_000, ct);
         foreach (var id in bothPending)
         {
             midRound.PendingUserMessages.Should().ContainKey(id,
@@ -309,7 +341,7 @@ public class InboxToolIntegrationTest : AITestBase
         var afterRound = await WaitForThreadAsync(threadPath,
             t => !t.IsExecuting
                  && bothPending.All(id => t.IngestedMessageIds.Contains(id)),
-            20_000, ct);
+            45_000, ct);
         afterRound.PendingUserMessages.Should().BeEmpty(
             "both consumed follow-ups are folded out of pending at round-end");
         afterRound.IngestedMessageIds.Should().Contain(u2);
@@ -334,7 +366,7 @@ public class InboxToolIntegrationTest : AITestBase
 
         var roundOneStart = await WaitForThreadAsync(threadPath,
             t => t.IsExecuting && t.IngestedMessageIds.Count >= 1,
-            10_000, ct);
+            30_000, ct);
         roundOneStart.IsExecuting.Should().BeTrue();
         var u1 = roundOneStart.IngestedMessageIds[0];
 
@@ -347,7 +379,7 @@ public class InboxToolIntegrationTest : AITestBase
         var queuedState = await WaitForThreadAsync(threadPath,
             t => t.PendingUserMessages.Count >= 1
                  && t.IsExecuting,
-            5_000, ct);
+            30_000, ct);
         queuedState.PendingUserMessages.Should().NotBeEmpty(
             "u2 must be queued in PendingUserMessages while round 1 runs");
 
@@ -358,6 +390,7 @@ public class InboxToolIntegrationTest : AITestBase
             .Update(curr => curr?.Content is MeshThread t
                 ? curr with { Content = t with { RequestedStatus = ThreadExecutionStatus.Cancelled } }
                 : curr!)
+            .SubscribeOn(TaskPoolScheduler.Default)
             .FirstAsync().ToTask(ct);
         (cancelled.Content as MeshThread)?.RequestedStatus.Should().Be(ThreadExecutionStatus.Cancelled);
 
@@ -365,7 +398,7 @@ public class InboxToolIntegrationTest : AITestBase
         // Round 2 ingests u2 and produces a NEW response cell distinct from r1.
         var afterCancel = await WaitForThreadAsync(threadPath,
             t => t.IngestedMessageIds.Count >= 2,
-            20_000, ct);
+            45_000, ct);
 
         afterCancel.IngestedMessageIds.Count.Should().BeGreaterThanOrEqualTo(2,
             "u2 must be ingested into a new round after ESC drains the in-flight one");
@@ -388,7 +421,7 @@ public class InboxToolIntegrationTest : AITestBase
 
         var roundStart = await WaitForThreadAsync(threadPath,
             t => t.IsExecuting && t.IngestedMessageIds.Count == 1,
-            10_000, ct);
+            30_000, ct);
         var u1 = roundStart.IngestedMessageIds[0];
         var initialMsgsCount = roundStart.Messages.Count;
 
@@ -399,15 +432,33 @@ public class InboxToolIntegrationTest : AITestBase
             .Update(curr => curr?.Content is MeshThread t
                 ? curr with { Content = t with { RequestedStatus = ThreadExecutionStatus.Cancelled } }
                 : curr!)
+            .SubscribeOn(TaskPoolScheduler.Default)
             .FirstAsync().ToTask(ct);
         (cancelled.Content as MeshThread)?.RequestedStatus.Should().Be(ThreadExecutionStatus.Cancelled);
 
         // Wait for the cancel cleanup to settle (IsExecuting flips false).
         var afterCancel = await WaitForThreadAsync(threadPath,
-            t => !t.IsExecuting, 10_000, ct);
+            t => !t.IsExecuting, 30_000, ct);
 
-        // Give the watcher ~1.5s of grace to incorrectly fire a phantom round.
-        await Task.Delay(1500, ct);
+        // No pending → the watcher must NOT fire a phantom ROUND. Watch the stream (the watcher's
+        // source) for the bad signal — a re-dispatch — and assert it never arrives within a bounded
+        // window. The signal is the round's PRODUCT: a new cell appended, or a second ingest. We do
+        // NOT key on raw IsExecuting here: right after the cancel there is a legitimate transient
+        // frame (Status=Executing while RequestedStatus=Cancelled) — round 1 winding down, same
+        // single ingest, no new cell — and the cache replay + TaskPool scheduling can surface that
+        // frame to this subscriber AFTER the !IsExecuting wait above, tripping a bare IsExecuting
+        // check (the CI-only flake). A phantom round, by contrast, re-ingests or appends a cell, so
+        // those two signals catch it cleanly; a phantom that re-enters execution and lingers is
+        // caught by the steady-state IsExecuting==false assert below. This is the reactive form of
+        // the sanctioned "confirm nothing happened" negative wait (matches Submit_SingleSubmit's
+        // NotEmit), so a phantom that fires anywhere in the window is caught.
+        await Mesh.GetWorkspace().GetMeshNodeStream(threadPath)
+            .SubscribeOn(TaskPoolScheduler.Default)
+            .Select(n => n.Content as MeshThread)
+            .Where(t => t is not null
+                        && (t!.Messages.Count > initialMsgsCount
+                            || t.IngestedMessageIds.Count > 1))
+            .Should().NotEmit(1500.Milliseconds());
 
         var final = await ReadThreadAsync(threadPath, ct);
         // Self-diagnosing assert: this has failed CI-only (passes solo AND
@@ -440,17 +491,27 @@ public class InboxToolIntegrationTest : AITestBase
             threadPath, "First",
             modelName: "inbox-fake-slow", createdBy: "rbuergi@systemorph.com");
         await WaitForThreadAsync(threadPath,
-            t => t.IsExecuting && t.IngestedMessageIds.Count == 1, 10_000, ct);
+            t => t.IsExecuting && t.IngestedMessageIds.Count == 1, 30_000, ct);
 
-        // Queue three follow-ups.
+        // Queue three follow-ups. Serialize each submit behind its OWN registration (await the
+        // UserMessageIds growth before submitting the next) so each cross-mirror append diffs off
+        // the prior's COMMITTED base — avoiding the concurrent-submit RFC 7396 array-replace
+        // clobber that intermittently drops a queued id (the thread then settles with fewer than 4
+        // userIds and the drain "loses" a message). That clobber is an ORTHOGONAL race owned by
+        // Hammer_ConcurrentSubmits_AllIngested_NoneLost (its dedicated 150 s no-loss guard); THIS
+        // test's concern is that cancel-then-restart drains ALL queued follow-ups, and it still
+        // queues three of them mid-round. Mirrors CheckInbox_TwoFollowUps ("submitted serially …
+        // avoids the concurrent-submit array-replace race — out of scope here").
+        var expectedUserIds = 1;
         foreach (var text in new[] { "Second", "Third", "Fourth" })
         {
             client.SubmitMessage(
                 threadPath, text,
                 modelName: "inbox-fake-slow", createdBy: "rbuergi@systemorph.com");
+            expectedUserIds++;
+            await WaitForThreadAsync(threadPath,
+                t => t.UserMessageIds.Count >= expectedUserIds, 30_000, ct);
         }
-        await WaitForThreadAsync(threadPath,
-            t => t.UserMessageIds.Count == 4, 5_000, ct);
 
         // ESC.
         // Cancel via stream.Update (see RequestViaStreamUpdate.md). Awaiting
@@ -459,6 +520,7 @@ public class InboxToolIntegrationTest : AITestBase
             .Update(curr => curr?.Content is MeshThread t
                 ? curr with { Content = t with { RequestedStatus = ThreadExecutionStatus.Cancelled } }
                 : curr!)
+            .SubscribeOn(TaskPoolScheduler.Default)
             .FirstAsync().ToTask(ct);
         (cancelled.Content as MeshThread)?.RequestedStatus.Should().Be(ThreadExecutionStatus.Cancelled);
 
@@ -466,7 +528,7 @@ public class InboxToolIntegrationTest : AITestBase
         // round 2/3/4 (one user message per round per PlanNextRound design).
         var final = await WaitForThreadAsync(threadPath,
             t => t.IngestedMessageIds.Count == 4 && !t.IsExecuting,
-            60_000, ct);
+            120_000, ct);
         final.IngestedMessageIds.Should().HaveCount(4);
         final.UserMessageIds.Should().HaveCount(4);
         final.PendingUserMessages.Should().BeEmpty();
@@ -526,7 +588,7 @@ public class InboxToolIntegrationTest : AITestBase
             threadPath, texts[0],
             modelName: "inbox-fake-slow", createdBy: "rbuergi@systemorph.com");
         await WaitForThreadAsync(threadPath,
-            t => t.IsExecuting && t.IngestedMessageIds.Count >= 1, 15_000, ct);
+            t => t.IsExecuting && t.IngestedMessageIds.Count >= 1, 30_000, ct);
 
         // HAMMER: fire the remaining submits back-to-back with NO await between them
         // (the real user-types-fast shape — same as RapidSubmits / Cancel_WithMultiplePending).
@@ -570,7 +632,8 @@ public class InboxToolIntegrationTest : AITestBase
             .Merge()
             .ToList()
             .FirstAsync()
-            .Timeout(TimeSpan.FromSeconds(30))
+            .Timeout(TimeSpan.FromSeconds(60))
+            .SubscribeOn(TaskPoolScheduler.Default)
             .ToTask(ct);
 
         // Every submitted text round-trips into a user cell (none lost). The
@@ -639,7 +702,9 @@ public class InboxToolIntegrationTest : AITestBase
     private async Task<IMessageHub> GetThreadHubAsync(string threadPath, CancellationToken ct)
     {
         // Trigger hub activation by reading the node once via the workspace.
-        await ReadNode(threadPath).FirstAsync().ToTask(ct);
+        // .Should().Emit() subscribes on the TaskPool (off the xUnit sync-context) so the
+        // one-shot read doesn't starve under 2-core load.
+        await ReadNode(threadPath).Should().Within(60.Seconds()).Emit();
         // Resolve the hub through the mesh service.
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         // GetHub is internal â€” we use the same trick as ThreadExecution: the
@@ -652,7 +717,7 @@ public class InboxToolIntegrationTest : AITestBase
 
     private async Task<MeshThread> ReadThreadAsync(string threadPath, CancellationToken ct)
     {
-        var node = await ReadNode(threadPath).FirstAsync().ToTask(ct);
+        var node = await ReadNode(threadPath).Should().Within(60.Seconds()).Emit();
         node.Should().NotBeNull();
         var content = node!.Content as MeshThread;
         content.Should().NotBeNull();
@@ -674,7 +739,14 @@ public class InboxToolIntegrationTest : AITestBase
         MeshThread? last = null;
         try
         {
+            // 🚨 SubscribeOn(TaskPoolScheduler) is load-bearing, not cosmetic: xUnit runs async
+            // tests on a single-threaded sync-context (maxParallelThreads:1). Subscribing this cold
+            // mesh stream directly on that thread funnels the mesh's async continuations back onto
+            // the one context thread → they serialise/starve under 2-core load and the predicate
+            // never sees the transition → timeout flake. Subscribing on the pool keeps every mesh
+            // round-trip off the context (see ObservableAssertions' SubscribeOn note).
             return (await Mesh.GetWorkspace().GetMeshNodeStream(threadPath)
+                .SubscribeOn(TaskPoolScheduler.Default)
                 .Select(n => n.Content as MeshThread)
                 .Where(t => t is not null)
                 .Do(t => last = t)
@@ -715,7 +787,11 @@ public class InboxToolIntegrationTest : AITestBase
         MeshThread? last = null;
         try
         {
+            // SubscribeOn(TaskPoolScheduler) — same load-bearing reason as WaitForThreadAsync:
+            // keep the cold own-stream subscription off the xUnit single-thread sync-context so it
+            // doesn't starve the mesh's async continuations under 2-core CI load.
             return (await threadHub.GetWorkspace().GetMeshNodeStream()
+                .SubscribeOn(TaskPoolScheduler.Default)
                 .Select(n => n.Content as MeshThread)
                 .Where(t => t is not null)
                 .Do(t => last = t)
@@ -783,11 +859,11 @@ public class InboxToolIntegrationTest : AITestBase
                     PendingUserMessages = pending
                 }
             };
-        }).Take(1).Timeout(TimeSpan.FromSeconds(15)).ToTask(ct);
+        }).SubscribeOn(TaskPoolScheduler.Default).Take(1).Timeout(TimeSpan.FromSeconds(30)).ToTask(ct);
 
         // Gate on the SAME own stream check_inbox reads (load-tolerant budget).
         await WaitForOwnAsync(threadHub,
-            t => t.IsExecuting && ids.All(t.PendingUserMessages.ContainsKey), 15_000, ct);
+            t => t.IsExecuting && ids.All(t.PendingUserMessages.ContainsKey), 30_000, ct);
         return ids;
     }
 

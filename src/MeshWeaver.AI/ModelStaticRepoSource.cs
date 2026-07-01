@@ -39,6 +39,7 @@ public sealed class ModelStaticRepoSource(BuiltInLanguageModelProvider provider)
     public MeshNode? PartitionRoot => new(ModelProviderNodeType.RootNamespace)
     {
         Name = "Providers",
+        Icon = "/static/NodeTypeIcons/database.svg",
         NodeType = "Space",
         State = MeshNodeState.Active,
         Content = new MarkdownContent

@@ -48,23 +48,28 @@
         }
     }
 
-    @* Tool calls — shown inline, each as a compact entry *@
+    @* Tool calls — compact window: running on top, then pending, capped at 5
+       (ToolCallVisibility). Completed backfill the leftover slots and a just-finished
+       call lingers ~5s before collapsing; the remainder folds behind a
+       "running · pending · completed" toggle. *@
     @if (HasToolCalls)
     {
-        <div class="thread-msg-tool-calls">
-            @foreach (var call in toolCalls!)
-            {
-                var isDelegation = !string.IsNullOrEmpty(call.DelegationPath);
-                var isPending = call.Result == null;
-                var summary = FormatToolCallSummary(call);
+        var toolView = ToolCallVisibility.Partition(toolCalls, DateTime.UtcNow);
 
+        RenderFragment<ToolCallEntry> renderToolCall = call =>
+            @<text>
+                @{
+                    var isDelegation = !string.IsNullOrEmpty(call.DelegationPath);
+                    var isPending = call.Result == null;
+                    var callSummary = FormatToolCallSummary(call);
+                }
                 @if (isDelegation && isPending)
                 {
                     @* Executing delegation: embed the sub-thread's Streaming area *@
                     <div class="thread-msg-delegation-entry">
                         <div class="thread-msg-delegation-header">
                             <span class="thread-msg-delegation-pulse">✹</span>
-                            <a href="/@call.DelegationPath" class="thread-msg-delegation-link">@summary</a>
+                            <a href="/@call.DelegationPath" class="thread-msg-delegation-link">@callSummary</a>
                         </div>
                         <div class="thread-msg-delegation-stream">
                             <LayoutAreaView ViewModel="@(new LayoutAreaControl(call.DelegationPath!, new LayoutAreaReference("Streaming")).WithSpinnerType(SpinnerType.None))" Stream="@Stream" Area="@($"{Area}/del-{call.DelegationPath}")" />
@@ -81,7 +86,7 @@
                             <span class="thread-msg-tool-done @(call.IsSuccess ? "" : "thread-msg-tool-error")">@(call.IsSuccess ? "✓" : "✗")</span>
                             @if (isDelegation)
                             {
-                                <a href="/@call.DelegationPath" class="thread-msg-delegation-link" @onclick:stopPropagation>@summary</a>
+                                <a href="/@call.DelegationPath" class="thread-msg-delegation-link" @onclick:stopPropagation>@callSummary</a>
                             }
                             else
                             {
@@ -118,8 +123,60 @@
                         }
                     </details>
                 }
+            </text>;
+
+        @* Collapsible group wrapping the whole round's tool calls — folds the block to a single
+           summary line once complete so it stops pushing the reply off-screen (see #129). Open while
+           any call runs, or when there's no assistant text (tool-only cell); collapsed once complete
+           with a reply present. *@
+        var anyPending = toolCalls!.Any(c => c.Result is null);
+        var failCount = toolCalls!.Count(c => !c.IsSuccess && c.Result is not null);
+        var anyFailed = failCount > 0;
+        var groupHasText = !string.IsNullOrWhiteSpace(messageText);
+        var groupOpen = anyPending || !groupHasText;
+        var groupIcon = anyPending ? "↗" : (anyFailed ? "✗" : "✓");
+        var groupLabel = anyFailed
+            ? $"{toolCalls!.Count} tool calls ({failCount} failed)"
+            : $"{toolCalls!.Count} tool calls";
+        <details class="thread-msg-tool-group" open="@groupOpen">
+        <summary class="thread-msg-tool-group-summary">
+            <span class="thread-msg-tool-done @(anyFailed ? "thread-msg-tool-error" : "")">@groupIcon</span>
+            @groupLabel
+        </summary>
+        <div class="thread-msg-tool-calls">
+            @foreach (var call in toolView.Visible)
+            {
+                @renderToolCall(call)
+            }
+            @if (toolView.HasHidden)
+            {
+                <button type="button" class="thread-msg-tool-more@(toolCallsExpanded ? " expanded" : "")"
+                        @onclick="ToggleToolCalls"
+                        title="@(toolCallsExpanded ? "Hide finished tool calls" : "Show all tool calls")">
+                    <span class="thread-msg-tool-more-caret">@(toolCallsExpanded ? "▾" : "▸")</span>
+                    @if (toolView.RunningCount > 0)
+                    {
+                        <span class="thread-msg-tool-more-count running">@toolView.RunningCount running</span>
+                    }
+                    @if (toolView.PendingCount > 0)
+                    {
+                        <span class="thread-msg-tool-more-count pending">@toolView.PendingCount pending</span>
+                    }
+                    @if (toolView.CompletedCount > 0)
+                    {
+                        <span class="thread-msg-tool-more-count completed">@toolView.CompletedCount completed</span>
+                    }
+                </button>
+                @if (toolCallsExpanded)
+                {
+                    @foreach (var call in toolView.Hidden)
+                    {
+                        @renderToolCall(call)
+                    }
+                }
             }
         </div>
+        </details>
     }
 </div>
 
@@ -310,6 +367,23 @@
         display: none;
     }
 
+    /* Collapsible group wrapping a whole round's tool calls — one summary line that
+       folds the entire block away once the round is complete (see #129). */
+    .thread-msg-tool-group > summary.thread-msg-tool-group-summary {
+        cursor: pointer;
+        list-style: none;
+        display: flex;
+        align-items: center;
+        gap: 0.35em;
+        font-size: 0.82em;
+        opacity: 0.75;
+        padding: 2px 0;
+        user-select: none;
+    }
+    .thread-msg-tool-group > summary.thread-msg-tool-group-summary::-webkit-details-marker { display: none; }
+    .thread-msg-tool-group > summary.thread-msg-tool-group-summary::marker { content: ''; }
+    .thread-msg-tool-group[open] > summary.thread-msg-tool-group-summary { opacity: 1; }
+
     /* Tool calls — inline entries */
     .thread-msg-tool-calls {
         margin-top: 8px;
@@ -375,6 +449,43 @@
     }
     .thread-msg-tool-error {
         color: var(--error);
+    }
+    /* "Show all" toggle for the collapsed tool-call remainder. */
+    .thread-msg-tool-more {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        align-self: flex-start;
+        border: none;
+        background: transparent;
+        cursor: pointer;
+        padding: 2px 4px;
+        border-radius: 6px;
+        font: inherit;
+        font-size: 0.74rem;
+        color: var(--neutral-foreground-hint);
+    }
+    .thread-msg-tool-more:hover {
+        background: var(--neutral-layer-3);
+        color: var(--neutral-foreground-rest);
+    }
+    .thread-msg-tool-more-caret {
+        flex: 0 0 auto;
+        font-size: 0.66rem;
+        opacity: 0.8;
+    }
+    .thread-msg-tool-more-count {
+        padding: 1px 6px;
+        border-radius: 999px;
+        background: var(--neutral-layer-3);
+        white-space: nowrap;
+    }
+    .thread-msg-tool-more-count.running {
+        color: var(--accent-fill-rest);
+        background: color-mix(in srgb, var(--accent-fill-rest) 14%, transparent);
+    }
+    .thread-msg-tool-more-count.completed {
+        opacity: 0.8;
     }
     .thread-msg-delegation-entry {
         border-left: 2px solid var(--accent-fill-rest);

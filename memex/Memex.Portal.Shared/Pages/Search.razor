@@ -8,6 +8,7 @@
 <PageTitle>Search - Memex</PageTitle>
 
 <div style="max-width: 1400px; margin: 0 auto; padding: 24px; width: 100%;">
+    <ContentSearchResultsView Query="@Query" Namespace="@Namespace" />
     <MeshSearchView ViewModel="@searchControl" />
 </div>
 
@@ -65,10 +66,10 @@
             "hierarchical" => MeshSearchRenderMode.Hierarchical,
             "namespacetree" => MeshSearchRenderMode.NamespaceTree,
             "graphnavigator" => MeshSearchRenderMode.GraphNavigator,
-            // No explicit mode → google-like flat relevance list, unless the caller asked
-            // to group by a property (e.g. the top-bar links use ?groupBy=Namespace).
+            // No explicit mode → google-like one-per-row relevance list (title · description), unless
+            // the caller asked to group by a property (e.g. the top-bar links use ?groupBy=Namespace).
             _ => string.IsNullOrWhiteSpace(GroupBy)
-                ? MeshSearchRenderMode.Flat
+                ? MeshSearchRenderMode.List
                 : MeshSearchRenderMode.Grouped
         };
         control = control.WithRenderMode(renderMode);

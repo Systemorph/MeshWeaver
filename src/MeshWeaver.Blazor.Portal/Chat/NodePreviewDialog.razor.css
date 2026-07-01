@@ -1,0 +1,10 @@
+/* #131 node-preview modal body: give the embedded layout area a bounded, scrollable box so a
+   large node view (dashboards, long documents) stays within the dialog instead of overflowing. */
+.node-preview-dialog-body {
+    height: 80vh;
+    max-height: 80vh;
+    min-height: 0;
+    overflow: auto;
+    display: flex;
+    flex-direction: column;
+}

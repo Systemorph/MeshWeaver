@@ -193,7 +193,20 @@ public static class LayoutExtensions
                 typeof(LayoutAreasReference),
                 typeof(GetLayoutAreasRequest),
                 typeof(LayoutAreasResponse),
-                typeof(DataGridCellClick)
+                typeof(DataGridCellClick),
+                // Non-IUiControl content/config records serialised INSIDE control state (so the reflection
+                // sweep above misses them) — they came back untyped on sync hubs and churned the layout:
+                typeof(MeshWeaver.Layout.LayoutAreaDefinition),
+                typeof(MeshWeaver.Layout.Pivot.PivotConfiguration),
+                typeof(MeshWeaver.Layout.Pivot.PivotDimension),
+                typeof(MeshWeaver.Layout.Pivot.PivotAggregate),
+                typeof(MeshWeaver.Layout.Catalog.GroupingConfig),
+                typeof(MeshWeaver.Layout.Catalog.SectionConfig),
+                typeof(MeshWeaver.Layout.Catalog.SortConfig),
+                typeof(MeshWeaver.Layout.Catalog.GridConfig),
+                typeof(MeshWeaver.Layout.Catalog.CatalogGroup),
+                typeof(MeshWeaver.Layout.Catalog.SearchResultGroup),
+                typeof(MeshWeaver.Layout.Catalog.GroupedSearchResult)
             )
             .WithHandler<GetLayoutAreasRequest>(HandleGetLayoutAreasRequest);
 

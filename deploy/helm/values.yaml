@@ -1,4 +1,9 @@
 parameters: {}
+# Local dev only (memex-local sets this true via --set): persist /data — the DataProtection keys under
+# /data/dataprotection-keys plus the nuget/compile caches — on a node hostPath, so a pod restart does NOT
+# wipe the keys and invalidate every session (the "have to refresh / Anonymous resubscribe loop" churn).
+# Prod (AKS) leaves this false (default) and persists DataProtection keys to Azure Blob instead.
+persistDataVolume: false
 # ---- Self-update (in-pod patch of the portal's own deployment) -------------
 # The portal polls the registry and, on Kubernetes, patches its own deployment to a newer image per
 # the Admin/UpdatePolicy node (see Doc/Architecture/ReleaseStrategy). The chart always creates the

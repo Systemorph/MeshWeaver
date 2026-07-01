@@ -33,6 +33,14 @@ public record SubmitCodeRequest(string Code) : IRequest<SubmitCodeResponse>
     public string? ActivityLogPath { get; init; }
 
     /// <summary>
+    /// Source language of <see cref="Code"/>. <c>"csharp"</c> (the default) runs in-process on the
+    /// Roslyn kernel; any other value (e.g. <c>"python"</c>) is routed by the Code-node handler to a
+    /// connected foreign-language worker participant over the mesh (see the gRPC bridge) — the in-process
+    /// kernel only ever runs C#. Mirrors <c>CodeConfiguration.Language</c>.
+    /// </summary>
+    public string Language { get; init; } = "csharp";
+
+    /// <summary>
     /// Optional input payload exposed to the script as the <c>Inputs</c> global.
     /// Forwarded verbatim from <c>ExecuteScriptRequest.Inputs</c> by the Code-node
     /// handler so script-templated operations (export, import, etc.) can read
