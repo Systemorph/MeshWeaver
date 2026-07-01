@@ -169,10 +169,13 @@ public sealed class GitWorkingTreeService(
     /// </summary>
     public IObservable<IReadOnlyList<GitCommit>> Log(string userId, string repoSlug, int maxCount = 100)
     {
+        // Clamp: 0/negative makes `git log -n` show nothing or error; an unbounded value would let a
+        // caller pull the whole history into the portal. 1000 is a generous ceiling for a browser.
+        var n = Math.Clamp(maxCount, 1, 1000);
         var dest = PathFor(userId, repoSlug);
         return Expect(git.Run(dest,
         [
-            "log", $"-n{maxCount}", "--date=format:%Y-%m-%d %H:%M",
+            "log", $"-n{n}", "--date=format:%Y-%m-%d %H:%M",
             // %H %h %ad %an %s, separated by the 0x1f unit separator (%x1f).
             "--pretty=format:%H%x1f%h%x1f%ad%x1f%an%x1f%s",
         ])).Select(ParseLog);
@@ -185,6 +188,11 @@ public sealed class GitWorkingTreeService(
     /// </summary>
     public IObservable<IReadOnlyList<GitFileChange>> CommitChanges(string userId, string repoSlug, string commitHash)
     {
+        // A blank hash, or one starting with '-', would be parsed by git as a flag (argument injection)
+        // rather than a revision — reject it before it reaches the CLI.
+        if (string.IsNullOrWhiteSpace(commitHash) || commitHash.StartsWith('-'))
+            return Observable.Throw<IReadOnlyList<GitFileChange>>(
+                new GitWorkingTreeException($"Invalid commit '{commitHash}'."));
         var dest = PathFor(userId, repoSlug);
         return Expect(git.Run(dest,
             ["diff-tree", "--no-commit-id", "--name-status", "--no-renames", "-r", "--root", commitHash]))
@@ -194,17 +202,32 @@ public sealed class GitWorkingTreeService(
     /// <summary>
     /// The content of <paramref name="relativePath"/> at git revision <paramref name="rev"/> (e.g.
     /// <c>"HEAD"</c>, a commit hash, or <c>"{hash}^"</c> for a parent) — the two sides a diff needs.
-    /// Returns <c>""</c> when the path did not exist at that revision (an added or deleted file): that
-    /// empty side is a legitimate diff input, not an error, so this does NOT go through <see cref="Expect"/>.
+    /// <para>Returns <c>""</c> ONLY when the path genuinely did not exist at that revision (an added or
+    /// deleted file — its empty side is a legitimate diff input). Any OTHER git failure (invalid
+    /// revision, repo not checked out, …) is propagated as a <see cref="GitWorkingTreeException"/>
+    /// rather than masked as empty, so a real fault is never silently swallowed.</para>
     /// </summary>
     public IObservable<string> ShowFile(string userId, string repoSlug, string rev, string relativePath)
     {
-        if (relativePath.StartsWith('-'))
-            return Observable.Throw<string>(new GitWorkingTreeException($"Invalid path '{relativePath}'."));
+        // Neither side may start with '-' (git would parse it as a flag — argument injection).
+        if (rev.StartsWith('-') || relativePath.StartsWith('-'))
+            return Observable.Throw<string>(
+                new GitWorkingTreeException($"Invalid revision '{rev}' or path '{relativePath}'."));
         var dest = PathFor(userId, repoSlug);
         return git.Run(dest, ["show", $"{rev}:{relativePath}"])
-            .Select(r => r.Ok ? r.StdOut : "");
+            .SelectMany(r => r.Ok
+                ? Observable.Return(r.StdOut)
+                : IsPathAbsentAtRev(r.StdErr)
+                    ? Observable.Return("")
+                    : Observable.Throw<string>(new GitWorkingTreeException(
+                        $"git show {rev}:{relativePath} failed (exit {r.ExitCode}): {r.Message}")));
     }
+
+    /// <summary>True when <c>git show</c>'s stderr signals the path simply wasn't in that revision
+    /// (vs. a real failure like a bad rev) — the messages git emits for an added/deleted file.</summary>
+    private static bool IsPathAbsentAtRev(string stderr) =>
+        stderr.Contains("does not exist in", StringComparison.Ordinal)
+        || stderr.Contains("exists on disk, but not in", StringComparison.Ordinal);
 
     // ── internals ─────────────────────────────────────────────────────────────────────────
 
