@@ -158,7 +158,7 @@ the binding's pointer (optimistically applied, exactly as the live stream echoes
 | **Web / Vite** | Fluent (shipped) | none | demo + 11 vitest tests, screenshot |
 | **Next.js** | Fluent (shipped) | `"use client"` + Fluent SSR (~10 lines) | guide (`clients/react/docs/nextjs.md`) |
 | **Electron (desktop)** | Fluent (shipped) | a `BrowserWindow` (shipped) | `clients/react/electron/main.cjs` |
-| **React Native / Expo (the MAUI peer)** | **RN pack (shipped)** | Expo project + gRPC-web transport (both **shipped**) | `clients/react-native` (+ `src/live.ts`), typechecks |
+| **React Native / Expo (the MAUI peer)** | **RN pack (shipped)** | Expo project + gRPC-web transport (both **shipped**) | `clients/react-native` (+ `src/live.ts`), typechecks + **7 headless render tests** |
 | **Browser / RN live transport** | n/a (transport) | none | **`@meshweaver/client-web`** (`clients/grpc-web`), typechecks + builds |
 | **Portal example** | Fluent (shipped) | an app shell (shipped) | `clients/portal`, builds, screenshot |
 
@@ -194,7 +194,8 @@ src/MeshWeaver.Documentation/Data/Architecture/ForeignLanguageBridge.md   transp
 
 **Verified here:** the C# transport (in-memory + live Kestrel h2c round-trips), the React renderer
 (pixel-verified web render, 11 vitest tests, 0.9 MB bundle), the RN connector (typechecks against real
-react-native types — proving the core compiles with zero DOM/Fluent runtime), the gRPC-web client
+react-native types AND 7 headless render tests that mount the sample through the RN pack — proving the core
+renders with zero DOM/Fluent runtime and resolves bindings), the gRPC-web client
 (`@meshweaver/client-web` typechecks + builds from the canonical `mesh.proto`, **8 vitest tests** driving the
 real connection against an in-memory Connect+Deliver service — ack, RequestId correlation, streamId demux —
 wired into the RN app's `src/live.ts`), and the portal (builds + rendered). CI typechecks/tests all of it.
