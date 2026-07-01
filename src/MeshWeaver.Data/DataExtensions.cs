@@ -149,6 +149,8 @@ public static class DataExtensions
                 typeof(CollectionReference),
                 typeof(CollectionsReference),
                 typeof(JsonPointerReference),
+                typeof(PrefixReference),
+                typeof(MeshWeaver.Data.Completion.AutocompleteReference),
                 typeof(LayoutAreaReference),
                 typeof(AggregateWorkspaceReference),
                 typeof(CombinedStreamReference),

@@ -24,3 +24,13 @@ export { Mesh, type MeshOptions } from "./mesh";
 export { MeshWebConnection, connect, type ConnectOptions } from "./connection";
 export { type Delivery } from "./envelope";
 export { type MeshNode } from "./types";
+export {
+  generateSpeakingId,
+  buildThreadNode,
+  createUserMessage,
+  buildSubmitPatch,
+  isOwnerlessThreadPath,
+  THREAD_PARTITION,
+  type StartThreadOptions,
+  type SubmitMessageOptions,
+} from "./threads";

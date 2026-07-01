@@ -11,6 +11,7 @@
     "web": "expo start --web",
     "web:export": "expo export --platform web",
     "typecheck": "tsc --noEmit",
+    "test": "vitest run",
     "e2e": "playwright test"
   },
   "dependencies": {
@@ -28,6 +29,9 @@
   "devDependencies": {
     "@playwright/test": "^1.48.0",
     "@types/react": "~18.3.0",
-    "typescript": "^5.6.0"
+    "@types/react-test-renderer": "~18.3.0",
+    "react-test-renderer": "18.3.1",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
   }
 }
