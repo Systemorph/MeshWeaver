@@ -6,21 +6,27 @@ import {
   RenderArea,
   StaticAreaSource,
   type AreaSource,
+  type AreaTree,
 } from "@meshweaver/react/core";
 import { rnPack } from "./src/rnPack";
 import { sampleArea } from "./src/sample";
 import { createLiveSource, type LiveOptions } from "./src/live";
 
-// Offline by default (the bundled sample). To render a REAL portal layout area over the wire, fill in
-// LIVE — the app connects via @meshweaver/client-web (the gRPC-web Connect+Deliver split) and feeds a
-// GrpcAreaSource. RN can't use @grpc/grpc-js (Node http2) or the bidi Open; see README "Live transport".
-const LIVE: LiveOptions | null = null;
-// const LIVE: LiveOptions = { url: "https://atioz.meshweaver.cloud", token: "mw_…", address: "@app/Home", area: "main" };
+// When this app is served BY the mesh host (Memex.LocalMesh serves the web build on the same origin as its
+// gRPC endpoint), connect live to that same origin — no CORS, no config. Anonymous read (empty token) is
+// enough for the public Doc partition. Off the web (native, or opened without a mesh), fall back to the
+// bundled offline sample.
+const sameOrigin = typeof window !== "undefined" && window.location ? window.location.origin : "";
+const LIVE: LiveOptions | null = sameOrigin
+  ? { url: sameOrigin, token: "", address: "Doc/Architecture", area: "Overview" }
+  : null;
 
-const staticSource = new StaticAreaSource(sampleArea);
+const rootArea = LIVE ? LIVE.area : "main";
+const emptyTree: AreaTree = { areas: {}, data: {} };
+const initialSource = new StaticAreaSource(LIVE ? emptyTree : sampleArea);
 
 export default function App() {
-  const [source, setSource] = useState<AreaSource>(staticSource);
+  const [source, setSource] = useState<AreaSource>(initialSource);
 
   useEffect(() => {
     if (!LIVE) return;
@@ -37,8 +43,8 @@ export default function App() {
       <StatusBar />
       <ScrollView contentContainerStyle={{ padding: 16 }}>
         <RegistryProvider pack={rnPack}>
-          <ScopeProvider source={source} area="main">
-            <RenderArea areaKey="main" />
+          <ScopeProvider source={source} area={rootArea}>
+            <RenderArea areaKey={rootArea} />
           </ScopeProvider>
         </RegistryProvider>
       </ScrollView>

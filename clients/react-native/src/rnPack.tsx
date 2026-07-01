@@ -2,7 +2,9 @@
 // renderer core (@meshweaver/react/core). This is the RN analog of MAUI's MauiViewPack and of the web
 // Fluent pack: SAME UiControl tree, native leaves. Drop it into <RegistryProvider pack={rnPack}>.
 
-import { View, Text, TextInput, Pressable, Switch, ScrollView, ActivityIndicator, StyleSheet } from "react-native";
+import { createElement } from "react";
+import { View, Text, TextInput, Pressable, Switch, ScrollView, ActivityIndicator, StyleSheet, Platform } from "react-native";
+import { marked } from "marked";
 import {
   ControlRenderer,
   RenderArea,
@@ -132,6 +134,42 @@ const DataGrid: ControlComponent = ({ control }) => {
   );
 };
 
+// Server-prerendered HTML (doc bodies, rich text). On web (react-native-web) inject it into a real DOM
+// node; on native there is no DOM, so strip tags to text — a full native HTML renderer is future work.
+const Html: ControlComponent = ({ control }) => {
+  const html = s(useResolve(control.data));
+  if (Platform.OS === "web")
+    return createElement("div", {
+      style: { color: "#242424", fontSize: 14, lineHeight: 1.55 },
+      dangerouslySetInnerHTML: { __html: html },
+    });
+  return <Text style={styles.body}>{html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim()}</Text>;
+};
+
+// Markdown / collaborative-markdown editors (read-only for now). CollaborativeMarkdownControl carries
+// its markdown in `value`; the plain Markdown control uses `data`. On web, convert markdown → HTML and
+// inject; on native (no DOM) fall back to the raw text.
+const Markdown: ControlComponent = ({ control }) => {
+  const md = s(useResolve(control.value ?? control.data ?? control.content ?? control.markdown));
+  if (Platform.OS === "web")
+    return createElement("div", {
+      style: { color: "#242424", fontSize: 14, lineHeight: 1.55 },
+      dangerouslySetInnerHTML: { __html: marked.parse(md, { async: false }) as string },
+    });
+  return <Text style={styles.body}>{md}</Text>;
+};
+
+// An embedded layout area on ANOTHER address — a distinct subscription. Show a labelled placeholder;
+// wiring a nested live GrpcAreaSource per embed is future work.
+const LayoutAreaEmbed: ControlComponent = ({ control }) => {
+  const ref = control.reference as any;
+  return (
+    <View style={styles.embed}>
+      <Text style={styles.label}>▦ {s(ref?.area ?? ref?.Area) || "layout area"} @ {s(useResolve(control.address))}</Text>
+    </View>
+  );
+};
+
 const fallback: ControlComponent = ({ control }) => <Text style={{ color: "#d83b01" }}>Unsupported: {control.$type}</Text>;
 
 export const rnPack: LeafPack = {
@@ -139,8 +177,10 @@ export const rnPack: LeafPack = {
   skins: { LayoutStack: stack, Layout: stack, LayoutGrid: stack, Card: card, NavMenu: stack, NavGroup: stack, Toolbar: stack, __default: passthrough },
   controls: {
     Label,
-    Markdown: Label,
-    Html: Label,
+    Markdown,
+    CollaborativeMarkdown: Markdown,
+    Html,
+    LayoutArea: LayoutAreaEmbed,
     Badge,
     Button,
     TextField,
@@ -170,4 +210,5 @@ const styles = StyleSheet.create({
   headerRow: { borderBottomWidth: 1, borderColor: "#ddd" },
   cell: { minWidth: 110, padding: 8, fontSize: 13 },
   headerCell: { fontWeight: "700" },
+  embed: { padding: 12, borderRadius: 8, borderWidth: 1, borderStyle: "dashed", borderColor: "#c7c7c7", backgroundColor: "#fafafa" },
 });

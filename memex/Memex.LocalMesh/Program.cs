@@ -38,10 +38,22 @@ builder.UseMeshWeaver(
 
 var app = builder.Build();
 
+// Serve the packaged web client (the React-Native app exported to web, baked into wwwroot) from the SAME
+// origin as the gRPC endpoint. Same origin ⇒ the browser makes no cross-origin request ⇒ no CORS at all.
+// The whole thing is encapsulated in this one backend: open http://localhost:<port> and the app talks to
+// its own origin for the mesh.
+app.UseDefaultFiles();
+app.UseStaticFiles();
+
 app.UseMeshWeaverGrpcWeb();     // browser / React-Native gRPC-web (Connect + Deliver)
 app.MapMeshWeaverGrpc();        // the mesh gRPC service (Open + Connect + Deliver)
-app.MapGet("/", () => Results.Text(
-    $"MeshWeaver local mesh — monolith runtime, SQLite at {dbPath}. gRPC on this endpoint " +
-    $"(http/2 bidi + gRPC-web). Point a client at http://localhost:{port}."));
+
+var wwwroot = app.Environment.WebRootPath ?? Path.Combine(app.Environment.ContentRootPath, "wwwroot");
+if (File.Exists(Path.Combine(wwwroot, "index.html")))
+    app.MapFallbackToFile("index.html"); // SPA fallback: any non-gRPC, non-file route → the packaged app
+else
+    app.MapGet("/", () => Results.Text(
+        $"MeshWeaver local mesh — monolith runtime, SQLite at {dbPath}. gRPC on this endpoint " +
+        $"(http/2 bidi + gRPC-web). No web app in wwwroot; point a client at http://localhost:{port}."));
 
 app.Run();
