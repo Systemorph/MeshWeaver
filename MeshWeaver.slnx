@@ -170,9 +170,11 @@
     <Project Path="test/MeshWeaver.Autocomplete.Test/MeshWeaver.Autocomplete.Test.csproj" />
     <Project Path="test/MeshWeaver.Query.Test/MeshWeaver.Query.Test.csproj" />
     <Project Path="test/MeshWeaver.Reactive.Assertions.Test/MeshWeaver.Reactive.Assertions.Test.csproj" />
+    <Project Path="test/MeshWeaver.Portal.E2E.Test/MeshWeaver.Portal.E2E.Test.csproj" />
+    <Project Path="test/MeshWeaver.Serialization.Test/MeshWeaver.Serialization.Test.csproj" />
+    <Project Path="test/MeshWeaver.MemexTemplate.Test/MeshWeaver.MemexTemplate.Test.csproj" />
     <Project Path="test/Memex.Portal.Shared.Test/Memex.Portal.Shared.Test.csproj" />
   </Folder>
-  <Project Path="test/MeshWeaver.MemexTemplate.Test/MeshWeaver.MemexTemplate.Test.csproj" />
   <Folder Name="/tools/">
     <File Path="tools/generate-memex-template.cs" />
     <Project Path="tools/MeshWeaver.Cli/MeshWeaver.Cli.csproj" />
