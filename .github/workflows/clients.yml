@@ -74,7 +74,7 @@ jobs:
       - run: npm test # vitest: envelope round-trip + in-memory Connect/Deliver correlation & demux
 
   react-native:
-    name: "RN connector (typecheck)"
+    name: "RN connector (typecheck + test)"
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -93,9 +93,11 @@ jobs:
       - name: Install + generate grpc-web client
         working-directory: clients/grpc-web
         run: npm install --no-audit --no-fund && npm run gen
-      # Targeted install (RN types only) — the pack typechecks against @meshweaver/react/core via tsconfig path.
-      - run: npm install --no-save --no-audit --no-fund react-native@0.76.5 react@18.3.1 @types/react@18.3.12 typescript@5.6.3
+      # Targeted install: typecheck needs RN types; the render test needs vitest + react-test-renderer
+      # (react-native itself is mocked in the test — see vitest.config.ts).
+      - run: npm install --no-save --no-audit --no-fund react-native@0.76.5 react@18.3.1 react-test-renderer@18.3.1 @types/react@18.3.12 @types/react-test-renderer@18.3.0 vitest@2.1.9 typescript@5.6.3
       - run: npx tsc --noEmit
+      - run: npx vitest run # headless render of the sample area through the RN leaf pack
 
   portal:
     name: "Portal example (build)"
