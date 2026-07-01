@@ -32,8 +32,6 @@ public class SidePanelChatTenMessagesTest(PortalFixture fixture)
         }
         """;
 
-    // The user bubble must appear far below the old 30s stall.
-    private static readonly int PromptBubbleMs = 15_000;
     // A real round with the small model; generous but bounded so a genuine wedge fails rather than hangs.
     private static readonly int RoundMs = 120_000;
 
