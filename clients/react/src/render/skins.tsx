@@ -13,6 +13,7 @@ import {
 } from "@fluentui/react-components";
 import { ChevronDown20Regular, ChevronRight20Regular } from "@fluentui/react-icons";
 import type { Skin, UiControl } from "../area/types.js";
+import { useResolve } from "../area/context.js";
 import { ControlRenderer, RenderArea, useChildAreas } from "./ControlRenderer.js";
 import { cssAlign, cssSize } from "./style.js";
 
@@ -172,12 +173,41 @@ function CardSkin({ control }: SkinProps): ReactNode {
   );
 }
 
+/**
+ * PropertySkin — the per-field wrapper of an EditForm, mirroring Blazor's PropertyView
+ * (src/MeshWeaver.Blazor/Components/PropertyView.razor): a label (Skin.Label, falling back to
+ * Name/title), an optional description line, then the bound field control.
+ */
 function PropertySkin({ skin, control }: SkinProps): ReactNode {
+  const label = useResolve(skin.label ?? skin.name ?? skin.title);
+  const description = useResolve(skin.description);
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-      {skin.title != null ? <Text weight="semibold">{String(skin.title)}</Text> : null}
+      {label != null && String(label).length > 0 ? (
+        <Text weight="semibold" as="span">
+          <label htmlFor={skin.name != null ? String(skin.name) : undefined}>{String(label)}</label>
+        </Text>
+      ) : null}
+      {description != null && String(description).length > 0 ? (
+        <Text size={200} style={{ color: "var(--colorNeutralForeground3)" }}>
+          {String(description)}
+        </Text>
+      ) : null}
       <ControlRenderer control={control} />
     </div>
+  );
+}
+
+/**
+ * EditFormSkin — the form wrapper, mirroring Blazor's EditFormView: the child property areas
+ * stacked as a form (each wrapped in PropertySkin). Fields data-bind per-edit through the standard
+ * update event — the owning hub persists every change, so no explicit submit button is needed.
+ */
+function EditFormSkin({ control }: SkinProps): ReactNode {
+  return (
+    <form onSubmit={(e) => e.preventDefault()} style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      <Children control={control} />
+    </form>
   );
 }
 
@@ -209,7 +239,7 @@ export const skinRegistry: Record<string, SkinComponent> = {
   NavGroup: NavGroupSkin,
   Card: CardSkin,
   Property: PropertySkin,
-  EditForm: PlainLayoutSkin,
+  EditForm: EditFormSkin,
   Editor: PlainLayoutSkin,
   Main: semanticWrapper("main"),
   Header: semanticWrapper("header"),

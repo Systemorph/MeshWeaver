@@ -238,7 +238,7 @@
                             else
                             {
                                 @* New chat — no thread yet *@
-                                <ThreadChatView @key="@sidePanelContentKey" ViewModel="@GetSidePanelControl()" />
+                                <ChatErrorBoundary @key="@sidePanelContentKey"><ThreadChatView @key="@sidePanelContentKey" ViewModel="@GetSidePanelControl()" /></ChatErrorBoundary>
                             }
                         </ChildContent>
                     </SidePanel>

@@ -12,7 +12,8 @@
     "baseUrl": ".",
     "paths": {
       "@meshweaver/react/core": ["../react/src/core.ts"],
-      "@meshweaver/react": ["../react/src/index.tsx"]
+      "@meshweaver/react": ["../react/src/index.tsx"],
+      "@meshweaver/client-web": ["../grpc-web/src/index.ts"]
     }
   },
   "include": ["src"]

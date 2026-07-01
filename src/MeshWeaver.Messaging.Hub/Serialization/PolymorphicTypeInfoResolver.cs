@@ -141,7 +141,34 @@ public class PolymorphicTypeInfoResolver(ITypeRegistry typeRegistry, string? own
             }
         }
 
+        WarnMissingDerivedRegistrations(baseType, derivedTypes);
         return derivedTypes;
+    }
+
+    // (A) Polymorphic subtypes of baseType that EXIST in its assembly but are NOT registered in THIS hub
+    // serialise fine here yet DROP to FallBackToNearestAncestor when this hub RECEIVES them, with no other
+    // signal (the silent-skin-drop class). Warn once per type (instance dict — no static state) so the
+    // missing registration surfaces. Scoped to baseType.Assembly to avoid a full AppDomain scan; STJ caches
+    // JsonTypeInfo so this runs at most once per base type.
+    private readonly ConcurrentDictionary<Type, byte> warnedMissingDerived = new();
+    private void WarnMissingDerivedRegistrations(Type baseType, List<JsonDerivedType> derivedTypes)
+    {
+        if (logger is null || baseType == typeof(object) || baseType.IsSealed)
+            return;
+        var present = derivedTypes.Select(d => d.DerivedType).ToHashSet();
+        foreach (var t in baseType.Assembly.GetTypes())
+        {
+            if (t.IsAbstract || t.IsInterface || t.IsGenericTypeDefinition || t == baseType
+                || !baseType.IsAssignableFrom(t) || present.Contains(t)
+                || !warnedMissingDerived.TryAdd(t, 0))
+                continue;
+            logger.LogWarning(
+                "Polymorphic subtype {Subtype} of {BaseType} is NOT registered on hub {Hub} — it serialises "
+                + "here but DROPS to the nearest ancestor (renders empty) when this hub RECEIVES it. Register "
+                + "it via WithType(typeof({Subtype}), nameof({Subtype})) so it round-trips in BOTH the sending "
+                + "and receiving hub.",
+                t.FullName, baseType.Name, owner ?? "(unknown)", t.Name, t.Name);
+        }
     }
 
     /// <summary>

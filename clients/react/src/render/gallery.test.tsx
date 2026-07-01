@@ -9,7 +9,9 @@ import { StaticAreaSource, type AreaTree, type UiControl } from "../core.js";
 // it catches a control that is registered but crashes on mount or renders nothing.
 //
 // Data/mesh controls (DataGrid, Chart, MeshSearch, ThreadChat, UserProfile, editors, …) need a live
-// AreaSource/hub and are covered by the registry-coverage test instead.
+// AreaSource/hub and are covered by the registry-coverage test instead. Dialog is a portal-rendered
+// modal with its own test (controls/dialog.test.tsx); ItemTemplate's binding semantics are pinned in
+// controls/itemTemplate.test.tsx and the theme panel (Appearance) in theme/theme.test.tsx.
 
 // jsdom lacks the browser APIs several Fluent components probe on mount.
 beforeAll(() => {
@@ -58,12 +60,18 @@ const leaves: Record<string, UiControl> = {
   navLink: { $type: "NavLink", title: "Home", url: "/" },
   progress: { $type: "Progress", data: 0.5 },
   spinner: { $type: "Spinner" },
+  appearance: { $type: "Appearance" }, // the theme settings panel (needs no mesh — localStorage only)
+  itemTemplate: { $type: "ItemTemplate", data: ptr("/data/people"), view: { $type: "Label", data: ptr("name") } },
+  layoutAreaDefinition: {
+    $type: "LayoutAreaDefinition",
+    definition: { area: "Overview", url: "/app/Overview", title: "Overview", description: "The overview area" },
+  },
 };
 
 const LEAVES = Object.keys(leaves);
 
 const gallery: AreaTree = {
-  data: { flag: true, num: 42, txt: "hello", choice: "a" },
+  data: { flag: true, num: 42, txt: "hello", choice: "a", people: [{ name: "Ada" }, { name: "Grace" }] },
   areas: {
     main: { $type: "Stack", skins: [{ $type: "LayoutStack" }], areas: LEAVES.map(ref) },
     ...leaves,
@@ -77,6 +85,7 @@ describe("Fluent pack renders every safe control (no fallback, no throw)", () =>
     expect(container.textContent).not.toContain("Unsupported control");
     // Real content rendered.
     expect(container.textContent).toContain("Hello world"); // the Label
+    expect(container.textContent).toContain("Ada"); // the ItemTemplate repeated its view per item
     expect(container.querySelectorAll("*").length).toBeGreaterThan(LEAVES.length);
   });
 });

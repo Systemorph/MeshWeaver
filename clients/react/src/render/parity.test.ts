@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { controlRegistry } from "./registry.js";
 import { skinRegistry } from "./skins.js";
+import { placeholderControlTypes } from "../controls/mesh.js";
 
 // Feature-parity guard: the Fluent React pack must render every control the Blazor portal renders.
 // These lists are the authoritative Blazor vocabulary — the `*Control` / `*Skin` types in
@@ -44,5 +45,27 @@ describe("React ↔ Blazor control parity", () => {
   it("covers Blazor's full leaf set (no silent shortfall)", () => {
     const covered = BLAZOR_LEAF_CONTROLS.filter((t) => t in controlRegistry).length;
     expect(covered).toBe(BLAZOR_LEAF_CONTROLS.length); // 51/51 — full $type parity
+  });
+
+  // RATCHET: the registered-but-placeholder long-tail (controls whose real rendering needs a live
+  // mesh service beyond the AreaSource contract). Implementing one for real = remove it from
+  // placeholderControlTypes AND from this pinned list. Adding a NEW placeholder fails here — every
+  // new control must ship a real implementation.
+  it("the placeholder long-tail only ever shrinks", () => {
+    const pinned = ["DocumentSource", "ExportDocument", "FileBrowser", "NodeExport", "NodeImport"];
+    expect([...placeholderControlTypes].sort()).toEqual(pinned.sort());
+  });
+
+  // RATCHET: formerly-thin controls that now have REAL implementations — regressing one to an
+  // alias of another control (the old PivotGrid→DataGrid / MeshNodeCollection→Catalog /
+  // MeshSearch→SearchBox shortcuts) fails here. Each must stay its own component.
+  it("no control regresses to an alias of another (the thin-list stays empty)", () => {
+    expect(controlRegistry.PivotGrid).not.toBe(controlRegistry.DataGrid);
+    expect(controlRegistry.MeshNodeCollection).not.toBe(controlRegistry.Catalog);
+    expect(controlRegistry.MeshSearch).not.toBe(controlRegistry.SearchBox);
+    expect(controlRegistry.DiffEditor).not.toBe(controlRegistry.CodeEditor);
+    // CodeEditor/Editor and MarkdownEditor/CollaborativeMarkdown intentionally share views
+    // (same wire contract); Chart/PivotGrid/LayoutArea are pinned real by their own test files
+    // (chart.test.tsx, pivot.test.tsx, embeddedArea.test.tsx).
   });
 });

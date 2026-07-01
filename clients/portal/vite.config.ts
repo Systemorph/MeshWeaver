@@ -16,6 +16,9 @@ export default defineConfig({
     alias: {
       "@meshweaver/react/core": path.resolve(here, "../react/src/core.ts"),
       "@meshweaver/react": path.resolve(here, "../react/src/index.tsx"),
+      // The live transport (gRPC-web Connect+Deliver split); its generated stubs come from
+      // `npm run gen` in clients/grpc-web, its deps resolve from clients/grpc-web/node_modules.
+      "@meshweaver/client-web": path.resolve(here, "../grpc-web/src/index.ts"),
     },
   },
 });

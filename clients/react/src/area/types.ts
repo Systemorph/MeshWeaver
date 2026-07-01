@@ -36,9 +36,10 @@ export interface AreaTree {
 }
 
 export interface MeshEvent {
-  kind: "click" | "blur" | "update";
+  kind: "click" | "blur" | "update" | "closeDialog";
   area: string;
   pointer?: string;
+  /** For "update": the new value. For "closeDialog": the DialogCloseState ("OK" | "Cancel"). */
   value?: Json;
 }
 

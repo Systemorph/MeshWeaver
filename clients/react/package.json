@@ -37,6 +37,8 @@
   "dependencies": {
     "@fluentui/react-components": "^9.54.0",
     "@fluentui/react-icons": "^2.0.260",
+    "@monaco-editor/react": "^4.7.0",
+    "chart.js": "^4.4.1",
     "react-markdown": "^9.0.1",
     "remark-gfm": "^4.0.0"
   },
