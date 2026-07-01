@@ -233,11 +233,25 @@ public interface INodePostCreationHandler
     /// <summary>
     /// Executes after the node has been saved to persistence. Reactive — returns
     /// <see cref="IObservable{T}"/> (never Task); compose any mesh writes with the reactive
-    /// primitives. Failures are logged but do not prevent the creation response.
+    /// primitives. Failures are logged; whether they also FAIL the create is controlled by
+    /// <see cref="FailsCreateOnError"/> (default best-effort).
     /// </summary>
     /// <param name="createdNode">The persisted node</param>
     /// <param name="createdBy">The ObjectId of the creating user (may be null)</param>
     IObservable<Unit> Handle(MeshNode createdNode, string? createdBy);
+
+    /// <summary>
+    /// When <c>true</c>, a failure of <see cref="Handle"/> FAULTS the create — the
+    /// <c>CreateNodeResponse</c> comes back as a failure instead of a silent Ok. Use it when the
+    /// side effect is a REQUIRED part of the create's contract: e.g. granting the creator
+    /// ownership of a brand-new partition — a Space that "created successfully" but left its
+    /// creator without the owner <c>AccessAssignment</c> is a broken, un-navigable node, and
+    /// swallowing that error (the old <c>.Catch(Observable.Empty)</c>) is exactly the band-aid
+    /// that shipped ownerless spaces. Default <c>false</c> keeps best-effort seeds
+    /// (composer/settings defaults) log-and-continue. Only <see cref="Handle"/> is gated;
+    /// <see cref="GetAdditionalNodes"/> writes stay best-effort regardless.
+    /// </summary>
+    bool FailsCreateOnError => false;
 
     /// <summary>
     /// Returns additional nodes that should be created as side effects of the primary node creation.
