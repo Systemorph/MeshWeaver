@@ -26,6 +26,7 @@
   <Folder Name="/memex/">
     <Project Path="memex/Memex.Portal.Shared/Memex.Portal.Shared.csproj" />
     <Project Path="memex/Memex.Portal.Monolith/Memex.Portal.Monolith.csproj" />
+    <Project Path="memex/Memex.LocalMesh/Memex.LocalMesh.csproj" />
   </Folder>
   <Folder Name="/memex/aspire/">
     <Project Path="memex/aspire/Memex.AppHost/Memex.AppHost.csproj" />
