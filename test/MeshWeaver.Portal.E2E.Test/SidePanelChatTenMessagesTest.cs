@@ -123,7 +123,7 @@ public class SidePanelChatTenMessagesTest(PortalFixture fixture)
 
             // (a) The user's bubble landed — poll the COUNT (>= i+1), robust to bubbles re-keying on the
             //     thread rebind (a specific .Nth(i) wait is brittle across re-renders).
-            (await PollAsync(async () => await userBubbles.CountAsync() >= i + 1, TimeSpan.FromSeconds(15)))
+            (await PollAsync(async () => await userBubbles.CountAsync() >= i + 1, TimeSpan.FromMilliseconds(PromptBubbleMs)))
                 .Should().BeTrue($"the user bubble for message {i + 1} must appear (saw {await userBubbles.CountAsync()})");
 
             // No submit error surfaced.
