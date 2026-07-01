@@ -43,6 +43,25 @@ public record LayoutDefinition(IMessageHub Hub)
     public string? DefaultArea { get; init; }
 
     /// <summary>
+    /// Optional STATUS-GATED EMERGENCY-MODE RENDERING gate (see <see cref="RenderingGate"/>).
+    /// When configured, the <see cref="LayoutAreaHost"/> invokes the registered renderers — the
+    /// typed-content readers — ONLY while the gate reports a SUCCESS status; an error/cancelled
+    /// status or missing configuration short-circuits every area of this hub to a visible
+    /// emergency error frame instead. Null (the default) renders unconditionally.
+    /// </summary>
+    public RenderingGate? RenderingGate { get; init; }
+
+    /// <summary>
+    /// Configures status-gated emergency-mode rendering for every area of this hub: renderers
+    /// (the typed-content readers) run only on a SUCCESS status; ERROR/CANCELLED status and
+    /// missing configuration render a visible emergency error frame — never a hang, never an
+    /// empty render. See <see cref="RenderingGate"/> for the full law.
+    /// </summary>
+    /// <param name="gate">The status source evaluated per layout-area host.</param>
+    public LayoutDefinition WithRenderingGate(RenderingGate gate)
+        => this with { RenderingGate = gate };
+
+    /// <summary>
     /// Sets the default area to display when no area is specified in the URL.
     /// </summary>
     public LayoutDefinition WithDefaultArea(string area)
