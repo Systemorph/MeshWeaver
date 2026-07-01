@@ -11,6 +11,44 @@ namespace MeshWeaver.Messaging.Serialization;
 /// </summary>
 public class ObjectPolymorphicConverter(ITypeRegistry typeRegistry, ILogger? logger = null) : JsonConverter<object>
 {
+    // Warn at most once per unregistered $type (per hub/options instance) so the receiving-hub diagnostic
+    // can never become a log storm. Instance field — dies with the hub's serializer options (no static state).
+    // Bounded: '$type' is payload-controlled, so the dedup set is capped (adversarial junk types stop being
+    // deduped past the cap — they log per occurrence, which is visible, not a memory-DoS) and very long
+    // names are truncated before caching/logging.
+    private const int MaxWarnedTypeNames = 1000;
+    private const int MaxTypeNameLogLength = 256;
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> warnedUnregisteredRead = new();
+    private int warnCapNoticed;
+
+    private void WarnUnregisteredDeserialization(string typeName)
+    {
+        if (logger is null)
+            return;
+        if (typeName.Length > MaxTypeNameLogLength)
+            typeName = typeName[..MaxTypeNameLogLength] + "… (truncated)";
+        if (warnedUnregisteredRead.Count >= MaxWarnedTypeNames)
+        {
+            // Cap reached: stop caching (bounded memory) AND stop logging (bounded log volume) —
+            // one notice marks the transition. Real systems have dozens of distinct types; only
+            // payload-controlled junk '$type' storms ever get here.
+            if (System.Threading.Interlocked.Exchange(ref warnCapNoticed, 1) == 0)
+                logger.LogWarning(
+                    "Unregistered-$type warning cap ({Max} distinct names) reached — further distinct "
+                    + "unregistered '$type' values will not be logged (payload-controlled junk?).",
+                    MaxWarnedTypeNames);
+            return;
+        }
+        if (!warnedUnregisteredRead.TryAdd(typeName, 0))
+            return;
+        logger.LogWarning(
+            "Received '$type':'{TypeName}' which is NOT registered in this (receiving) hub — it can only be read "
+            + "as an untyped JsonElement (the value renders empty / reactive waits time out). Register it in this "
+            + "hub too (WithType(typeof({TypeName}), nameof({TypeName}))): a $type must be registered in the "
+            + "RECEIVING hub as well as the sending one.",
+            typeName, typeName, typeName);
+    }
+
     /// <summary>
     /// Determines whether this converter applies. It only handles the open <see langword="object"/>
     /// type; concrete types are handled by their own type info.
@@ -99,6 +137,14 @@ public class ObjectPolymorphicConverter(ITypeRegistry typeRegistry, ILogger? log
                         typeName);
                     return cleanedElement.Clone();
                 }
+            }
+            else if (!string.IsNullOrEmpty(typeName))
+            {
+                // The payload carries a $type but THIS (receiving) hub has no registration for it, so it can
+                // only be read back as an untyped JsonElement (renders empty / reactive waits time out — the
+                // chat-vanish / untyped-storm class). A type must be registered in the RECEIVING hub as well
+                // as the sending one; warn once per type so the missing registration is found fast.
+                WarnUnregisteredDeserialization(typeName!);
             }
         }
 

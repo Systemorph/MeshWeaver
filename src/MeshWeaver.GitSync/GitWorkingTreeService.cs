@@ -160,6 +160,75 @@ public sealed class GitWorkingTreeService(
                 .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
     }
 
+    // ── git browser (read-only history) ──────────────────────────────────────────────────────
+
+    /// <summary>
+    /// The latest <paramref name="maxCount"/> commits on the working tree's current branch (newest
+    /// first) — the commit log the git browser renders. Fields are unit-separator delimited so a
+    /// subject containing any other character parses cleanly.
+    /// </summary>
+    public IObservable<IReadOnlyList<GitCommit>> Log(string userId, string repoSlug, int maxCount = 100)
+    {
+        // Clamp: 0/negative makes `git log -n` show nothing or error; an unbounded value would let a
+        // caller pull the whole history into the portal. 1000 is a generous ceiling for a browser.
+        var n = Math.Clamp(maxCount, 1, 1000);
+        var dest = PathFor(userId, repoSlug);
+        return Expect(git.Run(dest,
+        [
+            "log", $"-n{n}", "--date=format:%Y-%m-%d %H:%M",
+            // %H %h %ad %an %s, separated by the 0x1f unit separator (%x1f).
+            "--pretty=format:%H%x1f%h%x1f%ad%x1f%an%x1f%s",
+        ])).Select(ParseLog);
+    }
+
+    /// <summary>
+    /// The files changed by <paramref name="commitHash"/> against its parent (status + repo-relative
+    /// path). <c>--root</c> makes the initial commit list its files as added rather than empty;
+    /// <c>--no-renames</c> keeps every line a simple <c>STATUS\tpath</c> (a rename shows as D + A).
+    /// </summary>
+    public IObservable<IReadOnlyList<GitFileChange>> CommitChanges(string userId, string repoSlug, string commitHash)
+    {
+        // A blank hash, or one starting with '-', would be parsed by git as a flag (argument injection)
+        // rather than a revision — reject it before it reaches the CLI.
+        if (string.IsNullOrWhiteSpace(commitHash) || commitHash.StartsWith('-'))
+            return Observable.Throw<IReadOnlyList<GitFileChange>>(
+                new GitWorkingTreeException($"Invalid commit '{commitHash}'."));
+        var dest = PathFor(userId, repoSlug);
+        return Expect(git.Run(dest,
+            ["diff-tree", "--no-commit-id", "--name-status", "--no-renames", "-r", "--root", commitHash]))
+            .Select(ParseNameStatus);
+    }
+
+    /// <summary>
+    /// The content of <paramref name="relativePath"/> at git revision <paramref name="rev"/> (e.g.
+    /// <c>"HEAD"</c>, a commit hash, or <c>"{hash}^"</c> for a parent) — the two sides a diff needs.
+    /// <para>Returns <c>""</c> ONLY when the path genuinely did not exist at that revision (an added or
+    /// deleted file — its empty side is a legitimate diff input). Any OTHER git failure (invalid
+    /// revision, repo not checked out, …) is propagated as a <see cref="GitWorkingTreeException"/>
+    /// rather than masked as empty, so a real fault is never silently swallowed.</para>
+    /// </summary>
+    public IObservable<string> ShowFile(string userId, string repoSlug, string rev, string relativePath)
+    {
+        // Neither side may start with '-' (git would parse it as a flag — argument injection).
+        if (rev.StartsWith('-') || relativePath.StartsWith('-'))
+            return Observable.Throw<string>(
+                new GitWorkingTreeException($"Invalid revision '{rev}' or path '{relativePath}'."));
+        var dest = PathFor(userId, repoSlug);
+        return git.Run(dest, ["show", $"{rev}:{relativePath}"])
+            .SelectMany(r => r.Ok
+                ? Observable.Return(r.StdOut)
+                : IsPathAbsentAtRev(r.StdErr)
+                    ? Observable.Return("")
+                    : Observable.Throw<string>(new GitWorkingTreeException(
+                        $"git show {rev}:{relativePath} failed (exit {r.ExitCode}): {r.Message}")));
+    }
+
+    /// <summary>True when <c>git show</c>'s stderr signals the path simply wasn't in that revision
+    /// (vs. a real failure like a bad rev) — the messages git emits for an added/deleted file.</summary>
+    private static bool IsPathAbsentAtRev(string stderr) =>
+        stderr.Contains("does not exist in", StringComparison.Ordinal)
+        || stderr.Contains("exists on disk, but not in", StringComparison.Ordinal);
+
     // ── internals ─────────────────────────────────────────────────────────────────────────
 
     private IObservable<string> CurrentBranch(string dest) =>
@@ -189,6 +258,34 @@ public sealed class GitWorkingTreeService(
             changes.Add(new GitFileChange(line[3..].Trim(), line[..2].Trim()));
         }
         return new WorkingTreeStatus(branch, changes.Count == 0, changes);
+    }
+
+    /// <summary>The 0x1f unit separator that delimits <c>git log</c> fields (can't occur in commit text).</summary>
+    private const char LogFieldSeparator = '\x1f';
+
+    private static IReadOnlyList<GitCommit> ParseLog(GitCommandResult r)
+    {
+        var commits = new List<GitCommit>();
+        foreach (var line in r.StdOut.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+        {
+            // count: 5 → the subject keeps everything after the 4th separator even if it held one.
+            var f = line.Split(LogFieldSeparator, 5);
+            if (f.Length < 5) continue;
+            commits.Add(new GitCommit(f[0], f[1], f[2], f[3], f[4]));
+        }
+        return commits;
+    }
+
+    private static IReadOnlyList<GitFileChange> ParseNameStatus(GitCommandResult r)
+    {
+        var changes = new List<GitFileChange>();
+        foreach (var line in r.StdOut.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var tab = line.IndexOf('\t');
+            if (tab < 0) continue;
+            changes.Add(new GitFileChange(line[(tab + 1)..].Trim(), line[..tab].Trim()));
+        }
+        return changes;
     }
 
     /// <summary>The credential-helper config that reads the token from <c>$GW_TOKEN</c> (token never in argv).</summary>

@@ -101,7 +101,9 @@ public static class MeshDataSourceExtensions
                 return data
                     .Configure(rm => rm
                         .ForReducedStream<InstanceCollection>(reduced => reduced
-                            .AddWorkspaceReference<MeshNodeReference, MeshNode>(ReduceToMeshNode))
+                            .AddWorkspaceReference<MeshNodeReference, MeshNode>(
+                                (ci, r, initial) => ReduceToMeshNode(
+                                    ci, r, initial, data.Workspace.Hub.JsonSerializerOptions)))
                         .ForReducedStream<MeshNode>(reduced => reduced
                             .AddPatchFunction(PatchMeshNode))
                         .AddWorkspaceReferenceStream<MeshNode>(
@@ -765,8 +767,25 @@ public static class MeshDataSourceExtensions
                     cache.IsDeleted = false;
                     try
                     {
+                        // 🚨 FORWARD-ONLY refresh — never move the in-RAM node BACKWARD.
+                        // `notification.Entity` is the node as PERSISTED. The durable write + its
+                        // change notification are OFF-TURN, so under a write burst this notification
+                        // LAGS the in-RAM stream: by the time it arrives, the in-RAM commit may already
+                        // carry many newer writes. A blind `_ => newNode` overwrite re-applied that
+                        // STALE persisted snapshot over fresher in-RAM state and silently dropped every
+                        // field added since it was persisted — the concurrent cross-hub-write data-loss
+                        // bug (CrossHubPatchAtomicityTest: a burst of cross-mirror dict-adds settling
+                        // with entries permanently lost). The single-write echo-suppression above only
+                        // skips the EXACT latest version, not the older lagging echoes. The IN-RAM
+                        // commit is authoritative (the owner's monotonic Version is the one clock); a
+                        // persisted snapshot may only REPLACE it when it is STRICTLY NEWER (a genuine
+                        // out-of-band external write). A lagged own-write echo (version <= live) is a
+                        // no-op, so the in-RAM stream only ever moves forward.
                         hub.GetWorkspace().GetMeshNodeStream()
-                            .Update(_ => newNode)
+                            .Update(current =>
+                                current is not null && current.Version >= newNode.Version
+                                    ? current
+                                    : newNode)
                             .Subscribe(
                                 _ => { },
                                 ex => hub.ServiceProvider.GetService<ILoggerFactory>()
@@ -1125,8 +1144,9 @@ public static class MeshDataSourceExtensions
     /// stale snapshot) and instances to bind to the wrong assembly.
     /// </para>
     /// </summary>
-    private static ChangeItem<MeshNode> ReduceToMeshNode(
-        ChangeItem<InstanceCollection> current, MeshNodeReference reference, bool initial)
+    internal static ChangeItem<MeshNode> ReduceToMeshNode(
+        ChangeItem<InstanceCollection> current, MeshNodeReference reference, bool initial,
+        JsonSerializerOptions options)
     {
         var instances = current.Value?.Instances.Values.OfType<MeshNode>();
         var node = !string.IsNullOrEmpty(reference.Path)
@@ -1152,7 +1172,17 @@ public static class MeshDataSourceExtensions
             // returning null (which silently drops the emission and blocks live updates).
             return new(node, current.StreamId, current.Version);
         }
-        return new(change.Value as MeshNode, current.ChangedBy, current.StreamId,
+        // change.Value is a JsonElement when the update was derived from a JSON
+        // patch (cross-hub / mirror path) — `as MeshNode` would silently null it
+        // out, dropping a null-content ChangeItem into the mirror. Deserialize it
+        // the same way the sibling PatchMeshNode does.
+        var changedNode = change.Value switch
+        {
+            MeshNode m => m,
+            JsonElement je => je.Deserialize<MeshNode>(options),
+            _ => null
+        };
+        return new(changedNode, current.ChangedBy, current.StreamId,
             ChangeType.Patch, current.Version, [change]);
     }
 

@@ -231,11 +231,33 @@ image_build_local() {                                  # §3 Option B
   repo="$(resolve_repo)" || die "local build (Option B) needs the repo — set MEMEX_REPO to your MeshWeaver checkout, or use 'up --from-acr'"
   need dotnet "--cask dotnet-sdk"
   need docker docker
+
+  # ── WEDGE FIX: serialize image builds across concurrent memex-local invocations. Two agents each running
+  #    `dotnet publish` (portal + 11 dependents) saturate the host's cores (load → 20+, the machine goes
+  #    unresponsive). A lockdir mutex runs builds ONE-AT-A-TIME at full speed instead of contending — far
+  #    better than capping parallelism (which just makes every build slow). Self-heals a leaked lock via a
+  #    liveness check on the holder PID; 20-min hard ceiling so a truly stuck holder can't block forever.
+  #    Opt out with MEMEX_NO_BUILD_LOCK=1.
+  local _bl="${TMPDIR:-/tmp}/memex-build.lock"
+  if [ -z "${MEMEX_NO_BUILD_LOCK:-}" ]; then
+    local _w=0
+    while ! mkdir "$_bl" 2>/dev/null; do
+      local _p; _p="$(cat "$_bl/pid" 2>/dev/null || true)"
+      if { [ -n "$_p" ] && ! kill -0 "$_p" 2>/dev/null; } || [ "$_w" -ge 1200 ]; then rm -rf "$_bl" 2>/dev/null; continue; fi
+      [ "$_w" -eq 0 ] && step "Build lock held by another memex-local build (pid ${_p:-?}) — waiting to avoid wedging the host…"
+      sleep 5; _w=$((_w + 5))
+    done
+    echo "$$" > "$_bl/pid"
+    trap "rm -rf '$_bl' 2>/dev/null" RETURN
+    ok "Acquired build lock — building serially (set MEMEX_NO_BUILD_LOCK=1 to disable)"
+  fi
+
   base_build_local "${1:-}"                            # ensure the CLI-bearing base exists FIRST
   step "Building native arm64 portal image (layered on the CLI base) into Colima's Docker store (§3 Option B)"
   dotnet publish "$repo/memex/aspire/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj" \
     -c Release -t:PublishContainer -p:ContainerRepository=memex-portal-ai-local \
-    -p:ContainerBaseImage="$PORTAL_BASE_REF"
+    -p:ContainerBaseImage="$PORTAL_BASE_REF" \
+    -maxcpucount:"${MEMEX_BUILD_CPUS:-6}"   # WEDGE FIX: cap parallelism so ONE build can't saturate the host
   # Fail LOUD if the publish lost the co-hosted CLIs (e.g. the ContainerBaseImage didn't layer in
   # because the local registry was empty). A CLI-less portal silently ships a broken Claude Code /
   # Copilot harness: /login's `claude setup-token` hits "claude: not found" and exits → the portal
@@ -248,7 +270,8 @@ image_build_local() {                                  # §3 Option B
   ok "Portal image verified: claude + node CLIs are baked in"
   step "Building migration image (§3 Option B)"
   dotnet publish "$repo/memex/aspire/Memex.Database.Migration/Memex.Database.Migration.csproj" \
-    -c Release -t:PublishContainer -p:ContainerRepository=memex-migration-local
+    -c Release -t:PublishContainer -p:ContainerRepository=memex-migration-local \
+    -maxcpucount:"${MEMEX_BUILD_CPUS:-6}"   # WEDGE FIX: cap parallelism (see portal publish above)
   docker tag memex-migration-local:latest "$MIGRATION_IMAGE"
   ok "Images tagged $PORTAL_IMAGE / $MIGRATION_IMAGE (visible to k3s via IfNotPresent)"
 }
@@ -318,6 +341,7 @@ helm_deploy() {
   helm upgrade --install "$RELEASE" "$chart" \
     -f "$chart/values.yaml" \
     -f "$OVERLAY" \
+    --set persistDataVolume=true \
     -n "$NAMESPACE" --create-namespace \
     --force-conflicts
 }
@@ -947,6 +971,10 @@ COMMANDS:
                   Tail logs (portal by default). Log level: $LOG_LEVEL.
   update [--build|--from-acr] [--tag T]
                   Roll portal+migration to a newer image, then refresh forward.
+  autoroll <up|down|status>
+                  Auto-redeploy the portal whenever a fresh local image is built
+                  (launchd watcher → rollout restart on a new :latest digest).
+                  The local equivalent of the AKS in-pod self-update.
   port-forward    (Re)start the host:${HOST_PORT} -> ingress:443 forward.
   observability   Install Grafana/Loki/Promtail/Prometheus (§11).
   doctor          Preflight: tools, chart/assets, cluster.
@@ -970,6 +998,139 @@ cmd_version() { printf 'memex-local 0.1.0 (chart: memex %s)\n' "$(resolve_chart 
 # ===========================================================================
 # Dispatch
 # ===========================================================================
+# ── auto-roll: redeploy the portal whenever a fresh local image is built ─────────────────────
+# The host builds portal images into the docker store; k3s reuses them via IfNotPresent. This
+# launchd agent polls the portal :latest image digest every 30s and `rollout restart`s the portal
+# when it changes — so `memex-local update` (or any rebuild) auto-deploys with NO manual roll.
+# Same OUTCOME as the AKS in-pod self-update (SelfUpdateHostedService), but host-driven, which fits
+# the host-built local loop (the in-pod ACR poll can't reach a local-built image — see ReleaseStrategy).
+readonly AUTOROLL_LABEL="com.memex.local.autoroll"
+readonly AUTOROLL_PLIST="$HOME/Library/LaunchAgents/${AUTOROLL_LABEL}.plist"
+readonly AUTOROLL_STATE="$LOCAL_HOME/autoroll.digest"
+readonly AUTOROLL_LOG="$LOCAL_HOME/autoroll.log"
+readonly AUTOROLL_IMAGE="memex-portal-ai-local:latest"   # the moving tag the build writes (then tags $PORTAL_IMAGE)
+readonly AUTOROLL_MIG_IMAGE="memex-migration-local:latest" # the migration moving tag (then tagged $MIGRATION_IMAGE)
+readonly AUTOROLL_MIG_STATE="$LOCAL_HOME/autoroll.migration.digest"
+readonly AUTOROLL_MIG_JOB="memex-migration-autoroll"
+readonly PORTAL_DEPLOYMENT="memex-portal-deployment"
+
+# Re-run the migration as a one-shot Job against the MAIN DB (the chart's connection string from
+# memex-portal-config/secrets — NO e2e override) on the freshly-built image, and wait for it. The
+# migration is a run-once Job (no Deployment to roll), and the portal's DbVersionGate blocks boot
+# until the schema is current, so this MUST complete before the portal rolls. Returns non-zero on
+# failure/timeout so the tick keeps the portal on its current image and retries next pass.
+_autoroll_migrate() {
+  # Retag the freshly-built local image onto the chart ref the Job references ($MIGRATION_IMAGE) — a bare
+  # `dotnet publish` only writes memex-migration-local:latest, so without this the Job would re-run the OLD
+  # image (IfNotPresent reuses the chart ref from the Docker store).
+  docker tag "$AUTOROLL_MIG_IMAGE" "$MIGRATION_IMAGE" >/dev/null 2>&1 || true
+  kubectl -n "$NAMESPACE" delete job "$AUTOROLL_MIG_JOB" --ignore-not-found >/dev/null 2>&1 || true
+  kubectl -n "$NAMESPACE" apply -f - >/dev/null 2>&1 <<YAML || return 1
+apiVersion: batch/v1
+kind: Job
+metadata: { name: $AUTOROLL_MIG_JOB }
+spec:
+  backoffLimit: 1
+  ttlSecondsAfterFinished: 600
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: migration
+          image: $MIGRATION_IMAGE
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef: { name: memex-portal-config }
+            - secretRef:    { name: memex-portal-secrets }
+YAML
+  kubectl -n "$NAMESPACE" wait --for=condition=complete "job/$AUTOROLL_MIG_JOB" --timeout=300s >/dev/null 2>&1
+}
+
+cmd_autoroll() {
+  local action="${1:-status}"
+  case "$action" in
+    up)
+      need docker docker; need kubectl kubectl
+      mkdir -p "$LOCAL_HOME" "$(dirname "$AUTOROLL_PLIST")"
+      # Pin the portal to the MOVING tag so `rollout restart` picks up a rebuilt image (IfNotPresent
+      # reuses whatever the docker store now holds at that tag — no registry pull needed).
+      step "Pinning $PORTAL_DEPLOYMENT to $PORTAL_IMAGE (IfNotPresent) so rebuilds roll in"
+      kubectl -n "$NAMESPACE" set image "deploy/$PORTAL_DEPLOYMENT" "memex-portal=$PORTAL_IMAGE" >/dev/null 2>&1 || true
+      kubectl -n "$NAMESPACE" patch "deploy/$PORTAL_DEPLOYMENT" --type=json \
+        -p='[{"op":"replace","path":"/spec/template/spec/containers/0/imagePullPolicy","value":"IfNotPresent"}]' >/dev/null 2>&1 || true
+      # Seed BOTH digests with the CURRENT images so the watcher rolls on the NEXT rebuild, not on install.
+      docker image inspect "$AUTOROLL_IMAGE" --format '{{.Id}}' 2>/dev/null > "$AUTOROLL_STATE" || true
+      docker image inspect "$AUTOROLL_MIG_IMAGE" --format '{{.Id}}' 2>/dev/null > "$AUTOROLL_MIG_STATE" || true
+      local self; self="${SELF_DIR}/$(basename "$0")"
+      cat > "$AUTOROLL_PLIST" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>${AUTOROLL_LABEL}</string>
+  <key>ProgramArguments</key>
+  <array><string>${self}</string><string>autoroll</string><string>_tick</string></array>
+  <key>StartInterval</key><integer>30</integer>
+  <key>RunAtLoad</key><true/>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    <key>HOME</key><string>${HOME}</string>
+  </dict>
+  <key>StandardOutPath</key><string>${AUTOROLL_LOG}</string>
+  <key>StandardErrorPath</key><string>${AUTOROLL_LOG}</string>
+</dict></plist>
+PLIST
+      launchctl unload "$AUTOROLL_PLIST" >/dev/null 2>&1 || true
+      launchctl load "$AUTOROLL_PLIST"
+      ok "Auto-roll ON — watching portal + migration images every 30s; a new build → re-migrate then rollout restart. Log: $AUTOROLL_LOG"
+      ;;
+    down)
+      launchctl unload "$AUTOROLL_PLIST" >/dev/null 2>&1 || true
+      rm -f "$AUTOROLL_PLIST"
+      ok "Auto-roll OFF (portal stays on its current image)."
+      ;;
+    status)
+      if launchctl list 2>/dev/null | grep -q "$AUTOROLL_LABEL"; then ok "Auto-roll: RUNNING"; else info "Auto-roll: stopped"; fi
+      info "portal:    $AUTOROLL_IMAGE   last: $(cat "$AUTOROLL_STATE" 2>/dev/null || echo none)"
+      info "migration: $AUTOROLL_MIG_IMAGE   last: $(cat "$AUTOROLL_MIG_STATE" 2>/dev/null || echo none)"
+      info "deployment image: $(kubectl -n "$NAMESPACE" get "deploy/$PORTAL_DEPLOYMENT" -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || echo '?')"
+      ;;
+    _tick)   # invoked by launchd every 30s — re-migrate + roll iff a watched image digest changed
+      local pcur plast mcur mlast
+      # 1. Migration FIRST (schema must lead the portal). If it changed, re-run + wait; on failure
+      #    leave everything on the current images and retry next tick (don't roll the portal blind).
+      mcur="$(docker image inspect "$AUTOROLL_MIG_IMAGE" --format '{{.Id}}' 2>/dev/null || true)"
+      mlast="$(cat "$AUTOROLL_MIG_STATE" 2>/dev/null || true)"
+      if [ -n "$mcur" ] && [ "$mcur" != "$mlast" ]; then
+        printf '%s autoroll: migration image changed (%s -> %s) — re-running %s\n' \
+          "$(date -u +%FT%TZ)" "${mlast:-none}" "$mcur" "$AUTOROLL_MIG_JOB"
+        if _autoroll_migrate; then
+          printf '%s\n' "$mcur" > "$AUTOROLL_MIG_STATE"
+          printf '%s autoroll: migration complete\n' "$(date -u +%FT%TZ)"
+        else
+          printf '%s autoroll: MIGRATION FAILED — keeping current images, will retry\n' "$(date -u +%FT%TZ)"
+          exit 0
+        fi
+      fi
+      # 2. Portal — roll iff its image digest changed (after the schema is current).
+      pcur="$(docker image inspect "$AUTOROLL_IMAGE" --format '{{.Id}}' 2>/dev/null || true)"
+      [ -n "$pcur" ] || exit 0
+      plast="$(cat "$AUTOROLL_STATE" 2>/dev/null || true)"
+      if [ "$pcur" != "$plast" ]; then
+        printf '%s autoroll: portal image changed (%s -> %s) — rollout restart %s\n' \
+          "$(date -u +%FT%TZ)" "${plast:-none}" "$pcur" "$PORTAL_DEPLOYMENT"
+        # Retag the freshly-built local image onto the chart ref the Deployment runs ($PORTAL_IMAGE) so the
+        # restart actually picks up the NEW image — a bare `dotnet publish` only writes the *-local:latest
+        # tag, and the pod runs $PORTAL_IMAGE (IfNotPresent reuses the Docker-store image at that tag).
+        docker tag "$AUTOROLL_IMAGE" "$PORTAL_IMAGE" >/dev/null 2>&1 || true
+        kubectl -n "$NAMESPACE" rollout restart "deploy/$PORTAL_DEPLOYMENT" >/dev/null 2>&1 || true
+        printf '%s\n' "$pcur" > "$AUTOROLL_STATE"
+      fi
+      ;;
+    *) die "usage: memex-local autoroll {up|down|status}" ;;
+  esac
+}
+
 main() {
   local cmd="${1:-help}"; shift || true
   case "$cmd" in
@@ -979,6 +1140,7 @@ main() {
     status)        cmd_status "$@" ;;
     logs)          cmd_logs "$@" ;;
     update)        cmd_update "$@" ;;
+    autoroll)      cmd_autoroll "$@" ;;
     port-forward)  cmd_port_forward "$@" ;;
     observability) cmd_observability "$@" ;;
     doctor)        cmd_doctor "$@" ;;

@@ -54,6 +54,8 @@ public static class DocumentNodeType
                 .WithContentType<Indexing.Document>())
             .AddDefaultLayoutAreas()
             .AddLayout(layout => layout
-                .WithView(MeshNodeLayoutAreas.OverviewArea, DocumentLayoutAreas.Overview))
+                .WithView(MeshNodeLayoutAreas.OverviewArea, DocumentLayoutAreas.Overview)
+                .WithView(DocumentLayoutAreas.BlocksArea, DocumentLayoutAreas.Blocks)
+                .WithView(DocumentLayoutAreas.SourceArea, DocumentLayoutAreas.Source))
     };
 }

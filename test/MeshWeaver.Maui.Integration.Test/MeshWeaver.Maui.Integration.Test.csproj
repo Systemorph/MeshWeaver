@@ -1,0 +1,20 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Tier-2 of the MAUI test layer: integration tests on MonolithMeshTestBase that assert the REAL
+    framework data the native view pack binds to. Tier 1 (MeshWeaver.Maui.Abstractions.Test) tests the
+    projection logic against hand-built JSON; this tier proves the framework's actual serialization of
+    MeshThread / ThreadMessage (the live hub JsonSerializerOptions: camelCase, enum-as-string, computed
+    getters) matches the keys/values that projection assumes — the contract a hand-built JSON test can't
+    catch. Runs in normal net10.0 CI; NO maccatalyst toolchain required.
+  -->
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Monolith.TestBase\MeshWeaver.Hosting.Monolith.TestBase.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.Graph\MeshWeaver.Graph.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.AI\MeshWeaver.AI.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.Layout\MeshWeaver.Layout.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.Maui.Abstractions\MeshWeaver.Maui.Abstractions.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -100,6 +100,48 @@ public class OrleansUnresolvableNodeNoWedgeTest(ITestOutputHelper output) : Orle
     }
 
     /// <summary>
+    /// A SINGLE-SEGMENT phantom partition — a top-level path segment with no node and no
+    /// provisioned partition behind it (the <c>_Provider</c> shape: an orphaned partition that a
+    /// stale schema/index keeps "looking alive") — must resolve to a FAST answer for a
+    /// <c>SubscribeRequest</c>: either the partition-root synthesis activates a bare placeholder, or
+    /// routing NACKs <c>NotFound</c> ("address unknown"). What it must NEVER do is leave the cache
+    /// hub's <c>SubscribeRequest</c> parked until the 60s framework RequestTimeout — that 60s spin is
+    /// exactly the sglauser flake. <c>WaitAsync(15s)</c> turns any such hang into a deterministic
+    /// <see cref="TimeoutException"/> (RED); a value OR a <see cref="DeliveryFailureException"/>
+    /// inside the window is GREEN.
+    /// </summary>
+    [Fact]
+    public async Task SubscribeToPhantomSingleSegmentPartition_AnswersFast_NeverSpinsToRequestTimeout()
+    {
+        var phantom = $"phantom{Guid.NewGuid():N}";   // single segment, never provisioned
+        var reader = GetClient($"reader-{Guid.NewGuid():N}", "TestUser");
+
+        Func<Task> subscribe = () => reader.Observe(
+                new GetDataRequest(new MeshNodeReference()),
+                o => o.WithTarget(new Address(phantom)))
+            .FirstAsync().ToTask()
+            .WaitAsync(15.Seconds());
+
+        try
+        {
+            await subscribe();
+            Output.WriteLine("[test] phantom partition answered (synthesized root) within budget — no spin");
+        }
+        catch (DeliveryFailureException dfe)
+        {
+            // "address unknown" surfaced fast — the desired outcome for a truly-absent partition.
+            Output.WriteLine($"[test] phantom partition fast-NACKed (address unknown): {dfe.Message}");
+        }
+        catch (TimeoutException)
+        {
+            Assert.Fail(
+                "WEDGE: a SubscribeRequest to a phantom single-segment partition spun past 15s instead of "
+                + "answering or fast-failing. Routing must give 'address unknown' (DeliveryFailure{NotFound}) "
+                + "promptly — never let the cache hub's Observe park until the 60s RequestTimeout (the flake).");
+        }
+    }
+
+    /// <summary>
     /// An ILLEGAL (unregistered) node type must surface a PROPER outcome FAST — either a
     /// clean rejection or a <see cref="DeliveryFailureException"/> — and must never hang
     /// the caller or crash the owning hub. Every op is bounded with <c>WaitAsync</c>, so a
