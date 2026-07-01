@@ -436,44 +436,23 @@ public static class JsonSynchronizationStream
                     // HeartBeatEvent is [SystemMessage] — PostPipeline accepts null AccessContext
                     // without warning. No identity stamp needed; receiver doesn't gate on principal.
                     //
-                    // 🚨 OBSERVE the delivery — do NOT fire-and-forget. The heartbeat has no ack, so a
-                    // HEALTHY owner never responds and the Observe simply times out (the normal case,
-                    // ignored below). But a terminal NotFound DeliveryFailure means the owner ADDRESS
-                    // NO LONGER EXISTS: a recycled/deactivated grain REACTIVATES on the heartbeat post
-                    // and acks, so only a PERMANENTLY-GONE owner NotFounds — e.g. a one-shot
-                    // {Partition}/_Activity/import-{fingerprint} lock whose dedicated off-router import
-                    // hub was disposed when the import completed (the node persists as history, so the
-                    // change feed never fires a Created/Deleted pulse to drive resubscribe). When the
-                    // owner is gone we must STOP: tear the keep-alive down. Fire-and-forget left that
-                    // dead owner heart-beaten every interval forever → "[ROUTE] NotFound" per partition
-                    // for the life of the silo — the recurring import-activity NotFound storm that pegs
-                    // the CPU and trips the liveness probe. (Pinned by
-                    // HeartbeatStopsWhenOwnerDiesAfterSubscribeTest.)
-                    // Post the heartbeat (still keeps the grain alive) and OBSERVE its delivery. The
-                    // post is async-queued and the Observe registers synchronously right after, before
-                    // any response can land — no race. A healthy owner has no ack, so the Observe just
-                    // times out (the normal case, ignored). A terminal NotFound means the owner ADDRESS
-                    // is gone — only a permanently-gone owner NotFounds (a recycled grain reactivates on
-                    // the post and acks) — so STOP: tear the keep-alive down.
-                    var hbDelivery = h.Post(new HeartBeatEvent(), o => o.WithTarget(owner));
-                    if (hbDelivery is not null)
-                        h.Observe(hbDelivery)
-                            .Take(1)
-                            // A healthy owner sends no heartbeat ack, so the observe never emits — switch
-                            // to Empty (COMPLETES) instead of the throwing Timeout overload: the normal
-                            // case must not route through the error path every interval (exceptions-as-
-                            // control-flow is a real CPU/alloc cost given how many heartbeats run). A
-                            // terminal NotFound still arrives FAST as an OnError before this fires.
-                            .Timeout(heartbeatInterval, Observable.Empty<IMessageDelivery>())
-                            .Subscribe(
-                                _ => { },   // no ack to consume
-                                ex =>
-                                {
-                                    // Owner address gone (a recycled grain reactivates on the post and
-                                    // acks — only a permanently-gone owner NotFounds): STOP heart-beating.
-                                    if (ex is DeliveryFailureException { Failure.ErrorType: ErrorType.NotFound })
-                                        keepAlive.Dispose();
-                                });
+                    // 🚨 FIRE-AND-FORGET — do NOT observe the delivery. A HEALTHY owner never acks a
+                    // HeartBeatEvent, so OBSERVING it registered a hub callback that never resolved: the
+                    // observe's Rx .Timeout completed the OBSERVABLE but left the underlying callback
+                    // pending on THIS (cache) hub. Across many live sync streams those leaked
+                    // HeartBeatEvent callbacks piled up (hundreds pending >30 s — the [STALE-CALLBACK]
+                    // scan) until the hub's action block/liveness probe stalled: the doc-crawl / atioz
+                    // cache-hub wedge. The heartbeat has no ack to consume and needs none — its only job
+                    // is to keep the owner grain alive, which the Post itself does. An undeliverable
+                    // heartbeat is [CanBeIgnored], so routing DROPS it without a NACK (RoutingServiceBase
+                    // AND RoutingGrain.PostFailureToSender both skip [CanBeIgnored]) — no NotFound storm,
+                    // nothing to observe. A recycled/restarted owner is re-detected by the change-feed
+                    // resubscribe below — the sole recycled-grain detector now that the heartbeat is
+                    // fire-and-forget. A permanently-gone owner (a one-shot import-activity lock whose
+                    // change feed fires no pulse) is simply heart-beaten into routing's ignore path every
+                    // interval — a benign dropped post, not a storm — until this subscriber hub is itself
+                    // collected (the weak-ref check above disposes the timer then).
+                    h.Post(new HeartBeatEvent(), o => o.WithTarget(owner));
                 });
             // On keepAlive (not directly on reduced): a terminal NotFound from the initial
             // SubscribeRequest disposes keepAlive → stops this heartbeat. Normal teardown
