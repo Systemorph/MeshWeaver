@@ -24,7 +24,80 @@ public record NodeMenuItemDefinition(
     int Order = 0,
     string? Href = null,
     IReadOnlyList<NodeMenuItemDefinition>? Children = null,
-    string? Tooltip = null);
+    string? Tooltip = null)
+{
+    /// <summary>
+    /// Value equality that compares <see cref="Children"/> by SEQUENCE (recursively). The synthesized
+    /// record equality compares the Children LIST by REFERENCE, and the live menu stream deserializes a
+    /// fresh list on every <c>Full</c> re-emission — so a structurally-identical menu was never "equal",
+    /// the menu dedup never fired, and <c>PortalLayoutBase</c> re-rendered the WHOLE page on every
+    /// unchanged Full (a render-storm cascade to every layout area). Comparing children by sequence closes
+    /// that. Flat menus (Children null/empty) are unaffected.
+    /// </summary>
+    public virtual bool Equals(NodeMenuItemDefinition? other)
+    {
+        if (other is null) return false;
+        if (ReferenceEquals(this, other)) return true;
+        return Label == other.Label && Area == other.Area && Icon == other.Icon
+            && RequiredPermission == other.RequiredPermission && Order == other.Order
+            && Href == other.Href && Tooltip == other.Tooltip
+            && ChildrenEqual(Children, other.Children);
+    }
+
+    /// <summary>Hash consistent with <see cref="Equals(NodeMenuItemDefinition?)"/> — folds child ELEMENTS,
+    /// never the list reference.</summary>
+    public override int GetHashCode()
+    {
+        var hash = new HashCode();
+        hash.Add(Label);
+        hash.Add(Area);
+        hash.Add(Icon);
+        hash.Add(RequiredPermission);
+        hash.Add(Order);
+        hash.Add(Href);
+        hash.Add(Tooltip);
+        foreach (var c in Children ?? [])
+            hash.Add(c);
+        return hash.ToHashCode();
+    }
+
+    private static bool ChildrenEqual(IReadOnlyList<NodeMenuItemDefinition>? a, IReadOnlyList<NodeMenuItemDefinition>? b)
+    {
+        if (ReferenceEquals(a, b)) return true;
+        var ca = a?.Count ?? 0;
+        var cb = b?.Count ?? 0;
+        if (ca != cb) return false;
+        return ca == 0 || a!.SequenceEqual(b!);   // recurses through this Equals
+    }
+}
+
+/// <summary>
+/// Sequence equality for a menu-items list — for <c>DistinctUntilChanged</c> on the live menu stream so a
+/// structurally-identical re-emission does NOT re-render the layout. Elements compare by value (the
+/// <see cref="NodeMenuItemDefinition"/> value equality above, Children included).
+/// </summary>
+public sealed class MenuItemsSequenceComparer : IEqualityComparer<IReadOnlyList<NodeMenuItemDefinition>>
+{
+    /// <summary>Shared instance.</summary>
+    public static readonly MenuItemsSequenceComparer Instance = new();
+
+    /// <inheritdoc />
+    public bool Equals(IReadOnlyList<NodeMenuItemDefinition>? x, IReadOnlyList<NodeMenuItemDefinition>? y)
+    {
+        if (ReferenceEquals(x, y)) return true;
+        if (x is null || y is null || x.Count != y.Count) return false;
+        return x.SequenceEqual(y);
+    }
+
+    /// <inheritdoc />
+    public int GetHashCode(IReadOnlyList<NodeMenuItemDefinition> obj)
+    {
+        var hash = new HashCode();
+        foreach (var i in obj)
+            hash.Add(i);
+        return hash.ToHashCode();
+    }
+}
 
 /// <summary>
 /// Provider delegate that emits the current set of menu items as a reactive stream.
