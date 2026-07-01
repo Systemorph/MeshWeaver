@@ -99,10 +99,19 @@
          is the Graph MVID now, not this string, so a stable local value is safe. -->
     <InformationalVersion Condition="'$(CIRun)' == 'true'">$(Version)+build.$([System.DateTime]::UtcNow.Ticks)</InformationalVersion>
     <InformationalVersion Condition="'$(CIRun)' != 'true'">$(Version)</InformationalVersion>
-    <!-- AssemblyVersion + FileVersion = 3.0.0.<build> (numeric only — the -rc1 label is not
-         allowed here); changes every build for MSBuild's CopyToOutputDirectory heuristic (else
-         test bins hold stale framework DLLs and re-runs exercise old code). -->
-    <AssemblyVersion>$(_VersionNumeric).$(_BuildNumber)</AssemblyVersion>
+    <!-- 🔴 AssemblyVersion is STABLE (3.0.0.0) — it is the RUNTIME ASSEMBLY-BINDING identity, so it
+         MUST be identical across every assembly in a coherent build. `_BuildNumber` is
+         seconds-since-midnight/2 evaluated PER PROJECT at MSBuild time, so a time-based
+         AssemblyVersion drifts a few seconds (→ a different number) between projects built in the
+         same run. That made `Memex.Database.Migration` reference `MeshWeaver.Documentation,
+         Version=3.0.0.280` while the packaged DLL had a different `3.0.0.<other>` → FileNotFoundException
+         at startup → the migration CrashLoopBackOff'd, the schema stuck at v39, and Space creation
+         failed (issue #143). Binding identity must not depend on wall-clock time.
+         FileVersion KEEPS the per-build number — that (plus build timestamps) drives MSBuild's
+         CopyToOutputDirectory heuristic so test bins don't hold stale framework DLLs; it does NOT
+         participate in assembly binding, so it can vary freely. NodeType ABI identity uses the Graph
+         MVID and the self-updater keys on the image tag (ci.N) — neither uses AssemblyVersion. -->
+    <AssemblyVersion>$(_VersionNumeric).0</AssemblyVersion>
     <FileVersion>$(_VersionNumeric).$(_BuildNumber)</FileVersion>
   </PropertyGroup>
   <ItemGroup>
