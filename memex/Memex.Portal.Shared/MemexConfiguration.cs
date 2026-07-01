@@ -15,6 +15,7 @@ using MeshWeaver.Blazor.AI;
 using MeshWeaver.Blazor.GoogleMaps;
 using MeshWeaver.Blazor.Graph;
 using MeshWeaver.Blazor.Infrastructure;
+using MeshWeaver.Hosting.Grpc;
 using MeshWeaver.Blazor.Pages;
 using MeshWeaver.Blazor.Portal;
 using MeshWeaver.Blazor.Portal.Authentication;
@@ -480,6 +481,12 @@ public static class MemexConfiguration
             // import — no regression. Default Helm sets ["Doc","Agent","Provider","Harness","Skill"].
             var syncPartitions = features.StaticRepoSync.Partitions
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            // AI content is served as a UNIT: if the config names ANY AI partition, serve them ALL
+            // (Agent/Provider/Harness/Skill), so an incomplete list can't leave Skill (or a future AI
+            // content type) in-memory while the rest go to the DB — and AddAI's per-type serve-from-DB
+            // gating stays consistent with the static-repo import. See MeshWeaver.AI/AiContentSources.
+            if (syncPartitions.Overlaps(AiContentSources.ContentPartitions))
+                syncPartitions.UnionWith(AiContentSources.ContentPartitions);
             IReadOnlySet<string> serveFromPartition = syncPartitions;
 
             MeshBuilder mb = builder
@@ -510,6 +517,12 @@ public static class MemexConfiguration
                 .AddSpaceType()
                 .AddPortalType()
                 .AddAI(serveFromPartition);
+
+            // gRPC mesh transport (foreign participants py/*, node/*, and the React GUI's
+            // browser Connect+Deliver split). Registers the service + declares the
+            // participant address types stream-routed. Symmetric with Features:SignalR.
+            if (features.Grpc)
+                mb = mb.AddGrpcHub();
 
             // Each AI provider self-registers everything (catalog source +
             // IOptions binding + IChatClientFactory) via one builder extension.
@@ -677,6 +690,8 @@ public static class MemexConfiguration
                         .AddGitHubSyncSettingsTab()
                         // Code workspace tab — on-disk working-tree editor (checkout/edit/commit/push).
                         .AddWorkingTreeTab()
+                        // Git history tab — read-only git browser (commit log + changes + diffs) over the same working tree.
+                        .AddGitHistoryTab()
                         // Content Indexing tab — Space nodes, only when the indexing pipeline is active.
                         .AddContentIndexSettingsTab();
                 })
@@ -805,10 +820,36 @@ public static class MemexConfiguration
             return next();
         });
 
+        // Frontend selection (Portal:Frontend / Portal:ReactAppUrl + the mw-frontend override
+        // cookie): redirect interactive page navigations to the React app when the effective
+        // frontend is React. Inert unless Portal:ReactAppUrl is configured. Must run before
+        // static files/routing so it sees every navigation; assets/transport paths pass through.
+        app.UseFrontendSelection();
+
+        // React GUI SPA: rewrite extension-less /app paths to the SPA entry BEFORE static files,
+        // so the bundle's index.html wins over Blazor's page catch-all (endpoint FALLBACKS lose
+        // to page routes regardless of literal precedence — the rewrite sidesteps routing).
+        app.Use((ctx, next) =>
+        {
+            var p = ctx.Request.Path.Value;
+            if (p is not null
+                && (p.Equals("/app", StringComparison.OrdinalIgnoreCase)
+                    || p.StartsWith("/app/", StringComparison.OrdinalIgnoreCase))
+                && !System.IO.Path.HasExtension(p))
+                ctx.Request.Path = "/app/index.html";
+            return next();
+        });
+
         // Static files middleware must run before routing to serve _content/* paths from RCLs
         app.UseStaticFiles();
 
         app.UseRouting();
+
+        // gRPC-web middleware — lets browsers / React Native reach the mesh gRPC service
+        // (Connect+Deliver split) without HTTP/2 bidi. Must sit between UseRouting and the
+        // endpoint maps. Inert for non-grpc-web requests.
+        if (features.Grpc)
+            app.UseMeshWeaverGrpcWeb();
         app.UseAuthentication();
         app.UseAuthorization();
         app.UseAntiforgery();
@@ -848,6 +889,11 @@ public static class MemexConfiguration
         if (features.SignalR)
             app.MapMeshWeaverSignalRHubs();
 
+        // gRPC mesh endpoint (meshweaver.v1.Mesh/Open, grpc-web enabled) — foreign-language
+        // workers and the React GUI connect here.
+        if (features.Grpc)
+            app.MapMeshWeaverGrpc();
+
         // Map MCP endpoint
         app.MapMeshMcp();
 
@@ -856,6 +902,11 @@ public static class MemexConfiguration
         app.MapMeshApi();
 
         app.MapMeshWeaver();
+
+        // Frontend toggle endpoint: GET /frontend/{react|blazor|clear} sets/clears the per-user
+        // override cookie and redirects — the reversible switch both shells link to.
+        app.MapFrontendSelection();
+
 
         // Social publishing — LinkedIn connect/pull endpoints. Must be AFTER
         // UseAuthentication so HttpContext.User is populated.

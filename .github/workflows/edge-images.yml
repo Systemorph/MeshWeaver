@@ -1,0 +1,104 @@
+name: Edge images (unverified)
+
+# The EDGE channel — the "any" side of the Admin/UpdatePolicy "Only update to CI-verified (green)
+# builds" toggle. It builds + pushes portal/migration images WITHOUT the test-green gate, tagged with
+# an `edge` SemVer pre-release label (e.g. `3.0.0-edge.<run>`) plus the moving `edge` tag. An install
+# with RequireCiGreen=false (bleeding-edge / pre-merge testing) self-updates to these; a green-only
+# install (the default) ignores them — VersionSelect.IsEdge skips the `edge` label.
+#
+# The published version is BAKED (-p:Version), not just tagged, so a running edge install reports an
+# `-edge.<n>` InformationalVersion and compares correctly against newer edge builds (not against the
+# green `-ci.<n>` channel). Directory.Build.props honours -p:Version as the override escape-hatch.
+#
+# Trigger is MANUAL by default so it costs nothing per merge — publish an edge build when you want one.
+# Uncomment `push` to make the edge channel CONTINUOUS (publishes on every main commit; ~2x build cost).
+on:
+  workflow_dispatch:
+  # push:
+  #   branches: [ main ]
+
+permissions:
+  contents: read
+  id-token: write          # OIDC federated login to Azure (no stored secret)
+
+concurrency:
+  group: edge-images
+  cancel-in-progress: true
+
+env:
+  ACR: meshweaver.azurecr.io
+
+jobs:
+  edge-images:
+    name: "Build + push EDGE images to ACR"
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      # The SDK container build overflows the runner's ~14 GB; reclaim preinstalled tooling.
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          dotnet: false
+          android: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+      # Compute the green continuous version, then swap the channel label `ci` → `edge` so the result
+      # parses as an `edge` SemVer pre-release (VersionSelect.IsEdge). Handles both the clean-base
+      # (`3.0.0-ci.N`) and rc (`3.0.0-rc1.ci.N`) shapes; falls back to appending if there is no ci segment.
+      - name: Compute edge version
+        id: vars
+        run: |
+          set -euo pipefail
+          VERSION=$(dotnet msbuild memex/aspire/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj \
+            -getProperty:Version -p:CIRun=true -nologo | tr -d '[:space:]')
+          EDGE_VERSION="${VERSION/.ci./.edge.}"          # rc:    3.0.0-rc1.ci.N -> 3.0.0-rc1.edge.N
+          EDGE_VERSION="${EDGE_VERSION/-ci./-edge.}"      # clean: 3.0.0-ci.N    -> 3.0.0-edge.N
+          [ "$EDGE_VERSION" = "$VERSION" ] && EDGE_VERSION="${VERSION}-edge.${GITHUB_RUN_NUMBER}"
+          echo "version=$EDGE_VERSION" >> "$GITHUB_OUTPUT"
+          echo "Computed edge version: $EDGE_VERSION (from $VERSION, run #$GITHUB_RUN_NUMBER)"
+      - name: Ensure Azure CLI
+        run: command -v az >/dev/null || curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - name: ACR login
+        run: az acr login --name meshweaver
+      - name: Restore workloads
+        run: dotnet workload restore
+      # Multi-arch publish (identical to the green `images` job), but: Version is BAKED to the edge
+      # version, and tags are `<edge-version>` + the moving `edge` (NOT `main`, which is the green tag).
+      # %3B is the MSBuild escape for a literal ';' inside a `;`-separated property value.
+      - name: Build + push portal-ai (edge)
+        run: >
+          dotnet publish memex/aspire/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj
+          -c Release --no-self-contained -t:PublishContainer -p:PublishProfile=
+          -p:RuntimeIdentifiers="linux-x64%3Blinux-arm64"
+          -p:ContainerRuntimeIdentifiers="linux-x64%3Blinux-arm64"
+          -p:CIRun=true
+          -p:Version=${{ steps.vars.outputs.version }}
+          -p:ContainerRegistry=${{ env.ACR }}
+          -p:ContainerRepository=memex-portal-ai
+          -p:ContainerImageTags="${{ steps.vars.outputs.version }}%3Bedge"
+          -p:ContainerBaseImage=${{ env.ACR }}/memex-portal-ai-base:latest
+      - name: Build + push migration (edge)
+        run: >
+          dotnet publish memex/aspire/Memex.Database.Migration/Memex.Database.Migration.csproj
+          -c Release --no-self-contained -t:PublishContainer -p:PublishProfile=
+          -p:RuntimeIdentifiers="linux-x64%3Blinux-arm64"
+          -p:ContainerRuntimeIdentifiers="linux-x64%3Blinux-arm64"
+          -p:CIRun=true
+          -p:Version=${{ steps.vars.outputs.version }}
+          -p:ContainerRegistry=${{ env.ACR }}
+          -p:ContainerRepository=memex-migration
+          -p:ContainerImageTags="${{ steps.vars.outputs.version }}%3Bedge"

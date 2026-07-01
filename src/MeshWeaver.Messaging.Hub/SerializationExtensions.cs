@@ -99,8 +99,14 @@ public static class SerializationExtensions
 
         foreach (var standardConverter in standardConverters)
             options.Converters.Add(standardConverter);
-        options.TypeInfoResolver = new PolymorphicTypeInfoResolver(typeRegistry);
-        
+        // Pass the hub's address + a logger so the resolver can attribute an "unregistered type
+        // serialized with a full-name $type" warning to the publishing hub — the diagnostic that
+        // pinpoints WHERE a node is being serialized without its type registered.
+        options.TypeInfoResolver = new PolymorphicTypeInfoResolver(
+            typeRegistry,
+            hub.Address?.ToString(),
+            hub.ServiceProvider.GetService<ILogger<PolymorphicTypeInfoResolver>>());
+
         return options;
     }
 

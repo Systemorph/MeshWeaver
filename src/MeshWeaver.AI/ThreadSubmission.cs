@@ -726,10 +726,24 @@ internal static class ThreadSubmissionServer
         // when SetContext hadn't yet propagated). Treat hub-as-user as no-identity
         // and fall through to the wrapping MeshNode.CreatedBy (set by the
         // CreateNodeRequest handler from the requester's AccessContext).
-        var hubAsUserMatch = asyncLocalCtx?.ObjectId is { } id
-            && (string.Equals(id, threadPath, StringComparison.Ordinal)
-                || string.Equals(id, hub.Address.ToFullString(), StringComparison.Ordinal));
-        var userCtx = hubAsUserMatch ? null : (asyncLocalCtx ?? circuitCtx);
+        // asyncLocal / circuit can carry a NON-user principal here: the thread hub's own address, a
+        // hub-shaped principal (sync/ mesh/ node/ activity/ portal/), or "system-security" — the watcher's
+        // Throttle/Subscribe continuation captures whatever ExecutionContext was active at Subscribe time,
+        // and hub-init / SecurityService bootstrap run under system-security. NONE of these is the real
+        // submitter; a round dispatched as system-security instead of the user is the intermittent identity
+        // race (effective=system-security in the trace) behind the round-4 thread-hub stall / GUI reset
+        // (SidePanelChatTenMessagesTest). Reject them all and fall through to the persistent circuit context,
+        // then the SUBMITTER rider on the pending message (the authoritative identity that survives the hop).
+        bool IsRealUser(AccessContext? ctx) =>
+            ctx?.ObjectId is { } cid
+            && !string.Equals(cid, threadPath, StringComparison.Ordinal)
+            && !string.Equals(cid, hub.Address.ToFullString(), StringComparison.Ordinal)
+            && !string.Equals(cid, MeshWeaver.Mesh.Security.WellKnownUsers.System, StringComparison.Ordinal)
+            && !AccessService.LooksLikeHubPrincipal(cid);
+        var hubAsUserMatch = !IsRealUser(asyncLocalCtx); // asyncLocal is NOT the real user (kept for the trace)
+        var userCtx = IsRealUser(asyncLocalCtx) ? asyncLocalCtx
+            : IsRealUser(circuitCtx) ? circuitCtx
+            : null;
 
         // 🚨 The submission watcher runs on a Throttle/Subscribe continuation where the AsyncLocal
         // AccessContext is wiped (the hub-as-user case above), so the live context is usually unusable

@@ -6,11 +6,14 @@ namespace MeshWeaver.Data.Serialization;
 public class SyncStreamOptions
 {
     /// <summary>
-    /// Interval between HeartBeatEvents posted to the owner hub. Doubles as the resubscribe
-    /// detection window: when the owner is gone (recycled / idle / crashed), the next
-    /// heartbeat returns DeliveryFailure and the subscriber re-issues SubscribeRequest to
-    /// pick up a fresh snapshot from the new grain. Default: 45 seconds.
-    /// Tests use a much shorter interval to verify the resubscribe path without waiting.
+    /// Interval between HeartBeatEvents posted to the owner hub to keep its grain alive. The
+    /// heartbeat also detects a PERMANENTLY-gone owner: a recycled/idle grain REACTIVATES on the
+    /// heartbeat post and acks, so only a gone owner (e.g. a one-shot <c>_Activity/import-*</c> lock
+    /// whose dedicated import hub was disposed) returns a terminal NotFound — which tears the
+    /// keep-alive down so we never heartbeat a dead owner in an endless NotFound loop. Recycled-grain
+    /// RE-SUBSCRIPTION (picking up a fresh snapshot after a restart) is driven by the mesh change feed,
+    /// not the heartbeat. Default: 45 seconds. Tests use a much shorter interval to exercise the
+    /// teardown/resubscribe paths without waiting.
     /// </summary>
     public TimeSpan HeartbeatInterval { get; set; } = TimeSpan.FromSeconds(45);
 

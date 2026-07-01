@@ -218,15 +218,16 @@ public partial class MeshSearchView : IDisposable
         }
     }
 
-    /// <summary>The combobox only toggles Flat ↔ Grouped; the tree / navigator modes manage their
-    /// own browse surface, so the selector is hidden there.</summary>
+    /// <summary>The combobox only toggles the non-grouped presentation (Flat/List) ↔ Grouped; the
+    /// tree / navigator modes manage their own browse surface, so the selector is hidden there. List is
+    /// eligible so the global search page (which defaults to List) keeps its view-options bar.</summary>
     private bool SelectorEligible =>
-        BoundRenderMode is MeshSearchRenderMode.Flat or MeshSearchRenderMode.Grouped;
+        BoundRenderMode is MeshSearchRenderMode.Flat or MeshSearchRenderMode.List or MeshSearchRenderMode.Grouped;
 
     /// <summary>
-    /// The render mode after applying the combobox choice: None ⇒ Flat, a property ⇒ Grouped.
-    /// Falls back to the ViewModel's render mode when the user hasn't touched the selector
-    /// (or when the mode isn't selector-eligible).
+    /// The render mode after applying the combobox choice: None ⇒ the page's non-grouped presentation
+    /// (List or Flat, whichever the ViewModel set), a property ⇒ Grouped. Falls back to the ViewModel's
+    /// render mode when the user hasn't touched the selector (or when the mode isn't selector-eligible).
     /// </summary>
     private MeshSearchRenderMode EffectiveRenderMode
     {
@@ -235,10 +236,19 @@ public partial class MeshSearchView : IDisposable
             if (!SelectorEligible || _viewGroupBy is null)
                 return BoundRenderMode;
             return string.IsNullOrEmpty(_viewGroupBy)
-                ? MeshSearchRenderMode.Flat
+                // "None" keeps the page's own non-grouped layout — rows when it defaults to List.
+                ? (BoundRenderMode == MeshSearchRenderMode.List
+                    ? MeshSearchRenderMode.List
+                    : MeshSearchRenderMode.Flat)
                 : MeshSearchRenderMode.Grouped;
         }
     }
+
+    /// <summary>One-per-row list presentation (icon · title · description) for the global search page.</summary>
+    private bool IsListMode => EffectiveRenderMode == MeshSearchRenderMode.List;
+
+    /// <summary>The fallback subtitle shown on a search row when the node has no description.</summary>
+    private const string NoDescriptionPrompt = "Ask the agent to create a description.";
 
     /// <summary>The property to group by in Grouped mode — combobox choice first, then the ViewModel,
     /// then NodeType as the default bucket.</summary>
@@ -619,8 +629,8 @@ public partial class MeshSearchView : IDisposable
         // relevance — NO NodeType bucketing. The query aggregator already emits the Initial
         // frame sorted by Score desc and ApplySorting preserves that order, so this one group
         // is the relevance ranking. groups.Count == 1 ⇒ the view skips the header and renders
-        // a single card grid.
-        if (EffectiveRenderMode == MeshSearchRenderMode.Flat)
+        // a single card grid (Flat) or a one-per-row list (List).
+        if (EffectiveRenderMode is MeshSearchRenderMode.Flat or MeshSearchRenderMode.List)
         {
             var flatItems = sections?.ItemLimit is int flim && flim > 0
                 ? sortedNodes.Take(flim).ToList()
@@ -702,10 +712,10 @@ public partial class MeshSearchView : IDisposable
             var query = BuildFullQuery();
             if (query.Contains("sort:", StringComparison.OrdinalIgnoreCase))
                 return nodes;
-            // Flat results for a text query arrive already ranked by relevance (Score desc,
+            // Flat/List results for a text query arrive already ranked by relevance (Score desc,
             // set by the query aggregator's ClipMergedInitial). Keep that ranking instead of
             // re-sorting by Order/Name, which would throw the relevance away.
-            if (EffectiveRenderMode == MeshSearchRenderMode.Flat
+            if (EffectiveRenderMode is MeshSearchRenderMode.Flat or MeshSearchRenderMode.List
                 && !string.IsNullOrWhiteSpace(_currentValue))
                 return nodes;
             return nodes.OrderBy(n => n.Order).ThenBy(n => n.Name).ToList();

@@ -1,0 +1,12 @@
+{
+  "expo": {
+    "name": "MeshWeaver",
+    "slug": "meshweaver-mobile",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "ios": { "supportsTablet": true },
+    "android": {}
+  }
+}

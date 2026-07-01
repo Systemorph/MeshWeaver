@@ -96,7 +96,31 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
             _ =>
             {
                 if (Volatile.Read(ref _activeOperations) > 0)
-                    DelayDeactivation(TimeSpan.FromMinutes(10));
+                {
+                    if (LongRunningOperationCapExceeded(
+                            Volatile.Read(ref _longRunningStartedTicks),
+                            DateTime.UtcNow.Ticks,
+                            MaxLongRunningOperationDuration.Ticks))
+                    {
+                        // #147: a long-running operation (typically a hung AI stream with no timeout) has
+                        // been active past the cap. STOP re-arming DelayDeactivation — let Orleans
+                        // idle-collect the grain so deactivation fires executionCts.Cancel()
+                        // (RegisterForDisposal) and cancels the stuck call, instead of pinning the grain
+                        // in memory forever (1376-message backlog, recovery only via pod restart).
+                        logger.LogWarning(
+                            "Grain {GrainId}: a long-running operation has been active for over {Max} " +
+                            "(active={Count}) — no longer extending grain lifetime and requesting " +
+                            "deactivation so executionCts.Cancel() can cancel the stuck operation (#147).",
+                            this.GetPrimaryKeyString(), MaxLongRunningOperationDuration,
+                            Volatile.Read(ref _activeOperations));
+                        // Request deactivation NOW rather than waiting out the last DelayDeactivation
+                        // window + CollectionAgeLimit. On deactivation OnDeactivateAsync disposes the hub,
+                        // RegisterForDisposal fires executionCts.Cancel(), and the hung AI call is torn down.
+                        DeactivateOnIdle();
+                    }
+                    else
+                        DelayDeactivation(TimeSpan.FromMinutes(10));
+                }
                 return Task.CompletedTask;
             },
             new GrainTimerCreationOptions
@@ -299,6 +323,24 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
 
     private IGrainTimer? _keepAliveTimer;
     private int _activeOperations;
+    // Wall-clock ticks when the CURRENT run of long-running operations began (0 = none active). Bounds
+    // how long the keep-alive may extend: a hung AI stream (no timeout — #147) would otherwise hold
+    // _activeOperations > 0 and re-arm DelayDeactivation every minute FOREVER, pinning the grain in memory
+    // with no recovery short of a pod restart. Set on the 0→1 transition, cleared on →0.
+    private long _longRunningStartedTicks;
+    // Generous upper bound on a single run of long-running operations. Legit rounds — including nested
+    // delegation trees where a parent holds its slot while a sub-thread works — complete well within this;
+    // only a genuinely-hung endpoint exceeds it. Past this the keep-alive STOPS extending, Orleans
+    // idle-collects the grain, and executionCts.Cancel() (RegisterForDisposal) cancels the stuck AI call.
+    private static readonly TimeSpan MaxLongRunningOperationDuration = TimeSpan.FromMinutes(30);
+
+    /// <summary>
+    /// Pure decision for the keep-alive timer (unit-testable without an Orleans cluster/clock): a
+    /// long-running-operation RUN whose start is known has exceeded the cap. <paramref name="startedTicks"/>
+    /// == 0 means no run is active (or the clock was cleared) — never expired. See #147.
+    /// </summary>
+    internal static bool LongRunningOperationCapExceeded(long startedTicks, long nowTicks, long maxDurationTicks)
+        => startedTicks != 0 && nowTicks - startedTicks > maxDurationTicks;
 
     /// <summary>
     /// Starts a long-running operation scope.
@@ -308,7 +350,10 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
     /// </summary>
     private IDisposable BeginLongRunningOperation()
     {
-        Interlocked.Increment(ref _activeOperations);
+        // Stamp the start of the active-operation RUN on the 0→1 transition so the keep-alive timer can
+        // bound it (see MaxLongRunningOperationDuration / #147).
+        if (Interlocked.Increment(ref _activeOperations) == 1)
+            Volatile.Write(ref _longRunningStartedTicks, DateTime.UtcNow.Ticks);
         // DelayDeactivation is thread-safe in Orleans
         DelayDeactivation(TimeSpan.FromMinutes(10));
         logger.LogInformation("Grain {GrainId}: long-running operation started (active={Count})",
@@ -317,6 +362,8 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
         return new LongRunningOperationScope(() =>
         {
             var remaining = Interlocked.Decrement(ref _activeOperations);
+            if (remaining == 0)
+                Volatile.Write(ref _longRunningStartedTicks, 0);   // run ended — clear the bound clock
             logger.LogInformation("Grain {GrainId}: long-running operation completed (active={Count})",
                 this.GetPrimaryKeyString(), remaining);
         });

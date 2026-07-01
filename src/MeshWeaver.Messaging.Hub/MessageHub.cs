@@ -1368,13 +1368,74 @@ public sealed class MessageHub : IMessageHub
                         return;
                     logger.LogError(
                         "DISPOSAL DEADLOCK DETECTED: Hub {Address} did not complete shutdown within {Timeout}. " +
-                        "RunLevel={RunLevel}. Force-completing disposal to prevent hang.",
+                        "RunLevel={RunLevel}. Forcing out-of-band teardown so children/subscriptions cannot leak.",
                         Address, DisposalWatchdogTimeout, RunLevel);
-                    SignalDisposalCompleted();
+                    ForceTeardownAfterWatchdog();
                 },
                 // disposalCompleted faulting (SignalDisposalFaulted) propagates through TakeUntil;
                 // the watchdog is no longer needed — swallow so it isn't an unobserved error.
                 _ => { });
+    }
+
+    /// <summary>
+    /// Last-resort teardown when the phased shutdown state machine never ran: the posted
+    /// ShutdownRequest is starved behind a message flood (or a handler wedged the action
+    /// block), so Quiescing → DisposeHostedHubs → ShutDown can never advance. Runs the SAME
+    /// teardown those phases would have run — hosted hubs, pending callbacks, dispose
+    /// actions/subscriptions, message service — from the watchdog thread. Every step is
+    /// idempotent, so a rare race with a slow-but-alive phased disposal is harmless.
+    ///
+    /// 🚨 The predecessor only SIGNALLED completion here (unblocking the caller) and leaked
+    /// every child: a dead Blazor circuit's portal hub kept 7k sync-stream hubs alive,
+    /// heartbeating and fanning out DataChangedEvents at ~1.2 cores FOREVER — no
+    /// UnsubscribeRequest ever reached the owner nodes because the client streams were never
+    /// disposed (the 2026-07-01 zombie portal-hub storm; the memory-climbing wedge class).
+    /// </summary>
+    private void ForceTeardownAfterWatchdog()
+    {
+        // Past-Started guards (heartbeat self-dispose, hosted-hub creation refusal) key off
+        // RunLevel — flip it first so periodic emitters stop feeding the storm.
+        lock (locker)
+        {
+            RunLevel = MessageHubRunLevel.ShutDown;
+        }
+        try { hostedHubs.Dispose(); }
+        catch (Exception e)
+        {
+            TryLog(LogLevel.Warning, "[FORCE-TEARDOWN] {Address}: hostedHubs.Dispose faulted: {Type}: {Message}",
+                Address, e.GetType().Name, e.Message);
+        }
+        try { CancelCallbacks(); }
+        catch (Exception e)
+        {
+            TryLog(LogLevel.Warning, "[FORCE-TEARDOWN] {Address}: CancelCallbacks faulted: {Type}: {Message}",
+                Address, e.GetType().Name, e.Message);
+        }
+        try { DisposeImpl(); }
+        catch (Exception e)
+        {
+            TryLog(LogLevel.Warning, "[FORCE-TEARDOWN] {Address}: DisposeImpl faulted: {Type}: {Message}",
+                Address, e.GetType().Name, e.Message);
+        }
+        // Stops intake AND the drain pump — the starved queue can no longer burn CPU.
+        try { messageService.Dispose(); }
+        catch (Exception e)
+        {
+            TryLog(LogLevel.Warning, "[FORCE-TEARDOWN] {Address}: messageService.Dispose faulted: {Type}: {Message}",
+                Address, e.GetType().Name, e.Message);
+        }
+        // Dead BEFORE signalling — callers awaiting DisposalCompleted must observe the
+        // terminal state, never a mid-teardown snapshot.
+        lock (locker)
+        {
+            RunLevel = MessageHubRunLevel.Dead;
+        }
+        SignalDisposalCompleted();
+        disposalStopwatch.Stop();
+        quiescingSubscription?.Dispose();
+        hostedHubsDisposalSubscription?.Dispose();
+        TryLog(LogLevel.Warning, "[FORCE-TEARDOWN] {Address}: out-of-band teardown complete after {Elapsed}ms",
+            Address, disposalStopwatch.ElapsedMilliseconds);
     }
 
     private void DisposeImpl()

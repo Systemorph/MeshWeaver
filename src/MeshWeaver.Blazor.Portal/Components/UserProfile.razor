@@ -23,6 +23,12 @@
                             <div class="user-id">@username</div>
                         </FluentPersona>
                     </FluentStack>
+                    @if (showFrontendToggle)
+                    {
+                        <FluentStack VerticalAlignment="VerticalAlignment.Center" Style="margin-top: 8px;">
+                            <FluentButton Appearance="Appearance.Stealth" OnClick="SwitchToNewFrontend">Try the new frontend</FluentButton>
+                        </FluentStack>
+                    }
                 </ChildContent>
             </FluentProfileMenu>
         </div>
