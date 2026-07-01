@@ -2635,6 +2635,27 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         // /harness stays available (it falls through to the node-pick path) so a CLI harness isn't a
         // one-way door — the user can switch runtime back to MeshWeaver or another harness.
         items.Add(Item("harness", "Switch the harness (runtime)"));
+
+        // ALL of the harness's OWN slash-commands AND skills, probed from the CLI's init/hello message
+        // (IHarnessRuntimeInfo → harnessRuntimes). The user gets Claude Code / Copilot's native command +
+        // skill autocomplete; each is forwarded 1:1 to the CLI by the FORWARD path in the dispatch.
+        var label = harness.Definition.DisplayName ?? harness.Id;
+        var seen = new HashSet<string>(items.Select(i => (i.Label ?? "").TrimStart('/')), StringComparer.OrdinalIgnoreCase);
+        if (harnessRuntimes.GetValueOrDefault(harness.Id) is { } rt)
+        {
+            foreach (var cmd in rt.SlashCommands)
+            {
+                var name = cmd.TrimStart('/');
+                if (name.Length > 0 && seen.Add(name))
+                    items.Add(Item(name, $"{label} command"));
+            }
+            foreach (var skill in rt.Skills)
+            {
+                var name = skill.TrimStart('/');
+                if (name.Length > 0 && seen.Add(name))
+                    items.Add(Item(name, $"{label} skill"));
+            }
+        }
         return items.OrderBy(c => c.SortKey, StringComparer.Ordinal).ToList();
     }
 
