@@ -93,6 +93,11 @@ public static class MeshApiEndpoints
         group.MapPost("/execute-script", (HttpContext http, IMessageHub rootHub, ExecuteScriptBody body, CancellationToken ct) =>
             RunString(http, rootHub, ct, ops => ops.ExecuteScript(body.Path, body.TimeoutSeconds ?? 120)));
 
+        // First-full-frame render of a layout area — the SSR seeding verb (portal-next):
+        // returns {areas, data} EXACTLY as the sync-stream wire delivers it.
+        group.MapPost("/render-area", (HttpContext http, IMessageHub rootHub, RenderAreaBody body, CancellationToken ct) =>
+            HandleRenderArea(http, rootHub, body, ct));
+
         // Mirror Push/Pull — these talk to the mesh hub directly (same as MCP plugin's PostMirror).
         group.MapPost("/mirror", HandleMirror);
 
@@ -106,6 +111,40 @@ public static class MeshApiEndpoints
         group.MapPost("/upload", HandleUpload).DisableAntiforgery();
 
         return endpoints;
+    }
+
+    /// <summary>Default budget for <c>/render-area</c>; clamped so a caller can neither hang the
+    /// request forever nor force a sub-second flake.</summary>
+    private const int DefaultRenderAreaTimeoutSeconds = 30;
+
+    /// <summary>
+    /// <c>POST /api/mesh/render-area</c> — subscribes the node's layout area server-side (the
+    /// same <c>GetRemoteStream</c> primitive the Blazor portal binds with), takes the first
+    /// fully-materialised Full <c>{areas,data}</c> frame, disposes the subscription (on every
+    /// path, including client abort — the observable chain tears down with the request's
+    /// <see cref="CancellationToken"/>), and ships the frame verbatim: hub serializer options,
+    /// <c>$type</c> discriminators, JSON-encoded instance keys — byte-identical to the gRPC
+    /// wire's Full <c>DataChangedEvent</c>, so an SSR client seeds its area source without
+    /// translation. A timeout returns a 504 JSON error instead of hanging; every other failure
+    /// ships the <see cref="MeshOperations"/> <c>"Error: …"</c>/<c>"Not found: …"</c> sentinel
+    /// exactly like the sibling verbs.
+    /// </summary>
+    private static Task<IResult> HandleRenderArea(
+        HttpContext http, IMessageHub rootHub, RenderAreaBody body, CancellationToken ct)
+    {
+        var sessionHub = ResolveSession(http, rootHub);
+        var ops = new MeshOperations(sessionHub);
+        var timeout = Math.Clamp(body.TimeoutSeconds ?? DefaultRenderAreaTimeoutSeconds, 1, 120);
+        return ops.RenderArea(body.Path, body.Area, body.Id, timeout)
+            .Select(json => (IResult)Results.Content(json, "application/json"))
+            .Catch((TimeoutException _) => Observable.Return((IResult)Results.Json(
+                new
+                {
+                    error = $"Timed out after {timeout}s waiting for the first full frame of area " +
+                            $"'{body.Area ?? "(default)"}' at '{body.Path}'.",
+                },
+                statusCode: StatusCodes.Status504GatewayTimeout)))
+            .FirstAsync().ToTask(ct);
     }
 
     private static async Task<IResult> HandleMirror(
@@ -226,5 +265,6 @@ public static class MeshApiEndpoints
     public record CopyBody(string SourcePath, string TargetNamespace, bool Force = false);
     public record PathBody(string Path);
     public record ExecuteScriptBody(string Path, int? TimeoutSeconds);
+    public record RenderAreaBody(string Path, string? Area = null, string? Id = null, int? TimeoutSeconds = null);
     public record NavigateBody(string Path);
 }
