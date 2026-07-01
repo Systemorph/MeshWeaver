@@ -33,11 +33,18 @@ public class ChatRepeatedlyNoVanishTest(PortalFixture fixture)
 
         var page = await context.NewPageAsync();
         await page.SetViewportSizeAsync(1400, 1000);
-        await page.GotoAsync($"{fixture.BaseUrl}/User/{fixture.UserId}",
+        await page.GotoAsync(fixture.BaseUrl,
             new PageGotoOptions { WaitUntil = WaitUntilState.NetworkIdle, Timeout = 90_000 });
         page.Url.Should().NotContain("/login");
 
-        var editor = page.Locator(".thread-chat-footer .monaco-editor, .thread-chat-footer textarea").Last;
+        // The chat lives in a side panel that's CLOSED by default — open it via the header toggle
+        // (FluentButton Title="Chat" when no thread context). Then the composer's Monaco editor renders.
+        var chatToggle = page.Locator("fluent-button[title='Chat']").First;
+        await chatToggle.WaitForAsync(new() { State = WaitForSelectorState.Visible, Timeout = 30_000 });
+        await chatToggle.ClickAsync();
+        await page.WaitForTimeoutAsync(2500);   // let the composer render inside the panel
+
+        var editor = page.Locator(".thread-chat-footer .monaco-editor").First;
         await editor.WaitForAsync(new() { State = WaitForSelectorState.Visible, Timeout = 60_000 });
 
         if (await page.GetByText("No language model is available").CountAsync() > 0)
@@ -62,10 +69,14 @@ public class ChatRepeatedlyNoVanishTest(PortalFixture fixture)
 
             // INVARIANTS — the chat must still be mounted and the circuit alive after every send.
             page.Url.Should().NotContain("/login", $"login bounce after message {i} = the vanish");
-            (await container.CountAsync()).Should().BeGreaterThan(0, $"chat container vanished after message {i}");
-            (await page.Locator(".components-reconnect-show, .reconnect-overlay, #components-reconnect-modal")
-                    .CountAsync())
-                .Should().Be(0, $"the Blazor circuit dropped (reconnect overlay) after message {i} — the render storm");
+            // Tolerate a momentary re-mount during a rapid mid-stream submit — the storm failure is a
+            // PERMANENT teardown, so poll a few seconds for the container to be present.
+            (await PollAsync(async () => await container.CountAsync() > 0, TimeSpan.FromSeconds(8)))
+                .Should().BeTrue($"chat container permanently vanished after message {i} — the render storm");
+            // The reconnect modal is ALWAYS in the DOM (hidden); the circuit only dropped if it's actually
+            // VISIBLE (or carries the `components-reconnect-show` state) — check visibility, not presence.
+            (await page.Locator("#components-reconnect-modal").IsVisibleAsync())
+                .Should().BeFalse($"the Blazor circuit dropped (reconnect overlay shown) after message {i} — the render storm");
         }
 
         // Settle, then confirm it's still alive (a storm keeps re-rendering and eventually tears down).
