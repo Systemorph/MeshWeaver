@@ -236,7 +236,7 @@ function ContentPane({ source, nav, onNavigate }: { source: AreaSource; nav: Nav
   return (
     <View style={styles.content}>
       <ScrollView style={styles.contentScroll} contentContainerStyle={styles.contentInner}>
-        <View style={styles.contentColumn} onClick={onClickCapture as any}>
+        <View style={styles.contentColumn} {...({ onClick: onClickCapture } as any)}>
           <RenderArea areaKey={nav.area} />
         </View>
       </ScrollView>
@@ -313,7 +313,7 @@ const makeStyles = (p: Palette) => StyleSheet.create({
   brandText: { fontSize: 15, fontWeight: "700", color: p.text },
   searchWrap: { flex: 1, maxWidth: 620, alignSelf: "center", flexDirection: "row", alignItems: "center", gap: 6, backgroundColor: p.surface, borderWidth: 1, borderColor: p.border, borderRadius: 8, paddingHorizontal: 10, height: 32 },
   searchIcon: { fontSize: 15, color: p.textMuted },
-  search: { flex: 1, fontSize: 13.5, color: p.text, outlineStyle: "none" as any, height: 30 },
+  search: { flex: 1, fontSize: 13.5, color: p.text, height: 30, ...({ outlineStyle: "none" } as any) },
   themeBtn: { width: 30, height: 30, borderRadius: 15, alignItems: "center", justifyContent: "center" },
   themeBtnHover: { backgroundColor: p.navHover },
   themeBtnText: { fontSize: 16, color: p.textSubtle },

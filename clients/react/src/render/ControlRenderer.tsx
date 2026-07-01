@@ -20,7 +20,7 @@ export function ControlRenderer({ control }: { control?: UiControl | null }): Re
   if (skins.length > 0) {
     const skin = skins[skins.length - 1];
     const rest: UiControl = { ...control, skins: skins.slice(0, -1) };
-    const Wrapper = pack.skins[skin.$type] ?? pack.skins.__default ?? pack.defaultContainer;
+    const Wrapper = lookup(pack.skins, skin.$type, "Skin") ?? pack.skins.__default ?? pack.defaultContainer;
     return <Wrapper skin={skin} control={rest} />;
   }
 
@@ -29,18 +29,21 @@ export function ControlRenderer({ control }: { control?: UiControl | null }): Re
     return <Default skin={{ $type: "LayoutStack" }} control={control} />;
   }
 
-  // MeshWeaver serializes a control's `$type` as its full class name — `HtmlControl`, `MenuControl`,
-  // `LayoutAreaControl` — while packs register leaves by the short name (`Html`, `Menu`, `LayoutArea`).
-  // Dispatch on the exact `$type` first (a pack MAY register a full name), then on the suffix-stripped
-  // name so the short-name convention resolves the real wire types.
-  const Comp =
-    pack.controls[control.$type] ?? pack.controls[stripControlSuffix(control.$type)] ?? pack.fallback;
+  const Comp = lookup(pack.controls, control.$type, "Control") ?? pack.fallback;
   return <Comp control={control} />;
 }
 
-/** `HtmlControl` → `Html`; a `$type` that doesn't end in `Control` is returned unchanged. */
-function stripControlSuffix(type: string): string {
-  return type.endsWith("Control") ? type.slice(0, -"Control".length) : type;
+/**
+ * Registry lookup tolerant of the wire's C# `$type` names. The pack registers the suffix-stripped
+ * short names ("Stack", "Markdown", "LayoutStack"), but the live mesh serializes the class name —
+ * "StackControl" / "MarkdownControl" / "LayoutStackSkin" (TypeRegistry.FormatType → type.Name).
+ * Try the exact key first (static/demo trees), then the suffix-stripped one (live trees).
+ */
+function lookup<T>(map: Record<string, T>, type: string | undefined, suffix: string): T | undefined {
+  if (!type) return undefined;
+  if (map[type] !== undefined) return map[type];
+  if (type.length > suffix.length && type.endsWith(suffix)) return map[type.slice(0, -suffix.length)];
+  return undefined;
 }
 
 export interface ChildArea {

@@ -254,23 +254,37 @@ public static class SpaceNodeType
     {
         public string NodeType => SpaceNodeType.NodeType;
 
+        // The creator-Admin grant is part of the Space create's contract, NOT a best-effort
+        // side effect: a Space that persists without granting its creator ownership is an
+        // un-navigable, ownerless partition (the "created a space but I have no access" bug).
+        // So a failed/absent grant must FAULT the create (CreateNodeResponse.Fail) rather than
+        // be swallowed into a silent Ok — see RunPostCreationHandlersObs + FailsCreateOnError.
+        public bool FailsCreateOnError => true;
+
         public IObservable<System.Reactive.Unit> Handle(MeshNode createdNode, string? createdBy)
         {
-            if (string.IsNullOrEmpty(createdBy))
-            {
-                logger?.LogWarning("Cannot assign Admin role: no creator identity for Space at {Path}", createdNode.Path);
-                return Observable.Empty<System.Reactive.Unit>();
-            }
-
             // System needs no grant (Permission.All). When a Space root is materialized under
             // System impersonation — the static-repo import, onboarding, or the central partition
             // bootstrap (MeshExtensions.EnsurePartitionRoot) — there is no per-creator grant to
             // write: catalog read access comes from the partition's publicRead _Policy, not a
-            // spurious system-security AccessAssignment under {id}/_Access.
+            // spurious system-security AccessAssignment under {id}/_Access. (Checked BEFORE the
+            // empty-createdBy guard: System is a legitimate no-grant creator, not a missing owner.)
             if (string.Equals(createdBy, WellKnownUsers.System, StringComparison.OrdinalIgnoreCase))
             {
                 logger?.LogDebug("Skipping creator-Admin grant for system-created Space at {Path}", createdNode.Path);
                 return Observable.Empty<System.Reactive.Unit>();
+            }
+
+            // No (non-system) creator identity → we CANNOT make anyone the owner. A Space MUST
+            // have an owner, so this is a hard failure of the create, not a warn-and-continue:
+            // faulting here (FailsCreateOnError) stops us shipping an ownerless Space and surfaces
+            // the real upstream defect (a create that arrived with no AccessContext identity).
+            if (string.IsNullOrEmpty(createdBy))
+            {
+                logger?.LogError("Cannot assign Admin role: no creator identity for Space at {Path}", createdNode.Path);
+                return Observable.Throw<System.Reactive.Unit>(new InvalidOperationException(
+                    $"Cannot create Space '{createdNode.Path}' without a creator identity to grant ownership to. "
+                    + "The create request carried no AccessContext.ObjectId (and was not System-impersonated)."));
             }
 
             logger?.LogInformation("Granting Admin role to {User} on Space {Path}", createdBy, createdNode.Path);

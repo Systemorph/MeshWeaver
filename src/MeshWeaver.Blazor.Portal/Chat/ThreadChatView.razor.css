@@ -1164,6 +1164,25 @@
 
 .thread-msg-tool-error { color: var(--error-foreground-rest, #d93636); }
 
+/* Collapsible group wrapping a whole round's tool calls — one summary line that
+   folds the entire block away once the round is complete (see #129). */
+.thread-msg-tool-group > summary.thread-msg-tool-group-summary {
+    cursor: pointer;
+    list-style: none;
+    display: flex;
+    align-items: center;
+    gap: 0.35em;
+    font-size: 0.82em;
+    opacity: 0.75;
+    padding: 2px 0;
+    user-select: none;
+}
+
+.thread-msg-tool-group > summary.thread-msg-tool-group-summary::-webkit-details-marker { display: none; }
+.thread-msg-tool-group > summary.thread-msg-tool-group-summary::marker { content: ''; }
+
+.thread-msg-tool-group[open] > summary.thread-msg-tool-group-summary { opacity: 1; }
+
 .thread-msg-tool-path,
 .thread-msg-tool-action {
     color: var(--accent-fill-rest);

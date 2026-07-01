@@ -32,5 +32,5 @@ Full architecture: `src/MeshWeaver.Documentation/Data/Architecture/ForeignLangua
 
 `.github/workflows/clients.yml` runs on any PR touching `clients/`: `meshweaver` (Python) pytest,
 `@meshweaver/react` typecheck + vitest, `@meshweaver/client` (Node) typecheck, `@meshweaver/client-web`
-typecheck + vitest (buf-generates from the canonical `mesh.proto`), the RN connector typecheck, and the
-portal build. Both gRPC-codegen jobs generate from the one canonical `mesh.proto`.
+typecheck + vitest (buf-generates from the canonical `mesh.proto`), the RN connector typecheck + headless
+render tests, and the portal build. Both gRPC-codegen jobs generate from the one canonical `mesh.proto`.

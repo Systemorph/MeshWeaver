@@ -3,13 +3,28 @@
 // small MeshConnectionLike interface (the consumer passes a real MeshConnection), so the renderer
 // core has no transport dependency.
 //
-// 🔬 WIRE: the message-type names and field shapes below (SubscribeRequest / DataChangedEvent /
-// ClickedEvent / BlurEvent / the pointer-update request) are the layout-area protocol — pin them
-// against a running portal (capture one DataChangedEvent + one click/edit round-trip). Everything
-// else (folding, optimistic edits, demux) is correct as written.
+// WIRE (pinned against the server source, src/MeshWeaver.Data*/):
+//   - SubscribeRequest(StreamId, WorkspaceReference Reference) — Reference is POLYMORPHIC (abstract
+//     WorkspaceReference), so the subscribe JSON must carry the `$type` discriminator
+//     ("LayoutAreaReference", the TypeRegistry short name); without it the server cannot
+//     instantiate the abstract base and the subscribe is dropped.
+//   - An EMPTY reference.area subscribes the DEFAULT area: the server resolves it and the very
+//     first Full frame carries areas[""] = NamedAreaControl(resolvedArea) (LayoutAreaHost), so
+//     rendering root key "" follows the indirection.
+//   - DataChangedEvent.Change: ChangeType "Full" is a whole EntityStore snapshot; "Patch" is an
+//     RFC 6902 JSON-PATCH ARRAY (JsonSynchronizationStream.ToJsonPatch) — NOT an RFC 7396 merge.
+//   - EntityStore collections serialize as InstanceCollections: instance keys are JSON-ENCODED
+//     property names (`"Content"` arrives as the property `"\"Content\""`) plus a leading `$type`
+//     collection marker (InstanceCollectionConverter). Area lookups use PLAIN names
+//     (NamedArea.area → areas["Content"]), so keys are decoded at fold time; binding pointers keep
+//     their wire encoding and decode at resolution time (pointer.ts decodePointerSegment).
+//   - Client edits ride PatchDataChangeRequest(StreamId, …, RawJson Change, ChangeType) where the
+//     change is again an RFC 6902 patch array applied by the owner
+//     (JsonSynchronizationStream.ApplyPatchWithCorrectUnescaping); RawJson is raw inline JSON on
+//     the wire — never a stringified string.
 
 import type { AreaSource, AreaTree, Json, MeshEvent } from "../area/types.js";
-import { applyJsonPatch, setPointer, type JsonPatchOp } from "../area/pointer.js";
+import { decodePointerSegment, mergePatch, setPointer } from "../area/pointer.js";
 
 /** The subset of @meshweaver/client's MeshConnection this source needs. */
 export interface MeshConnectionLike {
@@ -22,7 +37,8 @@ export interface MeshConnectionLike {
   post(target: string, messageType: string, message: Record<string, unknown>): void;
 }
 
-/** A MeshWeaver LayoutAreaReference: which area (and instance) to subscribe to on the target hub. */
+/** A MeshWeaver LayoutAreaReference: which area (and instance) to subscribe to on the target hub.
+ *  An empty/absent `area` subscribes the target's DEFAULT area (resolved server-side). */
 export interface LayoutAreaReference {
   area: string;
   id?: string;
@@ -35,11 +51,7 @@ export interface GrpcAreaOptions {
 }
 
 export class GrpcAreaSource implements AreaSource {
-  // `raw` is the EntityStore exactly as it arrives on the wire: RFC 6902 patches address it by its
-  // wire paths (which quote the collection keys), so patches must fold into THIS shape. `state` is the
-  // normalized view the renderer consumes — see normalizeStore.
-  private raw: Json = {};
-  private state: AreaTree = { areas: {}, data: {} };
+  private state: AreaTree = {};
   private readonly listeners = new Set<() => void>();
   private readonly streamId: string;
 
@@ -62,10 +74,7 @@ export class GrpcAreaSource implements AreaSource {
   /** Open the area subscription and fold every change into the tree until the stream ends. */
   async start(): Promise<void> {
     for await (const delivery of this.connection.watch(this.address, this.streamId, "SubscribeRequest", {
-      // The sync-stream Reference is a polymorphic WorkspaceReference — it MUST carry its $type
-      // discriminator or the mesh can't deserialize it. Verified against Memex.LocalMesh: a $type-less
-      // reference elicits no subscription; with "LayoutAreaReference" the area streams back. Field casing
-      // is server-insensitive, so the lowercase { area, id, layout } passes through.
+      // The polymorphic $type is REQUIRED — Reference deserializes as abstract WorkspaceReference.
       reference: { $type: "LayoutAreaReference", ...this.reference },
     })) {
       this.applyChange(delivery.message);
@@ -73,23 +82,15 @@ export class GrpcAreaSource implements AreaSource {
   }
 
   private applyChange(message: Record<string, unknown>): void {
-    const rawChange = (message.change ?? message.Change) as Json;
-    const wrapper = typeof rawChange === "string" ? JSON.parse(rawChange) : rawChange;
-    if (wrapper == null) return;
-    // DataChangedEvent.Change wraps its payload as RawJson { Content: "<json>" }. For a Full change
-    // (ChangeType 0) the payload is the whole EntityStore; for a Patch it is a JsonPatch (RFC 6902,
-    // an array of op/path/value). Both fold into `raw` — the un-normalized wire shape the patch paths
-    // (which carry JSON-quoted collection keys) address.
-    const w = wrapper as Record<string, unknown>;
-    const content = w.Content ?? w.content ?? wrapper;
-    const payload = (typeof content === "string" ? JSON.parse(content) : content) as Json;
-    if (payload == null) return;
-    const changeType = String(message.changeType ?? message.ChangeType ?? "1");
-    this.raw =
-      changeType === "Full" || changeType === "0"
-        ? payload
-        : applyJsonPatch(this.raw, payload as JsonPatchOp[]);
-    this.state = normalizeStore(this.raw);
+    const raw = (message.change ?? message.Change) as Json;
+    const change = typeof raw === "string" ? JSON.parse(raw) : raw;
+    const changeType = String(message.changeType ?? message.ChangeType ?? "Full");
+    if (change == null || changeType === "NoUpdate") return;
+    this.state =
+      changeType === "Patch" || changeType === "1"
+        ? applyJsonPatch(this.state, change)
+        : // Full (or the enum's 0) / Instance replace the snapshot.
+          normalizeEntityStore(change);
     this.notify();
   }
 
@@ -101,16 +102,25 @@ export class GrpcAreaSource implements AreaSource {
       case "blur":
         this.connection.post(this.address, "BlurEvent", { area: event.area, streamId: this.streamId });
         break;
+      case "closeDialog":
+        // Mirrors Blazor's DialogView.HandleClose: CloseDialogEvent(Area, StreamId, DialogCloseState).
+        this.connection.post(this.address, "CloseDialogEvent", {
+          area: event.area,
+          streamId: this.streamId,
+          state: event.value ?? "OK",
+        });
+        break;
       case "update":
         if (!event.pointer) break;
-        // Optimistic local apply so the field reflects immediately; the server echoes the merge-patch.
+        // Optimistic local apply so the field reflects immediately (setPointer decodes the wire
+        // pointer's JSON-encoded segments, matching the fold); the server echoes the real patch.
         this.state = setPointer(this.state, event.pointer, event.value);
         this.notify();
         this.connection.post(this.address, "PatchDataChangeRequest", {
           streamId: this.streamId,
           changeType: "Patch",
-          // Sparse merge-patch: only the edited pointer (e.g. /data/name -> { data: { name: value } }).
-          change: JSON.stringify(setPointer({}, event.pointer, event.value)),
+          // RFC 6902 — one replace op at the (wire-encoded) pointer, as raw JSON (RawJson inlines).
+          change: [{ op: "replace", path: event.pointer, value: event.value }],
         });
         break;
     }
@@ -121,42 +131,150 @@ export class GrpcAreaSource implements AreaSource {
   }
 }
 
-function newId(): string {
-  const g = globalThis as { crypto?: { randomUUID?: () => string } };
-  return g.crypto?.randomUUID?.().replace(/-/g, "") ?? Math.random().toString(36).slice(2) + Date.now().toString(36);
+// ---- wire folding ---------------------------------------------------------------------------
+
+interface PatchOp {
+  op: string;
+  path: string;
+  value?: Json;
+  from?: string;
 }
 
-// The wire EntityStore is { $type, areas: <InstanceCollection>, data: <InstanceCollection> }, where each
-// InstanceCollection is a JSON object whose keys are JSON-ENCODED entity keys — a string area name
-// "Overview" is serialized as the property name "\"Overview\"" (MeshWeaver's InstanceCollectionConverter
-// does JsonSerializer.Serialize(key)) — plus a leading "$type" collection discriminator. The renderer keys
-// off plain names (areas["Overview"], NamedArea.area, /data/<id> pointers), so unwrap each collection:
-// drop $type and JSON-parse each key back to its plain string.
-function normalizeStore(raw: Json): AreaTree {
-  return { areas: unwrapCollection(raw?.areas), data: unwrapCollection(raw?.data) };
-}
-
-function unwrapCollection(collection: Json): Record<string, Json> {
+/**
+ * Fold a wire EntityStore snapshot into the renderer's {areas,data} tree: decode the JSON-encoded
+ * instance keys of each collection and drop the `$type` collection markers, so lookups
+ * (areas["Content"], decoded binding pointers) see plain keys. Control/data VALUES stay
+ * wire-faithful — their internal binding pointers keep the encoding and decode at resolution.
+ */
+function normalizeEntityStore(store: Json): AreaTree {
+  if (store == null || typeof store !== "object" || Array.isArray(store)) return (store ?? {}) as AreaTree;
   const out: Record<string, Json> = {};
-  if (collection && typeof collection === "object") {
-    for (const [key, value] of Object.entries(collection)) {
-      if (key === "$type") continue; // collection-type discriminator, not an entry
-      out[unquoteKey(key)] = value;
-    }
+  for (const [collection, value] of Object.entries(store as Record<string, Json>)) {
+    if (collection === "$type") continue;
+    out[collection] = normalizeCollection(value);
   }
   return out;
 }
 
-// A JSON-encoded string key ("\"Overview\"") parses back to "Overview". Anything that isn't a quoted
-// string (already-plain, or a numeric/tuple key) passes through unchanged.
-function unquoteKey(key: string): string {
-  if (key.length >= 2 && key.charCodeAt(0) === 0x22 /* " */) {
+/** Decode one InstanceCollection: JSON-encoded instance keys → plain, `$type` marker dropped. */
+function normalizeCollection(value: Json): Json {
+  if (value == null || typeof value !== "object" || Array.isArray(value)) return value;
+  const instances: Record<string, Json> = {};
+  for (const [key, item] of Object.entries(value as Record<string, Json>)) {
+    if (key === "$type") continue; // the collection-name marker, not an instance
+    instances[decodeWireKey(key)] = item;
+  }
+  return instances;
+}
+
+/** InstanceCollection keys arrive JSON-encoded (`"home"` → property `"\"home\""`); decode strings. */
+function decodeWireKey(key: string): string {
+  if (key.length >= 2 && key.startsWith('"') && key.endsWith('"')) {
     try {
-      const parsed = JSON.parse(key);
+      const parsed: unknown = JSON.parse(key);
       if (typeof parsed === "string") return parsed;
     } catch {
-      /* not a JSON string — fall through */
+      /* not JSON-encoded — keep the raw key */
     }
   }
   return key;
+}
+
+/**
+ * Apply an RFC 6902 patch (the wire's ChangeType.Patch shape) immutably. Pointer segments carry
+ * the same JSON-encoded instance keys as snapshots — decodePointerSegment folds them onto the
+ * normalized tree. A non-array delta is tolerated as an RFC 7396 merge (in-memory test sources).
+ */
+function applyJsonPatch(state: AreaTree, ops: Json): AreaTree {
+  if (!Array.isArray(ops)) return mergePatch(state, ops);
+  let next: Json = state;
+  for (const op of ops as PatchOp[]) {
+    const parts = splitWirePointer(op.path);
+    switch (op.op) {
+      case "add":
+      case "replace":
+        next = setAtParts(next, parts, normalizeValueAtDepth(op.value, parts.length), op.op === "add");
+        break;
+      case "remove":
+        next = removeAtParts(next, parts);
+        break;
+      case "move": {
+        const from = splitWirePointer(op.from ?? "");
+        const moved = getAtParts(next, from);
+        next = removeAtParts(next, from);
+        next = setAtParts(next, parts, moved, true);
+        break;
+      }
+      case "copy":
+        next = setAtParts(next, parts, getAtParts(next, splitWirePointer(op.from ?? "")), true);
+        break;
+      default:
+        break; // "test" (and unknown ops) are no-ops for folding
+    }
+  }
+  return next as AreaTree;
+}
+
+/** A value landing at the root is a whole store; at depth 1 a whole collection — normalize keys. */
+function normalizeValueAtDepth(value: Json, depth: number): Json {
+  if (depth === 0) return normalizeEntityStore(value);
+  if (depth === 1) return normalizeCollection(value);
+  return value;
+}
+
+function splitWirePointer(pointer: string): string[] {
+  if (!pointer || pointer === "/") return pointer === "/" ? [""] : [];
+  return pointer.split("/").slice(1).map(decodePointerSegment);
+}
+
+function getAtParts(root: Json, parts: string[]): Json {
+  let cur: Json = root;
+  for (const part of parts) {
+    if (cur == null) return undefined;
+    cur = Array.isArray(cur) ? cur[Number(part)] : cur[part];
+  }
+  return cur;
+}
+
+/** Immutable set — RFC 6902 semantics: on arrays, `add` INSERTS at the index ("-" appends). */
+function setAtParts(root: Json, parts: string[], value: Json, insert: boolean): Json {
+  if (parts.length === 0) return value;
+  const [head, ...rest] = parts;
+  if (Array.isArray(root)) {
+    const clone = [...root];
+    const idx = head === "-" ? clone.length : Number(head);
+    if (rest.length === 0) {
+      if (insert) clone.splice(idx, 0, value);
+      else clone[idx] = value;
+    } else {
+      clone[idx] = setAtParts(clone[idx], rest, value, insert);
+    }
+    return clone;
+  }
+  const clone: Record<string, Json> = { ...((root ?? {}) as Record<string, Json>) };
+  clone[head] = rest.length === 0 ? value : setAtParts(clone[head], rest, value, insert);
+  return clone;
+}
+
+/** Immutable remove — splices arrays, deletes object properties; missing paths are tolerated. */
+function removeAtParts(root: Json, parts: string[]): Json {
+  if (parts.length === 0) return {};
+  const [head, ...rest] = parts;
+  if (root == null || typeof root !== "object") return root;
+  if (Array.isArray(root)) {
+    const clone = [...root];
+    const idx = Number(head);
+    if (rest.length === 0) clone.splice(idx, 1);
+    else clone[idx] = removeAtParts(clone[idx], rest);
+    return clone;
+  }
+  const clone: Record<string, Json> = { ...(root as Record<string, Json>) };
+  if (rest.length === 0) delete clone[head];
+  else clone[head] = removeAtParts(clone[head], rest);
+  return clone;
+}
+
+function newId(): string {
+  const g = globalThis as { crypto?: { randomUUID?: () => string } };
+  return g.crypto?.randomUUID?.().replace(/-/g, "") ?? Math.random().toString(36).slice(2) + Date.now().toString(36);
 }
