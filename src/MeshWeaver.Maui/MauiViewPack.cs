@@ -57,7 +57,7 @@ public interface IMauiControlRenderer
     View RenderControl(UiControl control, ISynchronizationStream<JsonElement>? stream, string area);
 
     /// <summary>A view that subscribes to <paramref name="area"/>'s control stream and swaps its content.</summary>
-    View RenderArea(ISynchronizationStream<JsonElement> stream, string area);
+    View RenderArea(ISynchronizationStream<JsonElement> stream, string area, bool showProgress = true);
 }
 
 public sealed class MauiControlRenderer(MauiViewRegistry registry) : IMauiControlRenderer
@@ -73,20 +73,26 @@ public sealed class MauiControlRenderer(MauiViewRegistry registry) : IMauiContro
         return view.View;
     }
 
-    public View RenderArea(ISynchronizationStream<JsonElement> stream, string area)
+    public View RenderArea(ISynchronizationStream<JsonElement> stream, string area, bool showProgress = true)
     {
         // A spinner until the area emits its first control (replaced on emission). Also gives the host a
         // non-zero desired size, so the region is visible while resolving rather than collapsing to nothing.
+        // 🚨 showProgress=false is a SILENT embed (e.g. the Overview's Approvals area, WithShowProgress(false)):
+        // it renders nothing while empty and NEVER surfaces the "couldn't load" notice — exactly Blazor's
+        // NamedAreaView `@if (ShowProgress && RootControl == null && SpinnerType != None)`. Without this, an
+        // intentionally-empty area (Approvals/comments with no rows) spins forever then shows a FALSE error.
         var host = new ContentView
         {
-            Content = new ActivityIndicator
-            {
-                IsRunning = true,
-                HeightRequest = 24,
-                HorizontalOptions = LayoutOptions.Center,
-                VerticalOptions = LayoutOptions.Center,
-                Margin = new Thickness(0, 12),
-            },
+            Content = showProgress
+                ? new ActivityIndicator
+                {
+                    IsRunning = true,
+                    HeightRequest = 24,
+                    HorizontalOptions = LayoutOptions.Center,
+                    VerticalOptions = LayoutOptions.Center,
+                    Margin = new Thickness(0, 12),
+                }
+                : null,   // silent embed — blank until (and unless) a control arrives
         };
         IDisposable? sub = null;
 
@@ -100,7 +106,8 @@ public sealed class MauiControlRenderer(MauiViewRegistry registry) : IMauiContro
 
         void ShowNotLoaded()
         {
-            if (rendered) return;   // keep the last good content — don't clobber a region that loaded
+            if (rendered) return;       // keep the last good content — don't clobber a region that loaded
+            if (!showProgress) return;  // silent embed — stay blank, never surface a "couldn't load" notice
             host.Content = new Label
             {
                 Text = "⚠ couldn't load this section",
@@ -112,8 +119,11 @@ public sealed class MauiControlRenderer(MauiViewRegistry registry) : IMauiContro
         // INITIAL-LOAD deadline only: if no control arrives within 20s, show the in-region notice
         // instead of an eternal spinner. Cancelled the instant the first control renders, so it can
         // never fire on an already-loaded (but quiet) area. NOT a retry/resubscribe watchdog.
-        deadline = Observable.Timer(TimeSpan.FromSeconds(20))
-            .Subscribe(_ => MainThread.BeginInvokeOnMainThread(ShowNotLoaded));
+        // Skipped for silent embeds (showProgress=false): an intentionally-empty area (Approvals with no
+        // approvals) legitimately never emits, so surfacing "couldn't load" there is a false error.
+        if (showProgress)
+            deadline = Observable.Timer(TimeSpan.FromSeconds(20))
+                .Subscribe(_ => MainThread.BeginInvokeOnMainThread(ShowNotLoaded));
 
         // Tie the area subscription to the host's Loaded/Unloaded lifecycle. MAUI fires Unloaded
         // SPURIOUSLY during nested-layout/handler changes; GetControlStream replays the current control
@@ -228,6 +238,16 @@ public abstract class MauiView : IDisposable
         Stream?.Hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.Maui.View")
             .LogWarning(ex, "MAUI view write '{What}' failed for {Path}", what, path ?? "(n/a)");
 
+    /// <summary>
+    /// Whether an area shows a loading spinner while it is still empty — mirrors Blazor's NamedAreaView gate
+    /// (<c>ShowProgress &amp;&amp; SpinnerType != None</c>). Only an EXPLICIT <c>false</c> / <see cref="SpinnerType.None"/>
+    /// suppresses it; null / true / unknown default to showing progress so no existing area regresses. A
+    /// suppressed (silent) area renders BLANK while empty and never surfaces the "couldn't load" notice —
+    /// the fix for the Overview's <c>Approvals</c> embed (<c>WithShowProgress(false)</c>) spinning forever.
+    /// </summary>
+    protected static bool AreaShowsProgress(object? showProgress, SpinnerType spinnerType) =>
+        MauiAreaProgress.ShowsProgress(showProgress, spinnerType);
+
     public void Dispose()
     {
         foreach (var d in Disposables) d.Dispose();
@@ -287,16 +307,18 @@ public sealed class LayoutAreaView : ContentView
 {
     // Local area: GetStream(ref).Reduce("/") — exactly the Blazor LayoutAreaView's isLocal branch. (The
     // address ctor below is for a remote node's area via GetRemoteStream.)
-    public LayoutAreaView(IWorkspace workspace, LayoutAreaReference reference, IMauiControlRenderer renderer)
+    public LayoutAreaView(IWorkspace workspace, LayoutAreaReference reference, IMauiControlRenderer renderer,
+        bool showProgress = true)
     {
         var stream = workspace.GetStream(reference)!.Reduce(new JsonPointerReference("/"))!;
-        Content = renderer.RenderArea(stream, reference.Area);
+        Content = renderer.RenderArea(stream, reference.Area, showProgress);
     }
 
-    public LayoutAreaView(IWorkspace workspace, Address address, LayoutAreaReference reference, IMauiControlRenderer renderer)
+    public LayoutAreaView(IWorkspace workspace, Address address, LayoutAreaReference reference, IMauiControlRenderer renderer,
+        bool showProgress = true)
     {
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(address, reference)!;
-        Content = renderer.RenderArea(stream, reference.Area);
+        Content = renderer.RenderArea(stream, reference.Area, showProgress);
     }
 }
 
@@ -442,7 +464,8 @@ public sealed class ContainerView : MauiView
             : new VerticalStackLayout { Spacing = spacing };
         if (Stream is not null && Control is IContainerControl container)
             foreach (var named in container.Areas)
-                layout.Children.Add(Renderer.RenderArea(Stream, named.Area.ToString()!));
+                layout.Children.Add(Renderer.RenderArea(Stream, named.Area.ToString()!,
+                    AreaShowsProgress(named.ShowProgress, named.SpinnerType)));
 
         // Skinned wrappers (each a no-op when its skin is absent → default layout unchanged).
         if (Control is NavMenuControl nav)   // a fixed-width sidebar with a subtle panel background
@@ -516,7 +539,7 @@ public sealed class NamedAreaView : MauiView<NamedAreaControl>
 {
     protected override View CreateView() =>
         Stream is not null && Model.Area is not null
-            ? (View)Renderer.RenderArea(Stream, Model.Area.ToString()!)
+            ? (View)Renderer.RenderArea(Stream, Model.Area.ToString()!, AreaShowsProgress(Model.ShowProgress, Model.SpinnerType))
             : new ContentView();
 }
 
@@ -2673,9 +2696,12 @@ public sealed class LayoutAreaControlView : MauiView<LayoutAreaControl>
         if (Stream is null) return new ContentView();
         var workspace = Stream.Hub.GetWorkspace();
         Address address = Model.Address?.ToString() ?? "";
+        // Honour the control's ShowProgress/SpinnerType (mirrors Blazor). A silent embed (Approvals,
+        // WithShowProgress(false)) renders blank while empty instead of a perpetual spinner + false error.
+        var showProgress = AreaShowsProgress(Model.ShowProgress, Model.SpinnerType);
         return address.Equals(workspace.Hub.Address)
-            ? new LayoutAreaView(workspace, Model.Reference, Renderer)
-            : new LayoutAreaView(workspace, address, Model.Reference, Renderer);
+            ? new LayoutAreaView(workspace, Model.Reference, Renderer, showProgress)
+            : new LayoutAreaView(workspace, address, Model.Reference, Renderer, showProgress);
     }
 }
 
