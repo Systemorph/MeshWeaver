@@ -251,7 +251,7 @@ async Task<int> Run(
 // input is redirected (piped / non-interactive), where key-by-key capture isn't available.
 static string? PromptForToken()
 {
-    Console.Error.Write("Paste your atioz API token (mw_…): ");
+    Console.Error.Write("Paste your API token (mw_…): ");
     if (Console.IsInputRedirected)
         return Console.ReadLine()?.Trim();
 
