@@ -1,53 +1,87 @@
 import { useEffect, useState } from "react";
-import { SafeAreaView, ScrollView, StatusBar } from "react-native";
-import {
-  RegistryProvider,
-  ScopeProvider,
-  RenderArea,
-  StaticAreaSource,
-  type AreaSource,
-  type AreaTree,
-} from "@meshweaver/react/core";
+import { SafeAreaView, StatusBar } from "react-native";
+import { RegistryProvider, ScopeProvider, StaticAreaSource, type AreaSource, type AreaTree } from "@meshweaver/react/core";
 import { rnPack } from "./src/rnPack";
-import { sampleArea } from "./src/sample";
-import { createLiveSource, type LiveOptions } from "./src/live";
+import { createLiveSource } from "./src/live";
+import { NavContext, CurrentAddressContext, type NavTarget } from "./src/nav";
+import { Shell, HOME } from "./src/Shell";
+import { ensureWebStyles } from "./src/webStyles";
+import { currentInstance } from "./src/connection";
+import { type ClientDestination } from "./src/screens";
+import { ThemeProvider, useTheme } from "./src/theme";
 
-// When this app is served BY the mesh host (Memex.LocalMesh serves the web build on the same origin as its
-// gRPC endpoint), connect live to that same origin — no CORS, no config. Anonymous read (empty token) is
-// enough for the public Doc partition. Off the web (native, or opened without a mesh), fall back to the
-// bundled offline sample.
-const sameOrigin = typeof window !== "undefined" && window.location ? window.location.origin : "";
-const LIVE: LiveOptions | null = sameOrigin
-  ? { url: sameOrigin, token: "", address: "Doc/Architecture", area: "Overview" }
-  : null;
-
-const rootArea = LIVE ? LIVE.area : "main";
+// The client connects to the CURRENT mesh instance — "Local" is the mesh that served this app
+// (same origin, anonymous, no CORS); a remote instance is a portal the user added by URL + token
+// (see screens.tsx → ConnectScreen). The shell drives navigation; each target re-subscribes the
+// live source, and switching instance (instanceTick) reconnects and returns Home.
 const emptyTree: AreaTree = { areas: {}, data: {} };
-const initialSource = new StaticAreaSource(LIVE ? emptyTree : sampleArea);
 
 export default function App() {
-  const [source, setSource] = useState<AreaSource>(initialSource);
+  ensureWebStyles();
+  return (
+    <ThemeProvider>
+      <AppInner />
+    </ThemeProvider>
+  );
+}
+
+function AppInner() {
+  const { palette } = useTheme();
+  const [nav, setNav] = useState<NavTarget>(HOME);
+  const [clientScreen, setClientScreen] = useState<ClientDestination | null>(null);
+  const [instanceTick, setInstanceTick] = useState(0);
+  const [source, setSource] = useState<AreaSource>(() => new StaticAreaSource(emptyTree));
+
+  const navigate = (t: NavTarget) => {
+    setClientScreen(null);
+    setNav(t);
+  };
+  const reconnect = () => {
+    setClientScreen(null);
+    setNav(HOME);
+    setInstanceTick((t) => t + 1);
+  };
 
   useEffect(() => {
-    if (!LIVE) return;
+    const inst = currentInstance();
+    if (!inst.url) return;
     let live: Awaited<ReturnType<typeof createLiveSource>> | null = null;
-    createLiveSource(LIVE).then((l) => {
-      live = l;
-      setSource(l.source);
-    });
-    return () => live?.connection.close();
-  }, []);
+    let cancelled = false;
+    createLiveSource({ url: inst.url, token: inst.token, address: nav.address, area: nav.area })
+      .then((l) => {
+        if (cancelled) {
+          l.connection.close();
+          return;
+        }
+        live = l;
+        setSource(l.source);
+      })
+      .catch(() => { /* connection failed — the shell stays on the last-good source */ });
+    return () => {
+      cancelled = true;
+      live?.connection.close();
+    };
+  }, [nav.address, nav.area, instanceTick]);
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: "#faf9f8" }}>
+    <SafeAreaView style={{ flex: 1, backgroundColor: palette.appBg }}>
       <StatusBar />
-      <ScrollView contentContainerStyle={{ padding: 16 }}>
-        <RegistryProvider pack={rnPack}>
-          <ScopeProvider source={source} area={rootArea}>
-            <RenderArea areaKey={rootArea} />
-          </ScopeProvider>
-        </RegistryProvider>
-      </ScrollView>
+      <RegistryProvider pack={rnPack}>
+        <NavContext.Provider value={navigate}>
+          <CurrentAddressContext.Provider value={nav.address}>
+            <ScopeProvider source={source} area={nav.area}>
+              <Shell
+                source={source}
+                nav={nav}
+                clientScreen={clientScreen}
+                onNavigate={navigate}
+                onClientScreen={setClientScreen}
+                onReconnect={reconnect}
+              />
+            </ScopeProvider>
+          </CurrentAddressContext.Provider>
+        </NavContext.Provider>
+      </RegistryProvider>
     </SafeAreaView>
   );
 }

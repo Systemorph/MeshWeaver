@@ -139,10 +139,7 @@ const DataGrid: ControlComponent = ({ control }) => {
 const Html: ControlComponent = ({ control }) => {
   const html = s(useResolve(control.data));
   if (Platform.OS === "web")
-    return createElement("div", {
-      style: { color: "#242424", fontSize: 14, lineHeight: 1.55 },
-      dangerouslySetInnerHTML: { __html: html },
-    });
+    return createElement("div", { className: "markdown-body", dangerouslySetInnerHTML: { __html: html } });
   return <Text style={styles.body}>{html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim()}</Text>;
 };
 
@@ -153,7 +150,7 @@ const Markdown: ControlComponent = ({ control }) => {
   const md = s(useResolve(control.value ?? control.data ?? control.content ?? control.markdown));
   if (Platform.OS === "web")
     return createElement("div", {
-      style: { color: "#242424", fontSize: 14, lineHeight: 1.55 },
+      className: "markdown-body",
       dangerouslySetInnerHTML: { __html: marked.parse(md, { async: false }) as string },
     });
   return <Text style={styles.body}>{md}</Text>;
