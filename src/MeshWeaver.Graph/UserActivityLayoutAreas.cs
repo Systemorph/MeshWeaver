@@ -204,14 +204,17 @@ public static class UserActivityLayoutAreas
     }
 
     /// <summary>
-    /// The default home page shown until the owner authors their own <see cref="User.Body"/> — the chat
-    /// composer on top (start a thread right away), then the home regions embedded as <c>@@("area/…")</c>
-    /// blocks (the same mechanism as the Space welcome's <c>@@("area/Search")</c>), and a small
-    /// "it's configurable" note at the bottom linking to the config guide. This is the single source of
-    /// truth for "the default", shared by the render path and the unit tests.
+    /// The default home page shown until the owner authors their own <see cref="User.Body"/> — a
+    /// "Welcome back" heading on top, then the chat composer (start a thread right away) and the home
+    /// regions embedded as <c>@@("area/…")</c> blocks (the same mechanism as the Space welcome's
+    /// <c>@@("area/Search")</c>), and a small "it's configurable" note at the bottom linking to the
+    /// config guide. This is the single source of truth for "the default", shared by the render path
+    /// and the unit tests.
     /// </summary>
     internal static string UserWelcomeMarkdown(string ownerName) =>
         $$"""
+        ### Welcome back, {{ownerName}}
+
         @@("area/Composer")
 
         @@("area/Pinned")
@@ -220,7 +223,7 @@ public static class UserActivityLayoutAreas
 
         @@("area/Catalog")
 
-        _Welcome back, {{ownerName}} — this home is yours to shape. [It's fully configurable]({{ConfigGuideLink}}): tell the assistant in the chat above what you'd like to see, or edit this page's **Body** directly._
+        _This home is yours to shape. [It's fully configurable]({{ConfigGuideLink}}): tell the assistant in the chat above what you'd like to see, or edit this page's **Body** directly._
         """;
 
     // ── Home region areas ────────────────────────────────────────────────────────────────────────
