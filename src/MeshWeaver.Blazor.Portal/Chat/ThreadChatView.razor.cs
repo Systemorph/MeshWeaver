@@ -2278,13 +2278,16 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                 snapshot => InvokeAsync(() =>
                 {
                     if (_isDisposed) return;
-                    resumeThreads = snapshot
+                    var projected = snapshot
                         .Where(n => !string.IsNullOrEmpty(n.Path)
                             && string.Equals(n.NodeType, ThreadNodeType.NodeType, StringComparison.OrdinalIgnoreCase))
                         .OrderByDescending(n => n.LastModified)
                         .ToList();
+                    var changed = VisibleThreadListChanged(ref _resumeThreadsKey, projected);
+                    if (changed) resumeThreads = projected;
+                    var wasLoading = resumeLoading;
                     resumeLoading = false;
-                    StateHasChanged();
+                    if (changed || wasLoading) StateHasChanged();   // re-render on a real change, or to clear the spinner
                 }),
                 ex => InvokeAsync(() =>
                 {
@@ -2323,6 +2326,21 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     /// ones I created. RLS already scopes the snapshot to what I can read. Independent of the current
     /// thread, so it's set up once in <see cref="OnInitialized"/>.
     /// </summary>
+    // Visible-shape dedup keys for the thread-list subscriptions (Path|Name sequence). Hub.GetQuery
+    // re-emits the WHOLE set on ANY thread content change, and a streaming round churns a thread's content
+    // many times/second — the nav menu only shows path+name, so a content-only churn must NOT re-render
+    // (that per-token StateHasChanged was a storm cascading down to the header area). Only re-render when
+    // the visible sequence actually changes.
+    private string? _myThreadsKey, _childThreadsKey, _resumeThreadsKey;
+
+    private static bool VisibleThreadListChanged(ref string? lastKey, IReadOnlyList<MeshNode> projected)
+    {
+        var key = string.Join(";", projected.Select(n => n.Path + "|" + n.Name));
+        if (key == lastKey) return false;
+        lastKey = key;
+        return true;
+    }
+
     private void SetupMyThreadsSubscription()
     {
         myThreadsSubscription?.Dispose();
@@ -2332,13 +2350,15 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                 snapshot => InvokeAsync(() =>
                 {
                     if (_isDisposed) return;
-                    myThreads = snapshot
+                    var projected = snapshot
                         .Where(n => !string.IsNullOrEmpty(n.Path)
                             && string.Equals(n.NodeType, ThreadNodeType.NodeType, StringComparison.OrdinalIgnoreCase)
                             && (string.IsNullOrEmpty(me)
                                 || string.Equals(n.CreatedBy, me, StringComparison.OrdinalIgnoreCase)))
                         .OrderByDescending(n => n.LastModified)
                         .ToList();
+                    if (!VisibleThreadListChanged(ref _myThreadsKey, projected)) return;
+                    myThreads = projected;
                     StateHasChanged();
                 }),
                 ex => Logger.LogDebug(ex, "[ThreadChat:{InstanceId}] my-threads query failed", _instanceId));
@@ -2365,12 +2385,14 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                 snapshot => InvokeAsync(() =>
                 {
                     if (_isDisposed) return;
-                    childThreads = snapshot
+                    var projected = snapshot
                         .Where(n => !string.IsNullOrEmpty(n.Path)
                             && !string.Equals(n.Path, path, StringComparison.OrdinalIgnoreCase)
                             && string.Equals(n.NodeType, ThreadNodeType.NodeType, StringComparison.OrdinalIgnoreCase))
                         .OrderByDescending(n => n.LastModified)
                         .ToList();
+                    if (!VisibleThreadListChanged(ref _childThreadsKey, projected)) return;
+                    childThreads = projected;
                     StateHasChanged();
                 }),
                 ex => Logger.LogDebug(ex, "[ThreadChat:{InstanceId}] child-threads query failed", _instanceId));
@@ -3175,11 +3197,19 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     /// thread doesn't exist yet. Uses <see cref="SpinnerType.None"/> — the header
     /// is ancillary; showing a skeleton for it looks like a phantom message cell.
     /// </summary>
+    private LayoutAreaControl? _headerCell;
+    private string? _headerCellPath;
     private LayoutAreaControl? GetHeaderCell()
     {
         if (string.IsNullOrEmpty(threadPath))
             return null;
-        return new LayoutAreaControl(
+        // Cache by threadPath. Returning a FRESH control each render gave the header area a new ViewModel
+        // reference every parent render → it re-bound every time (defeating the OnParametersSet re-bind
+        // guard). A stable reference while the thread is unchanged ⇒ the header area binds once.
+        if (_headerCell is not null && _headerCellPath == threadPath)
+            return _headerCell;
+        _headerCellPath = threadPath;
+        return _headerCell = new LayoutAreaControl(
             threadPath,
             new LayoutAreaReference(ThreadNodeType.HeaderArea))
             .WithSpinnerType(SpinnerType.None);

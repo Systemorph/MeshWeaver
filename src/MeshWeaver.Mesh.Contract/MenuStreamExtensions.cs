@@ -29,7 +29,12 @@ public static class MenuStreamExtensions
     public static IObservable<IReadOnlyList<NodeMenuItemDefinition>> GetMenu(
         this ISynchronizationStream<JsonElement> stream, string? context = null)
         => stream.GetControlStream<MenuControl>(MenuControl.GetMenuArea(context))
-            .Select(menu => menu?.Items ?? (IReadOnlyList<NodeMenuItemDefinition>)[]);
+            .Select(menu => menu?.Items ?? (IReadOnlyList<NodeMenuItemDefinition>)[])
+            // Dedup by VALUE — the underlying layout-area stream re-emits a Full on every render even when
+            // the menu is byte-identical; without this, PortalLayoutBase re-renders the whole page on each
+            // (the render-storm cascade). MenuItemsSequenceComparer compares elements by value (Children
+            // included), so only a real menu change re-renders.
+            .DistinctUntilChanged(MenuItemsSequenceComparer.Instance);
 
     /// <summary>
     /// Workspace shorthand — opens the node's layout-area stream (shared via the workspace's remote-stream
