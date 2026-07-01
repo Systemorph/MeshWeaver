@@ -49,7 +49,7 @@ public class RawJsonTest(ITestOutputHelper output) : HubTestBase(output)
         // assert
         var actual = serialized.Should().NotBeNull().And.BeValidJson().Which;
         var actualMessage = actual.Should().HaveElement("message").Which;
-        actualMessage.Should().HaveElement("$type").Which.Should().HaveValue(typeof(SubscribeRequest).FullName);
+        actualMessage.Should().HaveElement("$type").Which.Should().HaveValue(typeof(SubscribeRequest).Name);
 
         // act
         var deserialized = JsonSerializer.Deserialize<MessageDelivery<RawJson>>(serialized, Mesh.JsonSerializerOptions);
@@ -65,7 +65,7 @@ public class RawJsonTest(ITestOutputHelper output) : HubTestBase(output)
                 .Content.Should().NotBeNullOrWhiteSpace()
                 .And.Subject;
         var jContent = rawJsonContent.Should().BeValidJson().Which;
-        jContent.Should().HaveElement("$type").Which.Should().HaveValue(typeof(SubscribeRequest).FullName);
+        jContent.Should().HaveElement("$type").Which.Should().HaveValue(typeof(SubscribeRequest).Name);
     }
 
     /// <summary>
@@ -139,7 +139,7 @@ public class RawJsonTest(ITestOutputHelper output) : HubTestBase(output)
         // assert
         var actual = serialized.Should().NotBeNull().And.BeValidJson().Which;
         var actualMessage = actual.Should().HaveElement("message").Which;
-        actualMessage.Should().HaveElement("$type").Which.Should().HaveValue(typeof(DataChangedEvent).FullName);
+        actualMessage.Should().HaveElement("$type").Which.Should().HaveValue(typeof(DataChangedEvent).Name);
 
         // act
         var deserialized = JsonSerializer.Deserialize<IMessageDelivery>(serialized, client.JsonSerializerOptions);
@@ -155,7 +155,7 @@ public class RawJsonTest(ITestOutputHelper output) : HubTestBase(output)
                 .Content.Should().NotBeNullOrWhiteSpace()
                 .And.Subject;
         var jContent = rawJsonContent.Should().BeValidJson().Which;
-        jContent.Should().HaveElement("$type").Which.Should().HaveValue(typeof(DataChangedEvent).FullName);
+        jContent.Should().HaveElement("$type").Which.Should().HaveValue(typeof(DataChangedEvent).Name);
         jContent.Should().HaveElement("version").Which.Should().HaveValue("10");
     }
 }
