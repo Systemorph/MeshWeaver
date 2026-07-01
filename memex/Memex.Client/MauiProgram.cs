@@ -9,6 +9,7 @@ using MeshWeaver.Documentation;
 using MeshWeaver.Layout;
 using MeshWeaver.Maui;
 using MeshWeaver.Graph;
+using LiveChartsCore.SkiaSharpView.Maui;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith;
 using MeshWeaver.Hosting.Persistence.Http;
@@ -60,6 +61,10 @@ public static class MauiProgram
         var builder = MauiApp.CreateBuilder();
         builder
             .UseMauiApp<App>()
+            // LiveCharts2 (MIT, SkiaSharp) — inits the chart engine for the native ChartView (ChartControl).
+            .UseLiveCharts()
+            // MAUI Maps (MapKit on maccatalyst/iOS) — for the native GoogleMapView (GoogleMapControl).
+            .UseMauiMaps()
             .ConfigureFonts(fonts =>
             {
                 fonts.AddFont("OpenSans-Regular.ttf", "OpenSansRegular");
@@ -177,6 +182,8 @@ public static class MauiProgram
         builder.Services.AddSingleton<DeviceOnboarding>();
         // The single source of truth for "where we are" — drives the content frame AND the top-bar menu.
         builder.Services.AddSingleton<NavigationService>();
+        // Bridges the native view pack's href nav links (NavLinkControl.Url) to the shell navigation above.
+        builder.Services.AddSingleton<MeshWeaver.Maui.IMauiNavigator, MauiNavigator>();
         // Provider-driven app-level menus (Settings ⚙, User 👤) for the portal shell — rendered through the
         // SAME DevExpress popup mechanism as the platform Node/Mesh/AI menus, so the shell hardcodes no menu
         // item list. Adding a menu entry = adding it to a provider here, never editing PortalShellPage.

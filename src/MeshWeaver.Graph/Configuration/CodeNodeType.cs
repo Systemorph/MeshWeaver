@@ -181,14 +181,25 @@ public static class CodeNodeType
                             // the caller-supplied Inputs so the script can read
                             // them off the `Inputs` global â€” the canonical channel
                             // for script-templated operations (export, importâ€¦).
+                            // C# runs in-process on the Activity hub's Roslyn kernel. A foreign
+                            // language (python) has no in-process runtime here, so it routes to a
+                            // connected worker participant over the mesh (the gRPC bridge); that worker
+                            // executes and patches THIS same ActivityLog node, so output surfaces
+                            // identically. The stable worker address is where the Python kernel registers
+                            // (clients/python: `python -m meshweaver.worker --address py/python-kernel`).
+                            var isPython = string.Equals(code.Language, "python", StringComparison.OrdinalIgnoreCase);
+                            var submitTarget = isPython
+                                ? new Address("py", "python-kernel")
+                                : new Address(activityPath);
                             hub.Post(
                                 new SubmitCodeRequest(code.Code ?? string.Empty)
                                 {
                                     Id = submissionId,
                                     ActivityLogPath = activityPath,
+                                    Language = string.IsNullOrWhiteSpace(code.Language) ? "csharp" : code.Language,
                                     Inputs = request.Message.Inputs
                                 },
-                                o => o.WithTarget(new Address(activityPath)));
+                                o => o.WithTarget(submitTarget));
 
                             // Stamp Last{ExecutedAt,ExecutedBy,ActivityPath} onto
                             // the Code MeshNode so the Content area can show
