@@ -7,6 +7,14 @@
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
     "ios": { "supportsTablet": true },
-    "android": {}
+    "android": {},
+    "plugins": [
+      [
+        "expo-av",
+        {
+          "microphonePermission": "MeshWeaver records the microphone for speech-to-text (transcribed on the centralized Whisper service, not on this device)."
+        }
+      ]
+    ]
   }
 }

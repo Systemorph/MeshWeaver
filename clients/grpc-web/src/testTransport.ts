@@ -35,9 +35,16 @@ export class Pushable<T> {
   }
 }
 
+export interface FakeMeshOptions {
+  /** Observe every delivery the client sends — assert on fire-and-forget posts (e.g. PatchDataRequest). */
+  onDeliver?: (d: ReturnType<typeof parseDelivery>) => void;
+  /** Content the fake node-watch answers with (default `{ done: false }`). */
+  nodeContent?: Record<string, unknown>;
+}
+
 // Responses correlate by RequestId == the request delivery's id; live changes carry the streamId the
 // client demuxes on (both addressed back to the sender).
-export function fakeMeshTransport() {
+export function fakeMeshTransport(opts: FakeMeshOptions = {}) {
   const conns = new Map<string, Pushable<Frame>>();
   const respond = (out: Pushable<Frame>, d: ReturnType<typeof parseDelivery>, message: Record<string, unknown>) =>
     out.push(create(ServerFrameSchema, {
@@ -60,6 +67,7 @@ export function fakeMeshTransport() {
       async deliver(req) {
         const out = conns.get(req.connectionId);
         const d = parseDelivery(req.delivery);
+        opts.onDeliver?.(d);
         if (out) {
           const streamId = d.message.streamId as string | undefined;
           const reference = d.message.reference as { area?: string; path?: string } | undefined;
@@ -81,7 +89,7 @@ export function fakeMeshTransport() {
             case "SubscribeRequest":
               if (reference?.path) {
                 // A node watch — the change carries the node fields meshNodeFromChange reads.
-                push(out, d, { $type: "DataChangedEvent", streamId, path: reference.path, name: "Node", content: { done: false } });
+                push(out, d, { $type: "DataChangedEvent", streamId, path: reference.path, name: "Node", content: opts.nodeContent ?? { done: false } });
               } else {
                 // A layout-area watch — a Full snapshot in the `change` string.
                 push(out, d, { $type: "DataChangedEvent", streamId, changeType: "Full", change: JSON.stringify({ areas: { main: { $type: "LayoutStackControl" } } }) });
