@@ -1568,14 +1568,22 @@ public static class MeshExtensions
         if (handlers.Count == 0)
             return Observable.Empty<System.Reactive.Unit>();
 
-        // For each matching handler: invoke Handle (reactive, logged-and-swallowed), then
-        // persist any additional nodes it returns. Sequentially via Concat to preserve
-        // the original order's side-effect dependencies.
+        // For each matching handler: invoke Handle, then persist any additional nodes it returns.
+        // Sequentially via Concat to preserve the original order's side-effect dependencies.
+        // Handle's error is propagated ONLY for handlers that declare FailsCreateOnError (a
+        // required-side-effect handler — e.g. the Space creator-Admin grant); the create handler's
+        // Subscribe turns that into a CreateNodeResponse.Fail. Best-effort handlers (onboarding
+        // seeds) keep log-and-continue. NEVER blanket-swallow a critical grant into a silent Ok —
+        // that shipped ownerless, un-navigable Spaces (AGENTS.md: no .Catch(Observable.Empty)).
         return handlers
             .Select(handler =>
             {
-                var handleObs = handler.Handle(node, createdBy)
-                    .Catch<System.Reactive.Unit, Exception>(ex =>
+                var rawHandle = handler.Handle(node, createdBy);
+                var handleObs = handler.FailsCreateOnError
+                    ? rawHandle.Do(_ => { }, ex => logger.LogError(ex,
+                        "Critical post-creation handler {Handler} failed for node {Path} — failing the create",
+                        handler.GetType().Name, node.Path))
+                    : rawHandle.Catch<System.Reactive.Unit, Exception>(ex =>
                     {
                         logger.LogWarning(ex,
                             "Post-creation handler {Handler} failed for node {Path}",

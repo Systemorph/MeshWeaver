@@ -10,8 +10,7 @@
 #   az aks command invoke -g memex-aks-rg -n memexaks-cluster \
 #     --command "bash import-dashboards.sh" \
 #     --file deploy/aks/scripts/import-dashboards.sh \
-#     --file deploy/aks/dashboards/atioz-overview.json \
-#     --file deploy/aks/dashboards/atioz-logs-errors.json
+#     --file deploy/aks/dashboards/<dashboard>.json
 #
 # The admin password is read from the chart's `loki-grafana` secret; no creds to pass.
 set -euo pipefail

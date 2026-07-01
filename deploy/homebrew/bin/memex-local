@@ -341,6 +341,7 @@ helm_deploy() {
   helm upgrade --install "$RELEASE" "$chart" \
     -f "$chart/values.yaml" \
     -f "$OVERLAY" \
+    --set persistDataVolume=true \
     -n "$NAMESPACE" --create-namespace \
     --force-conflicts
 }

@@ -5,7 +5,6 @@ using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
-using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -105,17 +104,11 @@ public static class UserActivityLayoutAreas
 
         var syncStream = host.Workspace.GetStream(new MeshNodeReference());
 
-        // For the OWNER, ensure the per-user {owner}/Chat node exists before embedding its Overview
-        // area (the side-panel chat composer). Built HERE — in the handler body where the viewer
-        // AccessContext is still set (see the capture note above) — so the create is attributed to the
-        // owner; idempotent (a benign already-exists is swallowed) and bounded so the dashboard never
-        // blocks on it. The visitor profile carries no composer, so no node is created for visitors.
-        var ready = isOwner
-            ? EnsureChatNode(host, ChatPath(nodeOwnerId))
-            : Observable.Return(System.Reactive.Unit.Default);
-
-        return ready
-            .SelectMany(_ => syncStream!)
+        // The composer region (@@("area/Composer")) renders its ThreadChatControl INLINE — a pure
+        // layout area with no backing node (see ComposerAreaView) — so the dashboard no longer has to
+        // ensure-create a {owner}/Chat node before rendering. Nothing to gate on: bind straight to the
+        // owner-node sync stream.
+        return syncStream!
             .Select(change =>
             {
                 var ownerNode = change.Value;
@@ -204,14 +197,17 @@ public static class UserActivityLayoutAreas
     }
 
     /// <summary>
-    /// The default home page shown until the owner authors their own <see cref="User.Body"/> — the chat
-    /// composer on top (start a thread right away), then the home regions embedded as <c>@@("area/…")</c>
-    /// blocks (the same mechanism as the Space welcome's <c>@@("area/Search")</c>), and a small
-    /// "it's configurable" note at the bottom linking to the config guide. This is the single source of
-    /// truth for "the default", shared by the render path and the unit tests.
+    /// The default home page shown until the owner authors their own <see cref="User.Body"/> — a
+    /// "Welcome back" heading on top, then the chat composer (start a thread right away) and the home
+    /// regions embedded as <c>@@("area/…")</c> blocks (the same mechanism as the Space welcome's
+    /// <c>@@("area/Search")</c>), and a small "it's configurable" note at the bottom linking to the
+    /// config guide. This is the single source of truth for "the default", shared by the render path
+    /// and the unit tests.
     /// </summary>
     internal static string UserWelcomeMarkdown(string ownerName) =>
         $$"""
+        ### Welcome back, {{ownerName}}
+
         @@("area/Composer")
 
         @@("area/Pinned")
@@ -220,7 +216,7 @@ public static class UserActivityLayoutAreas
 
         @@("area/Catalog")
 
-        _Welcome back, {{ownerName}} — this home is yours to shape. [It's fully configurable]({{ConfigGuideLink}}): tell the assistant in the chat above what you'd like to see, or edit this page's **Body** directly._
+        _This home is yours to shape. [It's fully configurable]({{ConfigGuideLink}}): tell the assistant in the chat above what you'd like to see, or edit this page's **Body** directly._
         """;
 
     // ── Home region areas ────────────────────────────────────────────────────────────────────────
@@ -250,14 +246,19 @@ public static class UserActivityLayoutAreas
     }
 
     /// <summary>
-    /// The chat composer region — the per-user <c>{owner}/Chat</c> node's "Overview" area, the SAME
-    /// ThreadChatControl the side panel mounts for a new chat (Monaco editor, harness/agent/model
-    /// selectors, attachments, Send). Declared by PATH + area name because MeshWeaver.Graph cannot
-    /// reference MeshWeaver.AI (AI references Graph); the node is ensure-created in <see cref="Activity"/>
-    /// so this embedded area always resolves.
+    /// The chat composer region — the SAME <see cref="ThreadChatControl"/> the side panel mounts for a
+    /// new chat (Monaco editor, harness/agent/model selectors, attachments, Send). Rendered INLINE as a
+    /// pure layout area on the already-alive user hub — it is NOT routed through a backing
+    /// <c>{owner}/Chat</c> mesh node. The control is self-contained: <c>ThreadChatView</c> resolves the
+    /// signed-in user from the circuit and anchors a new thread under the current page / the user's home
+    /// (never the hosting hub's address), so hosting it here is 1:1 with the side-panel composer.
+    /// <para>Rendering inline (rather than <c>Controls.LayoutArea("{owner}/Chat", "Overview")</c>)
+    /// removes the entire "the node must exist or the embedded area 404s (<c>No node found at
+    /// '{owner}/Chat'</c>)" failure class the previous on-demand-create design carried — there is
+    /// nothing left to create, race, or fail to provision.</para>
     /// </summary>
     internal static IObservable<UiControl?> ComposerAreaView(LayoutAreaHost host, RenderingContext _)
-        => Observable.Return<UiControl?>(Controls.LayoutArea(ChatPath(OwnerIdOf(host.Hub.Address.ToString())), ChatOverviewArea));
+        => Observable.Return<UiControl?>(new ThreadChatControl());
 
     /// <summary>
     /// The owner's OPEN threads — their own partition only (<c>{owner}/*_Thread</c>, no cross-partition
@@ -278,7 +279,12 @@ public static class UserActivityLayoutAreas
             .WithMaxRows(2)
             .WithMaxColumns(4)
             .WithReactiveMode(true)
-            with { CreateNodeType = "Thread", CreateNamespace = nodePath };
+            // "Create New" must NOT raw-create a Thread node — CreateNodeType="Thread" does a bare CreateNode
+            // that BYPASSES StartThread (AGENTS.md-forbidden: a hand-assembled Thread has no submission wiring
+            // / composer, so it renders as an empty message box). Instead navigate to the per-user new-chat
+            // composer at {owner}/Chat (the Chat node's Overview = the side-panel ThreadChatControl); sending
+            // there starts a proper thread via StartThread.
+            .WithCreateHref($"/{nodeOwnerId}/Chat");
 
     /// <summary>
     /// The fluent catalog: a skinned <see cref="TabsControl"/> whose tabs are labelled
@@ -332,44 +338,6 @@ public static class UserActivityLayoutAreas
                     .WithShowSearchBox(false).WithRenderMode(MeshSearchRenderMode.Flat)
                     .WithCollapsibleSections(false).WithSectionCounts(false)
                     .WithMaxColumns(2).WithItemLimit(50).WithMaxRows(4).WithReactiveMode(true));
-
-    /// <summary>
-    /// Path of the per-user home chat node: <c>{owner}/Chat</c> — mirrors
-    /// <c>MeshWeaver.AI.ChatNodeType.PathFor(owner)</c>. Spelled by literal here because
-    /// <c>MeshWeaver.Graph</c> cannot depend on <c>MeshWeaver.AI</c> (AI references Graph). Its
-    /// "Overview" area returns the side-panel <c>ThreadChatControl</c>; the node is ensure-created on
-    /// render (see <see cref="EnsureChatNode"/>) so the embedded area always resolves.
-    /// </summary>
-    private static string ChatPath(string nodeOwnerId) => $"{nodeOwnerId}/Chat";
-
-    /// <summary>NodeType of the per-user home chat node — mirrors <c>MeshWeaver.AI.ChatNodeType.NodeType</c>.</summary>
-    private const string ChatNodeType = "Chat";
-
-    /// <summary>Default area of the Chat node — mirrors <c>MeshWeaver.AI.ChatNodeType.OverviewArea</c>.</summary>
-    private const string ChatOverviewArea = "Overview";
-
-    /// <summary>
-    /// Ensures the per-user <c>{owner}/Chat</c> node exists so its embedded "Overview" area (the
-    /// side-panel chat composer) always resolves — create-if-absent, for brand-new and pre-existing
-    /// users alike (no onboarding back-fill needed). Reactive and idempotent: a benign already-exists
-    /// (or any create error) is swallowed and we still proceed to render; bounded by a timeout so the
-    /// dashboard never blocks on the create. MUST be invoked from the area-handler body (not lazily
-    /// inside a later Rx hop) so <c>CreateNode</c> captures the owner's <see cref="AccessContext"/>.
-    /// </summary>
-    private static IObservable<System.Reactive.Unit> EnsureChatNode(LayoutAreaHost host, string chatPath)
-    {
-        var meshService = host.Hub.ServiceProvider.GetService<IMeshService>();
-        if (meshService is null)
-            return Observable.Return(System.Reactive.Unit.Default);
-
-        return meshService
-            .CreateNode(MeshNode.FromPath(chatPath) with { NodeType = ChatNodeType, Name = "Chat" })
-            .Select(_ => System.Reactive.Unit.Default)
-            .Take(1)
-            .Timeout(TimeSpan.FromSeconds(10))
-            // Already-exists is the common, benign case; any other failure must not wedge the dashboard.
-            .Catch<System.Reactive.Unit, Exception>(_ => Observable.Return(System.Reactive.Unit.Default));
-    }
 
     /// <summary>
     /// Public profile shown to visitors — UserProfileControl (rendered by Blazor)
