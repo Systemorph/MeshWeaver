@@ -85,3 +85,4 @@ Browse the full set of controls, layout primitives, and data-binding guides:
 | [Side Panel](SidePanel) | Slide-in panels for detail views and settings |
 | [Reactive Dialogs](ReactiveDialogs) | Modal dialogs backed by observable state |
 | [Node Menu](NodeMenu) | Context menus on mesh nodes |
+| [Custom React Controls](ReactCustomControls) | Extend the React renderer with your own control — server-side `$type` + a React registry entry |
