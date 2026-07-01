@@ -123,7 +123,7 @@ public class SidePanelChatTenMessagesTest(PortalFixture fixture)
 
             // (a) The user's bubble landed — poll the COUNT (>= i+1), robust to bubbles re-keying on the
             //     thread rebind (a specific .Nth(i) wait is brittle across re-renders).
-            (await PollAsync(async () => await userBubbles.CountAsync() >= i + 1, TimeSpan.FromSeconds(15)))
+            (await PollAsync(async () => await userBubbles.CountAsync() >= i + 1, PromptBubbleDuration))
                 .Should().BeTrue($"the user bubble for message {i + 1} must appear (saw {await userBubbles.CountAsync()})");
 
             // No submit error surfaced.
@@ -158,6 +158,9 @@ public class SidePanelChatTenMessagesTest(PortalFixture fixture)
 
     // A real LLM round can take a while; poll the assistant-bubble count up to this bound.
     private static readonly TimeSpan RoundDuration = TimeSpan.FromMilliseconds(RoundMs);
+
+    // The user's own bubble should land quickly (well under the old 30s stall) — poll it up to this bound.
+    private static readonly TimeSpan PromptBubbleDuration = TimeSpan.FromMilliseconds(PromptBubbleMs);
 
     private static async Task<bool> PollAsync(Func<Task<bool>> predicate, TimeSpan timeout)
     {
