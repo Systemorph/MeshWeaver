@@ -100,7 +100,7 @@ window.customElements.define('chat-messages', class ChatMessages extends HTMLEle
 
             const elem = this.lastElementChild;
             if (this._isFirstAutoScroll || addedUserMessage || (hasTextUpdates && this._isNearScrollBoundary(300))) {
-                elem.scrollIntoView({ behavior: this._isFirstAutoScroll ? 'instant' : 'smooth' });
+                elem.scrollIntoView({ behavior: this._isFirstAutoScroll ? 'auto' : 'smooth' });
                 this._isFirstAutoScroll = false;
             }
         });

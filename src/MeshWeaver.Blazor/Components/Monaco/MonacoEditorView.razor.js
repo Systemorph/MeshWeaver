@@ -569,11 +569,14 @@ export function registerCompletionProvider(editorId, config) {
                     // that wrongly suppressed the trigger after legitimate word boundaries that are not
                     // whitespace — punctuation like ',', '.', ':', '!', '(' or a non-ASCII letter — so
                     // "Check @AgenticPension," followed by "@" (or "see.@Fund", "(@Fund") now triggers.
+                    // The boundary excludes a preceding '\w' (email "foo@bar") AND a preceding '/' — the
+                    // latter keeps the old intent of NOT re-opening a new @-reference INSIDE an existing
+                    // path token (e.g. "@/path/@content", where the second '@' follows a '/').
                     const atIndex = textUntilPosition.lastIndexOf(trigger);
                     if (atIndex >= 0) {
                         const afterTrigger = textUntilPosition.substring(atIndex + trigger.length);
                         const charBefore = atIndex > 0 ? textUntilPosition[atIndex - 1] : '';
-                        const onWordBoundary = atIndex === 0 || !/\w/.test(charBefore);
+                        const onWordBoundary = atIndex === 0 || !/[\w/]/.test(charBefore);
                         const withinToken = /^[\w\-\.\/:]*$/.test(afterTrigger);
                         if (onWordBoundary && withinToken) {
                             triggerMatch = [trigger + afterTrigger, afterTrigger];
