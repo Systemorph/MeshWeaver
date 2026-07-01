@@ -9,7 +9,7 @@
 // else (folding, optimistic edits, demux) is correct as written.
 
 import type { AreaSource, AreaTree, Json, MeshEvent } from "../area/types.js";
-import { mergePatch, setPointer } from "../area/pointer.js";
+import { applyJsonPatch, setPointer, type JsonPatchOp } from "../area/pointer.js";
 
 /** The subset of @meshweaver/client's MeshConnection this source needs. */
 export interface MeshConnectionLike {
@@ -35,7 +35,11 @@ export interface GrpcAreaOptions {
 }
 
 export class GrpcAreaSource implements AreaSource {
-  private state: AreaTree = {};
+  // `raw` is the EntityStore exactly as it arrives on the wire: RFC 6902 patches address it by its
+  // wire paths (which quote the collection keys), so patches must fold into THIS shape. `state` is the
+  // normalized view the renderer consumes — see normalizeStore.
+  private raw: Json = {};
+  private state: AreaTree = { areas: {}, data: {} };
   private readonly listeners = new Set<() => void>();
   private readonly streamId: string;
 
@@ -69,18 +73,23 @@ export class GrpcAreaSource implements AreaSource {
   }
 
   private applyChange(message: Record<string, unknown>): void {
-    const raw = (message.change ?? message.Change) as Json;
-    const wrapper = typeof raw === "string" ? JSON.parse(raw) : raw;
+    const rawChange = (message.change ?? message.Change) as Json;
+    const wrapper = typeof rawChange === "string" ? JSON.parse(rawChange) : rawChange;
     if (wrapper == null) return;
-    // Verified against Memex.LocalMesh: DataChangedEvent.Change wraps the EntityStore JSON as
-    // { Content: "<entitystore json>" }. The EntityStore IS { areas, data } — exactly the tree the
-    // renderer consumes (its $type is ignored). ChangeType 0 = Full (replace); anything else = RFC 7396 patch.
+    // DataChangedEvent.Change wraps its payload as RawJson { Content: "<json>" }. For a Full change
+    // (ChangeType 0) the payload is the whole EntityStore; for a Patch it is a JsonPatch (RFC 6902,
+    // an array of op/path/value). Both fold into `raw` — the un-normalized wire shape the patch paths
+    // (which carry JSON-quoted collection keys) address.
     const w = wrapper as Record<string, unknown>;
-    const content = w.Content ?? w.content;
-    const store = (typeof content === "string" ? JSON.parse(content) : content ?? wrapper) as Json;
-    if (store == null) return;
+    const content = w.Content ?? w.content ?? wrapper;
+    const payload = (typeof content === "string" ? JSON.parse(content) : content) as Json;
+    if (payload == null) return;
     const changeType = String(message.changeType ?? message.ChangeType ?? "1");
-    this.state = changeType === "Full" || changeType === "0" ? (store as AreaTree) : mergePatch(this.state, store);
+    this.raw =
+      changeType === "Full" || changeType === "0"
+        ? payload
+        : applyJsonPatch(this.raw, payload as JsonPatchOp[]);
+    this.state = normalizeStore(this.raw);
     this.notify();
   }
 
@@ -115,4 +124,39 @@ export class GrpcAreaSource implements AreaSource {
 function newId(): string {
   const g = globalThis as { crypto?: { randomUUID?: () => string } };
   return g.crypto?.randomUUID?.().replace(/-/g, "") ?? Math.random().toString(36).slice(2) + Date.now().toString(36);
+}
+
+// The wire EntityStore is { $type, areas: <InstanceCollection>, data: <InstanceCollection> }, where each
+// InstanceCollection is a JSON object whose keys are JSON-ENCODED entity keys — a string area name
+// "Overview" is serialized as the property name "\"Overview\"" (MeshWeaver's InstanceCollectionConverter
+// does JsonSerializer.Serialize(key)) — plus a leading "$type" collection discriminator. The renderer keys
+// off plain names (areas["Overview"], NamedArea.area, /data/<id> pointers), so unwrap each collection:
+// drop $type and JSON-parse each key back to its plain string.
+function normalizeStore(raw: Json): AreaTree {
+  return { areas: unwrapCollection(raw?.areas), data: unwrapCollection(raw?.data) };
+}
+
+function unwrapCollection(collection: Json): Record<string, Json> {
+  const out: Record<string, Json> = {};
+  if (collection && typeof collection === "object") {
+    for (const [key, value] of Object.entries(collection)) {
+      if (key === "$type") continue; // collection-type discriminator, not an entry
+      out[unquoteKey(key)] = value;
+    }
+  }
+  return out;
+}
+
+// A JSON-encoded string key ("\"Overview\"") parses back to "Overview". Anything that isn't a quoted
+// string (already-plain, or a numeric/tuple key) passes through unchanged.
+function unquoteKey(key: string): string {
+  if (key.length >= 2 && key.charCodeAt(0) === 0x22 /* " */) {
+    try {
+      const parsed = JSON.parse(key);
+      if (typeof parsed === "string") return parsed;
+    } catch {
+      /* not a JSON string — fall through */
+    }
+  }
+  return key;
 }

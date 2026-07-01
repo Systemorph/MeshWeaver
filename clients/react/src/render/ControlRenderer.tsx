@@ -29,8 +29,18 @@ export function ControlRenderer({ control }: { control?: UiControl | null }): Re
     return <Default skin={{ $type: "LayoutStack" }} control={control} />;
   }
 
-  const Comp = pack.controls[control.$type] ?? pack.fallback;
+  // MeshWeaver serializes a control's `$type` as its full class name — `HtmlControl`, `MenuControl`,
+  // `LayoutAreaControl` — while packs register leaves by the short name (`Html`, `Menu`, `LayoutArea`).
+  // Dispatch on the exact `$type` first (a pack MAY register a full name), then on the suffix-stripped
+  // name so the short-name convention resolves the real wire types.
+  const Comp =
+    pack.controls[control.$type] ?? pack.controls[stripControlSuffix(control.$type)] ?? pack.fallback;
   return <Comp control={control} />;
+}
+
+/** `HtmlControl` → `Html`; a `$type` that doesn't end in `Control` is returned unchanged. */
+function stripControlSuffix(type: string): string {
+  return type.endsWith("Control") ? type.slice(0, -"Control".length) : type;
 }
 
 export interface ChildArea {
