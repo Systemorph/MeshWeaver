@@ -386,8 +386,11 @@ public class MessageHubTest(ITestOutputHelper output) : HubTestBase(output)
     /// when the watchdog fires it must actually tear the children + subscriptions down. RED before the
     /// fix (both probes leak → time out); GREEN after.
     /// </summary>
+    // Companion to Dispose_WhenActionBlockWedged_… (which starves shutdown via a message-FLOOD
+    // backlog): this wedges the turn thread with a BLOCKED handler. Both wedge modes are named in
+    // ForceTeardownAfterWatchdog's contract, so both stay covered after the main-merge de-dup.
     [Fact]
-    public async Task Dispose_WhenActionBlockWedged_WatchdogTearsDownChildrenAndDisposables()
+    public async Task Dispose_WhenHandlerBlocksTheTurn_WatchdogTearsDownChildrenAndDisposables()
     {
         using var blockHandlerEntered = new ManualResetEventSlim(false);
         using var releaseBlock = new ManualResetEventSlim(false);
