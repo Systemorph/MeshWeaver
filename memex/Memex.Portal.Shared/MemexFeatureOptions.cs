@@ -35,6 +35,13 @@ public sealed record MemexFeatureOptions
     public bool SignalR { get; init; } = true;
 
     /// <summary>
+    /// gRPC mesh transport (<c>meshweaver.v1.Mesh/Open</c> + gRPC-web) for foreign-language
+    /// participants (Python/Node workers) and the browser React GUI's Connect+Deliver split.
+    /// On by default, symmetric with <see cref="SignalR"/>; close with <c>Features:Grpc=false</c>.
+    /// </summary>
+    public bool Grpc { get; init; } = true;
+
+    /// <summary>
     /// True when the deployment ships at least one in-process API provider OR one
     /// co-hosted CLI. When false, the portal has no built-in chat capability via
     /// catalog sources (users may still bring their own keys via ModelProviders) —
