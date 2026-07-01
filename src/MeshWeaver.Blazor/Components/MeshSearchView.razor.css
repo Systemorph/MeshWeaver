@@ -896,3 +896,97 @@
     0%, 100% { opacity: 1; }
     50% { opacity: 0.4; }
 }
+
+/* ── List mode: one result per row (icon · title · description) ── */
+
+.mesh-search-list {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+}
+
+.mesh-search-row {
+    position: relative;
+    border-bottom: 1px solid var(--neutral-stroke-rest);
+}
+
+.mesh-search-row-selected {
+    background: var(--neutral-fill-secondary-rest);
+}
+
+.mesh-search-row-link {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 12px 8px;
+    text-decoration: none;
+    color: inherit;
+    width: 100%;
+    box-sizing: border-box;
+}
+
+.mesh-search-row-link:hover {
+    background: var(--neutral-fill-stealth-hover);
+}
+
+.mesh-search-row-icon {
+    flex: 0 0 auto;
+    width: 40px;
+    height: 40px;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    background: var(--neutral-fill-secondary-rest);
+}
+
+.mesh-search-row-icon img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.mesh-search-row-icon ::deep svg {
+    width: 22px;
+    height: 22px;
+}
+
+.mesh-search-row-emoji {
+    font-size: 22px;
+}
+
+.mesh-search-row-initial {
+    font-weight: 600;
+    color: var(--accent-foreground-rest);
+}
+
+.mesh-search-row-text {
+    min-width: 0;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.mesh-search-row-title {
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.mesh-search-row-desc {
+    font-size: 0.85rem;
+    color: var(--neutral-foreground-hint);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+}
+
+.mesh-search-row-desc-empty {
+    font-style: italic;
+    opacity: 0.75;
+}

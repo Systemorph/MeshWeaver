@@ -1,0 +1,97 @@
+// RFC 6901 JSON-pointer resolution + RFC 7396 merge-patch, and the binding resolver that turns a
+// control property (literal OR a JsonPointerReference into /data) into its value.
+
+import type { AreaTree, Json } from "./types.js";
+
+function unescape(p: string): string {
+  return p.replace(/~1/g, "/").replace(/~0/g, "~");
+}
+function escape(p: string): string {
+  return p.replace(/~/g, "~0").replace(/\//g, "~1");
+}
+
+/**
+ * Decode one wire pointer segment. On the wire, EntityStore instance keys are JSON-ENCODED
+ * property names (the server's InstanceCollectionConverter / LayoutAreaReference.GetDataPointer:
+ * a data id "model" becomes the segment `"model"` — WITH literal quotes). The live source folds
+ * DECODED (plain) keys into the tree, so binding pointers that arrive wire-encoded
+ * (`/data/"model"/name`) must decode their quoted segments to resolve. Plain segments pass through.
+ */
+export function decodePointerSegment(seg: string): string {
+  const un = unescape(seg);
+  if (un.length >= 2 && un.startsWith('"') && un.endsWith('"')) {
+    try {
+      const parsed: unknown = JSON.parse(un);
+      if (typeof parsed === "string") return parsed;
+    } catch {
+      /* not a JSON-encoded key — keep the raw segment */
+    }
+  }
+  return un;
+}
+
+export function getPointer(root: Json, pointer: string): Json {
+  if (!pointer || pointer === "/" || pointer === "#") return root;
+  const parts = pointer.replace(/^#/, "").split("/").slice(1).map(decodePointerSegment);
+  let cur: Json = root;
+  for (const part of parts) {
+    if (cur == null) return undefined;
+    cur = Array.isArray(cur) ? cur[Number(part)] : cur[part];
+  }
+  return cur;
+}
+
+/** Immutably set the value at a JSON pointer, creating intermediate objects as needed. */
+export function setPointer(root: Json, pointer: string, value: Json): Json {
+  const parts = pointer.replace(/^#/, "").split("/").slice(1).map(decodePointerSegment);
+  if (parts.length === 0) return value;
+  const clone = Array.isArray(root) ? [...root] : { ...(root ?? {}) };
+  let cur: Json = clone;
+  for (let i = 0; i < parts.length - 1; i++) {
+    const key = parts[i];
+    const next = cur[key];
+    cur[key] = Array.isArray(next) ? [...next] : { ...(next ?? {}) };
+    cur = cur[key];
+  }
+  cur[parts[parts.length - 1]] = value;
+  return clone;
+}
+
+/** RFC 7396 JSON merge-patch — how layout-area deltas arrive over the wire. */
+export function mergePatch(target: Json, patch: Json): Json {
+  if (patch === null || typeof patch !== "object" || Array.isArray(patch)) return patch;
+  const out: Json = target && typeof target === "object" && !Array.isArray(target) ? { ...target } : {};
+  for (const [k, v] of Object.entries(patch)) {
+    if (v === null) delete out[k];
+    else out[k] = mergePatch(out[k], v);
+  }
+  return out;
+}
+
+export function isBinding(v: Json): v is { $type?: string; pointer: string } {
+  return (
+    v != null &&
+    typeof v === "object" &&
+    typeof v.pointer === "string" &&
+    /pointer|binding/i.test(String(v.$type ?? "pointer"))
+  );
+}
+
+/** Resolve a control property: a JsonPointerReference reads from the tree; anything else is literal. */
+export function resolve(root: AreaTree, value: Json, dataContext?: string): Json {
+  if (isBinding(value)) return getPointer(root, toAbsolute(value.pointer, dataContext));
+  return value;
+}
+
+/** The absolute pointer a binding writes back to (used by form edits → UpdatePointer). */
+export function bindingPointer(value: Json, dataContext?: string): string | undefined {
+  return isBinding(value) ? toAbsolute(value.pointer, dataContext) : undefined;
+}
+
+function toAbsolute(pointer: string, dataContext?: string): string {
+  if (pointer.startsWith("/")) return pointer;
+  const base = dataContext && dataContext.startsWith("/") ? dataContext : "";
+  return `${base}/${pointer}`;
+}
+
+export { escape as escapePointerSegment };

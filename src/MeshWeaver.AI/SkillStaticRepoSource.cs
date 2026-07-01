@@ -35,6 +35,7 @@ public sealed class SkillStaticRepoSource(BuiltInSkillProvider provider) : IStat
     public MeshNode? PartitionRoot => new(SkillNodeType.RootNamespace)
     {
         Name = "Skills",
+        Icon = "/static/NodeTypeIcons/sparkle.svg",
         NodeType = "Space",
         State = MeshNodeState.Active,
         Content = new MarkdownContent

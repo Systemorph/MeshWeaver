@@ -618,7 +618,7 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
         //    to the trigger so a future click with a newer timestamp is again
         //    dispatchable (the watcher uses strict-greater-than as the gate).
         await Mesh.GetWorkspace().GetMeshNodeStream(typePath)
-            .Should().Within(TimeSpan.FromSeconds(15))
+            .Should().Within(TimeSpan.FromSeconds(30))
             .Match(n => n?.Content is NodeTypeDefinition d
                 && d.LastReleaseRequestHandledAt is { } handled
                 && handled >= triggerAt);

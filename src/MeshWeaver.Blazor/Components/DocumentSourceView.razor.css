@@ -1,0 +1,96 @@
+.mw-docsource {
+    display: block;
+    width: 100%;
+    overflow: auto;
+    background: var(--neutral-layer-2);
+    border: 1px solid var(--neutral-stroke-rest);
+    border-radius: 8px;
+    padding: 16px;
+}
+
+.mw-docsource-loading {
+    color: var(--neutral-foreground-hint);
+    font-style: italic;
+    padding: 24px;
+    text-align: center;
+}
+
+/* Content below is injected by the JS module, so it must be reached with ::deep (no scope attribute). */
+
+.mw-docsource ::deep .mw-docsource-pages {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 16px;
+}
+
+.mw-docsource ::deep .mw-pdf-page {
+    position: relative;
+    box-shadow: 0 1px 6px rgba(0, 0, 0, 0.25);
+    background: #fff;
+}
+
+.mw-docsource ::deep .mw-pdf-page canvas {
+    display: block;
+}
+
+/* PDF.js text layer: transparent text over the canvas so selection + highlight align with glyphs. */
+.mw-docsource ::deep .mw-pdf-textlayer {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+    opacity: 1;
+    line-height: 1;
+    color: transparent;
+}
+
+.mw-docsource ::deep .mw-pdf-textlayer span {
+    position: absolute;
+    white-space: pre;
+    transform-origin: 0 0;
+    color: transparent;
+}
+
+.mw-docsource ::deep .mw-docx-body {
+    background: var(--neutral-layer-1);
+    color: var(--neutral-foreground-rest);
+    padding: 32px;
+    max-width: 900px;
+    margin: 0 auto;
+    border-radius: 6px;
+}
+
+/* The matched passage — visible over the canvas image (PDF) and inline (DOCX). */
+.mw-docsource ::deep .mw-docmark {
+    background-color: var(--accent-fill-rest, #ffd54f);
+    color: inherit;
+    border-radius: 2px;
+}
+
+.mw-docsource ::deep .mw-docsource-fallback {
+    padding: 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.mw-docsource ::deep .mw-docsource-note {
+    color: var(--neutral-foreground-hint);
+    margin: 0;
+}
+
+.mw-docsource ::deep .mw-docsource-download {
+    color: var(--accent-foreground-rest);
+    font-weight: 600;
+}
+
+.mw-docsource ::deep .mw-docsource-passage {
+    white-space: pre-wrap;
+    word-break: break-word;
+    background: var(--neutral-layer-1);
+    border-left: 3px solid var(--accent-fill-rest);
+    padding: 12px 14px;
+    border-radius: 4px;
+    font-size: 0.9rem;
+    line-height: 1.5;
+}

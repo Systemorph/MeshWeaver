@@ -320,21 +320,24 @@ else
 
                         @if (state.ToolCalls is { Count: > 0 })
                         {
-                            <div class="thread-msg-tool-calls">
-                                @foreach (var call in state.ToolCalls)
-                                {
-                                    var isDelegation = !string.IsNullOrEmpty(call.DelegationPath);
-                                    var isPending = call.Result == null;
-                                    var summary = FormatToolCallSummary(call);
+                            @* Compact tool-call window: running on top, then pending, capped at 5
+                               (ToolCallVisibility); completed backfill the leftover slots and a just-
+                               finished call lingers ~5s before collapsing. The remainder folds behind a
+                               "running · pending · completed" toggle. *@
+                            var toolView = ToolCallVisibility.Partition(state.ToolCalls, DateTime.UtcNow);
+                            var toolExpanded = IsToolCallsExpanded(msgId);
 
+                            RenderFragment<ToolCallEntry> renderToolCall = call =>
+                                @<text>
+                                    @{
+                                        var isDelegation = !string.IsNullOrEmpty(call.DelegationPath);
+                                        var isPending = call.Result == null;
+                                        var callSummary = FormatToolCallSummary(call);
+                                    }
                                     @if (isDelegation)
                                     {
-                                        @* Inline link only — sub-thread progress + status lives in the
-                                           runtime panel below the chat (anchored near the input). Keeps
-                                           the bubble compact and avoids the duplicate "tool call + embedded
-                                           streaming area" the user flagged. *@
                                         var delHeader = GetDelegationHeader(call.DelegationPath);
-                                        var title = delHeader?.Title ?? summary;
+                                        var title = delHeader?.Title ?? callSummary;
                                         var icon = delHeader?.Icon ?? "/static/NodeTypeIcons/chat.svg";
                                         var stateIcon = isPending
                                             ? "↗"
@@ -342,20 +345,23 @@ else
                                         var stateClass = isPending
                                             ? "thread-msg-tool-delegation-pending"
                                             : (call.IsSuccess ? "thread-msg-tool-delegation-ok" : "thread-msg-tool-delegation-error");
+                                        @* Inline link only — sub-thread progress + status lives in the
+                                           runtime panel below the chat (anchored near the input). Keeps
+                                           the bubble compact and avoids the duplicate "tool call + embedded
+                                           streaming area" the user flagged. *@
                                         <a href="/@call.DelegationPath"
                                            class="thread-msg-tool-delegation @stateClass"
                                            title="@title">
                                             <span class="thread-msg-tool-delegation-state">@stateIcon</span>
                                             <img src="@icon" alt="" class="thread-msg-tool-delegation-icon" />
                                             <span class="thread-msg-tool-delegation-title">@title</span>
-                                            <span class="thread-msg-tool-delegation-agent">@summary</span>
+                                            <span class="thread-msg-tool-delegation-agent">@callSummary</span>
                                         </a>
                                     }
                                     else
                                     {
                                         var display = FormatToolCallDisplay(call);
                                         var change = display.IsNodeModifying ? FindChange(state.UpdatedNodes, display.Path) : null;
-
                                         <details class="thread-msg-tool-entry">
                                             <summary class="thread-msg-tool-entry-name">
                                                 <span class="thread-msg-tool-done @(call.IsSuccess ? "" : "thread-msg-tool-error")">@(call.IsSuccess ? "✓" : "✗")</span>
@@ -391,8 +397,61 @@ else
                                             }
                                         </details>
                                     }
+                                </text>;
+
+                            @* Wrap the whole round's tool calls in a collapsible group so a long
+                               tool-call history collapses to a single summary line once complete and
+                               stops pushing the assistant's reply off-screen. Open while any call runs,
+                               or when the cell has no assistant text (tool-only — the user needs to see
+                               what was done); collapsed once complete with a reply present. *@
+                            var anyPending = state.ToolCalls.Any(c => c.Result is null);
+                            var failCount = state.ToolCalls.Count(c => !c.IsSuccess && c.Result is not null);
+                            var anyFailed = failCount > 0;
+                            var groupHasText = !string.IsNullOrWhiteSpace(state.Text);
+                            var groupOpen = anyPending || !groupHasText;
+                            var groupIcon = anyPending ? "↗" : (anyFailed ? "✗" : "✓");
+                            var groupLabel = anyFailed
+                                ? $"{state.ToolCalls.Count} tool calls ({failCount} failed)"
+                                : $"{state.ToolCalls.Count} tool calls";
+                            <details class="thread-msg-tool-group" open="@groupOpen">
+                            <summary class="thread-msg-tool-group-summary">
+                                <span class="thread-msg-tool-done @(anyFailed ? "thread-msg-tool-error" : "")">@groupIcon</span>
+                                @groupLabel
+                            </summary>
+                            <div class="thread-msg-tool-calls">
+                                @foreach (var call in toolView.Visible)
+                                {
+                                    @renderToolCall(call)
+                                }
+                                @if (toolView.HasHidden)
+                                {
+                                    <button type="button" class="thread-msg-tool-more@(toolExpanded ? " expanded" : "")"
+                                            @onclick="() => ToggleToolCalls(msgId)"
+                                            title="@(toolExpanded ? "Hide finished tool calls" : "Show all tool calls")">
+                                        <span class="thread-msg-tool-more-caret">@(toolExpanded ? "▾" : "▸")</span>
+                                        @if (toolView.RunningCount > 0)
+                                        {
+                                            <span class="thread-msg-tool-more-count running">@toolView.RunningCount running</span>
+                                        }
+                                        @if (toolView.PendingCount > 0)
+                                        {
+                                            <span class="thread-msg-tool-more-count pending">@toolView.PendingCount pending</span>
+                                        }
+                                        @if (toolView.CompletedCount > 0)
+                                        {
+                                            <span class="thread-msg-tool-more-count completed">@toolView.CompletedCount completed</span>
+                                        }
+                                    </button>
+                                    @if (toolExpanded)
+                                    {
+                                        @foreach (var call in toolView.Hidden)
+                                        {
+                                            @renderToolCall(call)
+                                        }
+                                    }
                                 }
                             </div>
+                            </details>
                         }
                     }
                     </div>
@@ -708,6 +767,31 @@ else
                    rather than hand-rolled flex divs + a raw <input> — one vertical stack, framework-themed. *@
                 <FluentStack Orientation="Microsoft.FluentUI.AspNetCore.Components.Orientation.Vertical" VerticalGap="10"
                              Style="padding:12px 14px; flex:1 1 auto; min-height:0; overflow-y:auto;">
+                    @if (_connectPasteToken && _connectStatus is not ConnectStatus.Connected and not ConnectStatus.Error)
+                    {
+                        @* Claude Code: `claude setup-token` MASKS its token in stdout (CLI #19274), so the
+                           server can't drive/scrape the OAuth. The user runs it locally and pastes the
+                           result here → SubmitConnectToken stores it. Readable instructions: neutral text +
+                           a copy box for the command (no low-contrast inline code). *@
+                        <div style="line-height:1.55;">
+                            <div><strong>1.</strong>&nbsp; In a terminal, run:</div>
+                            <div style="margin:5px 0; padding:7px 10px; border-radius:5px;
+                                        background:var(--neutral-fill-secondary-rest,#f1f1f3);
+                                        color:var(--neutral-foreground-rest);
+                                        font-family:var(--monospace-font-family,ui-monospace,monospace); user-select:all;">claude setup-token</div>
+                            <div><strong>2.</strong>&nbsp; Approve in the browser, then press <strong>c</strong> to copy the token.</div>
+                            <div style="margin-top:6px;"><strong>3.</strong>&nbsp; Paste it below (starts with
+                                <span style="font-family:var(--monospace-font-family,ui-monospace,monospace);">sk-ant-oat01-</span>):</div>
+                        </div>
+                        <FluentTextField @bind-Value="_connectCode" Immediate="true" Placeholder="sk-ant-oat01-…"
+                                         TextFieldType="Microsoft.FluentUI.AspNetCore.Components.TextFieldType.Password"
+                                         @onkeydown="OnConnectInputKeyDown" Style="width:100%;" />
+                        <FluentButton Appearance="FluentAppearance.Accent" Style="width:100%;"
+                                      Disabled="@(_connectBusy || string.IsNullOrWhiteSpace(_connectCode))"
+                                      OnClick="SubmitConnectToken">@(_connectBusy ? "Saving…" : "Connect")</FluentButton>
+                    }
+                    else
+                    {
                     @switch (_connectStatus)
                     {
                         case ConnectStatus.Connected:
@@ -745,6 +829,7 @@ else
                         default:
                             <div style="color:var(--neutral-foreground-hint);">Starting login…</div>
                             break;
+                    }
                     }
                 </FluentStack>
             </div>

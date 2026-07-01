@@ -88,6 +88,7 @@
     <Project Path="src/MeshWeaver.Hosting.Orleans/MeshWeaver.Hosting.Orleans.csproj" />
     <Project Path="src/MeshWeaver.Hosting.AzureStorage/MeshWeaver.Hosting.AzureStorage.csproj" />
     <Project Path="src/MeshWeaver.Hosting.Cosmos/MeshWeaver.Hosting.Cosmos.csproj" />
+    <Project Path="src/MeshWeaver.Hosting.Grpc/MeshWeaver.Hosting.Grpc.csproj" />
     <Project Path="src/MeshWeaver.Hosting.PostgreSql/MeshWeaver.Hosting.PostgreSql.csproj" />
     <Project Path="src/MeshWeaver.Hosting.Sqlite/MeshWeaver.Hosting.Sqlite.csproj" />
     <Project Path="src/MeshWeaver.Hosting.SignalR/MeshWeaver.Hosting.SignalR.csproj" />
@@ -99,6 +100,7 @@
     <Project Path="src/MeshWeaver.Markdown/MeshWeaver.Markdown.csproj" />
     <Project Path="src/MeshWeaver.Markdown.Collaboration/MeshWeaver.Markdown.Collaboration.csproj" />
     <Project Path="src/MeshWeaver.Markdown.Export/MeshWeaver.Markdown.Export.csproj" />
+    <Project Path="src/MeshWeaver.Maui.Abstractions/MeshWeaver.Maui.Abstractions.csproj" />
     <Project Path="src/MeshWeaver.Mesh.Contract/MeshWeaver.Mesh.Contract.csproj" />
     <Project Path="src/MeshWeaver.Messaging.Contract/MeshWeaver.Messaging.Contract.csproj" />
     <Project Path="src/MeshWeaver.Messaging.Hub/MeshWeaver.Messaging.Hub.csproj" />
@@ -127,12 +129,16 @@
     <Project Path="test/MeshWeaver.Documentation.Test/MeshWeaver.Documentation.Test.csproj" />
     <Project Path="test/MeshWeaver.Data.TestDomain/MeshWeaver.Data.TestDomain.csproj" />
     <Project Path="test/MeshWeaver.DataSetReader.Test/MeshWeaver.DataSetReader.Test.csproj" />
+    <Project Path="test/MeshWeaver.Hosting.Grpc.Test/MeshWeaver.Hosting.Grpc.Test.csproj" />
     <Project Path="test/MeshWeaver.Hosting.Monolith.Test/MeshWeaver.Hosting.Monolith.Test.csproj" />
     <Project Path="test/MeshWeaver.Hosting.Orleans.Test/MeshWeaver.Hosting.Orleans.Test.csproj" />
     <Project Path="test/MeshWeaver.Import.Test/MeshWeaver.Import.Test.csproj" />
     <Project Path="test/MeshWeaver.Layout.Test/MeshWeaver.Layout.Test.csproj" />
     <Project Path="test/MeshWeaver.Markdown.Test/MeshWeaver.Markdown.Test.csproj" />
     <Project Path="test/MeshWeaver.MathDemo.Test/MeshWeaver.MathDemo.Test.csproj" />
+    <Project Path="test/MeshWeaver.Maui.Abstractions.Test/MeshWeaver.Maui.Abstractions.Test.csproj" />
+    <Project Path="test/MeshWeaver.Maui.E2E.Test/MeshWeaver.Maui.E2E.Test.csproj" />
+    <Project Path="test/MeshWeaver.Maui.Integration.Test/MeshWeaver.Maui.Integration.Test.csproj" />
     <Project Path="test/MeshWeaver.Messaging.Hub.Test/MeshWeaver.Messaging.Hub.Test.csproj" />
     <Project Path="test/MeshWeaver.NodeOperations.Test/MeshWeaver.NodeOperations.Test.csproj" />
     <Project Path="test/MeshWeaver.Northwind.Test/MeshWeaver.Northwind.Test.csproj" />
@@ -164,9 +170,11 @@
     <Project Path="test/MeshWeaver.Autocomplete.Test/MeshWeaver.Autocomplete.Test.csproj" />
     <Project Path="test/MeshWeaver.Query.Test/MeshWeaver.Query.Test.csproj" />
     <Project Path="test/MeshWeaver.Reactive.Assertions.Test/MeshWeaver.Reactive.Assertions.Test.csproj" />
+    <Project Path="test/MeshWeaver.Portal.E2E.Test/MeshWeaver.Portal.E2E.Test.csproj" />
+    <Project Path="test/MeshWeaver.Serialization.Test/MeshWeaver.Serialization.Test.csproj" />
+    <Project Path="test/MeshWeaver.MemexTemplate.Test/MeshWeaver.MemexTemplate.Test.csproj" />
     <Project Path="test/Memex.Portal.Shared.Test/Memex.Portal.Shared.Test.csproj" />
   </Folder>
-  <Project Path="test/MeshWeaver.MemexTemplate.Test/MeshWeaver.MemexTemplate.Test.csproj" />
   <Folder Name="/tools/">
     <File Path="tools/generate-memex-template.cs" />
     <Project Path="tools/MeshWeaver.Cli/MeshWeaver.Cli.csproj" />

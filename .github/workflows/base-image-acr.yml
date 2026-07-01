@@ -73,8 +73,15 @@ jobs:
             --push deploy/base-images/portal-ai
 
       - name: Verify multi-arch manifest list in ACR
+        # Assert :latest is an image INDEX whose children include BOTH linux/amd64 AND linux/arm64,
+        # so the job fails loudly if the push ever flattened to a single arch. (jq is preinstalled on
+        # ubuntu-latest; the buildx provenance/SBOM children show as architecture "unknown" — ignored.)
         run: |
           set -euo pipefail
-          echo "Manifests now tagged on memex-portal-ai-base:latest —"
-          az acr manifest list-metadata -r meshweaver -n memex-portal-ai-base \
-            --query "[?contains(tags, 'latest')].{arch: architecture, mediaType: mediaType, digest: digest}" -o table
+          echo "memex-portal-ai-base:latest child platforms —"
+          ARCHES="$(az acr manifest show -r meshweaver -n memex-portal-ai-base:latest \
+            | jq -r '.manifests[].platform.architecture')"
+          echo "$ARCHES"
+          echo "$ARCHES" | grep -qx amd64 || { echo "::error::amd64 child missing from memex-portal-ai-base:latest"; exit 1; }
+          echo "$ARCHES" | grep -qx arm64 || { echo "::error::arm64 child missing from memex-portal-ai-base:latest"; exit 1; }
+          echo "OK: memex-portal-ai-base:latest is a multi-arch image index (linux/amd64 + linux/arm64)."

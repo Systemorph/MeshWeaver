@@ -1,0 +1,33 @@
+{
+  "name": "@meshweaver/client-web",
+  "version": "0.1.0",
+  "description": "Browser + React Native mesh client over gRPC-web (Connect-ES) — the MeshConnectionLike the renderer's GrpcAreaSource consumes, for platforms that can't do the bidi Open (no Node http2).",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": ["dist", "README.md"],
+  "scripts": {
+    "gen": "buf generate ../../src/MeshWeaver.Hosting.Grpc/Protos",
+    "build": "npm run gen && tsc -p tsconfig.build.json",
+    "typecheck": "npm run gen && tsc --noEmit",
+    "test": "npm run gen && vitest run",
+    "prepack": "npm run build"
+  },
+  "dependencies": {
+    "@bufbuild/protobuf": "^2.2.0",
+    "@connectrpc/connect": "^2.0.0",
+    "@connectrpc/connect-web": "^2.0.0"
+  },
+  "devDependencies": {
+    "@bufbuild/buf": "^1.47.0",
+    "@bufbuild/protoc-gen-es": "^2.2.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  }
+}

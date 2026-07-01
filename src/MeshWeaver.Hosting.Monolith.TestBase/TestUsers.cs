@@ -40,20 +40,25 @@ public static class TestUsers
     /// Requires AddGraph() to register the User and AccessAssignment node types.
     /// </summary>
     public static MeshNode[] SampleUsers() =>
-    [
-        // TestUser is the default test-circuit identity (TestUsers.TestUser), so its
-        // own User MeshNode must exist — AgentChatClient.LoadContextNode("User/TestUser")
-        // warned "Failed to load context node" when it wasn't seeded, and downstream
-        // chat flows that read ContextPath proceeded with a null Node.
-        new("TestUser", "User") { Name = "TestUser", NodeType = "User" },
-        new("Roland", "User") { Name = "Roland", NodeType = "User" },
-        new("Samuel", "User") { Name = "Samuel", NodeType = "User" },
-        new("Alice", "User") { Name = "Alice", NodeType = "User" },
-        new("Bob", "User") { Name = "Bob", NodeType = "User" },
-        new("Carol", "User") { Name = "Carol", NodeType = "User" },
-        new("David", "User") { Name = "David", NodeType = "User" },
-        new("Emma", "User") { Name = "Emma", NodeType = "User" },
-    ];
+        SampleUserNames
+            .SelectMany(name => new MeshNode[]
+            {
+                // 🚨 The PARTITION-ROOT User node ({name} at namespace="") — the exact shape onboarding
+                // (UserOnboardingService.CreateUser) writes. This is what /{name} routing resolves to and
+                // what makes the user's partition EXIST + reachable. Without it the user is not "properly
+                // onboarded": a thread started from their home has no partition to land in, so routing to
+                // {name} fails "No node found" (the not-reachable = wedge symptom). Seeding the catalog
+                // entry below WITHOUT this root was the gap ThreadCreatableFromHomeTest pins.
+                new(name) { Name = name, NodeType = "User" },
+                // The User/{name} catalog / auth-mirror entry (the V27 trigger writes this in prod; seeded
+                // here so AgentChatClient.LoadContextNode("User/{name}") resolves).
+                new(name, "User") { Name = name, NodeType = "User" },
+            })
+            .ToArray();
+
+    // TestUser is the default test-circuit identity (TestUsers.TestUser), so it leads the list.
+    private static readonly string[] SampleUserNames =
+        ["TestUser", "Roland", "Samuel", "Alice", "Bob", "Carol", "David", "Emma"];
 
     /// <summary>
     /// AccessAssignment granting Public users Admin rights.
