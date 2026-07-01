@@ -167,7 +167,14 @@ public static class MeshExtensions
             if (callback != null)
             {
                 var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.GrainKeepAlive");
-                logger?.LogInformation("HeartBeat: keeping grain alive for {Hub} (callback on {Parent})",
+                // Debug, NOT Information: this fires for EVERY sync-stream keep-alive heartbeat on EVERY
+                // open stream, every heartbeat interval — the single highest-volume log line on a busy
+                // portal (≈half of all log lines + ~11% of CPU under load, measured via dotnet-trace on
+                // the wedged e2e portal: ConsoleLoggerProcessor.ProcessLogQueue). At Information it ships
+                // to Loki on every tick and bleeds ingest budget for zero diagnostic value (a grain
+                // staying alive is the expected steady state). Keep it at Debug for when a deactivation
+                // is actually being investigated.
+                logger?.LogDebug("HeartBeat: keeping grain alive for {Hub} (callback on {Parent})",
                     hub.Address, current.Address);
                 callback.KeepAlive();
                 break;

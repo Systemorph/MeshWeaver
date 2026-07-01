@@ -37,16 +37,16 @@ public static class StaticRepoSyncExtensions
         {
             if (serveFromPartition.Contains("Doc"))
                 services.AddSingleton<IStaticRepoSource, DocumentationStaticRepoSource>();
-            if (serveFromPartition.Contains("Agent"))
-                services.AddSingleton<IStaticRepoSource, AgentStaticRepoSource>();
-            // The model catalog (providers + models + policy) imports into the top-level "Provider"
-            // partition. Honour the legacy "Model" partition name too for backwards-compatible configs.
-            if (serveFromPartition.Contains("Provider") || serveFromPartition.Contains("Model"))
-                services.AddSingleton<IStaticRepoSource, ModelStaticRepoSource>();
-            if (serveFromPartition.Contains("Harness"))
-                services.AddSingleton<IStaticRepoSource, HarnessStaticRepoSource>();
-            if (serveFromPartition.Contains("Skill"))
-                services.AddSingleton<IStaticRepoSource, SkillStaticRepoSource>();
+
+            // AI content (Agent / Provider / Harness / Skill) is ONE bundle: register every built-in
+            // AI source together whenever any AI partition is served, so a config that names only some
+            // of them can NEVER silently drop one (the recurring "Skill was never imported" bug). The
+            // set + the bundle live next to the sources in MeshWeaver.AI — adding a new AI content type
+            // there auto-joins the import; there is no per-partition allow-list here to forget. (The
+            // expand-to-the-whole-bundle also happens in MemexConfiguration so AddAI's serve-from-DB
+            // gating stays consistent with the import.)
+            if (serveFromPartition.Overlaps(AiContentSources.ContentPartitions))
+                services.AddBuiltInAiContentSources();
 
             // Runs after the PG schema-provisioning hosted service (registered earlier by
             // AddPartitionedPostgreSqlPersistence) — hosted services start in registration order.

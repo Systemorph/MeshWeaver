@@ -53,6 +53,13 @@ internal class TypeRegistry(ITypeRegistry? parent) : ITypeRegistry
         new(BasicTypes.Select(t => new KeyValuePair<string, TypeDefinition>(t.Name, new TypeDefinition(t, t.Name, null!))));
     private readonly ConcurrentDictionary<Type, string> nameByType =
         new(BasicTypes.Select(t => new KeyValuePair<Type, string>(t, t.Name)));
+    // Resolution-only aliases (full namespace-qualified names) → definition. Consulted by TryGetType so
+    // a full-name $type discriminator still resolves on the way IN, but deliberately NOT part of the
+    // canonical `typeByName` map that the polymorphic resolver enumerates (PolymorphicTypeInfoResolver
+    // → typeRegistry.Types) — otherwise each type would appear TWICE as a JsonDerivedType (short + full)
+    // and STJ's discriminator emission breaks ("must specify a type discriminator"). One canonical
+    // (short) name per type for OUTPUT; the full name is an INPUT-side alias only.
+    private readonly ConcurrentDictionary<string, TypeDefinition> aliasByName = new();
 
     private readonly KeyFunctionBuilder keyFunctionBuilder = new();
 
@@ -64,8 +71,23 @@ internal class TypeRegistry(ITypeRegistry? parent) : ITypeRegistry
         var typeDefinition = new TypeDefinition(type, typeName, keyFunctionBuilder);
         typeByName[typeName] = typeDefinition;
         nameByType[type] = typeName;
+        IndexFullNameAlias(type, typeDefinition, typeName);
 
         return this;
+    }
+
+    // Resolution alias: index the full (namespace-qualified) name alongside the canonical name, so a
+    // full-name $type discriminator — persisted data, OR a payload written before the short-name $type
+    // default (fb2ee677d) — still RESOLVES on the way IN. The canonical OUTPUT name stays whatever the
+    // caller registered (short by default) via nameByType, so new payloads keep serialising short.
+    // Collision-safe: full names are unique; TryAdd never clobbers an explicit registration that already
+    // owns the key. This is what lets TryGetType("MeshWeaver.Layout.StackControl") and the old full-name
+    // generic forms resolve again after the short-name default (LayoutSerializationTest et al.).
+    private void IndexFullNameAlias(Type type, TypeDefinition definition, string canonicalName)
+    {
+        var fullName = (type.FullName ?? type.Name).Replace('+', '.');
+        if (fullName != canonicalName)
+            aliasByName.TryAdd(fullName, definition);
     }
 
     public KeyFunction? GetKeyFunction(string collection) =>
@@ -81,7 +103,8 @@ internal class TypeRegistry(ITypeRegistry? parent) : ITypeRegistry
 
     public bool TryGetType(string name, out ITypeDefinition? typeDefinition)
     {
-        typeDefinition = typeByName.GetValueOrDefault(name);
+        // Canonical (short) name first, then the full-name resolution alias (input side only).
+        typeDefinition = typeByName.GetValueOrDefault(name) ?? aliasByName.GetValueOrDefault(name);
         if (typeDefinition != null)
             return true;
         // Handle nullable syntax (e.g., "Int32?" -> Nullable<Int32>)
@@ -206,7 +229,9 @@ internal class TypeRegistry(ITypeRegistry? parent) : ITypeRegistry
             return parentTypeName;
 
         typeName = defaultName ?? FormatType(type);
-        typeByName[typeName] = new(type, typeName, keyFunctionBuilder);
+        var definition = new TypeDefinition(type, typeName, keyFunctionBuilder);
+        typeByName[typeName] = definition;
+        IndexFullNameAlias(type, definition, typeName);
         return nameByType[type] = typeName;
     }
 
@@ -231,13 +256,14 @@ internal class TypeRegistry(ITypeRegistry? parent) : ITypeRegistry
             ret = new TypeDefinition(type, typeName, keyFunctionBuilder);
             typeByName[ret.CollectionName] = (TypeDefinition)ret;
             nameByType[type] = ret.CollectionName;
+            IndexFullNameAlias(type, (TypeDefinition)ret, ret.CollectionName);
         }
         return ret;
     }
 
     public ITypeDefinition? GetTypeDefinition(string typeName)
     {
-        var ret = typeByName.GetValueOrDefault(typeName);
+        var ret = typeByName.GetValueOrDefault(typeName) ?? aliasByName.GetValueOrDefault(typeName);
         if (ret != null)
             return ret;
         return parent?.GetTypeDefinition(typeName);

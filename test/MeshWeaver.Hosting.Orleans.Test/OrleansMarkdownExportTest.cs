@@ -246,48 +246,47 @@ public class OrleansMarkdownExportTest(ITestOutputHelper output) : TestBase(outp
     }
 
     /// <summary>
-    /// Negative counterpart: a sub-hub that does NOT register the export types â€” reproduces the
-    /// prod condition before <c>PortalApplication.DefaultPortalConfig</c> was updated. The
-    /// deserialize path used to throw <see cref="NotSupportedException"/> straight into the
-    /// observable and crash the circuit. After the robustness fix in
-    /// <c>LayoutExtensions.GetStream&lt;T&gt;</c>, the exception is caught and logged, and the
-    /// observable yields <c>default(T)</c> so subscribers keep flowing. This test asserts the
-    /// graceful-degradation contract: the stream completes with <c>null</c> rather than tearing
-    /// down the pipeline.
+    /// A sub-hub that does NOT explicitly register the export types still resolves the polymorphic
+    /// <see cref="ExportDocumentControl"/> — because a hosted hub's <c>ITypeRegistry</c> CHAINS to its
+    /// parent's (<c>new TypeRegistry(parent…)</c>; <c>TypeRegistry.Types</c> concats the parent's), and the
+    /// <c>$type</c> discriminator is now the SHORT type name (<c>TypeRegistry.FormatType</c>, fb2ee677d),
+    /// which resolves on ANY hub up the chain that knows the type. This is the both-ends-via-chain contract:
+    /// the type is registered on the SENDER and reachable through the RECEIVER's registry chain.
+    /// <para>This used to assert graceful degradation to <c>null</c>, back when the server emitted a
+    /// namespace-qualified FULL-name <c>$type</c> while the chain registered the SHORT name — a name
+    /// MISMATCH (not a missing registration) that left the type unresolved. The short-name default removed
+    /// that mismatch, so the control now resolves through the chain as intended. The graceful-degradation
+    /// catch in <c>LayoutExtensions.GetStream&lt;T&gt;</c> (NotSupportedException → logged + <c>null</c>
+    /// yield) remains the defensive path for a type that is genuinely absent from the ENTIRE chain.</para>
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task SubHub_WithoutExportTypesRegistered_DegradesGracefullyToNull()
+    public async Task SubHub_WithoutExplicitRegistration_ResolvesExportDocumentControlViaRegistryChain()
     {
         using var cts = new CancellationTokenSource(60.Seconds());
-        var parent = GetClient("portal-parent-bare");
+        var parent = GetClient("portal-parent-chain");
 
         var nodePath = await CreateMarkdownNodeAsync(
-            parent, "subhub-bare",
-            "# Hello\n\nSub-hub without export types registered.", cts.Token);
+            parent, "subhub-chain",
+            "# Hello\n\nSub-hub resolving the control through its parent registry chain.", cts.Token);
         Output.WriteLine($"Created Markdown node: {nodePath}");
 
-        // Bare sub-hub â€” no AddMarkdownExportTypes. This is what the portal did before the fix.
-        var subHub = parent.GetHostedHub(new Address("portal", "subhub-bare"),
+        // Sub-hub WITHOUT its own AddMarkdownExportTypes — it must resolve the control through the
+        // parent/mesh registry chain alone.
+        var subHub = parent.GetHostedHub(new Address("portal", "subhub-chain"),
             c => c.AddLayoutClient())!;
 
         var stream = subHub.GetWorkspace().GetRemoteStream<JsonElement, LayoutAreaReference>(
             new Address(nodePath), new LayoutAreaReference(ExportDocumentLayoutArea.PdfArea));
         // Server renders the UiControl under the Area pointer (not empty string).
 
-        // Observe the control stream â€” should NOT throw. An entry arrives but deserialization
-        // fails (caught + logged), yielding null.
-        UiControl? control = null;
-        using var subscription = stream.GetControlStream(ExportDocumentLayoutArea.PdfArea)
-            .Subscribe(v => control = v);
+        var control = await stream.GetControlStream(ExportDocumentLayoutArea.PdfArea)
+            .Timeout(30.Seconds())
+            .FirstAsync(x => x != null);
 
-        // Give the server time to render and the failed decode time to settle.
-        await Task.Delay(5.Seconds(), cts.Token);
-
-        control.Should().BeNull(
-            "without the sub-hub's TypeRegistry knowing ExportDocumentControl, the polymorphic " +
-            "UiControl deserialize throws NotSupportedException internally; the catch in " +
-            "LayoutExtensions.GetStream turns the crash into a logged error + null yield " +
-            "instead of tearing down the observable pipeline.");
+        control.Should().BeOfType<ExportDocumentControl>(
+            "the short-name $type resolves through the sub-hub's parent registry chain even though the " +
+            "sub-hub did not register the export types itself — the both-ends-via-chain contract.");
+        ((ExportDocumentControl)control!).SourcePath.Should().Be(nodePath);
     }
 
     [Fact(Timeout = 60000)]

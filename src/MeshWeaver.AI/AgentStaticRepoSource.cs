@@ -38,6 +38,7 @@ public sealed class AgentStaticRepoSource(BuiltInAgentProvider provider) : IStat
     public MeshNode? PartitionRoot => new("Agent")
     {
         Name = "Agents",
+        Icon = "/static/NodeTypeIcons/sparkle.svg",
         NodeType = "Space",
         State = MeshNodeState.Active,
         Content = new MarkdownContent

@@ -24,6 +24,17 @@ public static class VersionSelect
     private static readonly Regex RuntimeIdentifierSuffix =
         new(@"-(linux|win|osx)-(x64|x86|arm|arm64)$", RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
+    // 🔴 A real platform tag is DOTTED SemVer (3.0.0 / 3.0.0-ci.133). The multi-arch build ALSO pushes a
+    // 7-char git-sha tag per version (e.g. 6943991, 4779b4e) and a bare `main` tag — those are NOT deploy
+    // targets. But NuGetVersion.TryParse accepts a bare number, so an ALL-DIGIT sha like "6943991" parses
+    // as the version 6943991.0.0 and sorts ABOVE every real release (3.x). PickTarget would then pick that
+    // sha and pin the self-updater to whatever release it belongs to — the prod symptom where every portal
+    // froze on ci.122 (whose sha, 6943991, is all digits) and reverted any manual roll to a newer ci.N
+    // (ci.133's sha, 4779b4e, has letters so it never even parsed). Require the MAJOR.MINOR.PATCH dotted
+    // shape that a git-sha / `main` can never have.
+    private static readonly Regex PlatformVersionTag =
+        new(@"^\d+\.\d+\.\d+([-+].*)?$", RegexOptions.Compiled);
+
     /// <summary>
     /// The best tag to roll to under <paramref name="policy"/>, or <c>null</c> when nothing qualifies.
     /// <see cref="UpdatePolicyKind.Continuous"/> considers every parseable tag (incl. build-numbered
@@ -38,6 +49,7 @@ public static class VersionSelect
 
         var parsed = tags
             .Where(t => !RuntimeIdentifierSuffix.IsMatch(t))   // exclude per-RID image tags; keep the manifest list
+            .Where(t => PlatformVersionTag.IsMatch(t))         // exclude bare git-sha / `main` tags (see PlatformVersionTag)
             .Select(t => (tag: t, ver: NuGetVersion.TryParse(t, out var v) ? v : null))
             .Where(x => x.ver is not null)
             .Select(x => (x.tag, ver: x.ver!));
