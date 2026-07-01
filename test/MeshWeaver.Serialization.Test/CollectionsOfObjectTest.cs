@@ -40,7 +40,7 @@ public class CollectionsOfObjectTest : TestBase
 
         // assert
         var actual = serialized.Should().NotBeNull().And.BeValidJson().Which;
-        actual.Should().HaveElement("$type").Which.Should().HaveValue(typeof(ContainerRecord).FullName);
+        actual.Should().HaveElement("$type").Which.Should().HaveValue(typeof(ContainerRecord).Name);
         var actualData = actual.Should().HaveElement("data").Which;
         actualData.Should().HaveElement("1").Which.Should().HaveValue("One");
         actualData.Should().HaveElement("3").Which.Should().HaveValue("Three");
