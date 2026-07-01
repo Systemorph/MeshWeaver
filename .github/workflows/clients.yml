@@ -15,7 +15,7 @@ on:
 
 jobs:
   react:
-    name: "@meshweaver/react (typecheck + test)"
+    name: "@meshweaver/react (typecheck + test + build)"
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -27,7 +27,8 @@ jobs:
           node-version: 20
       - run: npm install --no-audit --no-fund
       - run: npm run typecheck
-      - run: npm test
+      - run: npm test # vitest: renderer core, control gallery, ThreadChat (live thread-node stream), Blazor-parity ratchet
+      - run: npm run build # the publishable lib (tsconfig.lib.json) must stay green, not just the test graph
 
   python-sdk:
     name: "meshweaver (Python test)"
@@ -71,7 +72,7 @@ jobs:
           node-version: 20
       - run: npm install --no-audit --no-fund
       - run: npm run typecheck # runs buf generate (from the canonical mesh.proto) then tsc
-      - run: npm test # vitest: envelope round-trip + in-memory Connect/Deliver correlation & demux
+      - run: npm test # vitest: envelope round-trip, in-memory Connect/Deliver correlation & demux, thread ops (startThread/submitMessage wire shapes)
 
   react-native:
     name: "RN connector (typecheck + test)"
@@ -93,15 +94,15 @@ jobs:
       - name: Install + generate grpc-web client
         working-directory: clients/grpc-web
         run: npm install --no-audit --no-fund && npm run gen
-      # Targeted install (RN types only) — the pack typechecks against @meshweaver/react/core via tsconfig path.
-      # expo-av types the recorder (src/speech/expoRecorder.ts); vitest runs the speech-pipeline tests.
-      - run: npm install --no-save --no-audit --no-fund react-native@0.76.5 react@18.3.1 @types/react@18.3.12 typescript@5.6.3 expo-av@15.0.2 vitest@2.1.9
+      # Targeted install: RN types for typecheck; react-test-renderer for the render test
+      # (react-native mocked — vitest.config.ts); expo-av types the speech recorder.
+      - run: npm install --no-save --no-audit --no-fund react-native@0.76.5 react@18.3.1 react-test-renderer@18.3.1 @types/react@18.3.12 @types/react-test-renderer@18.3.0 expo-av@15.0.2 vitest@2.1.9 typescript@5.6.3
       - run: npx tsc --noEmit
-      # The speech pipeline (transcription client + push-to-talk→thread-submit flow) is pure TS — vitest, no emulator.
+      # Headless render of the sample area + the speech pipeline (transcription client, push-to-talk→submit).
       - run: npx vitest run
 
   portal:
-    name: "Portal example (build)"
+    name: "Portal example (typecheck + build)"
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -115,5 +116,11 @@ jobs:
       - name: Install renderer deps
         working-directory: clients/react
         run: npm install --no-audit --no-fund
+      # The live mode source-aliases @meshweaver/client-web (../grpc-web/src) — install its deps and
+      # generate src/gen so the portal's tsc + vite can follow the alias.
+      - name: Install + generate grpc-web client
+        working-directory: clients/grpc-web
+        run: npm install --no-audit --no-fund && npm run gen
       - run: npm install --no-audit --no-fund
+      - run: npx tsc --noEmit # vite build transpiles without type-checking — check types explicitly
       - run: npm run build

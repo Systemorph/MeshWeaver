@@ -120,11 +120,11 @@ public class LayoutSerializationTest(ITestOutputHelper output) : HubTestBase(out
         var typeRegistry = client.ServiceProvider.GetRequiredService<ITypeRegistry>();
 
         // Check if StackControl is registered
-        var stackControlRegistered = typeRegistry.TryGetType("MeshWeaver.Layout.StackControl", out var stackControlInfo);
+        var stackControlRegistered = typeRegistry.TryGetType("StackControl", out var stackControlInfo);
         stackControlRegistered.Should().BeTrue("StackControl should be registered for polymorphism");
 
         // Check if NamedAreaControl is registered  
-        var namedAreaRegistered = typeRegistry.TryGetType("MeshWeaver.Layout.NamedAreaControl", out var namedAreaInfo);
+        var namedAreaRegistered = typeRegistry.TryGetType("NamedAreaControl", out var namedAreaInfo);
         namedAreaRegistered.Should().BeTrue("NamedAreaControl should be registered for polymorphism");
 
         // Try to find all types that inherit from UiControl

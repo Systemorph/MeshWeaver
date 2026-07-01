@@ -149,6 +149,8 @@ public static class DataExtensions
                 typeof(CollectionReference),
                 typeof(CollectionsReference),
                 typeof(JsonPointerReference),
+                typeof(PrefixReference),
+                typeof(MeshWeaver.Data.Completion.AutocompleteReference),
                 typeof(LayoutAreaReference),
                 typeof(AggregateWorkspaceReference),
                 typeof(CombinedStreamReference),
@@ -157,6 +159,10 @@ public static class DataExtensions
                 typeof(PartitionedWorkspaceReference<InstanceCollection>),
                 typeof(PartitionedWorkspaceReference<object>),
                 typeof(JsonPatch),
+                // Serialized inside stream-update payloads on every relaying hub —
+                // unregistered it auto-registers per hub with a warning (344 hits in
+                // one e2e run). Register it once, properly.
+                typeof(EntityUpdate),
                 typeof(DataChangedEvent),
                 typeof(DataChangeRequest),
                 typeof(DataChangeResponse),

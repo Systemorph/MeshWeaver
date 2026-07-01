@@ -13,6 +13,7 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.Authorization;
+using Microsoft.Extensions.Logging;
 using Microsoft.JSInterop;
 
 namespace MeshWeaver.Blazor.Portal.Layout;
@@ -28,6 +29,9 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     /// JS runtime used for side-panel persistence, sizing, and resize dispatch.
     /// </summary>
     [Inject] protected IJSRuntime JSRuntime { get; set; } = null!;
+
+    /// <summary>Logs notable side-panel lifecycle events (e.g. auto-hiding an active chat).</summary>
+    [Inject] protected ILogger<PortalLayoutBase> Logger { get; set; } = null!;
 
     /// <summary>
     /// Manages URL navigation in response to menu clicks and panel actions.
@@ -534,6 +538,13 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
             && SidePanelChatKeying.ShouldHideSidePanelOnThreadNavigation(
                 ctx.Node.NodeType, ctx.Node.Path, SidePanelState.ContentPath, SidePanelState.IsVisible))
         {
+            // Notable: collapsing a VISIBLE side panel because the main view opened a DIFFERENT thread.
+            // If navNode and ContentPath are actually the SAME thread this is the vanish bug — the log
+            // makes it visible instead of silent (SameThreadIdentity above should already prevent it).
+            Logger.LogWarning(
+                "[SidePanel] Auto-hiding side panel on thread nav: navNode='{NavPath}' (type {NavType}) "
+                + "vs contentPath='{ContentPath}'.",
+                ctx.Node.Path, ctx.Node.NodeType, SidePanelState.ContentPath);
             SidePanelState.SetVisible(false);
         }
 
@@ -730,6 +741,24 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
         if (string.IsNullOrEmpty(contentPath))
         {
             sidePanelViewModel = null;
+            return;
+        }
+
+        // 🎯 A thread path IS its own node address — it resolves to itself (Prefix=path,
+        // Remainder=empty). Render it DIRECTLY and skip PathResolver. Round-tripping a
+        // FRESHLY-created thread through the eventually-consistent resolver (IMeshQueryCore
+        // .Query) LAGS: the just-created node isn't indexed yet, so ResolvePath emits
+        // split-onto-parent states that fail the validity filter below, and under load the
+        // first VALID resolution can exceed the 10 s Timeout → onError → SetContentPath(null)
+        // NUKES the live side-panel chat ("disappears after it starts executing"). The thread
+        // address is authoritative and known here — there is nothing to resolve, so build the
+        // SAME LayoutAreaControl a successful resolution would (area null ⇒ the thread's
+        // default chat area), synchronously, with no query and no timeout. CQRS: never
+        // round-trip a single known node through the lagging query index.
+        if (IsThreadPath(contentPath))
+        {
+            sidePanelViewModel = Controls.LayoutArea(
+                (Address)contentPath, new LayoutAreaReference(null) { Id = "" });
             return;
         }
 

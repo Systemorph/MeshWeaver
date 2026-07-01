@@ -64,7 +64,41 @@ public static class SidePanelChatKeying
         // The navigated thread IS the one already shown in the side panel — same conversation, keep it.
         if (string.Equals(navNodePath, sidePanelContentPath, StringComparison.OrdinalIgnoreCase))
             return false;
+        // ...even when the two representations differ only by PREFIX (a "User/"-prefixed nav path vs the
+        // bare-partition ContentPath) or a trailing cell segment: compare the stable thread IDENTITY (the
+        // slug right after "/_Thread/"). Without this, a background nav-context emission to the panel's
+        // OWN thread during execution — NOT the user opening a different thread full-screen — trips the
+        // full-path inequality above and vanishes the active side-panel chat (the round-3 vanish that
+        // survived the earlier @key / keep-last-good fixes).
+        if (SameThreadIdentity(navNodePath, sidePanelContentPath))
+            return false;
         // A genuinely DIFFERENT thread opened full-screen in the main view → enforce "never both".
         return true;
+    }
+
+    /// <summary>
+    /// The thread slug — the segment immediately after <c>/_Thread/</c> — of <paramref name="path"/>,
+    /// or null when the path holds no thread. A prefix/suffix-stable identity for a thread, so two
+    /// representations of the SAME thread (differing only by a partition prefix or a trailing cell
+    /// segment) compare equal.
+    /// </summary>
+    internal static string? ThreadSlug(string? path)
+    {
+        if (string.IsNullOrEmpty(path))
+            return null;
+        const string marker = "/_Thread/";
+        var i = path.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
+        if (i < 0)
+            return null;
+        var rest = path[(i + marker.Length)..];
+        var slash = rest.IndexOf('/');
+        return slash >= 0 ? rest[..slash] : rest;
+    }
+
+    /// <summary>True when both paths name the SAME thread by <see cref="ThreadSlug"/> identity.</summary>
+    private static bool SameThreadIdentity(string? a, string? b)
+    {
+        var slug = ThreadSlug(a);
+        return slug is not null && string.Equals(slug, ThreadSlug(b), StringComparison.OrdinalIgnoreCase);
     }
 }

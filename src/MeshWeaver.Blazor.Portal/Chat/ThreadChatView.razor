@@ -399,6 +399,25 @@ else
                                     }
                                 </text>;
 
+                            @* Wrap the whole round's tool calls in a collapsible group so a long
+                               tool-call history collapses to a single summary line once complete and
+                               stops pushing the assistant's reply off-screen. Open while any call runs,
+                               or when the cell has no assistant text (tool-only — the user needs to see
+                               what was done); collapsed once complete with a reply present. *@
+                            var anyPending = state.ToolCalls.Any(c => c.Result is null);
+                            var failCount = state.ToolCalls.Count(c => !c.IsSuccess && c.Result is not null);
+                            var anyFailed = failCount > 0;
+                            var groupHasText = !string.IsNullOrWhiteSpace(state.Text);
+                            var groupOpen = anyPending || !groupHasText;
+                            var groupIcon = anyPending ? "↗" : (anyFailed ? "✗" : "✓");
+                            var groupLabel = anyFailed
+                                ? $"{state.ToolCalls.Count} tool calls ({failCount} failed)"
+                                : $"{state.ToolCalls.Count} tool calls";
+                            <details class="thread-msg-tool-group" open="@groupOpen">
+                            <summary class="thread-msg-tool-group-summary">
+                                <span class="thread-msg-tool-done @(anyFailed ? "thread-msg-tool-error" : "")">@groupIcon</span>
+                                @groupLabel
+                            </summary>
                             <div class="thread-msg-tool-calls">
                                 @foreach (var call in toolView.Visible)
                                 {
@@ -432,6 +451,7 @@ else
                                     }
                                 }
                             </div>
+                            </details>
                         }
                     }
                     </div>
@@ -747,6 +767,31 @@ else
                    rather than hand-rolled flex divs + a raw <input> — one vertical stack, framework-themed. *@
                 <FluentStack Orientation="Microsoft.FluentUI.AspNetCore.Components.Orientation.Vertical" VerticalGap="10"
                              Style="padding:12px 14px; flex:1 1 auto; min-height:0; overflow-y:auto;">
+                    @if (_connectPasteToken && _connectStatus is not ConnectStatus.Connected and not ConnectStatus.Error)
+                    {
+                        @* Claude Code: `claude setup-token` MASKS its token in stdout (CLI #19274), so the
+                           server can't drive/scrape the OAuth. The user runs it locally and pastes the
+                           result here → SubmitConnectToken stores it. Readable instructions: neutral text +
+                           a copy box for the command (no low-contrast inline code). *@
+                        <div style="line-height:1.55;">
+                            <div><strong>1.</strong>&nbsp; In a terminal, run:</div>
+                            <div style="margin:5px 0; padding:7px 10px; border-radius:5px;
+                                        background:var(--neutral-fill-secondary-rest,#f1f1f3);
+                                        color:var(--neutral-foreground-rest);
+                                        font-family:var(--monospace-font-family,ui-monospace,monospace); user-select:all;">claude setup-token</div>
+                            <div><strong>2.</strong>&nbsp; Approve in the browser, then press <strong>c</strong> to copy the token.</div>
+                            <div style="margin-top:6px;"><strong>3.</strong>&nbsp; Paste it below (starts with
+                                <span style="font-family:var(--monospace-font-family,ui-monospace,monospace);">sk-ant-oat01-</span>):</div>
+                        </div>
+                        <FluentTextField @bind-Value="_connectCode" Immediate="true" Placeholder="sk-ant-oat01-…"
+                                         TextFieldType="Microsoft.FluentUI.AspNetCore.Components.TextFieldType.Password"
+                                         @onkeydown="OnConnectInputKeyDown" Style="width:100%;" />
+                        <FluentButton Appearance="FluentAppearance.Accent" Style="width:100%;"
+                                      Disabled="@(_connectBusy || string.IsNullOrWhiteSpace(_connectCode))"
+                                      OnClick="SubmitConnectToken">@(_connectBusy ? "Saving…" : "Connect")</FluentButton>
+                    }
+                    else
+                    {
                     @switch (_connectStatus)
                     {
                         case ConnectStatus.Connected:
@@ -784,6 +829,7 @@ else
                         default:
                             <div style="color:var(--neutral-foreground-hint);">Starting login…</div>
                             break;
+                    }
                     }
                 </FluentStack>
             </div>

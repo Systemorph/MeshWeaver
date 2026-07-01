@@ -163,6 +163,27 @@ public class CircuitAccessHandler : CircuitHandler
         accessService?.ClearPersistentCircuitContext();
         _circuitContextAccessor.SetUserContext(null);
         _userContext = null;
+
+        // 🚨 Dispose the per-circuit portal hub (portal/<circuitId>) — this is the ONE
+        // exactly-once teardown point for it. Circuit close is terminal for the id (Blazor
+        // never reuses a closed circuit; reconnects keep the circuit alive and don't land
+        // here), and PortalApplication.Dispose deliberately does NOT dispose the hub (many
+        // wrapper instances share it within a circuit). Without this, every closed circuit
+        // (tab close, refresh, transport death, each E2E browser context) leaves a ZOMBIE
+        // portal hub whose hosted sync-stream children keep heartbeating and fanning out
+        // DataChangedEvents forever — the accumulation that saturated the routing thread,
+        // starved live circuits' SignalR keepalive (the chat-vanish), and pegged the e2e
+        // portal at ~1.2 cores with 7k leaked sync hubs (2026-07-01). Disposing the portal
+        // hub disposes its sync children; each child's teardown posts UnsubscribeRequest to
+        // its owner node, so the owner-side mirrors close too.
+        var portalHub = _hub.GetHostedHub(
+            AddressExtensions.CreatePortalAddress(circuit.Id), HostedHubCreation.Never);
+        if (portalHub is not null)
+        {
+            _circuitLogger.LogInformation(
+                "Disposing per-circuit portal hub {Address} on circuit close", portalHub.Address);
+            portalHub.Dispose();
+        }
         return Task.CompletedTask;
     }
 

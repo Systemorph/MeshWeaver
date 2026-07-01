@@ -1,0 +1,27 @@
+@using MeshWeaver.Data
+@using MeshWeaver.Layout
+@using MeshWeaver.Blazor.Components
+@using Microsoft.FluentUI.AspNetCore.Components
+@implements IDialogContentComponent<string>
+
+@* #131 — modal preview of a referenced node, layered OVER the thread. Renders the node's own
+   default layout area (the same area its full page shows) so the user sees the full context
+   without leaving the conversation. Dismissing the dialog returns to the thread untouched. *@
+<div class="node-preview-dialog-body">
+    @if (viewModel is not null)
+    {
+        <LayoutAreaView ViewModel="@viewModel" Top="true" />
+    }
+</div>
+
+@code {
+    [Parameter] public string Content { get; set; } = null!;
+    [CascadingParameter] public FluentDialog Dialog { get; set; } = null!;
+
+    private LayoutAreaControl? viewModel;
+
+    // The node PATH is its mesh address; a null area reference selects the node's default view —
+    // exactly what ApplicationPage renders for "/{path}" with no area segment.
+    protected override void OnParametersSet()
+        => viewModel = new LayoutAreaControl(Content, new LayoutAreaReference((string?)null));
+}

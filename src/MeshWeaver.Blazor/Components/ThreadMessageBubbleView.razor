@@ -125,6 +125,24 @@
                 }
             </text>;
 
+        @* Collapsible group wrapping the whole round's tool calls — folds the block to a single
+           summary line once complete so it stops pushing the reply off-screen (see #129). Open while
+           any call runs, or when there's no assistant text (tool-only cell); collapsed once complete
+           with a reply present. *@
+        var anyPending = toolCalls!.Any(c => c.Result is null);
+        var failCount = toolCalls!.Count(c => !c.IsSuccess && c.Result is not null);
+        var anyFailed = failCount > 0;
+        var groupHasText = !string.IsNullOrWhiteSpace(messageText);
+        var groupOpen = anyPending || !groupHasText;
+        var groupIcon = anyPending ? "↗" : (anyFailed ? "✗" : "✓");
+        var groupLabel = anyFailed
+            ? $"{toolCalls!.Count} tool calls ({failCount} failed)"
+            : $"{toolCalls!.Count} tool calls";
+        <details class="thread-msg-tool-group" open="@groupOpen">
+        <summary class="thread-msg-tool-group-summary">
+            <span class="thread-msg-tool-done @(anyFailed ? "thread-msg-tool-error" : "")">@groupIcon</span>
+            @groupLabel
+        </summary>
         <div class="thread-msg-tool-calls">
             @foreach (var call in toolView.Visible)
             {
@@ -158,6 +176,7 @@
                 }
             }
         </div>
+        </details>
     }
 </div>
 
@@ -347,6 +366,23 @@
     fluent-stack-item:has(.thread-msg-is-executing) ~ fluent-stack-item .thread-msg-actions {
         display: none;
     }
+
+    /* Collapsible group wrapping a whole round's tool calls — one summary line that
+       folds the entire block away once the round is complete (see #129). */
+    .thread-msg-tool-group > summary.thread-msg-tool-group-summary {
+        cursor: pointer;
+        list-style: none;
+        display: flex;
+        align-items: center;
+        gap: 0.35em;
+        font-size: 0.82em;
+        opacity: 0.75;
+        padding: 2px 0;
+        user-select: none;
+    }
+    .thread-msg-tool-group > summary.thread-msg-tool-group-summary::-webkit-details-marker { display: none; }
+    .thread-msg-tool-group > summary.thread-msg-tool-group-summary::marker { content: ''; }
+    .thread-msg-tool-group[open] > summary.thread-msg-tool-group-summary { opacity: 1; }
 
     /* Tool calls — inline entries */
     .thread-msg-tool-calls {

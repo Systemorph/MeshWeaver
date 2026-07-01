@@ -26,6 +26,16 @@ npm run ios                          # expo start --ios  (press i)
 In a monorepo, point Metro at `../react` (Metro `watchFolders` + a `@meshweaver/react` alias), or install
 the published package. `npm run typecheck` checks the pack against the core via a tsconfig path.
 
+## Tests
+
+`npm test` (vitest) renders the sample area through the leaf pack + the shared renderer core **headlessly**
+— react-native is swapped for a lightweight host-component mock (`test/react-native.mock.tsx`), so
+`react-test-renderer` produces a tree we assert on with no native runtime. It proves the pack maps a
+`UiControl` tree to the right native components **and resolves `/data` bindings** — e.g. the `TextField`
+becomes a `<TextInput>` carrying `"Ada Lovelace"`, the `CheckBox` a `<Switch value={true}>`, the `DataGrid`
+its bound rows — the runtime proof that `npm run typecheck` alone can't give. (An on-device render still
+needs `npm run ios`; this is the deterministic, CI-runnable level.)
+
 ## Leaf pack coverage
 
 Stacks/grids/cards/nav/toolbar (skins → `View`), `Label`/`Markdown`/`Html`/`Badge` (`Text`), `Button`

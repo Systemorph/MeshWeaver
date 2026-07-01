@@ -88,8 +88,9 @@ export function fakeMeshTransport(opts: FakeMeshOptions = {}) {
               break;
             case "SubscribeRequest":
               if (reference?.path) {
-                // A node watch — the change carries the node fields meshNodeFromChange reads.
-                push(out, d, { $type: "DataChangedEvent", streamId, path: reference.path, name: "Node", content: opts.nodeContent ?? { done: false } });
+                // A node watch — wire-faithful DataChangedEvent: a Full change carrying the whole
+                // node JSON as raw inline JSON (RawJson serializes verbatim, not stringified).
+                push(out, d, { $type: "DataChangedEvent", streamId, changeType: "Full", change: { path: reference.path, name: "Node", content: opts.nodeContent ?? { done: false } } });
               } else {
                 // A layout-area watch — a Full snapshot in the `change` string.
                 push(out, d, { $type: "DataChangedEvent", streamId, changeType: "Full", change: JSON.stringify({ areas: { main: { $type: "LayoutStackControl" } } }) });

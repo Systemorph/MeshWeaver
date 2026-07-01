@@ -95,7 +95,9 @@ describe("Mesh thread ops (gRPC-web, in-memory)", () => {
     expect(msgId).toMatch(/^[a-z0-9]{8}$/);
     const patch = await until(() => sent.find((d) => d.messageType === "PatchDataRequest"));
     expect(patch.target).toBe("rbuergi/_Thread/t-1");
-    const change = patch.message.change as Record<string, unknown>;
+    // PatchDataRequest(Reference, Patch): the merge document rides in `patch`, the node in `reference`.
+    expect(patch.message.reference).toEqual({ $type: "MeshNodeReference", path: "rbuergi/_Thread/t-1" });
+    const change = patch.message.patch as Record<string, unknown>;
     const content = change.content as Record<string, unknown>;
     expect(content.userMessageIds).toEqual(["aaaa1111", msgId]); // full array — merge-patch replaces arrays
     const pending = content.pendingUserMessages as Record<string, Record<string, unknown>>;

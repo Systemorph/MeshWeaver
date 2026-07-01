@@ -6,6 +6,7 @@
 // underneath is already correct + tested.
 
 import { connect as connectTransport, MeshWebConnection, type ConnectOptions } from "./connection";
+import { applyJsonPatch, type PatchOperation } from "./jsonPatch";
 import { meshNodeFromChange, type MeshNode } from "./types";
 import { newId } from "./envelope";
 import {
@@ -63,20 +64,49 @@ export class Mesh {
     throw new Error("stream closed before first state");
   }
 
-  /** Subscribe to a node's live state — yields on every change (Full, then merge-patches). */
+  /**
+   * Subscribe to a node's live state — yields on every change. Wire (pinned against the server
+   * source): SubscribeRequest's Reference is the POLYMORPHIC WorkspaceReference, for a node stream
+   * a MeshNodeReference(Path) — the `$type` discriminator is required. Changes arrive as
+   * DataChangedEvent: ChangeType "Full" carries the whole node JSON; "Patch" an RFC 6902 patch
+   * array at the node root (JsonSynchronizationStream.CreateSingleObjectPatch) — folded here.
+   */
   async *watch(path: string): AsyncIterableIterator<MeshNode> {
     const streamId = newId();
-    // WIRE: confirm the reference shape for a node path.
-    for await (const delivery of this.conn.watch(path, streamId, "SubscribeRequest", { reference: { path } })) {
-      yield meshNodeFromChange(delivery.message);
+    let node: Record<string, unknown> | null = null;
+    for await (const delivery of this.conn.watch(path, streamId, "SubscribeRequest", {
+      reference: { $type: "MeshNodeReference", path },
+    })) {
+      const m = delivery.message;
+      const rawChange = m["change"] ?? m["Change"];
+      if (rawChange === undefined) {
+        // Flat node fields on the message itself (in-memory fakes / legacy shapes).
+        yield meshNodeFromChange(m);
+        continue;
+      }
+      const change = typeof rawChange === "string" ? JSON.parse(rawChange) : rawChange;
+      const changeType = String(m["changeType"] ?? m["ChangeType"] ?? "Full");
+      if (change == null || changeType === "NoUpdate") continue;
+      node =
+        changeType === "Patch" || changeType === "1"
+          ? (applyJsonPatch(node ?? {}, change as PatchOperation[]) as Record<string, unknown>)
+          : (change as Record<string, unknown>);
+      yield meshNodeFromChange(node);
     }
   }
 
   // ---- writes (carry the caller's identity, server-stamped) -----------------
 
-  /** Field-level partial update (content deep-merges, RFC 7396) — the canonical mutation. */
+  /**
+   * Field-level partial update (content deep-merges, RFC 7396) — the canonical mutation. Wire:
+   * PatchDataRequest(WorkspaceReference Reference, RawJson Patch), targeted at the owning per-node
+   * hub (the path address) — the same JSON-merge request `GetMeshNodeStream(path).Update(...)` posts.
+   */
   patch(path: string, fields: Record<string, unknown>): void {
-    this.conn.post(path, "PatchDataRequest", { path, change: fields }); // WIRE: partial-update request type
+    this.conn.post(path, "PatchDataRequest", {
+      reference: { $type: "MeshNodeReference", path },
+      patch: fields,
+    });
   }
 
   /** Create a node (node-lifecycle on the mesh hub — routes, doesn't mutate). */
