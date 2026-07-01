@@ -58,7 +58,11 @@ export class GrpcAreaSource implements AreaSource {
   /** Open the area subscription and fold every change into the tree until the stream ends. */
   async start(): Promise<void> {
     for await (const delivery of this.connection.watch(this.address, this.streamId, "SubscribeRequest", {
-      reference: this.reference,
+      // The sync-stream Reference is a polymorphic WorkspaceReference — it MUST carry its $type
+      // discriminator or the mesh can't deserialize it. Verified against Memex.LocalMesh: a $type-less
+      // reference elicits no subscription; with "LayoutAreaReference" the area streams back. Field casing
+      // is server-insensitive, so the lowercase { area, id, layout } passes through.
+      reference: { $type: "LayoutAreaReference", ...this.reference },
     })) {
       this.applyChange(delivery.message);
     }
@@ -66,11 +70,17 @@ export class GrpcAreaSource implements AreaSource {
 
   private applyChange(message: Record<string, unknown>): void {
     const raw = (message.change ?? message.Change) as Json;
-    const change = typeof raw === "string" ? JSON.parse(raw) : raw;
-    if (change == null) return;
-    const changeType = String(message.changeType ?? message.ChangeType ?? "Patch");
-    // Full (or the enum's 0) replaces the snapshot; everything else is an RFC 7396 merge-patch.
-    this.state = changeType === "Full" || changeType === "0" ? change : mergePatch(this.state, change);
+    const wrapper = typeof raw === "string" ? JSON.parse(raw) : raw;
+    if (wrapper == null) return;
+    // Verified against Memex.LocalMesh: DataChangedEvent.Change wraps the EntityStore JSON as
+    // { Content: "<entitystore json>" }. The EntityStore IS { areas, data } — exactly the tree the
+    // renderer consumes (its $type is ignored). ChangeType 0 = Full (replace); anything else = RFC 7396 patch.
+    const w = wrapper as Record<string, unknown>;
+    const content = w.Content ?? w.content;
+    const store = (typeof content === "string" ? JSON.parse(content) : content ?? wrapper) as Json;
+    if (store == null) return;
+    const changeType = String(message.changeType ?? message.ChangeType ?? "1");
+    this.state = changeType === "Full" || changeType === "0" ? (store as AreaTree) : mergePatch(this.state, store);
     this.notify();
   }
 
