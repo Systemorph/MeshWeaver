@@ -2,9 +2,12 @@
 // If you don't want that behavior, you can simply not load this module.
 
 window.customElements.define('chat-messages', class ChatMessages extends HTMLElement {
-    static _isFirstAutoScroll = true;
-
     connectedCallback() {
+        // Per-INSTANCE (not static): a static field is shared across every <chat-messages> on the
+        // page, so with two threads open the first scroll in either steals the other's initial
+        // scroll-to-bottom. Each element tracks its own first-scroll flag.
+        this._isFirstAutoScroll = true;
+
         this._observer = new MutationObserver(mutations => this._scheduleAutoScroll(mutations));
         this._observer.observe(this, {
             childList: true,
@@ -17,7 +20,6 @@ window.customElements.define('chat-messages', class ChatMessages extends HTMLEle
         // Track the in-progress state to detect when chat ends
         const inProgressAttr = this.getAttribute('in-progress');
         this._previousInProgressState = inProgressAttr === 'true' || (this.hasAttribute('in-progress') && inProgressAttr !== 'false');
-        console.log('Initial in-progress state:', this._previousInProgressState, 'attr:', inProgressAttr);
     }
 
     disconnectedCallback() {
@@ -34,18 +36,14 @@ window.customElements.define('chat-messages', class ChatMessages extends HTMLEle
             const inProgressAttr = this.getAttribute('in-progress');
             const isInProgress = inProgressAttr === 'true' || (this.hasAttribute('in-progress') && inProgressAttr !== 'false');
 
-            console.log('Auto-scroll check - in-progress attr:', inProgressAttr, 'isInProgress:', isInProgress, 'previous:', this._previousInProgressState);
-
             // Check if chat just ended (in-progress changed from true to false)
             const chatJustEnded = this._previousInProgressState && !isInProgress;
             if (chatJustEnded) {
-                console.log('Chat just ended! Scrolling to bottom');
                 this._previousInProgressState = isInProgress;
                 // Always scroll to bottom when chat ends
                 const elem = this.lastElementChild;
                 if (elem) {
                     elem.scrollIntoView({ behavior: 'smooth' });
-                    console.log('Scrolled to bottom after chat completion');
                 }
                 return;
             }
@@ -55,14 +53,12 @@ window.customElements.define('chat-messages', class ChatMessages extends HTMLEle
                 if (m.type === 'attributes' && m.attributeName === 'in-progress') {
                     const oldValue = m.oldValue;
                     const newValue = this.getAttribute('in-progress');
-                    console.log('in-progress attribute changed from', oldValue, 'to', newValue);
 
                     // Chat ended if it went from having the attribute to not having it, or from 'true' to 'false'
                     const wasInProgress = oldValue === 'true' || (oldValue !== null && oldValue !== 'false');
                     const nowInProgress = newValue === 'true' || (newValue !== null && newValue !== 'false');
 
                     if (wasInProgress && !nowInProgress) {
-                        console.log('Detected chat completion via attribute change');
                         return true;
                     }
                 }
@@ -70,7 +66,6 @@ window.customElements.define('chat-messages', class ChatMessages extends HTMLEle
             });
 
             if (hasInProgressChange) {
-                console.log('Chat completed - scrolling to bottom');
                 const elem = this.lastElementChild;
                 if (elem) {
                     elem.scrollIntoView({ behavior: 'smooth' });
@@ -104,17 +99,19 @@ window.customElements.define('chat-messages', class ChatMessages extends HTMLEle
             });
 
             const elem = this.lastElementChild;
-            if (ChatMessages._isFirstAutoScroll || addedUserMessage || (hasTextUpdates && this._elemIsNearScrollBoundary(elem, 300))) {
-                elem.scrollIntoView({ behavior: ChatMessages._isFirstAutoScroll ? 'instant' : 'smooth' });
-                ChatMessages._isFirstAutoScroll = false;
+            if (this._isFirstAutoScroll || addedUserMessage || (hasTextUpdates && this._isNearScrollBoundary(300))) {
+                elem.scrollIntoView({ behavior: this._isFirstAutoScroll ? 'instant' : 'smooth' });
+                this._isFirstAutoScroll = false;
             }
         });
     }
 
-    _elemIsNearScrollBoundary(elem, threshold) {
-        const maxScrollPos = document.body.scrollHeight - window.innerHeight;
-        const remainingScrollDistance = maxScrollPos - window.scrollY;
-        return remainingScrollDistance < elem.offsetHeight + threshold;
+    _isNearScrollBoundary(threshold) {
+        // Measure against THIS element's own scroll box (the chat container), not the page/body —
+        // window.scrollY / document.body.scrollHeight give the wrong axis when the container, not
+        // <body>, is the scroller.
+        const remainingScrollDistance = this.scrollHeight - this.scrollTop - this.clientHeight;
+        return remainingScrollDistance < threshold;
     }
 });
 

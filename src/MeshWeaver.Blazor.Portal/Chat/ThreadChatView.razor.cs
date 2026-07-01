@@ -16,6 +16,7 @@ using MeshWeaver.Messaging;
 using MeshWeaver.Reactive;
 using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.Configuration;
+using Microsoft.FluentUI.AspNetCore.Components;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -61,6 +62,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
 {
     [Inject] private INavigationService NavigationService { get; set; } = null!;
     [Inject] private SidePanelStateService SidePanelState { get; set; } = null!;
+    [Inject] private IDialogService DialogService { get; set; } = null!;
     [Inject] private IMeshService MeshQuery { get; set; } = null!;
     [Inject] private IChatCompletionOrchestrator CompletionOrchestrator { get; set; } = null!;
     [Inject] private IConfiguration Configuration { get; set; } = null!;
@@ -204,13 +206,10 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                     submissionHandler.OnResponseAppeared();
                     isCancelling = false;
                 }
-                // Force re-render and auto-scroll to bottom
-                InvokeAsync(async () =>
-                {
-                    StateHasChanged();
-                    await Task.Yield(); // Let render complete
-                    await ScrollToBottomAsync();
-                });
+                // Re-render. Auto-scroll is handled entirely by the JS MutationObserver attached in
+                // OnAfterRenderAsync (#128) — it fires post-paint on every DOM mutation, including
+                // streamed text, so no Task.Yield timing guess or explicit scroll call is needed here.
+                InvokeAsync(StateHasChanged);
             }
         }
     }
@@ -228,6 +227,9 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     // Input state
     private MonacoEditorView? monacoEditor;
     private ElementReference messagesContainer;
+    // #128 auto-scroll: the JS module + the per-container handle it returns (disposed on teardown).
+    private IJSObjectReference? _scrollModule;
+    private IJSObjectReference? _scrollHandle;
     private string? MessageText;
     private readonly bool isCreatingThread;
     private bool isCancelling;
@@ -1527,6 +1529,25 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         await base.OnAfterRenderAsync(firstRender);
+
+        // #128 auto-scroll: attach the MutationObserver-based stick-to-bottom module to the message
+        // container once it exists. HideEmptyState omits the container (compact/dashboard mode), so
+        // guard on the module not yet being attached rather than firstRender alone — the container may
+        // first appear on a later render when a thread loads.
+        if (_scrollHandle is null && !_isDisposed && !ViewModel.HideEmptyState)
+        {
+            try
+            {
+                _scrollModule ??= await JSRuntime.InvokeAsync<IJSObjectReference>(
+                    "import", "./_content/MeshWeaver.Blazor.Portal/Chat/ThreadChatView.razor.js");
+                _scrollHandle = await _scrollModule.InvokeAsync<IJSObjectReference>("attach", messagesContainer);
+            }
+            catch (Exception ex) when (!_isDisposed)
+            {
+                Logger.LogDebug(ex, "[ThreadChat:{InstanceId}] Failed to attach auto-scroll module", _instanceId);
+            }
+        }
+
         if (_focusPickerOnRender && pendingPicker is not null)
         {
             _focusPickerOnRender = false;
@@ -1838,19 +1859,6 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         }
     }
 
-    private async Task ScrollToBottomAsync()
-    {
-        try
-        {
-            await JSRuntime.InvokeVoidAsync("eval",
-                "document.querySelector('.thread-chat-messages')?.scrollTo({top: 999999, behavior: 'smooth'})");
-        }
-        catch (Exception) when (!_isDisposed)
-        {
-            // Ignore JS interop failures
-        }
-    }
-
     private void CancelSubmission()
     {
         if (submissionHandler.IsInputEnabled || isCancelling)
@@ -2097,23 +2105,40 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         StateHasChanged();
     }
 
-    private void OnChipClicked(string path)
-    {
-        // Navigate to the referenced node
-        NavigationManager.NavigateTo($"/{path}");
-    }
+    // Both chip kinds — plain @-reference chips and the context chip — open the referenced node in a
+    // modal preview LAYERED OVER the thread (issue #131), never navigating the main view away or
+    // replacing the side-panel thread. The old behaviour (NavigateTo for @-chips, OpenWithContent for
+    // context chips) left the conversation with no way back.
+    private Task OnChipClicked(string path) => OpenNodePreviewAsync(path);
+
+    private Task OnContextChipClicked(string? path) => OpenNodePreviewAsync(path);
 
     /// <summary>
-    /// Click on a context chip (the hero header's chip + the composer's context chip) — peeks the
-    /// thread's starting-point ("main") node in the SIDE PANEL so the user can see the entire context
-    /// object WITHOUT leaving the conversation. Distinct from <see cref="OnChipClicked"/> (used by plain
-    /// @-reference chips), which navigates the main view.
+    /// Opens <paramref name="path"/> in a modal dialog on top of the thread so the user can inspect the
+    /// full node — its own default layout area, exactly as its page renders it — without leaving the
+    /// conversation. The thread stays mounted underneath; dismissing the dialog returns to it untouched.
     /// </summary>
-    private void OnContextChipClicked(string? path)
+    private async Task OpenNodePreviewAsync(string? path)
     {
         if (string.IsNullOrEmpty(path)) return;
-        SidePanelState.SetTitle(LastSegment(path));
-        SidePanelState.OpenWithContent(path);
+        var parameters = new DialogParameters<string>
+        {
+            Title = LastSegment(path),
+            PrimaryAction = string.Empty,   // no primary/confirm button — this is a read-only preview
+            SecondaryAction = "Close",
+            Width = "min(1100px, 90vw)",
+            TrapFocus = true,
+            Modal = true,
+            PreventScroll = true,
+        };
+        try
+        {
+            await DialogService.ShowDialogAsync<NodePreviewDialog, string>(path, parameters);
+        }
+        catch (Exception ex) when (!_isDisposed)
+        {
+            Logger.LogDebug(ex, "[ThreadChat:{InstanceId}] Failed to open node preview for {Path}", _instanceId, path);
+        }
     }
 
     // ─── Hero-header: inline title / description editing + Mark Done ───
@@ -2541,16 +2566,30 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         if (string.IsNullOrWhiteSpace(query) || !query.StartsWith("@"))
             return Observable.Return<IReadOnlyList<CompletionItem>>(Array.Empty<CompletionItem>());
 
-        var currentAddress = NavigationService.CurrentNamespace ?? initialContext ?? "";
+        // 🎯 Autocomplete context = the SPACE root, never a satellite. When viewing a thread at
+        // {space}/_Thread/abc, NavigationService.CurrentNamespace resolves to that FULL thread path;
+        // passed verbatim it points the orchestrator's Source A/B at the thread hub → a 2s per-source
+        // timeout and no space-level suggestions. NormalizeContextPath strips the satellite suffix
+        // (_Thread/_Activity/_Access/…) so the query targets the owning space.
+        var currentAddress = NormalizeContextPath(NavigationService.CurrentNamespace ?? initialContext ?? "");
 
         return Observable.Defer(() =>
         {
             SetCompletionsInflight(true);
+            var lastSnapshot = (IReadOnlyList<CompletionItem>)Array.Empty<CompletionItem>();
             return RunUnderCircuitUser(CompletionOrchestrator.GetCompletions(query, currentAddress)
                 .SelectMany(batch => batch.Items
                     .Select(item => AutocompleteToCompletion(item, batch.Category, batch.CategoryPriority)))
                 .ScanTopN(CompletionTopN, CompletionBySortKey)
                 .DistinctUntilChanged(SnapshotKey)
+                .Do(snapshot => lastSnapshot = snapshot)
+                // When the search finishes with nothing, surface a single non-interactive "No results"
+                // row rather than an empty list (Monaco hides an empty suggest widget). This confirms to
+                // the user that the @ trigger DID fire and the search ran — distinguishing it from a
+                // suppressed trigger. Emitted only at completion, so real results never flash a placeholder.
+                .Concat(Observable.Defer(() => lastSnapshot.Count == 0
+                    ? Observable.Return(NoResultsPlaceholder(query))
+                    : Observable.Empty<IReadOnlyList<CompletionItem>>()))
                 .Catch<IReadOnlyList<CompletionItem>, Exception>(ex =>
                 {
                     Logger.LogError(ex, "Error streaming completions for query: {Query}", query);
@@ -2559,6 +2598,27 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                 .Finally(() => SetCompletionsInflight(false)));
         });
     }
+
+    /// <summary>
+    /// A single non-interactive placeholder row shown when an @-query returns no matches.
+    /// <c>filterText</c> resolves to the query (MonacoEditorView.razor.js sets filterText ← insertText),
+    /// so Monaco does not fuzzy-filter it away; <c>InsertText</c> = the query makes accidental acceptance
+    /// a no-op (the typed text is left untouched), and the empty <c>Path</c> makes
+    /// <see cref="OnCompletionItemAccepted"/> return early without adding a chip.
+    /// </summary>
+    private static IReadOnlyList<CompletionItem> NoResultsPlaceholder(string query) =>
+        new[]
+        {
+            new CompletionItem
+            {
+                Label = $"No results for '{query}'",
+                InsertText = query,
+                Path = string.Empty,
+                Kind = CompletionItemKind.Text,
+                Category = "No results",
+                SortKey = "9999_noresults",
+            }
+        };
 
     /// <summary>
     /// Slash-skill completions: lists <c>nodeType:Skill</c> nodes (built-ins imported to PG plus any
@@ -3224,7 +3284,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     /// per-message / missing-probe / delegation streams), clears the tracking dictionaries, and unhooks
     /// the side-panel action handler before delegating to the base implementation.
     /// </summary>
-    public override ValueTask DisposeAsync()
+    public override async ValueTask DisposeAsync()
     {
         if (!_isDisposed)
         {
@@ -3252,8 +3312,24 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             delegationSubs.Clear();
             delegationHeaders.Clear();
             SidePanelState.OnActionRequested -= OnSidePanelAction;
+
+            // #128: tear down the JS auto-scroll observer, then release the interop references.
+            // On a full circuit teardown the JS side is already gone (JSDisconnectedException) —
+            // that is expected and needs no cleanup.
+            try
+            {
+                if (_scrollHandle is not null)
+                {
+                    await _scrollHandle.InvokeVoidAsync("dispose");
+                    await _scrollHandle.DisposeAsync();
+                }
+                if (_scrollModule is not null)
+                    await _scrollModule.DisposeAsync();
+            }
+            catch (JSDisconnectedException) { /* circuit already gone — nothing to tear down */ }
+            catch (Exception) { /* best-effort cleanup on teardown */ }
         }
 
-        return base.DisposeAsync();
+        await base.DisposeAsync();
     }
 }
