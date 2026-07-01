@@ -79,6 +79,22 @@ public class GitHistoryServiceTest(ITestOutputHelper output) : GitHubSyncTestBas
         Assert.Equal("", await WorkingTrees.ShowFile(UserId, "demo", head, "does/not/exist.txt").Timeout(30.Seconds()).ToTask());
         // docs/new.txt did not exist at the parent → empty (the "added" side of a diff).
         Assert.Equal("", await WorkingTrees.ShowFile(UserId, "demo", $"{head}^", "docs/new.txt").Timeout(30.Seconds()).ToTask());
+
+        // Hardening: a GENUINE git failure must PROPAGATE — never be masked as "". Running against a
+        // directory that exists but is NOT a checkout yields "not a git repository", which is a real
+        // fault (distinct from the "path absent at this revision" case that legitimately returns "").
+        Directory.CreateDirectory(WorkingTrees.PathFor(UserId, "notarepo"));
+        await Assert.ThrowsAsync<GitWorkingTreeException>(() => WorkingTrees
+            .ShowFile(UserId, "notarepo", "HEAD", "README.md").FirstAsync().ToTask());
+
+        // Argument-injection guards: a rev/hash/path starting with '-' (or a blank hash) is rejected
+        // before it reaches git, so it can't be parsed as a flag.
+        await Assert.ThrowsAsync<GitWorkingTreeException>(() => WorkingTrees
+            .ShowFile(UserId, "demo", "--upload-pack=x", "README.md").FirstAsync().ToTask());
+        await Assert.ThrowsAsync<GitWorkingTreeException>(() => WorkingTrees
+            .CommitChanges(UserId, "demo", "--output=/tmp/x").FirstAsync().ToTask());
+        await Assert.ThrowsAsync<GitWorkingTreeException>(() => WorkingTrees
+            .CommitChanges(UserId, "demo", "   ").FirstAsync().ToTask());
     }
 
     [Fact(Timeout = 60000)]

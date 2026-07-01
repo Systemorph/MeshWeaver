@@ -145,6 +145,16 @@ hub.WithTypes(typeof(Story), typeof(Task), typeof(Comment))
 
 A missing registration does not throw on write — the discriminator is simply absent, and the object deserializes as `JsonElement` or `object` instead of the expected CLR type. Register early; diagnose by inspecting stored JSON for a missing `$type`.
 
+### The `$type` discriminator is the SHORT name — register the type on BOTH ends
+
+The `$type` discriminator defaults to the **short** type name (`StackControl`, `LayoutStackSkin`), **not** the namespace-qualified full name (`MeshWeaver.Layout.StackControl`). A short name is **only** resolvable through the type registry — there is no `Type.GetType("StackControl")` reflection fallback the way there is for a full name. Two consequences, both non-negotiable:
+
+1. **Every control, skin, and content type must be registered on BOTH the sending hub and the receiving hub.** The sender writes `"$type":"StackControl"`; the receiver can only turn that back into a `StackControl` if its own registry maps `StackControl → typeof(StackControl)`. A type registered on the sender but missing on the receiver comes back as an untyped `JsonElement` — every `Content is StackControl` soft-cast fails, the value "renders empty", and reactive waits time out (this is the class of bug behind the untyped-`JsonElement` sync-hub storms). For layout, both ends call `AddLayoutTypes()`, whose reflection sweep registers every `IUiControl` / `Skin` / `StreamMessage` — so controls and skins are covered automatically; **any non-control record you nest inside control state must be added explicitly** (see the `WithTypes(...)` list of `LayoutAreaDefinition`, `PivotConfiguration`, … in `AddLayoutTypes`).
+
+2. **Never resolve a discriminator with `Type.GetType` (reflection) instead of the registry.** Reflection only ever worked because the old discriminator was a full name; it silently masked types that were never registered on the receiver. With short names it returns `null` and the value is dropped. The registry is the single source of truth — resolution flows through `ITypeRegistry.TryGetType` (which also resolves legacy full names via an alias) or, for polymorphic members, through the hub's `PolymorphicTypeInfoResolver` (whose derived-type discriminators are the same registry short names). A custom `JsonConverter` that resolves a `$type` by hand (e.g. `SkinListConverter`) **must** go through the registry / resolver, never bare `Type.GetType` — otherwise short-named elements are silently skipped.
+
+> Backward compatibility: the registry keeps an alias from each type's full name to its definition, so JSON persisted with a legacy `"$type":"MeshWeaver.Layout.StackControl"` still deserializes. New writes always emit the short name.
+
 ### Use typed query helpers
 
 The extension methods filter by `$type` and project directly to `T`, avoiding manual casting:
