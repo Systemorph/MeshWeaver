@@ -13,6 +13,7 @@ export default defineConfig({
   resolve: {
     dedupe: ["react", "react-dom", "@fluentui/react-components"],
     alias: {
+      "@meshweaver/react/wire": path.resolve(here, "../react/src/live/wire.ts"),
       "@meshweaver/react/core": path.resolve(here, "../react/src/core.ts"),
       "@meshweaver/react": path.resolve(here, "../react/src/index.tsx"),
       "@meshweaver/client-web": path.resolve(here, "../grpc-web/src/index.ts"),
