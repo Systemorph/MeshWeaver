@@ -1,0 +1,28 @@
+[project]
+name = "meshweaver"
+version = "0.1.0"
+description = "MeshWeaver mesh client — connect a Python process to the mesh over gRPC and use mesh features natively (the foreign-language counterpart of the MAUI/SignalR participant)."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "grpcio>=1.68",
+    "protobuf>=5.29",
+]
+
+[project.optional-dependencies]
+dev = [
+    "grpcio-tools>=1.68",
+    "pytest>=8",
+    "pytest-asyncio>=0.24",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["meshweaver*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

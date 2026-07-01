@@ -433,9 +433,25 @@ public static class JsonSynchronizationStream
                         sub.Dispose();
                         return;
                     }
-                    // HeartBeatEvent is [SystemMessage] — PostPipeline accepts
-                    // null AccessContext without warning. No identity stamp
-                    // needed; receiver doesn't gate on principal.
+                    // HeartBeatEvent is [SystemMessage] — PostPipeline accepts null AccessContext
+                    // without warning. No identity stamp needed; receiver doesn't gate on principal.
+                    //
+                    // 🚨 FIRE-AND-FORGET — do NOT observe the delivery. A HEALTHY owner never acks a
+                    // HeartBeatEvent, so OBSERVING it registered a hub callback that never resolved: the
+                    // observe's Rx .Timeout completed the OBSERVABLE but left the underlying callback
+                    // pending on THIS (cache) hub. Across many live sync streams those leaked
+                    // HeartBeatEvent callbacks piled up (hundreds pending >30 s — the [STALE-CALLBACK]
+                    // scan) until the hub's action block/liveness probe stalled: the doc-crawl / atioz
+                    // cache-hub wedge. The heartbeat has no ack to consume and needs none — its only job
+                    // is to keep the owner grain alive, which the Post itself does. An undeliverable
+                    // heartbeat is [CanBeIgnored], so routing DROPS it without a NACK (RoutingServiceBase
+                    // AND RoutingGrain.PostFailureToSender both skip [CanBeIgnored]) — no NotFound storm,
+                    // nothing to observe. A recycled/restarted owner is re-detected by the change-feed
+                    // resubscribe below — the sole recycled-grain detector now that the heartbeat is
+                    // fire-and-forget. A permanently-gone owner (a one-shot import-activity lock whose
+                    // change feed fires no pulse) is simply heart-beaten into routing's ignore path every
+                    // interval — a benign dropped post, not a storm — until this subscriber hub is itself
+                    // collected (the weak-ref check above disposes the timer then).
                     h.Post(new HeartBeatEvent(), o => o.WithTarget(owner));
                 });
             // On keepAlive (not directly on reduced): a terminal NotFound from the initial

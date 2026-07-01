@@ -480,6 +480,12 @@ public static class MemexConfiguration
             // import — no regression. Default Helm sets ["Doc","Agent","Provider","Harness","Skill"].
             var syncPartitions = features.StaticRepoSync.Partitions
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            // AI content is served as a UNIT: if the config names ANY AI partition, serve them ALL
+            // (Agent/Provider/Harness/Skill), so an incomplete list can't leave Skill (or a future AI
+            // content type) in-memory while the rest go to the DB — and AddAI's per-type serve-from-DB
+            // gating stays consistent with the static-repo import. See MeshWeaver.AI/AiContentSources.
+            if (syncPartitions.Overlaps(AiContentSources.ContentPartitions))
+                syncPartitions.UnionWith(AiContentSources.ContentPartitions);
             IReadOnlySet<string> serveFromPartition = syncPartitions;
 
             MeshBuilder mb = builder
