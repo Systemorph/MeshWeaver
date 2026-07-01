@@ -142,14 +142,17 @@ public class ExecutableCodeBlock(BlockParser parser) : FencedCodeBlock(parser)
         if (Info == "layout")
             return null;
 
+        // The fence language ("csharp", "python", …) flows onto the submission so a foreign-language
+        // block is routed to its worker (the in-process kernel only runs C#); empty fence => csharp.
+        var language = string.IsNullOrWhiteSpace(Info) ? "csharp" : Info;
         // --execute: silent execution (explicit opt-in).
         if (Args.TryGetValue(Execute, out var executionId))
-            return new(string.Join('\n', Lines.Lines)) { Id = executionId ?? Guid.NewGuid().AsString() };
+            return new(string.Join('\n', Lines.Lines)) { Id = executionId ?? Guid.NewGuid().AsString(), Language = language };
         if (SubmitCode is not null)
             return SubmitCode;
         // --render <AreaId>: execute + stream output to a named layout area.
         if (Args.TryGetValue(Render, out var renderId))
-            return new(string.Join('\n', Lines.Lines)) { Id = renderId ?? Guid.NewGuid().AsString() };
+            return new(string.Join('\n', Lines.Lines)) { Id = renderId ?? Guid.NewGuid().AsString(), Language = language };
         // Bare ```csharp blocks are documentation-only by default.
         // Use --execute for silent execution or --render <AreaId> to stream output.
         return null;

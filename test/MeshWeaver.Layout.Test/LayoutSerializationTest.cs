@@ -25,14 +25,14 @@ public class LayoutSerializationTest(ITestOutputHelper output) : HubTestBase(out
         // Real-world JSON payload with polymorphic layout controls
         var json = """
         {
-            "$type":"MeshWeaver.Layout.StackControl",
+            "$type":"StackControl",
             "skin":{
-                "$type":"MeshWeaver.Layout.LayoutStackSkin",
+                "$type":"LayoutStackSkin",
                 "orientation":"Vertical"
             },
             "areas":[
                 {
-                    "$type":"MeshWeaver.Layout.NamedAreaControl",
+                    "$type":"NamedAreaControl",
                     "area":"Catalog/1",
                     "moduleName":"MeshWeaver.Layout",
                     "apiVersion":"1.0.0",
@@ -40,7 +40,7 @@ public class LayoutSerializationTest(ITestOutputHelper output) : HubTestBase(out
                     "skins":[]
                 },
                 {
-                    "$type":"MeshWeaver.Layout.NamedAreaControl",
+                    "$type":"NamedAreaControl",
                     "area":"Catalog/2",
                     "moduleName":"MeshWeaver.Layout",
                     "apiVersion":"1.0.0",
@@ -48,7 +48,7 @@ public class LayoutSerializationTest(ITestOutputHelper output) : HubTestBase(out
                     "skins":[]
                 },
                 {
-                    "$type":"MeshWeaver.Layout.NamedAreaControl",
+                    "$type":"NamedAreaControl",
                     "area":"Catalog/3",
                     "moduleName":"MeshWeaver.Layout",
                     "apiVersion":"1.0.0",
@@ -56,7 +56,7 @@ public class LayoutSerializationTest(ITestOutputHelper output) : HubTestBase(out
                     "skins":[]
                 },
                 {
-                    "$type":"MeshWeaver.Layout.NamedAreaControl",
+                    "$type":"NamedAreaControl",
                     "area":"Catalog/4",
                     "moduleName":"MeshWeaver.Layout",
                     "apiVersion":"1.0.0",
@@ -64,7 +64,7 @@ public class LayoutSerializationTest(ITestOutputHelper output) : HubTestBase(out
                     "skins":[]
                 },
                 {
-                    "$type":"MeshWeaver.Layout.NamedAreaControl",
+                    "$type":"NamedAreaControl",
                     "area":"Catalog/5",
                     "moduleName":"MeshWeaver.Layout",
                     "apiVersion":"1.0.0",
@@ -72,7 +72,7 @@ public class LayoutSerializationTest(ITestOutputHelper output) : HubTestBase(out
                     "skins":[]
                 },
                 {
-                    "$type":"MeshWeaver.Layout.NamedAreaControl",
+                    "$type":"NamedAreaControl",
                     "area":"Catalog/6",
                     "moduleName":"MeshWeaver.Layout",
                     "apiVersion":"1.0.0",
@@ -120,11 +120,11 @@ public class LayoutSerializationTest(ITestOutputHelper output) : HubTestBase(out
         var typeRegistry = client.ServiceProvider.GetRequiredService<ITypeRegistry>();
 
         // Check if StackControl is registered
-        var stackControlRegistered = typeRegistry.TryGetType("MeshWeaver.Layout.StackControl", out var stackControlInfo);
+        var stackControlRegistered = typeRegistry.TryGetType("StackControl", out var stackControlInfo);
         stackControlRegistered.Should().BeTrue("StackControl should be registered for polymorphism");
 
         // Check if NamedAreaControl is registered  
-        var namedAreaRegistered = typeRegistry.TryGetType("MeshWeaver.Layout.NamedAreaControl", out var namedAreaInfo);
+        var namedAreaRegistered = typeRegistry.TryGetType("NamedAreaControl", out var namedAreaInfo);
         namedAreaRegistered.Should().BeTrue("NamedAreaControl should be registered for polymorphism");
 
         // Try to find all types that inherit from UiControl
@@ -141,7 +141,7 @@ public class LayoutSerializationTest(ITestOutputHelper output) : HubTestBase(out
     public void Deserialize()
     {
         var serialized =
-            """{"$type":"MeshWeaver.Layout.StackControl","skin":{"$type":"MeshWeaver.Layout.LayoutStackSkin","orientation":"Vertical"},"areas":[{"$type":"MeshWeaver.Layout.NamedAreaControl","area":"Catalog/1","moduleName":"MeshWeaver.Layout","apiVersion":"1.0.0","id":"1","skins":[]},{"$type":"MeshWeaver.Layout.NamedAreaControl","area":"Catalog/2","moduleName":"MeshWeaver.Layout","apiVersion":"1.0.0","id":"2","skins":[]},{"$type":"MeshWeaver.Layout.NamedAreaControl","area":"Catalog/3","moduleName":"MeshWeaver.Layout","apiVersion":"1.0.0","id":"3","skins":[]},{"$type":"MeshWeaver.Layout.NamedAreaControl","area":"Catalog/4","moduleName":"MeshWeaver.Layout","apiVersion":"1.0.0","id":"4","skins":[]},{"$type":"MeshWeaver.Layout.NamedAreaControl","area":"Catalog/5","moduleName":"MeshWeaver.Layout","apiVersion":"1.0.0","id":"5","skins":[]},{"$type":"MeshWeaver.Layout.NamedAreaControl","area":"Catalog/6","moduleName":"MeshWeaver.Layout","apiVersion":"1.0.0","id":"6","skins":[]},{"$type":"MeshWeaver.Layout.NamedAreaControl","area":"Catalog/7","moduleName":"MeshWeaver.Layout","apiVersion":"1.0.0","id":"7","skins":[]},{"$type":"MeshWeaver.Layout.NamedAreaControl","area":"Catalog/8","moduleName":"MeshWeaver.Layout","apiVersion":"1.0.0","id":"8","skins":[]},{"$type":"MeshWeaver.Layout.NamedAreaControl","area":"Catalog/9","moduleName":"MeshWeaver.Layout","apiVersion":"1.0.0","id":"9","skins":[]},{"$type":"MeshWeaver.Layout.NamedAreaControl","area":"Catalog/10","moduleName":"MeshWeaver.Layout","apiVersion":"1.0.0","id":"10","skins":[]},{"$type":"MeshWeaver.Layout.NamedAreaControl","area":"Catalog/11","moduleName":"MeshWeaver.Layout","apiVersion":"1.0.0","id":"11","skins":[]},{"$type":"MeshWeaver.Layout.NamedAreaControl","area":"Catalog/12","moduleName":"MeshWeaver.Layout","apiVersion":"1.0.0","id":"12","skins":[]},{"$type":"MeshWeaver.Layout.NamedAreaControl","area":"Catalog/13","moduleName":"MeshWeaver.Layout","apiVersion":"1.0.0","id":"13","skins":[]},{"$type":"MeshWeaver.Layout.NamedAreaControl","area":"Catalog/14","moduleName":"MeshWeaver.Layout","apiVersion":"1.0.0","id":"14","skins":[]},{"$type":"MeshWeaver.Layout.NamedAreaControl","area":"Catalog/15","moduleName":"MeshWeaver.Layout","apiVersion":"1.0.0","id":"15","skins":[]},{"$type":"MeshWeaver.Layout.NamedAreaControl","area":"Catalog/16","moduleName":"MeshWeaver.Layout","apiVersion":"1.0.0","id":"16","skins":[]},{"$type":"MeshWeaver.Layout.NamedAreaControl","area":"Catalog/17","moduleName":"MeshWeaver.Layout","apiVersion":"1.0.0","id":"17","skins":[]}],"moduleName":"MeshWeaver.Layout","apiVersion":"1.0.0","skins":[{"$type":"MeshWeaver.Layout.LayoutStackSkin","orientation":"Vertical"},{}],"pageTitle":"Articles"}""";
+            """{"$type":"StackControl","skin":{"$type":"LayoutStackSkin","orientation":"Vertical"},"areas":[{"$type":"NamedAreaControl","area":"Catalog/1","moduleName":"MeshWeaver.Layout","apiVersion":"1.0.0","id":"1","skins":[]},{"$type":"NamedAreaControl","area":"Catalog/2","moduleName":"MeshWeaver.Layout","apiVersion":"1.0.0","id":"2","skins":[]},{"$type":"NamedAreaControl","area":"Catalog/3","moduleName":"MeshWeaver.Layout","apiVersion":"1.0.0","id":"3","skins":[]},{"$type":"NamedAreaControl","area":"Catalog/4","moduleName":"MeshWeaver.Layout","apiVersion":"1.0.0","id":"4","skins":[]},{"$type":"NamedAreaControl","area":"Catalog/5","moduleName":"MeshWeaver.Layout","apiVersion":"1.0.0","id":"5","skins":[]},{"$type":"NamedAreaControl","area":"Catalog/6","moduleName":"MeshWeaver.Layout","apiVersion":"1.0.0","id":"6","skins":[]},{"$type":"NamedAreaControl","area":"Catalog/7","moduleName":"MeshWeaver.Layout","apiVersion":"1.0.0","id":"7","skins":[]},{"$type":"NamedAreaControl","area":"Catalog/8","moduleName":"MeshWeaver.Layout","apiVersion":"1.0.0","id":"8","skins":[]},{"$type":"NamedAreaControl","area":"Catalog/9","moduleName":"MeshWeaver.Layout","apiVersion":"1.0.0","id":"9","skins":[]},{"$type":"NamedAreaControl","area":"Catalog/10","moduleName":"MeshWeaver.Layout","apiVersion":"1.0.0","id":"10","skins":[]},{"$type":"NamedAreaControl","area":"Catalog/11","moduleName":"MeshWeaver.Layout","apiVersion":"1.0.0","id":"11","skins":[]},{"$type":"NamedAreaControl","area":"Catalog/12","moduleName":"MeshWeaver.Layout","apiVersion":"1.0.0","id":"12","skins":[]},{"$type":"NamedAreaControl","area":"Catalog/13","moduleName":"MeshWeaver.Layout","apiVersion":"1.0.0","id":"13","skins":[]},{"$type":"NamedAreaControl","area":"Catalog/14","moduleName":"MeshWeaver.Layout","apiVersion":"1.0.0","id":"14","skins":[]},{"$type":"NamedAreaControl","area":"Catalog/15","moduleName":"MeshWeaver.Layout","apiVersion":"1.0.0","id":"15","skins":[]},{"$type":"NamedAreaControl","area":"Catalog/16","moduleName":"MeshWeaver.Layout","apiVersion":"1.0.0","id":"16","skins":[]},{"$type":"NamedAreaControl","area":"Catalog/17","moduleName":"MeshWeaver.Layout","apiVersion":"1.0.0","id":"17","skins":[]}],"moduleName":"MeshWeaver.Layout","apiVersion":"1.0.0","skins":[{"$type":"LayoutStackSkin","orientation":"Vertical"},{}],"pageTitle":"Articles"}""";
         var deserialized = JsonSerializer.Deserialize<UiControl>(serialized, GetClient().JsonSerializerOptions);
         deserialized.Should().NotBeNull("Deserialized object should not be null");
     }
@@ -233,7 +233,7 @@ public class LayoutSerializationTest(ITestOutputHelper output) : HubTestBase(out
         deserialized.Should().NotBeNull();
 
         // Second, test that we can handle legacy payloads with empty skin objects
-        var legacyJsonWithEmptySkin = """{"$type":"MeshWeaver.Layout.StackControl","skin":{"$type":"MeshWeaver.Layout.LayoutStackSkin","orientation":"Vertical"},"areas":[],"moduleName":"MeshWeaver.Layout","apiVersion":"1.0.0","skins":[{"$type":"MeshWeaver.Layout.LayoutStackSkin","orientation":"Vertical"},{}],"pageTitle":"Articles"}""";
+        var legacyJsonWithEmptySkin = """{"$type":"StackControl","skin":{"$type":"LayoutStackSkin","orientation":"Vertical"},"areas":[],"moduleName":"MeshWeaver.Layout","apiVersion":"1.0.0","skins":[{"$type":"LayoutStackSkin","orientation":"Vertical"},{}],"pageTitle":"Articles"}""";
 
         // This should not throw an exception - empty objects should be handled gracefully
         Action deserializeLegacy = () =>

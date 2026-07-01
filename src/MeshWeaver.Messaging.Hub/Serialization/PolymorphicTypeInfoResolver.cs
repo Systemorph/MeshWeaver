@@ -1,8 +1,10 @@
 ﻿using System.Collections;
+using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.Json.Serialization.Metadata;
 using MeshWeaver.Domain;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Messaging.Serialization;
 
@@ -10,8 +12,15 @@ namespace MeshWeaver.Messaging.Serialization;
 /// <summary>
 /// Custom type info resolver that provides polymorphism configuration based on the type registry.
 /// </summary>
-public class PolymorphicTypeInfoResolver(ITypeRegistry typeRegistry) : DefaultJsonTypeInfoResolver
+/// <param name="typeRegistry">The hub's type registry — the source of $type discriminators.</param>
+/// <param name="owner">A human-readable identity for the hub these options belong to (its address),
+/// used only to attribute the "serialized an unregistered type" warning to the publishing hub.</param>
+/// <param name="logger">Optional logger for the unregistered-type diagnostic.</param>
+public class PolymorphicTypeInfoResolver(ITypeRegistry typeRegistry, string? owner = null, ILogger? logger = null) : DefaultJsonTypeInfoResolver
 {
+    // Warn at most once per unregistered type (per hub/options instance) so the diagnostic can never
+    // itself become a storm. Instance field — dies with the hub's options; never static.
+    private readonly ConcurrentDictionary<Type, byte> warnedUnregistered = new();
     /// <summary>
     /// Resolves the <see cref="JsonTypeInfo"/> for <paramref name="type"/> and, for eligible object
     /// types, augments it with polymorphism options whose derived types are discovered from the type
@@ -73,8 +82,15 @@ public class PolymorphicTypeInfoResolver(ITypeRegistry typeRegistry) : DefaultJs
         // This ensures all concrete types get $type discriminators
         if (!baseType.IsAbstract && !baseType.IsInterface)
         {
+            // A type that is registered in THIS hub's registry resolves to its short collection name;
+            // an UNregistered type falls back to GetOrAddType → FormatType → the namespace-qualified
+            // full name. Probe registration BEFORE the auto-add so we can tell the two apart (generic
+            // names legitimately contain '.', so a naive '.'-scan would false-positive).
+            var wasRegistered = typeRegistry.TryGetCollectionName(baseType, out _);
             // Automatically register the type in the registry if not already present
             var typeName = typeRegistry.GetOrAddType(baseType);
+            if (!wasRegistered)
+                WarnUnregisteredSerialization(baseType, typeName);
             derivedTypes.Add(new JsonDerivedType(baseType, typeName));
         }
 
@@ -125,8 +141,61 @@ public class PolymorphicTypeInfoResolver(ITypeRegistry typeRegistry) : DefaultJs
             }
         }
 
+        WarnMissingDerivedRegistrations(baseType, derivedTypes);
         return derivedTypes;
     }
+
+    // (A) Polymorphic subtypes of baseType that EXIST in its assembly but are NOT registered in THIS hub
+    // serialise fine here yet DROP to FallBackToNearestAncestor when this hub RECEIVES them, with no other
+    // signal (the silent-skin-drop class). Warn once per type (instance dict — no static state) so the
+    // missing registration surfaces. Scoped to baseType.Assembly to avoid a full AppDomain scan; STJ caches
+    // JsonTypeInfo so this runs at most once per base type.
+    private readonly ConcurrentDictionary<Type, byte> warnedMissingDerived = new();
+    private void WarnMissingDerivedRegistrations(Type baseType, List<JsonDerivedType> derivedTypes)
+    {
+        if (logger is null || baseType == typeof(object) || baseType.IsSealed)
+            return;
+        var present = derivedTypes.Select(d => d.DerivedType).ToHashSet();
+        foreach (var t in baseType.Assembly.GetTypes())
+        {
+            if (t.IsAbstract || t.IsInterface || t.IsGenericTypeDefinition || t == baseType
+                || !baseType.IsAssignableFrom(t) || present.Contains(t)
+                || !warnedMissingDerived.TryAdd(t, 0))
+                continue;
+            logger.LogWarning(
+                "Polymorphic subtype {Subtype} of {BaseType} is NOT registered on hub {Hub} — it serialises "
+                + "here but DROPS to the nearest ancestor (renders empty) when this hub RECEIVES it. Register "
+                + "it via WithType(typeof({Subtype}), nameof({Subtype})) so it round-trips in BOTH the sending "
+                + "and receiving hub.",
+                t.FullName, baseType.Name, owner ?? "(unknown)", t.Name, t.Name);
+        }
+    }
+
+    /// <summary>
+    /// The type is NOT registered in this hub's <see cref="ITypeRegistry"/>, so its <c>$type</c>
+    /// discriminator is the namespace-qualified full name instead of a stable short name. A node
+    /// (de)serialised this way — when read by another hub that registered the type under its short name
+    /// (or not at all) — comes back as an untyped <see cref="JsonElement"/>: every <c>Content is X</c>
+    /// soft-cast fails, the value "renders empty", and reactive waits time out (the <c>_Provider/_Policy</c>
+    /// storm). The fix is one of two things this warning is meant to make actionable: register the type on
+    /// the hub (<c>WithType(typeof(T), nameof(T))</c>), OR serialise the node from a hub that HAS it.
+    /// Deduped per type (instance dict, never static) so the diagnostic itself can never storm; this runs
+    /// during JsonTypeInfo resolution, which STJ caches per type, so it is at most once-per-type-per-hub.
+    /// </summary>
+    private void WarnUnregisteredSerialization(Type type, string discriminator)
+    {
+        if (logger is null || !warnedUnregistered.TryAdd(type, 0))
+            return;
+        logger.LogWarning(
+            "Unregistered type {Type} (de)serialised on hub {Hub} with auto short-name $type='{Discriminator}': "
+            + "the hub's TypeRegistry lacks it, so it is auto-registered under its SHORT name. That short name "
+            + "resolves on any hub that registered the type under the same short name (the default that cures "
+            + "the untyped-JsonElement read), but register it explicitly via WithType(typeof(...), nameof(...)) "
+            + "where this hub is configured — explicit registration avoids short-name collisions across "
+            + "namespaces and documents the contract.",
+            type.FullName, owner ?? "(unknown)", discriminator);
+    }
+
     private static bool IsValidDerivedTypeForBase(Type baseType, Type derivedType)
     {
         // For object type, include all registered types that can be serialized polymorphically

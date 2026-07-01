@@ -1,0 +1,125 @@
+name: Clients
+
+# CI for the foreign-language client packages under clients/. The .NET solution CI does not cover
+# these, so typecheck + test them here on any PR that touches them.
+on:
+  pull_request:
+    paths:
+      - "clients/**"
+      - ".github/workflows/clients.yml"
+  push:
+    branches: [main]
+    paths:
+      - "clients/**"
+      - ".github/workflows/clients.yml"
+
+jobs:
+  react:
+    name: "@meshweaver/react (typecheck + test + build)"
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: clients/react
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm install --no-audit --no-fund
+      - run: npm run typecheck
+      - run: npm test # vitest: renderer core, control gallery, ThreadChat (live thread-node stream), Blazor-parity ratchet
+      - run: npm run build # the publishable lib (tsconfig.lib.json) must stay green, not just the test graph
+
+  python-sdk:
+    name: "meshweaver (Python test)"
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: clients/python
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[dev]"
+      - run: bash scripts/gen_proto.sh # generate stubs from the canonical mesh.proto
+      - run: pytest -q
+
+  node-sdk:
+    name: "@meshweaver/client (typecheck)"
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: clients/typescript
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm install --no-audit --no-fund
+      - run: npm run typecheck
+
+  grpc-web:
+    name: "@meshweaver/client-web (typecheck + test)"
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: clients/grpc-web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm install --no-audit --no-fund
+      - run: npm run typecheck # runs buf generate (from the canonical mesh.proto) then tsc
+      - run: npm test # vitest: envelope round-trip, in-memory Connect/Deliver correlation & demux, thread ops (startThread/submitMessage wire shapes)
+
+  react-native:
+    name: "RN connector (typecheck + test)"
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: clients/react-native
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      # The aliased renderer source (../react/src) needs its own deps (react) resolvable.
+      - name: Install renderer deps
+        working-directory: clients/react
+        run: npm install --no-audit --no-fund
+      # The live path source-aliases @meshweaver/client-web (../grpc-web/src) — install its deps and
+      # generate src/gen so RN's tsc can follow the alias.
+      - name: Install + generate grpc-web client
+        working-directory: clients/grpc-web
+        run: npm install --no-audit --no-fund && npm run gen
+      # Targeted install: typecheck needs RN types; the render test needs vitest + react-test-renderer
+      # (react-native itself is mocked in the test — see vitest.config.ts).
+      - run: npm install --no-save --no-audit --no-fund react-native@0.76.5 react@18.3.1 react-test-renderer@18.3.1 @types/react@18.3.12 @types/react-test-renderer@18.3.0 vitest@2.1.9 typescript@5.6.3
+      - run: npx tsc --noEmit
+      - run: npx vitest run # headless render of the sample area through the RN leaf pack
+
+  portal:
+    name: "Portal example (typecheck + build)"
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: clients/portal
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      # The aliased renderer source (../react/src) needs its own deps (react, @fluentui) resolvable.
+      - name: Install renderer deps
+        working-directory: clients/react
+        run: npm install --no-audit --no-fund
+      # The live mode source-aliases @meshweaver/client-web (../grpc-web/src) — install its deps and
+      # generate src/gen so the portal's tsc + vite can follow the alias.
+      - name: Install + generate grpc-web client
+        working-directory: clients/grpc-web
+        run: npm install --no-audit --no-fund && npm run gen
+      - run: npm install --no-audit --no-fund
+      - run: npx tsc --noEmit # vite build transpiles without type-checking — check types explicitly
+      - run: npm run build

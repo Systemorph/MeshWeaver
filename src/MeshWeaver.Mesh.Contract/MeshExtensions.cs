@@ -31,6 +31,14 @@ public static class MeshExtensions
         config.TypeRegistry.WithType(typeof(PingResponse), nameof(PingResponse));
         config.TypeRegistry.WithType(typeof(MeshNode), nameof(MeshNode));
         config.TypeRegistry.WithType(typeof(MeshNodeState), nameof(MeshNodeState));
+        // AccessContext rides as a TYPED field on every IMessageDelivery. Unregistered, the
+        // polymorphic resolver stamps it a full-name $type ("MeshWeaver.Messaging.AccessContext") —
+        // harmless for the typed field (it round-trips) but it's ongoing log noise (the
+        // PolymorphicTypeInfoResolver "serializing UNREGISTERED type" warning fires once per hub) and
+        // dirties persisted deliveries. Register it (full-name READ alias FIRST, short name LAST) so
+        // it serialises with a stable short discriminator on every hub that applies AddMeshTypes.
+        config.TypeRegistry.WithType(typeof(MeshWeaver.Messaging.AccessContext), typeof(MeshWeaver.Messaging.AccessContext).FullName!);
+        config.TypeRegistry.WithType(typeof(MeshWeaver.Messaging.AccessContext), nameof(MeshWeaver.Messaging.AccessContext));
         // Core identity/activity node-content types live in THIS assembly but were never registered
         // anywhere, so any hub reading a {user} root node ("User") or its _UserActivity satellite
         // ("UserActivityRecord") got an untyped JsonElement ("TypeRegistry lacks the $type
@@ -38,7 +46,11 @@ public static class MeshExtensions
         // home-areas-hang-on-"awaiting first data" class of bug. Register them in the core registry
         // every host applies. (PartitionAccessPolicy is already registered via AddGraph; the AI
         // partition hubs additionally get all three via AddAITypes.)
+        // Full-name READ alias FIRST (legacy nodes persisted with a full-name $type), short nameof LAST
+        // so this hub keeps WRITING the short name. See WithGraphTypes for the full rationale.
+        config.TypeRegistry.WithType(typeof(MeshWeaver.Mesh.Security.User), typeof(MeshWeaver.Mesh.Security.User).FullName!);
         config.TypeRegistry.WithType(typeof(MeshWeaver.Mesh.Security.User), nameof(MeshWeaver.Mesh.Security.User));
+        config.TypeRegistry.WithType(typeof(MeshWeaver.Mesh.Activity.UserActivityRecord), typeof(MeshWeaver.Mesh.Activity.UserActivityRecord).FullName!);
         config.TypeRegistry.WithType(typeof(MeshWeaver.Mesh.Activity.UserActivityRecord), nameof(MeshWeaver.Mesh.Activity.UserActivityRecord));
         config.TypeRegistry.WithType(typeof(CreateNodeRequest), nameof(CreateNodeRequest));
         config.TypeRegistry.WithType(typeof(CreateNodeResponse), nameof(CreateNodeResponse));
@@ -154,8 +166,20 @@ public static class MeshExtensions
             var callback = current.Configuration.Get<GrainKeepAliveCallback>();
             if (callback != null)
             {
+                // Debug, NOT Information: this fires once per HeartBeatEvent (per sync stream,
+                // every 45s). At the accumulation scale a wedge produces (hundreds-to-thousands
+                // of live streams) an Information line here was ~11% of the pod's CPU (console
+                // logger) and pure Loki ingest noise — the heartbeat itself is the signal, the
+                // log line is diagnostics.
                 var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.GrainKeepAlive");
-                logger?.LogInformation("HeartBeat: keeping grain alive for {Hub} (callback on {Parent})",
+                // Debug, NOT Information: this fires for EVERY sync-stream keep-alive heartbeat on EVERY
+                // open stream, every heartbeat interval — the single highest-volume log line on a busy
+                // portal (≈half of all log lines + ~11% of CPU under load, measured via dotnet-trace on
+                // the wedged e2e portal: ConsoleLoggerProcessor.ProcessLogQueue). At Information it ships
+                // to Loki on every tick and bleeds ingest budget for zero diagnostic value (a grain
+                // staying alive is the expected steady state). Keep it at Debug for when a deactivation
+                // is actually being investigated.
+                logger?.LogDebug("HeartBeat: keeping grain alive for {Hub} (callback on {Parent})",
                     hub.Address, current.Address);
                 callback.KeepAlive();
                 break;
@@ -1549,14 +1573,22 @@ public static class MeshExtensions
         if (handlers.Count == 0)
             return Observable.Empty<System.Reactive.Unit>();
 
-        // For each matching handler: invoke Handle (reactive, logged-and-swallowed), then
-        // persist any additional nodes it returns. Sequentially via Concat to preserve
-        // the original order's side-effect dependencies.
+        // For each matching handler: invoke Handle, then persist any additional nodes it returns.
+        // Sequentially via Concat to preserve the original order's side-effect dependencies.
+        // Handle's error is propagated ONLY for handlers that declare FailsCreateOnError (a
+        // required-side-effect handler — e.g. the Space creator-Admin grant); the create handler's
+        // Subscribe turns that into a CreateNodeResponse.Fail. Best-effort handlers (onboarding
+        // seeds) keep log-and-continue. NEVER blanket-swallow a critical grant into a silent Ok —
+        // that shipped ownerless, un-navigable Spaces (AGENTS.md: no .Catch(Observable.Empty)).
         return handlers
             .Select(handler =>
             {
-                var handleObs = handler.Handle(node, createdBy)
-                    .Catch<System.Reactive.Unit, Exception>(ex =>
+                var rawHandle = handler.Handle(node, createdBy);
+                var handleObs = handler.FailsCreateOnError
+                    ? rawHandle.Do(_ => { }, ex => logger.LogError(ex,
+                        "Critical post-creation handler {Handler} failed for node {Path} — failing the create",
+                        handler.GetType().Name, node.Path))
+                    : rawHandle.Catch<System.Reactive.Unit, Exception>(ex =>
                     {
                         logger.LogWarning(ex,
                             "Post-creation handler {Handler} failed for node {Path}",
