@@ -23,8 +23,30 @@ npm install @meshweaver/react        # or a workspace / file:../react link for t
 npm run ios                          # expo start --ios  (press i)
 ```
 
-In a monorepo, point Metro at `../react` (Metro `watchFolders` + a `@meshweaver/react` alias), or install
-the published package. `npm run typecheck` checks the pack against the core via a tsconfig path.
+`metro.config.js` wires the monorepo: it watches `../react`, aliases `@meshweaver/react/core` to its source,
+pins a single `react` (defeats `../react/node_modules/react` → dual-React hook errors), maps the TS ESM
+`.js` import specifiers to their `.tsx`/`.ts` sources, and stubs the live gRPC-web client for the offline
+demo. `npm run typecheck` checks the pack against the core via a tsconfig path.
+
+## Run it as web + the Playwright test layer
+
+The RN app runs in a browser via **react-native-web** — the leaf pack's `View`/`Text`/`TextInput`/… map to
+DOM. That makes it drivable by Playwright headlessly (no simulator), so the sample renders and is asserted
+end-to-end:
+
+```bash
+npm run web            # expo start --web — open the app in a browser
+npm run web:export     # static build → dist/
+npm run e2e            # Playwright: export + serve dist/ + drive headless Chromium
+```
+
+`playwright.config.ts`'s `webServer` runs the export + a zero-dep static server (`e2e/serve.mjs`); the
+tests (`e2e/app.spec.ts`) assert the rendered sample — header/intro text, the `TextField` bound to
+`/data/name` ("Ada Lovelace"), the `CheckBox`→Switch checked, the `DataGrid` rows, Button + Badge, and no
+`Unsupported` fallback. This is the browser-level counterpart to the (react-native-mocked) vitest render
+tests. An on-device render still needs `npm run ios`.
+
+![The sample area rendered by the RN leaf pack via react-native-web](docs/web-render.png)
 
 ## Leaf pack coverage
 
