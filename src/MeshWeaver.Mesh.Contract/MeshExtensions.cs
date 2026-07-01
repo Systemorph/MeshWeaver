@@ -166,6 +166,11 @@ public static class MeshExtensions
             var callback = current.Configuration.Get<GrainKeepAliveCallback>();
             if (callback != null)
             {
+                // Debug, NOT Information: this fires once per HeartBeatEvent (per sync stream,
+                // every 45s). At the accumulation scale a wedge produces (hundreds-to-thousands
+                // of live streams) an Information line here was ~11% of the pod's CPU (console
+                // logger) and pure Loki ingest noise — the heartbeat itself is the signal, the
+                // log line is diagnostics.
                 var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.GrainKeepAlive");
                 // Debug, NOT Information: this fires for EVERY sync-stream keep-alive heartbeat on EVERY
                 // open stream, every heartbeat interval — the single highest-volume log line on a busy
