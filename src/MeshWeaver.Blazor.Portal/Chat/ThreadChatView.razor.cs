@@ -2311,10 +2311,9 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     private Task OnSelectThread(MeshNode node)
     {
         threadName = node.Name;
-        // Open the selected thread in the MAIN pane (full width) and collapse the side panel — per user
-        // preference — instead of previewing it in the cramped side panel.
-        NavigationManager.NavigateTo($"/{node.Path}");
-        SidePanelState.SetVisible(false);
+        viewMode = ChatViewMode.Chat;
+        SidePanelState.SetContentPath(node.Path);
+        UpdateSidePanelTitle();
         return Task.CompletedTask;
     }
 
