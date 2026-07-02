@@ -845,6 +845,9 @@ else
         @if (_connectProvider is null)
         {
         <div class="input-container" @onkeydown="@OnInputKeyDown">
+            @* AutoGrow: the composer expands with the content from 80px up to the adaptive
+               max (mirrors the command palette's min(440px, calc(100vh - 180px)) pattern),
+               then scrolls internally — no more invisible scrolling in a fixed 80px box. *@
             <MonacoEditorView @ref="monacoEditor"
                               Value="@MessageText"
                               ValueChanged="@OnMessageTextChanged"
@@ -852,7 +855,8 @@ else
                               OnCompletionAccepted="OnCompletionItemAccepted"
                               Placeholder="@placeholderText"
                               Height="80px"
-                              MaxHeight="200px"
+                              MaxHeight="min(400px, calc(100vh - 280px))"
+                              AutoGrow="true"
                               CompletionProvider="@GetCompletionConfig()"
                               CompletionCallback="@GetCompletions" />
         </div>
