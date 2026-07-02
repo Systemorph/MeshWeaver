@@ -420,6 +420,33 @@
     max-width: 180px;
 }
 
+/* The chips are <button> now (clickable → picker/combobox). Strip native button chrome; keep the chip look. */
+button.thread-chat-status-item {
+    background: none;
+    border: none;
+    margin: 0;
+    padding: 1px 5px;
+    font: inherit;
+    line-height: inherit;
+    color: inherit;
+    border-radius: 4px;
+    cursor: default;
+}
+
+.thread-chat-status-item.is-clickable {
+    cursor: pointer;
+    transition: background-color 0.12s ease;
+}
+
+.thread-chat-status-item.is-clickable:hover {
+    background-color: var(--neutral-fill-secondary-hover, rgba(127, 127, 127, 0.14));
+}
+
+.thread-chat-status-item .chip-svg {
+    flex: 0 0 auto;
+    opacity: 0.72;
+}
+
 .thread-chat-status-sep {
     color: var(--neutral-stroke-rest);
 }

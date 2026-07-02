@@ -647,31 +647,47 @@ else
             <div class="thread-chat-status-row">
                 @if (!string.IsNullOrEmpty(boundHarness))
                 {
-                    <span class="thread-chat-status-item" title="Harness (/harness to change)">⬡ @harnessId</span>
+                    <button type="button" class="thread-chat-status-item is-clickable"
+                            title="Harness — click to switch runtime" @onclick='() => OnStatusChipClick("harness", false)'>
+                        @ChipSvg("harness") @harnessId
+                    </button>
                 }
                 @if (isClaudeCode || isCopilot)
                 {
                     @* Claude Code and GitHub Copilot run the user's OWN CLI subscription — there is no mesh
                        agent to pick, and the model is the CLI's OWN (probed from its init/hello message),
-                       NOT the user's mesh Model-partition selection. Claude Code adds reasoning effort. *@
+                       NOT the user's mesh Model-partition selection. Claude Code adds reasoning effort.
+                       These chips forward /model|/effort 1:1 to the CLI (cliOwned: true). *@
                     @* harnessId is non-null here: this branch is gated by isClaudeCode || isCopilot,
                        which are false when harnessId is null (string.Equals(null, "ClaudeCode") == false). *@
                     var harnessRt = harnessRuntimes.GetValueOrDefault(harnessId!);
-                    <span class="thread-chat-status-item" title="Model (reported by @harnessId)">✦ @(string.IsNullOrEmpty(harnessRt?.Model) ? "…" : harnessRt!.Model)</span>
+                    <button type="button" class="thread-chat-status-item is-clickable"
+                            title="Model (reported by @harnessId) — click to change" @onclick='() => OnStatusChipClick("model", true)'>
+                        @ChipSvg("model") @(string.IsNullOrEmpty(harnessRt?.Model) ? "…" : harnessRt!.Model)
+                    </button>
                     @if (isClaudeCode)
                     {
-                        <span class="thread-chat-status-item" title="Reasoning effort (from settings.json)">⚡ @(string.IsNullOrEmpty(harnessRt?.Effort) ? "…" : harnessRt!.Effort)</span>
+                        <button type="button" class="thread-chat-status-item is-clickable"
+                                title="Reasoning effort — click to change" @onclick='() => OnStatusChipClick("effort", true)'>
+                            @ChipSvg("effort") @(string.IsNullOrEmpty(harnessRt?.Effort) ? "…" : harnessRt!.Effort)
+                        </button>
                     }
                 }
                 else
                 {
                     @if (!string.IsNullOrEmpty(boundAgentPath))
                     {
-                        <span class="thread-chat-status-item" title="Agent (/agent to change)">🤖 @LastSegment(boundAgentPath)</span>
+                        <button type="button" class="thread-chat-status-item is-clickable"
+                                title="Agent — click to change" @onclick='() => OnStatusChipClick("agent", false)'>
+                            @ChipSvg("agent") @LastSegment(boundAgentPath)
+                        </button>
                     }
                     @if (!string.IsNullOrEmpty(boundModelPath))
                     {
-                        <span class="thread-chat-status-item" title="Model (/model to change)">✦ @LastSegment(boundModelPath)</span>
+                        <button type="button" class="thread-chat-status-item is-clickable"
+                                title="Model — click to change" @onclick='() => OnStatusChipClick("model", false)'>
+                            @ChipSvg("model") @LastSegment(boundModelPath)
+                        </button>
                     }
                 }
                 @* The token chip renders its own leading separator only when it has usage data,

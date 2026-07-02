@@ -550,7 +550,12 @@ export function registerCompletionProvider(editorId, config) {
                 // @ can be followed by paths with slashes: @agent/Name, @content/path/file
                 // / is only a trigger at word boundary (for commands like /agent)
                 if (trigger === '/') {
-                    const regex = new RegExp(`(?:^|\\s)${escapedTrigger}([\\w\\-\\.]+)?$`);
+                    // A slash-command is only valid at the very START of the composer (line 1, only
+                    // optional whitespace before it). Triggering on a '/' mid-code — paths (`cd /etc`),
+                    // "//" comments, `a / b`, `http://` — popped the command list, which is now heavy
+                    // (every CLI command + skill) and churned Monaco → "stuck when entering code".
+                    if (position.lineNumber !== 1) continue;
+                    const regex = new RegExp(`^\\s*${escapedTrigger}([\\w\\-\\.]+)?$`);
                     const match = textUntilPosition.match(regex);
                     if (match) {
                         // Adjust match to not include the leading space
