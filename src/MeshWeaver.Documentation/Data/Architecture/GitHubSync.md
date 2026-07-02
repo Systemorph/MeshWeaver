@@ -68,11 +68,38 @@ Under **Repository**:
 |---|---|
 | **Repository URL** | `https://github.com/owner/repo`. |
 | **Branch** | The branch to commit to (default `main`). |
+| **Sync direction** | `Bidirectional` (default), `ExportOnly`, or `ImportOnly` — see below. |
 | **Create the branch if it doesn't exist** | When on, a missing branch is created as a fresh snapshot commit. |
 | **Create the repository (private) if it doesn't exist** | When on, a missing repo is created **private** under the owner/org. |
 | **Subdirectory** (optional) | Mirror the Space into this folder of the repo. Files outside it are left untouched. Empty = repository root. |
 
 Click **Save repository settings**.
+
+### Sync direction — unidirectional or bidirectional
+
+Each source syncs in a configurable direction, enforced by `GitHubSyncService` on every
+operation (the GUI additionally hides what would be rejected):
+
+| Direction | Commit ("Sync now") | Checkout / re-import |
+|---|---|---|
+| **Bidirectional** (default) | ✓ | ✓ |
+| **ExportOnly** — mesh → repo | ✓ | ✗ rejected — the repo can never overwrite the mesh |
+| **ImportOnly** — repo → mesh | ✗ rejected — the mesh can never overwrite the repo | ✓ |
+
+Use `ImportOnly` for a Space that mirrors an upstream repository you don't own, and
+`ExportOnly` for a backup/publishing target that must never feed edits back.
+
+### Multiple sync sources
+
+A Space can sync with **more than one repository**. The Repository section above edits
+the **primary** source (`{space}/_GitSync`); every additional source is its own config
+node at `{space}/_GitSync/{sourceId}` with its own repository, branch, subdirectory and
+direction. Manage them in the **Additional sync sources** section of the same settings
+tab (or, platform admins, on **Global Settings → Administration → Partitions**): add a
+source by name, edit its settings through the same data-bound editor, sync it with its
+own direction-aware buttons, and remove it when no longer needed. Programmatically:
+`GitHubSyncService.AddSyncSource / WatchConfigNodes / RemoveSyncSource`, and every sync
+operation takes an optional `sourceId` (null = the primary).
 
 ---
 
