@@ -207,21 +207,31 @@ At render time, `CountryCode` fetches every `Country` from the data context and 
 
 # Live Example
 
-The snippet below shows the form structure the editor would generate for a `Person`-style record. Paste it into any interactive notebook area to see the output:
+The form below is generated **live** from the record definition — each property becomes the field
+its type and attributes dictate (`string` → text field, `int` → number field, `bool` → checkbox,
+`DateTime` → date/time picker):
 
 ```csharp --render EditorDemo --show-code
-MeshWeaver.Layout.Controls.Stack
-    .WithView(MeshWeaver.Layout.Controls.Markdown(
-        "**Editor control mapping**\n\n" +
-        "| Property | Type | Rendered as |\n" +
-        "|---|---|---|\n" +
-        "| `Name` | `string` | Text field |\n" +
-        "| `Age` | `int` | Number field |\n" +
-        "| `IsActive` | `bool` | Checkbox |\n" +
-        "| `BirthDate` | `DateTime` | Date/time picker |\n\n" +
-        "> Annotate any property with `[Required]`, `[DisplayName]`, `[Range]`, or `[Browsable(false)]` " +
-        "to refine rendering and validation."
-    ))
+using System.ComponentModel;
+using System.ComponentModel.DataAnnotations;
+
+record Person
+{
+    [Required]
+    [DisplayName("Full name")]
+    public string Name { get; init; } = "Alice Example";
+
+    [Range(18, 120)]
+    public int Age { get; init; } = 34;
+
+    [DisplayName("Active member")]
+    public bool IsActive { get; init; } = true;
+
+    [DisplayName("Birth date")]
+    public DateTime BirthDate { get; init; } = new(1992, 3, 14);
+}
+
+Mesh.Edit(new Person(), "personDemo")
 ```
 
 ---
