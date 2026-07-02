@@ -56,8 +56,14 @@ public class AzureFoundryChatClientAgentFactory(
     /// </summary>
     public override bool Supports(string modelName)
     {
-        if (string.IsNullOrEmpty(modelName)
-            || modelName.StartsWith("claude", StringComparison.OrdinalIgnoreCase))
+        if (string.IsNullOrEmpty(modelName))
+            return false;
+        // The picker persists EITHER a bare id ("claude-…") OR a full LanguageModel node path
+        // ("Provider/Anthropic/claude-…") — test the LAST segment so a path-shaped Claude name
+        // is excluded even when the resolver snapshot is cold and can't name the provider yet.
+        var lastSlash = modelName.LastIndexOf('/');
+        var bareId = lastSlash >= 0 ? modelName[(lastSlash + 1)..] : modelName;
+        if (bareId.StartsWith("claude", StringComparison.OrdinalIgnoreCase))
             return false;
         var provider = Hub.ServiceProvider.GetService<ChatClientCredentialResolver>()
             ?.GetProviderForModel(modelName);
