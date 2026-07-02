@@ -224,12 +224,43 @@ public partial class FileBrowser
             {
                 await Collection.SaveFileAsync(CurrentPath!, file.Name, file.Stream!);
                 progressPercent = 100;
+
+                // Post-upload seam: raise the SAME observer the MCP upload path raises
+                // (MeshOperations.Upload → hub.RaiseContentUploaded) so a GUI upload
+                // auto-indexes like any other upload. Fire-and-forget by contract — the
+                // indexing runs as its own Activity and never blocks the upload (#170).
+                // CurrentPath can carry '\' separators on Windows (the Embed breadcrumb
+                // builds it via Path.Combine) — normalize so the seam always gets the
+                // MCP shape (forward-slash, collection-relative, no leading slash).
+                var folder = (CurrentPath ?? "").Replace('\\', '/').Trim('/');
+                var relativePath = string.IsNullOrEmpty(folder) ? file.Name : $"{folder}/{file.Name}";
+                Hub.RaiseContentUploaded(QualifiedCollectionPath, relativePath);
+
                 ToastService.ShowSuccess($"File {file.Name} successfully uploaded.");
             }
         }
         catch (Exception e)
         {
             ToastService.ShowError($"Error uploading {file.Name}: {e.Message}");
+        }
+    }
+
+    /// <summary>
+    /// The node-qualified collection path (<c>{address}/{collection}</c>) that upload
+    /// observers expect — the same shape <c>MeshOperations.Upload</c> raises and the same
+    /// composition <see cref="GetLink(FileItem)"/> uses for download URLs. Falls back to
+    /// <see cref="CollectionName"/> as-is when no <see cref="Address"/> is set or the name
+    /// is already qualified with it.
+    /// </summary>
+    private string QualifiedCollectionPath
+    {
+        get
+        {
+            var address = Address?.ToString();
+            return string.IsNullOrEmpty(address)
+                   || CollectionName!.StartsWith(address + "/", StringComparison.OrdinalIgnoreCase)
+                ? CollectionName!
+                : $"{address}/{CollectionName}";
         }
     }
 
