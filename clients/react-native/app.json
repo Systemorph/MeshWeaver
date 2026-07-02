@@ -9,6 +9,8 @@
     "ios": { "supportsTablet": true },
     "android": {},
     "plugins": [
+      "expo-asset",
+      "expo-font",
       [
         "expo-av",
         {
