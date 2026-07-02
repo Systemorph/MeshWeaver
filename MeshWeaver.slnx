@@ -111,6 +111,7 @@
     <Project Path="src/MeshWeaver.ServiceProvider/MeshWeaver.ServiceProvider.csproj" />
     <Project Path="src/MeshWeaver.ShortGuid/MeshWeaver.ShortGuid.csproj" />
     <Project Path="src/MeshWeaver.Social/MeshWeaver.Social.csproj" />
+    <Project Path="src/MeshWeaver.Speech/MeshWeaver.Speech.csproj" />
     <Project Path="src/MeshWeaver.Utils/MeshWeaver.Utils.csproj" />
   </Folder>
   <Folder Name="/test/">
@@ -147,6 +148,7 @@
     <Project Path="test/MeshWeaver.Search.Test/MeshWeaver.Search.Test.csproj" />
     <Project Path="test/MeshWeaver.Security.Test/MeshWeaver.Security.Test.csproj" />
     <Project Path="test/MeshWeaver.Social.Test/MeshWeaver.Social.Test.csproj" />
+    <Project Path="test/MeshWeaver.Speech.Test/MeshWeaver.Speech.Test.csproj" />
     <Project Path="test/MeshWeaver.TestDomain/MeshWeaver.TestDomain.csproj" />
     <Project Path="test/MeshWeaver.Graph.Test/MeshWeaver.Graph.Test.csproj" />
     <Project Path="test/MeshWeaver.GitSync.Test/MeshWeaver.GitSync.Test.csproj" />
