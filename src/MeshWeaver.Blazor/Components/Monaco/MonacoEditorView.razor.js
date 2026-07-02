@@ -309,13 +309,31 @@ export function initEditor(editorId, placeholder, dotNetRef, codeEditMode = fals
         // the editor out when the container height changes. Debounced so rapid typing doesn't
         // thrash the DOM; shrink-back on delete works the same way (smaller contentHeight).
         if (autoGrow) {
+            // 🚨 Grow the OUTER container (.monaco-editor-container), NOT the inner
+            // #editorId element. #editorId IS the .monaco-editor-view div, which
+            // MonacoEditorView.razor.css pins to `height: 100% !important` — and a CSS
+            // `!important` rule overrides an inline style, so setting `.style.height`
+            // on it was SILENTLY IGNORED. The composer therefore stayed stuck at the
+            // 80px min-height and long input scrolled invisibly (lines "moved up").
+            // The outer container carries the min-height/max-height clamps and has no
+            // !important height rule, so sizing IT lets the inner 100% fill it: the box
+            // expands with the content and only scrolls once max-height is reached.
             editorInstance.onDidContentSizeChange((e) => {
                 const st = editorState.get(editorId);
                 if (!st) return;
                 if (st.resizeTimeout) clearTimeout(st.resizeTimeout);
                 st.resizeTimeout = setTimeout(() => {
-                    const c = document.getElementById(editorId);
-                    if (c) c.style.height = e.contentHeight + 'px';
+                    const inner = document.getElementById(editorId);
+                    const outer = inner?.closest('.monaco-editor-container');
+                    // Guard against a dispose race: the editor can be torn down during the 50ms
+                    // debounce window, after which layout() throws "Couldn't find the editor…".
+                    // getDomNode() returns null once the instance is disposed — bail if so.
+                    if (outer && editorInstance.getDomNode()) {
+                        outer.style.height = e.contentHeight + 'px';
+                        // Re-lay out to the new height now; automaticLayout's ResizeObserver
+                        // would otherwise catch up a frame later.
+                        editorInstance.layout();
+                    }
                 }, 50);
             });
         }
