@@ -1372,24 +1372,51 @@ internal class MeshNodeCompilationService(
         {
             var timestamp = DateTimeOffset.UtcNow.Ticks.ToString("x");
             var releaseDir = Path.Combine(cacheDirectory, $"{nodeName}_{timestamp}");
-            Directory.CreateDirectory(releaseDir);
 
-            // The real emit (a compile error throws straight through — see method remarks).
-            lastDllPath = emitToReleaseDir(releaseDir);
+            // 🚨 Emit into a STAGING dir whose name does NOT match the `{nodeName}_*` discovery glob
+            // (TryGetLatestCachedDllPath), then atomically publish it by renaming to the discoverable
+            // `{nodeName}_{ticks}` name only AFTER the DLL is fully written + verified. The DLL file
+            // exists at 0 bytes and grows during compilation.Emit (File.Create + Emit is NOT atomic);
+            // without staging, a concurrent reader can discover the half-written DLL and
+            // LoadFromAssemblyPath a truncated image → a native crash (SIGSEGV) or a BadImageFormat
+            // that deletes the artifact and churns the compile. A directory rename on the same
+            // filesystem is atomic, so a reader sees either nothing or the COMPLETE artifact.
+            var stagingDir = Path.Combine(cacheDirectory, $".staging-{nodeName}-{timestamp}-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(stagingDir);
 
-            // Roslyn reported success — confirm the bytes are genuinely on disk. On an ephemeral
-            // cache directory the file can be evicted between emit and the next read.
-            if (File.Exists(lastDllPath) && new FileInfo(lastDllPath).Length > 0)
+            // The real emit (a compile error throws straight through — see method remarks). On a
+            // genuine compile error the half-written staging dir is discarded so a failed emit never
+            // leaves a partial artifact behind (the old code leaked a glob-discoverable
+            // `{nodeName}_{ticks}` dir here — the same partial-DLL hazard).
+            string stagedDllPath;
+            try
+            {
+                stagedDllPath = emitToReleaseDir(stagingDir);
+            }
+            catch
+            {
+                try { Directory.Delete(stagingDir, recursive: true); } catch { /* best-effort */ }
+                throw;
+            }
+            lastDllPath = Path.Combine(releaseDir, $"{nodeName}.dll");
+
+            // Roslyn reported success — confirm the bytes are genuinely on disk BEFORE publishing. On
+            // an ephemeral cache directory the file can be evicted between emit and the next read.
+            if (File.Exists(stagedDllPath) && new FileInfo(stagedDllPath).Length > 0)
+            {
+                // Atomic publish: the whole artifact becomes discoverable in one rename.
+                Directory.Move(stagingDir, releaseDir);
                 return lastDllPath;
+            }
 
             logger.LogWarning(
                 "Emit for {NodeName} reported success but the assembly was missing or empty at " +
                 "{DllPath} after flush (attempt {Attempt}/{Max}); re-emitting.",
-                nodeName, lastDllPath, attempt, maxAttempts);
+                nodeName, stagedDllPath, attempt, maxAttempts);
 
-            // Drop the empty/partial directory so the retry starts clean.
-            try { Directory.Delete(releaseDir, recursive: true); }
-            catch (Exception ex) { logger.LogDebug(ex, "Could not clean up empty release dir {ReleaseDir}", releaseDir); }
+            // Drop the empty/partial staging directory so the retry starts clean.
+            try { Directory.Delete(stagingDir, recursive: true); }
+            catch (Exception ex) { logger.LogDebug(ex, "Could not clean up empty staging dir {StagingDir}", stagingDir); }
         }
 
         throw new CompilationException(nodeName,
