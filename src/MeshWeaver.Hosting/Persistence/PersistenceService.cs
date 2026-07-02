@@ -86,9 +86,17 @@ public sealed class PersistenceService : IStorageAdapter
     /// Try each adapter's Read in order; emit the first non-null result, or
     /// null if no adapter has the path. <see cref="Observable.Concat{TSource}(IObservable{IObservable{TSource}})"/> with
     /// <see cref="Observable.FirstOrDefaultAsync{TSource}(IObservable{TSource})"/> keeps the chain lazy —
-    /// later adapters aren't queried once a hit lands.
+    /// later adapters aren't queried once a hit lands. A miss on a bare partition-root path runs
+    /// the legacy-user repair (see <see cref="LegacyUserPartitionRepair"/>) before giving up.
     /// </summary>
     public IObservable<MeshNode?> Read(string path, JsonSerializerOptions options)
+        => LegacyUserPartitionRepair.ReadWithRepair(
+            path,
+            p => ReadCore(p, options),
+            n => Write(n, options).Select(saved => (MeshNode?)saved),
+            _logger);
+
+    private IObservable<MeshNode?> ReadCore(string path, JsonSerializerOptions options)
         => _allOrdered
             .Select(p => p.Adapter.Read(path, options))
             .Concat()
