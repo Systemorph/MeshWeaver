@@ -41,6 +41,7 @@ public class MarkdownHtmlRenderer
     private List<string> _svgBlocks = new();
     private readonly DesignThemeModes _mode;
     private readonly ISynchronizationStream? _stream;
+    private readonly Action<string>? _runSubmission;
 
     /// <summary>
     /// Initialises the renderer with the current UI theme and an optional synchronization stream
@@ -48,10 +49,14 @@ public class MarkdownHtmlRenderer
     /// </summary>
     /// <param name="mode">The active design theme (light/dark) passed to mermaid and code-block components.</param>
     /// <param name="stream">The synchronization stream whose owner address is used to suppress self-referential UCR entries; may be <c>null</c>.</param>
-    public MarkdownHtmlRenderer(DesignThemeModes mode, ISynchronizationStream? stream)
+    /// <param name="runSubmission">Invoked with a block's submission id when the reader clicks the cell toolbar's
+    /// Run button; the hosting view (re-)posts that block's <c>SubmitCodeRequest</c> to its kernel activity.
+    /// Null when no kernel is available — cell toolbars then render their Run button disabled.</param>
+    public MarkdownHtmlRenderer(DesignThemeModes mode, ISynchronizationStream? stream, Action<string>? runSubmission = null)
     {
         _mode = mode;
         _stream = stream;
+        _runSubmission = runSubmission;
     }
 
     /// <summary>
@@ -114,6 +119,15 @@ public class MarkdownHtmlRenderer
                     break;
                 case { Name: "a" } when node.GetAttributeValue("class", "").Contains(LayoutAreaMarkdownRenderer.UcrLink):
                     RenderUcrLink(builder, node);
+                    break;
+                case { Name: "div" } when node.GetAttributeValue("class", "").Contains(ExecutableCodeBlockRenderer.CellToolbarClass):
+                    builder.OpenComponent<MarkdownCodeCellToolbar>(1);
+                    builder.AddAttribute(2, nameof(MarkdownCodeCellToolbar.SubmissionId),
+                        node.GetAttributeValue(ExecutableCodeBlockRenderer.SubmissionIdAttribute, ""));
+                    builder.AddAttribute(3, nameof(MarkdownCodeCellToolbar.Language),
+                        node.GetAttributeValue(ExecutableCodeBlockRenderer.LanguageAttribute, "csharp"));
+                    builder.AddAttribute(4, nameof(MarkdownCodeCellToolbar.OnRun), _runSubmission);
+                    builder.CloseComponent();
                     break;
                 case { Name: "div" } when node.GetAttributeValue("class", "").Contains(LayoutAreaMarkdownRenderer.LayoutArea):
                     var rawPath = node.GetAttributeValue($"data-{LayoutAreaMarkdownRenderer.RawPath}", "");

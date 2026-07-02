@@ -120,6 +120,35 @@
     background-color: var(--neutral-layer-1);
 }
 
+/* --- Executable code cell (notebook shape: toolbar / code / output in one frame) --- */
+
+.markdown-body ::deep .md-code-cell {
+    border: 1px solid var(--neutral-stroke-rest);
+    border-radius: 6px;
+    overflow: hidden;
+    background: var(--neutral-layer-1);
+    margin-bottom: 1.5em;
+}
+
+.markdown-body ::deep .md-code-cell .code-content {
+    border: none;
+    border-radius: 0;
+    margin-bottom: 0;
+}
+
+.markdown-body ::deep .md-code-cell .md-code-cell-output {
+    border-top: 1px solid var(--neutral-stroke-rest);
+    border-left: 3px solid var(--accent-fill-rest);
+    background: var(--neutral-layer-2);
+    padding: 10px 12px;
+}
+
+.markdown-body ::deep .md-code-cell .md-code-cell-output .layout-area {
+    margin-top: 0;
+    margin-bottom: 0;
+    background-color: transparent;
+}
+
 .markdown-body ::deep ul,
 .markdown-body ::deep ol {
     margin-bottom: 1.5em;

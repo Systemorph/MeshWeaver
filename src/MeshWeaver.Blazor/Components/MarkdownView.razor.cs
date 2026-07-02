@@ -227,8 +227,24 @@ public partial class MarkdownView
             ? MarkdownViewLogic.RenderKernelResultAreas(Html, KernelOwnerPath(), _kernelReady, KernelAddress)
             : Html;
 
-        var renderer = new MarkdownHtmlRenderer(Mode, Stream);
+        // The cell toolbars' Run buttons are enabled only once the kernel activity is routable —
+        // the same gate as the live result-area embed above.
+        var renderer = new MarkdownHtmlRenderer(Mode, Stream,
+            _kernelReady ? ResubmitBlock : null);
         renderer.ShowReferencesSection = ShowReferencesSection;
         renderer.RenderHtml(builder, html);
+    }
+
+    // Re-posts one executable block's submission to the per-view kernel activity — the cell
+    // toolbar's Run button. The kernel streams the run's output into the result area named by the
+    // submission id (directly below the code, inside the same cell frame), so the reader sees the
+    // fresh result exactly where the previous one rendered.
+    private void ResubmitBlock(string submissionId)
+    {
+        var submission = CodeSubmissions?
+            .FirstOrDefault(s => string.Equals(s.Id, submissionId, StringComparison.OrdinalIgnoreCase));
+        if (submission is null || !_kernelReady)
+            return;
+        Hub.Post(submission, o => o.WithTarget(KernelAddress));
     }
 }

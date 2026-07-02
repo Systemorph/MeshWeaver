@@ -1,0 +1,14 @@
+{
+  "id": "SampleStatistics",
+  "namespace": "PythonDemo",
+  "name": "Sample statistics (Python)",
+  "nodeType": "Code",
+  "description": "A runnable Python Code node: press Run to execute it on the connected py/python-kernel worker; the output lands directly below the code.",
+  "isPersistent": true,
+  "content": {
+    "$type": "CodeConfiguration",
+    "code": "import statistics\n\n# `Inputs` carries caller-supplied parameters, exactly like the C# kernel's Inputs global.\nsamples = Inputs.get(\"samples\", [3, 1, 4, 1, 5, 9, 2, 6])\nprint(f\"n = {len(samples)}\")\n\n# A trailing expression is the node's return value (shown in the Output pane).\n{\"mean\": statistics.mean(samples), \"median\": statistics.median(samples), \"max\": max(samples)}",
+    "language": "python",
+    "isExecutable": true
+  }
+}

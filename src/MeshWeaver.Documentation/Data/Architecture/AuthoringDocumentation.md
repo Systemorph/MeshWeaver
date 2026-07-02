@@ -66,9 +66,11 @@ Icon: <svg …/>                           # inline SVG or /static/… path
 - **Static images** go through a content collection: `![alt](images/foo.svg)` resolves via `ImgPathMarkdownExtension` to the page's static content.
 - **Mermaid** fenced blocks render for sequence/flow diagrams where hand-drawn SVG is overkill.
 
-## Executable code blocks
+## Code samples are executable
 
-A fenced C# block with `--render <AreaName>` executes in the kernel and renders its return value as a live layout area — the reader sees the real control, not a screenshot:
+**When a doc page brings a code example, the example is executable.** A real, runnable sample is written as an executable fenced block, never a static fence — the reader sees the code, a **Run** button on the cell's toolbar, and the result **directly below the code** (the notebook-cell shape). Blocks auto-execute on page load and Run re-executes them on demand.
+
+The fence syntax:
 
 ```text
     ```csharp --render MyDemo --show-code
@@ -77,7 +79,16 @@ A fenced C# block with `--render <AreaName>` executes in the kernel and renders 
     ```
 ```
 
-Use these for every UI claim a page makes — if the doc says a control renders, the doc should *render it*. Pages that define sample models back them with real code in `src/MeshWeaver.Documentation/` and tests in `test/MeshWeaver.Documentation.Test` (see [Business Rules](/Doc/Architecture/BusinessRules) for the canonical example).
+- `--render <AreaName>` executes the block in the kernel and streams its last expression into the named result area below the code — the reader sees the real control, not a screenshot.
+- `--show-code` displays the source above the result (this is what turns the block into a full notebook cell with the Run toolbar). Omit it for a live demo whose code isn't the point.
+- `--execute <id>` runs silently (setup code shared by later blocks on the same page — blocks on one page share a single kernel REPL session, in document order).
+- The fence language flows onto the submission: ` ```python --render X` routes to the connected Python worker instead of the in-process Roslyn kernel.
+
+**A plain fence is the explicit marker for a non-runnable fragment** — pseudo-code, wire shapes, framework source excerpts (handlers, layout-area methods, service registrations), bash. If a fence shows real, self-contained runnable code, make it executable.
+
+**Every executable block is enforced by CI**: `DocExecutableBlocksTest` (in `test/MeshWeaver.Persistence.Test`) extracts every `--render`/`--execute` block from every embedded doc page and executes it through a real kernel session — a block that stops compiling fails the build naming the page and the block. The same test carries a coverage ratchet, so silently converting an executable block back to a prose-only fence is visible.
+
+Use executable blocks for every UI claim a page makes — if the doc says a control renders, the doc should *render it*. Pages that define sample models back them with real code in `src/MeshWeaver.Documentation/` and tests in `test/MeshWeaver.Documentation.Test` (see [Business Rules](/Doc/Architecture/BusinessRules) for the canonical example).
 
 ## Style
 

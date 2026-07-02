@@ -34,7 +34,7 @@ The portal's container images do **not** ship a Python interpreter. A view that 
 
 ## Live example
 
-This cell executes on page load. The `Process` pool runs `python3` off the kernel's scheduler; the single top-level `await` at the end is the sanctioned script-edge bridge (interactive cells run in the kernel's hosted exec hub — see [Interactive Markdown](../InteractiveMarkdown)); the blocking work itself happens inside the pool slot:
+This cell executes on page load, and the **Run** button in its toolbar re-executes it on demand — the result renders directly below the code, inside the same cell. The `Process` pool runs `python3` off the kernel's scheduler; the single top-level `await` at the end is the sanctioned script-edge bridge (interactive cells run in the kernel's hosted exec hub — see [Interactive Markdown](../InteractiveMarkdown)); the blocking work itself happens inside the pool slot:
 
 ```csharp --render PythonDemo --show-code
 using System.IO;
@@ -207,7 +207,7 @@ private static IIoPool ProcessPool(IMessageHub hub) =>
 
 The deployed sample instance's `Report` area is embedded below (on a host without Python it shows the graceful notice — that is the pattern working, not failing):
 
-@PythonDemo/PrimeReport/First25/Report
+@@PythonDemo/PrimeReport/First25/area:Report
 
 ## Rules recap — what NOT to do
 

@@ -62,12 +62,12 @@ public class DocExamplesRenderTest(PortalFixture fixture)
     public static TheoryData<string, int, string?, string?> ExamplePages => new()
     {
         // ---- GUI ----
-        { "Doc/GUI", 1, Stack, "live from the kernel" },
+        { "Doc/GUI", 3, Stack, "live from the kernel" },
         { "Doc/GUI/LayoutAreas", 1, Stack, "live render" },
         { "Doc/GUI/LayoutGrid", 4, Grid, "12 cols (100%)" },
         { "Doc/GUI/DataGrid", 6, DataGrid, "Widget" },
         { "Doc/GUI/ContainerControl", 2, Tabs, "Welcome to the app" },
-        { "Doc/GUI/ContainerControl/Stack", 2, Stack, "Stack layout demo" },
+        { "Doc/GUI/ContainerControl/Stack", 3, Stack, "Stack layout demo" },
         { "Doc/GUI/ContainerControl/Tabs", 3, Tabs, "General settings here" },
         { "Doc/GUI/ContainerControl/Toolbar", 5, Toolbar, null },
         { "Doc/GUI/ContainerControl/Splitter", 8, Splitter, "Left Panel" },
@@ -82,6 +82,7 @@ public class DocExamplesRenderTest(PortalFixture fixture)
         // ---- Architecture ----
         { "Doc/Architecture/UserInterface", 1, Stack, "Controls Language" },
         { "Doc/Architecture/UserInterface/AvailableControls", 1, Stack, "live in the kernel" },
+        { "Doc/Architecture/NativeMauiRendering", 1, Tabs, null },
         { "Doc/Architecture/ScriptExecution", 1, Table, "Rebound per submission" },
         { "Doc/Architecture/ScriptExecutionDemo", 2, null, "🎆" },
         { "Doc/Architecture/VectorSearch", 1, Table, "TextSearch" },
@@ -92,7 +93,7 @@ public class DocExamplesRenderTest(PortalFixture fixture)
         { "Doc/DataMesh/InteractiveMarkdown", 3, null, "Hello World" },
         { "Doc/DataMesh/QuerySyntax", 1, Table, "nodeType:Organization" },
         { "Doc/DataMesh/DataConfiguration", 1, Stack, "Data Configuration Quick Reference" },
-        { "Doc/DataMesh/DataModeling", 1, Stack, "Common Data Modeling Attributes" },
+        { "Doc/DataMesh/DataModeling", 2, Stack, "Common Data Modeling Attributes" },
         { "Doc/DataMesh/DataCubes", 5, Table, "Funding Ratio" },
         { "Doc/DataMesh/NodeTypes", 1, Stack, "This cell rendered at" },
         { "Doc/DataMesh/NodeTypeConfiguration", 1, Table, "NodeType summary card" },

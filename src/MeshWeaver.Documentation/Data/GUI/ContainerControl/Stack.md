@@ -127,7 +127,7 @@ Every `With*` method returns a **new** `StackControl` instance — the stack is 
 
 Pair `Orientation.Horizontal` with `WithHorizontalAlignment("end")` to push a button row to the right edge — the standard footer pattern for dialogs and forms:
 
-```csharp
+```csharp --render RightAlignedButtons --show-code
 Controls.Stack
     .WithOrientation(Orientation.Horizontal)
     .WithHorizontalGap("8px")
