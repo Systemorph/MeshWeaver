@@ -1,6 +1,6 @@
 # Action-Block Wedge Prevention
 
-Every portal wedge we have diagnosed — the atioz `_Activity` NotFound storms, the
+Every portal wedge we have diagnosed — the production `_Activity` NotFound storms, the
 `DeliveryFailure`/`ShutdownRequest` ping-pong, the composer `UpdateStreamRequest`
 `AccessContext`-null cascade — is the **same failure**: a per-partition hub runs a
 **single-threaded action block**, and a message whose *failure produces more messages*

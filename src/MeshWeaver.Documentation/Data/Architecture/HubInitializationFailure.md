@@ -17,7 +17,7 @@ To a user this is an **unrecoverable wedge**: the node is reachable (HTTP 200) b
 times out at 30s, and the GUI shows a useless "Area unavailable — did not become addressable after N
 retries." The root error (what actually went wrong in init) is **invisible**.
 
-> **Production incident (atioz, 2026-06-16).** Selecting an agent in the chat composer triggered a
+> **Production incident (2026-06-16).** Selecting an agent in the chat composer triggered a
 > hub whose init threw. The `AgenticPension` grain's action block was stuck behind the closed gate,
 > so every `DeliverMessage` to it timed out at 30s and the whole node went dark.
 

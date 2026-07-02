@@ -202,7 +202,7 @@ The deployed sample lives at `MathDemo/Matrix/Example`. Its `Inverse` layout are
 
 Here is the equivalent interactive-markdown cell: same NuGet directive, same MathNet call, executed by the kernel every time this page loads:
 
-```csharp --render MatrixInverseDemo --show-code
+````csharp --render MatrixInverseDemo --show-code
 #r "nuget:MathNet.Numerics, 5.0.0"
 using MathNet.Numerics.LinearAlgebra;
 
@@ -219,7 +219,7 @@ Controls.Markdown($"""
 ```
 **Determinant:** {m.Determinant()}
 """)
-```
+````
 
 On a fresh replica the first of the two pays the single MathNet restore; the second hits the in-memory cache instantly. Both use the same `NuGetAssemblyResolver` under the hood.
 

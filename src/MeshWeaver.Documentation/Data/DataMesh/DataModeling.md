@@ -108,7 +108,7 @@ Records are the idiomatic carrier for MeshWeaver data models. Compared to classe
 - **Value-based equality** — two records with identical property values are equal.
 - **`with` expressions** — create modified copies without touching the original.
 
-```csharp
+```csharp --render RecordSemanticsDemo --show-code
 // Define a record
 public record Person { public string Name { get; init; } }
 
@@ -117,6 +117,8 @@ var alice = new Person { Name = "Alice" };
 
 // Create a modified copy — original is unchanged
 var bob = alice with { Name = "Bob" };
+
+Controls.Markdown($"`alice` is still **{alice.Name}**; the copy `bob` is **{bob.Name}**.")
 ```
 
 These guarantees simplify change tracking and make records a natural fit for MeshWeaver's reactive, stream-based data layer.

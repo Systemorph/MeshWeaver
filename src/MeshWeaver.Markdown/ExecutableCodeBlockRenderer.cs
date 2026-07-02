@@ -1,4 +1,5 @@
-﻿using Markdig.Renderers;
+﻿using System.Web;
+using Markdig.Renderers;
 using Markdig.Renderers.Html;
 using Markdig.Syntax;
 
@@ -6,7 +7,11 @@ namespace MeshWeaver.Markdown;
 
 /// <summary>
 /// HTML renderer for <see cref="ExecutableCodeBlock"/>: emits the optional code display, the kernel
-/// result-area placeholder div, mermaid diagrams, and embedded layout areas.
+/// result-area placeholder div, mermaid diagrams, and embedded layout areas. An executable block
+/// that also shows its code is wrapped in a notebook-cell frame (<see cref="CellClass"/>): a toolbar
+/// marker the Blazor renderer turns into a Run affordance, the code beneath it, and the kernel
+/// result area attached directly below inside the same frame — the same reading shape as a Code
+/// node's notebook cell.
 /// </summary>
 public class ExecutableCodeBlockRenderer : CodeBlockRenderer
 {
@@ -15,6 +20,24 @@ public class ExecutableCodeBlockRenderer : CodeBlockRenderer
 
     /// <summary>Fence argument that requests the fenced header (language + args) be displayed (<c>--show-header</c>).</summary>
     public const string ShowHeader = "show-header";
+
+    /// <summary>CSS class of the notebook-cell frame wrapping an executable block that shows its code.</summary>
+    public const string CellClass = "md-code-cell";
+
+    /// <summary>
+    /// CSS class of the cell-toolbar marker div. The Blazor renderer replaces it with the
+    /// interactive toolbar (Run button + language badge); non-interactive renderers leave it empty.
+    /// </summary>
+    public const string CellToolbarClass = "md-code-cell-toolbar";
+
+    /// <summary>CSS class of the output segment holding the kernel result area inside the cell frame.</summary>
+    public const string CellOutputClass = "md-code-cell-output";
+
+    /// <summary>Attribute on the toolbar marker carrying the block's submission id (= its result-area name).</summary>
+    public const string SubmissionIdAttribute = "data-submission-id";
+
+    /// <summary>Attribute on the toolbar marker carrying the block's fence language.</summary>
+    public const string LanguageAttribute = "data-language";
 
     /// <summary>
     /// Literal placeholder emitted in place of the kernel address; substituted with the real address
@@ -40,7 +63,24 @@ public class ExecutableCodeBlockRenderer : CodeBlockRenderer
         fenced.Initialize();
 
         var args = fenced.Args;
-        if (args.TryGetValue(ShowHeader, out var showHeader) && showHeader is null || bool.TryParse(showHeader, out var sh) && sh)
+        var showsHeader = args.TryGetValue(ShowHeader, out var showHeader) && showHeader is null
+                          || bool.TryParse(showHeader, out var sh) && sh;
+        var showsCode = args.TryGetValue(ShowCode, out var showCode) && showCode is null
+                        || bool.TryParse(showCode, out var sc) && sc;
+
+        // Executable block WITH visible code → notebook-cell frame: toolbar (Run) on top,
+        // code beneath, output attached below inside the same frame. Executable blocks that
+        // hide their code (--execute setup, --render live demos) keep the bare result area.
+        var isCell = fenced.SubmitCode is not null && (showsHeader || showsCode);
+        if (isCell)
+        {
+            renderer.Write($"<div class=\"{CellClass}\">");
+            renderer.Write($"<div class=\"{CellToolbarClass}\" " +
+                           $"{SubmissionIdAttribute}=\"{HttpUtility.HtmlAttributeEncode(fenced.SubmitCode!.Id)}\" " +
+                           $"{LanguageAttribute}=\"{HttpUtility.HtmlAttributeEncode(fenced.SubmitCode.Language)}\"></div>");
+        }
+
+        if (showsHeader)
         {
             renderer.Write("<div class=\"code-content\">");
             renderer.Write($"<pre><code class='language-{fenced.Info}'>");
@@ -52,8 +92,7 @@ public class ExecutableCodeBlockRenderer : CodeBlockRenderer
             renderer.Write("</code></pre>");
             renderer.Write("</div>");
         }
-        else if (args.TryGetValue(ShowCode, out var showCode) && showCode is null ||
-                 (bool.TryParse(showCode, out var sc) && sc))
+        else if (showsCode)
         {
             renderer.Write("<div class=\"code-content\">");
             base.Write(renderer, obj);
@@ -61,7 +100,16 @@ public class ExecutableCodeBlockRenderer : CodeBlockRenderer
         }
 
         if (fenced.SubmitCode is not null)
+        {
+            if (isCell)
+                renderer.Write($"<div class=\"{CellOutputClass}\">");
             renderer.Writer.Write(LayoutAreaMarkdownRenderer.GetLayoutAreaDiv(KernelAddressPlaceholder, fenced.SubmitCode.Id, null));
+            if (isCell)
+                renderer.Write("</div>");
+        }
+
+        if (isCell)
+            renderer.Write("</div>");
 
         renderer.EnsureLine();
 
