@@ -12,7 +12,7 @@ out_dir="$pkg_root/meshweaver/_generated"
 mkdir -p "$out_dir"
 touch "$out_dir/__init__.py"
 
-python -m grpc_tools.protoc \
+"${PYTHON:-python3}" -m grpc_tools.protoc \
     -I "$proto_dir" \
     --python_out="$out_dir" \
     --grpc_python_out="$out_dir" \

@@ -10,6 +10,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.Authorization;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Blazor.Portal.Components;
@@ -36,6 +37,10 @@ public partial class UserProfile : ComponentBase
     /// <summary>Access service supplying the current user's access context (name, object id).</summary>
     [Inject]
     public required AccessService AccessService { get; init; }
+
+    /// <summary>Application configuration — read for the frontend-selection feature (Portal:ReactAppUrl).</summary>
+    [Inject]
+    public required IConfiguration Configuration { get; init; }
 
     /// <summary>Portal application providing the message hub used for the platform-admin check.</summary>
     [Inject]
@@ -137,6 +142,17 @@ public partial class UserProfile : ComponentBase
             Navigation.NavigateTo($"/User/{userId}");
         }
     }
+
+    /// <summary>The "Try the new frontend" entry only shows when the deployment configured a React app URL.</summary>
+    private bool showFrontendToggle => FrontendSelection.IsEnabled(Configuration);
+
+    /// <summary>
+    /// Switch this user to the React frontend: a full-page navigation to the toggle endpoint, which
+    /// sets the override cookie and redirects to the React app. Reversed by the React shell's
+    /// "Back to classic" entry (GET /frontend/blazor).
+    /// </summary>
+    private void SwitchToNewFrontend()
+        => Navigation.NavigateTo($"{FrontendSelection.EndpointPrefix}/react", forceLoad: true);
 
     private void NavigateToSettings()
     {

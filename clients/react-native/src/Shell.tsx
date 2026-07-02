@@ -1,0 +1,352 @@
+// The app shell — an Outlook-for-macOS-style chrome around the live layout area:
+//   ┌───────────────────────────────────────────────┐
+//   │ top bar:  ◆ MeshWeaver   [ search … ]      ◍   │
+//   ├───────────────────────────────────────────────┤
+//   │ toolbar:  ⌂ Home  ›  Doc  ›  Architecture      │   (breadcrumb navigation)
+//   ├──────────┬──────────────────────────┬──────────┤
+//   │ left     │  main content            │ right    │
+//   │ menus    │  (.markdown-body doc     │ sidebar  │
+//   │ (from    │   OR a client screen)    │ (on this │
+//   │ providers)│                          │  page)   │
+//   └──────────┴──────────────────────────┴──────────┘
+//
+// The left menus are NOT hardcoded — they come from the mesh's menu providers, streamed into the
+// layout store as $Menu:{context} (Node / Mesh / AI; see NodeMenuItemsExtensions), plus the in-app
+// client contexts (You: profile / voice / connect) — the same split the MAUI PortalShellPage renders.
+import { useEffect, useState, useSyncExternalStore, type ReactNode } from "react";
+import { View, Text, TextInput, Pressable, ScrollView, StyleSheet } from "react-native";
+import { RenderArea, type AreaSource, type AreaTree } from "@meshweaver/react/core";
+import { type NavTarget } from "./nav";
+import { CLIENT_MENUS, ClientScreen, type ClientDestination } from "./screens";
+import { useStyles, useTheme, type Palette } from "./theme";
+
+const useSheet = () => useStyles(makeStyles);
+
+const CONTENT_AREA = "Overview";
+// The startup / home landing. On an anonymous local mesh there is no personal user page, so we land on
+// the documentation home; connected to a portal with a signed-in identity this is where the user's own
+// node/area would go (the MAUI app lands on device-user/Activity).
+export const HOME: NavTarget = { address: "Doc/Architecture", area: CONTENT_AREA };
+
+// The mesh menu contexts streamed as $Menu:{context}, in display order, with a glyph like MAUI's.
+const MESH_CONTEXTS: { key: string; label: string; glyph: string }[] = [
+  { key: "$Menu:Mesh", label: "Mesh", glyph: "▦" },
+  { key: "$Menu:Node", label: "This node", glyph: "🧊" },
+  { key: "$Menu:AI", label: "AI", glyph: "✨" },
+];
+
+interface MenuItem {
+  label?: string;
+  href?: string;
+  area?: string;
+  order?: number;
+}
+
+function useTree(source: AreaSource): AreaTree {
+  return useSyncExternalStore(source.subscribe, source.getState, source.getState);
+}
+
+function menuItems(tree: AreaTree, key: string): MenuItem[] {
+  const items = (tree.areas?.[key] as { items?: MenuItem[] } | undefined)?.items ?? [];
+  return [...items].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+}
+
+export function Shell({
+  source,
+  nav,
+  clientScreen,
+  onNavigate,
+  onClientScreen,
+  onReconnect,
+}: {
+  source: AreaSource;
+  nav: NavTarget;
+  clientScreen: ClientDestination | null;
+  onNavigate: (t: NavTarget) => void;
+  onClientScreen: (d: ClientDestination | null) => void;
+  onReconnect: () => void;
+}): ReactNode {
+  const tree = useTree(source);
+  const styles = useSheet();
+  return (
+    <View style={styles.root}>
+      <TopBar onNavigate={onNavigate} />
+      <Breadcrumb nav={nav} clientScreen={clientScreen} onNavigate={onNavigate} />
+      <View style={styles.body}>
+        <LeftMenu tree={tree} nav={nav} clientScreen={clientScreen} onNavigate={onNavigate} onClientScreen={onClientScreen} />
+        {clientScreen ? (
+          <View style={styles.content}>
+            <ClientScreen destination={clientScreen} onConnected={onReconnect} />
+          </View>
+        ) : (
+          <ContentPane source={source} nav={nav} onNavigate={onNavigate} />
+        )}
+        <RightSidebar contentKey={clientScreen ?? `${nav.address}/${nav.area}`} />
+      </View>
+    </View>
+  );
+}
+
+// ── top bar ───────────────────────────────────────────────────────────────────
+function TopBar({ onNavigate }: { onNavigate: (t: NavTarget) => void }): ReactNode {
+  const [q, setQ] = useState("");
+  const styles = useSheet();
+  const { mode, toggle, palette } = useTheme();
+  return (
+    <View style={styles.topbar}>
+      <Pressable style={styles.brand} onPress={() => onNavigate(HOME)}>
+        <View style={styles.logo}><Text style={styles.logoMark}>◆</Text></View>
+        <Text style={styles.brandText}>MeshWeaver</Text>
+      </Pressable>
+      <View style={styles.searchWrap}>
+        <Text style={styles.searchIcon}>⌕</Text>
+        <TextInput
+          style={styles.search}
+          value={q}
+          onChangeText={setQ}
+          placeholder="Search or go to a path (e.g. Doc/Architecture)"
+          placeholderTextColor={palette.textMuted}
+          onSubmitEditing={() => {
+            const a = q.trim().replace(/^\/+/, "");
+            if (a) onNavigate({ address: a, area: CONTENT_AREA });
+          }}
+          returnKeyType="go"
+        />
+      </View>
+      <Pressable style={({ hovered }: any) => [styles.themeBtn, hovered && styles.themeBtnHover]} onPress={toggle} accessibilityLabel="Toggle theme">
+        <Text style={styles.themeBtnText}>{mode === "dark" ? "☀" : "☾"}</Text>
+      </Pressable>
+      <View style={styles.avatar}><Text style={styles.avatarText}>R</Text></View>
+    </View>
+  );
+}
+
+// ── breadcrumb toolbar ──────────────────────────────────────────────────────────
+function Breadcrumb({
+  nav,
+  clientScreen,
+  onNavigate,
+}: {
+  nav: NavTarget;
+  clientScreen: ClientDestination | null;
+  onNavigate: (t: NavTarget) => void;
+}): ReactNode {
+  const segs = nav.address.split("/").filter(Boolean);
+  const styles = useSheet();
+  return (
+    <View style={styles.crumbs}>
+      <Pressable style={({ hovered }: any) => [styles.crumbBtn, hovered && styles.crumbHover]} onPress={() => onNavigate(HOME)}>
+        <Text style={styles.crumbHome}>⌂ Home</Text>
+      </Pressable>
+      {!clientScreen &&
+        segs.map((seg, i) => {
+          const address = segs.slice(0, i + 1).join("/");
+          const last = i === segs.length - 1;
+          return (
+            <View key={address} style={styles.crumbSeg}>
+              <Text style={styles.crumbSep}>›</Text>
+              <Pressable style={({ hovered }: any) => [styles.crumbBtn, hovered && styles.crumbHover]} onPress={() => onNavigate({ address, area: CONTENT_AREA })}>
+                <Text style={[styles.crumbText, last && styles.crumbTextLast]}>{seg}</Text>
+              </Pressable>
+            </View>
+          );
+        })}
+      {nav.area !== CONTENT_AREA && !clientScreen ? <Text style={[styles.crumbSep, { marginLeft: 4 }]}>· {nav.area}</Text> : null}
+    </View>
+  );
+}
+
+// ── left menus (from providers) ─────────────────────────────────────────────────
+function LeftMenu({
+  tree,
+  nav,
+  clientScreen,
+  onNavigate,
+  onClientScreen,
+}: {
+  tree: AreaTree;
+  nav: NavTarget;
+  clientScreen: ClientDestination | null;
+  onNavigate: (t: NavTarget) => void;
+  onClientScreen: (d: ClientDestination | null) => void;
+}): ReactNode {
+  const styles = useSheet();
+  return (
+    <View style={styles.left}>
+      <ScrollView contentContainerStyle={{ paddingVertical: 10 }}>
+        <NavRow label="⌂  Home" active={!clientScreen && nav.address === HOME.address} onPress={() => onNavigate(HOME)} />
+
+        {MESH_CONTEXTS.map((ctx) => {
+          const items = menuItems(tree, ctx.key);
+          if (items.length === 0) return null;
+          return (
+            <View key={ctx.key}>
+              <Text style={styles.sectionLabel}>{ctx.glyph}  {ctx.label}</Text>
+              {items.map((it, i) => (
+                <NavRow
+                  key={i}
+                  label={it.label ?? it.area ?? ""}
+                  active={!clientScreen && nav.area === it.area}
+                  onPress={() => it.area && onNavigate({ address: nav.address, area: it.area })}
+                />
+              ))}
+            </View>
+          );
+        })}
+
+        {CLIENT_MENUS.map((ctx) => (
+          <View key={ctx.context}>
+            <Text style={styles.sectionLabel}>{ctx.glyph}  {ctx.context}</Text>
+            {ctx.items.map((it) => (
+              <NavRow
+                key={it.destination}
+                label={it.label}
+                active={clientScreen === it.destination}
+                onPress={() => onClientScreen(it.destination)}
+              />
+            ))}
+          </View>
+        ))}
+      </ScrollView>
+    </View>
+  );
+}
+
+function NavRow({ label, active, onPress }: { label: string; active: boolean; onPress: () => void }): ReactNode {
+  const styles = useSheet();
+  return (
+    <Pressable style={({ hovered }: any) => [styles.navItem, hovered && styles.navItemHover, active && styles.navItemActive]} onPress={onPress}>
+      <Text style={[styles.navItemText, active && styles.navItemTextActive]} numberOfLines={1}>{label}</Text>
+    </Pressable>
+  );
+}
+
+// ── main content ────────────────────────────────────────────────────────────────
+function ContentPane({ source, nav, onNavigate }: { source: AreaSource; nav: NavTarget; onNavigate: (t: NavTarget) => void }): ReactNode {
+  const styles = useSheet();
+  const onClickCapture = (e: any) => {
+    const anchor = e?.target?.closest?.("a");
+    if (!anchor) return;
+    const t = anchor.getAttribute("href") ? parseHrefLocal(anchor.getAttribute("href"), nav.address) : null;
+    if (t) {
+      e.preventDefault();
+      onNavigate(t);
+    }
+  };
+  return (
+    <View style={styles.content}>
+      <ScrollView style={styles.contentScroll} contentContainerStyle={styles.contentInner}>
+        <View style={styles.contentColumn} {...({ onClick: onClickCapture } as any)}>
+          <RenderArea areaKey={nav.area} />
+        </View>
+      </ScrollView>
+    </View>
+  );
+}
+
+// ── right sidebar ("On this page" TOC) ──────────────────────────────────────────
+function RightSidebar({ contentKey }: { contentKey: string }): ReactNode {
+  const styles = useSheet();
+  const [toc, setToc] = useState<{ id: string; text: string; level: number }[]>([]);
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    let raf = 0;
+    const build = () => {
+      const nodes = Array.from(document.querySelectorAll(".markdown-body h1, .markdown-body h2, .markdown-body h3")) as HTMLElement[];
+      const items = nodes
+        .filter((n) => (n.tagName === "H1" ? n.parentElement?.classList.contains("markdown-body") : true))
+        .map((n) => ({ id: ensureId(n), text: (n.textContent ?? "").trim(), level: n.tagName === "H3" ? 3 : n.tagName === "H2" ? 2 : 1 }))
+        .filter((i) => i.text.length > 0);
+      setToc(items.length && items[0].level === 1 ? items.slice(1) : items);
+    };
+    setToc([]);
+    const obs = new MutationObserver(() => { cancelAnimationFrame(raf); raf = requestAnimationFrame(build); });
+    obs.observe(document.body, { childList: true, subtree: true });
+    build();
+    return () => { obs.disconnect(); cancelAnimationFrame(raf); };
+  }, [contentKey]);
+
+  return (
+    <View style={styles.right}>
+      <ScrollView contentContainerStyle={{ padding: 16 }}>
+        <Text style={styles.sectionLabel}>On this page</Text>
+        {toc.length === 0 ? (
+          <Text style={styles.tocEmpty}>—</Text>
+        ) : (
+          toc.map((h, i) => (
+            <Pressable key={i} style={({ hovered }: any) => [styles.tocItem, h.level === 3 && styles.tocItemSub, hovered && styles.navItemHover]} onPress={() => scrollToId(h.id)}>
+              <Text style={[styles.tocText, h.level === 3 && styles.tocTextSub]} numberOfLines={2}>{h.text}</Text>
+            </Pressable>
+          ))
+        )}
+      </ScrollView>
+    </View>
+  );
+}
+
+// ── helpers ─────────────────────────────────────────────────────────────────────
+function parseHrefLocal(href: string, currentAddress: string): NavTarget | null {
+  if (!href || href.startsWith("#") || /^https?:\/\//i.test(href) || href.startsWith("mailto:")) return null;
+  const raw = (href.startsWith("/") ? href : `${currentAddress}/${href}`).replace(/^\/+/, "");
+  const parts: string[] = [];
+  for (const seg of raw.split("/")) {
+    if (seg === "..") parts.pop();
+    else if (seg && seg !== ".") parts.push(seg);
+  }
+  return parts.length ? { address: parts.join("/"), area: CONTENT_AREA } : null;
+}
+function ensureId(el: HTMLElement): string {
+  if (!el.id) el.id = (el.textContent ?? "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+  return el.id;
+}
+function scrollToId(id: string): void {
+  if (typeof document !== "undefined") document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+// ── styles (Outlook-for-macOS palette, themed) ───────────────────────────────────
+const makeStyles = (p: Palette) => StyleSheet.create({
+  root: { flex: 1, backgroundColor: p.appBg },
+  topbar: { height: 52, flexDirection: "row", alignItems: "center", paddingHorizontal: 14, gap: 12, backgroundColor: p.topbarBg, borderBottomWidth: 1, borderBottomColor: p.border },
+  brand: { flexDirection: "row", alignItems: "center", gap: 8, width: 210 },
+  logo: { width: 26, height: 26, borderRadius: 6, backgroundColor: p.accent, alignItems: "center", justifyContent: "center" },
+  logoMark: { color: p.onAccent, fontSize: 14, fontWeight: "700" },
+  brandText: { fontSize: 15, fontWeight: "700", color: p.text },
+  searchWrap: { flex: 1, maxWidth: 620, alignSelf: "center", flexDirection: "row", alignItems: "center", gap: 6, backgroundColor: p.surface, borderWidth: 1, borderColor: p.border, borderRadius: 8, paddingHorizontal: 10, height: 32 },
+  searchIcon: { fontSize: 15, color: p.textMuted },
+  search: { flex: 1, fontSize: 13.5, color: p.text, height: 30, ...({ outlineStyle: "none" } as any) },
+  themeBtn: { width: 30, height: 30, borderRadius: 15, alignItems: "center", justifyContent: "center" },
+  themeBtnHover: { backgroundColor: p.navHover },
+  themeBtnText: { fontSize: 16, color: p.textSubtle },
+  avatar: { width: 30, height: 30, borderRadius: 15, backgroundColor: "#5b5fc7", alignItems: "center", justifyContent: "center" },
+  avatarText: { color: "#ffffff", fontSize: 13, fontWeight: "600" },
+
+  crumbs: { flexDirection: "row", alignItems: "center", height: 40, paddingHorizontal: 10, backgroundColor: p.surface, borderBottomWidth: 1, borderBottomColor: p.border, gap: 1 },
+  crumbSeg: { flexDirection: "row", alignItems: "center", gap: 1 },
+  crumbBtn: { paddingHorizontal: 8, paddingVertical: 5, borderRadius: 5 },
+  crumbHover: { backgroundColor: p.navHover },
+  crumbHome: { fontSize: 13, color: p.accent, fontWeight: "600" },
+  crumbSep: { fontSize: 13, color: p.textMuted },
+  crumbText: { fontSize: 13, color: p.textSubtle },
+  crumbTextLast: { color: p.text, fontWeight: "600" },
+
+  body: { flex: 1, flexDirection: "row", minHeight: 0 },
+  left: { width: 236, flexGrow: 0, flexShrink: 0, backgroundColor: p.sidebarBg, borderRightWidth: 1, borderRightColor: p.border },
+  sectionLabel: { fontSize: 11, fontWeight: "700", color: p.textMuted, letterSpacing: 0.5, textTransform: "uppercase", paddingHorizontal: 16, marginTop: 14, marginBottom: 6 },
+  navItem: { paddingHorizontal: 16, paddingVertical: 7, marginHorizontal: 8, borderRadius: 6 },
+  navItemHover: { backgroundColor: p.navHover },
+  navItemActive: { backgroundColor: p.navActiveBg },
+  navItemText: { fontSize: 13.5, color: p.text },
+  navItemTextActive: { color: p.navActiveText, fontWeight: "600" },
+
+  content: { flex: 1, minWidth: 0, backgroundColor: p.appBg },
+  contentScroll: { flex: 1 },
+  contentInner: { paddingHorizontal: 40, paddingVertical: 28, alignItems: "center" },
+  contentColumn: { width: "100%", maxWidth: 900 },
+
+  right: { width: 250, flexGrow: 0, flexShrink: 0, backgroundColor: p.rightBg, borderLeftWidth: 1, borderLeftColor: p.border },
+  tocEmpty: { color: p.textMuted, fontSize: 13, paddingHorizontal: 16 },
+  tocItem: { paddingVertical: 4, paddingHorizontal: 8, borderRadius: 5, marginBottom: 1 },
+  tocItemSub: { paddingLeft: 20 },
+  tocText: { fontSize: 12.5, color: p.textSubtle, lineHeight: 17 },
+  tocTextSub: { color: p.textMuted, fontSize: 12 },
+});

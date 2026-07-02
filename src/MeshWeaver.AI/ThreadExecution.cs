@@ -1093,7 +1093,11 @@ internal static class ThreadExecution
                 .Select(cell => request with
                 {
                     AgentName = request.AgentName ?? cell!.AgentName,
-                    ModelName = request.ModelName ?? cell!.ModelName,
+                    // The persisted cell carries the COMPOSER form of the model — the full
+                    // node path ("Provider/OpenAICompatible/qwen-small"). Normalize exactly
+                    // like the entry boundary above (and like Harness on the next line):
+                    // factories/credential resolution key on the bare model id.
+                    ModelName = SelectionId.IdOf(request.ModelName ?? cell!.ModelName),
                     Harness = SelectionId.IdOf(request.Harness ?? cell!.Harness)
                 })
                 .Catch<RoundParams, Exception>(ex =>

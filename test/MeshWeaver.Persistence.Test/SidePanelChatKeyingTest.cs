@@ -84,6 +84,23 @@ public class SidePanelChatKeyingTest
     }
 
     [Fact]
+    public void DoesNotHide_WhenNavThreadIsThePanelThread_UnderADifferentRepresentation()
+    {
+        // The nav-context emits the panel's OWN thread with a DIFFERENT representation — a "User/"-
+        // prefixed path (main view was /User/Acme), or a trailing cell segment — while ContentPath is
+        // the bare thread path. Full-path equality (line 65) misses this and collapses the active chat:
+        // the round-3 vanish in SidePanelChatTenMessagesTest, where a BACKGROUND nav emission (NOT a user
+        // full-screen open) hit the panel's own thread. Thread-slug identity keeps it open.
+        Assert.False(SidePanelChatKeying.ShouldHideSidePanelOnThreadNavigation(
+            ThreadType, "User/Acme/_Thread/t1", sidePanelContentPath: "Acme/_Thread/t1", isSidePanelVisible: true));
+        Assert.False(SidePanelChatKeying.ShouldHideSidePanelOnThreadNavigation(
+            ThreadType, "Acme/_Thread/t1/cell-42", sidePanelContentPath: "Acme/_Thread/t1", isSidePanelVisible: true));
+        // A genuinely different slug is still a different thread → still hides (the guard is precise).
+        Assert.True(SidePanelChatKeying.ShouldHideSidePanelOnThreadNavigation(
+            ThreadType, "User/Acme/_Thread/t2", sidePanelContentPath: "Acme/_Thread/t1", isSidePanelVisible: true));
+    }
+
+    [Fact]
     public void DoesNotHide_WhenPanelNotVisible_OrNavigatedNodeIsNotAThread()
     {
         // Panel already hidden → nothing to hide.

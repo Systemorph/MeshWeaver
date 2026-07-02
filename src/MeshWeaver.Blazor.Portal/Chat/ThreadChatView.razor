@@ -399,6 +399,25 @@ else
                                     }
                                 </text>;
 
+                            @* Wrap the whole round's tool calls in a collapsible group so a long
+                               tool-call history collapses to a single summary line once complete and
+                               stops pushing the assistant's reply off-screen. Open while any call runs,
+                               or when the cell has no assistant text (tool-only — the user needs to see
+                               what was done); collapsed once complete with a reply present. *@
+                            var anyPending = state.ToolCalls.Any(c => c.Result is null);
+                            var failCount = state.ToolCalls.Count(c => !c.IsSuccess && c.Result is not null);
+                            var anyFailed = failCount > 0;
+                            var groupHasText = !string.IsNullOrWhiteSpace(state.Text);
+                            var groupOpen = anyPending || !groupHasText;
+                            var groupIcon = anyPending ? "↗" : (anyFailed ? "✗" : "✓");
+                            var groupLabel = anyFailed
+                                ? $"{state.ToolCalls.Count} tool calls ({failCount} failed)"
+                                : $"{state.ToolCalls.Count} tool calls";
+                            <details class="thread-msg-tool-group" open="@groupOpen">
+                            <summary class="thread-msg-tool-group-summary">
+                                <span class="thread-msg-tool-done @(anyFailed ? "thread-msg-tool-error" : "")">@groupIcon</span>
+                                @groupLabel
+                            </summary>
                             <div class="thread-msg-tool-calls">
                                 @foreach (var call in toolView.Visible)
                                 {
@@ -432,6 +451,7 @@ else
                                     }
                                 }
                             </div>
+                            </details>
                         }
                     }
                     </div>

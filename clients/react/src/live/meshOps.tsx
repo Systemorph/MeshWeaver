@@ -1,0 +1,72 @@
+// The mesh OPERATIONS surface a live control needs beyond the layout-area AreaSource contract:
+// watching arbitrary NODE streams (a thread node + its per-message satellite cells) and the canonical
+// thread-submission ops (the client twin of MeshWeaver.AI.HubThreadExtensions — StartThread /
+// SubmitMessage). The react package stays transport-free (the same decoupling GrpcAreaSource gets via
+// MeshConnectionLike): @meshweaver/client-web's `Mesh` satisfies this interface STRUCTURALLY, so the
+// host app wires it with
+//
+//   import { Mesh } from "@meshweaver/client-web";
+//   const mesh = Mesh.from(connection);          // or await Mesh.connect(url, { token })
+//   <MeshOpsProvider ops={mesh}> ... <RenderArea/> ... </MeshOpsProvider>
+//
+// and every wire shape (CreateNodeRequest for StartThread, RFC 7396 PatchDataRequest for
+// SubmitMessage / control-plane flips) is produced — and tested — in @meshweaver/client-web.
+
+import { createContext, useContext } from "react";
+import type { ReactNode } from "react";
+
+/** One emission of a node's live stream (the shape meshNodeFromChange yields). */
+export interface MeshNodeState {
+  path: string;
+  name?: string;
+  nodeType?: string;
+  content: Record<string, unknown>;
+  [key: string]: unknown;
+}
+
+export interface ThreadSubmitOptions {
+  agentName?: string;
+  modelName?: string;
+  harness?: string;
+  contextPath?: string;
+  attachments?: string[];
+  createdBy?: string;
+  authorName?: string;
+}
+
+export interface MeshOps {
+  /** Subscribe to a node's live state — yields on every change (initial state, then updates). */
+  watch(path: string): AsyncIterable<MeshNodeState>;
+  /**
+   * Create a thread under `namespacePath` with the first user message queued — ONE CreateNodeRequest
+   * carrying the seeded thread node (content.pendingUserMessages + composer), targeted at the
+   * namespace hub. The per-thread submission watcher dispatches the first round.
+   */
+  startThread(
+    namespacePath: string,
+    userText: string,
+    opts?: ThreadSubmitOptions,
+  ): Promise<{ path: string; userMessageId?: string }>;
+  /**
+   * Queue a user message on an existing thread — a JSON-merge PatchDataRequest appending to
+   * content.userMessageIds + content.pendingUserMessages (the client twin of
+   * `GetMeshNodeStream(threadPath).Update(...)`). Resolves to the new message id, or null for a
+   * whitespace-only no-op.
+   */
+  submitMessage(threadPath: string, userText: string, opts?: ThreadSubmitOptions): Promise<string | null>;
+  /** Field-level partial node update (RFC 7396) — control-plane flips like requestedStatus. */
+  patch(path: string, fields: Record<string, unknown>): void;
+  /** Optional mesh query — when present it feeds the agent/model selectors (nodeType:Agent / nodeType:Model). */
+  search?(query: string, basePath?: string, limit?: number): Promise<Record<string, unknown>[]>;
+}
+
+const MeshOpsCtx = createContext<MeshOps | null>(null);
+
+/** The MeshOps of the nearest provider, or null when the app renders without a live mesh connection. */
+export function useMeshOps(): MeshOps | null {
+  return useContext(MeshOpsCtx);
+}
+
+export function MeshOpsProvider({ ops, children }: { ops: MeshOps | null; children: ReactNode }) {
+  return <MeshOpsCtx.Provider value={ops}>{children}</MeshOpsCtx.Provider>;
+}

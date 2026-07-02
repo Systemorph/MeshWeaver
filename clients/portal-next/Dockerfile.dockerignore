@@ -1,0 +1,11 @@
+# BuildKit per-Dockerfile ignore (applies when building with -f portal-next/Dockerfile).
+# Sources only — dependencies install inside the image from portal-next's lockfile.
+**/node_modules
+**/.next
+**/dist
+**/coverage
+**/*.tsbuildinfo
+portal/
+python/
+typescript/
+react-native/

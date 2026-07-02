@@ -18,5 +18,20 @@ export {
   type LayoutAreaReference,
   type GrpcAreaOptions,
 } from "./live/grpcSource.js";
+export { normalizeEntityStore } from "./live/wire.js";
+export {
+  MeshOpsProvider,
+  useMeshOps,
+  type MeshOps,
+  type MeshNodeState,
+  type ThreadSubmitOptions,
+} from "./live/meshOps.js";
+export {
+  EmbeddedAreaProvider,
+  useAreaSourceFactory,
+  type AreaSourceFactory,
+  type EmbeddedAreaHandle,
+  type EmbeddedAreaReference,
+} from "./render/embeddedArea.js";
 export { getPointer, setPointer, mergePatch, resolve, bindingPointer } from "./area/pointer.js";
 export type { AreaSource, AreaTree, UiControl, Skin, NamedArea, MeshEvent, Json } from "./area/types.js";

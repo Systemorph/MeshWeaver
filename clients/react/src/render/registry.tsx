@@ -6,11 +6,15 @@ import { skinRegistry, DefaultStackSkin } from "./skins.js";
 import { displayControls } from "../controls/display.js";
 import { inputControls } from "../controls/inputs.js";
 import { dataControls } from "../controls/data.js";
+import { chartControls } from "../controls/chart.js";
+import { pivotControls } from "../controls/pivot.js";
 import { navControls } from "../controls/nav.js";
 import { feedbackControls } from "../controls/feedback.js";
 import { containerControls } from "../controls/containers.js";
 import { editorControls } from "../controls/editors.js";
 import { meshControls } from "../controls/mesh.js";
+import { appearanceControls } from "../controls/appearance.js";
+import { itemTemplateControls } from "../controls/itemTemplate.js";
 
 export type { ControlComponent };
 
@@ -19,11 +23,15 @@ export const controlRegistry: Record<string, ControlComponent> = {
   ...displayControls,
   ...inputControls,
   ...dataControls,
+  ...chartControls,
+  ...pivotControls,
   ...navControls,
   ...feedbackControls,
   ...containerControls,
   ...editorControls,
   ...meshControls,
+  ...appearanceControls,
+  ...itemTemplateControls,
 };
 
 export function FallbackControl({ control }: { control: UiControl }): ReactNode {

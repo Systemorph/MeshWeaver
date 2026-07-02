@@ -166,6 +166,11 @@ public static class MeshExtensions
             var callback = current.Configuration.Get<GrainKeepAliveCallback>();
             if (callback != null)
             {
+                // Debug, NOT Information: this fires once per HeartBeatEvent (per sync stream,
+                // every 45s). At the accumulation scale a wedge produces (hundreds-to-thousands
+                // of live streams) an Information line here was ~11% of the pod's CPU (console
+                // logger) and pure Loki ingest noise — the heartbeat itself is the signal, the
+                // log line is diagnostics.
                 var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.GrainKeepAlive");
                 // Debug, NOT Information: this fires for EVERY sync-stream keep-alive heartbeat on EVERY
                 // open stream, every heartbeat interval — the single highest-volume log line on a busy
@@ -1568,14 +1573,22 @@ public static class MeshExtensions
         if (handlers.Count == 0)
             return Observable.Empty<System.Reactive.Unit>();
 
-        // For each matching handler: invoke Handle (reactive, logged-and-swallowed), then
-        // persist any additional nodes it returns. Sequentially via Concat to preserve
-        // the original order's side-effect dependencies.
+        // For each matching handler: invoke Handle, then persist any additional nodes it returns.
+        // Sequentially via Concat to preserve the original order's side-effect dependencies.
+        // Handle's error is propagated ONLY for handlers that declare FailsCreateOnError (a
+        // required-side-effect handler — e.g. the Space creator-Admin grant); the create handler's
+        // Subscribe turns that into a CreateNodeResponse.Fail. Best-effort handlers (onboarding
+        // seeds) keep log-and-continue. NEVER blanket-swallow a critical grant into a silent Ok —
+        // that shipped ownerless, un-navigable Spaces (AGENTS.md: no .Catch(Observable.Empty)).
         return handlers
             .Select(handler =>
             {
-                var handleObs = handler.Handle(node, createdBy)
-                    .Catch<System.Reactive.Unit, Exception>(ex =>
+                var rawHandle = handler.Handle(node, createdBy);
+                var handleObs = handler.FailsCreateOnError
+                    ? rawHandle.Do(_ => { }, ex => logger.LogError(ex,
+                        "Critical post-creation handler {Handler} failed for node {Path} — failing the create",
+                        handler.GetType().Name, node.Path))
+                    : rawHandle.Catch<System.Reactive.Unit, Exception>(ex =>
                     {
                         logger.LogWarning(ex,
                             "Post-creation handler {Handler} failed for node {Path}",

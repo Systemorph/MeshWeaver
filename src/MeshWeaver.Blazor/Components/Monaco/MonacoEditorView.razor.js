@@ -549,35 +549,45 @@ export function registerCompletionProvider(editorId, config) {
 
                 // @ can be followed by paths with slashes: @agent/Name, @content/path/file
                 // / is only a trigger at word boundary (for commands like /agent)
-                // For @, require start-of-string or whitespace BEFORE the @ — this prevents
-                // "@/path/@content/..." from triggering a new @-reference inside an existing path.
-                let regex;
                 if (trigger === '/') {
                     // A slash-command is only valid at the very START of the composer (line 1, only
                     // optional whitespace before it). Triggering on a '/' mid-code — paths (`cd /etc`),
                     // "//" comments, `a / b`, `http://` — popped the command list, which is now heavy
                     // (every CLI command + skill) and churned Monaco → "stuck when entering code".
                     if (position.lineNumber !== 1) continue;
-                    regex = new RegExp(`^\\s*${escapedTrigger}([\\w\\-\\.]+)?$`);
-                } else {
-                    regex = new RegExp(`(?:^|\\s|")${escapedTrigger}([\\w\\-\\./:]+)?$`);
-                }
-
-                const match = textUntilPosition.match(regex);
-                if (match) {
-                    if (trigger === '/') {
+                    const regex = new RegExp(`^\\s*${escapedTrigger}([\\w\\-\\.]+)?$`);
+                    const match = textUntilPosition.match(regex);
+                    if (match) {
                         // Adjust match to not include the leading space
                         const fullMatch = match[0];
                         const slashIndex = fullMatch.indexOf('/');
                         match[0] = fullMatch.substring(slashIndex);
-                    } else {
-                        // Adjust @ match to not include the leading space/quote
-                        const fullMatch = match[0];
-                        const atIndex = fullMatch.indexOf('@');
-                        match[0] = fullMatch.substring(atIndex);
+                        triggerMatch = match;
+                        break;
                     }
-                    triggerMatch = match;
-                    break;
+                } else {
+                    // @-reference trigger. Fire whenever the cursor is INSIDE an @-token being typed:
+                    // the most recent '@' before the cursor must (a) sit on a word boundary — i.e. NOT
+                    // immediately follow an alphanumeric/underscore, which would make it an email like
+                    // "foo@bar" — and (b) be followed only by valid path characters up to the cursor
+                    // (no whitespace / break). This replaces the old positive lookbehind (?:^|\s|")
+                    // that wrongly suppressed the trigger after legitimate word boundaries that are not
+                    // whitespace — punctuation like ',', '.', ':', '!', '(' or a non-ASCII letter — so
+                    // "Check @AgenticPension," followed by "@" (or "see.@Fund", "(@Fund") now triggers.
+                    // The boundary excludes a preceding '\w' (email "foo@bar") AND a preceding '/' — the
+                    // latter keeps the old intent of NOT re-opening a new @-reference INSIDE an existing
+                    // path token (e.g. "@/path/@content", where the second '@' follows a '/').
+                    const atIndex = textUntilPosition.lastIndexOf(trigger);
+                    if (atIndex >= 0) {
+                        const afterTrigger = textUntilPosition.substring(atIndex + trigger.length);
+                        const charBefore = atIndex > 0 ? textUntilPosition[atIndex - 1] : '';
+                        const onWordBoundary = atIndex === 0 || !/[\w/]/.test(charBefore);
+                        const withinToken = /^[\w\-\.\/:]*$/.test(afterTrigger);
+                        if (onWordBoundary && withinToken) {
+                            triggerMatch = [trigger + afterTrigger, afterTrigger];
+                            break;
+                        }
+                    }
                 }
             }
 
