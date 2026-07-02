@@ -97,12 +97,13 @@ public static class JsonSynchronizationStream
             if (eventType is null) return null;
             var pathProp = eventType.GetProperty("Path");
             if (pathProp is null) return null;
+            var kindProp = eventType.GetProperty("Kind");
 
             var helper = typeof(JsonSynchronizationStream).GetMethod(
                 nameof(SubscribeOwnerPathChangeFeedHelper),
                 System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!
                 .MakeGenericMethod(eventType);
-            return (IDisposable?)helper.Invoke(null, [feed, pathProp, ownerPath, onOwnerChanged]);
+            return (IDisposable?)helper.Invoke(null, [feed, pathProp, kindProp, ownerPath, onOwnerChanged]);
         }
         catch (Exception ex)
         {
@@ -114,13 +115,25 @@ public static class JsonSynchronizationStream
     }
 
     private static IDisposable? SubscribeOwnerPathChangeFeedHelper<TEvent>(
-        object feed, System.Reflection.PropertyInfo pathProperty, string ownerPath, Action onOwnerChanged)
+        object feed, System.Reflection.PropertyInfo pathProperty,
+        System.Reflection.PropertyInfo? kindProperty, string ownerPath, Action onOwnerChanged)
         where TEvent : class
     {
         Action<TEvent> handler = evt =>
         {
             try
             {
+                // Created/Deleted ONLY — this listener is the recycled-grain detector (an owner
+                // that was deleted/recreated needs a fresh SubscribeRequest). An Updated event is
+                // ordinary content flow that the stream already receives through its own
+                // subscription; resubscribing on it turns every high-frequency owner write (e.g.
+                // the per-request ApiToken LastUsedAt stamp) into a resubscribe wave across ALL
+                // of the owner's subscriber streams — sync-hub churn that starves the owner's
+                // action block (atioz storm, 2026-07-02: one token node at version 8939 with 85
+                // subscriber streams re-subscribing on every write).
+                if (kindProperty?.GetValue(evt) is { } kind
+                    && kind.ToString() is not ("Created" or "Deleted"))
+                    return;
                 if (pathProperty.GetValue(evt) is string p
                     && string.Equals(p, ownerPath, StringComparison.OrdinalIgnoreCase))
                     onOwnerChanged();

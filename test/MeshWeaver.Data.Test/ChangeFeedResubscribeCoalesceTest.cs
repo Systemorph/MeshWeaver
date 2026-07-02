@@ -153,6 +153,11 @@ public class ChangeFeedResubscribeCoalesceTest(ITestOutputHelper output) : HubTe
         // UN-throttled code, the in-flight guard clears between these settled events so each
         // fires its own resubscribe (the storm). On the throttled code the whole burst lands
         // within one window and collapses to a single resubscribe.
+        //
+        // Kind = Created — the recycled-grain signal this listener exists for (a rapid
+        // delete/recreate flap). Updated events are filtered out entirely (see
+        // UpdatedOwnerChangeFeedEvents_DoNotResubscribe below), so a burst of Updated would
+        // trivially pass this assertion without exercising the throttle.
         const string ownerPath = HostType + "/1";
         for (var i = 0; i < BurstSize; i++)
         {
@@ -160,7 +165,7 @@ public class ChangeFeedResubscribeCoalesceTest(ITestOutputHelper output) : HubTe
                 Namespace: HostType,
                 Id: "1",
                 Path: ownerPath,
-                Kind: MeshChangeKind.Updated,
+                Kind: MeshChangeKind.Created,
                 NodeType: null,
                 Version: i + 1,
                 Timestamp: DateTimeOffset.UtcNow));
@@ -182,6 +187,53 @@ public class ChangeFeedResubscribeCoalesceTest(ITestOutputHelper output) : HubTe
         resubscribes.Should().BeLessThanOrEqualTo(1,
             $"a burst of {BurstSize} owner change-feed events must coalesce into at most one " +
             "fresh-snapshot resubscribe — per-event resubscribe storms the owner/cache hub's action block");
+    }
+
+    /// <summary>
+    /// Pins the event-kind filter: <see cref="MeshChangeKind.Updated"/> events on the owner's
+    /// path must trigger NO resubscribe at all. The change-feed listener exists solely to detect
+    /// a recycled owner (Created/Deleted); content updates already flow through the stream's own
+    /// subscription. Before the filter, a high-frequency owner write (the per-request ApiToken
+    /// LastUsedAt stamp — atioz 2026-07-02, one node at version 8939 with 85 subscriber streams)
+    /// turned every write into a (throttled but endless) resubscribe wave across every
+    /// subscriber: sync-hub churn that starved the owner hub's action block.
+    /// </summary>
+    [HubFact]
+    public async Task UpdatedOwnerChangeFeedEvents_DoNotResubscribe()
+    {
+        var host = GetHost();
+        var client = GetClient();
+        var workspace = client.ServiceProvider.GetRequiredService<IWorkspace>();
+        var changeFeed = client.ServiceProvider.GetRequiredService<IMeshChangeFeed>();
+
+        await workspace.GetObservable<BusinessUnit>()
+            .Should().Within(10.Seconds())
+            .Match(x => x.Count > 0, "the owner must serve the initial snapshot");
+
+        var afterInitial = Volatile.Read(ref _subscribeCount);
+
+        // A stream of Updated events — the per-request owner-write shape.
+        for (var i = 0; i < BurstSize; i++)
+        {
+            changeFeed.Publish(new MeshChangeEvent(
+                Namespace: HostType,
+                Id: "1",
+                Path: HostType + "/1",
+                Kind: MeshChangeKind.Updated,
+                NodeType: null,
+                Version: i + 1,
+                Timestamp: DateTimeOffset.UtcNow));
+            Thread.Sleep(EventSpacing);
+        }
+
+        // Sanctioned fixed wait: a "nothing happened" negative has no positive signal to await.
+        // Wait past the throttle window plus margin so any (wrong) resubscribe would have fired.
+        Thread.Sleep(ResubscribeWindow + TimeSpan.FromMilliseconds(500));
+
+        var resubscribes = Volatile.Read(ref _subscribeCount) - afterInitial;
+        resubscribes.Should().Be(0,
+            "Updated events are ordinary content flow — only Created/Deleted (a recycled owner) " +
+            "may trigger a fresh-snapshot resubscribe");
     }
 
     /// <summary>
