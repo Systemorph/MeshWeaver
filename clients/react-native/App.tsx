@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { SafeAreaView, StatusBar } from "react-native";
-import { RegistryProvider, ScopeProvider, StaticAreaSource, type AreaSource, type AreaTree } from "@meshweaver/react/core";
+import { RegistryProvider, ScopeProvider, StaticAreaSource, type AreaSource } from "@meshweaver/react/core";
 import { rnPack } from "./src/rnPack";
+import { sampleArea } from "./src/sample";
 import { createLiveSource } from "./src/live";
 import { NavContext, CurrentAddressContext, type NavTarget } from "./src/nav";
 import { Shell, HOME } from "./src/Shell";
@@ -14,7 +15,11 @@ import { ThemeProvider, useTheme } from "./src/theme";
 // (same origin, anonymous, no CORS); a remote instance is a portal the user added by URL + token
 // (see screens.tsx → ConnectScreen). The shell drives navigation; each target re-subscribes the
 // live source, and switching instance (instanceTick) reconnects and returns Home.
-const emptyTree: AreaTree = { areas: {}, data: {} };
+//
+// Until a mesh ACKS the connect, the app is the bundled OFFLINE demo: the sample tree renders
+// under its "main" area (the metro-stub / README contract, and what the Playwright e2e drives
+// against a static file server). connect() only resolves on a real ack, so a non-mesh origin
+// can never swap the sample out for an empty live source.
 
 export default function App() {
   ensureWebStyles();
@@ -30,7 +35,8 @@ function AppInner() {
   const [nav, setNav] = useState<NavTarget>(HOME);
   const [clientScreen, setClientScreen] = useState<ClientDestination | null>(null);
   const [instanceTick, setInstanceTick] = useState(0);
-  const [source, setSource] = useState<AreaSource>(() => new StaticAreaSource(emptyTree));
+  const [source, setSource] = useState<AreaSource>(() => new StaticAreaSource(sampleArea));
+  const [liveConnected, setLiveConnected] = useState(false);
 
   const navigate = (t: NavTarget) => {
     setClientScreen(null);
@@ -55,6 +61,7 @@ function AppInner() {
         }
         live = l;
         setSource(l.source);
+        setLiveConnected(true);
       })
       .catch(() => { /* connection failed — the shell stays on the last-good source */ });
     return () => {
@@ -63,16 +70,20 @@ function AppInner() {
     };
   }, [nav.address, nav.area, instanceTick]);
 
+  // Offline (no ack yet): the sample tree's root area is "main"; live nav areas only exist
+  // once a mesh is streaming.
+  const effNav = liveConnected ? nav : { ...nav, area: "main" };
+
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: palette.appBg }}>
       <StatusBar />
       <RegistryProvider pack={rnPack}>
         <NavContext.Provider value={navigate}>
           <CurrentAddressContext.Provider value={nav.address}>
-            <ScopeProvider source={source} area={nav.area}>
+            <ScopeProvider source={source} area={effNav.area}>
               <Shell
                 source={source}
-                nav={nav}
+                nav={effNav}
                 clientScreen={clientScreen}
                 onNavigate={navigate}
                 onClientScreen={setClientScreen}
