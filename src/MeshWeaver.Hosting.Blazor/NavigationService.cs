@@ -396,7 +396,7 @@ internal class NavigationService : INavigationService
             _navigationContext.OnNext(null);
         }
 
-        // 🚨 ResolvePath is a ONE-SHOT snapshot (PathResolutionService.Take(1)): a
+        // 🚨 ResolveNavigationPath is a ONE-SHOT snapshot (PathResolutionService.Take(1)): a
         // transient empty Initial during partition warm-up / NodeType compile emits
         // null and COMPLETES — it does NOT re-emit when the catalog later learns the
         // path. Subscribing once therefore settled that transient negative as a
@@ -406,8 +406,13 @@ internal class NavigationService : INavigationService
         // FIRST non-null resolution. The negative is never cached/settled while the
         // budget is open — only an exhausted (all-empty) budget reports NotFound, and
         // a resolved path fires no wasteful extra probes (sequential, not parallel).
+        //
+        // 🚨 NAVIGATION uses ResolveNavigationPath (NOT the shared ResolvePath): it
+        // applies the legacy /User/{id} home rewrite so the portal's home URL renders on
+        // the user's own root partition. Message routing + node reads deliberately stay on
+        // the un-rewritten ResolvePath — see IPathResolver.
         IObservable<AddressResolution?> Probe(int attempt) =>
-            Observable.Defer(() => _pathResolver.ResolvePath(route))
+            Observable.Defer(() => _pathResolver.ResolveNavigationPath(route))
                 .SelectMany(r =>
                     r is not null || attempt >= _retryDelays.Length
                         ? Observable.Return(r)
