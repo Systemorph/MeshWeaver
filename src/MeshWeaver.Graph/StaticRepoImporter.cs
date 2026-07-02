@@ -756,12 +756,15 @@ public static class StaticRepoImporter
                 // same race ReadClaimedRoots guards; here the stakes are higher because the upsert
                 // below would re-materialize the root and RESET its SyncBehavior to Include, silently
                 // re-enabling sync for the whole partition). The root exists, so the read resolves
-                // promptly; on timeout fall back to the query snapshot rather than skipping the import.
+                // promptly; ONLY on timeout fall back to the query snapshot rather than skipping the
+                // import. Any other failure (access, connectivity, deserialization) propagates — an
+                // unverified claim must fail the import loudly, not proceed to an upsert that could
+                // clobber a claimed root.
                 return hub.GetWorkspace().GetMeshNodeStream(source.Partition)
                     .Where(n => n is not null)
                     .Take(1)
                     .Timeout(TimeSpan.FromSeconds(10))
-                    .Catch((Exception _) => Observable.Return<MeshNode?>(existing))
+                    .Catch((TimeoutException _) => Observable.Return<MeshNode?>(existing))
                     .SelectMany(current =>
                     {
                         if (current is { SyncBehavior: not SyncBehavior.Include })
