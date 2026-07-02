@@ -73,15 +73,22 @@ Browse the full set of controls, layout primitives, and data-binding guides:
 | Topic | Description |
 |---|---|
 | [Layout Areas](LayoutAreas) | Named rendering slots — how the hub decides what to show and where |
-| [Container Controls](ContainerControl) | Stack, Tabs, Toolbar, Splitter — composing areas together |
+| [Container Controls](ContainerControl) | Stack, Tabs, Toolbar, Splitter, Layout — composing areas together |
 | [Layout Grid](LayoutGrid) | CSS-grid-based two-dimensional layouts |
 | [Data Binding](DataBinding) | Two-way reactive binding via JSON Pointers — the contract every backend area must follow |
 | [Static vs. Dynamic Views](Observables) | When areas re-render and how to control update frequency |
 | [DataGrid](DataGrid) | Tabular data with sorting, filtering, and row actions |
+| [Form Input Controls](InputControls) | Checkboxes, switches, date pickers, list selectors, radio groups, node picker — each rendered live |
+| [Badges, Icons & Status](DisplayControls) | Badges, icons, progress bars, spacers, menu items, and card skins |
+| [Navigation Menus](Navigation) | NavMenu, NavGroup, NavLink — collapsible side navigation |
+| [Code, Diff & Markdown Editors](CodeEditor) | Monaco-backed source editing, diffs, and markdown authoring |
+| [Node Cards & Catalogs](NodeCards) | Cards, thumbnails, live node collections, and grouped catalogs |
 | [Mesh Search & Catalogs](MeshSearch) | One URL-driven `Search` area per node — group by namespace/type/category, drill down, embed with `@@` |
 | [Configurable Home & Space Pages](ConfigurablePages) | Your home / Space Overview is one editable markdown page that embeds regions with `@@` |
-| [Editor](Editor) | Rich code and text editing controls |
+| [Editor](Editor) | Auto-generated editable forms from C# records |
 | [Attributes](Attributes) | Declarative style, visibility, and validation annotations |
 | [Side Panel](SidePanel) | Slide-in panels for detail views and settings |
 | [Reactive Dialogs](ReactiveDialogs) | Modal dialogs backed by observable state |
 | [Node Menu](NodeMenu) | Context menus on mesh nodes |
+| [React Frontend](React) | The client-side React frontend — same `UiControl` contract, rendered in the browser over gRPC-web: running it, rendering, theming, chat, testing |
+| [Custom React Controls](ReactCustomControls) | Extend the React renderer with your own control — server-side `$type` + a React registry entry |

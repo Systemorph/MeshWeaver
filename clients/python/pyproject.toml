@@ -10,10 +10,15 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# The pandas node example (meshweaver.examples.pandas_node) holds a live DataFrame.
+examples = [
+    "pandas>=2.0",
+]
 dev = [
     "grpcio-tools>=1.68",
     "pytest>=8",
     "pytest-asyncio>=0.24",
+    "pandas>=2.0",
 ]
 
 [build-system]

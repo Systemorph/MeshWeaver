@@ -1,0 +1,13 @@
+{
+  "id": "LiveFrame",
+  "namespace": "PythonDemo/PandasExplorer",
+  "name": "Live sales frame",
+  "nodeType": "PythonDemo/PandasExplorer",
+  "description": "Interactive explorer instance — drives the py/pandas participant. Shows the no-node notice until a Python pandas node attaches.",
+  "isPersistent": true,
+  "content": {
+    "$type": "PandasExplorer",
+    "name": "Live sales frame",
+    "description": "Monthly sales by region, held live in a Python pandas DataFrame."
+  }
+}

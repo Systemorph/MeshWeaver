@@ -177,6 +177,73 @@ public class MessageHubTest(ITestOutputHelper output) : HubTestBase(output)
             "disposal must handle only the phase ShutdownRequests, never a version-mismatch repost storm");
     }
 
+    record WedgeEvent;
+
+    /// <summary>
+    /// Regression for the ZOMBIE-HUB leak (2026-07-01, the dead-circuit portal-hub storm).
+    /// When the action block is wedged (here: a handler blocking on an event that ignores
+    /// cancellation — in prod: a ShutdownRequest starved behind a DataChangedEvent flood),
+    /// the phased Quiescing → DisposeHostedHubs → ShutDown machine never runs. The disposal
+    /// watchdog used to merely SIGNAL completion — the caller unblocked, but every child
+    /// leaked: hosted sync-stream hubs kept heartbeating and fanning out stream traffic
+    /// forever (7k zombie sync hubs at ~1.2 cores on the e2e portal). The watchdog must run
+    /// the REAL teardown: hosted hubs disposed, registered disposables disposed, message
+    /// service stopped.
+    /// </summary>
+    [Fact]
+    public async Task Dispose_WhenActionBlockWedged_WatchdogTearsDownChildrenAndDisposables()
+    {
+        // Starve the block the way prod does: a QUEUE BACKLOG of slow messages the
+        // ShutdownRequest cannot jump. CancelExecution only cancels the IN-FLIGHT handler —
+        // it does not clear the queue. Sized under the storm breaker's trip threshold
+        // (2000 identical/1s window — a tripped flood is DROPPED at ingestion and never
+        // builds a backlog): 800 turns × 15ms ≈ 12s of queue ahead of the phased
+        // Quiescing request, well past the 8s watchdog.
+        var wedgeTurns = 0;
+        var victim = (MessageHub)Mesh.GetHostedHub(new Address("victim", "wedged"), c => c
+            // Plumbing fixture with no user → posts as infrastructure (System), per the
+            // never-null AccessContext invariant (else the post pipeline drops every flood post).
+            .WithPostingIdentity(PostingIdentity.System)
+            .WithHandler<WedgeEvent>((_, d) =>
+            {
+                Interlocked.Increment(ref wedgeTurns);
+                Thread.Sleep(15);
+                return d.Processed();
+            }), HostedHubCreation.Always)!;
+        var child = victim.GetHostedHub(new Address("victimchild", "1"), x => x, HostedHubCreation.Always);
+        child.Should().NotBeNull();
+
+        var registeredDisposableDisposed = false;
+        victim.RegisterForDisposal(_ => registeredDisposableDisposed = true);
+
+        for (var i = 0; i < 800; i++)
+            victim.Post(new WedgeEvent(), o => o.WithTarget(victim.Address));
+        // Let the first turn start so the backlog is genuinely in the queue when Dispose posts.
+        await Task.Delay(100);
+
+        var disposeSw = System.Diagnostics.Stopwatch.StartNew();
+        victim.Dispose();
+
+        // The phased path is starved; only the watchdog (8s) can complete this.
+        await victim.DisposalCompleted.FirstOrDefaultAsync().ToTask().WaitAsync(20.Seconds());
+        disposeSw.Stop();
+
+        // Sanity: this repro must actually exercise the starved path, not a fast phased dispose.
+        disposeSw.Elapsed.Should().BeGreaterThan(TimeSpan.FromSeconds(7),
+            $"the backlog must starve the phased shutdown so the watchdog is what completes disposal "
+            + $"(wedge turns processed: {Volatile.Read(ref wedgeTurns)})");
+
+        // The watchdog must have TORN DOWN, not just signalled:
+        registeredDisposableDisposed.Should().BeTrue(
+            "the watchdog force-teardown must dispose registered disposables (heartbeats, sync streams) — " +
+            "signalling without teardown leaks them forever (the zombie portal-hub storm)");
+        child!.IsDisposing.Should().BeTrue(
+            "the watchdog force-teardown must dispose hosted child hubs — leaked children keep " +
+            "heartbeating/fanning out stream traffic forever");
+        victim.RunLevel.Should().Be(MessageHubRunLevel.Dead,
+            "a force-torn hub must be terminally dead, not a Started zombie");
+    }
+
     record StormFloodEvent(int Seq);
 
     /// <summary>
@@ -319,8 +386,11 @@ public class MessageHubTest(ITestOutputHelper output) : HubTestBase(output)
     /// when the watchdog fires it must actually tear the children + subscriptions down. RED before the
     /// fix (both probes leak → time out); GREEN after.
     /// </summary>
+    // Companion to Dispose_WhenActionBlockWedged_… (which starves shutdown via a message-FLOOD
+    // backlog): this wedges the turn thread with a BLOCKED handler. Both wedge modes are named in
+    // ForceTeardownAfterWatchdog's contract, so both stay covered after the main-merge de-dup.
     [Fact]
-    public async Task Dispose_WhenActionBlockWedged_WatchdogTearsDownChildrenAndDisposables()
+    public async Task Dispose_WhenHandlerBlocksTheTurn_WatchdogTearsDownChildrenAndDisposables()
     {
         using var blockHandlerEntered = new ManualResetEventSlim(false);
         using var releaseBlock = new ManualResetEventSlim(false);

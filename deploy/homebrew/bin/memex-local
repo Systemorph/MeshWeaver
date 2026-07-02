@@ -254,9 +254,14 @@ image_build_local() {                                  # §3 Option B
 
   base_build_local "${1:-}"                            # ensure the CLI-bearing base exists FIRST
   step "Building native arm64 portal image (layered on the CLI base) into Colima's Docker store (§3 Option B)"
+  # ARM64 PIN: the .csproj now declares <RuntimeIdentifiers>linux-x64;linux-arm64</RuntimeIdentifiers>
+  # (main's multi-arch container work), so a bare -t:PublishContainer builds a multi-arch image INDEX and
+  # Colima's arm64 node can load the x64 assembly → "assembly architecture is not compatible" crashloop.
+  # Pin the single native RID so the local image is arm64-only (restores this step's documented intent).
   dotnet publish "$repo/memex/aspire/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj" \
     -c Release -t:PublishContainer -p:ContainerRepository=memex-portal-ai-local \
     -p:ContainerBaseImage="$PORTAL_BASE_REF" \
+    -p:ContainerRuntimeIdentifier=linux-arm64 \
     -maxcpucount:"${MEMEX_BUILD_CPUS:-6}"   # WEDGE FIX: cap parallelism so ONE build can't saturate the host
   # Fail LOUD if the publish lost the co-hosted CLIs (e.g. the ContainerBaseImage didn't layer in
   # because the local registry was empty). A CLI-less portal silently ships a broken Claude Code /
@@ -269,8 +274,10 @@ image_build_local() {                                  # §3 Option B
   docker tag memex-portal-ai-local:latest "$PORTAL_IMAGE"
   ok "Portal image verified: claude + node CLIs are baked in"
   step "Building migration image (§3 Option B)"
+  # ARM64 PIN — same reason as the portal publish above (Migration.csproj is also multi-RID).
   dotnet publish "$repo/memex/aspire/Memex.Database.Migration/Memex.Database.Migration.csproj" \
     -c Release -t:PublishContainer -p:ContainerRepository=memex-migration-local \
+    -p:ContainerRuntimeIdentifier=linux-arm64 \
     -maxcpucount:"${MEMEX_BUILD_CPUS:-6}"   # WEDGE FIX: cap parallelism (see portal publish above)
   docker tag memex-migration-local:latest "$MIGRATION_IMAGE"
   ok "Images tagged $PORTAL_IMAGE / $MIGRATION_IMAGE (visible to k3s via IfNotPresent)"
@@ -341,8 +348,17 @@ helm_deploy() {
   helm upgrade --install "$RELEASE" "$chart" \
     -f "$chart/values.yaml" \
     -f "$OVERLAY" \
+    --set persistDataVolume=true \
     -n "$NAMESPACE" --create-namespace \
     --force-conflicts
+
+  # DATA-VOLUME PERMS: persistDataVolume mounts the hostPath /var/lib/memex-portal-data at /data.
+  # k8s creates it (DirectoryOrCreate) root-owned 0755, but the portal runs NON-root and must write
+  # /data/dataprotection-keys (persisted DP keys, 678690598) → without this it crashloops with
+  # "Access to the path '/data/dataprotection-keys' is denied". Make the node dir writable so a fresh
+  # node (or a first deploy) doesn't hit the crash. Idempotent; single-node k3s so all pods share it.
+  colima ssh -- 'sudo mkdir -p /var/lib/memex-portal-data && sudo chmod 0777 /var/lib/memex-portal-data' 2>/dev/null \
+    || warn "could not make /var/lib/memex-portal-data writable on the node — portal may crashloop on DataProtection keys"
 }
 
 # ---------------------------------------------------------------------------

@@ -51,6 +51,9 @@ bld/
 # Uncomment if you have tasks that create the project's static files in wwwroot
 #wwwroot/
 
+# Memex.LocalMesh bakes the exported React-Native web app into wwwroot at package time — build artifact.
+memex/Memex.LocalMesh/wwwroot/
+
 # Visual Studio 2017 auto generated files
 Generated\ Files/
 
@@ -403,3 +406,4 @@ samples/Graph/Data/VUser/
 !.claude/skills/
 !.claude/skills/debug/
 !.claude/skills/release/
+memex/aspire/Memex.Portal.Distributed/wwwroot/app/

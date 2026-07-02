@@ -251,11 +251,16 @@ public class OAuthConnectController(
             request.code,
             request.client_id,
             request.redirect_uri,
-            request.code_verifier);
+            request.code_verifier,
+            out var failureReason);
 
         if (entry == null)
         {
-            logger.LogWarning("OAuth token exchange failed: invalid or expired code for client {ClientId}", request.client_id);
+            // The reason names the exact failing check (unknown/consumed, expired, client_id,
+            // redirect_uri, PKCE) — the wire response stays a generic invalid_grant per RFC 6749.
+            logger.LogWarning(
+                "OAuth token exchange failed for client {ClientId}: {FailureReason}",
+                request.client_id, failureReason);
             return Task.FromResult<IActionResult>(BadRequest(new { error = "invalid_grant" }));
         }
 
