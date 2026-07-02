@@ -129,7 +129,7 @@ public class ThreadSubmissionUnitTest
     {
         // Multiple queued messages with different selections: the round runs under the
         // LAST drained message's selection (its Text is also the current turn's input).
-        var u1 = new ThreadMessage { Role = "user", Text = "one", AgentName = "Coder", ModelName = "gpt-4" };
+        var u1 = new ThreadMessage { Role = "user", Text = "one", AgentName = "Assistant", ModelName = "gpt-4" };
         var u2 = new ThreadMessage { Role = "user", Text = "two", AgentName = "Worker", ModelName = "claude-opus-4-6", Harness = "MeshWeaver" };
         var thread = new MeshThread
         {

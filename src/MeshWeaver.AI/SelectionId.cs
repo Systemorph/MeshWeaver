@@ -3,7 +3,7 @@ namespace MeshWeaver.AI;
 /// <summary>
 /// Conventions for harness/agent/model selection values. Pickers and composer state store the
 /// picked node's full PATH (e.g. <c>Harness/MeshWeaver</c>, <c>Provider/Anthropic/claude-…</c>,
-/// <c>Agent/Coder</c>) and that path flows end-to-end through composer → message → Pending* →
+/// <c>Agent/Assistant</c>) and that path flows end-to-end through composer → message → Pending* →
 /// RoundParams (never pre-resolved at the GUI — see CLAUDE.md "pass node PATHS through").
 /// Execution matches REGISTERED ids/names (<c>IHarness.Id</c>, agent name, model id), which are
 /// always the LAST path segment — so the execution boundary normalizes with <see cref="IdOf"/>,

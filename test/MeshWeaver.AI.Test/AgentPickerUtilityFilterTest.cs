@@ -80,7 +80,7 @@ public class AgentPickerUtilityFilterTest
         var snapshot = new[]
         {
             AgentNode("Assistant", isDefault: true), // exposedInNavigator:false, but the conversational default
-            AgentNode("Coder"),
+            AgentNode("Researcher"),
             AgentNode("ThreadNamer", modelTier: "utility"),
             AgentNode("DescriptionWriter", modelTier: "utility"),
         };
@@ -90,7 +90,7 @@ public class AgentPickerUtilityFilterTest
             .Select(a => a.Name)
             .ToList();
 
-        conversational.Should().Contain(new[] { "Assistant", "Coder" });
+        conversational.Should().Contain(new[] { "Assistant", "Researcher" });
         conversational.Should().NotContain("ThreadNamer",
             "a utility generator must never be conversationally selectable");
         conversational.Should().NotContain("DescriptionWriter");

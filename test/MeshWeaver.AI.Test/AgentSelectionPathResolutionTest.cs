@@ -34,7 +34,7 @@ public class AgentSelectionPathResolutionTest : AITestBase
 
     // Distinct instruction strings let the fake client echo back WHICH config won
     // resolution — that is how we assert the correct agent was selected.
-    private const string BuiltInInstructions = "BUILTIN-CODER-INSTRUCTIONS";
+    private const string BuiltInInstructions = "BUILTIN-ANALYST-INSTRUCTIONS";
     private const string SpaceInstructions = "SPACE-DATENEXTRAKTION-INSTRUCTIONS";
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
@@ -124,10 +124,10 @@ public class AgentSelectionPathResolutionTest : AITestBase
 
     /// <summary>
     /// RED before the fix: two agents whose last path segment collides
-    /// (<c>Agent/Coder</c> built-in and <c>AgenticPension/Agent/Coder</c> space) load into
-    /// the same dictionary slot keyed by the bare id "Coder". Selecting the SPACE agent by
+    /// (<c>Agent/Analyst</c> built-in and <c>AgenticPension/Agent/Analyst</c> space) load into
+    /// the same dictionary slot keyed by the bare id "Analyst". Selecting the SPACE agent by
     /// its full path resolves the wrong (built-in) agent because the selection collapses to
-    /// "Coder" and the built-in won the slot.
+    /// "Analyst" and the built-in won the slot.
     /// </summary>
     [Fact]
     public async Task SelectSpaceScopedAgent_ByFullPath_ResolvesThatAgent_NotTheCollidingBuiltIn()
@@ -138,13 +138,13 @@ public class AgentSelectionPathResolutionTest : AITestBase
         client.ApplyAgents(
             new[]
             {
-                Agent("Agent/Coder", BuiltInInstructions),
-                Agent("AgenticPension/Agent/Coder", SpaceInstructions),
+                Agent("Agent/Analyst", BuiltInInstructions),
+                Agent("AgenticPension/Agent/Analyst", SpaceInstructions),
             },
             contextPath: null);
 
         // The picker stores the FULL node path; that is what the composer flows to the client.
-        client.SetSelectedAgent("AgenticPension/Agent/Coder");
+        client.SetSelectedAgent("AgenticPension/Agent/Analyst");
 
         var response = await RunAndCaptureAsync(client);
 
@@ -162,7 +162,7 @@ public class AgentSelectionPathResolutionTest : AITestBase
     public async Task SelectUnknownAgentPath_DegradesGracefully_DoesNotSilentlyPickAnotherAgent()
     {
         var client = new AgentChatClient(Mesh.ServiceProvider);
-        client.ApplyAgents(new[] { Agent("Agent/Coder", BuiltInInstructions) }, contextPath: null);
+        client.ApplyAgents(new[] { Agent("Agent/Analyst", BuiltInInstructions) }, contextPath: null);
 
         // Path that does not match any loaded agent.
         client.SetSelectedAgent("AgenticPension/Agent/Datenextraktion");

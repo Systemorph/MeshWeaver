@@ -18,7 +18,7 @@ Documentation lives as markdown files under `src/MeshWeaver.Documentation/Data/`
 | `Data/GUI/ContainerControl/Stack.md` | `Doc/GUI/ContainerControl/Stack` |
 | `Data/ReleaseNotes/3_0_0/index.md` | `Doc/ReleaseNotes/3_0_0` (an `index.md` *is* its folder's node) |
 
-Note the pairing: `Architecture.md` is the **index node** and the folder `Architecture/` holds its children. Agent definitions follow the same scheme under the **`Agent`** partition (`src/MeshWeaver.AI/Data/Agent/Coder.md` → `Agent/Coder`).
+Note the pairing: `Architecture.md` is the **index node** and the folder `Architecture/` holds its children. Agent definitions follow the same scheme under the **`Agent`** partition (`src/MeshWeaver.AI/Data/Agent/Researcher.md` → `Agent/Researcher`), and skills under the **`Skill`** partition (`src/MeshWeaver.AI/Data/Skill/code.md` → `Skill/code`).
 
 ## 🚨 Link rules — pinned by `DocumentationLinkIntegrityTest`
 
@@ -30,7 +30,8 @@ At render time, `LinkUrlCleanupExtension` resolves every markdown link with `Pat
 | A sibling page | `[CQRS](../CqrsAndContentAccess)` | up one from `Doc/Architecture/ThisPage`, then down |
 | Your own child page (from an index) | `[Stack](Stack)` | `Doc/GUI/ContainerControl/Stack` |
 | Another area | `[Data Binding](/Doc/GUI/DataBinding)` | absolute — immune to moves of *this* page |
-| An agent definition | `[Coder](/Agent/Coder)` | the `Agent` partition |
+| An agent definition | `[Researcher](/Agent/Researcher)` | the `Agent` partition |
+| A built-in skill | `[/code](/Skill/code)` | the `Skill` partition |
 
 And the three forms that **never** resolve:
 
@@ -40,7 +41,7 @@ And the three forms that **never** resolve:
 [X](../SiblingPage.md)    ❌ node paths have no .md suffix
 ```
 
-`DocumentationLinkIntegrityTest` (in `test/MeshWeaver.Documentation.Test`) resolves every link in every doc and agent page with the **real** `PathUtils` and fails the build naming the page, the literal URL, and the bad target — so a broken link never reaches the portal.
+`DocumentationLinkIntegrityTest` (in `test/MeshWeaver.Documentation.Test`) resolves every link in every doc, agent, and skill page with the **real** `PathUtils` and fails the build naming the page, the literal URL, and the bad target — so a broken link never reaches the portal.
 
 Two more link rules:
 

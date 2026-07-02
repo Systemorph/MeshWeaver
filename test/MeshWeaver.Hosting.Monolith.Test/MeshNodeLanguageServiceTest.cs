@@ -21,7 +21,7 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 ///
 /// <para>The headline scenario is the multi-source substitution test: rename a type
 /// in one source file and assert the diagnostic surfaces in a sibling file that
-/// references it. This is the failure mode Coder's <c>lsp_check_node</c> pre-flight
+/// references it. This is the failure mode the /code skill's <c>lsp_check_node</c> pre-flight
 /// loop catches that single-file isolation would miss.</para>
 /// </summary>
 public class MeshNodeLanguageServiceTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
@@ -90,7 +90,7 @@ public record StoryList
 
         // Substitute file A with a rename: `Story` → `StoryItem`. Full-substitution
         // semantics mean file B's reference to `Story` becomes a hard error — exactly
-        // the breakage Coder needs to catch BEFORE committing the Patch.
+        // the breakage the pre-flight needs to catch BEFORE committing the Patch.
         const string renamedA = @"
 public record StoryItem
 {

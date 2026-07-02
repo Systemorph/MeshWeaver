@@ -856,7 +856,7 @@ internal static class ThreadExecution
         AccessContext? userAccessContext)
     {
         // Selections arrive as picked node PATHS ("Harness/MeshWeaver",
-        // "Provider/Anthropic/claude-…", "Agent/Coder", "AgenticPension/Agent/Datenextraktion").
+        // "Provider/Anthropic/claude-…", "Agent/Assistant", "AgenticPension/Agent/Datenextraktion").
         // Models and harnesses match bare REGISTERED ids (the last path segment), so they
         // normalize at this boundary. The AGENT does NOT: a space-scoped agent
         // ("AgenticPension/Agent/Datenextraktion") collides with a built-in of the same

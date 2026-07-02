@@ -83,7 +83,7 @@ using MeshWeaver.AI;
 hub.StartThread(
     namespacePath: "ACME/Threads",
     userText: "Help me draft a Q3 roadmap.",
-    agentName: "Coder",
+    agentName: "Assistant",
     contextPath: "ACME/Roadmap",
     onCreated: node => Navigate($"/{node.Path}"),
     onError: msg => ShowToast(msg));
