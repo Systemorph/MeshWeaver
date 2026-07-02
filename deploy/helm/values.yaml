@@ -35,6 +35,29 @@ ingress:
   annotations:
     nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
     nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+# ---- Next.js React portal (experimental frontend — FEATURE-FLAGGED) --------
+# When enabled, a Next.js streaming-SSR build of the React GUI (clients/portal-next)
+# runs as its OWN Deployment beside memex-portal, and the portal ingress gains a
+# `/next` path routed to it (nginx longest-prefix: /next/* → portal-next, everything
+# else — incl. /api, gRPC-web, _blazor the React app calls same-origin — falls through
+# to the Blazor portal). The Blazor shell also gets Portal:ReactAppUrl=/next injected
+# (see the portal ConfigMap), which lights up the reversible PER-USER toggle: the user
+# menu's "Try the new frontend" → GET /frontend/react sets the mw-frontend cookie and
+# redirects to /next; "Back to classic" → /frontend/blazor reverses it. The DEPLOYMENT
+# DEFAULT frontend stays Blazor (Portal:Frontend is left unset) — this is opt-in, not a
+# forced switch. Off by default (neutral chart): prod/AKS is unaffected until an overlay
+# sets portalNext.enabled=true with an image the cluster can pull. Locally, memex-local
+# builds the image and flips this on automatically. See clients/portal-next/DEPLOY.md.
+portalNext:
+  enabled: false
+  # Container image. memex-local builds + tags this into Colima's Docker store and k3s
+  # loads it IfNotPresent. For AKS, push to ACR and override this + enabled in an overlay.
+  image: "meshweaver/portal-next:local"
+  replicas: 1
+  # Server-side (SSR) token mint + snapshot fetch go straight to the portal Service,
+  # skipping the ingress round-trip. The BROWSER still talks same-origin (cookies +
+  # gRPC-web are ingress-routed), so this only affects SSR.
+  portalOrigin: "http://memex-portal-service:8080"
 secrets:
   memex_postgres:
     memex_postgres_password: ""

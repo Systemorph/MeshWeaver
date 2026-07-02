@@ -28,6 +28,21 @@ spec:
     - host: {{ .Values.ingress.host | quote }}
       http:
         paths:
+{{- if .Values.portalNext.enabled }}
+          # ---- Next.js React GUI (FEATURE-FLAGGED — see .Values.portalNext) ---
+          # nginx matches the LONGEST prefix first regardless of order, so /next/*
+          # (the app + its /next/_next assets) hits portal-next while everything
+          # else — including /api, gRPC-web and _blazor that the React app calls
+          # same-origin — falls through to the Blazor portal below. The app is
+          # built with basePath: "/next", so NO rewrite annotation is needed.
+          - path: "/next"
+            pathType: "Prefix"
+            backend:
+              service:
+                name: "portal-next-service"
+                port:
+                  number: 3000
+{{- end }}
           - path: "/"
             pathType: "Prefix"
             backend:
