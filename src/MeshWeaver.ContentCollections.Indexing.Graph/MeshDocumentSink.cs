@@ -22,6 +22,18 @@ namespace MeshWeaver.ContentCollections.Indexing.Graph;
 /// </summary>
 public sealed class MeshDocumentSink(IMessageHub hub) : IDocumentSink
 {
+    // Cap on the DocumentExists probe. It runs on every hash-gate skip during a reindex, so a
+    // degraded mesh must not stall the walk for the full default request budget per file; per the
+    // IDocumentSink contract a timed-out probe reads as "absent" and the (idempotent) heal runs.
+    private static readonly TimeSpan ExistsProbeTimeout = TimeSpan.FromSeconds(5);
+
+    // Positive-existence cache (instance field on a mesh-scoped singleton — its lifetime IS the
+    // mesh, per the no-static-collections rule). A Document's path is deterministic and the sink
+    // is the only writer, so once a path is known to exist later skips need no mesh round-trip.
+    // POSITIVE-only: a stale "exists" merely reproduces the pre-heal behavior (no rewrite), while
+    // a cached negative could suppress the heal forever — so absence is always re-probed.
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, bool> _knownDocuments = new();
+
     /// <inheritdoc />
     public IObservable<Unit> WriteDocument(DocumentInfo doc)
     {
@@ -58,7 +70,10 @@ public sealed class MeshDocumentSink(IMessageHub hub) : IDocumentSink
                 // the indexing pipeline surfaces it rather than silently dropping the document.
                 if (response.Success
                     || (response.Error?.Contains("already exists", StringComparison.OrdinalIgnoreCase) ?? false))
+                {
+                    _knownDocuments[path] = true;
                     return Observable.Return(Unit.Default);
+                }
 
                 return Observable.Throw<Unit>(new InvalidOperationException(
                     $"Failed to write Document node at '{path}': {response.Error}"));
@@ -66,10 +81,21 @@ public sealed class MeshDocumentSink(IMessageHub hub) : IDocumentSink
     }
 
     /// <inheritdoc />
-    public IObservable<bool> DocumentExists(string collectionPath, string filePath) =>
+    public IObservable<bool> DocumentExists(string collectionPath, string filePath)
+    {
+        var path = DocumentPaths.For(collectionPath, filePath);
+        if (_knownDocuments.ContainsKey(path))
+            return Observable.Return(true);
+
         // One-shot request/response read of the node at the deterministic path; null (not found,
         // timeout, routing failure) counts as absent — per the interface contract, indeterminate
         // leans towards a heal because the write is an idempotent upsert.
-        hub.GetMeshNode(DocumentPaths.For(collectionPath, filePath))
-            .Select(node => node is not null);
+        return hub.GetMeshNode(path, ExistsProbeTimeout)
+            .Select(node =>
+            {
+                if (node is not null)
+                    _knownDocuments[path] = true;
+                return node is not null;
+            });
+    }
 }
