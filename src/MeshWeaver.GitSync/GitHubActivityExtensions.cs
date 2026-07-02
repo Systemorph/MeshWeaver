@@ -27,16 +27,18 @@ namespace MeshWeaver.GitSync;
 /// </summary>
 public static class GitHubActivityExtensions
 {
-    /// <summary>Commit ("Sync now") — mirror the Space into the repo as one commit on the branch HEAD.</summary>
+    /// <summary>Commit ("Sync now") — mirror the Space into the repo as one commit on the branch HEAD.
+    /// <paramref name="sourceId"/> selects the sync source (null = the primary).</summary>
     public static IObservable<string> CommitToGitHub(
-        this IMessageHub hub, string spacePath, string userId, Action<string>? onActivityCreated = null)
+        this IMessageHub hub, string spacePath, string userId, Action<string>? onActivityCreated = null,
+        string? sourceId = null)
     {
         var sync = hub.ServiceProvider.GetRequiredService<GitHubSyncService>();
         return hub.RunActivity(spacePath, ActivityCategory.DataUpdate, $"Commit {spacePath} to GitHub",
             ctx =>
             {
                 ctx.Log("Serializing Space content and committing on the branch HEAD…");
-                return sync.SyncToGitHub(spacePath, userId).Select(r =>
+                return sync.SyncToGitHub(spacePath, userId, sourceId).Select(r =>
                 {
                     ctx.Log($"Committed {r.CommitSha[..Math.Min(8, r.CommitSha.Length)]} " +
                             $"({r.FilesWritten} written, {r.FilesDeleted} removed)" +
@@ -46,16 +48,18 @@ public static class GitHubActivityExtensions
             }, onActivityCreated);
     }
 
-    /// <summary>Checkout / update to latest — re-import the Space at the configured branch HEAD.</summary>
+    /// <summary>Checkout / update to latest — re-import the Space at the configured branch HEAD.
+    /// <paramref name="sourceId"/> selects the sync source (null = the primary).</summary>
     public static IObservable<string> UpdateToLatestFromGitHub(
-        this IMessageHub hub, string spacePath, string userId, Action<string>? onActivityCreated = null)
+        this IMessageHub hub, string spacePath, string userId, Action<string>? onActivityCreated = null,
+        string? sourceId = null)
     {
         var pr = hub.ServiceProvider.GetRequiredService<PullRequestService>();
         return hub.RunActivity(spacePath, ActivityCategory.Import, $"Update {spacePath} to latest",
             ctx =>
             {
                 ctx.Log("Fetching the branch HEAD from GitHub and importing the deltas…");
-                return pr.UpdateToLatest(spacePath, userId).Select(r =>
+                return pr.UpdateToLatest(spacePath, userId, sourceId).Select(r =>
                 {
                     ctx.Log($"Imported {r.Outcome} ({r.Count} node(s)).");
                     return Unit.Default;
@@ -63,17 +67,18 @@ public static class GitHubActivityExtensions
             }, onActivityCreated);
     }
 
-    /// <summary>Re-import the Space at a chosen commit / branch (mirror to that state).</summary>
+    /// <summary>Re-import the Space at a chosen commit / branch (mirror to that state).
+    /// <paramref name="sourceId"/> selects the sync source (null = the primary).</summary>
     public static IObservable<string> ReimportFromGitHub(
         this IMessageHub hub, string spacePath, string commitish, string userId,
-        Action<string>? onActivityCreated = null)
+        Action<string>? onActivityCreated = null, string? sourceId = null)
     {
         var sync = hub.ServiceProvider.GetRequiredService<GitHubSyncService>();
         return hub.RunActivity(spacePath, ActivityCategory.Import, $"Re-import {spacePath} at {commitish}",
             ctx =>
             {
                 ctx.Log($"Fetching {commitish} from GitHub and importing the deltas…");
-                return sync.ReimportAtCommit(spacePath, commitish, userId).Select(r =>
+                return sync.ReimportAtCommit(spacePath, commitish, userId, sourceId).Select(r =>
                 {
                     ctx.Log($"Re-imported {r.Outcome} ({r.Count} node(s)) at {commitish}.");
                     return Unit.Default;

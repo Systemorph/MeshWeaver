@@ -33,6 +33,11 @@ public static class GitHubSyncConfiguration
         services.AddSingleton<GitHubCredentialService>();
         services.AddSingleton<GitHubSyncService>();
         services.AddSingleton<PullRequestService>();
+        // Surfaces the per-space GitHub sync sources on the partition administration page
+        // (PartitionSyncAdminLayoutArea resolves all IPartitionSyncSourceProvider from DI).
+        services.AddSingleton<IPartitionSyncSourceProvider>(sp => new GitHubPartitionSyncSourceProvider(
+            sp.GetRequiredService<GitHubSyncService>(),
+            sp.GetRequiredService<IMessageHub>()));
         // On-disk per-user git working trees (clone/edit/commit/push) — the working-tree
         // counterpart to content sync, shared by the AI harness + the in-portal editor.
         // Root binds from GitWorkspace:Root (env GitWorkspace__Root=/workspace in the portal,

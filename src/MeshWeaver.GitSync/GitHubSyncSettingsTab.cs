@@ -35,6 +35,7 @@ public static class GitHubSyncSettingsTab
 
     private const string ResultId = "ghSyncResult";
     private const string CommitFormId = "ghReimportForm";
+    private const string AddSourceFormId = "ghAddSourceForm";
     // Holds the path of the PR draft the user is currently editing (empty = none yet).
     private const string PrPathId = "ghPrPath";
     // Holds the path of the currently-running operation activity (empty = none). The progress
@@ -155,34 +156,13 @@ public static class GitHubSyncSettingsTab
         // Every long-running GitHub op runs as an ACTIVITY (Doc/Architecture/ActivityControlPlane):
         // the click calls the unified hub extension, which creates an activity + returns its path;
         // we stash the path so the progress panel below binds to it (live Messages/Status + Cancel).
+        // The button row is direction-aware: an import-only source offers no commit, an
+        // export-only source no checkout (the service enforces the same rule server-side).
         stack = stack.WithView(Section("Sync"));
-        stack = stack.WithView(Controls.Button("Sync now (commit)")
-            .WithAppearance(Appearance.Accent)
-            .WithClickAction(ctx =>
-            {
-                ctx.Host.Hub.CommitToGitHub(spacePath, userId,
-                        onActivityCreated: path => ctx.Host.UpdateData(ActivityPathId, path))
-                    .Subscribe(_ => { }, ex => ctx.Host.UpdateData(ResultId, Err(ex.Message)));
-                return Task.CompletedTask;
-            }));
-        stack = stack.WithView(Controls.Button("Update to latest (checkout)")
-            .WithAppearance(Appearance.Outline)
-            .WithClickAction(ctx =>
-            {
-                ctx.Host.Hub.UpdateToLatestFromGitHub(spacePath, userId,
-                        onActivityCreated: path => ctx.Host.UpdateData(ActivityPathId, path))
-                    .Subscribe(_ => { }, ex => ctx.Host.UpdateData(ResultId, Err(ex.Message)));
-                return Task.CompletedTask;
-            }));
-        stack = stack.WithView(Controls.Button("Check branch on GitHub")
-            .WithAppearance(Appearance.Outline)
-            .WithClickAction(ctx =>
-            {
-                ctx.Host.Hub.CheckBranchStateOnGitHub(spacePath, userId,
-                        onActivityCreated: path => ctx.Host.UpdateData(ActivityPathId, path))
-                    .Subscribe(_ => { }, ex => ctx.Host.UpdateData(ResultId, Err(ex.Message)));
-                return Task.CompletedTask;
-            }));
+        stack = stack.WithView((h, _) => sync.WatchConfig(spacePath)
+            .Select(cfg => (UiControl?)BuildSyncButtons(spacePath, userId, sourceId: null,
+                cfg?.Direction ?? SyncDirection.Bidirectional))
+            .StartWith((UiControl?)Controls.Stack.WithWidth("100%")));
 
         // Live activity progress panel: binds to the running operation's activity node — its
         // Messages stream live, the terminal Status shows the outcome, and Cancel flips
@@ -208,7 +188,23 @@ public static class GitHubSyncSettingsTab
             })));
         stack = stack.WithView(BuildReimportForm(spacePath, userId));
 
-        // ── 4. Pull request (AI-drafted → user edits the bound node → submit) ──
+        // ── 4. Additional sync sources ────────────────────────────────────────
+        // The Repository above is the PRIMARY sync source ({space}/_GitSync). A Space can sync
+        // with MORE repositories: each additional source is its own config node
+        // ({space}/_GitSync/{sourceId}) with its own repo, branch and direction, edited through
+        // the same standard node-content editor (bound directly to the node stream).
+        stack = stack.WithView(Section("Additional sync sources"));
+        stack = stack.WithView(Controls.Html(
+            "<p style=\"font-size:0.85rem;color:var(--neutral-foreground-hint);margin:0 0 8px 0;\">" +
+            "Sync this Space with more repositories — each source has its own repository, branch and " +
+            "sync direction (bidirectional, export-only or import-only).</p>"));
+        stack = stack.WithView((h, _) => sync.WatchConfigNodes(spacePath)
+            .Select(nodes => (UiControl?)BuildAdditionalSources(h, sync, spacePath, userId, nodes))
+            .StartWith((UiControl?)Controls.Stack.WithWidth("100%")));
+        host.UpdateData(AddSourceFormId, new Dictionary<string, object?> { ["name"] = "" });
+        stack = stack.WithView(BuildAddSourceForm(sync, spacePath));
+
+        // ── 5. Pull request (AI-drafted → user edits the bound node → submit) ──
         stack = stack.WithView(Section("Pull request"));
         stack = stack.WithView(Controls.Html(
             "<p style=\"font-size:0.85rem;color:var(--neutral-foreground-hint);margin:0 0 8px 0;\">" +
@@ -296,6 +292,131 @@ public static class GitHubSyncSettingsTab
             $"<a href=\"{Esc(connectUrl)}\" target=\"_top\" rel=\"noopener\" " +
             "style=\"color:var(--accent-fill-rest);font-weight:600;\">Connect GitHub →</a>" +
             " (one-time browser approval; authorize for the org whose repos you'll sync).</span></div>");
+    }
+
+    // ── Sync buttons (direction-aware, shared by the primary + additional sources) ──
+
+    /// <summary>
+    /// Builds the sync action row for one source, offering only the operations the source's
+    /// <see cref="SyncDirection"/> allows: commit for export-capable sources, checkout for
+    /// import-capable ones (the service enforces the same rule — this just hides what would
+    /// be rejected). All operations run as activities feeding the shared progress panel.
+    /// </summary>
+    private static UiControl BuildSyncButtons(string spacePath, string userId, string? sourceId, SyncDirection direction)
+    {
+        var row = Controls.Stack.WithOrientation(Orientation.Horizontal).WithStyle("gap:8px;flex-wrap:wrap;");
+        if (direction != SyncDirection.ImportOnly)
+            row = row.WithView(Controls.Button("Sync now (commit)")
+                .WithAppearance(Appearance.Accent)
+                .WithClickAction(ctx =>
+                {
+                    ctx.Host.Hub.CommitToGitHub(spacePath, userId,
+                            onActivityCreated: path => ctx.Host.UpdateData(ActivityPathId, path),
+                            sourceId: sourceId)
+                        .Subscribe(_ => { }, ex => ctx.Host.UpdateData(ResultId, Err(ex.Message)));
+                    return Task.CompletedTask;
+                }));
+        if (direction != SyncDirection.ExportOnly)
+            row = row.WithView(Controls.Button("Update to latest (checkout)")
+                .WithAppearance(Appearance.Outline)
+                .WithClickAction(ctx =>
+                {
+                    ctx.Host.Hub.UpdateToLatestFromGitHub(spacePath, userId,
+                            onActivityCreated: path => ctx.Host.UpdateData(ActivityPathId, path),
+                            sourceId: sourceId)
+                        .Subscribe(_ => { }, ex => ctx.Host.UpdateData(ResultId, Err(ex.Message)));
+                    return Task.CompletedTask;
+                }));
+        row = row.WithView(Controls.Button("Check branch on GitHub")
+            .WithAppearance(Appearance.Outline)
+            .WithClickAction(ctx =>
+            {
+                ctx.Host.Hub.CheckBranchStateOnGitHub(spacePath, userId,
+                        onActivityCreated: path => ctx.Host.UpdateData(ActivityPathId, path))
+                    .Subscribe(_ => { }, ex => ctx.Host.UpdateData(ResultId, Err(ex.Message)));
+                return Task.CompletedTask;
+            }));
+        return row;
+    }
+
+    // ── Additional sync sources (one config node per source under {space}/_GitSync/) ──
+
+    /// <summary>
+    /// Renders every ADDITIONAL sync source ({space}/_GitSync/{sourceId}) — the primary
+    /// (path == {space}/_GitSync) is skipped, it has its own Repository section above. Each
+    /// source shows the standard node-content editor (bound directly to its node stream) plus
+    /// its direction-aware sync buttons and a Remove button.
+    /// </summary>
+    private static UiControl BuildAdditionalSources(
+        LayoutAreaHost host, GitHubSyncService sync, string spacePath, string userId,
+        IReadOnlyList<MeshNode> nodes)
+    {
+        var primaryPath = GitHubSyncService.ConfigPath(spacePath);
+        var stack = Controls.Stack.WithWidth("100%").WithStyle("gap:16px;");
+        var any = false;
+        foreach (var node in nodes)
+        {
+            if (string.Equals(node.Path, primaryPath, StringComparison.OrdinalIgnoreCase))
+                continue;
+            any = true;
+            var sourceId = node.Id;
+            var config = node.ContentAs<GitHubSyncConfig>(host.Hub.JsonSerializerOptions);
+            var source = Controls.Stack.WithWidth("100%")
+                .WithStyle("padding:12px;background:var(--neutral-layer-2);border-radius:8px;gap:8px;");
+            source = source.WithView(Controls.Html(
+                $"<div style=\"font-weight:600;\">{Esc(node.Name ?? sourceId)}</div>"));
+            source = source.WithView(
+                MeshNodeContentEditorControl.ForType(node.Path, typeof(GitHubSyncConfig)));
+            source = source.WithView(BuildSyncButtons(
+                spacePath, userId, sourceId, config?.Direction ?? SyncDirection.Bidirectional));
+            source = source.WithView(Controls.Button("Remove source")
+                .WithAppearance(Appearance.Outline)
+                .WithClickAction(ctx =>
+                {
+                    // The source list live-binds to WatchConfigNodes; the delete re-emits
+                    // and the removed source disappears on its own.
+                    sync.RemoveSyncSource(spacePath, sourceId).Subscribe(
+                        _ => { },
+                        ex => ctx.Host.UpdateData(ResultId, Err(ex.Message)));
+                    return Task.CompletedTask;
+                }));
+            stack = stack.WithView(source);
+        }
+        if (!any)
+            stack = stack.WithView(Controls.Html(
+                "<p style=\"font-size:0.85rem;color:var(--neutral-foreground-hint);\">No additional sync sources.</p>"));
+        return stack;
+    }
+
+    private static UiControl BuildAddSourceForm(GitHubSyncService sync, string spacePath)
+    {
+        var row = Controls.Stack.WithOrientation(Orientation.Horizontal).WithStyle("gap:8px;align-items:flex-end;");
+        row = row.WithView(new TextFieldControl(new JsonPointerReference("name"))
+        {
+            Label = "New sync source name",
+            Placeholder = "e.g. upstream, mirror, backup",
+            DataContext = LayoutAreaReference.GetDataPointer(AddSourceFormId),
+        }.WithWidth("320px"));
+        row = row.WithView(Controls.Button("Add sync source")
+            .WithAppearance(Appearance.Outline)
+            .WithClickAction(ctx =>
+            {
+                ctx.Host.Stream.GetDataStream<Dictionary<string, object?>>(AddSourceFormId).Take(1).Subscribe(d =>
+                {
+                    var name = Str(d, "name");
+                    if (string.IsNullOrEmpty(name))
+                    {
+                        ctx.Host.UpdateData(ResultId, Err("Enter a name for the new sync source."));
+                        return;
+                    }
+                    sync.AddSyncSource(spacePath, name).Subscribe(
+                        node => ctx.Host.UpdateData(ResultId,
+                            Ok($"Sync source '{name}' added — configure its repository and direction above.")),
+                        ex => ctx.Host.UpdateData(ResultId, Err(ex.Message)));
+                });
+                return Task.CompletedTask;
+            }));
+        return row;
     }
 
     // ── Re-import form (transient action input — a commit/branch to import to, not node content) ──

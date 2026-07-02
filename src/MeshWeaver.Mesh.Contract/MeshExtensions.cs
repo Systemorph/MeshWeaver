@@ -1085,16 +1085,27 @@ public static class MeshExtensions
                                                 meshHub, storage, path, collected.ToDelete,
                                                 capturedRequest, request.AccessContext, logger, collectedMessages)
                                             .Timeout(opts.Timeout)
+                                            // 5. Post-deletion side effects for the ROOT node — e.g.
+                                            //    dropping the backing partition store when a
+                                            //    partition-owning Space root is deleted. The subtree
+                                            //    is already gone, so a handler failure can't
+                                            //    un-delete anything: it lands as a Warning on the
+                                            //    activity and the response stays Ok.
+                                            .SelectMany(deletedPaths =>
+                                                RunPostDeletionHandlersObs(
+                                                        hub, rootNode, capturedRequest.DeletedBy, logger, collectedMessages)
+                                                    .Select(_ => deletedPaths))
                                             .Do(deletedPaths =>
                                             {
+                                                var messages = collectedMessages.ToImmutable();
                                                 var okLog = baseActivity with
                                                 {
-                                                    Messages = collectedMessages.ToImmutable(),
+                                                    Messages = messages,
                                                     AffectedPaths = deletedPaths.ToImmutableList(),
                                                     End = DateTime.UtcNow,
-                                                    Status = warningMsgs.IsEmpty
-                                                        ? ActivityStatus.Succeeded
-                                                        : ActivityStatus.Warning
+                                                    Status = messages.Any(m => m.LogLevel >= LogLevel.Warning)
+                                                        ? ActivityStatus.Warning
+                                                        : ActivityStatus.Succeeded
                                                 };
 
                                                 logger.LogInformation(
@@ -1636,6 +1647,50 @@ public static class MeshExtensions
                 return handleObs.Concat(saveExtras);
             })
             .Concat();
+    }
+
+    /// <summary>
+    /// Runs the registered <see cref="INodePostDeletionHandler"/>s matching the deleted
+    /// ROOT node's type, sequentially (<c>Concat</c>), after the subtree has been removed
+    /// from persistence. A handler failure is logged and appended to
+    /// <paramref name="collectedMessages"/> as a Warning — the nodes are already gone, so
+    /// the delete response stays Ok (with Warning status) rather than reporting a failure
+    /// for a deletion that DID happen. Emits exactly once (also with zero handlers) so the
+    /// delete chain's <c>SelectMany</c> always proceeds to post the response.
+    /// </summary>
+    private static IObservable<System.Reactive.Unit> RunPostDeletionHandlersObs(
+        IMessageHub hub,
+        MeshNode node,
+        string? deletedBy,
+        ILogger logger,
+        ImmutableList<LogMessage>.Builder collectedMessages)
+    {
+        if (string.IsNullOrEmpty(node.NodeType))
+            return Observable.Return(System.Reactive.Unit.Default);
+
+        var handlers = hub.ServiceProvider.GetServices<INodePostDeletionHandler>()
+            .Where(h => h.NodeType.Equals(node.NodeType, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        if (handlers.Count == 0)
+            return Observable.Return(System.Reactive.Unit.Default);
+
+        return handlers
+            .Select(handler => handler.Handle(node, deletedBy)
+                .Catch<System.Reactive.Unit, Exception>(ex =>
+                {
+                    logger.LogError(ex,
+                        "Post-deletion handler {Handler} failed for node {Path}",
+                        handler.GetType().Name, node.Path);
+                    lock (collectedMessages)
+                        collectedMessages.Add(new LogMessage(
+                            $"Post-deletion cleanup ({handler.GetType().Name}) failed for '{node.Path}': {ex.Message}",
+                            LogLevel.Warning));
+                    return Observable.Return(System.Reactive.Unit.Default);
+                }))
+            .Concat()
+            .ToList()
+            .Select(_ => System.Reactive.Unit.Default);
     }
 
     /// <summary>

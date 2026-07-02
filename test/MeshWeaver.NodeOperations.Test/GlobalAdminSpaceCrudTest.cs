@@ -123,6 +123,42 @@ public class GlobalAdminSpaceCrudTest(ITestOutputHelper output) : MonolithMeshTe
     }
 
     [Fact(Timeout = 60000)]
+    public async Task DeletingSpace_RemovesPartitionDefinition()
+    {
+        var spaceId = $"TestSpace_{Guid.NewGuid():N}"[..20];
+
+        var spaceNode = MeshNode.FromPath(spaceId) with
+        {
+            Name = "Partition Cleanup",
+            NodeType = SpaceNodeType.NodeType,
+            Content = new Space { Name = "Partition Cleanup" }
+        };
+        await NodeFactory.CreateNode(spaceNode).Should().Emit();
+
+        // The create emitted the Admin/Partition/{id} definition (routing prime).
+        var defPath = $"{PartitionNodeType.Namespace}/{spaceId}";
+        await Observable.Interval(TimeSpan.FromMilliseconds(50))
+            .StartWith(0L)
+            .SelectMany(_ => ReadNode(defPath))
+            .Should().Within(15.Seconds()).Match(n => n is not null,
+                "creating a Space emits its Admin/Partition definition");
+
+        await NodeFactory.DeleteNode(spaceId).Should().Emit();
+
+        // The post-deletion handler removes the ENTIRE partition: the space node is gone
+        // AND the Admin/Partition/{id} definition is cleaned up.
+        await Observable.Interval(TimeSpan.FromMilliseconds(50))
+            .StartWith(0L)
+            .SelectMany(_ => ReadNode(spaceId))
+            .Should().Within(10.Seconds()).Match(n => n is null, "Deleted space should not be found");
+        await Observable.Interval(TimeSpan.FromMilliseconds(50))
+            .StartWith(0L)
+            .SelectMany(_ => ReadNode(defPath))
+            .Should().Within(10.Seconds()).Match(n => n is null,
+                "deleting a Space must remove its Admin/Partition definition");
+    }
+
+    [Fact(Timeout = 60000)]
     public async Task GlobalAdmin_HasAllPermissionsOnSpace()
     {
         var spaceId = $"TestSpace_{Guid.NewGuid():N}"[..20];

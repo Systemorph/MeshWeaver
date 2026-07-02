@@ -262,3 +262,29 @@ public interface INodePostCreationHandler
     /// <returns>Additional nodes to persist</returns>
     IEnumerable<MeshNode> GetAdditionalNodes(MeshNode createdNode) => [];
 }
+
+/// <summary>
+/// Post-deletion handler invoked after a node (and, for a recursive delete, its subtree)
+/// has been successfully removed from persistence — the deletion-side mirror of
+/// <see cref="INodePostCreationHandler"/>. Used for side effects that must follow the
+/// node's removal, e.g. tearing down the backing partition store when a partition-owning
+/// root (<c>Space</c>) is deleted. Register via DI as a singleton; matched by NodeType.
+/// Handlers run only for the ROOT of the delete operation, not for every descendant.
+/// </summary>
+public interface INodePostDeletionHandler
+{
+    /// <summary>
+    /// The node type this handler applies to (e.g. "Space").
+    /// </summary>
+    string NodeType { get; }
+
+    /// <summary>
+    /// Executes after the node has been removed from persistence. Reactive — returns
+    /// <see cref="IObservable{T}"/> (never Task); compose any mesh writes with the reactive
+    /// primitives. Failures are logged and surfaced as warnings on the deletion activity —
+    /// they never un-delete the node, so the response stays Ok.
+    /// </summary>
+    /// <param name="deletedNode">The node as it was loaded before deletion</param>
+    /// <param name="deletedBy">The ObjectId of the deleting user (may be null)</param>
+    IObservable<Unit> Handle(MeshNode deletedNode, string? deletedBy);
+}
