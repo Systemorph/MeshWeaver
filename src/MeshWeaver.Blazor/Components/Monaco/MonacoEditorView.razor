@@ -130,7 +130,19 @@
     [Parameter]
     public bool CodeEditMode { get; set; } = false;
 
-    private string ContainerStyle => $"height: {Height}; max-height: {MaxHeight}; min-height: 40px;";
+    /// <summary>
+    /// When true, the editor container grows with its content — from <see cref="Height"/>
+    /// (the minimum) up to <see cref="MaxHeight"/>, then scrolls internally. Driven by
+    /// Monaco's <c>onDidContentSizeChange</c> in the JS module. Default is false: the
+    /// container keeps the fixed <see cref="Height"/> (existing consumers unaffected).
+    /// </summary>
+    [Parameter]
+    public bool AutoGrow { get; set; } = false;
+
+    private string ContainerStyle => AutoGrow
+        // Auto-grow: JS drives the height from the content size; CSS clamps the range.
+        ? $"max-height: {MaxHeight}; min-height: {Height};"
+        : $"height: {Height}; max-height: {MaxHeight}; min-height: 40px;";
 
     private string GetMonacoTheme() => isDarkMode ? "vs-dark" : "vs";
 
@@ -224,7 +236,7 @@
 
         if (jsModule != null)
         {
-            await jsModule.InvokeVoidAsync("initEditor", EditorId, Placeholder, dotNetRef, CodeEditMode, ShowLineNumbers);
+            await jsModule.InvokeVoidAsync("initEditor", EditorId, Placeholder, dotNetRef, CodeEditMode, ShowLineNumbers, AutoGrow);
 
             // Register completion provider if configured
             await TryRegisterCompletionProvider();
