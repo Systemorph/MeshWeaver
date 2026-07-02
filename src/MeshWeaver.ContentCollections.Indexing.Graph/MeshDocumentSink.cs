@@ -64,4 +64,12 @@ public sealed class MeshDocumentSink(IMessageHub hub) : IDocumentSink
                     $"Failed to write Document node at '{path}': {response.Error}"));
             });
     }
+
+    /// <inheritdoc />
+    public IObservable<bool> DocumentExists(string collectionPath, string filePath) =>
+        // One-shot request/response read of the node at the deterministic path; null (not found,
+        // timeout, routing failure) counts as absent — per the interface contract, indeterminate
+        // leans towards a heal because the write is an idempotent upsert.
+        hub.GetMeshNode(DocumentPaths.For(collectionPath, filePath))
+            .Select(node => node is not null);
 }

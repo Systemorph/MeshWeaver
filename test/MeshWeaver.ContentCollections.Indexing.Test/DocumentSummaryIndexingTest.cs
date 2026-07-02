@@ -117,6 +117,33 @@ public class DocumentSummaryIndexingTest : IDisposable
     }
 
     [Fact]
+    public async Task Skip_WithMissingDocument_HealsTheDocument()
+    {
+        const string body = "Chunked before the document branch existed; the document is missing.";
+        var filePath = WriteFile("legacy.txt", body);
+
+        (await Index(filePath, "legacy.txt")).Status.Should().Be(IndexStatus.Indexed);
+        _sink.Writes.Should().Be(1);
+
+        // Simulate the legacy state: chunks + hash stored, but no Document (the file was indexed
+        // by a build without the document branch, or the Document write failed). Without the heal
+        // the hash gate skips this file FOREVER and its search hits land on a Not Found node.
+        _sink.Forget(Collection, filePath);
+
+        var second = await Index(filePath, "legacy.txt");
+        second.Status.Should().Be(IndexStatus.Skipped);
+
+        // The heal ran the document branch exactly once more; the chunk store was untouched.
+        _summarizer.Calls.Should().Be(2);
+        _sink.Writes.Should().Be(2);
+        var doc = _sink.LastDocument!;
+        doc.FilePath.Should().Be(filePath);
+        doc.ContentHash.Should().Be(Sha256Hex(Encoding.UTF8.GetBytes(body)));
+        doc.ChunkCount.Should().BeGreaterThan(0);
+        doc.Summary.Should().Be(FakeSummarizer.Expected(body));
+    }
+
+    [Fact]
     public async Task ModifiedBytes_ReRunBothSummaryAndDocument()
     {
         var filePath = WriteFile("changing.txt", "Original content about pensions.");
