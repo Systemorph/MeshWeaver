@@ -140,6 +140,39 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
         }
     }
 
+    /// <summary>
+    /// Idle-release seam for the shared mesh-node cache (MeshNodeStreamCache): atomically
+    /// detaches — WITHOUT disposing — every workspace-cached remote sync stream this handle
+    /// reads/writes through (the live cache entry plus any change-feed-evicted predecessors
+    /// still parked on the workspace). After the detach, a concurrent read/write for the same
+    /// path builds a FRESH upstream, so the caller can safely dispose the returned streams
+    /// once it has re-verified (under its own entry gate) that no subscriber remains; on a
+    /// lost race it MUST hand them back via <see cref="ReparkUpstreams"/>. Disposing a
+    /// detached stream posts <c>UnsubscribeRequest</c> to the owner and tears down the
+    /// per-stream <c>sync/</c> hub — the client-side heartbeat dies with it. Empty for
+    /// own-hub handles (nothing remote to release).
+    /// </summary>
+    internal IReadOnlyList<ISynchronizationStream> DetachUpstreams()
+    {
+        if (IsOwn || _workspace is not Workspace workspace)
+            return [];
+        return workspace.DetachRemoteStreams(new Address(_path!), new MeshNodeReference());
+    }
+
+    /// <summary>
+    /// Returns streams obtained from <see cref="DetachUpstreams"/> to the workspace's
+    /// parked-stream set when the caller's release race was lost (a consumer re-attached
+    /// between detach and the final zero-subscriber check). The workspace re-owns their
+    /// lifetime — they stay live for attached subscribers and are disposed by a later
+    /// successful release or at workspace disposal.
+    /// </summary>
+    internal void ReparkUpstreams(IReadOnlyList<ISynchronizationStream> streams)
+    {
+        if (streams.Count == 0 || _workspace is not Workspace workspace)
+            return;
+        workspace.ParkRemoteStreams(streams);
+    }
+
     /// <inheritdoc/>
     /// <remarks>
     /// 🚨 Every emission passes through <see cref="EnsureTypedContent"/> so the
