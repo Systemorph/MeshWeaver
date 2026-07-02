@@ -9,7 +9,7 @@ Every MeshWeaver screen is built by combining small, self-contained controls —
 
 # Container Types
 
-Four containers cover the majority of layout needs:
+Five containers cover the majority of layout needs:
 
 | Container | What it does | Reach for it when... |
 |-----------|-------------|----------------------|
@@ -17,6 +17,7 @@ Four containers cover the majority of layout needs:
 | [Tabs](Tabs) | Displays one child panel at a time behind tab buttons | Grouping related content, settings pages |
 | [Toolbar](Toolbar) | Lays out action buttons in a bar | Page headers, action bars |
 | [Splitter](Splitter) | Creates resizable, collapsible panes | Sidebars, IDE-style layouts |
+| [Layout](Layout) | Assigns children header / body / footer roles | Whole-page scaffolds with persistent chrome |
 
 For responsive multi-column grid layouts, see [Layout Grid](../LayoutGrid).
 

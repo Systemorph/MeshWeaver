@@ -13,11 +13,33 @@ public class ObjectPolymorphicConverter(ITypeRegistry typeRegistry, ILogger? log
 {
     // Warn at most once per unregistered $type (per hub/options instance) so the receiving-hub diagnostic
     // can never become a log storm. Instance field — dies with the hub's serializer options (no static state).
+    // Bounded: '$type' is payload-controlled, so the dedup set is capped (adversarial junk types stop being
+    // deduped past the cap — they log per occurrence, which is visible, not a memory-DoS) and very long
+    // names are truncated before caching/logging.
+    private const int MaxWarnedTypeNames = 1000;
+    private const int MaxTypeNameLogLength = 256;
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> warnedUnregisteredRead = new();
+    private int warnCapNoticed;
 
     private void WarnUnregisteredDeserialization(string typeName)
     {
-        if (logger is null || !warnedUnregisteredRead.TryAdd(typeName, 0))
+        if (logger is null)
+            return;
+        if (typeName.Length > MaxTypeNameLogLength)
+            typeName = typeName[..MaxTypeNameLogLength] + "… (truncated)";
+        if (warnedUnregisteredRead.Count >= MaxWarnedTypeNames)
+        {
+            // Cap reached: stop caching (bounded memory) AND stop logging (bounded log volume) —
+            // one notice marks the transition. Real systems have dozens of distinct types; only
+            // payload-controlled junk '$type' storms ever get here.
+            if (System.Threading.Interlocked.Exchange(ref warnCapNoticed, 1) == 0)
+                logger.LogWarning(
+                    "Unregistered-$type warning cap ({Max} distinct names) reached — further distinct "
+                    + "unregistered '$type' values will not be logged (payload-controlled junk?).",
+                    MaxWarnedTypeNames);
+            return;
+        }
+        if (!warnedUnregisteredRead.TryAdd(typeName, 0))
             return;
         logger.LogWarning(
             "Received '$type':'{TypeName}' which is NOT registered in this (receiving) hub — it can only be read "

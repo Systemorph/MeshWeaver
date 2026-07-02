@@ -150,4 +150,28 @@ property. The hidden query is just the [Query Syntax](/Doc/DataMesh/QuerySyntax)
 `namespace:ACME is:main -nodeType:NodeType`, extended with `scope:descendants` when `subtree` is on —
 so anything you can express as a query, you can scope a catalog to.
 
+You can declare the control directly in your own layout areas. This one searches the GUI
+documentation you are reading — type into the box and the grid filters live:
+
+```csharp --render MeshSearchLive --show-code
+new MeshSearchControl()
+    .WithTitle("GUI documentation")
+    .WithHiddenQuery("namespace:Doc/GUI scope:descendants nodeType:Markdown")
+    .WithNamespace("Doc/GUI")
+    .WithRenderMode(MeshSearchRenderMode.Flat)
+    .WithMaxColumns(3)
+    .WithItemLimit(6)
+    .WithPlaceholder("Search GUI docs…")
+```
+
+For just the autocomplete input — without the result grid — use the lighter `SearchBoxControl`:
+
+```csharp --render SearchBoxLive --show-code
+Controls.SearchBox
+    .WithPlaceholder("Search the documentation…")
+    .WithNamespace("Doc")
+    .WithNavigateOnSelect(false)
+    .WithMaxSuggestions(8)
+```
+
 Back to the [GUI overview](/Doc/GUI).

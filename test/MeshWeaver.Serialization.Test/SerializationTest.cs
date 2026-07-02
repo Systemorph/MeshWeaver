@@ -47,6 +47,9 @@ public class SerializationTest(ITestOutputHelper output) : HubTestBase(output)
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
     {
         return base.ConfigureClient(configuration)
+            // Plumbing fixture with no user → posts as infrastructure (System), per the
+            // never-null AccessContext invariant (test-thread posts carry no circuit user).
+            .WithPostingIdentity(PostingIdentity.System)
             .WithTypes(typeof(BoomerangResponse), typeof(MyEvent), typeof(GetDataRequest), typeof(GetDataResponse))
             .WithRoutes(f =>
             f.RouteAddress(HostType,
