@@ -344,15 +344,32 @@ internal static class NodeTypeCompileActivityHandler
                             $"Roslyn failed: {errMsg}", Microsoft.Extensions.Logging.LogLevel.Error));
                     }
 
-                    // Release MeshNode created BEFORE the parent's Ok write so the
-                    // parent's LatestReleasePath points at an existing node.
-                    // Release.CompilationActivityPath links back to this activity so
-                    // the UI can follow Release → Activity to see the full build detail.
-                    string? newReleasePath = null;
+                    // Release MeshNode created — and CONFIRMED — BEFORE the parent's Ok
+                    // write so the parent's LatestReleasePath points at an EXISTING node.
+                    // TryCreateReleaseNode is observed + bounded: it emits the path only
+                    // after the create landed (null on dispatch-failure/timeout), so a
+                    // reader following LatestReleasePath right after the terminal write
+                    // can never hit a phantom-path NotFound (the NodeTypeReleaseGateTest
+                    // 2-core flake). Release.CompilationActivityPath links back to this
+                    // activity so the UI can follow Release → Activity for build detail.
+                    var releasePathObservable = ok
+                        ? MeshDataSourceExtensions.TryCreateReleaseNode(
+                            activityHub, parentPath, outcome.Result!, outcome.PendingNode, activityPath, logger)
+                        : System.Reactive.Linq.Observable.Return<string?>(null);
+
+                    releasePathObservable
+                        .Take(1)
+                        .Subscribe(newReleasePath =>
+                    {
+                    // Terminal writes run under System: the create-response emission can
+                    // carry the release-REQUESTER's context (TryCreateReleaseNode stamps
+                    // the user on the Release node), but the parent status write is
+                    // infrastructure — a requester without Update on the parent partition
+                    // must not fail the terminal write closed.
+                    using var terminalScope = activityHub.ServiceProvider
+                        .GetService<AccessService>()?.ImpersonateAsSystem();
                     if (ok)
                     {
-                        newReleasePath = MeshDataSourceExtensions.TryCreateReleaseNode(
-                            activityHub, parentPath, outcome.Result!, outcome.PendingNode, activityPath, logger);
                         if (newReleasePath is not null)
                         {
                             activityMessages.Add(new LogMessage(
@@ -360,12 +377,12 @@ internal static class NodeTypeCompileActivityHandler
                                 Microsoft.Extensions.Logging.LogLevel.Information));
                             logger?.LogInformation(
                                 "[NTCA] Release {ReleasePath} linked to activity {ActivityPath} + assembly {AssemblyLocation}",
-                                newReleasePath, activityPath, outcome.Result.AssemblyLocation);
+                                newReleasePath, activityPath, outcome.Result!.AssemblyLocation);
                         }
                         else
                         {
                             activityMessages.Add(new LogMessage(
-                                "Release node NOT created (no IMeshService available) — assembly still usable directly",
+                                "Release node NOT created (create did not land / no IMeshService) — assembly still usable directly",
                                 Microsoft.Extensions.Logging.LogLevel.Warning));
                         }
                     }
@@ -436,6 +453,9 @@ internal static class NodeTypeCompileActivityHandler
                        // → activation falls back to default config and IWorkspace fails
                        // to activate (no AddData). Found via CodeEditRecompileTest.
                        compiledVersion: ok ? outcome.Result?.Version : null);
+                    },
+                    ex => logger?.LogWarning(ex,
+                        "[NTCA] release-create observation faulted for {ParentPath}", parentPath));
                 },
                 ex => logger?.LogWarning(ex, "[NTCA] compile chain faulted for {ParentPath}", parentPath));
 

@@ -43,18 +43,37 @@ internal static class NodeTypeContractHandler
             return request.Processed();
         }
 
-        // Reactive chain: read own MeshNode → compile if needed → post response.
+        // Reactive chain: ensure a compile is DISPATCHED (never run inline) → wait
+        // for it to settle → hydrate → post response.
         // No await, no Task in the hub flow (Doc/Architecture/AsynchronousCalls.md).
         //
-        // AwaitCompilationSettled holds the read until any in-progress compile
+        // 🚨 SINGLE COMPILE DRIVER. This handler must NEVER run Roslyn concurrently
+        // with the watcher-dispatched activity compile (InstallCompileWatcher →
+        // HandleDispatchCompile → RunCompile). On a FRESH NodeType (CompilationStatus
+        // still null) the old chain treated `null` as settled, raced past
+        // AwaitCompilationSettled, and ran CompileAndGetConfigurations INLINE while
+        // the first-build kickoff flipped Pending and dispatched the SAME compile
+        // through the watcher — two concurrent compiles on one NodeType. The loser
+        // then read the winner's DLL mid-emit ("Failed to load assembly … the build
+        // is not usable"), deleted it, and wrote a terminal state the other write-back
+        // half-overwrote — the compile-heavy 2-core CI flake
+        // (MeshNodeCompilationIntegrationTest / OrleansDynamicCompilationTest /
+        // FrameworkStaleInstanceRenderTest settling at Ok+assembly but
+        // CompiledFrameworkVersion empty ⇒ HasUsableBuild=false ⇒ wedge). Exactly the
+        // race HandleCreateRelease already fixed by delegating to the watcher
+        // (DispatchPendingFlip); this applies the same rule here: the STATUS FIELD is
+        // the single-flight lock, the watcher is the only Roslyn driver for a
+        // triggered compile.
+        //
+        // AwaitCompilationSettled then holds the read until the dispatched compile
         // finishes: a naive Take(1) would hand the requester the previous
         // release's AssemblyLocation while V2 is mid-compile, and every fresh
         // instance hub activated in that gap would render the stale layout.
-        // Same primitive used by HandleCreateRelease so request handling is
-        // serialised across the compile critical section.
-        hub.GetWorkspace().GetMeshNodeStream()
-            .AwaitCompilationSettled()
-            .Take(1)
+        var workspace = hub.GetWorkspace();
+        EnsureCompileDispatched(hub, workspace)
+            .SelectMany(_ => workspace.GetMeshNodeStream()
+                .AwaitCompilationSettled()
+                .Take(1))
             .Timeout(TimeSpan.FromSeconds(60))
             .SelectMany(node =>
             {
@@ -63,10 +82,10 @@ internal static class NodeTypeContractHandler
                     logger?.LogDebug(
                         "GetCompilationPathRequest at {HubPath}: MeshNode has no NodeTypeDefinition (Content={ContentType}).",
                         hubPath, node.Content?.GetType().Name ?? "null");
-                    return Observable.Return((GetCompilationPathResponse?)Fail(
+                    return Observable.Return(new ResolvedResponse(Fail(
                         null,
                         $"Node at '{hubPath}' is not a valid NodeType definition "
-                        + $"(Content type: {node.Content?.GetType().Name ?? "null"}).")!);
+                        + $"(Content type: {node.Content?.GetType().Name ?? "null"})."), false));
                 }
 
                 // Pinned release: resolve the explicitly requested Release MeshNode
@@ -91,9 +110,9 @@ internal static class NodeTypeContractHandler
                                     "GetCompilationPathRequest at {HubPath}: pinned release {ReleasePath} could not be resolved (releaseNode={ReleaseNode}).",
                                     hubPath, requestedReleasePath,
                                     releaseNode == null ? "null" : releaseNode.Content?.GetType().Name ?? "no-content");
-                                return Observable.Return<GetCompilationPathResponse?>(Fail(
+                                return Observable.Return(new ResolvedResponse(Fail(
                                     null,
-                                    $"Pinned release '{requestedReleasePath}' for '{hubPath}' could not be resolved."));
+                                    $"Pinned release '{requestedReleasePath}' for '{hubPath}' could not be resolved."), false));
                             }
                             // Use the persisted integer version the IAssemblyStore.Put
                             // used, not a parse of the display Version string.
@@ -106,17 +125,17 @@ internal static class NodeTypeContractHandler
                                         logger?.LogWarning(
                                             "GetCompilationPathRequest at {HubPath}: pinned release {ReleasePath} bytes not found in store (collection={Coll}, version={Version}).",
                                             hubPath, requestedReleasePath, release.AssemblyCollection, releaseVersion);
-                                        return Observable.Return<GetCompilationPathResponse?>(Fail(
+                                        return Observable.Return(new ResolvedResponse(Fail(
                                             null,
-                                            $"Pinned release '{requestedReleasePath}' assembly not found in store."));
+                                            $"Pinned release '{requestedReleasePath}' assembly not found in store."), false));
                                     }
                                     logger?.LogDebug(
                                         "GetCompilationPathRequest at {HubPath}: pinned release {ReleasePath} → {LocalPath}.",
                                         hubPath, requestedReleasePath, localPath);
                                     return compilationService.GetConfigurationsFromExistingAssembly(localPath!, hubPath)
-                                        .Select(result => BuildResponseFromLocal(
+                                        .Select(result => new ResolvedResponse(BuildResponseFromLocal(
                                             hubPath, node, localPath!, release.AssemblyCollection,
-                                            release.AssemblyContentPath, result));
+                                            release.AssemblyContentPath, result), false));
                                 });
                         });
                 }
@@ -141,7 +160,8 @@ internal static class NodeTypeContractHandler
                                     "GetCompilationPathRequest at {HubPath}: latest assembly not in store (collection={Coll}, version={Version}) — falling back to fresh compile.",
                                     hubPath, def.LatestAssemblyCollection, compileVersion);
                                 return compilationService.CompileAndGetConfigurations(node)
-                                    .Select(result => BuildResponse(hubPath, node, result));
+                                    .Select(result => new ResolvedResponse(
+                                        BuildResponse(hubPath, node, result), true));
                             }
                             logger?.LogDebug(
                                 "GetCompilationPathRequest at {HubPath}: using existing assembly at {LocalPath}.",
@@ -151,15 +171,27 @@ internal static class NodeTypeContractHandler
                                     hub, def.LastCompilationActivityPath, result,
                                     res => BuildResponseFromLocal(
                                         hubPath, node, localPath!, def.LatestAssemblyCollection,
-                                        def.LatestAssemblyPath, res)));
+                                        def.LatestAssemblyPath, res)))
+                                .Select(response => new ResolvedResponse(response, false));
                         });
                 }
 
+                // Terminal state without a published release + durable assembly refs:
+                // either the dispatched compile FAILED (settled Error — CompileAnd…
+                // below re-derives the diagnostics for the response; the watcher's
+                // park registry keeps this bounded), or this NodeType has nothing the
+                // watcher compiles (static-only) / the compile predates the durable
+                // store fields. The dispatched compile has SETTLED by here, so this
+                // call cannot overlap the activity's Roslyn run — a fresh success is
+                // a cache-hit load of the just-produced DLL, not a second emit.
                 return compilationService.CompileAndGetConfigurations(node)
-                    .Select(result => BuildResponse(hubPath, node, result));
+                    .Select(result => new ResolvedResponse(
+                        BuildResponse(hubPath, node, result), true));
             })
-            .SelectMany(response =>
+            .SelectMany(resolved =>
             {
+                var response = resolved.Response;
+                var freshCompile = resolved.FreshCompile;
                 // Write compile state back to the MeshNode FIRST, then post the
                 // response. Sequencing matters: callers that bridge
                 // GetCompilationPathRequest → Get the MeshNode immediately must
@@ -169,7 +201,7 @@ internal static class NodeTypeContractHandler
                 IObservable<GetCompilationPathResponse> writeBack;
                 try
                 {
-                    writeBack = hub.GetWorkspace().GetMeshNodeStream().Update(curr =>
+                    writeBack = workspace.GetMeshNodeStream().Update(curr =>
                     {
                         if (curr.Content is not NodeTypeDefinition def)
                             return curr;
@@ -189,7 +221,24 @@ internal static class NodeTypeContractHandler
                                     // populate them (Null store).
                                     LatestAssemblyCollection = response.Collection ?? def.LatestAssemblyCollection,
                                     LatestAssemblyPath = response.ContentPath ?? def.LatestAssemblyPath,
-                                    LastCompiledVersion = curr.Version
+                                    LastCompiledVersion = curr.Version,
+                                    // 🚨 A FRESH compile's success write must be COMPLETE —
+                                    // stamp the framework version the build ran against,
+                                    // exactly like the activity write-back (RunCompile).
+                                    // Leaving it unstamped produced the wedge state
+                                    // Ok + assembly-set + CompiledFrameworkVersion='' ⇒
+                                    // HasUsableBuild=false forever (nothing re-triggers:
+                                    // kickoff needs status null) — the 2-core CI flake's
+                                    // terminal signature. Safe: a fresh success is either a
+                                    // real Roslyn run against the live framework or a
+                                    // cache-hit DLL the loader already verified is NEWER
+                                    // than the framework build (LoadNodeAssembly deletes
+                                    // older-than-framework DLLs). Hydrate paths
+                                    // (freshCompile=false) keep the persisted value — they
+                                    // must never erase an ABI-staleness marker.
+                                    CompiledFrameworkVersion = freshCompile
+                                        ? NodeTypeCompilationHelpers.FrameworkVersion
+                                        : def.CompiledFrameworkVersion
                                 }
                             };
                         return curr with
@@ -230,6 +279,55 @@ internal static class NodeTypeContractHandler
                 });
 
         return request.Processed();
+    }
+
+    /// <summary>
+    /// Branch result: the response to post plus whether it came from a FRESH
+    /// <see cref="IMeshNodeCompilationService.CompileAndGetConfigurations"/> run
+    /// (drives the <see cref="NodeTypeDefinition.CompiledFrameworkVersion"/> stamp
+    /// in the write-back) as opposed to a hydrate of an existing assembly (which
+    /// must never re-stamp — that would erase an ABI-staleness marker).
+    /// </summary>
+    private sealed record ResolvedResponse(GetCompilationPathResponse? Response, bool FreshCompile);
+
+    /// <summary>
+    /// 🚨 The single-compile-driver gate. Ensures a NEVER-COMPILED dynamic NodeType
+    /// (CompilationStatus == null, no usable build, not static-only) has a compile
+    /// DISPATCHED through the status control plane — one status-guarded flip to
+    /// <see cref="CompilationStatus.Pending"/> that <c>InstallCompileWatcher</c> turns
+    /// into the one activity compile — before the caller waits on
+    /// <c>AwaitCompilationSettled</c>. Idempotent with the first-build kickoff
+    /// (<c>InstallCompileWatcher</c>'s <c>firstBuildKickoffSub</c>): both guard on
+    /// <c>CompilationStatus is null</c>, and the per-NodeType hub's serialized action
+    /// block makes exactly ONE of them transition the status, so exactly one compile
+    /// runs. Any non-null status returns unchanged — the status machine already owns
+    /// the compile lifecycle (Pending/Compiling hold the settled-wait; Ok/Error are
+    /// terminal and handled by the response branches).
+    /// <para>Runs as System — dispatching a first build is infrastructure, same as the
+    /// kickoff; the requester (often an instance activation) only needs READ rights and
+    /// must not be denied for lacking Edit on the NodeType node.</para>
+    /// <para>A no-op flip still emits the current node (the handle's no-op completion
+    /// contract), so the chain never hangs here.</para>
+    /// </summary>
+    private static IObservable<MeshNode> EnsureCompileDispatched(
+        IMessageHub hub, IWorkspace workspace)
+    {
+        var accessService = hub.ServiceProvider.GetService<AccessService>();
+        return Observable.Using(
+                () => (IDisposable?)accessService?.ImpersonateAsSystem()
+                      ?? System.Reactive.Disposables.Disposable.Empty,
+                _ => workspace.GetMeshNodeStream().Update(curr =>
+                {
+                    if (curr.Content is not NodeTypeDefinition def) return curr;
+                    if (def.CompilationStatus is not null) return curr;
+                    if (NodeTypeCompilationHelpers.HasUsableBuild(curr, def)) return curr;
+                    if (NodeTypeCompilationHelpers.IsStaticOnlyNodeType(curr, def)) return curr;
+                    return curr with
+                    {
+                        Content = def with { CompilationStatus = CompilationStatus.Pending }
+                    };
+                }))
+            .Take(1);
     }
 
     /// <summary>

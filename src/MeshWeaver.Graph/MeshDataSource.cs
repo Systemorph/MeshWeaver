@@ -425,15 +425,24 @@ public static class MeshDataSourceExtensions
     /// Best-effort: write a <c>Release</c> MeshNode at
     /// <c>{nodeTypePath}/Release/{version}</c> capturing the compiled assembly
     /// path + the markdown release notes from the NodeType's
-    /// <c>NodeTypeDefinition.ReleaseNotes</c> field. Returns the new release
-    /// path on success, or <c>null</c> if the create couldn't be dispatched
-    /// (no IMeshService available — early startup, test fixture, etc.).
+    /// <c>NodeTypeDefinition.ReleaseNotes</c> field.
     ///
-    /// <para>Failures are swallowed: the release MeshNode is observability +
-    /// history. Compile correctness must not depend on the create succeeding.
-    /// See <c>Doc/Architecture/Postmortems/NodeTypeReleaseRedesign.md</c>.</para>
+    /// <para>🚨 OBSERVED + BOUNDED — never advertise a path before it exists. The
+    /// returned observable emits the new release path ONLY after the create has
+    /// LANDED (the <c>CreateNode</c> response), or <c>null</c> when it couldn't be
+    /// dispatched / didn't land within the bound. The old fire-and-forget shape
+    /// returned the path immediately and the caller stamped it into
+    /// <c>NodeTypeDefinition.LatestReleasePath</c> — a reader following that field
+    /// right after the terminal Ok write then hit a hard path-resolution NotFound
+    /// (the un-created node faulted the read stream — the NodeTypeReleaseGateTest
+    /// 2-core flake). Same rule as RunCompile's activity-create guard: the stamp
+    /// follows the create; it is never a path that does not exist.</para>
+    ///
+    /// <para>Failures are swallowed (emit <c>null</c>): the release MeshNode is
+    /// observability + history. Compile correctness must not depend on the create
+    /// succeeding. See <c>Doc/Architecture/Postmortems/NodeTypeReleaseRedesign.md</c>.</para>
     /// </summary>
-    internal static string? TryCreateReleaseNode(
+    internal static IObservable<string?> TryCreateReleaseNode(
         IMessageHub hub,
         string nodeTypePath,
         NodeCompilationResult result,
@@ -444,7 +453,7 @@ public static class MeshDataSourceExtensions
         try
         {
             var meshService = hub.ServiceProvider.GetService<IMeshService>();
-            if (meshService is null) return null;
+            if (meshService is null) return Observable.Return<string?>(null);
 
             // Markdown release notes the author wrote on the NodeType's
             // ReleaseNotes field BEFORE clicking Create Release — sourced
@@ -542,35 +551,40 @@ public static class MeshDataSourceExtensions
             // release is attributable to its author (owner = caller). When no user requested it
             // (the System-driven Doc-release seed, or the first-build kickoff), RequestedReleaseBy
             // is null and the create falls through under the ambient System scope.
+            // Observable.Using acquires the scope AT SUBSCRIBE so both the CreateNode call and
+            // its subscription run inside it — CreateNode captures the caller's identity for
+            // the stored MeshNode.CreatedBy.
             var requestedBy = pendingNode.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions)?.RequestedReleaseBy;
             var accessService = hub.ServiceProvider.GetService<AccessService>();
-            var userScope = !string.IsNullOrEmpty(requestedBy) && accessService is not null
-                ? accessService.SwitchAccessContext(new AccessContext
+
+            // OBSERVED create: emit the path only once the create response lands.
+            // Bounded — a hung owner must never block the compile's terminal write;
+            // on timeout/fault emit null so the parent never advertises a phantom
+            // Release path (mirrors RunCompile's activity-create guard).
+            return Observable.Using(
+                    () => !string.IsNullOrEmpty(requestedBy) && accessService is not null
+                        ? accessService.SwitchAccessContext(new AccessContext
+                        {
+                            ObjectId = requestedBy,
+                            Name = requestedBy
+                        })
+                        : System.Reactive.Disposables.Disposable.Empty,
+                    _ => meshService.CreateNode(node).Take(1))
+                .Select(_ => (string?)releasePath)
+                .Timeout(TimeSpan.FromSeconds(10), Observable.Return<string?>(null))
+                .Catch<string?, Exception>(ex =>
                 {
-                    ObjectId = requestedBy,
-                    Name = requestedBy
-                })
-                : null;
-
-            // Fire-and-forget — observability, not correctness. If the create
-            // fails (replication race, transient mesh-side error) we log and
-            // skip; the next compile retry creates a fresh release. The Subscribe
-            // runs synchronously inside userScope, so CreateNode captures the
-            // caller's identity for the stored MeshNode.CreatedBy.
-            using (userScope)
-                meshService.CreateNode(node).Subscribe(
-                    _ => { },
-                    ex => logger?.LogWarning(ex,
+                    logger?.LogWarning(ex,
                         "CompileWatcher: failed to create Release node at {ReleasePath}",
-                        releasePath));
-
-            return releasePath;
+                        releasePath);
+                    return Observable.Return<string?>(null);
+                });
         }
         catch (Exception ex)
         {
             logger?.LogWarning(ex,
                 "CompileWatcher: TryCreateReleaseNode threw for {NodeTypePath}", nodeTypePath);
-            return null;
+            return Observable.Return<string?>(null);
         }
     }
 
