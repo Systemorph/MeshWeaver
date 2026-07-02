@@ -60,6 +60,24 @@ public class PartitionLifecycleTests(PostgreSqlFixture fixture, ITestOutputHelpe
             .DefaultIfEmpty(Unit.Default)
             .ToTask();
 
+    /// <summary>
+    /// Tear a partition down the platform way — every provider's
+    /// <see cref="IPartitionStorageProvider.DeletePartition"/> (PG → <c>DROP SCHEMA … CASCADE</c>).
+    /// This is what deleting a partition-owning root (Space) triggers via
+    /// <c>PartitionDropPostDeletionHandler</c>.
+    /// </summary>
+    private Task DeletePartition(string ns) =>
+        Mesh.ServiceProvider.GetServices<IPartitionStorageProvider>()
+            .Select(p => p.DeletePartition(ns))
+            .Concat()
+            .DefaultIfEmpty(Unit.Default)
+            .ToTask();
+
+    private IObservable<long> SchemaCount(string schema) =>
+        _fixture.DataSource.ScalarLong(
+            "SELECT COUNT(*) FROM information_schema.schemata WHERE schema_name = @s",
+            new[] { ("s", (object)schema) });
+
     [Fact(Timeout = 60000)]
     public async Task ProvisionedPartition_Write_EnablesSubsequentReads()
     {
@@ -158,6 +176,26 @@ public class PartitionLifecycleTests(PostgreSqlFixture fixture, ITestOutputHelpe
         var deleted = await meshService.DeleteNode(path)
             .Should().Within(30.Seconds()).Emit();
         deleted.Should().BeTrue();
+    }
+
+    [Fact(Timeout = 60000)]
+    public async Task DeletePartition_DropsSchema_AndReprovisionRecreatesIt()
+    {
+        var ns = $"pg9c_drop_{Guid.NewGuid():N}".ToLowerInvariant()[..18];
+        await ProvisionPartition(ns);
+        await SchemaCount(ns).Should().Within(30.Seconds()).Be(1L);
+
+        // Drop — the inverse of provisioning. Idempotent: a second drop of the now-absent
+        // schema completes without error.
+        await DeletePartition(ns);
+        await SchemaCount(ns).Should().Within(30.Seconds()).Be(0L);
+        await DeletePartition(ns);
+
+        // Re-provisioning after a drop must recreate the schema — the provider's
+        // provisioning promise-cache was evicted by the drop (else the cached "already
+        // provisioned" completion would replay and every write would 42P01 forever).
+        await ProvisionPartition(ns);
+        await SchemaCount(ns).Should().Within(30.Seconds()).Be(1L);
     }
 
     /// <summary>

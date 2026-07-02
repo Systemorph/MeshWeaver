@@ -198,6 +198,13 @@ public static class SpaceNodeType
                 new SpaceAdminInvariantValidator(
                     sp.GetRequiredService<IMessageHub>(),
                     sp.GetService<ILoggerFactory>()?.CreateLogger<SpaceAdminInvariantValidator>()));
+            // Deleting a Space removes the ENTIRE partition: after the recursive node
+            // delete, drop the backing store (Postgres schema incl. satellites) on every
+            // partition storage provider and remove the Admin/Partition/{id} definition.
+            services.AddSingleton<INodePostDeletionHandler>(sp =>
+                new PartitionDropPostDeletionHandler(
+                    sp.GetRequiredService<IMessageHub>(),
+                    sp.GetService<ILoggerFactory>()?.CreateLogger<PartitionDropPostDeletionHandler>()));
             return services;
         });
         // Space instances are NOT publicly readable — partition access controls visibility.
