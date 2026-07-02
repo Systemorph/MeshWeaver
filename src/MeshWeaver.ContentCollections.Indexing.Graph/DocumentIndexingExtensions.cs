@@ -30,6 +30,25 @@ public static class DocumentIndexingExtensions
         where TBuilder : MeshBuilder
     {
         builder.AddDocumentType();
+        // Register the Document content type on the MESH hub and on every per-node hub (the same
+        // two surfaces AddAI covers for Thread content). WithContentType<Document> only registers
+        // on the Document per-node hub itself — but the WRITE goes through the mesh hub
+        // (MeshDocumentSink → CreateOrUpdateNodeRequest) and READS go through whichever hub calls
+        // GetMeshNodeStream (portal, cache, query). Without the mesh-wide registration the content
+        // serialises WITHOUT a $type discriminator and every reader gets back an untyped
+        // JsonElement ("stayed an untyped JsonElement (TypeRegistry lacks the $type
+        // discriminator)") — the renders-empty / reactive-waits-time-out / page-not-found class of
+        // bug (see MeshExtensions.AddMeshTypes' User/UserActivityRecord registration rationale).
+        builder.ConfigureHub(config =>
+        {
+            config.TypeRegistry.WithType(typeof(Document), nameof(Document));
+            return config;
+        });
+        builder.ConfigureDefaultNodeHub(config =>
+        {
+            config.TypeRegistry.WithType(typeof(Document), nameof(Document));
+            return config;
+        });
         builder.ConfigureServices(services =>
         {
             services.AddSingleton<IDocumentSink>(sp =>

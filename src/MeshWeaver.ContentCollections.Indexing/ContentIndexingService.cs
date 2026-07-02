@@ -104,10 +104,50 @@ public sealed class ContentIndexingService
                     _logger.LogDebug(
                         "Hash gate: '{FilePath}' in '{Collection}' unchanged ({Hash}); skipping.",
                         filePath, collectionPath, hash);
-                    return Observable.Return(IndexResult.Skipped);
+                    // Chunks are up to date — but the per-file Document may still be MISSING
+                    // (chunks indexed before the document branch was wired, or the Document write
+                    // failed). A search hit for such a file resolves to a Document node that does
+                    // not exist → the click lands on Not Found, and the gate would skip it forever.
+                    // Heal: when the document branch is wired and no Document exists, run
+                    // extract + summarize + sink for THIS file only (the chunk store is untouched).
+                    return EnsureDocument(collectionPath, filePath, fileName, bytes, hash)
+                        .Select(_ => IndexResult.Skipped);
                 }
 
                 return IndexChanged(collectionPath, filePath, fileName, bytes, hash);
+            });
+    }
+
+    /// <summary>
+    /// The hash-gate HEAL: when the document branch is wired but no <c>Document</c> exists for the
+    /// (unchanged) file, extracts the text again and runs the summarize + sink branch, reporting
+    /// the stored chunk count. No-op (single <see cref="Unit"/>) when the branch isn't wired, the
+    /// Document already exists, or the file has no extractable text.
+    /// </summary>
+    private IObservable<Unit> EnsureDocument(
+        string collectionPath, string filePath, string fileName, byte[] bytes, string hash)
+    {
+        if (_summarizer is null || _documentSink is null)
+            return Observable.Return(Unit.Default);
+
+        return _documentSink.DocumentExists(collectionPath, filePath)
+            .Take(1)
+            .SelectMany(exists =>
+            {
+                if (exists)
+                    return Observable.Return(Unit.Default);
+
+                _logger.LogInformation(
+                    "Hash gate: '{FilePath}' in '{Collection}' unchanged but its Document is missing; healing.",
+                    filePath, collectionPath);
+                return _store.GetChunkCount(collectionPath, filePath)
+                    .Take(1)
+                    .SelectMany(chunkCount => _extractor.ExtractText(fileName, bytes)
+                        .Take(1)
+                        .SelectMany(text => string.IsNullOrWhiteSpace(text)
+                            ? Observable.Return(Unit.Default)
+                            : WriteDocumentBranch(
+                                collectionPath, filePath, fileName, text, bytes, hash, chunkCount)));
             });
     }
 
