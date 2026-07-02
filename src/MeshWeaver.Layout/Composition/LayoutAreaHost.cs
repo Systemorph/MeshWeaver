@@ -235,26 +235,11 @@ public record LayoutAreaHost : IDisposable
             // generator-side UpdateData write (also a Stream.Update) ahead of its
             // control. A late/observable generator re-emitting keeps flowing through
             // the same path for the area's whole lifetime.
-            // A view generator that throws SYNCHRONOUSLY — before returning its observable,
-            // e.g. a compiled NodeType view whose Invoke faults on a cold agent — would
-            // otherwise propagate out of this init subscribe, error the init observable, and
-            // FAULT the stream. After that no error frame can be pushed and the client spins
-            // on an indefinite null (the LinkedInTelemetryImport 45 s render timeout, with the
-            // real cause buried in a log line). Catch it here and surface a visible error
-            // control through the normal render pipeline — the stream is still healthy, the
-            // base frame was emitted above — exactly as RenderObservable.Catch does for a
-            // generator whose OBSERVABLE (rather than its function body) errors.
-            IObservable<EntityStoreAndUpdates> renderObservable;
-            try
-            {
-                renderObservable = LayoutDefinition.Render(this, context, baseStore);
-            }
-            catch (Exception renderEx)
-            {
-                renderObservable = Observable.Return(RenderRenderingError(
-                    context, new EntityStoreAndUpdates(baseStore, [], Stream.StreamId), renderEx));
-            }
-            var renderSubscription = renderObservable
+            // When the hub configured a RenderingGate, the pipeline is STATUS-GATED:
+            // renderers (the typed-content readers) run only on a SUCCESS status;
+            // error/cancelled status and missing configuration short-circuit to a
+            // visible emergency frame (see BuildRenderObservable).
+            var renderSubscription = BuildRenderObservable(context, baseStore)
                 .Subscribe(PushRenderResult, FailRendering);
 
             // Tear down: dispose the render + milestone subscriptions and clear the
@@ -267,6 +252,104 @@ public record LayoutAreaHost : IDisposable
                     accessService?.SetContext(null);
             });
         });
+
+    /// <summary>
+    /// The top-level render pipeline for this host, STATUS-GATED when the hub configured a
+    /// <see cref="Composition.RenderingGate"/> (see <see cref="LayoutDefinition.WithRenderingGate"/>):
+    /// <list type="bullet">
+    ///   <item>No gate → render unconditionally (<see cref="SafeRender"/>), exactly as before.</item>
+    ///   <item>SUCCESS status → invoke the renderers — the ONLY branch that reads the real typed
+    ///         content (<c>ContentAs&lt;T&gt;</c> / <c>Content is X</c> inside the view generators).</item>
+    ///   <item>ERROR/CANCELLED status or missing configuration → EMERGENCY MODE: the requested
+    ///         area renders a visible error frame (<see cref="RenderEmergency"/>) and the typed
+    ///         readers are NEVER invoked. Typing a failed node's content yields null → the area
+    ///         renders empty or a reactive wait times out (the "renders empty /
+    ///         secretly-errors-as-timeout" wedge class this gate closes) — the error must BE the
+    ///         rendered output instead.</item>
+    ///   <item>Still-Running status → nothing renders yet; the progress channel stays up and the
+    ///         guaranteed terminal transition re-fires the gate into one of the branches above.</item>
+    /// </list>
+    /// A faulted gate observable itself surfaces as a visible error frame via the trailing Catch —
+    /// never a silent hang (wedges-to-zero).
+    /// </summary>
+    private IObservable<EntityStoreAndUpdates> BuildRenderObservable(
+        RenderingContext context, EntityStore baseStore)
+    {
+        if (LayoutDefinition.RenderingGate is not { } gate)
+            return SafeRender(context, baseStore);
+
+        return Observable.Defer(() => gate.Invoke(this))
+            .DistinctUntilChanged()
+            .Select(state =>
+                state.Status.IsSuccess()
+                    ? SafeRender(context, baseStore)
+                    : state.Status.IsError()
+                        ? Observable.Return(RenderEmergency(context, baseStore, state))
+                        : Observable.Empty<EntityStoreAndUpdates>())
+            .Switch()
+            .Catch<EntityStoreAndUpdates, Exception>(ex =>
+                Observable.Return(RenderRenderingError(
+                    context, new EntityStoreAndUpdates(baseStore, [], Stream.StreamId), ex)));
+    }
+
+    /// <summary>
+    /// Invokes <see cref="LayoutDefinition.Render"/>, converting a SYNCHRONOUS throw from a view
+    /// generator — before it returns its observable, e.g. a compiled NodeType view whose Invoke
+    /// faults on a cold agent — into a visible error frame. Without this the throw would propagate
+    /// out of the init subscribe, error the init observable, and FAULT the stream; after that no
+    /// error frame can be pushed and the client spins on an indefinite null (the
+    /// LinkedInTelemetryImport 45 s render timeout, with the real cause buried in a log line).
+    /// The stream stays healthy — the base frame was already emitted — exactly as
+    /// <see cref="RenderObservable"/>'s Catch does for a generator whose OBSERVABLE (rather than
+    /// its function body) errors.
+    /// </summary>
+    private IObservable<EntityStoreAndUpdates> SafeRender(RenderingContext context, EntityStore baseStore)
+    {
+        try
+        {
+            return LayoutDefinition.Render(this, context, baseStore);
+        }
+        catch (Exception renderEx)
+        {
+            return Observable.Return(RenderRenderingError(
+                context, new EntityStoreAndUpdates(baseStore, [], Stream.StreamId), renderEx));
+        }
+    }
+
+    /// <summary>
+    /// EMERGENCY MODE render: the terminal, VISIBLE outcome of a status gate reporting an
+    /// error/cancelled status or missing configuration. Renders the error as a markdown error
+    /// control into the requested area — the same shape <see cref="RenderRenderingError"/> and
+    /// <see cref="LayoutDefinition"/>'s NotFound placeholder use — so the failure is the RENDERED
+    /// OUTPUT: never a hang, never an empty render, and the typed-content readers are never
+    /// invoked on un-typeable content. Flows through <see cref="PushRenderResult"/> like any
+    /// render, which also clears the progress spinner.
+    /// </summary>
+    private EntityStoreAndUpdates RenderEmergency(
+        RenderingContext context, EntityStore store, RenderingGateState state)
+    {
+        logger.LogWarning(
+            "Emergency-mode render for area {Area} on {Hub}: status {Status} (configMissing={ConfigMissing}) — {Error}",
+            context.Area, Hub.Address, state.Status, state.IsConfigMissing, state.ErrorMessage ?? "(no detail)");
+
+        var headline = state.IsConfigMissing
+            ? "This area cannot be rendered — no configuration is available."
+            : state.Status == ActivityStatus.Cancelled
+                ? "This area cannot be rendered — the operation was cancelled."
+                : "This area cannot be rendered — the content is in an error state.";
+        var detail = string.IsNullOrEmpty(state.ErrorMessage)
+            ? string.Empty
+            : $"\n\n```\n{state.ErrorMessage}\n```";
+        var errorControl = new MarkdownControl($"⚠️ **{headline}**{detail}");
+
+        // Tear down any live generator subscriptions from a previous (successful) render of this
+        // area before replacing it with the emergency frame, mirroring RenderObservable's
+        // DisposeExistingAreas discipline.
+        var cleared = DisposeExistingAreas(store, context);
+        var rendered = RenderArea(context, errorControl, cleared.Store);
+        return new EntityStoreAndUpdates(
+            rendered.Store, cleared.Updates.Concat(rendered.Updates), Stream.StreamId);
+    }
 
     /// <summary>
     /// Applies one <see cref="LayoutDefinition.Render"/> emission to the stream through

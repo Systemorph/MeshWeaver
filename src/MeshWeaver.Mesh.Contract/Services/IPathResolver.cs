@@ -23,8 +23,25 @@ public interface IPathResolver
     /// Resolves a full URL path to an address using score-based matching.
     /// Emits the best matching node's address and the remaining path segments,
     /// or <c>null</c> if no match is found.
+    ///
+    /// <para>This is the SHARED, literal resolution used by message routing
+    /// (<c>RoutingServiceBase.RouteMessage</c>) and single-node reads. It applies NO
+    /// URL-shape rewrites — a legacy <c>User/{id}</c> path resolves to the bare
+    /// <c>User</c> catalog node with a non-empty remainder (i.e. NotFound for a route),
+    /// which is exactly what preserves read/route invariants. GUI navigation that wants
+    /// the legacy-home rewrite must call <see cref="ResolveNavigationPath"/>.</para>
     /// </summary>
     IObservable<AddressResolution?> ResolvePath(string path);
+
+    /// <summary>
+    /// Navigation-only resolution: <see cref="ResolvePath"/> plus the legacy
+    /// <c>/User/{id}[/area]</c> home rewrite (strips the obsolete <c>User/</c> prefix and
+    /// re-resolves against the user's own root partition so the home area renders on the
+    /// right hub). Used exclusively by the GUI URL→area consumers (Blazor
+    /// <c>NavigationService</c> / area pages). Message routing and node reads must NOT use
+    /// this — they use <see cref="ResolvePath"/> so <c>User/{id}</c> stays unmodified.
+    /// </summary>
+    IObservable<AddressResolution?> ResolveNavigationPath(string path);
 }
 
 /// <summary>
