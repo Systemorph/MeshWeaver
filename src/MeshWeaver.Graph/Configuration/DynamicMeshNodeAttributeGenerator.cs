@@ -243,8 +243,15 @@ internal class DynamicMeshNodeAttributeGenerator
                 continue;
             }
 
-            // Check if this is a using statement (not inside a class/struct/etc)
-            if (trimmed.StartsWith("using ") && trimmed.EndsWith(";") && !trimmed.Contains("("))
+            // Check if this is a using DIRECTIVE (not a using DECLARATION inside a method).
+            // `using var x = new T { ... };` has no parentheses and ends with ';', so the
+            // paren check alone does not exclude it — hoisting it to the top of the
+            // generated file yanks the variable out of its method and breaks compilation
+            // (CS8805/CS0103). A directive never starts with `using var `.
+            if (trimmed.StartsWith("using ")
+                && !trimmed.StartsWith("using var ")
+                && trimmed.EndsWith(";")
+                && !trimmed.Contains("("))
             {
                 // This is a using directive, extract it
                 usings.Add(line);

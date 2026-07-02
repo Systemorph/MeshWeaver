@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <!-- Pre-copy samples/Graph for tests, including the PythonDemo folder this project targets. -->
+    <Content Include="..\..\samples\Graph\**">
+      <Link>SamplesGraph\%(RecursiveDir)%(Filename)%(Extension)</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <!-- The doc page whose live render cell DocPageLiveCellTest executes in a real kernel. -->
+    <Content Include="..\..\src\MeshWeaver.Documentation\Data\DataMesh\CallingPython.md">
+      <Link>CallingPython.md</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\MeshWeaver.Fixture\MeshWeaver.Fixture.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.Graph\MeshWeaver.Graph.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.Hosting\MeshWeaver.Hosting.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Monolith\MeshWeaver.Hosting.Monolith.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Monolith.TestBase\MeshWeaver.Hosting.Monolith.TestBase.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.Kernel.Hub\MeshWeaver.Kernel.Hub.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.Layout\MeshWeaver.Layout.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.Markdown\MeshWeaver.Markdown.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.Mesh.Contract\MeshWeaver.Mesh.Contract.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.Messaging.Hub\MeshWeaver.Messaging.Hub.csproj" />
+  </ItemGroup>
+</Project>
