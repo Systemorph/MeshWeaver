@@ -874,7 +874,9 @@ public class MeshOperations
     /// <c>"Error: …"</c> sentinel.</returns>
     public IObservable<string> QueryNodes(string query, int limit = 50)
     {
-        logger.LogInformation("QueryNodes called with query={Query}, limit={Limit}", query, limit);
+        // Debug, not Information: this verb backs per-keystroke browser UX (search suggestions,
+        // the notification bell) — Information would ship a line per keystroke to Loki.
+        logger.LogDebug("QueryNodes called with query={Query}, limit={Limit}", query, limit);
 
         limit = Math.Clamp(limit, 1, 200);
 
@@ -909,7 +911,8 @@ public class MeshOperations
     /// <c>"Not found: …"</c> sentinel when nothing matches, or <c>"Error: …"</c>.</returns>
     public IObservable<string> Resolve(string path)
     {
-        logger.LogInformation("Resolve called with path={Path}", path);
+        // Debug, not Information: called once per GUI navigation — too hot for Loki.
+        logger.LogDebug("Resolve called with path={Path}", path);
 
         if (string.IsNullOrWhiteSpace(path))
             return Observable.Return("Error: path is required.");

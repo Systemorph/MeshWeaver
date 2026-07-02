@@ -184,6 +184,7 @@ export function SearchBar() {
     setValue(next);
     setHighlighted(-1);
     if (!next.trim()) {
+      generation.current++; // invalidate any in-flight fetch — a late result must not repopulate
       setSuggestions([]);
       setShowDropdown(false);
       setIsLoading(false);
@@ -216,6 +217,7 @@ export function SearchBar() {
   }, []);
 
   const clearSearch = () => {
+    generation.current++; // invalidate any in-flight fetch — a late result must not repopulate
     setValue("");
     setSuggestions([]);
     setShowDropdown(false);
