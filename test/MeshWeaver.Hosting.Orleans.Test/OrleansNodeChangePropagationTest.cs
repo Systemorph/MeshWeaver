@@ -409,7 +409,7 @@ internal class PatchToolChatClient : IChatClient
 
 /// <summary>
 /// Factory: top-level agents (Navigator/Orchestrator/IsDefault) get
-/// <see cref="ToolCallDelegatingChatClient"/>; sub-agents (Worker/Executor/Coder)
+/// <see cref="ToolCallDelegatingChatClient"/>; sub-agents (Worker/Executor)
 /// get <see cref="PatchToolChatClient"/>. Extends <see cref="ChatClientAgentFactory"/>
 /// so MeshPlugin's Create/Patch/delegate_to_agent tools are wired into every agent â€”
 /// otherwise the fake chat clients stream <c>FunctionCallContent</c> for tools the

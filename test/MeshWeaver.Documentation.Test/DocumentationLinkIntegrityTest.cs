@@ -10,7 +10,8 @@ namespace MeshWeaver.Documentation.Test;
 
 /// <summary>
 /// Pins the runtime link-resolution semantics for every markdown link in the
-/// embedded documentation (Doc partition) and agent definitions (Agent partition).
+/// embedded documentation (Doc partition), agent definitions (Agent partition),
+/// and built-in skills (Skill partition).
 ///
 /// <para>At render time <c>LinkUrlCleanupExtension</c> resolves relative link URLs
 /// with <see cref="PathUtils.ResolveRelativePath"/> against the node's FULL path
@@ -18,14 +19,14 @@ namespace MeshWeaver.Documentation.Test;
 /// written <c>../Sibling</c>, a parent→child link is the bare child name, and
 /// there is no <c>xref:</c> handler and no <c>.md</c>-suffixed node path. This
 /// test resolves every link with the REAL <see cref="PathUtils"/> and asserts
-/// that every <c>Doc/…</c> and <c>Agent/…</c> target maps to an existing
-/// embedded resource. A failure message names the source doc, the literal URL,
-/// and the resolved target.</para>
+/// that every <c>Doc/…</c>, <c>Agent/…</c>, and <c>Skill/…</c> target maps to an
+/// existing embedded resource. A failure message names the source doc, the literal
+/// URL, and the resolved target.</para>
 ///
 /// <para>Links inside fenced code blocks and inline code spans are not rendered
 /// as links, so they are stripped before extraction. Image links (<c>![…]</c>)
 /// route through <c>ImgPathMarkdownExtension</c> (static content), not the link
-/// resolver, and are excluded. Targets outside the <c>Doc</c>/<c>Agent</c>
+/// resolver, and are excluded. Targets outside the <c>Doc</c>/<c>Agent</c>/<c>Skill</c>
 /// partitions (sample data, app routes) cannot be validated from embedded
 /// resources and are skipped.</para>
 /// </summary>
@@ -33,6 +34,7 @@ public class DocumentationLinkIntegrityTest
 {
     private const string DocResourcePrefix = "MeshWeaver.Documentation.Data.";
     private const string AgentResourcePrefix = "MeshWeaver.AI.Data.Agent.";
+    private const string SkillResourcePrefix = "MeshWeaver.AI.Data.Skill.";
 
     private static readonly Regex LinkRegex = new(@"(?<!\!)\[(?:[^\[\]]|\[[^\]]*\])*\]\(([^)\s]+)\)", RegexOptions.Compiled);
     private static readonly Regex FencedCodeRegex = new("```.*?```", RegexOptions.Singleline | RegexOptions.Compiled);
@@ -46,20 +48,23 @@ public class DocumentationLinkIntegrityTest
 
         var docNodes = LoadMarkdownNodes(docAssembly, DocResourcePrefix, "Doc");
         var agentNodes = LoadMarkdownNodes(agentAssembly, AgentResourcePrefix, "Agent");
+        var skillNodes = LoadMarkdownNodes(agentAssembly, SkillResourcePrefix, "Skill");
 
         var knownPaths = docNodes.Keys
             .Concat(agentNodes.Keys)
+            .Concat(skillNodes.Keys)
             .Append("Doc")
             .Append("Agent")
+            .Append("Skill")
             .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
 
         var failures = new List<string>();
 
-        foreach (var (nodePath, content) in docNodes.Concat(agentNodes))
+        foreach (var (nodePath, content) in docNodes.Concat(agentNodes).Concat(skillNodes))
             CheckLinks(nodePath, content, knownPaths, failures);
 
         failures.Should().BeEmpty(
-            "every internal Doc/Agent markdown link must resolve to an existing node " +
+            "every internal Doc/Agent/Skill markdown link must resolve to an existing node " +
             "under the runtime semantics of LinkUrlCleanupExtension + PathUtils.ResolveRelativePath. " +
             "Sibling links need '../Sibling'; parent→child links are bare names; absolute links " +
             "start with '/'; 'xref:' and '.md' suffixes never resolve. Failures:\n{0}",
@@ -109,7 +114,7 @@ public class DocumentationLinkIntegrityTest
             }
 
             var partition = target.Split('/')[0];
-            if (partition is not ("Doc" or "Agent"))
+            if (partition is not ("Doc" or "Agent" or "Skill"))
                 continue; // other mesh partitions can't be validated from embedded resources
 
             if (!knownPaths.Contains(target.TrimEnd('/')))

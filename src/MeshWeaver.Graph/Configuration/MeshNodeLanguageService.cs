@@ -26,7 +26,7 @@ namespace MeshWeaver.Graph.Configuration;
 /// <see cref="AdhocWorkspace"/> per NodeType — cached, keyed by source-versions hash.
 /// <para>
 /// Stage 1 of LSP integration. Consumed by the <c>lsp_*_for_node</c> MCP tools so the
-/// Coder agent can hover / complete / diagnose without a full <c>Compile</c> round-trip.
+/// code-authoring agents can hover / complete / diagnose without a full <c>Compile</c> round-trip.
 /// </para>
 /// </summary>
 internal sealed class MeshNodeLanguageService(
