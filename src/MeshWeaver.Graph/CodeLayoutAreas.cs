@@ -11,7 +11,6 @@ using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.Domain;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Activity;
-using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using MeshWeaver.ShortGuid;
@@ -34,6 +33,21 @@ public static class CodeLayoutAreas
     /// <summary>Area name for the Edit layout area.</summary>
     public const string EditArea = "Edit";
 
+    /// <summary>Area id of the notebook-cell frame inside the Content area.</summary>
+    public const string CellArea = "CodeCell";
+    /// <summary>Area id of the cell toolbar (Run / Cancel / Edit + metadata) inside the cell frame.</summary>
+    public const string CellToolbarArea = "CellToolbar";
+    /// <summary>Area id of the code segment inside the cell frame.</summary>
+    public const string CellCodeArea = "CellCode";
+    /// <summary>Area id of the output segment (last run's Progress embed) inside the cell frame.</summary>
+    public const string CellOutputArea = "CellOutput";
+    /// <summary>Area id of the Run button inside the cell toolbar.</summary>
+    public const string RunButtonArea = "Run";
+    /// <summary>Area id of the Cancel button inside the cell toolbar.</summary>
+    public const string CancelButtonArea = "Cancel";
+    /// <summary>Area id of the Edit button inside the cell toolbar.</summary>
+    public const string EditButtonArea = "Edit";
+
     private const string CodeDataId = "code";
     private const string SiblingNodesDataId = "siblingCodeNodes";
 
@@ -53,23 +67,41 @@ public static class CodeLayoutAreas
             .WithView(MeshNodeLayoutAreas.DeleteArea, DeleteLayoutArea.Delete));
 
     /// <summary>
-    /// Renders the Content area showing code in a markdown code block.
-    /// This is the default area, used when embedding via LayoutAreaControl with empty reference.
+    /// Renders the Content area as a notebook cell (Jupyter-style):
+    /// one framed block whose top edge carries the cell toolbar (Run / Cancel /
+    /// Edit + language and last-run metadata), the code beneath it, and the last
+    /// run's output attached directly below the code inside the same frame.
+    /// This is the default area, used when embedding via LayoutAreaControl with
+    /// empty reference (e.g. @@path embeds in markdown pages).
     /// </summary>
     [Browsable(false)]
     public static IObservable<UiControl?> Content(LayoutAreaHost host, RenderingContext _)
     {
-        var hubPath = host.Hub.Address.ToString();
-        // Caller's effective permissions: the Run button only renders when
-        // Execute is granted. Live SecurityService observable — re-emits when
-        // assignments change.
-        var permissionStream = host.Hub.GetEffectivePermissions(hubPath);
+        var nodeStream = host.Workspace.GetMeshNodeStream();
 
-        return host.Workspace.GetMeshNodeStream()
-            .CombineLatest(permissionStream, (node, perms) => (UiControl?)BuildContent(host, node, perms));
+        // The LAST run's live ActivityLog: keyed off the node's LastActivityPath
+        // and re-switched whenever a new run stamps a fresh path. Drives the cell
+        // toolbar's Cancel visibility reactively — the toolbar re-renders when the
+        // activity transitions Running → terminal. DistinctUntilChanged on the
+        // (Status, RequestedStatus) pair keeps per-log-message emissions from
+        // re-rendering the whole Content area (the output pane is a live
+        // LayoutAreaControl embed and streams its own messages).
+        var lastActivityStream = nodeStream
+            .Select(node => node.ContentAs<CodeConfiguration>(host.Hub.JsonSerializerOptions)?.LastActivityPath)
+            .DistinctUntilChanged()
+            .Select(path => string.IsNullOrEmpty(path)
+                ? Observable.Return<ActivityLog?>(null)
+                : host.Workspace.GetMeshNodeStream(path!)
+                    .Select(n => n.ContentAs<ActivityLog>(host.Hub.JsonSerializerOptions)))
+            .Switch()
+            .DistinctUntilChanged(log => (log?.Status, log?.RequestedStatus))
+            .StartWith((ActivityLog?)null);
+
+        return nodeStream.CombineLatest(lastActivityStream,
+            (node, lastActivity) => (UiControl?)BuildContent(host, node, lastActivity));
     }
 
-    private static UiControl BuildContent(LayoutAreaHost host, MeshNode? node, Permission callerPermissions = Permission.All)
+    private static UiControl BuildContent(LayoutAreaHost host, MeshNode? node, ActivityLog? lastActivity)
     {
         var hubAddress = host.Hub.Address;
         var codeConfig = node.ContentAs<CodeConfiguration>(host.Hub.JsonSerializerOptions);
@@ -77,15 +109,94 @@ public static class CodeLayoutAreas
 
         var title = node?.Name ?? node?.Id ?? "Code";
         var isExecutable = codeConfig?.IsExecutable == true;
-        var canExecute = callerPermissions.HasFlag(Permission.Execute);
+        var language = codeConfig?.Language ?? "csharp";
 
-        // Header: title gets flex:1 so the action group is pushed hard-right.
-        // (justify-content: space-between alone wasn't doing it because the
-        // H1 has its own intrinsic width and the actions were docking
-        // immediately after it.)
-        var actions = Controls.Stack
+        // Page header: title only. Run/Cancel/Edit live in the cell toolbar
+        // below — ONE source of truth for the notebook controls, no second Run
+        // stranded in the page header far away from the output it drives.
+        stack = stack.WithView(Controls.H1(title).WithStyle("margin: 0 0 16px 0;"));
+
+        // ── Notebook cell ────────────────────────────────────────────────────
+        // One visually framed block: toolbar on the top edge, code beneath it,
+        // output attached directly under the code inside the same frame.
+        var cell = Controls.Stack
+            .WithWidth("100%")
+            .WithStyle("border: 1px solid var(--neutral-stroke-rest); border-radius: 6px; " +
+                       "overflow: hidden; background: var(--neutral-layer-1);");
+
+        cell = cell.WithView(
+            BuildCellToolbar(hubAddress, codeConfig, isExecutable, language, lastActivity),
+            CellToolbarArea);
+
+        // Code segment (markdown fence rendering, unchanged).
+        if (!string.IsNullOrEmpty(codeConfig?.Code))
+        {
+            cell = cell.WithView(Controls.Markdown($"```{language}\n{codeConfig.Code}\n```")
+                    .WithStyle("width: 100%; overflow: auto; padding: 0 12px;"),
+                CellCodeArea);
+        }
+        else
+        {
+            cell = cell.WithView(Controls.Body("No code defined.")
+                    .WithStyle("display: block; padding: 12px; color: var(--neutral-foreground-hint); font-style: italic;"),
+                CellCodeArea);
+        }
+
+        if (isExecutable)
+        {
+            // Output segment: the LATEST activity's Progress area (log + status
+            // badge), directly beneath the code INSIDE the cell frame so the
+            // Run button and its result are visually one unit. Jupyter-esque
+            // left accent + thin separator mark it as the cell's output.
+            const string outputStyle =
+                "border-top: 1px solid var(--neutral-stroke-rest); " +
+                "border-left: 3px solid var(--accent-fill-rest); " +
+                "background: var(--neutral-layer-2); padding: 10px 12px;";
+            if (!string.IsNullOrEmpty(codeConfig?.LastActivityPath))
+            {
+                cell = cell.WithView(new LayoutAreaControl(
+                            new Address(codeConfig.LastActivityPath!),
+                            new LayoutAreaReference(ActivityLayoutAreas.ProgressArea))
+                        .WithStyle(outputStyle),
+                    CellOutputArea);
+            }
+            else
+            {
+                // Not yet run: a one-line subtle hint, not a large empty pane.
+                cell = cell.WithView(Controls.Body("Not yet run.")
+                        .WithStyle($"display: block; {outputStyle} " +
+                                   "color: var(--neutral-foreground-hint); font-style: italic; font-size: 0.85rem;"),
+                    CellOutputArea);
+            }
+        }
+
+        stack = stack.WithView(cell, CellArea);
+
+        // No activity history below the cell (removed 2026-07-02 on UX feedback:
+        // it reads as noise under a notebook cell — the run's own output is the
+        // record that matters here). Past runs remain reachable through the
+        // owner's activity feed.
+
+        return stack;
+    }
+
+    /// <summary>
+    /// The cell's toolbar: ▶ Run (accent), ⏹ Cancel (only while the last run is
+    /// actually running and no cancel is already in flight — the shared
+    /// <see cref="ActivityLayoutAreas.IsCancelButtonVisible"/> predicate), ✎ Edit,
+    /// then subtle right-aligned metadata (language badge, last-run provenance).
+    /// </summary>
+    private static UiControl BuildCellToolbar(
+        Address hubAddress,
+        CodeConfiguration? codeConfig,
+        bool isExecutable,
+        string language,
+        ActivityLog? lastActivity)
+    {
+        var toolbar = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
-            .WithStyle("gap: 8px; align-items: center; margin-left: auto;");
+            .WithStyle("display: flex; align-items: center; gap: 8px; padding: 6px 10px; " +
+                       "background: var(--neutral-layer-2); border-bottom: 1px solid var(--neutral-stroke-rest);");
 
         if (isExecutable)
         {
@@ -94,126 +205,64 @@ public static class CodeLayoutAreas
             // without it get back a DeliveryFailure (Unauthorized). Hiding the
             // button client-side hid it even from admins when the live
             // permission stream had a transient empty emission, which is exactly
-            // the state we just spent a session debugging.
-            actions = actions.WithView(Controls.Button("Run")
-                .WithIconStart(FluentIcons.Play())
+            // the state we once spent a session debugging.
+            toolbar = toolbar.WithView(Controls.Button("Run")
+                    .WithIconStart(FluentIcons.Play())
+                    .WithAppearance(Appearance.Accent)
+                    .WithClickAction(ctx =>
+                    {
+                        ctx.Host.Hub.Post(
+                            new ExecuteScriptRequest(),
+                            o => o.WithTarget(hubAddress));
+                        return Task.CompletedTask;
+                    }),
+                RunButtonArea);
+
+            // Cancel: classic notebook stop control, attached to the same
+            // toolbar as Run. Per the Activity Control Plane pattern the click
+            // patches RequestedStatus = Cancelled on the activity node via the
+            // canonical hub.CancelActivity extension — no bespoke request type.
+            var lastActivityPath = codeConfig?.LastActivityPath;
+            if (!string.IsNullOrEmpty(lastActivityPath)
+                && lastActivity is not null
+                && ActivityLayoutAreas.IsCancelButtonVisible(lastActivity))
+            {
+                toolbar = toolbar.WithView(Controls.Button("Cancel")
+                        .WithIconStart(FluentIcons.Stop())
+                        .WithClickAction(ctx =>
+                        {
+                            ctx.Host.Hub.CancelActivity(lastActivityPath!);
+                            return Task.CompletedTask;
+                        }),
+                    CancelButtonArea);
+            }
+        }
+
+        toolbar = toolbar.WithView(Controls.Button("")
+                .WithIconStart(FluentIcons.Edit())
                 .WithAppearance(Appearance.Accent)
-                .WithClickAction(ctx =>
-                {
-                    ctx.Host.Hub.Post(
-                        new ExecuteScriptRequest(),
-                        o => o.WithTarget(hubAddress));
-                    return Task.CompletedTask;
-                }));
-        }
+                .WithNavigateToHref(new LayoutAreaReference(EditArea).ToHref(hubAddress)),
+            EditButtonArea);
 
-        actions = actions.WithView(Controls.Button("")
-            .WithIconStart(FluentIcons.Edit())
-            .WithAppearance(Appearance.Accent)
-            .WithNavigateToHref(new LayoutAreaReference(EditArea).ToHref(hubAddress)));
-
-        var headerRow = Controls.Stack
+        // Right-aligned, subtle metadata: language badge + last-run provenance.
+        var meta = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
-            .WithStyle("display: flex; align-items: center; gap: 12px; margin-bottom: 16px;")
-            .WithView(Controls.H1(title).WithStyle("flex: 1; margin: 0;"))
-            .WithView(actions);
-
-        stack = stack.WithView(headerRow);
-
-        // Language + last-executed (when, by whom). No <a href> for activity
-        // history — the dedicated activities list area below replaces it.
-        var language = codeConfig?.Language ?? "csharp";
-        var infoBits = new List<string>
-        {
-            $"Language: <span style=\"font-family: monospace;\">{System.Net.WebUtility.HtmlEncode(language)}</span>",
-        };
+            .WithStyle("display: flex; align-items: baseline; gap: 12px; margin-left: auto; " +
+                       "color: var(--neutral-foreground-hint); font-size: 0.8rem;");
+        meta = meta.WithView(Controls.Body(language)
+            .WithStyle("font-family: monospace; padding: 1px 8px; " +
+                       "border: 1px solid var(--neutral-stroke-rest); border-radius: 10px;"));
         if (isExecutable)
         {
-            if (codeConfig?.LastExecutedAt is { } lastRun)
-            {
-                var when = $"<span title=\"{lastRun:O}\">{lastRun:g} UTC</span>";
-                var by = !string.IsNullOrEmpty(codeConfig.LastExecutedBy)
-                    ? $" by <strong>{System.Net.WebUtility.HtmlEncode(codeConfig.LastExecutedBy)}</strong>"
-                    : "";
-                infoBits.Add($"Last executed: {when}{by}");
-            }
-            else
-            {
-                infoBits.Add("<span style=\"font-style: italic;\">Never executed</span>");
-            }
+            var lastRunText = codeConfig?.LastExecutedAt is { } lastRun
+                ? $"last run {lastRun.Humanize()}"
+                  + (string.IsNullOrEmpty(codeConfig.LastExecutedBy) ? "" : $" by {codeConfig.LastExecutedBy}")
+                : "never executed";
+            meta = meta.WithView(Controls.Body(lastRunText).WithStyle("font-style: italic;"));
         }
-        var infoLineHtml =
-            "<div style=\"display: flex; align-items: baseline; gap: 16px; " +
-            "color: var(--neutral-foreground-hint); margin-bottom: 16px; font-size: 0.85rem;\">" +
-            string.Join("", infoBits.Select(b => $"<span>{b}</span>")) +
-            "</div>";
-        stack = stack.WithView(Controls.Html(infoLineHtml));
+        toolbar = toolbar.WithView(meta);
 
-        // Code block
-        if (!string.IsNullOrEmpty(codeConfig?.Code))
-        {
-            stack = stack.WithView(Controls.Markdown($"```{language}\n{codeConfig.Code}\n```")
-                .WithStyle("width: 100%; overflow: auto;"));
-        }
-        else
-        {
-            stack = stack.WithView(Controls.Body("No code defined.")
-                .WithStyle("color: var(--neutral-foreground-hint); font-style: italic;"));
-        }
-
-        if (isExecutable)
-        {
-            // Output: the LATEST activity's Progress area (log + inline cancel).
-            // No more polling a kernel/* address that may not exist — the
-            // activity hub serves its own Progress view, so the pane shows
-            // historical output immediately on page load.
-            stack = stack.WithView(Controls.Html("<h3 style=\"margin-top: 32px;\">Output</h3>"));
-            if (!string.IsNullOrEmpty(codeConfig?.LastActivityPath))
-            {
-                stack = stack.WithView(new LayoutAreaControl(
-                        new Address(codeConfig.LastActivityPath!),
-                        new LayoutAreaReference(ActivityLayoutAreas.ProgressArea))
-                    .WithStyle("margin-top: 8px; padding: 12px; background: var(--neutral-layer-3); border-radius: 4px; min-height: 48px;"));
-            }
-            else
-            {
-                stack = stack.WithView(Controls.Html(
-                    "<div style=\"margin-top: 8px; padding: 12px; background: var(--neutral-layer-3); " +
-                    "border-radius: 4px; color: var(--neutral-foreground-hint); font-style: italic;\">" +
-                    "Click <strong>Run</strong> to see output here.</div>"));
-            }
-
-            // Activity history: a real searchable list of past runs scoped to
-            // this Code node's activity namespace. Replaces the dead
-            // /{path}/_activity/* deep-link.
-            var activityNamespace = ResolveActivityNamespace(hubAddress, codeConfig);
-            stack = stack.WithView(Controls.Html("<h3 style=\"margin-top: 32px;\">Activity history</h3>"));
-            stack = stack.WithView(Controls.MeshSearch
-                .WithNamespace(activityNamespace)
-                .WithHiddenQuery($"nodeType:Activity")
-                .WithPlaceholder("Search past runs…")
-                .WithExcludeBasePath(true));
-        }
-
-        return stack;
-    }
-
-    /// <summary>
-    /// Mirror of the resolution rule in
-    /// <c>CodeNodeType.HandleExecuteScript</c>: where activities for this Code
-    /// node are written. Used by the Content view so the activity-history
-    /// search points at the same place the runs land.
-    /// </summary>
-    private static string ResolveActivityNamespace(Address hubAddress, CodeConfiguration? code)
-    {
-        var partitionRoot = hubAddress.Segments.Length > 0 ? hubAddress.Segments[0] : hubAddress.Path;
-        var parent = code?.ActivityParentPath switch
-        {
-            null => partitionRoot,
-            "{viewer}" => partitionRoot, // viewer-specific runs spread across partitions; show the source partition
-            var p => p
-        };
-        return $"{parent}/_Activity";
+        return toolbar;
     }
 
     /// <summary>
