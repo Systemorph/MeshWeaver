@@ -31,4 +31,15 @@ public class SyncStreamOptions
     /// Default: 1 second. Tests use a much shorter window to verify coalescing without waiting.
     /// </summary>
     public TimeSpan ChangeFeedResubscribeWindow { get; set; } = TimeSpan.FromSeconds(1);
+
+    /// <summary>
+    /// Settle window between the coalesced change-feed pulse and the version staleness check.
+    /// For a <c>MeshNode</c>-typed stream, a resubscribe only fires when — this long after the
+    /// pulse — the stream still has NOT received the node version the change feed announced:
+    /// a healthy subscriber gets every owner write through its own subscription (version catches
+    /// up; no resubscribe), while a subscriber orphaned by a recycled owner grain never does
+    /// (version stays behind; fresh SubscribeRequest). The window absorbs ordinary delivery skew
+    /// between the change-feed publish and the sync emission. Default: 1 second.
+    /// </summary>
+    public TimeSpan ChangeFeedStalenessGrace { get; set; } = TimeSpan.FromSeconds(1);
 }

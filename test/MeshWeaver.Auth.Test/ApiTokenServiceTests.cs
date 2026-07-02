@@ -161,12 +161,16 @@ public class ApiTokenServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
         // the change feed to all subscriber streams.
         (await service.ValidateToken(result.RawToken).Should().Emit()).Should().NotBeNull();
 
-        // Sanctioned fixed wait: negative "nothing happened" check — there is no
-        // positive signal to await for a write that must NOT occur.
-        await Task.Delay(500, TestContext.Current.CancellationToken);
-        var after = await ObserveNode(result.Node.Path!).Take(1).Should().Match(n => n is not null);
-        after!.Version.Should().Be(versionAfterStamp,
-            "a fresh LastUsedAt must not be re-stamped on every validation");
+        // Sanctioned fixed wait: negative "nothing happened" check — there is no positive
+        // signal to await for a write that must NOT occur. Sample a few times across the
+        // window (not a single read) so a DELAYED wrong write is still caught.
+        for (var sample = 0; sample < 3; sample++)
+        {
+            await Task.Delay(300, TestContext.Current.CancellationToken);
+            var after = await ObserveNode(result.Node.Path!).Take(1).Should().Match(n => n is not null);
+            after!.Version.Should().Be(versionAfterStamp,
+                "a fresh LastUsedAt must not be re-stamped on every validation");
+        }
     }
 
     [Fact]

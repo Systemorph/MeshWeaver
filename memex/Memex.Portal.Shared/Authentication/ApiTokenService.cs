@@ -260,13 +260,13 @@ internal class ApiTokenService(IMeshService nodeFactory, IMessageHub hub, ILogge
         // write fans out through the change feed to all of the node's subscriber streams.
         // Skip the write while the recorded LastUsedAt is fresh — the read above already
         // carries the current value.
+        var now = DateTimeOffset.UtcNow;
         if (tokenNode != null
-            && (apiToken.LastUsedAt is null
-                || DateTimeOffset.UtcNow - apiToken.LastUsedAt.Value >= LastUsedStampInterval))
+            && (apiToken.LastUsedAt is null || now - apiToken.LastUsedAt.Value >= LastUsedStampInterval))
         {
             hub.GetWorkspace()
                 .GetMeshNodeStream(tokenNode.Path)
-                .Update(node => node with { Content = (node.Content as ApiToken ?? apiToken) with { LastUsedAt = DateTimeOffset.UtcNow } })
+                .Update(node => node with { Content = (node.Content as ApiToken ?? apiToken) with { LastUsedAt = now } })
                 .Subscribe(_ => { }, _ => { });
         }
 

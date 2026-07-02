@@ -73,14 +73,26 @@ public static class JsonSynchronizationStream
         }
     }
 
+    /// <summary>Lock-free monotonic max — keeps the highest observed version under concurrent writers.</summary>
+    private static void InterlockedMax(ref long location, long value)
+    {
+        var current = System.Threading.Interlocked.Read(ref location);
+        while (value > current)
+        {
+            var prior = System.Threading.Interlocked.CompareExchange(ref location, value, current);
+            if (prior == current) return;
+            current = prior;
+        }
+    }
+
     /// <summary>
     /// Subscribes to the mesh change feed (resolved via reflection to avoid a
     /// Data → Mesh.Contract → Layout → Data project cycle) and invokes
-    /// <paramref name="onOwnerChanged"/> when an event's Path equals the owner's
-    /// bare path. Returns null if no change-feed service is registered.
+    /// <paramref name="onOwnerChanged"/> with the announced node version when an event's Path
+    /// equals the owner's bare path. Returns null if no change-feed service is registered.
     /// </summary>
     private static IDisposable? TrySubscribeOwnerPathChangeFeed(
-        IServiceProvider serviceProvider, ILogger logger, string ownerPath, Action onOwnerChanged)
+        IServiceProvider serviceProvider, ILogger logger, string ownerPath, Action<long> onOwnerChanged)
     {
         try
         {
@@ -97,13 +109,13 @@ public static class JsonSynchronizationStream
             if (eventType is null) return null;
             var pathProp = eventType.GetProperty("Path");
             if (pathProp is null) return null;
-            var kindProp = eventType.GetProperty("Kind");
+            var versionProp = eventType.GetProperty("Version");
 
             var helper = typeof(JsonSynchronizationStream).GetMethod(
                 nameof(SubscribeOwnerPathChangeFeedHelper),
                 System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!
                 .MakeGenericMethod(eventType);
-            return (IDisposable?)helper.Invoke(null, [feed, pathProp, kindProp, ownerPath, onOwnerChanged]);
+            return (IDisposable?)helper.Invoke(null, [feed, pathProp, versionProp, ownerPath, onOwnerChanged]);
         }
         catch (Exception ex)
         {
@@ -116,27 +128,20 @@ public static class JsonSynchronizationStream
 
     private static IDisposable? SubscribeOwnerPathChangeFeedHelper<TEvent>(
         object feed, System.Reflection.PropertyInfo pathProperty,
-        System.Reflection.PropertyInfo? kindProperty, string ownerPath, Action onOwnerChanged)
+        System.Reflection.PropertyInfo? versionProperty, string ownerPath, Action<long> onOwnerChanged)
         where TEvent : class
     {
         Action<TEvent> handler = evt =>
         {
             try
             {
-                // Created/Deleted ONLY — this listener is the recycled-grain detector (an owner
-                // that was deleted/recreated needs a fresh SubscribeRequest). An Updated event is
-                // ordinary content flow that the stream already receives through its own
-                // subscription; resubscribing on it turns every high-frequency owner write (e.g.
-                // the per-request ApiToken LastUsedAt stamp) into a resubscribe wave across ALL
-                // of the owner's subscriber streams — sync-hub churn that starves the owner's
-                // action block (atioz storm, 2026-07-02: one token node at version 8939 with 85
-                // subscriber streams re-subscribing on every write).
-                if (kindProperty?.GetValue(evt) is { } kind
-                    && kind.ToString() is not ("Created" or "Deleted"))
-                    return;
                 if (pathProperty.GetValue(evt) is string p
                     && string.Equals(p, ownerPath, StringComparison.OrdinalIgnoreCase))
-                    onOwnerChanged();
+                    // Announce the node version the event carries (0 when unavailable) so the
+                    // subscriber can decide whether it already RECEIVED that write through its
+                    // own subscription — see the version-gated staleness check in
+                    // CreateExternalClient.
+                    onOwnerChanged(versionProperty?.GetValue(evt) is long v ? v : 0L);
             }
             catch { /* keep change-feed alive on handler faults */ }
         };
@@ -496,17 +501,58 @@ public static class JsonSynchronizationStream
             // a quiet period). Recreate detection is preserved — a genuine owner restart still
             // triggers a resubscribe, just debounced by the window. Reactive only: no timer
             // watchdog, no async/await.
-            var resubscribeWindow = hub.ServiceProvider
-                .GetService<Microsoft.Extensions.Options.IOptions<SyncStreamOptions>>()
-                ?.Value?.ChangeFeedResubscribeWindow ?? TimeSpan.FromSeconds(1);
+            var streamOptions = hub.ServiceProvider
+                .GetService<Microsoft.Extensions.Options.IOptions<SyncStreamOptions>>()?.Value;
+            var resubscribeWindow = streamOptions?.ChangeFeedResubscribeWindow ?? TimeSpan.FromSeconds(1);
+            var stalenessGrace = streamOptions?.ChangeFeedStalenessGrace ?? TimeSpan.FromSeconds(1);
             var changeFeedPulses = new System.Reactive.Subjects.Subject<System.Reactive.Unit>();
-            // Throttle (debounce) collapses a burst to one trailing emission. Subscribe on
-            // keepAlive so a terminal NotFound tears it down with the heartbeat + change feed.
+
+            // 🚨 VERSION-GATED resubscribe for MeshNode streams. The change feed fires one event
+            // per owner write; a HEALTHY subscriber receives that same write through its own
+            // subscription, so resubscribing on it is pure churn — at scale it is the storm that
+            // starved atioz's hubs (one hot ApiToken node written per request reached version
+            // 8939 in a day with 85 subscriber streams, each resubscribing on every write).
+            // But the event is also the SOLE recycled-grain detector: a subscriber orphaned by a
+            // disposed owner grain receives NOTHING, and the post-recycle write's feed event is
+            // its only signal (pinned by ResubscribeOnOwnerDisposeTest — grain disposal emits no
+            // node-lifecycle event, so an event-KIND filter breaks recovery).
+            // The precise discriminator is the VERSION the event announces: track the highest
+            // node version received through the stream; on the coalesced pulse wait a short
+            // grace, then resubscribe ONLY when the stream is still BEHIND the announced version.
+            // Healthy subscribers catch up through their own emissions and skip; orphaned ones
+            // stay behind and refresh. Streams whose payload carries no version (non-MeshNode
+            // reductions announce version 0) keep today's always-resubscribe behavior.
+            var announcedVersion = 0L;
+            var receivedVersion = 0L;
+            // TReduced may carry a monotonic node Version (MeshNode does); resolved by NAME
+            // because Data sits below Mesh.Contract in the project graph and cannot reference
+            // MeshNode (same reason the change feed itself is reflection-resolved above).
+            // Absent → receivedVersion stays 0 → the gate stays open → today's behavior.
+            var reducedVersionProperty = typeof(TReduced).GetProperty("Version", typeof(long));
+            keepAlive.Add(reduced.Subscribe(
+                ci =>
+                {
+                    object? value = ci is null ? null : ci.Value;
+                    if (value is not null && reducedVersionProperty?.GetValue(value) is long v)
+                        InterlockedMax(ref receivedVersion, v);
+                },
+                // Passive tracker: the stream's fault (e.g. owner NotFound) is surfaced by the
+                // stream's real subscribers; an observer without onError would RETHROW on the
+                // emission thread and derail that propagation.
+                _ => { }));
+
             keepAlive.Add(
                 changeFeedPulses
+                    // Throttle (debounce) collapses a burst to one trailing emission…
                     .Throttle(resubscribeWindow)
+                    // …then give the stream's own emission the grace window to catch up…
+                    .SelectMany(_ => Observable.Timer(stalenessGrace))
+                    // …and only refresh when the stream is still behind what the feed announced.
+                    .Where(_ => System.Threading.Interlocked.Read(ref receivedVersion)
+                        < System.Threading.Interlocked.Read(ref announcedVersion))
                     .Subscribe(
-                        _ => Resubscribe("change feed event (coalesced)"),
+                        _ => Resubscribe(
+                            $"change feed announced v{Interlocked.Read(ref announcedVersion)} but stream is at v{Interlocked.Read(ref receivedVersion)} (stale/recycled owner)"),
                         ex => logger.LogWarning(ex,
                             "Stream {StreamId}: change-feed coalescing stream errored.",
                             reduced.StreamId)));
@@ -515,7 +561,15 @@ public static class JsonSynchronizationStream
             var ownerPath = owner.Path;
             var changeFeedSub = TrySubscribeOwnerPathChangeFeed(
                 hub.ServiceProvider, logger, ownerPath,
-                () => changeFeedPulses.OnNext(System.Reactive.Unit.Default));
+                version =>
+                {
+                    // A version-less event (0) must still trigger the resubscribe path for
+                    // version-less streams: announce MAX(version, received+1) so the Where
+                    // gate stays open unless the stream demonstrably caught up.
+                    InterlockedMax(ref announcedVersion,
+                        version > 0 ? version : Interlocked.Read(ref receivedVersion) + 1);
+                    changeFeedPulses.OnNext(System.Reactive.Unit.Default);
+                });
             if (changeFeedSub != null)
                 keepAlive.Add(changeFeedSub); // torn down with the heartbeat on terminal NotFound
         }
