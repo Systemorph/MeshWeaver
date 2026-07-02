@@ -1,6 +1,7 @@
 using System.ClientModel;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -52,8 +53,16 @@ public class OpenAIChatClientAgentFactory(
     /// <see cref="OwnedProviders"/> — so a <c>gpt-*</c> id owned by a direct
     /// OpenAI provider, or any model id owned by an OpenAI-compatible gateway,
     /// lands here while an Azure-OpenAI-owned id stays with the Azure factory.
-    /// Additive over the base (Models-list) match, so it never narrows existing
-    /// behaviour.
+    /// Accepts BOTH the bare model id and the full LanguageModel node path (the
+    /// composer's persisted form) — the resolver canonicalises paths.
+    /// ALSO routes here when the model is listed in an owned provider's
+    /// CONFIG section (<c>OpenAICompatible:Models</c> etc. — the exact section
+    /// <c>BuiltInLanguageModelProvider</c> seeds the catalog from): the config
+    /// seed must resolve a factory even before the mesh catalog snapshot is
+    /// warm, otherwise a freshly booted deployment whose only provider is
+    /// config-seeded (e.g. <c>OpenAICompatible__Models__0=qwen-small</c>)
+    /// fails every agent build. Additive over the base (Models-list) match,
+    /// so it never narrows existing behaviour.
     /// </summary>
     public override bool Supports(string modelName)
     {
@@ -61,7 +70,45 @@ public class OpenAIChatClientAgentFactory(
         var provider = Hub.ServiceProvider.GetService<ChatClientCredentialResolver>()
             ?.GetProviderForModel(modelName);
         return (provider != null && OwnedProviders.Contains(provider, StringComparer.OrdinalIgnoreCase))
+            || FindConfiguredCatalogSource(modelName) is not null
             || base.Supports(modelName);
+    }
+
+    /// <summary>
+    /// Finds the owned catalog source (OpenAI / OpenAICompatible / OpenRouter) whose CONFIG
+    /// section lists <paramref name="modelName"/> in <c>{Section}:Models</c>, and returns that
+    /// section's driver config. This mirrors <c>BuiltInLanguageModelProvider</c>'s seeding read
+    /// EXACTLY (same section, same keys, same DefaultEndpoint fallback) — one source of truth —
+    /// so a config-seeded model resolves this factory and its endpoint/key WITHOUT depending on
+    /// the mesh snapshot being warm. Returns null when no owned section lists the model.
+    /// </summary>
+    private (string Section, string? Endpoint, string? ApiKey)? FindConfiguredCatalogSource(string modelName)
+    {
+        var sources = Hub.ServiceProvider.GetService<LanguageModelCatalogOptions>();
+        var configuration = Hub.ServiceProvider.GetService<IConfiguration>();
+        if (sources is null || configuration is null) return null;
+
+        foreach (var source in sources.Sources)
+        {
+            if (!OwnedProviders.Contains(source.ProviderName, StringComparer.OrdinalIgnoreCase))
+                continue;
+            string[]? models;
+            try
+            {
+                models = configuration.GetSection($"{source.SectionName}:Models").Get<string[]>();
+            }
+            catch
+            {
+                continue; // malformed section — same skip as the catalog seeder.
+            }
+            if (models is null
+                || !models.Any(m => string.Equals(m, modelName, StringComparison.OrdinalIgnoreCase)))
+                continue;
+            return (source.SectionName,
+                configuration[$"{source.SectionName}:Endpoint"] ?? source.DefaultEndpoint,
+                configuration[$"{source.SectionName}:ApiKey"]);
+        }
+        return null;
     }
 
     /// <summary>
@@ -84,11 +131,19 @@ public class OpenAIChatClientAgentFactory(
             throw new InvalidOperationException("No model configured for OpenAI");
 
         var resolver = Hub.ServiceProvider.GetRequiredService<ChatClientCredentialResolver>();
+        // The selection may arrive as the full LanguageModel node PATH (the composer's
+        // persisted form) — canonicalise to the bare wire id the endpoint expects.
+        modelName = resolver.ResolveModelId(modelName) ?? modelName;
         var resolution = resolver.Resolve(modelName);
-        var endpoint = resolution.Endpoint ?? credentials.Endpoint;   // null → SDK default api.openai.com
-        var apiKey = resolution.ApiKey ?? credentials.ApiKey;
-        var source = resolution.Endpoint != null || resolution.ApiKey != null
-            ? resolution.Source : "IOptions";
+        // Credential chain: provider node (resolver) → the owned catalog source's CONFIG
+        // section (the seed BuiltInLanguageModelProvider reads — works before the mesh
+        // snapshot is warm) → legacy IOptions binding (OpenAI: section).
+        var configured = FindConfiguredCatalogSource(modelName);
+        var endpoint = resolution.Endpoint ?? configured?.Endpoint ?? credentials.Endpoint;   // null → SDK default api.openai.com
+        var apiKey = resolution.ApiKey ?? configured?.ApiKey ?? credentials.ApiKey;
+        var source = resolution.Endpoint != null || resolution.ApiKey != null ? resolution.Source
+            : configured is not null ? $"config:{configured.Value.Section}"
+            : "IOptions";
 
         if (string.IsNullOrEmpty(apiKey))
             throw new InvalidOperationException(

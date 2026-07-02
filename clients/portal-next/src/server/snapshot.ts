@@ -12,19 +12,27 @@
 //     { rawToken, nodePath, … } — nodePath is "{userId}/ApiToken/…", which reveals the caller's
 //     home partition (the SPA derives its default route the same way). The token is held in
 //     request-scoped locals ONLY — never persisted, never sent to the client.
-//   - Node snapshot: POST {origin}/api/mesh/get (MeshApiEndpoints.MapMeshApi — the REST
+//   - Rendered-area snapshot (PRIMARY): POST {origin}/api/mesh/render-area
+//     (MeshApiEndpoints.HandleRenderArea → MeshOperations.RenderArea). The portal subscribes the
+//     node's DEFAULT layout area server-side, takes the first fully-materialised Full frame, and
+//     ships it verbatim: the SAME {areas,data} EntityStore JSON the gRPC wire delivers
+//     ($type discriminators, JSON-encoded InstanceCollection keys). Folding it through
+//     normalizeEntityStore — the exact fold GrpcAreaSource applies to a live Full frame — yields
+//     a full-fidelity AreaTree that seeds StaticAreaSource without translation, rooted at the
+//     same areas[""] default-area indirection the live subscription uses.
+//   - Node snapshot (FALLBACK — older portals whose /api/mesh has no render-area verb, timeouts,
+//     denials): POST {origin}/api/mesh/get (MeshApiEndpoints.MapMeshApi — the REST
 //     transport-mirror of the MCP tools, Bearer mw_… authorized). Returns the MeshNode JSON, or
-//     a bare "Error: …" / "Not found: …" sentinel string (MeshOperations contract).
-//   - ⚠️ There is NO REST render-area endpoint: MapMeshApi maps get/search/create/update/patch/
-//     delete/move/copy/recycle/compile/diagnostics/execute-script/mirror/navigate-to/base-url/
-//     upload — no render. The MCP `render_area` tool (McpMeshPlugin.RenderArea) does NOT return
-//     the rendered UiControl tree either — it returns an MCP-UI iframe embed pointing at the
-//     portal URL. Neither shape is hydratable, so the SSR snapshot is the documented FALLBACK:
-//     an app-shell + a node-snapshot preview tree (title/type/markdown synthesized from
-//     /api/mesh/get), replaced by the live gRPC-web area after hydration.
+//     a bare "Error: …" / "Not found: …" sentinel string (MeshOperations contract); the SSR then
+//     synthesizes an app-shell preview tree (title/type/markdown), replaced by the live
+//     gRPC-web area after hydration.
 
 import "server-only";
 import * as React from "react";
+// The React-FREE wire-folding entry — importing it (unlike ./core) keeps the renderer's React
+// client-context modules OUT of this file's RSC server graph (next build rejects createContext
+// in server components).
+import { normalizeEntityStore } from "@meshweaver/react/wire";
 import type { AreaTree, Json, UiControl } from "@meshweaver/react/core";
 
 // React.cache exists in Next's vendored server runtime (per-request memoization). Stable react
@@ -126,6 +134,48 @@ export async function fetchNodeSnapshot(
     // A broken-NodeType read arrives wrapped: { node, compilationError }.
     const node = pick(parsed, "node") ?? parsed;
     return toSnapshot(node, path);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Fetch the node's rendered DEFAULT layout area over REST (`POST /api/mesh/render-area`) — the
+ * PRIMARY SSR seed. The response is the first fully-materialised Full frame of the same
+ * subscription the live client opens (reference {area: ""}), delivered EXACTLY as the gRPC wire
+ * ships it; normalizeEntityStore folds the wire keys the same way GrpcAreaSource folds a live
+ * Full frame, so the resulting tree seeds StaticAreaSource with wire fidelity.
+ *
+ * Returns null on ANY miss — a 404 (older portal without the verb), a 504 (portal-side render
+ * timeout), the "Error: …"/"Not found: …" sentinel (e.g. an RLS denial), or an unparseable body —
+ * so the caller degrades to the node-snapshot preview exactly as before.
+ */
+export async function fetchRenderedArea(
+  origin: string,
+  token: string,
+  path: string,
+): Promise<AreaTree | null> {
+  try {
+    const resp = await fetch(`${origin}/api/mesh/render-area`, {
+      method: "POST",
+      cache: "no-store",
+      headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+      body: JSON.stringify({ path }),
+    });
+    if (!resp.ok) return null; // 404 = older portal, 504 = render timeout — degrade to preview
+    const text = await resp.text();
+    if (text.startsWith("Error:") || text.startsWith("Not found:")) return null;
+    let parsed: Json;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      return null;
+    }
+    if (parsed == null || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+    const tree = normalizeEntityStore(parsed);
+    // A hydratable frame must carry rendered areas; anything else is not seedable.
+    if (tree.areas == null || Object.keys(tree.areas).length === 0) return null;
+    return tree;
   } catch {
     return null;
   }

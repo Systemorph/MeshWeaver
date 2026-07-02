@@ -16,6 +16,7 @@
     "plugins": [{ "name": "next" }],
     "baseUrl": ".",
     "paths": {
+      "@meshweaver/react/wire": ["../react/src/live/wire.ts"],
       "@meshweaver/react/core": ["../react/src/core.ts"],
       "@meshweaver/react": ["../react/src/index.tsx"],
       "@meshweaver/client-web": ["../grpc-web/src/index.ts"]

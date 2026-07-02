@@ -25,6 +25,7 @@
 
 import type { AreaSource, AreaTree, Json, MeshEvent } from "../area/types.js";
 import { decodePointerSegment, mergePatch, setPointer } from "../area/pointer.js";
+import { normalizeCollection, normalizeEntityStore } from "./wire.js";
 
 /** The subset of @meshweaver/client's MeshConnection this source needs. */
 export interface MeshConnectionLike {
@@ -140,45 +141,8 @@ interface PatchOp {
   from?: string;
 }
 
-/**
- * Fold a wire EntityStore snapshot into the renderer's {areas,data} tree: decode the JSON-encoded
- * instance keys of each collection and drop the `$type` collection markers, so lookups
- * (areas["Content"], decoded binding pointers) see plain keys. Control/data VALUES stay
- * wire-faithful — their internal binding pointers keep the encoding and decode at resolution.
- */
-function normalizeEntityStore(store: Json): AreaTree {
-  if (store == null || typeof store !== "object" || Array.isArray(store)) return (store ?? {}) as AreaTree;
-  const out: Record<string, Json> = {};
-  for (const [collection, value] of Object.entries(store as Record<string, Json>)) {
-    if (collection === "$type") continue;
-    out[collection] = normalizeCollection(value);
-  }
-  return out;
-}
-
-/** Decode one InstanceCollection: JSON-encoded instance keys → plain, `$type` marker dropped. */
-function normalizeCollection(value: Json): Json {
-  if (value == null || typeof value !== "object" || Array.isArray(value)) return value;
-  const instances: Record<string, Json> = {};
-  for (const [key, item] of Object.entries(value as Record<string, Json>)) {
-    if (key === "$type") continue; // the collection-name marker, not an instance
-    instances[decodeWireKey(key)] = item;
-  }
-  return instances;
-}
-
-/** InstanceCollection keys arrive JSON-encoded (`"home"` → property `"\"home\""`); decode strings. */
-function decodeWireKey(key: string): string {
-  if (key.length >= 2 && key.startsWith('"') && key.endsWith('"')) {
-    try {
-      const parsed: unknown = JSON.parse(key);
-      if (typeof parsed === "string") return parsed;
-    } catch {
-      /* not JSON-encoded — keep the raw key */
-    }
-  }
-  return key;
-}
+// normalizeEntityStore / normalizeCollection / decodeWireKey live in wire.ts — shared with the
+// SSR seeding path (portal-next fetches one Full frame over REST and folds it the same way).
 
 /**
  * Apply an RFC 6902 patch (the wire's ChangeType.Patch shape) immutably. Pointer segments carry

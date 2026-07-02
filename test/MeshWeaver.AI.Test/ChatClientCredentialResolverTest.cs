@@ -213,6 +213,75 @@ public class ChatClientCredentialResolverTest : AITestBase
         resolver.Resolve(defaultModelId).Should().NotBe(CredentialResolution.Missing);
     }
 
+    /// <summary>
+    /// The composer persists the model as the full LanguageModel node PATH
+    /// (<c>Provider/{provider}/{modelId}</c> — <c>AgentPickerProjection.ToModelInfo</c>'s
+    /// Path-carrying contract). The resolver must resolve that form exactly like the bare id:
+    /// provider stamp, credentials, and the canonical wire id. This is the e2e-portal
+    /// 2026-07-01 regression: <c>Provider/OpenAICompatible/qwen-small</c> resolved no
+    /// provider/factory because only <c>ModelDefinition.Id</c> was matched.
+    /// </summary>
+    [Fact]
+    public async Task Resolve_ByFullNodePath_ResolvesProviderCredentialsAndWireId_LikeTheBareId()
+    {
+        var root = ModelProviderNodeType.RootNamespace; // "Provider"
+        var suffix = Guid.NewGuid().ToString("N")[..8];
+        var providerName = $"OpenAICompat{suffix}";
+        var providerPath = $"{root}/{providerName}";
+        var modelId = $"qwen-small-{suffix}";
+        var modelPath = $"{providerPath}/{modelId}";
+
+        await MeshService.CreateNode(new MeshNode(providerName, root)
+        {
+            NodeType = ModelProviderNodeType.NodeType,
+            Name = providerName,
+            State = MeshNodeState.Active,
+            Content = new ModelProviderConfiguration
+            {
+                Provider = providerName,
+                ApiKey = "sk-compat-key",
+                Endpoint = "http://ollama.example:11434/v1",
+            }
+        }).Should().Within(15.Seconds()).Emit();
+
+        await MeshService.CreateNode(new MeshNode(modelId, providerPath)
+        {
+            NodeType = LanguageModelNodeType.NodeType,
+            Name = modelId,
+            State = MeshNodeState.Active,
+            Content = new ModelDefinition
+            {
+                Id = modelId,
+                Provider = providerName,
+                ProviderRef = providerPath,
+            }
+        }).Should().Within(15.Seconds()).Emit();
+
+        var resolver = Mesh.ServiceProvider.GetRequiredService<ChatClientCredentialResolver>();
+        resolver.EnsureSubscription();
+
+        // Warm-gate on the bare id first (the already-proven path)…
+        await Observable.Interval(TimeSpan.FromMilliseconds(50))
+            .Select(_ => resolver.Resolve(modelId))
+            .Should().Within(10.Seconds()).Match(r => r.ApiKey != null);
+
+        // …then the PATH form must resolve identically.
+        var byPath = resolver.Resolve(modelPath);
+        byPath.ApiKey.Should().Be("sk-compat-key",
+            "the composer's node-path form must resolve the same credentials as the bare id");
+        byPath.Endpoint.Should().Be("http://ollama.example:11434/v1");
+
+        resolver.GetProviderForModel(modelPath).Should().Be(providerName,
+            "factory Supports() gates on the provider stamp — it must resolve for the path form");
+
+        resolver.ResolveModelId(modelPath).Should().Be(modelId,
+            "the canonical wire id of a path selection is the node's ModelDefinition.Id");
+        resolver.ResolveModelId(modelId).Should().Be(modelId,
+            "bare ids pass through unchanged");
+        resolver.ResolveModelId($"{root}/nope/never-{suffix}").Should().Be($"{root}/nope/never-{suffix}",
+            "an unknown path passes through unchanged (caller falls back)");
+    }
+
     [Fact]
     public async Task GetProviderForModel_LooksUpProviderStamp()
     {

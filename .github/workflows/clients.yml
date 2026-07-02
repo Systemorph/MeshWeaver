@@ -139,6 +139,11 @@ jobs:
       - name: Install renderer deps
         working-directory: clients/react
         run: npm install --no-audit --no-fund
+      # metro.config.js aliases @meshweaver/client-web to ../grpc-web/src — install its deps and
+      # generate src/gen so the web export can bundle the live client.
+      - name: Install + generate grpc-web client
+        working-directory: clients/grpc-web
+        run: npm install --no-audit --no-fund && npm run gen
       - run: npm install --no-audit --no-fund
       - run: npx playwright install --with-deps chromium
       - run: npm run e2e # expo export --platform web → serve dist/ → drive headless Chromium

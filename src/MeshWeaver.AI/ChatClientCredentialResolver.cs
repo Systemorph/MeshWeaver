@@ -192,7 +192,11 @@ public sealed class ChatClientCredentialResolver : IDisposable
 
     /// <summary>
     /// Resolve credentials for a model. <paramref name="modelId"/> is the
-    /// LanguageModel id the chat selected (e.g. <c>claude-opus-4-7</c>).
+    /// LanguageModel id the chat selected (e.g. <c>claude-opus-4-7</c>) OR the
+    /// full LanguageModel node PATH the composer persists
+    /// (e.g. <c>Provider/OpenAICompatible/qwen-small</c> — the picker stores
+    /// the node path per <c>AgentPickerProjection.ToModelInfo</c>'s
+    /// Path-carrying contract; both forms resolve here).
     /// Walks the precedence chain documented on the class against a LIVE
     /// snapshot of the model + provider nodes.
     /// </summary>
@@ -327,7 +331,8 @@ public sealed class ChatClientCredentialResolver : IDisposable
 
     /// <summary>
     /// Returns the <see cref="ModelDefinition.Provider"/> string for a
-    /// given model id, looked up from the live snapshot. Factories call
+    /// given model id OR full LanguageModel node path, looked up from the
+    /// live snapshot. Factories call
     /// this to gate their <c>Supports(modelName)</c> on the model's
     /// declared provider rather than on the model id alone (so the same
     /// <c>claude-*</c> id can route to direct-Anthropic or Azure-Claude
@@ -338,6 +343,23 @@ public sealed class ChatClientCredentialResolver : IDisposable
         if (string.IsNullOrEmpty(modelId)) return null;
         var def = FindModelDefinition(ReadSnapshot(), modelId);
         return def?.Provider;
+    }
+
+    /// <summary>
+    /// Canonical bare model id (what the provider's wire API expects in the
+    /// <c>model</c> field) for a picker value that may be EITHER the bare id or
+    /// the full LanguageModel node PATH (<c>Provider/{provider}/{modelId}</c> —
+    /// the form the composer persists). When the value matches a LanguageModel
+    /// node's path in the live snapshot, that node's <see cref="ModelDefinition.Id"/>
+    /// is returned; otherwise the value passes through unchanged. This is the
+    /// resolver-backed replacement for the <see cref="SelectionId.IdOf"/> last-segment
+    /// heuristic (which mangles org/model-shaped ids like <c>qwen/qwen-2.5</c>).
+    /// </summary>
+    public string? ResolveModelId(string? modelNameOrPath)
+    {
+        if (string.IsNullOrEmpty(modelNameOrPath) || !modelNameOrPath.Contains('/'))
+            return modelNameOrPath;
+        return FindDefinitionByNodePath(ReadSnapshot(), modelNameOrPath)?.Id ?? modelNameOrPath;
     }
 
     /// <summary>
@@ -575,6 +597,7 @@ public sealed class ChatClientCredentialResolver : IDisposable
 
     private ModelDefinition? FindModelDefinition(IReadOnlyList<MeshNode> snapshot, string modelId)
     {
+        modelId = CanonicalModelId(snapshot, modelId);
         foreach (var node in snapshot)
         {
             if (!string.Equals(node.NodeType, LanguageModelNodeType.NodeType, StringComparison.OrdinalIgnoreCase))
@@ -590,9 +613,13 @@ public sealed class ChatClientCredentialResolver : IDisposable
     /// ALL model definitions in the snapshot matching <paramref name="modelId"/> — there can be several
     /// (a keyless root catalog entry + the user's own keyed provider node share the same id). Callers
     /// that need credentials must try each (see <see cref="Resolve"/>), not just the first.
+    /// Accepts BOTH the bare model id and the full LanguageModel node path (the composer's persisted
+    /// form) — the path is canonicalised to its node's <see cref="ModelDefinition.Id"/> first, so a
+    /// path selection still walks every same-id candidate (e.g. the user's keyed copy of a catalog model).
     /// </summary>
     private List<ModelDefinition> FindModelDefinitions(IReadOnlyList<MeshNode> snapshot, string modelId)
     {
+        modelId = CanonicalModelId(snapshot, modelId);
         var result = new List<ModelDefinition>();
         foreach (var node in snapshot)
         {
@@ -603,6 +630,35 @@ public sealed class ChatClientCredentialResolver : IDisposable
                 result.Add(def);
         }
         return result;
+    }
+
+    /// <summary>
+    /// Collapses a full LanguageModel node PATH (the composer's persisted form —
+    /// <c>Provider/{provider}/{modelId}</c>, see <c>AgentPickerProjection.ToModelInfo</c>) to that
+    /// node's bare <see cref="ModelDefinition.Id"/>. A value that matches no node path (including
+    /// every bare id — ids without '/' short-circuit) passes through unchanged.
+    /// </summary>
+    private string CanonicalModelId(IReadOnlyList<MeshNode> snapshot, string modelNameOrPath)
+    {
+        if (!modelNameOrPath.Contains('/'))
+            return modelNameOrPath;
+        return FindDefinitionByNodePath(snapshot, modelNameOrPath)?.Id ?? modelNameOrPath;
+    }
+
+    /// <summary>The ModelDefinition of the LanguageModel node at exactly <paramref name="nodePath"/>, or null.</summary>
+    private ModelDefinition? FindDefinitionByNodePath(IReadOnlyList<MeshNode> snapshot, string nodePath)
+    {
+        foreach (var node in snapshot)
+        {
+            if (node.Path == null
+                || !string.Equals(node.NodeType, LanguageModelNodeType.NodeType, StringComparison.OrdinalIgnoreCase)
+                || !string.Equals(node.Path, nodePath, StringComparison.OrdinalIgnoreCase))
+                continue;
+            var def = ExtractContent<ModelDefinition>(node.Content);
+            if (def != null)
+                return def;
+        }
+        return null;
     }
 
     private bool TryGetProvider(IReadOnlyList<MeshNode> snapshot, string providerPath, out ModelProviderConfiguration? cfg)

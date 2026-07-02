@@ -310,6 +310,195 @@ public class MeshOperations
     }
 
     /// <summary>
+    /// Renders a layout area of the node at <paramref name="path"/> and returns the first
+    /// fully-materialised <c>{areas, data}</c> frame as raw JSON — byte-identical to the Full
+    /// <c>DataChangedEvent</c> snapshot a live gRPC/SignalR client folds (same hub serializer
+    /// options: <c>$type</c> discriminators, JSON-encoded <c>InstanceCollection</c> keys), so an
+    /// SSR consumer can seed its client-side area source without translation.
+    ///
+    /// <para>Uses the SAME server-side primitive the Blazor portal binds a remote area with
+    /// (<c>GetRemoteStream&lt;JsonElement, LayoutAreaReference&gt;</c> — see
+    /// <c>LayoutAreaView.BindStream</c>), waits until the requested area's control has
+    /// materialised (following the default-area <c>areas[""]</c> NamedArea indirection the base
+    /// frame statically seeds), takes that single frame, and DISPOSES the stream via
+    /// <c>Finally</c> — the subscription never outlives the call on any path: completion,
+    /// fault, timeout, or caller unsubscribe (HTTP client abort).</para>
+    ///
+    /// <para>Error contract: <c>"Not found: …"</c> when the path resolves to nothing,
+    /// <c>"Error: …"</c> for failures surfaced by the subscribe (an RLS denial faults the
+    /// remote stream with "Access denied" — see <c>HubSubscriptionSecurityTest</c>). A timeout
+    /// faults the observable with <see cref="TimeoutException"/> so transports can map it
+    /// distinctly (REST maps it to a 504-style JSON error instead of the sentinel).</para>
+    /// </summary>
+    /// <param name="path">Node path, or URL-shaped <c>{path}/{area}/{id}</c> — the unmatched
+    /// remainder fills area/id when they are not passed explicitly (same split as <c>AreaPage</c>).</param>
+    /// <param name="area">Layout area name; null/empty renders the node's DEFAULT area (the
+    /// frame then carries the <c>areas[""]</c> indirection to the resolved area).</param>
+    /// <param name="id">Optional area instance id.</param>
+    /// <param name="timeoutSeconds">Budget covering path resolution + the first materialised frame.</param>
+    /// <returns>A cold observable emitting the wire JSON frame or a descriptive error string;
+    /// faults with <see cref="TimeoutException"/> when the budget elapses.</returns>
+    public IObservable<string> RenderArea(string path, string? area = null, string? id = null, int timeoutSeconds = 30)
+    {
+        logger.LogInformation("RenderArea called with path={Path} area={Area} id={Id}", path, area, id);
+
+        if (string.IsNullOrWhiteSpace(path))
+            return Observable.Return("Error: path is required.");
+
+        var resolvedPath = ResolvePath(path).Trim('/');
+        if (string.IsNullOrWhiteSpace(resolvedPath))
+            return Observable.Return("Error: path is required.");
+
+        var pathResolver = hub.ServiceProvider.GetRequiredService<IPathResolver>();
+        var accessService = hub.ServiceProvider.GetService<AccessService>();
+        return Observable.Defer(() =>
+        {
+            // Capture the CALLER's ambient identity at subscribe time (the transport request
+            // thread / test context — same precedence the sync-stream uses). The remote-stream
+            // creation below happens inside a reactive continuation on a hub scheduler where the
+            // AsyncLocal context is wiped or hub-shaped; without re-applying the captured user
+            // there, the SubscribeRequest would fall back to the System identity and BYPASS the
+            // owner's RLS read gate — a denied caller would receive the rendered content.
+            var caller = accessService?.Context ?? accessService?.CircuitContext;
+            return pathResolver.ResolvePath(resolvedPath)
+                .Take(1)
+                .SelectMany(resolution => RenderResolvedArea(resolution, resolvedPath, area, id, caller));
+        })
+            .Timeout(TimeSpan.FromSeconds(timeoutSeconds))
+            .Catch((Exception ex) =>
+            {
+                // A timeout stays a FAULT (transports map it to a gateway timeout); everything
+                // else surfaces through the standard "Error: …" sentinel contract.
+                if (ex is TimeoutException)
+                    return Observable.Throw<string>(ex);
+                logger.LogWarning(ex, "RenderArea failed for {Path}", resolvedPath);
+                return Observable.Return($"Error: {ex.Message}");
+            });
+    }
+
+    /// <summary>
+    /// Second half of <see cref="RenderArea"/>: builds the <see cref="LayoutAreaReference"/> from
+    /// the resolution + explicit arguments and opens the one-shot area stream under the captured
+    /// caller identity.
+    /// </summary>
+    private IObservable<string> RenderResolvedArea(
+        AddressResolution? resolution,
+        string resolvedPath,
+        string? area,
+        string? id,
+        AccessContext? caller)
+    {
+        if (resolution is null)
+            return Observable.Return($"Not found: {resolvedPath}");
+
+        // Path resolution falls back to the CLOSEST ANCESTOR, leaving unmatched segments
+        // as the remainder. When the caller passed area/id explicitly, a non-empty
+        // remainder means the NODE path itself did not resolve (e.g. "TestData/garbage"
+        // resolved to "TestData") — surface Not found rather than silently rendering the
+        // ancestor's area (the routing-fallback hazard FetchNode guards against too).
+        if (!string.IsNullOrEmpty(resolution.Remainder)
+            && (!string.IsNullOrEmpty(area) || !string.IsNullOrEmpty(id)))
+            return Observable.Return($"Not found: {resolvedPath}");
+
+        // Otherwise a URL-shaped path carries "{area}/{id}" as the remainder — the same
+        // split the Blazor AreaPage applies (an unknown segment renders the framework's
+        // visible "Area not found" control, exactly like the portal URL would).
+        var (remainderArea, remainderId) = SplitAreaRemainder(resolution.Remainder);
+        var effectiveArea = string.IsNullOrEmpty(area) ? remainderArea : area;
+        var effectiveId = string.IsNullOrEmpty(id) ? remainderId : id;
+        var reference = new LayoutAreaReference(
+            string.IsNullOrEmpty(effectiveArea) ? null : effectiveArea)
+        {
+            Id = effectiveId ?? ""
+        };
+
+        // Defer so the stream opens on Subscribe (cold — no work without a subscriber)
+        // and Finally guarantees disposal on every terminal path.
+        return Observable.Defer(() =>
+        {
+            // This factory runs inside a reactive continuation where the ambient AsyncLocal
+            // identity is NOT the caller's. GetRemoteStream captures the ambient AccessContext
+            // at stream creation (it stamps the SubscribeRequest's identity), so re-apply the
+            // caller captured at the RenderArea boundary for the creation scope — otherwise the
+            // subscribe would fall back to System and bypass the owner's RLS read gate.
+            var accessService = hub.ServiceProvider.GetService<AccessService>();
+            using var callerScope = caller is not null
+                ? accessService?.SwitchAccessContext(caller)
+                : null;
+            var stream = hub.GetWorkspace()
+                .GetRemoteStream<JsonElement, LayoutAreaReference>(
+                    (Address)resolution.Prefix, reference);
+            if (stream is null)
+                return Observable.Return(
+                    $"Error: could not open a layout-area stream for {resolvedPath}.");
+            return stream
+                .Where(ci => IsAreaMaterialized(ci.Value, reference.Area))
+                .Take(1)
+                .Select(ci => ci.Value.GetRawText())
+                .Finally(stream.Dispose);
+        });
+    }
+
+    /// <summary>
+    /// Splits a path-resolution remainder into <c>(area, id)</c> — the same
+    /// <c>{area}/{id}</c> split and <c>%9Y</c> decode the Blazor <c>AreaPage</c> applies.
+    /// </summary>
+    private static (string? Area, string? Id) SplitAreaRemainder(string? remainder)
+    {
+        if (string.IsNullOrEmpty(remainder))
+            return (null, null);
+        var slashIndex = remainder.IndexOf('/');
+        var (rawArea, rawId) = slashIndex >= 0
+            ? (remainder[..slashIndex], remainder[(slashIndex + 1)..])
+            : (remainder, (string?)null);
+        return (
+            (string?)WorkspaceReference.Decode(rawArea),
+            rawId is null ? null : (string?)WorkspaceReference.Decode(rawId));
+    }
+
+    /// <summary>
+    /// True when the frame carries the requested area's rendered control. The base frame a
+    /// layout-area subscription emits first is a shell (progress marker + — for default-area
+    /// subscriptions — the statically-seeded <c>areas[""]</c> NamedArea indirection, see
+    /// <c>LayoutAreaHost.BuildInitialization</c>); first-paint fidelity means waiting for the
+    /// frame where the resolved area's own control has landed. <c>InstanceCollection</c> keys
+    /// ride JSON-encoded on the wire (<c>"Overview"</c> → property <c>"\"Overview\""</c>).
+    /// </summary>
+    private static bool IsAreaMaterialized(JsonElement store, string? requestedArea)
+    {
+        if (store.ValueKind != JsonValueKind.Object
+            || !store.TryGetProperty(LayoutAreaReference.Areas, out var areas)
+            || areas.ValueKind != JsonValueKind.Object)
+            return false;
+
+        var rootKey = requestedArea ?? string.Empty;
+        if (!TryGetWireInstance(areas, rootKey, out var control))
+            return false;
+
+        // Default-area subscription: areas[""] points at the resolved area — require the
+        // resolved area's control too, otherwise the SSR seed would render an empty indirection.
+        if (rootKey.Length == 0
+            && control.ValueKind == JsonValueKind.Object
+            && (control.TryGetProperty("area", out var resolved)
+                || control.TryGetProperty("Area", out resolved))
+            && resolved.ValueKind == JsonValueKind.String
+            && resolved.GetString() is { Length: > 0 } resolvedArea)
+            return TryGetWireInstance(areas, resolvedArea, out _);
+
+        return true;
+    }
+
+    /// <summary>Reads one instance from a wire <c>InstanceCollection</c> object (JSON-encoded keys).</summary>
+    private static bool TryGetWireInstance(JsonElement collection, string key, out JsonElement value)
+    {
+        if (collection.TryGetProperty(JsonSerializer.Serialize(key), out value)
+            && value.ValueKind is not (JsonValueKind.Null or JsonValueKind.Undefined))
+            return true;
+        value = default;
+        return false;
+    }
+
+    /// <summary>
     /// One-shot read of the MeshNode at <paramref name="resolvedPath"/> via the
     /// owning per-node hub's <c>MeshNodeReference</c> reducer — the authoritative
     /// source of truth, no catalog lag. <c>GetDataRequest</c> activates the cold

@@ -98,6 +98,7 @@ public class AgentChatClient : IAgentChat
         detail ??= "No suitable agent found to handle the request.";
         var noModel = detail.Contains("must be configured", StringComparison.OrdinalIgnoreCase)
                       || detail.Contains("no model", StringComparison.OrdinalIgnoreCase)
+                      || detail.Contains("no chat-client factory", StringComparison.OrdinalIgnoreCase)
                       || detail.Contains("no registered IChatClientFactory", StringComparison.OrdinalIgnoreCase);
         return noModel
             ? "⚠️ No AI model is available to run this request. Configure a language-model provider "
@@ -1107,17 +1108,28 @@ public class AgentChatClient : IAgentChat
         //    GetStreamingResponseAsync render lastAgentCreationError as the chat output.
         if (!string.IsNullOrEmpty(currentAgentPath) || !string.IsNullOrEmpty(currentAgentName))
         {
-            var explicitlySelected = ResolveSelectedAgent();
+            var explicitlySelected = ResolveSelectedAgent(out var selectionMatched);
             if (explicitlySelected != null)
                 return explicitlySelected;
 
-            var requested = currentAgentPath ?? currentAgentName;
-            lastAgentCreationError =
-                $"Selected agent '{requested}' was not found among the available agents "
-                + $"([{string.Join(", ", loadedAgents.Select(a => a.Path ?? a.Name))}]). "
-                + "It may have been moved, renamed, or is not available in this context — "
-                + "pick another agent from the list.";
-            logger.LogWarning("[AgentChatClient] {Error}", lastAgentCreationError);
+            // 🚨 "Not found" is TRUE only when the selection matched no loaded agent.
+            // When the agent WAS matched but could not be built (no factory for the
+            // model, factory threw, config missing), ResolveSelectedAgent has already
+            // set the TRUTHFUL lastAgentCreationError — overwriting it here with
+            // "agent not found" masked the real failure ("no chat-client factory for
+            // model X") behind a message that contradicted the printed agent list
+            // (the 2026-07-01 e2e-portal symptom: 'Agent/Assistant' reported as not
+            // found while first in the list).
+            if (!selectionMatched)
+            {
+                var requested = currentAgentPath ?? currentAgentName;
+                lastAgentCreationError =
+                    $"Selected agent '{requested}' was not found among the available agents "
+                    + $"([{string.Join(", ", loadedAgents.Select(a => a.Path ?? a.Name))}]). "
+                    + "It may have been moved, renamed, or is not available in this context — "
+                    + "pick another agent from the list.";
+                logger.LogWarning("[AgentChatClient] {Error}", lastAgentCreationError);
+            }
             return null;
         }
 
@@ -1152,7 +1164,7 @@ public class AgentChatClient : IAgentChat
     /// <summary>
     /// Resolves the user's explicit picker selection (<see cref="currentAgentPath"/> /
     /// <see cref="currentAgentName"/>) to a <see cref="ChatClientAgent"/>, or null when the
-    /// selection matches no loaded agent.
+    /// selection matches no loaded agent OR the matched agent cannot be built.
     /// <para>Match order: exact FULL PATH against <see cref="loadedAgents"/> first (so a
     /// space-scoped agent is never confused with a built-in sharing its last segment),
     /// then bare id. The created-agents dictionary is keyed by the bare id
@@ -1161,8 +1173,14 @@ public class AgentChatClient : IAgentChat
     /// the dictionary holds only one. When the dictionary entry is NOT the path-matched
     /// config (a genuine collision), build the right agent on demand from the matched
     /// config so the user gets the agent they actually picked.</para>
+    /// <para><paramref name="selectionMatched"/> reports whether the selection matched a
+    /// loaded agent at all. On every matched-but-unbuildable path this method sets a
+    /// TRUTHFUL <see cref="lastAgentCreationError"/> naming the agent AND the real
+    /// failure (missing factory / model, factory exception, missing configuration) —
+    /// the caller must NOT overwrite it with the "agent not found" message, which is
+    /// reserved for a genuinely unmatched selection.</para>
     /// </summary>
-    private ChatClientAgent? ResolveSelectedAgent()
+    private ChatClientAgent? ResolveSelectedAgent(out bool selectionMatched)
     {
         // a) Exact full-path match (the picker stores the node path).
         var matched = !string.IsNullOrEmpty(currentAgentPath)
@@ -1177,8 +1195,22 @@ public class AgentChatClient : IAgentChat
                 || string.Equals(a.AgentConfiguration?.Id, currentAgentName, StringComparison.OrdinalIgnoreCase))
             : null;
 
-        if (matched?.AgentConfiguration is not { } config)
+        selectionMatched = matched is not null;
+        if (matched is null)
+            return null; // genuinely unmatched — the caller reports "not found".
+
+        var selectedLabel = matched.Path ?? matched.Name;
+        if (matched.AgentConfiguration is not { } config)
+        {
+            // The agent WAS matched — a "not found" message here would be a lie. The node
+            // simply carries no runnable configuration (content missing / failed to deserialize).
+            lastAgentCreationError =
+                $"Selected agent '{selectedLabel}' was found but carries no agent configuration "
+                + "(the node's content is missing or failed to deserialize) — it cannot be run. "
+                + "Fix or re-import the agent definition, or pick another agent.";
+            logger.LogWarning("[AgentChatClient] {Error}", lastAgentCreationError);
             return null;
+        }
 
         // The created-agents dict is keyed by bare id. The common (no-collision) case:
         // the dict entry IS this config — return it.
@@ -1186,12 +1218,21 @@ public class AgentChatClient : IAgentChat
             && string.Equals(existing.Instructions, config.Instructions, StringComparison.Ordinal))
             return existing;
 
-        // Collision (or the agent was skipped during the batch build): construct the
-        // path-matched agent on demand so the selection resolves to the RIGHT one rather
-        // than whichever same-id agent won the dictionary slot.
+        // Collision (or the agent was skipped during the batch build — e.g. the whole
+        // batch failed because no factory/model resolves): construct the path-matched
+        // agent on demand so the selection resolves to the RIGHT one rather than
+        // whichever same-id agent won the dictionary slot.
         var factory = GetFactoryForModel(currentModelName);
         if (factory == null)
-            return existing; // no factory to build with — best effort
+        {
+            if (existing != null)
+                return existing; // best effort: serve the same-id agent already built.
+            // Matched agent, no factory, nothing built: the failure is MODEL/FACTORY
+            // resolution — say exactly that (never "agent not found").
+            lastAgentCreationError = DescribeFactoryResolutionFailure(selectedLabel);
+            logger.LogWarning("[AgentChatClient] {Error}", lastAgentCreationError);
+            return null;
+        }
 
         try
         {
@@ -1201,11 +1242,31 @@ public class AgentChatClient : IAgentChat
         catch (Exception ex)
         {
             lastAgentCreationError =
-                $"Failed to create selected agent '{matched.Path ?? config.Id}' via factory "
-                + $"'{factory.Name}' for model '{currentModelName}': {ex.Message}";
+                $"Selected agent '{selectedLabel}' was found, but creating it failed via factory "
+                + $"'{factory.Name}' for model '{currentModelName ?? "(none selected)"}': {ex.Message}";
             logger.LogWarning(ex, "[AgentChatClient] {Error}", lastAgentCreationError);
             return existing;
         }
+    }
+
+    /// <summary>
+    /// Actionable description of a factory/model resolution failure for a MATCHED agent:
+    /// names the agent, the selected model, and every configured factory (with its
+    /// declared models) so the operator can see which piece of the chain is missing.
+    /// </summary>
+    private string DescribeFactoryResolutionFailure(string? selectedLabel)
+    {
+        var factories = chatClientFactories.Count == 0
+            ? "(none registered — add e.g. AddOpenAICompatible / AddAzureFoundry / AddAnthropic in the host configuration)"
+            : string.Join(", ", chatClientFactories
+                .OrderBy(f => f.Order)
+                .Select(f => f.Models is { Count: > 0 } models
+                    ? $"{f.Name} (models: {string.Join(", ", models)})"
+                    : f.Name));
+        return
+            $"Agent '{selectedLabel}' matched but no chat-client factory resolves model "
+            + $"'{currentModelName ?? "(none selected)"}' — available factories/models: [{factories}]. "
+            + "Configure a language-model provider (Settings → Language Models) or select a different model.";
     }
 
     /// <inheritdoc />

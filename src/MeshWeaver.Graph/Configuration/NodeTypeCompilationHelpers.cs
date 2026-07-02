@@ -528,7 +528,7 @@ internal static class NodeTypeCompilationHelpers
     /// so <see cref="InstallSourcesWatcher"/> can share the same condition —
     /// keeps the "what counts as static?" question in one place.</para>
     /// </summary>
-    private static bool IsStaticOnlyNodeType(MeshNode node, NodeTypeDefinition def) =>
+    internal static bool IsStaticOnlyNodeType(MeshNode node, NodeTypeDefinition def) =>
         node.HubConfiguration is not null
         && string.IsNullOrWhiteSpace(def.Configuration)
         && string.IsNullOrWhiteSpace(def.HubConfiguration)
@@ -1074,12 +1074,27 @@ internal static class NodeTypeCompilationHelpers
                     // node, so no reader can subscribe to a phantom `compile-*` path.
                     var resolvedActivityPath = outcome.ActivityPath;
 
-                    string? newReleasePath = null;
-                    if (ok)
+                    // 🚨 Release create is OBSERVED + BOUNDED (same guard as the activity
+                    // create): TryCreateReleaseNode emits the path only after the create
+                    // LANDED, or null on timeout/fault. The terminal write below runs in
+                    // its OnNext, so LatestReleasePath is never stamped with a path that
+                    // does not exist yet — a reader following the field right after the
+                    // Ok write used to hit a hard path-resolution NotFound (the
+                    // NodeTypeReleaseGateTest 2-core flake).
+                    var releasePathObservable = ok
+                        ? MeshDataSourceExtensions.TryCreateReleaseNode(
+                            hub, hubPath, outcome.Result!, outcome.PendingNode, resolvedActivityPath, logger)
+                        : Observable.Return<string?>(null);
+
+                    releasePathObservable
+                        .Take(1)
+                        .Subscribe(newReleasePath =>
                     {
-                        newReleasePath = MeshDataSourceExtensions.TryCreateReleaseNode(
-                            hub, hubPath, outcome.Result!, outcome.PendingNode, resolvedActivityPath, logger);
-                    }
+                    // Terminal writes run under System — same rule as every other
+                    // deferred pipeline in RunCompile (the ambient scope from the
+                    // compile subscription does not flow into this create-response
+                    // callback thread).
+                    using var terminalScope = accessService?.ImpersonateAsSystem();
 
                     // Write the FULL compile log + terminal status to the activity
                     // node (the official progress surface) in ONE atomic update:
@@ -1211,6 +1226,9 @@ internal static class NodeTypeCompilationHelpers
                         },
                         ex => logger?.LogWarning(ex,
                             "Compile: failed to write post-compile status for {HubPath}", hubPath));
+                    },
+                    ex => logger?.LogWarning(ex,
+                        "Compile: release-create observation faulted for {HubPath}", hubPath));
                 },
                 ex => logger?.LogWarning(ex, "Compile faulted for {HubPath}", hubPath));
 
