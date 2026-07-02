@@ -123,3 +123,22 @@ jobs:
       - run: npm install --no-audit --no-fund
       - run: npx tsc --noEmit # vite build transpiles without type-checking — check types explicitly
       - run: npm run build
+
+  rn-web-e2e:
+    name: "RN web (Playwright)"
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: clients/react-native
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      # The source-linked renderer core (../react/src) needs its own deps resolvable during the web export.
+      - name: Install renderer deps
+        working-directory: clients/react
+        run: npm install --no-audit --no-fund
+      - run: npm install --no-audit --no-fund
+      - run: npx playwright install --with-deps chromium
+      - run: npm run e2e # expo export --platform web → serve dist/ → drive headless Chromium

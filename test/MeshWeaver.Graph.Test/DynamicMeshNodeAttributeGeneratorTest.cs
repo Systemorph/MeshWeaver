@@ -107,6 +107,52 @@ public class DynamicMeshNodeAttributeGeneratorTest
     }
 
     [Fact]
+    public void GenerateAttributeSource_DoesNotHoistUsingDeclarations()
+    {
+        // Regression guard: `using var x = new T { ... };` inside a method has no
+        // parentheses and ends with ';', so the naive directive heuristic used to
+        // hoist it to the top of the generated file — yanking the variable out of
+        // its method (CS8805 top-level statements / CS0103 missing locals). This
+        // was the PythonDemo/PrimeReport compile failure.
+        var node = MeshNode.FromPath("test/proc") with
+        {
+            NodeType = "proc",
+            LastModified = DateTimeOffset.UtcNow
+        };
+
+        var codeConfig = new CodeConfiguration
+        {
+            Code = """
+                using System.Diagnostics;
+
+                public static class Runner
+                {
+                    public static string Run(ProcessStartInfo psi)
+                    {
+                        using var process = new Process { StartInfo = psi };
+                        process.Start();
+                        return process.Id.ToString();
+                    }
+                }
+                """
+        };
+
+        var source = _generator.GenerateAttributeSource(node, codeConfig, null);
+
+        // The directive IS hoisted; the declaration stays inside the method body.
+        var assemblyAttrIndex = source.IndexOf("[assembly:");
+        var directiveIndex = source.IndexOf("using System.Diagnostics;");
+        var declarationIndex = source.IndexOf("using var process = new Process { StartInfo = psi };");
+
+        directiveIndex.Should().BeGreaterThanOrEqualTo(0);
+        declarationIndex.Should().BeGreaterThanOrEqualTo(0);
+        directiveIndex.Should().BeLessThan(assemblyAttrIndex,
+            "using DIRECTIVES must be hoisted above the assembly attribute");
+        declarationIndex.Should().BeGreaterThan(assemblyAttrIndex,
+            "a using DECLARATION must stay inside its method, never hoisted to the file top");
+    }
+
+    [Fact]
     public void GenerateAttributeSource_GeneratesValidClassName()
     {
         // Arrange
