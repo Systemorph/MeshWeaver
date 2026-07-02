@@ -138,6 +138,42 @@ public class ApiTokenServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
     }
 
     [Fact]
+    public async Task ValidateToken_FreshLastUsedAt_DoesNotRewriteTheNode()
+    {
+        var service = GetService();
+        var result = await service.CreateToken(
+            "user1", "Test User", "test@example.com", "Stamp Once").Should().Emit();
+
+        // First validation stamps LastUsedAt (null → now). Wait for the async
+        // fire-and-forget write to land on the node.
+        await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+            .SelectMany(_ => service.ValidateToken(result.RawToken).Take(1))
+            .Should().Match(v => v is not null);
+        var stamped = await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+            .SelectMany(_ => ObserveNode(result.Node.Path!).Take(1))
+            .Should().Match(n => (n?.Content as ApiToken)?.LastUsedAt != null);
+        var versionAfterStamp = stamped!.Version;
+
+        // A second validation while the recorded LastUsedAt is FRESH must not write
+        // the node again — the stamp has display granularity, not per-request. A busy
+        // integration's per-request write turned its token into the hottest node on
+        // the mesh (prod: version 8939 in one day) and every write fans out through
+        // the change feed to all subscriber streams.
+        (await service.ValidateToken(result.RawToken).Should().Emit()).Should().NotBeNull();
+
+        // Sanctioned fixed wait: negative "nothing happened" check — there is no positive
+        // signal to await for a write that must NOT occur. Sample a few times across the
+        // window (not a single read) so a DELAYED wrong write is still caught.
+        for (var sample = 0; sample < 3; sample++)
+        {
+            await Task.Delay(300, TestContext.Current.CancellationToken);
+            var after = await ObserveNode(result.Node.Path!).Take(1).Should().Match(n => n is not null);
+            after!.Version.Should().Be(versionAfterStamp,
+                "a fresh LastUsedAt must not be re-stamped on every validation");
+        }
+    }
+
+    [Fact]
     public async Task ValidateToken_RevokedToken_ReturnsNull()
     {
         var service = GetService();

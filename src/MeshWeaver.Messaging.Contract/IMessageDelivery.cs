@@ -50,6 +50,19 @@ public interface IMessageDelivery
     IMessageDelivery Package();
 
     /// <summary>
+    /// Returns a wire-ready copy of this delivery with the message packaged (serialized) for
+    /// transport, using <paramref name="fallbackOptions"/> when this delivery carries no captured
+    /// serializer options. A delivery that was re-typed (<c>WithMessage</c>) or deserialized at a
+    /// process boundary has NO captured options — packaging it with the runtime defaults would put
+    /// PascalCase properties and record-shaped <c>RawJson</c> on the wire, which no client contract
+    /// recognizes. Transports own their wire shape, so they pass their hub's options here.
+    /// </summary>
+    /// <param name="fallbackOptions">The transport hub's serializer options, used when the delivery
+    /// captured none. Null keeps the delivery's own captured options (the parameterless overload).</param>
+    /// <returns>The packaged delivery.</returns>
+    IMessageDelivery Package(System.Text.Json.JsonSerializerOptions? fallbackOptions);
+
+    /// <summary>
     /// Returns a copy of this delivery stamped with the given access context.
     /// </summary>
     /// <param name="accessObject">The caller's access context.</param>

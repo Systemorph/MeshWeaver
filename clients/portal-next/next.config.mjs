@@ -18,6 +18,23 @@ const nextConfig = {
   output: "standalone",
   basePath: "/next",
   reactStrictMode: true,
+  // Same-origin plumbing for LOCAL runs (next dev / next start against a portal on another
+  // port): the browser client mints tokens and speaks gRPC-web against ITS OWN origin (the
+  // production shape — one ingress fronts both apps), so proxy those root-origin routes to the
+  // portal when PORTAL_ORIGIN is set. In the k8s deployment the ingress routes /api and the
+  // gRPC service to the portal before Next ever sees them, so these rewrites are simply never
+  // hit there.
+  async rewrites() {
+    const origin = process.env.PORTAL_ORIGIN?.replace(/\/+$/, "");
+    if (!origin) return [];
+    return {
+      beforeFiles: [
+        { source: "/api/:path*", destination: `${origin}/api/:path*`, basePath: false },
+        { source: "/meshweaver.v1.Mesh/:path*", destination: `${origin}/meshweaver.v1.Mesh/:path*`, basePath: false },
+        { source: "/static/:path*", destination: `${origin}/static/:path*`, basePath: false },
+      ],
+    };
+  },
   // `next build` type-checks the FULL module graph, including the vendored ../react and
   // ../grpc-web SOURCE (externalDir). TS resolves bare imports (react, react-dom, chart.js, the
   // fluentui deep paths, …) by walking up from each file's OWN directory — and those sibling

@@ -146,7 +146,7 @@ public static class SignalRClientExtensions
             return ioPool.Invoke(async c =>
             {
                 var connection = await selected;
-                var json = JsonSerializer.Serialize(delivery.Package(), routes.Hub.JsonSerializerOptions);
+                var json = JsonSerializer.Serialize(delivery.Package(routes.Hub.JsonSerializerOptions), routes.Hub.JsonSerializerOptions);
                 await connection.InvokeAsync("DeliverMessage", json, c);
                 return delivery.Forwarded();
             });

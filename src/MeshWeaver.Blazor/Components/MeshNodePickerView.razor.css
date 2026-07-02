@@ -61,6 +61,17 @@
     background: var(--neutral-layer-3, #f0f0f0) var(--icon-url) no-repeat center / 18px;
 }
 
+/* Inline-SVG avatar. Harnesses (Claude Code, GitHub Copilot) embed their logo as a raw <svg> with
+   a viewBox but NO width/height, injected via MarkupString. That <svg> carries no CSS-isolation
+   scope attribute, so a scoped rule can't reach it — and with no intrinsic size it renders at the
+   browser default (~300×150) and overflows / collapses, so the icon looked blank or generic.
+   Constrain any inline avatar SVG to fill the avatar box. */
+::deep .mesh-node-picker-avatar svg {
+    width: 100%;
+    height: 100%;
+    display: block;
+}
+
 .mesh-node-picker-info {
     flex: 1;
     min-width: 0;
@@ -154,7 +165,12 @@
     left: 0;
     right: 0;
     bottom: 0;
-    z-index: 9;
+    /* Floating tier (above app chrome). The picker lives inside the chat composer, inside the side
+       panel whose header is z-index:10 (and the portal menu bar at z-index:1100). At the old
+       z-index:9/10 the upward-opening dropdown painted UNDER the side-panel top bar (close button
+       etc.) — the reported overlap. Lift the overlay + dropdown to the same floating tier the
+       slash-command palette uses so they render ABOVE all chrome. */
+    z-index: 9999;
     background: transparent;
 }
 
@@ -169,7 +185,7 @@
     border: 1px solid var(--neutral-stroke-rest, #d1d1d1);
     border-radius: 4px;
     box-shadow: var(--elevation-shadow-flyout);
-    z-index: 10;
+    z-index: 10000;
     padding: 4px;
     margin-top: 2px;
 }

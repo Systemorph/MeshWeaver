@@ -134,7 +134,7 @@ public sealed class SignalRConnectionRegistry : IDisposable
     private IObservable<IMessageDelivery> PushToClient(string connectionId, IMessageDelivery delivery, CancellationToken _) =>
         ioPool.Invoke(async ct =>
         {
-            var json = JsonSerializer.Serialize(delivery.Package(), hub.JsonSerializerOptions);
+            var json = JsonSerializer.Serialize(delivery.Package(hub.JsonSerializerOptions), hub.JsonSerializerOptions);
             await hubContext.Clients.Client(connectionId).SendAsync("ReceiveMessage", json, ct);
             return delivery.Forwarded();
         });
