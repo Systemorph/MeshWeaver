@@ -57,9 +57,10 @@ public interface IMessageDelivery
     /// PascalCase properties and record-shaped <c>RawJson</c> on the wire, which no client contract
     /// recognizes. Transports own their wire shape, so they pass their hub's options here.
     /// </summary>
-    /// <param name="fallbackOptions">The transport hub's serializer options, used when the delivery captured none.</param>
+    /// <param name="fallbackOptions">The transport hub's serializer options, used when the delivery
+    /// captured none. Null keeps the delivery's own captured options (the parameterless overload).</param>
     /// <returns>The packaged delivery.</returns>
-    IMessageDelivery Package(System.Text.Json.JsonSerializerOptions fallbackOptions);
+    IMessageDelivery Package(System.Text.Json.JsonSerializerOptions? fallbackOptions);
 
     /// <summary>
     /// Returns a copy of this delivery stamped with the given access context.

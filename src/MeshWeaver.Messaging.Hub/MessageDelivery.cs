@@ -166,7 +166,7 @@ public abstract record MessageDelivery : IMessageDelivery
     /// serialization failure returns a failed delivery describing the error rather than throwing.
     /// </summary>
     /// <returns>This delivery with its payload replaced by serialized <c>RawJson</c>, or a failed delivery on error.</returns>
-    public IMessageDelivery Package() => Package(null!);
+    public IMessageDelivery Package() => Package(null);
 
     /// <summary>
     /// Serializes the message payload into a <c>RawJson</c> envelope, preferring the options this
@@ -176,9 +176,10 @@ public abstract record MessageDelivery : IMessageDelivery
     /// <c>{"Content": …}</c> record — a wire shape no client fold recognizes (the gRPC-web live
     /// takeover silently rendered nothing).
     /// </summary>
-    /// <param name="fallbackOptions">The transport hub's serializer options, used when the delivery captured none.</param>
+    /// <param name="fallbackOptions">The transport hub's serializer options, used when the delivery
+    /// captured none. Null keeps the delivery's own captured options.</param>
     /// <returns>This delivery with its payload replaced by serialized <c>RawJson</c>, or a failed delivery on error.</returns>
-    public IMessageDelivery Package(JsonSerializerOptions fallbackOptions)
+    public IMessageDelivery Package(JsonSerializerOptions? fallbackOptions)
     {
         try
         {
