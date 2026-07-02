@@ -255,7 +255,14 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     // StormFailThreshold logs ONE "[STORM-BREAKER] suppressing" warning so the storm is
     // visible in Grafana/Loki without the per-failure log flood.
     private readonly ConcurrentDictionary<string, NegativeEntry> _negative = new();
-    private sealed record NegativeEntry(Exception Error, int FailCount, DateTimeOffset OpenUntil);
+    // Reprobing: set true by the FIRST read past OpenUntil — that read drops the stale errored
+    // entry and lets a fresh probe hydrate. Subsequent reads while that probe is IN FLIGHT must
+    // NOT re-evict it (repeatedly tearing a still-hydrating entry down before it can resolve is a
+    // churn/storm that never lets the negative entry clear). Reset whenever RecordNegative writes
+    // a fresh window; FailCount is carried across the reprobe so a genuinely-missing node still
+    // backs off further when the fresh probe re-errors.
+    private sealed record NegativeEntry(Exception Error, int FailCount, DateTimeOffset OpenUntil,
+        bool Reprobing = false);
     private static readonly TimeSpan StormBaseCooldown = TimeSpan.FromSeconds(2);
     private static readonly TimeSpan StormMaxCooldown = TimeSpan.FromMinutes(5);
     private const int StormFailThreshold = 5;
@@ -832,26 +839,43 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         // STORM BREAKER: while this path's negative-cache window is open, fast-fail
         // by replaying the cached owner error WITHOUT opening an upstream
         // SubscribeRequest. See _negative. Once the window elapses, drop the errored
-        // Entry so the NEXT read re-probes the owner exactly once (re-probe is driven
+        // Entry so the NEXT read re-probes the owner EXACTLY ONCE (re-probe is driven
         // by a real read, never an auto-resubscribe). FailCount is retained so a
         // repeat failure backs off further; a success clears it (see GetEntry).
+        //
+        // 🚨 Two guards keep the re-probe from turning into a subscribe/unsubscribe storm
+        // that wedges the owner hub (the DevLogin self-provision hang):
+        //   1. Reprobing: only the FIRST read past the window evicts + reopens; while the
+        //      fresh probe is IN FLIGHT, later reads fall through to SharedView and share
+        //      it (the atomic TryUpdate lets exactly one reader win). Without this, every
+        //      ~100ms read re-evicted the still-hydrating fresh probe before it resolved,
+        //      so the negative entry never cleared.
+        //   2. The stale-entry eviction disposes ONLY the Rx hydration + marks the entry
+        //      evicted — it does NOT synchronously dispose the upstream sync stream. A
+        //      terminally-errored upstream ("No node found") has ALREADY torn down its own
+        //      keep-alive/heartbeat, so it leaks nothing; but posting UnsubscribeRequest to
+        //      the owner mid-reprobe RACES the fresh re-subscribe and wedges the owner's
+        //      action block (its snapshot DataChangedEvent then never lands → the read
+        //      never resolves). The idle sweep reaps genuinely-idle LIVE upstreams (the
+        //      actual leak); an errored/superseded upstream is reaped by the change-feed
+        //      parking + workspace disposal, exactly as before the idle-release change.
         if (_negative.TryGetValue(path, out var neg))
         {
             if (neg.OpenUntil > DateTimeOffset.UtcNow)
                 return Observable.Throw<MeshNode>(neg.Error);
-            if (_streams.TryRemove(path, out var staleLazy) && staleLazy.IsValueCreated)
+            if (!neg.Reprobing
+                && _negative.TryUpdate(path, neg with { Reprobing = true }, neg)
+                && _streams.TryRemove(path, out var staleLazy) && staleLazy.IsValueCreated)
             {
                 try
                 {
-                    // Forced eviction of the errored entry: detach + dispose its
-                    // upstream sync streams too, so an errored-but-undisposed client
-                    // (its terminal NotFound already killed the keep-alive) doesn't
-                    // linger on the workspace until shutdown.
+                    // Drop the errored entry's Rx hydration and mark it evicted so any
+                    // straggling SharedView wrapper transparently re-resolves. Deliberately
+                    // NOT DetachUpstreams()/TearDownEntry() here — see guard #2 above.
                     var stale = staleLazy.Value;
-                    var detached = stale.Handle.DetachUpstreams();
                     stale.MarkEvicted();
-                    var released = TearDownEntry(path, stale, detached);
-                    readStreamEvictions.OnNext(new ReadStreamEviction(path, released, "storm-breaker"));
+                    stale.HydrationSub.Dispose();
+                    readStreamEvictions.OnNext(new ReadStreamEviction(path, false, "storm-breaker"));
                 }
                 catch (Exception ex) { logger.LogDebug(ex, "MeshNodeStreamCache: error disposing stale entry for {Path}", path); }
             }
