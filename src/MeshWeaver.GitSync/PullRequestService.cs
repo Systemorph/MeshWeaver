@@ -103,16 +103,16 @@ public sealed class PullRequestService
     /// to <see cref="GitHubSyncService.ReimportAtCommit"/>, which fetches + mirrors). This is
     /// the checkout operation: the working Space is brought to the latest repo state.
     /// </summary>
-    public IObservable<StaticRepoImportResult> UpdateToLatest(string spacePath, string userId)
+    public IObservable<StaticRepoImportResult> UpdateToLatest(string spacePath, string userId, string? sourceId = null)
     {
-        return sync.ReadConfig(spacePath).Take(1).SelectMany(config =>
+        return sync.ReadConfig(spacePath, sourceId).Take(1).SelectMany(config =>
         {
             if (config?.RepositoryUrl is not { Length: > 0 })
                 return Observable.Throw<StaticRepoImportResult>(new InvalidOperationException(
                     "No GitHub repository configured for this Space."));
             var branch = string.IsNullOrWhiteSpace(config.Branch) ? "main" : config.Branch;
             logger?.LogInformation("Updating {Space} to latest on {Branch}", spacePath, branch);
-            return sync.ReimportAtCommit(spacePath, branch, userId);
+            return sync.ReimportAtCommit(spacePath, branch, userId, sourceId);
         });
     }
 

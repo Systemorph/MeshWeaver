@@ -165,6 +165,28 @@ public interface IPartitionStorageProvider
         => System.Reactive.Linq.Observable.Return<bool?>(null);
 
     /// <summary>
+    /// Tears down whatever backing store this provider holds for a top-level partition —
+    /// the inverse of <see cref="EnsurePartitionProvisioned"/>. The Postgres provider drops
+    /// the partition's schema (all tables, satellites included) and evicts its provisioning
+    /// caches so a later re-create of the same partition provisions from scratch. Idempotent:
+    /// deleting a partition whose backing store does not exist emits and completes normally.
+    /// Emits exactly once and completes; a genuine failure propagates through OnError.
+    ///
+    /// <para><b>Reactive surface — no <c>await</c>.</b> Any actual I/O (the Postgres
+    /// <c>DROP SCHEMA … CASCADE</c> round-trip) stays at the IO boundary inside the
+    /// implementation, bounded by the provider's <c>IIoPool</c>. This is driven by the
+    /// partition-owning delete flow (deleting a <c>Space</c>/<c>User</c> root) — the ONE
+    /// trigger for partition removal, mirroring how <c>OwnsPartitionProvisioningValidator</c>
+    /// is the one trigger for creation.</para>
+    ///
+    /// <para>Default is a no-op: providers whose storage has no per-partition backing store
+    /// (InMemory, EmbeddedResource, StaticNode) emit immediately — the recursive node delete
+    /// has already removed their rows.</para>
+    /// </summary>
+    IObservable<System.Reactive.Unit> DeletePartition(string @namespace)
+        => System.Reactive.Linq.Observable.Return(System.Reactive.Unit.Default);
+
+    /// <summary>
     /// Contexts this partition opts into. Consumers iterating
     /// partitions for a given context (search, autocomplete, browse)
     /// skip every partition that doesn't include the context. The

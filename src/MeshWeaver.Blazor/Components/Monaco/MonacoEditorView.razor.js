@@ -247,7 +247,7 @@ export function waitForMonaco() {
     return true;
 }
 
-export function initEditor(editorId, placeholder, dotNetRef, codeEditMode = false, showLineNumbers = false) {
+export function initEditor(editorId, placeholder, dotNetRef, codeEditMode = false, showLineNumbers = false, autoGrow = false) {
     const container = document.getElementById(editorId);
     if (!container) {
         // Component may have been disposed before JS init completed — not an error
@@ -269,7 +269,9 @@ export function initEditor(editorId, placeholder, dotNetRef, codeEditMode = fals
         completionConfig: null,
         completionDisposable: null,
         codeEditMode: codeEditMode,
-        showLineNumbers: showLineNumbers
+        showLineNumbers: showLineNumbers,
+        autoGrow: autoGrow,
+        resizeTimeout: null
     });
 
     // Add placeholder styling
@@ -301,6 +303,23 @@ export function initEditor(editorId, placeholder, dotNetRef, codeEditMode = fals
             }
         });
 
+        // Auto-grow (opt-in): follow the content height so the composer expands with the
+        // text instead of scrolling invisibly inside a fixed box (issue #178). The container's
+        // CSS min-height/max-height clamp the range; automaticLayout's ResizeObserver re-lays
+        // the editor out when the container height changes. Debounced so rapid typing doesn't
+        // thrash the DOM; shrink-back on delete works the same way (smaller contentHeight).
+        if (autoGrow) {
+            editorInstance.onDidContentSizeChange((e) => {
+                const st = editorState.get(editorId);
+                if (!st) return;
+                if (st.resizeTimeout) clearTimeout(st.resizeTimeout);
+                st.resizeTimeout = setTimeout(() => {
+                    const c = document.getElementById(editorId);
+                    if (c) c.style.height = e.contentHeight + 'px';
+                }, 50);
+            });
+        }
+
         // Handle Enter key - in code edit mode, Enter inserts newline; in chat mode, Enter submits
         const state = editorState.get(editorId);
         if (!state?.codeEditMode) {
@@ -308,12 +327,17 @@ export function initEditor(editorId, placeholder, dotNetRef, codeEditMode = fals
             editorInstance.onKeyDown(async (e) => {
                 // Check for Enter key without modifiers
                 if (e.keyCode === monaco.KeyCode.Enter && !e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey) {
-                    // Check if suggest widget is visible
-                    // States: 0=Hidden, 1=Loading, 2=Empty, 3=Open, 4=Frozen, 5=Details
-                    // Use > 0 to handle undefined/null case (where !== 0 would wrongly be true)
-                    const suggestController = editorInstance.getContribution('editor.contrib.suggestController');
-                    const suggestState = suggestController?.model?.state;
-                    const isSuggestVisible = typeof suggestState === 'number' && suggestState > 0;
+                    // Block submit ONLY when the suggest widget is ACTUALLY on screen (it owns
+                    // Enter then: accept the selected suggestion). The previous check read
+                    // suggestController.model.state > 0, which is truthy for the whole suggest
+                    // SESSION — including the async-completion loading window with nothing
+                    // rendered yet. Typing "/model" and pressing Enter inside the completion
+                    // debounce therefore swallowed the first Enter with no visible widget
+                    // (issue #174: commands need multiple attempts). The rendered widget adds
+                    // .suggest-widget.visible to the editor DOM — check that instead: it is
+                    // exactly what the user sees, and version-stable across Monaco builds.
+                    const suggestWidget = editorInstance.getDomNode()?.querySelector('.suggest-widget');
+                    const isSuggestVisible = !!suggestWidget && suggestWidget.classList.contains('visible');
 
                     if (!isSuggestVisible) {
                         e.preventDefault();
@@ -550,7 +574,12 @@ export function registerCompletionProvider(editorId, config) {
                 // @ can be followed by paths with slashes: @agent/Name, @content/path/file
                 // / is only a trigger at word boundary (for commands like /agent)
                 if (trigger === '/') {
-                    const regex = new RegExp(`(?:^|\\s)${escapedTrigger}([\\w\\-\\.]+)?$`);
+                    // A slash-command is only valid at the very START of the composer (line 1, only
+                    // optional whitespace before it). Triggering on a '/' mid-code — paths (`cd /etc`),
+                    // "//" comments, `a / b`, `http://` — popped the command list, which is now heavy
+                    // (every CLI command + skill) and churned Monaco → "stuck when entering code".
+                    if (position.lineNumber !== 1) continue;
+                    const regex = new RegExp(`^\\s*${escapedTrigger}([\\w\\-\\.]+)?$`);
                     const match = textUntilPosition.match(regex);
                     if (match) {
                         // Adjust match to not include the leading space

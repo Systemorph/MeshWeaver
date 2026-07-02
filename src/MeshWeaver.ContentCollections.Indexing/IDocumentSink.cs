@@ -26,4 +26,15 @@ public interface IDocumentSink
     /// the write runs on subscribe. Composed (never awaited) by <see cref="ContentIndexingService"/>.
     /// </summary>
     IObservable<Unit> WriteDocument(DocumentInfo doc);
+
+    /// <summary>
+    /// Whether a <c>Document</c> already exists for <c>(collectionPath, filePath)</c>. Drives the
+    /// hash-gate HEAL in <see cref="ContentIndexingService.IndexFile"/>: a file whose chunks are
+    /// up to date may still be missing its per-file Document (indexed before the document branch
+    /// was wired, or its write failed) — the gate skips re-chunking but must not skip a missing
+    /// Document forever. Cold; emits one value then completes. Indeterminate probes should lean
+    /// towards <c>false</c>: <see cref="WriteDocument"/> is an idempotent upsert, so a spurious
+    /// heal is harmless while a spurious "exists" wedges the missing Document permanently.
+    /// </summary>
+    IObservable<bool> DocumentExists(string collectionPath, string filePath);
 }

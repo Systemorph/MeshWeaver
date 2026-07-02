@@ -24,9 +24,9 @@ public class MeshNodeContentEditorTest(ITestOutputHelper output) : GitHubSyncTes
         var fields = MeshNodeEditorField.FromType(typeof(GitHubSyncConfig));
         var keys = fields.Select(f => f.Key).ToArray();
 
-        // The five editable properties, by camelCase key — and NOT the [Browsable(false)] last-sync fields.
+        // The six editable properties, by camelCase key — and NOT the [Browsable(false)] last-sync fields.
         Assert.Equal(
-            new[] { "repositoryUrl", "branch", "subdirectory", "createBranchIfMissing", "createRepoIfMissing" },
+            new[] { "repositoryUrl", "branch", "subdirectory", "direction", "createBranchIfMissing", "createRepoIfMissing" },
             keys);
         Assert.DoesNotContain("lastSyncedAt", keys);
         Assert.DoesNotContain("lastSyncCommitSha", keys);
@@ -35,6 +35,13 @@ public class MeshNodeContentEditorTest(ITestOutputHelper output) : GitHubSyncTes
         Assert.Equal(MeshNodeEditorFieldKind.Text, fields.First(f => f.Key == "repositoryUrl").Kind);
         Assert.Equal(MeshNodeEditorFieldKind.Bool, fields.First(f => f.Key == "createBranchIfMissing").Kind);
         Assert.Equal("Repository URL", fields.First(f => f.Key == "repositoryUrl").Label);
+
+        // The sync direction renders as an enum dropdown over the SyncDirection members.
+        var direction = fields.First(f => f.Key == "direction");
+        Assert.Equal(MeshNodeEditorFieldKind.Enum, direction.Kind);
+        Assert.Equal(
+            new[] { nameof(SyncDirection.Bidirectional), nameof(SyncDirection.ExportOnly), nameof(SyncDirection.ImportOnly) },
+            direction.Options);
     }
 
     [Fact(Timeout = 60000)]

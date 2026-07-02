@@ -66,24 +66,44 @@ public sealed class GitHubSyncService
     /// <returns>The config node path.</returns>
     public static string ConfigPath(string spacePath) => $"{spacePath}/{ConfigId}";
 
+    /// <summary>
+    /// The sync-config node path for one of a Space's sync sources. The PRIMARY source
+    /// (null/empty <paramref name="sourceId"/>) lives at <c>{spacePath}/_GitSync</c>;
+    /// every additional source is a child: <c>{spacePath}/_GitSync/{sourceId}</c>. All
+    /// sources carry the same <see cref="GitHubSyncConfig"/> content (repo, branch,
+    /// <see cref="GitHubSyncConfig.Direction"/>, last-sync state).
+    /// </summary>
+    /// <param name="spacePath">The Space (partition root) path.</param>
+    /// <param name="sourceId">The source id, or null/empty for the primary source.</param>
+    /// <returns>The config node path for that source.</returns>
+    public static string ConfigPath(string spacePath, string? sourceId) =>
+        string.IsNullOrEmpty(sourceId) ? ConfigPath(spacePath) : $"{spacePath}/{ConfigId}/{sourceId}";
+
     // ══════════════════════════════════════════════════════════════════════════
     //  EXPORT — mesh → GitHub (the "sync back")
     // ══════════════════════════════════════════════════════════════════════════
 
     /// <summary>
-    /// Mirrors the Space subtree into its configured GitHub repo as a single commit,
-    /// authenticated as <paramref name="userId"/>, and stores the resulting commit
-    /// SHA on the Space's <see cref="GitHubSyncConfig"/>. Emits the push result.
+    /// Mirrors the Space subtree into the configured GitHub repo of one sync source as a
+    /// single commit, authenticated as <paramref name="userId"/>, and stores the resulting
+    /// commit SHA on that source's <see cref="GitHubSyncConfig"/>. Rejected when the
+    /// source's <see cref="GitHubSyncConfig.Direction"/> is
+    /// <see cref="SyncDirection.ImportOnly"/>. Emits the push result.
     /// </summary>
-    public IObservable<GitHubPushResult> SyncToGitHub(string spacePath, string userId)
+    public IObservable<GitHubPushResult> SyncToGitHub(string spacePath, string userId, string? sourceId = null)
     {
-        return ReadConfig(spacePath).Take(1).SelectMany(config =>
+        return ReadConfig(spacePath, sourceId).Take(1).SelectMany(config =>
         {
             if (config?.RepositoryUrl is not { Length: > 0 } repoUrl)
                 return Observable.Throw<GitHubPushResult>(new InvalidOperationException(
                     "No repository URL is set for this Space yet. In the Repository section above, enter a " +
                     "URL like https://github.com/owner/repo (the repo is created automatically if it doesn't " +
                     "exist), then Sync."));
+
+            if (config.Direction == SyncDirection.ImportOnly)
+                return Observable.Throw<GitHubPushResult>(new InvalidOperationException(
+                    $"This sync source is import-only (repo → mesh): exporting to {repoUrl} is not allowed. " +
+                    "Change the source's Sync direction to Bidirectional or Export-only to commit."));
 
             return credentials.Get(userId).Take(1).SelectMany(cred =>
             {
@@ -115,7 +135,7 @@ public sealed class GitHubSyncService
                         // node content (stream.Update read-modify-write) — never a full-content write,
                         // so a concurrent repo-field edit in the GUI editor is not clobbered.
                         return repoClient.Push(request).SelectMany(result =>
-                            RecordLastSync(spacePath, result.CommitSha).Select(_ => result));
+                            RecordLastSync(spacePath, result.CommitSha, sourceId).Select(_ => result));
                     }));
             });
         });
@@ -281,17 +301,24 @@ public sealed class GitHubSyncService
 
     /// <summary>
     /// Re-imports an existing Space to the state of <paramref name="commitish"/> (a
-    /// branch or commit SHA), mirroring the repo into the partition (add/update/prune),
-    /// and records the resolved commit SHA on the Space's config. This is the
-    /// "change the commit and re-import to that state" operation.
+    /// branch or commit SHA) from one sync source, mirroring the repo into the partition
+    /// (add/update/prune), and records the resolved commit SHA on that source's config.
+    /// Rejected when the source's <see cref="GitHubSyncConfig.Direction"/> is
+    /// <see cref="SyncDirection.ExportOnly"/>. This is the "change the commit and
+    /// re-import to that state" operation.
     /// </summary>
-    public IObservable<StaticRepoImportResult> ReimportAtCommit(string spacePath, string commitish, string userId)
+    public IObservable<StaticRepoImportResult> ReimportAtCommit(
+        string spacePath, string commitish, string userId, string? sourceId = null)
     {
-        return ReadConfig(spacePath).Take(1).SelectMany(config =>
+        return ReadConfig(spacePath, sourceId).Take(1).SelectMany(config =>
         {
             if (config?.RepositoryUrl is not { Length: > 0 } repoUrl)
                 return Observable.Throw<StaticRepoImportResult>(new InvalidOperationException(
                     "No GitHub repository configured for this Space."));
+            if (config.Direction == SyncDirection.ExportOnly)
+                return Observable.Throw<StaticRepoImportResult>(new InvalidOperationException(
+                    $"This sync source is export-only (mesh → repo): importing from {repoUrl} is not allowed. " +
+                    "Change the source's Sync direction to Bidirectional or Import-only to re-import."));
             return credentials.Get(userId).Take(1).SelectMany(cred =>
             {
                 if (cred?.AccessToken is not { Length: > 0 } token)
@@ -299,7 +326,7 @@ public sealed class GitHubSyncService
                         "Connect your GitHub account first."));
                 logger?.LogInformation("Re-importing {Space} at {Ref}", spacePath, commitish);
                 return FetchAndImport(repoUrl, commitish, config.Subdirectory, token, spacePath)
-                    .SelectMany(x => RecordLastSync(spacePath, x.CommitSha).Select(_ => x.Result));
+                    .SelectMany(x => RecordLastSync(spacePath, x.CommitSha, sourceId).Select(_ => x.Result));
             });
         });
     }
@@ -310,9 +337,9 @@ public sealed class GitHubSyncService
     /// branch?"). The branch name comes from the (local) config; the HEAD comes straight from
     /// GitHub, so the answer can never drift. Delegates rather than replicating branch state.
     /// </summary>
-    public IObservable<BranchState> AskBranchState(string spacePath, string userId)
+    public IObservable<BranchState> AskBranchState(string spacePath, string userId, string? sourceId = null)
     {
-        return ReadConfig(spacePath).Take(1).SelectMany(config =>
+        return ReadConfig(spacePath, sourceId).Take(1).SelectMany(config =>
         {
             if (config?.RepositoryUrl is not { Length: > 0 } repoUrl)
                 return Observable.Throw<BranchState>(new InvalidOperationException(
@@ -402,19 +429,79 @@ public sealed class GitHubSyncService
     /// the hidden <c>{space}/_GitSync</c> satellite path, whose per-node hub does not serve the
     /// single-node reducer reliably (it timed out → "not configured"). Emits the config or null.
     /// </summary>
-    public IObservable<GitHubSyncConfig?> WatchConfig(string spacePath) =>
-        WatchConfigNode(spacePath).Select(Extract<GitHubSyncConfig>);
+    public IObservable<GitHubSyncConfig?> WatchConfig(string spacePath, string? sourceId = null) =>
+        WatchConfigNode(spacePath, sourceId).Select(Extract<GitHubSyncConfig>);
 
-    /// <summary>Live <see cref="MeshNode"/> stream for the Space's <c>_GitSync</c> config node
+    /// <summary>Live <see cref="MeshNode"/> stream for one sync-source config node of the Space
     /// (or null when absent) — the synced <c>GetQuery</c>. The GUI editor binds to this node by
     /// path via <c>GetMeshNodeStream</c>; this stream is for service-side reads/displays.</summary>
-    public IObservable<MeshNode?> WatchConfigNode(string spacePath)
+    public IObservable<MeshNode?> WatchConfigNode(string spacePath, string? sourceId = null)
     {
-        var path = ConfigPath(spacePath);
+        var path = ConfigPath(spacePath, sourceId);
         return hub.GetWorkspace()
-            .GetQuery($"gitsync-cfg:{spacePath}", $"path:{path}")
+            .GetQuery($"gitsync-cfg:{path}", $"path:{path}")
             .Select(nodes => nodes?.FirstOrDefault(n => string.Equals(n.Path, path, StringComparison.OrdinalIgnoreCase)));
     }
+
+    /// <summary>
+    /// Live stream of ALL of the Space's sync-source config nodes: the primary
+    /// (<c>{space}/_GitSync</c>, when present) followed by every additional source
+    /// (<c>{space}/_GitSync/{sourceId}</c>), ordered by source id. Re-emits when a source is
+    /// added, removed, or edited — the synced <c>GetQuery</c> over the <c>_GitSync</c>
+    /// namespace, combined with the primary's own stream.
+    /// </summary>
+    public IObservable<IReadOnlyList<MeshNode>> WatchConfigNodes(string spacePath)
+    {
+        var primaryPath = ConfigPath(spacePath);
+        var children = hub.GetWorkspace()
+            .GetQuery($"gitsync-cfgs:{spacePath}", $"namespace:{primaryPath} nodeType:{ConfigNodeType}")
+            .Select(nodes => (nodes ?? [])
+                .Where(n => string.Equals(n.Namespace, primaryPath, StringComparison.OrdinalIgnoreCase))
+                .OrderBy(n => n.Id, StringComparer.OrdinalIgnoreCase)
+                .ToList());
+        return WatchConfigNode(spacePath).CombineLatest(children, (primary, extra) =>
+        {
+            var all = new List<MeshNode>();
+            if (primary is not null) all.Add(primary);
+            all.AddRange(extra);
+            return (IReadOnlyList<MeshNode>)all;
+        });
+    }
+
+    /// <summary>
+    /// Adds a sync source to the Space: creates the <c>{space}/_GitSync/{sourceId}</c>
+    /// config node (with defaults) named <paramref name="name"/>, where the id is the
+    /// sanitized name. Create-on-absent — adding a source whose id already exists returns
+    /// the existing node untouched. Configure the repo/branch/direction afterwards through
+    /// the standard node editor bound to the returned node's path.
+    /// </summary>
+    public IObservable<MeshNode> AddSyncSource(string spacePath, string name)
+    {
+        var sourceId = SanitizeSourceId(name);
+        if (string.IsNullOrEmpty(sourceId))
+            return Observable.Throw<MeshNode>(new ArgumentException(
+                "The sync-source name must contain at least one letter or digit.", nameof(name)));
+        return EnsureConfigNode(spacePath, sourceId, name);
+    }
+
+    /// <summary>
+    /// Removes an ADDITIONAL sync source (<c>{space}/_GitSync/{sourceId}</c>). The primary
+    /// source node is never removed this way — clear its repository URL instead.
+    /// </summary>
+    public IObservable<bool> RemoveSyncSource(string spacePath, string sourceId)
+    {
+        if (string.IsNullOrEmpty(sourceId))
+            return Observable.Throw<bool>(new ArgumentException(
+                "The primary sync source cannot be removed — clear its repository URL instead.",
+                nameof(sourceId)));
+        return meshService.DeleteNode(ConfigPath(spacePath, sourceId));
+    }
+
+    /// <summary>Sanitizes a display name into a node id: letters/digits/dash/underscore only.</summary>
+    private static string SanitizeSourceId(string name) =>
+        new string(name.Trim()
+            .Select(c => char.IsLetterOrDigit(c) ? c : '-')
+            .ToArray()).Trim('-');
 
     /// <summary>
     /// Create-on-absent the Space's <c>_GitSync</c> config node (with defaults) so the standard
@@ -424,9 +511,8 @@ public sealed class GitHubSyncService
     /// absent path (that NotFound-storms). Mirrors <c>AiSettingsNodeType.EnsureExists</c>.
     /// Returns the existing or newly-created node.
     /// </summary>
-    public IObservable<MeshNode> EnsureConfigNode(string spacePath)
+    public IObservable<MeshNode> EnsureConfigNode(string spacePath, string? sourceId = null, string? name = null)
     {
-        var path = ConfigPath(spacePath);
         // Capture identity synchronously BEFORE the async WatchConfigNode hop (same reason as
         // UpdateConfig). meshService.CreateNode captures the AccessContext at its CALL — which here
         // happens inside the SelectMany continuation, where the AsyncLocal has been dropped, so the
@@ -435,13 +521,17 @@ public sealed class GitHubSyncService
         // captured context on the create's subscribe so CreateNode's own capture picks it up.
         var accessService = hub.ServiceProvider.GetService<AccessService>();
         var ctx = accessService?.Context ?? accessService?.CircuitContext;
-        return WatchConfigNode(spacePath).Take(1).SelectMany(existing =>
+        return WatchConfigNode(spacePath, sourceId).Take(1).SelectMany(existing =>
         {
             if (existing is not null) return Observable.Return(existing);
-            var node = new MeshNode(ConfigId, spacePath)
+            // Primary source: {space}/_GitSync. Additional source: {space}/_GitSync/{sourceId}.
+            var node = string.IsNullOrEmpty(sourceId)
+                ? new MeshNode(ConfigId, spacePath)
+                : new MeshNode(sourceId, ConfigPath(spacePath));
+            node = node with
             {
                 NodeType = ConfigNodeType,
-                Name = "GitHub Sync",
+                Name = name ?? (string.IsNullOrEmpty(sourceId) ? "GitHub Sync" : sourceId),
                 State = MeshNodeState.Active,
                 MainNode = spacePath,
                 Content = new GitHubSyncConfig(),
@@ -452,19 +542,21 @@ public sealed class GitHubSyncService
                 ? meshService.CreateNode(node)
                 : Observable.Using(() => accessService.SwitchAccessContext(ctx), _ => meshService.CreateNode(node));
             return create
-                .Catch<MeshNode, Exception>(_ => WatchConfigNode(spacePath).Where(n => n is not null).Select(n => n!).Take(1));
+                .Catch<MeshNode, Exception>(_ => WatchConfigNode(spacePath, sourceId).Where(n => n is not null).Select(n => n!).Take(1));
         });
     }
 
     /// <summary>One-shot config read for actions (Sync / Re-import). The synced query's first
     /// emission already reflects a committed write (the GUI auto-saves the repo URL on edit, so by
     /// Sync time the config is present).</summary>
-    public IObservable<GitHubSyncConfig?> ReadConfig(string spacePath) => WatchConfig(spacePath).Take(1);
+    public IObservable<GitHubSyncConfig?> ReadConfig(string spacePath, string? sourceId = null)
+        => WatchConfig(spacePath, sourceId).Take(1);
 
     /// <summary>Persists the repository settings (preserving the recorded last-sync state).</summary>
     public IObservable<MeshNode> SaveConfig(
         string spacePath, string? repositoryUrl, string branch, string? subdirectory,
-        bool createBranchIfMissing, bool createRepoIfMissing)
+        bool createBranchIfMissing, bool createRepoIfMissing,
+        SyncDirection direction = SyncDirection.Bidirectional, string? sourceId = null)
         => UpdateConfig(spacePath, c => c with
         {
             RepositoryUrl = string.IsNullOrWhiteSpace(repositoryUrl) ? null : repositoryUrl.Trim(),
@@ -472,10 +564,12 @@ public sealed class GitHubSyncService
             Subdirectory = string.IsNullOrWhiteSpace(subdirectory) ? null : subdirectory.Trim().Trim('/'),
             CreateBranchIfMissing = createBranchIfMissing,
             CreateRepoIfMissing = createRepoIfMissing,
-        });
+            Direction = direction,
+        }, sourceId);
 
     /// <summary>Read-modify-write a config field (current value from the synced query; null when absent).</summary>
-    private IObservable<MeshNode> UpdateConfig(string spacePath, Func<GitHubSyncConfig, GitHubSyncConfig> update)
+    private IObservable<MeshNode> UpdateConfig(
+        string spacePath, Func<GitHubSyncConfig, GitHubSyncConfig> update, string? sourceId = null)
     {
         // 🚨 Capture the caller's identity SYNCHRONOUSLY, here on the calling thread, BEFORE the
         // ReadConfig hop. ReadConfig's SelectMany continuation can run on a pool thread where the
@@ -488,7 +582,8 @@ public sealed class GitHubSyncService
         // write's post via WithAccessContext so it never depends on the AsyncLocal surviving the hop.
         var accessService = hub.ServiceProvider.GetService<AccessService>();
         var ctx = accessService?.Context ?? accessService?.CircuitContext;
-        return ReadConfig(spacePath).SelectMany(current => WriteConfig(spacePath, ctx, update(current ?? new GitHubSyncConfig())));
+        return ReadConfig(spacePath, sourceId).SelectMany(current =>
+            WriteConfig(spacePath, ctx, update(current ?? new GitHubSyncConfig()), sourceId));
     }
 
     /// <summary>
@@ -497,10 +592,10 @@ public sealed class GitHubSyncService
     /// <c>GetMeshNodeStream(path).Update</c> (read-modify-write). Touching only those two fields
     /// means a concurrent GUI edit of the repository fields is never clobbered.
     /// </summary>
-    private IObservable<MeshNode> RecordLastSync(string spacePath, string commitSha)
+    private IObservable<MeshNode> RecordLastSync(string spacePath, string commitSha, string? sourceId = null)
     {
         var now = DateTimeOffset.UtcNow;
-        return hub.GetWorkspace().GetMeshNodeStream(ConfigPath(spacePath)).Update(node =>
+        return hub.GetWorkspace().GetMeshNodeStream(ConfigPath(spacePath, sourceId)).Update(node =>
         {
             var cur = Extract<GitHubSyncConfig>(node) ?? new GitHubSyncConfig();
             return node with { Content = cur with { LastSyncedAt = now, LastSyncCommitSha = commitSha } };
@@ -510,12 +605,15 @@ public sealed class GitHubSyncService
     /// <summary>Writes the FULL config (no read) — used by <see cref="SaveConfig"/> (a programmatic
     /// / test API). The GUI does NOT use this: it edits the node through the standard
     /// <c>MeshNodeContentEditorControl</c> which binds directly to the node stream.</summary>
-    private IObservable<MeshNode> WriteConfig(string spacePath, AccessContext? ctx, GitHubSyncConfig config)
+    private IObservable<MeshNode> WriteConfig(
+        string spacePath, AccessContext? ctx, GitHubSyncConfig config, string? sourceId = null)
     {
-        var node = new MeshNode(ConfigId, spacePath)
+        var node = (string.IsNullOrEmpty(sourceId)
+            ? new MeshNode(ConfigId, spacePath)
+            : new MeshNode(sourceId, ConfigPath(spacePath))) with
         {
             NodeType = ConfigNodeType,
-            Name = "GitHub Sync",
+            Name = string.IsNullOrEmpty(sourceId) ? "GitHub Sync" : sourceId,
             State = MeshNodeState.Active,
             MainNode = spacePath,
             Content = config,

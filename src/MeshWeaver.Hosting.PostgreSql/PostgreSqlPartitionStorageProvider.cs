@@ -386,6 +386,47 @@ public sealed class PostgreSqlPartitionStorageProvider : IPartitionStorageProvid
     }
 
     /// <summary>
+    /// Drops the partition's backing schema — the inverse of
+    /// <see cref="EnsurePartitionProvisioned"/>. <c>DROP SCHEMA IF EXISTS … CASCADE</c>
+    /// removes the partition's <c>mesh_nodes</c> and every satellite table in one atomic
+    /// DDL statement, then evicts the provisioning caches (<see cref="_schemasInitialized"/>,
+    /// <see cref="_provisioned"/>, <see cref="_registeredPartitions"/>) so a later re-create
+    /// of the same partition provisions from scratch instead of replaying the cached
+    /// "already provisioned" promise against a schema that no longer exists. Idempotent —
+    /// dropping an absent schema is a no-op. The async DB edge is sealed inside
+    /// <see cref="IIoPool"/> (never <c>Observable.FromAsync</c>).
+    /// </summary>
+    public IObservable<Unit> DeletePartition(string @namespace)
+    {
+        if (string.IsNullOrEmpty(@namespace))
+            return Observable.Return(Unit.Default);
+
+        var schema = _registeredPartitions.TryGetValue(@namespace, out var def)
+                     && !string.IsNullOrEmpty(def.Schema)
+            ? def.Schema!
+            : @namespace.ToLowerInvariant();
+
+        return _ioPool.Invoke(async ct =>
+        {
+            await ExecuteDdlWithRetryAsync(async attemptCt =>
+            {
+                // Schema name is identifier-quoted — it derives from a node id, not raw SQL.
+                await using var cmd = _baseDataSource.CreateCommand(
+                    $"DROP SCHEMA IF EXISTS \"{schema.Replace("\"", "\"\"")}\" CASCADE");
+                await cmd.ExecuteNonQueryAsync(attemptCt).ConfigureAwait(false);
+            }, ct, _logger).ConfigureAwait(false);
+
+            _schemasInitialized.TryRemove(schema, out _);
+            _provisioned.TryRemove(schema, out _);
+            _registeredPartitions.TryRemove(@namespace, out _);
+            _logger?.LogInformation(
+                "PostgreSqlPartitionStorageProvider: dropped schema {Schema} for deleted partition {Namespace}",
+                schema, @namespace);
+            return Unit.Default;
+        });
+    }
+
+    /// <summary>
     /// Tests / boot-time callers can pre-register a known
     /// <see cref="PartitionDefinition"/> so the router resolves its real schema
     /// (notably the <c>_</c>-prefix globals whose schema ≠ lowercased namespace)

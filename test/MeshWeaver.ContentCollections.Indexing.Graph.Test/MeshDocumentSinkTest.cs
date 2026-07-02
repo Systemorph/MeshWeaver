@@ -102,6 +102,45 @@ public class MeshDocumentSinkTest(ITestOutputHelper output) : MonolithMeshTestBa
         document.IndexedAt.Should().NotBe(default);
     }
 
+    /// <summary>
+    /// Pins the serialization boundary the in-memory store never crosses: on a JSON-backed store
+    /// (Postgres jsonb) the Document content is serialized with the MESH hub's options (the write
+    /// travels MeshDocumentSink → CreateOrUpdateNodeRequest → mesh hub → storage), NOT the
+    /// Document per-node hub's. Prod repro (atioz 2026-07-01): the mesh hub's TypeRegistry lacked
+    /// <c>Document</c>, content persisted WITHOUT a <c>$type</c> discriminator, and every reader got
+    /// an untyped JsonElement ("stayed an untyped JsonElement (TypeRegistry lacks the $type
+    /// discriminator)") — document pages rendered empty / not found.
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public async Task DocumentContent_RoundTripsTyped_ThroughMeshHubSerializer()
+    {
+        var (service, _, _) = BuildService();
+
+        const string fileName = "roundtrip.txt";
+        var filePath = $"docs/{fileName}";
+        var bytes = Encoding.UTF8.GetBytes("Round-trip body long enough to chunk and summarize.");
+
+        var result = await service.IndexFile(Collection, filePath, fileName, bytes)
+            .FirstAsync().ToTask();
+        result.Status.Should().Be(IndexStatus.Indexed);
+
+        var node = await ReadDocumentNode(DocumentPaths.For(Collection, filePath));
+
+        // Serialize with the MESH hub's options — the exact boundary a jsonb store exercises.
+        var json = System.Text.Json.JsonSerializer.Serialize(node, Mesh.JsonSerializerOptions);
+        using (var parsed = System.Text.Json.JsonDocument.Parse(json))
+        {
+            parsed.RootElement.GetProperty("content").TryGetProperty("$type", out var discriminator)
+                .Should().BeTrue("the mesh hub must emit the Document $type discriminator");
+            discriminator.GetString().Should().Be(nameof(Document));
+        }
+
+        // And back: a reader deserializing with the same options gets TYPED content.
+        var roundTripped = System.Text.Json.JsonSerializer.Deserialize<MeshNode>(json, Mesh.JsonSerializerOptions);
+        roundTripped!.Content.Should().BeOfType<Document>()
+            .Which.FilePath.Should().Be(filePath);
+    }
+
     [Fact(Timeout = 60_000)]
     public async Task ReindexIdenticalBytes_IsSkipped_NodeUnchanged()
     {

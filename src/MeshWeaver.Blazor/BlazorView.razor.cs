@@ -86,10 +86,43 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
     /// <summary>Inline CSS style string bound from <c>ViewModel.Style</c>; applied to the root element.</summary>
     protected string? Style { get; set; }
 
-    /// <summary>Tears down previous data bindings and rebuilds them after every Blazor parameter update.</summary>
+    // Snapshot of the binding-relevant parameters at the last actual bind — OnParametersSet compares
+    // against these to skip redundant re-binds (see the guard there).
+    private TViewModel? _boundViewModel;
+    private ISynchronizationStream<JsonElement>? _boundStream;
+    private string? _boundArea;
+    private string? _boundDataContext;
+    private ModelParameter<JsonElement>? _boundModel;
+    private object? _boundContext;
+    private bool _hasBound;
+
+    /// <summary>Rebuilds data bindings after a Blazor parameter update — but ONLY when a binding-relevant
+    /// parameter actually changed (see the guard), never on every no-op parent render.</summary>
     protected override void OnParametersSet()
     {
         base.OnParametersSet();
+        // Blazor calls OnParametersSet on EVERY parent render. Re-disposing + re-subscribing all bindings
+        // each time re-fires the ReplaySubject-backed sync stream → StateHasChanged → the parent re-renders
+        // → OnParametersSet → … a client-side render storm that pegs the circuit (the recurring "chat
+        // freeze"/wedge). When no binding-relevant parameter actually changed, the existing bindings are
+        // still correct — skip the re-bind and break the loop. Reference identity suffices: ViewModel /
+        // Stream / Model / Context are immutable records or stable per-area handles; Area / DataContext are
+        // strings compared by value.
+        if (_hasBound
+            && ReferenceEquals(ViewModel, _boundViewModel)
+            && ReferenceEquals(Stream, _boundStream)
+            && Area == _boundArea
+            && DataContext == _boundDataContext
+            && ReferenceEquals(Model, _boundModel)
+            && ReferenceEquals(Context, _boundContext))
+            return;
+        _boundViewModel = ViewModel;
+        _boundStream = Stream;
+        _boundArea = Area;
+        _boundDataContext = DataContext;
+        _boundModel = Model;
+        _boundContext = Context;
+        _hasBound = true;
         BindDataAfterParameterReset();
     }
 
@@ -339,6 +372,9 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
         catch (Exception ex)
         {
             Logger.LogError(ex, "Critical error in DataBind for Area {area}", Area);
+            // Surface it — never let a binding fault freeze the area silently (the wedge symptom). The
+            // default-value fallback below keeps the property usable; SurfaceError shows the fault.
+            SurfaceError(ex, $"Data binding for area {Area}");
             // Attempt to set default value as last resort
             try
             {

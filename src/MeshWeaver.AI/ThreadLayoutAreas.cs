@@ -570,6 +570,11 @@ public static class ThreadLayoutAreas
             .DistinctUntilChanged(p => p.key)
             .Select(p => CollectUpdatedNodes(host.Hub, threadPath, p.ids))
             .Switch()
+            // Dedup the aggregated change-set on its VISIBLE summary (path/op/version per entry).
+            // CollectUpdatedNodes re-emits as a round streams even when that summary is unchanged; without
+            // this the Header layout area re-rendered per streamed token — a residual render-storm loop.
+            // BuildHeader depends only on `updates`, so this is safe.
+            .DistinctUntilChanged(updates => string.Join(";", updates.Select(u => $"{u.Path}|{u.Operation}|{u.VersionAfter}")))
             .Select(updates => BuildHeader(parentLink, updates, threadPath));
 
         return initial.Concat(aggregated);

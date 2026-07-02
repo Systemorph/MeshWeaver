@@ -237,19 +237,34 @@ public class MeshOperations
         // Single-node content read via GetDataRequest + MeshNodeReference + RegisterCallback.
         // See Doc/Architecture/CqrsAndContentAccess.md — queries are for sets only.
         return TryResolveUnifiedPath(resolvedPath)
-            .SelectMany(unified => unified != null
-                ? Observable.Return(unified)
-                : FetchNode(resolvedPath).SelectMany(node =>
-                    {
-                        if (node is null)
-                            return GetWithBrokenNodeTypeFallback(resolvedPath);
-                        return LookupCompilationError(node)
-                            .Select(compileError => compileError != null
-                                ? JsonSerializer.Serialize(
-                                    new { node, compilationError = compileError },
-                                    hub.JsonSerializerOptions)
-                                : JsonSerializer.Serialize(node, hub.JsonSerializerOptions));
-                    }))
+            .SelectMany(unified =>
+            {
+                // A unified (UCR) interpretation that ERRORS may be shadowing a real node whose
+                // own path contains a UCR keyword as an interior segment: Document nodes live at
+                // {collection}/_Documents/{slug}, and the collection segment ("content") is a UCR
+                // keyword — the unified read hijacks the path and fails with "Content collection
+                // '_Documents' not found". The node namespace is authoritative: on a unified
+                // error, fall back to the node read and surface the unified error only when no
+                // node exists at the full path either.
+                var unifiedError = unified is not null
+                    && unified.StartsWith("Error:", StringComparison.Ordinal) ? unified : null;
+                if (unified is not null && unifiedError is null)
+                    return Observable.Return(unified);
+
+                return FetchNode(resolvedPath).SelectMany(node =>
+                {
+                    if (node is null)
+                        return unifiedError is not null
+                            ? Observable.Return(unifiedError)
+                            : GetWithBrokenNodeTypeFallback(resolvedPath);
+                    return LookupCompilationError(node)
+                        .Select(compileError => compileError != null
+                            ? JsonSerializer.Serialize(
+                                new { node, compilationError = compileError },
+                                hub.JsonSerializerOptions)
+                            : JsonSerializer.Serialize(node, hub.JsonSerializerOptions));
+                });
+            })
             .Catch((Exception ex) =>
             {
                 logger.LogWarning(ex, "Error getting data at path {Path}", resolvedPath);
