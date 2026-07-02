@@ -12,6 +12,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 [assembly: InternalsVisibleTo("MeshWeaver.Auth.Test")]
+[assembly: InternalsVisibleTo("Memex.Portal.Shared.Test")]
 
 namespace Memex.Portal.Shared.Authentication;
 
