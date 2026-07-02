@@ -2,7 +2,7 @@
 nodeType: Markdown
 name: Language Services (LSP-style)
 category: Architecture
-description: Roslyn-backed in-process language services over a NodeType's live CSharpCompilation — speculative pre-flight diagnostics, hover, completions. Consumed by the Coder agent (Lsp plugin), external MCP clients (McpMeshPlugin), and Monaco live squiggles in the portal Edit view.
+description: Roslyn-backed in-process language services over a NodeType's live CSharpCompilation — speculative pre-flight diagnostics, hover, completions. Consumed by code-authoring agents (Lsp plugin, driven by the /code skill), external MCP clients (McpMeshPlugin), and Monaco live squiggles in the portal Edit view.
 icon: /static/NodeTypeIcons/code.svg
 ---
 
@@ -12,7 +12,7 @@ MeshWeaver surfaces Roslyn's full language intelligence — diagnostics, hover, 
 
 | Consumer | How it connects | What it uses |
 |---|---|---|
-| **Coder agent** | `Lsp` plugin (opt-in per agent via `plugins: - Lsp`) | Pre-flight diagnostics before committing a `Patch` |
+| **Code-authoring agents** (the `/code` skill) | `Lsp` plugin (opt-in per agent via `plugins: - Lsp`) | Pre-flight diagnostics before committing a `Patch` |
 | **External MCP clients** (Claude Code, etc.) | `Lsp*` tools on `McpMeshPlugin` | All four tools |
 | **Monaco editor in the portal** | `IMeshLanguageService` resolved from DI | Live squiggles on any `Code` node under a NodeType's `Source/` subtree |
 
@@ -25,7 +25,7 @@ Behind all three sits one `IMeshLanguageService` interface with one in-process i
   </defs>
   <rect x="0" y="0" width="760" height="370" rx="4" fill="#1a1a2e"/>
   <rect x="30" y="20" width="170" height="52" rx="10" fill="#1e88e5"/>
-  <text x="115" y="41" text-anchor="middle" font-family="sans-serif" font-size="12" font-weight="bold" fill="#fff">Coder Agent</text>
+  <text x="115" y="41" text-anchor="middle" font-family="sans-serif" font-size="12" font-weight="bold" fill="#fff">Code Agents</text>
   <text x="115" y="58" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#bbdefb">Lsp plugin (opt-in)</text>
   <rect x="295" y="20" width="170" height="52" rx="10" fill="#8e24aa"/>
   <text x="380" y="41" text-anchor="middle" font-family="sans-serif" font-size="12" font-weight="bold" fill="#fff">MCP Clients</text>
@@ -52,7 +52,7 @@ Behind all three sits one `IMeshLanguageService` interface with one in-process i
   <rect x="390" y="332" width="340" height="28" rx="8" fill="#f57c00" fill-opacity="0.8"/>
   <text x="560" y="351" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#fff">SpeculativeCompilation</text>
 </svg>
-*Three consumers share one `IMeshLanguageService` backed by Roslyn — Coder pre-flight, MCP tools, and Monaco live squiggles all route through the same in-process pipeline.*
+*Three consumers share one `IMeshLanguageService` backed by Roslyn — the /code pre-flight, MCP tools, and Monaco live squiggles all route through the same in-process pipeline.*
 
 ## Architecture
 
@@ -95,7 +95,7 @@ Behind all three sits one `IMeshLanguageService` interface with one in-process i
 
 ## The MCP and Agent Surface
 
-Two tools are exposed via `McpMeshPlugin` for external MCP clients (`lsp_check_node`, `lsp_diagnostics_for_node`); the in-portal `Lsp` agent plugin additionally carries hover and completions for agents that opt in (Coder declares `plugins: - Lsp`). Hover/completions were removed from the MCP surface in the 2026-06-11 tool-surface compaction — position-based lookups are an IDE interaction shape, and an agent driving JSON tool calls reads source via `get` and runs the pre-flight check instead. `IMeshLanguageService` retains all four capabilities for first-party UI (Monaco) use.
+Two tools are exposed via `McpMeshPlugin` for external MCP clients (`lsp_check_node`, `lsp_diagnostics_for_node`); the in-portal `Lsp` agent plugin additionally carries hover and completions for agents that opt in via `plugins: - Lsp` (the built-in Assistant, Worker, and Email Router declare it). Hover/completions were removed from the MCP surface in the 2026-06-11 tool-surface compaction — position-based lookups are an IDE interaction shape, and an agent driving JSON tool calls reads source via `get` and runs the pre-flight check instead. `IMeshLanguageService` retains all four capabilities for first-party UI (Monaco) use.
 
 | Tool | Surface | Purpose | Returns |
 |---|---|---|---|
@@ -108,9 +108,9 @@ Two tools are exposed via `McpMeshPlugin` for external MCP clients (`lsp_check_n
 
 **`{ok: true}` semantics.** This means there are no `Error`-severity diagnostics — warnings alone don't fail the check, mirroring how a real `Compile` succeeds with warnings.
 
-## The Coder Pre-Flight Loop
+## The /code Pre-Flight Loop
 
-Before any non-trivial source change, the Coder agent follows this sequence:
+Before any non-trivial source change, an agent operating under the [/code skill](/Skill/code) follows this sequence:
 
 1. Read current source (`Get` if not already in context).
 2. Call `LspCheckNode({nodeTypePath, sourcePath, proposedCode})`.
@@ -121,11 +121,11 @@ Before any non-trivial source change, the Coder agent follows this sequence:
 
 This loop replaces the old blind `Patch → Compile → Recycle → fix` cycle that previously dominated CI failures.
 
-> **Full-substitution semantics.** `LspCheckNode` rebuilds the whole NodeType source set with the one proposed file substituted in. This catches the dominant Coder failure mode where editing one file breaks a sibling — rename a type in `A`, and `B`'s reference still points at the old name. Single-file isolation would miss this entirely.
+> **Full-substitution semantics.** `LspCheckNode` rebuilds the whole NodeType source set with the one proposed file substituted in. This catches the dominant code-edit failure mode where editing one file breaks a sibling — rename a type in `A`, and `B`'s reference still points at the old name. Single-file isolation would miss this entirely.
 
 > **`#r` support.** The proposed source can include `#r "nuget:PackageId, Version"` directives — the speculative compile strips them and resolves the packages through the same `INuGetAssemblyResolver` the production compile uses. New diagnostics reflect what `Compile` will actually see.
 
-Full Coder workflow is in [Coder.md](/Agent/Coder).
+The full coding workflow is in the [/code skill](/Skill/code).
 
 ## Monaco Live Diagnostics
 
@@ -157,7 +157,7 @@ Speculative compiles do **not** cache — every `LspCheckNode` call rebuilds the
 
 The following capabilities were considered but are not yet implemented:
 
-- **Stage 2: repo-level LSP** for the MeshWeaver framework itself (50+ projects, on-disk `.slnx`). Originally planned as a separate CLI host spawning `Microsoft.CodeAnalysis.LanguageServer` for Claude Code's consumption. Skipped for now — the in-portal surface (Stage 1) covers the immediate Coder workflow.
+- **Stage 2: repo-level LSP** for the MeshWeaver framework itself (50+ projects, on-disk `.slnx`). Originally planned as a separate CLI host spawning `Microsoft.CodeAnalysis.LanguageServer` for Claude Code's consumption. Skipped for now — the in-portal surface (Stage 1) covers the immediate /code workflow.
 
 - **Monaco hover + completions.** `MonacoEditorView` only consumes the `DiagnosticsCallback` today. Hover and completion providers would be additional JSInvokables plus Monaco `registerHoverProvider` / `registerCompletionItemProvider` calls, but they need overlay support in `IMeshLanguageService` (in-flight editor text rather than saved text) before they're useful — a separate API extension.
 

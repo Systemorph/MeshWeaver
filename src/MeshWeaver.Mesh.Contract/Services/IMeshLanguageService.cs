@@ -54,7 +54,7 @@ public interface IMeshLanguageService
     /// substitute file is identified by <paramref name="sourcePath"/> — if no source at
     /// that path exists today, the proposed code is added as a new file.
     /// <para>
-    /// Full substitution (not single-file isolation) — catches the dominant Coder
+    /// Full substitution (not single-file isolation) — catches the dominant code-edit
     /// failure mode where editing one source file breaks a sibling. Reuses the cached
     /// <c>MetadataReference</c> set so per-check cost is just parse + bind + diagnose
     /// (~200–500ms for typical NodeTypes; no NuGet resolution, no emit).

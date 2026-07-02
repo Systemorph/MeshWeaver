@@ -80,4 +80,4 @@ The **Edit** view on any `Code` MeshNode under a NodeType's `Source/` subtree no
 
 ---
 
-**See also:** [Language Services](/Doc/Architecture/LanguageServices) · [Coder workflow](/Agent/Coder)
+**See also:** [Language Services](/Doc/Architecture/LanguageServices) · [coding workflow — the /code skill](/Skill/code)

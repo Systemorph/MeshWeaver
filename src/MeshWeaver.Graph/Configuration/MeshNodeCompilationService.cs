@@ -903,7 +903,7 @@ internal class MeshNodeCompilationService(
     /// <para>
     /// Distinct from the emit path (<see cref="CompileCore"/>) which concatenates all sources
     /// into one syntax tree to produce an assembly. Used by <c>MeshNodeLanguageService</c>
-    /// (hover / completion / diagnostics) and <c>SpeculativeCompilation</c> (Coder pre-flight
+    /// (hover / completion / diagnostics) and <c>SpeculativeCompilation</c> (the /code pre-flight
     /// check). Does NOT register NuGet probing directories — that's emit-path bookkeeping.
     /// </para>
     /// </summary>
