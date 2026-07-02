@@ -75,7 +75,7 @@ where the exact request `$type` awaits a live capture.
 - **Python — `clients/python` (`meshweaver`)**: `grpc.aio` transport + a `Mesh` operations surface.
   ```python
   import meshweaver as mw
-  mesh = await mw.Mesh.connect("https://atioz.meshweaver.cloud", token="mw_…")
+  mesh = await mw.Mesh.connect("https://memex.meshweaver.cloud", token="mw_…")
   stories = await mesh.search("nodeType:Story namespace:ACME")   # mesh → python
   await mesh.patch("ACME/Stories/42", {"content": {"done": True}})  # python → mesh
   ```
