@@ -18,6 +18,7 @@ export {
   type LayoutAreaReference,
   type GrpcAreaOptions,
 } from "./live/grpcSource.js";
+export { normalizeEntityStore } from "./live/wire.js";
 export {
   MeshOpsProvider,
   useMeshOps,
