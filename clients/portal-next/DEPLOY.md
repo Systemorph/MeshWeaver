@@ -111,6 +111,30 @@ prefix. TLS terminates at the ingress as today; the portal session cookie flows 
 because it is the SAME host (cookie path `/`), which is what authorizes the per-request
 server-side token mint.
 
+## Local development (no k8s)
+
+Run any portal locally (e.g. the Monolith: `dotnet run --project memex/Memex.Portal.Monolith`,
+http://localhost:5022), then:
+
+```bash
+PORTAL_ORIGIN=http://localhost:5022 npm run dev     # http://localhost:3300/next
+```
+
+With `PORTAL_ORIGIN` set, `next.config.mjs` adds root-origin rewrites (`/api/*`, the gRPC-web
+service, `/static/*`) proxying to the portal, so the browser's same-origin token mint + live
+gRPC-web connection work exactly like behind the shared ingress. Sign in on the portal origin
+first (e.g. `/login` → dev login) — the session cookie authorizes the mint.
+
+Rewrites are baked at **build** time: `next dev` picks the env up at start, but a local
+`next start` needs `PORTAL_ORIGIN=… npm run build` first. The Docker image builds without
+`PORTAL_ORIGIN`, so the deployed app carries NO rewrites — ingress owns the routing there.
+
+One caveat for ANY local proxy in front of the gRPC-web stream (the Next rewrite included):
+gzip pass-through BUFFERS the streamed frames — the live area then appears stuck on the
+snapshot for ~30s+. If you front the app with your own local proxy, strip `accept-encoding`
+on the proxied request (the k8s nginx ingress handles grpc-web correctly; this is purely a
+local-tooling artifact).
+
 ## Notes
 
 - **Stateless by design**: every request mints a short-lived token from the forwarded cookies and

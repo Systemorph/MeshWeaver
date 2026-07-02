@@ -41,7 +41,8 @@ public static class PartitionStorageServiceExtensions
         services.Replace(ServiceDescriptor.Singleton<IStorageAdapter>(sp =>
             new RoutingProxyAdapter(
                 sp.GetRequiredService<IMessageHub>(),
-                sp.GetRequiredService<PartitionStorageRouter>())));
+                sp.GetRequiredService<PartitionStorageRouter>(),
+                sp.GetService<Microsoft.Extensions.Logging.ILogger<RoutingProxyAdapter>>())));
 
         return services;
     }

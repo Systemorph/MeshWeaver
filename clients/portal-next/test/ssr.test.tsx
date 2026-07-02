@@ -88,7 +88,11 @@ describe("server-side rendering", () => {
     const renderer = createDOMRenderer();
     const html = renderToString(
       <RendererProvider renderer={renderer}>
-        <LiveArea path="Northwind/Dashboard" initialTree={buildInitialTree(snapshot)} />
+        <LiveArea
+          path="Northwind/Dashboard"
+          target={{ address: "Northwind/Dashboard", area: "", id: "" }}
+          initialTree={buildInitialTree(snapshot)}
+        />
       </RendererProvider>,
     );
 
