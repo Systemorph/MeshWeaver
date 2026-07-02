@@ -860,6 +860,83 @@ public class MeshOperations
     }
 
     /// <summary>
+    /// Full-node query for remote GUI shells — the transport twin of the Blazor shell's
+    /// <c>IMeshService.Query&lt;MeshNode&gt;</c> reads (search-bar suggestions, the notification
+    /// bell). Unlike <see cref="Search"/> (which projects to path/name/nodeType for agents), this
+    /// returns the matched nodes with every shell field, icon and content, serialized with the hub
+    /// options (<c>$type</c> discriminators), so the shell can render suggestion icons and
+    /// notification state without a per-row Get round-trip. Snapshot semantics: <c>Take(1)</c>
+    /// yields the Initial batch, exactly like <see cref="Search"/>.
+    /// </summary>
+    /// <param name="query">Mesh query string (same syntax as <see cref="Search"/>).</param>
+    /// <param name="limit">Maximum rows (clamped 1–200).</param>
+    /// <returns>A cold observable emitting <c>{"count":N,"results":[MeshNode…]}</c> or an
+    /// <c>"Error: …"</c> sentinel.</returns>
+    public IObservable<string> QueryNodes(string query, int limit = 50)
+    {
+        logger.LogInformation("QueryNodes called with query={Query}, limit={Limit}", query, limit);
+
+        limit = Math.Clamp(limit, 1, 200);
+
+        return mesh.Query<MeshNode>(new MeshQueryRequest { Query = query, Limit = limit })
+            .Take(1)
+            .Select(change =>
+            {
+                var items = change.Items.Take(limit).ToImmutableList();
+                var payload = new JsonObject
+                {
+                    ["count"] = items.Count,
+                    ["results"] = JsonSerializer.SerializeToNode(items, hub.JsonSerializerOptions) ?? new JsonArray(),
+                };
+                return payload.ToJsonString();
+            })
+            .Catch((Exception ex) =>
+            {
+                logger.LogWarning(ex, "Error querying nodes with query {Query}", query);
+                return Observable.Return($"Error: {ex.Message}");
+            });
+    }
+
+    /// <summary>
+    /// Resolves a URL-shaped path into its node address and layout-area remainder — the transport
+    /// twin of the Blazor GUI's <c>IPathResolver.ResolveNavigationPath</c> (the same split
+    /// <c>ApplicationPage</c> applies to <c>/{path}/{area}/{id}</c> URLs). A remote shell calls this
+    /// once per navigation so its live area subscription targets the actual node hub instead of the
+    /// raw URL path.
+    /// </summary>
+    /// <param name="path">The URL path to resolve (UCR <c>@/…</c> accepted).</param>
+    /// <returns>A cold observable emitting <c>{"prefix":"…","remainder":"…"}</c>, a
+    /// <c>"Not found: …"</c> sentinel when nothing matches, or <c>"Error: …"</c>.</returns>
+    public IObservable<string> Resolve(string path)
+    {
+        logger.LogInformation("Resolve called with path={Path}", path);
+
+        if (string.IsNullOrWhiteSpace(path))
+            return Observable.Return("Error: path is required.");
+
+        var resolvedPath = ResolvePath(path).Trim('/');
+        if (string.IsNullOrWhiteSpace(resolvedPath))
+            return Observable.Return("Error: path is required.");
+
+        var pathResolver = hub.ServiceProvider.GetRequiredService<IPathResolver>();
+        return pathResolver.ResolveNavigationPath(resolvedPath)
+            .Take(1)
+            .Timeout(TimeSpan.FromSeconds(10))
+            .Select(resolution => resolution is null
+                ? $"Not found: {resolvedPath}"
+                : new JsonObject
+                {
+                    ["prefix"] = resolution.Prefix,
+                    ["remainder"] = resolution.Remainder,
+                }.ToJsonString())
+            .Catch((Exception ex) =>
+            {
+                logger.LogWarning(ex, "Resolve failed for {Path}", resolvedPath);
+                return Observable.Return($"Error: {ex.Message}");
+            });
+    }
+
+    /// <summary>
     /// Deserialises a single MeshNode from JSON (repairing common LLM JSON defects), validates its
     /// identity and content schema, then creates it in the mesh.
     /// </summary>

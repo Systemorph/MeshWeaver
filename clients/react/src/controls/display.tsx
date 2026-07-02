@@ -1,9 +1,11 @@
-import type { ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Badge, Text, Tooltip, MessageBar, MessageBarBody, MessageBarTitle } from "@fluentui/react-components";
 import type { UiControl } from "../area/types.js";
-import { useResolve } from "../area/context.js";
+import { ScopeProvider, useAreaState, useResolve } from "../area/context.js";
+import { RenderArea } from "../render/ControlRenderer.js";
+import { useAreaSourceFactory, type EmbeddedAreaHandle } from "../render/embeddedArea.js";
 import { controlStyle } from "../render/style.js";
 import { str, useClick, useText } from "./common.js";
 import { resolveIconByName } from "./icon.js";
@@ -67,10 +69,93 @@ function HtmlView({ control }: { control: UiControl }): ReactNode {
   return <div style={controlStyle(control)} dangerouslySetInnerHTML={{ __html: useText(control.data) }} />;
 }
 
+// ---- Markdown (with @@("…") layout-area embeds) ---------------------------------------------------
+// MarkdownControl wire (src/MeshWeaver.Layout/MarkdownControl.cs): { markdown, nodePath?, html? }.
+// The Blazor renderer resolves block-level @@("area/X") / @@("path") macros
+// (MeshWeaver.Markdown/LayoutAreaMarkdownParser) into embedded layout areas — the mechanism the
+// user home dashboard (Composer/Pinned/Threads/Catalog regions) and doc embeds are built from.
+// This is the React mirror: the text splits at macro lines; each macro opens a nested area through
+// the host's AreaSourceFactory (same machinery as LayoutAreaControl). "area/X" renders area X of
+// the OWNING node (control.nodePath — the resolution base the server stamps); any other path
+// renders that node's default area. Hosts without a factory render the text segments only.
+
+type MarkdownSegment = { kind: "markdown"; text: string } | { kind: "embed"; path: string };
+
+/** Block-level layout-area macro: @@("area/X"), @@("path"), @@"path", @@path — alone on a line. */
+const AREA_MACRO_LINE = /^\s*@@\s*(?:\(\s*)?["']?([^"'()\s][^"'()]*?)["']?(?:\s*\))?\s*$/;
+
+/** Split markdown into text segments and @@-embed macros (exported for tests). */
+export function splitAreaMacros(text: string): MarkdownSegment[] {
+  const segments: MarkdownSegment[] = [];
+  let buffer: string[] = [];
+  const flush = () => {
+    const chunk = buffer.join("\n");
+    if (chunk.trim().length > 0) segments.push({ kind: "markdown", text: chunk });
+    buffer = [];
+  };
+  for (const line of text.split("\n")) {
+    const match = AREA_MACRO_LINE.exec(line);
+    if (match) {
+      flush();
+      segments.push({ kind: "embed", path: match[1].trim() });
+    } else {
+      buffer.push(line);
+    }
+  }
+  flush();
+  return segments;
+}
+
+/** Renders inside the nested source's scope once its root area arrives (regions collapse until then). */
+function EmbeddedMacroBody({ rootArea }: { rootArea: string }): ReactNode {
+  const state = useAreaState();
+  if (state.areas?.[rootArea] == null) return null;
+  return <RenderArea areaKey={rootArea} />;
+}
+
+function MarkdownAreaEmbed({ path, nodePath }: { path: string; nodePath: string }): ReactNode {
+  const factory = useAreaSourceFactory();
+  const isArea = path.startsWith("area/");
+  const address = isArea ? nodePath : path;
+  const area = isArea ? path.slice("area/".length) : "";
+
+  const [handle, setHandle] = useState<EmbeddedAreaHandle | null>(null);
+  useEffect(() => {
+    if (!factory || !address) return;
+    const h = factory(address, { area: area || undefined });
+    setHandle(h);
+    return () => {
+      h?.dispose?.();
+      setHandle(null);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [factory, address, area]);
+
+  if (!factory || !address || !handle) return null;
+  const rootArea = handle.rootArea ?? area;
+  return (
+    <ScopeProvider source={handle.source} area={rootArea}>
+      <EmbeddedMacroBody rootArea={rootArea} />
+    </ScopeProvider>
+  );
+}
+
 function MarkdownView({ control }: { control: UiControl }): ReactNode {
+  // The wire property is `markdown` (MarkdownControl); `data` kept for literal/demo trees.
+  const text = useText(control.markdown ?? control.data);
+  const nodePath = str(useResolve(control.nodePath));
+  const segments = useMemo(() => splitAreaMacros(text), [text]);
   return (
     <div className="mw-markdown" style={controlStyle(control)}>
-      <Markdown remarkPlugins={[remarkGfm]}>{useText(control.data)}</Markdown>
+      {segments.map((segment, i) =>
+        segment.kind === "markdown" ? (
+          <Markdown key={i} remarkPlugins={[remarkGfm]}>
+            {segment.text}
+          </Markdown>
+        ) : (
+          <MarkdownAreaEmbed key={`${segment.path}-${i}`} path={segment.path} nodePath={nodePath} />
+        ),
+      )}
     </div>
   );
 }

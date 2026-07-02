@@ -13,6 +13,7 @@
 import { cookies, headers } from "next/headers";
 import {
   buildInitialTree,
+  fetchAreaTarget,
   fetchNodeSnapshot,
   fetchRenderedArea,
   mintToken,
@@ -29,14 +30,33 @@ export async function AreaSnapshot({ path }: { path: string }) {
 
   const mint = await mintToken(origin, cookieHeader);
   const resolvedPath = path || mint?.userId || "";
-  const rendered = mint && resolvedPath ? await fetchRenderedArea(origin, mint.rawToken, resolvedPath) : null;
+  // The HOME route (no explicit path) renders the signed-in user's Activity dashboard — the same
+  // explicit `Address={userId} Area="Activity"` the Blazor Index.razor binds (the node's DEFAULT
+  // area is the generic overview, not the dashboard). Explicit paths resolve into (node address,
+  // area remainder); that resolution and the rendered snapshot fetch in parallel — render-area
+  // does its own resolution internally, so neither depends on the other.
+  const [target, rendered] = !mint || !resolvedPath
+    ? [{ address: resolvedPath, area: "", id: "" }, null]
+    : !path
+      ? await Promise.all([
+          Promise.resolve({ address: resolvedPath, area: "Activity", id: "" }),
+          fetchRenderedArea(origin, mint.rawToken, resolvedPath, "Activity"),
+        ])
+      : await Promise.all([
+          fetchAreaTarget(origin, mint.rawToken, resolvedPath),
+          fetchRenderedArea(origin, mint.rawToken, resolvedPath),
+        ]);
   const snapshot =
     !rendered && mint && resolvedPath ? await fetchNodeSnapshot(origin, mint.rawToken, resolvedPath) : null;
 
   return (
     <LiveArea
       path={resolvedPath}
+      target={target}
       initialTree={rendered ?? (snapshot ? buildInitialTree(snapshot) : null)}
+      // A rendered frame roots at the requested area (an explicit-area URL roots at its name;
+      // the default-area subscribe at ""); the synthesized preview tree always roots at "".
+      initialRootArea={rendered ? target.area : ""}
       unauthenticated={!mint}
     />
   );

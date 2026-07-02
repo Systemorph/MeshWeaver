@@ -191,7 +191,7 @@ public sealed class GrpcConnectionRegistry : IDisposable
         {
             if (connections.TryGetValue(connectionId, out var s))
             {
-                var json = JsonSerializer.Serialize(delivery.Package(), hub.JsonSerializerOptions);
+                var json = JsonSerializer.Serialize(delivery.Package(hub.JsonSerializerOptions), hub.JsonSerializerOptions);
                 await s.Outbound.WriteAsync(new ServerFrame { Receive = json }, ct);
             }
             return delivery.Forwarded();
@@ -207,7 +207,7 @@ public sealed class GrpcConnectionRegistry : IDisposable
     {
         if (connections.TryGetValue(connectionId, out var s))
         {
-            var json = JsonSerializer.Serialize(delivery.Package(), hub.JsonSerializerOptions);
+            var json = JsonSerializer.Serialize(delivery.Package(hub.JsonSerializerOptions), hub.JsonSerializerOptions);
             s.Outbound.TryWrite(new ServerFrame { Receive = json }); // unbounded ⇒ always accepted unless completed
         }
         return Observable.Return(delivery.Forwarded());

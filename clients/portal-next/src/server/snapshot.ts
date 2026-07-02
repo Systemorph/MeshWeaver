@@ -154,13 +154,15 @@ export async function fetchRenderedArea(
   origin: string,
   token: string,
   path: string,
+  area?: string,
+  id?: string,
 ): Promise<AreaTree | null> {
   try {
     const resp = await fetch(`${origin}/api/mesh/render-area`, {
       method: "POST",
       cache: "no-store",
       headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
-      body: JSON.stringify({ path }),
+      body: JSON.stringify({ path, ...(area ? { area } : {}), ...(id ? { id } : {}) }),
     });
     if (!resp.ok) return null; // 404 = older portal, 504 = render timeout — degrade to preview
     const text = await resp.text();
@@ -178,6 +180,60 @@ export async function fetchRenderedArea(
     return tree;
   } catch {
     return null;
+  }
+}
+
+/** The live-subscription target for a URL path: the resolved node ADDRESS plus the layout-area
+ *  reference split off the unmatched remainder — the same {address}/{area}/{id} split the Blazor
+ *  ApplicationPage applies. area "" subscribes the node's DEFAULT area. */
+export interface AreaTarget {
+  address: string;
+  area: string;
+  id: string;
+}
+
+/** Split a resolution remainder into (area, id) — first segment is the area, the rest the id
+ *  (the exact ParseSidePanelRemainder / SplitAreaRemainder split the Blazor portal uses). */
+export function splitRemainder(remainder: string | null | undefined): { area: string; id: string } {
+  const r = (remainder ?? "").replace(/^\/+|\/+$/g, "");
+  if (!r) return { area: "", id: "" };
+  const slash = r.indexOf("/");
+  return slash < 0 ? { area: r, id: "" } : { area: r.slice(0, slash), id: r.slice(slash + 1) };
+}
+
+/**
+ * Resolve a URL path into its live-subscription target over REST (`POST /api/mesh/resolve` —
+ * MeshOperations.Resolve, the transport twin of the Blazor GUI's ResolveNavigationPath). The
+ * client's GrpcAreaSource must target the actual NODE hub (with the remainder as the area
+ * reference), never the raw URL path — subscribing a non-node address is the NotFound-storm
+ * hazard the Blazor portal avoids by resolving first. Returns the whole-path fallback when the
+ * verb is missing (older portal) or resolution fails, matching the pre-resolution behavior.
+ */
+export async function fetchAreaTarget(origin: string, token: string, path: string): Promise<AreaTarget> {
+  const fallback: AreaTarget = { address: path, area: "", id: "" };
+  if (!path) return fallback;
+  try {
+    const resp = await fetch(`${origin}/api/mesh/resolve`, {
+      method: "POST",
+      cache: "no-store",
+      headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+      body: JSON.stringify({ path }),
+    });
+    if (!resp.ok) return fallback;
+    const text = await resp.text();
+    if (text.startsWith("Error:") || text.startsWith("Not found:")) return fallback;
+    let parsed: Json;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      return fallback;
+    }
+    const prefix = asString(pick(parsed, "prefix"));
+    if (!prefix) return fallback;
+    const { area, id } = splitRemainder(asString(pick(parsed, "remainder")));
+    return { address: prefix, area, id };
+  } catch {
+    return fallback;
   }
 }
 

@@ -98,6 +98,15 @@ public static class MeshApiEndpoints
         group.MapPost("/render-area", (HttpContext http, IMessageHub rootHub, RenderAreaBody body, CancellationToken ct) =>
             HandleRenderArea(http, rootHub, body, ct));
 
+        // GUI-shell verbs (portal-next chrome) — the browser twins of the reads the Blazor shell
+        // gets in-process: full-node query (search-bar suggestions, notification bell) and URL→
+        // (node, area) navigation resolution.
+        group.MapPost("/query-nodes", (HttpContext http, IMessageHub rootHub, QueryNodesBody body, CancellationToken ct) =>
+            RunString(http, rootHub, ct, ops => ops.QueryNodes(body.Query, body.Limit ?? 50)));
+
+        group.MapPost("/resolve", (HttpContext http, IMessageHub rootHub, PathBody body, CancellationToken ct) =>
+            RunString(http, rootHub, ct, ops => ops.Resolve(body.Path)));
+
         // Mirror Push/Pull — these talk to the mesh hub directly (same as MCP plugin's PostMirror).
         group.MapPost("/mirror", HandleMirror);
 
@@ -257,6 +266,7 @@ public static class MeshApiEndpoints
     // by property name (case-insensitive). All optional fields default to null / false.
     public record GetBody(string Path);
     public record SearchBody(string Query, string? BasePath);
+    public record QueryNodesBody(string Query, int? Limit = null);
     public record CreateBody(string Node);
     public record UpdateBody(string Nodes);
     public record PatchBody(string Path, string Fields);

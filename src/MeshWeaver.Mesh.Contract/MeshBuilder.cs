@@ -213,7 +213,7 @@ public record MeshBuilder
                         return Observable.Return(delivery);
 
                     return routes.Hub.ServiceProvider.GetRequiredService<IRoutingService>()
-                        .DeliverMessage(delivery.Package());
+                        .DeliverMessage(delivery.Package(routes.Hub.JsonSerializerOptions));
                 }))
             .Set(meshConfig)
         );
