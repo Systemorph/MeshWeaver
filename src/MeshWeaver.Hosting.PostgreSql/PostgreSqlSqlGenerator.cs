@@ -202,6 +202,17 @@ public class PostgreSqlSqlGenerator
     }
 
     /// <summary>
+    /// Projection for the node-level static-repo sync claim: the real <c>sync_behavior</c> column
+    /// when selecting from <c>mesh_nodes</c> (the only decouplable table), else the Include (0)
+    /// default so satellite-table selects keep a uniform result shape (mirrors
+    /// <c>PostgreSqlStorageAdapter.SyncBehaviorCol</c>).
+    /// </summary>
+    private static string SyncBehaviorColumn(string tableName) =>
+        tableName.Contains("mesh_nodes", StringComparison.OrdinalIgnoreCase)
+            ? "n.sync_behavior"
+            : "0::smallint AS sync_behavior";
+
+    /// <summary>
     /// Builds a complete <c>SELECT</c> statement (columns, optional activity/user-activity joins,
     /// scope, order, and limit) for a parsed query, with bound parameters.
     /// </summary>
@@ -233,9 +244,18 @@ public class PostgreSqlSqlGenerator
         // planner avoids the heap fetch + de-tuple of large blobs.
         var contentColumn = includeContent ? "n.content" : "NULL::jsonb AS content";
 
+        // sync_behavior (the static-repo "Not synced" decouple claim) lives only on mesh_nodes —
+        // the sole decouplable table. Omitting it here made EVERY query-served node report
+        // SyncBehavior.Include (PgMeshNodeReader defaults a missing column), so the importer's
+        // claim checks (EnsureRoot's root claim, Run's IsClaimed/excludedRoots snapshot) were
+        // blind on the PG path and a partition-root decouple was silently re-synced on the next
+        // boot. Project the real column for mesh_nodes and the Include default for satellites so
+        // the result shape stays uniform.
+        var syncBehaviorColumn = SyncBehaviorColumn(tableName);
+
         var sql = new StringBuilder("SELECT n.id, n.namespace, n.name, n.node_type, n.description, " +
             $"n.category, n.icon, n.display_order, n.last_modified, n.version, n.state, {contentColumn}, " +
-            $"n.desired_id, n.main_node FROM {tableName} n");
+            $"n.desired_id, n.main_node, {syncBehaviorColumn} FROM {tableName} n");
 
         if (isAccessedQuery)
         {
@@ -539,7 +559,7 @@ public class PostgreSqlSqlGenerator
             var selectSql = "SELECT n.id, n.namespace, n.name, n.node_type, n.description, " +
                 $"n.category, n.icon, n.display_order, {lastModifiedExpr} AS last_modified, " +
                 "n.version, n.state, n.content, " +
-                $"n.desired_id, n.main_node FROM {qualifiedTable} n";
+                $"n.desired_id, n.main_node, {SyncBehaviorColumn(tableName)} FROM {qualifiedTable} n";
 
             if (isAccessed)
                 selectSql += $" INNER JOIN {userActivityTable} ua ON ua.namespace = @actUserNs" +
@@ -564,7 +584,7 @@ public class PostgreSqlSqlGenerator
         // Content branches — only for a FREE-TEXT omnibox query, and only over schemas that hold a
         // content_chunks table. Each branch lexically matches the chunk text and projects each file's
         // best chunk to its synthetic Document row (slug + _Documents namespace — replicates
-        // DocumentPaths.For/Slug; see SlugSql). The 14 projected columns align positionally with the
+        // DocumentPaths.For/Slug; see SlugSql). The 15 projected columns align positionally with the
         // mesh_nodes branches above so the outer SELECT * / ReadMeshNode shape is uniform; the term is
         // inlined (this generator inlines all params) and single-quotes doubled, mirroring the
         // mesh_nodes text-rank term handling below.
@@ -587,7 +607,8 @@ public class PostgreSqlSqlGenerator
                     "NULL::text AS category, NULL::text AS icon, NULL::int AS display_order, " +
                     "cc.last_modified AS last_modified, 0::bigint AS version, 2::smallint AS state, " +
                     "NULL::jsonb AS content, NULL::text AS desired_id, " +
-                    $"cc.collection_path || '/_Documents/' || {SlugSql} AS main_node " +
+                    $"cc.collection_path || '/_Documents/' || {SlugSql} AS main_node, " +
+                    "0::smallint AS sync_behavior " +
                     $"FROM {contentTable} cc WHERE cc.chunk_text ILIKE '%{term}%' " +
                     // DISTINCT ON requires its keys lead the ORDER BY; keep one (best) row per file.
                     "ORDER BY cc.collection_path, cc.file_path)");
@@ -755,7 +776,7 @@ public class PostgreSqlSqlGenerator
         var branch1 = new StringBuilder(
             "SELECT n.id, n.namespace, n.name, n.node_type, n.description, " +
             "n.category, n.icon, n.display_order, n.last_modified, n.version, n.state, n.content, " +
-            $"n.desired_id, n.main_node, (n.embedding <=> @queryVector) AS _distance FROM {meshTable} n WHERE ");
+            $"n.desired_id, n.main_node, n.sync_behavior, (n.embedding <=> @queryVector) AS _distance FROM {meshTable} n WHERE ");
         branch1.Append(string.Join(" AND ", meshClauses));
 
         // No content branch → keep the original single-branch shape (cosine, or lexical-tier+cosine).
@@ -788,7 +809,7 @@ public class PostgreSqlSqlGenerator
         // ── Branch 2: indexed content_chunks, each file's best-matching chunk projected to its
         //    synthetic Document mesh node. Path convention (slug, _Documents namespace) replicates
         //    DocumentPaths.For/Slug — see SlugSql. DISTINCT ON keeps ONE Document row per file (a file
-        //    yields many chunks); ordered so the closest chunk per file wins. The 14 projected columns
+        //    yields many chunks); ordered so the closest chunk per file wins. The 15 projected columns
         //    align positionally with branch 1 so ReadMeshNode (reads by name off branch-1 aliases)
         //    materializes a valid MeshNode (state = 2 Active survives the structural filter). ──
         var contentTable = QualifyTable("content_chunks");
@@ -803,6 +824,7 @@ public class PostgreSqlSqlGenerator
             "cc.last_modified AS last_modified, 0::bigint AS version, 2::smallint AS state, " +
             "NULL::jsonb AS content, NULL::text AS desired_id, " +
             $"cc.collection_path || '/_Documents/' || {SlugSql} AS main_node, " +
+            "0::smallint AS sync_behavior, " +
             $"(cc.embedding <=> @queryVector) AS _distance FROM {contentTable} cc WHERE cc.embedding IS NOT NULL");
         if (hasNamespace)
             contentBranch.Append($" AND (cc.collection_path || '/_Documents/' || {SlugSql}) LIKE @nsPrefix || '%'");
