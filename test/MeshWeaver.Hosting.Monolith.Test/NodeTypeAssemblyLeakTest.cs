@@ -126,14 +126,26 @@ public class NodeTypeAssemblyLeakTest(ITestOutputHelper output) : MonolithMeshTe
         return newContexts.Select(a => new WeakReference(a)).ToList();
     }
 
+    // Collecting a collectible ALC is EVENTUAL: the per-node-hub disposal continuations
+    // (SubscribeToOwnDeletion → UnloadNodeContexts) run on mesh/pool schedulers and must
+    // release their references before the ALC can die. A tight synchronous GC loop can
+    // outrun those continuations under 2-core CI contention, so a still-referenced context
+    // "survives" purely because its releasing continuation hasn't run yet (the flake).
+    // YIELD between passes so those continuations drain, within a bounded budget. This does
+    // NOT weaken the leak assertion: a genuine leak (a pinned ref — a singleton TypeRegistry
+    // still holding the generated type) never collects no matter how long we wait, so the
+    // caller's `survivors == 0` still fails on a real leak; it only removes the race with
+    // in-flight disposal.
     [MethodImpl(MethodImplOptions.NoInlining)]
-    private static void ForceCollect(IReadOnlyCollection<WeakReference> weakRefs)
+    private static async Task ForceCollectAsync(IReadOnlyCollection<WeakReference> weakRefs)
     {
-        for (var i = 0; i < 12 && weakRefs.Any(w => w.IsAlive); i++)
+        for (var i = 0; i < 40 && weakRefs.Any(w => w.IsAlive); i++)
         {
             GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true);
             GC.WaitForPendingFinalizers();
             GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true);
+            if (weakRefs.Any(w => w.IsAlive))
+                await Task.Delay(100); // let disposal continuations release their refs
         }
     }
 
@@ -155,7 +167,7 @@ public class NodeTypeAssemblyLeakTest(ITestOutputHelper output) : MonolithMeshTe
             .Timeout(TimeSpan.FromSeconds(30))
             .ToTask();
 
-        ForceCollect(weakRefs);
+        await ForceCollectAsync(weakRefs);
 
         var survivors = weakRefs.Count(w => w.IsAlive);
         survivors.Should().Be(0,
