@@ -945,14 +945,27 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             if (!submissionHandler.TryBeginSubmit(userMessageText))
                 return;
 
-            // Disable input and clear the editor immediately — flush render so spinner shows
-            MessageText = null;
-            StateHasChanged();
-
-            // Fire-and-forget Monaco clear — no await in the submit path.
-            if (monacoEditor != null)
+            // EXISTING thread: clear the editor immediately — the message echoes into the
+            // message list via PendingUserMessages right away, so the text is never "gone".
+            // NEW thread (no threadPath yet): keep the text in the editor until the thread
+            // is readable (cleared in onCreated below). Clearing here left the landing-page
+            // composer with NO visible trace of the message for the whole create+redirect
+            // window — and permanently when the view was torn down mid-allocation (issue
+            // #175: "message absorbed but disappears immediately"). The input is dimmed +
+            // aria-hidden while showSubmissionProgress, so the retained text cannot be
+            // edited or re-submitted during allocation; on a create error it is still
+            // there for the user to retry instead of silently lost.
+            var isNewThread = string.IsNullOrEmpty(threadPath);
+            if (!isNewThread)
             {
-                _ = ClearMonacoAsync();
+                MessageText = null;
+                StateHasChanged();
+
+                // Fire-and-forget Monaco clear — no await in the submit path.
+                if (monacoEditor != null)
+                {
+                    _ = ClearMonacoAsync();
+                }
             }
 
             var accessService = Hub.ServiceProvider.GetService<AccessService>();
@@ -1014,7 +1027,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             // deleted gpt-4o falls back to the top catalog model). Read-only: nothing is written here.
             var modelForThread = ResolveSubmitModel(boundModelPath);
 
-            if (string.IsNullOrEmpty(threadPath))
+            if (isNewThread)
             {
                 showSubmissionProgress = true; // step 2: show progress in the composer immediately on submit
                 lastSubmittedText = userMessageText; // ...and echo the submitted message under the progress
@@ -1073,6 +1086,13 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                                     threadPath = path;
                                     threadName = ready!.Name;
                                     UpdateSidePanelTitle();
+                                    // The thread is readable — NOW release the composer text
+                                    // that was kept visible during allocation (see the
+                                    // deferred clear in SubmitMessageCore) and hand over to
+                                    // the thread view / redirect.
+                                    MessageText = null;
+                                    if (monacoEditor != null)
+                                        _ = ClearMonacoAsync();
                                     if (isCompact)
                                         NavigationManager.NavigateTo($"/{path}");
                                     else
@@ -1093,7 +1113,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                 // is data-bound to, the typed text + live context/attachments are passed
                 // explicitly, and the composer empties itself in the same atomic update.
                 Hub.SubmitComposer(
-                    threadPath: threadPath,
+                    threadPath: threadPath!, // non-null: isNewThread == false ⇔ threadPath non-empty
                     userText: userMessageText!,
                     contextPath: safeContext,
                     attachments: capturedAttachments,
