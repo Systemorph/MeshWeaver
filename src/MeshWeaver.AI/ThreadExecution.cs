@@ -583,6 +583,19 @@ internal static class ThreadExecution
                         .Timeout(WatchdogRescueBudget)
                         .Subscribe(_ => { }, ex =>
                         {
+                            // Escalate ONLY on the landing-budget timeout — that is the proof the
+                            // action block is blocked. Any other error (validation, access,
+                            // serialization) fails FAST on a healthy hub: deactivating there would
+                            // tear down a healthy grain for a defect deactivate-and-retry cannot
+                            // cure. Those keep the log-and-give-up behavior.
+                            if (ex is not TimeoutException)
+                            {
+                                logger?.LogWarning(ex,
+                                    "[ThreadExec] Init watchdog: force-Idle Update failed for " +
+                                    "{ThreadPath} (non-timeout — hub is responsive, not escalating).",
+                                    threadPath);
+                                return;
+                            }
                             logger?.LogWarning(ex,
                                 "[ThreadExec] Init watchdog: force-Idle Update did not land within " +
                                 "{Budget:F0}s for {ThreadPath} — the hub's action block is blocked (#147).",
