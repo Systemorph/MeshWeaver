@@ -221,6 +221,7 @@ The deployed sample instance's `Report` area is embedded below (on a host withou
 
 ## Related
 
+- [A pandas node in Python](../PythonPandasNode) — the stateful counterpart: a Python **participant** that holds a live `pandas.DataFrame` and renders it back as a real `DataGridControl`.
 - [Controlled I/O Pooling](/Doc/Architecture/ControlledIoPooling) — the `IIoPool` contract, pool names and caps.
 - [Asynchronous Calls](/Doc/Architecture/AsynchronousCalls) — the no-async rule book for hub-reachable code.
 - [Creating Node Types](../CreatingNodeTypes) — the base walkthrough for content records and layout areas.

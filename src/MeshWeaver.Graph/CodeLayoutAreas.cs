@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
+using System.Text.Json;
 using Humanizer;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
@@ -50,6 +51,14 @@ public static class CodeLayoutAreas
 
     private const string CodeDataId = "code";
     private const string SiblingNodesDataId = "siblingCodeNodes";
+
+    /// <summary>
+    /// Languages a Code node can be authored in. C# runs in-process on the Roslyn kernel; Python routes
+    /// to a connected <c>py/python-kernel</c> worker participant (see <c>CodeNodeType.HandleExecuteScript</c>);
+    /// the rest are first-class for authoring / syntax highlighting / display. Immutable constant lookup.
+    /// </summary>
+    private static readonly string[] LanguageOptions =
+        { "csharp", "python", "typescript", "javascript", "json", "sql", "markdown" };
 
     /// <summary>
     /// Adds the Code views to the hub's layout for Code nodes.
@@ -360,7 +369,7 @@ public static class CodeLayoutAreas
                 var label = sibling.Name ?? sibling.Id;
                 var siblingHref = new LayoutAreaReference(OverviewArea).ToHref(sibling.Path);
                 codeGroup = codeGroup.WithView(
-                    new NavLinkControl(label, CustomIcons.CSharp(), siblingHref)
+                    new NavLinkControl(label, CustomIcons.ForLanguage(SiblingLanguage(sibling)), siblingHref)
                 );
             }
         }
@@ -374,6 +383,22 @@ public static class CodeLayoutAreas
         navMenu = navMenu.WithNavGroup(codeGroup);
 
         return navMenu;
+    }
+
+    /// <summary>
+    /// Best-effort language of a sibling Code node, read from its <see cref="CodeConfiguration"/> content
+    /// (typed or still-raw JSON). Used to pick the nav-menu glyph; falls back to null (→ the C# icon).
+    /// </summary>
+    private static string? SiblingLanguage(MeshNode node)
+    {
+        if (node.Content is CodeConfiguration code)
+            return code.Language;
+        if (node.Content is JsonElement json
+            && json.ValueKind == JsonValueKind.Object
+            && json.TryGetProperty("language", out var language)
+            && language.ValueKind == JsonValueKind.String)
+            return language.GetString();
+        return null;
     }
 
     /// <summary>
@@ -404,6 +429,7 @@ public static class CodeLayoutAreas
         var stack = Controls.Stack.WithWidth("100%").WithStyle("padding: 24px;");
         var codeDataId = Guid.NewGuid().AsString();
         var displayNameDataId = Guid.NewGuid().AsString();
+        var languageDataId = Guid.NewGuid().AsString();
 
         var initialCode = codeConfig.Code ?? "";
         var language = codeConfig.Language ?? "csharp";
@@ -411,6 +437,7 @@ public static class CodeLayoutAreas
 
         host.UpdateData(codeDataId, initialCode);
         host.UpdateData(displayNameDataId, nodeName);
+        host.UpdateData(languageDataId, language);
 
         // Header
         stack = stack.WithView(Controls.H2($"Edit: {nodeName}")
@@ -428,6 +455,19 @@ public static class CodeLayoutAreas
             { DataContext = LayoutAreaReference.GetDataPointer(displayNameDataId) });
 
         stack = stack.WithView(displayNameRow);
+
+        // Language selector — pick C#, Python, TypeScript, JavaScript, … so a Code node can be DEFINED
+        // in any first-class language (persisted onto CodeConfiguration.Language on Save). Python code
+        // then executes on the connected py/python-kernel worker; C# runs in-process on the Roslyn kernel.
+        var languageRow = Controls.Stack
+            .WithOrientation(Orientation.Horizontal)
+            .WithStyle("gap: 12px; align-items: center; margin-bottom: 16px;")
+            .WithView(Controls.Label("Language:").WithStyle("font-weight: 500;"))
+            .WithView((new SelectControl(new JsonPointerReference(""), Array.Empty<object>())
+                    .WithOptions(LanguageOptions)) with
+                { DataContext = LayoutAreaReference.GetDataPointer(languageDataId) });
+
+        stack = stack.WithView(languageRow);
 
         // Monaco editor. LSP opt-in: when this Code node sits under a NodeType's Source/
         // subtree, enable live Roslyn diagnostics (Stage-1 IMeshLanguageService). The
@@ -475,11 +515,23 @@ public static class CodeLayoutAreas
             .WithIconStart(FluentIcons.Save())
             .WithClickAction(actx =>
             {
-                host.Stream.GetDataStream<string>(codeDataId)
+                // Snapshot both the edited code AND the chosen language (both seeded, so each Take(1)
+                // emits its current value) and persist them together.
+                host.Stream.GetDataStream<string>(codeDataId).Take(1)
+                    .CombineLatest(host.Stream.GetDataStream<string>(languageDataId).Take(1),
+                        (currentCode, currentLanguage) => (currentCode, currentLanguage))
                     .Take(1)
-                    .Subscribe(currentCode =>
+                    .Subscribe(edited =>
                     {
-                        var updatedCodeConfiguration = codeConfig with { Code = currentCode };
+                        var (currentCode, currentLanguage) = edited;
+                        var chosenLanguage = string.IsNullOrWhiteSpace(currentLanguage)
+                            ? codeConfig.Language
+                            : currentLanguage;
+                        var updatedCodeConfiguration = codeConfig with
+                        {
+                            Code = currentCode,
+                            Language = chosenLanguage!,
+                        };
                         var delivery = actx.Host.Hub.Post(
                             new DataChangeRequest { ChangedBy = actx.Host.Stream.ClientId }.WithUpdates(updatedCodeConfiguration),
                             o => o.WithTarget(hubAddress))!;
