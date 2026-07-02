@@ -109,6 +109,10 @@ The runtime lifecycle — how a compile is triggered, how to watch progress, how
 
 Pull in third-party libraries (Math.NET, Markdig, and more) by dropping a `#r "nuget:..."` directive at the top of any source file.
 
+### [Calling Python](/Doc/DataMesh/CallingPython)
+
+Compute a layout area's content in an external `python3` process through the bounded Process I/O pool — reactive end to end, degrading gracefully when Python is absent.
+
 ### [Testing Node Types](/Doc/DataMesh/NodeTypes/Testing)
 
 Stand up a `MonolithMeshTestBase` test project against a samples directory, render layout areas against a real client, and assert on the streaming response.
