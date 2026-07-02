@@ -27,3 +27,23 @@ public record GrainKeepAliveCallback(Action KeepAlive);
 /// In monolith mode, no callback is set — returns a no-op disposable.
 /// </summary>
 public record GrainLongRunningOperationCallback(Func<IDisposable> BeginOperation);
+
+/// <summary>
+/// Registered on the hub configuration by the Orleans grain during activation
+/// (alongside <see cref="GrainKeepAliveCallback"/>). Requests IMMEDIATE grain
+/// deactivation (<c>Grain.DeactivateOnIdle</c>) as an OUT-OF-BAND escape hatch that
+/// does NOT ride the hub's message queue.
+/// <para>WHY: the hosted hub's action block runs on the grain's
+/// ActivationTaskScheduler. When a round wedges that scheduler (issue #147: an LLM
+/// streaming continuation that never resumed occupied the single scheduler slot,
+/// queueing 1376 messages), every rescue that is itself a hub message — including the
+/// stuck-round watchdog's force-Idle <c>stream.Update</c> — joins the blocked backlog
+/// and can never be processed. Invoking this callback deactivates the grain WITHOUT
+/// going through the blocked action block; deactivation disposes the hub, which fires
+/// the round's <c>executionCts.Cancel()</c> via <c>RegisterForDisposal</c>, tearing
+/// down the stuck call. The next access re-activates the grain fresh.</para>
+/// <para>In monolith mode, no callback is set — there is no grain scheduler to wedge,
+/// so callers treat the absence as a no-op (see
+/// <c>MessageHubExtensions.RequestGrainDeactivation</c>).</para>
+/// </summary>
+public record GrainDeactivateCallback(Action Invoke);
