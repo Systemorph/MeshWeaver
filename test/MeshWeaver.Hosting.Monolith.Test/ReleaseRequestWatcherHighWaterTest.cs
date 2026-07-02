@@ -28,11 +28,13 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 /// <para><b>The forced interleaving</b> (all four writes serialize FIFO on the
 /// owner's MeshNode stream hub as <c>UpdateStreamRequest</c>s):</para>
 /// <list type="number">
-///   <item>A gate write parks the owner's stream action block, so the two
-///     trigger writes P1 (req=T1) and P2 (req=T2) are BOTH enqueued before
-///     either applies. This is what makes the interleaving deterministic:
-///     the watcher's own Update U1 is only posted after P1 applies (after the
-///     gate opens), so U1 provably lands BEHIND P2 in the queue.</item>
+///   <item>A gate write parks the owner's stream action block (a handshake
+///     latch confirms the park has ENGAGED before anything else is posted),
+///     so the two trigger writes P1 (req=T1) and P2 (req=T2) are BOTH
+///     enqueued before either applies. This is what makes the interleaving
+///     deterministic: the watcher's own Update U1 is only posted after P1
+///     applies (after the gate opens), so U1 provably lands BEHIND P2 in
+///     the queue.</item>
 ///   <item>P1 applies → emission (req=T1, status settled) → watcher fires,
 ///     posts U1.</item>
 ///   <item>P2 applies → emission (req=T2, status STILL settled — U1 hasn't
@@ -52,7 +54,7 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 /// <c>LastReleaseRequestHandledAt</c> is actually stamped.</para>
 /// </summary>
 public class ReleaseRequestWatcherHighWaterTest(ITestOutputHelper output)
-    : MonolithMeshTestBase(output), IDisposable
+    : MonolithMeshTestBase(output)
 {
     private readonly string _cacheDir = Path.Combine(
         Path.GetTempPath(), $"MeshWeaverHighWaterTest-{Guid.NewGuid():N}");
@@ -70,9 +72,12 @@ public class ReleaseRequestWatcherHighWaterTest(ITestOutputHelper output)
                 }));
     }
 
-    public new void Dispose()
+    /// <summary>Async disposal — xUnit v3 awaits this naturally, so the mesh tears
+    /// down exactly once with no sync-over-async blocking; the per-test compile
+    /// cache dir is cleaned after the mesh (and its compile pipeline) is gone.</summary>
+    public override async ValueTask DisposeAsync()
     {
-        base.DisposeAsync().AsTask().GetAwaiter().GetResult();
+        await base.DisposeAsync();
         if (Directory.Exists(_cacheDir))
             try { Directory.Delete(_cacheDir, recursive: true); } catch { }
     }
@@ -142,17 +147,34 @@ public class ReleaseRequestWatcherHighWaterTest(ITestOutputHelper output)
         //    can only be posted after P1 applies — after the gate opens — so it
         //    provably lands behind P2. Both trigger emissions therefore pass
         //    the watcher's settled-status Where before U1 flips Pending.
+        //
+        //    `parked` is the handshake that PROVES the park engaged: it is set at
+        //    the top of the gate lambda (i.e. the gate write is actively executing
+        //    on the owner's serialized write path), and the test blocks on it
+        //    BEFORE enqueueing the triggers. Without it, on a busy runner the gate
+        //    write could still be queued when the triggers are posted and only
+        //    execute after gate.Set() — nothing parked, the interleaving silently
+        //    degrades to ordinary timing, and the test could false-PASS a future
+        //    regression. Cross-thread ManualResetEventSlim handshake is the
+        //    project's established pattern for synchronous Subscribe-side signals
+        //    (see DeleteNodeBehaviorTest); both waits are bounded so a broken run
+        //    can never wedge the suite.
+        using var parked = new ManualResetEventSlim(false);
         using var gate = new ManualResetEventSlim(false);
         ownWs.GetMeshNodeStream().Update(curr =>
         {
-            // Park the serialized write queue until both triggers are enqueued.
-            // Bounded so a broken run can never wedge the suite.
+            // Handshake: the serialized write queue is now provably parked.
+            parked.Set();
             if (!gate.Wait(TimeSpan.FromSeconds(20)))
                 Output.WriteLine("!!! gate wait timed out — interleaving no longer forced");
             return curr; // no-op
         }).Subscribe(
             _ => { },
             ex => Output.WriteLine($"gate write failed: {ex}"));
+
+        parked.Wait(TimeSpan.FromSeconds(20)).Should().BeTrue(
+            "the gate write must be executing (owner write queue parked) before the "
+            + "triggers are enqueued — otherwise the lost-trigger interleaving is not forced");
 
         var t1 = DateTimeOffset.UtcNow;
         var t2 = t1.AddMilliseconds(200);
