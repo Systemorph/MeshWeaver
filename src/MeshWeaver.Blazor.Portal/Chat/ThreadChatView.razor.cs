@@ -892,6 +892,15 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             if (_isDisposed)
                 return;
 
+            // A NEW thread is allocating (composer dimmed, text retained — see the deferred
+            // clear below): ignore submits entirely. The dimmed overlay blocks pointer events
+            // but NOT keyboard — Monaco keeps focus, and the submission handler was
+            // force-released at the end of the previous submit, so a repeated Enter would
+            // otherwise StartThread AGAIN with the same text (duplicate thread). The flag
+            // clears in the onCreated readable callback and in onError.
+            if (showSubmissionProgress)
+                return;
+
             // Use MessageText (updated via Monaco ValueChanged binding) — no blocking Monaco read.
             var userMessageText = MessageText;
 
