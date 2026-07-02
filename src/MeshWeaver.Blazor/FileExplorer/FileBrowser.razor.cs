@@ -229,9 +229,11 @@ public partial class FileBrowser
                 // (MeshOperations.Upload → hub.RaiseContentUploaded) so a GUI upload
                 // auto-indexes like any other upload. Fire-and-forget by contract — the
                 // indexing runs as its own Activity and never blocks the upload (#170).
-                var relativePath = string.IsNullOrEmpty(CurrentPath)
-                    ? file.Name
-                    : $"{CurrentPath.Trim('/')}/{file.Name}".TrimStart('/');
+                // CurrentPath can carry '\' separators on Windows (the Embed breadcrumb
+                // builds it via Path.Combine) — normalize so the seam always gets the
+                // MCP shape (forward-slash, collection-relative, no leading slash).
+                var folder = (CurrentPath ?? "").Replace('\\', '/').Trim('/');
+                var relativePath = string.IsNullOrEmpty(folder) ? file.Name : $"{folder}/{file.Name}";
                 Hub.RaiseContentUploaded(QualifiedCollectionPath, relativePath);
 
                 ToastService.ShowSuccess($"File {file.Name} successfully uploaded.");
