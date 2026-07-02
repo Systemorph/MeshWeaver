@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Reactive.Linq;
+using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
@@ -91,8 +92,37 @@ internal class PathResolutionService : IPathResolver
     }
 
     private IObservable<AddressResolution?> ResolveOnce(string path)
+        => ResolveSegments(path.Split('/'))
+            .SelectMany(RewriteLegacyUserHome);
+
+    /// <summary>
+    /// Rewrites the LEGACY <c>/User/{id}[/area]</c> URL shape onto the user's own
+    /// ROOT partition. Pre-v10 user content lived under a shared <c>User/</c>
+    /// namespace; post-v10 every user OWNS a root partition at <c>{id}</c> (see
+    /// <see cref="UserNodeType.CreateMeshNode"/> — <c>RestrictedToNamespaces=[""]</c>,
+    /// <c>OwnsPartition</c>). The built-in <c>User</c> NodeType node still exists at
+    /// path <c>"User"</c>, so a legacy <c>/User/{id}</c> URL prefix-matches THAT catalog
+    /// node (Prefix="User", Remainder="{id}[/area]") — nothing deeper under <c>User/</c>
+    /// exists. Consumed as-is that yields hub=<c>User</c>, area=<c>{id}</c> ("No renderer
+    /// is registered for area '{id}' on hub 'User'"). Strip the <c>User/</c> prefix and
+    /// re-resolve against the user's own partition so the home area renders on the right
+    /// hub. Bare <c>{id}</c> is the canonical form and already resolves — this makes the
+    /// legacy prefixed URL (still emitted by the portal) and any stale bookmark match it.
+    /// <para>Only fires when the SOLE match is the bare <c>User</c> catalog node: a real
+    /// node under <c>User/</c> (transitional data, or a NodeType child) matches deeper,
+    /// so Prefix != "User" and this is a no-op — that data still resolves by its own path.
+    /// Applied once (to the top-level resolution, not to the re-resolution below), so it
+    /// cannot loop.</para>
+    /// </summary>
+    private IObservable<AddressResolution?> RewriteLegacyUserHome(AddressResolution? resolution)
+        => resolution is not null
+            && string.Equals(resolution.Prefix, UserNodeType.NodeType, StringComparison.OrdinalIgnoreCase)
+            && !string.IsNullOrEmpty(resolution.Remainder)
+            ? ResolveSegments(resolution.Remainder.Split('/'))
+            : Observable.Return(resolution);
+
+    private IObservable<AddressResolution?> ResolveSegments(string[] segments)
     {
-        var segments = path.Split('/');
         // Quote each prefix so segments containing SPACES survive the query parser.
         // Unquoted values terminate at the first whitespace (the parser's "space = AND"
         // rule), which silently truncated paths like `AgenticPension/Data Analytics/…`
