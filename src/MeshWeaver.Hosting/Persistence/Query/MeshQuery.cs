@@ -578,14 +578,17 @@ public class MeshQuery : IMeshQueryCore
                                 providerName, request.Query, request.UserId);
                             initialSeen[idx] = true;
                             initialCount++;
+                            // Stamp Query even when EVERY provider went silent (lastQuery never
+                            // set) — downstream consumers rely on QueryResultChange.Query being
+                            // populated on an Initial; fall back to parsing the request.
                             var template = new QueryResultChange<T>
                             {
                                 ChangeType = QueryChangeType.Initial,
                                 Items = Array.Empty<T>(),
                                 Timestamp = DateTimeOffset.UtcNow,
+                                Query = lastQuery
+                                    ?? new QueryParser().Parse(request.EffectiveQueries.FirstOrDefault() ?? ""),
                             };
-                            if (lastQuery is not null)
-                                template = template with { Query = lastQuery };
                             EmitMergedInitialIfComplete(template);
                         }
                     });
