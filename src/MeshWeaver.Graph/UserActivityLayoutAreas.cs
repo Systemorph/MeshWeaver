@@ -35,6 +35,15 @@ public static class UserActivityLayoutAreas
     /// <summary>Area name for the chat composer region embedded via <c>@@("area/Composer")</c>.</summary>
     public const string ComposerArea = "Composer";
 
+    /// <summary>
+    /// The user-facing chat URL contract: <c>/{user}/Chat</c> — one string serving as BOTH the URL
+    /// segment links navigate to (<c>WithCreateHref</c>, chat menu) AND the layout-area name that
+    /// URL resolves to (AreaPage renders prefix=<c>{user}</c>, remainder=<c>Chat</c> as area "Chat"
+    /// on the user hub). Kept separate from <see cref="ComposerArea"/>, whose name is persisted in
+    /// user home markdown (<c>@@("area/Composer")</c>) and cannot be renamed.
+    /// </summary>
+    public const string ChatArea = "Chat";
+
     /// <summary>Link to the doc page that explains the configurable Body-page + <c>@@</c>-region model.</summary>
     internal const string ConfigGuideLink = "/Doc/GUI/ConfigurablePages";
 
@@ -62,7 +71,15 @@ public static class UserActivityLayoutAreas
             .WithView(PinnedArea, PinnedAreaView)
             .WithView(ThreadsArea, ThreadsAreaView)
             .WithView(CatalogArea, CatalogAreaView)
-            .WithView(ComposerArea, ComposerAreaView));
+            .WithView(ComposerArea, ComposerAreaView)
+            // "/{user}/Chat" (ChatArea) is a well-known URL (thread-catalog Create-New, chat menu
+            // links). Since ChatNodeType was removed there is NO {user}/Chat node any more: the URL
+            // resolves to prefix={user} + remainder="Chat", which AreaPage renders as area "Chat"
+            // on this hub. Without this registration that's "no renderer for area Chat", and a
+            // LEGACY {user}/Chat node from an older deployment resolves as invalid-NodeType
+            // ("No node found at '{user}/Chat'… remainder='Chat'" — the prod memex report,
+            // 2026-07-02). The composer is node-less — serve it directly.
+            .WithView(ChatArea, ComposerAreaView));
 
     /// <summary>
     /// Renders the user's page. Shows a personal dashboard to the owner,
@@ -282,9 +299,9 @@ public static class UserActivityLayoutAreas
             // "Create New" must NOT raw-create a Thread node — CreateNodeType="Thread" does a bare CreateNode
             // that BYPASSES StartThread (AGENTS.md-forbidden: a hand-assembled Thread has no submission wiring
             // / composer, so it renders as an empty message box). Instead navigate to the per-user new-chat
-            // composer at {owner}/Chat (the Chat node's Overview = the side-panel ThreadChatControl); sending
+            // composer at /{owner}/Chat (the ChatArea layout area — node-less ThreadChatControl); sending
             // there starts a proper thread via StartThread.
-            .WithCreateHref($"/{nodeOwnerId}/Chat");
+            .WithCreateHref($"/{nodeOwnerId}/{ChatArea}");
 
     /// <summary>
     /// The fluent catalog: a skinned <see cref="TabsControl"/> whose tabs are labelled

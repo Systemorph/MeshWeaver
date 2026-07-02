@@ -22,11 +22,20 @@ public sealed record Address
     /// </summary>
     public string Type => Segments.Length > 0 ? Segments[0] : "";
 
+    // Id/Path are pure functions of Segments (host-independent), so the lazy caches survive
+    // `with { Host = … }` copies correctly (record with-ers copy private fields). Caching matters:
+    // AddressComparer hashes/compares via Id on EVERY hosted-hub dictionary lookup, and the message
+    // router does several lookups per routed message — recomputing string.Join per hash call was the
+    // hot frame (String.Join inside AddressComparer.GetHashCode) burning a full core under heartbeat
+    // fan-out load on the wedged e2e portal (2026-07-02). Benign race: recompute is idempotent.
+    private string? cachedId;
+    private string? cachedPath;
+
     /// <summary>
     /// Gets segments after the first one joined with "/".
     /// For backward compatibility.
     /// </summary>
-    public string Id => Segments.Length > 1
+    public string Id => cachedId ??= Segments.Length > 1
         ? string.Join("/", Segments.Skip(1))
         : "";
 
@@ -45,22 +54,22 @@ public sealed record Address
     /// Returns the path (segments joined with "/") without host information.
     /// Use this instead of ToString() when you need the node path for persistence or display.
     /// </summary>
-    public string Path => string.Join("/", Segments);
+    public string Path => cachedPath ??= string.Join("/", Segments);
 
     /// <summary>
     /// Returns the segment path, appending <c>~host</c> when this address is hosted.
     /// </summary>
     public override string ToString() => Host is null
-        ? string.Join("/", Segments)
-        : string.Join("/", Segments) + '~' + Host;
+        ? Path
+        : Path + '~' + Host;
 
     /// <summary>
     /// Returns full string representation including host if present.
     /// Format: "outermost_host~...~inner_segments"
     /// </summary>
     public string ToFullString() => Host != null
-        ? $"{Host.ToFullString()}~{string.Join("/", Segments)}"
-        : string.Join("/", Segments);
+        ? $"{Host.ToFullString()}~{Path}"
+        : Path;
 
     /// <summary>
     /// Two addresses are equal when their segments match in order and their hosts
