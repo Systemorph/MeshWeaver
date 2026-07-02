@@ -45,11 +45,31 @@ public class AzureFoundryChatClientAgentFactory(
     /// DeepSeek, and any other model the deployment exposes through the /models path.
     /// Excludes claude-* (which goes through the dedicated Anthropic endpoint via
     /// <see cref="AzureClaudeChatClientAgentFactory"/>). This catch-all serves the
-    /// chat-selected model without any Models[] enumeration on the deployment side.
+    /// chat-selected model without any Models[] enumeration on the deployment side —
+    /// but ONLY for models whose declared provider is AzureFoundry or unknown. A model
+    /// the catalog declares under ANOTHER provider (e.g.
+    /// <c>Provider/OpenAICompatible/qwen-small</c> → Ollama) must route to that
+    /// provider's factory; the unconditional catch-all at Order 0 used to hijack it,
+    /// build an Azure ChatCompletionsClient against the foreign endpoint, and fail every
+    /// round with 403 (the e2e chat-round breaker, 2026-07-02). Same gating rule the
+    /// resolver documents on <see cref="ChatClientCredentialResolver.GetProviderForModel"/>.
     /// </summary>
-    public override bool Supports(string modelName) =>
-        !string.IsNullOrEmpty(modelName)
-        && !modelName.StartsWith("claude", StringComparison.OrdinalIgnoreCase);
+    public override bool Supports(string modelName)
+    {
+        if (string.IsNullOrEmpty(modelName))
+            return false;
+        // The picker persists EITHER a bare id ("claude-…") OR a full LanguageModel node path
+        // ("Provider/Anthropic/claude-…") — test the LAST segment so a path-shaped Claude name
+        // is excluded even when the resolver snapshot is cold and can't name the provider yet.
+        var lastSlash = modelName.LastIndexOf('/');
+        var bareId = lastSlash >= 0 ? modelName[(lastSlash + 1)..] : modelName;
+        if (bareId.StartsWith("claude", StringComparison.OrdinalIgnoreCase))
+            return false;
+        var provider = Hub.ServiceProvider.GetService<ChatClientCredentialResolver>()
+            ?.GetProviderForModel(modelName);
+        return provider is null
+               || string.Equals(provider, "AzureFoundry", StringComparison.OrdinalIgnoreCase);
+    }
 
     /// <summary>
     /// Builds an <see cref="IChatClient"/> for the model selected for the given
