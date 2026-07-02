@@ -1,0 +1,17 @@
+{
+  "id": "PrimeReport",
+  "namespace": "PythonDemo",
+  "name": "Prime Report",
+  "nodeType": "NodeType",
+  "category": "Types",
+  "description": "A report whose content is computed by an external python3 process through the bounded Process I/O pool",
+  "isPersistent": true,
+  "content": {
+    "$type": "NodeTypeDefinition",
+    "namespace": "PythonDemo",
+    "displayName": "Prime Report",
+    "iconName": "Calculator",
+    "description": "A report computed by python3 via IIoPool.InvokeBlocking",
+    "configuration": "config => config.WithContentType<PrimeReport>().AddLayout(layout => layout.AddPrimeReportLayoutAreas().WithDefaultArea(\"Report\"))"
+  }
+}
