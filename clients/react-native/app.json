@@ -6,13 +6,17 @@
     "orientation": "portrait",
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
-    "ios": {
-      "supportsTablet": true
-    },
+    "ios": { "supportsTablet": true },
     "android": {},
     "plugins": [
       "expo-asset",
-      "expo-font"
+      "expo-font",
+      [
+        "expo-av",
+        {
+          "microphonePermission": "MeshWeaver records the microphone for speech-to-text (transcribed on the centralized Whisper service, not on this device)."
+        }
+      ]
     ]
   }
 }

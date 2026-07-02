@@ -94,11 +94,12 @@ jobs:
       - name: Install + generate grpc-web client
         working-directory: clients/grpc-web
         run: npm install --no-audit --no-fund && npm run gen
-      # Targeted install: typecheck needs RN types; the render test needs vitest + react-test-renderer
-      # (react-native itself is mocked in the test — see vitest.config.ts).
-      - run: npm install --no-save --no-audit --no-fund react-native@0.76.5 react@18.3.1 react-test-renderer@18.3.1 @types/react@18.3.12 @types/react-test-renderer@18.3.0 vitest@2.1.9 typescript@5.6.3
+      # Targeted install: RN types for typecheck; react-test-renderer for the render test
+      # (react-native mocked — vitest.config.ts); expo-av types the speech recorder.
+      - run: npm install --no-save --no-audit --no-fund react-native@0.76.5 react@18.3.1 react-test-renderer@18.3.1 @types/react@18.3.12 @types/react-test-renderer@18.3.0 expo-av@15.0.2 vitest@2.1.9 typescript@5.6.3
       - run: npx tsc --noEmit
-      - run: npx vitest run # headless render of the sample area through the RN leaf pack
+      # Headless render of the sample area + the speech pipeline (transcription client, push-to-talk→submit).
+      - run: npx vitest run
 
   portal:
     name: "Portal example (typecheck + build)"

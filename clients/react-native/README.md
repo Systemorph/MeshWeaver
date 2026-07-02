@@ -99,3 +99,45 @@ hardcoded), an "On this page" TOC, **navigation** (menu / links / search / bread
 live source), **client screens** (Voice/speech, Connect-to-remote-mesh, Profile), and **dark mode**. It's the
 JS peer of the MAUI `PortalShellPage`, and it's served **same-origin (zero CORS)** by `Memex.LocalMesh`.
 Full write-up: **[docs/shell.md](docs/shell.md)**.
+
+## Speech → chat threads (centralized Whisper)
+
+Speech recognition is **centralized** — the point of the speech branch: the Swiss-German Whisper model
+runs ONCE as a container (`deploy/whisper/`, see
+[CentralizedSpeech](../../src/MeshWeaver.Documentation/Data/Architecture/CentralizedSpeech.md)) and the
+app only **records** audio and posts it for transcription. Nothing is recognized on-device.
+
+The pipeline (`src/speech/` + `src/chat.tsx`):
+
+1. **Capture** — `ExpoAvRecorder` (`expo-av`): 16 kHz mono; WAV/LINEARPCM on iOS, AAC/.m4a on Android.
+2. **Transcribe** — `SpeechTranscriptionClient` POSTs multipart (`file` + `language` +
+   `response_format=json`) to the portal's `POST /api/speech/transcribe` (the endpoint
+   CentralizedSpeech.md specifies; still "next" server-side — for dev, point it straight at a Whisper
+   container with `speech: { url: "http://localhost:8080", path: "/inference" }`, same contract).
+3. **Submit** — the mesh thread surface on the SAME gRPC-web connection the renderer uses:
+   `Mesh.submitMessage(threadPath, text)` to the active thread, or `Mesh.startThread(namespacePath, text)`
+   when none — the client twins of `hub.SubmitMessage` / `hub.StartThread` (`@meshweaver/client-web`).
+
+The `ChatComposer` mic has two gestures, with a visible state line (red dot while recording, spinner
+while transcribing, error text on faults):
+
+- **tap** — dictate: record, tap again, the transcript lands in the composer draft;
+- **hold (push-to-talk)** — record while held; on release the transcript submits directly to the thread.
+
+Enable it in `App.tsx` (submission needs a connected mesh instance — see "Connect to mesh" in the shell;
+dictation-only works without):
+
+```ts
+const CHAT: ChatOptions = { namespacePath: "rbuergi", speech: { language: "de" } };
+```
+
+The composer is distinct from the shell's **Voice** client screen: Voice is the browser's on-device Web
+Speech API; the composer's mic is the **centralized** Whisper pipeline above.
+
+`language: "de"` transcribes Swiss German OUT as Standard German (the fine-tune's behavior). Android note:
+`.m4a` needs the portal endpoint (or a Whisper container built with ffmpeg + `--convert`) to transcode —
+plain `whisper-server` only accepts WAV.
+
+Tests (`vitest`, pure TS — no emulator): `npm test` covers the transcription client against a mocked
+endpoint (the exact `/inference` multipart contract) and the push-to-talk → submit flow against a mocked
+mesh client (active-thread submit, start-thread fallback, whitespace no-op, fault surfacing).

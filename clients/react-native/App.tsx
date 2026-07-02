@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { SafeAreaView, StatusBar } from "react-native";
 import { RegistryProvider, ScopeProvider, StaticAreaSource, type AreaSource } from "@meshweaver/react/core";
+import { Mesh } from "@meshweaver/client-web";
 import { rnPack } from "./src/rnPack";
 import { sampleArea } from "./src/sample";
 import { createLiveSource } from "./src/live";
@@ -10,6 +11,10 @@ import { ensureWebStyles } from "./src/webStyles";
 import { currentInstance } from "./src/connection";
 import { type ClientDestination } from "./src/screens";
 import { ThemeProvider, useTheme } from "./src/theme";
+import { ChatComposer } from "./src/chat";
+import { ExpoAvRecorder } from "./src/speech/expoRecorder";
+import { SpeechTranscriptionClient } from "./src/speech/transcription";
+import type { ThreadSubmitter } from "./src/speech/pushToTalk";
 
 // The client connects to the CURRENT mesh instance — "Local" is the mesh that served this app
 // (same origin, anonymous, no CORS); a remote instance is a portal the user added by URL + token
@@ -20,6 +25,19 @@ import { ThemeProvider, useTheme } from "./src/theme";
 // under its "main" area (the metro-stub / README contract, and what the Playwright e2e drives
 // against a static file server). connect() only resolves on a real ack, so a non-mesh origin
 // can never swap the sample out for an empty live source.
+
+// The chat composer + CENTRALIZED speech pipeline (distinct from the shell's VoiceScreen, which is
+// the browser's on-device Web Speech API). `namespacePath` anchors new threads (your partition);
+// speech records via expo-av and posts the audio to the portal's `POST /api/speech/transcribe`
+// (the centralized Whisper container — see src/speech/transcription.ts; for a dev container use
+// `speech: { url: "http://localhost:8080", path: "/inference" }`). Set CHAT to null to hide the
+// composer entirely. Submission rides the SAME gRPC-web connection the renderer uses.
+interface ChatOptions {
+  namespacePath: string;
+  speech?: { url?: string; token?: string; path?: string; language?: string } | null;
+}
+const CHAT: ChatOptions | null = null;
+// const CHAT: ChatOptions = { namespacePath: "rbuergi", speech: { language: "de" } };
 
 export default function App() {
   ensureWebStyles();
@@ -37,6 +55,7 @@ function AppInner() {
   const [instanceTick, setInstanceTick] = useState(0);
   const [source, setSource] = useState<AreaSource>(() => new StaticAreaSource(sampleArea));
   const [liveConnected, setLiveConnected] = useState(false);
+  const [submitter, setSubmitter] = useState<ThreadSubmitter | undefined>(undefined);
 
   const navigate = (t: NavTarget) => {
     setClientScreen(null);
@@ -62,6 +81,8 @@ function AppInner() {
         live = l;
         setSource(l.source);
         setLiveConnected(true);
+        // The SAME gRPC-web connection carries thread submissions (Mesh.startThread / Mesh.submitMessage).
+        setSubmitter(Mesh.from(l.connection));
       })
       .catch(() => { /* connection failed — the shell stays on the last-good source */ });
     return () => {
@@ -69,6 +90,25 @@ function AppInner() {
       live?.connection.close();
     };
   }, [nav.address, nav.area, instanceTick]);
+
+  // Speech seams — the transcription endpoint follows the CURRENT instance (or an explicit
+  // CHAT.speech.url override); the composer hides the mic when speech isn't configured.
+  const speech = useMemo(() => {
+    if (!CHAT?.speech) return null;
+    const inst = currentInstance();
+    const url = CHAT.speech.url ?? inst.url;
+    if (!url) return null; // no portal to transcribe against
+    return {
+      recorder: new ExpoAvRecorder(),
+      transcriber: new SpeechTranscriptionClient({
+        url,
+        token: CHAT.speech.token ?? inst.token,
+        path: CHAT.speech.path,
+        language: CHAT.speech.language,
+      }),
+      language: CHAT.speech.language,
+    };
+  }, [instanceTick]);
 
   // Offline (no ack yet): the sample tree's root area is "main"; live nav areas only exist
   // once a mesh is streaming.
@@ -93,6 +133,15 @@ function AppInner() {
           </CurrentAddressContext.Provider>
         </NavContext.Provider>
       </RegistryProvider>
+      {CHAT && (
+        <ChatComposer
+          submitter={submitter}
+          namespacePath={CHAT.namespacePath}
+          recorder={speech?.recorder}
+          transcriber={speech?.transcriber}
+          language={speech?.language}
+        />
+      )}
     </SafeAreaView>
   );
 }

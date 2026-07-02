@@ -1,0 +1,30 @@
+# The centralized Swiss-German Whisper container. Bring it up, then point the portal at it:
+#   Speech:Endpoint = http://localhost:8080   (or http://whisper:8080 from another compose service)
+#   Speech:Enabled  = true
+#
+# The model is NOT baked into the image (it's ~547 MB and swappable) — drop it in ./models/model.bin first:
+#   mkdir -p models && curl -fSL \
+#     https://memex.meshweaver.cloud/MeshWeaver/static/Speech/ggml-swiss-german-turbo-q5_0.bin \
+#     -o models/model.bin
+# (Same file the on-device MAUI client downloads — see Doc/Architecture/OnDeviceVoice.)
+
+services:
+  whisper:
+    build: .
+    image: meshweaver/whisper-swiss-german:latest
+    ports:
+      - "8080:8080"
+    environment:
+      WHISPER_MODEL: /models/model.bin
+      WHISPER_LANGUAGE: de   # Swiss German transcribes OUT as Standard German
+      WHISPER_THREADS: 4
+    volumes:
+      - ./models:/models:ro
+    restart: unless-stopped
+    healthcheck:
+      # whisper.cpp server answers /inference; a bare GET returns a non-5xx once it's up + the model loaded.
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://localhost:8080/"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 60s   # model load can take a while on first start
