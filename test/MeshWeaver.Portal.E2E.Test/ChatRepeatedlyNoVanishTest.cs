@@ -33,7 +33,8 @@ public class ChatRepeatedlyNoVanishTest(PortalFixture fixture)
 
         var page = await context.NewPageAsync();
         await page.SetViewportSizeAsync(1400, 1000);
-        await page.GotoAsync(fixture.BaseUrl,
+        // BaseUrl is non-null here: Assert.SkipUnless(fixture.Available) above requires it.
+        await page.GotoAsync(fixture.BaseUrl!,
             new PageGotoOptions { WaitUntil = WaitUntilState.NetworkIdle, Timeout = 90_000 });
         page.Url.Should().NotContain("/login");
 
