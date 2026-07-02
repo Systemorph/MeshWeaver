@@ -147,4 +147,50 @@ public class EmitToDiskWithRetryTest : IDisposable
         ex.Message.Should().Contain("; expected");
         attempts.Should().Be(1, "a deterministic compile error must NOT be retried");
     }
+
+    [Fact]
+    public void Successful_emit_publishes_to_a_discoverable_dir_and_leaves_no_staging()
+    {
+        // Atomic-publish contract: the artifact is emitted into a NON-discoverable staging dir and
+        // renamed into the `{nodeName}_*` discovery namespace only once complete, so a concurrent
+        // TryGetLatestCachedDllPath never sees a half-written DLL (loading a truncated image is a
+        // native crash / BadImageFormat). After success exactly one discoverable dir holds the DLL
+        // and no `.staging-*` dir is left behind.
+        const string nodeName = "Demo_AtomicPublish";
+
+        var result = MeshNodeCompilationService.EmitToDiskWithRetry(
+            _cacheDir, nodeName, maxAttempts: 3, NullLogger.Instance,
+            releaseDir => WriteAssembly(releaseDir, nodeName));
+
+        File.Exists(result).Should().BeTrue();
+        Path.GetDirectoryName(result)!.Should().NotContain(".staging-");
+        Directory.GetDirectories(_cacheDir, $"{nodeName}_*").Should()
+            .ContainSingle("the published artifact lives in exactly one discoverable dir");
+        Directory.GetDirectories(_cacheDir, ".staging-*").Should()
+            .BeEmpty("staging is renamed away on publish, never left behind");
+    }
+
+    [Fact]
+    public void Compile_error_leaves_no_discoverable_partial_artifact()
+    {
+        // A failed emit must NOT pollute the discovery namespace with a partial DLL — the staging dir
+        // (and any half-written bytes in it) is discarded, so TryGetLatestCachedDllPath can never pick
+        // up the wreckage of a failed compile.
+        const string nodeName = "Demo_ErrorNoPartial";
+
+        Assert.Throws<CompilationException>(() =>
+            MeshNodeCompilationService.EmitToDiskWithRetry(
+                _cacheDir, nodeName, maxAttempts: 3, NullLogger.Instance,
+                releaseDir =>
+                {
+                    // Roslyn wrote a partial DLL, then the compile failed.
+                    File.WriteAllBytes(Path.Combine(releaseDir, $"{nodeName}.dll"), new byte[] { 0x4D, 0x5A });
+                    throw new CompilationException(nodeName, "CS1002: ; expected");
+                }));
+
+        Directory.GetDirectories(_cacheDir, $"{nodeName}_*").Should()
+            .BeEmpty("a failed compile must leave no discoverable artifact");
+        Directory.GetDirectories(_cacheDir, ".staging-*").Should()
+            .BeEmpty("the failed staging dir is cleaned up");
+    }
 }
