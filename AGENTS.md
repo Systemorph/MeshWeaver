@@ -487,7 +487,7 @@ For detailed patterns with code examples, read:
 
 ## Testing Guidelines
 
-Before building NodeTypes, data models, layout areas, or CSV loaders — read [Coder.md](src/MeshWeaver.AI/Data/Agent/Coder.md) first (canonical guide + non-negotiable testing standards).
+Before building NodeTypes, data models, layout areas, or CSV loaders — read the [/code skill](src/MeshWeaver.AI/Data/Skill/code.md) first (canonical guide + non-negotiable testing standards).
 
 **No mocking.** Use `MonolithMeshTestBase` or `OrleansTestBase` — never mock `IMessageHub`, `IMeshService`, or core interfaces.  
 **Always `run_in_background: true`** for test runs (they take minutes).  

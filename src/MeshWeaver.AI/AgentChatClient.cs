@@ -1272,7 +1272,7 @@ public class AgentChatClient : IAgentChat
     /// <inheritdoc />
     public void SetSelectedAgent(string? agentName)
     {
-        // The picker stores the node PATH ("Agent/Coder",
+        // The picker stores the node PATH ("Agent/Assistant",
         // "AgenticPension/Agent/Datenextraktion"); a bare name is also accepted.
         // Keep BOTH forms: the full path drives an exact-path match in SelectAgent
         // (so a space-scoped agent isn't confused with a built-in sharing its last

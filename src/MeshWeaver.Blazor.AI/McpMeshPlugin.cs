@@ -458,7 +458,7 @@ For the full source-discovery + matched-Code-paths + Roslyn trace, `get @<activi
     [McpServerTool(Title = "Speculative Roslyn check", ReadOnly = true, Idempotent = true, OpenWorld = false)]
     [Description(@"PRE-FLIGHT CHECK before committing a source change to a NodeType. Runs Roslyn against the NodeType's current source set with ONE source file substituted by `proposedCode`, returns all diagnostics (errors + warnings). No emit, no Recycle, no side effects — purely speculative.
 
-Use this in the Coder edit loop: edit a Source/*.cs file in your head → `lsp_check_node` → if diagnostics, fix → repeat → only then `patch` + `compile`. Eliminates the costly blind-patch / Compile / fix cycle.
+Use this in the code edit loop: edit a Source/*.cs file in your head → `lsp_check_node` → if diagnostics, fix → repeat → only then `patch` + `compile`. Eliminates the costly blind-patch / Compile / fix cycle.
 
 Returns `{ok: true, diagnostics: []}` when the substituted source compiles cleanly, or `{ok: false, diagnostics: [{id, severity, message, sourcePath?, line?, character?}, ...]}` when it doesn't. Severity is one of `Hidden|Info|Warning|Error`. Positions are 0-based.")]
     public Task<string> LspCheckNode(
@@ -555,7 +555,7 @@ Returns `{status:'Started', threadPath}` as soon as the thread node exists; the 
     public Task<string> StartThread(
         [Description("Namespace to create the thread under (e.g. 'rbuergi' or 'ACME/Projects'). The thread lives at {namespace}/_Thread/{id}.")] string namespacePath,
         [Description("The first user message — the task for the agent. Write it self-contained: the agent has not seen this conversation.")] string message,
-        [Description("Agent to run the thread (e.g. 'Assistant', 'Coder', 'Researcher'). Default: the platform's default agent.")] string? agentName = null,
+        [Description("Agent to run the thread (e.g. 'Assistant', 'Researcher'). Default: the platform's default agent.")] string? agentName = null,
         [Description("Optional node path the agent should treat as its working context (relative @-paths in the conversation resolve against it).")] string? contextPath = null)
     {
         if (string.IsNullOrWhiteSpace(namespacePath))

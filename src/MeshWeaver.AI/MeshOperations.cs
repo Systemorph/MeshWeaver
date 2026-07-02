@@ -285,7 +285,7 @@ public class MeshOperations
     /// "queries are for sets only" (see <c>Doc/Architecture/CqrsAndContentAccess.md</c>):
     /// the live content is unreachable, the catalog snapshot is the best we
     /// have, and the wrapped response surfaces the compile error so callers
-    /// (Coder agent, MCP, UI overlays) can fix the source instead of seeing a
+    /// (code-authoring agents, MCP, UI overlays) can fix the source instead of seeing a
     /// generic "Not found".</para>
     /// </summary>
     private IObservable<string> GetWithBrokenNodeTypeFallback(string resolvedPath)

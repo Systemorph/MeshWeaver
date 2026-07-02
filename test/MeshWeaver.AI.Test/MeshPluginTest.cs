@@ -724,7 +724,7 @@ public class MeshPluginTest : MonolithMeshTestBase
     /// <summary>
     /// A NodeType whose Configuration references an undefined type must surface
     /// the compilation error through <see cref="MeshPlugin.GetDiagnostics"/> so
-    /// the Coder agent can self-diagnose.
+    /// a code-authoring agent can self-diagnose.
     /// </summary>
     // Skipped 2026-04-28: same Windows file-locking + concurrent-compile race as
     // CodeEditRecompileTest. The first compile attempt writes the cached .dll +

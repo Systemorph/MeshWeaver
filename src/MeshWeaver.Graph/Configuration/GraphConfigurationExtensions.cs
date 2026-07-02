@@ -207,7 +207,7 @@ public static class GraphConfigurationExtensions
                     services.AddSingleton<NodeTypeCompileParkRegistry>();
                     // Stage-1 LSP language services over a NodeType's live CSharpCompilation
                     // — hover, completion, diagnostics, speculative pre-flight checks. Consumed
-                    // by the Lsp* MCP tools + Coder agent's Lsp plugin. SpeculativeCompilation
+                    // by the Lsp* MCP tools + the agents' Lsp plugin (the /code skill's pre-flight). SpeculativeCompilation
                     // needs the NuGet resolver to handle #r directives in proposed source.
                     services.AddSingleton<SpeculativeCompilation>();
                     services.AddSingleton<IMeshLanguageService, MeshNodeLanguageService>();

@@ -209,7 +209,7 @@ public class ThreadComposerFlowTest : AITestBase
         SelectionId.IdOf("").Should().Be("");
         SelectionId.IdOf("claude-sonnet-4-6").Should().Be("claude-sonnet-4-6");
         SelectionId.IdOf("_Provider/Anthropic/claude-sonnet-4-6").Should().Be("claude-sonnet-4-6");
-        SelectionId.IdOf("Agent/Coder").Should().Be("Coder");
+        SelectionId.IdOf("Agent/Researcher").Should().Be("Researcher");
     }
 
     // ─── Composer value equality (the echo-dedup guard) ───

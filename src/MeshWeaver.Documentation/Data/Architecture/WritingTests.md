@@ -335,7 +335,7 @@ Fix the bug. Re-running a hung test "to see if it was a flake" hides the race �
 
 ## Coverage Expectations
 
-[`Coder.md`](/Agent/Coder) sets the bar for NodeTypes and data models: **a test per invariant, per branch, per boundary, per degenerate input** — plus a serialization round-trip. A NodeType with a single happy-path test is demoed, not tested.
+The [/code skill](/Skill/code) sets the bar for NodeTypes and data models: **a test per invariant, per branch, per boundary, per degenerate input** — plus a serialization round-trip. A NodeType with a single happy-path test is demoed, not tested.
 
 ---
 

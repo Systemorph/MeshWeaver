@@ -21,9 +21,9 @@ namespace MeshWeaver.Graph.Configuration;
 /// already-seen packages are essentially free on subsequent checks.
 /// </para>
 /// <para>
-/// Used by <c>MeshNodeLanguageService.CheckSpeculative</c> to back the Coder agent's
-/// <c>LspCheckNode</c> pre-flight tool. Full substitution (not single-file isolation)
-/// catches the dominant Coder failure mode: editing one source breaks a sibling.
+/// Used by <c>MeshNodeLanguageService.CheckSpeculative</c> to back the <c>LspCheckNode</c>
+/// pre-flight tool (the /code skill's edit loop). Full substitution (not single-file
+/// isolation) catches the dominant code-edit failure mode: editing one source breaks a sibling.
 /// </para>
 /// </summary>
 internal sealed class SpeculativeCompilation(INuGetAssemblyResolver nugetResolver)
