@@ -480,9 +480,24 @@ public partial class CollaborativeMarkdownView
                 _processedHtml, KernelOwnerPath(), _kernelReady, KernelAddress)
             : _processedHtml;
 
-        var renderer = new MarkdownHtmlRenderer(Mode, Stream);
+        // Cell toolbars' Run buttons are enabled only once the kernel activity is routable —
+        // the same gate as the live result-area embed above.
+        var renderer = new MarkdownHtmlRenderer(Mode, Stream,
+            _kernelReady ? ResubmitBlock : null);
         renderer.ShowReferencesSection = true;
         renderer.RenderHtml(builder, html);
+    }
+
+    // Re-posts one executable block's submission to the per-view kernel activity — the cell
+    // toolbar's Run button (same behaviour as MarkdownView.ResubmitBlock). The kernel streams
+    // the run's output into the result area named by the submission id.
+    private void ResubmitBlock(string submissionId)
+    {
+        var submission = _codeSubmissions?
+            .FirstOrDefault(s => string.Equals(s.Id, submissionId, StringComparison.OrdinalIgnoreCase));
+        if (submission is null || !_kernelReady)
+            return;
+        Hub.Post(submission, o => o.WithTarget(KernelAddress));
     }
 
     private string RenderMarkdown(string content)

@@ -34,15 +34,15 @@ cluster is private — `kubectl` only via `az aks command invoke`.
 
 ```bash
 az aks command invoke -g memex-aks-rg -n memexaks-cluster --command "\
-  for ns in atioz memex; do \
+  for ns in memex memex-cloud; do \
     echo \"[\$ns]\"; \
     kubectl -n \$ns get deploy -o jsonpath='{range .items[*]}{.spec.template.spec.containers[0].image}{\"\n\"}{end}'; \
   done"
 ```
 
-Everything that prints is a **hard keeper**. As of this writing that is:
+Everything that prints is a **hard keeper**. Example output shape:
 
-- `memex-portal-ai:nicepicker-09149ea0d` (atioz portal)
+- `memex-portal-ai:nicepicker-09149ea0d` (a customer portal)
 - `memex-portal-ai:settingsfix-bfdd797ae` (**memex** portal — looks old, is live!)
 - `memex-migration:settingsfix-bfdd797ae` (both envs' migration)
 

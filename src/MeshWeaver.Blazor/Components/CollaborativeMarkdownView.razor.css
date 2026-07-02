@@ -923,6 +923,34 @@
     margin-bottom: 1.5em;
 }
 
+/* --- Executable code cell (notebook shape: toolbar / code / output in one frame) --- */
+
+::deep .md-code-cell {
+    border: 1px solid var(--neutral-stroke-rest);
+    border-radius: 6px;
+    overflow: hidden;
+    background: var(--neutral-layer-1);
+    margin-bottom: 1.5em;
+}
+
+::deep .md-code-cell .code-content {
+    border: none;
+    border-radius: 0;
+    margin-bottom: 0;
+}
+
+::deep .md-code-cell .md-code-cell-output {
+    border-top: 1px solid var(--neutral-stroke-rest);
+    border-left: 3px solid var(--accent-fill-rest);
+    background: var(--neutral-layer-2);
+    padding: 10px 12px;
+}
+
+::deep .md-code-cell .md-code-cell-output .layout-area {
+    margin: 0;
+    background-color: transparent;
+}
+
 ::deep .code-content code {
     white-space: pre-wrap;
     overflow-wrap: anywhere;

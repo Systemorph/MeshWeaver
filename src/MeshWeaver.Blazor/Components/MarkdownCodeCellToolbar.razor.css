@@ -1,0 +1,20 @@
+/* The notebook-cell toolbar strip on top of an executable markdown code block:
+   Run button left, subtle language badge right — mirrors the Code node cell toolbar. */
+.md-cell-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    background: var(--neutral-layer-2);
+    border-bottom: 1px solid var(--neutral-stroke-rest);
+}
+
+.md-cell-language {
+    margin-left: auto;
+    color: var(--neutral-foreground-hint);
+    font-size: 0.8rem;
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Consolas, "Liberation Mono", Menlo, monospace;
+    padding: 1px 8px;
+    border: 1px solid var(--neutral-stroke-rest);
+    border-radius: 10px;
+}

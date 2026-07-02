@@ -52,8 +52,8 @@ A platform that has never had a provider configured prompts for one as an **onbo
 
 | Deployment | Default provider (`order:-1` model) | Notes |
 |---|---|---|
-| atioz | Anthropic (Claude via Azure Foundry) | endpoint `…/anthropic/…`, Foundry key |
 | memex / memex-cloud | OpenRouter | `https://openrouter.ai/api/v1`, models auto-listed |
+| customer portals | per customer — e.g. Anthropic (Claude via Azure Foundry) | endpoint `…/anthropic/…`, Foundry key |
 
 These are **mesh nodes**, set per deployment through the catalog — not baked into any config. A user can additionally configure **their own** providers/models in their dotfile namespace `{user}/_Memex/…`; their selection of which providers are active is stored at `{user}/_Memex/Selection`.
 

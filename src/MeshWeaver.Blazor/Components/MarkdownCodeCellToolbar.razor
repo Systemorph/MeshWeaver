@@ -1,0 +1,35 @@
+@using Microsoft.FluentUI.AspNetCore.Components
+
+<div class="md-cell-toolbar">
+    <FluentButton Appearance="Microsoft.FluentUI.AspNetCore.Components.Appearance.Accent"
+                  Disabled="@(OnRun is null)"
+                  Title="@(OnRun is null ? "Interactive kernel is not available here" : "Run this code block")"
+                  IconStart="@(new Icons.Regular.Size16.Play())"
+                  OnClick="@Run">Run</FluentButton>
+    <span class="md-cell-language">@Language</span>
+</div>
+
+@code {
+    /// <summary>
+    /// The executable block's submission id — also the name of the kernel result area
+    /// the run's output streams into (directly below the code, inside the same cell frame).
+    /// </summary>
+    [Parameter] public string? SubmissionId { get; set; }
+
+    /// <summary>The block's fence language (shown as the cell's language badge).</summary>
+    [Parameter] public string? Language { get; set; }
+
+    /// <summary>
+    /// Invoked with <see cref="SubmissionId"/> when the reader clicks Run; the hosting markdown
+    /// view (re-)posts the block's <c>SubmitCodeRequest</c> to its kernel activity. Null while the
+    /// kernel is not available (no owner / not yet routable) — the button renders disabled.
+    /// </summary>
+    [Parameter] public Action<string>? OnRun { get; set; }
+
+    private void Run()
+    {
+        if (OnRun is null || string.IsNullOrEmpty(SubmissionId))
+            return;
+        OnRun(SubmissionId!);
+    }
+}
