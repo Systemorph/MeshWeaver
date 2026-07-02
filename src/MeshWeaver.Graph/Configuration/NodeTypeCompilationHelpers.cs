@@ -587,32 +587,47 @@ internal static class NodeTypeCompilationHelpers
         var parkRegistry = hub.ServiceProvider.GetService<NodeTypeCompileParkRegistry>();
 
         // 🚨 MONOTONIC high-water mark of the highest RequestedReleaseAt this
-        // process has OBSERVED-and-dispatched (the on-node
-        // LastReleaseRequestHandledAt is the cross-silo / restart equivalent).
-        // It is the FLAP-BACK guard.
+        // process has COMMITTED — advanced ONLY where LastReleaseRequestHandledAt
+        // is actually stamped (the on-node stamp is the cross-silo / restart
+        // equivalent). It is the FLAP-BACK guard.
         //
         // Under load, two concurrent cross-hub RequestedReleaseAt patches can
         // apply OUT OF ORDER at the owner, so this OWN stream can momentarily
         // re-emit a node whose RequestedReleaseAt has FLAPPED BACK to an OLDER
         // value AFTER we already saw the newer one (captured trace:
-        // RRW-FIRED req=665 → the node re-emits reqAt=399). Two failures follow
-        // if we ever trust the live value at dispatch time:
-        //   (a) the Update lambda RE-READING def.RequestedReleaseAt would see 399,
-        //       stamp LastReleaseRequestHandledAt = 399 and SKIP the Pending flip
-        //       (399 <= handled) → the genuine recompile NEVER runs → the test's
-        //       WaitForLatestRelease / Status==Ok times out (the whole flake);
-        //   (b) the flapped-back 399 emission would itself spuriously re-fire.
-        // Fix: gate the outer Where on `req > high-water` (a flapped-back older
-        // value can never re-trigger and can never un-handle one already in
-        // flight), and inside the action CARRY the value the Where OBSERVED into
-        // the Update — never re-read def.RequestedReleaseAt live.
+        // RRW-FIRED req=665 → the node re-emits reqAt=399). If the Update lambda
+        // RE-READ def.RequestedReleaseAt it would see 399, stamp
+        // LastReleaseRequestHandledAt = 399 and SKIP the Pending flip
+        // (399 <= handled) → the genuine recompile NEVER runs. Fix: the action
+        // CARRIES the value the Where OBSERVED into the Update — never a live
+        // re-read — and the on-node stamp is written monotonically.
         //
-        // The companion data-layer guard (DataExtensions.DropStaleMonotonicTriggers)
-        // stops the flap-back at its source; this watcher is correct even without
-        // it. The high-water also short-circuits redundant Updates when the
-        // framework re-emits the same trigger faster than our own Update can
-        // round-trip — the role the former `localLastDispatched` served.
-        DateTimeOffset? dispatchHighWater = null;
+        // 🚨 COMMIT-time advance, NEVER dispatch-time (issue #185). The Update
+        // below has bail paths (trigger already handled; status flipped to
+        // Pending/Compiling by an earlier trigger's commit or a concurrent
+        // kickoff) that return `curr` WITHOUT stamping LastReleaseRequestHandledAt.
+        // The old code advanced the high-water EAGERLY in the Subscribe callback,
+        // so a trigger whose Update bailed was left with high-water >= trigger
+        // while the on-node stamp stayed below it — the post-settle re-emission
+        // then failed `req > high-water` and the trigger was LOST for the life of
+        // the process (deterministic repro: ReleaseRequestWatcherHighWaterTest).
+        // Advancing only on the commit path keeps the in-memory mark exactly in
+        // step with the on-node stamp, so a bailed trigger stays live and
+        // re-fires on the next settled emission — the recovery the settled-gate
+        // comment below promises. Cost: between dispatch and commit, a duplicate
+        // or flapped-back emission can re-enter the Subscribe and queue a
+        // redundant Update — which then bails on the `triggerAt <= handled` /
+        // status guards (no double compile, no stale stamp: the carried-trigger
+        // + monotonic-stamp write is what handles flap-back correctness; the
+        // data-layer guard DataExtensions.DropStaleMonotonicTriggers additionally
+        // stops flap-back at its source).
+        //
+        // Tear-free by construction: the mark is advanced inside the Update
+        // lambda (the owner's serialized write path) while the Where reads it on
+        // the reduced-stream emission path — two different serialized contexts,
+        // so the mark uses Interlocked over UTC ticks instead of a bare
+        // Nullable<DateTimeOffset> local.
+        var dispatchHighWater = new MonotonicHighWaterMark();
 
         // 🚨 Gate on Status being SETTLED (Ok / Error / null) — never fire
         // while a compile is in-flight (Pending or Compiling). If we fired
@@ -630,9 +645,10 @@ internal static class NodeTypeCompilationHelpers
         return ownStream
             .Where(node => node?.Content is NodeTypeDefinition def
                 && def.RequestedReleaseAt is { } req
-                // Strictly past our process-local high-water — a flapped-back older
-                // value (or a duplicate emission of the same trigger) never matches.
-                && (dispatchHighWater is null || req > dispatchHighWater.Value)
+                // Strictly past our process-local COMMIT high-water — a flapped-back
+                // older value (or a duplicate emission of an already-committed
+                // trigger) never matches.
+                && dispatchHighWater.IsPast(req)
                 // …and strictly past the on-node last-handled stamp (cross-silo /
                 // restart consistency; owner-written via UpdateOwn, so it never flaps).
                 && (def.LastReleaseRequestHandledAt is null
@@ -649,9 +665,11 @@ internal static class NodeTypeCompilationHelpers
                     // action block (see the high-water comment above).
                     if (node.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions)?.RequestedReleaseAt
                         is not { } triggerAt) return;
-                    // Advance the high-water monotonically. The Where already proved
-                    // triggerAt > dispatchHighWater, so this only ever moves forward.
-                    dispatchHighWater = triggerAt;
+                    // 🚨 NO high-water advance here. The mark advances ONLY on the
+                    // Update's COMMIT path below — where LastReleaseRequestHandledAt
+                    // is actually stamped. Advancing eagerly at dispatch time lost
+                    // any trigger whose Update bailed (issue #185; see the
+                    // high-water comment above).
                     // 🅿️ Deliberate retry → un-park so the explicit rebuild is allowed through
                     // the compile watcher's parked short-circuit (and the attempt budget resets).
                     parkRegistry?.Unpark(hubPath);
@@ -671,13 +689,20 @@ internal static class NodeTypeCompilationHelpers
                             return curr;
                         // Double-check status inside the lambda — OWN's state may have
                         // transitioned to Pending/Compiling between the outer Where
-                        // matching and this lambda running. Returning `curr` unchanged
-                        // is safe: an in-flight compile carries this request to a
-                        // terminal status, and a still-unhandled fresher request
-                        // re-fires on the next settled emission.
+                        // matching and this lambda running (an earlier trigger's commit
+                        // in the same burst, or a concurrent kickoff). Returning `curr`
+                        // unchanged is safe BECAUSE the high-water was not advanced for
+                        // this trigger: it stays strictly above both gates, so the next
+                        // settled emission (Status = Ok / Error after the in-flight
+                        // compile) re-fires it and drives a fresh Pending flip → fresh
+                        // compile with the user's latest edits.
                         if (def.CompilationStatus is CompilationStatus.Pending
                                                   or CompilationStatus.Compiling)
                             return curr;
+                        // COMMIT: this is the one path that stamps
+                        // LastReleaseRequestHandledAt — advance the in-memory
+                        // high-water in the same breath so the two marks never diverge.
+                        dispatchHighWater.Advance(triggerAt);
                         return curr with
                         {
                             Content = def with
@@ -700,6 +725,39 @@ internal static class NodeTypeCompilationHelpers
                 },
                 ex => logger?.LogWarning(ex,
                     "[ReleaseRequestWatcher] {HubPath}: stream faulted", hubPath));
+    }
+
+    /// <summary>
+    /// Process-local monotonic high-water mark over <see cref="DateTimeOffset"/>
+    /// instants for <see cref="InstallReleaseRequestWatcher"/>. Stored as UTC ticks
+    /// behind <see cref="System.Threading.Interlocked"/> because the mark is
+    /// advanced on the owner's serialized write path (inside the Update lambda's
+    /// commit branch) while the watcher's Where reads it on the reduced-stream
+    /// emission path — two different serialized contexts, and a bare
+    /// <c>Nullable&lt;DateTimeOffset&gt;</c> (16 bytes) is not tear-free across
+    /// them. Instance per watcher install (captured in the subscription closure);
+    /// never static (NoStaticState.md).
+    /// </summary>
+    private sealed class MonotonicHighWaterMark
+    {
+        // long.MinValue = "nothing committed yet": every real trigger is past it.
+        private long utcTicks = long.MinValue;
+
+        /// <summary>True when <paramref name="candidate"/> is STRICTLY past the mark.</summary>
+        public bool IsPast(DateTimeOffset candidate) =>
+            candidate.UtcTicks > System.Threading.Interlocked.Read(ref utcTicks);
+
+        /// <summary>Advances the mark to <paramref name="candidate"/> if (and only if)
+        /// it moves forward — monotonic under concurrent advancers.</summary>
+        public void Advance(DateTimeOffset candidate)
+        {
+            var c = candidate.UtcTicks;
+            long seen;
+            while (c > (seen = System.Threading.Interlocked.Read(ref utcTicks))
+                   && System.Threading.Interlocked.CompareExchange(ref utcTicks, c, seen) != seen)
+            {
+            }
+        }
     }
 
     /// <summary>
