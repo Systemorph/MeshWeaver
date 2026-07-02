@@ -170,14 +170,17 @@ public static class PartitionSyncAdminLayoutArea
     /// </summary>
     private static IObservable<ImmutableArray<PartitionInfo>> DiscoverPartitions(LayoutAreaHost host)
     {
+        // Case-insensitive throughout — partition ids dedupe/order case-insensitively below,
+        // so a Space root whose casing differs from IStaticRepoSource.Partition must still
+        // resolve its static-source names.
         var staticSources = host.Hub.ServiceProvider.GetServices<IStaticRepoSource>()
-            .GroupBy(s => s.Partition, StringComparer.Ordinal)
+            .GroupBy(s => s.Partition, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(
                 g => g.Key,
                 g => string.Join(", ", g.Select(s => s.GetType().Name)
                     .Distinct(StringComparer.Ordinal)
                     .OrderBy(n => n, StringComparer.Ordinal)),
-                StringComparer.Ordinal);
+                StringComparer.OrdinalIgnoreCase);
 
         var meshService = host.Hub.ServiceProvider.GetService<IMeshService>();
         var spaceRoots = meshService is null

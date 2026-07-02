@@ -1110,7 +1110,8 @@ public static class MeshExtensions
 
                                                 logger.LogInformation(
                                                     "[DeleteNode] succeeded path={Path} count={Count} warnings={Warnings} by={DeletedBy}",
-                                                    path, deletedPaths.Count, warningMsgs.Count,
+                                                    path, deletedPaths.Count,
+                                                    messages.Count(m => m.LogLevel >= LogLevel.Warning),
                                                     capturedRequest.DeletedBy ?? "system");
 
                                                 // MeshChangeEvent.Deleted is published per-path inside

@@ -332,7 +332,8 @@ public static class GitHubSyncSettingsTab
             .WithClickAction(ctx =>
             {
                 ctx.Host.Hub.CheckBranchStateOnGitHub(spacePath, userId,
-                        onActivityCreated: path => ctx.Host.UpdateData(ActivityPathId, path))
+                        onActivityCreated: path => ctx.Host.UpdateData(ActivityPathId, path),
+                        sourceId: sourceId)
                     .Subscribe(_ => { }, ex => ctx.Host.UpdateData(ResultId, Err(ex.Message)));
                 return Task.CompletedTask;
             }));

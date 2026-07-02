@@ -122,16 +122,18 @@ public static class GitHubActivityExtensions
             }, onActivityCreated);
     }
 
-    /// <summary>Ask GitHub (live) for the configured branch's HEAD + whether the Space is up to date.</summary>
+    /// <summary>Ask GitHub (live) for the configured branch's HEAD + whether the Space is up to date.
+    /// <paramref name="sourceId"/> selects the sync source (null = the primary).</summary>
     public static IObservable<string> CheckBranchStateOnGitHub(
-        this IMessageHub hub, string spacePath, string userId, Action<string>? onActivityCreated = null)
+        this IMessageHub hub, string spacePath, string userId, Action<string>? onActivityCreated = null,
+        string? sourceId = null)
     {
         var sync = hub.ServiceProvider.GetRequiredService<GitHubSyncService>();
         return hub.RunActivity(spacePath, ActivityCategory.Unknown, $"Check branch of {spacePath}",
             ctx =>
             {
                 ctx.Log("Asking GitHub for the branch state…");
-                return sync.AskBranchState(spacePath, userId).Select(st =>
+                return sync.AskBranchState(spacePath, userId, sourceId).Select(st =>
                 {
                     ctx.Log($"Branch '{st.Branch}' is at {st.HeadCommitSha[..Math.Min(8, st.HeadCommitSha.Length)]} — " +
                             (st.UpToDate ? "your Space is up to date." : "your Space is behind (use Update to latest)."));
