@@ -10,6 +10,16 @@
 # out of the context; all deps install fresh from portal-next/package-lock.json — the
 # webpack resolve.modules override makes the sibling sources resolve every bare import
 # from portal-next/node_modules, so ../react and ../grpc-web need no install of their own.
+#
+# PREREQUISITE — grpc-web codegen. grpc-web/src/connection.ts imports ./gen/mesh_pb, which is
+# GENERATED (gitignored) by `buf generate` from the mesh .proto that lives in the .NET tree
+# (src/MeshWeaver.Hosting.Grpc/Protos, OUTSIDE this clients/ context). buf ships glibc binaries,
+# so codegen runs on the HOST, not in this musl Alpine image. Generate it FIRST, then build:
+#
+#   npm --prefix grpc-web install && npm --prefix grpc-web run gen   # → grpc-web/src/gen/mesh_pb.ts
+#
+# (memex-local's portal_next_build_local does this automatically.) Without it the build fails with
+# "Module not found: Can't resolve './gen/mesh_pb'".
 
 FROM node:22-alpine AS build
 WORKDIR /workspace

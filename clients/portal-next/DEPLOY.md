@@ -1,13 +1,42 @@
 # Deploying portal-next (memex-local / helm)
 
 The Next.js portal runs as its own Deployment beside `memex-portal`, and the existing portal
-ingress gains one extra path: `/next` → this service. Nothing in `deploy/` needs to change for a
-local experiment — the snippets below are additive manifests you can `kubectl apply` into the
-same namespace (or fold into `deploy/helm` as a `portal-next` template when it graduates).
+ingress gains one extra path: `/next` → this service.
+
+## Graduated into the chart (feature-flagged) — the normal path
+
+This is now a first-class, **feature-flagged** part of `deploy/helm`, off by default so prod/AKS is
+unaffected:
+
+- `deploy/helm/templates/memex-portal/portal-next.yaml` — the Deployment + Service.
+- `deploy/helm/templates/memex-portal/ingress.yaml` — adds the `/next` path (gated).
+- `deploy/helm/templates/memex-portal/config.yaml` — injects `Portal__ReactAppUrl: "/next"` (gated),
+  which lights up the reversible per-user toggle (the Blazor user menu's *"Try the new frontend"* →
+  `GET /frontend/react`; *"Back to classic"* → `/frontend/blazor`). The **default frontend stays
+  Blazor** — enabling the flag is opt-in per user, not a forced switch.
+- Chart values (`deploy/helm/values.yaml` → `portalNext`): `enabled` (default `false`), `image`,
+  `replicas`, `portalOrigin`.
+
+**Local (`memex.localhost`):** `memex-local up` / `memex-local update` build this image into Colima's
+Docker store and `helm_deploy` flips `portalNext.enabled=true` automatically whenever the image is
+present — no manual steps.
+
+**AKS / other:** build + push the image to a registry the cluster can pull, then set
+`portalNext.enabled=true` and `portalNext.image=<ref>` in your env overlay.
+
+## Manual / ad-hoc manifests (reference)
+
+The snippets below are the equivalent raw manifests you can `kubectl apply` into the same namespace
+for a one-off experiment — kept for reference; the chart above is the source of truth.
 
 ## 1. Image
 
 ```bash
+# grpc-web/src/gen (protobuf TS) is GENERATED + gitignored, and the .proto lives OUTSIDE the
+# clients/ context (src/MeshWeaver.Hosting.Grpc/Protos), and buf ships glibc binaries — so
+# generate on the HOST first, then build (see the Dockerfile header):
+npm --prefix clients/grpc-web install && npm --prefix clients/grpc-web run gen
+
 # From the repo root — the build context is clients/ (the app compiles ../react + ../grpc-web sources)
 docker build -f clients/portal-next/Dockerfile -t meshweaver/portal-next:dev clients/
 ```
