@@ -146,12 +146,12 @@ public abstract record MessageDelivery : IMessageDelivery
 
     private IMessageDelivery<TMessage> WithMessageImpl<TMessage>(TMessage message)
     {
-        return new MessageDelivery<TMessage>
+        // Carry the captured serializer options into the re-typed delivery — dropping them here
+        // made Package() fall back to the runtime defaults (PascalCase, record-shaped RawJson),
+        // shipping a wire frame no client contract recognizes.
+        return new MessageDelivery<TMessage>(Sender, Target!, message, options)
         {
-            Message = message,
             State = State,
-            Target = Target,
-            Sender = Sender,
             Properties = Properties,
             Id = Id,
             ForwardedTo = ForwardedTo,
@@ -166,14 +166,26 @@ public abstract record MessageDelivery : IMessageDelivery
     /// serialization failure returns a failed delivery describing the error rather than throwing.
     /// </summary>
     /// <returns>This delivery with its payload replaced by serialized <c>RawJson</c>, or a failed delivery on error.</returns>
-    public IMessageDelivery Package()
+    public IMessageDelivery Package() => Package(null!);
+
+    /// <summary>
+    /// Serializes the message payload into a <c>RawJson</c> envelope, preferring the options this
+    /// delivery captured at creation and falling back to <paramref name="fallbackOptions"/> when a
+    /// re-typed / boundary-deserialized delivery carries none. Without the fallback such a
+    /// delivery serialized with the runtime defaults — PascalCase properties, <c>RawJson</c> as a
+    /// <c>{"Content": …}</c> record — a wire shape no client fold recognizes (the gRPC-web live
+    /// takeover silently rendered nothing).
+    /// </summary>
+    /// <param name="fallbackOptions">The transport hub's serializer options, used when the delivery captured none.</param>
+    /// <returns>This delivery with its payload replaced by serialized <c>RawJson</c>, or a failed delivery on error.</returns>
+    public IMessageDelivery Package(JsonSerializerOptions fallbackOptions)
     {
         try
         {
             var message = GetMessage();
             if (message is RawJson)
                 return this;
-            var serialized = JsonSerializer.Serialize(message, options);
+            var serialized = JsonSerializer.Serialize(message, options ?? fallbackOptions);
             var rawJson = new RawJson(serialized);
             return WithMessage(rawJson);
         }
