@@ -238,7 +238,11 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
     /// (<c>EnrichWithNodeType slow path faulted</c>, <c>SubscribeRequest</c>
     /// timeouts → compilation-error overlay → MARKER_V1 never rendered).
     /// </summary>
-    [Fact(Timeout = 60000)]
+    // 120s (not the usual 60s): the happy path completes in seconds; the budget is for the
+    // FAILURE path — WaitForLatestRelease's 50s primary wait plus its discriminating timeout
+    // diagnostic (mirror/index probes + decisive re-trigger, worst case ~50s more) must fit
+    // inside the xUnit method timeout or the diagnostic is cancelled before it can be emitted.
+    [Fact(Timeout = 120000)]
     public async Task NodeType_RequestedReleasePath_PinsToHistoricalRelease()
     {
         var workspace = Mesh.GetWorkspace();
@@ -393,7 +397,11 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
     /// <c>NodeTypeLayoutAreas.BuildCompileStatusPanel</c>) binds to this
     /// state machine, so this is the test that gates the UI.
     /// </summary>
-    [Fact(Timeout = 60000)]
+    // 120s (not the usual 60s): the happy path completes in seconds; the budget is for the
+    // FAILURE path — WaitForLatestRelease's 50s primary wait plus its discriminating timeout
+    // diagnostic (mirror/index probes + decisive re-trigger, worst case ~50s more) must fit
+    // inside the xUnit method timeout or the diagnostic is cancelled before it can be emitted.
+    [Fact(Timeout = 120000)]
     public async Task IsDirty_FlipsTrueOnSourceEdit_FalseAfterCompile()
     {
         var workspace = Mesh.GetWorkspace();
@@ -550,7 +558,11 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
     /// — same code path the button executes — and asserts both the property
     /// flip and the resulting release.
     /// </summary>
-    [Fact(Timeout = 60000)]
+    // 120s (not the usual 60s): the happy path completes in seconds; the budget is for the
+    // FAILURE path — WaitForLatestRelease's 50s primary wait plus its discriminating timeout
+    // diagnostic (mirror/index probes + decisive re-trigger, worst case ~50s more) must fit
+    // inside the xUnit method timeout or the diagnostic is cancelled before it can be emitted.
+    [Fact(Timeout = 120000)]
     public async Task PressingCompileButton_SetsRequestedReleaseAt_AndProducesNewRelease()
     {
         var workspace = Mesh.GetWorkspace();
@@ -663,13 +675,87 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
     private async Task<string> WaitForLatestRelease(string nodeTypePath, string? knownRelease)
     {
         var workspace = Mesh.GetWorkspace();
-        var node = await workspace.GetMeshNodeStream(nodeTypePath)
-            .Should().Within(50.Seconds())
-            .Match(n => n?.Content is NodeTypeDefinition def
-                && def.CompilationStatus == CompilationStatus.Ok
-                && !string.IsNullOrEmpty(def.LatestReleasePath)
-                && def.LatestReleasePath != knownRelease);
-        return ((NodeTypeDefinition)node.Content!).LatestReleasePath!;
+        try
+        {
+            var node = await workspace.GetMeshNodeStream(nodeTypePath)
+                .Should().Within(50.Seconds())
+                .Match(n => n?.Content is NodeTypeDefinition def
+                    && def.CompilationStatus == CompilationStatus.Ok
+                    && !string.IsNullOrEmpty(def.LatestReleasePath)
+                    && def.LatestReleasePath != knownRelease);
+            return ((NodeTypeDefinition)node.Content!).LatestReleasePath!;
+        }
+        catch (Exception ex)
+        {
+            // Diagnostic: on timeout, discriminate OWNER-side (never produced v2) from a
+            // DELIVERY / mirror-staleness race (owner produced v2 but the cross-hub mirror the test
+            // reads never received it). Compare two INDEPENDENT views of the SAME node:
+            //   MIRROR — the single-node cross-hub cache handle the test/watcher read.
+            //   INDEX  — the mesh query (a DIFFERENT path: the owner's persisted+indexed state),
+            //            plus the Release children. If INDEX shows a fresh v2 / Handled while MIRROR
+            //            is stale at v1 / Handled=null → delivery race confirmed (owner did the work).
+            //            If BOTH are stale → owner-side (the watcher/compile never produced v2).
+            var cur = await workspace.GetMeshNodeStream(nodeTypePath)
+                .Where(n => n is not null).Take(1).Timeout(5.Seconds());
+            var m = cur?.Content as NodeTypeDefinition;
+
+            var meshService = Mesh.ServiceProvider.GetService<IMeshService>();
+            string indexNode = "(no IMeshService)", releases = "(no IMeshService)";
+            if (meshService is not null)
+            {
+                try
+                {
+                    // Best-effort: take the FIRST emission bounded to 5s — waiting for a
+                    // non-empty snapshot could stall the whole bound when the node is genuinely
+                    // absent from the index (itself a diagnostic result).
+                    var idx = await meshService.Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{nodeTypePath}"))
+                        .Take(1).Timeout(5.Seconds());
+                    var id = idx.Items.FirstOrDefault()?.Content as NodeTypeDefinition;
+                    indexNode = id is null ? "(not in index)"
+                        : $"Status={id.CompilationStatus}, Latest={id.LatestReleasePath ?? "(null)"}, " +
+                          $"Handled={id.LastReleaseRequestHandledAt:O}";
+                }
+                catch (Exception qx) { indexNode = $"(query failed: {qx.GetType().Name})"; }
+                try
+                {
+                    var rel = await meshService.Query<MeshNode>(
+                            MeshQueryRequest.FromQuery($"path:{nodeTypePath}/Release scope:descendants"))
+                        .Take(1).Timeout(5.Seconds());
+                    releases = rel.Items.Count == 0 ? "(none)" : string.Join(", ", rel.Items.Select(r => r.Path));
+                }
+                catch (Exception qx) { releases = $"(query failed: {qx.GetType().Name})"; }
+            }
+
+            // (a) vs (b): re-trigger with a FRESH timestamp. If the watcher is alive and merely MISSED
+            // the first settled-trigger emission, this second trigger produces v2 → "RECOVERED" (sub-case a:
+            // a one-time missed/lost emission). If it stays stuck, the watcher/state is persistently
+            // clobbered or the subscription is dead (sub-case b). Decisive + repro-cheap.
+            string retrigger;
+            try
+            {
+                var t2 = DateTimeOffset.UtcNow.AddMilliseconds(1);
+                await workspace.GetMeshNodeStream(nodeTypePath).Update(curr =>
+                    curr?.Content is NodeTypeDefinition cd
+                        ? curr with { Content = cd with { RequestedReleaseAt = t2, RequestedReleaseForce = true } }
+                        : curr!).Should().Within(10.Seconds()).Emit();
+                var v2 = await workspace.GetMeshNodeStream(nodeTypePath)
+                    .Where(n => n?.Content is NodeTypeDefinition d2
+                        && d2.CompilationStatus == CompilationStatus.Ok
+                        && !string.IsNullOrEmpty(d2.LatestReleasePath)
+                        && d2.LatestReleasePath != knownRelease)
+                    .Take(1).Timeout(25.Seconds());
+                retrigger = $"RECOVERED via re-trigger → v2={((NodeTypeDefinition)v2.Content!).LatestReleasePath} (sub-case a: first emission missed)";
+            }
+            catch (Exception rx) { retrigger = $"STILL STUCK after re-trigger ({rx.GetType().Name}) (sub-case b: persistent clobber / dead subscription)"; }
+
+            throw new Exception(
+                $"WaitForLatestRelease stuck for {nodeTypePath}: known={knownRelease ?? "(null)"}\n" +
+                $"  MIRROR: Status={m?.CompilationStatus}, Latest={m?.LatestReleasePath ?? "(null)"}, " +
+                $"ReqAt={m?.RequestedReleaseAt:O}, Handled={m?.LastReleaseRequestHandledAt:O}, Force={m?.RequestedReleaseForce}\n" +
+                $"  INDEX node: {indexNode}\n" +
+                $"  INDEX Release children: [{releases}]\n" +
+                $"  RE-TRIGGER: {retrigger}", ex);
+        }
     }
 
     private async Task<CreateReleaseResponse> SendCreateRelease(string nodeTypePath, bool force)
