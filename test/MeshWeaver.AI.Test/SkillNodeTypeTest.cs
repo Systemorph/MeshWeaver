@@ -114,6 +114,36 @@ public class SkillNodeTypeTest
     }
 
     [Fact]
+    public void SkillInfo_ToSubmissionText_DigestsTypedTaskForInstructionSkill()
+    {
+        // "/code build a Todo NodeType …" — the text typed AFTER the skill word is the task. It is
+        // digested into the submitted message together with a load_skill directive naming this skill.
+        var info = SkillNodeType.ProjectSkills(new[] { InstructionSkillNode("code") }, Json).Single();
+
+        var text = info.ToSubmissionText("  build a Todo NodeType with a Kanban board  ");
+
+        text.Should().NotBeNull();
+        text.Should().Contain("build a Todo NodeType with a Kanban board", "the typed task is digested verbatim");
+        text.Should().Contain(info.Path!, "the round must know WHICH skill to load");
+        text.Should().Contain("load_skill", "the agent loads the skill's instructions before starting");
+        text.Should().NotStartWith("/", "the composed message must not re-parse as a slash command");
+    }
+
+    [Fact]
+    public void SkillInfo_ToSubmissionText_NothingToDigest_ReturnsNull()
+    {
+        var instruction = SkillNodeType.ProjectSkills(new[] { InstructionSkillNode("code") }, Json).Single();
+        instruction.ToSubmissionText(null).Should().BeNull("no task text — the chat shows the skill's help");
+        instruction.ToSubmissionText("   ").Should().BeNull("whitespace is not a task");
+
+        // Behaviour skills consume their argument themselves (the picker search term) — never a round.
+        var pick = SkillNodeType.ProjectSkills(
+            new[] { SkillNode("agent", "switch", "namespace:Agent nodeType:Agent", "agentName", "Choose an agent") }, Json)
+            .Single();
+        pick.ToSubmissionText("Worker").Should().BeNull("a Pick skill's argument pre-filters the picker");
+    }
+
+    [Fact]
     public void SkillQueries_AreTheUnifiedRegistryPattern_PlatformPlusSpacePlusUser()
     {
         // Same shape as agents + models: ONE namespace:A|B|C exact-membership query (platform Skill +
@@ -137,6 +167,14 @@ public class SkillNodeTypeTest
         q.Should().Be("namespace:rbuergi/Skill|Skill nodeType:Skill");
         q.Should().NotContain("login/Skill");
     }
+
+    private static MeshNode InstructionSkillNode(string id) =>
+        new(id, SkillNodeType.RootNamespace)
+        {
+            NodeType = SkillNodeType.NodeType,
+            Description = "Bring in coding capability",
+            Content = new SkillDefinition { Instructions = "# Coding rules\n\nRead the architecture docs first." }
+        };
 
     private static MeshNode SkillNode(string id, string desc, string query, string field, string title) =>
         new(id, SkillNodeType.RootNamespace)

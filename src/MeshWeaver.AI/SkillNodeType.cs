@@ -241,6 +241,22 @@ public record SkillInfo
         Definition.Action is { Kind: SkillActionKind.Pick, Query: { } q, Field: { } f }
             ? new NodePickerRequest(q, f, Definition.Action.Title ?? Name ?? Id, searchTerm)
             : null;
+
+    /// <summary>
+    /// For a pure INSTRUCTION skill (no <see cref="SkillDefinition.Action"/>), the message to submit when
+    /// the user invokes it with trailing text (<c>/code build a tracker</c>): the typed task prefixed with
+    /// a <c>load_skill</c> directive, so the agent round loads this skill's instructions first and applies
+    /// them to exactly what the user typed. Null for a behaviour skill (its action consumes the argument
+    /// itself), a skill with no instructions, or when no task text was typed — the caller shows the
+    /// skill's help instead.
+    /// </summary>
+    public string? ToSubmissionText(string? rawArguments) =>
+        Definition is { Action: null, Instructions: { } instructions }
+        && !string.IsNullOrWhiteSpace(instructions)
+        && !string.IsNullOrWhiteSpace(rawArguments)
+        && !string.IsNullOrEmpty(Path)
+            ? $"Use the skill at '{Path}' (load it with the load_skill tool), then apply it to this task:\n\n{rawArguments!.Trim()}"
+            : null;
 }
 
 /// <summary>

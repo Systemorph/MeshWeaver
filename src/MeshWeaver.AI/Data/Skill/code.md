@@ -1,7 +1,7 @@
 ---
 nodeType: Skill
 name: /code
-description: Bring in coding capability — create and modify NodeTypes, source, data models, layout areas, and scripts
+description: Create and modify NodeTypes, source, data models, layout areas, and scripts — type /code followed by the task
 icon: Sparkle
 category: Skills
 order: 4

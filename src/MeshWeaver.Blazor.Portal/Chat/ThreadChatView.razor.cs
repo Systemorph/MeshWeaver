@@ -1249,8 +1249,11 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
 
     /// <summary>
     /// Runs a resolved skill's action: <c>Pick</c> → combobox (write the pick to the composer);
-    /// <c>OpenContent</c> → load into the content window; instruction/Connect skills have no inline
-    /// chat behaviour (mounted to the CLI harnesses / advertised to the agent).
+    /// <c>OpenContent</c> → load into the content window. A pure INSTRUCTION skill invoked with
+    /// trailing text (<c>/code build a tracker</c>) digests the text into a normal round: the typed
+    /// task is submitted prefixed with a <c>load_skill</c> directive
+    /// (<see cref="MeshWeaver.AI.SkillInfo.ToSubmissionText"/>), so the agent loads the skill's
+    /// instructions and applies them to the task. With no trailing text it shows the skill's help.
     /// </summary>
     private void RunSkill(MeshWeaver.AI.SkillInfo skill, ParsedCommand parsed)
     {
@@ -1278,7 +1281,16 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                 ShowSkillStatus(skill.Name ?? skill.Id, false);
                 break;
             default:
-                ShowSkillStatus(skill.Description ?? $"/{skill.Id}", false);
+                // Instruction skill + typed task → re-enter the normal submission path with the
+                // composed message (it never starts with '/', so it cannot re-parse as a command).
+                var submission = skill.ToSubmissionText(parsed.RawArguments);
+                if (submission is not null)
+                {
+                    MessageText = submission;
+                    SubmitMessageCore();
+                }
+                else
+                    ShowSkillStatus(skill.Description ?? $"/{skill.Id}", false);
                 break;
         }
     }
