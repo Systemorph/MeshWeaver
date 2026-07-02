@@ -27,19 +27,36 @@ public sealed class RoutingProxyAdapter : IStorageAdapter
 {
     private readonly IMessageHub _callerHub;
     private readonly PartitionStorageRouter _router;
+    private readonly Microsoft.Extensions.Logging.ILogger? _logger;
 
     /// <summary>
     /// Constructs a proxy that posts via <paramref name="callerHub"/> to the
     /// partition hubs registered in <paramref name="router"/>.
     /// </summary>
-    public RoutingProxyAdapter(IMessageHub callerHub, PartitionStorageRouter router)
+    public RoutingProxyAdapter(
+        IMessageHub callerHub,
+        PartitionStorageRouter router,
+        Microsoft.Extensions.Logging.ILogger<RoutingProxyAdapter>? logger = null)
     {
         _callerHub = callerHub;
         _router = router;
+        _logger = logger;
     }
 
     /// <inheritdoc/>
+    /// <remarks>
+    /// Wrapped in the legacy-user repair (see <see cref="LegacyUserPartitionRepair"/>): the proxy
+    /// is the one seam that can read the legacy <c>User/{id}</c> partition AND write the repaired
+    /// root into the <c>{id}</c> partition — each routed to its own partition hub.
+    /// </remarks>
     public IObservable<MeshNode?> Read(string path, JsonSerializerOptions options)
+        => LegacyUserPartitionRepair.ReadWithRepair(
+            path,
+            p => ReadCore(p, options),
+            n => Write(n, options),
+            _logger);
+
+    private IObservable<MeshNode?> ReadCore(string path, JsonSerializerOptions options)
         => _router.AddressFor(path).SelectMany(addr =>
             addr is null
                 ? Observable.Return<MeshNode?>(null)

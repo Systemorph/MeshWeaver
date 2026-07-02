@@ -31,7 +31,10 @@ public class DevAuthController : ControllerBase
         _accessService = accessService;
         // DevLogin is forced OFF in prod (Memex.Portal.Distributed/Program.cs); this gate
         // ensures the self-provisioning below can NEVER auto-create users in production.
-        _devLoginEnabled = configuration["Authentication:EnableDevLogin"] == "true";
+        // bool.TryParse, not == "true": a JSON boolean `true` binds as the string "True"
+        // (PascalCase), so the string comparison silently disabled self-provisioning for every
+        // appsettings that used the natural boolean form.
+        _devLoginEnabled = bool.TryParse(configuration["Authentication:EnableDevLogin"], out var enabled) && enabled;
     }
 
     /// <summary>
