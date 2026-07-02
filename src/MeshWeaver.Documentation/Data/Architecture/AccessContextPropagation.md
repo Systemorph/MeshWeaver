@@ -392,7 +392,7 @@ protected override void Synchronize(ChangeItem<EntityStore> item) =>
     }, ex => { logger.LogWarning(ex, "Updating {DataSource} failed", Id); return Task.CompletedTask; });
 ```
 
-If you instead let the persistence write inherit the (null) ambient context, it **fails closed** and the change is **silently dropped** — a write that "succeeded" upstream never lands. When the dropped write is an `_Activity` node, every progress reader then subscribes to a node that does not exist → a **`[ROUTE] NotFound` resubscribe storm** that wedges the partition (atioz 2026-06-17, compile + import activities). Persistence is the bottom of the stack: it stores what was already approved; it never re-gates and never fail-closes.
+If you instead let the persistence write inherit the (null) ambient context, it **fails closed** and the change is **silently dropped** — a write that "succeeded" upstream never lands. When the dropped write is an `_Activity` node, every progress reader then subscribes to a node that does not exist → a **`[ROUTE] NotFound` resubscribe storm** that wedges the partition (production outage 2026-06-17, compile + import activities). Persistence is the bottom of the stack: it stores what was already approved; it never re-gates and never fail-closes.
 
 ## Posting/redirecting to a node: do it inside `Create().Subscribe()`
 

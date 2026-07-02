@@ -81,7 +81,7 @@ Steady state is **self-update** (see [ReleaseStrategy.md](/Doc/Architecture/Rele
 
 **What the Helm chart already does** (no edits needed): when `selfUpdate.azureClientId` is set it annotates `memex-portal-sa` with `azure.workload.identity/client-id`, labels the pod `azure.workload.identity/use: "true"`, and sets `AZURE_CLIENT_ID`. The self-updater (`AcrTagLister`) then uses `ManagedIdentityCredential(AZURE_CLIENT_ID)` → AAD token → ACR token.
 
-**What the Azure side provides** (`infra/modules/portal-identity.bicep`, wired from `infra/main.bicep`): a **single shared** user-assigned managed identity (`<namePrefix>-portal-mi`) with **one federated credential per portal namespace** — subject `system:serviceaccount:<ns>:memex-portal-sa`, issuer = the cluster OIDC issuer, audience `api://AzureADTokenExchange` — for `memex`, `atioz`, and `memex-cloud` (the `portalNamespaces` param). The UAMI gets **AcrPull** on `meshweaver.azurecr.io` (AcrPull includes the `metadata_read` the tag-list call needs). One UAMI → one AcrPull grant → the **same** `portalIdentityClientId` wired into `selfUpdate.azureClientId` for every namespace.
+**What the Azure side provides** (`infra/modules/portal-identity.bicep`, wired from `infra/main.bicep`): a **single shared** user-assigned managed identity (`<namePrefix>-portal-mi`) with **one federated credential per portal namespace** — subject `system:serviceaccount:<ns>:memex-portal-sa`, issuer = the cluster OIDC issuer, audience `api://AzureADTokenExchange` — for every namespace in the `portalNamespaces` param (`memex`, `memex-cloud`, and any customer portal namespaces). The UAMI gets **AcrPull** on `meshweaver.azurecr.io` (AcrPull includes the `metadata_read` the tag-list call needs). One UAMI → one AcrPull grant → the **same** `portalIdentityClientId` wired into `selfUpdate.azureClientId` for every namespace.
 
 ### One-time setup
 
@@ -99,7 +99,7 @@ Steady state is **self-update** (see [ReleaseStrategy.md](/Doc/Architecture/Rele
    (IaC alternative: deploy with `grantSharedAcrPull=true` — authors this via `infra/modules/acr-role-assignment.bicep` in the registry's RG; needs User Access Administrator on `meshweaver-shared`. A *per-deployment* ACR instead of the shared one is granted in-bicep automatically.)
 3. **Set `selfUpdate.azureClientId`** to `portalIdentityClientId` for each environment (the in-pod patch works without it; this only authenticates the tag-list). Same value everywhere:
    - `memex` → the git-ignored `scripts/values.deploy.yaml` (see `values.deploy.example.yaml`), or `helm upgrade --set selfUpdate.azureClientId=<clientId>`.
-   - `atioz` / `memex-cloud` → the git-ignored `envs/<env>/values.<env>.yaml`.
+   - `memex-cloud` / customer portals → the git-ignored `envs/<env>/values.<env>.yaml`.
 
 > Adding a **new** portal namespace? It needs its own federated credential on the shared UAMI — add the namespace to `portalNamespaces` and re-run the infra deploy (idempotent), or `az identity federated-credential create` (see [OnboardingNewEnvironment.md](/Doc/Architecture/OnboardingNewEnvironment)). The subject must be exactly `system:serviceaccount:<ns>:memex-portal-sa`.
 

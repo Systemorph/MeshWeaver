@@ -20,9 +20,10 @@ MeshWeaver's UI model has three interlocking ideas. Once they click, building ri
 
 Every control is a plain C# record. `With*` methods return **new instances** — the original is never mutated:
 
-```csharp
+```csharp --render ImmutableControlsDemo --show-code
 var button1 = Controls.Button("Click me");
 var button2 = button1.WithId("myButton");  // button1 is unchanged
+button2
 ```
 
 This means control definitions are pure data. You can safely share, copy, and compose them without worrying about side effects. A control doesn't *render* anything until it's placed in a layout area.
@@ -44,14 +45,14 @@ Container structure is fixed; only observable-backed slots re-render.
 
 Pass any `IObservable<T>` as a view and the content updates automatically. Subscriptions are created and disposed for you as areas mount and unmount:
 
-```csharp
+```csharp --render LiveCounterDemo --show-code
 var counter = Observable.Interval(TimeSpan.FromSeconds(1));
 
 Controls.Stack
     .WithView(counter.Select(n => Controls.Label($"Count: {n}")))
 ```
 
-No callbacks to wire up. No teardown code to write.
+No callbacks to wire up. No teardown code to write — the counter below is ticking live.
 
 ---
 

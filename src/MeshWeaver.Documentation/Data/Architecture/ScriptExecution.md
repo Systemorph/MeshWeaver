@@ -187,8 +187,8 @@ var svc = new InvitationService(
 
 foreach (var (email, name) in new[]
 {
-    ("roman.grob@atioz.ch",     "Roman Grob"),
-    ("steven.forster@atioz.ch", "Steven Forster"),
+    ("ada.lovelace@example.com", "Ada Lovelace"),
+    ("grace.hopper@example.com", "Grace Hopper"),
 })
 {
     var node = await svc.CreateInvitation(email, invitedBy: "rbuergi", note: name)

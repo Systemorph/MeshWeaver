@@ -63,7 +63,7 @@ This single fix unblocks **the framework home, the `MeshSearch` catalog, AND liv
 
 The home/user page is authored declaratively in the framework (`UserActivityLayoutAreas.BuildOwnerDashboard`): a `Controls.Markdown` banner (no `Controls.Html` hack) + a **fluent catalog** + the `ThreadComposer` area. The fluent catalog is `MeshWeaver.Layout/CatalogExtensions.cs`:
 
-```csharp
+```csharp --render FluentCatalogDemo --show-code
 Controls.Tabs
     .WithMeshSearch("Threads", @namespace: "*/_Thread", scope: "descendants", nodeType: "Thread", createNodeType: "Thread")
     .WithMeshSearch("Last Viewed", query: "sort:LastViewed-desc")

@@ -58,6 +58,10 @@ public class DocumentationCodeBlockCompilationTest
         var submissions = document.Descendants<ExecutableCodeBlock>()
             .Select(block => { block.Initialize(); return block; })
             .Where(block => block.SubmitCode is not null)
+            // Only C# executes on the in-process Roslyn kernel; foreign-language blocks (python, …)
+            // route to a connected worker and cannot be compiled as C#. Their runtime path is covered
+            // by DocExecutableBlocksTest (which skips them loudly when no worker is connected).
+            .Where(block => string.Equals(block.SubmitCode!.Language, "csharp", StringComparison.OrdinalIgnoreCase))
             // #r "nuget:..." directives are resolved by the kernel at runtime, not by plain
             // CSharpScript — exclude those cells (covered by ScriptExecutionInUserHomeTest).
             .Where(block => !block.SubmitCode!.Code.Contains("#r \"nuget:", StringComparison.OrdinalIgnoreCase))
