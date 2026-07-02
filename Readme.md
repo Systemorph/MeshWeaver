@@ -1,212 +1,53 @@
 # MeshWeaver
 
-MeshWeaver is a modular framework for building data-driven applications with real-time updates, interactive visualizations, and powerful data processing capabilities.
+MeshWeaver is an open-source framework for building **data meshes**: documents, data, code, AI agents, and UI live together as addressable nodes on a mesh — versioned, collaboratively editable, vector-searchable, and processed by an actor-model message hub with a reactive Blazor UI. **Memex**, the portal application included in this repository, is a knowledge portal built on it where people and AI agents work on the same content.
 
-## Getting Started
+**See it live at [memex.meshweaver.cloud](https://memex.meshweaver.cloud)** — try the portal and read the full documentation at [memex.meshweaver.cloud/Doc](https://memex.meshweaver.cloud/Doc). The same docs are in this repo under [`src/MeshWeaver.Documentation/Data/`](src/MeshWeaver.Documentation/Data/).
 
-You can run the Memex portal in two modes:
+## Installation
 
-### Monolithic Setup
+### Run from source
+
 ```bash
+git clone https://github.com/Systemorph/MeshWeaver.git
+cd MeshWeaver
 dotnet run --project memex/Memex.Portal.Monolith
 ```
 
-Runs at `https://localhost:7122` (HTTP fallback `http://localhost:5022`). This setup is useful for smaller projects deployed as monoliths. If you are unsure which approach to pick, pick this one.
+Opens at `https://localhost:7122`. Single process, no Docker — if you are unsure which setup to pick, pick this one.
 
-### Microservices Setup (with .NET Aspire)
+For the microservices setup orchestrated with .NET Aspire (requires Docker):
+
 ```bash
 dotnet run --project memex/aspire/Memex.AppHost
 ```
 
-Runs the portal at `https://localhost:7202` (HTTP fallback `http://localhost:5202`). This approach requires Docker. Microservices are more complex to operate but provide the flexibility needed for production setups.
+Portal at `https://localhost:7202`, with PostgreSQL persistence and the Aspire dashboard.
 
-## Creating New Projects
-
-MeshWeaver provides project templates to quickly get started with new applications. These templates include a complete portal setup with Todo module examples, AI integration, and comprehensive documentation.
-
-### Install the Template
-
-First, install the MeshWeaver project templates:
+### Create your own portal
 
 ```bash
-dotnet new install MeshWeaver.ProjectTemplates
+dotnet new install MeshWeaver.MemexTemplate
+dotnet new meshweaver-memex -n MyPortal
+cd MyPortal
+dotnet run --project MyPortal.Portal.Monolith
 ```
 
-### Create a New Solution
+The template contains the complete Memex portal solution (Blazor Server monolith + Aspire microservices, Graph + AI integration), renamed to your project name.
 
-Create a complete MeshWeaver solution with portal, Todo module, AI integration, and tests:
+### Local Kubernetes stack (macOS)
+
+A prod-like stack on Colima k3s, installable via Homebrew:
 
 ```bash
-dotnet new meshweaver-solution -n MyApp
-cd MyApp
-dotnet run --project MyApp.Portal
+brew tap systemorph/memex https://github.com/Systemorph/MeshWeaver.git
+brew install --HEAD systemorph/memex/memex-local
+memex-local up
 ```
 
-This creates:
-- **MyApp.Portal**: Main web portal with Blazor UI, AI chat, and article system
-- **MyApp.Todo**: Todo module demonstrating data management and layout areas  
-- **MyApp.Todo.AI**: AI agent for Todo management with natural language processing
-- **MyApp.Todo.Test**: Unit tests for the Todo module
+Opens at `https://memex.localhost:8443`. See [`deploy/homebrew`](deploy/homebrew) for details.
 
-### Individual Project Templates
-
-You can also create individual projects:
-
-```bash
-# Portal application only
-dotnet new meshweaver-portal -n MyPortal
-
-# Todo library only  
-dotnet new meshweaver-todo -n MyTodo
-
-# Todo AI library only
-dotnet new meshweaver-todo-ai -n MyTodoAI
-
-# Test project only
-dotnet new meshweaver-test -n MyTests
-```
-
-### What's Included
-
-The templates provide:
-
-- **Complete Portal Infrastructure**: Authentication, navigation, responsive design
-- **Reactive Data Management**: Real-time updates using MeshWeaver's messaging system
-- **AI Integration**: Azure OpenAI integration with chat interface and AI agents
-- **Layout Areas**: Dynamic UI areas with data binding and real-time updates
-- **Documentation System**: Markdown-based articles with images and author information
-- **Comprehensive Testing**: Unit test setup with FluentAssertions
-- **Sample Application**: Full Todo application demonstrating CRUD operations
-
-### Running Your Application
-
-After creating a project:
-
-1. Navigate to your portal project: `cd MyApp.Portal`
-2. Run the application: `dotnet run`
-3. Open your browser to: `https://localhost:5001`
-
-The portal includes:
-- **Todos**: Sample Todo application with real-time updates
-- **Articles**: Complete documentation system with technical articles
-- **Agents**: AI-powered chat interface for Todo management
-
-### Template Versions
-
-Templates are versioned alongside MeshWeaver releases. To update to the latest templates:
-
-```bash
-dotnet new uninstall MeshWeaver.ProjectTemplates
-dotnet new install MeshWeaver.ProjectTemplates
-```
-
-## Development Setup
-
-### GitHub MCP Server (for Claude Code Users)
-
-This repository includes a GitHub MCP (Model Context Protocol) server configuration that enables AI-assisted development with Claude Code.
-
-#### Prerequisites
-
-- [Claude Code](https://code.claude.com/) installed
-- Node.js and npm installed
-- GitHub account with repository access
-
-#### Setup Instructions
-
-1. **Create a GitHub Personal Access Token**
-   - Visit https://github.com/settings/tokens
-   - Click "Generate new token" → "Generate new token (classic)"
-   - Give it a descriptive name (e.g., "Claude Code MCP")
-   - Select required scopes:
-     - `repo` - Full control of private repositories
-     - `read:org` - Read org and team membership (if working with organization repos)
-   - Click "Generate token" and copy the token
-
-2. **Configure the Token**
-
-   Add the token to your shell profile (`~/.zshrc` or `~/.bashrc`):
-   ```bash
-   export GITHUB_PERSONAL_ACCESS_TOKEN="your_token_here"
-   ```
-
-   Then reload your shell:
-   ```bash
-   source ~/.zshrc  # or ~/.bashrc
-   ```
-
-3. **Enable the MCP Server**
-
-   When you first start Claude Code in this repository, you'll be prompted to enable the GitHub MCP server. Select "use this MCP server" to enable it.
-
-4. **Verify Connection**
-
-   In Claude Code, run `/mcp` to verify the GitHub server is connected.
-
-#### What Can You Do?
-
-With the GitHub MCP server enabled, you can ask Claude to:
-- List and create issues
-- View and create pull requests
-- Search repository contents
-- Get repository information
-- Manage labels and milestones
-
-Example prompts:
-- "List all open issues in this repository"
-- "Create an issue titled 'Add feature X'"
-- "Show me recent pull requests"
-
-#### Configuration File
-
-The MCP server configuration is defined in `.mcp.json` at the repository root. Team members automatically inherit this configuration when they pull the repository - they only need to set their personal access token.
-
-## Core Components
-
-### Message Hub System
-The backbone of MeshWeaver is its message hub system (`MeshWeaver.Messaging.Hub`), which provides:
-- Actor model-based message routing
-- Request-response patterns
-- Hierarchical hub hosting
-- Built-in dependency injection
-
-### Data Processing
-- **Messaging**: Send and receive messages between addresses. Route them inside the mesh.
-- **Concurrency**: Fully asynchronous concurrency using the actor model.
-- **Data Synchronization**: Full-fledged data replication for Create, Read, Update, Delete.
-- **Business Rules**: Rule engine with scope-based state management
-- **Import**: Flexible data import system with activity tracking
-
-### Computation
-- **Kernel**: Interactive code execution and visualization
-- **Interactive Markdown**: A markdown dialect allowing to include code execution.
-
-### UI and Visualization
-- **Layout**: Framework-agnostic UI control abstractions
-- **Reporting**: Flexible and interactive reporting
-
-### Flexible deployment options
-- **Elasticity**: Create a fully elastic setup using Orleans
-- **Integration**: Integrate with almost any available technology through Aspire.
-
-## Resources
-
-- [Portal](https://portal.meshweaver.cloud) - Try out MeshWeaver and read our blog
-- [Website](https://meshweaver.cloud) - Learn more about MeshWeaver
-- [Discord](https://discord.gg/ACSYBWPy) - Join our community
-
-## Deployment Options
-
-1. **Monolithic** (`memex/Memex.Portal.Monolith`)
-   - Single-process deployment
-   - Simplified setup
-   - Suitable for development and smaller deployments
-
-2. **Microservices** (`memex/aspire/Memex.AppHost`)
-   - .NET Aspire-based orchestration
-   - Service discovery
-   - PostgreSQL for persistence
-   - Filesystem or Azure Blob Storage backends
+### Deploy to production
 
 Production deployment recipes live under [`deploy/`](deploy/):
 
@@ -215,6 +56,22 @@ Production deployment recipes live under [`deploy/`](deploy/):
 - [`deploy/aca`](deploy/aca) — Azure Container Apps (Bicep)
 - [`deploy/compose`](deploy/compose) · [`deploy/compose-ha`](deploy/compose-ha) — Docker Compose (single-node / HA)
 
-## Contributing
+### CLI
 
-We welcome contributions! Join our [Discord](https://discord.gg/wMTug8qtvc) to discuss features, report issues, or get help. 
+The `memex` CLI operates any portal's mesh over the REST API — read, search, mutate, compile, and mirror nodes from the shell:
+
+```bash
+dotnet tool install -g MeshWeaver.Cli --prerelease
+memex login mw_yourtoken --base-url https://memex.meshweaver.cloud
+memex search "nodeType:Agent"
+```
+
+See [`src/MeshWeaver.Cli`](src/MeshWeaver.Cli) for the full command reference.
+
+### NuGet packages
+
+The framework ships as [`MeshWeaver.*` packages on nuget.org](https://www.nuget.org/packages?q=MeshWeaver) — use them to build your own modules, node types, and agents against the mesh.
+
+## Community
+
+Join our [Discord](https://discord.gg/wMTug8qtvc) to discuss features, report issues, or get help. Licensed under [MIT](LICENSE).
