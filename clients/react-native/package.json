@@ -8,16 +8,26 @@
     "start": "expo start",
     "ios": "expo start --ios",
     "android": "expo start --android",
+    "web": "expo start --web",
+    "web:export": "expo export --platform web",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "e2e": "playwright test"
   },
   "dependencies": {
+    "@expo/metro-runtime": "~4.0.1",
     "expo": "~52.0.0",
+    "expo-asset": "~11.0.5",
+    "expo-constants": "~17.0.8",
+    "expo-font": "~13.0.4",
     "expo-status-bar": "~2.0.0",
     "react": "18.3.1",
-    "react-native": "0.76.5"
+    "react-dom": "18.3.1",
+    "react-native": "0.76.5",
+    "react-native-web": "~0.19.13"
   },
   "devDependencies": {
+    "@playwright/test": "^1.48.0",
     "@types/react": "~18.3.0",
     "@types/react-test-renderer": "~18.3.0",
     "react-test-renderer": "18.3.1",
