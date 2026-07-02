@@ -925,11 +925,14 @@ else
                 }
                 else
                 {
-                    @* Submit is disabled until the thread is idle — the mid-round inbox is off, so
-                       follow-ups are ingested only after the current round finishes. Esc cancels. *@
+                    @* Never block on the running round. A message sent mid-round is accepted immediately
+                       (echoed via PendingUserMessages) and drained when the current round finishes — the
+                       composer clears on submit and is ready for the next message right away. Esc cancels
+                       the in-flight round. Disabled ONLY for genuinely un-sendable states: empty text or
+                       no model. *@
                     <FluentButton Appearance="FluentAppearance.Accent" OnClick="SendMessage"
-                                  Disabled="@(string.IsNullOrWhiteSpace(MessageText) || ThreadViewModel?.IsExecuting == true || HasNoModels)"
-                                  Title="@(HasNoModels ? "No model available — configure one to chat" : ThreadViewModel?.IsExecuting == true ? "Waiting for the current response to finish… (Esc to stop)" : "Send")">
+                                  Disabled="@(string.IsNullOrWhiteSpace(MessageText) || HasNoModels)"
+                                  Title="@(HasNoModels ? "No model available — configure one to chat" : "Send")">
                         <FluentIcon Value="@(new Icons.Regular.Size20.Send())" Color="Color.Neutral" />
                     </FluentButton>
                 }

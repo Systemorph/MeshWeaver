@@ -165,15 +165,27 @@ public partial class ThreadSidePanelContent : ComponentBase, IDisposable
             .Subscribe(
                 threadPath => InvokeAsync(() =>
                 {
-                    SidePanelState.SetContentPath(threadPath);
-                    selectedThreadPath = threadPath;
-                    StateHasChanged();
-                    // Consume the signal so it doesn't re-fire on the next subscribe.
+                    // Consume the signal FIRST so it can't re-fire on the next subscribe or when the
+                    // user returns to this page (a lingering OpenThreadPath would re-navigate).
                     StreamCache.Update(path, n =>
                     {
                         var c = n.ContentAs<ThreadComposer>(Hub.JsonSerializerOptions, _logger);
                         return c?.OpenThreadPath is null ? n : n with { Content = c with { OpenThreadPath = null } };
                     }, Hub.JsonSerializerOptions).Subscribe(_ => { }, _ => { });
+
+                    // Started from the MAIN/home screen (root URL) → open the new thread FULL-SCREEN: the
+                    // ApplicationPage catch-all ("/{*Path}") renders the full Thread view. Anywhere else
+                    // (e.g. a "+" new chat started INSIDE the side panel) keep the in-panel behavior.
+                    var relative = NavigationManager.ToBaseRelativePath(NavigationManager.Uri).TrimEnd('/');
+                    if (string.IsNullOrEmpty(relative))
+                    {
+                        NavigationManager.NavigateTo($"/{threadPath}");
+                        return;
+                    }
+
+                    SidePanelState.SetContentPath(threadPath);
+                    selectedThreadPath = threadPath;
+                    StateHasChanged();
                 }),
                 ex => _logger?.LogDebug(ex, "[ThreadSidePanel] composer observer errored for {Path}", path));
     }
