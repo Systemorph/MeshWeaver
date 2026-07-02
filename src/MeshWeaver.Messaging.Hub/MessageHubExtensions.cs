@@ -223,4 +223,41 @@ public static class MessageHubExtensions
         // (no grain to delay-deactivate), so a no-op is the correct shape.
         return Disposable.Empty;
     }
+
+    /// <summary>
+    /// Requests immediate deactivation of the Orleans grain hosting this hub, WITHOUT
+    /// going through the hub's message queue. Walks the parent hub chain (like
+    /// <see cref="BeginAsyncOperation"/>) because <see cref="GrainDeactivateCallback"/>
+    /// is set on the grain's top-level hub, not on child hubs (threads' <c>_Exec</c>,
+    /// messages, …).
+    /// <para>This is the #147 escape hatch: the grain-hosted hub's action block runs on
+    /// the grain's ActivationTaskScheduler, so when a stuck round wedges that scheduler
+    /// every message-shaped rescue (including a watchdog's <c>stream.Update</c>) joins
+    /// the blocked backlog and is never processed. The callback deactivates the grain
+    /// out-of-band; deactivation disposes the hub, which cancels the round's
+    /// CancellationTokenSource via <c>RegisterForDisposal</c> and tears down the stuck
+    /// call. The next access re-activates the grain fresh.</para>
+    /// </summary>
+    /// <param name="hub">The hub (or a child of the hub) whose hosting grain should deactivate.</param>
+    /// <returns>
+    /// <c>true</c> when a grain callback was found and invoked; <c>false</c> in monolith
+    /// hosting (no grain — nothing to deactivate; callers treat this as a no-op).
+    /// </returns>
+    public static bool RequestGrainDeactivation(this IMessageHub hub)
+    {
+        var current = hub;
+        while (current != null)
+        {
+            var callback = current.Configuration.Get<GrainDeactivateCallback>();
+            if (callback != null)
+            {
+                callback.Invoke();
+                return true;
+            }
+            var parent = current.Configuration.ParentHub;
+            if (parent == current) break;
+            current = parent;
+        }
+        return false;
+    }
 }
