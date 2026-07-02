@@ -69,6 +69,10 @@ public class ChangeFeedResubscribeCoalesceTest(ITestOutputHelper output) : HubTe
     // (600ms), so the throttled code collapses the entire burst into a single resubscribe.
     private static readonly TimeSpan EventSpacing = TimeSpan.FromMilliseconds(60);
 
+    // Settle window between the coalesced pulse and the version staleness check. Short so the
+    // tests observe the (version-less stream ⇒ always stale ⇒ resubscribe) outcome quickly.
+    private static readonly TimeSpan StalenessGrace = TimeSpan.FromMilliseconds(200);
+
     // Instance (never static — no cross-test bleed). Counts SubscribeRequests at the owner.
     private int _subscribeCount;
 
@@ -124,6 +128,7 @@ public class ChangeFeedResubscribeCoalesceTest(ITestOutputHelper output) : HubTe
                     {
                         o.HeartbeatInterval = LongHeartbeat;
                         o.ChangeFeedResubscribeWindow = ResubscribeWindow;
+                        o.ChangeFeedStalenessGrace = StalenessGrace;
                     }))
             .AddData(data => data.AddHubSource(CreateHostAddress(),
                 ds => ds.WithType<BusinessUnit>().WithType<LineOfBusiness>()));
@@ -153,6 +158,11 @@ public class ChangeFeedResubscribeCoalesceTest(ITestOutputHelper output) : HubTe
         // UN-throttled code, the in-flight guard clears between these settled events so each
         // fires its own resubscribe (the storm). On the throttled code the whole burst lands
         // within one window and collapses to a single resubscribe.
+        //
+        // Kind = Created — the recycled-grain signal this listener exists for (a rapid
+        // delete/recreate flap). Updated events are filtered out entirely (see
+        // UpdatedOwnerChangeFeedEvents_DoNotResubscribe below), so a burst of Updated would
+        // trivially pass this assertion without exercising the throttle.
         const string ownerPath = HostType + "/1";
         for (var i = 0; i < BurstSize; i++)
         {
@@ -160,17 +170,17 @@ public class ChangeFeedResubscribeCoalesceTest(ITestOutputHelper output) : HubTe
                 Namespace: HostType,
                 Id: "1",
                 Path: ownerPath,
-                Kind: MeshChangeKind.Updated,
+                Kind: MeshChangeKind.Created,
                 NodeType: null,
                 Version: i + 1,
                 Timestamp: DateTimeOffset.UtcNow));
             Thread.Sleep(EventSpacing);
         }
 
-        // Let the resubscribe window fully elapse plus margin so any coalesced resubscribe has
-        // fired and been counted. Sanctioned fixed wait: we are bounding "how many resubscribes
-        // happened", which has no single positive signal to await.
-        Thread.Sleep(ResubscribeWindow + TimeSpan.FromMilliseconds(500));
+        // Let the resubscribe window + staleness grace fully elapse plus margin so any coalesced
+        // resubscribe has fired and been counted. Sanctioned fixed wait: we are bounding "how many
+        // resubscribes happened", which has no single positive signal to await.
+        Thread.Sleep(ResubscribeWindow + StalenessGrace + TimeSpan.FromMilliseconds(500));
 
         var resubscribes = Volatile.Read(ref _subscribeCount) - afterInitial;
         Output.WriteLine($"DIAG afterInitial={afterInitial} total={Volatile.Read(ref _subscribeCount)} resubscribes={resubscribes}");

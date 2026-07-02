@@ -253,16 +253,32 @@ internal class ApiTokenService(IMeshService nodeFactory, IMessageHub hub, ILogge
         // because Update is cold; the empty error handler keeps the cold
         // observable's GC-time fire-and-forget warning quiet on writes
         // that hit a deleted node.
-        if (tokenNode != null)
+        //
+        // Stamp at DISPLAY granularity, not per request. The UI renders "Last used" to the
+        // minute; a per-request write turned a busy integration's token into the hottest node
+        // on the mesh (atioz 2026-07-02: version 8939 in one day, ~13 writes/min), and every
+        // write fans out through the change feed to all of the node's subscriber streams.
+        // Skip the write while the recorded LastUsedAt is fresh — the read above already
+        // carries the current value.
+        var now = DateTimeOffset.UtcNow;
+        if (tokenNode != null
+            && (apiToken.LastUsedAt is null || now - apiToken.LastUsedAt.Value >= LastUsedStampInterval))
         {
             hub.GetWorkspace()
                 .GetMeshNodeStream(tokenNode.Path)
-                .Update(node => node with { Content = (node.Content as ApiToken ?? apiToken) with { LastUsedAt = DateTimeOffset.UtcNow } })
+                .Update(node => node with { Content = (node.Content as ApiToken ?? apiToken) with { LastUsedAt = now } })
                 .Subscribe(_ => { }, _ => { });
         }
 
         return apiToken;
     }
+
+    /// <summary>
+    /// Minimum age of the recorded <see cref="ApiToken.LastUsedAt"/> before a token use writes a
+    /// fresh stamp. Keeps the "Last used" display accurate to a few minutes without making every
+    /// authenticated request a mesh-node write.
+    /// </summary>
+    private static readonly TimeSpan LastUsedStampInterval = TimeSpan.FromMinutes(5);
 
     /// <summary>
     /// Reactive token revocation. Writes the IsRevoked flag through
