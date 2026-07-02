@@ -36,7 +36,7 @@ If `psql` is not installed: `winget install PostgreSQL.PostgreSQL` (Windows) —
 
 ## C# alternative (no psql install needed)
 
-Drop a script under `tools/`:
+Drop a script anywhere outside the repo (e.g. a temp directory):
 
 ```csharp
 #r "nuget: Npgsql, 9.0.2"
@@ -61,9 +61,7 @@ while (await rdr.ReadAsync())
     Console.WriteLine($"{rdr[0]}  {rdr[1]}");
 ```
 
-Run with `dotnet script tools/your-query.csx` (one-time `dotnet tool install -g dotnet-script` if missing).
-
-There's a worked example at `tools/check-prod-db.csx` — uses the same pattern to run a battery of diagnostic queries (migration version, per-user schemas, access assignments, thread distribution).
+Run with `dotnet script your-query.csx` (one-time `dotnet tool install -g dotnet-script` if missing). Write such scripts as throwaways — run, then delete; the connection pattern above plus the cheat sheet below is everything a new one needs. Don't commit them to the repo.
 
 ## Cheat sheet for migration / partition state
 
