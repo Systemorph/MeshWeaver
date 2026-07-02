@@ -245,7 +245,21 @@ public static class DataExtensions
         {
             syncHub = current.GetHostedHub(request.Target!, create: HostedHubCreation.Never);
             if (syncHub is not null) break;
-            current = current.Configuration.ParentHub;
+            var parent = current.Configuration.ParentHub;
+            // 🚨 TERMINATE the parent-chain walk on a self-parent. `Configuration.ParentHub`
+            // resolves `IMessageHub` from the parent DI scope, and for a root/mesh hub that is
+            // the hub ITSELF (parent == current) — so without this guard the walk NEVER advances:
+            // when the sync sub-hub for this StreamId is absent (a disconnected circuit's stream,
+            // a reaped/never-created sync hub), a SINGLE StreamMessage spins the hub's DrainOne
+            // thread forever at 100% CPU inside GetHostedHub → the hub can process nothing else,
+            // starving that hub's SignalR keepalive (the round-3 composer-vanish) and leaving a
+            // silent, pegged-core, undisposable zombie portal hub (the 8s disposal-deadlock
+            // watchdog can't interrupt a running synchronous loop). Making the per-probe cost
+            // cheaper (the cached _parentHub, the allocation-free AddressComparer) only makes the
+            // infinite loop iterate faster — the loop itself must terminate. Mirrors the identical
+            // guard in MessageHubExtensions.BeginAsyncOperation, which walks the same chain.
+            if (ReferenceEquals(parent, current)) break;
+            current = parent;
         }
         if (syncHub is null)
             return Observable.Return(request.Ignored());
