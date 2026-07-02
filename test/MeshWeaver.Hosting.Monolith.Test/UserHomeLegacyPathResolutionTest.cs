@@ -29,6 +29,13 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 /// legacy <c>User/</c> prefix and re-resolves against the user's own partition, so
 /// <c>/User/{id}</c> resolves the SAME as the canonical <c>/{id}</c> — the user root
 /// node, whose default area (<c>Activity</c>) renders the home.</para>
+///
+/// <para><b>Scope: NAVIGATION ONLY.</b> The rewrite lives on
+/// <see cref="IPathResolver.ResolveNavigationPath"/> (what the GUI URL→area path calls),
+/// NOT on the shared <see cref="IPathResolver.ResolvePath"/> that message routing and
+/// node reads use — so a read/route of <c>User/{id}</c> stays literal (see
+/// <see cref="SharedResolvePath_DoesNotRewriteLegacyUserHome_PreservesReadRouteInvariant"/>).
+/// These tests therefore assert on the NAVIGATION resolution.</para>
 /// </summary>
 public class UserHomeLegacyPathResolutionTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
@@ -64,7 +71,7 @@ public class UserHomeLegacyPathResolutionTest(ITestOutputHelper output) : Monoli
         const string id = "roland_legacy_home";
         await SeedUserRoot(id);
 
-        var resolution = await Resolver.ResolvePath($"User/{id}").Should().Within(20.Seconds()).Emit();
+        var resolution = await Resolver.ResolveNavigationPath($"User/{id}").Should().Within(20.Seconds()).Emit();
 
         resolution.Should().NotBeNull();
         resolution!.Prefix.Should().Be(id,
@@ -85,7 +92,7 @@ public class UserHomeLegacyPathResolutionTest(ITestOutputHelper output) : Monoli
         const string id = "roland_bare_home";
         await SeedUserRoot(id);
 
-        var resolution = await Resolver.ResolvePath(id).Should().Within(20.Seconds()).Emit();
+        var resolution = await Resolver.ResolveNavigationPath(id).Should().Within(20.Seconds()).Emit();
 
         resolution.Should().NotBeNull();
         resolution!.Prefix.Should().Be(id);
@@ -104,7 +111,7 @@ public class UserHomeLegacyPathResolutionTest(ITestOutputHelper output) : Monoli
         const string id = "roland_area_home";
         await SeedUserRoot(id);
 
-        var resolution = await Resolver.ResolvePath($"User/{id}/{UserActivityLayoutAreas.ActivityArea}")
+        var resolution = await Resolver.ResolveNavigationPath($"User/{id}/{UserActivityLayoutAreas.ActivityArea}")
             .Should().Within(20.Seconds()).Emit();
 
         resolution.Should().NotBeNull();
@@ -121,11 +128,41 @@ public class UserHomeLegacyPathResolutionTest(ITestOutputHelper output) : Monoli
     [Fact(Timeout = 30000)]
     public async Task BareUserNodeType_StillResolvesToCatalogNode()
     {
-        var resolution = await Resolver.ResolvePath("User").Should().Within(20.Seconds()).Emit();
+        var resolution = await Resolver.ResolveNavigationPath("User").Should().Within(20.Seconds()).Emit();
 
         resolution.Should().NotBeNull("the built-in User NodeType node lives at path 'User'");
         resolution!.Prefix.Should().Be("User");
         resolution.Remainder.Should().BeNull();
+    }
+
+    /// <summary>
+    /// 🚨 The regression guard: the legacy-home rewrite is NAVIGATION-ONLY. The shared
+    /// <see cref="IPathResolver.ResolvePath"/> — which message routing
+    /// (<c>RoutingServiceBase.RouteMessage</c>) and node reads (<c>GetMeshNodeStream</c>)
+    /// go through — must NOT rewrite <c>User/{id}</c>. It resolves LITERALLY to the bare
+    /// <c>User</c> catalog node with the id as the (non-empty) remainder → NotFound for a
+    /// route. This is exactly what preserves the "no legacy User mirror" onboarding
+    /// invariant (<c>UserOnboardingServiceTests.CreateUser_WritesPartitionRootOnly_NoUserMirror</c>):
+    /// a read of <c>User/{id}</c> must find nothing, never get redirected to the user's
+    /// root partition (which DOES exist).
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task SharedResolvePath_DoesNotRewriteLegacyUserHome_PreservesReadRouteInvariant()
+    {
+        const string id = "roland_route_literal";
+        await SeedUserRoot(id);
+
+        // The un-rewritten ResolvePath must see User/{id} as the bare User catalog node
+        // (Prefix="User") plus a leftover remainder — NEVER the user's own root partition.
+        var resolution = await Resolver.ResolvePath($"User/{id}").Should().Within(20.Seconds()).Emit();
+
+        resolution.Should().NotBeNull("the built-in User NodeType node still prefix-matches 'User/…'");
+        resolution!.Prefix.Should().Be("User",
+            "the SHARED ResolvePath must NOT rewrite the legacy home — routing/reads see the literal resolution");
+        resolution.Remainder.Should().Be(id,
+            "the id is the leftover remainder off the bare User catalog node; a route with a non-empty remainder is NotFound");
+        resolution.Prefix.Should().NotBe(id,
+            "reads/routes of User/{id} must never resolve to the user's root partition (that would re-break the no-mirror invariant)");
     }
 
     /// <summary>
@@ -139,7 +176,7 @@ public class UserHomeLegacyPathResolutionTest(ITestOutputHelper output) : Monoli
         const string id = "roland_render_home";
         await SeedUserRoot(id);
 
-        var resolution = await Resolver.ResolvePath($"User/{id}").Should().Within(20.Seconds()).Emit();
+        var resolution = await Resolver.ResolveNavigationPath($"User/{id}").Should().Within(20.Seconds()).Emit();
         resolution!.Prefix.Should().Be(id);
 
         var client = GetClient();

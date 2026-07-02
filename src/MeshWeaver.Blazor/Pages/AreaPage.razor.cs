@@ -46,8 +46,10 @@ public partial class AreaPage : ComponentBase
     protected override void OnParametersSet()
     {
         // Reactive — Subscribe, never await on PathResolver chain (deadlock surface;
-        // see Doc/Architecture/AsynchronousCalls.md).
-        PathResolver.ResolvePath(Path ?? "").Subscribe(resolution =>
+        // see Doc/Architecture/AsynchronousCalls.md). This is GUI URL→area navigation, so
+        // use ResolveNavigationPath (applies the legacy /User/{id} home rewrite); message
+        // routing + node reads use the un-rewritten ResolvePath — see IPathResolver.
+        PathResolver.ResolveNavigationPath(Path ?? "").Subscribe(resolution =>
         {
             Resolution = resolution;
 
