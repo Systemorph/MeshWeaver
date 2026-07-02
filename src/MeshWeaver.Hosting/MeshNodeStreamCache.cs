@@ -49,6 +49,20 @@ namespace MeshWeaver.Hosting;
 /// (<c>NodeTypeCompilationHelpers.InstallCompileWatcher</c>) flips
 /// <c>CompilationStatus = Pending</c> on its OWN stream only on explicit
 /// user-driven <c>RequestedReleaseAt</c> flips.</para>
+///
+/// <para><b>Idle release.</b> Read entries have the same sliding-expiration
+/// semantics as the write-side update queues (<see cref="_updateQueues"/>): an
+/// entry whose shared stream has had NO live subscriber and NO read/write hit
+/// for <see cref="MeshNodeStreamCacheOptions.ReadStreamIdleExpiration"/> is
+/// released — its upstream <c>SubscribeRequest</c> is closed (the owner-side
+/// mirror unsubscribes, the 45s sync-stream heartbeat dies) and the NEXT read
+/// transparently re-creates it. Without this, every path EVER read (GUI
+/// navigation, per-URL path resolution, routing, NodeType activation, MCP
+/// get/search, synced-query grain warming) kept a permanently-connected
+/// JsonSynchronizationStream heartbeating for the process lifetime (~1,650
+/// live streams / 37 heartbeats-per-second measured on a long-lived portal).
+/// An entry with a live subscriber is NEVER released; the sweep only ever
+/// CLOSES idle things — it never re-subscribes (the 2026-06-08 rule).</para>
 /// </summary>
 internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
 {
@@ -58,11 +72,115 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     // teardown idempotent so the second caller is a no-op.
     private int _disposed;
 
-    /// <summary>One cache entry: the updatable handle plus the shared,
-    /// replay-cached read view over it. The Shared observable is the raw
-    /// system-side stream; per-user access gating is applied in
-    /// <c>GetStream</c> before each subscriber consumes it.</summary>
-    private sealed record Entry(MeshNodeStreamHandle Handle, IObservable<MeshNode> Shared, IDisposable HydrationSub);
+    /// <summary>One cache entry: the updatable handle, the raw replay-cached read
+    /// view over the hydration subject (<see cref="Replay"/> — per-user access
+    /// gating is applied in <c>GetStream</c> before each subscriber consumes it),
+    /// and the live upstream subscription. Also carries the idle-release state: a
+    /// live-subscriber refcount plus a sliding last-activity stamp, both guarded by
+    /// a plain synchronous gate (held for nanoseconds around pure field updates —
+    /// never across I/O, a hub post, or anything awaitable), so subscriber
+    /// attach/detach is ATOMIC against the idle sweep's evict decision: an entry
+    /// with a live subscriber can never be evicted, and a reader that just pinned
+    /// the entry cannot lose it. Once <c>evicted</c> flips the entry is permanently
+    /// dead — <see cref="TryTouch"/>/<see cref="TryAddSubscriber"/> fail and the
+    /// caller transparently re-creates a fresh entry (same lifecycle as write-queue
+    /// eviction — invisible to callers).</summary>
+    private sealed class Entry(MeshNodeStreamHandle handle, IObservable<MeshNode> replay, IDisposable hydrationSub)
+    {
+        private readonly object gate = new();
+        private int subscribers;
+        private long lastActiveAt = Environment.TickCount64; // monotonic ms
+        private bool evicted;
+
+        public MeshNodeStreamHandle Handle { get; } = handle;
+
+        /// <summary>Raw replay view over the hydration subject. Internal plumbing —
+        /// consumers attach via the refcounted wrapper (<see cref="SharedView"/>),
+        /// which is what makes live subscribers visible to the idle sweep.</summary>
+        public IObservable<MeshNode> Replay { get; } = replay;
+
+        /// <summary>The upstream hydration subscription (+ storm-breaker bookkeeping).</summary>
+        public IDisposable HydrationSub { get; } = hydrationSub;
+
+        /// <summary>True while the entry is usable. Does NOT refresh the idle window.</summary>
+        public bool IsLive { get { lock (gate) return !evicted; } }
+
+        /// <summary>Refreshes the sliding idle window (read/write activity hit).</summary>
+        public void Touch() { lock (gate) lastActiveAt = Environment.TickCount64; }
+
+        /// <summary>Atomically "still live + refresh the sliding window". False ⇒ the
+        /// entry was evicted; the caller must drop it and re-create. A successful pin
+        /// makes idle eviction impossible for a full idle window.</summary>
+        public bool TryTouch()
+        {
+            lock (gate)
+            {
+                if (evicted) return false;
+                lastActiveAt = Environment.TickCount64;
+                return true;
+            }
+        }
+
+        /// <summary>Registers a live subscriber (blocks idle eviction outright) and
+        /// refreshes the window. False ⇒ evicted; caller re-resolves a fresh entry.</summary>
+        public bool TryAddSubscriber()
+        {
+            lock (gate)
+            {
+                if (evicted) return false;
+                subscribers++;
+                lastActiveAt = Environment.TickCount64;
+                return true;
+            }
+        }
+
+        /// <summary>Releases a live subscriber. Also refreshes the window, so "idle"
+        /// is measured from the LAST unsubscribe, not the last data emission.</summary>
+        public void RemoveSubscriber()
+        {
+            lock (gate)
+            {
+                subscribers--;
+                lastActiveAt = Environment.TickCount64;
+            }
+        }
+
+        /// <summary>Cheap advisory pre-check the sweep runs before detaching the path's
+        /// upstreams. The authoritative decision is <see cref="TryMarkIdleEvicted"/>.</summary>
+        public bool IsIdleCandidate(TimeSpan idleWindow)
+        {
+            lock (gate)
+                return !evicted && subscribers == 0
+                    && Environment.TickCount64 - lastActiveAt >= (long)idleWindow.TotalMilliseconds;
+        }
+
+        /// <summary>Authoritative evict decision: marks the entry evicted iff it has
+        /// ZERO live subscribers AND stayed untouched for the full idle window —
+        /// atomically against <see cref="TryTouch"/>/<see cref="TryAddSubscriber"/>.</summary>
+        public bool TryMarkIdleEvicted(TimeSpan idleWindow)
+        {
+            lock (gate)
+            {
+                if (evicted || subscribers > 0
+                    || Environment.TickCount64 - lastActiveAt < (long)idleWindow.TotalMilliseconds)
+                    return false;
+                evicted = true;
+                return true;
+            }
+        }
+
+        /// <summary>Unconditional evict mark for the forced paths (node delete /
+        /// storm-breaker stale entry / cache disposal). Idempotent.</summary>
+        public bool MarkEvicted()
+        {
+            lock (gate)
+            {
+                if (evicted) return false;
+                evicted = true;
+                return true;
+            }
+        }
+    }
 
     /// <summary>
     /// Validity window for a cached <c>(path,user) → Permission</c> result. A
@@ -90,6 +208,30 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     private readonly ConcurrentDictionary<string, Lazy<Entry>> _streams = new();
     private readonly ConcurrentDictionary<(string Path, string UserId), AccessEntry> _access = new();
 
+    // 🚨 Idle release of read entries — the read-side counterpart of the write
+    // cache's (_updateQueues) sliding expiration. Window/interval come from
+    // MeshNodeStreamCacheOptions (10 min / 1 min by default; tests inject short
+    // windows). The sweep subscription only ever CLOSES idle entries; re-opening
+    // is always driven by the next natural read (never a timer — 2026-06-08 rule).
+    private readonly TimeSpan readStreamIdleExpiration;
+    private readonly TimeSpan readStreamSweepInterval;
+    private readonly IDisposable idleSweep;
+
+    // Diagnostic/test seam: one event per released read entry (idle sweep,
+    // Invalidate, storm-breaker stale removal). Subject.Synchronize because
+    // releases fire from the sweep timer thread and hub threads concurrently.
+    private readonly ISubject<ReadStreamEviction> readStreamEvictions =
+        Subject.Synchronize(new Subject<ReadStreamEviction>());
+
+    /// <summary>Emits one event per released read entry. Diagnostic/test seam —
+    /// deterministic tests await the eviction of a specific path instead of polling.</summary>
+    internal IObservable<ReadStreamEviction> ReadStreamEvictions => readStreamEvictions.AsObservable();
+
+    /// <summary>True when a live (non-evicted) read entry exists for <paramref name="path"/>.
+    /// Test seam — does NOT touch the entry's idle window.</summary>
+    internal bool IsReadStreamLive(string path) =>
+        _streams.TryGetValue(path, out var lazy) && lazy.IsValueCreated && lazy.Value.IsLive;
+
     // 🚨 STORM BREAKER / negative cache. A read whose owner answers NotFound /
     // DeliveryFailure (the node does not exist) caches that FAILURE here with an
     // exponential-backoff window. While the window is OPEN, GetStreamRaw fast-fails
@@ -113,7 +255,14 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     // StormFailThreshold logs ONE "[STORM-BREAKER] suppressing" warning so the storm is
     // visible in Grafana/Loki without the per-failure log flood.
     private readonly ConcurrentDictionary<string, NegativeEntry> _negative = new();
-    private sealed record NegativeEntry(Exception Error, int FailCount, DateTimeOffset OpenUntil);
+    // Reprobing: set true by the FIRST read past OpenUntil — that read drops the stale errored
+    // entry and lets a fresh probe hydrate. Subsequent reads while that probe is IN FLIGHT must
+    // NOT re-evict it (repeatedly tearing a still-hydrating entry down before it can resolve is a
+    // churn/storm that never lets the negative entry clear). Reset whenever RecordNegative writes
+    // a fresh window; FailCount is carried across the reprobe so a genuinely-missing node still
+    // backs off further when the fresh probe re-errors.
+    private sealed record NegativeEntry(Exception Error, int FailCount, DateTimeOffset OpenUntil,
+        bool Reprobing = false);
     private static readonly TimeSpan StormBaseCooldown = TimeSpan.FromSeconds(2);
     private static readonly TimeSpan StormMaxCooldown = TimeSpan.FromMinutes(5);
     private const int StormFailThreshold = 5;
@@ -190,10 +339,16 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     /// <summary>Cached effective-permission probe with expiry.</summary>
     private sealed record AccessEntry(Permission Permissions, DateTimeOffset ValidUntil);
 
-    public MeshNodeStreamCache(IMessageHub meshHub, ILogger<MeshNodeStreamCache> logger)
+    public MeshNodeStreamCache(
+        IMessageHub meshHub,
+        ILogger<MeshNodeStreamCache> logger,
+        MeshNodeStreamCacheOptions? options = null)
     {
         this.meshHub = meshHub;
         this.logger = logger;
+        var opts = options ?? new MeshNodeStreamCacheOptions();
+        readStreamIdleExpiration = opts.ReadStreamIdleExpiration;
+        readStreamSweepInterval = opts.ReadStreamSweepInterval;
 
         // 🚨 Dedicated cache hub at a PROCESS-UNIQUE address keyed by the
         // parent mesh hub's Address Id. The `cache` address-type is declared
@@ -256,6 +411,15 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         // container disposes it on container teardown; the _disposed guard
         // makes whichever fires second a no-op.
         cacheHub.RegisterForDisposal(_ => Dispose());
+
+        // 🚨 Idle sweep for the per-path READ cache. Periodic and EVICTION-ONLY: each
+        // tick closes entries that have been subscriber-free AND untouched for the
+        // full idle window; it NEVER re-subscribes anything (re-opening is always
+        // the next natural read — the same lifecycle as _updateQueues' sliding
+        // expiry, which this mirrors on the read side). Disposed FIRST in Dispose()
+        // so no pass starts after teardown begins.
+        idleSweep = Observable.Interval(readStreamSweepInterval)
+            .Subscribe(_ => ReleaseIdleReadStreams());
     }
 
     /// <summary>
@@ -268,17 +432,35 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         if (System.Threading.Interlocked.Exchange(ref _disposed, 1) != 0)
             return; // already torn down by the other disposal path
 
+        // 0. Idle sweep FIRST — no new sweep pass may start once teardown begins
+        //    (an in-flight pass is harmless: entry teardown is idempotent and the
+        //    sync hubs are hosted by cacheHub, whose disposal reaps any stragglers).
+        try { idleSweep.Dispose(); }
+        catch (Exception ex)
+        {
+            logger.LogDebug(ex, "MeshNodeStreamCache: error disposing idle sweep");
+        }
+        try { readStreamEvictions.OnCompleted(); }
+        catch (Exception ex)
+        {
+            logger.LogDebug(ex, "MeshNodeStreamCache: error completing eviction seam");
+        }
+
         // 1. Per-path hydration: cancel the upstream SubscribeRequest so the
         //    owning node hub's response-subject is released. (The Entry's
         //    Handle is a stateless factory — it owns nothing; the HydrationSub
         //    IS the live subscription.) Without this every cache.GetStream(path)
         //    leaks a long-lived SubscribeRequest into the mesh hub's
-        //    responseSubjects and the leak detector flags it at dispose.
+        //    responseSubjects and the leak detector flags it at dispose. The
+        //    upstream sync streams themselves are disposed with the cacheHub's
+        //    workspace (they are cached there); MarkEvicted makes any straggling
+        //    wrapper reference fail over instead of attaching to a dead subject.
         foreach (var (path, lazyEntry) in _streams)
         {
             if (!lazyEntry.IsValueCreated) continue;
             try
             {
+                lazyEntry.Value.MarkEvicted();
                 lazyEntry.Value.HydrationSub.Dispose();
             }
             catch (Exception ex)
@@ -326,8 +508,32 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         _negative.Clear();
     }
 
-    private Entry GetEntry(string path) =>
-        _streams.GetOrAdd(path, p => new Lazy<Entry>(() =>
+    /// <summary>
+    /// Resolves the live entry for <paramref name="path"/>, creating it when absent —
+    /// the same Lazy-in-ConcurrentDictionary dedup as before (factory side effects run
+    /// at most once per key), now with a pin-or-recreate loop on top: <c>TryTouch</c>
+    /// atomically verifies the entry is not evicted AND refreshes its sliding idle
+    /// window, so a successfully returned entry cannot be idle-evicted for a full
+    /// window — the caller's subsequent subscribe/write can never race the sweep. An
+    /// evicted entry (idle sweep / Invalidate / storm breaker) is unlinked pair-exact
+    /// (never a newer entry) and transparently re-created, exactly like a write after
+    /// update-queue eviction.
+    /// </summary>
+    private Entry GetEntry(string path)
+    {
+        while (true)
+        {
+            var lazy = _streams.GetOrAdd(path, p => new Lazy<Entry>(
+                () => CreateEntry(p), LazyThreadSafetyMode.ExecutionAndPublication));
+            var entry = lazy.Value;
+            if (entry.TryTouch())
+                return entry;
+            _streams.TryRemove(new KeyValuePair<string, Lazy<Entry>>(path, lazy));
+        }
+    }
+
+    private Entry CreateEntry(string p)
+    {
         {
             logger.LogDebug("MeshNodeStreamCache: opening shared stream for {Path}", p);
             // 🚨 Bypass the cache when opening our OWN upstream — otherwise
@@ -362,10 +568,14 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
             // grants that principal access to partition nodes — owners' RLS
             // would deny with "user 'mesh/{guid}' lacks Read permission".
             //
-            // Eager Connect() (vs AutoConnect(1)) keeps the upstream alive
-            // for process lifetime — no RefCount churn, identity captured
-            // deterministically at cache-creation rather than at first
-            // random consumer.
+            // Eager hydration (vs AutoConnect(1)) keeps the upstream alive for
+            // the ENTRY's lifetime — no per-consumer RefCount churn on the
+            // upstream, identity captured deterministically at entry-creation
+            // rather than at first random consumer. The entry's lifetime is
+            // itself bounded: the idle sweep releases it (closing this
+            // subscription AND the underlying sync stream) once the path has
+            // had no subscriber and no read/write hit for the idle window —
+            // the next read transparently re-runs this factory.
             // Build the cached subject explicitly so we can wrap it with
             // Subject.Synchronize — RX subjects are NOT threadsafe across
             // multiple producers (and even with one producer, race between
@@ -411,12 +621,160 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                 ex => RecordNegative(p, ex));
             var disposal = new System.Reactive.Disposables.CompositeDisposable(hydrationSub, bookkeeping);
             // Store the disposal on the Entry so the mesh hub's pre-Quiescing
-            // disposal hook (registered in the ctor) can cancel it. Without
-            // this, every cache.GetStream(path) leaks a long-lived
-            // SubscribeRequest into the mesh hub's responseSubjects and the
-            // test base's leak detection flags it at dispose.
+            // disposal hook (registered in the ctor) can cancel it — and so the
+            // idle sweep can close it when the path goes quiet. Without this,
+            // every cache.GetStream(path) leaks a long-lived SubscribeRequest
+            // into the mesh hub's responseSubjects and the test base's leak
+            // detection flags it at dispose.
             return new Entry(handle, inner.AsObservable(), disposal);
-        }, LazyThreadSafetyMode.ExecutionAndPublication)).Value;
+        }
+    }
+
+    /// <summary>
+    /// The per-path shared read view handed to every consumer: a COLD wrapper that, at
+    /// subscription time, pins the CURRENT live entry — registering on its subscriber
+    /// refcount so the idle sweep can never release a stream that is actually being
+    /// observed — and relays the entry's Replay(1) hydration. Unsubscribing releases
+    /// the refcount and restarts the idle window. A wrapper reference held across an
+    /// idle release transparently re-opens the path on its next subscription: the
+    /// subscribe IS a read, exactly like a write after update-queue eviction.
+    /// </summary>
+    private IObservable<MeshNode> SharedView(string path) =>
+        Observable.Create<MeshNode>(observer =>
+        {
+            while (true)
+            {
+                var entry = GetEntry(path); // pins: live entry, idle window refreshed
+                // Between GetEntry's pin and this refcount registration the sweep
+                // cannot idle-evict (the pin just reset the window), but a FORCED
+                // eviction (node delete / storm breaker) can still land — loop and
+                // re-resolve; a fresh entry cannot be evicted before we register.
+                if (!entry.TryAddSubscriber())
+                    continue;
+                IDisposable sub;
+                try
+                {
+                    sub = entry.Replay.Subscribe(observer);
+                }
+                catch
+                {
+                    entry.RemoveSubscriber();
+                    throw;
+                }
+                return System.Reactive.Disposables.Disposable.Create(() =>
+                {
+                    sub.Dispose();
+                    // Refcount release ALSO restarts the idle window — "idle" is
+                    // measured from the last unsubscribe, never mid-subscription.
+                    entry.RemoveSubscriber();
+                });
+            }
+        });
+
+    /// <summary>
+    /// One idle-sweep pass over the read cache: releases every entry whose shared
+    /// stream has had NO live subscriber and NO read/write hit for the full idle
+    /// window. Release = close the hydration subscription AND dispose the path's
+    /// upstream sync streams (posting <c>UnsubscribeRequest</c> to the owner — the
+    /// owner-side mirror unsubscribes and the 45s heartbeat dies), then drop the
+    /// entry so the NEXT read transparently re-opens. 🚨 CLOSES ONLY — never
+    /// re-subscribes (2026-06-08 rule; same discipline as the storm breaker).
+    ///
+    /// <para>The detach-then-mark protocol guarantees a mid-release concurrent read
+    /// can neither adopt a doomed upstream nor lose a live subscription:</para>
+    /// <list type="number">
+    ///   <item>Advisory idle pre-check (<see cref="Entry.IsIdleCandidate"/>).</item>
+    ///   <item>DETACH the path's upstream sync streams from the cacheHub workspace —
+    ///     from this instant a concurrent read/write builds a FRESH upstream and can
+    ///     no longer adopt a detached instance; the current entry's hydration stays
+    ///     attached and live.</item>
+    ///   <item>Authoritative <see cref="Entry.TryMarkIdleEvicted"/> under the entry
+    ///     gate. LOST (a reader pinned/subscribed since the pre-check) ⇒ re-park the
+    ///     detached streams (they stay live for the entry) and skip — the entry
+    ///     survives untouched.</item>
+    ///   <item>WON ⇒ nothing is attached (the refcount was zero for the whole
+    ///     window): unlink the entry pair-exact, dispose the hydration subscription
+    ///     FIRST (so upstream teardown can never surface into the storm-breaker
+    ///     negative cache), then dispose the detached upstreams.</item>
+    /// </list>
+    /// </summary>
+    private void ReleaseIdleReadStreams()
+    {
+        if (System.Threading.Volatile.Read(ref _disposed) != 0)
+            return;
+        try
+        {
+            foreach (var (path, lazy) in _streams)
+            {
+                if (!lazy.IsValueCreated)
+                    continue;
+                var entry = lazy.Value;
+                if (!entry.IsIdleCandidate(readStreamIdleExpiration))
+                    continue;
+
+                var detached = entry.Handle.DetachUpstreams();
+                if (!entry.TryMarkIdleEvicted(readStreamIdleExpiration))
+                {
+                    // Lost the race — a consumer pinned the entry between the
+                    // pre-check and the mark. Hand the upstreams back; the entry
+                    // keeps serving them. (A later write may open a fresh upstream
+                    // alongside — the same benign divergence a change-feed evict
+                    // produces; both are reaped on the eventual release.)
+                    entry.Handle.ReparkUpstreams(detached);
+                    continue;
+                }
+
+                _streams.TryRemove(new KeyValuePair<string, Lazy<Entry>>(path, lazy));
+                var upstreamReleased = TearDownEntry(path, entry, detached);
+                logger.LogDebug(
+                    "MeshNodeStreamCache: released idle read stream for {Path} (upstreams disposed: {Count})",
+                    path, detached.Count);
+                readStreamEvictions.OnNext(new ReadStreamEviction(path, upstreamReleased, "idle"));
+            }
+        }
+        catch (Exception ex)
+        {
+            // Never let a sweep fault kill the interval subscription silently — the
+            // leak would quietly return. Log loudly; the next tick runs a fresh pass.
+            logger.LogError(ex, "MeshNodeStreamCache: idle read-stream sweep failed");
+        }
+    }
+
+    /// <summary>
+    /// Tears down an already-evicted, unlinked entry: disposes the hydration +
+    /// storm-breaker bookkeeping FIRST (so upstream disposal can never surface a
+    /// teardown error into the negative cache and poison the next natural read),
+    /// then disposes the detached upstream sync streams — closing the
+    /// SubscribeRequest at the owner and stopping the client-side heartbeat.
+    /// Returns true when at least one upstream sync stream was disposed.
+    /// </summary>
+    private bool TearDownEntry(string path, Entry entry, IReadOnlyList<ISynchronizationStream> detached)
+    {
+        try
+        {
+            entry.HydrationSub.Dispose();
+        }
+        catch (Exception ex)
+        {
+            logger.LogDebug(ex,
+                "MeshNodeStreamCache: error disposing hydration subscription for {Path}", path);
+        }
+        var released = false;
+        foreach (var stream in detached)
+        {
+            try
+            {
+                stream.Dispose();
+                released = true;
+            }
+            catch (Exception ex)
+            {
+                logger.LogDebug(ex,
+                    "MeshNodeStreamCache: error disposing upstream sync stream for {Path}", path);
+            }
+        }
+        return released;
+    }
 
     /// <summary>
     /// Records an upstream read failure for <paramref name="path"/> in the storm
@@ -481,21 +839,49 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         // STORM BREAKER: while this path's negative-cache window is open, fast-fail
         // by replaying the cached owner error WITHOUT opening an upstream
         // SubscribeRequest. See _negative. Once the window elapses, drop the errored
-        // Entry so the NEXT read re-probes the owner exactly once (re-probe is driven
+        // Entry so the NEXT read re-probes the owner EXACTLY ONCE (re-probe is driven
         // by a real read, never an auto-resubscribe). FailCount is retained so a
         // repeat failure backs off further; a success clears it (see GetEntry).
+        //
+        // 🚨 Two guards keep the re-probe from turning into a subscribe/unsubscribe storm
+        // that wedges the owner hub (the DevLogin self-provision hang):
+        //   1. Reprobing: only the FIRST read past the window evicts + reopens; while the
+        //      fresh probe is IN FLIGHT, later reads fall through to SharedView and share
+        //      it (the atomic TryUpdate lets exactly one reader win). Without this, every
+        //      ~100ms read re-evicted the still-hydrating fresh probe before it resolved,
+        //      so the negative entry never cleared.
+        //   2. The stale-entry eviction disposes ONLY the Rx hydration + marks the entry
+        //      evicted — it does NOT synchronously dispose the upstream sync stream. A
+        //      terminally-errored upstream ("No node found") has ALREADY torn down its own
+        //      keep-alive/heartbeat, so it leaks nothing; but posting UnsubscribeRequest to
+        //      the owner mid-reprobe RACES the fresh re-subscribe and wedges the owner's
+        //      action block (its snapshot DataChangedEvent then never lands → the read
+        //      never resolves). The idle sweep reaps genuinely-idle LIVE upstreams (the
+        //      actual leak); an errored/superseded upstream is reaped by the change-feed
+        //      parking + workspace disposal, exactly as before the idle-release change.
         if (_negative.TryGetValue(path, out var neg))
         {
             if (neg.OpenUntil > DateTimeOffset.UtcNow)
                 return Observable.Throw<MeshNode>(neg.Error);
-            if (_streams.TryRemove(path, out var staleLazy))
+            if (!neg.Reprobing
+                && _negative.TryUpdate(path, neg with { Reprobing = true }, neg)
+                && _streams.TryRemove(path, out var staleLazy) && staleLazy.IsValueCreated)
             {
-                try { if (staleLazy.IsValueCreated) staleLazy.Value.HydrationSub.Dispose(); }
+                try
+                {
+                    // Drop the errored entry's Rx hydration and mark it evicted so any
+                    // straggling SharedView wrapper transparently re-resolves. Deliberately
+                    // NOT DetachUpstreams()/TearDownEntry() here — see guard #2 above.
+                    var stale = staleLazy.Value;
+                    stale.MarkEvicted();
+                    stale.HydrationSub.Dispose();
+                    readStreamEvictions.OnNext(new ReadStreamEviction(path, false, "storm-breaker"));
+                }
                 catch (Exception ex) { logger.LogDebug(ex, "MeshNodeStreamCache: error disposing stale entry for {Path}", path); }
             }
         }
 
-        var shared = GetEntry(path).Shared;
+        var shared = SharedView(path);
 
         var accessService = meshHub.ServiceProvider.GetService<AccessService>();
         if (accessService is null)
@@ -767,6 +1153,10 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                         // A successful write proves the owner is live ⇒ clear any storm-breaker
                         // window so reads/writes re-probe normally.
                         _negative.TryRemove(path, out _);
+                        // Write activity refreshes the read entry's idle window — GetEntry
+                        // pinned it at write START; touching again on each terminal keeps
+                        // an in-flight write's upstream out of the idle sweep's reach.
+                        entry.Touch();
                         req.Result.OnNext(node);
                     },
                     ex =>
@@ -781,6 +1171,7 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                         // so a legitimately-existing node is never falsely suppressed.
                         if (IsMissingNodeFailure(ex))
                             RecordNegative(path, ex);
+                        entry.Touch();
                         req.Result.OnError(ex);
                         Settle();
                     },
@@ -789,6 +1180,7 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                         logger.LogDebug(
                             "[UpdateQueue] COMPLETE path={Path} seq={Seq} totalElapsed={ElapsedMs}ms",
                             path, req.Seq, (DateTimeOffset.UtcNow - req.EnteredAt).TotalMilliseconds);
+                        entry.Touch();
                         req.Result.OnCompleted();
                         Settle();
                     });
@@ -1153,11 +1545,22 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         if (_streams.TryRemove(path, out var lazyEntry))
         {
             // Dispose the upstream SubscribeRequest so it doesn't dangle in
-            // mesh hub's responseSubjects after the path is deleted. Skip
-            // for Lazy<Entry> that never ran its factory (nothing to dispose).
+            // mesh hub's responseSubjects after the path is deleted — and
+            // detach + dispose the underlying sync streams so nothing keeps
+            // heartbeating a deleted owner. MarkEvicted makes any straggling
+            // wrapper reference transparently re-resolve (and hit the deleted
+            // node's NotFound → storm breaker) instead of attaching to a dead
+            // subject. Skip for Lazy<Entry> that never ran its factory.
             if (lazyEntry.IsValueCreated)
             {
-                try { lazyEntry.Value.HydrationSub.Dispose(); }
+                try
+                {
+                    var entry = lazyEntry.Value;
+                    var detached = entry.Handle.DetachUpstreams();
+                    entry.MarkEvicted();
+                    var released = TearDownEntry(path, entry, detached);
+                    readStreamEvictions.OnNext(new ReadStreamEviction(path, released, "invalidate"));
+                }
                 catch (Exception ex)
                 {
                     logger.LogDebug(ex,
@@ -1190,3 +1593,13 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         return PartitionDefinition.IsSatelliteNodeType(firstSegment);
     }
 }
+
+/// <summary>
+/// One released read entry of <see cref="MeshNodeStreamCache"/> — emitted on
+/// <c>ReadStreamEvictions</c> for diagnostics and deterministic tests.
+/// <paramref name="UpstreamReleased"/> is true when at least one upstream sync
+/// stream (the <c>SubscribeRequest</c> client whose 45s heartbeat kept the
+/// owner-side mirror alive) was actually disposed as part of the release.
+/// <paramref name="Reason"/> ∈ { "idle", "invalidate", "storm-breaker" }.
+/// </summary>
+internal sealed record ReadStreamEviction(string Path, bool UpstreamReleased, string Reason);
