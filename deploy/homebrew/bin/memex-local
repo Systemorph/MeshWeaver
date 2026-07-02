@@ -42,6 +42,11 @@ readonly COLIMA_MEM="${MEMEX_COLIMA_MEM:-16}"   # VM sizing (§2)
 # local-build and ACR-pull paths retag onto these names so k3s finds them (§3).
 readonly PORTAL_IMAGE="ghcr.io/systemorph/memex-portal-ai:latest"
 readonly MIGRATION_IMAGE="ghcr.io/systemorph/memex-migration:latest"
+# The Next.js React GUI (clients/portal-next), served at /next as a FEATURE-FLAGGED
+# opt-in frontend beside the Blazor portal. Built locally into Colima's Docker store
+# (arm64) and loaded IfNotPresent; helm_deploy flips portalNext.enabled=true whenever
+# this image is present. Matches the chart's portalNext.image default (deploy/helm/values.yaml).
+readonly PORTAL_NEXT_IMAGE="meshweaver/portal-next:local"
 # The portal-ai BASE image (ASP.NET runtime + the co-hosted CLIs: Claude Code + GitHub Copilot,
 # npm -g). The local portal image layers the published app ON this base so the CLIs are PACKAGED into
 # the k3s portal exactly like the ACR/AKS image (deploy/base-images/portal-ai/Dockerfile). ACR's base
@@ -283,6 +288,34 @@ image_build_local() {                                  # §3 Option B
   ok "Images tagged $PORTAL_IMAGE / $MIGRATION_IMAGE (visible to k3s via IfNotPresent)"
 }
 
+# Build the Next.js React GUI image (clients/portal-next) into Colima's Docker store so k3s loads
+# it IfNotPresent. The build CONTEXT is clients/ (the app aliases @meshweaver/react +
+# @meshweaver/client-web to their SOURCE trees in ../react + ../grpc-web — see the Dockerfile).
+# Once present, helm_deploy flips portalNext.enabled=true → the /next ingress route + the
+# Portal:ReactAppUrl config that lights up the opt-in "Try the new frontend" toggle. This is a
+# fast Node build (no .NET), so it runs OUTSIDE image_build_local's host-saturation lock.
+portal_next_build_local() {
+  local repo
+  repo="$(resolve_repo)" || die "portal-next build needs the repo — set MEMEX_REPO to your MeshWeaver checkout"
+  need docker docker
+  need node node
+  # grpc-web consumes protobuf TS generated from the mesh .proto via `buf generate` — buf +
+  # protoc-gen-es are grpc-web devDeps and the .proto (src/MeshWeaver.Hosting.Grpc/Protos) lives in
+  # the .NET tree, OUTSIDE the clients/ Docker context. buf also ships glibc binaries, so we generate
+  # on the HOST (arm64 macOS) rather than inside the musl Alpine image; the output
+  # (clients/grpc-web/src/gen, gitignored) is then copied into the build context. grpc-web has no
+  # committed lockfile (gitignored), so `npm install` — NOT `npm ci`.
+  step "Generating grpc-web protobuf TS on the host (buf generate) for portal-next"
+  npm --prefix "$repo/clients/grpc-web" install --no-audit --no-fund
+  npm --prefix "$repo/clients/grpc-web" run gen
+  step "Building portal-next (Next.js React GUI) image → $PORTAL_NEXT_IMAGE (arm64)"
+  docker build --platform linux/arm64 \
+    -f "$repo/clients/portal-next/Dockerfile" \
+    -t "$PORTAL_NEXT_IMAGE" \
+    "$repo/clients"
+  ok "portal-next image built: $PORTAL_NEXT_IMAGE (visible to k3s via IfNotPresent; helm enables /next)"
+}
+
 image_pull_acr() {                                     # §3 Option A
   local tag="${1:-latest}"
   need docker docker
@@ -345,10 +378,24 @@ helm_deploy() {
   # revision 7). Forcing conflicts makes helm the authoritative owner of the fields it sets —
   # the chart stays the source of truth — which both heals an already-wedged release and
   # prevents the wedge from recurring.
+  # FEATURE FLAG — Next.js React GUI at /next. Self-contained + idempotent: if the portal-next
+  # image is present in Colima's Docker store (portal_next_build_local built it), flip the chart's
+  # portalNext.enabled on so the /next Deployment/Service/ingress-path + Portal:ReactAppUrl land.
+  # Absent (e.g. --from-acr / --skip-image, where portal-next isn't published) → stays off, so the
+  # Blazor-only stack deploys unchanged. The default frontend remains Blazor — /next is opt-in.
+  local next_args=()
+  if command -v docker >/dev/null 2>&1 && docker image inspect "$PORTAL_NEXT_IMAGE" >/dev/null 2>&1; then
+    next_args=(--set portalNext.enabled=true --set portalNext.image="$PORTAL_NEXT_IMAGE")
+    info "portal-next image present → enabling the Next.js frontend at /next (opt-in via the user menu's 'Try the new frontend')"
+  else
+    info "portal-next image not present → Blazor-only (build it with 'up'/'update' to enable /next)"
+  fi
+
   helm upgrade --install "$RELEASE" "$chart" \
     -f "$chart/values.yaml" \
     -f "$OVERLAY" \
     --set persistDataVolume=true \
+    "${next_args[@]}" \
     -n "$NAMESPACE" --create-namespace \
     --force-conflicts
 
@@ -747,7 +794,7 @@ cmd_up() {
   start_colima                                   # §2
 
   case "$image_source" in                        # §3
-    build) image_build_local ;;
+    build) image_build_local; portal_next_build_local ;;   # portal + migration, then the /next React GUI
     acr)   image_pull_acr "$acr_tag" ;;
     skip)  info "Skipping image step (--skip-image); relying on IfNotPresent/cache" ;;
   esac
@@ -865,7 +912,7 @@ cmd_update() {
 
   step "Rolling memex to a newer image ($image_source)"
   case "$image_source" in
-    build) image_build_local ;;                  # §3 Option B — builds portal AND migration
+    build) image_build_local; portal_next_build_local ;;   # §3 Option B — portal + migration, then the /next React GUI
     acr)   image_pull_acr "$acr_tag" ;;          # §3 Option A — retags onto the chart's image names
   esac
 

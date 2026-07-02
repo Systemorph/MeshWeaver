@@ -134,6 +134,22 @@ This guidance lives in the shared agent base prompt (`AgentChatClient`); the age
   Copilot) discover + read them through the `meshweaver` MCP server. A `LaunchesSubThread` skill runs in
   its own sub-thread when loaded (the generic `StartThread` launcher).
 
+### Using an instruction skill: `/code <task>`
+
+An instruction skill is invoked with the task typed **after the slash word** — everything after the
+skill name is the work order:
+
+```
+/code build a Todo NodeType with a Kanban board layout area
+```
+
+The chat digests the trailing text into a normal round (`SkillInfo.ToSubmissionText`): the typed task
+is submitted prefixed with a `load_skill` directive, so the agent loads the skill's instructions (the
+`SKILL.md` body) first and then applies them to exactly what you typed. `/code` alone (no task) just
+shows the skill's help text — there is nothing to run. Under a CLI harness (Claude Code / Copilot) the
+raw `/code …` text is instead forwarded 1:1 to the harness, which resolves the skill itself through
+the `meshweaver` MCP server.
+
 ---
 
 ## How dispatch works
@@ -143,7 +159,8 @@ When the user runs `/name`, the chat view (`ThreadChatView.HandleSlashCommandAsy
 1. **harness-owned command?** (`/login`, `/logout` under a non-MeshWeaver harness) → route to the harness.
 2. **otherwise** → resolve a `nodeType:Skill` **mesh node** by slash word (with namespace inheritance,
    `ResolveSkillNodeAndRun`) and run its `Action` — `Pick` pops the combobox, `OpenContent` loads the
-   content window. Pure-instruction skills have no chat behaviour.
+   content window. A pure-instruction skill with trailing text submits the task as a round with a
+   `load_skill` directive (see above); without trailing text it shows the skill's help.
 
 The view contains **no per-skill code** — only the generic picker + content-window callbacks. All pick
 skills write to the same `ThreadComposer`.
@@ -154,7 +171,8 @@ skills write to the same `ThreadComposer`.
 
 - `test/MeshWeaver.AI.Test/SkillNodeTypeTest.cs` — the POCO data layer: `BuiltInSkillProvider` ships the
   three `Pick` skills, `SkillQueries` (inheritance), `ProjectSkills` (dedupe + JsonElement),
-  `SkillInfo.ToPickerRequest`.
+  `SkillInfo.ToPickerRequest`, and `SkillInfo.ToSubmissionText` (an instruction skill digests the text
+  typed after the slash word into a `load_skill`-prefixed round).
 - `test/MeshWeaver.AI.Test/SkillAutocompleteTest.cs` — typing `/` lists the built-in skills.
 - `test/MeshWeaver.AI.Test/SkillHarnessImportSourceTest.cs` — the Skill + Harness catalogs import into
   Postgres (and the sync gate drops the in-memory surface on the DB-synced path).
