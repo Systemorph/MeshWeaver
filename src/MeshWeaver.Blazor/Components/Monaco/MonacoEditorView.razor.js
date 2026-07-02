@@ -325,7 +325,10 @@ export function initEditor(editorId, placeholder, dotNetRef, codeEditMode = fals
                 st.resizeTimeout = setTimeout(() => {
                     const inner = document.getElementById(editorId);
                     const outer = inner?.closest('.monaco-editor-container');
-                    if (outer) {
+                    // Guard against a dispose race: the editor can be torn down during the 50ms
+                    // debounce window, after which layout() throws "Couldn't find the editor…".
+                    // getDomNode() returns null once the instance is disposed — bail if so.
+                    if (outer && editorInstance.getDomNode()) {
                         outer.style.height = e.contentHeight + 'px';
                         // Re-lay out to the new height now; automaticLayout's ResizeObserver
                         // would otherwise catch up a frame later.

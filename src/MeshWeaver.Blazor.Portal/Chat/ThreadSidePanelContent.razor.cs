@@ -171,12 +171,19 @@ public partial class ThreadSidePanelContent : ComponentBase, IDisposable
                     {
                         var c = n.ContentAs<ThreadComposer>(Hub.JsonSerializerOptions, _logger);
                         return c?.OpenThreadPath is null ? n : n with { Content = c with { OpenThreadPath = null } };
-                    }, Hub.JsonSerializerOptions).Subscribe(_ => { }, _ => { });
+                    }, Hub.JsonSerializerOptions).Subscribe(_ => { },
+                        ex => _logger?.LogWarning(ex,
+                            "[ThreadSidePanel] clearing OpenThreadPath failed for {Path} — the signal may re-fire", path));
 
                     // Started from the MAIN/home screen (root URL) → open the new thread FULL-SCREEN: the
                     // ApplicationPage catch-all ("/{*Path}") renders the full Thread view. Anywhere else
                     // (e.g. a "+" new chat started INSIDE the side panel) keep the in-panel behavior.
-                    var relative = NavigationManager.ToBaseRelativePath(NavigationManager.Uri).TrimEnd('/');
+                    // Strip any query string / fragment first so "/?x=1" or "/#y" still counts as home —
+                    // ToBaseRelativePath keeps them, which would otherwise defeat the root check.
+                    var relative = NavigationManager.ToBaseRelativePath(NavigationManager.Uri);
+                    var cut = relative.IndexOfAny(['?', '#']);
+                    if (cut >= 0) relative = relative[..cut];
+                    relative = relative.TrimEnd('/');
                     if (string.IsNullOrEmpty(relative))
                     {
                         NavigationManager.NavigateTo($"/{threadPath}");
