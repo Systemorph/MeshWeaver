@@ -64,12 +64,14 @@ public class GitHubSyncSettingsTabTest(ITestOutputHelper output) : GitHubSyncTes
         await CreateSpace(space, "PR Gui Space");
 
         // Select the GitHub Sync tab so its content pane (BuildContent) renders — wait until the
-        // PR section's draft button text appears. This proves the new "Pull request" section is
-        // wired into the layout area, not just the tab label.
+        // PR section's draft button AND the (reactive, direction-aware) sync buttons appear. The
+        // sync button row is data-bound to the source's config stream, so it lands asynchronously
+        // relative to the static sections.
         var json = await RenderSettings(
             new Address(space),
             new LayoutAreaReference("Settings") { Id = GitHubSyncSettingsTab.TabId },
-            j => j.GetRawText().Contains("Draft pull request with AI"));
+            j => j.GetRawText().Contains("Draft pull request with AI")
+                 && j.GetRawText().Contains("Sync now (commit)"));
 
         Assert.Contains("Draft pull request with AI", json);
         Assert.Contains("Pull request", json);          // the section heading

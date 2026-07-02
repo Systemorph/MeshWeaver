@@ -100,6 +100,25 @@ Creating a Space `Acme` (empty namespace, id `Acme`) automatically produces:
 > the Space node *is* the landing page, and a stray Overview node just duplicates
 > it. The text below is everything you need to make `Acme` itself look good.
 
+## Deleting a Space
+
+Deleting a Space removes the **entire partition** from the system — the exact inverse
+of creating one. Use the Space's node menu (top-right **⋯**) → **Delete** (type
+`DELETE` to confirm), or send a recursive `DeleteNodeRequest` at the Space's path.
+The operation:
+
+- recursively deletes the Space node and every node inside the partition;
+- **drops the partition's backing store** — on Postgres the whole schema
+  (`acme.mesh_nodes` and every satellite table: threads, access, activities, …)
+  in one `DROP SCHEMA … CASCADE`;
+- removes the `Admin/Partition/Acme` partition definition;
+- evicts the provisioning caches, so a Space with the **same id can be created again**
+  afterwards and provisions from scratch.
+
+This is **irreversible** — there is no recycle bin for a dropped partition. Only
+users holding Delete on the Space (its Admins, or a global admin) can do it. Global
+admins can also reach it from **Global Settings → Administration → Partitions**.
+
 ## Authoring your Space's home page
 
 When someone opens `Acme`, the Space's **Overview** renders, in order: a header

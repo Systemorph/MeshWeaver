@@ -3,8 +3,9 @@ using System.ComponentModel;
 namespace MeshWeaver.GitSync;
 
 /// <summary>
-/// Space-level GitHub sync configuration, stored as a MeshNode at
-/// <c>{spaceId}/_GitSync</c>. Holds the target repository the Space exports to —
+/// One GitHub sync source of a Space, stored as a MeshNode at <c>{spaceId}/_GitSync</c>
+/// (the primary source) or <c>{spaceId}/_GitSync/{sourceId}</c> (each additional source).
+/// Holds the repository the Space syncs with and the allowed <see cref="Direction"/> —
 /// NOT a secret (the per-user OAuth credential lives separately at
 /// <c>{userId}/_Provider/GitHub</c> and is never serialized into exported content).
 /// Editable by Space admins.
@@ -32,6 +33,14 @@ public record GitHubSyncConfig
     /// </summary>
     [Description("Subdirectory (optional — blank = repository root)")]
     public string? Subdirectory { get; init; }
+
+    /// <summary>
+    /// The direction this source is allowed to sync in: bidirectional (default), export-only
+    /// (mesh → repo — imports rejected) or import-only (repo → mesh — exports rejected).
+    /// Enforced by <see cref="GitHubSyncService"/> on every sync operation.
+    /// </summary>
+    [Description("Sync direction")]
+    public SyncDirection Direction { get; init; } = SyncDirection.Bidirectional;
 
     /// <summary>Create <see cref="Branch"/> if it does not exist yet. Default true.</summary>
     [Description("Create the branch if it doesn't exist")]
