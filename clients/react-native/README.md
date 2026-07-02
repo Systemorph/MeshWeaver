@@ -88,6 +88,18 @@ the app offline from a literal area tree. The same client unblocks live data in 
 (`@meshweaver/client` is Node-only). One runtime caveat on RN: gRPC-web server-streaming needs a streaming
 `fetch` — install a streaming-fetch polyfill before `connect()` (see the client's README).
 
+The live layout-area protocol is **verified end-to-end** (RFC 6902 patches, JSON-quoted `EntityStore` keys,
+the `Control`-suffix `$type` convention): see **[../react/docs/live-protocol.md](../react/docs/live-protocol.md)**.
+
+## The app shell (a real client)
+
+`App.tsx` is more than a render harness — it's an Outlook-for-macOS-style shell: a global search + breadcrumb,
+a **left menu streamed from the mesh's menu providers** (`$Menu:Node` / `$Menu:Mesh` / `$Menu:AI`, never
+hardcoded), an "On this page" TOC, **navigation** (menu / links / search / breadcrumb, each re-subscribing the
+live source), **client screens** (Voice/speech, Connect-to-remote-mesh, Profile), and **dark mode**. It's the
+JS peer of the MAUI `PortalShellPage`, and it's served **same-origin (zero CORS)** by `Memex.LocalMesh`.
+Full write-up: **[docs/shell.md](docs/shell.md)**.
+
 ## Speech → chat threads (centralized Whisper)
 
 Speech recognition is **centralized** — the point of the speech branch: the Swiss-German Whisper model
@@ -112,11 +124,15 @@ while transcribing, error text on faults):
 - **tap** — dictate: record, tap again, the transcript lands in the composer draft;
 - **hold (push-to-talk)** — record while held; on release the transcript submits directly to the thread.
 
-Enable it in `App.tsx` (requires `LIVE` for submission; dictation-only works without):
+Enable it in `App.tsx` (submission needs a connected mesh instance — see "Connect to mesh" in the shell;
+dictation-only works without):
 
 ```ts
 const CHAT: ChatOptions = { namespacePath: "rbuergi", speech: { language: "de" } };
 ```
+
+The composer is distinct from the shell's **Voice** client screen: Voice is the browser's on-device Web
+Speech API; the composer's mic is the **centralized** Whisper pipeline above.
 
 `language: "de"` transcribes Swiss German OUT as Standard German (the fine-tune's behavior). Android note:
 `.m4a` needs the portal endpoint (or a Whisper container built with ffmpeg + `--convert`) to transcode —

@@ -18,7 +18,13 @@ test.describe("React Native app renders the sample area", () => {
   });
 
   test("binds the TextField to /data/name", async ({ page }) => {
-    await expect(page.locator("input").first()).toHaveValue("Ada Lovelace");
+    // Not input.first() — the shell's topbar search box is also an <input>; assert that the
+    // content pane's TextField (some input on the page) carries the bound /data/name value.
+    await expect
+      .poll(async () =>
+        page.locator("input").evaluateAll((els) => els.map((e) => (e as HTMLInputElement).value)),
+      )
+      .toContain("Ada Lovelace");
   });
 
   test("renders the CheckBox as a bound Switch (checked)", async ({ page }) => {

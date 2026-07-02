@@ -101,7 +101,7 @@ In a multi-silo cluster each silo holds its own cache with its own handles. That
 
 There are **two identities on the read path, and they must never be mixed**:
 
-**1. The shared upstream ALWAYS opens under System — never a user.** The single `SubscribeRequest` per path is infrastructure: routing, NodeType activation, path-resolution, satellite enumeration and every view read through it, and none of them is attributable to a particular user. So the cache opens that upstream under a **system identity** and keeps it alive for the silo's lifetime. It MUST NOT capture the identity of whoever happened to trigger the first read.
+**1. The shared upstream ALWAYS opens under System — never a user.** The single `SubscribeRequest` per path is infrastructure: routing, NodeType activation, path-resolution, satellite enumeration and every view read through it, and none of them is attributable to a particular user. So the cache opens that upstream under a **system identity** and keeps it alive for the entry's lifetime. It MUST NOT capture the identity of whoever happened to trigger the first read.
 
 > 🚨 **A leaked user identity on the upstream wedges the node for everyone.** If an ambient `AccessContext` survives onto the upstream open (or onto a per-path sync hub's `BuildupAction`), RLS evaluates *that* user against the node. If the user lacks `Read`, the read throws `UnauthorizedAccessException` — and because it faults the **shared** stream / sync hub (not just that one subscriber), the hub goes to a **FAILED** state and the node wedges for **everyone, including its legitimate owner**. This is the 2026-06-23 atioz symptom: a co-active admin's MCP session leaked `rbuergi` onto the sync hub for `sglauser/_UserActivity/sglauser`; RLS denied `rbuergi`, the hub deferred its `SubscribeRequest` >30 s and FAILED, and `sglauser`'s activity page rendered nothing until a restart. **The fix is the rule above: the upstream / sync-hub `BuildupAction` opens under System regardless of the ambient context — `ImpersonateAsSystem`, not whatever is on `AccessService.Context`.**
 
@@ -125,6 +125,29 @@ hub.SubmitMessage(threadPath, "first");
 hub.SubmitMessage(threadPath, "second");
 hub.SubmitMessage(threadPath, "third");
 ```
+
+## Idle release — quiet paths give their upstream back
+
+A read entry does **not** live for the process lifetime. Like the write-side serial
+queues (10-minute sliding expiration), the read cache runs an **idle sweep**: an entry
+whose shared stream has had **no live subscriber and no read/write hit for the idle
+window** (default 10 minutes; `MeshNodeStreamCacheOptions`) is released — its upstream
+`SubscribeRequest` is closed (the owner-side mirror unsubscribes and the 45s sync-stream
+heartbeat dies) and the entry is dropped. The **next read transparently re-creates it**,
+exactly like a write after write-queue eviction — invisible to callers.
+
+Two hard guarantees:
+
+- **A stream with a live subscriber is never released.** Every subscription registers on
+  the entry's refcount; the sweep's evict decision is atomic against subscriber
+  attach/detach, and the idle clock restarts at the *last unsubscribe*.
+- **The sweep only ever closes.** It never re-subscribes anything (the 2026-06-08 rule);
+  re-opening is always driven by the next natural read.
+
+Without this, every path ever read — GUI navigation, per-URL path resolution, routing,
+NodeType activation, MCP get/search, synced-query grain warming — leaked a
+permanently-connected upstream stream (~1,650 live streams / 37 heartbeats-per-second
+measured on a long-lived portal).
 
 ## The storm breaker — absent nodes can't melt the silo
 

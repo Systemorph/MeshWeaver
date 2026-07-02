@@ -173,5 +173,138 @@ public class AgentSelectionPathResolutionTest : AITestBase
             "an unknown explicit selection must NOT silently fall through to a different agent");
         response.Should().Contain("Datenextraktion",
             "the unknown-agent message should name the agent the user asked for");
+        response.Should().Contain("was not found among the available agents",
+            "a genuinely unmatched selection IS an agent-not-found failure");
+    }
+}
+
+/// <summary>
+/// The MATCHED-agent failure surface: when the selected agent IS in the loaded list but
+/// cannot be built (the factory throws for the selected model), the chat output must state
+/// the REAL failure — agent found, creation/model failed — never the misleading
+/// "agent 'X' was not found among the available agents ([X, …])" observed live on the
+/// e2e portal 2026-07-01 (the agent was FIRST in the printed list).
+/// </summary>
+public class AgentSelectionMatchedButUnbuildableTest : AITestBase
+{
+    public AgentSelectionMatchedButUnbuildableTest(ITestOutputHelper output) : base(output) { }
+
+    private const string CreationFailure = "ApiKey is missing for model 'qwen-small'";
+
+    protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
+        => base.ConfigureMesh(builder)
+            .ConfigureServices(services =>
+            {
+                services.AddSingleton<IChatClientFactory>(new ThrowingFactory());
+                return services;
+            });
+
+    /// <summary>A factory whose CreateAgent always throws — the "provider unconfigured / credentials missing" shape.</summary>
+    private sealed class ThrowingFactory : IChatClientFactory
+    {
+        public string Name => "ThrowingFactory";
+        public IReadOnlyList<string> Models => ["qwen-small"];
+        public int Order => 0;
+
+        public ChatClientAgent CreateAgent(
+            AgentConfiguration config, IAgentChat chat,
+            IReadOnlyDictionary<string, ChatClientAgent> existingAgents,
+            IReadOnlyList<AgentConfiguration> hierarchyAgents, string? modelName = null)
+            => throw new InvalidOperationException(CreationFailure);
+
+        public Task<ChatClientAgent> CreateAgentAsync(
+            AgentConfiguration config, IAgentChat chat,
+            IReadOnlyDictionary<string, ChatClientAgent> existingAgents,
+            IReadOnlyList<AgentConfiguration> hierarchyAgents, string? modelName = null)
+            => throw new InvalidOperationException(CreationFailure);
+    }
+
+    [Fact]
+    public async Task MatchedAgent_WhoseCreationFails_SurfacesTheCreationFailure_NotAgentNotFound()
+    {
+        var client = new AgentChatClient(Mesh.ServiceProvider);
+        // The batch build fails for every agent (ThrowingFactory) → agents dict stays empty,
+        // which is exactly the state that used to mis-report "agent not found".
+        client.ApplyAgents(
+            new[]
+            {
+                new AgentDisplayInfo
+                {
+                    Name = "Assistant",
+                    Path = "Agent/Assistant",
+                    Description = "Assistant",
+                    AgentConfiguration = new AgentConfiguration { Id = "Assistant", Instructions = "assist" },
+                },
+            },
+            contextPath: null);
+
+        // The composer's picker form: the full node path.
+        client.SetSelectedAgent("Agent/Assistant");
+
+        var sb = new StringBuilder();
+        await foreach (var update in client.GetStreamingResponseAsync(
+            [new ChatMessage(ChatRole.User, "hello")], TestContext.Current.CancellationToken))
+        {
+            if (!string.IsNullOrEmpty(update.Text))
+                sb.Append(update.Text);
+        }
+        var response = sb.ToString();
+
+        response.Should().NotContain("was not found among the available agents",
+            "the agent WAS matched — reporting it as not-found masks the real failure");
+        response.Should().Contain("Agent/Assistant",
+            "the error must name the agent that was matched");
+        response.Should().Contain(CreationFailure,
+            "the error must carry the factory's real failure so the operator can act on it");
+        response.Should().Contain("ThrowingFactory",
+            "the error must name the factory that failed");
+    }
+}
+
+/// <summary>
+/// The MATCHED-agent / NO-factory failure surface: with no <see cref="IChatClientFactory"/>
+/// registered at all, selecting an agent that IS loaded must report the factory/model gap
+/// ("no chat-client factory resolves model …") — never "agent not found".
+/// </summary>
+public class AgentSelectionNoFactoryTest : AITestBase
+{
+    public AgentSelectionNoFactoryTest(ITestOutputHelper output) : base(output) { }
+
+    // Deliberately NO IChatClientFactory registration — base AddAI() registers none.
+
+    [Fact]
+    public async Task MatchedAgent_WithNoFactoryForModel_ReportsFactoryModelGap_NotAgentNotFound()
+    {
+        var client = new AgentChatClient(Mesh.ServiceProvider);
+        client.ApplyAgents(
+            new[]
+            {
+                new AgentDisplayInfo
+                {
+                    Name = "Assistant",
+                    Path = "Agent/Assistant",
+                    Description = "Assistant",
+                    AgentConfiguration = new AgentConfiguration { Id = "Assistant", Instructions = "assist" },
+                },
+            },
+            contextPath: null);
+
+        client.SetSelectedAgent("Agent/Assistant");
+
+        var sb = new StringBuilder();
+        await foreach (var update in client.GetStreamingResponseAsync(
+            [new ChatMessage(ChatRole.User, "hello")], TestContext.Current.CancellationToken))
+        {
+            if (!string.IsNullOrEmpty(update.Text))
+                sb.Append(update.Text);
+        }
+        var response = sb.ToString();
+
+        response.Should().NotContain("was not found among the available agents",
+            "the agent WAS matched — the failure is factory/model resolution, not agent lookup");
+        response.Should().Contain("Agent/Assistant",
+            "the error must name the matched agent");
+        response.Should().Contain("no chat-client factory resolves model",
+            "the error must say the failure is the chat-client factory/model resolution");
     }
 }

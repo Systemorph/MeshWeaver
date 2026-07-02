@@ -131,9 +131,18 @@ public sealed class GrpcConnectionRegistry : IDisposable
                     // Forward messages addressed to the participant FROM elsewhere (responses, stream
                     // changes). Leave the proxy hub's own self/lifecycle messages (InitializeHubRequest,
                     // disposal — sender == the participant) for the hub to process normally.
+                    //
+                    // 🚨 SYNCHRONOUS forward — NOT the async PushToClient. HierarchicalRouting folds the
+                    // route chain synchronously (it Subscribes each handler and expects the result inline,
+                    // Observable.Return-shaped). An ioPool.Invoke(async …) emits on a LATER turn, so the
+                    // fold never sees the Forwarded() state: the delivery falls through to local dispatch
+                    // → "No handler found for DataChangedEvent" storms, AND the racing async pushes reorder
+                    // frames (a layout Full snapshot can land after a later Patch → the client wipes fresh
+                    // content). Forwarding on the proxy hub's own single-threaded action block keeps
+                    // delivery order and satisfies the sync-fold contract.
                     delivery.Sender is not null && delivery.Sender.Equals(address)
                         ? Observable.Return(delivery)
-                        : PushToClient(connectionId, delivery, ct))));
+                        : ForwardToClientSync(connectionId, delivery))));
         connections.AddOrUpdate(connectionId,
             // Begin() always runs first, so the "add" branch is a defensive fallback only.
             _ => new ConnectionState(Anonymous, Channel.CreateUnbounded<ServerFrame>().Writer, route, participantHub),
@@ -174,7 +183,9 @@ public sealed class GrpcConnectionRegistry : IDisposable
     // connection's outbound channel. The Open call's single write-pump drains the channel to the
     // wire — gRPC forbids two concurrent writes to one response stream, so the channel IS the
     // serialization point (mirrors SignalRConnectionRegistry.PushToClient, which leans on
-    // SignalR's internal per-connection ordering instead).
+    // SignalR's internal per-connection ordering instead). Used by the Orleans RegisterStream
+    // route, whose callback the base RouteImpl subscribes ONCE at the framework boundary — an
+    // async emit is safe there. (The monolith proxy-hub route must NOT use this; see Connect.)
     private IObservable<IMessageDelivery> PushToClient(string connectionId, IMessageDelivery delivery, CancellationToken _) =>
         ioPool.Invoke(async ct =>
         {
@@ -185,6 +196,22 @@ public sealed class GrpcConnectionRegistry : IDisposable
             }
             return delivery.Forwarded();
         });
+
+    // Synchronous twin of PushToClient for the monolith proxy-hub catch-all route. Serialization is
+    // CPU (not I/O) and the write targets an UNBOUNDED channel, so TryWrite never blocks and never
+    // needs the IoPool. Running it inline — on the proxy hub's own single-threaded action block —
+    // (a) satisfies HierarchicalRouting's synchronous route-fold contract so the Forwarded() state is
+    // observed inline (no "no handler" false-failure), and (b) preserves delivery order: the single
+    // action block enqueues frames in the order they arrive, where concurrent ioPool tasks would race.
+    private IObservable<IMessageDelivery> ForwardToClientSync(string connectionId, IMessageDelivery delivery)
+    {
+        if (connections.TryGetValue(connectionId, out var s))
+        {
+            var json = JsonSerializer.Serialize(delivery.Package(), hub.JsonSerializerOptions);
+            s.Outbound.TryWrite(new ServerFrame { Receive = json }); // unbounded ⇒ always accepted unless completed
+        }
+        return Observable.Return(delivery.Forwarded());
+    }
 
     /// <inheritdoc />
     public void Dispose()

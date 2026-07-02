@@ -51,34 +51,58 @@ internal class OAuthCodeStore
 
     /// <summary>
     /// Exchanges an authorization code for the stored entry.
-    /// Returns null if the code is invalid, expired, or already consumed.
+    /// Returns null if the code is invalid, expired, or already consumed — with the exact
+    /// failing check in <paramref name="failureReason"/> so the caller can log a diagnosable
+    /// warning (a bare "invalid_grant" made real-world flow failures unattributable).
     /// Validates PKCE code_verifier if a code_challenge was stored.
+    /// Consume-first is intentional: a code is single-use on ANY exchange attempt (standard
+    /// OAuth hardening — prevents retry brute-force), so a duplicate callback surfaces here
+    /// as "unknown or already consumed", not as a second success.
     /// </summary>
-    public AuthorizationCode? ExchangeCode(string code, string clientId, string redirectUri, string? codeVerifier)
+    public AuthorizationCode? ExchangeCode(
+        string code, string clientId, string redirectUri, string? codeVerifier, out string? failureReason)
     {
         if (!_codes.TryRemove(code, out var entry))
+        {
+            failureReason = "unknown or already consumed code (never issued by this process, "
+                + "expired-and-cleaned, or burnt by an earlier exchange attempt — e.g. a duplicate callback)";
             return null;
+        }
 
-        // Check expiry
-        if (DateTimeOffset.UtcNow - entry.CreatedAt > CodeLifetime)
+        var age = DateTimeOffset.UtcNow - entry.CreatedAt;
+        if (age > CodeLifetime)
+        {
+            failureReason = $"expired: age {(int)age.TotalSeconds}s > lifetime {(int)CodeLifetime.TotalSeconds}s";
             return null;
+        }
 
-        // Validate client_id and redirect_uri match
         if (!string.Equals(entry.ClientId, clientId, StringComparison.Ordinal))
+        {
+            failureReason = "client_id mismatch between /authorize and /token";
             return null;
+        }
         if (!string.Equals(entry.RedirectUri, redirectUri, StringComparison.Ordinal))
+        {
+            failureReason = "redirect_uri mismatch between /authorize and /token";
             return null;
+        }
 
-        // Validate PKCE
         if (!string.IsNullOrEmpty(entry.CodeChallenge))
         {
             if (string.IsNullOrEmpty(codeVerifier))
+            {
+                failureReason = "PKCE code_verifier missing (a code_challenge was supplied at /authorize)";
                 return null;
+            }
 
             if (!VerifyPkce(codeVerifier, entry.CodeChallenge, entry.CodeChallengeMethod))
+            {
+                failureReason = "PKCE verification failed (code_verifier does not match code_challenge)";
                 return null;
+            }
         }
 
+        failureReason = null;
         return entry;
     }
 
