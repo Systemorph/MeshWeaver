@@ -256,6 +256,22 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
                         ? matchedNodes.OrderByDescending(n => GetSortableValue(n, parsedQuery.OrderBy.Property))
                         : matchedNodes.OrderBy(n => GetSortableValue(n, parsedQuery.OrderBy.Property));
                 }
+                else if (!string.IsNullOrEmpty(parsedQuery.TextSearch))
+                {
+                    // 🚨 Free-text results are RANKED BY RELEVANCE before the Limit clip.
+                    // The evaluator's Matches() already computes a fuzzy score per node but
+                    // discarded it, leaving matches in STORE-ENUMERATION order — a broad
+                    // substring term ("alice" matching dozens of content bodies) then filled
+                    // the Take(limit) window with whatever the storage walk yielded first,
+                    // and whether a NAME-matching node survived the clip depended on
+                    // file-system directory enumeration order. That is the CI-only
+                    // SearchQueryTests.TextSearch_CaseInsensitive flake (10 content matches
+                    // returned, the Alice-named nodes clipped away on ext4 ordering).
+                    // OrderByDescending is stable, so equal-score ties keep the walk order.
+                    // An explicit sort: (OrderBy above) still wins over relevance.
+                    sorted = matchedNodes.OrderByDescending(n =>
+                        _evaluator.GetFuzzyScore(n, parsedQuery.TextSearch));
+                }
 
                 IEnumerable<object> projected = sorted.Select(node =>
                     parsedQuery.Select != null
