@@ -57,6 +57,27 @@ public class MeshQuery : IMeshQueryCore
 
     private JsonSerializerOptions Options => hub.JsonSerializerOptions;
 
+    private ILogger? _logger;
+
+    // Defensive: the unsecured IMeshQueryCore registration constructs MeshQuery with hub: null
+    // (options are passed per call there), so the logger resolves lazily and tolerates absence.
+    private ILogger? Logger
+    {
+        get
+        {
+            if (_logger is not null) return _logger;
+            try
+            {
+                return _logger = hub?.ServiceProvider?.GetService<ILoggerFactory>()
+                    ?.CreateLogger<MeshQuery>();
+            }
+            catch (ObjectDisposedException)
+            {
+                return null;
+            }
+        }
+    }
+
     /// <summary>
     /// Pre-extracts the partition candidates a query targets — union of
     /// <c>namespace:</c> condition values and the first segment of
@@ -92,7 +113,7 @@ public class MeshQuery : IMeshQueryCore
     {
         var matched = SelectMatchingProviders(NamespacesForRequest(request));
         return MergeProviderObservables(
-                matched.Select(p => p.Query<T>(request, Options)).ToList(),
+                matched.Select(p => (p.Query<T>(request, Options), p.Name)).ToList(),
                 request)
             // Push the upstream subscription onto the thread pool so the
             // calling hub's action block isn't blocked while providers open
@@ -306,13 +327,13 @@ public class MeshQuery : IMeshQueryCore
             ? request with { UserId = WellKnownUsers.System }
             : request;
         return MergeProviderObservables(
-                matched.Select(p => isSystem
+                matched.Select(p => (isSystem
                     ? (p is IMeshQueryCore core
                         ? core.Query<T>(coreRequest, options)
                         : p.Query<T>(coreRequest, options))
                     // Real user: ALWAYS hit the secured provider surface
                     // (validators apply per-result RLS for request.UserId).
-                    : p.Query<T>(request, options)).ToList(),
+                    : p.Query<T>(request, options), p.Name)).ToList(),
                 request)
             .SubscribeOn(System.Reactive.Concurrency.TaskPoolScheduler.Default);
     }
@@ -373,7 +394,7 @@ public class MeshQuery : IMeshQueryCore
     }
 
     private IObservable<QueryResultChange<T>> MergeProviderObservables<T>(
-        List<IObservable<QueryResultChange<T>>> observables,
+        List<(IObservable<QueryResultChange<T>> Stream, string Provider)> observables,
         MeshQueryRequest request)
     {
         // Collect Initial from all providers, merge into a single Initial emission,
@@ -399,7 +420,7 @@ public class MeshQuery : IMeshQueryCore
             // Single-provider ordering is preserved when OrderBy is absent
             // and all scores are equal, because LINQ's OrderByDescending
             // is stable.
-            return observables[0].Select(change =>
+            return observables[0].Stream.Select(change =>
             {
                 if (change.ChangeType != QueryChangeType.Initial)
                     return change;
@@ -447,6 +468,8 @@ public class MeshQuery : IMeshQueryCore
             var initialIdentities = new HashSet<T>();
             var initialCount = 0;
             var initialTarget = observables.Count;
+            // Per-provider Initial tracking for the completion guard below.
+            var initialSeen = new bool[observables.Count];
             ParsedQuery? lastQuery = null;
             var gate = new object();
 
@@ -458,9 +481,28 @@ public class MeshQuery : IMeshQueryCore
 
             var subscriptions = new List<IDisposable>();
 
+            // Emits the merged Initial once the gate is satisfied. Must be called under `gate`.
+            void EmitMergedInitialIfComplete(QueryResultChange<T> template)
+            {
+                if (initialCount != initialTarget)
+                    return;
+                foreach (var path in initialPaths)
+                    liveItems.Add(path);
+                // Flat concat across providers — no priority shuffle. ClipMergedInitial
+                // performs the authoritative sort using OrderBy + Score, so the order we
+                // feed it is irrelevant to the final shape.
+                var ordered = new List<(T Item, double Score)>();
+                for (var p = 0; p < providerHits.Length; p++)
+                    ordered.AddRange(providerHits[p]);
+                var parsed = lastQuery
+                    ?? new QueryParser().Parse(request.EffectiveQueries.FirstOrDefault() ?? "");
+                var clipped = ClipMergedInitial<T>(ordered, template, parsed, request);
+                observer.OnNext(clipped);
+            }
+
             for (var i = 0; i < observables.Count; i++)
             {
-                var obs = observables[i];
+                var (obs, providerName) = observables[i];
                 var idx = i;
                 var sub = obs.Subscribe(
                     change =>
@@ -493,24 +535,13 @@ public class MeshQuery : IMeshQueryCore
                                     }
                                 }
                                 lastQuery ??= change.Query;
-                                initialCount++;
-
-                                if (initialCount == initialTarget)
+                                if (!initialSeen[idx])
                                 {
-                                    foreach (var path in initialPaths)
-                                        liveItems.Add(path);
-                                    // Flat concat across providers — no priority
-                                    // shuffle. ClipMergedInitial below performs
-                                    // the authoritative sort using OrderBy +
-                                    // Score, so the order we feed it is
-                                    // irrelevant to the final shape.
-                                    var ordered = new List<(T Item, double Score)>();
-                                    for (var p = 0; p < providerHits.Length; p++)
-                                        ordered.AddRange(providerHits[p]);
-                                    var clipped = ClipMergedInitial<T>(
-                                        ordered, change, lastQuery!, request);
-                                    observer.OnNext(clipped);
+                                    initialSeen[idx] = true;
+                                    initialCount++;
                                 }
+
+                                EmitMergedInitialIfComplete(change);
                             }
                         }
                         else
@@ -522,7 +553,42 @@ public class MeshQuery : IMeshQueryCore
                             }
                         }
                     },
-                    ex => observer.OnError(ex));
+                    ex => observer.OnError(ex),
+                    // 🚨 Completion guard — the merged Initial gates on EVERY provider
+                    // emitting one. A provider whose observable COMPLETES without an
+                    // Initial (an Observable.Empty-shaped branch, a swallowed fault, an
+                    // early-disposed inner chain) used to starve the gate FOREVER: the
+                    // consumer's Take(1)/FirstAsync never fired and the caller hung until
+                    // its transport timeout (prod: every real-user unpinned search on
+                    // atioz hung 300s — DB idle, no error anywhere). The contract is
+                    // documented at every provider ("returning Observable.Empty would
+                    // hang the consumer") — ENFORCE it here: count the silent completion
+                    // as an empty Initial so the merge proceeds, and log LOUDLY naming
+                    // the provider so the offending code path gets fixed at its root.
+                    () =>
+                    {
+                        lock (gate)
+                        {
+                            if (initialSeen[idx])
+                                return;
+                            Logger?.LogWarning(
+                                "Query provider {Provider} completed WITHOUT emitting an Initial for query '{Query}' "
+                                + "(user '{UserId}') — contract violation; counting as empty so the merged query can "
+                                + "proceed. Fix the provider: every Query<T> observable must emit exactly one Initial.",
+                                providerName, request.Query, request.UserId);
+                            initialSeen[idx] = true;
+                            initialCount++;
+                            var template = new QueryResultChange<T>
+                            {
+                                ChangeType = QueryChangeType.Initial,
+                                Items = Array.Empty<T>(),
+                                Timestamp = DateTimeOffset.UtcNow,
+                            };
+                            if (lastQuery is not null)
+                                template = template with { Query = lastQuery };
+                            EmitMergedInitialIfComplete(template);
+                        }
+                    });
 
                 subscriptions.Add(sub);
             }
