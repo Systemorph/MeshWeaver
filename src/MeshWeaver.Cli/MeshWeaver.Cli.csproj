@@ -13,12 +13,9 @@
     <ToolCommandName>memex</ToolCommandName>
     <PackageId>MeshWeaver.Cli</PackageId>
     <IsPackable>true</IsPackable>
-    <Authors>MeshWeaver</Authors>
     <Description>Command-line interface for MeshWeaver / Memex — operates the mesh over the REST API (get, upload, patch, compile, mirror, …).</Description>
-    <PackageProjectUrl>https://github.com/meshweaver/meshweaver</PackageProjectUrl>
-    <RepositoryUrl>https://github.com/meshweaver/meshweaver</RepositoryUrl>
+    <PackageProjectUrl>https://github.com/Systemorph/MeshWeaver</PackageProjectUrl>
     <PackageTags>meshweaver;memex;cli;mesh;cms</PackageTags>
-    <PackageLicenseExpression>MIT</PackageLicenseExpression>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="System.CommandLine" />

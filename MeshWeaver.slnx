@@ -60,6 +60,7 @@
     <Project Path="src/MeshWeaver.Blazor/MeshWeaver.Blazor.csproj" />
     <Project Path="src/MeshWeaver.BusinessRules.Generator/MeshWeaver.BusinessRules.Generator.csproj" />
     <Project Path="src/MeshWeaver.BusinessRules/MeshWeaver.BusinessRules.csproj" />
+    <Project Path="src/MeshWeaver.Cli/MeshWeaver.Cli.csproj" />
     <Project Path="src/MeshWeaver.Connection.Orleans/MeshWeaver.Connection.Orleans.csproj" />
     <Project Path="src/MeshWeaver.ContentCollections/MeshWeaver.ContentCollections.csproj" />
     <Project Path="src/MeshWeaver.ContentCollections.Indexing/MeshWeaver.ContentCollections.Indexing.csproj" />
@@ -181,7 +182,6 @@
   </Folder>
   <Folder Name="/tools/">
     <File Path="tools/generate-memex-template.cs" />
-    <Project Path="tools/MeshWeaver.Cli/MeshWeaver.Cli.csproj" />
     <Project Path="tools/MeshWeaver.MemexTemplate.Pack/MeshWeaver.MemexTemplate.Pack.csproj" />
     <Project Path="tools/MeshWeaver.ThumbnailGenerator/MeshWeaver.ThumbnailGenerator.csproj" />
   </Folder>
