@@ -238,7 +238,11 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
     /// (<c>EnrichWithNodeType slow path faulted</c>, <c>SubscribeRequest</c>
     /// timeouts → compilation-error overlay → MARKER_V1 never rendered).
     /// </summary>
-    [Fact(Timeout = 60000)]
+    // 120s (not the usual 60s): the happy path completes in seconds; the budget is for the
+    // FAILURE path — WaitForLatestRelease's 50s primary wait plus its discriminating timeout
+    // diagnostic (mirror/index probes + decisive re-trigger, worst case ~50s more) must fit
+    // inside the xUnit method timeout or the diagnostic is cancelled before it can be emitted.
+    [Fact(Timeout = 120000)]
     public async Task NodeType_RequestedReleasePath_PinsToHistoricalRelease()
     {
         var workspace = Mesh.GetWorkspace();
@@ -393,7 +397,11 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
     /// <c>NodeTypeLayoutAreas.BuildCompileStatusPanel</c>) binds to this
     /// state machine, so this is the test that gates the UI.
     /// </summary>
-    [Fact(Timeout = 60000)]
+    // 120s (not the usual 60s): the happy path completes in seconds; the budget is for the
+    // FAILURE path — WaitForLatestRelease's 50s primary wait plus its discriminating timeout
+    // diagnostic (mirror/index probes + decisive re-trigger, worst case ~50s more) must fit
+    // inside the xUnit method timeout or the diagnostic is cancelled before it can be emitted.
+    [Fact(Timeout = 120000)]
     public async Task IsDirty_FlipsTrueOnSourceEdit_FalseAfterCompile()
     {
         var workspace = Mesh.GetWorkspace();
@@ -550,7 +558,11 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
     /// — same code path the button executes — and asserts both the property
     /// flip and the resulting release.
     /// </summary>
-    [Fact(Timeout = 60000)]
+    // 120s (not the usual 60s): the happy path completes in seconds; the budget is for the
+    // FAILURE path — WaitForLatestRelease's 50s primary wait plus its discriminating timeout
+    // diagnostic (mirror/index probes + decisive re-trigger, worst case ~50s more) must fit
+    // inside the xUnit method timeout or the diagnostic is cancelled before it can be emitted.
+    [Fact(Timeout = 120000)]
     public async Task PressingCompileButton_SetsRequestedReleaseAt_AndProducesNewRelease()
     {
         var workspace = Mesh.GetWorkspace();
@@ -693,8 +705,11 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
             {
                 try
                 {
+                    // Best-effort: take the FIRST emission bounded to 5s — waiting for a
+                    // non-empty snapshot could stall the whole bound when the node is genuinely
+                    // absent from the index (itself a diagnostic result).
                     var idx = await meshService.Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{nodeTypePath}"))
-                        .Where(c => c.Items.Count > 0).Take(1).Timeout(10.Seconds());
+                        .Take(1).Timeout(5.Seconds());
                     var id = idx.Items.FirstOrDefault()?.Content as NodeTypeDefinition;
                     indexNode = id is null ? "(not in index)"
                         : $"Status={id.CompilationStatus}, Latest={id.LatestReleasePath ?? "(null)"}, " +
@@ -705,7 +720,7 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
                 {
                     var rel = await meshService.Query<MeshNode>(
                             MeshQueryRequest.FromQuery($"path:{nodeTypePath}/Release scope:descendants"))
-                        .Take(1).Timeout(10.Seconds());
+                        .Take(1).Timeout(5.Seconds());
                     releases = rel.Items.Count == 0 ? "(none)" : string.Join(", ", rel.Items.Select(r => r.Path));
                 }
                 catch (Exception qx) { releases = $"(query failed: {qx.GetType().Name})"; }

@@ -127,9 +127,10 @@ jobs:
           if [ "$failed" = "0" ]; then
             echo "No repro in $iters iterations (the flake did not surface this run)."
           fi
-          # Always exit 0 so the diagnostics-collection + upload steps run; the
-          # ::error:: above marks the run, and the uploaded trx records the failure.
-          exit 0
+          # Exit non-zero on repro so the run is CLEARLY marked failed in the Actions
+          # list (repro achieved = red). The diagnostics-collection + upload steps
+          # below run regardless via `if: always()`.
+          exit "$failed"
       - name: Collect diagnostics
         if: always()
         run: |
