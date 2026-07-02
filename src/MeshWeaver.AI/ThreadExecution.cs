@@ -563,8 +563,57 @@ internal static class ThreadExecution
                             }
                             : node;
                     })
-                        .Subscribe(_ => { }, ex => logger?.LogWarning(ex,
-                            "[ThreadExec] Init watchdog: force-Idle Update failed for {ThreadPath}", threadPath));
+                        // #147 escape hatch. The force-Idle rescue write above rides the hub's own
+                        // action block — which on Orleans runs on the grain's
+                        // ActivationTaskScheduler. In the wedge this watchdog exists for (a
+                        // streaming continuation that never resumed occupying the scheduler slot,
+                        // 1376-message backlog), the rescue write joins the blocked queue and can
+                        // NEVER land: the watchdog fired correctly but could not rescue. A healthy
+                        // hub applies an own-node Update in milliseconds, so a write that neither
+                        // completes within WatchdogRescueBudget nor errors is proof the action
+                        // block is dead → escalate OUT-OF-BAND: RequestGrainDeactivation invokes
+                        // Grain.DeactivateOnIdle via the callback the grain registered at
+                        // activation (this Throttle emission runs on a ThreadPool timer, off the
+                        // blocked scheduler). Deactivation disposes the hub → RegisterForDisposal
+                        // fires executionCts.Cancel() → the stuck call is torn down; the next
+                        // access re-activates fresh and this same recovery drives the persisted
+                        // state to a valid one. In monolith hosting no callback is registered —
+                        // RequestGrainDeactivation returns false (no-op) and the rescue write
+                        // above is the whole story, as before.
+                        .Timeout(WatchdogRescueBudget)
+                        .Subscribe(_ => { }, ex =>
+                        {
+                            // Escalate ONLY on the landing-budget timeout — that is the proof the
+                            // action block is blocked. Any other error (validation, access,
+                            // serialization) fails FAST on a healthy hub: deactivating there would
+                            // tear down a healthy grain for a defect deactivate-and-retry cannot
+                            // cure. Those keep the log-and-give-up behavior.
+                            if (ex is not TimeoutException)
+                            {
+                                logger?.LogWarning(ex,
+                                    "[ThreadExec] Init watchdog: force-Idle Update failed for " +
+                                    "{ThreadPath} (non-timeout — hub is responsive, not escalating).",
+                                    threadPath);
+                                return;
+                            }
+                            logger?.LogWarning(ex,
+                                "[ThreadExec] Init watchdog: force-Idle Update did not land within " +
+                                "{Budget:F0}s for {ThreadPath} — the hub's action block is blocked (#147).",
+                                WatchdogRescueBudget.TotalSeconds, threadPath);
+                            if (hub.RequestGrainDeactivation())
+                                logger?.LogWarning(
+                                    "[ThreadExec] Init watchdog: requested OUT-OF-BAND grain " +
+                                    "deactivation for wedged {ThreadPath} — hub disposal will cancel " +
+                                    "the round's CancellationTokenSource and the grain re-activates " +
+                                    "fresh on next access (#147).",
+                                    threadPath);
+                            else
+                                logger?.LogWarning(
+                                    "[ThreadExec] Init watchdog: no grain deactivation callback " +
+                                    "registered for {ThreadPath} (monolith hosting) — rescue write " +
+                                    "failed and no escape hatch is available.",
+                                    threadPath);
+                        });
                 },
                 ex => logger?.LogWarning(ex,
                     "[ThreadExec] Init watchdog stream faulted for {ThreadPath}", threadPath));
@@ -579,6 +628,37 @@ internal static class ThreadExecution
     /// but live round — healthy work bumps <c>LastModified</c> far more often.
     /// </summary>
     private static readonly TimeSpan StuckGracePeriod = TimeSpan.FromSeconds(90);
+
+    /// <summary>
+    /// Budget for the stuck-round watchdog's force-Idle rescue write to LAND. A healthy
+    /// hub applies an own-node <c>stream.Update</c> in milliseconds; when the write does
+    /// not complete within this window the hub's action block itself is blocked — the
+    /// #147 wedge, where the grain's ActivationTaskScheduler slot is occupied by a
+    /// continuation that never resumed, so the rescue write joins the dead backlog and
+    /// can never be processed. Past this budget the watchdog escalates to the
+    /// out-of-band grain deactivation escape hatch
+    /// (<see cref="MessageHubExtensions.RequestGrainDeactivation"/>).
+    /// </summary>
+    private static readonly TimeSpan WatchdogRescueBudget = TimeSpan.FromSeconds(10);
+
+    /// <summary>
+    /// Hard wall-clock cap on a single streaming round at the AI I/O boundary (#147).
+    /// The primary defect behind the permanently-wedged thread grain was an UNBOUNDED
+    /// external network wait: an LLM streaming call that never produced another update
+    /// (and never faulted) parked its continuation forever, occupying the grain's
+    /// scheduler slot — 1376 messages queued, recovery only via pod restart. With this
+    /// cap the continuation ALWAYS resumes: the round's linked CancellationTokenSource
+    /// fires and the round terminates as a graceful ERROR (response cell
+    /// <c>Status = Error</c> naming the timeout), so the wedge cannot form.
+    /// <para>Generous enough for legitimate long rounds INCLUDING nested delegation
+    /// trees (a delegating parent holds its round open while sub-threads work) —
+    /// deliberately matched to the grain-side backstop
+    /// <c>MessageHubGrain.MaxLongRunningOperationDuration</c> (30 min), so the
+    /// in-process graceful error fires no later than the grain's own
+    /// stop-extending-lifetime cap. Tests override via <see cref="AiStreamingLimits"/>
+    /// (mesh-scoped singleton, never a mutable static).</para>
+    /// </summary>
+    private static readonly TimeSpan MaxStreamingDuration = TimeSpan.FromMinutes(30);
 
     /// <summary>
     /// True when the thread carries an in-flight <c>delegate_to_agent</c> tool call
@@ -1604,7 +1684,23 @@ internal static class ThreadExecution
                     if (userAccessContext != null)
                         parentHub.ServiceProvider.GetService<AccessService>()?.SetContext(userAccessContext);
 
-                    var ct = executionCts.Token;
+                    // #147: hard wall-clock cap at the I/O boundary. Link to executionCts so a
+                    // user Stop / hub disposal still cancels immediately; CancelAfter adds the
+                    // MaxStreamingDuration ceiling on top. An unbounded external network wait was
+                    // the primary wedge defect (an LLM stream that never yielded another update
+                    // parked the continuation forever) — with the cap, the continuation ALWAYS
+                    // resumes. A timeout-induced cancellation is surfaced as a graceful round
+                    // ERROR (converted to TimeoutException below → the generic catch writes
+                    // Status=Error to the response cell); the requested-cancel path
+                    // (executionCts) keeps its Cancelled semantics. Disposed in the finally,
+                    // before executionCts.
+                    var maxStreamingDuration =
+                        parentHub.ServiceProvider.GetService<AiStreamingLimits>()?.MaxStreamingDuration
+                        ?? MaxStreamingDuration;
+                    var streamingTimeoutCts =
+                        CancellationTokenSource.CreateLinkedTokenSource(executionCts.Token);
+                    streamingTimeoutCts.CancelAfter(maxStreamingDuration);
+                    var ct = streamingTimeoutCts.Token;
                     // responseText / capturedResponseText / segment.ResponseText were
                     // wired just before the first push (above) so a check_inbox
                     // racing the round start still sees the live accumulator.
@@ -1621,15 +1717,14 @@ internal static class ThreadExecution
                     // the output cell records what really ran, not just what was asked.
                     string? actualModel = null;
 
-                    // No time-limit watchdog. A streaming session blocked on an
-                    // unresponsive AI endpoint, a long-running delegation, or a
-                    // sub-thread doing its own multi-minute work is indistinguishable
-                    // from a "stuck" pipeline from the parent's perspective — and an
-                    // arbitrary deadline that fires `executionCts.Cancel()` would
-                    // tear those down even when something is happening down the tree.
-                    // Manual cancellation via the Stop button (RequestedStatus =
-                    // Cancelled on the thread node, see RequestViaStreamUpdate.md) is
-                    // the only legitimate cancel.
+                    // Cancellation sources, in order of intent:
+                    //   • Stop button / delegation cancel / hub disposal → executionCts →
+                    //     graceful Cancelled (the filtered catch below).
+                    //   • MaxStreamingDuration wall-clock cap → streamingTimeoutCts alone →
+                    //     graceful ERROR (the generic catch below). The cap is generous
+                    //     enough that a legitimate delegation tree completes well within it;
+                    //     only a genuinely-hung endpoint exceeds it (#147). Sub-thread
+                    //     staleness within the cap remains the HeartbeatTicker's job.
 
                     try
                     {
@@ -1993,7 +2088,13 @@ internal static class ThreadExecution
                     NotifyParentCompletion(parentHub, threadPath, finalText, true, aggregatedChanges);
                     EmitCompletionNotification(parentHub, threadPath, finalText, request.AgentName);
                     }
-                    catch (OperationCanceledException)
+                    // Only a REQUESTED cancel (Stop button via RequestedStatus=Cancelled, delegation
+                    // cancel, hub disposal — everything that fires executionCts) is a graceful
+                    // Cancelled. A wall-clock streaming timeout also surfaces as
+                    // OperationCanceledException (the linked streamingTimeoutCts fired WITHOUT
+                    // executionCts) but must NOT masquerade as a user cancel — it falls through to
+                    // the generic catch below and terminates as a round ERROR (#147).
+                    catch (OperationCanceledException) when (executionCts.IsCancellationRequested)
                     {
                         logger.LogInformation("[ThreadExec] CANCELLED: {Time:HH:mm:ss.fff} threadPath={ThreadPath}", DateTime.UtcNow, threadPath);
                         // ToString must be under logLock — UpdateDelegationStatus
@@ -2075,8 +2176,23 @@ internal static class ThreadExecution
                         NotifyParentCompletion(parentHub, threadPath, cancelText, false, cancelNodeChanges);
                         EmitCompletionNotification(parentHub, threadPath, "Cancelled", request.AgentName);
                     }
-                    catch (Exception ex)
+                    catch (Exception exRaw)
                     {
+                        // #147: a wall-clock streaming-timeout cancellation (streamingTimeoutCts
+                        // fired, executionCts did NOT) reaches here as OperationCanceledException.
+                        // Convert it to a descriptive TimeoutException so the standard error path
+                        // below (response cell → Status=Error, thread → Idle, parent notified)
+                        // tells the user WHY the round was aborted instead of a bare "The
+                        // operation was canceled." — never a silent swallow, never a fake cancel.
+                        var ex = exRaw is OperationCanceledException
+                                 && streamingTimeoutCts.IsCancellationRequested
+                                 && !executionCts.IsCancellationRequested
+                            ? new TimeoutException(
+                                $"AI streaming exceeded the maximum round duration of " +
+                                $"{maxStreamingDuration} and was aborted (#147). The model endpoint " +
+                                "stopped responding mid-stream; resubmit to retry.",
+                                exRaw)
+                            : exRaw;
                         logger.LogError(ex, "[ThreadExec] ERROR: {Time:HH:mm:ss.fff} threadPath={ThreadPath}", DateTime.UtcNow, threadPath);
                         // Same lock-guarded snapshot as the cancellation path.
                         string errorTextBase;
@@ -2188,6 +2304,10 @@ internal static class ThreadExecution
                         // BEFORE this, so Reset here cannot lose a fold.
                         ThreadInboxChannel.For(parentHub).Reset();
                         parentHub.Set<CancellationTokenSource>(null!);
+                        // Linked timeout source first (unregisters from executionCts), then the
+                        // round CTS itself. Both catch blocks above read IsCancellationRequested
+                        // BEFORE this finally runs, so disposal never races the classification.
+                        streamingTimeoutCts.Dispose();
                         executionCts.Dispose();
                         // No per-_Exec stream handle to dispose — writes went through
                         // IMeshNodeStreamCache.Update, whose upstream handle is owned

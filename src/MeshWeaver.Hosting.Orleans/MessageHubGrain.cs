@@ -270,7 +270,25 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
                 return node.HubConfiguration!(config)
                     .WithTaskScheduler(grainScheduler)
                     .Set(new GrainKeepAliveCallback(() => DelayDeactivation(TimeSpan.FromMinutes(10))))
-                    .Set(new GrainLongRunningOperationCallback(BeginLongRunningOperation));
+                    .Set(new GrainLongRunningOperationCallback(BeginLongRunningOperation))
+                    // #147 escape hatch: the hub's action block runs on THIS grain's
+                    // ActivationTaskScheduler (WithTaskScheduler above), so when a stuck round
+                    // wedges that scheduler, any rescue that is itself a hub message can never be
+                    // processed. This callback lets the stuck-round watchdog (which fires on a
+                    // ThreadPool timer, OFF the blocked scheduler) deactivate the grain directly:
+                    // deactivation disposes the hub → RegisterForDisposal fires
+                    // executionCts.Cancel() → the hung AI call is torn down, and the queued
+                    // deliveries are NACKed instead of piling up forever.
+                    .Set(new GrainDeactivateCallback(() =>
+                    {
+                        logger.LogWarning(
+                            "Grain {GrainId}: out-of-band deactivation requested via " +
+                            "GrainDeactivateCallback — a stuck round could not be rescued through " +
+                            "the hub's message queue (#147). Deactivating so hub disposal cancels " +
+                            "the in-flight operation.",
+                            this.GetPrimaryKeyString());
+                        DeactivateOnIdle();
+                    }));
             })!;
 
             hub.RegisterForDisposal(_ => DeactivateOnIdle());
