@@ -67,22 +67,26 @@ mesh controls. Unknown `$type`s render a clearly-labeled fallback; extend or ove
 
 ## Wiring to a live mesh
 
-`GrpcAreaSource` does this — subscribe to a layout area over `@meshweaver/client`, fold the RFC-7396
-patches into `{areas,data}`, and route `emit` back (clicks + edits):
+`GrpcAreaSource` does this — subscribe to a layout area over the gRPC-web transport, fold the change stream
+into `{areas,data}`, and route `emit` back (clicks + edits):
 
 ```ts
-import { connect } from "@meshweaver/client";
-import { GrpcAreaSource, MeshAreaView } from "@meshweaver/react";
+import { connect } from "@meshweaver/client-web";        // browser / RN gRPC-web split
+import { GrpcAreaSource } from "@meshweaver/react/core";
 
-const conn = await connect("https://atioz.meshweaver.cloud", { token: "mw_..." });
-const source = new GrpcAreaSource(conn, "ACME/MyApp", { area: "Overview" });
-source.start(); // begins folding the area stream into {areas,data}
-// <MeshAreaView source={source} rootArea="Overview" />
+const conn = await connect(url, { token });              // "" token ⇒ anonymous (public Doc partition)
+const source = new GrpcAreaSource(conn, "Doc/Architecture", { area: "Overview" });
+await source.start();                                    // begins folding the area stream into {areas,data}
+// <ScopeProvider source={source} area="Overview"> … <RenderArea areaKey="Overview" />
 ```
 
-The layout-area protocol (`SubscribeRequest` / `DataChangedEvent` / the click/edit messages, marked
-`🔬 WIRE:` in `live/grpcSource.ts`) is the one piece still to pin against a running portal — capture one
-change + one round-trip. Once pinned, the same renderer drives web, Electron, and React Native.
+**The layout-area protocol is verified end-to-end** (against `Memex.LocalMesh`) — `SubscribeRequest` with a
+`$type`-tagged `LayoutAreaReference`, `DataChangedEvent` frames whose `ChangeType` selects Full (replace) vs
+**RFC 6902 JSON-Patch** (apply), an `EntityStore` with **JSON-quoted collection keys** the source normalizes,
+and control `$type`s that carry a `Control` suffix the dispatcher strips. The full write-up — including the
+one server-side edge (the monolith proxy hub must forward synchronously) — is in
+**[docs/live-protocol.md](docs/live-protocol.md)**. The same renderer then drives web, Electron, and React
+Native unchanged.
 
 ## Targets
 

@@ -87,3 +87,15 @@ const LIVE: LiveOptions = { url: "https://atioz.meshweaver.cloud", token: "mw_�
 the app offline from a literal area tree. The same client unblocks live data in a **browser** web app too
 (`@meshweaver/client` is Node-only). One runtime caveat on RN: gRPC-web server-streaming needs a streaming
 `fetch` — install a streaming-fetch polyfill before `connect()` (see the client's README).
+
+The live layout-area protocol is **verified end-to-end** (RFC 6902 patches, JSON-quoted `EntityStore` keys,
+the `Control`-suffix `$type` convention): see **[../react/docs/live-protocol.md](../react/docs/live-protocol.md)**.
+
+## The app shell (a real client)
+
+`App.tsx` is more than a render harness — it's an Outlook-for-macOS-style shell: a global search + breadcrumb,
+a **left menu streamed from the mesh's menu providers** (`$Menu:Node` / `$Menu:Mesh` / `$Menu:AI`, never
+hardcoded), an "On this page" TOC, **navigation** (menu / links / search / breadcrumb, each re-subscribing the
+live source), **client screens** (Voice/speech, Connect-to-remote-mesh, Profile), and **dark mode**. It's the
+JS peer of the MAUI `PortalShellPage`, and it's served **same-origin (zero CORS)** by `Memex.LocalMesh`.
+Full write-up: **[docs/shell.md](docs/shell.md)**.

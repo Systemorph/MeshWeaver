@@ -20,3 +20,7 @@ export const SafeAreaView = host("SafeAreaView");
 export const StatusBar = host("StatusBar");
 
 export const StyleSheet = { create: <T,>(styles: T): T => styles };
+
+// The pack branches on Platform.OS (web renders real HTML for Markdown/Html; native renders <Text>).
+// The headless unit level asserts the NATIVE mapping, so report a native OS.
+export const Platform = { OS: "ios" };

@@ -8,16 +8,27 @@ const fs = require("fs");
 
 const projectRoot = __dirname;
 const reactPkg = path.resolve(projectRoot, "../react");
+const grpcWebPkg = path.resolve(projectRoot, "../grpc-web");
 const config = getDefaultConfig(projectRoot);
 
-// Watch the source-linked renderer package.
-config.watchFolders = [reactPkg];
+// Watch the source-linked renderer + gRPC-web client packages.
+config.watchFolders = [reactPkg, grpcWebPkg];
+
+// The gRPC-web client's generated code imports subpath exports (e.g. @bufbuild/protobuf/codegenv2), which
+// Metro only resolves with package-exports on. Also let Metro find the client's own deps (@connectrpc/…).
+config.resolver.unstable_enablePackageExports = true;
+config.resolver.nodeModulesPaths = [
+  path.resolve(projectRoot, "node_modules"),
+  path.resolve(grpcWebPkg, "node_modules"),
+];
 
 const appReact = path.resolve(projectRoot, "node_modules/react");
 const aliases = {
   "@meshweaver/react/core": path.resolve(reactPkg, "src/core.ts"),
-  // Offline demo: don't bundle the browser/Node gRPC-web client (needs an RN fetch polyfill); stub it.
-  "@meshweaver/client-web": path.resolve(projectRoot, "metro-stubs/client-web.ts"),
+  // The real gRPC-web client (Connect-ES). It bundles cleanly for the WEB target (browser fetch handles the
+  // Connect server-stream); on native RN it additionally needs a streaming-fetch polyfill. When served from
+  // the mesh host (same origin) there's no CORS. (The offline metro-stub is kept for a mesh-less demo build.)
+  "@meshweaver/client-web": path.resolve(grpcWebPkg, "src/index.ts"),
 };
 
 const base = config.resolver.resolveRequest;
