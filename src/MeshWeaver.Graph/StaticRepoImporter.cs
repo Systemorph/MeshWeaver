@@ -743,19 +743,40 @@ public static class StaticRepoImporter
             {
                 var existing = change.Items.FirstOrDefault(n =>
                     string.Equals(n.Path, source.Partition, StringComparison.OrdinalIgnoreCase));
-                if (existing is { SyncBehavior: not SyncBehavior.Include })
+                if (existing is null)
                 {
-                    logger?.LogDebug(
-                        "[StaticRepoImport] {Partition}: root claimed (SyncBehavior={Behavior}) — leaving untouched.",
-                        source.Partition, existing.SyncBehavior);
-                    return Observable.Return(0);
+                    NodeTypeCompilationActivity.AppendLog(
+                        hub, activityPath, $"Ensuring Space root {source.Partition}…", logger!);
+                    // Absent → create through the canonical verb — creating a Space triggers eager
+                    // schema provisioning + the partition-definition/routing prime + the admin grant.
+                    return Upsert(hub, Materialize(root));
                 }
-                NodeTypeCompilationActivity.AppendLog(
-                    hub, activityPath, $"Ensuring Space root {source.Partition}…", logger!);
-                // Upsert through the canonical verb — creating a Space triggers eager schema provisioning
-                // + the partition-definition/routing prime + the admin grant; an existing (Include) root
-                // is updated (owner preserves identity). Same path as every other node.
-                return Upsert(hub, Materialize(root));
+                // EXISTING root: check the claim AUTHORITATIVELY (GetMeshNodeStream), never only the
+                // query snapshot — a JUST-SET "sync: none" lags the eventually-consistent query (the
+                // same race ReadClaimedRoots guards; here the stakes are higher because the upsert
+                // below would re-materialize the root and RESET its SyncBehavior to Include, silently
+                // re-enabling sync for the whole partition). The root exists, so the read resolves
+                // promptly; on timeout fall back to the query snapshot rather than skipping the import.
+                return hub.GetWorkspace().GetMeshNodeStream(source.Partition)
+                    .Where(n => n is not null)
+                    .Take(1)
+                    .Timeout(TimeSpan.FromSeconds(10))
+                    .Catch((Exception _) => Observable.Return<MeshNode?>(existing))
+                    .SelectMany(current =>
+                    {
+                        if (current is { SyncBehavior: not SyncBehavior.Include })
+                        {
+                            logger?.LogDebug(
+                                "[StaticRepoImport] {Partition}: root claimed (SyncBehavior={Behavior}) — leaving untouched.",
+                                source.Partition, current.SyncBehavior);
+                            return Observable.Return(0);
+                        }
+                        NodeTypeCompilationActivity.AppendLog(
+                            hub, activityPath, $"Ensuring Space root {source.Partition}…", logger!);
+                        // Existing (Include) root → overwrite to refresh the welcome, preserving
+                        // owner identity. Same canonical path as every other node.
+                        return Upsert(hub, Materialize(root));
+                    });
             });
     }
 
