@@ -1,0 +1,17 @@
+{
+  "id": "PandasExplorer",
+  "namespace": "PythonDemo",
+  "name": "Pandas Explorer",
+  "nodeType": "NodeType",
+  "category": "Types",
+  "description": "An interactive frontend (buttons + input) that drives a live pandas DataFrame held in the Python py/pandas mesh participant and renders its current state as a real DataGrid.",
+  "isPersistent": true,
+  "content": {
+    "$type": "NodeTypeDefinition",
+    "namespace": "PythonDemo",
+    "displayName": "Pandas Explorer",
+    "iconName": "Table",
+    "description": "Buttons + text input that control a Python-held pandas DataFrame over the mesh; the grid renders the live frame returned by the participant.",
+    "configuration": "config => config.WithContentType<PandasExplorer>().AddLayout(layout => layout.AddPandasExplorerLayoutAreas().WithDefaultArea(\"Explorer\"))"
+  }
+}
