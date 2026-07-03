@@ -50,58 +50,10 @@ public sealed class V35_ReconcilePartitionAccessIndex : IMigration
     public string Description =>
         "Re-apply per-partition permission functions and reconcile public.partition_access for every schema";
 
-    public async Task RunAsync(MigrationContext ctx)
-    {
-        // 1. (Re)install the single-source-of-truth provisioning proc so its body carries the
-        //    CURRENT versioned DDL (the rebuild functions with the partition_access sync). Pure
-        //    CREATE OR REPLACE FUNCTION — idempotent.
-        await using (var procCmd = ctx.DataSource.CreateCommand(
-            PostgreSqlSchemaInitializer.GetEnsurePartitionSchemaProcScript(ctx.Options.VectorDimensions)))
-        {
-            await procCmd.ExecuteNonQueryAsync();
-        }
-
-        // 2. Re-apply the functions per schema, then reconcile uep + partition_access.
-        var schemas = await SchemaHelpers.DiscoverAccessSchemasAsync(ctx.DataSource);
-
-        foreach (var schema in schemas)
-        {
-            // 2a. Re-apply the current per-partition DDL (CREATE OR REPLACE the rebuild functions
-            //     etc.) via the single-source-of-truth proc. This cures a stale
-            //     rebuild_user_permissions_for that never synced partition_access.
-            try
-            {
-                await using var ensureCmd = ctx.DataSource.CreateCommand(
-                    "SELECT public.ensure_partition_schema(@p)");
-                ensureCmd.Parameters.AddWithValue("@p", schema);
-                await ensureCmd.ExecuteNonQueryAsync();
-                ctx.Logger.LogInformation(
-                    "Repair v35: \"{Schema}\" — per-partition functions re-applied", schema);
-            }
-            catch (Exception ex)
-            {
-                ctx.Logger.LogWarning(ex,
-                    "Repair v35: \"{Schema}\" — ensure_partition_schema failed; skipping", schema);
-                continue;
-            }
-
-            // 2b. Full schema-level reconcile: rebuild user_effective_permissions AND re-sync
-            //     public.partition_access for every user with Read in this partition. Heals the
-            //     drift whether it came from a stale function or a trigger-bypassing write.
-            try
-            {
-                await using var rebuildCmd = ctx.DataSource.CreateCommand(
-                    $"SELECT \"{schema}\".rebuild_user_effective_permissions()");
-                await rebuildCmd.ExecuteNonQueryAsync();
-                ctx.Logger.LogInformation(
-                    "Repair v35: \"{Schema}\".rebuild_user_effective_permissions() OK — partition_access reconciled",
-                    schema);
-            }
-            catch (Exception ex)
-            {
-                ctx.Logger.LogWarning(ex,
-                    "Repair v35: rebuild_user_effective_permissions failed for \"{Schema}\"", schema);
-            }
-        }
-    }
+    public Task RunAsync(MigrationContext ctx)
+        // Single implementation shared with the ALWAYS-RUNS phase in Program.cs — the drift
+        // this migration healed once RECURRED on databases already past v35, so the reconcile
+        // now also runs on every migration pass; see PartitionAccessReconcile.
+        => PartitionAccessReconcile.RunAsync(
+            ctx.DataSource, ctx.Options.VectorDimensions, ctx.Logger, phase: "v35");
 }
