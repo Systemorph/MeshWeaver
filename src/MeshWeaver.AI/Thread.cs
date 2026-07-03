@@ -360,6 +360,20 @@ public record Thread
     public ImmutableList<ToolCallEntry>? StreamingToolCalls { get; init; }
 
     /// <summary>
+    /// 🚨 Round-trip buffer for content members this compiled shape does not declare
+    /// (schema evolution: written by a newer build, or removed since the JSON was
+    /// persisted — the mixed-version-silo case during rolling updates).
+    /// <c>[JsonExtensionData]</c> captures them on read and re-emits them on write, and
+    /// rides record <c>with</c>-copies — so neither the persistence echo nor an edit
+    /// through a narrower shape can silently drop them (the content-narrowing
+    /// silent-data-loss class; see <c>NodeTypeDefinition.UnknownMembers</c>). Never read
+    /// programmatically. <c>[Browsable(false)]</c> keeps it out of reflected editors.
+    /// </summary>
+    [System.ComponentModel.Browsable(false)]
+    [JsonExtensionData]
+    public IDictionary<string, JsonElement>? UnknownMembers { get; init; }
+
+    /// <summary>
     /// Brings the thread to REST — the single canonical reset of transient execution state. Sets
     /// <c>Status = Idle</c> and clears the active-round handle, streaming buffers, and the
     /// control-plane request, while PRESERVING the conversation
@@ -556,4 +570,18 @@ public record ThreadMessage
     /// streaming. <c>CompletedAt - Timestamp</c> is the per-message duration.
     /// </summary>
     public DateTime? CompletedAt { get; init; }
+
+    /// <summary>
+    /// 🚨 Round-trip buffer for content members this compiled shape does not declare
+    /// (schema evolution: written by a newer build, or removed since the JSON was
+    /// persisted — the mixed-version-silo case during rolling updates).
+    /// <c>[JsonExtensionData]</c> captures them on read and re-emits them on write, and
+    /// rides record <c>with</c>-copies — so neither the persistence echo nor an edit
+    /// through a narrower shape can silently drop them (the content-narrowing
+    /// silent-data-loss class; see <c>NodeTypeDefinition.UnknownMembers</c>). Never read
+    /// programmatically. <c>[Browsable(false)]</c> keeps it out of reflected editors.
+    /// </summary>
+    [System.ComponentModel.Browsable(false)]
+    [JsonExtensionData]
+    public IDictionary<string, JsonElement>? UnknownMembers { get; init; }
 }
