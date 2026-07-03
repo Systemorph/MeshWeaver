@@ -91,10 +91,13 @@ public record MeshNodePickerControl(object Data)
     public bool DefaultToFirst { get; init; }
 
     /// <summary>
-    /// When true, the queries load ONCE without the typed text and the view filters the
-    /// cached result set in-memory (diacritic- and case-insensitive — "Burgi" finds "Bürgi").
-    /// Use for bounded result sets (users, groups, roles) where server-side substring search
-    /// would miss accented matches; leave false for large/open sets that need server search.
+    /// When true, the queries load ONCE without the typed text — capped at 500 nodes — and
+    /// the view filters the cached set in-memory (diacritic- and case-insensitive — "Burgi"
+    /// finds "Bürgi"). If the cap is hit, typed text ADDITIONALLY runs the normal server-side
+    /// search and the union is shown, so installations larger than the cap still find the
+    /// tail (server matching there is substring-based, not diacritic-folded). Use for
+    /// typically-small sets (users, groups, roles); leave false for large/open sets that
+    /// should always search server-side.
     /// </summary>
     public bool FilterInMemory { get; init; }
 
