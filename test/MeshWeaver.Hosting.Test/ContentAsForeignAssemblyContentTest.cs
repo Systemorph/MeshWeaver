@@ -85,21 +85,24 @@ public class ContentAsForeignAssemblyContentTest(ITestOutputHelper output) : Hub
     }
 
     [Fact]
-    public void ContentAs_DifferentlyNamedTargetType_BindsByShapeLikeTheJsonElementPath()
+    public void ContentAs_DifferentlyNamedTypedContent_StaysNull_PreservingProbeDispatch()
     {
         var node = MaterializeThroughHost(out _);
         node.Content.Should().BeOfType<QueryLayerModel.BalanceEntry>();
 
-        // Parity with the degraded-JsonElement recovery: a $type the target doesn't recognise
-        // is just an ignored member — the fields still bind by shape (the rbuergi/EntryProbe
-        // diagnostic on atioz exercised exactly this: ContentAs<ProbeEntry> over
-        // "$type":"BalanceSheetEntry" content).
+        // A DIFFERENTLY-named typed content is a legitimate "this is another domain type" answer,
+        // and call sites probe-dispatch on it: the token validator does
+        // `ContentAs<ApiTokenIndex>() ?? treat the node as the token itself` — shape-recovering
+        // ApiToken→ApiTokenIndex (both carry TokenHash) yields a half-populated index with a null
+        // TokenPath and every login fails "Token not found" (McpAccessControlTests, shard 0).
+        // Recovery is strictly for the SAME-named cross-assembly identity; by-shape binding of
+        // differently-named types remains the degraded-JsonElement path's job (untyped content).
         var client = GetClient();
         var typed = node.ContentAs<ConsumerModel.RenamedEntry>(client.JsonSerializerOptions);
 
-        typed.Should().NotBeNull();
-        typed!.Position.Should().Be("pension/Position/Equities");
-        typed.Year.Should().Be("pension/Year/2024");
+        typed.Should().BeNull(
+            "a typed content of a DIFFERENT name must not be shape-recovered — probe-dispatch "
+            + "call sites rely on the null to fall back to their next interpretation");
     }
 
     [Fact]
