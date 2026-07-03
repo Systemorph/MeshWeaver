@@ -47,6 +47,12 @@ public partial class MeshNodePickerView : FormComponentBase<MeshNodePickerContro
     private MeshNode[]? BoundItems { get; set; }
     private bool HasItems => BoundItems is { Length: > 0 };
 
+    // Client-side filtering: pre-loaded Items OR an explicit FilterInMemory opt-in on the
+    // control (bounded sets like the access-subject picker). The base queries load once
+    // WITHOUT the typed text; keystrokes filter the cached set diacritic-insensitively via
+    // SearchText.Matches — server-side ILIKE would miss "Burgi" → "Bürgi" (issue #213).
+    private bool UseClientFilter => HasItems || ViewModel?.FilterInMemory == true;
+
     // Compact "thin" rendering + open-upward dropdown, driven by the control's Layout/Open.
     private bool IsThin => ViewModel?.Layout == MeshNodePickerLayout.Thin;
     private bool OpensUp => ViewModel?.Open == MeshNodePickerOpenDirection.Up;
@@ -198,7 +204,7 @@ public partial class MeshNodePickerView : FormComponentBase<MeshNodePickerContro
         _isSearchOpen = true;
 
         // In-memory filter path — cheap, no debounce.
-        if (HasItems && _cachedResults != null)
+        if (UseClientFilter && _cachedResults != null)
         {
             _results = FilterCached(_searchText.Trim());
             _highlightedIndex = 0;
@@ -218,8 +224,8 @@ public partial class MeshNodePickerView : FormComponentBase<MeshNodePickerContro
 
     private void LoadResultsAsync()
     {
-        // When Items are provided and already cached, filter in-memory
-        if (HasItems && _cachedResults != null)
+        // When the cached client-filter set is already loaded, filter in-memory
+        if (UseClientFilter && _cachedResults != null)
         {
             _results = FilterCached(_searchText.Trim());
             _highlightedIndex = 0;
@@ -251,7 +257,7 @@ public partial class MeshNodePickerView : FormComponentBase<MeshNodePickerContro
         var userText = _searchText.Trim();
         var observables = queries.Select(baseQuery =>
         {
-            var fullQuery = HasItems || string.IsNullOrEmpty(userText)
+            var fullQuery = UseClientFilter || string.IsNullOrEmpty(userText)
                 ? baseQuery
                 : $"{baseQuery} {userText}";
             return MeshQuery
@@ -289,7 +295,7 @@ public partial class MeshNodePickerView : FormComponentBase<MeshNodePickerContro
                 .Select(g => g.First())
                 .ToList();
 
-            if (HasItems)
+            if (UseClientFilter)
             {
                 // Cache for in-memory filtering
                 _cachedResults = merged;
@@ -333,12 +339,9 @@ public partial class MeshNodePickerView : FormComponentBase<MeshNodePickerContro
         if (_cachedResults == null) return new List<MeshNode>();
         if (string.IsNullOrEmpty(searchText)) return _cachedResults;
 
+        // Diacritic- AND case-insensitive: "Burgi" matches "Bürgi" (SearchText.Fold).
         return _cachedResults
-            .Where(n =>
-                (n.Name ?? "").Contains(searchText, StringComparison.OrdinalIgnoreCase)
-                || (n.Path ?? "").Contains(searchText, StringComparison.OrdinalIgnoreCase)
-                || (n.NodeType ?? "").Contains(searchText, StringComparison.OrdinalIgnoreCase)
-                || (n.Id ?? "").Contains(searchText, StringComparison.OrdinalIgnoreCase))
+            .Where(n => SearchText.Matches(searchText, n.Name, n.Path, n.NodeType, n.Id))
             .ToList();
     }
 
