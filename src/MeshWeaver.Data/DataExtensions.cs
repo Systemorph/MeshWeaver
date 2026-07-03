@@ -262,7 +262,28 @@ public static class DataExtensions
             current = parent;
         }
         if (syncHub is null)
+        {
+            // The absent-target drop is intentional (a disconnected circuit's stream, a reaped or
+            // never-created sync hub) — but it must never be SILENT: data-sync traffic vanishing
+            // without a trace is unfindable in production (agentic-pensions#12 asked for exactly
+            // this signal). One Warning per drop, carrying the stream id + message type + hub.
+            try
+            {
+                hub.ServiceProvider.GetService<ILoggerFactory>()
+                    ?.CreateLogger(typeof(DataExtensions).FullName!)
+                    .LogWarning(
+                        "Dropping {MessageType} for stream {StreamId} on hub {Address}: no synchronization "
+                        + "hub found on this hub or any parent — the target stream is gone (disposed circuit, "
+                        + "released read stream, or never-created sync hub). Sender: {Sender}.",
+                        message.GetType().Name, streamMessage.StreamId, hub.Address, request.Sender);
+            }
+            catch (ObjectDisposedException)
+            {
+                // Drops routinely fire while the hub is tearing down — the diagnostic must never
+                // turn a benign Ignored into a faulted delivery.
+            }
             return Observable.Return(request.Ignored());
+        }
         syncHub.DeliverMessage(request);
         return Observable.Return(request.Forwarded());
     }

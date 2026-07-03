@@ -138,6 +138,91 @@ public class TypeRegistryTest(ITestOutputHelper output) : HubTestBase(output)
         writeName.Should().Be(nameof(AliasedContent));
     }
 
+    /// <summary>
+    /// Serializing a type from a COLLECTIBLE assembly (a dynamic node / kernel-script compilation —
+    /// per-compile CLR identity) must NOT adopt the type into the hub's TypeRegistry. Pre-fix, the
+    /// resolver's auto-registration poisoned the shared hub for the pod's lifetime: every later $type
+    /// resolution (e.g. mesh-query row deserialization) yielded THAT foreign CLR type, and consumers
+    /// holding their OWN compilation of the class read Content as null — the atioz "BalanceSheet
+    /// dashboards render empty" outage (agentic-pensions#12). The wire shape must be unchanged (short-name
+    /// $type still written); reads on this hub degrade politely to JsonElement, which the consumer recovers.
+    /// </summary>
+    [Fact]
+    public void SerializingCollectibleType_DoesNotPoisonRegistry_AndDegradesReadsToJsonElement()
+    {
+        var host = GetHost();
+        var typeRegistry = host.ServiceProvider.GetRequiredService<ITypeRegistry>();
+        var collectibleType = EmitCollectibleType("SharedEntry", "Position");
+        collectibleType.Assembly.IsCollectible.Should().BeTrue(
+            "the emitted assembly must model a dynamic node compilation (loaded collectible)");
+
+        var captured = new ConcurrentQueue<string>();
+        var options = new JsonSerializerOptions();
+        options.Converters.Add(new ObjectPolymorphicConverter(typeRegistry));
+        options.TypeInfoResolver = new PolymorphicTypeInfoResolver(
+            typeRegistry, owner: "mesh/shared-hub", logger: new CapturingLogger(captured));
+
+        var instance = Activator.CreateInstance(collectibleType)!;
+        collectibleType.GetProperty("Position")!.SetValue(instance, "Assets");
+        var json = JsonSerializer.Serialize(instance, typeof(object), options);
+
+        // Wire shape unchanged: the short-name $type is still written, so hubs that DO own the type
+        // (explicit WithType/WithContentType registration) resolve it exactly as before.
+        json.Should().Contain("\"SharedEntry\"",
+            "serialization must still stamp the short-name $type discriminator");
+        json.Should().Contain("Assets", "the payload properties must serialize normally");
+
+        // The poisoning is gone: the registry must NOT have adopted the per-compile CLR identity.
+        typeRegistry.TryGetType("SharedEntry", out _).Should().BeFalse(
+            "a collectible-assembly type must never be auto-registered by serialization — it would make "
+            + "every later $type resolution on this hub yield the foreign/stale CLR type");
+        typeRegistry.TryGetCollectionName(collectibleType, out _).Should().BeFalse();
+
+        // Reads on THIS hub degrade politely to JsonElement (recoverable via ContentAs<T> at the
+        // consumer) instead of resolving to the foreign type.
+        var back = JsonSerializer.Deserialize<object>(json, options);
+        back.Should().BeOfType<JsonElement>();
+    }
+
+    /// <summary>
+    /// Emits a minimal public class with one string property into a COLLECTIBLE dynamic assembly —
+    /// the CLR shape of a compiled dynamic-node type (see CompilationCacheService: collectible ALC,
+    /// "DynamicNode_*" naming) without dragging Roslyn into this test project.
+    /// </summary>
+    private static Type EmitCollectibleType(string typeName, string propertyName)
+    {
+        var assemblyBuilder = System.Reflection.Emit.AssemblyBuilder.DefineDynamicAssembly(
+            new System.Reflection.AssemblyName("DynamicNode_CollectibleTest"),
+            System.Reflection.Emit.AssemblyBuilderAccess.RunAndCollect);
+        var moduleBuilder = assemblyBuilder.DefineDynamicModule("main");
+        var typeBuilder = moduleBuilder.DefineType(
+            typeName, System.Reflection.TypeAttributes.Public | System.Reflection.TypeAttributes.Class);
+        var field = typeBuilder.DefineField(
+            $"_{propertyName}", typeof(string), System.Reflection.FieldAttributes.Private);
+        var property = typeBuilder.DefineProperty(
+            propertyName, System.Reflection.PropertyAttributes.None, typeof(string), null);
+        const System.Reflection.MethodAttributes accessorAttributes =
+            System.Reflection.MethodAttributes.Public
+            | System.Reflection.MethodAttributes.SpecialName
+            | System.Reflection.MethodAttributes.HideBySig;
+        var getter = typeBuilder.DefineMethod(
+            $"get_{propertyName}", accessorAttributes, typeof(string), Type.EmptyTypes);
+        var getterIl = getter.GetILGenerator();
+        getterIl.Emit(System.Reflection.Emit.OpCodes.Ldarg_0);
+        getterIl.Emit(System.Reflection.Emit.OpCodes.Ldfld, field);
+        getterIl.Emit(System.Reflection.Emit.OpCodes.Ret);
+        var setter = typeBuilder.DefineMethod(
+            $"set_{propertyName}", accessorAttributes, null, new[] { typeof(string) });
+        var setterIl = setter.GetILGenerator();
+        setterIl.Emit(System.Reflection.Emit.OpCodes.Ldarg_0);
+        setterIl.Emit(System.Reflection.Emit.OpCodes.Ldarg_1);
+        setterIl.Emit(System.Reflection.Emit.OpCodes.Stfld, field);
+        setterIl.Emit(System.Reflection.Emit.OpCodes.Ret);
+        property.SetGetMethod(getter);
+        property.SetSetMethod(setter);
+        return typeBuilder.CreateType()!;
+    }
+
     private sealed class CapturingLogger(ConcurrentQueue<string> sink) : ILogger
     {
         public IDisposable BeginScope<TState>(TState state) where TState : notnull => NullScope.Instance;
