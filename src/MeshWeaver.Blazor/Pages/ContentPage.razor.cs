@@ -291,6 +291,7 @@ public partial class ContentPage : ComponentBase, IDisposable
     /// Collection names with slashes (e.g., "Submissions@Microsoft/2026") are encoded
     /// with '~' in URLs to avoid path parsing issues.
     /// </summary>
-    private static string DecodeCollectionName(string encodedName) => encodedName.Replace("~", "/");
+    private static string DecodeCollectionName(string encodedName)
+        => ContentCollectionsExtensions.DecodeCollectionName(encodedName);
 }
 

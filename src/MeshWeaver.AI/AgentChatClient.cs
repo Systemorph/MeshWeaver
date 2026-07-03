@@ -8,6 +8,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using MeshWeaver.AI.Persistence;
+using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Layout;
@@ -538,9 +539,11 @@ public class AgentChatClient : IAgentChat
 
                         if (BinaryExtensions.Contains(ext))
                         {
-                            // Load binary from content collection on the node's hub
+                            // Load binary from the node's default content collection (the
+                            // `content:` UCR prefix addresses the default collection by design).
                             var effectivePath = nodePath ?? Context?.Path;
-                            var stream = await contentService.GetContentAsync("content", fileName).ConfigureAwait(false);
+                            var stream = await contentService.GetContentAsync(
+                                ContentCollectionsExtensions.DefaultCollectionName, fileName).ConfigureAwait(false);
                             if (stream != null)
                             {
                                 using (stream)

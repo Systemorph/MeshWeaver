@@ -23,17 +23,26 @@ namespace MeshWeaver.ContentCollections.Test;
 /// Tests for docx → markdown conversion via IContentTransformer,
 /// content autocomplete for document files, and agent content access.
 /// </summary>
-public class DocxConversionTest(ITestOutputHelper output) : HubTestBase(output)
+public class DocxConversionTest : HubTestBase
 {
     private readonly string _contentBasePath = Path.Combine(AppContext.BaseDirectory, "Files", "DocxTest");
 
-    protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
+    public DocxConversionTest(ITestOutputHelper output) : base(output)
     {
+        // The fixtures are read BOTH through the client hub's collection AND directly from
+        // disk (DocSharpContentTransformer_Converts_Docx_To_Markdown never builds a hub) —
+        // create them in the ctor, not in ConfigureClient, so they exist regardless of
+        // whether (and in which order) a test calls GetClient(). Creating them in
+        // ConfigureClient made the direct-read test order-dependent: green on a warm bin
+        // (residue from earlier runs), DirectoryNotFoundException on a clean checkout.
         Directory.CreateDirectory(_contentBasePath);
         CreateTestDocx(Path.Combine(_contentBasePath, "sample.docx"), "Hello World", "This is a test document.");
         // Also create a plain text file for comparison
         File.WriteAllText(Path.Combine(_contentBasePath, "readme.md"), "# Readme\nSome text.");
+    }
 
+    protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
+    {
         return base.ConfigureClient(configuration)
             .AddContentCollection(_ => new ContentCollectionConfig
             {

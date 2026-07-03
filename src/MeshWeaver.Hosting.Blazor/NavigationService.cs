@@ -3,6 +3,7 @@ using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Runtime.CompilerServices;
 using MeshWeaver.Blazor.Infrastructure;
+using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Markdown;
@@ -81,12 +82,18 @@ internal class NavigationService : INavigationService
     private bool _isInitialized;
     private bool _disposed;
 
+    // Optional (app-level opt-in): the app's registered single-segment Blazor page routes
+    // (/login, /privacy, /search, …). See PageRouteRegistry for why the args-only heuristic
+    // is not enough. Null when the app doesn't register one — behavior then unchanged.
+    private readonly PageRouteRegistry? _pageRoutes;
+
     public NavigationService(
         NavigationManager navigationManager,
         IPathResolver pathResolver,
         IMessageHub hub,
-        ICircuitContextAccessor circuitContextAccessor)
-        : this(navigationManager, pathResolver, hub, circuitContextAccessor, DefaultRetryDelays)
+        ICircuitContextAccessor circuitContextAccessor,
+        PageRouteRegistry? pageRoutes = null)
+        : this(navigationManager, pathResolver, hub, circuitContextAccessor, DefaultRetryDelays, pageRoutes)
     {
     }
 
@@ -99,8 +106,10 @@ internal class NavigationService : INavigationService
         IPathResolver pathResolver,
         IMessageHub hub,
         ICircuitContextAccessor circuitContextAccessor,
-        int[] retryDelays)
+        int[] retryDelays,
+        PageRouteRegistry? pageRoutes = null)
     {
+        _pageRoutes = pageRoutes;
         _navigationManager = navigationManager;
         _pathResolver = pathResolver;
         _hub = hub;
@@ -344,7 +353,14 @@ internal class NavigationService : INavigationService
         // It is ALSO how `/search?q=nodeType%3AThread&…` was permission-checked as a Thread
         // node. A page route has NO node address: clear the context and stop — the page
         // (Search/Create/Login) reads its own query via [SupplyParameterFromQuery].
-        if (!string.IsNullOrEmpty(route) && !route.Contains('/') && !args.IsEmpty)
+        //
+        // 🚨 A BARE single segment matching a registered page route (/privacy, bare /login) is
+        // ALSO a page, args or not. Resolving it as a mesh path synthesizes a partition root
+        // whenever the writable provider's PartitionExists probe is indeterminate
+        // (InMemory/monolith), and the anonymous hard-gate then bounces the deliberately-PUBLIC
+        // page to /login — the /privacy regression. See PageRouteRegistry.
+        if (!string.IsNullOrEmpty(route) && !route.Contains('/')
+            && (!args.IsEmpty || _pageRoutes?.IsPageRoute(route) == true))
         {
             _resolutionSubscription?.Dispose();
             _notFoundWatchdog?.Dispose();
@@ -354,6 +370,39 @@ internal class NavigationService : INavigationService
             _status.OnNext(NavigationStatus.Idle());
             _navigationContext.OnNext(null);
             return;
+        }
+
+        // A /content/… route is the ContentPage (its own @page route — the page renders the
+        // file itself), but the navigation CONTEXT must still follow the node whose content is
+        // being viewed: /content/{address}/{collection}/{filePath} strips the page prefix and
+        // resolves {address}, leaving "{collection}/{filePath}" as the remainder (area =
+        // collection, id = file path). Context consumers — the chat context chip + agent
+        // navigation reference, node menus — then track file views; without this the literal
+        // "content/…" path resolved to nothing and every file click blanked the context.
+        // A GLOBAL collection (/content/{collection}/{filePath}, a portal-registered collection
+        // name) has no node address — clear the context like a page route. So does BARE
+        // /content (ContentPage's catch-all matches an empty remainder) — without that case
+        // the literal route "content" fell through to mesh resolution and could synthesize a
+        // bogus partition root.
+        if (string.Equals(route, "content", StringComparison.OrdinalIgnoreCase)
+            || route.StartsWith("content/", StringComparison.OrdinalIgnoreCase))
+        {
+            var contentRoute = route.Length > "content".Length ? route["content/".Length..] : "";
+            // '~' encodes '/' in collection names on content URLs (see ContentPage).
+            var firstSegment = ContentCollectionsExtensions.DecodeCollectionName(contentRoute.Split('/')[0]);
+            var contentService = _hub.ServiceProvider.GetService<IContentService>();
+            if (!contentRoute.Contains('/') || contentService?.GetCollectionConfig(firstSegment) is not null)
+            {
+                _resolutionSubscription?.Dispose();
+                _notFoundWatchdog?.Dispose();
+                IsResolving = false;
+                Context = null;
+                CurrentNamespace = null;
+                _status.OnNext(NavigationStatus.Idle());
+                _navigationContext.OnNext(null);
+                return;
+            }
+            route = contentRoute;
         }
 
         _status.OnNext(NavigationStatus.LookingUp(route));
