@@ -48,13 +48,17 @@ public static class PartitionAccessReconcile
 
         foreach (var schema in schemas)
         {
+            // Quoted-identifier escaping: schema names come from information_schema but can
+            // legally contain double quotes (and prod carries junk schemas from URL fragments)
+            // — double any embedded quote so the interpolated identifier stays valid SQL.
+            var ident = schema.Replace("\"", "\"\"");
             // Drift detection BEFORE the heal: assignments present but materialization empty is
             // the silent permission wedge — surface it loudly so recurrences are diagnosable.
             try
             {
                 await using var driftCmd = dataSource.CreateCommand($"""
-                    SELECT (SELECT count(*) FROM "{schema}".access),
-                           (SELECT count(*) FROM "{schema}".user_effective_permissions)
+                    SELECT (SELECT count(*) FROM "{ident}".access),
+                           (SELECT count(*) FROM "{ident}".user_effective_permissions)
                     """);
                 await using var rdr = await driftCmd.ExecuteReaderAsync();
                 if (await rdr.ReadAsync())
@@ -97,7 +101,7 @@ public static class PartitionAccessReconcile
             try
             {
                 await using var rebuildCmd = dataSource.CreateCommand(
-                    $"SELECT \"{schema}\".rebuild_user_effective_permissions()");
+                    $"SELECT \"{ident}\".rebuild_user_effective_permissions()");
                 await rebuildCmd.ExecuteNonQueryAsync();
             }
             catch (Exception ex)
