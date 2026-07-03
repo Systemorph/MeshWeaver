@@ -277,12 +277,16 @@ export function initEditor(editorId, placeholder, dotNetRef, codeEditMode = fals
     // Add placeholder styling
     updatePlaceholder(editorId, placeholder, showLineNumbers);
 
-    // Apply theme immediately to this editor instance to ensure correct colors
-    // This is needed because the editor may be created before the global theme sync runs
-    if (editorInstance) {
+    // Apply the CURRENT app theme immediately and UNCONDITIONALLY. monaco.editor.setTheme is
+    // GLOBAL (not per-instance), so it must run even when this editor isn't in BlazorMonaco's
+    // registry yet (getEditor returned null). Gating it on `editorInstance` (the content-change
+    // rewiring) meant a composer mounted AFTER the first editor — e.g. the chat composer inside
+    // the user-activity area — kept Monaco's default 'vs' (light) theme, so its glyphs rendered
+    // BLACK on the transparent-over-dark composer background (unreadable in dark mode). Re-syncing
+    // the global theme on every mount also heals a stale theme set before the app flipped to dark.
+    if (typeof monaco !== 'undefined' && monaco.editor) {
         const currentTheme = detectThemeFromDOM();
-        const monacoTheme = currentTheme === 'dark' ? 'vs-dark' : 'vs';
-        monaco.editor.setTheme(monacoTheme);
+        monaco.editor.setTheme(currentTheme === 'dark' ? 'vs-dark' : 'vs');
     }
     if (editorInstance) {
         // Handle content changes for placeholder AND push the value back to C#.
