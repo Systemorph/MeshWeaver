@@ -17,6 +17,19 @@ public static class ModuleNodeType
     public const string NodeType = "Module";
 
     /// <summary>
+    /// Sub-namespace under a module for theory blocks (plain Markdown
+    /// children): <c>{module}/Theory/{n}</c>. The module page embeds them in
+    /// <see cref="MeshNode.Order"/> order.
+    /// </summary>
+    public const string TheorySubNamespace = "Theory";
+
+    /// <summary>
+    /// Sub-namespace under a module for worked examples (plain Code children):
+    /// <c>{module}/Example/{n}</c>.
+    /// </summary>
+    public const string ExampleSubNamespace = "Example";
+
+    /// <summary>
     /// Registers the built-in "Module" MeshNode on the mesh builder.
     /// </summary>
     public static TBuilder AddModuleType<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
@@ -40,7 +53,9 @@ public static class ModuleNodeType
             config.TypeRegistry.AddCoursesTypes();
             return config
                 .AddMeshDataSource(s => s.WithContentType<ModuleConfiguration>())
-                .AddDefaultLayoutAreas();
+                // Framework defaults + the module page (Content) as the default
+                // area — summary, theory/example embeds, exercise tabs, nav.
+                .AddModuleViews();
         }
     };
 }

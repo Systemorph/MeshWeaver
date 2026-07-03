@@ -51,6 +51,8 @@ public static class CoursesConfigurationExtensions
             .WithType(typeof(ExerciseConfiguration), nameof(ExerciseConfiguration))
             .WithType(typeof(ExerciseAttemptStatus), nameof(ExerciseAttemptStatus))
             .WithType(typeof(AttemptStatus), nameof(AttemptStatus))
+            // Progress-grid row rendered by the course overview's DataGrid.
+            .WithType(typeof(CourseProgressRow), nameof(CourseProgressRow))
             // Internal validation-dispatch trigger — the watcher posts it to the
             // per-attempt hub's own address; registered so the routing /
             // serialisation pipeline resolves the type name even for self-post.

@@ -1,9 +1,12 @@
 using System;
+using System.Text.Json;
 using System.Threading.Tasks;
 using MeshWeaver.Courses.Configuration;
+using MeshWeaver.Data;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Layout;
+using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
@@ -124,5 +127,53 @@ public abstract class CoursesTestBase(ITestOutputHelper output) : MonolithMeshTe
 
         return new SeededExercise(
             coursePath, modulePath, exercisePath, starterPath, validationPath, solutionPath);
+    }
+
+    /// <summary>
+    /// Seeds a theory Markdown child at <c>{module}/Theory/{id}</c> and returns
+    /// its path.
+    /// </summary>
+    protected async Task<string> SeedTheory(string modulePath, string id, string markdown)
+    {
+        var mesh = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        var ns = $"{modulePath}/{ModuleNodeType.TheorySubNamespace}";
+        await mesh.CreateNode(new MeshNode(id, ns)
+        {
+            Name = id,
+            NodeType = MarkdownNodeType.NodeType,
+            Content = new MarkdownContent { Content = markdown }
+        }).Should().Within(30.Seconds()).Emit();
+        return $"{ns}/{id}";
+    }
+
+    /// <summary>
+    /// Seeds a worked-example Code child at <c>{module}/Example/{id}</c> and
+    /// returns its path.
+    /// </summary>
+    protected async Task<string> SeedExample(string modulePath, string id, string code)
+    {
+        var mesh = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        var ns = $"{modulePath}/{ModuleNodeType.ExampleSubNamespace}";
+        await mesh.CreateNode(new MeshNode(id, ns)
+        {
+            Name = id,
+            NodeType = CodeNodeType.NodeType,
+            Content = new CodeConfiguration { Code = code }
+        }).Should().Within(30.Seconds()).Emit();
+        return $"{ns}/{id}";
+    }
+
+    /// <summary>
+    /// Opens the remote layout-area stream for <paramref name="area"/> on the
+    /// node hub at <paramref name="path"/> — the exact binding the GUI uses
+    /// (<c>GetRemoteStream</c> + <c>GetControlStream</c>).
+    /// </summary>
+    protected (ISynchronizationStream<JsonElement> Stream, LayoutAreaReference Reference) OpenArea(
+        string path, string area)
+    {
+        var reference = new LayoutAreaReference(area);
+        var stream = GetClient().GetWorkspace()
+            .GetRemoteStream<JsonElement, LayoutAreaReference>(new Address(path), reference);
+        return (stream, reference);
     }
 }

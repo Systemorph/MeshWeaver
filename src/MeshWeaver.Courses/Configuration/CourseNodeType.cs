@@ -45,7 +45,9 @@ public static class CourseNodeType
             config.TypeRegistry.AddCoursesTypes();
             return config
                 .AddMeshDataSource(s => s.WithContentType<CourseConfiguration>())
-                .AddDefaultLayoutAreas();
+                // Framework defaults + the course overview (Content) as the
+                // default area — description, module cards, viewer progress.
+                .AddCourseViews();
         }
     };
 }
