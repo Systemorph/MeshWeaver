@@ -174,14 +174,20 @@ public sealed class InstanceSyncService(
     /// Removes drained entries from the manifest — only entries whose version is ≤ the drained
     /// version, so a write racing the drain stays pending and is pushed on the next pass.
     /// </summary>
-    public IObservable<MeshNode> RemoveDrained(string configPath, IReadOnlyCollection<PendingChange> drained) =>
-        UpdateConfig(configPath, cfg => cfg with
+    public IObservable<MeshNode> RemoveDrained(string configPath, IReadOnlyCollection<PendingChange> drained)
+    {
+        // Path → highest drained version, so the filter is O(pending) even after a long
+        // offline accumulation.
+        var drainedByPath = drained
+            .GroupBy(d => d.Path, StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => g.Max(d => d.Version), StringComparer.Ordinal);
+        return UpdateConfig(configPath, cfg => cfg with
         {
             PendingChanges = cfg.PendingChanges
-                .Where(p => !drained.Any(d =>
-                    string.Equals(d.Path, p.Path, StringComparison.Ordinal) && p.Version <= d.Version))
+                .Where(p => !(drainedByPath.TryGetValue(p.Path, out var v) && p.Version <= v))
                 .ToImmutableList(),
         });
+    }
 
     private static ImmutableList<PendingChange> Coalesce(ImmutableList<PendingChange> pending, PendingChange change)
     {

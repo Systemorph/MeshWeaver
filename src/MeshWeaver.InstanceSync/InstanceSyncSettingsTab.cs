@@ -154,7 +154,7 @@ public static class InstanceSyncSettingsTab
             {
                 // The parties list live-binds to WatchSyncSources — the delete re-emits and the
                 // card disappears; the coordinator stops the worker on the same event.
-                sync.RemoveSyncSource(spacePath, sourcePath.Split('/')[^1])
+                sync.RemoveSyncSource(spacePath, source.Id)
                     .Subscribe(_ => { },
                         ex => logger?.LogWarning(ex, "Removing sync party {Path} failed", sourcePath));
                 return Task.CompletedTask;

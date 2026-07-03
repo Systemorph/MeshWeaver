@@ -462,6 +462,10 @@ public sealed class InstanceSyncWorker : IDisposable
     /// </summary>
     private IObservable<Unit> OnSyncFailure(Exception ex)
     {
+        // A failure surfacing after disposal (an in-flight remote call cancelled by shutdown)
+        // must not stamp the node or schedule a probe — the worker is already gone.
+        if (disposed)
+            return Observable.Return(Unit.Default);
         if (IsConnectivityError(ex))
         {
             logger?.LogWarning("Instance sync {Config}: remote unreachable ({Error}) — accumulating; next probe in {Delay}",

@@ -60,7 +60,7 @@ IMeshChangeFeed ──► InstanceSyncCoordinator (IHostedService, one per proce
                        ▼
                 InstanceSyncWorker (one per registration)
                   PUSH: coalesce into PendingChanges manifest (stream.Update, durable)
-                        └─ drain pipeline (Subject → Throttle → Concat, serialized)
+                        └─ drain pipeline (Subject → Sample → Concat, serialized)
                             └─ per node: Get remote → equal? skip : Create/Update/Delete
                   PULL: periodic sweep — search hits carry version + lastModified,
                         Get only changed nodes, newest-writer-wins, apply as system
