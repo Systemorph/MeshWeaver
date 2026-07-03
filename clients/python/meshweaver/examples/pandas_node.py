@@ -22,6 +22,11 @@ Two interaction surfaces, both against the SAME live frame:
    ``df["margin"] = df["sales"] - df["cost"]`` in one submission is visible to the next. That persistent
    ``df`` IS "an object created and controlled in Python".
 
+The canonical data source is **a file kept in mesh content**: a ``load`` command carrying a ``path``
+(e.g. ``PythonDemo/SalesData``) makes the participant read that node over the mesh, parse the CSV it
+holds with :func:`pandas.read_csv`, and replace the held frame — mesh → Python. Every analytical view
+then flows back through the hub as a ``DataGridControl`` — Python → mesh → C# GUI.
+
 Run the self-contained showcase (no mesh needed) — prints the DataGrid JSON the GUI would render::
 
     python -m meshweaver.examples.pandas_node --demo
@@ -46,6 +51,8 @@ import pandas.api.types as pdt
 
 from .. import envelope
 from ..connection import connect as _connect
+from ..content import fenced_or_text, text_from_node
+from ..mesh import Mesh
 from ..worker import _jsonable
 
 DEFAULT_ADDRESS = "py/pandas"
@@ -105,6 +112,30 @@ def frame_to_datagrid(df: pd.DataFrame) -> dict[str, Any]:
     return {"data": data, "columns": columns}
 
 
+# --- a file kept in content -> DataFrame (mesh -> Python) ------------------------------------------
+
+def csv_from_markdown(text: str) -> str:
+    """The CSV inside ``text``: the first fenced code block if one is present, else the text itself.
+
+    A CSV file kept in content is typically a Markdown node whose body wraps the data in a
+    ```` ```csv ```` fence (renders as a code block in the portal, stays hand-editable). Prose around
+    the fence is ignored; a node that stores the bare CSV works too."""
+    return fenced_or_text(text)
+
+
+def csv_from_node(node: Any) -> str:
+    """Extract the CSV text a mesh node keeps in its content — see :func:`meshweaver.content.text_from_node`."""
+    try:
+        return text_from_node(node)
+    except ValueError:
+        raise ValueError("node carries no textual content to read CSV from") from None
+
+
+def frame_from_node(node: Any) -> pd.DataFrame:
+    """Parse the CSV a node keeps in content into a DataFrame — the mesh → pandas edge."""
+    return pd.read_csv(io.StringIO(csv_from_node(node)))
+
+
 # --- the participant that owns the frame -----------------------------------------------------------
 
 class PandasNode:
@@ -112,12 +143,19 @@ class PandasNode:
 
     Construct with a connected :class:`MeshConnection` (or any object exposing ``serve`` / ``respond`` /
     ``post`` — that's what the tests and the ``--demo`` driver pass). The frame is real Python state on
-    ``self``; :meth:`handle` reacts to inbound deliveries and mutates / queries / renders it."""
+    ``self``; :meth:`handle` reacts to inbound deliveries and mutates / queries / renders it.
 
-    def __init__(self, connection: Any, frame: Optional[pd.DataFrame] = None):
+    ``node_reader`` is the mesh-read edge for ``load`` commands that carry a ``path`` (a file kept in
+    content): an async callable ``path -> node``. On a real :class:`MeshConnection` it defaults to
+    :meth:`meshweaver.mesh.Mesh.get`; tests inject a fake."""
+
+    def __init__(self, connection: Any, frame: Optional[pd.DataFrame] = None, node_reader: Any = None):
         self._c = connection
         self._df = pd.DataFrame() if frame is None else frame.copy()
         self._ns: dict[str, Any] = {"pd": pd}  # persistent namespace for the SubmitCodeRequest surface
+        if node_reader is None and hasattr(connection, "subscribe"):
+            node_reader = Mesh(connection).get  # a real participant reads nodes off their live streams
+        self._read_node = node_reader
         connection.serve(self.handle)
 
     @property
@@ -138,12 +176,24 @@ class PandasNode:
     async def _handle_command(self, delivery: "envelope.Delivery") -> None:
         msg = delivery.message
         command = str(msg.get("command") or msg.get("Command") or "").lower()
+        path = msg.get("path") or msg.get("Path")
         try:
-            kind, payload = self._apply(command, msg)
+            if command == "load" and path:
+                kind, payload = "ack", await self._load_from_content(str(path))
+            else:
+                kind, payload = self._apply(command, msg)
         except Exception as ex:  # a bad command never wedges the node — it replies with an error
             await self._c.respond(delivery, ERROR_TYPE, {"command": command, "error": f"{type(ex).__name__}: {ex}"})
             return
         await self._c.respond(delivery, GRID_TYPE if kind == "grid" else ACK_TYPE, payload)
+
+    async def _load_from_content(self, path: str) -> dict[str, Any]:
+        """mesh → Python: read the CSV file kept in content at ``path``, replace the held frame with it."""
+        if self._read_node is None:
+            raise RuntimeError("this node has no mesh connection to read content nodes from")
+        node = await self._read_node(path)
+        self._df = frame_from_node(node)
+        return {**self._summary(), "source": path}
 
     def _apply(self, command: str, msg: dict[str, Any]) -> tuple[str, dict[str, Any]]:
         """Apply one command to the held frame, returning ``("grid"|"ack", payload)``.
@@ -196,12 +246,15 @@ class PandasNode:
         status = "Succeeded" if result["error"] is None else "Failed"
         if activity_path:
             messages = [{"message": m} for m in (result["output"], result["error"]) if m]
+            # PatchDataRequest = (reference, patch) targeted at the node's own hub (PatchDataRequest.cs);
+            # the requester's context is echoed (honoured on the trusted endpoint).
             await self._c.post(
                 target=activity_path,
                 message_type="PatchDataRequest",
-                message={"path": activity_path, "change": {"content": {
+                message={"reference": {"$type": "MeshNodeReference"}, "patch": {"content": {
                     "status": status, "messages": messages, "returnValue": result["returnValue"],
                 }}},
+                access_context=delivery.access_context,
             )
         await self._c.respond(delivery, "SubmitCodeResponse", {
             "status": status, "returnValue": result["returnValue"], "output": result["output"],
@@ -259,7 +312,7 @@ class RecordingConnection:
     async def respond(self, to: Any, message_type: str, message: dict[str, Any]) -> None:
         self.responses.append((message_type, message))
 
-    async def post(self, target: str, message_type: str, message: dict[str, Any]) -> None:
+    async def post(self, target: str, message_type: str, message: dict[str, Any], access_context: Any = None) -> None:
         self.posts.append((target, message_type, message))
 
     async def send_command(self, node: "PandasNode", command: str, **fields: Any) -> tuple[str, dict[str, Any]]:

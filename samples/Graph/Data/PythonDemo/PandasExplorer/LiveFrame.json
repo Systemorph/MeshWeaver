@@ -8,6 +8,7 @@
   "content": {
     "$type": "PandasExplorer",
     "name": "Live sales frame",
-    "description": "Monthly sales by region, held live in a Python pandas DataFrame."
+    "description": "Monthly sales by region, held live in a Python pandas DataFrame.",
+    "sourcePath": "PythonDemo/SalesData"
   }
 }

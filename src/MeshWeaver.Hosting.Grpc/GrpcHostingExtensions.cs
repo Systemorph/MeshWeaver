@@ -41,6 +41,8 @@ public static class GrpcHostingExtensions
     {
         services.AddGrpc();
         services.AddSingleton<GrpcConnectionRegistry>();
+        // Grpc:TrustedPort — the loopback endpoint co-deployed gates authenticate on (GrpcOptions).
+        services.AddOptions<GrpcOptions>().BindConfiguration(GrpcOptions.SectionName);
         return services;
     }
 

@@ -37,3 +37,15 @@ def test_extracts_request_id_and_is_casing_resilient():
     assert d.sender == "p"
     assert d.request_id == "r"
     assert d.message_type == "M"
+
+
+def test_access_context_round_trips():
+    ctx = {"$type": "AccessContext", "objectId": "alice", "name": "Alice"}
+    built = e.build_deliver(delivery_id="d3", sender="s", target="t",
+                            message_type="Ping", message={}, access_context=ctx)
+    assert json.loads(built)["accessContext"] == ctx     # carried on the envelope, camelCase
+    assert e.parse_delivery(built).access_context == ctx
+    # Absent context stays absent — never an empty object the server would misread.
+    plain = e.build_deliver(delivery_id="d4", sender="s", target="t", message_type="Ping", message={})
+    assert "accessContext" not in json.loads(plain)
+    assert e.parse_delivery(plain).access_context is None

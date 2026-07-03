@@ -4,20 +4,23 @@
 // </meshweaver>
 
 using System;
+using System.Linq;
 using System.Reactive.Linq;
+using System.Text.Json;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.DataGrid;
+using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 
 /// <summary>
 /// The INTERACTIVE frontend for the Python <c>py/pandas</c> participant
 /// (<c>clients/python/meshweaver/examples/pandas_node.py</c>). A toolbar of real framework buttons +
-/// a text input DRIVE a live <c>pandas.DataFrame</c> that lives in a Python process, and the grid
-/// below shows the frame's current state as a genuine <see cref="DataGridControl"/> — never markdown
-/// or an HTML string.
+/// a text input DRIVE a live <c>pandas.DataFrame</c> that lives in a Python process — fed from a CSV
+/// file kept in mesh content (<see cref="PandasExplorer.SourcePath"/>) — and the grid below shows the
+/// frame's current state as a genuine <see cref="DataGridControl"/> — never markdown or an HTML string.
 /// <para>
 /// Everything is reactive end-to-end: a button flips a trigger in the layout-area data store, the
 /// grid sub-area re-observes it and POSTS the matching <see cref="PandasCommand"/> to <c>py/pandas</c>,
@@ -45,8 +48,10 @@ public static class PandasExplorerLayoutAreas
 
     private const string Intro =
         "This grid is rendered by a **Python** process — a `pandas.DataFrame` held live in the "
-        + "`py/pandas` mesh participant. The buttons below post `PandasCommand` messages that mutate "
-        + "and analyse that frame; the grid re-renders from whatever the Python node returns.";
+        + "`py/pandas` mesh participant, fed from a **CSV file kept in mesh content** "
+        + "(`PythonDemo/SalesData` by default). *Load* makes the participant read that node over the "
+        + "mesh and parse it with `pandas.read_csv`; the other buttons post `PandasCommand` messages "
+        + "that mutate and analyse the frame, and the grid re-renders from whatever Python returns.";
 
     private const string NoNodeText =
         "**No Python pandas node attached.**\n\n"
@@ -142,8 +147,8 @@ public static class PandasExplorerLayoutAreas
             .WithOrientation(Orientation.Horizontal)
             .WithStyle("display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 8px 0 16px 0;")
             // load / append MUTATE the held frame, then refresh the grid.
-            .WithView(Button("Load sample sales", Appearance.Accent,
-                ctx => Mutate(ctx.Host, PandasCommand.LoadSample())), "load")
+            .WithView(Button("Load sales CSV", Appearance.Accent,
+                ctx => LoadFromContent(ctx.Host)), "load")
             .WithView(Button("Append 2 rows", Appearance.Neutral,
                 ctx => Mutate(ctx.Host, PandasCommand.AppendTwo())), "append")
             // group-by reads the text input, then renders a grouped view.
@@ -172,6 +177,61 @@ public static class PandasExplorerLayoutAreas
     /// <summary>Flip the trigger to a new read-only view — the grid sub-area re-renders it.</summary>
     private static void View(LayoutAreaHost host, PandasViewCommand view) =>
         host.UpdateData(TriggerId, view);
+
+    /// <summary>
+    /// Load the CSV file kept in mesh content into the Python-held frame: resolve the source path from
+    /// the explorer node's content (<see cref="PandasExplorer.SourcePath"/>), then post a <c>load</c>
+    /// command carrying only the PATH — the participant reads the node over the mesh itself, so the
+    /// data never travels through the frontend.
+    /// </summary>
+    private static void LoadFromContent(LayoutAreaHost host) =>
+        SourcePath(host).Subscribe(path => Mutate(host, PandasCommand.LoadFrom(path)));
+
+    /// <summary>
+    /// The explorer node's <see cref="PandasExplorer.SourcePath"/> — one snapshot off the per-node
+    /// hub's own node stream (the same read the framework's default node areas use). Falls back to
+    /// <see cref="PandasExplorer.DefaultSourcePath"/> when the area is hosted without a node (tests,
+    /// ad-hoc layout hosts) so the button stays functional everywhere.
+    /// </summary>
+    private static IObservable<string> SourcePath(LayoutAreaHost host)
+    {
+        var nodeStream = host.Workspace.GetStream<MeshNode>();
+        if (nodeStream is null)
+            return Observable.Return(PandasExplorer.DefaultSourcePath);
+
+        var hubPath = host.Hub.Address.ToString();
+        return nodeStream
+            .Select(nodes => ExtractExplorer(nodes?.FirstOrDefault(n => n.Path == hubPath))?.SourcePath)
+            .Select(path => string.IsNullOrWhiteSpace(path) ? PandasExplorer.DefaultSourcePath : path!)
+            .Take(1)
+            .Timeout(BackendTimeout)
+            .Catch((Exception _) => Observable.Return(PandasExplorer.DefaultSourcePath));
+    }
+
+    /// <summary>
+    /// Extracts the typed content from the MeshNode, handling both the typed record and the raw
+    /// JsonElement shape (content arrives as JSON before the type is bound).
+    /// </summary>
+    private static PandasExplorer? ExtractExplorer(MeshNode? node)
+    {
+        if (node?.Content is PandasExplorer explorer)
+            return explorer;
+
+        if (node?.Content is JsonElement json)
+        {
+            try
+            {
+                var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+                return JsonSerializer.Deserialize<PandasExplorer>(json.GetRawText(), options);
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        return null;
+    }
 
     /// <summary>Read the current group-by column from the input, then render the grouped view.</summary>
     private static void GroupBy(LayoutAreaHost host) =>
