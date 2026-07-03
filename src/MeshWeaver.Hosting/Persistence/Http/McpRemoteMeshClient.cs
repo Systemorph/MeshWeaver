@@ -149,26 +149,46 @@ public sealed class McpRemoteMeshClient : IRemoteMeshClient, IAsyncDisposable
 
     /// <inheritdoc />
     public IObservable<IReadOnlyList<string>> SearchPaths(string query) =>
+        Search(query).Select(result => (IReadOnlyList<string>)result.Hits.Select(h => h.Path).ToList());
+
+    /// <inheritdoc />
+    public IObservable<RemoteSearchResult> Search(string query, int limit = 50) =>
         Connect().SelectMany(client =>
             _pool.Invoke(async ct =>
             {
                 var result = await client.CallToolAsync(
                     "search",
-                    new Dictionary<string, object?> { ["query"] = query }!,
+                    new Dictionary<string, object?> { ["query"] = query, ["limit"] = limit }!,
                     progress: null, options: null, cancellationToken: ct).ConfigureAwait(false);
                 var text = ExtractText(result);
-                if (string.IsNullOrEmpty(text)) return (IReadOnlyList<string>)Array.Empty<string>();
+                if (string.IsNullOrEmpty(text)) return new RemoteSearchResult([], Truncated: false);
 
-                // Search returns a JSON array of anonymous objects each with a `path` field.
+                // The search tool returns the envelope {count, limit, truncated, results:[...]}
+                // (MeshOperations.Search); a bare array is tolerated for older remotes.
                 var jsonNode = JsonNode.Parse(text);
-                if (jsonNode is not JsonArray arr) return Array.Empty<string>();
-                var paths = new List<string>(arr.Count);
-                foreach (var item in arr)
+                var (items, truncated) = jsonNode switch
                 {
-                    if (item is JsonObject obj && obj["path"]?.GetValue<string>() is { Length: > 0 } p)
-                        paths.Add(p);
+                    JsonObject envelope => (
+                        envelope["results"] as JsonArray,
+                        envelope["truncated"]?.GetValue<bool>() ?? false),
+                    JsonArray bare => (bare, false),
+                    _ => (null, false),
+                };
+                if (items is null) return new RemoteSearchResult([], Truncated: truncated);
+
+                var hits = new List<RemoteSearchHit>(items.Count);
+                foreach (var item in items)
+                {
+                    if (item is not JsonObject obj
+                        || obj["path"]?.GetValue<string>() is not { Length: > 0 } path)
+                        continue;
+                    hits.Add(new RemoteSearchHit(
+                        path,
+                        obj["nodeType"]?.GetValue<string>(),
+                        obj["version"]?.GetValue<long>() ?? 0,
+                        obj["lastModified"]?.GetValue<DateTimeOffset>()));
                 }
-                return (IReadOnlyList<string>)paths;
+                return new RemoteSearchResult(hits, truncated);
             }));
 
     /// <summary>
