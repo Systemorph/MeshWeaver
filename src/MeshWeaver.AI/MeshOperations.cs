@@ -234,6 +234,15 @@ public class MeshOperations
                 });
         }
 
+        // MCP-documented AREA-READ route `{path}/area/{Name[/Id]}` (McpMeshPlugin.Get docs).
+        // Routed through the same one-shot client-hub subscription RenderArea uses
+        // (GetRemoteStream + materialised-frame wait + Finally-dispose), so the payload is
+        // the SETTLED control tree — never the base-frame shell a raw first emission
+        // carries. Before this route existed, the path fell through to FetchNode on the
+        // full "{path}/area/Name" string and always returned "Not found: …".
+        if (TryParseAreaRoute(resolvedPath, out var areaNodePath, out var routeArea, out var routeAreaId))
+            return GetAreaRoute(resolvedPath, areaNodePath, routeArea, routeAreaId);
+
         // Single-node content read via GetDataRequest + MeshNodeReference + RegisterCallback.
         // See Doc/Architecture/CqrsAndContentAccess.md — queries are for sets only.
         return TryResolveUnifiedPath(resolvedPath)
@@ -453,6 +462,67 @@ public class MeshOperations
                 .Finally(stream.Dispose);
         });
     }
+
+    /// <summary>
+    /// Parses the MCP-documented area-read route <c>{nodePath}/area/{Name[/Id]}</c>.
+    /// The marker is the LAST exact <c>area</c> segment (ordinal, the documented casing) so
+    /// a node path that itself contains an <c>area</c> segment still yields the deepest —
+    /// i.e. correct — node-path/area split. The legacy colon form <c>{path}/area:Name</c> is
+    /// deliberately NOT parsed here: it keeps flowing through <see cref="TryResolveUnifiedPath"/>
+    /// unchanged (it supports UCR-special forms like <c>area:content:file</c> that map to
+    /// <c>$Content</c> areas downstream).
+    /// </summary>
+    private static bool TryParseAreaRoute(
+        string resolvedPath, out string nodePath, out string? area, out string? id)
+    {
+        nodePath = string.Empty;
+        area = null;
+        id = null;
+
+        if (resolvedPath.Contains(':'))
+            return false; // legacy colon form — handled by TryResolveUnifiedPath
+
+        var segments = resolvedPath.Split('/');
+        for (var i = segments.Length - 1; i > 0; i--)
+        {
+            if (!string.Equals(segments[i], "area", StringComparison.Ordinal))
+                continue;
+
+            nodePath = string.Join('/', segments.Take(i));
+            if (string.IsNullOrEmpty(nodePath.Trim('/')))
+                return false; // no node path before the marker — not the area route
+
+            var rest = segments.Skip(i + 1).ToImmutableList();
+            area = rest.Count > 0 && rest[0].Length > 0 ? rest[0] : null;
+            var restId = rest.Count > 1 ? string.Join('/', rest.Skip(1)).Trim('/') : string.Empty;
+            id = restId.Length > 0 ? restId : null;
+            return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Serves the MCP <c>get {path}/area/{Name}</c> route: renders through the settled
+    /// <see cref="RenderArea"/> pipeline, mapping a fault (incl. the timeout) onto the Get
+    /// contract's <c>"Error: …"</c> string. When the area interpretation fails, a REAL node
+    /// at the FULL path is authoritative and wins (the same interior-keyword-shadowing rule
+    /// the UCR <c>content</c> fallback applies — see <c>DocumentNodeGetTest</c>); the area
+    /// error surfaces only when no such node exists.
+    /// </summary>
+    private IObservable<string> GetAreaRoute(
+        string fullPath, string nodePath, string? area, string? id) =>
+        RenderArea(nodePath, area, id)
+            .Catch((Exception ex) => Observable.Return($"Error: {ex.Message}"))
+            .SelectMany(result =>
+            {
+                if (!result.StartsWith("Not found:", StringComparison.Ordinal)
+                    && !result.StartsWith("Error:", StringComparison.Ordinal))
+                    return Observable.Return(result);
+                return FetchNode(fullPath).Select(node => node is null
+                    ? result
+                    : JsonSerializer.Serialize(node, hub.JsonSerializerOptions));
+            });
 
     /// <summary>
     /// Splits a path-resolution remainder into <c>(area, id)</c> — the same
@@ -704,13 +774,19 @@ public class MeshOperations
             }
         }
 
-        // Try new slash format: address/prefix/path where prefix is a known UCR keyword
+        // Try new slash format: address/prefix/path where prefix is a known UCR keyword.
+        // `layoutAreas` is the MCP-documented listing route (`{path}/layoutAreas/`): it is
+        // not in the UCR prefix map (it maps to no $-area), but the per-node hub answers
+        // GetDataRequest(UnifiedReference("layoutAreas…")) directly via the layout plugin's
+        // HandleLayoutAreasRequest — so route it like any unified segment. Without this the
+        // path fell through to FetchNode("{path}/layoutAreas") → always "Not found: …".
         if (addressPart == null)
         {
             var segments = resolvedPath.Split('/');
             for (var i = 0; i < segments.Length; i++)
             {
-                if (UcrPrefixResolver.PrefixToAreaMap.ContainsKey(segments[i]))
+                if (UcrPrefixResolver.PrefixToAreaMap.ContainsKey(segments[i])
+                    || string.Equals(segments[i], "layoutAreas", StringComparison.Ordinal))
                 {
                     if (i > 0)
                     {
