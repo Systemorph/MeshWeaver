@@ -63,5 +63,8 @@ public static class MauiControlManifest
         // Content vector-index viewer controls — highlighted text + the inline PDF/DOCX viewer; not yet
         // rendered natively in the MAUI client.
         "HighlightControl", "DocumentSourceControl",
+        // Courses — video player (Blazor renders <video controls>/<iframe> by Kind); no native
+        // MediaElement/WebView wiring in the MAUI view pack yet.
+        "VideoControl",
     }.ToImmutableHashSet(StringComparer.Ordinal);
 }
