@@ -860,7 +860,13 @@ else
            Submit isn't pushed below the fold. *@
         @if (_connectProvider is null)
         {
-        <div class="input-container" @onkeydown="@OnInputKeyDown">
+        @* @onclick FocusComposerAsync: any click in the composer region focuses the
+           editor. Defuses the thread-nav-shell amplifier (issue #199): the shell is
+           tabindex="0" with outline:none for Alt-Tab thread cycling, so a click that
+           misses Monaco's hit-target would otherwise focus the shell and every
+           printable keystroke would be silently discarded while the input LOOKS
+           active. Focusing an already-focused editor is a no-op. *@
+        <div class="input-container" @onkeydown="@OnInputKeyDown" @onclick="@FocusComposerAsync">
             @* AutoGrow: the composer expands with the content from 80px up to the adaptive
                max (mirrors the command palette's min(440px, calc(100vh - 180px)) pattern),
                then scrolls internally — no more invisible scrolling in a fixed 80px box. *@

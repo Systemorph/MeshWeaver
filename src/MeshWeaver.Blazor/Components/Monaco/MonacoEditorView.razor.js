@@ -352,9 +352,15 @@ export function initEditor(editorId, placeholder, dotNetRef, codeEditMode = fals
                     // rendered yet. Typing "/model" and pressing Enter inside the completion
                     // debounce therefore swallowed the first Enter with no visible widget
                     // (issue #174: commands need multiple attempts). The rendered widget adds
-                    // .suggest-widget.visible to the editor DOM — check that instead: it is
-                    // exactly what the user sees, and version-stable across Monaco builds.
-                    const suggestWidget = editorInstance.getDomNode()?.querySelector('.suggest-widget');
+                    // .suggest-widget.visible — but with FixedOverflowWidgets (our config) the
+                    // widget is hosted OUTSIDE the editor node in the document-level
+                    // .overflowingContentWidgets container (same reason isAutocompleteVisible
+                    // below searches document-wide), so check the editor DOM first and fall
+                    // back to the overflow container. A visible suggest widget can only belong
+                    // to the focused editor — the one receiving this keydown — so the
+                    // document-wide fallback cannot misattribute across editors.
+                    const suggestWidget = editorInstance.getDomNode()?.querySelector('.suggest-widget')
+                        ?? document.querySelector('.overflowingContentWidgets .suggest-widget');
                     const isSuggestVisible = !!suggestWidget && suggestWidget.classList.contains('visible');
 
                     if (!isSuggestVisible) {

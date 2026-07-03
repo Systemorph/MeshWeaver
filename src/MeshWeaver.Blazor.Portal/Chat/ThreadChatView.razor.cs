@@ -1940,6 +1940,27 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         }
     }
 
+    /// <summary>
+    /// Click anywhere in the composer region focuses the editor (issue #199). The
+    /// surrounding thread-nav-shell is <c>tabindex="0"</c> with a suppressed outline
+    /// (for Alt-Tab thread cycling), so a click that misses Monaco's hit-target would
+    /// otherwise focus the shell and every printable keystroke would be silently
+    /// discarded while the input looks active. Focusing an already-focused editor is
+    /// a no-op; failures are debug-logged (a disposed editor mid-teardown).
+    /// </summary>
+    private async Task FocusComposerAsync()
+    {
+        try
+        {
+            if (monacoEditor != null)
+                await monacoEditor.FocusAsync();
+        }
+        catch (Exception ex) when (!_isDisposed)
+        {
+            Logger.LogDebug(ex, "[ThreadChat:{InstanceId}] Failed to focus Monaco editor", _instanceId);
+        }
+    }
+
     private void CancelSubmission()
     {
         if (submissionHandler.IsInputEnabled || isCancelling)
