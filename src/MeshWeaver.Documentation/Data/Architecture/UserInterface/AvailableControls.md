@@ -1,643 +1,247 @@
 ---
 Name: Available Controls Reference
 Category: Documentation
-Description: Complete reference for MeshWeaver UI controls — layout, input, display, navigation, and container components, all created server-side via the Controls factory.
+Description: Catalog of the control families — display, containers, inputs, data grids, charts, feedback, editors, and mesh controls — one live example per family, with links to each deep-dive page.
 Icon: /static/DocContent/Architecture/UserInterface/AvailableControls/icon.svg
 ---
 
-MeshWeaver's UI is built from a library of composable controls defined entirely in C# on the server. The browser renders whatever the server describes — there is no client-side component code to write. Every control is created through the `Controls` factory class and composed into trees that update reactively as your data changes.
+A [layout area](/Doc/GUI/LayoutAreas) renders a tree of **controls** — immutable C# records declared server-side through the `Controls` factory (`MeshWeaver.Layout`) and streamed to the browser as data. There is no client-side component code to write: you compose controls, the portal renders them, and they update reactively as the underlying data changes.
 
-<svg viewBox="0 0 760 340" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;" font-family="sans-serif" font-size="12">
+Two shapes cover the whole factory surface: parameterless controls are **property getters** (`Controls.Stack`, `Controls.Tabs` — no parentheses), and parameterised ones are methods (`Controls.Label("…")`, `Controls.DataGrid(rows)`). Children are attached with `WithView(...)` — one call per child — never with a children list. Every code cell on this page is executable: the result renders directly below the code, and **Run** re-executes it.
+
+<svg viewBox="0 0 760 300" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;" font-family="sans-serif" font-size="12">
   <defs>
-    <marker id="arr" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto">
+    <marker id="acarr" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto">
       <path d="M0,0 L0,6 L8,3 z" fill="currentColor" fill-opacity="0.55"/>
     </marker>
   </defs>
-  <rect x="300" y="8" width="160" height="36" rx="10" fill="#1e88e5"/>
-  <text x="380" y="31" text-anchor="middle" fill="#fff" font-weight="bold" font-size="13">Controls factory</text>
-  <line x1="380" y1="44" x2="100" y2="92" stroke="currentColor" stroke-opacity="0.45" stroke-width="1.5" marker-end="url(#arr)"/>
-  <line x1="380" y1="44" x2="248" y2="92" stroke="currentColor" stroke-opacity="0.45" stroke-width="1.5" marker-end="url(#arr)"/>
-  <line x1="380" y1="44" x2="380" y2="92" stroke="currentColor" stroke-opacity="0.45" stroke-width="1.5" marker-end="url(#arr)"/>
-  <line x1="380" y1="44" x2="512" y2="92" stroke="currentColor" stroke-opacity="0.45" stroke-width="1.5" marker-end="url(#arr)"/>
-  <line x1="380" y1="44" x2="660" y2="92" stroke="currentColor" stroke-opacity="0.45" stroke-width="1.5" marker-end="url(#arr)"/>
-  <rect x="20" y="92" width="160" height="34" rx="8" fill="#5c6bc0"/>
-  <text x="100" y="114" text-anchor="middle" fill="#fff" font-weight="bold">Layout</text>
-  <rect x="168" y="92" width="160" height="34" rx="8" fill="#43a047"/>
-  <text x="248" y="114" text-anchor="middle" fill="#fff" font-weight="bold">Input</text>
-  <rect x="300" y="92" width="160" height="34" rx="8" fill="#1e88e5"/>
-  <text x="380" y="114" text-anchor="middle" fill="#fff" font-weight="bold">Display</text>
-  <rect x="432" y="92" width="160" height="34" rx="8" fill="#f57c00"/>
-  <text x="512" y="114" text-anchor="middle" fill="#fff" font-weight="bold">Action</text>
-  <rect x="580" y="92" width="160" height="34" rx="8" fill="#8e24aa"/>
-  <text x="660" y="114" text-anchor="middle" fill="#fff" font-weight="bold">Navigation</text>
-  <line x1="100" y1="126" x2="56" y2="168" stroke="currentColor" stroke-opacity="0.35" stroke-width="1.2" marker-end="url(#arr)"/>
-  <line x1="100" y1="126" x2="100" y2="168" stroke="currentColor" stroke-opacity="0.35" stroke-width="1.2" marker-end="url(#arr)"/>
-  <line x1="100" y1="126" x2="144" y2="168" stroke="currentColor" stroke-opacity="0.35" stroke-width="1.2" marker-end="url(#arr)"/>
-  <rect x="14" y="168" width="84" height="28" rx="6" fill="#5c6bc0" fill-opacity="0.7"/>
-  <text x="56" y="187" text-anchor="middle" fill="#fff" font-size="11">Stack</text>
-  <rect x="58" y="168" width="84" height="28" rx="6" fill="#5c6bc0" fill-opacity="0.7"/>
-  <text x="100" y="187" text-anchor="middle" fill="#fff" font-size="11">Grid</text>
-  <rect x="102" y="168" width="84" height="28" rx="6" fill="#5c6bc0" fill-opacity="0.7"/>
-  <text x="144" y="187" text-anchor="middle" fill="#fff" font-size="11">LayoutArea</text>
-  <line x1="248" y1="126" x2="204" y2="168" stroke="currentColor" stroke-opacity="0.35" stroke-width="1.2" marker-end="url(#arr)"/>
-  <line x1="248" y1="126" x2="248" y2="168" stroke="currentColor" stroke-opacity="0.35" stroke-width="1.2" marker-end="url(#arr)"/>
-  <line x1="248" y1="126" x2="292" y2="168" stroke="currentColor" stroke-opacity="0.35" stroke-width="1.2" marker-end="url(#arr)"/>
-  <rect x="162" y="168" width="84" height="28" rx="6" fill="#43a047" fill-opacity="0.7"/>
-  <text x="204" y="187" text-anchor="middle" fill="#fff" font-size="11">TextField</text>
-  <rect x="206" y="168" width="84" height="28" rx="6" fill="#43a047" fill-opacity="0.7"/>
-  <text x="248" y="187" text-anchor="middle" fill="#fff" font-size="11">Select</text>
-  <rect x="250" y="168" width="84" height="28" rx="6" fill="#43a047" fill-opacity="0.7"/>
-  <text x="292" y="187" text-anchor="middle" fill="#fff" font-size="11">DatePicker</text>
-  <line x1="380" y1="126" x2="336" y2="168" stroke="currentColor" stroke-opacity="0.35" stroke-width="1.2" marker-end="url(#arr)"/>
-  <line x1="380" y1="126" x2="380" y2="168" stroke="currentColor" stroke-opacity="0.35" stroke-width="1.2" marker-end="url(#arr)"/>
-  <line x1="380" y1="126" x2="424" y2="168" stroke="currentColor" stroke-opacity="0.35" stroke-width="1.2" marker-end="url(#arr)"/>
-  <rect x="294" y="168" width="84" height="28" rx="6" fill="#1e88e5" fill-opacity="0.7"/>
-  <text x="336" y="187" text-anchor="middle" fill="#fff" font-size="11">Text</text>
-  <rect x="338" y="168" width="84" height="28" rx="6" fill="#1e88e5" fill-opacity="0.7"/>
-  <text x="380" y="187" text-anchor="middle" fill="#fff" font-size="11">DataGrid</text>
-  <rect x="382" y="168" width="84" height="28" rx="6" fill="#1e88e5" fill-opacity="0.7"/>
-  <text x="424" y="187" text-anchor="middle" fill="#fff" font-size="11">Chart</text>
-  <line x1="512" y1="126" x2="468" y2="168" stroke="currentColor" stroke-opacity="0.35" stroke-width="1.2" marker-end="url(#arr)"/>
-  <line x1="512" y1="126" x2="512" y2="168" stroke="currentColor" stroke-opacity="0.35" stroke-width="1.2" marker-end="url(#arr)"/>
-  <line x1="512" y1="126" x2="556" y2="168" stroke="currentColor" stroke-opacity="0.35" stroke-width="1.2" marker-end="url(#arr)"/>
-  <rect x="426" y="168" width="84" height="28" rx="6" fill="#f57c00" fill-opacity="0.7"/>
-  <text x="468" y="187" text-anchor="middle" fill="#fff" font-size="11">Button</text>
-  <rect x="470" y="168" width="84" height="28" rx="6" fill="#f57c00" fill-opacity="0.7"/>
-  <text x="512" y="187" text-anchor="middle" fill="#fff" font-size="11">IconButton</text>
-  <rect x="514" y="168" width="84" height="28" rx="6" fill="#f57c00" fill-opacity="0.7"/>
-  <text x="556" y="187" text-anchor="middle" fill="#fff" font-size="11">Menu</text>
-  <line x1="660" y1="126" x2="616" y2="168" stroke="currentColor" stroke-opacity="0.35" stroke-width="1.2" marker-end="url(#arr)"/>
-  <line x1="660" y1="126" x2="660" y2="168" stroke="currentColor" stroke-opacity="0.35" stroke-width="1.2" marker-end="url(#arr)"/>
-  <line x1="660" y1="126" x2="704" y2="168" stroke="currentColor" stroke-opacity="0.35" stroke-width="1.2" marker-end="url(#arr)"/>
-  <rect x="574" y="168" width="84" height="28" rx="6" fill="#8e24aa" fill-opacity="0.7"/>
-  <text x="616" y="187" text-anchor="middle" fill="#fff" font-size="11">Tabs</text>
-  <rect x="618" y="168" width="84" height="28" rx="6" fill="#8e24aa" fill-opacity="0.7"/>
-  <text x="660" y="187" text-anchor="middle" fill="#fff" font-size="11">Breadcrumb</text>
-  <rect x="662" y="168" width="84" height="28" rx="6" fill="#8e24aa" fill-opacity="0.7"/>
-  <text x="704" y="187" text-anchor="middle" fill="#fff" font-size="11">Link</text>
-  <line x1="380" y1="228" x2="248" y2="266" stroke="currentColor" stroke-opacity="0.35" stroke-width="1.2" marker-end="url(#arr)"/>
-  <line x1="380" y1="228" x2="380" y2="266" stroke="currentColor" stroke-opacity="0.35" stroke-width="1.2" marker-end="url(#arr)"/>
-  <line x1="380" y1="228" x2="512" y2="266" stroke="currentColor" stroke-opacity="0.35" stroke-width="1.2" marker-end="url(#arr)"/>
-  <rect x="270" y="228" width="220" height="28" rx="8" fill="#26a69a"/>
-  <text x="380" y="247" text-anchor="middle" fill="#fff" font-weight="bold">Container + Utility</text>
-  <rect x="162" y="266" width="172" height="28" rx="6" fill="#26a69a" fill-opacity="0.7"/>
-  <text x="248" y="285" text-anchor="middle" fill="#fff" font-size="11">Dialog · EditForm · ExpansionPanel</text>
-  <rect x="294" y="266" width="172" height="28" rx="6" fill="#26a69a" fill-opacity="0.7"/>
-  <text x="380" y="285" text-anchor="middle" fill="#fff" font-size="11">Card · Spinner · Alert</text>
-  <rect x="426" y="266" width="172" height="28" rx="6" fill="#26a69a" fill-opacity="0.7"/>
-  <text x="512" y="285" text-anchor="middle" fill="#fff" font-size="11">Divider · Checkbox · Number</text>
-  <line x1="380" y1="44" x2="380" y2="228" stroke="currentColor" stroke-opacity="0.2" stroke-width="1" stroke-dasharray="4 3"/>
+  <rect x="255" y="8" width="250" height="38" rx="10" fill="#1e88e5"/>
+  <text x="380" y="26" text-anchor="middle" fill="#fff" font-weight="bold" font-size="13">Controls factory</text>
+  <text x="380" y="40" text-anchor="middle" fill="#bbdefb" font-size="10">MeshWeaver.Layout</text>
+  <line x1="380" y1="46" x2="97" y2="86" stroke="currentColor" stroke-opacity="0.45" stroke-width="1.5" marker-end="url(#acarr)"/>
+  <line x1="380" y1="46" x2="286" y2="86" stroke="currentColor" stroke-opacity="0.45" stroke-width="1.5" marker-end="url(#acarr)"/>
+  <line x1="380" y1="46" x2="474" y2="86" stroke="currentColor" stroke-opacity="0.45" stroke-width="1.5" marker-end="url(#acarr)"/>
+  <line x1="380" y1="46" x2="663" y2="86" stroke="currentColor" stroke-opacity="0.45" stroke-width="1.5" marker-end="url(#acarr)"/>
+  <rect x="9" y="88" width="178" height="76" rx="8" fill="#1e88e5" fill-opacity="0.85"/>
+  <text x="98" y="108" text-anchor="middle" fill="#fff" font-weight="bold">Display</text>
+  <text x="98" y="126" text-anchor="middle" fill="#e3f2fd" font-size="10">Label · Badge · Icon</text>
+  <text x="98" y="141" text-anchor="middle" fill="#e3f2fd" font-size="10">Markdown · Html</text>
+  <rect x="197" y="88" width="178" height="76" rx="8" fill="#5c6bc0" fill-opacity="0.85"/>
+  <text x="286" y="108" text-anchor="middle" fill="#fff" font-weight="bold">Containers</text>
+  <text x="286" y="126" text-anchor="middle" fill="#e8eaf6" font-size="10">Stack · LayoutGrid · Tabs</text>
+  <text x="286" y="141" text-anchor="middle" fill="#e8eaf6" font-size="10">Splitter · Toolbar</text>
+  <rect x="385" y="88" width="178" height="76" rx="8" fill="#43a047" fill-opacity="0.85"/>
+  <text x="474" y="108" text-anchor="middle" fill="#fff" font-weight="bold">Inputs</text>
+  <text x="474" y="126" text-anchor="middle" fill="#c8e6c9" font-size="10">Text · Number · Select</text>
+  <text x="474" y="141" text-anchor="middle" fill="#c8e6c9" font-size="10">CheckBox · DateTime</text>
+  <rect x="573" y="88" width="178" height="76" rx="8" fill="#f57c00" fill-opacity="0.85"/>
+  <text x="662" y="108" text-anchor="middle" fill="#fff" font-weight="bold">Data &amp; charts</text>
+  <text x="662" y="126" text-anchor="middle" fill="#ffe0b2" font-size="10">DataGrid · Charts</text>
+  <text x="662" y="141" text-anchor="middle" fill="#ffe0b2" font-size="10">PivotGrid</text>
+  <line x1="380" y1="46" x2="135" y2="188" stroke="currentColor" stroke-opacity="0.3" stroke-width="1.2" marker-end="url(#acarr)"/>
+  <line x1="380" y1="46" x2="380" y2="188" stroke="currentColor" stroke-opacity="0.3" stroke-width="1.2" marker-end="url(#acarr)"/>
+  <line x1="380" y1="46" x2="625" y2="188" stroke="currentColor" stroke-opacity="0.3" stroke-width="1.2" marker-end="url(#acarr)"/>
+  <rect x="15" y="190" width="240" height="76" rx="8" fill="#26a69a" fill-opacity="0.85"/>
+  <text x="135" y="210" text-anchor="middle" fill="#fff" font-weight="bold">Feedback</text>
+  <text x="135" y="228" text-anchor="middle" fill="#b2dfdb" font-size="10">Progress · Exception</text>
+  <rect x="260" y="190" width="240" height="76" rx="8" fill="#8e24aa" fill-opacity="0.85"/>
+  <text x="380" y="210" text-anchor="middle" fill="#fff" font-weight="bold">Editors</text>
+  <text x="380" y="228" text-anchor="middle" fill="#e1bee7" font-size="10">Edit macro · MarkdownEditor</text>
+  <text x="380" y="243" text-anchor="middle" fill="#e1bee7" font-size="10">CodeEditor</text>
+  <rect x="505" y="190" width="240" height="76" rx="8" fill="#e53935" fill-opacity="0.85"/>
+  <text x="625" y="210" text-anchor="middle" fill="#fff" font-weight="bold">Mesh &amp; navigation</text>
+  <text x="625" y="228" text-anchor="middle" fill="#ffcdd2" font-size="10">MeshNodePicker · MeshSearch</text>
+  <text x="625" y="243" text-anchor="middle" fill="#ffcdd2" font-size="10">NavMenu · NavLink · LayoutArea</text>
 </svg>
 
-*Control taxonomy — all controls are created via `Controls.*` and compose into reactive UI trees.*
+*The control families — every control is created via `Controls.*` (plus `Charts.*` for charts) and composed with `WithView`.*
 
----
+## The catalog at a glance
 
-## Layout Controls
-
-Layout controls determine how other controls are spatially arranged on the page.
-
-### StackControl
-
-The workhorse layout control. Arranges children in a single axis — vertical by default, or horizontal when you need a toolbar or button row.
-
-```csharp
-Controls.Stack()
-    .WithOrientation(Orientation.Vertical)
-    .WithChildren(
-        Controls.Text("Item 1"),
-        Controls.Text("Item 2")
-    )
-```
-
-| Property | Type | Description |
+| Family | Factory members | Deep dive |
 |---|---|---|
-| `Orientation` | `Orientation` | `Vertical` (default) or `Horizontal` |
-| `Spacing` | `string` | Gap between children — any CSS value |
-| `Children` | `IEnumerable<UiControl>` | Child controls |
+| Display | `Label` (+ typography helpers `H1`…`H6`, `Body`, `Header`), `Badge`, `Icon`, `Markdown`, `Html`, `Title`, `CodeSample`, `Spacer` | [Badges, Icons & Status](/Doc/GUI/DisplayControls) |
+| Containers & skins | `Stack`, `LayoutGrid`, `Tabs`, `Splitter`, `Toolbar`, `Layout`, `Skins.Card` | [Container Controls](/Doc/GUI/ContainerControl) · [Layout Grid](/Doc/GUI/LayoutGrid) |
+| Inputs | `Text`, `Number`, `Date`, `DateTime`, `CheckBox`, `Switch`, `Select`, `Combobox`, `Listbox`, `RadioGroup`, `Slider` | [Form Input Controls](/Doc/GUI/InputControls) |
+| Actions | `Button`, `MenuItem` | [User Interface](/Doc/Architecture/UserInterface) — click handlers |
+| Data | `DataGrid` + `PropertyColumnControl` / `TemplateColumnControl` | [DataGrid](/Doc/GUI/DataGrid) |
+| Charts & pivots | `Charts.*` (`MeshWeaver.Layout.Chart`), `ToPivotGrid` (`MeshWeaver.Layout.Pivot`) | [Charts at a glance](/Doc/GUI/ChartGallery) · [Pivot tricks](/Doc/GUI/PivotTricks) |
+| Feedback | `Progress`, `Exception` | [Badges, Icons & Status](/Doc/GUI/DisplayControls) |
+| Editors | `Edit` macro (`EditorControl`), `MarkdownEditorControl`, `CodeEditorControl` | [Editor](/Doc/GUI/Editor) · [Code Editor](/Doc/GUI/CodeEditor) |
+| Mesh & navigation | `MeshNodePicker`, `MeshSearch`, `SearchBox`, `FileBrowser`, `NavMenu`, `NavLink`, `NavGroup`, `LayoutArea`, `NamedArea` | [Mesh Search](/Doc/GUI/MeshSearch) · [Navigation Menus](/Doc/GUI/Navigation) |
 
----
+> **One naming gotcha.** `Controls.Text(...)` is a text **input** (`TextFieldControl`), not display text. Read-only text goes through `Controls.Label` / the typography helpers, `Controls.Markdown`, or — for genuinely pre-rendered markup only — `Controls.Html`.
 
-### GridControl
+## Display — Label, Badge, Icon, Markdown
 
-When a single axis isn't enough, `GridControl` exposes the full power of CSS Grid for arbitrary two-dimensional layouts.
+Display controls present read-only content: `Label` with typography helpers for text, `Badge` for status pills, `Icon` for the `FluentIcons` catalog, and `Markdown` for formatted prose. They are the leaves of most control trees.
 
-```csharp
-Controls.Grid()
-    .WithColumns("1fr 2fr 1fr")
-    .WithRows("auto 1fr auto")
-    .WithChildren(
-        Controls.Text("Header").WithGridArea("1 / 1 / 2 / 4"),
-        Controls.Text("Sidebar").WithGridArea("2 / 1 / 3 / 2"),
-        Controls.Text("Content").WithGridArea("2 / 2 / 3 / 3")
-    )
+```csharp --render CatalogDisplay --show-code
+Controls.Stack
+    .WithView(Controls.H4("Display controls"))
+    .WithView(Controls.Label("Every family on this page renders live in the kernel"))
+    .WithView(Controls.Stack
+        .WithOrientation(Orientation.Horizontal)
+        .WithHorizontalGap("8px")
+        .WithView(Controls.Badge("Released").WithAppearance("Accent"))
+        .WithView(Controls.Icon(FluentIcons.CheckmarkCircle()))
+        .WithView(Controls.Markdown("**Markdown** renders inline, too")))
 ```
 
-| Property | Type | Description |
-|---|---|---|
-| `Columns` | `string` | CSS `grid-template-columns` value |
-| `Rows` | `string` | CSS `grid-template-rows` value |
-| `Gap` | `string` | Gap between grid cells |
+See [Badges, Icons & Status](/Doc/GUI/DisplayControls) for the full display set, including `Spacer` and the `Skins.Card` skin.
 
----
+## Containers — Stack, Tabs, Toolbar, Splitter, LayoutGrid
 
-### LayoutAreaControl
+Containers arrange other controls. `WithView(control)` appends a child; the optional second argument (`s => s.WithLabel("…")`) configures the child's slot — that is how tabs get labels, splitter panes get sizes, and grid items get column spans. `Stack` stacks vertically or horizontally, `Tabs` shows one panel at a time, `Toolbar` lays out action buttons, `Splitter` creates resizable panes, and `LayoutGrid` is the responsive 12-column system.
 
-A named region that can be updated independently of its surroundings. Use it to carve a page into independently-refreshable zones — a detail panel that reloads on row selection, for example.
-
-```csharp
-Controls.LayoutArea("detail-panel")
-    .WithView(context => RenderDetailView(context))
+```csharp --render CatalogContainers --show-code
+Controls.Tabs
+    .WithView(
+        Controls.Stack
+            .WithView(Controls.Markdown("`Stack` arranges children **vertically** by default; each `WithView` appends one child."))
+            .WithView(Controls.Toolbar
+                .WithView(Controls.Button("Refresh"))
+                .WithView(Controls.Button("Export"))),
+        s => s.WithLabel("Overview"))
+    .WithView(Controls.Label("Tabs show one panel at a time."), s => s.WithLabel("Details"))
 ```
 
-| Property | Type | Description |
-|---|---|---|
-| `Area` | `string` | Unique area identifier |
-| `View` | `Func<LayoutAreaContext, UiControl>` | View rendering function |
+See [Container Controls](/Doc/GUI/ContainerControl) for all five containers and the full `WithView` overload table, and [Layout Grid](/Doc/GUI/LayoutGrid) for responsive breakpoints.
 
----
+## Inputs — Text, Number, Select, CheckBox, DateTime
 
-## Input Controls
+Input controls bind a value two-way. In a real layout area the first argument is a `JsonPointerReference` into the area's data store (see [Data Binding](/Doc/GUI/DataBinding)); in standalone demos it is a plain value. List selection takes `Option<T>` values; `Select`, `Combobox`, and `Listbox` share the same `(data, options)` shape and differ only in presentation.
 
-Input controls bind to your data model and surface user edits through the reactive data pipeline.
-
-### TextFieldControl
-
-Single-line text input with built-in validation support.
-
-```csharp
-Controls.TextField("username")
-    .WithLabel("Username")
-    .WithPlaceholder("Enter username")
-    .WithRequired(true)
-    .WithMaxLength(50)
-```
-
-| Property | Type | Description |
-|---|---|---|
-| `DataContext` | `string` | Binding path for the value |
-| `Label` | `string` | Field label |
-| `Placeholder` | `string` | Placeholder text |
-| `Required` | `bool` | Whether the field is required |
-| `MaxLength` | `int?` | Maximum character length |
-| `Disabled` | `bool` | Disables the input |
-
----
-
-### NumberFieldControl
-
-Numeric input with formatting options and min/max/step constraints.
-
-```csharp
-Controls.NumberField("amount")
-    .WithLabel("Amount")
-    .WithMin(0)
-    .WithMax(1000000)
-    .WithStep(0.01)
-    .WithFormat("N2")
-```
-
-| Property | Type | Description |
-|---|---|---|
-| `Min` | `double?` | Minimum value |
-| `Max` | `double?` | Maximum value |
-| `Step` | `double?` | Increment step |
-| `Format` | `string` | .NET number format string |
-
----
-
-### SelectControl
-
-Dropdown selection from a static or dynamic list of options.
-
-```csharp
-Controls.Select("status")
-    .WithLabel("Status")
-    .WithOptions(new[] {
-        new SelectOption("draft", "Draft"),
-        new SelectOption("active", "Active"),
-        new SelectOption("closed", "Closed")
-    })
-```
-
-| Property | Type | Description |
-|---|---|---|
-| `Options` | `IEnumerable<SelectOption>` | Available choices |
-| `Multiple` | `bool` | Allow multi-selection |
-| `Searchable` | `bool` | Enable search filtering |
-
----
-
-### CheckboxControl
-
-A simple boolean toggle, typically used inside a form.
-
-```csharp
-Controls.Checkbox("agreed")
-    .WithLabel("I agree to the terms")
-```
-
----
-
-### DatePickerControl
-
-Date selection backed by a calendar popup, with optional min/max bounds.
-
-```csharp
-Controls.DatePicker("startDate")
-    .WithLabel("Start Date")
-    .WithMinDate(DateTime.Today)
-    .WithFormat("yyyy-MM-dd")
-```
-
-| Property | Type | Description |
-|---|---|---|
-| `MinDate` | `DateTime?` | Earliest selectable date |
-| `MaxDate` | `DateTime?` | Latest selectable date |
-| `Format` | `string` | Date display format string |
-
----
-
-### MeshNodePickerControl
-
-Searchable picker for mesh nodes. Renders search results as cards (via `MeshSearchView`) and stores the **selected node's path** as the form value. The standard surface behind the [`[MeshNode]` attribute](/Doc/GUI/Attributes) — prefer the attribute on data models; construct the control directly only in hand-built layout areas.
-
-```csharp
-new MeshNodePickerControl(new JsonPointerReference("/assigneePath"))
-    .WithQueries("nodeType:User namespace:acme", "nodeType:Group path:acme scope:selfAndAncestors")
-    .WithMaxResults(10)
-    .WithEmptyOption("Root (top-level)")
-    .WithLayout(MeshNodePickerLayout.Thin)
-    .WithOpenDirection(MeshNodePickerOpenDirection.Up)
-    .WithDefaultToFirst()
-```
-
-| Property | Type | Description |
-|---|---|---|
-| `Queries` | `string[]?` | Query strings run in parallel and merged; the user's typed text is appended to each (see [Query Syntax](/Doc/DataMesh/QuerySyntax)) |
-| `Namespace` | `object?` | Namespace to scope the search to |
-| `MaxResults` | `object?` | Maximum results shown in the dropdown |
-| `Items` | `object[]?` | Fixed `MeshNode` set merged with query results (deduplicated by path) — for small known sets like creatable types or roles |
-| `EmptyOptionLabel` | `string?` | When set, adds a top option that selects the empty value `""` |
-| `Layout` | `MeshNodePickerLayout` | `Default` (full card) or `Thin` (compact row) |
-| `Open` | `MeshNodePickerOpenDirection` | `Down` (default) or `Up` for bottom-anchored fields (chat composer) |
-| `DefaultToFirst` | `bool` | Auto-select (and persist) the first result when no value is set |
-
----
-
-## Display Controls
-
-Display controls present data to the user without expecting direct edits.
-
-### TextControl
-
-Styled text with configurable typography and colour. Covers headings, body copy, captions, and everything in between.
-
-```csharp
-Controls.Text("Welcome to MeshWeaver")
-    .WithTypography(Typography.H1)
-    .WithColor("primary")
-```
-
-| Property | Type | Description |
-|---|---|---|
-| `Content` | `string` | Text content |
-| `Typography` | `Typography` | H1–H6, Body, Caption, and more |
-| `Color` | `string` | Text colour |
-
----
-
-### DataGridControl
-
-Full-featured tabular display with sorting, filtering, pagination, and row-click actions — the standard way to render any collection.
-
-```csharp
-Controls.DataGrid(claimsData)
-    .WithColumns(
-        Column.For("claimNumber").WithTitle("Claim #"),
-        Column.For("status").WithTitle("Status"),
-        Column.For("amount").WithTitle("Amount").WithFormat("C2")
-    )
-    .WithPaging(pageSize: 25)
-    .WithSorting(true)
-    .WithRowClick(OnRowClick)
-```
-
-| Property | Type | Description |
-|---|---|---|
-| `Data` | `object` | Data source (any collection) |
-| `Columns` | `IEnumerable<Column>` | Column definitions |
-| `PageSize` | `int` | Rows per page |
-| `Sortable` | `bool` | Enable column sorting |
-| `Filterable` | `bool` | Enable column filtering |
-
----
-
-### CardControl
-
-A visually distinct container with an optional title, subtitle, body, and action strip — useful for summary panels and entity detail views.
-
-```csharp
-Controls.Card()
-    .WithTitle("Claim Summary")
-    .WithSubtitle("CLM-2024-001")
-    .WithContent(
-        Controls.Stack().WithChildren(...)
-    )
-    .WithActions(
-        Controls.Button("Edit").WithClickAction(OnEdit)
-    )
-```
-
----
-
-### ChartControl
-
-Data visualisation powered by Chart.js, supporting bar, line, pie, area, and other chart types.
-
-```csharp
-Controls.Chart()
-    .WithType(ChartType.Bar)
-    .WithData(salesData)
-    .WithXAxis("month")
-    .WithYAxis("revenue")
-```
-
-| Property | Type | Description |
-|---|---|---|
-| `Type` | `ChartType` | Bar, Line, Pie, Area, etc. |
-| `Data` | `object` | Chart data source |
-| `XAxis` | `string` | X-axis data field |
-| `YAxis` | `string` | Y-axis data field |
-
----
-
-## Action Controls
-
-Action controls let the user trigger operations. Their click handlers run server-side — you always have direct access to the hub and the full mesh.
-
-### ButtonControl
-
-The primary interaction control. Supports variants, icons, and a synchronous click handler.
-
-```csharp
-Controls.Button("Submit")
-    .WithVariant(ButtonVariant.Primary)
-    .WithIcon("Send")
-    .WithClickAction(context => {
-        context.Hub.Post(new SubmitRequest());
-        return Task.CompletedTask;
-    })
-```
-
-| Property | Type | Description |
-|---|---|---|
-| `Label` | `string` | Button text |
-| `Variant` | `ButtonVariant` | Primary, Secondary, Outlined, Text |
-| `Icon` | `string` | Icon name |
-| `Disabled` | `bool` | Disables the button |
-| `ClickAction` | `Func<ClickContext, Task>` | Click handler |
-
----
-
-### IconButtonControl
-
-A compact, icon-only button suited to inline actions such as delete, edit, or expand. Always pair with a tooltip for accessibility.
-
-```csharp
-Controls.IconButton("Delete")
-    .WithIcon("delete")
-    .WithTooltip("Delete item")
-    .WithClickAction(OnDelete)
-```
-
----
-
-### MenuControl
-
-A contextual dropdown menu triggered by any control — typically an `IconButton` with a "more_vert" icon.
-
-```csharp
-Controls.Menu()
-    .WithTrigger(Controls.IconButton("more_vert"))
-    .WithItems(
-        MenuItem.Action("Edit", OnEdit),
-        MenuItem.Action("Duplicate", OnDuplicate),
-        MenuItem.Divider(),
-        MenuItem.Action("Delete", OnDelete).WithColor("error")
-    )
-```
-
----
-
-## Navigation Controls
-
-### TabsControl
-
-Switches between named content panels without a full page reload.
-
-```csharp
-Controls.Tabs()
-    .WithTabs(
-        Tab.Create("overview", "Overview", overviewContent),
-        Tab.Create("details", "Details", detailsContent),
-        Tab.Create("history", "History", historyContent)
-    )
-```
-
----
-
-### BreadcrumbControl
-
-Shows the user's position in the mesh hierarchy and lets them jump back up.
-
-```csharp
-Controls.Breadcrumb()
-    .WithItems(
-        BreadcrumbItem.Link("Home", "/"),
-        BreadcrumbItem.Link("Claims", "/claims"),
-        BreadcrumbItem.Current("CLM-2024-001")
-    )
-```
-
----
-
-### LinkControl
-
-A navigational link to any path within the mesh.
-
-```csharp
-Controls.Link("View Claim")
-    .WithPath("Insurance/Claims/CLM-2024-001")
-```
-
----
-
-## Container Controls
-
-Container controls group other controls and add behaviour — form validation, modal presentation, or collapsible visibility.
-
-### DialogControl
-
-A modal dialog with a content area and an action strip. Show it programmatically from a button's click handler.
-
-```csharp
-Controls.Dialog()
-    .WithTitle("Confirm Delete")
-    .WithContent(Controls.Text("Are you sure?"))
-    .WithActions(
-        Controls.Button("Cancel").WithClickAction(OnCancel),
-        Controls.Button("Delete").WithVariant(ButtonVariant.Primary).WithClickAction(OnConfirm)
-    )
-```
-
----
-
-### EditFormControl
-
-Wraps input controls in a validated form container, giving you a single `SubmitAction` entry point instead of wiring each field individually.
-
-```csharp
-Controls.EditForm(claimData)
-    .WithChildren(
-        Controls.TextField("claimNumber").WithLabel("Claim Number"),
-        Controls.DatePicker("lossDate").WithLabel("Loss Date"),
-        Controls.NumberField("reserveAmount").WithLabel("Reserve")
-    )
-    .WithSubmitAction(OnSubmit)
-```
-
-| Property | Type | Description |
-|---|---|---|
-| `Data` | `object` | Form data object |
-| `Children` | `IEnumerable<UiControl>` | Form field controls |
-| `SubmitAction` | `Func<SubmitContext, Task>` | Form submission handler |
-
----
-
-### ExpansionPanelControl
-
-A collapsible section that keeps the page tidy by hiding infrequently-needed content behind a clickable header.
-
-```csharp
-Controls.ExpansionPanel()
-    .WithTitle("Advanced Options")
-    .WithContent(advancedOptionsContent)
-    .WithExpanded(false)
-```
-
----
-
-## Utility Controls
-
-Small, single-purpose controls that fill common UI gaps.
-
-### SpinnerControl
-
-A loading indicator for asynchronous operations.
-
-```csharp
-Controls.Spinner()
-    .WithSize(SpinnerSize.Large)
-    .WithLabel("Loading...")
-```
-
----
-
-### AlertControl
-
-An inline message banner — use it to surface warnings, errors, or success confirmations without a full dialog.
-
-```csharp
-Controls.Alert()
-    .WithSeverity(AlertSeverity.Warning)
-    .WithTitle("Review Required")
-    .WithMessage("This claim requires manager approval.")
-```
-
-| Property | Type | Description |
-|---|---|---|
-| `Severity` | `AlertSeverity` | Info, Success, Warning, Error |
-| `Title` | `string` | Alert title |
-| `Message` | `string` | Alert message body |
-
----
-
-### DividerControl
-
-A thin visual rule for separating content regions.
-
-```csharp
-Controls.Divider()
-    .WithOrientation(Orientation.Horizontal)
-```
-
----
-
-## Composing Controls
-
-Controls are plain C# objects — compose them freely in helper methods to build rich, readable view code. The example below assembles a complete claim view from layout, display, navigation, and action controls:
-
-```csharp
-public UiControl BuildClaimView(Claim claim)
+```csharp --render CatalogInputs --show-code
+var currencies = new[]
 {
-    return Controls.Stack()
-        .WithChildren(
-            // Header card with a 3-column summary grid
-            Controls.Card()
-                .WithTitle(claim.ClaimNumber)
-                .WithContent(
-                    Controls.Grid()
-                        .WithColumns("1fr 1fr 1fr")
-                        .WithChildren(
-                            LabelValue("Status", claim.Status),
-                            LabelValue("Loss Date", claim.LossDate.ToShortDateString()),
-                            LabelValue("Reserve", claim.ReserveAmount.ToString("C"))
-                        )
-                ),
-            // Tabbed detail sections
-            Controls.Tabs()
-                .WithTabs(
-                    Tab.Create("notes", "Notes", BuildNotesTab(claim)),
-                    Tab.Create("documents", "Documents", BuildDocsTab(claim)),
-                    Tab.Create("history", "History", BuildHistoryTab(claim))
-                ),
-            // Horizontal action strip
-            Controls.Stack()
-                .WithOrientation(Orientation.Horizontal)
-                .WithChildren(
-                    Controls.Button("Edit").WithClickAction(OnEdit),
-                    Controls.Button("Close Claim")
-                        .WithVariant(ButtonVariant.Primary)
-                        .WithClickAction(OnClose)
-                )
-        );
+    new Option<string>("CHF", "Swiss Franc (CHF)"),
+    new Option<string>("EUR", "Euro (EUR)")
+};
+
+Controls.Stack
+    .WithView(Controls.Text("Alice Example").WithLabel("Name"))
+    .WithView(Controls.Number(42, "Int32").WithLabel("Age"))
+    .WithView(Controls.Select("CHF", currencies).WithLabel("Currency"))
+    .WithView(Controls.CheckBox(true).WithLabel("Active"))
+    .WithView(Controls.DateTime(DateTime.Today).WithLabel("Start date"))
+```
+
+See [Form Input Controls](/Doc/GUI/InputControls) for every input rendered live — including `Switch`, `TextArea`, `RadioGroup`, and the mesh-node picker — and [Property Attributes](/Doc/GUI/Attributes) for the attributes that pick these controls automatically.
+
+## Data — DataGrid
+
+`Controls.DataGrid(rows)` renders any collection as a sortable, resizable table — the standard way to render tabular data (never hand-built HTML). Columns are typed `PropertyColumnControl<T>` instances; **property names are camelCase** (`"instrument"` for `Instrument`). `TemplateColumnControl` puts an arbitrary control in every cell for action columns.
+
+```csharp --render CatalogDataGrid --show-code
+record Position(string Instrument, int Quantity, decimal Price);
+
+var positions = new[]
+{
+    new Position("Bond A", 100, 102.50m),
+    new Position("Equity B", 250, 48.30m),
+    new Position("Fund C", 75, 210.00m)
+};
+
+Controls.DataGrid(positions)
+    .WithColumn(new PropertyColumnControl<string>  { Property = "instrument" }.WithTitle("Instrument"))
+    .WithColumn(new PropertyColumnControl<int>     { Property = "quantity"   }.WithTitle("Quantity"))
+    .WithColumn(new PropertyColumnControl<decimal> { Property = "price"      }
+        .WithTitle("Price").WithAlign("end").WithFormat("N2"))
+```
+
+See [DataGrid](/Doc/GUI/DataGrid) for pagination, virtualization, action columns, and the full option tables.
+
+## Charts and pivots
+
+Charts live in `MeshWeaver.Layout.Chart`: the `Charts.*` factories turn plain arrays into column, bar, line, and pie charts, and the `SliceBy(...).To*Chart(...)` pipeline charts sliced datasets. The pivot twin (`ToPivotGrid`) folds flat facts into rows-by-X, columns-by-Y tables.
+
+```csharp --render CatalogChart --show-code
+using MeshWeaver.Layout.Chart;
+
+var revenue = new double[] { 480, 520, 610, 730 };
+var quarters = new[] { "Q1", "Q2", "Q3", "Q4" };
+
+Charts.Column(revenue, quarters, "Revenue (CHF k)")
+    .WithTitle("Quarterly revenue")
+```
+
+See [Charts at a glance](/Doc/GUI/ChartGallery) for the whole gallery, [Pivot tricks](/Doc/GUI/PivotTricks) for the pivot side, and [Data Cubes](/Doc/DataMesh/DataCubes) for slicing real datasets.
+
+## Feedback — Progress
+
+`Controls.Progress(message, percentage)` is the standard way to surface long-running work — imports, compiles, exports — in a layout area. In real use the percentage comes from an observable, so the bar advances as the operation reports progress; `Controls.Exception(ex)` renders a failure where a result would have gone.
+
+```csharp --render CatalogProgress --show-code
+Controls.Stack
+    .WithView(Controls.Progress("Exporting report…", 80))
+    .WithView(Controls.Progress("Compiling node type…", 45))
+```
+
+See [Static vs Dynamic Views](/Doc/GUI/Observables) for feeding a control from a live stream.
+
+## Editors and forms
+
+The `Edit` macro generates a complete form from a plain record — each property becomes the input its type and attributes dictate (`string` → text field, `int` → number field, `bool` → checkbox), with validation from standard data annotations. Never hand-build a form field-by-field when a record describes the shape.
+
+```csharp --render CatalogEditor --show-code
+using System.ComponentModel;
+using System.ComponentModel.DataAnnotations;
+
+record ContactForm
+{
+    [Required]
+    [DisplayName("Full name")]
+    public string Name { get; init; } = "Alice Example";
+
+    [Range(18, 120)]
+    public int Age { get; init; } = 34;
+
+    [DisplayName("Subscribe to updates")]
+    public bool Subscribed { get; init; } = true;
 }
 
-private UiControl LabelValue(string label, string value)
-{
-    return Controls.Stack()
-        .WithChildren(
-            Controls.Text(label).WithTypography(Typography.Caption),
-            Controls.Text(value).WithTypography(Typography.Body1)
-        );
-}
+Mesh.Edit(new ContactForm(), "catalogEditorDemo")
 ```
 
----
+The rich editors are **node-bound**: they bind to a mesh node's content and auto-save through the node stream, so they need a layout-area host with a node path and cannot run standalone in a kernel cell:
 
-## Live Demo
-
-The cell below renders a small stack of controls directly in this page, illustrating how layout, text, and button controls compose together at runtime:
-
-```csharp --render ControlsDemo --show-code
-MeshWeaver.Layout.Controls.Stack
-    .WithView(MeshWeaver.Layout.Controls.Text("Layout Controls — live in the kernel"))
-    .WithView(MeshWeaver.Layout.Controls.Html("<hr style='margin:4px 0'/>"))
-    .WithView(MeshWeaver.Layout.Controls.Stack
-        .WithView(MeshWeaver.Layout.Controls.Html("<b>Stack (Vertical, default)</b>"))
-        .WithView(MeshWeaver.Layout.Controls.Html("Item A"))
-        .WithView(MeshWeaver.Layout.Controls.Html("Item B"))
-        .WithView(MeshWeaver.Layout.Controls.Html("Item C")))
-    .WithView(MeshWeaver.Layout.Controls.Button("Example Button"))
+```csharp
+// Node-bound — not runnable standalone: requires a mesh node to bind to.
+new MarkdownEditorControl { Value = markdown }
+    .WithAutoSave(hubAddress, nodePath)                          // markdown w/ auto-save
+MeshNodeContentEditorControl.ForType(nodePath, typeof(MyContent)) // typed content editor
 ```
+
+See [Editor](/Doc/GUI/Editor) for the macro's attribute-driven mapping and reactive output, [Code Editor](/Doc/GUI/CodeEditor) for the Monaco-based code editor, and [Data Binding](/Doc/GUI/DataBinding) for how values flow.
+
+## Mesh controls — MeshNodePicker, MeshSearch
+
+Mesh controls work directly against mesh content. `MeshNodePicker` is the standard picker whenever content references other content — it searches with [query syntax](/Doc/DataMesh/QuerySyntax) and stores the selected node's **path**; never hand-build a select over node paths. `MeshSearch` and `SearchBox` provide free-text search surfaces, and `FileBrowser` navigates a content collection.
+
+```csharp --render CatalogNodePicker --show-code
+Controls.MeshNodePicker("Doc/GUI/DataGrid")
+    .WithQueries("namespace:Doc/GUI scope:descendants nodeType:Markdown")
+    .WithMaxResults(8)
+    .WithLabel("Pick a documentation page")
+```
+
+See [Mesh Search](/Doc/GUI/MeshSearch) for the search surface and [Form Input Controls](/Doc/GUI/InputControls) for the picker's query options.
+
+## Navigation — NavMenu, NavLink, NavGroup
+
+Navigation menus compose from three controls: `NavMenu` (the container), `NavGroup` (a collapsible heading), and `NavLink` (a clickable link with optional `FluentIcons` icon). The URLs are ordinary mesh paths. To embed another hub's layout area inside a view, use `Controls.LayoutArea(address, area)`; to reference a named slot within the current area, `Controls.NamedArea(area)`.
+
+```csharp --render CatalogNavMenu --show-code
+Controls.NavMenu
+    .WithNavLink("GUI Overview", "/Doc/GUI", FluentIcons.Home())
+    .WithNavLink("Data Grid", "/Doc/GUI/DataGrid", FluentIcons.Table())
+```
+
+See [Navigation Menus](/Doc/GUI/Navigation) for grouped, collapsible menus and [Layout Areas](/Doc/GUI/LayoutAreas) for how areas nest.
+
+## See also
+
+- [User Interface](/Doc/Architecture/UserInterface) — how control trees travel to the browser and how click handlers run
+- [GUI documentation](/Doc/GUI) — the full GUI area index
+- [Data Binding](/Doc/GUI/DataBinding) — `JsonPointerReference` and the reactive data pipeline behind every input
