@@ -1,5 +1,6 @@
 using System;
 using System.Threading.Tasks;
+using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Persistence.Parsers;
 using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
@@ -421,6 +422,214 @@ public class MarkdownFileParserTest
 
     #endregion
 
+    #region Slide + Order Frontmatter (Notes / Background / Order)
+
+    [Fact(Timeout = 20000)]
+    public void RoundTrip_SlideNode_PreservesNotesBackgroundAndOrder()
+    {
+        // Arrange - a typed Slide node as the mesh holds it (framework SlideContent)
+        var node = new MeshNode("S01", "deck")
+        {
+            NodeType = "Slide",
+            Name = "Opening",
+            Order = 1,
+            Content = new SlideContent
+            {
+                Content = "# Opening\n\nWelcome to the deck.",
+                Notes = "Speak slowly.\nPause after the title.",
+                Background = "linear-gradient(135deg, #667eea 0%, #764ba2 100%)"
+            }
+        };
+
+        // Act - serialize to canonical .md, then parse back
+        var serialized = _parser.Serialize(node);
+        var reparsed = _parser.Parse("/root/deck/S01.md", serialized, "deck/S01.md");
+
+        // Assert - the .md carries everything in frontmatter + body
+        serialized.Should().Contain("NodeType: Slide");
+        serialized.Should().Contain("Order: 1");
+        serialized.Should().Contain("# Opening");
+
+        // ... and a git reimport no longer downgrades Slide → Markdown
+        reparsed.Should().NotBeNull();
+        reparsed!.NodeType.Should().Be("Slide");
+        reparsed.Name.Should().Be("Opening");
+        reparsed.Order.Should().Be(1);
+        var slide = reparsed.Content.Should().BeOfType<SlideContent>().Subject;
+        slide.Content.Should().Be("# Opening\n\nWelcome to the deck.");
+        slide.Notes.Should().Be("Speak slowly.\nPause after the title.");
+        slide.Background.Should().Be("linear-gradient(135deg, #667eea 0%, #764ba2 100%)");
+    }
+
+    [Fact(Timeout = 20000)]
+    public void Serialize_SlideNode_WithJsonElementContent_EmitsNotesBackgroundAndBody()
+    {
+        // Arrange - the untyped wire form a hub without the typed registry resolves
+        var json = """
+            {"$type":"SlideContent","content":"# Body slide","notes":"Presenter note.","background":"#123456"}
+            """;
+        var node = new MeshNode("S02", "deck")
+        {
+            NodeType = "Slide",
+            Name = "S02",
+            Order = 2,
+            Content = System.Text.Json.JsonDocument.Parse(json).RootElement
+        };
+
+        // Act
+        var serialized = _parser.Serialize(node);
+        var reparsed = _parser.Parse("/root/deck/S02.md", serialized, "deck/S02.md");
+
+        // Assert
+        serialized.Should().Contain("NodeType: Slide");
+        serialized.Should().Contain("Order: 2");
+        serialized.Should().Contain("Presenter note.");
+        serialized.Should().Contain("# Body slide");
+
+        reparsed!.NodeType.Should().Be("Slide");
+        reparsed.Order.Should().Be(2);
+        var slide = reparsed.Content.Should().BeOfType<SlideContent>().Subject;
+        slide.Content.Should().Be("# Body slide");
+        slide.Notes.Should().Be("Presenter note.");
+        slide.Background.Should().Be("#123456");
+    }
+
+    [Fact(Timeout = 20000)]
+    public void RoundTrip_OrderedMarkdownNode_PreservesOrder()
+    {
+        // Arrange - Order applies to ANY node type (lesson/module ordering)
+        var node = new MeshNode("L05", "course")
+        {
+            Name = "Lesson Five",
+            Order = 5,
+            Content = new MarkdownContent { Content = "# Lesson 5" }
+        };
+
+        // Act
+        var serialized = _parser.Serialize(node);
+        var reparsed = _parser.Parse("/root/course/L05.md", serialized, "course/L05.md");
+
+        // Assert - Order round-trips; content stays MarkdownContent
+        serialized.Should().Contain("Order: 5");
+        reparsed!.Order.Should().Be(5);
+        reparsed.NodeType.Should().Be("Markdown");
+        reparsed.Content.Should().BeOfType<MarkdownContent>();
+    }
+
+    [Fact(Timeout = 20000)]
+    public void Serialize_NodeWithoutNewKeys_EmissionIsByteIdenticalToLegacyFormat()
+    {
+        // Arrange - a node carrying none of Order/Notes/Background. Its emission is
+        // pinned byte-for-byte: the new frontmatter keys are OmitNull and declared
+        // AFTER the legacy keys, so existing git mirrors see zero diff churn.
+        var node = new MeshNode("doc", "test")
+        {
+            NodeType = "Article",
+            Name = "My Doc",
+            Category = "Docs",
+            Content = new MarkdownContent
+            {
+                Content = "# Body\n\nText.",
+                Abstract = "Summary"
+            }
+        };
+
+        var nl = Environment.NewLine;
+        var expected =
+            "---" + nl +
+            "NodeType: Article" + nl +
+            "Name: My Doc" + nl +
+            "Category: Docs" + nl +
+            "Abstract: Summary" + nl +
+            "---" + nl +
+            nl +
+            "# Body\n\nText.";
+
+        // Act
+        var serialized = _parser.Serialize(node);
+
+        // Assert
+        serialized.Should().Be(expected);
+    }
+
+    [Fact(Timeout = 20000)]
+    public void Parse_LegacyFileWithoutNewKeys_ParsesUnchanged()
+    {
+        // Arrange - a pre-existing mirror file that never carried the new keys
+        var content = """
+            ---
+            NodeType: Article
+            Name: Legacy File
+            ---
+
+            # Legacy
+
+            Body.
+            """;
+
+        // Act
+        var node = _parser.Parse("/test/legacy.md", content, "test/legacy.md");
+
+        // Assert - no Order, regular MarkdownContent, nothing invented
+        node.Should().NotBeNull();
+        node!.NodeType.Should().Be("Article");
+        node.Order.Should().BeNull();
+        node.Content.Should().BeOfType<MarkdownContent>();
+    }
+
+    [Fact(Timeout = 20000)]
+    public void Parse_LegacySlideFileWithoutNotesOrBackground_ReconstructsSlideContent()
+    {
+        // Arrange - a Slide exported before the frontmatter carried Notes/Background
+        var content = """
+            ---
+            NodeType: Slide
+            Name: Old Slide
+            ---
+
+            # Old slide body
+            """;
+
+        // Act
+        var node = _parser.Parse("/deck/old.md", content, "deck/old.md");
+
+        // Assert - Slide is reconstructed typed (no downgrade to Markdown), extras null
+        node.Should().NotBeNull();
+        node!.NodeType.Should().Be("Slide");
+        var slide = node.Content.Should().BeOfType<SlideContent>().Subject;
+        slide.Content.Should().Contain("# Old slide body");
+        slide.Notes.Should().BeNull();
+        slide.Background.Should().BeNull();
+    }
+
+    [Fact(Timeout = 20000)]
+    public void Parse_NonSlideFileWithStrayNotes_IgnoresThem()
+    {
+        // Arrange - Notes/Background only mean something on a Slide; on any other
+        // node type they are ignored (MarkdownContent has no such fields, and
+        // inventing an untyped content to carry them would downgrade the node).
+        var content = """
+            ---
+            Name: Not A Slide
+            Notes: stray presenter notes
+            Background: red
+            ---
+
+            Body.
+            """;
+
+        // Act
+        var node = _parser.Parse("/test/plain.md", content, "test/plain.md");
+        var reserialized = _parser.Serialize(node!);
+
+        // Assert
+        node!.Content.Should().BeOfType<MarkdownContent>();
+        reserialized.Should().NotContain("Notes:");
+        reserialized.Should().NotContain("Background:");
+    }
+
+    #endregion
+
     #region CanSerialize Tests
 
     [Fact(Timeout = 20000)]
@@ -441,6 +650,15 @@ public class MarkdownFileParserTest
     public void CanSerialize_WithStringContent_ReturnsTrue()
     {
         var node = new MeshNode("doc") { Content = "# Markdown string" };
+        _parser.CanSerialize(node).Should().BeTrue();
+    }
+
+    [Fact(Timeout = 20000)]
+    public void CanSerialize_WithTypedSlideContent_ReturnsTrue()
+    {
+        // Typed SlideContent serializes as canonical .md (frontmatter carries
+        // Notes/Background) — not as a .json fallback.
+        var node = new MeshNode("S01") { NodeType = "Slide", Content = new SlideContent { Content = "# Slide" } };
         _parser.CanSerialize(node).Should().BeTrue();
     }
 
