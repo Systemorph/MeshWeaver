@@ -266,7 +266,23 @@ internal class ApiTokenService(IMeshService nodeFactory, IMessageHub hub, ILogge
         {
             hub.GetWorkspace()
                 .GetMeshNodeStream(tokenNode.Path)
-                .Update(node => node with { Content = (node.Content as ApiToken ?? apiToken) with { LastUsedAt = now } })
+                .Update(node =>
+                {
+                    // 🚨 Authoritative freshness gate. The outer check above ran against the
+                    // EVENTUALLY-CONSISTENT query snapshot (GetApiTokenByHash) — under read-side
+                    // index lag several validations in a row all still see the pre-stamp
+                    // LastUsedAt and pass it, each firing another stamp (CI run 28682878901:
+                    // five queued stamps bumped one token node 6→11 inside a single test —
+                    // the same per-request-write shape the display-granularity stamp exists
+                    // to prevent). The node handed to THIS lambda is the live state at write
+                    // time, so re-check here and return the node unchanged when a racing
+                    // stamp already landed — stream.Update short-circuits an unchanged node
+                    // into a true no-op (no version bump, no change-feed fan-out).
+                    var current = node.ContentAs<ApiToken>(hub.JsonSerializerOptions) ?? apiToken;
+                    if (current.LastUsedAt is { } last && now - last < LastUsedStampInterval)
+                        return node;
+                    return node with { Content = current with { LastUsedAt = now } };
+                })
                 .Subscribe(_ => { }, _ => { });
         }
 
