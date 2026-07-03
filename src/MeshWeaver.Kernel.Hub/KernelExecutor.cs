@@ -286,9 +286,14 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
         return Observable.Using(
             () =>
             {
+                // Both standard streams are piped into the script's ActivityLog:
+                // stdout as Information lines, stderr as Error lines — so
+                // Console.Error prints surface on the run's output (red) instead
+                // of vanishing into the host process's stderr.
                 var stdoutPipe = new LoggerTextWriter(scriptOutputLogger);
-                var capture = CapturingTextWriter.Capture(stdoutPipe);
-                return new StdoutScope(stdoutPipe, capture);
+                var stderrPipe = new LoggerTextWriter(scriptOutputLogger, LogLevel.Error);
+                var capture = CapturingTextWriter.Capture(stdoutPipe, stderrPipe);
+                return new StdoutScope(stdoutPipe, stderrPipe, capture);
             },
             // Roslyn compile+execute on the bounded Compile IoPool (see `compilePool`) —
             // NOT a bare Observable.FromAsync on the shared ThreadPool. `t` is the pool's
@@ -300,7 +305,7 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
                 .Select(state =>
                 {
                     scriptState = state;
-                    scope.StdoutPipe.Flush();
+                    scope.Flush();
                     if (state.ReturnValue is not null)
                     {
                         UpdateView(viewId, state.ReturnValue);
@@ -310,13 +315,20 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
                 }));
     }
 
-    private sealed class StdoutScope(LoggerTextWriter stdoutPipe, IDisposable capture) : IDisposable
+    private sealed class StdoutScope(LoggerTextWriter stdoutPipe, LoggerTextWriter stderrPipe, IDisposable capture) : IDisposable
     {
-        public LoggerTextWriter StdoutPipe { get; } = stdoutPipe;
+        /// <summary>Flushes any partially-buffered line on both pipes.</summary>
+        public void Flush()
+        {
+            stdoutPipe.Flush();
+            stderrPipe.Flush();
+        }
+
         public void Dispose()
         {
             capture.Dispose();
-            StdoutPipe.Dispose();
+            stdoutPipe.Dispose();
+            stderrPipe.Dispose();
         }
     }
 
