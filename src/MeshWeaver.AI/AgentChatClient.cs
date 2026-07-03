@@ -1126,11 +1126,26 @@ public class AgentChatClient : IAgentChat
             if (!selectionMatched)
             {
                 var requested = currentAgentPath ?? currentAgentName;
-                lastAgentCreationError =
-                    $"Selected agent '{requested}' was not found among the available agents "
-                    + $"([{string.Join(", ", loadedAgents.Select(a => a.Path ?? a.Name))}]). "
-                    + "It may have been moved, renamed, or is not available in this context — "
-                    + "pick another agent from the list.";
+                // 🚨 Distinguish "stale selection" from "EMPTY catalog" (#201). With zero
+                // loaded agents there is nothing to "pick from the list" — blaming the
+                // selection ("moved or renamed — pick another") dead-ends the user. An
+                // empty catalog means the agent query returned nothing for THIS hub's
+                // identity/context (still converging on a cold start, or agents not
+                // visible to this principal) — say that, and that a retry can succeed
+                // once the catalog emits. The stale-selection wording stays reserved for
+                // the non-empty case, where picking another agent is real advice.
+                lastAgentCreationError = loadedAgents.Count == 0
+                    ? $"Selected agent '{requested}' could not be validated: the agent "
+                      + "catalog is empty — no agents are loaded in this context. Either "
+                      + "the agent query has not emitted yet (cold start — retry the "
+                      + "message) or no agents are visible to this identity/context. If "
+                      + "this persists, verify agents exist under the 'Agent', "
+                      + "'{space}/Agent' or '{user}/Agent' namespaces and are readable "
+                      + "in this context."
+                    : $"Selected agent '{requested}' was not found among the available agents "
+                      + $"([{string.Join(", ", loadedAgents.Select(a => a.Path ?? a.Name))}]). "
+                      + "It may have been moved, renamed, or is not available in this context — "
+                      + "pick another agent from the list.";
                 logger.LogWarning("[AgentChatClient] {Error}", lastAgentCreationError);
             }
             return null;
