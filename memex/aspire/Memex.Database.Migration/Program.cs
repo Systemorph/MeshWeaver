@@ -156,6 +156,16 @@ var ctx = new MigrationContext(dataSource, connectionString, options, logger, in
 var runner = new MigrationRunner(migrations);
 var finalVersion = await runner.RunAsync(ctx);
 
+// ── Partition-access reconcile (always runs): rebuild {schema}.user_effective_permissions +
+// public.partition_access from the access satellites across every partition schema. The V35
+// one-shot healed this drift once, but it RECURRED on databases already past v35 (memex.local +
+// atioz, 2026-07-03: grants present, materialization empty → permissions silently wedge and
+// spaces vanish from search, no error anywhere). Idempotent and cheap (one function call per
+// schema); any future drift self-heals on the next roll, and detected drift is logged at
+// Warning as the evidence trail for the still-unidentified wiper. Runs AFTER the versioned
+// migrations (schema moves/drops done) and BEFORE the searchable-schemas refresh.
+await PartitionAccessReconcile.RunAsync(dataSource, options.VectorDimensions, logger, phase: "always-on");
+
 // ── Doc search index (always runs): mirror the embedded documentation into the `doc`
 // schema so it surfaces in the main search bar (full-text + vector). Runs BEFORE Phase 3
 // so the searchable-schemas refresh picks up `doc`. Full replace + incremental embedding.
