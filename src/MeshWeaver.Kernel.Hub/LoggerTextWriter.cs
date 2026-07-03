@@ -5,12 +5,14 @@ namespace MeshWeaver.Kernel.Hub;
 
 /// <summary>
 /// <see cref="TextWriter"/> that buffers per line and flushes each completed
-/// line to an <see cref="ILogger"/> as a separate <c>LogInformation</c> entry.
-/// Used by <see cref="KernelExecutor"/> to route a script's <c>Console.Write*</c>
-/// output into the script's <c>ActivityLog</c>, in line with how
-/// <c>Log.LogInformation(...)</c> calls flow.
+/// line to an <see cref="ILogger"/> as a separate log entry at
+/// <paramref name="level"/> (<see cref="LogLevel.Information"/> for the stdout
+/// pipe, <see cref="LogLevel.Error"/> for the stderr pipe). Used by
+/// <see cref="KernelExecutor"/> to route a script's <c>Console.Write*</c> /
+/// <c>Console.Error.Write*</c> output into the script's <c>ActivityLog</c>,
+/// in line with how <c>Log.LogInformation(...)</c> calls flow.
 /// </summary>
-internal sealed class LoggerTextWriter(ILogger logger) : TextWriter
+internal sealed class LoggerTextWriter(ILogger logger, LogLevel level = LogLevel.Information) : TextWriter
 {
     private readonly StringBuilder buffer = new();
     private readonly object bufferLock = new();
@@ -60,7 +62,7 @@ internal sealed class LoggerTextWriter(ILogger logger) : TextWriter
         if (buffer.Length == 0) return;
         var msg = buffer.ToString();
         buffer.Clear();
-        logger.LogInformation("{Stdout}", msg);
+        logger.Log(level, "{Stdout}", msg);
     }
 
     protected override void Dispose(bool disposing)
