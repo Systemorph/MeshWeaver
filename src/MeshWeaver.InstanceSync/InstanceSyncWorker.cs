@@ -39,7 +39,7 @@ namespace MeshWeaver.InstanceSync;
 /// any echo that slips through converges after one hop instead of ping-ponging.</para>
 ///
 /// <para>🚨 Reactive end-to-end; the only asynchrony lives inside <see cref="IRemoteMeshClient"/>
-/// (IoPool-bounded). Drains are serialised by a Subject → Throttle → Concat pipeline (never a
+/// (IoPool-bounded). Drains are serialised by a Subject → Sample → Concat pipeline (never a
 /// lock/semaphore); config/manifest writes go through <c>stream.Update</c> on the owning hub.</para>
 /// </summary>
 public sealed class InstanceSyncWorker : IDisposable
@@ -110,10 +110,11 @@ public sealed class InstanceSyncWorker : IDisposable
     {
         disposables.Add(retryProbe);
 
-        // Serialised drain pipeline: bursts coalesce (Throttle), passes never overlap (Concat),
-        // failures are handled inside RunDrain so the pipeline itself never terminates.
+        // Serialised drain pipeline: bursts coalesce (Sample — unlike Throttle it cannot starve
+        // under a sustained change stream), passes never overlap (Concat), failures are handled
+        // inside RunDrain so the pipeline itself never terminates.
         disposables.Add(drainRequests
-            .Throttle(options.DrainDebounce)
+            .Sample(options.DrainDebounce)
             .Select(_ => RunDrain()
                 .Catch<Unit, Exception>(ex =>
                 {
@@ -126,7 +127,7 @@ public sealed class InstanceSyncWorker : IDisposable
                 ex => logger?.LogError(ex, "Instance sync drain pipeline terminated for {Config}", ConfigPath)));
 
         // Pull-sweep loop: the next tick is scheduled only after the previous sweep completed
-        // (recursive Defer + Concat), so sweeps never overlap and a slow remote never queues up.
+        // (Defer + Repeat), so sweeps never overlap and a slow remote never queues up.
         disposables.Add(PullLoop().Subscribe(
             _ => { },
             ex => logger?.LogError(ex, "Instance sync pull loop terminated for {Config}", ConfigPath)));
@@ -134,7 +135,7 @@ public sealed class InstanceSyncWorker : IDisposable
         RequestDrain();
     }
 
-    /// <summary>Signals the drain pipeline (idempotent; coalesced by the Throttle).</summary>
+    /// <summary>Signals the drain pipeline (idempotent; coalesced by the Sample window).</summary>
     public void RequestDrain()
     {
         if (!disposed)
@@ -314,14 +315,13 @@ public sealed class InstanceSyncWorker : IDisposable
     // ══════════════════════════════════════════════════════════════════════════
 
     private IObservable<Unit> PullLoop() =>
-        Observable.Timer(options.PullInterval)
-            .SelectMany(_ => RunPullSweep().Catch<Unit, Exception>(ex =>
-            {
-                logger?.LogWarning(ex, "Instance sync pull sweep failed for {Config}", ConfigPath);
-                return Observable.Return(Unit.Default);
-            }))
-            .IgnoreElements()
-            .Concat(Observable.Defer(PullLoop));
+        Observable.Defer(() => Observable.Timer(options.PullInterval)
+                .SelectMany(_ => RunPullSweep().Catch<Unit, Exception>(ex =>
+                {
+                    logger?.LogWarning(ex, "Instance sync pull sweep failed for {Config}", ConfigPath);
+                    return Observable.Return(Unit.Default);
+                })))
+            .Repeat(); // next tick scheduled only after the previous sweep completed — no overlap
 
     private IObservable<Unit> RunPullSweep() =>
         service.AsSystem(() => service.ReadConfigAuthoritative(SpacePath, SourceId)).SelectMany(cfg =>
