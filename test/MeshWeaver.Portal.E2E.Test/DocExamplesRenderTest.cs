@@ -81,7 +81,7 @@ public class DocExamplesRenderTest(PortalFixture fixture)
         { "Doc/GUI/SidePanel", 1, Stack, "Side Panel Header Controls" },
         // ---- Architecture ----
         { "Doc/Architecture/UserInterface", 1, Stack, "Controls Language" },
-        { "Doc/Architecture/UserInterface/AvailableControls", 1, Stack, "live in the kernel" },
+        { "Doc/Architecture/UserInterface/AvailableControls", 9, Stack, "live in the kernel" },
         { "Doc/Architecture/NativeMauiRendering", 1, Tabs, null },
         { "Doc/Architecture/ScriptExecution", 1, Table, "Rebound per submission" },
         { "Doc/Architecture/ScriptExecutionDemo", 2, null, "🎆" },

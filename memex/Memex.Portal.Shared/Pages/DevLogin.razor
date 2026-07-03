@@ -86,8 +86,10 @@
 
     protected override void OnInitialized()
     {
+        // Canonical users query — the legacy "namespace:User" shape targets the pre-V27
+        // `user` schema, which no longer exists, and silently returns zero users.
         _personsSubscription = MeshQuery
-            .Query<MeshNode>(MeshQueryRequest.FromQuery("nodeType:User namespace:User"))
+            .Query<MeshNode>(MeshQueryRequest.FromQuery(MeshWeaver.Mesh.Security.AccessSubjectQueries.Users))
             .Subscribe(
                 change =>
                 {
