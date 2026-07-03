@@ -14,9 +14,10 @@ public static class MeshNodeContentExtensions
     /// <summary>
     /// Content as <typeparamref name="T"/>: already-typed → as-is; a degraded
     /// <see cref="JsonElement"/> → deserialized into <typeparamref name="T"/>;
-    /// typed with a DIFFERENT CLR type of the same shape (the same class compiled
-    /// into two dynamic node assemblies, or a same-named type resolved by another
-    /// hub's registry at the query boundary) → recovered by a JSON round-trip;
+    /// typed with a SAME-NAMED but different CLR type (the same class compiled
+    /// into two dynamic node assemblies, or resolved by another hub's registry at
+    /// the query boundary) → recovered by a JSON round-trip; typed with a
+    /// DIFFERENTLY-named type → <c>null</c> (call sites probe-dispatch on that);
     /// otherwise <c>null</c> (logged loud — never silently swallowed).
     /// </summary>
     public static T? ContentAs<T>(this MeshNode? node, JsonSerializerOptions options, ILogger? logger = null)
@@ -43,37 +44,46 @@ public static class MeshNodeContentExtensions
                     return null;
                 }
             default:
-                // Content is a typed object, but not OUR T: the same class compiled into a different
-                // dynamic node assembly (@@-included copies), or a same-short-named type another hub's
-                // registry resolved when the node crossed the query/message boundary. The VALUE is
-                // perfectly recoverable — round-trip through JSON and bind into the caller's T. The
-                // silent null here was the atioz "BalanceSheet dashboards render empty" outage
-                // (agentic-pensions#12): 200 fact nodes arrived typed with the fact NodeType's own
-                // assembly and the dashboard's loader dropped every one.
-                try
+                // Content is a typed object, but not OUR T. Recover ONLY when the runtime type has the
+                // SAME short name as T: the same class compiled into a different dynamic node assembly
+                // (@@-included copies), or a same-short-named type another hub's registry resolved when
+                // the node crossed the query/message boundary. The silent null here was the atioz
+                // "BalanceSheet dashboards render empty" outage (agentic-pensions#12): 200 fact nodes
+                // arrived typed with the fact NodeType's own assembly and the dashboard's loader
+                // dropped every one.
+                //
+                // A DIFFERENTLY-named type must stay null: call sites probe-dispatch on it — e.g. the
+                // token validator's `ContentAs<ApiTokenIndex>() ?? treat node as the token itself`.
+                // Shape-recovering ApiToken→ApiTokenIndex there (both carry TokenHash) yields a
+                // half-populated index with a null TokenPath and every login fails "Token not found"
+                // (the McpAccessControlTests regression that reverted the first cut of this recovery).
+                if (node.Content.GetType().Name == typeof(T).Name)
                 {
-                    // Serialize AS the concrete runtime type: the object-declared path would route
-                    // through ObjectPolymorphicConverter.GetTypeName → an UNGUARDED GetOrAddType that
-                    // adopts the foreign type into the caller's registry as a read side effect. The
-                    // concrete-type path goes through PolymorphicTypeInfoResolver, whose collectible-
-                    // assembly guard formats the discriminator WITHOUT registering.
-                    var element = JsonSerializer.SerializeToElement(node.Content, node.Content.GetType(), options);
-                    var recovered = element.Deserialize<T>(options);
-                    if (recovered is not null)
+                    try
                     {
-                        // Debug, not Warning: this fires per node per read on the cross-assembly path
-                        // (a healthy, recoverable shape) — Warning would storm at snapshot size × emission.
-                        logger?.LogDebug(
-                            "ContentAs<{TargetType}> for {Path}: recovered Content typed as foreign {ActualType} "
-                            + "({ActualAssembly}) via JSON round-trip",
-                            typeof(T).Name, node.Path, node.Content.GetType().Name,
-                            node.Content.GetType().Assembly.GetName().Name);
-                        return recovered;
+                        // Serialize AS the concrete runtime type: the object-declared path would route
+                        // through ObjectPolymorphicConverter.GetTypeName → an UNGUARDED GetOrAddType that
+                        // adopts the foreign type into the caller's registry as a read side effect. The
+                        // concrete-type path goes through PolymorphicTypeInfoResolver, whose collectible-
+                        // assembly guard formats the discriminator WITHOUT registering.
+                        var element = JsonSerializer.SerializeToElement(node.Content, node.Content.GetType(), options);
+                        var recovered = element.Deserialize<T>(options);
+                        if (recovered is not null)
+                        {
+                            // Debug, not Warning: this fires per node per read on the cross-assembly path
+                            // (a healthy, recoverable shape) — Warning would storm at snapshot size × emission.
+                            logger?.LogDebug(
+                                "ContentAs<{TargetType}> for {Path}: recovered Content typed as foreign {ActualType} "
+                                + "({ActualAssembly}) via JSON round-trip",
+                                typeof(T).Name, node.Path, node.Content.GetType().Name,
+                                node.Content.GetType().Assembly.GetName().Name);
+                            return recovered;
+                        }
                     }
-                }
-                catch (Exception ex) when (ex is JsonException or NotSupportedException or InvalidOperationException)
-                {
-                    // fall through to the loud log below
+                    catch (Exception ex) when (ex is JsonException or NotSupportedException or InvalidOperationException)
+                    {
+                        // fall through to the loud log below
+                    }
                 }
                 // Assembly-qualified on purpose: dynamic node assemblies compile without namespaces,
                 // so the bare type name is identical on BOTH sides of a cross-assembly mismatch —
