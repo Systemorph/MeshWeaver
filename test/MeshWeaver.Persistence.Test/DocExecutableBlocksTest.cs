@@ -46,7 +46,7 @@ public class DocExecutableBlocksTest(ITestOutputHelper output) : MonolithMeshTes
     private const int MinPagesWithExecutableBlocks = 51;
 
     /// <summary>Coverage ratchet — total executable blocks across all doc pages. See above.</summary>
-    private const int MinExecutableBlocks = 114;
+    private const int MinExecutableBlocks = 122;
 
     private static readonly Lazy<IReadOnlyDictionary<string, IReadOnlyList<SubmitCodeRequest>>> PageSubmissions =
         new(() =>
