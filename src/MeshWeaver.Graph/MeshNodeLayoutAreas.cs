@@ -1185,9 +1185,15 @@ public static class MeshNodeLayoutAreas
                 stack = stack.WithView(Controls.Title(col.DisplayName ?? col.Name, 3));
 
             var colConfig = col;
+            // Navigation mirrors into the collection's OWN URL space —
+            // /{node}/{collection}/{p1}/{p2} (the collection-named layout area) — so the
+            // address bar carries the full path under the MOUNTED collection name (a
+            // collection can be mounted under any name), and deep links / refresh land in
+            // the right folder. The Files tab itself always shows the collection roots.
             stack = stack.WithView(new FileBrowserControl(colConfig.Name)
                 .WithCollectionConfiguration(colConfig)
                 .WithCollectionInfo(colConfig.SourceType, colConfig.BasePath, colConfig.Settings)
+                .WithUrlBasePath(BuildUrl(hubPath, ContentCollectionsExtensions.EncodeCollectionName(colConfig.Name)))
                 .CreatePath());
         }
 
@@ -1324,9 +1330,9 @@ public static class MeshNodeLayoutAreas
 
     private static IObservable<UiControl?> RenderImageAsync(LayoutAreaHost host, string contentPath, string _)
     {
-        // Build static content URL: /static/{address}/content/{filePath}
+        // Build static content URL: /static/{address}/{defaultCollection}/{filePath}
         var address = host.Hub.Address.ToString();
-        var staticUrl = $"/static/{address}/content/{contentPath}";
+        var staticUrl = $"/static/{address}/{ContentCollectionsExtensions.DefaultCollectionName}/{contentPath}";
 
         return Observable.Return<UiControl?>(
             Controls.Html($"<img src='{staticUrl}' alt='{Path.GetFileName(contentPath)}' style='max-width: 100%;' />"));
@@ -1339,7 +1345,7 @@ public static class MeshNodeLayoutAreas
         var fileName = Path.GetFileName(contentPath);
 
         // Create a message with link to navigate to the content
-        var markdown = $"*This is text inserted from @{address}/content:{contentPath}*\n\n" +
+        var markdown = $"*This is text inserted from @{address}/{ContentCollectionsExtensions.DefaultCollectionName}:{contentPath}*\n\n" +
                        $"[Navigate to {fileName}](/{address}/$Content/{contentPath})";
 
         return Controls.Markdown(markdown);
