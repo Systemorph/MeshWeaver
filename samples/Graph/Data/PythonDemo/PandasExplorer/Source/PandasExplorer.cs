@@ -14,11 +14,14 @@ using MeshWeaver.Messaging;
 /// Content of a <c>PandasExplorer</c> node — the marker record for the interactive frontend
 /// (<see cref="PandasExplorerLayoutAreas"/>) that DRIVES the Python <c>py/pandas</c> participant
 /// (<c>clients/python/meshweaver/examples/pandas_node.py</c>). The node holds no data itself; the
-/// live <c>pandas.DataFrame</c> lives in the Python process. This record only carries the display
-/// name so the node is addressable and browsable.
+/// live <c>pandas.DataFrame</c> lives in the Python process and is fed from
+/// <see cref="SourcePath"/> — a CSV file kept in mesh content.
 /// </summary>
 public record PandasExplorer
 {
+    /// <summary>The CSV file kept in content that feeds the frame when no per-node override is set.</summary>
+    public const string DefaultSourcePath = "PythonDemo/SalesData";
+
     /// <summary>Display name of the explorer node (mirrored onto <see cref="MeshNode.Name"/>).</summary>
     [Required]
     [MeshNodeProperty(nameof(MeshNode.Name))]
@@ -26,6 +29,13 @@ public record PandasExplorer
 
     /// <summary>Optional blurb rendered above the interactive controls.</summary>
     public string? Description { get; init; }
+
+    /// <summary>
+    /// Mesh path of the CSV file kept in content that the <em>Load</em> button feeds to the Python
+    /// participant (which reads the node over the mesh and parses it with <c>pandas.read_csv</c>).
+    /// Point different explorer instances at different data files.
+    /// </summary>
+    public string SourcePath { get; init; } = DefaultSourcePath;
 }
 
 /// <summary>
@@ -40,6 +50,13 @@ public record PandasCommand : IRequest<DataGridControl>
 {
     /// <summary>Command verb: <c>load</c>, <c>append</c>, <c>reset</c>, <c>render</c>, <c>groupby</c>, <c>rolling</c> or <c>describe</c>.</summary>
     public string Command { get; init; } = "render";
+
+    /// <summary>
+    /// For <c>load</c>: mesh path of a CSV file kept in content. The participant reads that node over
+    /// the mesh (mesh → Python) and replaces the held frame with the parsed CSV. Takes precedence
+    /// over inline <see cref="Data"/>.
+    /// </summary>
+    public string? Path { get; init; }
 
     /// <summary>Group-by column for <c>groupby</c>.</summary>
     public string? By { get; init; }
@@ -59,28 +76,20 @@ public record PandasCommand : IRequest<DataGridControl>
     /// <summary>Records to replace the frame with for <c>load</c>.</summary>
     public object[]? Data { get; init; }
 
-    /// <summary>A monthly sales frame across two regions — the same showcase dataset the Python demo seeds.</summary>
-    public static object[] SampleSales() =>
-    [
-        new { month = "Jan", region = "EMEA", sales = 120.0, units = 12 },
-        new { month = "Feb", region = "EMEA", sales = 135.5, units = 14 },
-        new { month = "Mar", region = "EMEA", sales = 128.0, units = 13 },
-        new { month = "Apr", region = "APAC", sales = 98.0, units = 9 },
-        new { month = "May", region = "APAC", sales = 143.0, units = 15 },
-        new { month = "Jun", region = "APAC", sales = 150.0, units = 16 },
-    ];
+    /// <summary>
+    /// Replace the held frame with a CSV file kept in mesh content: the participant reads the node at
+    /// <paramref name="path"/> and parses its CSV — the data never travels through the frontend.
+    /// </summary>
+    public static PandasCommand LoadFrom(string path) => new() { Command = "load", Path = path };
 
-    /// <summary>Replace the held frame with the sample sales data.</summary>
-    public static PandasCommand LoadSample() => new() { Command = "load", Data = SampleSales() };
-
-    /// <summary>Append two more months over the mesh — mutates the held frame.</summary>
+    /// <summary>Append two more months over the mesh — mutates the held frame (the CSV file keeps Jan–Aug).</summary>
     public static PandasCommand AppendTwo() => new()
     {
         Command = "append",
         Rows =
         [
-            new { month = "Jul", region = "APAC", sales = 161.0, units = 17 },
-            new { month = "Aug", region = "EMEA", sales = 152.0, units = 15 },
+            new { month = "Sep", region = "APAC", sales = 161.0, units = 17 },
+            new { month = "Oct", region = "EMEA", sales = 152.0, units = 15 },
         ],
     };
 

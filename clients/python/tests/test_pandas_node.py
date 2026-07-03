@@ -11,6 +11,8 @@ from meshweaver.examples.pandas_node import (
     GRID_TYPE,
     PandasNode,
     RecordingConnection,
+    csv_from_markdown,
+    csv_from_node,
     frame_to_datagrid,
     run_demo,
     sample_sales_frame,
@@ -113,6 +115,58 @@ async def test_unknown_command_replies_error_never_raises():
     assert "unknown command" in payload["error"]
 
 
+# ---- a file kept in content: `load path=…` reads the CSV node over the mesh -----------------------
+
+SALES_MARKDOWN = (
+    "# Sales Data\n\nMonthly sales by region — a file kept in content.\n\n"
+    "```csv\nmonth,region,sales,units\nJan,EMEA,120.0,12\nFeb,APAC,98.0,9\n```\n"
+)
+
+
+def test_csv_from_markdown_extracts_the_fenced_block():
+    csv = csv_from_markdown(SALES_MARKDOWN)
+    assert csv.startswith("month,region,sales,units")
+    assert csv.endswith("Feb,APAC,98.0,9")
+    # A node storing the bare CSV (no fence, no prose) works too.
+    assert csv_from_markdown("a,b\n1,2\n") == "a,b\n1,2"
+
+
+def test_csv_from_node_handles_markdown_document_and_raw_string_content():
+    doc_node = {"path": "PythonDemo/SalesData",
+                "content": {"$type": "MarkdownContent", "content": SALES_MARKDOWN}}
+    assert csv_from_node(doc_node).startswith("month,region")
+    assert csv_from_node({"content": "a,b\n1,2"}) == "a,b\n1,2"
+    with pytest.raises(ValueError):
+        csv_from_node({"content": None})
+
+
+async def test_load_with_path_reads_the_content_file_over_the_mesh():
+    conn = RecordingConnection()
+    reads: list[str] = []
+
+    async def read_node(path: str) -> dict:
+        reads.append(path)
+        return {"path": path, "content": {"$type": "MarkdownContent", "content": SALES_MARKDOWN}}
+
+    node = PandasNode(conn, node_reader=read_node)
+    mtype, ack = await conn.send_command(node, "load", path="PythonDemo/SalesData")
+    assert mtype == "PandasAck"
+    assert reads == ["PythonDemo/SalesData"]        # the participant fetched the node itself
+    assert ack["source"] == "PythonDemo/SalesData"
+    assert ack["rowCount"] == 2
+    # read_csv parsed real dtypes: floats stay numeric, so groupby/rolling work downstream.
+    assert list(node.dataframe["region"]) == ["EMEA", "APAC"]
+    assert float(node.dataframe["sales"].sum()) == 120.0 + 98.0
+
+
+async def test_load_with_path_without_mesh_connection_replies_error():
+    conn = RecordingConnection()                    # no `subscribe` -> no node reader
+    node = PandasNode(conn)
+    mtype, payload = await conn.send_command(node, "load", path="PythonDemo/SalesData")
+    assert mtype == "PandasError"
+    assert "no mesh connection" in payload["error"]
+
+
 # ---- the code surface: the frame persists across SubmitCodeRequests -------------------------------
 
 async def test_submit_code_persists_frame_state_across_calls():
@@ -136,7 +190,8 @@ async def test_submit_code_writes_back_to_activity_node():
     target, mtype, message = conn.posts[0]
     assert target == "ACME/_Activity/1"
     assert mtype == "PatchDataRequest"
-    content = message["change"]["content"]
+    assert message["reference"] == {"$type": "MeshNodeReference"}
+    content = message["patch"]["content"]
     assert content["status"] == "Succeeded"
     assert content["returnValue"] == 6
     assert any("rows: 6" in m["message"] for m in content["messages"])

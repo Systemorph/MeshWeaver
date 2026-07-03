@@ -23,6 +23,21 @@ ollama:
     enabled: false
     host: ""        # cluster host-gateway IP of the host running Ollama
     port: 11434
+# ---- Native gRPC (HTTP/2) for foreign-language participants ---------------
+# The mesh gRPC service (meshweaver.v1.Mesh/Open — the bidi participant connection the Python /
+# Node SDKs use) needs real HTTP/2 end-to-end; the browser path (HTTP/1.1 + gRPC-web) is not
+# enough. Enabled: Kestrel gets TWO extra endpoints beside the 8080 web port —
+#   * port (8081): PUBLIC h2c gRPC, exposed via the service and (when ingress.enabled) a same-host
+#     ingress whose /meshweaver.v1.Mesh path proxies with backend-protocol GRPC — so participants
+#     connect to the ordinary portal URL over TLS, no extra DNS or certs.
+#   * trustedPort (8082): TRUSTED endpoint bound to 127.0.0.1 — reachable ONLY from containers in
+#     the portal's own pod (the shipped node / bun / python gates). Reachability IS the
+#     authentication: no API token, nothing to rotate; deliveries may carry through the requesting
+#     user's AccessContext (see GrpcOptions.TrustedPort).
+grpc:
+  enabled: true
+  port: 8081
+  trustedPort: 8082
 # ---- Portal Ingress (TLS via an ingress controller) -----------------------
 # Off by default (cloud envs wire ingress/TLS their own way). A self-host overlay
 # enables it with a hostname + a pre-created TLS secret. The proxy-*-timeout
