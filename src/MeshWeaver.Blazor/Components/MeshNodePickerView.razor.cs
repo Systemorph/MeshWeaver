@@ -47,6 +47,23 @@ public partial class MeshNodePickerView : FormComponentBase<MeshNodePickerContro
     private MeshNode[]? BoundItems { get; set; }
     private bool HasItems => BoundItems is { Length: > 0 };
 
+    // Client-side filtering: pre-loaded Items OR an explicit FilterInMemory opt-in on the
+    // control (bounded sets like the access-subject picker). The base queries load once
+    // WITHOUT the typed text; keystrokes filter the cached set diacritic-insensitively via
+    // SearchText.Matches — server-side ILIKE would miss "Burgi" → "Bürgi" (issue #213).
+    private bool UseClientFilter => HasItems || ViewModel?.FilterInMemory == true;
+
+    // The FilterInMemory base load is CAPPED so a large installation can't pull the whole
+    // node set into the circuit. When the cap is hit (_cacheAtCap), typed text falls back to
+    // the normal server-side search and the dropdown shows the union of the client-filtered
+    // cache and the server matches — the tail beyond the cap stays findable.
+    private const int ClientFilterLoadLimit = 500;
+    private bool _cacheAtCap;
+
+    // At-cap + non-empty text → the cheap cached path is NOT sufficient; go to the server.
+    private bool CanServeFromCache(string searchText)
+        => UseClientFilter && _cachedResults != null && !(_cacheAtCap && searchText.Length > 0);
+
     // Compact "thin" rendering + open-upward dropdown, driven by the control's Layout/Open.
     private bool IsThin => ViewModel?.Layout == MeshNodePickerLayout.Thin;
     private bool OpensUp => ViewModel?.Open == MeshNodePickerOpenDirection.Up;
@@ -198,7 +215,7 @@ public partial class MeshNodePickerView : FormComponentBase<MeshNodePickerContro
         _isSearchOpen = true;
 
         // In-memory filter path — cheap, no debounce.
-        if (HasItems && _cachedResults != null)
+        if (CanServeFromCache(_searchText.Trim()))
         {
             _results = FilterCached(_searchText.Trim());
             _highlightedIndex = 0;
@@ -218,8 +235,8 @@ public partial class MeshNodePickerView : FormComponentBase<MeshNodePickerContro
 
     private void LoadResultsAsync()
     {
-        // When Items are provided and already cached, filter in-memory
-        if (HasItems && _cachedResults != null)
+        // When the cached client-filter set is already loaded, filter in-memory
+        if (CanServeFromCache(_searchText.Trim()))
         {
             _results = FilterCached(_searchText.Trim());
             _highlightedIndex = 0;
@@ -249,13 +266,17 @@ public partial class MeshNodePickerView : FormComponentBase<MeshNodePickerContro
         }
 
         var userText = _searchText.Trim();
+        // Client-filter mode appends the typed text ONLY when the capped cache can't answer
+        // (at cap): then the server search covers the tail beyond the cap.
+        var appendText = !string.IsNullOrEmpty(userText) && (!UseClientFilter || _cacheAtCap);
         var observables = queries.Select(baseQuery =>
         {
-            var fullQuery = HasItems || string.IsNullOrEmpty(userText)
-                ? baseQuery
-                : $"{baseQuery} {userText}";
+            var fullQuery = appendText ? $"{baseQuery} {userText}" : baseQuery;
+            var request = MeshQueryRequest.FromQuery(fullQuery);
+            if (UseClientFilter)
+                request = request with { Limit = ClientFilterLoadLimit };
             return MeshQuery
-                .Query<MeshNode>(MeshQueryRequest.FromQuery(fullQuery))
+                .Query<MeshNode>(request)
                 .Take(1)
                 .Select(c => (IReadOnlyList<MeshNode>)c.Items)
                 .Catch<IReadOnlyList<MeshNode>, Exception>(
@@ -289,11 +310,28 @@ public partial class MeshNodePickerView : FormComponentBase<MeshNodePickerContro
                 .Select(g => g.First())
                 .ToList();
 
-            if (HasItems)
+            if (UseClientFilter)
             {
-                // Cache for in-memory filtering
-                _cachedResults = merged;
-                _results = FilterCached(_searchText.Trim());
+                var searchText = _searchText.Trim();
+                if (_cachedResults == null || searchText.Length == 0)
+                {
+                    // Base load (no typed text appended): (re)establish the cache. At-cap
+                    // detection keys the server-search fallback for later keystrokes.
+                    _cachedResults = merged;
+                    _cacheAtCap = queryResults.Count >= ClientFilterLoadLimit;
+                    _results = FilterCached(searchText);
+                }
+                else
+                {
+                    // At-cap text search: union the diacritic-filtered cache with the
+                    // server-side text matches (dedup by Path; cache entries win). The
+                    // cache itself stays the base set — never poison it with a filtered load.
+                    _results = FilterCached(searchText)
+                        .Concat(merged)
+                        .GroupBy(n => n.Path, StringComparer.OrdinalIgnoreCase)
+                        .Select(g => g.First())
+                        .ToList();
+                }
             }
             else
             {
@@ -333,12 +371,9 @@ public partial class MeshNodePickerView : FormComponentBase<MeshNodePickerContro
         if (_cachedResults == null) return new List<MeshNode>();
         if (string.IsNullOrEmpty(searchText)) return _cachedResults;
 
+        // Diacritic- AND case-insensitive: "Burgi" matches "Bürgi" (SearchText.Fold).
         return _cachedResults
-            .Where(n =>
-                (n.Name ?? "").Contains(searchText, StringComparison.OrdinalIgnoreCase)
-                || (n.Path ?? "").Contains(searchText, StringComparison.OrdinalIgnoreCase)
-                || (n.NodeType ?? "").Contains(searchText, StringComparison.OrdinalIgnoreCase)
-                || (n.Id ?? "").Contains(searchText, StringComparison.OrdinalIgnoreCase))
+            .Where(n => SearchText.Matches(searchText, n.Name, n.Path, n.NodeType, n.Id))
             .ToList();
     }
 
