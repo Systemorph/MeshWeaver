@@ -419,6 +419,26 @@ public static class MeshDataSourceExtensions
         public volatile MeshNode? Current;
         /// <summary>Whether the cached node has been deleted.</summary>
         public volatile bool IsDeleted;
+
+        /// <summary>
+        /// 🚨 The latest own-node instance that is KNOWN to be already persisted — stamped by
+        /// <c>MeshNodeTypeSource.BuildInstanceCollection</c> for every state that ARRIVED from
+        /// persistence or from the routing-supplied own-node stream (both are, by construction,
+        /// already-durable: the fallback read comes straight from storage, and the routing
+        /// stream is fed by the storage/catalog change feed). The persistence sampler skips
+        /// emissions that are reference-identical to this snapshot: a load is a READ, and
+        /// echoing it back to storage is at best a redundant rewrite on every activation
+        /// (file/mtime churn — the perpetually-git-dirty <c>samples/Graph/Data</c> trees) and
+        /// was, before persisted content types carried their <c>[JsonExtensionData]</c>
+        /// buffers, the write that persisted the content-narrowing loss on pure activation
+        /// (prod <c>Systemorph/Event/DAV2026</c>).
+        /// <para>Reference identity — not value equality — keeps this fail-open: every state a
+        /// LOCAL write produces is a fresh <c>with</c>-copy (<c>UpdateImpl</c> stamps a new
+        /// instance; the cross-hub patch path deserializes one), so a genuine write can never
+        /// be suppressed. An identity-breaking hop merely degrades to the old behaviour — a
+        /// redundant (now lossless) echo.</para>
+        /// </summary>
+        public volatile MeshNode? PersistedSnapshot;
     }
 
     /// <summary>
@@ -686,7 +706,19 @@ public static class MeshDataSourceExtensions
             {
                 var sub = new System.Reactive.Disposables.SingleAssignmentDisposable();
                 sub.Disposable = own
-                    .Where(n => n != null && !nodeCache.IsDeleted)
+                    // 🚨 Initial-load echo suppression: a state that ARRIVED from
+                    // persistence/routing (reference-identical to PersistedSnapshot,
+                    // stamped by MeshNodeTypeSource.BuildInstanceCollection) is already
+                    // durable — a load is a READ and must not write storage. Before this
+                    // gate, pure activation re-saved the just-loaded node 200 ms later,
+                    // which both churned every FS-persisted file on activation and
+                    // persisted the content-narrowing loss when the content had
+                    // materialized through a narrower registered type. Local writes are
+                    // fresh instances (UpdateImpl `with`-stamps; patches deserialize),
+                    // so they always pass; an identity-breaking hop fails open to a
+                    // redundant (lossless) echo. See OwnNodeCache.PersistedSnapshot.
+                    .Where(n => n != null && !nodeCache.IsDeleted
+                        && !ReferenceEquals(n, nodeCache.PersistedSnapshot))
                     .DistinctUntilChanged()
                     .Sample(interval)
                     .Subscribe(node =>
