@@ -155,8 +155,9 @@ public static class AccessControlLayoutArea
 
         var userPicker = new MeshNodePickerControl(new JsonPointerReference("accessObject"))
         {
-            Queries = ["namespace:\"\" nodeType:User"],
-            Label = "Add user",
+            Queries = AccessSubjectQueries.ForScope(nodePath),
+            FilterInMemory = true,
+            Label = "Add user or group",
             DataContext = dataContext
         }.WithStyle("flex: 1; min-width: 220px;");
 
@@ -278,10 +279,11 @@ public static class AccessControlLayoutArea
             ["role"] = ""
         });
 
-        // Resolve queries for AccessObject from [MeshNode] attribute
-        var meshNodeAttr = typeof(AccessAssignment).GetProperty(nameof(AccessAssignment.AccessObject))!
-            .GetCustomAttributes(typeof(MeshNodeAttribute), false).OfType<MeshNodeAttribute>().First();
-        var subjectQueries = MeshNodeAttribute.ResolveQueries(meshNodeAttr.Queries, nodePath, nodePath);
+        // Canonical subject queries (users at root via the auth mirror + groups in the
+        // partition subtree) — never resolve the attribute template with a PATH here: the
+        // previous ResolveQueries(queries, nodePath, nodePath) substituted the node's path
+        // into {node.namespace}, scoping the group search to the node instead of its partition.
+        var subjectQueries = AccessSubjectQueries.ForScope(nodePath);
 
         // Resolve queries for Role from [MeshNodeCollection] attribute
         var rolesAttr = typeof(AccessAssignment).GetProperty(nameof(AccessAssignment.Roles))!
@@ -293,6 +295,7 @@ public static class AccessControlLayoutArea
             .WithView(new MeshNodePickerControl(new JsonPointerReference("accessObject"))
             {
                 Queries = subjectQueries,
+                FilterInMemory = true,
                 Label = "Subject (User or Group)",
                 Required = true,
                 DataContext = LayoutAreaReference.GetDataPointer(formId)

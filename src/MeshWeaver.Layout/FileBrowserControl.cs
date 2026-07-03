@@ -44,6 +44,24 @@
         public FileBrowserControl CreatePath()
             => this with { PathCreation = true };
 
+        /// <summary>Returns a copy with <paramref name="path"/> as the folder the browser opens on.</summary>
+        /// <param name="path">The collection-relative folder path (leading slash), e.g. <c>/p1/p2</c>.</param>
+        public FileBrowserControl WithPath(string path)
+            => this with { Path = path };
+
+        /// <summary>Returns a copy with <paramref name="urlBasePath"/> as the URL the browser mirrors its folder position under.</summary>
+        /// <param name="urlBasePath">The base URL of the embedding area (e.g. <c>/{node}/Files</c>); folder navigation appends the folder path to it.</param>
+        public FileBrowserControl WithUrlBasePath(string urlBasePath)
+            => this with { UrlBasePath = urlBasePath };
+
+        /// <summary>
+        /// When set, the embedded browser navigates folders THROUGH THE URL: folder rows and
+        /// breadcrumbs are links to <c>{UrlBasePath}{folderPath}</c>, so the address bar always
+        /// carries the full sub-folder path (deep-linkable, refresh-safe). When null, embedded
+        /// folder navigation stays in-place (dialogs and other URL-less hosts).
+        /// </summary>
+        public string? UrlBasePath { get; init; }
+
         /// <summary>Returns a copy with <paramref name="path"/> as the top-level path the browser is restricted to.</summary>
         /// <param name="path">The top-level mesh or file-system path; the browser cannot navigate above this.</param>
         public FileBrowserControl WithTopLevel(string path)

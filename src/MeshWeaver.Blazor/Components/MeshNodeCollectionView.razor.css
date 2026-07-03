@@ -41,6 +41,16 @@
     flex-shrink: 0;
 }
 
+/* Inline-SVG icon. A viewBox-only <svg> injected via MarkupString has no
+   intrinsic size and no CSS-isolation scope attribute, so without this rule
+   it renders at the browser default size and the avatar shows blank. Same
+   fix as MeshSearchView / MeshNodePickerView. */
+::deep .mesh-node-collection-avatar svg {
+    width: 100%;
+    height: 100%;
+    display: block;
+}
+
 ::deep .mesh-node-collection-avatar-icon {
     width: 36px;
     height: 36px;

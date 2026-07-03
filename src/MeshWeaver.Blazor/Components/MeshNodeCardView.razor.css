@@ -33,6 +33,18 @@
     flex-shrink: 0;
 }
 
+/* Inline-SVG icon. Node icons authored as a raw <svg> with a viewBox but NO
+   width/height are injected via MarkupString, so they carry no CSS-isolation
+   scope attribute — a scoped rule can't reach them — and with no intrinsic
+   size they render at the browser default (~300×150) and collapse/overflow,
+   i.e. a blank tile. Constrain any inline SVG to fill the icon box (same fix
+   as MeshSearchView / MeshNodePickerView). */
+::deep .mesh-node-card-image svg {
+    width: 100%;
+    height: 100%;
+    display: block;
+}
+
 
 .mesh-node-card-placeholder {
     width: 48px;

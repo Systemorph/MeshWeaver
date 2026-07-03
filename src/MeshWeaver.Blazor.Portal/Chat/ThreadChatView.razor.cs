@@ -67,6 +67,15 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     [Inject] private IChatCompletionOrchestrator CompletionOrchestrator { get; set; } = null!;
     [Inject] private IConfiguration Configuration { get; set; } = null!;
 
+    /// <summary>
+    /// True when this chat renders inside the portal side panel (cascaded by
+    /// <c>PortalLayoutBase</c>, flowing through <c>LayoutAreaView</c>-hosted threads and the
+    /// direct new-chat composer alike). Drives the context chip's click target: a side-panel
+    /// chat opens its context in the MAIN view; a main-view chat peeks it in the side panel.
+    /// </summary>
+    [CascadingParameter(Name = "IsInSidePanel")]
+    public bool IsInSidePanel { get; set; }
+
 
     /// <summary>Stateless — single instance reused per submission.</summary>
     private static readonly ChatPreParser ChatParser = new();
@@ -2186,13 +2195,29 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         StateHasChanged();
     }
 
-    // Both chip kinds — plain @-reference chips and the context chip — open the referenced node in a
-    // modal preview LAYERED OVER the thread (issue #131), never navigating the main view away or
-    // replacing the side-panel thread. The old behaviour (NavigateTo for @-chips, OpenWithContent for
-    // context chips) left the conversation with no way back.
+    // Plain @-reference chips open the referenced node in a modal preview LAYERED OVER the thread
+    // (issue #131), never navigating the main view away or replacing the side-panel thread.
     private Task OnChipClicked(string path) => OpenNodePreviewAsync(path);
 
-    private Task OnContextChipClicked(string? path) => OpenNodePreviewAsync(path);
+    // The CONTEXT chip opens the context node in the OPPOSITE panel, so the thread and its subject
+    // are visible side by side: a main-view thread peeks the context in the side panel (the same
+    // peek ToggleSidePanel uses), a side-panel chat brings the context to the main view. Neither
+    // direction replaces the conversation — the thread stays where it is.
+    private Task OnContextChipClicked(string? path)
+    {
+        if (string.IsNullOrEmpty(path))
+            return Task.CompletedTask;
+
+        if (IsInSidePanel)
+        {
+            NavigationService.NavigateTo($"/{path.TrimStart('/')}");
+            return Task.CompletedTask;
+        }
+
+        SidePanelState.SetTitle(LastSegment(path));
+        SidePanelState.OpenWithContent(path);
+        return Task.CompletedTask;
+    }
 
     /// <summary>
     /// Opens <paramref name="path"/> in a modal dialog on top of the thread so the user can inspect the

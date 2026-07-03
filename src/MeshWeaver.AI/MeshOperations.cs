@@ -798,7 +798,8 @@ public class MeshOperations
     }
 
     /// <summary>
-    /// Runs a mesh query and returns a JSON envelope <c>{count, limit, truncated, results:[{path,name,nodeType}]}</c>.
+    /// Runs a mesh query and returns a JSON envelope
+    /// <c>{count, limit, truncated, results:[{path,name,nodeType,version,lastModified}]}</c>.
     /// When <paramref name="basePath"/> is set the query is scoped to that namespace; <c>truncated</c> flags that
     /// more matches exist than were returned.
     /// </summary>
@@ -831,8 +832,10 @@ public class MeshOperations
             .Take(1)
             .Select(change =>
             {
+                // Version + LastModified ride along so remote consumers (the instance-sync
+                // pull sweep) can detect changed nodes from the listing alone.
                 var list = change.Items
-                    .Select(node => (object)new { node.Path, node.Name, node.NodeType })
+                    .Select(node => (object)new { node.Path, node.Name, node.NodeType, node.Version, node.LastModified })
                     .ToImmutableList();
                 // Envelope instead of a bare array so truncation is VISIBLE: a result
                 // set that silently stops at the limit reads as "that's everything"

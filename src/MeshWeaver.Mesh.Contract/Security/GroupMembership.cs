@@ -11,7 +11,7 @@ namespace MeshWeaver.Mesh.Security;
 public record GroupMembership
 {
     /// <summary>Member identifier (User or Group path) for this membership.</summary>
-    [MeshNode("namespace:User nodeType:User", "namespace:{node.namespace} nodeType:Group scope:selfAndAncestors")]
+    [MeshNode(AccessSubjectQueries.Users, "namespace:{node.namespace} nodeType:Group scope:selfAndAncestors")]
     public string Member { get; init; } = "";
 
     /// <summary>Optional display name for the member.</summary>

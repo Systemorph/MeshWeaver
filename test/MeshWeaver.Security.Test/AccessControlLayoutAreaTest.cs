@@ -301,12 +301,12 @@ public class AccessControlLayoutAreaTest(ITestOutputHelper output) : MonolithMes
         var rootControl = (await stream.GetControlStream(reference.Area!)
             .Should().Within(15.Seconds()).Match(c => c is StackControl s && s.Areas?.Count >= 4))!;
 
-        // The inline add row renders a user picker scoped to root-namespace users…
+        // The inline add row renders a subject picker bound to the canonical users query…
         var pickers = await CollectControls<MeshNodePickerControl>(stream, rootControl, reference.Area!);
         var userPicker = pickers.Select(p => p.Control)
-            .FirstOrDefault(p => p.Queries?.Contains("namespace:\"\" nodeType:User") == true);
+            .FirstOrDefault(p => p.Queries?.Contains(AccessSubjectQueries.Users) == true);
         userPicker.Should().NotBeNull(
-            "the inline add row must render a user picker — broken if hub.CheckPermission(path, Permission.Delete) didn't surface the admin assignment");
+            "the inline add row must render a subject picker — broken if hub.CheckPermission(path, Permission.Delete) didn't surface the admin assignment");
 
         // …and a + Add button.
         var buttons = await CollectControls<ButtonControl>(stream, rootControl, reference.Area!);
@@ -342,11 +342,12 @@ public class AccessControlLayoutAreaTest(ITestOutputHelper output) : MonolithMes
 
         var pickers = await CollectControls<MeshNodePickerControl>(stream, rootControl, reference.Area!);
         var userPicker = pickers.Select(p => p.Control)
-            .FirstOrDefault(p => string.Equals(p.Label?.ToString(), "Add user", StringComparison.Ordinal));
-        userPicker.Should().NotBeNull("the inline add row must render an 'Add user' picker");
+            .FirstOrDefault(p => string.Equals(p.Label?.ToString(), "Add user or group", StringComparison.Ordinal));
+        userPicker.Should().NotBeNull("the inline add row must render an 'Add user or group' picker");
         userPicker!.Queries.Should().NotBeNull();
-        userPicker.Queries!.Should().Contain("namespace:\"\" nodeType:User",
-            "users live at the root namespace, so the add field must scope to namespace:\"\"");
+        userPicker.Queries!.Should().Contain(AccessSubjectQueries.Users,
+            "the add field must bind the canonical AccessSubjectQueries.Users query "
+            + "(users live at the root namespace, served by the auth mirror)");
 
         var selects = await CollectControls<SelectControl>(stream, rootControl, reference.Area!);
         var roleSelect = selects.Select(s => s.Control)

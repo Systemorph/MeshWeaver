@@ -32,8 +32,20 @@ public static class ContentCollectionsExtensions
 
     /// <summary>
     /// Default collection name used when no specific collection is configured or specified.
+    /// A collection can be mounted under ANY name — never assume a collection is called
+    /// "content"; use the configured name (or this constant only for genuine defaults).
     /// </summary>
     public const string DefaultCollectionName = "content";
+
+    /// <summary>
+    /// Encodes a collection name for use as a URL segment by replacing '/' with '~'
+    /// (a qualified name like "Submissions@Microsoft/2026" would otherwise split into
+    /// path segments; ASP.NET Core URL-decodes %2F before route matching).
+    /// </summary>
+    public static string EncodeCollectionName(string collectionName) => collectionName.Replace('/', '~');
+
+    /// <summary>Decodes a collection name from a URL segment ('~' back to '/').</summary>
+    public static string DecodeCollectionName(string encodedName) => encodedName.Replace('~', '/');
 
     /// <summary>
     /// Area name for unified content references. Uses $ prefix to avoid name collisions.
@@ -114,7 +126,14 @@ public static class ContentCollectionsExtensions
                 .AddLayout(layout => layout
                     .WithView(ContentAreaName, ContentLayoutArea.UnifiedContent)
                     .WithView(FileBrowserAreaName, FileBrowserLayoutAreas.FileBrowser)
-                    .WithView(CollectionAreaName, CollectionLayoutArea.Collection));
+                    .WithView(CollectionAreaName, CollectionLayoutArea.Collection)
+                    // Collection-named areas: /{node}/{collection}/{path…} — the URL segment is
+                    // the MOUNTED collection name (a collection can be mounted under any name;
+                    // nothing assumes "content"). A folder path renders the file browser scoped
+                    // there; a file path renders the file's content.
+                    .WithView(
+                        ctx => CollectionNamedLayoutArea.IsCollectionArea(layout.Hub, ctx),
+                        CollectionNamedLayoutArea.Render));
         }
     }
 

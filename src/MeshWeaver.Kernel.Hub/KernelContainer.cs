@@ -72,7 +72,19 @@ public class KernelContainer(IServiceProvider serviceProvider)
 
         return config
             .AddLayout(layout =>
-                layout.WithView(_ => true,
+                // 🚨 The kernel's view domain is ONLY its dynamic script areas (the
+                // submission-id areas its area dictionary owns) — NEVER areas owned by a
+                // named renderer (Progress/Overview/Thumbnail on an Activity hub, …).
+                // Every renderer matching an area first disposes and REMOVES the area's
+                // existing content (RenderObservable → DisposeExistingAreas), so a
+                // `_ => true` catch-all destroyed every named area on every hub hosting
+                // the kernel: no Activity layout area ever rendered, and the code cell's
+                // output pane (LayoutAreaControl(activityPath, Progress)) spun forever
+                // for every viewer, runner included (2026-07-03 RCA; pinned by
+                // CodeCellOutputCaptureTest). `layout` here is the definition built by
+                // the lambdas applied BEFORE this one — node-type views register ahead
+                // of AddKernelSubHubHandlers, so their named areas are all visible.
+                layout.WithView(ctx => !layout.HasNamedRenderer(ctx.Area),
                     (host, ctx) => GetAreaStream(host.Hub.ServiceProvider)
                         .Select(a =>
                         {
@@ -82,6 +94,20 @@ public class KernelContainer(IServiceProvider serviceProvider)
                             var uiControlService = host.Hub.ServiceProvider.GetRequiredService<IUiControlService>();
                             return uiControlService.Convert(valueOrDefault);
                         })
+                        // 🚨 Emit IMMEDIATELY — this catch-all matches EVERY area on the
+                        // hub, and LayoutDefinition.Render composes the area's renderers
+                        // SEQUENTIALLY (SelectMany): a matching renderer that stays silent
+                        // dams the whole chain, so NO area on the hub ever reaches the
+                        // store. On Activity hubs (which host the kernel AND named areas
+                        // like Progress/Overview) that meant every layout-area
+                        // subscription hung forever — the code cell's output pane spun
+                        // eternally for every viewer, runner included (2026-07-03 RCA;
+                        // pinned by CodeCellOutputCaptureTest). A null renders as a
+                        // PASS-THROUGH (RenderArea: view == null ⇒ store unchanged), so
+                        // the kernel view has "no opinion" until its own area dictionary
+                        // actually owns the requested area; the script's control still
+                        // flows the moment it lands in the dictionary.
+                        .StartWith((UiControl?)null)
                 )
             )
             .WithServices(services => services.AddScoped(CreateAreaStream))
