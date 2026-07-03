@@ -505,4 +505,24 @@ public record NodeTypeDefinition
     /// <para><c>null</c> until the first successful compile completes.</para>
     /// </summary>
     public string? CompiledFrameworkVersion { get; init; }
+
+    /// <summary>
+    /// 🚨 Round-trip buffer for content members this compiled shape does not declare —
+    /// schema evolution: a property written by a NEWER build, or one removed since the
+    /// JSON was persisted. Without this, System.Text.Json silently DROPS such members on
+    /// typed materialization (no exception, so the preserve-raw fallback in
+    /// <c>ObjectPolymorphicConverter</c> never fires) and the per-node hub's persistence
+    /// echo then persists the loss on pure activation — the content-narrowing
+    /// silent-data-loss class (prod <c>Systemorph/Event/DAV2026</c> stripped to defaults;
+    /// ~40 <c>samples/Graph/Data</c> NodeType files losing
+    /// <c>showChildrenInDetails</c>/<c>detailsChildrenLimit</c>).
+    /// <para><c>[JsonExtensionData]</c> captures the unknown members on read and re-emits
+    /// them on write — and, being a real record property, it rides every <c>with</c>-copy,
+    /// so edits made through the narrower shape keep them too. Never read this
+    /// programmatically; it exists solely so unknown JSON survives the round-trip.
+    /// <c>[Browsable(false)]</c> keeps it out of reflected content editors.</para>
+    /// </summary>
+    [System.ComponentModel.Browsable(false)]
+    [System.Text.Json.Serialization.JsonExtensionData]
+    public IDictionary<string, System.Text.Json.JsonElement>? UnknownMembers { get; init; }
 }
