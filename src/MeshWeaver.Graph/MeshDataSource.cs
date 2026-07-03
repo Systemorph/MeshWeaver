@@ -593,6 +593,27 @@ public static class MeshDataSourceExtensions
     /// rapid editor-style updates collapse to one save per window, latest wins.</summary>
     private static readonly TimeSpan SaveSampleInterval = TimeSpan.FromMilliseconds(200);
 
+    /// <summary>
+    /// Resolves the static node SERVED at <paramref name="hubPath"/>: the first
+    /// non-<see cref="MeshNode.IsDefinitionOnly"/> static node across every registered
+    /// <see cref="IStaticNodeProvider"/> whose <see cref="MeshNode.Path"/> matches
+    /// (case-insensitive). Definition-only type-defs (DB-synced NodeType catalogs) are
+    /// skipped — Postgres owns the runtime node at their path
+    /// (Doc/Architecture/NodeTypeCatalogs.md).
+    ///
+    /// <para>This is the ONE resolution shared by <see cref="MeshDataSource.WithMeshNodes"/>
+    /// (which serves a matching node via <c>WithInitialData</c>, bypassing persistence
+    /// entirely) and the persistence-sampler gate in <see cref="SubscribeToOwnDeletion"/>
+    /// (which must NOT auto-persist such a node — its path routes to a partition schema
+    /// that is by design never provisioned, and a persisted echo is never served back by
+    /// this hub). Keeping both on the same lookup guarantees "served static" ⇔ "not
+    /// auto-persisted" can never drift apart.</para>
+    /// </summary>
+    internal static MeshNode? FindServedStaticNode(IServiceProvider serviceProvider, string hubPath)
+        => serviceProvider.EnumerateStaticNodes()
+            .FirstOrDefault(n => !n.IsDefinitionOnly
+                && string.Equals(n.Path, hubPath, StringComparison.OrdinalIgnoreCase));
+
     private static void SubscribeToOwnDeletion(IMessageHub hub)
     {
         var cache = hub.ServiceProvider.GetService<OwnNodeCache>();
@@ -687,9 +708,26 @@ public static class MeshDataSourceExtensions
                 return sub;
             }
 
-            var saveSub = InstallPersistenceSampler(
-                ownStream, cache, new WeakReference<IMessageHub>(hub), SaveSampleInterval);
-            hub.RegisterForDisposal(saveSub);
+            // 🚨 The sampler is ONLY for persistence-backed hubs. A hub whose own MeshNode is
+            // served from a static source (WithMeshNodes' WithInitialData branch: AddMeshNodes
+            // built-in type definitions like Code/Markdown/User, static partition definitions)
+            // has NO persistence backing — the static source wins again on every activation, so
+            // a persisted echo is never read back by this hub. Auto-persisting it anyway was the
+            // boot-time 42P01 noise on every portal start: a type-def path routes to a Postgres
+            // schema named after the lowercased type (code/markdown/user) that is BY DESIGN never
+            // provisioned (schema creation is gated to partition-owning creates — the ghost-schema
+            // invariant), so every boot logged `SaveMeshNode failed … relation "code.mesh_nodes"
+            // does not exist`. On FileSystem it littered degraded duplicates (delegate-typed
+            // HubConfiguration and default-suppressed fields are lost on serialisation) that
+            // shadow the static definition in persistence-first readers. Static definitions are
+            // never auto-persisted — Doc/Architecture/NodeTypeCatalogs.md. Same resolution as
+            // WithMeshNodes (FindServedStaticNode) so serving and persisting stay in lockstep.
+            if (FindServedStaticNode(hub.ServiceProvider, hub.Address.Path) is null)
+            {
+                var saveSub = InstallPersistenceSampler(
+                    ownStream, cache, new WeakReference<IMessageHub>(hub), SaveSampleInterval);
+                hub.RegisterForDisposal(saveSub);
+            }
 
             // Per-NodeType compile auto-watcher: fires RunCompile whenever the own
             // MeshNode emits with CompilationStatus = Pending. Replaces the legacy
@@ -1285,33 +1323,20 @@ public record MeshDataSource : GenericUnpartitionedDataSource<MeshDataSource>
         // for both the initial seed AND ongoing pushes into the workspace.
         var ownStream = Workspace.Hub.Configuration.Get<OwnNodeStreamHolder>()?.Stream;
 
-        // Check if this hub path corresponds to a built-in node (registered via AddMeshNodes).
-        // Built-in nodes (NodeType, Markdown, Agent, etc.) are pre-loaded — no persistence needed.
-        var builtInNode = Workspace.Hub.ServiceProvider.FindStaticNode(_hubPath);
-        // A definition-only static node (a DB-synced NodeType catalog's in-memory type-def) is NOT
-        // the runtime node at this path — Postgres owns the nodeType:NodeType partition root. Fall
-        // through to persistence so the PG root is served, never the colliding in-memory type-def.
-        // See Doc/Architecture/NodeTypeCatalogs.md.
-        if (builtInNode is { IsDefinitionOnly: true })
-            builtInNode = null;
-        if (builtInNode is not null)
-        {
-            _logger?.LogDebug("[DIAG-MeshDataSource] BUILT-IN node for hubPath='{HubPath}'", _hubPath);
-            Workspace.Hub.OpenGate(MeshNodeExtensions.MeshNodeInitGateName);
-            return WithType<MeshNode>(ts => ts
-                .WithKey(n => n.Id)
-                .WithInitialData([builtInNode]));
-        }
-
-        // Check static node providers (e.g., DocumentationNodeProvider, BuiltInAgentProvider)
-        var allStatic = Workspace.Hub.ServiceProvider.GetServices<IStaticNodeProvider>()
-            .SelectMany(p => p.GetStaticNodes()).ToList();
-        // Skip definition-only catalog type-defs here too — PG owns the runtime node at their path.
-        var staticNode = allStatic
-            .FirstOrDefault(n => !n.IsDefinitionOnly
-                && string.Equals(n.Path, _hubPath, StringComparison.OrdinalIgnoreCase));
-        _logger?.LogDebug("[DIAG-MeshDataSource] static lookup hubPath='{HubPath}', total={Total}, found={Found}",
-            _hubPath, allStatic.Count, staticNode != null);
+        // Check if this hub path is served from a static source: AddMeshNodes built-ins
+        // (NodeType, Markdown, Agent, etc.) and IStaticNodeProvider providers
+        // (DocumentationNodeProvider, DefaultPartitionProvider, …). Static-served nodes are
+        // pre-loaded — no persistence involved. Definition-only static nodes (a DB-synced
+        // NodeType catalog's in-memory type-def) are NOT the runtime node at this path —
+        // Postgres owns the nodeType:NodeType partition root, so those fall through to
+        // persistence (Doc/Architecture/NodeTypeCatalogs.md). Shares
+        // MeshDataSourceExtensions.FindServedStaticNode with the persistence-sampler gate in
+        // SubscribeToOwnDeletion: a hub served from WithInitialData below has no persistence
+        // backing, so the sampler must never post SaveMeshNodeRequest for it.
+        var staticNode = MeshDataSourceExtensions.FindServedStaticNode(
+            Workspace.Hub.ServiceProvider, _hubPath);
+        _logger?.LogDebug("[DIAG-MeshDataSource] static lookup hubPath='{HubPath}', found={Found}",
+            _hubPath, staticNode != null);
         if (staticNode != null)
         {
             Workspace.Hub.OpenGate(MeshNodeExtensions.MeshNodeInitGateName);
