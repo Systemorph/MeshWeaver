@@ -20,20 +20,26 @@ public static class FileBrowserLayoutAreas
         if (split is null || split.Length < 1)
             return new MarkdownControl("Collection must be specified");
 
-        var collection = split[0];
-        var path = split.Length > 1 ? string.Join('/', split.Skip(1)) : "/";
+        var collection = ContentCollectionsExtensions.DecodeCollectionName(split[0]);
+        var path = split.Length > 1 ? $"/{string.Join('/', split.Skip(1))}" : "/";
 
         var contentService = host.Hub.GetContentService();
         var collectionConfig = contentService.GetCollectionConfig(collection);
 
-        var fileBrowser = new FileBrowserControl(collection);
+        var fileBrowser = new FileBrowserControl(collection)
+            .WithPath(path)
+            .WithUrlBasePath(
+                $"/{host.Hub.Address}/{ContentCollectionsExtensions.FileBrowserAreaName}/{ContentCollectionsExtensions.EncodeCollectionName(collection)}");
 
         if (collectionConfig != null)
         {
             fileBrowser = fileBrowser
                 .WithCollectionConfiguration(collectionConfig)
-                .WithCollectionInfo(collectionConfig.SourceType, collectionConfig.BasePath, collectionConfig.Settings)
-                .CreatePath();
+                .WithCollectionInfo(collectionConfig.SourceType, collectionConfig.BasePath, collectionConfig.Settings);
+            // Only auto-create the collection root — never a URL-supplied sub-path
+            // (a mistyped deep link must not create folders).
+            if (path == "/")
+                fileBrowser = fileBrowser.CreatePath();
         }
 
         return fileBrowser;
