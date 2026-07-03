@@ -112,6 +112,19 @@ public record LayoutDefinition(IMessageHub Hub)
         };
 
     /// <summary>
+    /// True when a named renderer is registered for <paramref name="area"/>. Predicate
+    /// (catch-all) views use this to keep OFF areas that are explicitly owned: every
+    /// renderer matching an area first disposes and REMOVES that area's existing content
+    /// (<c>RenderObservable</c> → <c>DisposeExistingAreas</c>), so two renderers for the
+    /// same area are last-wins-destructive. A <c>WithView(_ =&gt; true, …)</c> that also
+    /// matched named areas silently wiped them — the kernel catch-all did exactly this on
+    /// every Activity hub, and NO named area (Progress/Overview/Thumbnail) ever rendered
+    /// there (the 2026-07-03 eternal-spinner RCA).
+    /// </summary>
+    /// <param name="area">The area name to test.</param>
+    public bool HasNamedRenderer(string area) => NamedRenderers.ContainsKey(area);
+
+    /// <summary>
     /// Renders <paramref name="context"/>'s area reactively. Composes the named
     /// renderer (if one is registered for <c>context.Area</c>) and every matching
     /// predicate renderer, accumulating their <see cref="EntityStoreAndUpdates"/> onto
