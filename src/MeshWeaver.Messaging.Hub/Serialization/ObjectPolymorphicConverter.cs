@@ -9,8 +9,18 @@ namespace MeshWeaver.Messaging.Serialization;
 /// Custom converter for object types that handles polymorphic serialization/deserialization
 /// using the type registry and $type discriminator.
 /// </summary>
-public class ObjectPolymorphicConverter(ITypeRegistry typeRegistry, ILogger? logger = null) : JsonConverter<object>
+public class ObjectPolymorphicConverter(
+    ITypeRegistry typeRegistry,
+    ILogger? logger = null,
+    SerializationDepthGuard? depthGuard = null) : JsonConverter<object>
 {
+    // Depth accounting across the NESTED serializer sessions this converter spawns (see
+    // SerializationDepthGuard): without it a self-referencing graph recurses one C# stack level
+    // per edge while every fresh session resets writer depth to 0 — MaxDepth never trips and the
+    // process dies of native stack exhaustion (SIGABRT). Shared with the other session-spawning
+    // standard converters of the same options; instance state, dies with the hub.
+    private readonly SerializationDepthGuard depthGuard = depthGuard ?? new();
+
     // Warn at most once per unregistered $type (per hub/options instance) so the receiving-hub diagnostic
     // can never become a log storm. Instance field — dies with the hub's serializer options (no static state).
     // Bounded: '$type' is payload-controlled, so the dedup set is capped (adversarial junk types stop being
@@ -253,7 +263,12 @@ public class ObjectPolymorphicConverter(ITypeRegistry typeRegistry, ILogger? log
             {
                 // Register the ValueTuple type and serialize with type information
                 var typeName = typeRegistry.GetOrAddType(valueType);
-                var json = JsonSerializer.Serialize(value, valueType, options);
+                // Nested serializer session: its fresh writer restarts depth at 0, so account the
+                // depth consumed so far via the guard — otherwise a cyclic graph recurses past every
+                // MaxDepth check and exhausts the native stack (SIGABRT).
+                string json;
+                using (depthGuard.Enter(writer, options, valueType))
+                    json = JsonSerializer.Serialize(value, valueType, options);
                 using var doc = JsonDocument.Parse(json);
 
                 writer.WriteStartObject();
@@ -288,8 +303,13 @@ public class ObjectPolymorphicConverter(ITypeRegistry typeRegistry, ILogger? log
             // For complex types, serialize with type information if registered
             else if (typeRegistry.TryGetCollectionName(valueType, out var typeName))
             {
-                // Create a wrapper object with type discriminator
-                var json = JsonSerializer.Serialize(value, valueType, options);
+                // Create a wrapper object with type discriminator.
+                // Nested serializer session (fresh writer, depth restarts at 0): account the depth
+                // consumed so far via the guard so a self-referencing graph trips MaxDepth as a
+                // JsonException instead of recursing per edge until the native stack dies (SIGABRT).
+                string json;
+                using (depthGuard.Enter(writer, options, valueType))
+                    json = JsonSerializer.Serialize(value, valueType, options);
                 using var doc = JsonDocument.Parse(json);
 
                 if (doc.RootElement.ValueKind == JsonValueKind.Object)
