@@ -7,6 +7,9 @@ using System.Text.Json;
 [assembly: InternalsVisibleTo("MeshWeaver.Graph")]
 [assembly: InternalsVisibleTo("MeshWeaver.AI")]
 [assembly: InternalsVisibleTo("Memex.Portal.Shared")]
+// SyncedQueryInitialGateTest decorates the REAL IMeshQueryCore with a
+// subscription-delaying wrapper to pin the pre-Initial emission gate.
+[assembly: InternalsVisibleTo("MeshWeaver.Query.Test")]
 // Castle.DynamicProxy (used by NSubstitute) generates proxies in this assembly;
 // without InternalsVisibleTo it can't implement the internal IMeshQueryCore.
 [assembly: InternalsVisibleTo("DynamicProxyGenAssembly2")]

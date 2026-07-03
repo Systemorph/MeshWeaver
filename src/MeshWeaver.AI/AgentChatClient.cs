@@ -1123,11 +1123,22 @@ public class AgentChatClient : IAgentChat
             if (!selectionMatched)
             {
                 var requested = currentAgentPath ?? currentAgentName;
-                lastAgentCreationError =
-                    $"Selected agent '{requested}' was not found among the available agents "
-                    + $"([{string.Join(", ", loadedAgents.Select(a => a.Path ?? a.Name))}]). "
-                    + "It may have been moved, renamed, or is not available in this context — "
-                    + "pick another agent from the list.";
+                // 🚨 Truthful empty-set error (issue #201): with ZERO loaded
+                // agents the problem is never the user's selection — the agent
+                // registry returned none (the load failed or none are visible
+                // in this context). "pick another agent from the list" with an
+                // empty list misdirects the user at the selection instead of
+                // the load, so that suggestion is reserved for the non-empty
+                // case.
+                lastAgentCreationError = loadedAgents.Count == 0
+                    ? $"Selected agent '{requested}' could not be resolved. "
+                      + "No agents are available in this context — the agent registry "
+                      + "returned none (agents failed to load, or none are visible here). "
+                      + "Check the agent configuration and access rights for this space."
+                    : $"Selected agent '{requested}' was not found among the available agents "
+                      + $"([{string.Join(", ", loadedAgents.Select(a => a.Path ?? a.Name))}]). "
+                      + "It may have been moved, renamed, or is not available in this context — "
+                      + "pick another agent from the list.";
                 logger.LogWarning("[AgentChatClient] {Error}", lastAgentCreationError);
             }
             return null;
@@ -1402,6 +1413,13 @@ public class AgentChatClient : IAgentChat
                 {
                     logger.LogWarning(ex, "[AgentChatClient] Agent subscription faulted — unblocking with empty");
                     ApplyAgents(Array.Empty<AgentDisplayInfo>(), contextPath);
+                    // AFTER ApplyAgents — CreateAgentsSync resets
+                    // lastAgentCreationError at the start of each attempt, so
+                    // recording the fault first would be wiped. Surfacing the
+                    // REAL load failure here means the chat output shows why
+                    // no agents are available instead of a stale-selection
+                    // "not found" message (issue #201).
+                    lastAgentCreationError = $"Agent loading failed: {ex.Message}";
                     readinessFired = true;
                     agentsLoadedSubject.OnNext(this);
                 },

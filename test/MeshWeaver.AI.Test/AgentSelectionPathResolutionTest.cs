@@ -176,6 +176,38 @@ public class AgentSelectionPathResolutionTest : AITestBase
         response.Should().Contain("was not found among the available agents",
             "a genuinely unmatched selection IS an agent-not-found failure");
     }
+
+    /// <summary>
+    /// Issue #201's downstream symptom surface: an EMPTY agent set (the synced agent
+    /// query emitted an empty snapshot — pre-Initial-gate regression, or genuinely no
+    /// agents visible) combined with an explicit selection must report the TRUTHFUL
+    /// failure — no agents are available in this context — and must NOT tell the user
+    /// to "pick another agent from the list" when the list is empty. (The explicit
+    /// selection still does NOT fall through to another agent — there is none — and
+    /// the non-empty case keeps the existing "was not found among the available
+    /// agents ([…]) … pick another agent" message, pinned by
+    /// <see cref="SelectUnknownAgentPath_DegradesGracefully_DoesNotSilentlyPickAnotherAgent"/>.)
+    /// </summary>
+    [Fact]
+    public async Task EmptyAgentSet_ExplicitSelection_ReportsNoAgentsAvailable_NotPickAnother()
+    {
+        var client = new AgentChatClient(Mesh.ServiceProvider);
+        // The empty-snapshot state: the synced-query Subscribe callback applied
+        // an empty agent list (the exact production path of issue #201).
+        client.ApplyAgents(Array.Empty<AgentDisplayInfo>(), contextPath: null);
+
+        // The composer's picker carries a persisted selection from before the list emptied.
+        client.SetSelectedAgent("Agent/Assistant");
+
+        var response = await RunAndCaptureAsync(client);
+
+        response.Should().Contain("No agents are available",
+            "with zero loaded agents the truthful failure is the agent LOAD (registry returned "
+            + "none — failed to load or none visible), not the user's selection");
+        response.Should().NotContain("pick another agent from the list",
+            "there is no list to pick from — that suggestion misdirects the user at the "
+            + "selection instead of the load");
+    }
 }
 
 /// <summary>
