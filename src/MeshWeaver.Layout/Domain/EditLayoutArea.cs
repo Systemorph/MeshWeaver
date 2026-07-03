@@ -250,7 +250,7 @@ public static class EditLayoutArea
             foreach (var prop in regularProps)
             {
                 var control = host.Hub.ServiceProvider.MapToToggleableControl(prop, dataId, canEdit, host, isToggleable, boundDataContext);
-                propsGrid = propsGrid.WithView(control, s => s.WithXs(12).WithMd(6).WithLg(4));
+                propsGrid = propsGrid.WithView(control, s => s.WithPropertyCellSizing(prop));
             }
 
             stack = stack.WithView(propsGrid);
@@ -282,6 +282,35 @@ public static class EditLayoutArea
         string dataId,
         bool canEdit,
         bool isToggleable = true) => BuildPropertyForm(host, contentType, dataId, canEdit, isToggleable);
+
+    /// <summary>
+    /// Applies the responsive grid-cell sizing for a property rendered in the auto-generated property form.
+    /// Plain free-text string properties span the full row (<c>Xs(12)</c> at every breakpoint) so long values
+    /// stay readable without entering edit mode; structured values (numbers, dates, booleans, enums,
+    /// dimension / mesh-node references, fixed option lists — all short labels) keep the compact responsive
+    /// cells (<c>Xs(12).Md(6).Lg(4)</c>, up to three per row on large screens).
+    /// </summary>
+    /// <param name="skin">The grid item skin to configure.</param>
+    /// <param name="property">The property rendered in this grid cell.</param>
+    /// <returns>A new <see cref="LayoutGridItemSkin"/> with the sizing appropriate for the property.</returns>
+    public static LayoutGridItemSkin WithPropertyCellSizing(this LayoutGridItemSkin skin, PropertyInfo property)
+        => IsFreeTextProperty(property)
+            ? skin.WithXs(12)
+            : skin.WithXs(12).WithMd(6).WithLg(4);
+
+    /// <summary>
+    /// Determines whether a property renders as plain free text: a <see cref="string"/> property without a
+    /// <see cref="DimensionAttribute"/>, without a <see cref="MeshNodeAttribute"/> reference, and without fixed
+    /// <see cref="UiControlAttribute.Options"/> — i.e. its value length is unbounded, so it needs the full row
+    /// to be readable. Structured references and option-backed strings render as short labels and stay compact.
+    /// </summary>
+    /// <param name="property">The property to classify.</param>
+    /// <returns><c>true</c> when the property is a plain free-text string; otherwise <c>false</c>.</returns>
+    public static bool IsFreeTextProperty(PropertyInfo property)
+        => property.PropertyType == typeof(string)
+           && property.GetCustomAttribute<DimensionAttribute>() == null
+           && property.GetCustomAttribute<MeshNodeAttribute>() == null
+           && property.GetCustomAttribute<UiControlAttribute>()?.Options == null;
 
     /// <summary>
     /// Gets the consistent data ID for a node path. Used by both header and property overview.
