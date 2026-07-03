@@ -27,6 +27,13 @@ public partial class FileBrowser
     [Parameter] public string TopLevelPath { get; set; } = "";
     /// <summary>When true the browser renders in an embedded (compact) mode without a full-page chrome.</summary>
     [Parameter] public bool Embed { get; set; }
+    /// <summary>
+    /// Base URL the embedded browser mirrors its folder position under (e.g. <c>/{node}/Files</c>).
+    /// When set, folder rows and breadcrumbs are real links to <c>{UrlBasePath}{folderPath}</c> —
+    /// the address bar carries the full sub-folder path and deep links / refresh land in the right
+    /// folder. When null, embedded navigation stays in-place (dialogs and other URL-less hosts).
+    /// </summary>
+    [Parameter] public string? UrlBasePath { get; set; }
     /// <summary>When true, automatically creates <c>CurrentPath</c> inside the collection on initialization if it does not exist.</summary>
     [Parameter] public bool CreatePath { get; set; }
     /// <summary>When true, shows the "New Article" action in the toolbar.</summary>
@@ -167,6 +174,19 @@ public partial class FileBrowser
     {
         return $"/collections/{CollectionName}{item.Path}";
     }
+
+    /// <summary>
+    /// URL for a folder position when the embedding host mirrors navigation in the URL:
+    /// <c>{UrlBasePath}{folderPath}</c>. <paramref name="folderPath"/> is collection-relative
+    /// with a leading slash (the shape <c>FolderItem.Path</c> and the breadcrumb
+    /// accumulator produce).
+    /// </summary>
+    private string GetUrlLink(string folderPath)
+    {
+        if (string.IsNullOrEmpty(folderPath) || folderPath == Root)
+            return UrlBasePath!;
+        return folderPath.StartsWith('/') ? $"{UrlBasePath}{folderPath}" : $"{UrlBasePath}/{folderPath}";
+    }
     private string GetLink(FileItem item)
     {
         // Use full address string (e.g., "Cornerstone/Microsoft/2026") for URL generation
@@ -183,6 +203,11 @@ public partial class FileBrowser
             return $"/static/{addressString}/{encodedCollection}{item.Path}?download";
         }
 
+        // URL-mirrored host: files live in the same collection-named URL space as folders —
+        // /{node}/{collection}/{p1}/{p2}/file.ext (the collection-named layout area renders them).
+        if (!string.IsNullOrEmpty(UrlBasePath))
+            return GetUrlLink(item.Path);
+
         // Previewable files: /content/{address}/{encodedCollection}{item.Path}
         return $"/content/{addressString}/{encodedCollection}{item.Path}";
     }
@@ -191,12 +216,14 @@ public partial class FileBrowser
     /// Encodes a collection name for use in URLs by replacing '/' with '~'.
     /// This avoids issues with ASP.NET Core URL-decoding %2F before route matching.
     /// </summary>
-    private static string EncodeCollectionName(string collectionName) => collectionName.Replace("/", "~");
+    private static string EncodeCollectionName(string collectionName)
+        => ContentCollectionsExtensions.EncodeCollectionName(collectionName);
 
     /// <summary>
     /// Decodes a collection name from a URL by replacing '~' back to '/'.
     /// </summary>
-    internal static string DecodeCollectionName(string encodedName) => encodedName.Replace("~", "/");
+    internal static string DecodeCollectionName(string encodedName)
+        => ContentCollectionsExtensions.DecodeCollectionName(encodedName);
 
     private static bool ShouldDownload(string fileName)
     {

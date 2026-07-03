@@ -291,6 +291,111 @@ public class NavigationServiceTest
 
     #endregion
 
+    #region Page Route Tests
+
+    /// <summary>
+    /// A bare single-segment URL matching a REGISTERED page route (/privacy) must
+    /// short-circuit BEFORE mesh path resolution: no ResolveNavigationPath call and no
+    /// anonymous-gate /login redirect — the deliberately-PUBLIC page renders for a
+    /// logged-out visitor. Without the registry, partition-root synthesis resolved the
+    /// bare segment on indeterminate providers (InMemory/monolith) and the anonymous
+    /// gate bounced the page to /login.
+    /// </summary>
+    [Fact]
+    public async Task AnonymousVisitor_RegisteredPageRoute_ShortCircuits_NoLoginRedirect()
+    {
+        MakeVisitorAnonymous();
+        var registry = new PageRouteRegistry();
+        registry.Register("privacy");
+        var service = new NavigationService(
+            _navigationManager, _pathResolver, _hub, _circuitContextAccessor, registry);
+        // If the short-circuit failed, this resolution would fire the anonymous gate.
+        _pathResolver.ResolveNavigationPath(Arg.Any<string>())
+            .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(
+                new AddressResolution("privacy", "")));
+
+        service.Initialize();
+        _navigationManager.SimulateLocationChanged("http://localhost/privacy");
+
+        // Negative test: give any (wrong) resolution path a moment to run, then assert
+        // nothing resolved and nothing redirected.
+        await Task.Delay(200);
+        _navigationManager.Uri.Should().NotContain("/login");
+        _ = _pathResolver.DidNotReceive().ResolveNavigationPath(Arg.Any<string>());
+    }
+
+    /// <summary>
+    /// Reflection-derived registry: single-fixed-segment @page templates register;
+    /// multi-segment and parameterized templates do not.
+    /// </summary>
+    [Fact]
+    public void PageRouteRegistry_ReflectsSingleSegmentTemplates()
+    {
+        var registry = new PageRouteRegistry(typeof(TestPrivacyPage).Assembly);
+        registry.IsPageRoute("test-privacy").Should().BeTrue();
+        registry.IsPageRoute("TEST-PRIVACY").Should().BeTrue(); // case-insensitive
+        registry.IsPageRoute("multi").Should().BeFalse();       // multi-segment template
+        registry.IsPageRoute("nonexistent").Should().BeFalse();
+    }
+
+    [Microsoft.AspNetCore.Components.Route("/test-privacy")]
+    private sealed class TestPrivacyPage : IComponent
+    {
+        public void Attach(RenderHandle renderHandle) { }
+        public Task SetParametersAsync(ParameterView parameters) => Task.CompletedTask;
+    }
+
+    [Microsoft.AspNetCore.Components.Route("/multi/segment")]
+    private sealed class TestMultiSegmentPage : IComponent
+    {
+        public void Attach(RenderHandle renderHandle) { }
+        public Task SetParametersAsync(ParameterView parameters) => Task.CompletedTask;
+    }
+
+    #endregion
+
+    #region Content Route Context Tests
+
+    /// <summary>
+    /// A /content/{address}/{collection}/{filePath} URL is the ContentPage (its own @page route —
+    /// the page renders the file itself), but the navigation CONTEXT must follow the node whose
+    /// content is being viewed: the "content/" page prefix is stripped, the {address} part
+    /// resolves, and the remainder carries area = {collection}, id = {filePath}. This keeps the
+    /// chat context chip + agent navigation reference (and the node menus) tracking file views;
+    /// before, the literal "content/…" path resolved to nothing and every file click blanked the
+    /// context.
+    /// </summary>
+    [Fact]
+    public async Task OnLocationChanged_ContentRoute_ResolvesNodeContext_WithCollectionAreaAndFilePath()
+    {
+        var service = CreateService();
+        _pathResolver.ResolveNavigationPath(Arg.Any<string>())
+            .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(
+                new AddressResolution("ACME", null)));
+        service.Initialize();
+
+        _pathResolver.ResolveNavigationPath("ACME/Project/content/p1/p2/file.cs")
+            .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(
+                new AddressResolution("ACME/Project", "content/p1/p2/file.cs")));
+
+        // Act — the browser is on the ContentPage URL (page prefix "content/").
+        _navigationManager.SimulateLocationChanged(
+            "http://localhost/content/ACME/Project/content/p1/p2/file.cs");
+        await service.NavigationContext.Should().Within(WaitTimeout)
+            .Match(ctx => ctx?.Namespace == "ACME/Project");
+
+        // Assert — the context is the owning node with the file carried as area reference.
+        service.Context.Should().NotBeNull();
+        service.Context!.Namespace.Should().Be("ACME/Project");
+        service.Context.Area.Should().Be("content");
+        service.Context.Id.Should().Be("p1/p2/file.cs");
+        // The literal page route (with the /content/ prefix) is never fed to the resolver.
+        _ = _pathResolver.DidNotReceive()
+            .ResolveNavigationPath("content/ACME/Project/content/p1/p2/file.cs");
+    }
+
+    #endregion
+
     #region InitializeAsync Tests
 
     [Fact]

@@ -11,7 +11,13 @@
                 <FluentBreadcrumb>
                     @{
                         var accumulatedPath = Embed ? "/" : "/collections/" + @Collection.Collection;
-                            if (Embed)
+                        var relativePath = ""; // clean collection-relative accumulator for URL-mirrored navigation
+                        var urlNav = Embed && !string.IsNullOrEmpty(UrlBasePath);
+                            if (urlNav)
+                            {
+                                <FluentBreadcrumbItem Href="@GetUrlLink(TopLevelPath)">@Root</FluentBreadcrumbItem>
+                            }
+                            else if (Embed)
                             {
                                 var topPath = string.IsNullOrEmpty(TopLevelPath) ? accumulatedPath : Path.Combine(accumulatedPath, TopLevelPath);
                                 <FluentBreadcrumbItem @onclick="@(() => ChangePath(topPath))" class="breadcrumb-clickable">@Root</FluentBreadcrumbItem>
@@ -24,9 +30,14 @@
                         @foreach (var folder in CurrentPath!.Split('/').Where(p => !string.IsNullOrEmpty(p)))
                         {
                             accumulatedPath += '/' + folder;
+                            relativePath += "/" + folder;
                             if (accumulatedPath.TrimStart('/').Length > ((TopLevelPath ?? "").TrimStart('/').Length))
                             {
-                                if (Embed)
+                                if (urlNav)
+                                {
+                                    <FluentBreadcrumbItem Href="@GetUrlLink(relativePath)">@Path.GetFileName(folder)</FluentBreadcrumbItem>
+                                }
+                                else if (Embed)
                                 {
                                     var path = accumulatedPath;
                                     <FluentBreadcrumbItem @onclick="@(() => ChangePath(path))" class="breadcrumb-clickable">@Path.GetFileName(folder)</FluentBreadcrumbItem>
@@ -89,7 +100,7 @@
             <div class="grid-item">
                 @if (context is FolderItem folder)
                 {
-                    @if (Embed)
+                    @if (Embed && string.IsNullOrEmpty(UrlBasePath))
                     {
                         <a href="javascript:void(0)" @onclick="() => ChangePath(folder.Path)" class="file-browser-link">
                             <FluentIcon Value="@(new Icons.Filled.Size20.Folder())"/>
@@ -98,7 +109,7 @@
                     }
                     else
                     {
-                        <a href="@GetLink(context)" class="file-browser-link">
+                        <a href="@(Embed ? GetUrlLink(folder.Path) : GetLink(context))" class="file-browser-link">
                             <FluentIcon Value="@(new Icons.Filled.Size20.Folder())"/>
                             <span>@context.Name</span>
                         </a>

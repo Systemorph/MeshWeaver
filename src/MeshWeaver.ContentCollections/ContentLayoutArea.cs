@@ -54,7 +54,7 @@ public static class ContentLayoutArea
     /// reactive — no async, no Task surface (Doc/Architecture/AsynchronousCalls.md,
     /// ControlledIoPooling.md).
     /// </summary>
-    private static IIoPool GetIoPool(IMessageHub hub)
+    internal static IIoPool GetIoPool(IMessageHub hub)
         => hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.FileSystem)
            ?? IoPool.Unbounded;
 
@@ -310,24 +310,55 @@ public static class ContentLayoutArea
                 if (collection is null)
                     return Observable.Return<UiControl?>(new MarkdownControl($"Collection '{collectionPart}' not found. Ensure the collection is mapped using MapContentCollection."));
 
-                var extension = Path.GetExtension(filePath).ToLowerInvariant();
-
-                // For images, get the raw content and render appropriately
-                if (IsImageFile(extension))
-                    return RenderImageContent(ioPool, collection, filePath, extension);
-
-                // For binary document formats, convert to markdown via IContentTransformer
-                if (IsDocumentFile(extension))
-                    return RenderDocumentContent(ioPool, collection, host.Hub, filePath);
-
-                // For other content types, use the existing GetMarkdown pipeline
-                var contentStream = collection.GetMarkdown(filePath);
-                if (contentStream is null)
-                    return Observable.Return<UiControl?>(new MarkdownControl($"File '{filePath}' not found in collection '{collectionPart}'."));
-
-                return contentStream.Select(content => (UiControl?)(content is null
-                    ? new MarkdownControl($"File '{filePath}' not found in collection '{collectionPart}'")
-                    : RenderContent(filePath, content, false)));
+                return RenderFile(host, collection, collectionPart, filePath);
             });
+    }
+
+    /// <summary>
+    /// Renders a single file from <paramref name="collection"/> by extension: images inline,
+    /// binary documents via <see cref="IContentTransformer"/>, PDFs embedded from the static
+    /// endpoint, everything else through the markdown pipeline. Shared by the unified
+    /// <c>$Content</c> area and the collection-named area (<see cref="CollectionNamedLayoutArea"/>).
+    /// </summary>
+    internal static IObservable<UiControl?> RenderFile(
+        LayoutAreaHost host, ContentCollection collection, string collectionName, string filePath)
+    {
+        var ioPool = GetIoPool(host.Hub);
+        var extension = Path.GetExtension(filePath).ToLowerInvariant();
+
+        // For images, get the raw content and render appropriately
+        if (IsImageFile(extension))
+            return RenderImageContent(ioPool, collection, filePath, extension);
+
+        // For binary document formats, convert to markdown via IContentTransformer
+        if (IsDocumentFile(extension))
+            return RenderDocumentContent(ioPool, collection, host.Hub, filePath);
+
+        // PDFs render embedded from the static endpoint (the markdown pipeline would read binary).
+        if (extension == ".pdf")
+            return Observable.Return<UiControl?>(RenderPdf(host, collectionName, filePath));
+
+        // For other content types, use the existing GetMarkdown pipeline
+        var contentStream = collection.GetMarkdown(filePath);
+        if (contentStream is null)
+            return Observable.Return<UiControl?>(new MarkdownControl($"File '{filePath}' not found in collection '{collectionName}'."));
+
+        return contentStream.Select(content => (UiControl?)(content is null
+            ? new MarkdownControl($"File '{filePath}' not found in collection '{collectionName}'")
+            : RenderContent(filePath, content, false)));
+    }
+
+    private static UiControl RenderPdf(LayoutAreaHost host, string collectionName, string filePath)
+    {
+        var contentUrl =
+            $"/static/{host.Hub.Address}/{ContentCollectionsExtensions.EncodeCollectionName(collectionName)}/{filePath}";
+        var fileName = Path.GetFileName(filePath);
+        return new HtmlControl(
+            $@"<div style=""width: 100%; min-height: 500px;"">
+                <iframe src=""{contentUrl}"" style=""width: 100%; height: 600px; border: 1px solid var(--neutral-stroke-rest); border-radius: 4px;"" title=""{fileName}""></iframe>
+                <div style=""margin-top: 8px;"">
+                    <a href=""{contentUrl}?download"" download=""{fileName}"">Download PDF</a>
+                </div>
+            </div>");
     }
 }

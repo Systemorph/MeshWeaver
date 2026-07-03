@@ -228,18 +228,24 @@
                 <div class="side-panel-wrapper">
                     <SidePanel @key="@("side-panel-singleton")" OnCloseRequested="ToggleSidePanel">
                         <ChildContent>
-                            @if (sidePanelViewModel != null)
-                            {
-                                @* Resolved content — render via LayoutAreaView (same as main page) *@
-                                <LayoutAreaView @key="@SidePanelState.ContentPath"
-                                                ViewModel="@sidePanelViewModel"
-                                                Area="@($"sidepanel-{SidePanelState.ContentPath}")" />
-                            }
-                            else
-                            {
-                                @* New chat — no thread yet *@
-                                <ChatErrorBoundary @key="@sidePanelContentKey"><ThreadChatView @key="@sidePanelContentKey" ViewModel="@GetSidePanelControl()" /></ChatErrorBoundary>
-                            }
+                            @* IsInSidePanel lets panel-hosted views (e.g. ThreadChatView's context chip)
+                               target the OPPOSITE panel — a side-panel chat opens its context in the
+                               main view, a main-view chat peeks it here. IsFixed: the value never changes
+                               for this subtree, so descendants skip change-tracking subscriptions. *@
+                            <CascadingValue Name="IsInSidePanel" Value="@true" IsFixed="true">
+                                @if (sidePanelViewModel != null)
+                                {
+                                    @* Resolved content — render via LayoutAreaView (same as main page) *@
+                                    <LayoutAreaView @key="@SidePanelState.ContentPath"
+                                                    ViewModel="@sidePanelViewModel"
+                                                    Area="@($"sidepanel-{SidePanelState.ContentPath}")" />
+                                }
+                                else
+                                {
+                                    @* New chat — no thread yet *@
+                                    <ChatErrorBoundary @key="@sidePanelContentKey"><ThreadChatView @key="@sidePanelContentKey" ViewModel="@GetSidePanelControl()" /></ChatErrorBoundary>
+                                }
+                            </CascadingValue>
                         </ChildContent>
                     </SidePanel>
                 </div>
