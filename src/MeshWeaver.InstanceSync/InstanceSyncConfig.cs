@@ -140,7 +140,10 @@ public record InstanceSyncConfig
     [Browsable(false)]
     public ImmutableList<PendingChange> PendingChanges { get; init; } = [];
 
-    /// <summary>Whether the connection settings are complete enough to sync.</summary>
+    /// <summary>Whether the connection settings are complete enough to sync (derived — hidden
+    /// from the generated editor).</summary>
+    [Browsable(false)]
+    [JsonIgnore]
     public bool IsConfigured =>
         !string.IsNullOrWhiteSpace(RemoteUrl) && !string.IsNullOrWhiteSpace(RemoteToken);
 }

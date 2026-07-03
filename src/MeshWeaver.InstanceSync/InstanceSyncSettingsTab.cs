@@ -27,8 +27,6 @@ public static class InstanceSyncSettingsTab
     /// <summary>The settings-menu item id for the Instance Sync tab.</summary>
     public const string TabId = "InstanceSync";
 
-    private const string AddSourceFormId = "instanceSyncAddSource";
-
     /// <summary>Registers the Instance Sync settings tab provider (shown on any node within a Space).</summary>
     public static MessageHubConfiguration AddInstanceSyncSettingsTab(this MessageHubConfiguration config)
         => config.AddSettingsMenuItems(new SettingsMenuItemProvider(GetTab));
@@ -109,7 +107,7 @@ public static class InstanceSyncSettingsTab
         foreach (var source in sources)
             stack = stack.WithView(BuildPartyCard(sync, spacePath, source, logger));
 
-        stack = stack.WithView(BuildAddForm(sync, spacePath, logger));
+        stack = stack.WithView(BuildAddButton(sync, spacePath, sources, logger));
         return stack;
     }
 
@@ -179,38 +177,37 @@ public static class InstanceSyncSettingsTab
         return string.Join("\n", parts);
     }
 
-    private static UiControl BuildAddForm(InstanceSyncService sync, string spacePath, ILogger? logger)
+    /// <summary>
+    /// One-click add: creates the registration under a generated unique id — the connection
+    /// (URL, token, target space, direction) is then filled in through the standard node
+    /// editor on the new card. No hand-rolled form state.
+    /// </summary>
+    private static UiControl BuildAddButton(
+        InstanceSyncService sync, string spacePath, IReadOnlyList<MeshNode> sources, ILogger? logger)
     {
-        var row = Controls.Stack
-            .WithOrientation(Orientation.Horizontal)
-            .WithHorizontalGap(8)
-            .WithStyle("align-items: flex-end;");
-        row = row.WithView(new TextFieldControl(new JsonPointerReference("name"))
-        {
-            Label = "New syncing party",
-            Placeholder = "e.g. prod, backup, partner-instance",
-            DataContext = LayoutAreaReference.GetDataPointer(AddSourceFormId),
-        }.WithWidth("280px"));
-        row = row.WithView(Controls.Button("Add syncing party")
+        var name = NextPartyName(sources);
+        return Controls.Button("Add syncing party")
             .WithAppearance(Appearance.Outline)
             .WithIconStart(FluentIcons.Add())
             .WithClickAction(ctx =>
             {
-                ctx.Host.Stream.GetDataStream<Dictionary<string, object?>>(AddSourceFormId)
-                    .Take(1)
-                    .Subscribe(form =>
-                    {
-                        var name = form.GetValueOrDefault("name") is { } v ? v.ToString()?.Trim() : null;
-                        if (string.IsNullOrEmpty(name))
-                            return;
-                        sync.AddSyncSource(spacePath, name)
-                            .Subscribe(_ => ctx.Host.UpdateData(AddSourceFormId,
-                                    new Dictionary<string, object?> { ["name"] = "" }),
-                                ex => logger?.LogWarning(ex,
-                                    "Adding sync party '{Name}' to {Space} failed", name, spacePath));
-                    });
+                // The parties list live-binds to WatchSyncSources; the create re-emits and the
+                // new card (with its editor) appears on its own.
+                sync.AddSyncSource(spacePath, name)
+                    .Subscribe(_ => { },
+                        ex => logger?.LogWarning(ex,
+                            "Adding sync party '{Name}' to {Space} failed", name, spacePath));
                 return Task.CompletedTask;
-            }));
-        return row;
+            });
+    }
+
+    /// <summary>First free "party-N" id given the existing sources.</summary>
+    private static string NextPartyName(IReadOnlyList<MeshNode> sources)
+    {
+        var existing = sources.Select(s => s.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var n = 1;
+        while (existing.Contains($"party-{n}"))
+            n++;
+        return $"party-{n}";
     }
 }
