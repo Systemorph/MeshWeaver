@@ -947,16 +947,22 @@ public static class MemexConfiguration
     }
 
     /// <summary>
-    /// Adds all MeshWeaver view assemblies (Blazor, Graph, Radzen, GoogleMaps) to the Razor components endpoint.
+    /// Adds all MeshWeaver view assemblies (Blazor, Graph, Radzen, GoogleMaps) to the Razor components endpoint,
+    /// and excludes static-asset/infrastructure prefixes (_framework, _content, favicon.ico, auth, mcp, ...)
+    /// from ApplicationPage's root catch-all endpoint so asset misses fall through to 404 instead of the
+    /// HTML shell. The page templates themselves carry NO inline constraint — the Blazor Router would
+    /// interpret ":nonfile" as the built-in dot-rejecting constraint and break every mesh path ending
+    /// in a file extension (Document nodes).
     /// </summary>
     public static RazorComponentsEndpointConventionBuilder AddMeshViews(
         this RazorComponentsEndpointConventionBuilder builder)
         => builder.AddAdditionalAssemblies(
-            typeof(ApplicationPage).Assembly,              // MeshWeaver.Blazor (includes ApplicationPage with catch-all route)
-            typeof(MeshNodeEditorView).Assembly,           // MeshWeaver.Blazor.Graph
-            typeof(RadzenChartView).Assembly,              // MeshWeaver.Blazor.Radzen
-            typeof(GoogleMapView).Assembly                 // MeshWeaver.Blazor.GoogleMaps
-        );
+                typeof(ApplicationPage).Assembly,              // MeshWeaver.Blazor (includes ApplicationPage with catch-all route)
+                typeof(MeshNodeEditorView).Assembly,           // MeshWeaver.Blazor.Graph
+                typeof(RadzenChartView).Assembly,              // MeshWeaver.Blazor.Radzen
+                typeof(GoogleMapView).Assembly                 // MeshWeaver.Blazor.GoogleMaps
+            )
+            .ExcludeStaticAssetPaths();
 }
 
 public class StylesConfiguration

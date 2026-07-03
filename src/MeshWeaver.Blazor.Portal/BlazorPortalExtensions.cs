@@ -1,10 +1,8 @@
-using MeshWeaver.Blazor.Infrastructure;
 using MeshWeaver.Blazor.Portal.SidePanel;
 using MeshWeaver.Blazor.Portal.Infrastructure;
 using MeshWeaver.Blazor.Portal.Resize;
 using MeshWeaver.Blazor.Services;
 using Microsoft.AspNetCore.Components.Server;
-using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Blazor.Portal;
@@ -18,13 +16,15 @@ public static class BlazorPortalExtensions
     /// <summary>
     /// Adds portal services including DimensionManager, CacheStorageAccessor, AppVersionService,
     /// and SidePanelStateService with persistent state support.
-    /// Also registers the "nonfile" route constraint used by ApplicationPage and AreaPage.
     /// Call this on the IServerSideBlazorBuilder returned by AddInteractiveServerComponents().
+    /// Static-asset path exclusion for the catch-all page is an endpoint convention
+    /// (NonfileRouteConstraintExtensions.ExcludeStaticAssetPaths on MapRazorComponents),
+    /// not a DI ConstraintMap registration — the Blazor Router never honors custom
+    /// inline constraints, so ":nonfile" in a page template must never come back.
     /// </summary>
     public static IServerSideBlazorBuilder AddBlazorPortalServices(this IServerSideBlazorBuilder builder)
     {
         builder.Services.AddBlazorPortalCoreServices();
-        builder.Services.AddNonfileRouteConstraint();
         builder.AddSidePanelState();
         return builder;
     }
