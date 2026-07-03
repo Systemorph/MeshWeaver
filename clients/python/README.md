@@ -53,14 +53,50 @@ python -m meshweaver.worker --url https://atioz.meshweaver.cloud --token mw_… 
 value, REPL-style; exposes `Inputs`); `CodeWorker` is the thin mesh shell around it. Full architecture +
 how to author a Python Code node: `Doc/Architecture/PythonCodeNodes`.
 
+## Examples
+
+Each is a runnable module with a documented mesh pattern behind it (`meshweaver/examples/`):
+
+| Module | Pattern | Doc page |
+|---|---|---|
+| `pandas_node` | a stateful **backend participant**: loads a CSV file kept in mesh content into a live `pandas.DataFrame` and renders it back through the hub as a real `DataGridControl` for the C# GUI | `Doc/DataMesh/PythonPandasNode` |
+| `finetune` | **mesh-orchestrated batch work**: distill the docs into a training dataset kept in content, LoRA-fine-tune an LLM on it, stream progress back onto a run node | `Doc/DataMesh/PythonFineTuning` |
+| `standalone_hub` | a **complete hub in Python**: own address, handlers by message type, owned state; loads a namespace from the mesh, serves statistics, saves its report back | `Doc/DataMesh/PythonStandaloneHub` |
+
+All three run self-contained (`--demo`, or fake-driven tests) without a mesh; point them at a portal
+with `--url`/`--token` to go live.
+
 ## Status
 
-- **Transport / correlation / stream-demux** — complete and protocol-faithful (mirrors
-  `MeshGrpcService` + the SignalR client).
-- **Envelope wire-shape** (`envelope.py`) and **operation request types** (`mesh.py`, marked `# WIRE:`)
-  — pinned to the mesh's `IMessageDelivery` JSON. Confirm the exact `$type` token + property casing
-  against a sample captured from the C# round-trip test, then the `# WIRE:` spots are a one-line fix
-  each. Everything beneath them already works.
+**Confirmed live against a running portal (2026-07-03).**
 
-Security: the API token travels in gRPC call metadata; the server validates it and stamps every write
-with your identity. A forged client-side identity is never trusted.
+- **Transport / correlation / stream-demux** — complete and protocol-faithful (mirrors
+  `MeshGrpcService` + the SignalR client). Bidi `Open` + connect/ack + request/response correlation
+  confirmed live; the envelope `$type` is ``MessageDelivery`1[RawJson]`` (pinned from the
+  `MeshGrpcTransportTest` capture).
+- **Operations** (`mesh.py`) — two transports, both confirmed live:
+  - **REST** `POST {portal}/api/mesh/<verb>` (the portal's transport-mirror of the MCP tools):
+    `get` / `search` / `query_nodes` / `create` / `update` / `patch` / `delete` / `move` / `copy`.
+  - **gRPC sync protocol** for `watch(path)`: `SubscribeRequest(streamId, MeshNodeReference)` →
+    `DataChangedEvent` (`Full` = whole node, `Patch` = **RFC 6902 JSON-Patch op array**, deduped by
+    stream `version` — frames can arrive duplicated) → `UnsubscribeRequest` on exit. A REST patch
+    was observed live on a gRPC watch.
+- **Custom participant protocols** (e.g. the pandas node's `PandasCommand`) route by target address
+  with no server-side registration — requires the server's `RawJsonPassThrough` proxy-hub policy
+  (`GrpcConnectionRegistry`), shipped alongside this SDK.
+
+The bidi gRPC connection needs HTTP/2 end-to-end; the deployment routes `meshweaver.v1.Mesh/Open`
+natively at the ordinary portal URL (helm `values.grpc` — live on all hosted portals). For a
+self-signed local portal pass the CA via `connect(..., root_certificates=...)`.
+
+Security — two participant classes:
+
+* **External participants** authenticate with an API token (`Authorization: Bearer mw_…` in gRPC
+  call metadata); the server validates it and re-stamps every write with the validated identity.
+  A forged client-side identity is never trusted.
+* **Trusted gates** — services that ship *in the same deployment* as the portal (the co-located
+  node / bun / python gates) — connect to the trusted loopback endpoint (`http://127.0.0.1:8082`
+  inside the portal's pod). Reachability is the authentication (only same-pod containers share
+  loopback): no token, nothing to rotate. A trusted gate may carry the requesting user's
+  `accessContext` through on its deliveries (`respond` echoes it automatically), so work done on a
+  user's behalf writes under that user's identity — like the in-process C# kernel.

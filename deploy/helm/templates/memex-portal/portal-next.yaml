@@ -1,4 +1,4 @@
-{{- if .Values.portalNext.enabled }}
+{{- if (.Values.portalNext).enabled }}
 # ---- Next.js React portal (FEATURE-FLAGGED frontend) -----------------------
 # A Next.js streaming-SSR build of clients/portal-next, served at /next beside the
 # Blazor portal (the portal ingress routes /next → this Service; see ingress.yaml).

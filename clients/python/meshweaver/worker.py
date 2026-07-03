@@ -102,13 +102,18 @@ class CodeWorker:
         status = "Succeeded" if result.ok else "Failed"
         messages = [{"message": m} for m in (result.stdout, result.error) if m]  # WIRE: LogMessage shape
         # Mesh-native: patch the Activity node subscribers already watch (same surface as the C# kernel).
+        # PatchDataRequest is (reference, patch): a MeshNodeReference targeted at the node's own hub,
+        # with the RFC 7396 merge patch under `patch` (the pinned C# contract — PatchDataRequest.cs).
+        # The requester's accessContext is echoed so, on the trusted endpoint, the write runs under
+        # the identity of the user whose Code node this run is — like the in-process C# kernel.
         if activity_path:
             await self._c.post(
                 target=activity_path,
-                message_type="PatchDataRequest",  # WIRE: confirm partial-update request type
-                message={"path": activity_path, "change": {"content": {
+                message_type="PatchDataRequest",
+                message={"reference": {"$type": "MeshNodeReference"}, "patch": {"content": {
                     "status": status, "messages": messages, "returnValue": result.return_value,  # WIRE: ActivityLog fields
                 }}},
+                access_context=delivery.access_context,
             )
         # And reply to the requester for request/response callers (e.g. the .NET dispatch awaiting a result).
         await self._c.respond(delivery, "SubmitCodeResponse", {  # WIRE: SubmitCodeResponse shape

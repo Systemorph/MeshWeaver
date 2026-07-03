@@ -43,25 +43,28 @@ def test_error_is_captured_not_raised():
 class FakeConn:
     def __init__(self) -> None:
         self.posts: list[tuple[str, str, dict[str, Any]]] = []
+        self.post_contexts: list[Any] = []
         self.responses: list[tuple[Delivery, str, dict[str, Any]]] = []
         self.handler = None
 
     def serve(self, handler) -> None:
         self.handler = handler
 
-    async def post(self, target: str, message_type: str, message: dict[str, Any]) -> None:
+    async def post(self, target: str, message_type: str, message: dict[str, Any], access_context: Any = None) -> None:
         self.posts.append((target, message_type, message))
+        self.post_contexts.append(access_context)
 
     async def respond(self, to: Delivery, message_type: str, message: dict[str, Any]) -> None:
         self.responses.append((to, message_type, message))
 
 
-def _submit(code: str, activity: str = "ACME/_Activity/1") -> Delivery:
+def _submit(code: str, activity: str = "ACME/_Activity/1", access_context: Any = None) -> Delivery:
     return Delivery(
         id="req-1", sender="@code/ACME/Source/1", target="py/python-kernel", request_id=None,
         message_type="SubmitCodeRequest",
         message={"$type": "SubmitCodeRequest", "code": code, "activityLogPath": activity},
         raw={},
+        access_context=access_context,
     )
 
 
@@ -79,7 +82,8 @@ async def test_handle_executes_and_writes_back_to_activity():
     target, message_type, message = conn.posts[0]
     assert target == "ACME/_Activity/1"
     assert message_type == "PatchDataRequest"
-    content = message["change"]["content"]
+    assert message["reference"] == {"$type": "MeshNodeReference"}
+    content = message["patch"]["content"]
     assert content["status"] == "Succeeded"
     assert content["returnValue"] == 42
     assert any("hi" in m["message"] for m in content["messages"])
@@ -92,9 +96,19 @@ async def test_handle_executes_and_writes_back_to_activity():
 async def test_handle_reports_failure_status():
     conn = FakeConn()
     await CodeWorker(conn).handle(_submit("raise ValueError('boom')"))
-    content = conn.posts[0][2]["change"]["content"]
+    content = conn.posts[0][2]["patch"]["content"]
     assert content["status"] == "Failed"
     assert any("ValueError" in m["message"] for m in content["messages"])
+
+
+async def test_write_back_echoes_the_requesters_access_context():
+    # On the TRUSTED loopback endpoint the server passes a carried accessContext through, so the
+    # gate's activity write-back must echo the identity of the user whose Code node this run is —
+    # the worker acts on the user's behalf, like the in-process C# kernel.
+    conn = FakeConn()
+    requester = {"$type": "AccessContext", "objectId": "alice", "name": "Alice"}
+    await CodeWorker(conn).handle(_submit("1 + 1", access_context=requester))
+    assert conn.post_contexts == [requester]
 
 
 async def test_handle_ignores_non_submit_requests():
