@@ -398,7 +398,12 @@ public static class MeshNodeLayoutAreas
             }
             else if (iconValue.TrimStart().StartsWith("<svg", StringComparison.OrdinalIgnoreCase))
             {
-                tile = Controls.Html($"<div style=\"{tileStyle}\">{iconValue}</div>");
+                // Raw-HTML surface — no scoped CSS can size the injected svg, so a
+                // viewBox-only icon would render at the browser default (~300×150)
+                // and show a blank tile. Inject the size into the markup itself
+                // (mirrors the 48px img sizing above).
+                tile = Controls.Html(
+                    $"<div style=\"{tileStyle}\">{MeshNodeImageHelper.SizeInlineSvg(iconValue, 48)}</div>");
             }
             else if (rawIcon != null && MeshNodeImageHelper.IsFluentIconName(rawIcon))
             {
