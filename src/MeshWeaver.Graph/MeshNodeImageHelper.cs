@@ -137,6 +137,30 @@ public static class MeshNodeImageHelper
         => !string.IsNullOrEmpty(icon) && !IsImageUrl(icon) && !IsInlineSvg(icon) && !IsFluentIconName(icon);
 
     /// <summary>
+    /// Ensures an inline <c>&lt;svg&gt;</c> renders at an explicit pixel size when injected
+    /// as a raw HTML string (e.g. <c>Controls.Html</c> surfaces, where no scoped CSS can
+    /// reach the markup). Node icons are typically authored with a <c>viewBox</c> but NO
+    /// <c>width</c>/<c>height</c>; without an intrinsic size such an svg renders at the
+    /// browser default (~300×150) and overflows/collapses — a blank tile. Injects a
+    /// <c>style</c> attribute right after the opening <c>&lt;svg</c> tag; because a
+    /// duplicate attribute's FIRST occurrence wins in HTML parsing, the injected size
+    /// takes precedence over any author-supplied inline style.
+    /// </summary>
+    /// <param name="svg">The inline svg markup (anything before the first <c>&lt;svg</c> is preserved).</param>
+    /// <param name="pixels">The square size, in CSS pixels, the svg should occupy.</param>
+    public static string SizeInlineSvg(string svg, int pixels)
+    {
+        if (string.IsNullOrEmpty(svg))
+            return svg;
+        var idx = svg.IndexOf("<svg", StringComparison.OrdinalIgnoreCase);
+        if (idx < 0)
+            return svg;
+        var insertAt = idx + "<svg".Length;
+        return svg.Insert(insertAt,
+            $" style=\"width: {pixels}px; height: {pixels}px; display: block;\"");
+    }
+
+    /// <summary>
     /// Legacy method — returns the icon only if it's an image URL.
     /// Prefer <see cref="GetIconForRendering"/> which also returns SVG and emoji icons.
     /// </summary>
