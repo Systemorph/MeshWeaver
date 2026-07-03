@@ -14,6 +14,14 @@ dependencies = [
 examples = [
     "pandas>=2.0",
 ]
+# The fine-tuning example (meshweaver.examples.finetune) — heavy; only the `train` step needs these.
+finetune = [
+    "torch>=2.4",
+    "transformers>=4.45",
+    "peft>=0.13",
+    "datasets>=3.0",
+    "accelerate>=1.0",
+]
 dev = [
     "grpcio-tools>=1.68",
     "pytest>=8",

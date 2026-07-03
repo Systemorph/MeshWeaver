@@ -105,6 +105,23 @@ public record UnhandledMessageNack(
     string? NodeTypePath = null);
 
 /// <summary>
+/// Hub-level "forward, don't deserialize" policy for PROXY hubs that stand in for a remote
+/// participant (the gRPC connection registry's hosted hub is the canonical case). Such a hub is the
+/// delivery <em>target</em> only nominally — its catch-all route re-serializes every delivery onto
+/// the participant's wire, so inbound payloads whose <c>$type</c> is not in the server's
+/// TypeRegistry (a participant's own protocol, e.g. the Python pandas node's <c>PandasCommand</c>)
+/// must stay <c>RawJson</c> and forward verbatim instead of failing with
+/// "type not registered in this hub's TypeRegistry".
+///
+/// <para>Set on the proxy hub via <c>MessageHubConfiguration.Set(new RawJsonPassThrough())</c>.
+/// Registered types still deserialize normally; only the unregistered-type fallback changes from
+/// fail-the-delivery to pass-through. Do NOT set this on hubs that dispatch to typed handlers —
+/// there the fail-fast is what keeps callers from parking forever (see
+/// <see cref="UnhandledMessageNack"/>).</para>
+/// </summary>
+public record RawJsonPassThrough;
+
+/// <summary>
 /// Classifies why a message delivery failed, carried on a <see cref="DeliveryFailure"/>.
 /// </summary>
 public enum ErrorType

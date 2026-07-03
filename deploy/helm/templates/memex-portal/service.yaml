@@ -18,3 +18,11 @@ spec:
       protocol: "TCP"
       port: 8080
       targetPort: 8080
+{{- if (.Values.grpc).enabled }}
+    # Native gRPC (h2c) for foreign-language participants — see .Values.grpc. The trusted
+    # loopback port (grpc.trustedPort) is deliberately NOT exposed here: it is same-pod only.
+    - name: "grpc"
+      protocol: "TCP"
+      port: {{ .Values.grpc.port }}
+      targetPort: {{ .Values.grpc.port }}
+{{- end }}

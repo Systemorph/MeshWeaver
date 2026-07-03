@@ -115,7 +115,15 @@ Compute a layout area's content in an external `python3` process through the bou
 
 ### [A pandas node in Python](/Doc/DataMesh/PythonPandasNode)
 
-Connect a Python process to the mesh as a participant, hold a live `pandas.DataFrame` inside it, control that object over the mesh, and render its state back as a real `DataGridControl`.
+Connect a Python process to the mesh as a participant, load a CSV file kept in mesh content into a live `pandas.DataFrame`, control that object over the mesh, and render its state back as a real `DataGridControl` — GUI in C#, backend in Python.
+
+### [A standalone hub in Python](/Doc/DataMesh/PythonStandaloneHub)
+
+Program a complete MeshWeaver hub in Python — its own address, message handlers, owned state — connect it to the mesh, load information from the mesh and save results back.
+
+### [Fine-tuning an LLM on mesh content](/Doc/DataMesh/PythonFineTuning)
+
+Distill the documentation into a training dataset kept in mesh content, fine-tune a language model on it in Python, and stream training progress live back onto a mesh node.
 
 ### [Testing Node Types](/Doc/DataMesh/NodeTypes/Testing)
 

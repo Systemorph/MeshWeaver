@@ -56,6 +56,12 @@ spec:
             - name: "http"
               protocol: "TCP"
               containerPort: 8080
+{{- if (.Values.grpc).enabled }}
+            # Public h2c gRPC (the trusted port binds 127.0.0.1 and is same-pod only — not listed).
+            - name: "grpc"
+              protocol: "TCP"
+              containerPort: {{ .Values.grpc.port }}
+{{- end }}
           volumeMounts:
             - name: "memex-data"
               mountPath: "/data"
