@@ -197,7 +197,7 @@ public class AgentSelectionPathResolutionTest : AITestBase
 
         response.Should().Contain("Agent/Assistant",
             "the message should name the agent the user asked for");
-        response.Should().Contain("NO agents are loaded",
+        response.Should().Contain("agent catalog is empty",
             "an empty catalog is a load/visibility condition, not a stale selection");
         response.Should().NotContain("pick another agent from the list",
             "there is nothing to pick from — the stale-selection advice is a dead end");

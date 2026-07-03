@@ -1135,12 +1135,13 @@ public class AgentChatClient : IAgentChat
                 // once the catalog emits. The stale-selection wording stays reserved for
                 // the non-empty case, where picking another agent is real advice.
                 lastAgentCreationError = loadedAgents.Count == 0
-                    ? $"Selected agent '{requested}' could not be validated: NO agents are "
-                      + "loaded in this context (the agent catalog is empty). Either the "
-                      + "agent query has not emitted yet (cold start — retry the message) "
-                      + "or no agents are visible to this identity/context. If this "
-                      + "persists, verify agents exist under the user/space/global Agent "
-                      + "namespaces and are readable in this context."
+                    ? $"Selected agent '{requested}' could not be validated: the agent "
+                      + "catalog is empty — no agents are loaded in this context. Either "
+                      + "the agent query has not emitted yet (cold start — retry the "
+                      + "message) or no agents are visible to this identity/context. If "
+                      + "this persists, verify agents exist under the 'Agent', "
+                      + "'{space}/Agent' or '{user}/Agent' namespaces and are readable "
+                      + "in this context."
                     : $"Selected agent '{requested}' was not found among the available agents "
                       + $"([{string.Join(", ", loadedAgents.Select(a => a.Path ?? a.Name))}]). "
                       + "It may have been moved, renamed, or is not available in this context — "
