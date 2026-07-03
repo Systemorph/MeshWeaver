@@ -6,9 +6,9 @@ Description: "Grant user permissions in MeshWeaver by creating AccessAssignment 
 
 # Granting Access via AccessAssignments
 
-Permissions in MeshWeaver are **data** — they live as `AccessAssignment` MeshNodes inside `_Access` satellite namespaces. There is no dedicated admin UI. You grant access by creating an `AccessAssignment` node via MCP, a hub message, or the migration runner, and the `PermissionEvaluator` picks it up automatically via its synced query.
+Permissions in MeshWeaver are **data** — they live as `AccessAssignment` MeshNodes inside `_Access` satellite namespaces. You grant access either through the **Access Control UI** (Settings → Access Control on any node you administer) or by creating an `AccessAssignment` node via MCP, a hub message, or the migration runner. Either way, the `PermissionEvaluator` picks the node up automatically via its synced query — the UI is just a convenient writer of the same data.
 
-This page walks through the field anatomy and provides copy-paste recipes for the most common scenarios.
+This page walks through the UI, the field anatomy, and copy-paste recipes for the most common scenarios.
 
 <svg viewBox="0 0 760 320" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;" font-family="sans-serif" font-size="13">
   <defs>
@@ -53,6 +53,21 @@ This page walks through the field anatomy and provides copy-paste recipes for th
 </svg>
 
 *AccessAssignment nodes live in `_Access` satellite namespaces; `PermissionEvaluator` picks them up via a synced query and Postgres triggers rebuild effective permissions automatically.*
+
+---
+
+## The Access Control UI
+
+Open a node you administer → **Settings → Access Control**. The page shows the assignments inherited from the parent scope (read-only), the editable assignments at the current scope, an inline **Add** row, and a collapsed **Advanced** section for the partition policy.
+
+The **Subject (User or Group)** picker is bound to the canonical queries in `AccessSubjectQueries` (`src/MeshWeaver.Mesh.Contract/Security/AccessSubjectQueries.cs`):
+
+- **Users** — `nodeType:User namespace:""`. Users live at the ROOT namespace (path = userId); the path-less query is pinned to the central `auth` lookup mirror by `UserNodeType`'s routing rule, so one query covers every user in the mesh. 🚨 The legacy `namespace:User` shape targets the pre-V27 `user` schema, which no longer exists — it silently returns **zero** rows. Never hand-roll subject queries; reference `AccessSubjectQueries`.
+- **Groups** — `nodeType:Group namespace:{partition} scope:subtree`: every group defined in the scope's partition.
+
+The picker loads the subject set once (capped at 500 nodes) and filters **in-memory, diacritic- and case-insensitively** (`SearchText.Fold`): typing "Burgi" finds "Bürgi". On installations with more subjects than the cap, typed text additionally runs the normal server-side search and the union is shown, so users beyond the cap remain findable (that path matches by substring, without diacritic folding).
+
+**Limitation — not-yet-provisioned users.** A `User` node is created at first login/onboarding, so a person who has never logged in cannot be picked. Either invite them first (platform admin → Invitations), or grant by principal via MCP (Recipe 3 below with the exact login userId) — the assignment lies dormant until they exist.
 
 ---
 
