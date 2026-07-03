@@ -109,6 +109,30 @@ public class PandasExplorerAreaTest : HubTestBase
     }
 
     [HubFact]
+    public async Task Load_button_posts_load_with_the_content_file_path()
+    {
+        var reference = new LayoutAreaReference(Area);
+        var client = GetClient();
+        var stream = client.GetWorkspace()
+            .GetRemoteStream<JsonElement, LayoutAreaReference>(CreateHostAddress(), reference);
+
+        await stream.GetControlStream($"{Area}/toolbar/load")
+            .Where(c => c is not null).FirstAsync().Timeout(TimeSpan.FromSeconds(30)).ToTask();
+
+        var recorder = ServiceProvider.GetRequiredService<PandasCommandRecorder>();
+        client.Post(new ClickedEvent($"{Area}/toolbar/load", stream.StreamId),
+            o => o.WithTarget(CreateHostAddress()));
+
+        // The click posts `load` carrying the PATH of the CSV file kept in content — never the data
+        // itself; the participant reads the node over the mesh. Hosted without a node instance, the
+        // area falls back to the default source path.
+        var load = await recorder.Commands.Where(c => c.Command == "load")
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(20)).ToTask();
+        Assert.Equal(PandasExplorer.DefaultSourcePath, load.Path);
+        Assert.Null(load.Data);
+    }
+
+    [HubFact]
     public async Task GroupBy_button_posts_a_groupby_PandasCommand_to_py_pandas()
     {
         var reference = new LayoutAreaReference(Area);

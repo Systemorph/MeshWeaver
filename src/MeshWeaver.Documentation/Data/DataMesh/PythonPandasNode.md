@@ -1,32 +1,63 @@
 ---
 Name: A pandas node in Python
 Category: Documentation
-Description: Hold a live pandas DataFrame inside a Python mesh participant, control it over the mesh, and render its state back as a real DataGrid control — not markdown.
+Description: Load a CSV file kept in mesh content into a live pandas DataFrame held by a Python mesh participant, and render every analysis back through the hub as a real DataGrid — GUI in C#, backend in Python.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M3 15h18M9 3v18M15 3v18"/></svg>
 ---
 
 # A pandas node in Python
 
-[Calling Python](../CallingPython) runs `python3` as a **stateless external process**: the mesh shells out, Python prints, the process dies. This page is the interactive counterpart. Here a Python process **connects to the mesh as a participant** (over gRPC, exactly like the MAUI / Blazor-WASM clients) and **owns a live object** — a `pandas.DataFrame` — that the mesh can drive over many round trips. The frame is real, long-lived Python state; the mesh creates it, mutates it, queries it, and renders its **current** state back as a genuine `DataGridControl`.
+[Calling Python](../CallingPython) runs `python3` as a **stateless external process**: the mesh shells out, Python prints, the process dies. This page is the interactive counterpart — **GUI in C#, backend in Python**. A Python process **connects to the mesh as a participant** (over gRPC, exactly like the MAUI / Blazor-WASM clients) and **owns a live object** — a `pandas.DataFrame` — fed from **a CSV file kept in mesh content**. The C# frontend never touches the data: it posts commands through the hub, Python reads the file node over the mesh, does the pandas work, and every result flows back through the hub as a genuine `DataGridControl` the GUI renders.
 
 | | [Calling Python](../CallingPython) | This page |
 |---|---|---|
 | Python is a… | short-lived process | connected mesh **participant** (`py/pandas`) |
+| Data source | inline in the script | a **CSV file kept in content** (`PythonDemo/SalesData`) |
 | State | none (fresh each call) | a **live DataFrame held in the participant** |
 | Output | markdown text | a real **`DataGridControl`** (sortable, formatted) |
 
 The working code lives in the Python client package: `clients/python/meshweaver/examples/pandas_node.py` (tests: `clients/python/tests/test_pandas_node.py`). The participant model itself is in `clients/python/README.md`.
 
+## The file kept in content
+
+The data source is an ordinary mesh node, `PythonDemo/SalesData` — a Markdown node whose body carries the CSV in a fenced block, so it renders as a readable table-of-text in the portal and stays **hand-editable** like any other content:
+
+````markdown
+# Sales Data
+
+Monthly sales by region — **a file kept in content**.
+
+```csv
+month,region,sales,units
+Jan,EMEA,120.0,12
+Feb,EMEA,135.5,14
+…
+Aug,EMEA,152.0,15
+```
+````
+
+When the frontend asks for a load, it sends **only the path**. The participant reads the node itself — `Mesh.get(path)` (one snapshot off the node's live stream, the Python analog of `GetMeshNodeStream`), extracts the fenced CSV, and parses it:
+
+```python
+async def _load_from_content(self, path: str):
+    node = await self._read_node(path)            # mesh → Python: read the content node
+    self._df = pd.read_csv(io.StringIO(csv_from_node(node)))
+    return {**self._summary(), "source": path}
+```
+
+Edit the CSV in the portal, press *Load sales CSV* again, and the new data is live — the mesh content is the single source of truth for the file.
+
 ## Two ways to control the frame
 
 Both surfaces act on the **same** held DataFrame:
 
-1. **Typed `PandasCommand` messages** — `load` / `append` / `reset` (mutate), `render` / `groupby` / `describe` / `rolling` (analyse). The mesh routes them to the participant's address by *target*; the message type is opaque to the mesh (it round-trips as `RawJson`), so nothing needs server-side registration.
+1. **Typed `PandasCommand` messages** — `load` (with a `path` to a content file, or inline `data`) / `append` / `reset` (mutate), `render` / `groupby` / `describe` / `rolling` (analyse). The mesh routes them to the participant's address by *target*; the message type is opaque to the mesh (it round-trips as `RawJson`), so nothing needs server-side registration.
 2. **`SubmitCodeRequest`** — pandas code run against a **persistent** namespace where the frame lives as `df`. Unlike the stateless kernel worker (`meshweaver.worker.execute_python`, a fresh namespace per call), this namespace *survives* across calls, so `df["margin"] = df["sales"] - df["units"]` in one submission is visible to the next. That persistent `df` **is** "an object created and controlled in Python".
 
 ```mermaid
 graph LR
-    A[mesh participant / agent] -- PandasCommand / SubmitCode --> B[py/pandas participant]
+    S[(PythonDemo/SalesData<br/>CSV file in content)] -- Mesh.get --> B[py/pandas participant]
+    A[C# frontend / agent] -- PandasCommand / SubmitCode --> B
     B -- holds --> D[(live pandas DataFrame)]
     B -- render --> G[DataGridControl JSON]
     G -- deserialises to --> H[typed DataGridControl<br/>GUI renders a real grid]
@@ -88,12 +119,13 @@ A `render` (or any analytical command) replies with the grid **as a `DataGridCon
 
 ## The interactive frontend — the `PandasExplorer` node
 
-The Python participant is the backend. **A .NET NodeType is the frontend that drives it.** `PandasExplorer` (`samples/Graph/Data/PythonDemo/PandasExplorer/`) is an ordinary mesh NodeType whose layout area (`PandasExplorerLayoutAreas.Explorer`) is a toolbar of **real framework controls** above a **live `DataGridControl`** — no hand-rolled HTML, no markdown for the data.
+The Python participant is the backend. **A .NET NodeType is the frontend that drives it.** `PandasExplorer` (`samples/Graph/Data/PythonDemo/PandasExplorer/`) is an ordinary mesh NodeType whose layout area (`PandasExplorerLayoutAreas.Explorer`) is a toolbar of **real framework controls** above a **live `DataGridControl`** — no hand-rolled HTML, no markdown for the data. Its content record carries `SourcePath` — the mesh path of the CSV file in content — so different explorer instances can point at different data files.
 
 ```mermaid
 graph LR
     U[user] -- clicks a button --> F[PandasExplorer layout area]
     F -- PandasCommand --> P[py/pandas participant]
+    S[(SalesData CSV<br/>in content)] -- Mesh.get --> P
     P -- holds --> D[(live DataFrame)]
     P -- DataGridControl --> F
     F -- renders --> G[real DataGrid]
@@ -103,13 +135,15 @@ Every control maps to one `PandasCommand` posted to `py/pandas`; the grid then r
 
 | Control | Posts | Effect |
 |---|---|---|
-| **Load sample sales** | `load` (6 rows) | replaces the held frame, then re-renders |
+| **Load sales CSV** | `load` with `path` = the node's `SourcePath` | the participant reads the file node over the mesh, `read_csv`s it into the frame, then re-renders |
 | **Append 2 rows** | `append` | grows the held frame, then re-renders |
 | **Group by** + text input | `groupby` (by = the typed column, default `region`) | grouped sum view |
 | **Rolling mean (3)** | `rolling` (column `sales`, window 3) | adds a rolling-mean column |
 | **Describe** | `describe` | descriptive statistics |
 | **Refresh** | `render` | re-renders the current frame |
 | **Reset** | `reset` | clears the held frame |
+
+Note what travels over the wire on a load: **the path, not the data**. The GUI in C# stays a thin reactive shell; the file read and every pandas computation happen in the Python backend, and only the rendered `DataGridControl` comes back through the hub.
 
 The whole flow is **reactive, never `async`** (a rule of the actor-model mesh): a click flips a trigger in the layout-area data store, the grid sub-area re-observes it, `Hub.Post(command, o => o.WithTarget("py/pandas"))` fires and `Hub.Observe(delivery)` awaits the reply — composed with `Timeout` + `Catch`, so the grid degrades gracefully instead of hanging. Mutations (`load`/`append`/`reset`) chain their re-render off the participant's ack, so the grid always reflects the new frame state (race-free).
 
@@ -138,6 +172,10 @@ Serve as a real participant other participants / agents drive over gRPC:
 python -m meshweaver.examples.pandas_node --url https://memex.meshweaver.cloud --token mw_… --address py/pandas
 ```
 
+The bidi participant connection is native gRPC at the ordinary portal URL (the deployment routes `meshweaver.v1.Mesh/Open` to a dedicated HTTP/2 port — see the transport note in [A standalone hub in Python](../PythonStandaloneHub)); a gate shipping in the portal's own pod uses the trusted loopback endpoint instead, with no token at all. The `PandasCommand` protocol itself needs **no server-side registration**: the participant's proxy hub forwards unregistered types verbatim (`RawJsonPassThrough`).
+
+Then open the `PythonDemo/PandasExplorer/LiveFrame` node in the portal and press **Load sales CSV**: the participant reads `PythonDemo/SalesData` over the mesh, parses it, and the grid renders the file's contents. Edit the CSV node and load again to see the change flow through.
+
 ## Proof it's a real grid, not markdown
 
 The bytes `--demo` emits are checked end to end:
@@ -147,6 +185,8 @@ The bytes `--demo` emits are checked end to end:
 
 ## Related
 
+- [A standalone hub in Python](../PythonStandaloneHub) — the full hub programming model this participant is a special case of.
+- [Fine-tuning an LLM on mesh content](../PythonFineTuning) — the same *file kept in content* convention feeding a training job.
 - [Calling Python](../CallingPython) — the stateless process pattern (a layout area shells out to `python3`).
 - [Controlled I/O Pooling](/Doc/Architecture/ControlledIoPooling) — why the C# side bridges every async/blocking edge through `IIoPool`.
 - [Query Syntax](../QuerySyntax) — the query language a participant uses to find nodes to feed a frame.

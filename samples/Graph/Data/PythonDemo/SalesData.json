@@ -1,0 +1,12 @@
+{
+  "id": "SalesData",
+  "namespace": "PythonDemo",
+  "name": "Sales Data (CSV)",
+  "nodeType": "Markdown",
+  "description": "A CSV file kept in mesh content — the data source the Python pandas participant loads over the mesh. Edit it here and reload the Pandas Explorer to see the new data.",
+  "isPersistent": true,
+  "content": {
+    "$type": "MarkdownContent",
+    "content": "# Sales Data\n\nMonthly sales by region — **a file kept in content**. The `py/pandas` participant reads this node over the mesh, parses the CSV below with `pandas.read_csv`, and serves the resulting DataFrame back to the [Pandas Explorer](@/PythonDemo/PandasExplorer/LiveFrame) as a live DataGrid.\n\n```csv\nmonth,region,sales,units\nJan,EMEA,120.0,12\nFeb,EMEA,135.5,14\nMar,EMEA,128.0,13\nApr,APAC,98.0,9\nMay,APAC,143.0,15\nJun,APAC,150.0,16\nJul,APAC,161.0,17\nAug,EMEA,152.0,15\n```\n"
+  }
+}

@@ -7,15 +7,18 @@ wire shape is pinned it changes here and nowhere else.
 Parsing is resilient (reads the few fields we need case-insensitively). Building is the side that must
 match the server's ``JsonSerializer.Deserialize<IMessageDelivery>`` exactly:
 
-* The delivery object needs a ``$type`` discriminator that the server's ``ITypeRegistry`` resolves to
-  the concrete ``MessageDelivery<TMessage>``; the payload under ``message`` needs its own ``$type``
-  (the registered short name of the request, e.g. ``"GetNodeRequest"``).
-* ``sender`` / ``target`` serialize as plain Address strings (``"type/id"``).
+* The delivery's ``$type`` is the RawJson-typed envelope (see ``DELIVERY_TYPE``) — the payload under
+  ``message`` carries its own ``$type`` (the registered short name of the request, e.g.
+  ``"PatchDataRequest"``), which the HANDLING hub deserializes late; an unregistered payload type
+  simply round-trips as raw JSON.
+* ``sender`` / ``target`` serialize as plain Address strings (``"type/id"``); property casing is
+  camelCase except the ``properties`` dictionary keys (verbatim, e.g. ``RequestId``).
 
-🔬 VALIDATION: the canonical sample is whatever the C# round-trip test
-(``MeshGrpcTransportTest``) logs for a real request/response. Capture it, then confirm
-``DELIVERY_TYPE`` and the property casing below. Everything else in the SDK is transport-level and
-already correct.
+Pinned against the canonical capture from ``MeshGrpcTransportTest`` (2026-07-03)::
+
+    {"$type":"MessageDelivery`1[RawJson]",
+     "message":{"$type":"EchoResponse","text":"hello mesh"},
+     "id":"…","sender":"mesh/…","target":"py/…","properties":{"RequestId":"…"}}
 """
 from __future__ import annotations
 
@@ -23,20 +26,27 @@ import json
 from dataclasses import dataclass
 from typing import Any, Optional
 
-# $type token the server uses for the concrete delivery envelope. Confirm against a captured sample.
-DELIVERY_TYPE = "MessageDelivery"
+# $type of the delivery envelope. The server serializes deliveries whose payload travelled the mesh
+# as MessageDelivery`1[RawJson]; a client-built delivery uses the same envelope and the receiving
+# hub late-deserializes `message` by ITS $type. (Backtick-1 = the CLR constructed-generic name.)
+DELIVERY_TYPE = "MessageDelivery`1[RawJson]"
 TYPE_KEY = "$type"
 REQUEST_ID = "RequestId"
 
 
 def build_deliver(
     *, delivery_id: str, sender: str, target: str, message_type: str, message: dict[str, Any],
-    request_id: Optional[str] = None,
+    request_id: Optional[str] = None, access_context: Optional[dict[str, Any]] = None,
 ) -> str:
     """Serialize a participant->mesh delivery to the JSON the server deserializes.
 
     ``request_id`` set => this is a RESPONSE: the server correlates it back to the original request by
-    ``properties.RequestId`` (the same key ``observe`` keys responses on)."""
+    ``properties.RequestId`` (the same key ``observe`` keys responses on).
+
+    ``access_context`` carries an identity on the delivery. Only meaningful on the TRUSTED loopback
+    endpoint, where the server passes it through — a gate executing a user's request echoes the
+    requester's context so its write-backs run under that user's identity. On token-authenticated
+    connections the server re-stamps regardless (a forged identity is never trusted)."""
     envelope = {
         TYPE_KEY: DELIVERY_TYPE,
         "id": delivery_id,
@@ -45,6 +55,8 @@ def build_deliver(
         "message": {TYPE_KEY: message_type, **message},
         "properties": {REQUEST_ID: request_id} if request_id else {},
     }
+    if access_context:
+        envelope["accessContext"] = access_context
     return json.dumps(envelope)
 
 
@@ -59,6 +71,7 @@ class Delivery:
     message_type: Optional[str]
     message: dict[str, Any]
     raw: dict[str, Any]
+    access_context: Optional[dict[str, Any]] = None
 
 
 def parse_delivery(payload: str) -> Delivery:
@@ -66,6 +79,7 @@ def parse_delivery(payload: str) -> Delivery:
     root = json.loads(payload)
     props = _get(root, "properties") or {}
     message = _get(root, "message") or {}
+    context = _get(root, "accessContext")
     return Delivery(
         id=_get(root, "id"),
         sender=_get(root, "sender"),
@@ -74,6 +88,7 @@ def parse_delivery(payload: str) -> Delivery:
         message_type=message.get(TYPE_KEY) if isinstance(message, dict) else None,
         message=message if isinstance(message, dict) else {},
         raw=root,
+        access_context=context if isinstance(context, dict) else None,
     )
 
 
