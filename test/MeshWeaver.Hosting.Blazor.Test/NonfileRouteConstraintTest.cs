@@ -55,6 +55,19 @@ public class NonfileRouteConstraintTest
         Match(path).Should().BeTrue(because: $"'{path}' is a normal route and should pass through");
     }
 
+    [Theory]
+    [InlineData("AgenticPension/content/_Documents/PKG_2026.pdf")]
+    [InlineData("AgenticPension/content/_Documents/contract_motor_2026.docx")]
+    [InlineData("Doc/notes.txt")]
+    [InlineData("robots.txt")]
+    public void MeshPathsWithFileExtensions_PassThrough(string path)
+    {
+        // Regression pin for agentic-pensions#10: this constraint excludes by PREFIX only.
+        // It must never reject a path because its last segment contains a dot — Document
+        // node slugs legitimately end in file extensions and must reach ApplicationPage.
+        Match(path).Should().BeTrue(because: $"'{path}' is a mesh path, not a static asset — extensions are legitimate");
+    }
+
     [Fact]
     public void EmptyPath_ReturnsTrue()
     {

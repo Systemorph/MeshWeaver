@@ -1,6 +1,7 @@
-@* Routes for area pages - entire path is matched against registered namespace patterns *@
-@* The :nonfile constraint prevents matching static file paths like _content, _framework, etc. *@
-@page "/area/{*Path:nonfile}"
+@* Routes for area pages - entire path is matched against registered namespace patterns.
+   NO inline route constraint (see ApplicationPage.razor): mesh paths may end in file extensions,
+   and static assets never live under /area/ — like /article and /content this is a plain catch-all. *@
+@page "/area/{**Path}"
 @using MeshWeaver.Blazor.Layouts
 @layout EmptyLayout
 

@@ -1,6 +1,10 @@
-@* Routes for application pages - entire path is matched against registered namespace patterns *@
-@* The :nonfile constraint prevents matching static file paths like _content, _framework, etc. *@
-@page "/{*Path:nonfile}"
+@* Routes for application pages - entire path is matched against registered namespace patterns.
+   NO inline route constraint here: the Blazor Router resolves inline constraints against its own
+   compiled-in map where "nonfile" is the built-in dot-rejecting NonFileNameRouteConstraint, which
+   made every mesh path ending in a file extension (Document nodes: .pdf/.docx/...) unroutable in
+   the interactive circuit. Static-asset prefixes (_framework, _content, ...) are excluded at the
+   endpoint layer instead — see NonfileRouteConstraintExtensions.ExcludeStaticAssetPaths. *@
+@page "/{**Path}"
 @using MeshWeaver.Blazor.Components
 @using MeshWeaver.Mesh.Services
 @using MeshWeaver.Messaging
