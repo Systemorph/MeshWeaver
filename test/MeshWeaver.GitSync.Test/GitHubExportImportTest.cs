@@ -1,6 +1,8 @@
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using MeshWeaver.GitSync;
+using MeshWeaver.Graph.Configuration;
+using MeshWeaver.Mesh;
 using Xunit;
 
 namespace MeshWeaver.GitSync.Test;
@@ -47,6 +49,54 @@ public class GitHubExportImportTest(ITestOutputHelper output) : GitHubSyncTestBa
         Assert.Contains("Section.", MarkdownBody(await WaitForNode($"{b}/Docs")));
         // README.md is a display file — import must NOT create a stray node for it.
         Assert.True(await IsAbsent($"{b}/README"));
+    }
+
+    [Fact(Timeout = 120000)]
+    public async Task Export_Then_Import_RoundTripsSlideNotesBackgroundAndOrder()
+    {
+        await Connect();
+        var a = "GhD" + Guid.NewGuid().ToString("N")[..8];
+        await CreateSpace(a, "Deck A");
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{a}/S01") with
+        {
+            NodeType = "Slide",
+            Name = "Opening",
+            Order = 1,
+            State = MeshNodeState.Active,
+            Content = new SlideContent
+            {
+                Content = "# Opening\n\nWelcome to the deck.",
+                Notes = "Speak slowly.",
+                Background = "linear-gradient(135deg, #667eea 0%, #764ba2 100%)"
+            },
+        }).Timeout(60.Seconds()).ToTask();
+
+        var repo = "https://github.com/test/deck-a";
+        await Sync.SaveConfig(a, repo, "main", null, true, true).Timeout(30.Seconds()).ToTask();
+        await Sync.SyncToGitHub(a, UserId).Timeout(60.Seconds()).ToTask();
+
+        // The slide mirrors as canonical .md whose frontmatter carries the slide metadata.
+        var file = Fake.Tree(repo).FirstOrDefault(f => f.Path == "S01.md");
+        Assert.NotNull(file);
+        Assert.Contains("NodeType: Slide", file!.Content);
+        Assert.Contains("Order: 1", file.Content);
+        Assert.Contains("Speak slowly.", file.Content);
+        Assert.Contains("667eea", file.Content);
+        Assert.Contains("# Opening", file.Content);
+
+        // Import into a fresh Space — the Slide must round-trip typed, not downgrade to Markdown.
+        var b = "GhE" + Guid.NewGuid().ToString("N")[..8];
+        await Sync.ImportFromGitHub(repo, "main", b, "Deck B", subdirectory: null, UserId)
+            .Timeout(90.Seconds()).ToTask();
+
+        var slideNode = await WaitForNode($"{b}/S01");
+        Assert.Equal("Slide", slideNode.NodeType);
+        Assert.Equal(1, slideNode.Order);
+        var slide = slideNode.ContentAs<SlideContent>(Mesh.JsonSerializerOptions);
+        Assert.NotNull(slide);
+        Assert.Contains("Welcome to the deck.", slide!.Content);
+        Assert.Equal("Speak slowly.", slide.Notes);
+        Assert.Equal("linear-gradient(135deg, #667eea 0%, #764ba2 100%)", slide.Background);
     }
 
     [Fact(Timeout = 120000)]
