@@ -193,7 +193,9 @@ public sealed class GrpcConnectionRegistry : IDisposable
     public void Deliver(string connectionId, IMessageDelivery delivery)
     {
         var state = connections.TryGetValue(connectionId, out var s) ? s : null;
-        var user = state?.Trusted == true && delivery.AccessContext is not null
+        // Pass-through requires a REAL carried identity — an empty AccessContext object (no
+        // ObjectId) falls back to the trusted default (System), never an empty principal.
+        var user = state?.Trusted == true && delivery.AccessContext is { ObjectId.Length: > 0 }
             ? delivery.AccessContext
             : state?.User ?? Anonymous;
         using (accessService.SwitchAccessContext(user))

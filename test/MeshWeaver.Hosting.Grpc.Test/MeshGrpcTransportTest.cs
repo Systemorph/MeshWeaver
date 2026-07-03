@@ -150,6 +150,10 @@ public class MeshGrpcTransportTest(ITestOutputHelper output) : MonolithMeshTestB
         Assert.Equal("alice", await WhoAmI(service, cts.Token, trusted,
             new AccessContext { ObjectId = "alice", Name = "Alice" }));
         Assert.Equal(WellKnownUsers.System, await WhoAmI(service, cts.Token, trusted, null));
+        // An EMPTY carried context (no ObjectId) is not an identity — falls back to System,
+        // never an empty principal.
+        Assert.Equal(WellKnownUsers.System, await WhoAmI(service, cts.Token, trusted,
+            new AccessContext { ObjectId = "", Name = "" }));
 
         var untrusted = new DefaultHttpContext();
         untrusted.Connection.LocalPort = 8081;
