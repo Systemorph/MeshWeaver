@@ -286,17 +286,17 @@ public static class AccessAssignmentLayoutAreas
         var formId = $"change_subject_{Guid.NewGuid().AsString()}";
         ctx.Host.UpdateData(formId, new Dictionary<string, object?> { ["accessObject"] = "" });
 
-        // Users live at the root namespace; groups in the partition subtree.
-        var subjectQueries = new[]
-        {
-            "namespace:\"\" nodeType:User",
-            "namespace:Group nodeType:Group"
-        };
+        // Canonical subject queries for the assignment's SCOPE (the path prefix before
+        // /_Access). The previous hand-rolled pair searched the legacy "Group" partition,
+        // whose schema no longer exists — the group half always came back empty (issue #213).
+        var subjectQueries = AccessSubjectQueries.ForScope(
+            AccessSubjectQueries.ScopeOfAssignment(nodePath));
 
         var formContent = Controls.Stack.WithStyle("gap: 16px; padding: 16px;")
             .WithView(new MeshNodePickerControl(new JsonPointerReference("accessObject"))
             {
                 Queries = subjectQueries,
+                FilterInMemory = true,
                 Label = "Subject (User or Group)",
                 Required = true,
                 DataContext = LayoutAreaReference.GetDataPointer(formId)
