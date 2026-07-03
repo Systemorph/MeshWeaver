@@ -52,6 +52,32 @@ public class InstanceSyncE2ETest(PortalFixture fixture)
             {
                 // Persisted from a prior run — fine.
             }
+            // A token-created Space grants its creator under the TOKEN identity (the lowercase
+            // partition key, e.g. "roland"), while the browser circuit authenticates as the
+            // DevLogin ObjectId (e.g. "Roland") — so the circuit would be denied on the fresh
+            // space. Grant the circuit identity explicitly (the token user is the space admin
+            // and may write _Access), mirroring what the UI's share flow would do.
+            try
+            {
+                await fixture.CreateNodeAsync(context, token, $$"""
+                    {
+                      "id": "{{fixture.UserId}}_CircuitAccess",
+                      "namespace": "{{Space}}/_Access",
+                      "name": "{{fixture.UserId}} Access",
+                      "nodeType": "AccessAssignment",
+                      "mainNode": "{{Space}}",
+                      "content": {
+                        "$type": "AccessAssignment",
+                        "accessObject": "{{fixture.UserId}}",
+                        "displayName": "{{fixture.UserId}}",
+                        "roles": [ { "$type": "RoleAssignment", "role": "Admin" } ]
+                      }
+                    }
+                    """);
+            }
+            catch (InvalidOperationException)
+            {
+            }
             try
             {
                 await fixture.CreateNodeAsync(context, token, $$"""
@@ -74,15 +100,35 @@ public class InstanceSyncE2ETest(PortalFixture fixture)
             await page.SetViewportSizeAsync(1600, 1000);
 
             // ── The Instance Sync tab on the Space's settings page ─────────────
-            await page.GotoAsync($"{fixture.BaseUrl}/{Space}/Settings/InstanceSync",
-                new PageGotoOptions { WaitUntil = WaitUntilState.NetworkIdle, Timeout = 90_000 });
-            await page.GetByText("Instance Sync").First.WaitForAsync(
-                new LocatorWaitForOptions { State = WaitForSelectorState.Visible, Timeout = 90_000 });
+            // The creator-admin grant on a fresh space propagates eventually; a circuit that
+            // subscribes before it lands is denied and keeps last-good display without
+            // retrying — so retry the navigation (each reload is a fresh subscription), the
+            // same "wait for the grant BEFORE driving the UI" rule the other E2E tests follow.
+            var tabVisible = false;
+            for (var attempt = 0; attempt < 8 && !tabVisible; attempt++)
+            {
+                await page.GotoAsync($"{fixture.BaseUrl}/{Space}/Settings/InstanceSync",
+                    new PageGotoOptions { WaitUntil = WaitUntilState.NetworkIdle, Timeout = 90_000 });
+                try
+                {
+                    await page.GetByText("Instance Sync").First.WaitForAsync(
+                        new LocatorWaitForOptions { State = WaitForSelectorState.Visible, Timeout = 15_000 });
+                    tabVisible = true;
+                }
+                catch (TimeoutException)
+                {
+                    // grant not propagated to the circuit yet — reload
+                }
+                catch (PlaywrightException)
+                {
+                    // grant not propagated to the circuit yet — reload
+                }
+            }
+            tabVisible.Should().BeTrue("the Instance Sync tab must render once the creator grant propagated");
             await page.GetByText("No syncing parties yet", new() { Exact = false }).First.WaitForAsync(
                 new LocatorWaitForOptions { State = WaitForSelectorState.Visible, Timeout = 60_000 });
 
-            // ── Add a syncing party through the UI form ────────────────────────
-            await page.GetByLabel("New syncing party").FillAsync("loopback");
+            // ── Add a syncing party through the UI (one-click, auto-named party-1) ──
             await page.GetByText("Add syncing party", new() { Exact = true }).ClickAsync();
 
             // The parties list live-binds — the new card appears with its editor.
@@ -90,7 +136,7 @@ public class InstanceSyncE2ETest(PortalFixture fixture)
                 new LocatorWaitForOptions { State = WaitForSelectorState.Visible, Timeout = 60_000 });
 
             // ── Configure the connection (merge patch onto the registry node) ──
-            await fixture.PatchNodeAsync(context, token, $"{Space}/_Sync/loopback", $$"""
+            await fixture.PatchNodeAsync(context, token, $"{Space}/_Sync/party-1", $$"""
                 {
                   "content": {
                     "remoteUrl": "{{LoopbackUrl}}",
@@ -124,7 +170,7 @@ public class InstanceSyncE2ETest(PortalFixture fixture)
         finally
         {
             // Best-effort cleanup so reruns start clean.
-            await fixture.DeleteNodeAsync(context, token, $"{Space}/_Sync/loopback");
+            await fixture.DeleteNodeAsync(context, token, $"{Space}/_Sync/party-1");
             await fixture.DeleteNodeAsync(context, token, MirrorSpace);
             await fixture.DeleteNodeAsync(context, token, Space);
         }
