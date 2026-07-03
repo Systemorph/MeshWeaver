@@ -12,10 +12,12 @@ using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.Domain;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Activity;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using MeshWeaver.ShortGuid;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Graph;
 
@@ -48,6 +50,10 @@ public static class CodeLayoutAreas
     public const string CancelButtonArea = "Cancel";
     /// <summary>Area id of the Edit button inside the cell toolbar.</summary>
     public const string EditButtonArea = "Edit";
+    /// <summary>Area id of the Cancel button inside the copy-to-home dialog.</summary>
+    public const string CopyDialogCancelArea = "CopyDialogCancel";
+    /// <summary>Area id of the Confirm button inside the copy-to-home dialog.</summary>
+    public const string CopyDialogConfirmArea = "CopyDialogConfirm";
 
     private const string CodeDataId = "code";
     private const string SiblingNodesDataId = "siblingCodeNodes";
@@ -88,6 +94,15 @@ public static class CodeLayoutAreas
     {
         var nodeStream = host.Workspace.GetMeshNodeStream();
 
+        // The VIEWER's effective permissions on this node — the canonical reactive
+        // check (hub.GetEffectivePermissions; resolves the caller from the ambient
+        // AccessContext at call time, same as GitHubSyncSettingsTab / CopyLayoutArea).
+        // Drives the Edit button's shape: Update permission → direct edit
+        // navigation; no Update → the copy-to-home dialog trigger.
+        var permissionStream = host.Hub
+            .GetEffectivePermissions(host.Hub.Address.ToString())
+            .DistinctUntilChanged();
+
         // The LAST run's live ActivityLog: keyed off the node's LastActivityPath
         // and re-switched whenever a new run stamps a fresh path. Drives the cell
         // toolbar's Cancel visibility reactively — the toolbar re-renders when the
@@ -106,11 +121,11 @@ public static class CodeLayoutAreas
             .DistinctUntilChanged(log => (log?.Status, log?.RequestedStatus))
             .StartWith((ActivityLog?)null);
 
-        return nodeStream.CombineLatest(lastActivityStream,
-            (node, lastActivity) => (UiControl?)BuildContent(host, node, lastActivity));
+        return nodeStream.CombineLatest(lastActivityStream, permissionStream,
+            (node, lastActivity, permissions) => (UiControl?)BuildContent(host, node, lastActivity, permissions));
     }
 
-    private static UiControl BuildContent(LayoutAreaHost host, MeshNode? node, ActivityLog? lastActivity)
+    private static UiControl BuildContent(LayoutAreaHost host, MeshNode? node, ActivityLog? lastActivity, Permission permissions)
     {
         var hubAddress = host.Hub.Address;
         var codeConfig = node.ContentAs<CodeConfiguration>(host.Hub.JsonSerializerOptions);
@@ -126,16 +141,14 @@ public static class CodeLayoutAreas
         stack = stack.WithView(Controls.H1(title).WithStyle("margin: 0 0 16px 0;"));
 
         // ── Notebook cell ────────────────────────────────────────────────────
-        // One visually framed block: toolbar on the top edge, code beneath it,
-        // output attached directly under the code inside the same frame.
+        // One visually framed block: code on top, the run's output attached
+        // directly under it, and the toolbar as a composer-style bar on the
+        // BOTTOM edge (2026-07-03 UX feedback: the controls belong at the foot
+        // of the cell, like a chat composer, not above the code).
         var cell = Controls.Stack
             .WithWidth("100%")
             .WithStyle("border: 1px solid var(--neutral-stroke-rest); border-radius: 6px; " +
                        "overflow: hidden; background: var(--neutral-layer-1);");
-
-        cell = cell.WithView(
-            BuildCellToolbar(hubAddress, codeConfig, isExecutable, language, lastActivity),
-            CellToolbarArea);
 
         // Code segment (markdown fence rendering, unchanged).
         if (!string.IsNullOrEmpty(codeConfig?.Code))
@@ -179,6 +192,13 @@ public static class CodeLayoutAreas
             }
         }
 
+        // Toolbar LAST — the composer bar at the bottom of the cell frame,
+        // below the output segment.
+        cell = cell.WithView(
+            BuildCellToolbar(hubAddress, codeConfig, isExecutable, language, lastActivity,
+                canEdit: permissions.HasFlag(Permission.Update)),
+            CellToolbarArea);
+
         stack = stack.WithView(cell, CellArea);
 
         // No activity history below the cell (removed 2026-07-02 on UX feedback:
@@ -190,22 +210,28 @@ public static class CodeLayoutAreas
     }
 
     /// <summary>
-    /// The cell's toolbar: ▶ Run (accent), ⏹ Cancel (only while the last run is
-    /// actually running and no cancel is already in flight — the shared
+    /// The cell's toolbar — the composer bar on the BOTTOM edge of the cell:
+    /// ▶ Run (accent), ⏹ Cancel (only while the last run is actually running and
+    /// no cancel is already in flight — the shared
     /// <see cref="ActivityLayoutAreas.IsCancelButtonVisible"/> predicate), ✎ Edit,
     /// then subtle right-aligned metadata (language badge, last-run provenance).
+    /// <para>Edit is rights-gated: with <see cref="Permission.Update"/> on the node
+    /// it navigates straight to the Edit area; without it, it opens the
+    /// copy-to-home dialog (<see cref="OpenCopyToHomeDialog"/>) offering to copy
+    /// the node into the viewer's own home space via the standard copy machinery.</para>
     /// </summary>
     private static UiControl BuildCellToolbar(
         Address hubAddress,
         CodeConfiguration? codeConfig,
         bool isExecutable,
         string language,
-        ActivityLog? lastActivity)
+        ActivityLog? lastActivity,
+        bool canEdit)
     {
         var toolbar = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
             .WithStyle("display: flex; align-items: center; gap: 8px; padding: 6px 10px; " +
-                       "background: var(--neutral-layer-2); border-bottom: 1px solid var(--neutral-stroke-rest);");
+                       "background: var(--neutral-layer-2); border-top: 1px solid var(--neutral-stroke-rest);");
 
         if (isExecutable)
         {
@@ -247,11 +273,31 @@ public static class CodeLayoutAreas
             }
         }
 
-        toolbar = toolbar.WithView(Controls.Button("")
-                .WithIconStart(FluentIcons.Edit())
-                .WithAppearance(Appearance.Accent)
-                .WithNavigateToHref(new LayoutAreaReference(EditArea).ToHref(hubAddress)),
-            EditButtonArea);
+        if (canEdit)
+        {
+            // Direct edit navigation — ONLY for viewers holding Update on the node.
+            toolbar = toolbar.WithView(Controls.Button("")
+                    .WithIconStart(FluentIcons.Edit())
+                    .WithAppearance(Appearance.Accent)
+                    .WithNavigateToHref(new LayoutAreaReference(EditArea).ToHref(hubAddress)),
+                EditButtonArea);
+        }
+        else
+        {
+            // Read-only viewer: Edit still shows, but opens the copy-to-home
+            // dialog instead of navigating (no NavigateToHref — the click action
+            // drives the DialogControl area). Identity resolution + the actual
+            // copy happen at CLICK time under the clicker's AccessContext.
+            var sourcePath = hubAddress.ToString();
+            toolbar = toolbar.WithView(Controls.Button("Edit")
+                    .WithIconStart(FluentIcons.Edit())
+                    .WithClickAction(ctx =>
+                    {
+                        OpenCopyToHomeDialog(ctx, sourcePath);
+                        return Task.CompletedTask;
+                    }),
+                EditButtonArea);
+        }
 
         // Right-aligned, subtle metadata: language badge + last-run provenance.
         var meta = Controls.Stack
@@ -272,6 +318,119 @@ public static class CodeLayoutAreas
         toolbar = toolbar.WithView(meta);
 
         return toolbar;
+    }
+
+    /// <summary>
+    /// Opens the read-only-viewer Edit dialog: explains the node is read-only for
+    /// the current viewer and offers to copy it into their home space (Confirm /
+    /// Cancel). Confirm runs the standard <see cref="NodeCopyHelper.CopyNodeTree"/>
+    /// machinery into <c>{viewerHome}/{nodeId}</c> and navigates to the copy's
+    /// Edit area. Anonymous / hub-shaped identities (no home partition) get a
+    /// sign-in hint instead.
+    /// </summary>
+    private static void OpenCopyToHomeDialog(UiActionContext ctx, string sourcePath)
+    {
+        var hub = ctx.Host.Hub;
+        var viewerHome = ResolveViewerHome(hub.ServiceProvider.GetService<AccessService>());
+        if (viewerHome is null)
+        {
+            ctx.Host.UpdateArea(DialogControl.DialogArea, Controls.Dialog(
+                    Controls.Markdown(
+                        "**Sign in required.** This content is read-only, and copying it " +
+                        "into your own home space requires a signed-in account."),
+                    "Read-only content")
+                .WithSize("S").WithClosable(true));
+            return;
+        }
+
+        var nodeId = sourcePath[(sourcePath.LastIndexOf('/') + 1)..];
+        var copyPath = $"{viewerHome}/{nodeId}";
+
+        var body = Controls.Stack
+            .WithStyle("gap: 16px;")
+            .WithView(Controls.Markdown(
+                "This content is read-only for you. We'll copy it to your home space " +
+                "where you can edit your own version."))
+            .WithView(Controls.Stack
+                .WithOrientation(Orientation.Horizontal)
+                .WithStyle("gap: 8px; justify-content: flex-end;")
+                .WithView(Controls.Button("Cancel")
+                        .WithAppearance(Appearance.Neutral)
+                        .WithClickAction(c =>
+                        {
+                            c.Host.UpdateArea(DialogControl.DialogArea, null!);
+                            return Task.CompletedTask;
+                        }),
+                    CopyDialogCancelArea)
+                .WithView(Controls.Button("Copy to my home")
+                        .WithAppearance(Appearance.Accent)
+                        .WithIconStart(FluentIcons.Copy())
+                        .WithClickAction(c =>
+                        {
+                            CopyToHomeAndNavigate(c, sourcePath, viewerHome, copyPath);
+                            return Task.CompletedTask;
+                        }),
+                    CopyDialogConfirmArea));
+
+        ctx.Host.UpdateArea(DialogControl.DialogArea,
+            Controls.Dialog(body, "Copy to your home space?").WithSize("M").WithClosable(true));
+    }
+
+    /// <summary>
+    /// Confirm handler of the copy-to-home dialog: deep-copies the node subtree
+    /// into the viewer's home partition via the standard
+    /// <see cref="NodeCopyHelper.CopyNodeTree"/> (permission checks live in the
+    /// upsert handlers — the viewer needs Create on their own home, which they
+    /// always hold), closes the dialog, and navigates to the copy's Edit area.
+    /// </summary>
+    private static void CopyToHomeAndNavigate(
+        UiActionContext ctx, string sourcePath, string targetNamespace, string copyPath)
+    {
+        var hub = ctx.Host.Hub;
+        var logger = hub.ServiceProvider.GetService<ILogger<LayoutAreaHost>>();
+        var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
+
+        NodeCopyHelper.CopyNodeTree(
+                meshService, meshService, hub, sourcePath, targetNamespace, force: false, logger)
+            .Subscribe(
+                copied =>
+                {
+                    logger?.LogInformation(
+                        "Copy-to-home complete: {Count} node(s) from {Source} to {Target}",
+                        copied, sourcePath, targetNamespace);
+                    ctx.Host.UpdateArea(DialogControl.DialogArea, null!);
+                    ctx.Host.UpdateArea(ctx.Area,
+                        new RedirectControl(new LayoutAreaReference(EditArea).ToHref(copyPath)));
+                },
+                ex =>
+                {
+                    logger?.LogWarning(ex, "Copy-to-home failed for {Source} -> {Target}",
+                        sourcePath, targetNamespace);
+                    ctx.Host.UpdateArea(DialogControl.DialogArea, Controls.Dialog(
+                            Controls.Markdown($"**Copy failed:**\n\n{ex.Message}"),
+                            "Copy Failed")
+                        .WithSize("M").WithClosable(true));
+                });
+    }
+
+    /// <summary>
+    /// The signed-in viewer's HOME partition, resolved from the ambient
+    /// <see cref="AccessService"/> (per-delivery context first, then the durable
+    /// circuit context) — mirroring <c>AgentPickerProjection.ResolveUserHome</c>.
+    /// System / anonymous / hub-shaped principals yield <c>null</c>: they have no
+    /// home partition to copy into.
+    /// </summary>
+    private static string? ResolveViewerHome(AccessService? accessService)
+    {
+        if (accessService is null)
+            return null;
+        foreach (var candidate in new[] { accessService.Context?.ObjectId, accessService.CircuitContext?.ObjectId })
+            if (!string.IsNullOrEmpty(candidate)
+                && candidate != WellKnownUsers.System
+                && !string.Equals(candidate, WellKnownUsers.Anonymous, StringComparison.OrdinalIgnoreCase)
+                && !AccessService.LooksLikeHubPrincipal(candidate))
+                return candidate;
+        return null;
     }
 
     /// <summary>
