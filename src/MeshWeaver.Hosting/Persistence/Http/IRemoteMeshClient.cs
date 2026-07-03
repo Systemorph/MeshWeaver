@@ -1,3 +1,4 @@
+using System.Reactive.Linq;
 using MeshWeaver.Mesh;
 
 namespace MeshWeaver.Hosting.Persistence.Http;
@@ -59,4 +60,25 @@ public interface IRemoteMeshClient
     /// is left to the adapter when it matters.
     /// </summary>
     IObservable<IReadOnlyList<string>> SearchPaths(string query);
+
+    /// <summary>
+    /// Run a MeshWeaver search query and emit the full hit envelope: per-hit path /
+    /// nodeType / version / lastModified plus the truncation flag. This is the instance-sync
+    /// pull sweep's primitive — the version + lastModified stamps let the sweep fetch only
+    /// nodes that actually changed. Default falls back to <see cref="SearchPaths"/> with empty
+    /// stamps (a remote older than the enriched search envelope), which forces a per-node Get.
+    /// </summary>
+    IObservable<RemoteSearchResult> Search(string query, int limit = 50) =>
+        SearchPaths(query).Select(paths => new RemoteSearchResult(
+            paths.Select(p => new RemoteSearchHit(p, null, 0, null)).ToList(),
+            Truncated: paths.Count >= limit));
 }
+
+/// <summary>One remote search hit. <see cref="Version"/>/<see cref="LastModified"/> are the
+/// remote node's change stamps when the remote returns them (0/null from older remotes —
+/// treat as "changed" and Get the node).</summary>
+public record RemoteSearchHit(string Path, string? NodeType, long Version, DateTimeOffset? LastModified);
+
+/// <summary>A remote search result page. <see cref="Truncated"/> mirrors the portal envelope's
+/// flag — more matches exist than were returned.</summary>
+public record RemoteSearchResult(IReadOnlyList<RemoteSearchHit> Hits, bool Truncated);

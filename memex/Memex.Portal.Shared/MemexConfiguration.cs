@@ -32,6 +32,7 @@ using MeshWeaver.GoogleMaps;
 using MeshWeaver.Data;
 using MeshWeaver.GitSync;
 using MeshWeaver.Graph;
+using MeshWeaver.InstanceSync;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Markdown.Export.Configuration;
 using MeshWeaver.Hosting.Activity;
@@ -257,6 +258,11 @@ public static class MemexConfiguration
         // absent a client id the Connect flow is gracefully disabled.
         services.AddGitHubSyncServices();
         services.Configure<GitHubOAuthOptions>(builder.Configuration.GetSection("GitHub:OAuth"));
+
+        // Instance sync — bidirectional Space replication to another MeshWeaver instance
+        // (per-space registry at {space}/_Sync; offline changes accumulate in the durable
+        // manifest and drain when the remote is reachable again).
+        services.AddInstanceSyncServices();
 
         // Per-user CLI Connect (Settings → Models, CLI providers). The
         // ConnectSessionManager is a mesh-scoped singleton holding the live
@@ -509,6 +515,9 @@ public static class MemexConfiguration
                 // Register GitHub-sync content types (GitHubCredential / GitHubSyncConfig)
                 // on the mesh + per-node hubs so their config nodes (de)serialize.
                 .AddGitHubSyncTypes()
+                // Register the instance-sync content type ({space}/_Sync/{sourceId} config
+                // nodes) on the mesh + per-node hubs so they (de)serialize.
+                .AddInstanceSyncTypes()
                 // Seed root-scope Admin AccessAssignments for users listed under
                 // `Auth:GlobalAdmins` so configured admins bypass per-partition
                 // RLS for cross-partition operations (list Spaces, create
@@ -688,6 +697,9 @@ public static class MemexConfiguration
                         .AddTokenUsageSettingsTab()
                         // GitHub Sync tab — shows only on Space nodes (self-filtered).
                         .AddGitHubSyncSettingsTab()
+                        // Instance Sync tab — replicate the Space to another MeshWeaver
+                        // instance (self-filtered to Spaces, like the GitHub Sync tab).
+                        .AddInstanceSyncSettingsTab()
                         // Code workspace tab — on-disk working-tree editor (checkout/edit/commit/push).
                         .AddWorkingTreeTab()
                         // Git history tab — read-only git browser (commit log + changes + diffs) over the same working tree.
