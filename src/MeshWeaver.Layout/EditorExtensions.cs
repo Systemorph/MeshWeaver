@@ -980,10 +980,12 @@ public static class EditorExtensions
         }
         else
         {
+            // Generic (free-text) read-only label: wrap long values instead of clipping so the
+            // content is readable without entering edit mode (see issue #195).
             readOnlyControl = new LabelControl(new JsonPointerReference(propName))
             {
                 DataContext = EffectiveDataContext(dataId, boundDataContext)
-            }.WithStyle("padding: 8px; min-height: 32px; background: var(--neutral-fill-rest); border-radius: 4px;");
+            }.WithStyle("padding: 8px; min-height: 32px; background: var(--neutral-fill-rest); border-radius: 4px; white-space: pre-wrap; word-break: break-word;");
         }
 
         if (isEditable)
