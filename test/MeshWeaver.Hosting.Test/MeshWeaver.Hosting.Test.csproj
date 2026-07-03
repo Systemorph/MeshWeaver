@@ -6,4 +6,9 @@
     <ProjectReference Include="..\..\src\MeshWeaver.Hosting\MeshWeaver.Hosting.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Fixture\MeshWeaver.Fixture.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- Concrete HostBuilder for MeshHostBuilderTeardownOrderingTest (the legacy
+         IHostBuilder path the Orleans TestCluster silos/clients are built on). -->
+    <PackageReference Include="Microsoft.Extensions.Hosting" />
+  </ItemGroup>
 </Project>

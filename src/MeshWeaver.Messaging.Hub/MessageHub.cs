@@ -207,11 +207,45 @@ public sealed class MessageHub : IMessageHub
     /// <summary>
     /// Faults the <see cref="Started"/> task with <paramref name="error"/> so dependents observing
     /// startup (e.g. data-source initialization) also fault. Called when a stream errors during init.
+    /// <para>
+    /// Teardown-disposal is classified as CANCELLATION, not failure: when the cause chain
+    /// contains an <see cref="ObjectDisposedException"/> (the shape <c>CancelCallbacks</c>
+    /// pushes into pending <c>Observe</c> subjects at hub disposal — "Hub … was disposed
+    /// before the response arrived"), startup didn't fail, it will simply never happen.
+    /// A sync hub's <see cref="Started"/> task has NO awaiter at teardown, so faulting it
+    /// armed a <c>TaskScheduler.UnobservedTaskException</c> that detonated at the next GC —
+    /// xUnit v3 escalates that to a "Catastrophic failure" poisoning the next test class
+    /// (the #228 capture). A canceled task never raises UnobservedTaskException, and a live
+    /// awaiter still gets a graceful, typed <see cref="TaskCanceledException"/>
+    /// (<c>DataContext.OpenInitializationGate</c> handles <c>IsCanceled</c> explicitly).
+    /// Real startup errors keep faulting <see cref="Started"/> so dependents observe them.
+    /// Pinned by <c>FailStartupTeardownClassificationTest</c> and
+    /// <c>TeardownPendingSubscribeGracefulTest</c>.
+    /// </para>
     /// </summary>
     /// <param name="error">The exception that caused startup to fail.</param>
     public void FailStartup(Exception error)
     {
-        hasStarted.TrySetException(error);
+        if (IsTeardownDisposal(error))
+            hasStarted.TrySetCanceled();
+        else
+            hasStarted.TrySetException(error);
+    }
+
+    /// <summary>
+    /// True when <paramref name="error"/> (or any exception in its cause chain) is an
+    /// <see cref="ObjectDisposedException"/> — the benign teardown shape. Walks the chain
+    /// because the disposal error arrives both bare (the SubscribeRequest observe path) and
+    /// wrapped (e.g. <c>InvalidOperationException</c> → ODE from the DataChangeRequest
+    /// observe path in <c>JsonSynchronizationStream</c>); mirrors
+    /// <c>SynchronizationStream.IsObjectDisposed</c>.
+    /// </summary>
+    private static bool IsTeardownDisposal(Exception? error)
+    {
+        for (var e = error; e != null; e = e.InnerException)
+            if (e is ObjectDisposedException)
+                return true;
+        return false;
     }
 
     /// <summary>
