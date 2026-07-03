@@ -52,7 +52,12 @@ public static class MeshNodeContentExtensions
                 // assembly and the dashboard's loader dropped every one.
                 try
                 {
-                    var element = JsonSerializer.SerializeToElement(node.Content, options);
+                    // Serialize AS the concrete runtime type: the object-declared path would route
+                    // through ObjectPolymorphicConverter.GetTypeName → an UNGUARDED GetOrAddType that
+                    // adopts the foreign type into the caller's registry as a read side effect. The
+                    // concrete-type path goes through PolymorphicTypeInfoResolver, whose collectible-
+                    // assembly guard formats the discriminator WITHOUT registering.
+                    var element = JsonSerializer.SerializeToElement(node.Content, node.Content.GetType(), options);
                     var recovered = element.Deserialize<T>(options);
                     if (recovered is not null)
                     {
@@ -70,9 +75,13 @@ public static class MeshNodeContentExtensions
                 {
                     // fall through to the loud log below
                 }
+                // Assembly-qualified on purpose: dynamic node assemblies compile without namespaces,
+                // so the bare type name is identical on BOTH sides of a cross-assembly mismatch —
+                // only the assembly identity makes this diagnosable.
                 logger?.LogError(
-                    "ContentAs<{TargetType}> for {Path}: Content is {ActualType}, not convertible",
-                    typeof(T).Name, node.Path, node.Content.GetType().Name);
+                    "ContentAs<{TargetType}> for {Path}: Content is {ActualType} ({ActualAssembly}), not convertible",
+                    typeof(T).Name, node.Path, node.Content.GetType().FullName,
+                    node.Content.GetType().Assembly.GetName().Name);
                 return null;
         }
     }
