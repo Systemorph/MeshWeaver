@@ -350,14 +350,20 @@ public static class ContentLayoutArea
 
     private static UiControl RenderPdf(LayoutAreaHost host, string collectionName, string filePath)
     {
+        // The file name/path is USER content (uploads) and HtmlControl renders as raw markup:
+        // URL-encode each path segment (malformed-link safety) and HTML-encode every value
+        // interpolated into an attribute so a crafted name cannot break out of it (XSS).
+        var encodedPath = string.Join('/',
+            filePath.Split('/').Select(Uri.EscapeDataString));
         var contentUrl =
-            $"/static/{host.Hub.Address}/{ContentCollectionsExtensions.EncodeCollectionName(collectionName)}/{filePath}";
-        var fileName = Path.GetFileName(filePath);
+            $"/static/{host.Hub.Address}/{Uri.EscapeDataString(ContentCollectionsExtensions.EncodeCollectionName(collectionName))}/{encodedPath}";
+        var urlAttribute = System.Net.WebUtility.HtmlEncode(contentUrl);
+        var fileName = System.Net.WebUtility.HtmlEncode(Path.GetFileName(filePath));
         return new HtmlControl(
             $@"<div style=""width: 100%; min-height: 500px;"">
-                <iframe src=""{contentUrl}"" style=""width: 100%; height: 600px; border: 1px solid var(--neutral-stroke-rest); border-radius: 4px;"" title=""{fileName}""></iframe>
+                <iframe src=""{urlAttribute}"" style=""width: 100%; height: 600px; border: 1px solid var(--neutral-stroke-rest); border-radius: 4px;"" title=""{fileName}""></iframe>
                 <div style=""margin-top: 8px;"">
-                    <a href=""{contentUrl}?download"" download=""{fileName}"">Download PDF</a>
+                    <a href=""{urlAttribute}?download"" download=""{fileName}"">Download PDF</a>
                 </div>
             </div>");
     }

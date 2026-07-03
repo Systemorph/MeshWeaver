@@ -394,6 +394,24 @@ public class NavigationServiceTest
             .ResolveNavigationPath("content/ACME/Project/content/p1/p2/file.cs");
     }
 
+    /// <summary>
+    /// Bare /content (ContentPage's catch-all matches an empty remainder) is a page route with
+    /// no node address: the context clears and the literal "content" is never fed to the mesh
+    /// resolver (which could synthesize a bogus partition root).
+    /// </summary>
+    [Fact]
+    public async Task OnLocationChanged_BareContentRoute_ClearsContext_WithoutResolving()
+    {
+        var service = CreateService();
+        service.Initialize();
+
+        _navigationManager.SimulateLocationChanged("http://localhost/content");
+        await service.NavigationContext.Should().Within(WaitTimeout).Match(ctx => ctx == null);
+
+        service.Context.Should().BeNull();
+        _ = _pathResolver.DidNotReceive().ResolveNavigationPath(Arg.Any<string>());
+    }
+
     #endregion
 
     #region InitializeAsync Tests

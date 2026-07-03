@@ -380,10 +380,14 @@ internal class NavigationService : INavigationService
         // navigation reference, node menus — then track file views; without this the literal
         // "content/…" path resolved to nothing and every file click blanked the context.
         // A GLOBAL collection (/content/{collection}/{filePath}, a portal-registered collection
-        // name) has no node address — clear the context like a page route.
-        if (route.StartsWith("content/", StringComparison.OrdinalIgnoreCase))
+        // name) has no node address — clear the context like a page route. So does BARE
+        // /content (ContentPage's catch-all matches an empty remainder) — without that case
+        // the literal route "content" fell through to mesh resolution and could synthesize a
+        // bogus partition root.
+        if (string.Equals(route, "content", StringComparison.OrdinalIgnoreCase)
+            || route.StartsWith("content/", StringComparison.OrdinalIgnoreCase))
         {
-            var contentRoute = route["content/".Length..];
+            var contentRoute = route.Length > "content".Length ? route["content/".Length..] : "";
             // '~' encodes '/' in collection names on content URLs (see ContentPage).
             var firstSegment = ContentCollectionsExtensions.DecodeCollectionName(contentRoute.Split('/')[0]);
             var contentService = _hub.ServiceProvider.GetService<IContentService>();
