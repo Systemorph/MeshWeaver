@@ -14,6 +14,21 @@ data:
   MEMEX_JDBCCONNECTIONSTRING: "{{ .Values.config.memex_portal.MEMEX_JDBCCONNECTIONSTRING }}"
   MEMEX_DATABASENAME: "{{ .Values.config.memex_portal.MEMEX_DATABASENAME }}"
   ASPNETCORE_HTTP_PORTS: "{{ .Values.config.memex_portal.ASPNETCORE_HTTP_PORTS }}"
+{{- if (.Values.grpc).enabled }}
+  # ---- Native gRPC (HTTP/2) — see .Values.grpc ------------------------------
+  # Explicit Kestrel endpoints (these OVERRIDE ASPNETCORE_HTTP_PORTS, so the web port is
+  # restated): the web port stays HTTP/1.1+2 defaults; the gRPC port is h2c (Http2-only —
+  # cleartext HTTP/2 needs prior knowledge, which requires a dedicated endpoint); the trusted
+  # port binds loopback so ONLY same-pod containers (the shipped gates) can reach it.
+  ASPNETCORE_Kestrel__Endpoints__Http__Url: "http://0.0.0.0:{{ .Values.config.memex_portal.ASPNETCORE_HTTP_PORTS | default 8080 }}"
+  ASPNETCORE_Kestrel__Endpoints__Grpc__Url: "http://0.0.0.0:{{ .Values.grpc.port }}"
+  ASPNETCORE_Kestrel__Endpoints__Grpc__Protocols: "Http2"
+  ASPNETCORE_Kestrel__Endpoints__GrpcTrusted__Url: "http://127.0.0.1:{{ .Values.grpc.trustedPort }}"
+  ASPNETCORE_Kestrel__Endpoints__GrpcTrusted__Protocols: "Http2"
+  # The server-side trust discriminator (GrpcOptions): a connection whose local port is this one
+  # authenticates as a trusted co-deployed service.
+  Grpc__TrustedPort: "{{ .Values.grpc.trustedPort }}"
+{{- end }}
   Deployment__Backend: "{{ .Values.config.memex_portal.Deployment__Backend }}"
   Deployment__DataRoot: "{{ .Values.config.memex_portal.Deployment__DataRoot }}"
   Deployment__Orleans__Clustering: "{{ .Values.config.memex_portal.Deployment__Orleans__Clustering }}"
@@ -30,7 +45,7 @@ data:
   # InstanceColor is the badge fill (hex, e.g. "#f59e0b"); empty = amber default.
   Portal__InstanceName: "{{ .Values.config.memex_portal.Portal__InstanceName | default "" }}"
   Portal__InstanceColor: "{{ .Values.config.memex_portal.Portal__InstanceColor | default "" }}"
-{{- if .Values.portalNext.enabled }}
+{{- if (.Values.portalNext).enabled }}
   # ---- Next.js React frontend (FEATURE-FLAGGED — see .Values.portalNext) -----
   # Non-empty ReactAppUrl is what enables FrontendSelection: it shows the user
   # menu's "Try the new frontend" entry, activates the /frontend/{react|blazor}

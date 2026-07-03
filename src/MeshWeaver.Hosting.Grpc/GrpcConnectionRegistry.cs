@@ -56,9 +56,19 @@ public sealed class GrpcConnectionRegistry : IDisposable
         Name = WellKnownUsers.Anonymous,
     };
 
+    // Default identity of a TRUSTED connection (a co-deployed gate on the loopback endpoint) when
+    // an injected delivery carries no AccessContext of its own — the same well-known System
+    // principal the in-process infrastructure impersonates (Permission.All, RLS-bypassing).
+    private static readonly AccessContext TrustedService = new()
+    {
+        ObjectId = WellKnownUsers.System,
+        Name = WellKnownUsers.System,
+    };
+
     private sealed record ConnectionState(
         AccessContext User,
         ChannelWriter<ServerFrame> Outbound,
+        bool Trusted = false,
         IDisposable? Route = null,
         IMessageHub? ParticipantHub = null);
     private readonly ConcurrentDictionary<string, ConnectionState> connections = new();
@@ -68,9 +78,23 @@ public sealed class GrpcConnectionRegistry : IDisposable
     public void Begin(string connectionId, ChannelWriter<ServerFrame> outbound) =>
         connections[connectionId] = new ConnectionState(Anonymous, outbound);
 
-    /// <summary>Validate the connection's Bearer token (if any) → remember the user for this connection.</summary>
-    public IObservable<Unit> Authenticate(string connectionId, string? rawToken)
+    /// <summary>
+    /// Validate the connection's Bearer token (if any) → remember the user for this connection.
+    /// <paramref name="trusted"/> marks a connection that arrived on the TRUSTED loopback endpoint
+    /// (<see cref="GrpcOptions.TrustedPort"/> — reachable only from the portal's own pod): it needs
+    /// no token, defaults to the well-known System identity, and its injected deliveries keep an
+    /// <c>AccessContext</c> they already carry (see <see cref="Deliver"/>).
+    /// </summary>
+    public IObservable<Unit> Authenticate(string connectionId, string? rawToken, bool trusted = false)
     {
+        if (trusted)
+        {
+            connections.AddOrUpdate(connectionId,
+                _ => new ConnectionState(TrustedService, Channel.CreateUnbounded<ServerFrame>().Writer, Trusted: true),
+                (_, s) => s with { User = TrustedService, Trusted = true });
+            return Observable.Return(Unit.Default);
+        }
+
         if (string.IsNullOrWhiteSpace(rawToken)
             || !rawToken.StartsWith(ValidateTokenRequest.TokenPrefix, StringComparison.Ordinal))
         {
@@ -126,7 +150,10 @@ public sealed class GrpcConnectionRegistry : IDisposable
     {
         var route = routingService.RegisterStream(address, (delivery, ct) => PushToClient(connectionId, delivery, ct));
         var participantHub = hub.GetHostedHub(address, config =>
-            config.WithRoutes(routes =>
+            // The proxy hub only FORWARDS — a participant's own protocol types (registered nowhere
+            // on the server) must pass through as RawJson instead of failing deserialization.
+            config.Set(new RawJsonPassThrough())
+                .WithRoutes(routes =>
                 routes.WithHandler((delivery, ct) =>
                     // Forward messages addressed to the participant FROM elsewhere (responses, stream
                     // changes). Leave the proxy hub's own self/lifecycle messages (InitializeHubRequest,
@@ -145,7 +172,8 @@ public sealed class GrpcConnectionRegistry : IDisposable
                         : ForwardToClientSync(connectionId, delivery))));
         connections.AddOrUpdate(connectionId,
             // Begin() always runs first, so the "add" branch is a defensive fallback only.
-            _ => new ConnectionState(Anonymous, Channel.CreateUnbounded<ServerFrame>().Writer, route, participantHub),
+            _ => new ConnectionState(Anonymous, Channel.CreateUnbounded<ServerFrame>().Writer,
+                Route: route, ParticipantHub: participantHub),
             (_, s) =>
             {
                 s.Route?.Dispose();
@@ -154,10 +182,22 @@ public sealed class GrpcConnectionRegistry : IDisposable
             });
     }
 
-    /// <summary>Inject a participant message into the mesh, stamped with the connection's validated identity.</summary>
+    /// <summary>
+    /// Inject a participant message into the mesh, stamped with the connection's validated identity.
+    /// A TRUSTED connection (co-deployed gate on the loopback endpoint) may instead carry through an
+    /// <c>AccessContext</c> already on the delivery — a gate executing a user's request (e.g. the
+    /// python kernel running a Code node) echoes the requester's context onto its write-backs so
+    /// they run under that user's identity, exactly like the in-process C# kernel. Untrusted
+    /// connections are ALWAYS re-stamped; a forged client-side identity is never trusted.
+    /// </summary>
     public void Deliver(string connectionId, IMessageDelivery delivery)
     {
-        var user = connections.TryGetValue(connectionId, out var s) ? s.User : Anonymous;
+        var state = connections.TryGetValue(connectionId, out var s) ? s : null;
+        // Pass-through requires a REAL carried identity — an empty AccessContext object (no
+        // ObjectId) falls back to the trusted default (System), never an empty principal.
+        var user = state?.Trusted == true && delivery.AccessContext is { ObjectId.Length: > 0 }
+            ? delivery.AccessContext
+            : state?.User ?? Anonymous;
         using (accessService.SwitchAccessContext(user))
             hub.DeliverMessage(delivery.SetAccessContext(user));
     }
