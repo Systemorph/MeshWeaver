@@ -6,7 +6,6 @@ using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Messaging;
-using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.InstanceSync;
 

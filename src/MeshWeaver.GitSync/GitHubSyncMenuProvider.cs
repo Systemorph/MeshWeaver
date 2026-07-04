@@ -59,22 +59,24 @@ public sealed class GitHubSyncMenuProvider : INodeMenuProvider
 
                         var children = new List<NodeMenuItemDefinition>();
                         var childOrder = 0;
+                        // Icons are emoji (NodeMenuItemDefinition.Icon = emoji or SVG URL) — a Fluent
+                        // icon NAME would render as a broken <img src="Name"> in both clients.
                         if (canExport)
                             children.Add(new NodeMenuItemDefinition("Sync now", GitHubActionArea.AreaName,
-                                Icon: "CloudArrowUp", Order: childOrder++,
+                                Icon: "⬆️", Order: childOrder++,
                                 Href: GitHubActionArea.Href(hubPath, sourceId, GitHubActionArea.Commit)));
                         if (canImport)
                             children.Add(new NodeMenuItemDefinition("Update to latest", GitHubActionArea.AreaName,
-                                Icon: "CloudArrowDown", Order: childOrder++,
+                                Icon: "⬇️", Order: childOrder++,
                                 Href: GitHubActionArea.Href(hubPath, sourceId, GitHubActionArea.Update)));
                         children.Add(new NodeMenuItemDefinition("Check branch", GitHubActionArea.AreaName,
-                            Icon: "BranchCompare", Order: childOrder++,
+                            Icon: "🔍", Order: childOrder++,
                             Href: GitHubActionArea.Href(hubPath, sourceId, GitHubActionArea.Check)));
 
                         items.Add(new NodeMenuItemDefinition(
                             Label: node.Name ?? sourceId ?? "GitHub",
                             Area: GitHubActionArea.AreaName,
-                            Icon: "BranchFork",
+                            Icon: "🐙",
                             Order: order++,
                             Tooltip: RepoSummary(cfg),
                             Children: children));
