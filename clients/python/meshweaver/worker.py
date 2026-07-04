@@ -121,15 +121,63 @@ class CodeWorker:
         })
 
 
-async def serve(url: str, token: Optional[str] = None, address: str = DEFAULT_WORKER_ADDRESS) -> None:
-    """Connect as a stable ``py/*`` worker and run until cancelled, executing Python Code-node submissions."""
-    conn = await _connect(url, token=token, address=address)
-    CodeWorker(conn)
-    print(f"meshweaver python worker listening as {conn.address} -> {url}")
+async def serve(url: str, token: Optional[str] = None, address: str = DEFAULT_WORKER_ADDRESS,
+                *, reconnect: bool = False, retry_seconds: float = 3.0) -> None:
+    """Connect as a stable ``py/*`` worker and run until cancelled, executing Python Code-node submissions.
+
+    ``reconnect`` (the co-deployed **gate** mode): if the connection can't be established — the portal
+    isn't up yet — or it drops later — the portal restarted on a deploy / liveness probe — wait
+    ``retry_seconds`` and reconnect, instead of exiting. A gate outlives many portal restarts; the
+    default (``False``) keeps the original single-shot behaviour for scripts and tests."""
+    stop = asyncio.Event()
+    _install_stop_signals(stop)
+    while not stop.is_set():
+        try:
+            conn = await _connect(url, token=token, address=address)
+        except Exception as ex:  # connect/ack failed — portal not ready, DNS, TLS, …
+            if not reconnect:
+                raise
+            print(f"meshweaver python worker: connect to {url} failed "
+                  f"({type(ex).__name__}: {ex}); retrying in {retry_seconds}s", flush=True)
+            await _sleep_or_stop(stop, retry_seconds)
+            continue
+        CodeWorker(conn)
+        print(f"meshweaver python worker listening as {conn.address} -> {url}", flush=True)
+        try:
+            # Run until asked to stop OR the connection drops (wait_closed returns).
+            closed = asyncio.ensure_future(conn.wait_closed())
+            stopping = asyncio.ensure_future(stop.wait())
+            await asyncio.wait({closed, stopping}, return_when=asyncio.FIRST_COMPLETED)
+            for task in (closed, stopping):
+                task.cancel()
+        finally:
+            await conn.close()
+        if not reconnect:
+            break
+        if not stop.is_set():
+            print(f"meshweaver python worker: connection to {url} ended; "
+                  f"reconnecting in {retry_seconds}s", flush=True)
+            await _sleep_or_stop(stop, retry_seconds)
+
+
+def _install_stop_signals(stop: "asyncio.Event") -> None:
+    """SIGTERM / SIGINT → set the stop event, so a reconnect loop exits cleanly on pod termination.
+    Best-effort: platforms without add_signal_handler (Windows) just fall back to default handling."""
+    import signal
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            loop.add_signal_handler(sig, stop.set)
+        except (NotImplementedError, ValueError, RuntimeError):
+            pass
+
+
+async def _sleep_or_stop(stop: "asyncio.Event", seconds: float) -> None:
+    """Sleep ``seconds`` unless the stop event fires first (so shutdown isn't delayed by a backoff)."""
     try:
-        await asyncio.Event().wait()  # run forever; inbound requests drive the worker
-    finally:
-        await conn.close()
+        await asyncio.wait_for(stop.wait(), timeout=seconds)
+    except asyncio.TimeoutError:
+        pass
 
 
 def main() -> None:
@@ -137,8 +185,12 @@ def main() -> None:
     p.add_argument("--url", required=True, help="portal gRPC endpoint, e.g. https://atioz.meshweaver.cloud")
     p.add_argument("--token", default=None, help="MeshWeaver API token (validated server-side)")
     p.add_argument("--address", default=DEFAULT_WORKER_ADDRESS, help="stable worker address the kernel targets")
+    p.add_argument("--reconnect", action="store_true",
+                   help="reconnect on connect failure / drop (the co-deployed gate mode) instead of exiting")
+    p.add_argument("--retry-seconds", type=float, default=3.0, help="backoff between reconnects")
     args = p.parse_args()
-    asyncio.run(serve(args.url, token=args.token, address=args.address))
+    asyncio.run(serve(args.url, token=args.token, address=args.address,
+                      reconnect=args.reconnect, retry_seconds=args.retry_seconds))
 
 
 if __name__ == "__main__":
