@@ -1,9 +1,11 @@
-﻿@using Microsoft.JSInterop
+@using Microsoft.JSInterop
 @inject IJSRuntime JsRuntime
 
 <div @ref="CodeBlockElement" class="code-content">
     @((MarkupString)(Html ?? ""))
-    <i class="copy-to-clipboard" @onclick="CopyToClipboard"></i>
+    @* Copy is wired natively in JS (setupCopyButton) — a Blazor @@onclick round-trips over SignalR
+       and loses the user gesture, so Safari rejects navigator.clipboard.writeText. *@
+    <i class="copy-to-clipboard"></i>
 </div>
 
 @code {
@@ -26,27 +28,14 @@
                 // Add a small delay to ensure DOM is fully rendered
                 await Task.Delay(10);
                 await jsModule.InvokeVoidAsync("highlightBlock", CodeBlockElement);
+                // Attach the native copy handler so the clipboard write runs inside the click
+                // gesture (Safari-safe). Idempotent — guarded by a data-attribute in JS.
+                await jsModule.InvokeVoidAsync("setupCopyButton", CodeBlockElement);
             }
         }
         catch (Exception ex)
         {
             Console.WriteLine($"Error highlighting code: {ex.Message}");
-        }
-    }
-
-    private async Task CopyToClipboard()
-    {
-        try
-        {
-            if (jsModule is not null)
-            {
-                var codeText = await jsModule.InvokeAsync<string>("getCodeText", CodeBlockElement);
-                await JsRuntime.InvokeVoidAsync("navigator.clipboard.writeText", codeText);
-            }
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"Error copying to clipboard: {ex.Message}");
         }
     }
 }
