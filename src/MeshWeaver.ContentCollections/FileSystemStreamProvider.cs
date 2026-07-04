@@ -246,12 +246,21 @@ public class FileSystemStreamProvider(string basePath) : IStreamProvider
         // drive stream.Update into a disposed hub. See Doc/Architecture/HubDisposalModel.
         var handle = new WatcherHandle(w);
 
-        w.Changed += (sender, e) =>
+        // A brand-new file often surfaces ONLY as Created (not Changed) — notably an external
+        // writer (git sync, another process) creating a .md file, and on Linux a create+write into
+        // a newly-created subdirectory. Handle Created as well as Changed so those files ingest
+        // instead of staying invisible until the collection re-initializes. UpdateArticle is
+        // idempotent, so a file that raises both Created and Changed is merged once per event
+        // harmlessly. (In-process writes no longer depend on this at all — see
+        // ContentCollection.SaveFileAsync's proactive ingest.)
+        FileSystemEventHandler ingest = (sender, e) =>
         {
             if (handle.Stopped) return;
             if (Path.GetExtension(e.FullPath) == ".md")
                 onChanged(Path.GetRelativePath(basePath, e.FullPath));
         };
+        w.Created += ingest;
+        w.Changed += ingest;
 
         w.Renamed += (sender, e) =>
         {
