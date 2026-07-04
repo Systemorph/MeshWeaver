@@ -8,6 +8,9 @@ import { str, useField, useText } from "./common.js";
 import { AddressAreaEmbed, sanitizeInlineSvg } from "./display.js";
 import { ThreadChatView } from "./threadChat.js";
 import { MeshNodeCollectionView, MeshSearchView } from "./meshLive.js";
+import { documentControls } from "./documentControls.js";
+import { nodeTransferControls } from "./nodeTransfer.js";
+import { fileBrowserControls } from "./fileBrowser.js";
 
 function MeshNodePickerView({ control }: { control: UiControl }): ReactNode {
   const f = useField(control);
@@ -170,25 +173,12 @@ function placeholder(label: string) {
 }
 
 /**
- * The remaining registered-but-placeholder $types — every entry needs a live mesh service
- * (file storage, thread execution, import/export pipelines) beyond the AreaSource contract.
- * parity.test.ts ratchets this list: it may only SHRINK as controls get real implementations.
+ * The remaining registered-but-placeholder $types. parity.test.ts ratchets this list: it may only
+ * SHRINK as controls get real implementations — it is now EMPTY (every mesh control is real).
  */
-export const placeholderControlTypes = [
-  "FileBrowser",
-  "ExportDocument",
-  "NodeExport",
-  "NodeImport",
-  "DocumentSource",
-] as const;
+export const placeholderControlTypes = [] as const;
 
-const placeholderLabels: Record<(typeof placeholderControlTypes)[number], string> = {
-  FileBrowser: "File browser",
-  ExportDocument: "Export document",
-  NodeExport: "Node export",
-  NodeImport: "Node import",
-  DocumentSource: "Document source",
-};
+const placeholderLabels: Record<(typeof placeholderControlTypes)[number], string> = {};
 
 export const meshControls = {
   MeshSearch: MeshSearchView,
@@ -200,5 +190,9 @@ export const meshControls = {
   ThreadMessageBubble: ThreadMessageBubbleView,
   ThreadChat: ThreadChatView,
   LayoutAreaDefinition: LayoutAreaDefinitionView,
+  // Document, node-transfer, and file-browser controls (formerly placeholders) — real implementations.
+  ...documentControls,
+  ...nodeTransferControls,
+  ...fileBrowserControls,
   ...Object.fromEntries(placeholderControlTypes.map((t) => [t, placeholder(placeholderLabels[t])])),
 };
