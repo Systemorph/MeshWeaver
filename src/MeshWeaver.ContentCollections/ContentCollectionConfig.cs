@@ -47,6 +47,16 @@ public record ContentCollectionConfig
     public bool IsStatic { get; set; }
 
     /// <summary>
+    /// Disables the backing-store change monitor (the <c>FileSystemWatcher</c>). Off by default —
+    /// external / out-of-band edits are picked up live. Set <c>true</c> where the watcher is
+    /// unreliable (network mounts, high load — its OS event buffer coalesces and overflows), trading
+    /// live external-change detection for determinism: a save the process performed is still reflected
+    /// immediately (<see cref="ContentCollection.SaveFileAsync"/> merges its own write — read-your-writes),
+    /// so uploads and save→render never depend on a watcher event that may arrive late or never.
+    /// </summary>
+    public bool DisableFileWatcher { get; set; }
+
+    /// <summary>
     /// Whether this collection should be visible to child nodes in the hierarchy.
     /// When false, only the node that owns the collection can see it.
     /// <para>Default <c>false</c> for the same wire-default reason as <see cref="IsEditable"/>:

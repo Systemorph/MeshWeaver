@@ -141,20 +141,17 @@ public class ContentCollection : IDisposable
     {
         await provider.SaveFileAsync(path, fileName, openReadStream);
 
-        // 🚨 Read-after-write for the collection's OWN writes must NOT depend on the file-system
-        // watcher. The watcher (AttachMonitor) is the only thing that feeds a post-init write into
-        // markdownStream — but on Linux inotify DROPS the event for a file written into a
-        // just-created subdirectory (the recursive watch on the new dir isn't registered before the
-        // write), so the article never lands and a content render stays "not found" until the
-        // collection re-initializes. That is the CI-only CollectionNamedArea flake AND the prod
-        // "upload a file then open it → shows nothing" bug this test class was written for. macOS
-        // FSEvents watches the whole tree so it never misses — which is why it only ever flaked on
-        // the Linux runner. Ingest our own write directly; the watcher remains for EXTERNAL changes.
-        if (fileName.EndsWith(".md", StringComparison.OrdinalIgnoreCase))
-        {
-            var folder = path.Trim('/');
-            UpdateArticle(folder.Length == 0 ? fileName : $"{folder}/{fileName}");
-        }
+        // 🚨 Read-your-writes: merge a just-written markdown file into the stream RIGHT NOW instead
+        // of waiting for the FileSystemWatcher. The watcher is asynchronous and lossy — its events
+        // are coalesced and its internal buffer overflows under load, so a "save then view" (an
+        // upload, or a save→render) could hang until a watcher event that may arrive late or NEVER
+        // (the CI flake: the file-content render reduces `markdownStream`, which only the watcher
+        // populated → the article never lands → the render emits null → a 30s render timeout). The
+        // watcher stays the path for OUT-OF-BAND (external) changes; a save we performed is
+        // reflected deterministically here. Same merge path the watcher uses (idempotent if both fire).
+        var relativePath = $"{path.Trim('/')}/{fileName}".TrimStart('/');
+        if (MarkdownFilter(relativePath))
+            UpdateArticle(relativePath);
     }
 
     /// <summary>
@@ -263,9 +260,14 @@ public class ContentCollection : IDisposable
         );
     }
 
-    /// <summary>Subscribes the collection to backing-store change notifications, routing each to <see cref="UpdateArticle"/>.</summary>
+    /// <summary>Subscribes the collection to backing-store change notifications, routing each to
+    /// <see cref="UpdateArticle"/>. No-op when <see cref="ContentCollectionConfig.DisableFileWatcher"/>
+    /// is set — read-your-writes (<see cref="SaveFileAsync"/>'s own merge) keeps in-process saves live
+    /// without it; only OUT-OF-BAND edits go unseen.</summary>
     protected void AttachMonitor()
     {
+        if (Config.DisableFileWatcher)
+            return;
         monitorDisposable = provider.AttachMonitor(UpdateArticle);
     }
 
