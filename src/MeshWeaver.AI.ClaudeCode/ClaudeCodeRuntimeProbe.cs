@@ -57,11 +57,13 @@ public sealed class ClaudeCodeRuntimeProbe : IHarnessRuntimeInfo
     /// </summary>
     private string? ReadEffortLevel(string? userConfigDir)
     {
+        // Resolve the dir OUTSIDE the try so the catch logs the dir actually read (the resolved
+        // fallback when userConfigDir is null), not the raw null parameter.
+        var dir = !string.IsNullOrEmpty(userConfigDir)
+            ? userConfigDir
+            : Path.Combine(Environment.GetEnvironmentVariable("HOME") ?? "/root", ".claude");
         try
         {
-            var dir = !string.IsNullOrEmpty(userConfigDir)
-                ? userConfigDir
-                : Path.Combine(Environment.GetEnvironmentVariable("HOME") ?? "/root", ".claude");
             var settingsPath = Path.Combine(dir, "settings.json");
             if (File.Exists(settingsPath))
             {
@@ -73,7 +75,7 @@ public sealed class ClaudeCodeRuntimeProbe : IHarnessRuntimeInfo
         }
         catch (Exception ex)
         {
-            logger?.LogDebug(ex, "Could not read effortLevel from {Dir}", userConfigDir);
+            logger?.LogDebug(ex, "Could not read effortLevel from {Dir}", dir);
         }
         return null;
     }

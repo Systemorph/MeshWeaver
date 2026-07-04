@@ -937,16 +937,16 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                 var parsed = ChatParser.Parse(userMessageText);
                 if (parsed.Command != null)
                 {
-                    // Under a CLI harness (Claude Code / Copilot) MeshWeaver injects ONLY two things —
-                    // everything else is FORWARDED 1:1 so the HARNESS owns it:
+                    // Under a CLI harness (Claude Code / Copilot) the harness's OWN commands (/login,
+                    // /logout — it authenticates ITSELF) and the node-pick built-ins (/agent, /model —
+                    // the harness has its own model/agent selection) are FORWARDED 1:1: the raw
+                    // "/command" text flows to the harness as the message. Everything ELSE is handled by
+                    // MeshWeaver via HandleSlashCommandAsync → skill resolution:
                     //   • /harness — the runtime switch (so the user is never stuck in a CLI harness);
-                    //   • a custom MeshWeaver skill (a nodeType:Skill — /code, /gui, … — resolved and
-                    //     injected via HandleSlashCommandAsync, which loads the skill's instructions
-                    //     into the round).
-                    // The harness's OWN commands (/login, /logout — it authenticates ITSELF) and the
-                    // node-pick built-ins (/agent, /model — the harness has its own model/agent
-                    // selection) belong to the harness → FORWARDED: the raw "/command" text flows to the
-                    // harness as the message. Under the MeshWeaver harness, intercept every slash-skill.
+                    //   • a custom MeshWeaver skill (a nodeType:Skill — /code, /gui, …) is injected
+                    //     (its instructions are loaded into the round);
+                    //   • anything that resolves to no skill surfaces "Unknown command" locally.
+                    // Under the MeshWeaver harness, every slash-skill is handled this way.
                     var harness = ActiveHarness();
                     var commandName = parsed.Command.Name;
                     var isRuntimeSwitch = string.Equals(commandName, "harness", StringComparison.OrdinalIgnoreCase);
