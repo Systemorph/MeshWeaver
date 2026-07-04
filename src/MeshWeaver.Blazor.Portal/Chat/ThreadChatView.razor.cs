@@ -1178,15 +1178,14 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     }
 
     /// <summary>
-    /// Dispatches a parsed leading "/word args" — harness-owned commands (/login, /logout) first, then
-    /// a nodeType:Skill resolved by slash word (<see cref="ResolveSkillNodeAndRun"/>). Updates
+    /// Dispatches a parsed leading "/word args" to the nodeType:Skill resolved by that slash word
+    /// (<see cref="ResolveSkillNodeAndRun"/>). Updates
     /// <see cref="lastCommandStatus"/> for the breadcrumb. No await on hub calls — skill actions are
     /// in-process GUI logic (open a picker, load the content window) or reactive subscriptions.
     /// </summary>
     private async Task HandleSlashCommandAsync(ParsedCommand parsedCommand)
     {
-
-        // Otherwise resolve a nodeType:Skill by slash word and run its action (Pick → combobox,
+        // Resolve a nodeType:Skill by slash word and run its action (Pick → combobox,
         // OpenContent → content window, …). Skills are declarative mesh nodes (the built-in
         // /agent /model /harness + any Space/NodeType/user-defined one) — there is no C# registry.
         ResolveSkillNodeAndRun(parsedCommand);

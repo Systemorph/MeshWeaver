@@ -770,10 +770,7 @@ else
         @* Monaco editor for markdown input with completion. Stays visible during
            execution (Claude.ai pattern) — typing while a round is in flight is
            allowed; it queues via PendingUserMessages and dispatches when the round
-           completes. Esc cancels the in-flight round; the typed text is preserved.
-           HIDDEN while a CLI-harness login (Connect) widget is up, so the user pastes the
-           code into the widget's field above — not into this chat box — and the widget's
-           Submit isn't pushed below the fold. *@
+           completes. Esc cancels the in-flight round; the typed text is preserved. *@
         @* @onclick FocusComposerAsync: any click in the composer region focuses the
            editor. Defuses the thread-nav-shell amplifier (issue #199): the shell is
            tabindex="0" with outline:none for Alt-Tab thread cycling, so a click that
