@@ -1781,6 +1781,109 @@ public class MeshOperations
     }
 
     /// <summary>
+    /// Lists a content collection directory — the read half of the file browser. Path shape is
+    /// <c>{node}/{collection}[/{dir}]</c> (e.g. <c>Systemorph/content</c> or
+    /// <c>Systemorph/content/images</c>). Mirrors <see cref="Upload"/>'s resolve → collection-config →
+    /// IoPool flow, then enumerates <c>GetCollectionItems</c>. Returns JSON
+    /// <c>{ collection, path, editable, items: [{ kind, name, path, itemCount?, lastModified? }] }</c>
+    /// or a descriptive <c>Error: …</c> string.
+    /// </summary>
+    public IObservable<string> ContentList(string path)
+    {
+        logger.LogInformation("ContentList path={Path}", path);
+        if (string.IsNullOrWhiteSpace(path))
+            return Observable.Return("Error: path is required.");
+        var resolvedPath = ResolvePath(path).TrimStart('/');
+        if (string.IsNullOrWhiteSpace(resolvedPath))
+            return Observable.Return("Error: path is required.");
+
+        var pathResolver = hub.ServiceProvider.GetRequiredService<IPathResolver>();
+        return pathResolver.ResolvePath(resolvedPath).SelectMany(resolution =>
+        {
+            if (resolution == null)
+                return Observable.Return($"Error: no matching node for path '{resolvedPath}'");
+            if (string.IsNullOrEmpty(resolution.Remainder))
+                return Observable.Return("Error: path must include '{collection}[/{dir}]' after the node path (e.g. 'Systemorph/content').");
+
+            var remainderParts = resolution.Remainder.Split('/', StringSplitOptions.RemoveEmptyEntries);
+            var collectionName = remainderParts[0];
+            var dirParts = remainderParts.Skip(1).ToArray();
+            // The FileSystem provider resolves the listing dir with an unguarded Path.Combine(basePath, dir),
+            // so a '..' (or a backslash-embedded) segment would traverse OUTSIDE the collection scope. Reject
+            // traversal at the boundary — the listing contract is strictly "within this collection".
+            if (dirParts.Any(p => p is "." or ".." || p.Contains('\\') || p.Contains("..")))
+                return Observable.Return("Error: the directory path must not contain '.', '..', or backslash segments.");
+            var dir = string.Join("/", dirParts);
+            var targetAddress = (Address)resolution.Prefix;
+            var qualifiedCollectionName = $"{resolution.Prefix}/{collectionName}";
+
+            // Same collection-config lookup the static GET endpoint + Upload use — .Timeout is
+            // mandatory (a node hub without AddContentCollections never answers this).
+            return hub.Observe(
+                new GetDataRequest(new ContentCollectionReference([collectionName])),
+                o => o.WithTarget(targetAddress))
+                .Take(1)
+                .Timeout(TimeSpan.FromSeconds(30))
+                .Select(collectionResponse =>
+                {
+                    IReadOnlyCollection<ContentCollectionConfig>? configs = collectionResponse?.Message switch
+                    {
+                        GetDataResponse { Data: JsonElement je } =>
+                            JsonSerializer.Deserialize<ContentCollectionConfig[]>(je, hub.JsonSerializerOptions),
+                        GetDataResponse { Data: IReadOnlyCollection<ContentCollectionConfig> direct } => direct,
+                        _ => null
+                    };
+                    var sourceConfig = configs?.FirstOrDefault(c => c.Name == collectionName);
+                    if (sourceConfig == null) return (ContentCollectionConfig?)null;
+                    return sourceConfig with { Name = qualifiedCollectionName, Address = targetAddress };
+                })
+                .SelectMany(collectionConfig =>
+                {
+                    if (collectionConfig == null)
+                        return Observable.Return($"Error: collection '{collectionName}' not found on '{resolution.Prefix}'.");
+
+                    var contentService = hub.ServiceProvider.GetService<IContentService>();
+                    if (contentService == null)
+                        return Observable.Return("Error: content service not configured on the hub.");
+
+                    contentService.AddConfiguration(collectionConfig);
+                    var ioPool = hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.FileSystem) ?? IoPool.Unbounded;
+                    return ioPool.Run(async ct =>
+                    {
+                        var collection = await contentService.GetCollectionAsync(qualifiedCollectionName, ct).ConfigureAwait(false);
+                        if (collection == null)
+                            return $"Error: failed to initialize collection '{qualifiedCollectionName}'.";
+
+                        var items = new List<object>();
+                        await foreach (var item in collection.GetCollectionItems(dir, ct).ConfigureAwait(false))
+                            items.Add(item switch
+                            {
+                                FolderItem f => (object)new { kind = "folder", name = f.Name, path = f.Path, itemCount = f.ItemCount },
+                                FileItem fi => new { kind = "file", name = fi.Name, path = fi.Path, lastModified = fi.LastModified },
+                                _ => new { kind = "unknown", name = item.Name, path = item.Path },
+                            });
+
+                        return JsonSerializer.Serialize(new
+                        {
+                            collection = qualifiedCollectionName,
+                            path = dir,
+                            editable = collectionConfig.IsEditable,
+                            items,
+                        }, hub.JsonSerializerOptions);
+                    });
+                });
+        })
+        .Catch((Exception ex) =>
+        {
+            logger.LogWarning(ex, "ContentList failed for {Path}", path);
+            var message = ex is TimeoutException
+                ? "the node did not respond to the content-collection lookup in time — confirm the path resolves to a content-enabled node."
+                : ex.Message;
+            return Observable.Return($"Error: {message}");
+        });
+    }
+
+    /// <summary>
     /// Deletes one or more nodes (and their descendants) given a JSON array of path strings.
     /// </summary>
     /// <param name="paths">A JSON array of node paths to delete.</param>

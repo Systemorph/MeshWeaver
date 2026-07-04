@@ -12,6 +12,7 @@
 
 import { GrpcAreaSource, type AreaSource } from "@meshweaver/react/core";
 import type {
+  ContentListing,
   MarkdownCellSubmission,
   MarkdownKernelSession,
   MeshNodeState,
@@ -74,9 +75,11 @@ export async function connectLive(baseUrl: string = window.location.origin): Pro
   const runDeleteNode = (path: string) => deleteNode(baseUrl, rawToken, path);
   const runStartKernel = (cells: MarkdownCellSubmission[]) =>
     startMarkdownKernel(connection, mesh, userId, cells, runDeleteNode);
+  const runListContent = (path: string) => listContent(baseUrl, rawToken, path);
+  const runUploadContent = (path: string, file: File) => uploadContent(baseUrl, rawToken, path, file);
   return {
     connection,
-    ops: adaptOps(mesh, runQuery, runAutocomplete, runRenderMarkdown, runStartKernel),
+    ops: adaptOps(mesh, runQuery, runAutocomplete, runRenderMarkdown, runStartKernel, runListContent, runUploadContent),
     userId,
     getNode: (path: string) => mesh.get(path).then((n) => n.raw as MeshNodeRow).catch(() => null),
     queryNodes: runQuery,
@@ -296,6 +299,8 @@ function adaptOps(
   runAutocomplete: (query: string, contextPath?: string) => Promise<AutocompleteRow[]>,
   runRenderMarkdown: (markdown: string, nodePath?: string) => Promise<RenderedMarkdown>,
   runStartKernel: (cells: MarkdownCellSubmission[]) => Promise<MarkdownKernelSession>,
+  runListContent: (path: string) => Promise<ContentListing>,
+  runUploadContent: (path: string, file: File) => Promise<void>,
 ): MeshOps {
   return {
     watch: (path: string) => watchNode(mesh, path),
@@ -311,7 +316,100 @@ function adaptOps(
     // Interactive markdown: the ONE Markdig parser renders server-side; the client hydrates.
     renderMarkdown: runRenderMarkdown,
     startMarkdownKernel: runStartKernel,
+    // Node read/create — NodeExport bundles a subtree of getNode reads; NodeImport re-creates them.
+    getNode: (path: string) => mesh.get(path).then((n) => n.raw as Record<string, unknown>).catch(() => null),
+    createNode: (node: Record<string, unknown>) => mesh.create(node).then(() => undefined),
+    // Document export: post ExportDocumentRequest, watch the Activity, return the rendered bytes.
+    exportDocument: (sourcePath: string, options) => exportDocument(mesh, sourcePath, options),
+    // File browser: list a content-collection directory + upload (REST — content isn't a mesh node).
+    listContent: runListContent,
+    uploadContent: runUploadContent,
   };
+}
+
+/** Content-collection listing (`POST /api/mesh/content/list`) — `path` = {node}/{collection}[/{dir}]. */
+async function listContent(baseUrl: string, token: string, path: string): Promise<ContentListing> {
+  const resp = await fetch(`${baseUrl}/api/mesh/content/list`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+    body: JSON.stringify({ path }),
+  });
+  const text = await resp.text();
+  if (!resp.ok || text.startsWith("Error:")) throw new Error(text || `content list failed (${resp.status})`);
+  const parsed = JSON.parse(text) as ContentListing;
+  return {
+    collection: String(parsed.collection ?? ""),
+    path: String(parsed.path ?? ""),
+    editable: !!parsed.editable,
+    items: Array.isArray(parsed.items) ? parsed.items : [],
+  };
+}
+
+/** Content upload (`POST /api/mesh/upload`, multipart) — `path` = {node}/{collection}/{filePath}. */
+async function uploadContent(baseUrl: string, token: string, path: string, file: File): Promise<void> {
+  const form = new FormData();
+  form.append("path", path);
+  form.append("file", file, file.name);
+  const resp = await fetch(`${baseUrl}/api/mesh/upload`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${token}` },
+    body: form,
+  });
+  const text = await resp.text();
+  if (!resp.ok || text.startsWith("Error:")) throw new Error(text || `upload failed (${resp.status})`);
+}
+
+/**
+ * Run a document export the way the Blazor ExportDocumentView does: post ExportDocumentRequest to
+ * the SOURCE node hub, get back an ActivityPath, watch that Activity to a terminal Status, then
+ * decode the RenderedDocument (FileName, MimeType, Content:byte[]) from ActivityLog.ReturnValue.
+ * Content is base64 on the wire (byte[] JSON) → Uint8Array for the browser download.
+ */
+async function exportDocument(
+  mesh: Mesh,
+  sourcePath: string,
+  options: { format?: "pdf" | "docx"; title?: string; includeChildren?: boolean; coverPage?: boolean; tableOfContents?: boolean },
+): Promise<{ fileName: string; mimeType: string; bytes: Uint8Array }> {
+  if (!sourcePath) throw new Error("no source path to export");
+  const resp = await mesh.connection.observe(sourcePath, "ExportDocumentRequest", {
+    sourcePath,
+    options: {
+      format: options.format === "docx" ? "Docx" : "Pdf", // ExportFormat (string enum)
+      title: options.title ?? null,
+      includeChildren: options.includeChildren ?? false,
+      coverPage: options.coverPage ?? true,
+      tableOfContents: options.tableOfContents ?? true,
+    },
+  });
+  const m = resp.message;
+  const err = m["error"] ?? m["Error"];
+  if (err) throw new Error(String(err));
+  const activityPath = String(m["activityPath"] ?? m["ActivityPath"] ?? "");
+  if (!activityPath) throw new Error("export did not start (no activity path)");
+
+  for await (const node of mesh.watch(activityPath)) {
+    const content = (node.content ?? {}) as Record<string, unknown>;
+    const status = String(content["status"] ?? content["Status"] ?? "");
+    if (status === "Failed") throw new Error(String(content["error"] ?? content["Error"] ?? "export failed"));
+    if (status === "Succeeded" || status === "Completed") {
+      const rvRaw = content["returnValue"] ?? content["ReturnValue"];
+      const rv = (typeof rvRaw === "string" ? JSON.parse(rvRaw) : rvRaw) as Record<string, unknown> | null;
+      if (!rv) throw new Error("export produced no document");
+      return {
+        fileName: String(rv["fileName"] ?? rv["FileName"] ?? "document"),
+        mimeType: String(rv["mimeType"] ?? rv["MimeType"] ?? "application/octet-stream"),
+        bytes: base64ToBytes(String(rv["content"] ?? rv["Content"] ?? "")),
+      };
+    }
+  }
+  throw new Error("export activity ended before completion");
+}
+
+function base64ToBytes(b64: string): Uint8Array {
+  const binary = atob(b64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
 }
 
 async function* watchNode(mesh: Mesh, path: string): AsyncIterable<MeshNodeState> {

@@ -85,6 +85,57 @@ export interface MeshOps {
    * markdown itself. Hosts without it fall back to the plain client-side renderer.
    */
   renderMarkdown?(markdown: string, nodePath?: string): Promise<RenderedMarkdown>;
+  /** Optional single-node read — the raw hub-serialized MeshNode JSON at `path` (NodeExport bundles
+   *  a subtree of these). Null when absent/unreadable. */
+  getNode?(path: string): Promise<Record<string, unknown> | null>;
+  /** Optional node create — the NodeImport fan-out re-creates each bundled node via this (routes to
+   *  the node's owner partition, throws on a refused create). */
+  createNode?(node: Record<string, unknown>): Promise<void>;
+  /**
+   * Optional document export — the client twin of the Blazor ExportDocumentView: posts
+   * ExportDocumentRequest to the source node hub, watches the returned Activity to a terminal
+   * status, and resolves the rendered PDF/DOCX bytes for a browser download. Absent → the control
+   * renders a "not available here" notice.
+   */
+  exportDocument?(sourcePath: string, options: DocumentExportOptions): Promise<DocumentDownload>;
+  /** Optional content-collection listing — the read half of the file browser. `path` is
+   *  `{node}/{collection}[/{dir}]`. Absent → the browser renders a "not available" notice. */
+  listContent?(path: string): Promise<ContentListing>;
+  /** Optional content upload (multipart) — `path` is `{node}/{collection}/{filePath}`. */
+  uploadContent?(path: string, file: File): Promise<void>;
+}
+
+/** A content-collection directory listing (the /api/mesh/content/list shape). */
+export interface ContentListing {
+  collection: string;
+  path: string;
+  editable: boolean;
+  items: ContentItem[];
+}
+
+/** One entry in a content-collection directory. */
+export interface ContentItem {
+  kind: "folder" | "file" | "unknown";
+  name: string;
+  path: string;
+  itemCount?: number;
+  lastModified?: string;
+}
+
+/** A rendered export ready for a browser download (the RenderedDocument wire shape, decoded). */
+export interface DocumentDownload {
+  fileName: string;
+  mimeType: string;
+  bytes: Uint8Array;
+}
+
+/** The subset of DocumentExportOptions the React export form drives. */
+export interface DocumentExportOptions {
+  format?: "pdf" | "docx";
+  title?: string;
+  includeChildren?: boolean;
+  coverPage?: boolean;
+  tableOfContents?: boolean;
 }
 
 export type { MarkdownCellSubmission, MarkdownKernelSession, RenderedMarkdown } from "../controls/interactiveMarkdown.js";
