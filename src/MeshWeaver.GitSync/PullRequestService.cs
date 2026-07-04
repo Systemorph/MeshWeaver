@@ -236,6 +236,61 @@ public sealed class PullRequestService
     }
 
     // ══════════════════════════════════════════════════════════════════════════
+    //  Richer PR reads (delegated, live — list / detail / comment / merge)
+    // ══════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Lists ALL of the configured repo's pull requests (optionally filtered to
+    /// <paramref name="state"/>) LIVE from GitHub — one compact summary row per PR. Never
+    /// persisted; the GUI binds this straight into a table.
+    /// </summary>
+    public IObservable<IReadOnlyList<GitHubPullRequestSummary>> ListAll(
+        string spacePath, PullRequestStatus? state, string userId)
+    {
+        return WithRepoAndToken(spacePath, userId, (repoUrl, _, token) =>
+            repoClient.ListPullRequests(repoUrl, state, token));
+    }
+
+    /// <summary>
+    /// Reads one PR's live detail (mergeability + a checks roll-up + a reviews roll-up),
+    /// delegated to GitHub and never stored.
+    /// </summary>
+    public IObservable<GitHubPullRequestDetail> GetDetail(string spacePath, int number, string userId)
+    {
+        return WithRepoAndToken(spacePath, userId, (repoUrl, _, token) =>
+            repoClient.GetPullRequestDetail(repoUrl, number, token));
+    }
+
+    /// <summary>Posts a conversation comment on a pull request and emits the created comment.</summary>
+    public IObservable<GitHubIssueComment> Comment(string spacePath, int number, string body, string userId)
+    {
+        if (string.IsNullOrWhiteSpace(body))
+            return Observable.Throw<GitHubIssueComment>(new InvalidOperationException("Enter a comment."));
+        return WithRepoAndToken(spacePath, userId, (repoUrl, _, token) =>
+            repoClient.CommentPullRequest(repoUrl, number, body, token));
+    }
+
+    /// <summary>
+    /// Merges an open pull request with the requested strategy. Emits the merge outcome; a
+    /// non-mergeable PR surfaces GitHub's error (never a silent no-op).
+    /// </summary>
+    public IObservable<GitHubMergeResult> Merge(
+        string spacePath, int number, GitHubMergeMethod method,
+        string? commitTitle, string? commitMessage, string userId)
+    {
+        return WithRepoAndToken(spacePath, userId, (repoUrl, _, token) =>
+            repoClient.MergePullRequest(new GitHubMergePullRequestRequest
+            {
+                RepositoryUrl = repoUrl,
+                Number = number,
+                Method = method,
+                CommitTitle = commitTitle,
+                CommitMessage = commitMessage,
+                AccessToken = token,
+            }));
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
     //  Reads / writes
     // ══════════════════════════════════════════════════════════════════════════
 

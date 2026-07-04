@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Reactive.Linq;
 using MeshWeaver.GitSync;
 
@@ -22,8 +23,12 @@ public sealed class FakeGitHubRepoClient : IGitHubRepoClient
     private readonly Dictionary<string, Dictionary<string, string>> _branches = new(StringComparer.Ordinal);
     // repoKey → list of PRs (number-keyed)
     private readonly Dictionary<string, Dictionary<int, FakePullRequest>> _prs = new(StringComparer.Ordinal);
+    // repoKey → issues (number-keyed)
+    private readonly Dictionary<string, Dictionary<int, GitHubIssue>> _issues = new(StringComparer.Ordinal);
     private int _counter;
     private int _prNumber;
+    private int _issueNumber;
+    private long _commentId;
 
     private sealed record FakePullRequest(
         int Number, string Url, string Title, string? Body,
@@ -165,6 +170,159 @@ public sealed class FakeGitHubRepoClient : IGitHubRepoClient
                 $"Fake repo '{repositoryUrl}' has no PR #{number}."));
         }
     });
+
+    // ── Issues ───────────────────────────────────────────────────────────────
+
+    /// <summary>Seeds an issue into the fake repo (for sync tests). Returns the assigned number.</summary>
+    public int SeedIssue(string repositoryUrl, string title, string? body = null, GitHubIssueState state = GitHubIssueState.Open)
+    {
+        lock (_lock)
+        {
+            var key = Key(repositoryUrl);
+            var number = ++_issueNumber;
+            var (owner, repo) = OctokitGitHubRepoClient.ParseRepoUrl(repositoryUrl);
+            Issues(key)[number] = new GitHubIssue
+            {
+                Number = number, Title = title, Body = body, State = state, AuthorLogin = "tester",
+                CommentsCount = 0, Url = $"https://github.com/{owner}/{repo}/issues/{number}",
+                CreatedAt = DateTimeOffset.UtcNow, UpdatedAt = DateTimeOffset.UtcNow,
+            };
+            return number;
+        }
+    }
+
+    public IObservable<IReadOnlyList<GitHubIssue>> ListIssues(
+        string repositoryUrl, GitHubIssueState? state, string accessToken) => Observable.Defer(() =>
+    {
+        lock (_lock)
+        {
+            var all = _issues.TryGetValue(Key(repositoryUrl), out var m)
+                ? m.Values : Enumerable.Empty<GitHubIssue>();
+            var list = all
+                .Where(i => state is null || i.State == state)
+                // A list read carries no comments (matches the real client).
+                .Select(i => i with { Comments = ImmutableList<GitHubIssueComment>.Empty })
+                .OrderByDescending(i => i.Number)
+                .ToList();
+            return Observable.Return((IReadOnlyList<GitHubIssue>)list);
+        }
+    });
+
+    public IObservable<GitHubIssue> GetIssue(string repositoryUrl, int number, string accessToken) => Observable.Defer(() =>
+    {
+        lock (_lock)
+        {
+            if (_issues.TryGetValue(Key(repositoryUrl), out var m) && m.TryGetValue(number, out var issue))
+                return Observable.Return(issue);
+            return Observable.Throw<GitHubIssue>(new InvalidOperationException(
+                $"Fake repo '{repositoryUrl}' has no issue #{number}."));
+        }
+    });
+
+    public IObservable<GitHubIssue> CreateIssue(GitHubCreateIssueRequest request) => Observable.Defer(() =>
+    {
+        lock (_lock)
+        {
+            var key = Key(request.RepositoryUrl);
+            var number = ++_issueNumber;
+            var (owner, repo) = OctokitGitHubRepoClient.ParseRepoUrl(request.RepositoryUrl);
+            var issue = new GitHubIssue
+            {
+                Number = number, Title = request.Title, Body = request.Body, State = GitHubIssueState.Open,
+                AuthorLogin = "tester", Labels = request.Labels, CommentsCount = 0,
+                Url = $"https://github.com/{owner}/{repo}/issues/{number}",
+                CreatedAt = DateTimeOffset.UtcNow, UpdatedAt = DateTimeOffset.UtcNow,
+            };
+            Issues(key)[number] = issue;
+            return Observable.Return(issue);
+        }
+    });
+
+    public IObservable<GitHubIssueComment> CommentIssue(
+        string repositoryUrl, int number, string body, string accessToken) => Observable.Defer(() =>
+    {
+        lock (_lock)
+        {
+            var key = Key(repositoryUrl);
+            if (!_issues.TryGetValue(key, out var m) || !m.TryGetValue(number, out var issue))
+                return Observable.Throw<GitHubIssueComment>(new InvalidOperationException(
+                    $"Fake repo '{repositoryUrl}' has no issue #{number}."));
+            var comment = new GitHubIssueComment(++_commentId, "tester", body, DateTimeOffset.UtcNow, null);
+            m[number] = issue with
+            {
+                CommentsCount = issue.CommentsCount + 1,
+                Comments = issue.Comments.Add(comment),
+            };
+            return Observable.Return(comment);
+        }
+    });
+
+    // ── Pull requests (richer) ────────────────────────────────────────────────
+
+    public IObservable<IReadOnlyList<GitHubPullRequestSummary>> ListPullRequests(
+        string repositoryUrl, PullRequestStatus? state, string accessToken) => Observable.Defer(() =>
+    {
+        lock (_lock)
+        {
+            var all = _prs.TryGetValue(Key(repositoryUrl), out var m)
+                ? m.Values : Enumerable.Empty<FakePullRequest>();
+            var list = all
+                .Where(pr => state is null || MatchesFilter(pr.Status, state.Value))
+                .Select(pr => new GitHubPullRequestSummary(
+                    pr.Number, pr.Title, "tester", pr.Status, false, pr.Head, pr.Base, pr.Url,
+                    DateTimeOffset.UtcNow, DateTimeOffset.UtcNow))
+                .OrderByDescending(s => s.Number)
+                .ToList();
+            return Observable.Return((IReadOnlyList<GitHubPullRequestSummary>)list);
+        }
+    });
+
+    public IObservable<GitHubPullRequestDetail> GetPullRequestDetail(
+        string repositoryUrl, int number, string accessToken) => Observable.Defer(() =>
+    {
+        lock (_lock)
+        {
+            if (_prs.TryGetValue(Key(repositoryUrl), out var m) && m.TryGetValue(number, out var pr))
+                return Observable.Return(new GitHubPullRequestDetail(
+                    pr.Number, pr.Title, pr.Body, "tester", pr.Status, false, pr.Head, pr.Base,
+                    "headsha", pr.Url, Mergeable: true, MergeableState: "clean", CommentsCount: 0,
+                    GitHubCheckSummary.Empty, GitHubReviewSummary.Empty));
+            return Observable.Throw<GitHubPullRequestDetail>(new InvalidOperationException(
+                $"Fake repo '{repositoryUrl}' has no PR #{number}."));
+        }
+    });
+
+    public IObservable<GitHubIssueComment> CommentPullRequest(
+        string repositoryUrl, int number, string body, string accessToken) => Observable.Defer(() =>
+    {
+        lock (_lock)
+            return Observable.Return(new GitHubIssueComment(++_commentId, "tester", body, DateTimeOffset.UtcNow, null));
+    });
+
+    public IObservable<GitHubMergeResult> MergePullRequest(GitHubMergePullRequestRequest request) => Observable.Defer(() =>
+    {
+        lock (_lock)
+        {
+            var key = Key(request.RepositoryUrl);
+            if (_prs.TryGetValue(key, out var m) && m.TryGetValue(request.Number, out var pr))
+            {
+                m[request.Number] = pr with { Status = PullRequestStatus.Merged };
+                return Observable.Return(new GitHubMergeResult(true, "mergedsha", "Pull request successfully merged"));
+            }
+            return Observable.Throw<GitHubMergeResult>(new InvalidOperationException(
+                $"Fake repo '{request.RepositoryUrl}' has no PR #{request.Number}."));
+        }
+    });
+
+    private static bool MatchesFilter(PullRequestStatus status, PullRequestStatus filter) =>
+        filter == PullRequestStatus.Open ? status == PullRequestStatus.Open
+        : status is PullRequestStatus.Closed or PullRequestStatus.Merged;
+
+    private Dictionary<int, GitHubIssue> Issues(string key)
+    {
+        if (!_issues.TryGetValue(key, out var i)) _issues[key] = i = new();
+        return i;
+    }
 
     private Dictionary<string, string> Branches(string key)
     {

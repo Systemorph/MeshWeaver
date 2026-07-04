@@ -5,6 +5,7 @@
 
   <ItemGroup>
     <PackageReference Include="Octokit" />
+    <PackageReference Include="Octokit.Reactive" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
     <PackageReference Include="System.Reactive" />
   </ItemGroup>
