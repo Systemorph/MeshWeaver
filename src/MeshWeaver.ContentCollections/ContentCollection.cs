@@ -137,8 +137,25 @@ public class ContentCollection : IDisposable
     /// <param name="path">The destination folder path within the collection.</param>
     /// <param name="fileName">The file name to write.</param>
     /// <param name="openReadStream">The content to persist.</param>
-    public Task SaveFileAsync(string path, string fileName, Stream openReadStream)
-        => provider.SaveFileAsync(path, fileName, openReadStream);
+    public async Task SaveFileAsync(string path, string fileName, Stream openReadStream)
+    {
+        await provider.SaveFileAsync(path, fileName, openReadStream);
+
+        // 🚨 Read-after-write for the collection's OWN writes must NOT depend on the file-system
+        // watcher. The watcher (AttachMonitor) is the only thing that feeds a post-init write into
+        // markdownStream — but on Linux inotify DROPS the event for a file written into a
+        // just-created subdirectory (the recursive watch on the new dir isn't registered before the
+        // write), so the article never lands and a content render stays "not found" until the
+        // collection re-initializes. That is the CI-only CollectionNamedArea flake AND the prod
+        // "upload a file then open it → shows nothing" bug this test class was written for. macOS
+        // FSEvents watches the whole tree so it never misses — which is why it only ever flaked on
+        // the Linux runner. Ingest our own write directly; the watcher remains for EXTERNAL changes.
+        if (fileName.EndsWith(".md", StringComparison.OrdinalIgnoreCase))
+        {
+            var folder = path.Trim('/');
+            UpdateArticle(folder.Length == 0 ? fileName : $"{folder}/{fileName}");
+        }
+    }
 
     /// <summary>
     /// Streams folders + files at <paramref name="currentPath"/> as a single async enumerable.
