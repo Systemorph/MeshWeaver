@@ -648,7 +648,7 @@ else
                 {
                     <button type="button" class="thread-chat-status-item is-clickable"
                             title="Harness — click to switch runtime" @onclick='() => OnStatusChipClick("harness", false)'>
-                        @ChipSvg("harness") @harnessId
+                        @HarnessIcon(boundHarness) @harnessId
                     </button>
                 }
                 @if (isClaudeCode || isCopilot)
@@ -845,8 +845,8 @@ else
                        the in-flight round. Disabled ONLY for genuinely un-sendable states: empty text or
                        no model. *@
                     <FluentButton Appearance="FluentAppearance.Accent" OnClick="SendMessage"
-                                  Disabled="@(string.IsNullOrWhiteSpace(MessageText) || (HasNoModels && ActiveHarness() is null))"
-                                  Title="@(HasNoModels && ActiveHarness() is null ? "No model available — configure one to chat" : "Send")">
+                                  Disabled="@(string.IsNullOrWhiteSpace(MessageText))"
+                                  Title="Send">
                         <FluentIcon Value="@(new Icons.Regular.Size20.Send())" Color="Color.Neutral" />
                     </FluentButton>
                 }

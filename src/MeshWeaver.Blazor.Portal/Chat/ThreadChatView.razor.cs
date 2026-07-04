@@ -701,12 +701,36 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     {
         if (string.IsNullOrEmpty(_templatePath))
             return;
+        // Apply to the ACTIVE composer (the thread's embedded composer inside a thread, the per-user
+        // composer node out of one).
+        ApplyComposerSelection(_templatePath!, harness, agentPath, modelName, ensure: false, "Saving your selection");
+
+        // ALSO persist the selection as the user's DEFAULT composer, so a NEW chat (or a re-init after the
+        // catalog changes) restores the last-used harness/model/agent instead of snapping back to the
+        // catalog default — this is the "harness jumped back to Claude Code" report. Out of a thread the
+        // default IS _templatePath (the second write is idempotent); inside a thread it is a different node
+        // that may not be materialised yet, so ensure it first (never Update an absent node → NotFound storm).
+        var defaultPath = string.IsNullOrEmpty(_userHome)
+            ? null : MeshWeaver.AI.ThreadComposerNodeType.PathFor(_userHome);
+        if (!string.IsNullOrEmpty(defaultPath) && !string.Equals(defaultPath, _templatePath, StringComparison.Ordinal))
+            ApplyComposerSelection(defaultPath!, harness, agentPath, modelName, ensure: true, "Saving your default");
+    }
+
+    /// <summary>
+    /// Merges the (harness/agent/model) selection onto a composer node's <c>ThreadComposer</c> content —
+    /// coalescing only the provided fields (a null arg leaves that field untouched), bad-data tolerant (an
+    /// unreadable node is left alone, never clobbered). When <paramref name="ensure"/> is set the node is
+    /// CreateNode'd first (benign <c>NodeAlreadyExists</c>) so a not-yet-materialised per-user default
+    /// composer does not NotFound-storm the partition hub on Update.
+    /// </summary>
+    private void ApplyComposerSelection(string path, string? harness, string? agentPath, string? modelName, bool ensure, string errorContext)
+    {
         // Reached from the slash-command picker AFTER Rx hops (skill query → picker query → InvokeAsync),
         // where the circuit AccessService's Context AND CircuitContext have been nulled by the Blazor
         // inbound-activity finally. UpdateMeshNodeAsCircuitUser re-establishes the DURABLE circuit user on
         // the hub AccessService for Update's synchronous capture, so the composer write is attributed to
         // the real user instead of null (→ "Saving your selection: Access denied").
-        UpdateMeshNodeAsCircuitUser(_templatePath, node =>
+        void Write() => UpdateMeshNodeAsCircuitUser(path, node =>
         {
             var existing = MeshWeaver.AI.ThreadComposerNodeType.ComposerOf(node, Hub.JsonSerializerOptions, Logger);
             if (node?.Content is not null && existing is null)
@@ -719,7 +743,21 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             };
             return MeshWeaver.AI.ThreadComposerNodeType.WithComposer(
                 node!, updated, Hub.JsonSerializerOptions, Logger);
-        }, ex => SurfaceError(ex, "Saving your selection"));
+        }, ex => SurfaceError(ex, errorContext));
+
+        if (!ensure)
+        {
+            Write();
+            return;
+        }
+        // Create the node (benign if it already exists), THEN merge the selection — CreateNode registers a
+        // routable node, unlike Update which only patches an existing one.
+        MeshQuery.CreateNode(MeshWeaver.Mesh.MeshNode.FromPath(path) with
+        {
+            NodeType = MeshWeaver.AI.ThreadComposerNodeType.NodeType,
+            Name = "Chat Input",
+            Content = new MeshWeaver.AI.ThreadComposer()
+        }).Subscribe(_ => InvokeAsync(Write), _ => InvokeAsync(Write));
     }
 
     /// <summary>
@@ -973,18 +1011,12 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                 }
             }
 
-            // No usable MESH model → don't submit under the MeshWeaver harness (the agent has nothing to
-            // run). A CLI harness (Claude Code / Copilot) runs its OWN subscription model, so an empty
-            // mesh catalog must NOT block it — that was the "can type but Enter/Send does nothing under
-            // Claude Code" report. Slash commands short-circuit above, so /model, /harness, /login still
-            // work with an empty catalog.
-            if (HasNoModels && ActiveHarness() is null)
-            {
-                lastCommandStatus = "No language model is available — add one in Settings → Language Models to chat.";
-                lastCommandStatusIsError = true;
-                StateHasChanged();
-                return;
-            }
+            // 🚫 The composer NEVER blocks. We do not gate submission on model/harness availability here —
+            // that is the "chat is chronically disabled / Enter does nothing" report. A CLI harness (Claude
+            // Code / Copilot) runs its OWN subscription model; and even under the MeshWeaver harness with an
+            // empty catalog the message is accepted and the "no AI model available" condition is surfaced in
+            // the thread OUTPUT (the wedges-to-zero graceful sink), not by dead-ending the input box. Slash
+            // commands still short-circuit above, so /model, /harness, /login work regardless.
 
             // Attempt to begin submission — rejects empty text and concurrent submissions
             if (!submissionHandler.TryBeginSubmit(userMessageText))
@@ -1233,6 +1265,22 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         };
         return new MarkupString(
             $"<svg class=\"chip-svg\" viewBox=\"0 0 16 16\" width=\"12\" height=\"12\" fill=\"currentColor\" aria-hidden=\"true\"><path d=\"{path}\"/></svg>");
+    }
+
+    /// <summary>
+    /// The harness's OWN brand icon for the status chip — the inline SVG carried on
+    /// <see cref="MeshWeaver.AI.Harness.Icon"/> (e.g. Claude Code's terracotta burst). Falls back to the
+    /// generic hexagon glyph when the harness is unknown or ships no inline SVG. This is why the harness
+    /// logo now renders instead of the placeholder hexagon.
+    /// </summary>
+    private MarkupString HarnessIcon(string? harnessId)
+    {
+        var harness = MeshWeaver.AI.HarnessNodeType.ResolveHarness(Hub.ServiceProvider, harnessId);
+        var icon = harness?.Definition.Icon;
+        // Only raw inline SVG (starts with '<') is safe to emit as markup; a URL/path is not an icon here.
+        return !string.IsNullOrEmpty(icon) && icon.TrimStart().StartsWith('<')
+            ? new MarkupString($"<span class=\"chip-svg\" aria-hidden=\"true\">{icon}</span>")
+            : ChipSvg("harness");
     }
 
     /// <summary>
@@ -2100,12 +2148,36 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     // ─── Hero-header: inline title / description editing + Mark Done ───
 
     /// <summary>Enter title edit mode, seeding the editor with the current name and focusing it.</summary>
+    // Rendered true on the first pass and set true before every StateHasChanged that MUST paint (entering
+    // or leaving an inline title/description edit, focus). See ShouldRender.
+    private bool _forceRender = true;
+
+    /// <summary>
+    /// Render isolation for the inline title/description editors. While an edit is in flight this large
+    /// component would otherwise re-diff the WHOLE thread on every <c>Immediate</c> keystroke AND on every
+    /// background thread-stream emission — visibly "bumping" the caret and making typing feel janky. We
+    /// therefore SUPPRESS re-renders while editing, painting only when a real state transition needs it
+    /// (flagged via <see cref="_forceRender"/>). The edited text is still captured server-side by the
+    /// two-way binding regardless of ShouldRender, so Enter/blur commit the latest value. (GUI/DataBinding.md
+    /// render-isolation — the sanctioned alternative to extracting a node-bound child component here.)
+    /// </summary>
+    protected override bool ShouldRender()
+    {
+        if (_forceRender)
+        {
+            _forceRender = false;
+            return true;
+        }
+        return !(isEditingTitle || isEditingDescription);
+    }
+
     private void BeginTitleEdit()
     {
         if (IsReadOnlyThread || isEditingTitle) return;
         editTitleText = ThreadViewModel?.Name ?? "";
         isEditingTitle = true;
         _focusTitleOnRender = true;
+        _forceRender = true;
         StateHasChanged();
     }
 
@@ -2134,12 +2206,14 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             UpdateMeshNodeAsCircuitUser(threadPath, node => node with { Name = newName },
                 ex => SurfaceError(ex, "Saving the title"));
         }
+        _forceRender = true;
         StateHasChanged();
     }
 
     private void CancelTitleEdit()
     {
         isEditingTitle = false;
+        _forceRender = true;
         StateHasChanged();
     }
 
@@ -2150,6 +2224,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         editDescriptionText = ThreadViewModel?.Description ?? "";
         isEditingDescription = true;
         _focusDescOnRender = true;
+        _forceRender = true;
         StateHasChanged();
     }
 
@@ -2175,12 +2250,14 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             UpdateMeshNodeAsCircuitUser(threadPath, node => node with { Description = normalized },
                 ex => SurfaceError(ex, "Saving the description"));
         }
+        _forceRender = true;
         StateHasChanged();
     }
 
     private void CancelDescriptionEdit()
     {
         isEditingDescription = false;
+        _forceRender = true;
         StateHasChanged();
     }
 
