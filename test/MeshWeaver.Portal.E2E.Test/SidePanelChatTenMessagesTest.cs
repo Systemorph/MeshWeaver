@@ -21,13 +21,13 @@ public class SidePanelChatTenMessagesTest(PortalFixture fixture)
 {
     private const int MessageCount = 10;
 
-    private const string ComposerSeedJson = """
+    private string ComposerSeedJson => $$"""
         {
           "id": "ThreadComposer",
-          "namespace": "Roland/_Thread",
+          "namespace": "{{fixture.UserId}}/_Thread",
           "name": "Chat Input",
           "nodeType": "ThreadComposer",
-          "mainNode": "Roland",
+          "mainNode": "{{fixture.UserId}}",
           "content": { "$type": "ThreadComposer" }
         }
         """;
@@ -56,15 +56,15 @@ public class SidePanelChatTenMessagesTest(PortalFixture fixture)
             Headers = new Dictionary<string, string> { ["authorization"] = $"Bearer {token}" },
             DataObject = new
             {
-                Path = "Roland/_Thread/ThreadComposer",
+                Path = $"{fixture.UserId}/_Thread/ThreadComposer",
                 Fields = "{\"content\":{\"$type\":\"ThreadComposer\",\"harness\":\"Harness/MeshWeaver\","
-                       + "\"modelName\":\"" + ModelPath + "\",\"contextPath\":\"Roland\"}}"
+                       + "\"modelName\":\"" + ModelPath + "\",\"contextPath\":\"" + fixture.UserId + "\"}}"
             }
         });
 
         var page = await context.NewPageAsync();
         await page.SetViewportSizeAsync(1400, 950);
-        await page.GotoAsync($"{fixture.BaseUrl}/User/Roland",
+        await page.GotoAsync($"{fixture.BaseUrl}/User/{fixture.UserId}",
             new PageGotoOptions { WaitUntil = WaitUntilState.NetworkIdle });
 
         // Open the side-panel chat.

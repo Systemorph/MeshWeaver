@@ -38,13 +38,17 @@ public sealed class PortalFixture : IAsyncLifetime
     public string UserPartition => User.ToLowerInvariant();
 
     /// <summary>
-    /// The DevLogin user's id EXACTLY as the User node / circuit identity carries it (the personId,
-    /// not lower-cased) — this is the user's <c>ObjectId</c> / home partition. The per-user registry
-    /// namespaces are <c>{UserId}/Skill</c>, <c>{UserId}/Agent</c>, … and an AccessAssignment granting
-    /// this user a role uses <c>accessObject = UserId</c>. (Distinct from <see cref="UserPartition"/>,
-    /// which is the lower-cased schema name.)
+    /// The DevLogin user's id EXACTLY as the User NODE carries it — resolved from the portal itself
+    /// (the token mint's <c>nodePath</c> first segment, the same contract portal-next boots from)
+    /// on the first authenticated context, falling back to the personId until then. 🚨 Never assume
+    /// the node id matches the personId's CASING: DevLogin provisions the user node lower-cased
+    /// ('roland' for person 'Roland'); seeding a namespace under the capital-cased id auto-creates a
+    /// TYPELESS STUB ROOT ('Roland') that shadows the real User node for every /{UserId} navigation —
+    /// the Blazor home then renders "Area not found: Activity" (the token-vs-circuit casing seam).
     /// </summary>
-    public string UserId => User;
+    public string UserId => _resolvedUserId ?? User;
+
+    private string? _resolvedUserId;
 
     /// <summary>True when a portal + browser are available, i.e. the tests should run.</summary>
     public bool Available => BaseUrl is not null && _browser is not null;
@@ -143,6 +147,33 @@ public sealed class PortalFixture : IAsyncLifetime
             throw new InvalidOperationException(
                 $"DevLogin for user '{person}' failed ({response?.Status}). " +
                 "A 4xx means E2E_USER is not a valid User node id; a persistent 5xx means the portal is unhealthy.");
+
+        // First default-user context: learn the REAL user node id from the token mint's nodePath
+        // ("{userId}/ApiToken/…") so seeds/URLs use the node's exact casing (see UserId).
+        if (person == User && _resolvedUserId is null)
+        {
+            try
+            {
+                var mint = await context.APIRequest.PostAsync($"{BaseUrl}/api/tokens", new APIRequestContextOptions
+                {
+                    DataObject = new { Label = "e2e-identity-probe", ExpiresInDays = 1 }
+                });
+                if ((int)mint.Status < 400)
+                {
+                    var json = await mint.JsonAsync();
+                    if (json!.Value.TryGetProperty("nodePath", out var nodePath))
+                    {
+                        var first = nodePath.GetString()?.Split('/').FirstOrDefault();
+                        if (!string.IsNullOrEmpty(first))
+                            _resolvedUserId = first;
+                    }
+                }
+            }
+            catch
+            {
+                // best effort — UserId falls back to the personId
+            }
+        }
         return context;
     }
 
@@ -291,8 +322,52 @@ public sealed class PortalFixture : IAsyncLifetime
         return false;
     }
 
+    private IBrowserContext? _sharedContext;
+
+    /// <summary>
+    /// ONE lazily-created authenticated context, shared across the read-only page SWEEPS
+    /// (DocExamplesSweepTest / PortalNextDocExamplesTest — 50+ theory cases each). A context (and
+    /// its /dev/signin) per case is what starved the resource-bounded e2e portal mid-suite: the
+    /// kernel-compile load stalls request handling and the NEXT case's signin times out. Tests are
+    /// serial (one collection), so sharing is race-free; pages are still per-test. Never dispose it
+    /// in a test — the fixture owns it.
+    /// </summary>
+    public async Task<IBrowserContext> SharedAuthenticatedContextAsync()
+        => _sharedContext ??= await NewAuthenticatedContextAsync();
+
+    private bool _kernelWarmed;
+
+    /// <summary>
+    /// One-time kernel warm-up for the doc-example sweeps: the FIRST Roslyn compile after a pod
+    /// roll takes 1-2 minutes and (on the resource-bounded e2e pod) starves concurrent request
+    /// handling — whichever sweep page happens to run first would pay that cost and fail its
+    /// per-page budget (a warm-up lottery, not a page defect). Loading one small executable page
+    /// up front and waiting for its kernel output isolates the boot cost so every sweep page
+    /// measures the actual render contract. The warm-up cost itself stays visible in this step's
+    /// duration on the first sweep test.
+    /// </summary>
+    public async Task EnsureKernelWarmAsync(IBrowserContext context)
+    {
+        if (_kernelWarmed) return;
+        var page = await context.NewPageAsync();
+        try
+        {
+            await page.GotoAsync($"{BaseUrl}/Doc/DataMesh/InteractiveMarkdown",
+                new PageGotoOptions { WaitUntil = WaitUntilState.Load, Timeout = 60_000 });
+            await page.GetByText("Hello World", new() { Exact = false }).First
+                .WaitForAsync(new LocatorWaitForOptions { State = WaitForSelectorState.Visible, Timeout = 240_000 });
+            _kernelWarmed = true;
+        }
+        finally
+        {
+            await page.CloseAsync();
+        }
+    }
+
     public async ValueTask DisposeAsync()
     {
+        if (_sharedContext is not null)
+            await _sharedContext.DisposeAsync();
         if (_browser is not null)
             await _browser.DisposeAsync();
         _playwright?.Dispose();

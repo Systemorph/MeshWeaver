@@ -76,6 +76,11 @@ public partial class CollaborativeMarkdownView
     private Address? _kernelAddress;
     private Address KernelAddress => _kernelAddress ?? ResolveActivityAddress();
     private bool _codeSubmitted;
+    // True once THIS view actually created the per-view kernel Activity node (owner resolved +
+    // CreateActivityAndSubmit called). Gates dispose-time teardown so we never delete an activity
+    // that was never created (which would NotFound-storm the router). Distinct from _codeSubmitted,
+    // which is set even when the owner did not resolve and NO activity was created.
+    private bool _kernelActivityCreated;
     // Flipped (via CreateActivityAndSubmit's onReady) once the per-view Activity is created + routable.
     // Gates the LIVE kernel-area embed in RenderContentHtml so the GUI never subscribes to a
     // not-yet-created {owner}/_Activity/markdown-{id} (the subscribe-before-create NotFound storm).
@@ -384,6 +389,7 @@ public partial class CollaborativeMarkdownView
             MarkdownViewLogic.CreateActivityAndSubmit(
                 Hub, meshService, KernelAddress, ownerPath, _kernelId, _codeSubmissions,
                 onReady: OnKernelReady);
+            _kernelActivityCreated = true;
         }
     }
 
@@ -897,6 +903,39 @@ public partial class CollaborativeMarkdownView
         }
         dotNetRef?.Dispose();
         dotNetRef = null;
+        ReleaseKernelActivity();
         await base.DisposeAsync();
+    }
+
+    /// <summary>
+    /// Deletes the per-view kernel <c>Activity</c> node on unmount so its hub tears down immediately
+    /// (SubscribeToOwnDeletion) instead of surviving to the 15-min idle timeout — the same
+    /// accumulation-of-live-hubs wedge the read-only <see cref="MarkdownView"/> release fixes. Guarded
+    /// on <see cref="_kernelActivityCreated"/> so a view that never created the activity never posts a
+    /// delete to a nonexistent address. Best-effort.
+    /// </summary>
+    private void ReleaseKernelActivity()
+    {
+        if (!_kernelActivityCreated || _kernelAddress is null)
+            return;
+        var activityPath = _kernelAddress.ToString();
+        var logger = Hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MarkdownExecution");
+        // See MarkdownView.ReleaseKernelActivity: in-circuit dispose deletes now; a full-page nav /
+        // tab close leaves the hub shutting down (ObjectDisposedException) → benign, idle timeout reaps.
+        try
+        {
+            Hub.ServiceProvider.GetService<IMeshService>()?.DeleteNode(activityPath)
+                .Subscribe(_ => { }, ex =>
+                {
+                    if (ex is ObjectDisposedException)
+                        logger?.LogDebug("Markdown kernel activity {Path} not deleted on dispose — circuit shutting down; idle timeout will reap it.", activityPath);
+                    else
+                        logger?.LogWarning(ex, "Markdown kernel activity {Path} delete-on-dispose failed (falls back to idle timeout)", activityPath);
+                });
+        }
+        catch (ObjectDisposedException)
+        {
+            // Circuit already tearing down — the idle timeout reaps the activity. Not an error.
+        }
     }
 }

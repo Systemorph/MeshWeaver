@@ -49,6 +49,13 @@ public partial class MarkdownView
 
     private bool _codeSubmitted;
 
+    // True once THIS view actually created the per-view kernel Activity node (owner resolved +
+    // CreateActivityAndSubmit called). Gates the dispose-time teardown: deleting/cancelling an
+    // activity that was never created would post to a nonexistent address and NotFound-storm the
+    // router — the exact wedge class. Distinct from _codeSubmitted, which is set even when the
+    // owner did not resolve (SSR/prerender) and NO activity was created.
+    private bool _kernelActivityCreated;
+
     // Flipped (via CreateActivityAndSubmit's onReady) once the per-view Activity node is created and
     // routable. Gates the LIVE kernel-area embed in RenderHtml: until it's true the kernel result
     // areas render as a non-subscribing placeholder, so the GUI never subscribes to a not-yet-created
@@ -187,6 +194,7 @@ public partial class MarkdownView
             MarkdownViewLogic.CreateActivityAndSubmit(
                 Hub, meshService, KernelAddress, ownerPath, _kernelId, CodeSubmissions,
                 onReady: OnKernelReady);
+            _kernelActivityCreated = true;
         }
     }
 
@@ -205,13 +213,59 @@ public partial class MarkdownView
     }
 
     /// <summary>
-    /// Disposes resources held by this view, delegating to the base <c>DisposeAsync</c>
-    /// which tears down data bindings and reactive subscriptions.
+    /// Disposes resources held by this view: releases the per-view kernel Activity (so its hub tears
+    /// down NOW instead of lingering to the 15-min idle timeout), then delegates to the base
+    /// <c>DisposeAsync</c> which tears down data bindings and reactive subscriptions.
     /// </summary>
     /// <returns>A value task that completes once all resources are released.</returns>
     public override async ValueTask DisposeAsync()
     {
+        ReleaseKernelActivity();
         await base.DisposeAsync();
+    }
+
+    /// <summary>
+    /// Deletes the per-view kernel <c>Activity</c> node on unmount. Deleting the node fires the owning
+    /// hub's <c>SubscribeToOwnDeletion</c> → the kernel hub (and its executor sub-hub, cancelling any
+    /// in-flight Roslyn compile) is disposed immediately, rather than surviving to the 15-min idle
+    /// timeout. Every doc-page visit created one of these; without release they accumulate as live
+    /// hubs that keep taking routed traffic — the CPU-starvation wedge that timed out <c>/healthz</c>.
+    /// <para>🚨 Guarded on <see cref="_kernelActivityCreated"/>: a view that never created the activity
+    /// (SSR/prerender, no resolvable owner) must NOT post a delete — routing a message to a nonexistent
+    /// <c>_Activity/markdown-*</c> address is the NotFound-storm we are avoiding. Delete-only, not
+    /// cancel-then-delete: the delete IS the teardown, so a separate cancel would only race to post to
+    /// an address the delete just removed. Best-effort — a failed delete falls back to the idle timeout.</para>
+    /// </summary>
+    private void ReleaseKernelActivity()
+    {
+        if (!_kernelActivityCreated || _kernelAddress is null)
+            return;
+        var activityPath = _kernelAddress.ToString();
+        var logger = Hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MarkdownExecution");
+        // In-circuit navigation (component disposes, hub alive) → the delete lands and tears the
+        // kernel hub down now. A FULL-page nav / tab close tears down the whole circuit, so the hub
+        // is already shutting down and the request can't register a response subject
+        // (ObjectDisposedException) — that is EXPECTED and benign: the kernel's own idle timeout
+        // reaps it. Distinguish that from a real delete failure so only the latter is a Warning; the
+        // try/catch covers a synchronous throw during shutdown (the DeleteNode observable may fault
+        // on subscribe rather than via OnError).
+        try
+        {
+            Hub.ServiceProvider.GetService<IMeshService>()?.DeleteNode(activityPath)
+                .Subscribe(_ => { }, ex => LogKernelReleaseFault(logger, ex, activityPath));
+        }
+        catch (ObjectDisposedException)
+        {
+            // Circuit already tearing down — the idle timeout reaps the activity. Not an error.
+        }
+    }
+
+    private static void LogKernelReleaseFault(ILogger? logger, Exception ex, string activityPath)
+    {
+        if (ex is ObjectDisposedException)
+            logger?.LogDebug("Markdown kernel activity {Path} not deleted on dispose — circuit shutting down; idle timeout will reap it.", activityPath);
+        else
+            logger?.LogWarning(ex, "Markdown kernel activity {Path} delete-on-dispose failed (falls back to idle timeout)", activityPath);
     }
 
     private void RenderHtml(RenderTreeBuilder builder)
