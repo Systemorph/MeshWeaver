@@ -19,6 +19,10 @@ public class ClaudeCodeChatClient : IChatClient
     private readonly string? modelName;
     private readonly string? configDir;
     private readonly string? oauthToken;
+    // Which env var the resolved credential authenticates through: "oauth" (or null) → CLAUDE_CODE_OAUTH_TOKEN,
+    // "apiKey" → ANTHROPIC_API_KEY, "authToken" → ANTHROPIC_AUTH_TOKEN (+ baseUrl → ANTHROPIC_BASE_URL).
+    private readonly string? authMethod;
+    private readonly string? baseUrl;
     private readonly IMcpBackConnection? mcpBackConnection;
     private readonly string? userId;
     private readonly string? userName;
@@ -47,7 +51,9 @@ public class ClaudeCodeChatClient : IChatClient
         IMcpBackConnection? mcpBackConnection = null,
         string? userId = null,
         string? userName = null,
-        string? userEmail = null)
+        string? userEmail = null,
+        string? authMethod = null,
+        string? baseUrl = null)
     {
         this.configuration = configuration ?? throw new ArgumentNullException(nameof(configuration));
         this.modelName = modelName;
@@ -58,6 +64,8 @@ public class ClaudeCodeChatClient : IChatClient
         // replica never share credentials or session state.
         this.configDir = configDir;
         this.oauthToken = oauthToken;
+        this.authMethod = authMethod;
+        this.baseUrl = baseUrl;
         // Automatic MCP back-connection (the mesh is the CLI's workspace) — resolved per spawn.
         this.mcpBackConnection = mcpBackConnection;
         this.userId = userId;
@@ -164,8 +172,28 @@ public class ClaudeCodeChatClient : IChatClient
             try { Directory.CreateDirectory(configDir); }
             catch (Exception ex) { logger?.LogWarning(ex, "Could not create CLAUDE_CONFIG_DIR {Dir}", configDir); }
         }
+        // Set EXACTLY the one env var the chosen auth method names — never two at once, so the CLI's
+        // documented precedence (ANTHROPIC_AUTH_TOKEN > ANTHROPIC_API_KEY > CLAUDE_CODE_OAUTH_TOKEN)
+        // can't pick a stale credential. `authMethod` null/"oauth" keeps the historical subscription-token
+        // behaviour; "apiKey"/"authToken" are the paths that used to be impossible because only the OAuth
+        // env var was ever set (the "passing the key never worked" report).
         if (!string.IsNullOrEmpty(effectiveToken))
-            env["CLAUDE_CODE_OAUTH_TOKEN"] = effectiveToken;
+        {
+            switch (authMethod?.ToLowerInvariant())
+            {
+                case "apikey":
+                    env["ANTHROPIC_API_KEY"] = effectiveToken;
+                    break;
+                case "authtoken":
+                    env["ANTHROPIC_AUTH_TOKEN"] = effectiveToken;
+                    if (!string.IsNullOrEmpty(baseUrl))
+                        env["ANTHROPIC_BASE_URL"] = baseUrl;
+                    break;
+                default: // "oauth" or null — Claude subscription token from `claude setup-token`.
+                    env["CLAUDE_CODE_OAUTH_TOKEN"] = effectiveToken;
+                    break;
+            }
+        }
 
         var claudeOptions = new ClaudeAgentOptions { Env = env };
 

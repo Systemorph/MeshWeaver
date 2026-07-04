@@ -323,6 +323,30 @@ public sealed class ChatClientCredentialResolver : IDisposable
     }
 
     /// <summary>
+    /// The full co-hosted-CLI credential: the decrypted token/key, the
+    /// <see cref="ModelProviderConfiguration.AuthMethod"/> that says WHICH env var to set, and the
+    /// optional gateway base URL. All fields null when the user hasn't connected.
+    /// </summary>
+    public sealed record HarnessCredential(string? Token, string? AuthMethod, string? BaseUrl);
+
+    /// <summary>
+    /// Method-aware companion to <see cref="ResolveConnectToken"/>: resolves the token AND its
+    /// <see cref="ModelProviderConfiguration.AuthMethod"/> (+ gateway <see cref="ModelProviderConfiguration.Endpoint"/>)
+    /// so the harness sets the RIGHT env var — the fix that lets a stored API key actually authenticate
+    /// (before, only <c>CLAUDE_CODE_OAUTH_TOKEN</c> was ever set). All-null when not connected.
+    /// </summary>
+    public HarnessCredential ResolveConnectCredential(string providerName, string? userPartition)
+    {
+        if (string.IsNullOrEmpty(providerName) || string.IsNullOrEmpty(userPartition))
+            return new HarnessCredential(null, null, null);
+        WatchPartition(userPartition!);
+        var providerPath = $"{ModelProviderNodeType.UserNamespacePath(userPartition!)}/{providerName}";
+        return TryGetProvider(ReadSnapshot(), providerPath, out var cfg) && cfg is not null
+            ? new HarnessCredential(Decrypt(cfg.ApiKey), cfg.AuthMethod, cfg.Endpoint)
+            : new HarnessCredential(null, null, null);
+    }
+
+    /// <summary>
     /// Decrypts a stored credential. Passthrough when no protector is registered
     /// or the value is legacy plaintext (see <see cref="IProviderKeyProtector"/>).
     /// </summary>

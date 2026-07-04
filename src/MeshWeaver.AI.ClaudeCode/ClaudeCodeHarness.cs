@@ -79,8 +79,13 @@ public sealed class ClaudeCodeHarness(IOptions<ClaudeCodeConfiguration> options)
         // API key — resolve it from the user's ClaudeCode provider node. Best-effort: the CLI also
         // reads its own .credentials.json from the per-user CLAUDE_CONFIG_DIR on the shared volume,
         // so an absent token simply means "rely on the config dir" (and Connect/login can populate it).
+        // Resolve the credential AND its auth method so the client can set the RIGHT env var —
+        // CLAUDE_CODE_OAUTH_TOKEN (subscription), ANTHROPIC_API_KEY (Console key), or
+        // ANTHROPIC_AUTH_TOKEN + ANTHROPIC_BASE_URL (gateway). Passing a key only as the OAuth-token
+        // env var is why API keys never authenticated.
         var resolver = hub.ServiceProvider.GetService<ChatClientCredentialResolver>();
-        var token = resolver?.ResolveConnectToken(Harnesses.ClaudeCode, userId);
+        var cred = resolver?.ResolveConnectCredential(Harnesses.ClaudeCode, userId);
+        var token = cred?.Token;
 
         var root = configuration.ConfigDirRoot?.TrimEnd('/');
         var configDir = !string.IsNullOrEmpty(root) && !string.IsNullOrEmpty(userId)
@@ -96,6 +101,6 @@ public sealed class ClaudeCodeHarness(IOptions<ClaudeCodeConfiguration> options)
         // `get`, never materialised to disk. No per-spawn skill writing here.
         return new ClaudeCodeChatClient(
             configuration, modelName: null, clientLogger, configDir, token,
-            mcp, userId, accessCtx?.Name, accessCtx?.Email);
+            mcp, userId, accessCtx?.Name, accessCtx?.Email, cred?.AuthMethod, cred?.BaseUrl);
     }
 }

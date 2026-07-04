@@ -973,10 +973,12 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                 }
             }
 
-            // No usable model in the catalog → don't submit (the agent has nothing to run). Send is already
-            // disabled in the UI with a hint; this also guards the Enter/OnSubmit path. Slash commands have
-            // short-circuited above, so /model, /harness, /login etc. still work with an empty catalog.
-            if (HasNoModels)
+            // No usable MESH model → don't submit under the MeshWeaver harness (the agent has nothing to
+            // run). A CLI harness (Claude Code / Copilot) runs its OWN subscription model, so an empty
+            // mesh catalog must NOT block it — that was the "can type but Enter/Send does nothing under
+            // Claude Code" report. Slash commands short-circuit above, so /model, /harness, /login still
+            // work with an empty catalog.
+            if (HasNoModels && ActiveHarness() is null)
             {
                 lastCommandStatus = "No language model is available — add one in Settings → Language Models to chat.";
                 lastCommandStatusIsError = true;
