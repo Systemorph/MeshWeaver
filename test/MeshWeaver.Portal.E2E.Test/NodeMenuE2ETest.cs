@@ -83,9 +83,11 @@ public class NodeMenuE2ETest(PortalFixture fixture)
                     await button.WaitForAsync(
                         new LocatorWaitForOptions { State = WaitForSelectorState.Visible, Timeout = 15_000 });
                     await button.ClickAsync();
-                    // The routed page drives $Menu:Node → Delete must be an item.
-                    await page.GetByText("Delete", new() { Exact = false }).First.WaitForAsync(
-                        new LocatorWaitForOptions { State = WaitForSelectorState.Visible, Timeout = 10_000 });
+                    // Scoped to a MENU ITEM (role=menuitem) — not page-body text — so this only passes
+                    // when Delete is genuinely IN the Node dropdown that the routed page drives.
+                    await page.GetByRole(AriaRole.Menuitem, new() { Name = "Delete", Exact = false }).First
+                        .WaitForAsync(
+                            new LocatorWaitForOptions { State = WaitForSelectorState.Visible, Timeout = 10_000 });
                     menuOk = true;
                 }
                 catch (TimeoutException) { /* grant not propagated yet — reload */ }
@@ -93,11 +95,16 @@ public class NodeMenuE2ETest(PortalFixture fixture)
             }
 
             menuOk.Should().BeTrue(
-                "the Space's Node menu must be driven by the routed page and contain Delete "
+                "the Space's Node menu must be driven by the routed page and contain a Delete menu item "
                 + "(an empty menu means the routed page stopped driving $Menu:Node)");
 
-            // The menu is headed by the Space's OWN name — not a stale previewed node's.
-            await page.GetByText("Menu E2E", new() { Exact = false }).First.WaitForAsync(
+            // The dropdown that holds Delete is headed by the Space's OWN name — scoped to THAT
+            // <fluent-menu> (not the page's <h1>), so a stale previewed-node header would fail here.
+            var nodeMenu = page.Locator("fluent-menu").Filter(new()
+            {
+                Has = page.GetByRole(AriaRole.Menuitem, new() { Name = "Delete", Exact = false }),
+            });
+            await nodeMenu.GetByText("Menu E2E", new() { Exact = false }).First.WaitForAsync(
                 new LocatorWaitForOptions { State = WaitForSelectorState.Visible, Timeout = 10_000 });
 
             await page.ScreenshotAsync(new PageScreenshotOptions { Path = "/tmp/node-menu.png" });
