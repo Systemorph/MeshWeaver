@@ -933,6 +933,11 @@ public static class MemexConfiguration
         // {userId}/_Provider/GitHub. See Doc/Architecture/GitHubSync.
         app.MapGitHubConnect();
 
+        // "Sign in with GitHub" — an authentication provider (distinct from the connect endpoints
+        // above). Reuses the same GitHub:OAuth creds; issues the Entra-shaped cookie so a GitHub
+        // login resolves to the same mesh user as an Entra login with that verified email.
+        app.MapGitHubLogin();
+
         // Use HTTPS redirection only for non-MCP paths (MCP needs HTTP for Claude Code)
         app.UseWhen(
             context => !context.Request.Path.StartsWithSegments("/mcp"),
