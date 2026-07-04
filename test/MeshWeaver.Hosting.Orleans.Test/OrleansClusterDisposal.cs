@@ -31,6 +31,30 @@ internal static class OrleansClusterDisposal
     /// Hand a cluster's disposal to a background pool thread — NEVER awaited on the
     /// teardown thread. Null-safe and best-effort (the cluster is on its way down; a
     /// shutdown-race exception is benign and swallowed).
+    ///
+    /// <para><b>Graceful stop BEFORE dispose — the root fix for the Autofac
+    /// disposed-<c>LifetimeScope</c> straggler (task #20).</b> <see cref="TestCluster.DisposeAsync"/>
+    /// disposes the Orleans CLIENT host through the generic <c>IHost.DisposeAsync()</c>, which
+    /// only disposes the service provider and NEVER runs <c>StopAsync()</c>. So the client's
+    /// connection message pump (<c>Orleans.Runtime.Messaging.Connection.ProcessIncoming</c>) keeps
+    /// deserializing in-flight messages while the client's Autofac container is being torn down;
+    /// <c>CodecProvider</c> then lazily resolves a serialization codec from the already-disposed
+    /// <c>LifetimeScope</c> and throws <see cref="ObjectDisposedException"/> ("Instances cannot be
+    /// resolved and nested lifetimes cannot be created from this LifetimeScope … already disposed").
+    /// Unobserved under CI load, that reaches <see cref="AppDomain.UnhandledException"/> — the ONLY
+    /// channel xUnit v3's in-proc console runner hooks — and is reported as an anonymous
+    /// "Catastrophic failure" that reds a 123/123-green shard. (The silos are already graceful:
+    /// <c>InProcessSiloHandle.DisposeAsync</c> runs <c>StopSiloAsync(graceful)</c> first; only the
+    /// client host skips its <c>StopAsync</c>.) The pump is purely Orleans-internal, so the mesh
+    /// drain added in #231 (<c>MeshTeardownHostedService</c>) never covered it — and because the
+    /// client's <c>StopAsync</c> is skipped, that drain never even ran on the client.</para>
+    ///
+    /// <para><see cref="TestCluster.StopAllSilosAsync"/> stops the client and every silo through
+    /// their <c>StopAsync</c> lifecycle (client → secondaries → primary), which drains those
+    /// connection pumps (AND runs <c>MeshTeardownHostedService</c>) so that by the time the
+    /// containers are disposed nothing is left resolving. Named + measured by
+    /// <c>TeardownStragglerCapturer</c>: the disposed-scope first-chance throw count per Orleans.Test
+    /// run drops from ~130 to ~0 once the graceful stop precedes disposal.</para>
     /// </summary>
     public static void DisposeInBackground(TestCluster? cluster)
     {
@@ -38,6 +62,12 @@ internal static class OrleansClusterDisposal
             return;
         Pending.Add(Task.Run(async () =>
         {
+            // Graceful ordered stop FIRST (drains client + silo connection pumps before any
+            // Autofac container is disposed), THEN the dispose. Separate guards so a stop-race
+            // can't skip the dispose that finishes teardown. Both benign here — the cluster is
+            // going down; a genuinely surviving straggler is now NAMED by TeardownStragglerCapturer.
+            try { await cluster.StopAllSilosAsync(); }
+            catch { /* stop-race on a cluster that's going down — DisposeAsync still completes teardown */ }
             try { await cluster.DisposeAsync(); }
             catch { /* shutdown-race / zombie silo — benign, the cluster is going down */ }
         }));
