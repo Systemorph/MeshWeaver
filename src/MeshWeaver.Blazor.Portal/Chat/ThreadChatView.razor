@@ -1,6 +1,5 @@
 @inherits BlazorView<ThreadChatControl, ThreadChatView>
 @using MeshWeaver.AI
-@using MeshWeaver.AI.Connect
 @using MeshWeaver.Data
 @using MeshWeaver.Layout
 @using MeshWeaver.Blazor.Components
@@ -767,89 +766,6 @@ else
             </div>
         }
 
-        @* Inline harness LOGIN (Connect) — driven by a harness's /login command. Reuses
-           ConnectSessionManager (the same flow Settings → Models uses), surfaced in the chat so the
-           user never leaves the conversation to authenticate a CLI harness. *@
-        @if (_connectProvider is not null)
-        {
-            @* Uses the shared widget's responsive max-height (min(440px, calc(100vh-180px))) so it fits
-               below the side-panel header; the inner list scrolls if the login content exceeds it. *@
-            <div class="thread-chat-widget">
-                <div class="thread-chat-widget-header">
-                    <span>Log in to @_connectHarnessLabel</span>
-                    <button class="thread-msg-action-btn" @onclick="CancelConnect" title="Close">&#10005;</button>
-                </div>
-                @* Composed with the framework's FluentStack + FluentAnchor / FluentTextField / FluentButton
-                   rather than hand-rolled flex divs + a raw <input> — one vertical stack, framework-themed. *@
-                <FluentStack Orientation="Microsoft.FluentUI.AspNetCore.Components.Orientation.Vertical" VerticalGap="10"
-                             Style="padding:12px 14px; flex:1 1 auto; min-height:0; overflow-y:auto;">
-                    @if (_connectPasteToken && _connectStatus is not ConnectStatus.Connected and not ConnectStatus.Error)
-                    {
-                        @* Claude Code: `claude setup-token` MASKS its token in stdout (CLI #19274), so the
-                           server can't drive/scrape the OAuth. The user runs it locally and pastes the
-                           result here → SubmitConnectToken stores it. Readable instructions: neutral text +
-                           a copy box for the command (no low-contrast inline code). *@
-                        <div style="line-height:1.55;">
-                            <div><strong>1.</strong>&nbsp; In a terminal, run:</div>
-                            <div style="margin:5px 0; padding:7px 10px; border-radius:5px;
-                                        background:var(--neutral-fill-secondary-rest,#f1f1f3);
-                                        color:var(--neutral-foreground-rest);
-                                        font-family:var(--monospace-font-family,ui-monospace,monospace); user-select:all;">claude setup-token</div>
-                            <div><strong>2.</strong>&nbsp; Approve in the browser, then press <strong>c</strong> to copy the token.</div>
-                            <div style="margin-top:6px;"><strong>3.</strong>&nbsp; Paste it below (starts with
-                                <span style="font-family:var(--monospace-font-family,ui-monospace,monospace);">sk-ant-oat01-</span>):</div>
-                        </div>
-                        <FluentTextField @bind-Value="_connectCode" Immediate="true" Placeholder="sk-ant-oat01-…"
-                                         TextFieldType="Microsoft.FluentUI.AspNetCore.Components.TextFieldType.Password"
-                                         @onkeydown="OnConnectInputKeyDown" Style="width:100%;" />
-                        <FluentButton Appearance="FluentAppearance.Accent" Style="width:100%;"
-                                      Disabled="@(_connectBusy || string.IsNullOrWhiteSpace(_connectCode))"
-                                      OnClick="SubmitConnectToken">@(_connectBusy ? "Saving…" : "Connect")</FluentButton>
-                    }
-                    else
-                    {
-                    @switch (_connectStatus)
-                    {
-                        case ConnectStatus.Connected:
-                            <div style="color:var(--success-foreground, #16a34a);">&#10003; Connected — you can chat now.</div>
-                            break;
-
-                        case ConnectStatus.Error err:
-                            <div style="color:var(--error-foreground, #dc2626);">@err.Reason</div>
-                            <FluentButton Appearance="FluentAppearance.Accent"
-                                          OnClick="@(() => StartHarnessConnect(_connectHarness!))">Try again</FluentButton>
-                            break;
-
-                        case ConnectStatus.Connecting c when !string.IsNullOrEmpty(c.Challenge.VerificationUrl):
-                            @* A compact accent link instead of the raw OAuth URL — the full URL wraps to
-                               ~8 lines and shoves the paste field + Submit off the bottom of the widget. *@
-                            <div><strong>1</strong>&nbsp; Open the authorization page and approve:</div>
-                            <FluentAnchor Href="@c.Challenge.VerificationUrl" Target="_blank"
-                                          Appearance="FluentAppearance.Accent">Open authorization page&nbsp;↗</FluentAnchor>
-                            @if (c.Challenge.RequiresPastedCode)
-                            {
-                                <div style="margin-top:4px;"><strong>2</strong>&nbsp; Paste the code Claude shows you, then submit:</div>
-                                <FluentTextField @bind-Value="_connectCode" Immediate="true" Placeholder="Paste code"
-                                                 @onkeydown="OnConnectInputKeyDown" Style="width:100%;" />
-                                <FluentButton Appearance="FluentAppearance.Accent" Style="width:100%;"
-                                              Disabled="@(_connectBusy || string.IsNullOrWhiteSpace(_connectCode))"
-                                              OnClick="SubmitConnectCode">@(_connectBusy ? "Verifying…" : "Submit code")</FluentButton>
-                            }
-                            else if (!string.IsNullOrEmpty(c.Challenge.UserCode))
-                            {
-                                <div>Enter this code in the browser: <strong>@c.Challenge.UserCode</strong></div>
-                                <div style="color:var(--neutral-foreground-hint);">Waiting for authorization…</div>
-                            }
-                            break;
-
-                        default:
-                            <div style="color:var(--neutral-foreground-hint);">Starting login…</div>
-                            break;
-                    }
-                    }
-                </FluentStack>
-            </div>
-        }
 
         @* Monaco editor for markdown input with completion. Stays visible during
            execution (Claude.ai pattern) — typing while a round is in flight is
@@ -858,8 +774,6 @@ else
            HIDDEN while a CLI-harness login (Connect) widget is up, so the user pastes the
            code into the widget's field above — not into this chat box — and the widget's
            Submit isn't pushed below the fold. *@
-        @if (_connectProvider is null)
-        {
         @* @onclick FocusComposerAsync: any click in the composer region focuses the
            editor. Defuses the thread-nav-shell amplifier (issue #199): the shell is
            tabindex="0" with outline:none for Alt-Tab thread cycling, so a click that
@@ -882,7 +796,6 @@ else
                               CompletionProvider="@GetCompletionConfig()"
                               CompletionCallback="@GetCompletions" />
         </div>
-        }
 
         @* Attachments split: the navigation-context chip(s) sit inline in the compact bottom
            row (next to the harness combobox + Send); any extra @@-reference attachments get
@@ -907,9 +820,6 @@ else
            wired threw out of the embedded area and tore the whole composer down (the "choosing
            Assistant crashes the chat" defect). Slash-command selection records the choice on the
            composer without building the agent, so it can never crash the footer. *@
-        @* Hidden while the login (Connect) widget is up — only its paste-field + Submit are interactive. *@
-        @if (_connectProvider is null)
-        {
         <div class="thread-chat-bottom-row" style="display: flex; align-items: center; gap: 8px; flex-wrap: nowrap; margin-top: 4px;">
             @if (contextChips.Count > 0)
             {
@@ -945,7 +855,6 @@ else
                 }
             </div>
         </div>
-        }
         @if (HasNoModels)
         {
             <span class="thread-chat-status-msg error">
