@@ -198,15 +198,23 @@ public sealed record SyncedQueryMeshNodes : VirtualTypeSource<MeshNode>
     ///         <see cref="QueryResultChange{MeshNode}"/>.</item>
     ///   <item>A single <c>Scan</c> folds the deltas into
     ///         <see cref="ImmutableDictionary{TKey,TValue}"/> keyed by
-    ///         <see cref="MeshNode.Path"/> AND a per-query Initial-count
-    ///         array. <c>Initial</c>/<c>Reset</c>/<c>Added</c>/<c>Updated</c>
+    ///         <see cref="MeshNode.Path"/> plus a <c>SeenInitial</c> flag.
+    ///         <c>Initial</c>/<c>Reset</c>/<c>Added</c>/<c>Updated</c>
     ///         set/replace the dict entry; <c>Removed</c> drops it.</item>
-    ///   <item>Suppress emissions until every query has produced its first
-    ///         provider Initial, so the first <c>.Take(1)</c> consumer sees
-    ///         the complete path set rather than a partial one. Push the
-    ///         live path set into <see cref="_pathSet"/> for synchronous
-    ///         <see cref="Owns"/> checks by the write reducer, then emit
-    ///         <c>dict.Values</c>.</item>
+    ///   <item>🚨 INVARIANT (restored after regression a777a87bd): suppress
+    ///         ALL downstream emissions until the upstream query has produced
+    ///         its first provider <c>Initial</c>/<c>Reset</c>. The
+    ///         <see cref="_externalChanges"/> side-channel and the
+    ///         <see cref="IMeshChangeFeed"/> deletion fast-path are NOT
+    ///         filtered by the query — if either fires in the
+    ///         subscribe→Initial window, an un-gated Scan emits an EMPTY
+    ///         dictionary as its FIRST emission, which <c>Replay(1)</c>
+    ///         consumers cache and replay (issue #201: chat's agent list
+    ///         resolved to <c>[]</c>). Pre-Initial changes still fold into
+    ///         the dictionary; they are only not emitted early. Once the gate
+    ///         opens, push the live path set into <see cref="_pathSet"/> for
+    ///         synchronous <see cref="Owns"/> checks by the write reducer,
+    ///         then emit <c>dict.Values</c>.</item>
     /// </list>
     ///
     /// <para>For single-node content reads on a known path use
@@ -331,20 +339,43 @@ public sealed record SyncedQueryMeshNodes : VirtualTypeSource<MeshNode>
         // already unions across all queries, so a single Initial seeds the
         // complete snapshot; subsequent Added/Updated/Removed events apply
         // verbatim.
+        //
+        // 🚨 Initial gate — do NOT remove (regression: commit a777a87bd,
+        // 2026-05-09, deleted the per-query gate and left the side-channels
+        // un-gated). The class contract (see the type doc, "Initial gating")
+        // promises NO downstream emission until the upstream query has
+        // produced its first Initial/Reset. `externalChanges` (the
+        // NotifyDeleted side-channel) and `feedRemovals` (the process-wide
+        // IMeshChangeFeed deletions, UNFILTERED by this query) can fire in
+        // the subscribe→Initial window; without the gate the Scan's FIRST
+        // emission is an EMPTY dictionary, which Replay(1) consumers
+        // (MeshNodeStreamCache.GetQueryRaw) cache and replay — downstream
+        // symptom: "Selected agent 'X' was not found among the available
+        // agents ([])" (issue #201). Pre-Initial changes still FOLD into the
+        // dictionary — they are only not EMITTED early. SeenInitial is seeded
+        // true when there is no query core: that branch's upstream is
+        // Observable.Empty and would never emit Initial, so the side-channels
+        // must stay observable (as before) instead of wedging forever.
         return allChanges
             .Scan(
-                ImmutableDictionary<string, MeshNode>.Empty,
-                (dict, change) => change.ChangeType switch
+                (Dict: ImmutableDictionary<string, MeshNode>.Empty, SeenInitial: queryCore == null),
+                (state, change) => change.ChangeType switch
                 {
-                    QueryChangeType.Initial or QueryChangeType.Reset
-                        or QueryChangeType.Added or QueryChangeType.Updated =>
-                        change.Items.Aggregate(dict, (d, n) =>
-                            string.IsNullOrEmpty(n.Path) ? d : d.SetItem(n.Path, n)),
+                    // Only the upstream query emits Initial/Reset — this is
+                    // what flips the gate open.
+                    QueryChangeType.Initial or QueryChangeType.Reset =>
+                        (change.Items.Aggregate(state.Dict, (d, n) =>
+                            string.IsNullOrEmpty(n.Path) ? d : d.SetItem(n.Path, n)), true),
+                    QueryChangeType.Added or QueryChangeType.Updated =>
+                        (change.Items.Aggregate(state.Dict, (d, n) =>
+                            string.IsNullOrEmpty(n.Path) ? d : d.SetItem(n.Path, n)), state.SeenInitial),
                     QueryChangeType.Removed =>
-                        change.Items.Aggregate(dict, (d, n) =>
-                            string.IsNullOrEmpty(n.Path) ? d : d.Remove(n.Path)),
-                    _ => dict,
+                        (change.Items.Aggregate(state.Dict, (d, n) =>
+                            string.IsNullOrEmpty(n.Path) ? d : d.Remove(n.Path)), state.SeenInitial),
+                    _ => state,
                 })
+            .Where(state => state.SeenInitial)
+            .Select(state => state.Dict)
             .Do(dict => diagLogger?.LogDebug(
                 "[SyncedQuery] snapshot hub={HubAddress} count={Count} keys=[{Keys}]",
                 workspace.Hub.Address, dict.Count,
