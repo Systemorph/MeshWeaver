@@ -304,40 +304,14 @@ public static class GitHubSyncSettingsTab
     /// </summary>
     private static UiControl BuildSyncButtons(string spacePath, string userId, string? sourceId, SyncDirection direction)
     {
-        var row = Controls.Stack.WithOrientation(Orientation.Horizontal).WithStyle("gap:8px;flex-wrap:wrap;");
-        if (direction != SyncDirection.ImportOnly)
-            row = row.WithView(Controls.Button("Sync now (commit)")
-                .WithAppearance(Appearance.Accent)
-                .WithClickAction(ctx =>
-                {
-                    ctx.Host.Hub.CommitToGitHub(spacePath, userId,
-                            onActivityCreated: path => ctx.Host.UpdateData(ActivityPathId, path),
-                            sourceId: sourceId)
-                        .Subscribe(_ => { }, ex => ctx.Host.UpdateData(ResultId, Err(ex.Message)));
-                    return Task.CompletedTask;
-                }));
-        if (direction != SyncDirection.ExportOnly)
-            row = row.WithView(Controls.Button("Update to latest (checkout)")
-                .WithAppearance(Appearance.Outline)
-                .WithClickAction(ctx =>
-                {
-                    ctx.Host.Hub.UpdateToLatestFromGitHub(spacePath, userId,
-                            onActivityCreated: path => ctx.Host.UpdateData(ActivityPathId, path),
-                            sourceId: sourceId)
-                        .Subscribe(_ => { }, ex => ctx.Host.UpdateData(ResultId, Err(ex.Message)));
-                    return Task.CompletedTask;
-                }));
-        row = row.WithView(Controls.Button("Check branch on GitHub")
-            .WithAppearance(Appearance.Outline)
-            .WithClickAction(ctx =>
-            {
-                ctx.Host.Hub.CheckBranchStateOnGitHub(spacePath, userId,
-                        onActivityCreated: path => ctx.Host.UpdateData(ActivityPathId, path),
-                        sourceId: sourceId)
-                    .Subscribe(_ => { }, ex => ctx.Host.UpdateData(ResultId, Err(ex.Message)));
-                return Task.CompletedTask;
-            }));
-        return row;
+        // Settings = SETUP only. The one-click GitHub actions (Sync now / Update to latest / Check
+        // branch) moved to the dedicated "GitHub" node-menu dropdown once a repository is configured
+        // — direction-gated there the same way. Re-import at a specific commit + the pull-request
+        // workflow (input-driven) stay in this tab below. See GitHubSyncMenuProvider / GitHubActionArea.
+        _ = (spacePath, userId, sourceId, direction);
+        return Controls.Markdown(
+            "One-click sync actions (Sync now / Update to latest / Check branch) are in the "
+            + "**GitHub** menu in the top bar (shown once a repository is configured).");
     }
 
     // ── Additional sync sources (one config node per source under {space}/_GitSync/) ──

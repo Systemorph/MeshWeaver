@@ -1,9 +1,11 @@
 using MeshWeaver.Graph;
+using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -124,7 +126,16 @@ public static class GitHubSyncConfiguration
             .WithType<GitHubCredential>(nameof(GitHubCredential))
             .WithType<GitHubSyncConfig>(nameof(GitHubSyncConfig))
             .WithType<GitHubPullRequest>(nameof(GitHubPullRequest))
-            .WithType<GitHubIssue>(nameof(GitHubIssue)));
+            .WithType<GitHubIssue>(nameof(GitHubIssue))
+            // The "GitHub" node-menu dropdown (its own context) + the action area its items navigate
+            // to. Per-node-hub scoped provider (self-gates to Spaces with a configured repo).
+            .WithServices(s =>
+            {
+                s.TryAddEnumerable(ServiceDescriptor.Scoped<INodeMenuProvider, GitHubSyncMenuProvider>());
+                return s;
+            })
+            .AddLayout(layout => layout
+                .WithView(GitHubActionArea.AreaName, GitHubActionArea.Render)));
         return builder;
     }
 }
