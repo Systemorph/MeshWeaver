@@ -1015,6 +1015,20 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         // patches that the RFC 7396 owner-side merge cannot resolve (lists
         // collapse to the last writer). Serializing per path makes each
         // lambda observe its predecessor's effect.
+        // DISPOSED-CACHE GUARD (write side): a late write after this cache's Dispose() — the
+        // canonical case is an agent round whose ThreadExecution.PushToResponseMessage is still
+        // streaming when its mesh's cacheHub tore down (State captured by TeardownStragglerCapturer:
+        // UpdateRaw → _updateQueues.TryGetValue → MemoryCache.CheckDisposed) — must NOT touch the
+        // disposed _updateQueues MemoryCache, whose TryGetValue throws a synchronous
+        // ObjectDisposedException on the caller's ThreadPool continuation. Unobserved, that reaches
+        // AppDomain.UnhandledException and xUnit escalates it to a "Catastrophic failure" that reds
+        // an otherwise-green shard. Dispose() sets _disposed=1 BEFORE it disposes _updateQueues, so
+        // this flag check (same Volatile idiom as ReleaseIdleReadStreams) fully covers the straggler.
+        // Return the same graceful Observable.Throw terminal the negative-cache breaker below uses —
+        // observed by the caller's Subscribe (a benign teardown write), never an unobserved throw.
+        if (System.Threading.Volatile.Read(ref _disposed) != 0)
+            return Observable.Throw<MeshNode>(new ObjectDisposedException(nameof(MeshNodeStreamCache)));
+
         // STORM BREAKER (write side): if this path's owner is in a known missing-node failure
         // window, fast-fail rather than enqueue another PatchDataRequest the owner can't
         // activate. Same negative cache as the read-side GetStreamRaw breaker, so a missing-node
@@ -1261,6 +1275,11 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     // Handle.Overwrite (ChangeType.Full) instead of Handle.Update.
     private IObservable<MeshNode> OverwriteRaw(string path, MeshNode node)
     {
+        // Disposed-cache guard — see UpdateRaw. A late overwrite after Dispose() must not hit the
+        // disposed _updateQueues MemoryCache; return a graceful observed terminal, never a throw.
+        if (System.Threading.Volatile.Read(ref _disposed) != 0)
+            return Observable.Throw<MeshNode>(new ObjectDisposedException(nameof(MeshNodeStreamCache)));
+
         var queue = GetOrCreateUpdateQueue(path);
         var result = new ReplaySubject<MeshNode>();
         var seq = System.Threading.Interlocked.Increment(ref _updateSeq);
