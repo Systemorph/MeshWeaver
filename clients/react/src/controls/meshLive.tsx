@@ -18,8 +18,10 @@ import { Avatar, Badge, Button, Card, Input, Link, Spinner, Text } from "@fluent
 import { Add20Regular, Search20Regular } from "@fluentui/react-icons";
 import type { UiControl } from "../area/types.js";
 import { useResolve } from "../area/context.js";
+import { useMeshLink } from "../area/navigation.js";
 import { useMeshOps, type MeshOps } from "../live/meshOps.js";
 import { str, useText } from "./common.js";
+import { AddressAreaEmbed, isInlineSvg, sanitizeInlineSvg } from "./display.js";
 
 interface NodeResult {
   path: string;
@@ -78,9 +80,25 @@ function useMeshQuery(ops: MeshOps | null, query: string, basePath?: string): { 
 
 // ---- MeshSearch -----------------------------------------------------------------------------------
 
-function ResultCard({ node }: { node: NodeResult }): ReactNode {
+/**
+ * A per-item ITEM-AREA card — the Blazor MeshSearchView ItemArea mode: the item delegates its
+ * rendering to a layout area hosted on the node's own hub (e.g. the home Pinned row's
+ * PinnedThumbnail cards, which carry the unpin overlay). NO outer link: the embedded area's own
+ * MeshNodeCard already navigates — wrapping it would nest <a> inside <a> (HTML splits those,
+ * duplicating every card link).
+ */
+function ItemAreaCard({ node, itemArea }: { node: NodeResult; itemArea: string }): ReactNode {
   return (
-    <Link href={`/${node.path}`} style={{ textDecoration: "none" }}>
+    <div title={`Open ${node.name}`} style={{ position: "relative", minWidth: 0 }}>
+      <AddressAreaEmbed address={node.path} area={itemArea} />
+    </div>
+  );
+}
+
+function ResultCard({ node }: { node: NodeResult }): ReactNode {
+  const link = useMeshLink(`/${node.path}`);
+  return (
+    <Link href={link.href} onClick={link.onClick} style={{ textDecoration: "none" }}>
       <Card style={{ padding: 12, gap: 4, height: "100%" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <Text weight="semibold" style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>
@@ -103,9 +121,10 @@ function ResultCard({ node }: { node: NodeResult }): ReactNode {
 }
 
 function ResultRow({ node }: { node: NodeResult }): ReactNode {
+  const link = useMeshLink(`/${node.path}`);
   return (
     <div style={{ display: "flex", alignItems: "baseline", gap: 8, padding: "6px 0", borderBottom: "1px solid var(--colorNeutralStroke3)" }}>
-      <Link href={`/${node.path}`}>
+      <Link href={link.href} onClick={link.onClick}>
         <Text weight="semibold">{node.name}</Text>
       </Link>
       {node.nodeType ? (
@@ -134,7 +153,9 @@ export function MeshSearchView({ control }: { control: UiControl }): ReactNode {
   const showEmptyMessage = useResolve(control.showEmptyMessage) !== false;
   const showLoading = useResolve(control.showLoadingIndicator) !== false;
   const createHref = str(useResolve(control.createHref));
+  const itemArea = str(useResolve(control.itemArea));
 
+  const createLink = useMeshLink(createHref || undefined);
   const [visible, setVisible] = useState(initialVisible);
   const [submitted, setSubmitted] = useState(initialVisible);
   const term = useDebounced(liveSearch ? visible : submitted, 250);
@@ -164,7 +185,7 @@ export function MeshSearchView({ control }: { control: UiControl }): ReactNode {
           />
         ) : null}
         {createHref ? (
-          <Link href={createHref}>
+          <Link href={createLink.href} onClick={createLink.onClick}>
             <Button icon={<Add20Regular />} appearance="subtle" aria-label="Create" />
           </Link>
         ) : null}
@@ -183,9 +204,9 @@ export function MeshSearchView({ control }: { control: UiControl }): ReactNode {
         </div>
       ) : (
         <div style={{ display: "grid", gap: 12, gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))" }}>
-          {items.map((n) => (
-            <ResultCard key={n.path} node={n} />
-          ))}
+          {items.map((n) =>
+            itemArea ? <ItemAreaCard key={n.path} node={n} itemArea={itemArea} /> : <ResultCard key={n.path} node={n} />,
+          )}
         </div>
       )}
     </div>
@@ -232,20 +253,37 @@ export function MeshNodeCollectionView({ control }: { control: UiControl }): Rea
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
       {items.map((n) => (
-        <Link key={n.path} href={`/${n.path}`} style={{ textDecoration: "none" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 8px", borderRadius: 6 }}>
-            <Avatar name={n.name} image={n.thumbnail ? { src: n.thumbnail } : undefined} size={28} />
-            <div style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
-              <Text weight="semibold" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                {n.name}
-              </Text>
-              <Text size={200} style={{ color: "var(--colorNeutralForeground3)" }}>
-                {n.nodeType}
-              </Text>
-            </div>
-          </div>
-        </Link>
+        <CollectionRow key={n.path} node={n} />
       ))}
     </div>
+  );
+}
+
+function CollectionRow({ node }: { node: NodeResult }): ReactNode {
+  const link = useMeshLink(`/${node.path}`);
+  return (
+    <Link href={link.href} onClick={link.onClick} style={{ textDecoration: "none" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 8px", borderRadius: 6 }}>
+        {node.thumbnail && isInlineSvg(node.thumbnail) ? (
+          // Inline SVG node Icon — an <Avatar image src> can't take raw markup (it would break and
+          // fall back to initials), so render the SVG directly in an avatar-sized box.
+          <span
+            aria-hidden
+            style={{ display: "inline-flex", width: 28, height: 28, flexShrink: 0, borderRadius: "50%", overflow: "hidden" }}
+            dangerouslySetInnerHTML={{ __html: sanitizeInlineSvg(node.thumbnail) }}
+          />
+        ) : (
+          <Avatar name={node.name} image={node.thumbnail ? { src: node.thumbnail } : undefined} size={28} />
+        )}
+        <div style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
+          <Text weight="semibold" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            {node.name}
+          </Text>
+          <Text size={200} style={{ color: "var(--colorNeutralForeground3)" }}>
+            {node.nodeType}
+          </Text>
+        </div>
+      </div>
+    </Link>
   );
 }

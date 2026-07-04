@@ -27,11 +27,13 @@ export interface MeshAreaViewProps {
   ops?: MeshOps | null;
 }
 
-/** Top-level: wraps Fluent's provider and renders the root layout area. */
+/** Top-level: wraps Fluent's provider and renders the root layout area. The provider fills its
+ *  host (height 100%) so full-height layouts (chat panes, splitters) reach the page bottom —
+ *  without it the area collapses to content height (the "page height is not 100%" parity bug). */
 export function MeshAreaView({ source, rootArea, theme, themeStorageKey, ops }: MeshAreaViewProps) {
   const { theme: preferredTheme } = useThemeMode({ storageKey: themeStorageKey });
   return (
-    <FluentProvider theme={theme ?? preferredTheme}>
+    <FluentProvider theme={theme ?? preferredTheme} style={{ height: "100%", minHeight: 0 }}>
       <MeshOpsProvider ops={ops ?? null}>
         <RegistryProvider pack={fluentPack}>
           <ScopeProvider source={source} area={rootArea}>
@@ -50,6 +52,7 @@ export { RegistryProvider, useLeafPack, type LeafPack, type SkinComponent } from
 export { StaticAreaSource } from "./area/source.js";
 export {
   GrpcAreaSource,
+  createGrpcEmbeddedFactory,
   type MeshConnectionLike,
   type LayoutAreaReference,
   type GrpcAreaOptions,
@@ -63,6 +66,15 @@ export {
   type ThreadSubmitOptions,
 } from "./live/meshOps.js";
 export { ScopeProvider, useAreaState, useResolve, useEmit, useScope } from "./area/context.js";
+export {
+  NavigationProvider,
+  useNavigation,
+  useMeshLink,
+  useHtmlLinkInterceptor,
+  isExternalTarget,
+  type MeshNavigation,
+  type MeshLink,
+} from "./area/navigation.js";
 export {
   EmbeddedAreaProvider,
   useAreaSourceFactory,

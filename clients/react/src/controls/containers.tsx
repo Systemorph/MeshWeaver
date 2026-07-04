@@ -15,6 +15,7 @@ import {
 } from "@fluentui/react-components";
 import type { Json, UiControl } from "../area/types.js";
 import { ScopeProvider, useAreaState, useEmit, useResolve, useScope } from "../area/context.js";
+import { useMeshLink } from "../area/navigation.js";
 import { RenderArea } from "../render/ControlRenderer.js";
 import { useAreaSourceFactory, type EmbeddedAreaHandle } from "../render/embeddedArea.js";
 import { str, useText } from "./common.js";
@@ -144,7 +145,12 @@ function DialogView({ control }: { control: UiControl }): ReactNode {
 
 function RedirectView({ control }: { control: UiControl }): ReactNode {
   const href = useText(control.href);
-  return <Link href={href}>{href}</Link>;
+  const link = useMeshLink(href || undefined);
+  return (
+    <Link href={link.href} onClick={link.onClick}>
+      {href}
+    </Link>
+  );
 }
 
 export const containerControls = {

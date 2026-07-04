@@ -78,9 +78,15 @@ export function fakeMeshTransport(opts: FakeMeshOptions = {}) {
             case "QueryRequest":
               respond(out, d, { $type: "QueryResponse", results: [{ path: "ACME/Stories/1", name: "S1" }] });
               break;
-            case "CreateNodeRequest":
-              respond(out, d, { $type: "CreateNodeResponse", path: (d.message.node as { path?: string })?.path });
+            case "CreateNodeRequest": {
+              const node = d.message.node as { path?: string; id?: string } | undefined;
+              // An id containing "fail" answers a refused create — pins the surfaced-failure path.
+              if (node?.id?.includes("fail"))
+                respond(out, d, { $type: "CreateNodeResponse", success: false, message: "creation refused" });
+              else
+                respond(out, d, { $type: "CreateNodeResponse", path: node?.path });
               break;
+            }
             case "DeleteNodeRequest":
             case "MoveNodeRequest":
             case "CopyNodeRequest":

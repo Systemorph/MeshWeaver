@@ -27,7 +27,13 @@ import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { Json, UiControl } from "../area/types.js";
 import { useResolve } from "../area/context.js";
-import { useMeshOps, type MeshNodeState, type MeshOps, type ThreadSubmitOptions } from "../live/meshOps.js";
+import {
+  useMeshOps,
+  type AutocompleteSuggestion,
+  type MeshNodeState,
+  type MeshOps,
+  type ThreadSubmitOptions,
+} from "../live/meshOps.js";
 import { controlStyle } from "../render/style.js";
 import { str } from "./common.js";
 
@@ -398,7 +404,78 @@ export function ThreadChatView({ control }: { control: UiControl }): ReactNode {
     if (ops && threadPath) ops.patch(threadPath, { content: { requestedStatus: "Cancelled" } });
   };
 
+  // ── @-mention autocomplete (the Blazor MeshNodeAutocomplete parity surface) ──────────────────
+  // Typing an @token opens mesh suggestions from MeshOps.autocomplete (the wire
+  // AutocompleteRequest); picking one splices the item's insertText (a UCR `@/path`) into the
+  // composer. Hosts without the optional ops.autocomplete never open the dropdown.
+  const [atState, setAtState] = useState<{ token: string; start: number; end: number } | null>(null);
+  const [atSuggestions, setAtSuggestions] = useState<AutocompleteSuggestion[]>([]);
+  const [atHighlight, setAtHighlight] = useState(0);
+  const atGeneration = useRef(0);
+
+  const trackAtToken = (value: string, caret: number) => {
+    const before = value.slice(0, caret);
+    const match = /(^|\s)(@[\w\-./]*)$/.exec(before);
+    if (!match || !ops?.autocomplete) {
+      setAtState(null);
+      setAtSuggestions([]);
+      return;
+    }
+    setAtState({ token: match[2], start: caret - match[2].length, end: caret });
+  };
+
+  useEffect(() => {
+    if (!atState || !ops?.autocomplete) return;
+    const gen = ++atGeneration.current;
+    const timer = setTimeout(() => {
+      ops.autocomplete!(atState.token, initialContext || threadPath || undefined).then(
+        (items) => {
+          if (atGeneration.current !== gen) return;
+          setAtSuggestions(items.slice(0, 8));
+          setAtHighlight(0);
+        },
+        () => {
+          if (atGeneration.current === gen) setAtSuggestions([]);
+        },
+      );
+    }, 250);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [atState?.token]);
+
+  const pickSuggestion = (s: AutocompleteSuggestion) => {
+    if (!atState) return;
+    const insert = str(s.insertText) || (s.path ? `@/${str(s.path)}` : str(s.label));
+    setText(text.slice(0, atState.start) + insert + " " + text.slice(atState.end));
+    setAtState(null);
+    setAtSuggestions([]);
+  };
+
+  const atOpen = atState != null && atSuggestions.length > 0;
+
   const onComposerKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (atOpen) {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setAtHighlight((h) => (h + 1) % atSuggestions.length);
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setAtHighlight((h) => (h <= 0 ? atSuggestions.length - 1 : h - 1));
+        return;
+      }
+      if (e.key === "Enter" || e.key === "Tab") {
+        e.preventDefault();
+        pickSuggestion(atSuggestions[atHighlight]);
+        return;
+      }
+      if (e.key === "Escape") {
+        setAtState(null);
+        setAtSuggestions([]);
+        return;
+      }
+    }
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       send();
@@ -452,13 +529,63 @@ export function ThreadChatView({ control }: { control: UiControl }): ReactNode {
         </Text>
       ) : null}
 
-      <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 4, position: "relative" }}>
+        {atOpen ? (
+          <div
+            data-mw-autocomplete
+            style={{
+              position: "absolute",
+              bottom: "100%",
+              left: 0,
+              right: 0,
+              marginBottom: 4,
+              zIndex: 300,
+              background: "var(--colorNeutralBackground1)",
+              border: "1px solid var(--colorNeutralStroke2)",
+              borderRadius: 8,
+              boxShadow: "var(--shadow16)",
+              maxHeight: 280,
+              overflowY: "auto",
+            }}
+          >
+            {atSuggestions.map((s, i) => (
+              <div
+                key={`${str(s.insertText) || str(s.path)}-${i}`}
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  pickSuggestion(s);
+                }}
+                onMouseEnter={() => setAtHighlight(i)}
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  padding: "6px 10px",
+                  cursor: "pointer",
+                  background: i === atHighlight ? "var(--colorNeutralBackground1Selected)" : "transparent",
+                }}
+              >
+                <Text weight="semibold" size={200}>
+                  {str(s.label) || str(s.path)}
+                </Text>
+                {s.path || s.description ? (
+                  <Text size={100} style={{ color: "var(--colorNeutralForeground3)" }}>
+                    {str(s.path) || str(s.description)}
+                  </Text>
+                ) : null}
+              </div>
+            ))}
+          </div>
+        ) : null}
         <Textarea
           aria-label="Message"
           placeholder="Type a message…"
           value={text}
           disabled={isExecuting}
-          onChange={(_, d) => setText(d.value)}
+          onChange={(ev, d) => {
+            setText(d.value);
+            const target = ev.target as HTMLTextAreaElement;
+            trackAtToken(d.value, target.selectionStart ?? d.value.length);
+          }}
           onKeyDown={onComposerKeyDown}
           resize="vertical"
         />
