@@ -141,4 +141,43 @@ public static class GitHubActivityExtensions
                 });
             }, onActivityCreated);
     }
+
+    /// <summary>Sync the configured repo's issues into <c>{space}/_Issue/{number}</c> nodes.
+    /// <paramref name="state"/> optionally filters to open/closed (null = all).</summary>
+    public static IObservable<string> SyncIssuesFromGitHub(
+        this IMessageHub hub, string spacePath, string userId, GitHubIssueState? state = null,
+        Action<string>? onActivityCreated = null)
+    {
+        var issues = hub.ServiceProvider.GetRequiredService<IssueService>();
+        return hub.RunActivity(spacePath, ActivityCategory.Import, $"Sync issues of {spacePath}",
+            ctx =>
+            {
+                ctx.Log("Listing issues on GitHub and mirroring them into the Space…");
+                return issues.SyncIssues(spacePath, userId, state).Select(count =>
+                {
+                    ctx.Log($"Synced {count} issue(s).");
+                    return Unit.Default;
+                });
+            }, onActivityCreated);
+    }
+
+    /// <summary>Merge an open pull request on the configured repo with the given strategy.</summary>
+    public static IObservable<string> MergePullRequestOnGitHub(
+        this IMessageHub hub, string spacePath, int number, GitHubMergeMethod method, string userId,
+        Action<string>? onActivityCreated = null)
+    {
+        var pr = hub.ServiceProvider.GetRequiredService<PullRequestService>();
+        return hub.RunActivity(spacePath, ActivityCategory.DataUpdate, $"Merge pull request #{number}",
+            ctx =>
+            {
+                ctx.Log($"Merging pull request #{number} ({method}) on GitHub…");
+                return pr.Merge(spacePath, number, method, null, null, userId).Select(r =>
+                {
+                    ctx.Log(r.Merged
+                        ? $"Pull request #{number} merged{(r.Sha is { Length: > 0 } s ? $" ({s[..Math.Min(8, s.Length)]})" : "")}."
+                        : $"Pull request #{number} was not merged: {r.Message}");
+                    return Unit.Default;
+                });
+            }, onActivityCreated);
+    }
 }

@@ -30,7 +30,7 @@ public abstract class GitHubSyncTestBase(ITestOutputHelper output) : MonolithMes
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => base.ConfigureMesh(builder)
             .AddGitHubSyncTypes()
-            .ConfigureDefaultNodeHub(c => c.AddGitHubSyncSettingsTab())
+            .ConfigureDefaultNodeHub(c => c.AddGitHubSyncSettingsTab().AddGitHubIssuesTab())
             .ConfigureServices(s =>
             {
                 s.AddGitHubSyncServices();
@@ -47,6 +47,8 @@ public abstract class GitHubSyncTestBase(ITestOutputHelper output) : MonolithMes
 
     protected GitHubSyncService Sync => Mesh.ServiceProvider.GetRequiredService<GitHubSyncService>();
     protected PullRequestService PullRequests => Mesh.ServiceProvider.GetRequiredService<PullRequestService>();
+    protected IssueService Issues => Mesh.ServiceProvider.GetRequiredService<IssueService>();
+    protected GitHubWebhookProcessor Webhooks => Mesh.ServiceProvider.GetRequiredService<GitHubWebhookProcessor>();
     protected GitHubCredentialService Credentials => Mesh.ServiceProvider.GetRequiredService<GitHubCredentialService>();
     protected IProviderKeyProtector Protector => Mesh.ServiceProvider.GetRequiredService<IProviderKeyProtector>();
     // The DevLogin user the test base logs in (TestUsers.Admin). Read directly rather than
@@ -95,6 +97,15 @@ public abstract class GitHubSyncTestBase(ITestOutputHelper output) : MonolithMes
         (await Observable.Interval(100.Milliseconds()).StartWith(0L)
             .SelectMany(_ => ReadNode(path))
             .Where(n => n is not null)
+            .FirstAsync()
+            .Timeout(30.Seconds())
+            .ToTask())!;
+
+    /// <summary>Waits for the issue node at <paramref name="path"/> to satisfy <paramref name="predicate"/>.</summary>
+    protected async Task<GitHubIssue> WaitForIssue(string path, Func<GitHubIssue, bool> predicate) =>
+        (await Issues.WatchIssue(path)
+            .Where(i => i is not null && predicate(i))
+            .Select(i => i!)
             .FirstAsync()
             .Timeout(30.Seconds())
             .ToTask())!;
