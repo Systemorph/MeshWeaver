@@ -22,13 +22,13 @@ public class HomeComposerVerifyTest(PortalFixture fixture)
         var token = await fixture.MintTokenAsync(context);
         try
         {
-            await fixture.CreateNodeAsync(context, token, """
+            await fixture.CreateNodeAsync(context, token, $$"""
                 {
                   "id": "ThreadComposer",
-                  "namespace": "Roland/_Thread",
+                  "namespace": "{{fixture.UserId}}/_Thread",
                   "name": "Chat Input",
                   "nodeType": "ThreadComposer",
-                  "mainNode": "Roland",
+                  "mainNode": "{{fixture.UserId}}",
                   "content": { "$type": "ThreadComposer" }
                 }
                 """);
@@ -40,7 +40,7 @@ public class HomeComposerVerifyTest(PortalFixture fixture)
 
         var page = await context.NewPageAsync();
         await page.SetViewportSizeAsync(1280, 900);
-        await page.GotoAsync($"{fixture.BaseUrl}/User/Roland",
+        await page.GotoAsync($"{fixture.BaseUrl}/User/{fixture.UserId}",
             new PageGotoOptions { WaitUntil = WaitUntilState.NetworkIdle });
 
         // The composer's message editor (the embedded ThreadChatControl's Monaco editor) is the last editor on the page.

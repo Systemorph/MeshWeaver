@@ -25,7 +25,7 @@ public class CompileErrorPageE2ETest(PortalFixture fixture)
         var token = await fixture.MintTokenAsync(context);
 
         // Unique ids so reruns against a persisted portal don't collide.
-        const string partition = "Roland";
+        var partition = fixture.UserId;
         var suffix = Guid.NewGuid().ToString("N")[..8];
         var nodeTypeId = $"BrokenE2EType{suffix}";
         var instanceId = $"broken-e2e-instance-{suffix}";

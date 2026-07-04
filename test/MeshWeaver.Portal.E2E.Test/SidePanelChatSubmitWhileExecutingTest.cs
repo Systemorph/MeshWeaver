@@ -24,14 +24,16 @@ namespace MeshWeaver.Portal.E2E;
 public class SidePanelChatSubmitWhileExecutingTest(PortalFixture fixture)
 {
     // Create-fallback for a fresh DB; the real harness/model/context is applied by the PATCH below
-    // (a PATCH, not create, so the post-creation seed handler can't reset it).
-    private const string ComposerSeedJson = """
+    // (a PATCH, not create, so the post-creation seed handler can't reset it). Uses the RESOLVED
+    // user node id — a hardcoded 'Roland' seeded a capital-cased namespace that materialized the
+    // typeless stub root (the casing seam) and now gets a proper 401 cross-partition rejection.
+    private string ComposerSeedJson => $$"""
         {
           "id": "ThreadComposer",
-          "namespace": "Roland/_Thread",
+          "namespace": "{{fixture.UserId}}/_Thread",
           "name": "Chat Input",
           "nodeType": "ThreadComposer",
-          "mainNode": "Roland",
+          "mainNode": "{{fixture.UserId}}",
           "content": { "$type": "ThreadComposer" }
         }
         """;
@@ -72,20 +74,19 @@ public class SidePanelChatSubmitWhileExecutingTest(PortalFixture fixture)
             Headers = new Dictionary<string, string> { ["authorization"] = $"Bearer {token}" },
             DataObject = new
             {
-                Path = "Roland/_Thread/ThreadComposer",
+                Path = $"{fixture.UserId}/_Thread/ThreadComposer",
                 Fields = "{\"content\":{\"$type\":\"ThreadComposer\",\"harness\":\"Harness/MeshWeaver\","
-                       + "\"modelName\":\"" + ModelPath + "\",\"contextPath\":\"Roland\"}}"
+                       + "\"modelName\":\"" + ModelPath + "\",\"contextPath\":\"" + fixture.UserId + "\"}}"
             }
         });
 
-        // Chat from a page in the WRITABLE 'Roland' partition — the /User/Roland home routes
+        // Chat from a page in the user's own WRITABLE partition — the /User/{id} home routes
         // thread-create to the system-managed 'User' partition (PartitionWriteGuard rejects it).
-        // CompileErrorPageE2ETest proves 'Roland' is writable for the DevLogin user.
         var chatPageId = "e2e-chat-" + Guid.NewGuid().ToString("N")[..8];
         await fixture.CreateNodeAsync(context, token, $$"""
             {
               "id": "{{chatPageId}}",
-              "namespace": "Roland",
+              "namespace": "{{fixture.UserId}}",
               "name": "E2E Chat Page",
               "nodeType": "Markdown",
               "content": { "$type": "MarkdownContent", "content": "# E2E chat page" }
@@ -94,7 +95,7 @@ public class SidePanelChatSubmitWhileExecutingTest(PortalFixture fixture)
 
         var page = await context.NewPageAsync();
         await page.SetViewportSizeAsync(1400, 950);
-        await page.GotoAsync($"{fixture.BaseUrl}/Roland/{chatPageId}",
+        await page.GotoAsync($"{fixture.BaseUrl}/{fixture.UserId}/{chatPageId}",
             new PageGotoOptions { WaitUntil = WaitUntilState.NetworkIdle });
 
         // Open the side-panel chat (the layout's "Chat" toggle → ThreadChatView).
