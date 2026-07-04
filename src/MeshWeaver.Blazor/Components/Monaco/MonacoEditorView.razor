@@ -141,7 +141,15 @@
 
     private string ContainerStyle => AutoGrow
         // Auto-grow: JS drives the height from the content size; CSS clamps the range.
-        ? $"max-height: {MaxHeight}; min-height: {Height};"
+        // 🚨 The explicit initial height is LOAD-BEARING (issue #199): the inner
+        // .monaco-editor-view is pinned to `height: 100% !important`, so with an
+        // auto-height container the whole chain resolves to 0 until the first
+        // debounced onDidContentSizeChange lands — Monaco's hit-target collapses to
+        // ~one text line while the box still LOOKS like an input, and clicks land on
+        // whatever focusable ancestor sits behind it (the #188 dead-keyboard
+        // regression). Geometry must never depend on a JS event: start at Height,
+        // let the JS grow-write overwrite the inline value from there.
+        ? $"height: {Height}; max-height: {MaxHeight}; min-height: {Height};"
         : $"height: {Height}; max-height: {MaxHeight}; min-height: 40px;";
 
     private string GetMonacoTheme() => isDarkMode ? "vs-dark" : "vs";
