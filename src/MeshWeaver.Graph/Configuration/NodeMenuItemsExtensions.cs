@@ -43,6 +43,16 @@ public static class NodeMenuItemsExtensions
     /// context, to contribute more items (sorted by <see cref="NodeMenuItemDefinition.Order"/>).</summary>
     public const string AiMenuContext = "AI";
 
+    /// <summary>Menu context for a Space's remote-instance SYNC actions (Sync now / Pause / Remove),
+    /// contributed by an <see cref="INodeMenuProvider"/> that emits only when the Space has a
+    /// configured <c>_Sync</c> registration. Its own dropdown, separate from Node/GitHub.</summary>
+    public const string SyncMenuContext = "Sync";
+
+    /// <summary>Menu context for a Space's GITHUB actions (Sync now / Update / Re-import / PR),
+    /// contributed by an <see cref="INodeMenuProvider"/> that emits only when the Space has a
+    /// configured <c>_GitSync</c>. Its own dropdown, separate from Node/Sync.</summary>
+    public const string GitHubMenuContext = "GitHub";
+
     /// <summary>Shared empty slice — providers emit this (never <c>Observable.Empty</c>) when they contribute nothing.</summary>
     private static readonly IReadOnlyCollection<NodeMenuItemDefinition> EmptyItems = [];
 
@@ -324,6 +334,14 @@ public static class NodeMenuItemsExtensions
         if (registered != null) contexts.UnionWith(registered);
 
         var diProviders = host.Hub.ServiceProvider.GetServices<INodeMenuProvider>().ToList();
+
+        // A DI-registered INodeMenuProvider self-registers its Context — so declaring a provider
+        // with Context = "Sync" / "GitHub" makes that dropdown render without a separate
+        // AddNodeMenuItems seed. The renderer writes the context's slot even when the provider
+        // currently emits nothing (integration not configured), so the client can subscribe it.
+        foreach (var provider in diProviders)
+            if (provider.Context is { Length: > 0 } c)
+                contexts.Add(c);
 
         var result = new Dictionary<string, IObservable<IReadOnlyCollection<NodeMenuItemDefinition>>>(StringComparer.Ordinal);
         foreach (var context in contexts)
