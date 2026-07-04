@@ -253,21 +253,18 @@ public class FileSystemStreamProvider(string basePath) : IStreamProvider
         // idempotent, so a file that raises both Created and Changed is merged once per event
         // harmlessly. (In-process writes no longer depend on this at all — see
         // ContentCollection.SaveFileAsync's proactive ingest.)
-        FileSystemEventHandler ingest = (sender, e) =>
+        // Case-insensitive `.md` (an upload named `.MD`/`.Md` is still markdown) and forward-slash
+        // relative paths — the article key must match what GetMarkdown reduces on, which uses `/`;
+        // Path.GetRelativePath yields `\` on Windows, so normalize (no-op on Linux/macOS).
+        void Ingest(string fullPath)
         {
             if (handle.Stopped) return;
-            if (Path.GetExtension(e.FullPath) == ".md")
-                onChanged(Path.GetRelativePath(basePath, e.FullPath));
-        };
-        w.Created += ingest;
-        w.Changed += ingest;
-
-        w.Renamed += (sender, e) =>
-        {
-            if (handle.Stopped) return;
-            if (Path.GetExtension(e.FullPath) == ".md")
-                onChanged(Path.GetRelativePath(basePath, e.FullPath));
-        };
+            if (string.Equals(Path.GetExtension(fullPath), ".md", StringComparison.OrdinalIgnoreCase))
+                onChanged(Path.GetRelativePath(basePath, fullPath).Replace('\\', '/'));
+        }
+        w.Created += (_, e) => Ingest(e.FullPath);
+        w.Changed += (_, e) => Ingest(e.FullPath);
+        w.Renamed += (_, e) => Ingest(e.FullPath);
 
         w.EnableRaisingEvents = true;
         return handle;
