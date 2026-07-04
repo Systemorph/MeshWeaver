@@ -133,6 +133,9 @@ public static class SkillView
         SkillActionKind.OpenContent => string.IsNullOrWhiteSpace(action.ContentPath)
             ? "Opens content"
             : $"Opens `{action.ContentPath}`",
+        SkillActionKind.Navigate => string.IsNullOrWhiteSpace(action.ContentPath)
+            ? "Navigates the UI to a path (pane-aware, resilient)"
+            : $"Navigates to `{action.ContentPath}` (pane-aware, resilient)",
         SkillActionKind.Connect => string.IsNullOrWhiteSpace(action.Provider)
             ? "Connects a provider"
             : $"Connects {Escape(action.Provider!)}",

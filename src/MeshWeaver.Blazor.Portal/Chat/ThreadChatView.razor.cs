@@ -1288,6 +1288,21 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                 }
                 ShowSkillStatus(skill.Name ?? skill.Id, false);
                 break;
+            case MeshWeaver.AI.SkillActionKind.Navigate:
+                // "Take me there" — resolve the row resiliently, then navigate PANE-AWARE. Target is the
+                // typed argument (or, when empty, the skill's own ContentPath / path).
+                var navRow = string.IsNullOrWhiteSpace(parsed.RawArguments)
+                    ? (string.IsNullOrEmpty(action.ContentPath) ? skill.Path : action.ContentPath)
+                    : parsed.RawArguments.Trim();
+                if (string.IsNullOrWhiteSpace(navRow))
+                {
+                    ShowSkillStatus("Where to? Try `/navigate <path or what you're looking for>`.", true);
+                    break;
+                }
+                lastCommandStatus = null;
+                lastCommandStatusIsError = false;
+                RunNavigate(navRow!);
+                break;
             default:
                 // Instruction skill + typed task → re-enter the normal submission path with the
                 // composed message (it never starts with '/', so it cannot re-parse as a command).
@@ -1300,6 +1315,84 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                 else
                     ShowSkillStatus(skill.Description ?? $"/{skill.Id}", false);
                 break;
+        }
+    }
+
+    /// <summary>
+    /// Resolves a navigation row (resilient: direct path first, else free-text context; always the best
+    /// available match) and applies the result PANE-AWARE. Reactive — resolve then Subscribe, never await.
+    /// </summary>
+    private void RunNavigate(string row)
+    {
+        var resolver = new MeshWeaver.AI.Navigation.NavigationResolver(Hub);
+        RunUnderCircuitUser(resolver.Resolve(row, initialContext))
+            .Take(1)
+            .Timeout(TimeSpan.FromSeconds(8))
+            .Subscribe(
+                resolution => InvokeAsync(() =>
+                {
+                    if (_isDisposed) return;
+                    ApplyNavigation(resolution);
+                }),
+                ex => InvokeAsync(() =>
+                {
+                    if (_isDisposed) return;
+                    ShowSkillStatus($"Couldn't navigate to “{row}”: {ex.Message}", true);
+                }));
+    }
+
+    /// <summary>
+    /// Applies a resolved navigation. A matched SKILL is RUN (a skill does more than a route change); an app
+    /// ROUTE navigates the main view by URL; a NODE navigates pane-aware; Unresolved surfaces the message.
+    /// </summary>
+    private void ApplyNavigation(MeshWeaver.AI.Navigation.NavigationResolution resolution)
+    {
+        switch (resolution.Kind)
+        {
+            case MeshWeaver.AI.Navigation.NavigationTargetKind.Skill:
+                var skillId = LastSegment(resolution.Target);
+                // Guard against re-entering /navigate; in that degenerate case just open its page.
+                if (string.Equals(skillId, "navigate", StringComparison.OrdinalIgnoreCase))
+                {
+                    ApplyPaneAwareNavigation(resolution.Target!);
+                    break;
+                }
+                ResolveSkillNodeAndRun(new MeshWeaver.AI.Parsing.ParsedCommand
+                {
+                    Name = skillId ?? string.Empty,
+                    Arguments = [],
+                    RawArguments = string.Empty,
+                });
+                break;
+            case MeshWeaver.AI.Navigation.NavigationTargetKind.Route:
+                // A page route (e.g. /search?…) — a page, not a renderable node, so always the main view.
+                NavigationService.NavigateTo(resolution.Target!);
+                ShowSkillStatus(resolution.Message ?? $"Opened {resolution.Target}", false);
+                break;
+            case MeshWeaver.AI.Navigation.NavigationTargetKind.Node:
+                ApplyPaneAwareNavigation(resolution.Target!);
+                ShowSkillStatus(resolution.Message ?? $"Opened {LastSegment(resolution.Target)}", false);
+                break;
+            default:
+                ShowSkillStatus(resolution.Message ?? "Couldn't find anywhere to go.", true);
+                break;
+        }
+    }
+
+    /// <summary>
+    /// The pane-aware rule (identical to <see cref="OnContextChipClicked"/>): a thread in the SIDE panel
+    /// changes the URL and navigates the MAIN pane; a thread in the MAIN pane opens the target in the SIDE
+    /// panel — so the conversation and the place it sent you sit side by side.
+    /// </summary>
+    private void ApplyPaneAwareNavigation(string path)
+    {
+        var clean = path.TrimStart('/');
+        if (IsInSidePanel)
+            NavigationService.NavigateTo($"/{clean}");
+        else
+        {
+            SidePanelState.SetTitle(LastSegment(clean));
+            SidePanelState.OpenWithContent(clean);
         }
     }
 

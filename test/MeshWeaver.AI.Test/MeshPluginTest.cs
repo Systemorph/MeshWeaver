@@ -478,7 +478,7 @@ public class MeshPluginTest : MonolithMeshTestBase
     #region NavigateTo
 
     [Fact]
-    public void NavigateTo_ValidPath_ReturnsNavigatingMessage()
+    public async Task NavigateTo_ValidPath_ResolvesAndReturnsNavigatingMessage()
     {
         var displayedControls = new List<LayoutAreaControl>();
         var mockChat = new MockAgentChat
@@ -487,23 +487,51 @@ public class MeshPluginTest : MonolithMeshTestBase
         };
         var plugin = new MeshPlugin(Mesh, mockChat);
 
-        var result = plugin.NavigateTo("@Agent/Orchestrator");
+        // NavigateTo now RESOLVES against the live mesh (honest — no false success), so target must exist.
+        var uniqueId = $"NavTarget_{Guid.NewGuid():N}";
+        var path = $"ACME/{uniqueId}";
+        await plugin.Create(JsonSerializer.Serialize(new
+        {
+            id = uniqueId, @namespace = "ACME", name = "Nav Target", nodeType = "Markdown"
+        }));
+
+        var result = await plugin.NavigateTo($"@{path}");
 
         result.Should().Contain("Navigating to:");
-        result.Should().Contain("Agent/Orchestrator");
+        result.Should().Contain(path);
         displayedControls.Should().HaveCount(1, "DisplayLayoutArea should have been called once");
     }
 
     [Fact]
-    public void NavigateTo_StripsAtPrefix()
+    public async Task NavigateTo_StripsAtPrefix()
     {
         var mockChat = new MockAgentChat();
         var plugin = new MeshPlugin(Mesh, mockChat);
 
-        var result = plugin.NavigateTo("@ACME/ProductLaunch");
+        var uniqueId = $"NavAt_{Guid.NewGuid():N}";
+        var path = $"ACME/{uniqueId}";
+        await plugin.Create(JsonSerializer.Serialize(new
+        {
+            id = uniqueId, @namespace = "ACME", name = "Nav At", nodeType = "Markdown"
+        }));
 
-        result.Should().Contain("ACME/ProductLaunch");
+        var result = await plugin.NavigateTo($"@{path}");
+
+        result.Should().Contain(path);
         result.Should().NotContain("@ACME");
+    }
+
+    [Fact]
+    public async Task NavigateTo_NonExistentPath_IsHonest_DoesNotClaimSuccess()
+    {
+        var mockChat = new MockAgentChat();
+        var plugin = new MeshPlugin(Mesh, mockChat);
+
+        // A path that cannot resolve to anything — the old tool falsely said "Navigating to: …".
+        var result = await plugin.NavigateTo("@ACME/there-is-no-such-node-xyz-9999");
+
+        result.Should().NotContain("Navigating to: ACME/there-is-no-such-node-xyz-9999",
+            "the tool must never claim to open a node that doesn't exist");
     }
 
     #endregion
