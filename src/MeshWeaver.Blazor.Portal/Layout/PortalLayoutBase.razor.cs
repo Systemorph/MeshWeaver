@@ -152,6 +152,12 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
         NavigationService.SidePanelNavigationRequested += OnSidePanelNavigation;
         _navContextSubscription = NavigationService.NavigationContext
             .Subscribe(OnNavigationContextChanged);
+        // Collapse the side pane whenever the MAIN view NAVIGATES to a thread — a thread lives in
+        // EITHER the main view OR the side panel, never both. Keyed on the REAL navigation event
+        // (LocationChanged), NOT the nav-context stream, so a background context re-emission to the
+        // panel's own thread during a running round can't trip it (the "chat vanishes during
+        // execution" bug the nav-context path had to guard against with SameThreadIdentity).
+        NavigationManager.LocationChanged += OnLocationChanged;
         _nodeMenuSubscription = MenuItemsProvider.GetMenu(NodeMenuContext).Subscribe(items =>
         {
             _nodeMenuItems = items;
@@ -512,6 +518,31 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
 
     private NavigationContext? _currentNavContext;
 
+    /// <summary>
+    /// Collapses the side pane when the MAIN view navigates to a thread node. Fired on the real
+    /// <see cref="NavigationManager.LocationChanged"/> event (a genuine URL navigation) — never the
+    /// nav-context stream — so a background context re-emission during a running round cannot collapse
+    /// the active side-panel chat (the recurring "chat disappears during execution" bug). An unsent
+    /// new-chat composer (empty <c>ContentPath</c>) is preserved: it is not an opened thread. This
+    /// implements "opening a thread in the main pane collapses the side pane" for EVERY entry point
+    /// (composer full-screen submit, Open-Full-Screen, a thread link) since they all navigate.
+    /// </summary>
+    private void OnLocationChanged(object? sender, Microsoft.AspNetCore.Components.Routing.LocationChangedEventArgs e)
+    {
+        if (!isAuthenticated || !SidePanelState.IsVisible || string.IsNullOrEmpty(SidePanelState.ContentPath))
+            return;
+        var path = NavigationManager.ToBaseRelativePath(e.Location);
+        var cut = path.IndexOfAny(['?', '#']);
+        if (cut >= 0)
+            path = path[..cut];
+        // Only a THREAD in the main view collapses the pane — identified by the stable "/_Thread/"
+        // segment (SidePanelChatKeying.ThreadSlug returns null for any non-thread path).
+        if (SidePanelChatKeying.ThreadSlug(path) is null)
+            return;
+        SidePanelState.SetVisible(false);
+        InvokeAsync(StateHasChanged);
+    }
+
     private void OnNavigationContextChanged(NavigationContext? ctx)
     {
         _currentNavContext = ctx;
@@ -843,6 +874,7 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     {
         SidePanelState.OnStateChanged -= OnSidePanelStateChanged;
         NavigationService.SidePanelNavigationRequested -= OnSidePanelNavigation;
+        NavigationManager.LocationChanged -= OnLocationChanged;
         _navContextSubscription?.Dispose();
         _nodeMenuSubscription?.Dispose();
         _meshMenuSubscription?.Dispose();

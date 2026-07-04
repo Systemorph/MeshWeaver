@@ -1348,11 +1348,19 @@ public class AgentChatClient : IAgentChat
     public AgentChatClient Initialize(string? contextPath, string? modelName = null, string? nodeTypePath = null)
     {
         // Normalize at entry so satellite paths (e.g. "ACME/Project/_Thread/<slug>") collapse to
-        // their main-node path before any downstream query/cache key uses them. The model may
-        // arrive as the picked node PATH ("Provider/Anthropic/claude-…") — factories match the
-        // bare model id (last segment).
+        // their main-node path before any downstream query/cache key uses them.
         contextPath = NormalizeContextPath(contextPath);
-        currentModelName = SelectionId.IdOf(modelName);
+        // The model arrives as the picked node PATH (the composer's persisted form,
+        // "Provider/{provider}/{modelId}"). Resolve it to the model's REGISTERED ModelDefinition.Id
+        // via the credential resolver's node-path lookup — NOT SelectionId.IdOf's last-segment
+        // heuristic. IdOf over-strips a model whose id ITSELF contains '/' (an org/model slug like
+        // "z-ai/glm-5.2" → "glm-5.2"), so it no longer Resolve()s and the round falls back to the
+        // default while telling the user the model is "unavailable" — for a model that is configured
+        // (the memex.meshweaver.cloud "glm-5.2 unavailable → z-ai/glm-5.2" report). ResolveModelId
+        // returns the value unchanged for a bare id or a path it can't find, so IdOf is only the
+        // last-ditch fallback when the resolver service is absent.
+        currentModelName = hub.ServiceProvider.GetService<ChatClientCredentialResolver>()?.ResolveModelId(modelName)
+                           ?? SelectionId.IdOf(modelName);
         lastLoadedContextPath = contextPath;
         // Default the NodeType-search namespace to the context node's NodeType when the
         // caller didn't supply one. AgentPickerProjection.BuildAgentQueries will only
