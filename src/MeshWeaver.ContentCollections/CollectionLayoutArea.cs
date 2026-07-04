@@ -21,8 +21,8 @@ public static class CollectionLayoutArea
         if (split is null || split.Length < 1)
             return new MarkdownControl("Collection must be specified in format: Collection/Name or Collection/Name/Path");
 
-        var collection = split[0];
-        var path = split.Length > 1 ? string.Join('/', split.Skip(1)) : "/";
+        var collection = ContentCollectionsExtensions.DecodeCollectionName(split[0]);
+        var path = split.Length > 1 ? $"/{string.Join('/', split.Skip(1))}" : "/";
 
         var contentService = host.Hub.GetContentService();
         var collectionConfig = contentService.GetCollectionConfig(collection);
@@ -30,9 +30,10 @@ public static class CollectionLayoutArea
         if (collectionConfig == null)
             return new MarkdownControl($"Collection '{collection}' not found.");
 
-        var fileBrowser = new FileBrowserControl(collection);
-
-        fileBrowser = fileBrowser
+        var fileBrowser = new FileBrowserControl(collection)
+            .WithPath(path)
+            .WithUrlBasePath(
+                $"/{host.Hub.Address}/{ContentCollectionsExtensions.CollectionAreaName}/{ContentCollectionsExtensions.EncodeCollectionName(collection)}")
             .WithCollectionConfiguration(collectionConfig);
 
         return Controls.Stack

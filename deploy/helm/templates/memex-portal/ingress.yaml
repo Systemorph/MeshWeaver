@@ -28,7 +28,7 @@ spec:
     - host: {{ .Values.ingress.host | quote }}
       http:
         paths:
-{{- if .Values.portalNext.enabled }}
+{{- if (.Values.portalNext).enabled }}
           # ---- Next.js React GUI (FEATURE-FLAGGED — see .Values.portalNext) ---
           # nginx matches the LONGEST prefix first regardless of order, so /next/*
           # (the app + its /next/_next assets) hits portal-next while everything
@@ -50,4 +50,45 @@ spec:
                 name: "memex-portal-service"
                 port:
                   number: {{ .Values.config.memex_portal.ASPNETCORE_HTTP_PORTS | default 8080 }}
+{{- if (.Values.grpc).enabled }}
+# ---- Native gRPC on the SAME host (backend-protocol is per-Ingress-resource) ----
+# ONLY the bidi participant connection (meshweaver.v1.Mesh/Open) is native gRPC — a second Ingress
+# on the same host routes exactly that method to the portal's h2c gRPC port with backend-protocol
+# GRPC, so participants connect to the ordinary portal URL over TLS (nginx serves HTTP/2 on 443),
+# no extra DNS or certs. 🚨 Deliberately NOT the whole /meshweaver.v1.Mesh prefix: the gRPC-WEB
+# split (Connect + Deliver — the React GUI's browser transport) shares that prefix but is
+# HTTP/1.1, and grpc_pass would break it; it keeps falling through to the web ingress above.
+---
+apiVersion: "networking.k8s.io/v1"
+kind: "Ingress"
+metadata:
+  name: "memex-portal-grpc-ingress"
+  labels:
+    app.kubernetes.io/name: "{{ .Chart.Name }}"
+    app.kubernetes.io/component: "memex-portal"
+    app.kubernetes.io/instance: "{{ .Release.Name }}"
+  annotations:
+    nginx.ingress.kubernetes.io/backend-protocol: "GRPC"
+    # Long-lived bidi streams (the participant connection IS one Open stream) — keep the proxy
+    # from idling them out.
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+spec:
+  ingressClassName: {{ .Values.ingress.className | quote }}
+  tls:
+    - hosts:
+        - {{ .Values.ingress.host | quote }}
+      secretName: {{ .Values.ingress.tlsSecret | quote }}
+  rules:
+    - host: {{ .Values.ingress.host | quote }}
+      http:
+        paths:
+          - path: "/meshweaver.v1.Mesh/Open"
+            pathType: "Exact"
+            backend:
+              service:
+                name: "memex-portal-service"
+                port:
+                  number: {{ .Values.grpc.port }}
+{{- end }}
 {{- end }}

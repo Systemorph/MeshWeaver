@@ -33,6 +33,7 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
     private readonly IWorkspace _workspace;
     private readonly ILogger? _logger;
     private readonly IObservable<MeshNode?>? _ownNodeStream;
+    private readonly MeshDataSourceExtensions.OwnNodeCache? _ownNodeCache;
     private InstanceCollection _lastSaved = new();
 
     // Pending create / delete buffer. UpdateImpl enqueues here; a debounce
@@ -86,6 +87,8 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
             .DistinctUntilChanged()
             .Replay(1).RefCount();
         _logger = workspace.Hub.ServiceProvider.GetService<ILogger<MeshNodeTypeSource>>();
+        _ownNodeCache = workspace.Hub.ServiceProvider
+            .GetService<MeshDataSourceExtensions.OwnNodeCache>();
         _logger?.LogDebug("MeshNodeTypeSource: Created for hubPath={HubPath} (routingSuppliedStream={Supplied})",
             hubPath, ownNodeStream != null);
 
@@ -484,6 +487,18 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
     private InstanceCollection BuildInstanceCollection(MeshNode? rawNode)
     {
         var ownNode = rawNode != null ? ResolveJsonElementContent(rawNode) : null;
+
+        // 🚨 Stamp this instance as ALREADY PERSISTED before it enters the workspace:
+        // every state flowing through here arrived from persistence (the fallback
+        // one-shot read) or from the routing-supplied own-node stream (fed by the
+        // storage/catalog change feed) — both durable by construction. The persistence
+        // sampler (MeshDataSourceExtensions.SubscribeToOwnDeletion) skips emissions
+        // reference-identical to this snapshot so a pure load never writes storage
+        // back (the initial-load echo that rewrote every FS file on activation and
+        // persisted content-narrowing losses). Set BEFORE the collection is returned
+        // so the stamp is in place when the workspace emits it to the sampler.
+        if (_ownNodeCache != null)
+            _ownNodeCache.PersistedSnapshot = ownNode;
 
         // 🚨 LEAVE BOTH CLOCKS ALONE on load — never touch Hub.Version, never re-stamp the node.
         // Hub.Version is already strictly monotonic on its own (++ per message in

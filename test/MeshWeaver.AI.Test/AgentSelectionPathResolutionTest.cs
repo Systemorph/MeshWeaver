@@ -178,35 +178,33 @@ public class AgentSelectionPathResolutionTest : AITestBase
     }
 
     /// <summary>
-    /// Issue #201's downstream symptom surface: an EMPTY agent set (the synced agent
-    /// query emitted an empty snapshot — pre-Initial-gate regression, or genuinely no
-    /// agents visible) combined with an explicit selection must report the TRUTHFUL
-    /// failure — no agents are available in this context — and must NOT tell the user
-    /// to "pick another agent from the list" when the list is empty. (The explicit
-    /// selection still does NOT fall through to another agent — there is none — and
-    /// the non-empty case keeps the existing "was not found among the available
-    /// agents ([…]) … pick another agent" message, pinned by
-    /// <see cref="SelectUnknownAgentPath_DegradesGracefully_DoesNotSilentlyPickAnotherAgent"/>.)
+    /// #201: with an EMPTY agent catalog the failure is "no agents loaded in this
+    /// context", never "your selection was moved or renamed — pick another from the
+    /// list": there is no list. The stale-selection wording dead-ended users on the
+    /// deployed portal ("available agents ([])" with nothing to pick); the empty-set
+    /// message must name the real condition (catalog not emitted / not visible) and
+    /// the recovery (retry; check agent visibility). The root-cause of the empty
+    /// snapshot — a lost synced-query Initial gate — is pinned separately by
+    /// SyncedQueryInitialGateTest; this asserts the downstream user-facing message.
     /// </summary>
     [Fact]
-    public async Task EmptyAgentSet_ExplicitSelection_ReportsNoAgentsAvailable_NotPickAnother()
+    public async Task SelectAgent_WithEmptyCatalog_ReportsEmptyCatalog_NotStaleSelection()
     {
         var client = new AgentChatClient(Mesh.ServiceProvider);
-        // The empty-snapshot state: the synced-query Subscribe callback applied
-        // an empty agent list (the exact production path of issue #201).
         client.ApplyAgents(Array.Empty<AgentDisplayInfo>(), contextPath: null);
 
-        // The composer's picker carries a persisted selection from before the list emptied.
         client.SetSelectedAgent("Agent/Assistant");
 
         var response = await RunAndCaptureAsync(client);
 
-        response.Should().Contain("No agents are available",
-            "with zero loaded agents the truthful failure is the agent LOAD (registry returned "
-            + "none — failed to load or none visible), not the user's selection");
+        response.Should().Contain("Agent/Assistant",
+            "the message should name the agent the user asked for");
+        response.Should().Contain("agent catalog is empty",
+            "an empty catalog is a load/visibility condition, not a stale selection");
         response.Should().NotContain("pick another agent from the list",
-            "there is no list to pick from — that suggestion misdirects the user at the "
-            + "selection instead of the load");
+            "there is nothing to pick from — the stale-selection advice is a dead end");
+        response.Should().NotContain("may have been moved, renamed",
+            "blaming the selection is wrong when zero agents resolved");
     }
 }
 

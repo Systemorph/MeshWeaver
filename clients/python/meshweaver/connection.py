@@ -54,6 +54,19 @@ class MeshConnection:
             self._reader.cancel()
         await self._channel.close()
 
+    async def wait_closed(self) -> None:
+        """Block until the inbound stream ends — the server went away / the connection dropped.
+        A long-lived participant (e.g. the gate) awaits this to know when to reconnect. A reader
+        exception (an RPC error on a dropped connection) IS "closed" for this purpose, so it is
+        swallowed rather than propagated; cancellation propagates normally."""
+        if self._reader is not None:
+            try:
+                await self._reader
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                pass
+
     async def __aenter__(self) -> "MeshConnection":
         return self
 
@@ -114,19 +127,24 @@ class MeshConnection:
         finally:
             self._pending.pop(delivery_id, None)
 
-    async def post(self, target: str, message_type: str, message: dict[str, Any]) -> None:
-        """Fire-and-forget a message to ``target``."""
+    async def post(self, target: str, message_type: str, message: dict[str, Any],
+                   access_context: Optional[dict[str, Any]] = None) -> None:
+        """Fire-and-forget a message to ``target``. ``access_context`` carries an identity on the
+        delivery (honoured only on the trusted loopback endpoint — see :func:`envelope.build_deliver`)."""
         payload = envelope.build_deliver(
             delivery_id=uuid.uuid4().hex, sender=self.address, target=target,
-            message_type=message_type, message=message,
+            message_type=message_type, message=message, access_context=access_context,
         )
         await self._send_q.put(mesh_pb2.ClientFrame(deliver=payload))
 
     async def respond(self, to: "envelope.Delivery", message_type: str, message: dict[str, Any]) -> None:
-        """Reply to an inbound request — addressed back to its sender, correlated by its delivery id."""
+        """Reply to an inbound request — addressed back to its sender, correlated by its delivery id.
+        The inbound request's ``accessContext`` is echoed, so on a trusted connection the response
+        runs under the REQUESTER's identity (the gate acting on the user's behalf)."""
         payload = envelope.build_deliver(
             delivery_id=uuid.uuid4().hex, sender=self.address, target=to.sender or "",
             message_type=message_type, message=message, request_id=to.id,
+            access_context=to.access_context,
         )
         await self._send_q.put(mesh_pb2.ClientFrame(deliver=payload))
 
@@ -150,16 +168,26 @@ class MeshConnection:
             self._subscriptions.pop(stream_id, None)
 
 
-async def connect(url: str, token: Optional[str] = None, address: Optional[str] = None) -> MeshConnection:
+async def connect(url: str, token: Optional[str] = None, address: Optional[str] = None,
+                  root_certificates: Optional[bytes] = None) -> MeshConnection:
     """Connect a Python process to the mesh as a participant.
 
-    ``url`` is the portal gRPC endpoint, e.g. ``https://atioz.meshweaver.cloud`` (TLS) or
-    ``http://localhost:5202`` (h2c). ``token`` is a MeshWeaver API token; the server validates it and
-    stamps every write with your identity. ``address`` defaults to a fresh ``py/<uuid>`` participant.
+    ``url`` is the portal gRPC endpoint:
+
+    * ``https://memex.meshweaver.cloud`` — TLS through the portal ingress (the same-host
+      ``/meshweaver.v1.Mesh`` gRPC route). ``root_certificates`` overrides the trust roots for
+      self-signed local portals (pass the PEM bytes of the ingress cert, e.g. ``tls.crt`` from the
+      cluster's TLS secret); omit it for real certificates.
+    * ``http://127.0.0.1:8082`` — the TRUSTED loopback endpoint for gates that ship in the same
+      deployment as the portal (same pod): h2c, no token needed — reachability is the
+      authentication, and the server honours an ``accessContext`` carried on deliveries.
+
+    ``token`` is a MeshWeaver API token; the server validates it and stamps every write with your
+    identity. ``address`` defaults to a fresh ``py/<uuid>`` participant.
     """
     target = url.split("://", 1)[-1]
     if url.startswith("https://"):
-        channel = grpc.aio.secure_channel(target, grpc.ssl_channel_credentials())
+        channel = grpc.aio.secure_channel(target, grpc.ssl_channel_credentials(root_certificates))
     else:
         channel = grpc.aio.insecure_channel(target)
     conn = MeshConnection(channel, address or f"py/{uuid.uuid4().hex}", token)

@@ -56,6 +56,12 @@ spec:
             - name: "http"
               protocol: "TCP"
               containerPort: 8080
+{{- if (.Values.grpc).enabled }}
+            # Public h2c gRPC (the trusted port binds 127.0.0.1 and is same-pod only — not listed).
+            - name: "grpc"
+              protocol: "TCP"
+              containerPort: {{ .Values.grpc.port }}
+{{- end }}
           volumeMounts:
             - name: "memex-data"
               mountPath: "/data"
@@ -86,6 +92,28 @@ spec:
             periodSeconds: 15
             timeoutSeconds: 10
             failureThreshold: 6
+{{- if (((.Values.grpc).pythonGate).enabled) }}
+        # ---- Python gate (TRUSTED co-deployed participant — see .Values.grpc.pythonGate) ----------
+        # Same pod ⇒ shares the network namespace ⇒ reaches the portal's 127.0.0.1-bound trusted gRPC
+        # endpoint. That reachability IS the authentication (no token). Executes `python` Code nodes
+        # exactly as the in-process Roslyn kernel executes C# ones. OFF unless the image is provided.
+        - name: "python-gate"
+          image: "{{ .Values.grpc.pythonGate.image }}"
+          imagePullPolicy: "IfNotPresent"
+          env:
+            - name: "MESH_GRPC_URL"
+              value: "http://127.0.0.1:{{ .Values.grpc.trustedPort }}"
+            - name: "MESH_GATE_ADDRESS"
+              value: "{{ .Values.grpc.pythonGate.address | default "py/python-kernel" }}"
+          resources:
+            requests: { cpu: "25m", memory: "64Mi" }
+            limits: { memory: "256Mi" }
+          securityContext:
+            # The image already runs as a non-root uid; harden the rest.
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            capabilities: { drop: ["ALL"] }
+{{- end }}
       volumes:
         - name: "memex-data"
 {{- if .Values.persistDataVolume }}

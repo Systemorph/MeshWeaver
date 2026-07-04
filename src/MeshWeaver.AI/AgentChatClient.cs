@@ -8,6 +8,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using MeshWeaver.AI.Persistence;
+using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Layout;
@@ -538,9 +539,11 @@ public class AgentChatClient : IAgentChat
 
                         if (BinaryExtensions.Contains(ext))
                         {
-                            // Load binary from content collection on the node's hub
+                            // Load binary from the node's default content collection (the
+                            // `content:` UCR prefix addresses the default collection by design).
                             var effectivePath = nodePath ?? Context?.Path;
-                            var stream = await contentService.GetContentAsync("content", fileName).ConfigureAwait(false);
+                            var stream = await contentService.GetContentAsync(
+                                ContentCollectionsExtensions.DefaultCollectionName, fileName).ConfigureAwait(false);
                             if (stream != null)
                             {
                                 using (stream)
@@ -1123,18 +1126,25 @@ public class AgentChatClient : IAgentChat
             if (!selectionMatched)
             {
                 var requested = currentAgentPath ?? currentAgentName;
-                // 🚨 Truthful empty-set error (issue #201): with ZERO loaded
-                // agents the problem is never the user's selection — the agent
-                // registry returned none (the load failed or none are visible
-                // in this context). "pick another agent from the list" with an
-                // empty list misdirects the user at the selection instead of
-                // the load, so that suggestion is reserved for the non-empty
-                // case.
+                // 🚨 Distinguish "stale selection" from "EMPTY catalog" (#201). With zero
+                // loaded agents there is nothing to "pick from the list" — blaming the
+                // selection ("moved or renamed — pick another") dead-ends the user. An
+                // empty catalog means the agent query returned nothing for THIS hub's
+                // identity/context (still converging on a cold start, or agents not
+                // visible to this principal) — say that, and that a retry can succeed
+                // once the catalog emits. The stale-selection wording stays reserved for
+                // the non-empty case, where picking another agent is real advice.
+                // (The root-cause of the empty catalog — a lost synced-query Initial
+                // gate — is fixed in SyncedQueryMeshNodes; this message covers the
+                // residual "genuinely no agents visible" case.)
                 lastAgentCreationError = loadedAgents.Count == 0
-                    ? $"Selected agent '{requested}' could not be resolved. "
-                      + "No agents are available in this context — the agent registry "
-                      + "returned none (agents failed to load, or none are visible here). "
-                      + "Check the agent configuration and access rights for this space."
+                    ? $"Selected agent '{requested}' could not be validated: the agent "
+                      + "catalog is empty — no agents are loaded in this context. Either "
+                      + "the agent query has not emitted yet (cold start — retry the "
+                      + "message) or no agents are visible to this identity/context. If "
+                      + "this persists, verify agents exist under the 'Agent', "
+                      + "'{space}/Agent' or '{user}/Agent' namespaces and are readable "
+                      + "in this context."
                     : $"Selected agent '{requested}' was not found among the available agents "
                       + $"([{string.Join(", ", loadedAgents.Select(a => a.Path ?? a.Name))}]). "
                       + "It may have been moved, renamed, or is not available in this context — "

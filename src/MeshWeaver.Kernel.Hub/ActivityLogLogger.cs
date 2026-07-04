@@ -30,7 +30,21 @@ internal sealed class ActivityLogLogger(IMessageHub hub, string activityLogPath)
     // under System (Permission.All) — same rule as compile (#2) / user-activity (#3).
     private readonly AccessService? _accessService = hub.ServiceProvider.GetService<AccessService>();
     private ImmutableList<LogMessage> _messages = ImmutableList<LogMessage>.Empty;
-    private int _completed;
+
+    // 🚨 Terminal-settle state — guarded by _publishLock, together with every
+    // publish. Once Complete has stored a terminal status here, EVERY subsequent
+    // snapshot (immediate append flush, throttle tail-flush timer, duplicate
+    // Complete) re-asserts it. Decision + hub.Post happen under the SAME lock, so
+    // post order == decision order and a Running snapshot can never be posted
+    // after the terminal one. Before this, a log append arriving after Complete
+    // (a late Subscribe-callback log, a leaked subscription still ticking, or the
+    // tail-flush timer racing Complete's check-then-publish) re-published
+    // Status=Running/End=null wholesale over a settled Failed/Succeeded — the
+    // 2026-07-02/03 memex-cloud "zombie activity stuck Running forever" RCA.
+    private readonly object _publishLock = new();
+    private ActivityStatus? _terminalStatus;
+    private DateTime? _terminalEnd;
+    private JsonElement? _terminalReturnValue;
 
     // Rate-limit running-state publishes. Each Log call appends to _messages but
     // only triggers a DataChangeRequest at most once per ThrottleMs. Without
@@ -103,18 +117,21 @@ internal sealed class ActivityLogLogger(IMessageHub hub, string activityLogPath)
                     .Subscribe(_ =>
                     {
                         Interlocked.Exchange(ref _publishScheduled, 0);
-                        if (Volatile.Read(ref _completed) == 0)
-                        {
-                            Interlocked.Exchange(ref _lastPublishTicks, Environment.TickCount64);
-                            PublishSnapshot(ActivityStatus.Running, finish: false);
-                        }
+                        Interlocked.Exchange(ref _lastPublishTicks, Environment.TickCount64);
+                        // Publishing after Complete is safe — PublishSnapshot
+                        // resolves the status under _publishLock and re-asserts
+                        // the terminal state, so this tail flush surfaces late
+                        // messages without ever regressing the settle. (The old
+                        // check-then-publish here was the TOCTOU that let a
+                        // Running snapshot land after the terminal write.)
+                        PublishSnapshot();
                     });
             }
             return;
         }
 
         Interlocked.Exchange(ref _lastPublishTicks, now);
-        PublishSnapshot(ActivityStatus.Running, finish: false);
+        PublishSnapshot();
     }
 
     /// <summary>
@@ -123,14 +140,36 @@ internal sealed class ActivityLogLogger(IMessageHub hub, string activityLogPath)
     /// script's <paramref name="returnValue"/> on the activity content so request
     /// handlers that triggered the script (e.g. <c>ExportDocumentHandler</c>) can
     /// deserialize it on terminal status without a side-channel MeshNode.
+    /// Idempotent — the first terminal status wins; later calls are no-ops.
     /// </summary>
     public void Complete(ActivityStatus status, JsonElement? returnValue = null)
     {
-        if (Interlocked.Exchange(ref _completed, 1) != 0) return;
-        PublishSnapshot(status, finish: true, returnValue);
+        lock (_publishLock)
+        {
+            if (_terminalStatus is not null) return;
+            _terminalStatus = status;
+            _terminalEnd = DateTime.UtcNow;
+            _terminalReturnValue = returnValue;
+            PublishSnapshotLocked();
+        }
     }
 
-    private void PublishSnapshot(ActivityStatus status, bool finish, JsonElement? returnValue = null)
+    private void PublishSnapshot()
+    {
+        lock (_publishLock) PublishSnapshotLocked();
+    }
+
+    /// <summary>
+    /// Builds and posts a snapshot of the current message list. MUST be called
+    /// under <see cref="_publishLock"/>: the status decision (terminal vs Running)
+    /// and the <c>hub.Post</c> are one atomic step, so post order equals decision
+    /// order — once <see cref="Complete"/> has stored the terminal state, no
+    /// Running-status snapshot can ever be posted after it, and every later
+    /// append-flush re-asserts the terminal Status/End/ReturnValue instead of
+    /// clobbering them. <c>hub.Post</c> is a synchronous enqueue (no await, no
+    /// hub-turn wait), so holding the plain lock across it is safe.
+    /// </summary>
+    private void PublishSnapshotLocked()
     {
         ImmutableList<LogMessage> snapshot;
         lock (_lock) { snapshot = _messages; }
@@ -144,9 +183,9 @@ internal sealed class ActivityLogLogger(IMessageHub hub, string activityLogPath)
             var log = new ActivityLog("ScriptExecution")
             {
                 Messages = snapshot,
-                Status = status,
-                End = finish ? DateTime.UtcNow : null,
-                ReturnValue = returnValue
+                Status = _terminalStatus ?? ActivityStatus.Running,
+                End = _terminalEnd,
+                ReturnValue = _terminalReturnValue
             };
 
             var segments = activityLogPath.Split('/', StringSplitOptions.RemoveEmptyEntries);

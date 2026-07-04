@@ -5,6 +5,8 @@ using System.Threading.Channels;
 using Grpc.Core;
 using MeshWeaver.Hosting.Grpc.Protocol;
 using MeshWeaver.Messaging;
+using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Options;
 
 namespace MeshWeaver.Hosting.Grpc;
 
@@ -22,10 +24,36 @@ namespace MeshWeaver.Hosting.Grpc;
 /// outbound frame — the connect ack AND mesh deliveries — funnels through one pump draining the
 /// connection's <see cref="Channel{T}"/>.</para>
 /// </summary>
-public sealed class MeshGrpcService(IMessageHub hub, GrpcConnectionRegistry registry) : Protocol.Mesh.MeshBase
+public sealed class MeshGrpcService(IMessageHub hub, GrpcConnectionRegistry registry, IOptions<GrpcOptions>? options = null)
+    : Protocol.Mesh.MeshBase
 {
     /// <summary>The fully-qualified gRPC service name the endpoint is mapped at.</summary>
     public const string ServiceName = "meshweaver.v1.Mesh";
+
+    /// <summary>
+    /// Whether this call arrived on the TRUSTED loopback endpoint (<see cref="GrpcOptions.TrustedPort"/>).
+    /// The trust boundary is the pod: only same-pod containers (the shipped node / bun / python gates)
+    /// can reach a <c>127.0.0.1</c>-bound port, so the local port of the accepted connection IS the
+    /// authentication. No configured trusted port ⇒ never trusted.
+    /// </summary>
+    private bool IsTrusted(ServerCallContext context)
+    {
+        if (options?.Value.TrustedPort is not int trustedPort)
+            return false;
+        try
+        {
+            // The official accessor: on real Kestrel the context IS an HttpContextServerCallContext
+            // (a UserState probe does NOT work there — "__HttpContext" is only its legacy fallback,
+            // which the in-memory transport tests use).
+            return context.GetHttpContext().Connection.LocalPort == trustedPort;
+        }
+        catch (InvalidOperationException)
+        {
+            // Not an AspNetCore-hosted call (e.g. an in-memory context without the fallback entry) —
+            // no HttpContext means no trusted-port evidence.
+            return false;
+        }
+    }
 
     /// <inheritdoc />
     public override async Task Open(
@@ -43,7 +71,8 @@ public sealed class MeshGrpcService(IMessageHub hub, GrpcConnectionRegistry regi
         try
         {
             // Boundary bridge: validate the Bearer token (gRPC call metadata) once per connection.
-            await registry.Authenticate(connectionId, ExtractBearerToken(context))
+            // A call on the trusted loopback endpoint authenticates by reachability instead.
+            await registry.Authenticate(connectionId, ExtractBearerToken(context), IsTrusted(context))
                 .FirstAsync().ToTask(context.CancellationToken);
 
             await foreach (var frame in requestStream.ReadAllAsync(context.CancellationToken))
@@ -95,7 +124,7 @@ public sealed class MeshGrpcService(IMessageHub hub, GrpcConnectionRegistry regi
         var pump = WritePumpAsync(outbound.Reader, responseStream);
         try
         {
-            await registry.Authenticate(connectionId, ExtractBearerToken(context))
+            await registry.Authenticate(connectionId, ExtractBearerToken(context), IsTrusted(context))
                 .FirstAsync().ToTask(context.CancellationToken);
             var address = JsonSerializer.Deserialize<Address>(request.Address, hub.JsonSerializerOptions)
                 ?? throw new RpcException(new Status(StatusCode.InvalidArgument, "Address did not deserialize."));

@@ -112,13 +112,20 @@ public static class SerializationExtensions
 
     private static IEnumerable<JsonConverter> GetStandardConverters(IMessageHub hub)
     {
+        // One depth guard per hub's options, shared by every standard converter that spawns
+        // NESTED serializer sessions (serialize-to-string / SerializeToNode per polymorphic edge).
+        // It carries accumulated depth across those sessions so a self-referencing object graph
+        // trips MaxDepth as a catchable JsonException instead of recursing per edge until the
+        // native stack is exhausted (StackOverflow → SIGABRT — uncatchable, kills the process).
+        var depthGuard = new SerializationDepthGuard();
         yield return new AddressConverter();
         yield return new ObjectPolymorphicConverter(hub.TypeRegistry,
-            hub.ServiceProvider.GetService<ILogger<ObjectPolymorphicConverter>>());
+            hub.ServiceProvider.GetService<ILogger<ObjectPolymorphicConverter>>(),
+            depthGuard);
         yield return new MessageDeliveryConverter(hub.TypeRegistry);
         yield return new ReadOnlyCollectionConverterFactory();
         yield return new JsonNodeConverter();
-        yield return new ImmutableDictionaryOfStringObjectConverter();
+        yield return new ImmutableDictionaryOfStringObjectConverter(depthGuard);
         yield return new RawJsonConverter();
     }
     private static SerializationConfiguration CreateSerializationConfiguration(IMessageHub hub)

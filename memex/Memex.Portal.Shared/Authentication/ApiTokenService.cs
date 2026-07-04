@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Reactive.Linq;
 using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
@@ -39,6 +40,31 @@ internal class ApiTokenService(IMeshService nodeFactory, IMessageHub hub, ILogge
     private const int TokenByteLength = 32;
     private const string NodeTypeApiToken = "ApiToken";
     private const string ApiTokenNamespace = "ApiToken";
+
+    /// <summary>
+    /// Single-flight recency memo for the LastUsedAt stamp, keyed by token hash:
+    /// the UTC time this service instance last DISPATCHED a stamp write for the
+    /// token. Recorded at dispatch (not completion), so a burst of validations
+    /// re-dispatches nothing while a stamp is still in flight — READ-SIDE state
+    /// (query snapshot, stream mirror) can lag arbitrarily and must never gate
+    /// the write (CI runs 28682878901/28684288201: the snapshot-only and
+    /// mirror-lambda gates both let lagged polls through, 5 then 3 duplicate
+    /// stamps on one token node). Instance field on the mesh-scoped singleton
+    /// (AddSingleton&lt;ApiTokenService&gt;) — dies with the mesh, never static.
+    /// </summary>
+    private readonly ConcurrentDictionary<string, DateTimeOffset> lastStampDispatchedAt = new();
+
+    private int stampDispatchCount;
+
+    /// <summary>
+    /// Number of LastUsedAt stamp writes this instance has DISPATCHED — the
+    /// single-flight contract's observable. A burst of N validations against
+    /// a token must move this by exactly 1 per freshness window regardless of
+    /// read-side lag; <c>ApiTokenServiceTests</c> asserts on it (node-version
+    /// observation alone cannot distinguish "one write" from "several writes
+    /// coalesced by the change feed" deterministically).
+    /// </summary>
+    internal int StampDispatchCount => Volatile.Read(ref stampDispatchCount);
 
     /// <summary>
     /// Reactive token creation — composes two <see cref="IMeshService.CreateNode"/> observables
@@ -262,11 +288,36 @@ internal class ApiTokenService(IMeshService nodeFactory, IMessageHub hub, ILogge
         // carries the current value.
         var now = DateTimeOffset.UtcNow;
         if (tokenNode != null
-            && (apiToken.LastUsedAt is null || now - apiToken.LastUsedAt.Value >= LastUsedStampInterval))
+            && (apiToken.LastUsedAt is null || now - apiToken.LastUsedAt.Value >= LastUsedStampInterval)
+            // 🚨 Dispatch-time single-flight: the snapshot check above reads the
+            // EVENTUALLY-CONSISTENT query index, and the Update lambda below reads
+            // the stream MIRROR — both can lag the stamp that is already in flight,
+            // so neither can be the authoritative gate (each lagged validation
+            // would re-dispatch a distinct-timestamp patch the owner applies →
+            // per-request version bumps, the hot-token storm #210 exists to stop).
+            // The memo is dispatch-side state on THIS instance: once one stamp has
+            // been dispatched inside the freshness window, every later validation
+            // skips regardless of read-side lag.
+            && TryClaimStampDispatch(hash, now))
         {
+            Interlocked.Increment(ref stampDispatchCount);
             hub.GetWorkspace()
                 .GetMeshNodeStream(tokenNode.Path)
-                .Update(node => node with { Content = (node.Content as ApiToken ?? apiToken) with { LastUsedAt = now } })
+                .Update(node =>
+                {
+                    // Defense-in-depth for MULTI-INSTANCE racing (another silo's stamp
+                    // already landed on the node this mirror has since synced): re-check
+                    // freshness against the node handed to the lambda and return it
+                    // unchanged when a stamp is already recorded — stream.Update
+                    // short-circuits an unchanged node into a true no-op (no version
+                    // bump, no change-feed fan-out). NOT the primary gate: the mirror
+                    // can lag an in-flight stamp, which is what the dispatch-time memo
+                    // above closes.
+                    var current = node.ContentAs<ApiToken>(hub.JsonSerializerOptions) ?? apiToken;
+                    if (current.LastUsedAt is { } last && now - last < LastUsedStampInterval)
+                        return node;
+                    return node with { Content = current with { LastUsedAt = now } };
+                })
                 .Subscribe(_ => { }, _ => { });
         }
 
@@ -279,6 +330,35 @@ internal class ApiTokenService(IMeshService nodeFactory, IMessageHub hub, ILogge
     /// authenticated request a mesh-node write.
     /// </summary>
     private static readonly TimeSpan LastUsedStampInterval = TimeSpan.FromMinutes(5);
+
+    /// <summary>
+    /// Atomically claims the right to dispatch a LastUsedAt stamp for
+    /// <paramref name="hash"/>: returns <c>true</c> (and records
+    /// <paramref name="now"/>) when no stamp has been dispatched by this
+    /// instance within <see cref="LastUsedStampInterval"/>; <c>false</c>
+    /// when one already has. Lock-free CAS over the instance
+    /// <see cref="lastStampDispatchedAt"/> memo — never blocks, never parks
+    /// (concurrent-collection compare-exchange, not an async gate).
+    /// </summary>
+    private bool TryClaimStampDispatch(string hash, DateTimeOffset now)
+    {
+        while (true)
+        {
+            if (lastStampDispatchedAt.TryGetValue(hash, out var previous))
+            {
+                if (now - previous < LastUsedStampInterval)
+                    return false; // a stamp for this token is already dispatched/fresh
+                if (lastStampDispatchedAt.TryUpdate(hash, now, previous))
+                    return true;
+                // Lost the CAS to a concurrent claimer — re-read its timestamp.
+            }
+            else if (lastStampDispatchedAt.TryAdd(hash, now))
+            {
+                return true;
+            }
+            // Lost TryAdd to a concurrent claimer — re-read its timestamp.
+        }
+    }
 
     /// <summary>
     /// Reactive token revocation. Writes the IsRevoked flag through

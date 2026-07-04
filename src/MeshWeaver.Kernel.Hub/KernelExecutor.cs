@@ -147,14 +147,34 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
             returnValue =>
             {
                 ClearCancellationIf(cts);
-                // Capture the script's return value as JsonElement on the activity's
-                // terminal snapshot so handlers that triggered the script (e.g.
-                // ExportDocumentHandler) can deserialize it without a side-channel MeshNode.
-                JsonElement? returnElement = returnValue is null
-                    ? null
-                    : JsonSerializer.SerializeToElement(returnValue, hub.JsonSerializerOptions);
-                activityLogger.Complete(ActivityStatus.Succeeded, returnElement);
-                hub.Post(new SubmitCodeResponse(msg.Id, true), o => o.ResponseFor(request));
+                try
+                {
+                    // Capture the script's return value as JsonElement on the activity's
+                    // terminal snapshot so handlers that triggered the script (e.g.
+                    // ExportDocumentHandler) can deserialize it without a side-channel MeshNode.
+                    JsonElement? returnElement = returnValue is null
+                        ? null
+                        : JsonSerializer.SerializeToElement(returnValue, hub.JsonSerializerOptions);
+                    activityLogger.Complete(ActivityStatus.Succeeded, returnElement);
+                    hub.Post(new SubmitCodeResponse(msg.Id, true), o => o.ResponseFor(request));
+                }
+                catch (Exception settleEx)
+                {
+                    // 🚨 The settle path itself faulted — canonically SerializeToElement on a
+                    // non-serializable script return value (throwing getter, unsupported type).
+                    // Wedges-to-zero: route the fault to the activity's graceful sink and STILL
+                    // settle terminally. Before this guard the exception skipped Complete
+                    // entirely (activity stuck Running forever — the zombie-activity shape) and
+                    // unwound through the AsyncSubject into the Concat pump, wedging every later
+                    // submission on this kernel. Complete is idempotent, so the Failed settle
+                    // here can never overwrite an already-published Succeeded.
+                    activityLogger.LogError(settleEx,
+                        "Failed to record script result: {Reason}", settleEx.Message);
+                    activityLogger.Complete(ActivityStatus.Failed);
+                    hub.Post(
+                        new SubmitCodeResponse(msg.Id, false) { Error = settleEx.Message },
+                        o => o.ResponseFor(request));
+                }
             },
             ex =>
             {
@@ -187,6 +207,12 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
     /// forwards its outcome to the submission's <see cref="AsyncSubject{T}"/> result sink,
     /// and ALWAYS completes its own (Unit) signal — even on failure — so a failed submission
     /// never tears down the pump and Concat advances to the next one.
+    /// <para>🚨 The OnError/OnCompleted calls on the result sink run the settle path
+    /// (activity terminal write + response post) SYNCHRONOUSLY. A sink that throws must
+    /// never wedge the pump: the settle path self-handles its faults (see
+    /// <see cref="HandleSubmitCodeRequest"/>), and anything still escaping is logged here
+    /// while the <c>finally</c> guarantees the pump advances — before this, a sink throw
+    /// skipped the downstream signal and every later submission queued forever.</para>
     /// </summary>
     private IObservable<Unit> RunSubmission(Submission s) =>
         Observable.Create<Unit>(downstream =>
@@ -195,15 +221,39 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
                     value => s.Result.OnNext(value),
                     ex =>
                     {
-                        s.Result.OnError(ex);
-                        downstream.OnNext(Unit.Default);
-                        downstream.OnCompleted();
+                        try
+                        {
+                            s.Result.OnError(ex);
+                        }
+                        catch (Exception sinkEx)
+                        {
+                            Logger.LogError(sinkEx,
+                                "Submission {ViewId}: outcome sink threw while settling failure",
+                                s.ViewId);
+                        }
+                        finally
+                        {
+                            downstream.OnNext(Unit.Default);
+                            downstream.OnCompleted();
+                        }
                     },
                     () =>
                     {
-                        s.Result.OnCompleted();
-                        downstream.OnNext(Unit.Default);
-                        downstream.OnCompleted();
+                        try
+                        {
+                            s.Result.OnCompleted();
+                        }
+                        catch (Exception sinkEx)
+                        {
+                            Logger.LogError(sinkEx,
+                                "Submission {ViewId}: outcome sink threw while settling success",
+                                s.ViewId);
+                        }
+                        finally
+                        {
+                            downstream.OnNext(Unit.Default);
+                            downstream.OnCompleted();
+                        }
                     }));
 
     private void ClearCancellationIf(CancellationTokenSource cts)
@@ -286,9 +336,14 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
         return Observable.Using(
             () =>
             {
+                // Both standard streams are piped into the script's ActivityLog:
+                // stdout as Information lines, stderr as Error lines — so
+                // Console.Error prints surface on the run's output (red) instead
+                // of vanishing into the host process's stderr.
                 var stdoutPipe = new LoggerTextWriter(scriptOutputLogger);
-                var capture = CapturingTextWriter.Capture(stdoutPipe);
-                return new StdoutScope(stdoutPipe, capture);
+                var stderrPipe = new LoggerTextWriter(scriptOutputLogger, LogLevel.Error);
+                var capture = CapturingTextWriter.Capture(stdoutPipe, stderrPipe);
+                return new StdoutScope(stdoutPipe, stderrPipe, capture);
             },
             // Roslyn compile+execute on the bounded Compile IoPool (see `compilePool`) —
             // NOT a bare Observable.FromAsync on the shared ThreadPool. `t` is the pool's
@@ -300,7 +355,7 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
                 .Select(state =>
                 {
                     scriptState = state;
-                    scope.StdoutPipe.Flush();
+                    scope.Flush();
                     if (state.ReturnValue is not null)
                     {
                         UpdateView(viewId, state.ReturnValue);
@@ -310,13 +365,20 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
                 }));
     }
 
-    private sealed class StdoutScope(LoggerTextWriter stdoutPipe, IDisposable capture) : IDisposable
+    private sealed class StdoutScope(LoggerTextWriter stdoutPipe, LoggerTextWriter stderrPipe, IDisposable capture) : IDisposable
     {
-        public LoggerTextWriter StdoutPipe { get; } = stdoutPipe;
+        /// <summary>Flushes any partially-buffered line on both pipes.</summary>
+        public void Flush()
+        {
+            stdoutPipe.Flush();
+            stderrPipe.Flush();
+        }
+
         public void Dispose()
         {
             capture.Dispose();
-            StdoutPipe.Dispose();
+            stdoutPipe.Dispose();
+            stderrPipe.Dispose();
         }
     }
 

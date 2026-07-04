@@ -44,7 +44,7 @@ public sealed class DocumentationStaticRepoSource(IServiceProvider serviceProvid
             NodePath: $"{Partition}/DataMesh/UnifiedPath",
             SourceCollection: "DocContent",
             SourcePath: "DataMesh/UnifiedPath",
-            TargetCollection: "content",
+            TargetCollection: MeshWeaver.ContentCollections.ContentCollectionsExtensions.DefaultCollectionName,
             TargetPath: ""),
     ];
 

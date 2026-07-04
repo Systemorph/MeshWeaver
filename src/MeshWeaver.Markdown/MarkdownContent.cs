@@ -48,6 +48,19 @@ public record MarkdownContent
     public string? Abstract { get; init; }
 
     /// <summary>
+    /// 🚨 Round-trip buffer for content members this compiled shape does not declare
+    /// (schema evolution: written by a newer build, or removed since the JSON was
+    /// persisted). <c>[JsonExtensionData]</c> captures them on read and re-emits them on
+    /// write, and rides record <c>with</c>-copies — so neither the persistence echo nor
+    /// an edit through a narrower shape can silently drop them (the content-narrowing
+    /// silent-data-loss class; see <c>NodeTypeDefinition.UnknownMembers</c>). Never read
+    /// programmatically. <c>[Browsable(false)]</c> keeps it out of reflected editors.
+    /// </summary>
+    [System.ComponentModel.Browsable(false)]
+    [System.Text.Json.Serialization.JsonExtensionData]
+    public IDictionary<string, System.Text.Json.JsonElement>? UnknownMembers { get; init; }
+
+    /// <summary>
     /// Creates a MarkdownContent from raw content by parsing and rendering.
     /// </summary>
     /// <param name="content">The raw markdown content (without YAML front matter).</param>

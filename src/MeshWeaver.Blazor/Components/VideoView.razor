@@ -1,0 +1,35 @@
+@inherits BlazorView<VideoControl, VideoView>
+
+@if (!string.IsNullOrEmpty(Src))
+{
+    @if (ViewModel.Kind == VideoKind.Embed)
+    {
+        <iframe src="@Src" title="@Title" class="@Class" style="@FrameStyle"
+                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                allowfullscreen></iframe>
+    }
+    else
+    {
+        <video controls src="@Src" poster="@Poster" title="@Title" class="@Class" style="@FrameStyle"></video>
+    }
+}
+
+@code
+{
+    private string? Src { get; set; }
+    private string? Poster { get; set; }
+    private string? Title { get; set; }
+    private string? AspectRatio { get; set; }
+
+    private string FrameStyle =>
+        $"width: 100%; aspect-ratio: {AspectRatio}; border: 0; background: #000; {Style}";
+
+    protected override void BindData()
+    {
+        base.BindData();
+        DataBind(ViewModel.Src, x => x.Src);
+        DataBind(ViewModel.Poster, x => x.Poster);
+        DataBind(ViewModel.Title, x => x.Title);
+        DataBind(ViewModel.AspectRatio, x => x.AspectRatio, defaultValue: "16/9");
+    }
+}

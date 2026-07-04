@@ -167,7 +167,7 @@ The target collection must exist on the node and be editable (`IsEditable=true`)
     /// <param name="limit">Maximum number of results to return (default 50, max 200).</param>
     /// <returns>A JSON envelope <c>{count, limit, truncated, results}</c> as a string.</returns>
     [McpServerTool(Title = "Search the mesh", ReadOnly = true, Idempotent = true, OpenWorld = false)]
-    [Description(@"Searches the mesh using GitHub-style query syntax. Returns {count, limit, truncated, results:[{path,name,nodeType}]} — when 'truncated' is true there are more matches than returned; narrow the query or raise 'limit'.
+    [Description(@"Searches the mesh using GitHub-style query syntax. Returns {count, limit, truncated, results:[{path,name,nodeType,version,lastModified}]} — when 'truncated' is true there are more matches than returned; narrow the query or raise 'limit'.
 
 Query terms (space-separated, all case-insensitive):
   • field filters: nodeType:Agent, name:Acme, name:*sales* (wildcards), -status:Archived (negation), price:>100

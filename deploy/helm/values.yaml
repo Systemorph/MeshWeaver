@@ -23,6 +23,35 @@ ollama:
     enabled: false
     host: ""        # cluster host-gateway IP of the host running Ollama
     port: 11434
+# ---- Native gRPC (HTTP/2) for foreign-language participants ---------------
+# The mesh gRPC service (meshweaver.v1.Mesh/Open — the bidi participant connection the Python /
+# Node SDKs use) needs real HTTP/2 end-to-end; the browser path (HTTP/1.1 + gRPC-web) is not
+# enough. Enabled: Kestrel gets TWO extra endpoints beside the 8080 web port —
+#   * port (8081): PUBLIC h2c gRPC, exposed via the service and (when ingress.enabled) a same-host
+#     ingress whose /meshweaver.v1.Mesh path proxies with backend-protocol GRPC — so participants
+#     connect to the ordinary portal URL over TLS, no extra DNS or certs.
+#   * trustedPort (8082): TRUSTED endpoint bound to 127.0.0.1 — reachable ONLY from containers in
+#     the portal's own pod (the shipped node / bun / python gates). Reachability IS the
+#     authentication: no API token, nothing to rotate; deliveries may carry through the requesting
+#     user's AccessContext (see GrpcOptions.TrustedPort).
+grpc:
+  enabled: true
+  port: 8081
+  trustedPort: 8082
+  # ---- Python gate sidecar (executes `python` Code nodes; OFF by default) ---
+  # A trusted, co-deployed participant that runs `meshweaver.worker` as a SIDECAR in the portal pod
+  # and connects to the trusted loopback endpoint above (127.0.0.1:{trustedPort}) — reachability
+  # across the shared pod network namespace IS the authentication, no token. It is the Python
+  # counterpart of the in-process Roslyn kernel: a Code node whose Language=="python" routes to it
+  # (address `py/python-kernel`), runs, and writes its result back onto the run's Activity node.
+  #
+  # OFF by default: a deployment must (a) supply the image (built from deploy/python-gate/Dockerfile,
+  # pushed to a registry the cluster can pull) and (b) opt in — standing python execution is a
+  # deliberate capability, not a default. Enable in an overlay / --set.
+  pythonGate:
+    enabled: false
+    image: "meshweaver/python-gate:local"
+    address: "py/python-kernel"
 # ---- Portal Ingress (TLS via an ingress controller) -----------------------
 # Off by default (cloud envs wire ingress/TLS their own way). A self-host overlay
 # enables it with a hostname + a pre-created TLS secret. The proxy-*-timeout

@@ -83,14 +83,40 @@ public class PolymorphicTypeInfoResolver(ITypeRegistry typeRegistry, string? own
         if (!baseType.IsAbstract && !baseType.IsInterface)
         {
             // A type that is registered in THIS hub's registry resolves to its short collection name;
-            // an UNregistered type falls back to GetOrAddType → FormatType → the namespace-qualified
-            // full name. Probe registration BEFORE the auto-add so we can tell the two apart (generic
+            // an UNregistered type falls back to GetOrAddType → FormatType → the short type name.
+            // Probe registration BEFORE the auto-add so we can tell the two apart (generic
             // names legitimately contain '.', so a naive '.'-scan would false-positive).
-            var wasRegistered = typeRegistry.TryGetCollectionName(baseType, out _);
-            // Automatically register the type in the registry if not already present
-            var typeName = typeRegistry.GetOrAddType(baseType);
-            if (!wasRegistered)
+            var wasRegistered = typeRegistry.TryGetCollectionName(baseType, out var registeredName);
+            string typeName;
+            if (wasRegistered)
+            {
+                typeName = registeredName!;
+            }
+            else if (baseType.Assembly.IsCollectible)
+            {
+                // 🚨 NEVER auto-register a type from a COLLECTIBLE assembly (dynamic node / kernel-script
+                // compilations — every recompile is a NEW assembly with a NEW CLR identity for the "same"
+                // class). Adopting such a type into a long-lived hub's registry as a serialization side
+                // effect poisons that hub for the rest of the process: every later $type resolution on the
+                // hub (e.g. mesh-query row deserialization) then yields THAT foreign/stale CLR type, and a
+                // consumer holding its OWN compilation of the class (`Content is T` / `ContentAs<T>`) reads
+                // null — the atioz "BalanceSheet dashboards render empty" outage (agentic-pensions#12). It
+                // also pins the collectible assembly, defeating unload. Format the discriminator WITHOUT
+                // registering: THIS serialization still writes the short-name $type; deserialization on
+                // this hub politely degrades to JsonElement, which ContentAs<T> recovers at the consumer.
+                // Hubs that legitimately OWN the type register it explicitly (WithType / WithContentType /
+                // GetTypeDefinition) — those paths are unaffected.
+                typeName = typeRegistry is TypeRegistry concreteRegistry
+                    ? concreteRegistry.FormatType(baseType)
+                    : baseType.Name;
+                WarnCollectibleSerialization(baseType, typeName);
+            }
+            else
+            {
+                // Automatically register the type in the registry if not already present
+                typeName = typeRegistry.GetOrAddType(baseType);
                 WarnUnregisteredSerialization(baseType, typeName);
+            }
             derivedTypes.Add(new JsonDerivedType(baseType, typeName));
         }
 
@@ -115,8 +141,10 @@ public class PolymorphicTypeInfoResolver(ITypeRegistry typeRegistry, string? own
                 {
                     derivedTypes.Add(new JsonDerivedType(attr.DerivedType, typeDiscriminator));
 
-                    // Also register in the type registry for consistency
-                    typeRegistry.GetOrAddType(attr.DerivedType);
+                    // Also register in the type registry for consistency — but never adopt a
+                    // collectible-assembly type as a side effect (see the guard above).
+                    if (!attr.DerivedType.Assembly.IsCollectible)
+                        typeRegistry.GetOrAddType(attr.DerivedType);
                 }
             }
         }
@@ -194,6 +222,28 @@ public class PolymorphicTypeInfoResolver(ITypeRegistry typeRegistry, string? own
             + "where this hub is configured — explicit registration avoids short-name collisions across "
             + "namespaces and documents the contract.",
             type.FullName, owner ?? "(unknown)", discriminator);
+    }
+
+    /// <summary>
+    /// A type from a COLLECTIBLE assembly (dynamic node compilation, kernel script) was serialised on a
+    /// hub that has not explicitly registered it. The discriminator is formatted but the type is NOT
+    /// adopted into the registry — a per-compile CLR identity in a long-lived registry would make every
+    /// later $type resolution on this hub yield the foreign/stale type (consumers holding their own
+    /// compilation read null) and would pin the collectible assembly. Deduped per type; Debug level —
+    /// this is the EXPECTED shape whenever a shared hub relays dynamic-node content it does not own.
+    /// </summary>
+    private void WarnCollectibleSerialization(Type type, string discriminator)
+    {
+        if (logger is null || !warnedUnregistered.TryAdd(type, 0))
+            return;
+        logger.LogDebug(
+            "Type {Type} from collectible assembly {Assembly} serialised on hub {Hub} with $type='{Discriminator}' "
+            + "WITHOUT registering it: adopting a per-compile CLR identity into this hub's TypeRegistry would make "
+            + "every later $type resolution here yield the foreign/stale type (consumers holding their own "
+            + "compilation of the class read Content as null) and would pin the collectible assembly. Reads on "
+            + "this hub degrade to JsonElement, which ContentAs<T> recovers at the consumer. If this hub OWNS the "
+            + "type, register it explicitly via WithType/WithContentType.",
+            type.FullName, type.Assembly.GetName().Name, owner ?? "(unknown)", discriminator);
     }
 
     private static bool IsValidDerivedTypeForBase(Type baseType, Type derivedType)

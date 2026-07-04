@@ -908,8 +908,9 @@ else
             @if (contextChips.Count > 0)
             {
                 <div class="thread-chat-context" style="flex: 1 1 auto; min-width: 0; overflow: hidden;">
-                    @* Context chip → peek the context object in the side panel (OnContextChipClicked),
-                       NOT navigate away (that's OnChipClicked, used by the @-reference chips above). *@
+                    @* Context chip → open the context object in the OPPOSITE panel (OnContextChipClicked):
+                       main-view chat peeks it in the side panel, side-panel chat brings it to the main
+                       view. @-reference chips above use OnChipClicked (modal preview) instead. *@
                     <ReferenceChipCollection
                         Attachments="@contextChips"
                         OnAttachmentRemoved="@OnAttachmentRemoved"

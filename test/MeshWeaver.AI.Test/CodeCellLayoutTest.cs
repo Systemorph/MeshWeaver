@@ -96,7 +96,8 @@ public class CodeCellLayoutTest(ITestOutputHelper output) : MonolithMeshTestBase
             .Should().Within(30.Seconds()).Match(c => c is StackControl s
                 && HasArea(s, CodeLayoutAreas.CellArea)))!;
 
-        // Cell frame: toolbar + code + output segments.
+        // Cell frame: code + output segments with the toolbar at the BOTTOM
+        // (the composer bar — 2026-07-03 UX feedback).
         var cell = (StackControl)(await stream
             .GetControlStream(FindArea(root, CodeLayoutAreas.CellArea))
             .Should().Within(10.Seconds()).Match(c => c is StackControl))!;
@@ -104,6 +105,18 @@ public class CodeCellLayoutTest(ITestOutputHelper output) : MonolithMeshTestBase
         HasArea(cell, CodeLayoutAreas.CellCodeArea).Should().BeTrue("the code sits inside the cell frame");
         HasArea(cell, CodeLayoutAreas.CellOutputArea).Should().BeTrue(
             "an executable cell always has an output segment attached beneath the code");
+
+        // Order inside the frame: code, then output, then the toolbar LAST —
+        // the toolbar is the composer bar at the foot of the cell.
+        var areaOrder = cell.Areas.Select(a => a.Area?.ToString() ?? "").ToArray();
+        int IndexOf(string id) => Array.FindIndex(areaOrder,
+            a => a == id || a.EndsWith("/" + id, StringComparison.Ordinal));
+        IndexOf(CodeLayoutAreas.CellCodeArea).Should().BeLessThan(
+            IndexOf(CodeLayoutAreas.CellOutputArea),
+            "the output segment attaches directly beneath the code");
+        IndexOf(CodeLayoutAreas.CellOutputArea).Should().BeLessThan(
+            IndexOf(CodeLayoutAreas.CellToolbarArea),
+            "the toolbar moved to the BOTTOM of the cell, below the output segment");
 
         // (a) Toolbar contains Run (and Edit); no Cancel while nothing runs.
         var toolbarArea = FindArea(cell, CodeLayoutAreas.CellToolbarArea);
@@ -115,6 +128,16 @@ public class CodeCellLayoutTest(ITestOutputHelper output) : MonolithMeshTestBase
             "Edit moved into the cell toolbar as well");
         HasArea(toolbar, CodeLayoutAreas.CancelButtonArea).Should().BeFalse(
             "no activity is running — Cancel must not render");
+
+        // The DevLogin admin holds Update on the node — Edit is the DIRECT
+        // navigation button (rights-gated; the no-rights dialog variant is
+        // pinned by CodeCellEditRightsTest).
+        var editControl = await stream
+            .GetControlStream(FindArea(toolbar, CodeLayoutAreas.EditButtonArea))
+            .Should().Within(10.Seconds()).Match(c => c is not null);
+        editControl.Should().BeOfType<ButtonControl>()
+            .Which.NavigateToHref.Should().NotBeNull(
+                "an editor's Edit button navigates straight to the Edit area");
 
         var runControl = await stream
             .GetControlStream(FindArea(toolbar, CodeLayoutAreas.RunButtonArea))

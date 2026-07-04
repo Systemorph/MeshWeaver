@@ -60,4 +60,23 @@ public class MeshNodeImageHelperTest
         var node = new MeshNode("X", "ns");
         MeshNodeImageHelper.ResolveNodeIcon(node).Should().Be("/static/NodeTypeIcons/box.svg");
     }
+
+    [Fact]
+    public void SizeInlineSvg_Injects_Explicit_Size_Into_Opening_Tag()
+    {
+        // viewBox-only inline svgs have no intrinsic size; on raw-HTML surfaces
+        // (Controls.Html tiles) no scoped CSS can reach them, so the size must
+        // live in the markup — first style attribute wins in HTML parsing.
+        const string svg = "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\"><path d=\"M0 0h24v24\"/></svg>";
+        var sized = MeshNodeImageHelper.SizeInlineSvg(svg, 48);
+        sized.Should().StartWith("<svg style=\"width: 48px; height: 48px; display: block;\"");
+        sized.Should().Contain("viewBox=\"0 0 24 24\"");
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("not an svg")]
+    public void SizeInlineSvg_PassesThrough_NonSvg(string? value)
+        => MeshNodeImageHelper.SizeInlineSvg(value!, 48).Should().Be(value);
 }

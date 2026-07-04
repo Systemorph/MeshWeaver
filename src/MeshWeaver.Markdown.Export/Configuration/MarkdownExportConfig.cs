@@ -10,7 +10,7 @@ public class MarkdownExportConfig
     /// Name of the content collection to write exports into. Defaults to <c>content</c>
     /// — the single editable collection every node hub has by default.
     /// </summary>
-    public string CollectionName { get; set; } = "content";
+    public string CollectionName { get; set; } = MeshWeaver.ContentCollections.ContentCollectionsExtensions.DefaultCollectionName;
 
     /// <summary>
     /// Sub-directory within the collection (relative to the collection root) where

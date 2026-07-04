@@ -23,10 +23,14 @@ public class KernelStdoutCaptureTest
     private sealed class CapturingLogger : ILogger
     {
         public List<string> Messages { get; } = new();
+        public List<LogLevel> Levels { get; } = new();
         public IDisposable BeginScope<TState>(TState state) where TState : notnull => NullLogger.Instance.BeginScope(state)!;
         public bool IsEnabled(LogLevel logLevel) => true;
         public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
-            => Messages.Add(formatter(state, exception));
+        {
+            Messages.Add(formatter(state, exception));
+            Levels.Add(logLevel);
+        }
     }
 
     [Fact]
@@ -104,7 +108,7 @@ public class KernelStdoutCaptureTest
 
         async Task RunCaptureAsync(StringWriter into, string label, int delayMs)
         {
-            using (CapturingTextWriter.Capture(into))
+            using (CapturingTextWriter.Capture(into, TextWriter.Null))
             {
                 Console.Write($"{label}-1");
                 await Task.Delay(delayMs);
@@ -130,7 +134,7 @@ public class KernelStdoutCaptureTest
         // We can't easily assert on the runner's Console, but we can verify
         // that a Capture scope's restorer puts the AsyncLocal back to null.
         var capture = new StringWriter();
-        using (CapturingTextWriter.Capture(capture))
+        using (CapturingTextWriter.Capture(capture, TextWriter.Null))
         {
             Console.Write("inside");
         }
@@ -139,5 +143,37 @@ public class KernelStdoutCaptureTest
         Console.Write("outside");
         capture.ToString().Length.Should().Be(beforeLength,
             "post-scope writes must not land in the no-longer-active capture");
+    }
+
+    [Fact]
+    public void LoggerTextWriter_Logs_At_Configured_Level()
+    {
+        // The stderr pipe logs each completed line at Error level — this is what
+        // turns a script's Console.Error prints red on the activity output.
+        var logger = new CapturingLogger();
+        using var writer = new LoggerTextWriter(logger, LogLevel.Error);
+
+        writer.WriteLine("boom");
+
+        logger.Messages.Should().ContainSingle().Which.Should().Contain("boom");
+        logger.Levels.Should().ContainSingle().Which.Should().Be(LogLevel.Error);
+    }
+
+    [Fact]
+    public void CapturingTextWriter_Routes_Error_Stream_To_Error_Target()
+    {
+        // Console.WriteLine → the stdout target; Console.Error.WriteLine → the
+        // stderr target. Before the two-channel capture, error prints bypassed
+        // the capture entirely and vanished into the host process's stderr.
+        var stdout = new StringWriter();
+        var stderr = new StringWriter();
+        using (CapturingTextWriter.Capture(stdout, stderr))
+        {
+            Console.Write("to-out");
+            Console.Error.Write("to-err");
+        }
+
+        stdout.ToString().Should().Be("to-out", "stdout capture must only see Console.Out writes");
+        stderr.ToString().Should().Be("to-err", "stderr capture must only see Console.Error writes");
     }
 }
