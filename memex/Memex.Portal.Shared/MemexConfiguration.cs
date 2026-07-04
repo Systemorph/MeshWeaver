@@ -701,6 +701,8 @@ public static class MemexConfiguration
                         .AddTokenUsageSettingsTab()
                         // GitHub Sync tab — shows only on Space nodes (self-filtered).
                         .AddGitHubSyncSettingsTab()
+                        // GitHub Issues & PRs tab — browse/act on the repo's issues + pull requests.
+                        .AddGitHubIssuesTab()
                         // Instance Sync tab — replicate the Space to another MeshWeaver
                         // instance (self-filtered to Spaces, like the GitHub Sync tab).
                         .AddInstanceSyncSettingsTab()
@@ -932,6 +934,11 @@ public static class MemexConfiguration
         // requirement: needs HttpContext.User). Stores the per-user token at
         // {userId}/_Provider/GitHub. See Doc/Architecture/GitHubSync.
         app.MapGitHubConnect();
+
+        // GitHub webhooks — POST /webhooks/github. HMAC-verified (GitHub:Webhook:Secret), no
+        // browser session, so it does NOT need HttpContext.User. Refreshes synced issue nodes
+        // live. Register one webhook per repo (Issues + Issue comments) with the shared secret.
+        app.MapGitHubWebhook();
 
         // Use HTTPS redirection only for non-MCP paths (MCP needs HTTP for Claude Code)
         app.UseWhen(

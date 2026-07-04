@@ -33,6 +33,8 @@ public static class GitHubSyncConfiguration
         services.AddSingleton<GitHubCredentialService>();
         services.AddSingleton<GitHubSyncService>();
         services.AddSingleton<PullRequestService>();
+        services.AddSingleton<IssueService>();
+        services.AddSingleton<GitHubWebhookProcessor>();
         // Surfaces the per-space GitHub sync sources on the partition administration page
         // (PartitionSyncAdminLayoutArea resolves all IPartitionSyncSourceProvider from DI).
         services.AddSingleton<IPartitionSyncSourceProvider>(sp => new GitHubPartitionSyncSourceProvider(
@@ -99,6 +101,16 @@ public static class GitHubSyncConfiguration
                 ExcludeFromContext = new HashSet<string> { "search", "create" },
                 HubConfiguration = config => config
                     .AddMeshDataSource(source => source.WithContentType<GitHubPullRequest>()),
+            },
+            // GitHubIssue satellite ({space}/_Issue/{number}). A synced mirror of a repo issue —
+            // a satellite type, so the export filter skips it (issues are never written to the repo).
+            new MeshNode(IssueService.NodeType)
+            {
+                Name = "GitHub Issue",
+                IsSatelliteType = true,
+                ExcludeFromContext = new HashSet<string> { "search", "create" },
+                HubConfiguration = config => config
+                    .AddMeshDataSource(source => source.WithContentType<GitHubIssue>()),
             });
 
         // Also register the content types on the mesh hub + every per-node hub so reads via
@@ -106,11 +118,13 @@ public static class GitHubSyncConfiguration
         builder.ConfigureHub(c => c
             .WithType<GitHubCredential>(nameof(GitHubCredential))
             .WithType<GitHubSyncConfig>(nameof(GitHubSyncConfig))
-            .WithType<GitHubPullRequest>(nameof(GitHubPullRequest)));
+            .WithType<GitHubPullRequest>(nameof(GitHubPullRequest))
+            .WithType<GitHubIssue>(nameof(GitHubIssue)));
         builder.ConfigureDefaultNodeHub(c => c
             .WithType<GitHubCredential>(nameof(GitHubCredential))
             .WithType<GitHubSyncConfig>(nameof(GitHubSyncConfig))
-            .WithType<GitHubPullRequest>(nameof(GitHubPullRequest)));
+            .WithType<GitHubPullRequest>(nameof(GitHubPullRequest))
+            .WithType<GitHubIssue>(nameof(GitHubIssue)));
         return builder;
     }
 }

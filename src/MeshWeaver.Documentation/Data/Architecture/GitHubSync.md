@@ -1,7 +1,7 @@
 ---
 NodeType: Markdown
 Name: "Syncing a Space with GitHub"
-Abstract: "How to connect a Space to a GitHub repository and move content both ways: sync FROM GitHub (import a repo to create a Space, update to latest, re-import at a commit) and sync TO GitHub (commit/export the Space's nodes as a single commit). Plus the repo operations: create a branch, commit, checkout / update to latest, and open a pull request (AI-drafted, you edit, then submit) with live PR status sync and a link. Covers the per-user OAuth connection, the Space settings, and how operators enable it."
+Abstract: "How to connect a Space to a GitHub repository and move content both ways: sync FROM GitHub (import a repo to create a Space, update to latest, re-import at a commit) and sync TO GitHub (commit/export the Space's nodes as a single commit). Plus the repo operations: create a branch, commit, checkout / update to latest, and open a pull request (AI-drafted, you edit, then submit) with live PR status sync and a link. Plus browsing and acting on the repo's issues and pull requests: sync issues into the Space as nodes, create + comment on issues, list PRs live and merge them, and keep issues fresh via HMAC-verified GitHub webhooks. Covers the per-user OAuth connection, the Space settings, and how operators enable it."
 Icon: "<svg viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'><rect width='24' height='24' rx='4' fill='#24292f'/><path d='M12 4a8 8 0 0 0-2.53 15.59c.4.07.55-.17.55-.38l-.01-1.34c-2.23.48-2.7-1.07-2.7-1.07-.36-.92-.89-1.17-.89-1.17-.73-.5.06-.49.06-.49.8.06 1.23.83 1.23.83.71 1.22 1.87.87 2.33.66.07-.52.28-.87.5-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.83-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.22 2.2.82a7.6 7.6 0 0 1 4 0c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.52.56.83 1.28.83 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48l-.01 2.2c0 .21.15.46.55.38A8 8 0 0 0 12 4Z' fill='white'/></svg>"
 Authors:
   - "Roland Buergi"
@@ -224,7 +224,54 @@ GitHub. Before a PR is opened it is simply a local **Draft**.
 
 ---
 
-## 6. Operator setup (enabling the feature)
+## 6. Issues & pull requests (browse and act)
+
+Beyond moving content, a Space can **track and act on the repository's issues and pull
+requests** — in the **Settings → GitHub Issues & PRs** tab. Structured lists are rendered
+with the framework's data grid (never hand-built HTML).
+
+### Issues — synced into the Space
+
+Issues are the one GitHub object that is **materialized** into the mesh. Click **Sync
+issues from GitHub** and every issue is mirrored to a node at `{space}/_Issue/{number}`
+(NodeType `GitHubIssue`) and listed in a **live** table (number, title, state, author,
+labels, comments, updated). The table binds to a synced query, so it refreshes itself as
+issues land — from a sync, from **Create issue** (opens a new issue on GitHub and
+materializes its node), or from a **webhook** (below). You can **create an issue** and
+**comment** on one straight from the mesh — both act on GitHub, then refresh the affected
+node. Programmatic: `IssueService.SyncIssues / SyncIssue / CreateIssue / CommentIssue /
+WatchIssueNodes`, and the activity `hub.SyncIssuesFromGitHub(...)`.
+
+### Pull requests — listed live, merge from the tab
+
+The tab lists **every** pull request in the repo (number, title, author, status, draft,
+head → base, updated), read **live** from GitHub (never persisted — a stored copy would
+drift). **Refresh pull requests** re-reads them. You can **merge** an open PR — enter its
+number and pick **Merge commit** or **Squash & merge** — which runs as a tracked activity.
+Programmatic: `PullRequestService.ListAll / GetDetail / Comment / Merge`, and the activity
+`hub.MergePullRequestOnGitHub(...)`. `GetDetail` additionally returns a **checks roll-up**
+(CI pass/fail/pending over the head commit) and a **reviews roll-up** (latest decision per
+reviewer).
+
+> The AI-drafted **open a pull request** flow (draft → edit → submit) lives in the
+> **GitHub Sync** tab (§5). This tab is for browsing and acting on issues + PRs that
+> already exist on GitHub.
+
+### Live updates via webhooks
+
+So the synced issue nodes stay fresh without polling, register a **GitHub webhook** per
+repo pointing at `https://{host}/webhooks/github` (content-type `application/json`),
+subscribed to the **Issues** and **Issue comments** events, with the shared secret from
+`GitHub:Webhook:Secret`. Each delivery is **HMAC-verified** (`X-Hub-Signature-256`) and
+then applied: the event payload carries the full issue, so the receiver updates the
+`{space}/_Issue/{number}` node of every Space that syncs that repo **without needing a
+token** — the update runs under the system identity, merging in the new comment on a
+comment event. Pull-request events are ignored (PR state is read live, so there is no node
+to refresh). See `GitHubWebhookProcessor`.
+
+---
+
+## 7. Operator setup (enabling the feature)
 
 Two pieces of server configuration enable GitHub Sync:
 
@@ -253,16 +300,28 @@ Two pieces of server configuration enable GitHub Sync:
    [AccessControl.md](/Doc/Architecture/AccessControl)). Without it, tokens are stored
    as plaintext (development only).
 
+3. **A webhook secret (optional — for live issue updates).** To keep synced issue nodes
+   fresh without polling, set a shared secret and register a webhook per repo (Issues +
+   Issue comments events) at `https://{host}/webhooks/github`:
+
+   ```jsonc
+   "GitHub": { "Webhook": { "Secret": "<random shared secret>" } }
+   ```
+
+   Keep it in the Key Vault and surface it as `GitHub__Webhook__Secret`. Deliveries are
+   HMAC-verified against it; absent the secret the endpoint returns 503 and issue nodes
+   refresh only on an explicit sync.
+
 All GitHub HTTP and serialization run through the controlled I/O pool — see
 [ControlledIoPooling.md](/Doc/Architecture/ControlledIoPooling).
 
 ---
 
-## 7. What is and isn't synced
+## 8. What is and isn't synced
 
 | Synced (export) | Not synced |
 |---|---|
-| Content nodes under the Space (markdown, typed, code), including nested folders | Satellites: `_Access`, `_Activity`, `_Thread`, `_Comment`, `_Notification`, `_PullRequest` |
+| Content nodes under the Space (markdown, typed, code), including nested folders | Satellites: `_Access`, `_Activity`, `_Thread`, `_Comment`, `_Notification`, `_PullRequest`, `_Issue` |
 | The Space root (as `index.json`) | The GitHub credential (`{you}/_Provider/GitHub`) and the sync config (`{space}/_GitSync`) |
 | | Nodes you marked to exclude from sync |
 
