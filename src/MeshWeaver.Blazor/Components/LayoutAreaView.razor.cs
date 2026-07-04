@@ -184,13 +184,16 @@ public partial class LayoutAreaView
                 .Subscribe(
                     el => OnProgressStreamChanged(el.Value),
                     ex => OnReducedStreamError(ex, "progress")));
-            if (Top)
+            if (DrivesMenu)
             {
                 // Menus ride the SAME area stream, read via the renderer-agnostic hub.GetMenu API
                 // (MeshWeaver.Mesh.MenuStreamExtensions) — the framework counterpart of hub.GetQuery.
                 // No bespoke reduce + deserialize per context here; the native MAUI shell consumes the
                 // exact same observable. Each subscription registers on AreaStream so AreaStream.Dispose()
                 // tears it down (no separate menu-stream fields to track / null out).
+                // 🚨 Gated on DrivesMenu (NOT Top): only the routed primary page (ApplicationPage /
+                // AreaPage) owns the header menu. A modal preview (NodePreviewDialog) or an embedded
+                // area renders Top=true but must not clobber the current node's menu — see DrivesMenu.
                 SubscribeMenu("", null);
                 SubscribeMenu(NodeMenuContext, NodeMenuContext);
                 SubscribeMenu(MeshMenuContext, MeshMenuContext);
