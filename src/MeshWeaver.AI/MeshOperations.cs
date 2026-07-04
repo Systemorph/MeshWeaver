@@ -1807,7 +1807,13 @@ public class MeshOperations
 
             var remainderParts = resolution.Remainder.Split('/', StringSplitOptions.RemoveEmptyEntries);
             var collectionName = remainderParts[0];
-            var dir = string.Join("/", remainderParts.Skip(1));
+            var dirParts = remainderParts.Skip(1).ToArray();
+            // The FileSystem provider resolves the listing dir with an unguarded Path.Combine(basePath, dir),
+            // so a '..' (or a backslash-embedded) segment would traverse OUTSIDE the collection scope. Reject
+            // traversal at the boundary — the listing contract is strictly "within this collection".
+            if (dirParts.Any(p => p is "." or ".." || p.Contains('\\') || p.Contains("..")))
+                return Observable.Return("Error: the directory path must not contain '.', '..', or backslash segments.");
+            var dir = string.Join("/", dirParts);
             var targetAddress = (Address)resolution.Prefix;
             var qualifiedCollectionName = $"{resolution.Prefix}/{collectionName}";
 

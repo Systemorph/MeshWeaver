@@ -166,7 +166,18 @@ const rowStyle: React.CSSProperties = {
 
 function Row({ onClick, icon, name, meta, muted }: { onClick: () => void; icon: ReactNode; name: string; meta?: string; muted?: boolean }): ReactNode {
   return (
-    <div role="button" tabIndex={0} onClick={onClick} onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && onClick()} style={{ ...rowStyle, cursor: "pointer" }}>
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={onClick}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault(); // Space would otherwise scroll the page on a role="button" element
+          onClick();
+        }
+      }}
+      style={{ ...rowStyle, cursor: "pointer" }}
+    >
       {icon}
       <Text weight={muted ? "regular" : "semibold"} style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: muted ? "var(--colorNeutralForeground3)" : undefined }}>
         {name}

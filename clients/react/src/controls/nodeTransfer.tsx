@@ -154,7 +154,9 @@ function NodeImportView({ control }: { control: UiControl }): ReactNode {
         <MessageBar intent={state.failed > 0 ? "warning" : "success"}>
           <MessageBarBody>
             Imported {state.created} node{state.created === 1 ? "" : "s"}
-            {state.failed > 0 ? `; ${state.failed} skipped (already present — enable Force to overwrite)` : ""}.
+            {state.failed > 0
+              ? `; ${state.failed} failed${force ? "" : " (existing nodes need Force to overwrite)"}`
+              : ""}.
           </MessageBarBody>
         </MessageBar>
       ) : null}

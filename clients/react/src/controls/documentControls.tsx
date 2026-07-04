@@ -11,7 +11,6 @@ import { Button, Checkbox, Link, MessageBar, MessageBarBody, Radio, RadioGroup, 
 import { ArrowDownload20Regular } from "@fluentui/react-icons";
 import type { UiControl } from "../area/types.js";
 import { useResolve } from "../area/context.js";
-import { useMeshLink } from "../area/navigation.js";
 import { useMeshOps } from "../live/meshOps.js";
 import { str, useText } from "./common.js";
 
@@ -22,9 +21,6 @@ function DocumentSourceView({ control }: { control: UiControl }): ReactNode {
   const mime = useText(control.mime);
   const highlight = useText(control.highlight);
   const fileName = useText(control.fileName) || safeName(fileUrl);
-  // A /static/… URL is a resource, not an app route — the browser fetches it at the origin root
-  // (the ingress serves /static), so it works verbatim under the /next basePath or the SPA.
-  const download = useMeshLink(fileUrl || undefined);
   if (!fileUrl) return null;
   const isPdf = /pdf/i.test(mime) || /\.pdf(\?|$)/i.test(fileUrl);
 
@@ -58,7 +54,10 @@ function DocumentSourceView({ control }: { control: UiControl }): ReactNode {
           Highlighted passage: “{highlight}”
         </Text>
       ) : null}
-      <Link href={download.href} onClick={download.onClick} style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 12 }}>
+      {/* A /static/… URL is an ORIGIN resource, not an app route — keep it root-absolute so the
+          browser fetches it directly. Routing it through useMeshLink would rewrite it under the
+          host basePath (e.g. /next/static/… in portal-next) and 404. */}
+      <Link href={fileUrl} download style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 12 }}>
         <ArrowDownload20Regular fontSize={16} /> Download {fileName}
       </Link>
     </div>
