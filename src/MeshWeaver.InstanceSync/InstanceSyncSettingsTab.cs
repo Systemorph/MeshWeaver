@@ -126,25 +126,15 @@ public static class InstanceSyncSettingsTab
         // config node's stream (per-field auto-persisting; no replica, no save subscription).
         card = card.WithView(MeshNodeContentEditorControl.ForType(source.Path, typeof(InstanceSyncConfig)));
 
+        // Settings = SETUP only: the connection editor above + party management (add/remove).
+        // The runtime ACTIONS (Sync now / Pause·Resume) live in the "Sync" node-menu dropdown once
+        // the party is configured. Remove stays here too so an UNCONFIGURED party (which the menu
+        // deliberately hides) can still be deleted.
+        var sourcePath = source.Path;
         var actions = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
             .WithHorizontalGap(8)
             .WithStyle("flex-wrap: wrap;");
-
-        // "Sync now" stamps the SyncRequestedAt control-plane field: the coordinator reacts to
-        // the config change event and pokes the worker — works regardless of which process
-        // renders this view (the standard Requested-field pattern).
-        var sourcePath = source.Path;
-        actions = actions.WithView(Controls.Button("Sync now")
-            .WithAppearance(Appearance.Accent)
-            .WithIconStart(FluentIcons.ArrowSync())
-            .WithClickAction(ctx =>
-            {
-                sync.UpdateConfig(sourcePath, c => c with { SyncRequestedAt = DateTimeOffset.UtcNow })
-                    .Subscribe(_ => { },
-                        ex => logger?.LogWarning(ex, "Sync-now request failed for {Path}", sourcePath));
-                return Task.CompletedTask;
-            }));
 
         actions = actions.WithView(Controls.Button("Remove (stop syncing)")
             .WithAppearance(Appearance.Outline)
