@@ -98,5 +98,17 @@
         /// <param name="readOnly">When <c>true</c>, only read operations are available in the browser UI.</param>
         public FileBrowserControl WithReadOnly(bool readOnly = true)
             => this with { ReadOnly = readOnly };
+
+        /// <summary>
+        /// The OWNING node path (the collection lives on this node's hub). The remote React browser
+        /// needs it to build the content-listing path <c>{NodePath}/{Collection}{Path}</c> — the
+        /// scope doesn't otherwise expose the owning address. Blazor ignores it (it resolves the
+        /// collection in-process). Set via <see cref="WithNodePath"/>.
+        /// </summary>
+        public string? NodePath { get; init; }
+
+        /// <summary>Returns a copy stamped with the owning node path (for the remote file browser).</summary>
+        public FileBrowserControl WithNodePath(string nodePath)
+            => this with { NodePath = nodePath };
     }
 }
