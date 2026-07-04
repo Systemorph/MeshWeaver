@@ -21,7 +21,7 @@ import { useResolve } from "../area/context.js";
 import { useMeshLink } from "../area/navigation.js";
 import { useMeshOps, type MeshOps } from "../live/meshOps.js";
 import { str, useText } from "./common.js";
-import { AddressAreaEmbed, isInlineSvg } from "./display.js";
+import { AddressAreaEmbed, isInlineSvg, sanitizeInlineSvg } from "./display.js";
 
 interface NodeResult {
   path: string;
@@ -270,7 +270,7 @@ function CollectionRow({ node }: { node: NodeResult }): ReactNode {
           <span
             aria-hidden
             style={{ display: "inline-flex", width: 28, height: 28, flexShrink: 0, borderRadius: "50%", overflow: "hidden" }}
-            dangerouslySetInnerHTML={{ __html: node.thumbnail }}
+            dangerouslySetInnerHTML={{ __html: sanitizeInlineSvg(node.thumbnail) }}
           />
         ) : (
           <Avatar name={node.name} image={node.thumbnail ? { src: node.thumbnail } : undefined} size={28} />

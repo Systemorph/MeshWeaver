@@ -115,8 +115,6 @@ function parseLayoutBlock(body: string): LayoutEmbedSegment | null {
   return null;
 }
 
-let anonymousCellCounter = 0;
-
 /**
  * Parse markdown into ordered interactive segments. Fenced blocks are extracted first (an @@
  * macro inside a fence stays literal); non-executable fences stay part of the surrounding
@@ -124,6 +122,10 @@ let anonymousCellCounter = 0;
  */
 export function parseInteractiveMarkdown(text: string): InteractiveSegment[] {
   const segments: InteractiveSegment[] = [];
+  // Per-parse counter for anonymous cell ids: a module-global made ids depend on prior parses, so
+  // re-parsing the same document produced DIFFERENT submission ids → unnecessary kernel restarts +
+  // unstable area ids across navigation. Local ⇒ the same text always yields the same ids.
+  let anonymousCellCounter = 0;
   let buffer: string[] = [];
   const flush = () => {
     const chunk = buffer.join("\n");

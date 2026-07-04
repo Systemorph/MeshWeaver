@@ -146,8 +146,13 @@ function SplitterSkin({ skin, control }: SkinProps): ReactNode {
   }, [children]);
 
   const [sizes, setSizes] = useState<number[]>(initial);
-  // Re-sync when the number of panes changes (a different splitter mounts under the same skin).
-  useEffect(() => setSizes(initial), [initial.length]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Re-sync when the pane SHAPE changes — keyed on the id/weight signature, not just the count, so a
+  // DIFFERENT splitter with the same pane count (but different panes) doesn't inherit stale sizes.
+  const shapeKey = useMemo(
+    () => children.map((c, i) => `${String(c.control?.id ?? c.key ?? i)}:${paneWeight(c.control)}`).join("|"),
+    [children],
+  );
+  useEffect(() => setSizes(initial), [shapeKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const startDrag = (index: number) => (e: ReactPointerEvent) => {
     const container = containerRef.current;
@@ -170,12 +175,19 @@ function SplitterSkin({ skin, control }: SkinProps): ReactNode {
       next[index + 1] = startSizes[index + 1] - delta;
       setSizes(next);
     };
-    const up = () => {
+    // Tear the drag down on ANY terminal — pointerup, pointercancel (touch interrupted), or the
+    // window losing focus mid-drag. Without pointercancel/blur the window listeners leaked and kept
+    // resizing on later pointer moves.
+    const end = () => {
       window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointerup", end);
+      window.removeEventListener("pointercancel", end);
+      window.removeEventListener("blur", end);
     };
     window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up);
+    window.addEventListener("pointerup", end);
+    window.addEventListener("pointercancel", end);
+    window.addEventListener("blur", end);
   };
 
   const gutter = horizontal ? { width: 5, cursor: "col-resize", alignSelf: "stretch" as const } : { height: 5, cursor: "row-resize" };

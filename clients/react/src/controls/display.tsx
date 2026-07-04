@@ -74,6 +74,23 @@ export function isInlineSvg(value: string): boolean {
   return /^\s*<svg[\s>]/i.test(value);
 }
 
+/**
+ * Defense-in-depth for inline-SVG injection: node Icons come from the (trusted) IconGenerator, but
+ * an Icon field CAN be user-authored, and SVG supports active content. Strip the obvious vectors —
+ * `<script>`/`<foreignObject>` elements, `on*` event handlers, and `javascript:` hrefs — before
+ * injecting. (The Blazor side trusts the same field via MarkupString; this is a strictly safer
+ * mirror, not a full sanitizer.)
+ */
+export function sanitizeInlineSvg(svg: string): string {
+  return svg
+    .replace(/<script[\s\S]*?<\/script\s*>/gi, "")
+    .replace(/<foreignObject[\s\S]*?<\/foreignObject\s*>/gi, "")
+    .replace(/\son\w+\s*=\s*"[^"]*"/gi, "")
+    .replace(/\son\w+\s*=\s*'[^']*'/gi, "")
+    .replace(/\son\w+\s*=\s*[^\s>]+/gi, "")
+    .replace(/((?:xlink:)?href)\s*=\s*(["'])\s*javascript:[^"']*\2/gi, "");
+}
+
 function IconView({ control }: { control: UiControl }): ReactNode {
   const name = useText(control.data);
   const onClick = useClick(control);
@@ -86,7 +103,7 @@ function IconView({ control }: { control: UiControl }): ReactNode {
         onClick={onClick}
         style={{ cursor, display: "inline-flex", width: 20, height: 20 }}
         className="mw-inline-svg"
-        dangerouslySetInnerHTML={{ __html: name }}
+        dangerouslySetInnerHTML={{ __html: sanitizeInlineSvg(name) }}
       />
     );
   const Cmp = resolveIconByName(name);
@@ -511,7 +528,7 @@ function useServerRenderedMarkdown(markdown: string, nodePath: string): Rendered
   const ops = useMeshOps();
   const [rendered, setRendered] = useState<RenderedMarkdown | null>(null);
   const requestedFor = useRef<string | null>(null);
-  const inputKey = `${nodePath} ${markdown}`;
+  const inputKey = `${nodePath}\u0000${markdown}`;
   useEffect(() => {
     if (!ops?.renderMarkdown || markdown.trim().length === 0) return;
     if (requestedFor.current === inputKey) return;

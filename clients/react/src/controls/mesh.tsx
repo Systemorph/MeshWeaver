@@ -5,7 +5,7 @@ import { useResolve } from "../area/context.js";
 import { useMeshLink } from "../area/navigation.js";
 import { useThemeMode } from "../theme/themeMode.js";
 import { str, useField, useText } from "./common.js";
-import { AddressAreaEmbed } from "./display.js";
+import { AddressAreaEmbed, sanitizeInlineSvg } from "./display.js";
 import { ThreadChatView } from "./threadChat.js";
 import { MeshNodeCollectionView, MeshSearchView } from "./meshLive.js";
 
@@ -115,7 +115,7 @@ function MeshNodeCardView({ control }: { control: UiControl }): ReactNode {
     <Card className="mesh-node-card" style={{ cursor: link.href ? "pointer" : undefined, width: "100%", padding: 12 }}>
       <div className="mesh-node-card-content" style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 0 }}>
         {isInlineSvg ? (
-          <div className="mesh-node-card-image" style={placeholderStyle} dangerouslySetInnerHTML={{ __html: imageUrl }} />
+          <div className="mesh-node-card-image" style={placeholderStyle} dangerouslySetInnerHTML={{ __html: sanitizeInlineSvg(imageUrl) }} />
         ) : isEmoji ? (
           <div className="mesh-node-card-placeholder" style={{ ...placeholderStyle, fontSize: 32 }}>
             {imageUrl}
