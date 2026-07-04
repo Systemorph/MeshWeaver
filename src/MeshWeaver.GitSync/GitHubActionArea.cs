@@ -59,6 +59,9 @@ public static class GitHubActionArea
         var sourceId = string.IsNullOrEmpty(rawSource) ? null : rawSource;
         var userId = host.Hub.ServiceProvider.GetService<AccessService>()?.Context?.ObjectId ?? "";
 
+        if (string.IsNullOrEmpty(spacePath))
+            return Observable.Return<UiControl?>(Message(
+                "Not in a Space", "GitHub actions run on a Space; this node has no containing Space.", backHref));
         if (string.IsNullOrEmpty(op))
             return Observable.Return<UiControl?>(Message("Nothing to do", "No operation specified.", backHref));
         if (string.IsNullOrEmpty(userId))
@@ -70,12 +73,15 @@ public static class GitHubActionArea
             Commit => ("Committing to GitHub", host.Hub.CommitToGitHub(spacePath, userId, sourceId: sourceId)),
             Update => ("Updating from GitHub", host.Hub.UpdateToLatestFromGitHub(spacePath, userId, sourceId: sourceId)),
             Check => ("Checking branch state", host.Hub.CheckBranchStateOnGitHub(spacePath, userId, sourceId: sourceId)),
-            _ => ("Unknown operation", Observable.Empty<string>()),
+            _ => (null, (IObservable<string>?)null),
         };
+        if (action is null)   // unknown op — don't claim an activity started
+            return Observable.Return<UiControl?>(Message(
+                "Unknown operation", $"Unrecognized GitHub operation <code>{System.Net.WebUtility.HtmlEncode(op)}</code>.", backHref));
 
         action.Subscribe(_ => { }, ex => logger?.LogWarning(ex, "GitHub action {Op} failed for {Space}", op, spacePath));
         return Observable.Return<UiControl?>(Message(
-            title,
+            title!,
             "The operation is running as an activity — its progress and result appear in this Space's "
             + "activity feed and your notifications.",
             backHref));

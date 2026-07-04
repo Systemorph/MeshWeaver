@@ -64,19 +64,21 @@ public class GitHubSyncSettingsTabTest(ITestOutputHelper output) : GitHubSyncTes
         await CreateSpace(space, "PR Gui Space");
 
         // Select the GitHub Sync tab so its content pane (BuildContent) renders — wait until the
-        // PR section's draft button AND the (reactive, direction-aware) sync buttons appear. The
-        // sync button row is data-bound to the source's config stream, so it lands asynchronously
-        // relative to the static sections.
+        // PR section's draft button appears. The one-click sync actions (Sync now / Update to latest
+        // / Check branch) MOVED to the "GitHub" node-menu dropdown (settings = setup only); the tab
+        // now points the user there and keeps the input-driven PR + re-import flows.
+        // The note is data-bound (renders async relative to the static sections) — wait for its
+        // plain-text tail so we assert against the snapshot that actually carries it.
         var json = await RenderSettings(
             new Address(space),
             new LayoutAreaReference("Settings") { Id = GitHubSyncSettingsTab.TabId },
             j => j.GetRawText().Contains("Draft pull request with AI")
-                 && j.GetRawText().Contains("Sync now (commit)"));
+                 && j.GetRawText().Contains("shown once a repository is configured"));
 
         Assert.Contains("Draft pull request with AI", json);
-        Assert.Contains("Pull request", json);          // the section heading
-        Assert.Contains("Sync now (commit)", json);     // the commit action renders in the tab
-        Assert.Contains("Update to latest (checkout)", json);  // the checkout action renders too
+        Assert.Contains("Pull request", json);                          // the section heading
+        Assert.Contains("shown once a repository is configured", json);  // note → the moved actions
+        Assert.DoesNotContain("Sync now (commit)", json);               // one-click action no longer in the tab
     }
 
     [Fact(Timeout = 60000)]
