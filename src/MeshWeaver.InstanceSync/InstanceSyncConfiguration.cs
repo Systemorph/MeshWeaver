@@ -1,5 +1,6 @@
 using MeshWeaver.Graph;
 using MeshWeaver.Hosting.Persistence.Http;
+using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -60,7 +61,17 @@ public static class InstanceSyncConfiguration
             .WithType<PendingChange>(nameof(PendingChange)));
         builder.ConfigureDefaultNodeHub(c => c
             .WithType<InstanceSyncConfig>(nameof(InstanceSyncConfig))
-            .WithType<PendingChange>(nameof(PendingChange)));
+            .WithType<PendingChange>(nameof(PendingChange))
+            // The "Sync" node-menu dropdown (its own context) + the action area its items navigate
+            // to. The provider is per-node-hub scoped (TryAddEnumerable) so the menu render running
+            // on the node hub resolves it; it self-gates to Spaces with a configured registration.
+            .WithServices(s =>
+            {
+                s.TryAddEnumerable(ServiceDescriptor.Scoped<INodeMenuProvider, InstanceSyncMenuProvider>());
+                return s;
+            })
+            .AddLayout(layout => layout
+                .WithView(InstanceSyncActionArea.AreaName, InstanceSyncActionArea.Render)));
         return builder;
     }
 }
