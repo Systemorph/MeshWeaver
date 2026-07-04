@@ -139,29 +139,7 @@
                             <FluentIcon Value="@(new Icons.Regular.Size20.Sparkle())" Color="Color.FillInverse" />
                         </FluentButton>
 
-                        @* Sync menu — remote-instance sync actions; shown only when the Space has a configured party *@
-                        @if (GetSyncMenuItems().Count > 0)
-                        {
-                            <FluentMenu Anchor="sync-menu-anchor" Open="@isSyncMenuOpen" OpenChanged="@OnSyncMenuOpenChanged">
-                                @foreach (var menuItem in FlattenMenuItems(GetSyncMenuItems()))
-                                {
-                                    var item = menuItem;
-                                    @if (item.Area == "_separator")
-                                    {
-                                        <hr style="margin: 4px 8px; border: none; border-top: 1px solid var(--neutral-stroke-divider-rest);" />
-                                    }
-                                    else
-                                    {
-                                        <FluentMenuItem OnClick="@(() => HandleMenuItemClick(item))" title="@(item.Tooltip ?? item.Label)">@item.Label</FluentMenuItem>
-                                    }
-                                }
-                            </FluentMenu>
-                            <FluentButton Id="sync-menu-anchor" Appearance="Appearance.Stealth" BackgroundColor="transparent"
-                                Title="Sync" aria-label="Sync menu"
-                                OnClick="@ToggleSyncMenu">
-                                <FluentIcon Value="@(new Icons.Regular.Size20.ArrowSync())" Color="Color.FillInverse" />
-                            </FluentButton>
-                        }
+                        @* Instance sync lives in the Node menu ("Synchronizations") — no separate dropdown. *@
 
                         @* GitHub menu — GitHub sync actions; shown only when the Space has GitHub configured *@
                         @if (GetGitHubMenuItems().Count > 0)

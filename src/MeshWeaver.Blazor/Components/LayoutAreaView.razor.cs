@@ -152,7 +152,6 @@ public partial class LayoutAreaView
     private const string NodeMenuContext = "Node";
     private const string MeshMenuContext = "Mesh";
     private const string AiMenuContext = "AI";
-    private const string SyncMenuContext = "Sync";
     private const string GitHubMenuContext = "GitHub";
 
     private void BindStream()
@@ -200,9 +199,9 @@ public partial class LayoutAreaView
                 SubscribeMenu(NodeMenuContext, NodeMenuContext);
                 SubscribeMenu(MeshMenuContext, MeshMenuContext);
                 SubscribeMenu(AiMenuContext, AiMenuContext);
-                // Per-integration dropdowns — populated only when the Space has a configured
-                // registration (the provider self-gates); the slot stays empty otherwise.
-                SubscribeMenu(SyncMenuContext, SyncMenuContext);
+                // GitHub keeps its own dropdown — populated only when the Space has a repository
+                // configured (the provider self-gates); the slot stays empty otherwise. (Instance
+                // sync is in the Node menu as "Synchronizations", not a separate dropdown.)
                 SubscribeMenu(GitHubMenuContext, GitHubMenuContext);
             }
         }

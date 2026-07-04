@@ -43,14 +43,10 @@ public static class NodeMenuItemsExtensions
     /// context, to contribute more items (sorted by <see cref="NodeMenuItemDefinition.Order"/>).</summary>
     public const string AiMenuContext = "AI";
 
-    /// <summary>Menu context for a Space's remote-instance SYNC actions (Sync now / Pause / Remove),
-    /// contributed by an <see cref="INodeMenuProvider"/> that emits only when the Space has a
-    /// configured <c>_Sync</c> registration. Its own dropdown, separate from Node/GitHub.</summary>
-    public const string SyncMenuContext = "Sync";
-
     /// <summary>Menu context for a Space's GITHUB actions (Sync now / Update / Re-import / PR),
     /// contributed by an <see cref="INodeMenuProvider"/> that emits only when the Space has a
-    /// configured <c>_GitSync</c>. Its own dropdown, separate from Node/Sync.</summary>
+    /// configured <c>_GitSync</c>. Its own dropdown, separate from the Node menu. (Instance sync
+    /// lives in the Node menu as "Synchronizations", not a separate context.)</summary>
     public const string GitHubMenuContext = "GitHub";
 
     /// <summary>Shared empty slice — providers emit this (never <c>Observable.Empty</c>) when they contribute nothing.</summary>
@@ -119,37 +115,58 @@ public static class NodeMenuItemsExtensions
             var (menuPath, _, menuNode, perms) = menuCtx;
             var items = ImmutableList.CreateBuilder<NodeMenuItemDefinition>();
 
+            // The node menu is grouped into sections (rendered with "_separator" dividers), each
+            // item carrying an emoji so it reads at a glance. The Order encodes the grouping — the
+            // aggregator re-sorts every provider's items by Order, so InstanceSync's
+            // "Synchronizations" item (Order 36) slots into the middle section on its own.
+            //   10-18  edit / organize            ✏️ 🔖 ➡️ 📋 🗑️
+            //   30-38  content / history / sync    📁 🕘 🔌 (🔄)
+            //   50     lifecycle                   ♻️
+
+            // ── Group 1: edit / organize ──
             var edit = MeshNodeLayoutAreas.GetEditMenuItem(menuPath, perms);
-            if (edit != null) items.Add(edit);
-
-            var files = MeshNodeLayoutAreas.GetFilesMenuItem(menuPath, perms);
-            if (files != null) items.Add(files);
-
-            // Threads moved to the dedicated top-bar AI menu (AiMenuContext).
+            if (edit != null) items.Add(edit with { Order = 10, Icon = "✏️" });
 
             var accessService = host.Hub.ServiceProvider.GetService<AccessService>();
             var viewerId = accessService?.Context?.ObjectId
                            ?? accessService?.CircuitContext?.ObjectId;
             var pin = PinLayoutArea.GetMenuItem(menuPath, viewerId);
-            if (pin != null) items.Add(pin);
-
-            var versions = VersionLayoutArea.GetMenuItem(menuPath, perms);
-            if (versions != null) items.Add(versions);
-
-            var copy = CopyLayoutArea.GetMenuItem(menuPath, perms);
-            if (copy != null) items.Add(copy);
+            if (pin != null) items.Add(pin with { Order = 12, Icon = "🔖" });
 
             var move = MoveLayoutArea.GetMenuItem(menuPath, perms);
-            if (move != null) items.Add(move);
+            if (move != null) items.Add(move with { Order = 14, Icon = "➡️" });
 
-            var recycle = RecycleLayoutArea.GetMenuItem(menuPath, perms);
-            if (recycle != null) items.Add(recycle);
-
-            var stopSync = StopSyncLayoutArea.GetMenuItem(menuNode, menuPath, perms);
-            if (stopSync != null) items.Add(stopSync);
+            var copy = CopyLayoutArea.GetMenuItem(menuPath, perms);
+            if (copy != null) items.Add(copy with { Order = 16, Icon = "📋" });
 
             var delete = DeleteLayoutArea.GetMenuItem(menuPath, perms);
-            if (delete != null) items.Add(delete);
+            if (delete != null) items.Add(delete with { Order = 18, Icon = "🗑️" });
+            var hasGroup1 = items.Count > 0;
+
+            // ── Group 2: content / history / sync ── (InstanceSync adds "Synchronizations" at 36)
+            var beforeGroup2 = items.Count;
+            var files = MeshNodeLayoutAreas.GetFilesMenuItem(menuPath, perms);
+            if (files != null) items.Add(files with { Order = 30, Icon = "📁" });
+
+            var versions = VersionLayoutArea.GetMenuItem(menuPath, perms);
+            if (versions != null) items.Add(versions with { Order = 32, Icon = "🕘" });
+
+            var stopSync = StopSyncLayoutArea.GetMenuItem(menuNode, menuPath, perms);
+            if (stopSync != null) items.Add(stopSync with { Order = 34, Icon = "🔌" });
+            var hasGroup2 = items.Count > beforeGroup2;
+
+            // ── Group 3: lifecycle ──
+            var recycle = RecycleLayoutArea.GetMenuItem(menuPath, perms);
+            if (recycle != null) items.Add(recycle with { Order = 50, Icon = "♻️" });
+            var hasGroup3 = recycle != null;
+
+            // Threads moved to the dedicated top-bar AI menu (AiMenuContext).
+
+            // Section dividers at the seams — only where both adjacent sections carry items.
+            if (hasGroup1 && (hasGroup2 || hasGroup3))
+                items.Add(new NodeMenuItemDefinition("", "_separator", Order: 20));
+            if ((hasGroup1 || hasGroup2) && hasGroup3)
+                items.Add(new NodeMenuItemDefinition("", "_separator", Order: 40));
 
             return (IReadOnlyCollection<NodeMenuItemDefinition>)items.ToImmutable();
         });

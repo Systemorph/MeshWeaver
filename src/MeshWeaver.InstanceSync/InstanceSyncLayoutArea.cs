@@ -2,11 +2,9 @@ using System.Reactive.Linq;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
-using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh;
-using MeshWeaver.Mesh.Security;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -14,84 +12,47 @@ using Microsoft.Extensions.Logging;
 namespace MeshWeaver.InstanceSync;
 
 /// <summary>
-/// The "Instance Sync" settings tab — the GUI for syncing a Space with another MeshWeaver
-/// instance. Appears on the Settings page of every node within a Space (always acting on the
-/// containing Space, exactly like the GitHub Sync tab) for users with Update on the Space.
-/// Lists every syncing party live (status, pending changes, last sync), binds the standard
-/// node-content editor to each registration's config node (remote URL / token / target space /
-/// direction / active — data-bound, <c>stream.Update</c>-persisting, nothing hand-rolled),
-/// and offers Sync now / Remove per party plus the add-party form.
+/// The "Synchronizations" node-menu area — the GUI for syncing a Space with other MeshWeaver
+/// instances. Reached from the node "⋯" menu (a per-node operation, alongside Files / Versions),
+/// NOT from a settings tab. Lists every syncing party live (status, pending changes, last sync),
+/// binds the standard node-content editor to each registration's config node (remote URL / token /
+/// target space / direction / active — data-bound, <c>stream.Update</c>-persisting, nothing
+/// hand-rolled), and offers Sync now / Pause·Resume / Remove per party plus the add-party form —
+/// setup AND actions together in one place.
 /// </summary>
-public static class InstanceSyncSettingsTab
+public static class InstanceSyncLayoutArea
 {
-    /// <summary>The settings-menu item id for the Instance Sync tab.</summary>
-    public const string TabId = "InstanceSync";
+    /// <summary>Area name for the instance-sync management view (the "Synchronizations" menu item).</summary>
+    public const string AreaName = "Sync";
 
-    /// <summary>Registers the Instance Sync settings tab provider (shown on any node within a Space).</summary>
-    public static MessageHubConfiguration AddInstanceSyncSettingsTab(this MessageHubConfiguration config)
-        => config.AddSettingsMenuItems(new SettingsMenuItemProvider(GetTab));
-
-    private static IObservable<IReadOnlyList<SettingsMenuItemDefinition>> GetTab(
-        LayoutAreaHost host, RenderingContext ctx)
+    /// <summary>Renders the sync management view for the containing Space.</summary>
+    public static IObservable<UiControl?> Render(LayoutAreaHost host, RenderingContext _)
     {
-        IReadOnlyList<SettingsMenuItemDefinition> none = Array.Empty<SettingsMenuItemDefinition>();
-        var tab = new SettingsMenuItemDefinition(
-            Id: TabId,
-            Label: "Instance Sync",
-            ContentBuilder: BuildContent,
-            Group: "Integration",
-            Icon: FluentIcons.ArrowSync(),
-            GroupIcon: FluentIcons.Document(),
-            Order: 255,
-            Keywords: ["instance sync", "sync", "remote instance", "replicate", "replication",
-                "mirror", "bidirectional", "federation", "share", "memex"],
-            // Visibility + the Update check are gated on the CONTAINING SPACE below, same as
-            // the GitHub Sync tab — the feature replicates the whole Space.
-            RequiredPermission: Permission.None);
-
-        var spaceRoot = SpaceRootPath(host.Hub.Address.ToString());
-        if (string.IsNullOrEmpty(spaceRoot))
-            return Observable.Return(none);
-
-        return host.Workspace.GetMeshNodeStream(spaceRoot)
-            .Select(node => string.Equals(node?.NodeType, InstanceSyncService.SpaceNodeType, StringComparison.Ordinal))
-            .CombineLatest(
-                host.Hub.GetEffectivePermissions(spaceRoot),
-                (isSpace, perms) => isSpace && perms.HasFlag(Permission.Update))
-            .DistinctUntilChanged()
-            .Select(show => show ? (IReadOnlyList<SettingsMenuItemDefinition>)new[] { tab } : none)
-            .Catch<IReadOnlyList<SettingsMenuItemDefinition>, Exception>(_ => Observable.Return(none))
-            .StartWith(none);
+        var spacePath = InstanceSyncService.SpaceOf(host.Hub.Address.ToString());
+        return string.IsNullOrEmpty(spacePath)
+            ? Observable.Return<UiControl?>(Controls.Markdown("*Instance Sync is available inside a Space.*"))
+            : Observable.Return<UiControl?>(BuildContent(host, spacePath));
     }
 
-    /// <summary>The partition root for a node path — its first segment (spaces are top-level).</summary>
-    private static string SpaceRootPath(string? path) =>
-        string.IsNullOrEmpty(path) ? "" : path.Split('/', 2)[0];
-
-    internal static UiControl BuildContent(LayoutAreaHost host, StackControl stack, MeshNode? node)
+    private static UiControl BuildContent(LayoutAreaHost host, string spacePath)
     {
         var sp = host.Hub.ServiceProvider;
         var sync = sp.GetRequiredService<InstanceSyncService>();
-        var logger = sp.GetService<ILoggerFactory>()?.CreateLogger(typeof(InstanceSyncSettingsTab));
-        var spacePath = SpaceRootPath(node?.Path ?? "");
+        var logger = sp.GetService<ILoggerFactory>()?.CreateLogger(typeof(InstanceSyncLayoutArea));
 
-        if (string.IsNullOrEmpty(spacePath))
-            return stack.WithView(Controls.Markdown("*Instance Sync is available inside a Space.*"));
-
-        stack = stack.WithView(Controls.H2("Instance Sync").WithStyle("margin: 0 0 8px 0;"));
-        stack = stack.WithView(Controls.Markdown(
-            "Replicate this Space to another MeshWeaver instance and keep syncing changes as they "
-            + "happen — like syncing a SharePoint library. Enter the remote instance's URL and an "
-            + "API token issued there; the initial replication runs automatically, then changes flow "
-            + "in the configured direction. If the remote is unreachable, changes accumulate and "
-            + "sync as soon as it can be reached again."));
+        var stack = Controls.Stack
+            .WithView(Controls.H2("Instance Sync").WithStyle("margin: 0 0 8px 0;"))
+            .WithView(Controls.Markdown(
+                "Replicate this Space to another MeshWeaver instance and keep syncing changes as they "
+                + "happen — like syncing a SharePoint library. Enter the remote instance's URL and an "
+                + "API token issued there; the initial replication runs automatically, then changes flow "
+                + "in the configured direction. If the remote is unreachable, changes accumulate and "
+                + "sync as soon as it can be reached again."));
 
         // The live parties list: re-renders on add / remove / any config or status change.
-        stack = stack.WithView((h, _) => sync.WatchConfigNodes(spacePath)
+        return stack.WithView((h, _) => sync.WatchConfigNodes(spacePath)
             .Select(sources => (UiControl?)BuildPartiesView(h, sync, spacePath, sources, logger))
             .StartWith((UiControl?)Controls.Markdown("*Loading sync parties…*")));
-
-        return stack;
     }
 
     private static UiControl BuildPartiesView(
@@ -126,15 +87,36 @@ public static class InstanceSyncSettingsTab
         // config node's stream (per-field auto-persisting; no replica, no save subscription).
         card = card.WithView(MeshNodeContentEditorControl.ForType(source.Path, typeof(InstanceSyncConfig)));
 
-        // Settings = SETUP only: the connection editor above + party management (add/remove).
-        // The runtime ACTIONS (Sync now / Pause·Resume) live in the "Sync" node-menu dropdown once
-        // the party is configured. Remove stays here too so an UNCONFIGURED party (which the menu
-        // deliberately hides) can still be deleted.
         var sourcePath = source.Path;
+        var configPath = InstanceSyncService.ConfigPath(spacePath, source.Id);
         var actions = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
             .WithHorizontalGap(8)
             .WithStyle("flex-wrap: wrap;");
+
+        // Sync now — flip the control-plane trigger; the worker drains on the next tick.
+        actions = actions.WithView(Controls.Button("Sync now")
+            .WithAppearance(Appearance.Accent)
+            .WithIconStart(FluentIcons.ArrowSync())
+            .WithClickAction(ctx =>
+            {
+                sync.UpdateConfig(configPath, c => c with { SyncRequestedAt = DateTimeOffset.UtcNow })
+                    .Subscribe(_ => { },
+                        ex => logger?.LogWarning(ex, "Sync-now for {Path} failed", configPath));
+                return Task.CompletedTask;
+            }));
+
+        // Pause / Resume — toggle the Active flag; the coordinator starts/stops the worker.
+        actions = actions.WithView(Controls.Button(config.Active ? "Pause" : "Resume")
+            .WithAppearance(Appearance.Outline)
+            .WithIconStart(config.Active ? FluentIcons.Pause() : FluentIcons.Play())
+            .WithClickAction(ctx =>
+            {
+                sync.UpdateConfig(configPath, c => c with { Active = !c.Active })
+                    .Subscribe(_ => { },
+                        ex => logger?.LogWarning(ex, "Pause/resume for {Path} failed", configPath));
+                return Task.CompletedTask;
+            }));
 
         actions = actions.WithView(Controls.Button("Remove (stop syncing)")
             .WithAppearance(Appearance.Outline)
@@ -142,7 +124,7 @@ public static class InstanceSyncSettingsTab
             .WithStyle("color: var(--error, #d32f2f);")
             .WithClickAction(ctx =>
             {
-                // The parties list live-binds to WatchSyncSources — the delete re-emits and the
+                // The parties list live-binds to WatchConfigNodes — the delete re-emits and the
                 // card disappears; the coordinator stops the worker on the same event.
                 sync.RemoveSyncSource(spacePath, source.Id)
                     .Subscribe(_ => { },
@@ -181,7 +163,7 @@ public static class InstanceSyncSettingsTab
             .WithIconStart(FluentIcons.Add())
             .WithClickAction(ctx =>
             {
-                // The parties list live-binds to WatchSyncSources; the create re-emits and the
+                // The parties list live-binds to WatchConfigNodes; the create re-emits and the
                 // new card (with its editor) appears on its own.
                 sync.AddSyncSource(spacePath, name)
                     .Subscribe(_ => { },

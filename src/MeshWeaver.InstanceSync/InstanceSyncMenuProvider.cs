@@ -1,5 +1,6 @@
 using System.Reactive.Linq;
 using MeshWeaver.Data;
+using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh;
@@ -10,16 +11,16 @@ using Microsoft.Extensions.DependencyInjection;
 namespace MeshWeaver.InstanceSync;
 
 /// <summary>
-/// DI-registered <see cref="INodeMenuProvider"/> that contributes the Space's remote-instance
-/// SYNC actions to their OWN "Sync" dropdown — shown only when the containing Space has a
-/// configured <c>_Sync</c> registration and the viewer may Update it. One submenu per registration
-/// (its name) with Sync now / Pause·Resume / Remove; each navigates to
-/// <see cref="InstanceSyncActionArea"/>. Setup (URL / token / direction) stays in the settings tab.
+/// DI-registered <see cref="INodeMenuProvider"/> that contributes the "Synchronizations" entry to
+/// the NODE menu (instance sync is a per-node/Space operation, sitting in the content-and-history
+/// section next to Files / Versions). Selecting it opens <see cref="InstanceSyncLayoutArea"/> — the
+/// full sync management view (add party, connection setup, Sync now / Pause·Resume / Remove). Shown
+/// on any node within a Space for a viewer who may Update it; there is no settings tab.
 /// </summary>
 public sealed class InstanceSyncMenuProvider : INodeMenuProvider
 {
     /// <inheritdoc />
-    public string Context => NodeMenuItemsExtensions.SyncMenuContext;
+    public string Context => NodeMenuItemsExtensions.NodeMenuContext;
 
     /// <inheritdoc />
     public IObservable<IReadOnlyCollection<NodeMenuItemDefinition>> GetItems(
@@ -27,52 +28,28 @@ public sealed class InstanceSyncMenuProvider : INodeMenuProvider
     {
         var hubPath = host.Hub.Address.ToString();
         var spacePath = InstanceSyncService.SpaceOf(hubPath);
+        IReadOnlyCollection<NodeMenuItemDefinition> none = [];
         if (string.IsNullOrEmpty(spacePath))
-            return Observable.Return<IReadOnlyCollection<NodeMenuItemDefinition>>([]);
+            return Observable.Return(none);
 
-        var sync = host.Hub.ServiceProvider.GetService<InstanceSyncService>();
-        if (sync is null)
-            return Observable.Return<IReadOnlyCollection<NodeMenuItemDefinition>>([]);
+        var item = new NodeMenuItemDefinition(
+            Label: "Synchronizations",
+            Area: InstanceSyncLayoutArea.AreaName,
+            Icon: "🔄",
+            Order: 36,   // content/history/sync section (Files=30, Versions=32, StopSync=34)
+            Href: MeshNodeLayoutAreas.BuildUrl(hubPath, InstanceSyncLayoutArea.AreaName),
+            Tooltip: "Sync this Space with other MeshWeaver instances");
 
-        // Live: re-projects when a registration is added/removed/edited OR the viewer's permission
-        // on the Space enriches (the access-race fix). StartWith so CombineLatest fires immediately.
-        return sync.WatchConfigNodes(spacePath).StartWith([])
+        // Live: show on a Space (its root or any descendant) for a viewer who may Update it — the
+        // access-race fix re-emits when the permission enriches. StartWith so CombineLatest fires.
+        return host.Workspace.GetMeshNodeStream(spacePath)
+            .Select(node => string.Equals(node?.NodeType, InstanceSyncService.SpaceNodeType, StringComparison.Ordinal))
             .CombineLatest(
                 host.Hub.GetEffectivePermissions(spacePath),
-                (configs, perms) =>
-                {
-                    if (!perms.HasFlag(Permission.Update))
-                        return (IReadOnlyCollection<NodeMenuItemDefinition>)[];
-
-                    var items = new List<NodeMenuItemDefinition>();
-                    var order = 0;
-                    foreach (var node in configs)
-                    {
-                        var cfg = sync.Extract(node);
-                        if (cfg is not { IsConfigured: true })
-                            continue;   // an unconfigured party has nothing to act on yet
-                        var id = node.Id;
-                        var active = cfg.Active;
-                        items.Add(new NodeMenuItemDefinition(
-                            Label: node.Name ?? id,
-                            Area: InstanceSyncActionArea.AreaName,
-                            Icon: "ArrowSync",
-                            Order: order++,
-                            Tooltip: InstanceSyncPartitionSyncSourceProvider.Describe(cfg),
-                            Children:
-                            [
-                                new NodeMenuItemDefinition("Sync now", InstanceSyncActionArea.AreaName,
-                                    Icon: "ArrowSync", Order: 0,
-                                    Href: InstanceSyncActionArea.Href(hubPath, id, InstanceSyncActionArea.SyncNow)),
-                                new NodeMenuItemDefinition(active ? "Pause" : "Resume", InstanceSyncActionArea.AreaName,
-                                    Icon: active ? "Pause" : "Play", Order: 1,
-                                    Href: InstanceSyncActionArea.Href(hubPath, id, InstanceSyncActionArea.Pause)),
-                                new NodeMenuItemDefinition("Remove", InstanceSyncActionArea.AreaName,
-                                    Icon: "Delete", Order: 2,
-                                    Href: InstanceSyncActionArea.Href(hubPath, id, InstanceSyncActionArea.Remove)),
-                            ]));
-                    }
-                    return items;
-                });
+                (isSpace, perms) => isSpace && perms.HasFlag(Permission.Update))
+            .DistinctUntilChanged()
+            .Select(show => show ? (IReadOnlyCollection<NodeMenuItemDefinition>)[item] : none)
+            .Catch<IReadOnlyCollection<NodeMenuItemDefinition>, Exception>(_ => Observable.Return(none))
+            .StartWith(none);
     }
 }
