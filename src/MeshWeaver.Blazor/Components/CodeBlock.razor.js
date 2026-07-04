@@ -70,15 +70,24 @@ export function setupCopyButton(element) {
     }
     button.dataset.copyWired = "1";
 
-    button.addEventListener("click", () => {
+    const doCopy = () => {
         const text = getCodeText(element);
-        // Called synchronously in the click handler so Safari's gesture check passes.
+        // Called synchronously in the gesture handler so Safari's gesture check passes.
         if (navigator.clipboard && window.isSecureContext) {
             navigator.clipboard.writeText(text).then(
                 () => flashCopied(button),
                 () => { if (copyViaExecCommand(text)) flashCopied(button); });
         } else if (copyViaExecCommand(text)) {
             flashCopied(button);
+        }
+    };
+
+    button.addEventListener("click", doCopy);
+    // Keyboard activation for the role="button" icon (Enter / Space).
+    button.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            doCopy();
         }
     });
 }
@@ -92,16 +101,15 @@ function copyViaExecCommand(text) {
     ta.style.left = "0";
     ta.style.opacity = "0";
     document.body.appendChild(ta);
-    ta.focus();
-    ta.select();
-    let ok = false;
     try {
-        ok = document.execCommand("copy");
+        ta.focus();
+        ta.select();
+        return document.execCommand("copy");
     } catch {
-        ok = false;
+        return false;
+    } finally {
+        document.body.removeChild(ta);   // always clean up, even if select/execCommand throws
     }
-    document.body.removeChild(ta);
-    return ok;
 }
 
 function flashCopied(button) {

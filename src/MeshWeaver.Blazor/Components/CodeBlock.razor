@@ -4,8 +4,9 @@
 <div @ref="CodeBlockElement" class="code-content">
     @((MarkupString)(Html ?? ""))
     @* Copy is wired natively in JS (setupCopyButton) — a Blazor @@onclick round-trips over SignalR
-       and loses the user gesture, so Safari rejects navigator.clipboard.writeText. *@
-    <i class="copy-to-clipboard"></i>
+       and loses the user gesture, so Safari rejects navigator.clipboard.writeText. role/tabindex/
+       aria make the <i> a keyboard- and screen-reader-accessible button. *@
+    <i class="copy-to-clipboard" role="button" tabindex="0" title="Copy code" aria-label="Copy code"></i>
 </div>
 
 @code {
