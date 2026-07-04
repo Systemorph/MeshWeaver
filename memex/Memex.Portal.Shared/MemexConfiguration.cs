@@ -27,6 +27,7 @@ using MeshWeaver.ContentCollections;
 using MeshWeaver.ContentCollections.Indexing;
 using MeshWeaver.ContentCollections.Indexing.Graph;
 using MeshWeaver.ContentCollections.Indexing.PostgreSql;
+using MeshWeaver.Courses;
 using MeshWeaver.Documentation;
 using MeshWeaver.GoogleMaps;
 using MeshWeaver.Data;
@@ -524,6 +525,9 @@ public static class MemexConfiguration
                 // a new Space, etc.). Empty / missing section = no-op.
                 .AddMeshNodes(Authentication.GlobalAdminSeed.Build(configuration))
                 .AddSpaceType()
+                // Interactive courses: Course/Module/Exercise/ExerciseAttempt
+                // node types + the stream-update validation control plane.
+                .AddCourses()
                 .AddPortalType()
                 .AddAI(serveFromPartition);
 

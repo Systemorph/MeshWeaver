@@ -67,6 +67,7 @@
     <Project Path="src/MeshWeaver.ContentCollections.Indexing.PostgreSql/MeshWeaver.ContentCollections.Indexing.PostgreSql.csproj" />
     <Project Path="src/MeshWeaver.Connection.SignalR/MeshWeaver.Connection.SignalR.csproj" />
     <Project Path="src/MeshWeaver.ContentCollections.Indexing.Graph/MeshWeaver.ContentCollections.Indexing.Graph.csproj" />
+    <Project Path="src/MeshWeaver.Courses/MeshWeaver.Courses.csproj" />
     <Project Path="src/MeshWeaver.Data.Contract/MeshWeaver.Data.Contract.csproj" />
     <Project Path="src/MeshWeaver.Data/MeshWeaver.Data.csproj" />
     <Project Path="src/MeshWeaver.DataSetReader.Csv/MeshWeaver.DataSetReader.Csv.csproj" />
@@ -129,6 +130,7 @@
     <Project Path="test/MeshWeaver.ContentCollections.Indexing.Test/MeshWeaver.ContentCollections.Indexing.Test.csproj" />
     <Project Path="test/MeshWeaver.ContentCollections.Indexing.PostgreSql.Test/MeshWeaver.ContentCollections.Indexing.PostgreSql.Test.csproj" />
     <Project Path="test/MeshWeaver.ContentCollections.Indexing.Graph.Test/MeshWeaver.ContentCollections.Indexing.Graph.Test.csproj" />
+    <Project Path="test/MeshWeaver.Courses.Test/MeshWeaver.Courses.Test.csproj" />
     <Project Path="test/MeshWeaver.Data.Test/MeshWeaver.Data.Test.csproj" />
     <Project Path="test/MeshWeaver.Documentation.Test/MeshWeaver.Documentation.Test.csproj" />
     <Project Path="test/MeshWeaver.Data.TestDomain/MeshWeaver.Data.TestDomain.csproj" />
