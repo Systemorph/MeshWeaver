@@ -49,11 +49,13 @@ public sealed class ClaudeCodeRuntimeProbe : IHarnessRuntimeInfo
     }
 
     /// <summary>
-    /// Reads the active effort level from <c>{configDir}/settings.json</c> (<c>effortLevel</c>) — where the
-    /// CLI persists it; it is NOT in the init message. Falls back to <c>medium</c> (the CLI's documented
-    /// default/recommendation for Opus) when unset — never the non-value "default".
+    /// Reads the active effort level from <c>{userConfigDir}/settings.json</c> (<c>effortLevel</c>) — where
+    /// the <c>claude</c> CLI persists it for THIS user; it is NOT in the init message. Returns the value the
+    /// harness actually has set, or <c>null</c> when it has none — NEVER a fabricated default (the old
+    /// hardcoded "medium" showed a level the user had never chosen). A null <see cref="HarnessRuntime.Effort"/>
+    /// renders as "…" in the status bar, i.e. "the harness hasn't reported an effort", which is the truth.
     /// </summary>
-    private string ReadEffortLevel(string? userConfigDir)
+    private string? ReadEffortLevel(string? userConfigDir)
     {
         try
         {
@@ -73,7 +75,7 @@ public sealed class ClaudeCodeRuntimeProbe : IHarnessRuntimeInfo
         {
             logger?.LogDebug(ex, "Could not read effortLevel from {Dir}", userConfigDir);
         }
-        return "medium";
+        return null;
     }
 
     private async Task<HarnessRuntime> ProbeAsync(CancellationToken ct)
