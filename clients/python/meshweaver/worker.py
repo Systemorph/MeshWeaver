@@ -150,6 +150,9 @@ async def serve(url: str, token: Optional[str] = None, address: str = DEFAULT_WO
             await asyncio.wait({closed, stopping}, return_when=asyncio.FIRST_COMPLETED)
             for task in (closed, stopping):
                 task.cancel()
+            # Await both so neither becomes an unobserved-exception warning (a cancelled task, or an
+            # error surfaced by wait_closed, is captured here rather than left dangling).
+            await asyncio.gather(closed, stopping, return_exceptions=True)
         finally:
             await conn.close()
         if not reconnect:
