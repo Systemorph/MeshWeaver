@@ -181,11 +181,14 @@ public sealed class IssueService
             MainNode = spacePath,
             Content = issue,
         };
+        // The write runs as the calling user: AccessContext is an AsyncLocal that ExecutionContext
+        // carries across the IoPool's ConfigureAwait(false) hops, so it is still set here even after
+        // the repoClient round-trip. Return the server-reconciled node (version/normalization) on success.
         return hub.Observe<CreateOrUpdateNodeResponse>(new CreateOrUpdateNodeRequest(node))
             .FirstAsync()
             .Select(d => d.Message)
             .SelectMany(resp => resp.Success
-                ? Observable.Return(node)
+                ? Observable.Return(resp.Node ?? node)
                 : Observable.Throw<MeshNode>(new InvalidOperationException(
                     $"Failed to sync issue #{issue.Number}: {resp.Error}")));
     }

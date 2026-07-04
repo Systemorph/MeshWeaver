@@ -155,7 +155,7 @@ public sealed class GitHubWebhookProcessor
                     () => accessService.ImpersonateAsSystem(),
                     _ => hub.Observe<CreateOrUpdateNodeResponse>(new CreateOrUpdateNodeRequest(node)).FirstAsync())
                 .SelectMany(d => d.Message.Success
-                    ? Observable.Return(node)
+                    ? Observable.Return(d.Message.Node ?? node)
                     : Observable.Throw<MeshNode>(new InvalidOperationException(
                         $"Webhook upsert of issue #{issue.Number} into {space} failed: {d.Message.Error}")));
         });

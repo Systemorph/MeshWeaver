@@ -317,7 +317,12 @@ public sealed class OctokitGitHubRepoClient(IoPoolRegistry ioPools, ILogger<Octo
                     ? Observable.Return(GitHubCheckSummary.Empty)
                     : Http.InvokeObservable(ct => client.Check.Run.GetAllForReference(owner, repo, headSha))
                         .Select(SummarizeChecks)
-                        .Catch<GitHubCheckSummary, ApiException>(_ => Observable.Return(GitHubCheckSummary.Empty));
+                        // Only "no checks configured / no checks:read scope" (404 / 403) degrade to empty;
+                        // a real error (auth, 5xx) must surface, not be silently hidden as "no checks".
+                        .Catch<GitHubCheckSummary, ApiException>(ex =>
+                            ex is NotFoundException || ex.StatusCode == System.Net.HttpStatusCode.Forbidden
+                                ? Observable.Return(GitHubCheckSummary.Empty)
+                                : Observable.Throw<GitHubCheckSummary>(ex));
                 // Both leaves emit exactly once → Zip pairs them into a single detail emission.
                 return reviews.Zip(checks, (rev, chk) => ToDetail(pr, headSha, chk, rev));
             });
