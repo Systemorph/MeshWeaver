@@ -32,6 +32,7 @@ public static class CollectionLayoutArea
 
         var fileBrowser = new FileBrowserControl(collection)
             .WithPath(path)
+            .WithNodePath(host.Hub.Address.ToString())
             .WithUrlBasePath(
                 $"/{host.Hub.Address}/{ContentCollectionsExtensions.CollectionAreaName}/{ContentCollectionsExtensions.EncodeCollectionName(collection)}")
             .WithCollectionConfiguration(collectionConfig);
