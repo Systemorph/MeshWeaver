@@ -38,7 +38,7 @@ describe("Mesh ops (gRPC-web, in-memory)", () => {
   });
 
   it("create targets the node's OWNER partition address (never 'mesh/main' — unroutable on the distributed portal)", async () => {
-    const deliveries: { messageType: string; target: string }[] = [];
+    const deliveries: { messageType: string | undefined; target: string | undefined }[] = [];
     const mesh = await Mesh.connect("memory://", {
       transport: fakeMeshTransport({ onDeliver: (d) => deliveries.push({ messageType: d.messageType, target: d.target }) }),
     });
@@ -79,7 +79,7 @@ describe("Mesh ops (gRPC-web, in-memory)", () => {
   });
 
   it("delete/move/copy target the NODE's own hub (never the unroutable 'mesh/main')", async () => {
-    const deliveries: { messageType: string; target: string }[] = [];
+    const deliveries: { messageType: string | undefined; target: string | undefined }[] = [];
     const mesh = await Mesh.connect("memory://", {
       transport: fakeMeshTransport({ onDeliver: (d) => deliveries.push({ messageType: d.messageType, target: d.target }) }),
     });
