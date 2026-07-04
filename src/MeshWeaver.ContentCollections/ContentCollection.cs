@@ -137,8 +137,36 @@ public class ContentCollection : IDisposable
     /// <param name="path">The destination folder path within the collection.</param>
     /// <param name="fileName">The file name to write.</param>
     /// <param name="openReadStream">The content to persist.</param>
-    public Task SaveFileAsync(string path, string fileName, Stream openReadStream)
-        => provider.SaveFileAsync(path, fileName, openReadStream);
+    public async Task SaveFileAsync(string path, string fileName, Stream openReadStream)
+    {
+        await provider.SaveFileAsync(path, fileName, openReadStream);
+
+        // Proactively publish the markdown we just wrote into the live stream. The application
+        // knows EXACTLY what it wrote, so it must NOT depend on the FileSystemWatcher to notice
+        // its own write: the watcher's arming window and — on Linux/inotify with
+        // IncludeSubdirectories — the watch-add for a brand-new sub-folder race the very write
+        // that created the file inside it, so the change event is silently dropped on a
+        // cold/loaded box. A reactive reader (GetMarkdown → the collection-named file view) then
+        // stays stranded on absent content until a later event that never arrives — the
+        // ContentCollections cold-start hang. The watcher remains the source of truth for
+        // EXTERNAL changes; an application write publishes itself, deterministically.
+        if (MarkdownFilter(fileName))
+        {
+            var relativePath = CombineCollectionPath(path, fileName);
+            var article = await ParseArticleFromDiskAsync(relativePath, CancellationToken.None);
+            if (article is not null)
+                PublishArticle(article);
+        }
+    }
+
+    /// <summary>Joins a folder path and file name into the collection-relative path used as the
+    /// markdown-stream key (mirrors the FileSystemWatcher's <c>GetRelativePath</c> shape:
+    /// forward slashes, no leading slash).</summary>
+    private static string CombineCollectionPath(string path, string fileName)
+    {
+        var folder = path.Replace('\\', '/').Trim('/');
+        return string.IsNullOrEmpty(folder) ? fileName : $"{folder}/{fileName}";
+    }
 
     /// <summary>
     /// Streams folders + files at <paramref name="currentPath"/> as a single async enumerable.
@@ -198,35 +226,47 @@ public class ContentCollection : IDisposable
         // UpdateStreamRequest handler is await-free by contract.
         var ioPool = Hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.FileSystem)
                      ?? IoPool.Unbounded;
-        ioPool.Invoke(async ct =>
-            {
-                var tuple = await provider.GetStreamWithMetadataAsync(path, ct);
-                if (tuple.Stream is null)
-                    return null;
-                return await ParseArticleAsync(tuple.Stream, tuple.Path, tuple.LastModified, ct);
-            })
+        ioPool.Invoke(ct => ParseArticleFromDiskAsync(path, ct))
             .Subscribe(
                 article =>
                 {
-                    if (article is null)
-                        return;
-                    var key = article.Path.EndsWith(".md", StringComparison.OrdinalIgnoreCase)
-                        ? article.Path[..^3]
-                        : article.Path;
-                    markdownStream.Update(
-                        x => new ChangeItem<InstanceCollection>(x!.SetItem(key, article), markdownStream.StreamId, Hub.Version),
-                        ex =>
-                        {
-                            // The stream errors incoming pushes once it (or its hub) is disposing — typically a
-                            // FileSystemWatcher event racing collection teardown. Close the incoming stream at the
-                            // source so no further events flow into a disposed hub. See Doc/Architecture/HubDisposalModel.
-                            if (ex is ObjectDisposedException)
-                                monitorDisposable?.Dispose();
-                        });
+                    if (article is not null)
+                        PublishArticle(article);
                 },
                 ex => Hub.ServiceProvider.GetService<ILoggerFactory>()
                     ?.CreateLogger(typeof(ContentCollection))
                     .LogWarning(ex, "UpdateArticle failed reading {Path} in collection {Collection}", path, Collection));
+    }
+
+    /// <summary>Reads and parses the markdown file at <paramref name="path"/> from the backing
+    /// store, or <c>null</c> when it is absent. Shared by the change monitor
+    /// (<see cref="UpdateArticle"/>) and the proactive publish on write (<see cref="SaveFileAsync"/>).</summary>
+    private async Task<MarkdownElement?> ParseArticleFromDiskAsync(string path, CancellationToken ct)
+    {
+        var tuple = await provider.GetStreamWithMetadataAsync(path, ct);
+        if (tuple.Stream is null)
+            return null;
+        return await ParseArticleAsync(tuple.Stream, tuple.Path, tuple.LastModified, ct);
+    }
+
+    /// <summary>Merges <paramref name="article"/> into the live markdown stream under its
+    /// path-derived key (the <c>.md</c> suffix stripped), the same key <see cref="GetMarkdown"/>
+    /// reads back.</summary>
+    private void PublishArticle(MarkdownElement article)
+    {
+        var key = article.Path.EndsWith(".md", StringComparison.OrdinalIgnoreCase)
+            ? article.Path[..^3]
+            : article.Path;
+        markdownStream.Update(
+            x => new ChangeItem<InstanceCollection>(x!.SetItem(key, article), markdownStream.StreamId, Hub.Version),
+            ex =>
+            {
+                // The stream errors incoming pushes once it (or its hub) is disposing — typically a
+                // FileSystemWatcher event racing collection teardown. Close the incoming stream at the
+                // source so no further events flow into a disposed hub. See Doc/Architecture/HubDisposalModel.
+                if (ex is ObjectDisposedException)
+                    monitorDisposable?.Dispose();
+            });
     }
 
     private async Task<MarkdownElement?> ParseArticleAsync(Stream? stream, string path, DateTime lastModified, CancellationToken ct)

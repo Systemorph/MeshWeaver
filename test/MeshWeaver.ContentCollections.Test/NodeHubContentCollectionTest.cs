@@ -1,7 +1,10 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.IO;
 using System.Linq;
+using System.Reactive.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Fixture;
@@ -194,5 +197,96 @@ public class NodeHubContentCollectionTest(ITestOutputHelper output) : HubTestBas
         {
             await collection!.DeleteFileAsync("/sub/hello.md");
         }
+    }
+}
+
+/// <summary>
+/// Pins the ContentCollections cold-start race that timed out
+/// <see cref="NodeHubContentCollectionTest.CollectionNamedArea_RendersBrowserForFolder_AndContentForFile"/>
+/// on CI. The collection-named FILE view reads content from the collection's live markdown stream,
+/// which was historically populated ONLY by the <see cref="System.IO.FileSystemWatcher"/>. On a
+/// cold/loaded box that change event is unreliable — most sharply on Linux/inotify, where a
+/// <c>SaveFileAsync</c> into a brand-new sub-folder creates the folder and writes the file inside it
+/// in immediate succession, and the inotify watch for the new folder is added only AFTER the file's
+/// write events already fired (with <c>IncludeSubdirectories = true</c>). The events are then dropped,
+/// so a reactive reader (<c>GetMarkdown</c>) stays stranded on absent content until an event that
+/// never arrives — the observable "never emits" → 30s render timeout.
+/// <para>
+/// This test makes the failure DETERMINISTIC by pairing the collection with a provider whose monitor
+/// NEVER delivers (<c>AttachMonitor</c> → null) — the exact stand-in for a dropped watcher event —
+/// and asserts the write still publishes its own article into the stream. It fails (10s timeout)
+/// against the pre-fix code where the write did not publish, and passes once <c>SaveFileAsync</c>
+/// publishes proactively.
+/// </para>
+/// </summary>
+public class ContentCollectionWriteIsWatcherIndependentTest(ITestOutputHelper output) : HubTestBase(output)
+{
+    [Fact]
+    public async Task SaveFile_PublishesToMarkdownStream_WithoutTheFileSystemWatcher()
+    {
+        var hub = GetClient();
+        var ct = TestContext.Current.CancellationToken;
+        var basePath = Path.Combine(
+            AppContext.BaseDirectory, "Files", "WatcherIndependent", Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(basePath);
+
+        var config = new ContentCollectionConfig
+        {
+            Name = "content",
+            SourceType = "FileSystem",
+            IsEditable = true,
+            BasePath = basePath,
+            Settings = new Dictionary<string, string> { ["BasePath"] = basePath }
+        };
+
+        // A provider whose monitor NEVER fires — the deterministic stand-in for a FileSystemWatcher
+        // whose event is dropped under CI cold-start load.
+        var provider = new MonitorlessFileSystemProvider(basePath);
+        using var collection = new ContentCollection(config, provider, hub);
+        await collection.InitializeAsync(ct);
+
+        var bytes = "# Hello from the collection area"u8.ToArray();
+        using (var stream = new MemoryStream(bytes))
+            // Write into a brand-new sub-folder, exactly like the failing test.
+            await collection.SaveFileAsync("/sub", "hello.md", stream);
+
+        // With the watcher permanently silent, the ONLY way the article reaches the stream is the
+        // proactive publish on write. GetMarkdown must therefore still emit it. (It is already
+        // present, so this resolves immediately; the bound only fences a regression as a timeout.)
+        var content = await collection.GetMarkdown("sub/hello.md")
+            .Should().Within(TimeSpan.FromSeconds(10))
+            .Match(x => x is MarkdownElement me && me.Content.Contains("Hello from the collection area"));
+
+        content.Should().NotBeNull();
+    }
+
+    /// <summary>Delegates every I/O op to a real <see cref="FileSystemStreamProvider"/> but returns
+    /// a null monitor, so the live stream is fed ONLY by the write path — never by a watcher.</summary>
+    private sealed class MonitorlessFileSystemProvider(string basePath) : IStreamProvider
+    {
+        private readonly FileSystemStreamProvider _inner = new(basePath);
+
+        public string ProviderType => _inner.ProviderType;
+        public Task<Stream?> GetStreamAsync(string reference, CancellationToken ct = default)
+            => _inner.GetStreamAsync(reference, ct);
+        public Task<(Stream? Stream, string Path, DateTime LastModified)> GetStreamWithMetadataAsync(string path, CancellationToken ct = default)
+            => _inner.GetStreamWithMetadataAsync(path, ct);
+        public Task WriteStreamAsync(string reference, Stream content, CancellationToken ct = default)
+            => _inner.WriteStreamAsync(reference, content, ct);
+        public IAsyncEnumerable<(Stream? Stream, string Path, DateTime LastModified)> GetStreamsAsync(Func<string, bool> filter, CancellationToken ct = default)
+            => _inner.GetStreamsAsync(filter, ct);
+        public IAsyncEnumerable<FolderItem> GetFolders(string path, CancellationToken ct = default)
+            => _inner.GetFolders(path, ct);
+        public IAsyncEnumerable<FileItem> GetFiles(string path, CancellationToken ct = default)
+            => _inner.GetFiles(path, ct);
+        public Task SaveFileAsync(string path, string fileName, Stream content, CancellationToken ct = default)
+            => _inner.SaveFileAsync(path, fileName, content, ct);
+        public Task CreateFolderAsync(string folderPath) => _inner.CreateFolderAsync(folderPath);
+        public Task DeleteFolderAsync(string folderPath) => _inner.DeleteFolderAsync(folderPath);
+        public Task DeleteFileAsync(string filePath) => _inner.DeleteFileAsync(filePath);
+        // The point of the test: the monitor NEVER delivers a change.
+        public IDisposable? AttachMonitor(Action<string> onChanged) => null;
+        public Task<ImmutableDictionary<string, Author>> LoadAuthorsAsync(CancellationToken ct = default)
+            => _inner.LoadAuthorsAsync(ct);
     }
 }

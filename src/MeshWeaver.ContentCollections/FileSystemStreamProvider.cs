@@ -253,6 +253,18 @@ public class FileSystemStreamProvider(string basePath) : IStreamProvider
                 onChanged(Path.GetRelativePath(basePath, e.FullPath));
         };
 
+        // A brand-new file is signalled by Created; its content write then fires Changed. Handle
+        // BOTH: relying on Changed alone drops externally-created markdown whose Created arrives
+        // but whose Changed is coalesced/lost (e.g. an atomic write, or the inotify watch for a
+        // just-made sub-folder being added only after the file inside it was already written).
+        // onChanged re-reads + re-parses, so a double-fire (Created + Changed) is idempotent.
+        w.Created += (sender, e) =>
+        {
+            if (handle.Stopped) return;
+            if (Path.GetExtension(e.FullPath) == ".md")
+                onChanged(Path.GetRelativePath(basePath, e.FullPath));
+        };
+
         w.Renamed += (sender, e) =>
         {
             if (handle.Stopped) return;
