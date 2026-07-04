@@ -495,9 +495,12 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         foreach (var probe in Hub.ServiceProvider.GetServices<MeshWeaver.AI.IHarnessRuntimeInfo>())
         {
             var harnessId = probe.HarnessId;
-            // null config dir → the harness's default ({HOME}/.claude), which is what the CLI uses when
-            // ConfigDirRoot is unset; the probe reads effortLevel from there.
-            harnessRuntimeSubs.Add(probe.Get(userConfigDir: null).Subscribe(
+            // Ask the harness for the effort THIS user actually has set — read from the user's OWN
+            // per-user CLI config dir ({ClaudeCode:ConfigDirRoot}/{userId}/.claude, the exact dir the
+            // harness runs the CLI under), NOT the server's ~/.claude. Null when no per-user root is
+            // configured (local dev) → the probe falls back to the CLI's default config dir. The old
+            // `userConfigDir: null` always read the server dir → a wrong/absent level shown as "medium".
+            harnessRuntimeSubs.Add(probe.Get(ResolveProbeConfigDir(harnessId)).Subscribe(
                 rt => InvokeAsync(() =>
                 {
                     if (_isDisposed) return;
@@ -508,6 +511,21 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         }
 
         Logger.LogDebug("[ThreadChat:{InstanceId}] OnInitialized completed", _instanceId);
+    }
+
+    /// <summary>
+    /// The per-user CLI config dir a runtime probe reads the user's <c>effortLevel</c> from — the SAME
+    /// dir the harness runs the CLI under (<c>{ClaudeCode:ConfigDirRoot}/{userId}/.claude</c>), so the
+    /// status bar reflects THIS user's setting, not the server's. Null when the harness has no per-user
+    /// config root (local dev) or the user isn't resolved yet → the probe uses the CLI's default dir.
+    /// </summary>
+    private string? ResolveProbeConfigDir(string harnessId)
+    {
+        if (!string.Equals(harnessId, MeshWeaver.AI.Harnesses.ClaudeCode, StringComparison.OrdinalIgnoreCase)
+            || string.IsNullOrEmpty(_userHome))
+            return null;
+        var root = Configuration["ClaudeCode:ConfigDirRoot"]?.TrimEnd('/', '\\');
+        return string.IsNullOrEmpty(root) ? null : $"{root}/{_userHome}/.claude";
     }
 
     // ─── Per-user chat template (_ThreadTemplate) ─────────────────────────────
@@ -919,19 +937,27 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                 var parsed = ChatParser.Parse(userMessageText);
                 if (parsed.Command != null)
                 {
-                    // Under a CLI harness (Claude Code / Copilot) FORWARD slash commands 1:1 to the
-                    // harness as the message — with two exceptions that MeshWeaver MUST own:
+                    // Under a CLI harness (Claude Code / Copilot) the harness's OWN commands (/login,
+                    // /logout — it authenticates ITSELF) and the node-pick built-ins (/agent, /model —
+                    // the harness has its own model/agent selection) are FORWARDED 1:1: the raw
+                    // "/command" text flows to the harness as the message. Everything ELSE is handled by
+                    // MeshWeaver via HandleSlashCommandAsync → skill resolution:
                     //   • /harness — the runtime switch (so the user is never stuck in a CLI harness);
-                    //   • the harness's OWN Commands (/login, /logout) — these drive the inline Connect
-                    //     flow (`claude setup-token` + store token). They CANNOT be forwarded: the CLI
-                    //     can't interactively authenticate from a piped prompt, so forwarding /login
-                    //     just yields an endless "Not logged in" loop.
-                    // Under the MeshWeaver harness, intercept every slash-skill as before.
+                    //   • a custom MeshWeaver skill (a nodeType:Skill — /code, /gui, …) is injected
+                    //     (its instructions are loaded into the round);
+                    //   • anything that resolves to no skill surfaces "Unknown command" locally.
+                    // Under the MeshWeaver harness, every slash-skill is handled this way.
                     var harness = ActiveHarness();
-                    var isRuntimeSwitch = string.Equals(parsed.Command.Name, "harness", StringComparison.OrdinalIgnoreCase);
+                    var commandName = parsed.Command.Name;
+                    var isRuntimeSwitch = string.Equals(commandName, "harness", StringComparison.OrdinalIgnoreCase);
                     var isHarnessOwnedCommand = harness?.Commands.Any(
-                        c => string.Equals(c.Name, parsed.Command.Name, StringComparison.OrdinalIgnoreCase)) == true;
-                    if (harness is null || isRuntimeSwitch || isHarnessOwnedCommand)
+                        c => string.Equals(c.Name, commandName, StringComparison.OrdinalIgnoreCase)) == true;
+                    var isHarnessNodePick = string.Equals(commandName, "agent", StringComparison.OrdinalIgnoreCase)
+                        || string.Equals(commandName, "model", StringComparison.OrdinalIgnoreCase);
+                    // Forward only under a CLI harness, and never /harness (always MeshWeaver-owned).
+                    var forwardToHarness = harness is not null && !isRuntimeSwitch
+                        && (isHarnessOwnedCommand || isHarnessNodePick);
+                    if (!forwardToHarness)
                     {
                         _ = HandleSlashCommandAsync(parsed.Command);
                         // Clear the input + bail — submissionHandler.TryBeginSubmit
@@ -942,8 +968,8 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                         StateHasChanged();
                         return;
                     }
-                    // else: CLI harness + a command the harness does NOT own → fall through, so the raw
-                    // "/command" text is submitted to the harness as the message (forwarded 1:1).
+                    // else: CLI harness + a harness-owned (/login, /logout) or node-pick (/agent, /model)
+                    // command → fall through, so the raw "/command" text is forwarded 1:1 to the harness.
                 }
             }
 
