@@ -500,6 +500,7 @@ verify_endpoint() {
 # ---------------------------------------------------------------------------
 readonly E2E_DB="memex_e2e"
 readonly E2E_APP="memex-e2e-portal"
+readonly E2E_NEXT_APP="memex-e2e-portal-next"
 readonly E2E_MIG_JOB="memex-e2e-migration"
 readonly E2E_HOST="e2e.${HOSTNAME_LOCAL}"            # covered by the *.memex.localhost cert
 readonly E2E_PORT="${MEMEX_E2E_PORT:-8444}"
@@ -563,7 +564,11 @@ spec:
           env:
             - { name: ConnectionStrings__memex, value: "$(e2e_conn)" }
 YAML
-  kubectl -n "$NAMESPACE" wait --for=condition=complete "job/$E2E_MIG_JOB" --timeout=300s \
+  # 900s (was 300s): a FRESH memex_e2e runs the full first-boot EmbeddingBackfill (embed every
+  # imported doc + sample node at 1024-dim through host Ollama) — several minutes, and a migration
+  # that is making steady progress must never be killed by a short wait (that's a false-wedge).
+  # A genuinely stuck migration still fails at 900s; check job completion, not just wall-clock.
+  kubectl -n "$NAMESPACE" wait --for=condition=complete "job/$E2E_MIG_JOB" --timeout=900s \
     || { kubectl -n "$NAMESPACE" logs "job/$E2E_MIG_JOB" --tail=50 2>/dev/null || true; die "e2e migration failed"; }
   ok "migration complete"
 }
@@ -589,9 +594,13 @@ spec:
           # to stay small), pushing the Colima VM to ~86% and risking an OOM of the
           # real memex portal. With a memory LIMIT, .NET reads the cgroup cap and
           # holds its GC heap under it — bounded AND leaner at steady state.
+          # 3cpu/6Gi (was 2cpu/4Gi): the full doc-example E2E SWEEP compiles ~50 Roslyn
+          # cells; at 2 CPUs the pod CPU-saturated, /healthz blew past the probe timeout,
+          # readiness flapped, and the Service pulled the pod mid-run (every test then got
+          # connection-refused). This headroom keeps /healthz answering during a compile burst.
           resources:
-            requests: { cpu: "250m", memory: "1Gi" }
-            limits:   { cpu: "2",    memory: "4Gi" }
+            requests: { cpu: "500m", memory: "2Gi" }
+            limits:   { cpu: "3",    memory: "6Gi" }
           ports: [ { containerPort: 8080 } ]
           envFrom:
             - configMapRef: { name: memex-portal-config }
@@ -610,6 +619,11 @@ spec:
             httpGet: { path: /healthz, port: 8080 }
             initialDelaySeconds: 10
             periodSeconds: 5
+            # 5s (k8s default is 1s): /healthz short-circuits before identity/mesh/renderer, so it
+            # only ever exceeds 1s when the pod is CPU-saturated (a doc-sweep compile burst). A 1s
+            # timeout flapped readiness under that load and the Service pulled the pod mid-run.
+            # Matches the production helm probe (deployment.yaml timeoutSeconds: 5).
+            timeoutSeconds: 5
             failureThreshold: 60
           volumeMounts:
             # The reused config's Deployment:DataRoot is /data (assembly/nuget/dataprotection
@@ -652,6 +666,62 @@ YAML
   kubectl -n "$NAMESPACE" rollout status "deploy/$E2E_APP" --timeout=300s \
     || { kubectl -n "$NAMESPACE" logs "deploy/$E2E_APP" --tail=60 2>/dev/null || true; die "e2e portal did not become ready"; }
   ok "e2e portal ready"
+
+  e2e_deploy_portal_next
+}
+
+# The Next.js React GUI beside the e2e portal — same shape as the chart's portal-next.yaml, so
+# Playwright can drive /next with DevLogin (the parity suite). Gated on the image being present
+# (built by 'up'; '--skip-build' reuses it). SSR talks to the e2e portal Service directly
+# (PORTAL_ORIGIN); the BROWSER stays same-origin through the ingress — exactly the deployed shape.
+e2e_deploy_portal_next() {
+  if ! docker image inspect "$PORTAL_NEXT_IMAGE" >/dev/null 2>&1; then
+    info "portal-next image not present → e2e is Blazor-only (build it with 'memex-local update' or 'up')"
+    return 0
+  fi
+  step "Deploying e2e portal-next ($E2E_NEXT_APP) at /next"
+  kubectl -n "$NAMESPACE" apply -f - <<YAML
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: $E2E_NEXT_APP, labels: { app: $E2E_NEXT_APP } }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: $E2E_NEXT_APP } }
+  template:
+    metadata: { labels: { app: $E2E_NEXT_APP } }
+    spec:
+      containers:
+        - name: portal-next
+          image: $PORTAL_NEXT_IMAGE
+          imagePullPolicy: IfNotPresent
+          ports: [ { containerPort: 3000 } ]
+          env:
+            - { name: PORTAL_ORIGIN, value: "http://$E2E_APP:8080" }
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+            limits:   { memory: 512Mi }
+          readinessProbe:
+            httpGet: { path: /next, port: 3000 }
+            initialDelaySeconds: 3
+            periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata: { name: $E2E_NEXT_APP }
+spec:
+  selector: { app: $E2E_NEXT_APP }
+  ports: [ { port: 3000, targetPort: 3000 } ]
+YAML
+  # Add the /next path to the e2e ingress (idempotent JSON patch — apply above owns the base rule).
+  kubectl -n "$NAMESPACE" patch ingress "$E2E_APP" --type=json -p "[
+    {\"op\": \"add\", \"path\": \"/spec/rules/0/http/paths/0\", \"value\": {
+      \"path\": \"/next\", \"pathType\": \"Prefix\",
+      \"backend\": { \"service\": { \"name\": \"$E2E_NEXT_APP\", \"port\": { \"number\": 3000 } } } } }
+  ]" >/dev/null 2>&1 || warn "could not patch /next into the e2e ingress (already present?)"
+  kubectl -n "$NAMESPACE" rollout restart "deploy/$E2E_NEXT_APP" >/dev/null 2>&1 || true
+  kubectl -n "$NAMESPACE" rollout status "deploy/$E2E_NEXT_APP" --timeout=180s \
+    || { kubectl -n "$NAMESPACE" logs "deploy/$E2E_NEXT_APP" --tail=40 2>/dev/null || true; die "e2e portal-next did not become ready"; }
+  ok "e2e portal-next ready at https://$E2E_HOST:$E2E_PORT/next"
 }
 
 e2e_forward_stop() {
@@ -710,7 +780,7 @@ cmd_e2e() {
       [ "${1:-}" = "--skip-build" ] && skip_build="yes"
       preflight
       e2e_require_stack
-      [ "$skip_build" = "yes" ] || image_build_local      # §3 Option B — current working tree
+      [ "$skip_build" = "yes" ] || { image_build_local; portal_next_build_local; }  # §3 Option B — current working tree
       e2e_ensure_db
       e2e_migrate
       e2e_deploy
@@ -749,6 +819,7 @@ cmd_e2e() {
       e2e_forward_stop
       step "Deleting e2e portal/service/ingress/job"
       kubectl -n "$NAMESPACE" delete deployment,service,ingress "$E2E_APP" --ignore-not-found
+      kubectl -n "$NAMESPACE" delete deployment,service "$E2E_NEXT_APP" --ignore-not-found
       kubectl -n "$NAMESPACE" delete job "$E2E_MIG_JOB" --ignore-not-found
       if [ "$keep_db" = "no" ]; then
         step "Dropping database '$E2E_DB'"
@@ -945,6 +1016,17 @@ cmd_update() {
   kubectl rollout restart deploy/memex-portal-deployment -n "$NAMESPACE"
   apply_logging
   kubectl rollout status deploy/memex-portal-deployment -n "$NAMESPACE" --timeout=300s
+
+  # portal-next has the SAME unchanged-tag problem (:local + IfNotPresent): a rebuilt image never
+  # reaches the running pod without a restart. Without this, /next silently serves the previous
+  # build forever — the exact "full portal is not deployed" trap. Only when the deployment exists
+  # (the feature flag was on).
+  if [ "$image_source" = "build" ] \
+      && kubectl get deploy/portal-next-deployment -n "$NAMESPACE" >/dev/null 2>&1; then
+    step "Forcing a fresh portal-next pod (:local tag unchanged → rollout restart picks up the rebuilt image)"
+    kubectl rollout restart deploy/portal-next-deployment -n "$NAMESPACE"
+    kubectl rollout status deploy/portal-next-deployment -n "$NAMESPACE" --timeout=180s
+  fi
   info "A rollout invalidates the old port-forward binding — refreshing it (§8/§14)"
   install_launchd
   ok "update complete"

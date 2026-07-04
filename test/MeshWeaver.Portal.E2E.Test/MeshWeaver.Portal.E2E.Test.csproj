@@ -10,4 +10,11 @@
     <PackageReference Include="Microsoft.Playwright" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- The documentation source pages, copied beside the tests so the doc-example SWEEP
+         (DocExampleCatalog) can ENUMERATE every page carrying executable examples without
+         referencing (and thus building) the framework projects — this project stays Playwright-only. -->
+    <None Include="..\..\src\MeshWeaver.Documentation\Data\**\*.md" LinkBase="DocData" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

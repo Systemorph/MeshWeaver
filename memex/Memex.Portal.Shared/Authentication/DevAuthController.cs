@@ -167,13 +167,18 @@ public class DevAuthController : ControllerBase
     /// </summary>
     private async Task<MeshNode> ProvisionDevUser(string personId)
     {
+        // 🚨 LOWERCASE the node id — the SAME mapping BootstrapController applies. DevLogin used to
+        // provision the node id verbatim ('Roland') while bootstrap lowercased ('roland'): two
+        // id-derivations for the same person, and the circuit's email-local-part heuristic
+        // (CircuitAccessHandler.UsernameFromEmail) is aligned with the lowercase convention.
+        var username = personId.Trim().ToLowerInvariant();
         var request = new UserOnboardingRequest(
-            Username: personId,
-            Email: $"{personId.ToLowerInvariant()}@dev.local",
+            Username: username,
+            Email: $"{username}@dev.local",
             FullName: personId,
             Role: Role.Admin.Id);
         var userNode = await _onboarding.CreateUser(request).FirstAsync();
-        await _onboarding.GrantSelfAdmin(personId).FirstAsync();
+        await _onboarding.GrantSelfAdmin(username).FirstAsync();
         return userNode;
     }
 
