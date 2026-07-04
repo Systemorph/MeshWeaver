@@ -21,6 +21,8 @@ import { Button, FluentProvider, Text } from "@fluentui/react-components";
 import { Dismiss24Regular, Navigation24Regular } from "@fluentui/react-icons";
 import { ThemeToggle } from "@meshweaver/react";
 import { HeaderMenus } from "./HeaderMenus";
+import { MeshNavigationProvider } from "./MeshNavigation";
+import { MeshWeaverLogo } from "./MeshWeaverLogo";
 import { MobileMenu } from "./MobileMenu";
 import { NotificationCenter } from "./NotificationCenter";
 import { SearchBar } from "./SearchBar";
@@ -41,60 +43,93 @@ export function PortalShell({ children }: { children: ReactNode }) {
 
   return (
     <FluentProvider theme={theme} style={{ height: "100vh" }}>
-      <SidePanelProvider>
-        <div style={{ display: "grid", gridTemplateRows: "52px 1fr", height: "100vh" }}>
-          <header
-            data-mw-header
+      <MeshNavigationProvider>
+        <SidePanelProvider>
+          <div
             style={{
-              position: "relative",
-              display: "flex",
-              alignItems: "center",
-              gap: 8,
-              padding: "0 12px",
-              borderBottom: "1px solid var(--colorNeutralStroke2)",
-              minWidth: 0,
+              display: "grid",
+              gridTemplateRows: "52px 1fr",
+              height: "100vh",
             }}
           >
-            <Link href="/" style={{ textDecoration: "none", color: "inherit", flexShrink: 0 }} aria-label="MeshWeaver">
-              <Text weight="bold" size={400} style={{ whiteSpace: "nowrap" }}>
-                ⬡ MESHWEAVER
-              </Text>
-            </Link>
+            <header
+              data-mw-header
+              style={{
+                position: "relative",
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                padding: "0 12px",
+                borderBottom: "1px solid var(--colorNeutralStroke2)",
+                minWidth: 0,
+              }}
+            >
+              <Link
+                href="/"
+                data-mw-logo
+                aria-label="MeshWeaver"
+                style={{
+                  textDecoration: "none",
+                  color: "inherit",
+                  flexShrink: 0,
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 8,
+                }}
+              >
+                <MeshWeaverLogo size={28} />
+                <Text weight="bold" size={400} style={{ whiteSpace: "nowrap" }}>
+                  MESHWEAVER
+                </Text>
+              </Link>
 
-            {isMobile ? (
-              <>
-                <div style={{ flex: 1 }} />
-                <UserProfileMenu />
-                <Button
-                  appearance="transparent"
-                  className="navigation-button"
-                  title="Menu"
-                  aria-label="Menu"
-                  icon={navMenuOpen ? <Dismiss24Regular /> : <Navigation24Regular />}
-                  onClick={() => setNavMenuOpen((open) => !open)}
-                />
-                {navMenuOpen && <MobileMenu onClose={() => setNavMenuOpen(false)} />}
-              </>
-            ) : (
-              <>
-                {/* The search bar takes ALL remaining header space. */}
-                <SearchBar />
-                <HeaderMenus />
-                <NotificationCenter />
-                <SidePanelToggle />
-                {/* Theme toggle reads localStorage — render only after mount (SSR-consistent). */}
-                {mounted ? <ThemeToggle /> : null}
-                <UserProfileMenu />
-              </>
-            )}
-          </header>
+              {isMobile ? (
+                <>
+                  <div style={{ flex: 1 }} />
+                  <UserProfileMenu />
+                  <Button
+                    appearance="transparent"
+                    className="navigation-button"
+                    title="Menu"
+                    aria-label="Menu"
+                    icon={
+                      navMenuOpen ? (
+                        <Dismiss24Regular />
+                      ) : (
+                        <Navigation24Regular />
+                      )
+                    }
+                    onClick={() => setNavMenuOpen((open) => !open)}
+                  />
+                  {navMenuOpen && (
+                    <MobileMenu onClose={() => setNavMenuOpen(false)} />
+                  )}
+                </>
+              ) : (
+                <>
+                  {/* The search bar takes ALL remaining header space. */}
+                  <SearchBar />
+                  <HeaderMenus />
+                  <NotificationCenter />
+                  <SidePanelToggle />
+                  {/* Theme toggle reads localStorage — render only after mount (SSR-consistent). */}
+                  {mounted ? <ThemeToggle /> : null}
+                  <UserProfileMenu />
+                </>
+              )}
+            </header>
 
-          <div style={{ display: "flex", minHeight: 0 }}>
-            <main style={{ flex: 1, overflow: "auto", padding: 24, minWidth: 0 }}>{children}</main>
-            {!isMobile && <SidePanelPane />}
+            <div style={{ display: "flex", minHeight: 0 }}>
+              <main
+                style={{ flex: 1, overflow: "auto", padding: 24, minWidth: 0 }}
+              >
+                {children}
+              </main>
+              {!isMobile && <SidePanelPane />}
+            </div>
           </div>
-        </div>
-      </SidePanelProvider>
+        </SidePanelProvider>
+      </MeshNavigationProvider>
     </FluentProvider>
   );
 }

@@ -15,7 +15,7 @@ const BLAZOR_LEAF_CONTROLS = [
   "CollaborativeMarkdown", "Combobox", "DataGrid", "Date", "DateTime", "Dialog", "DiffEditor",
   "DocumentSource", "Exception", "ExportDocument", "FileBrowser", "Highlight", "Html", "Icon",
   "ItemTemplate", "Label", "LayoutArea", "LayoutAreaDefinition", "Listbox", "Markdown", "MarkdownEditor",
-  "MenuItem", "MeshNodeCollection", "MeshNodePicker", "MeshSearch", "NamedArea", "NavLink", "NodeExport",
+  "MenuItem", "MeshNodeCard", "MeshNodeCollection", "MeshNodePicker", "MeshSearch", "NamedArea", "NavLink", "NodeExport",
   "NodeImport", "NumberField", "PivotGrid", "Progress", "RadioGroup", "Redirect", "SearchBox", "Select",
   "Slider", "Spacer", "Switch", "TextArea", "ThreadChat", "ThreadMessageBubble", "UserProfile",
 ];

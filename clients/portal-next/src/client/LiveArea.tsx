@@ -17,7 +17,7 @@
 
 import { useEffect, useMemo, useSyncExternalStore } from "react";
 import { MessageBar, MessageBarBody } from "@fluentui/react-components";
-import { EmbeddedAreaProvider, GrpcAreaSource, MeshAreaView, StaticAreaSource } from "@meshweaver/react";
+import { EmbeddedAreaProvider, MeshAreaView, StaticAreaSource, createGrpcEmbeddedFactory } from "@meshweaver/react";
 import type { AreaSource, AreaTree } from "@meshweaver/react";
 import { rootAreaOf, targetKey, type AreaTarget } from "./live";
 import { useLiveConnection, usePublishNavigation } from "./LiveConnection";
@@ -78,6 +78,11 @@ export function LiveArea({ path, target, initialTree, initialRootArea = "", unau
   const offline = live.state.kind === "offline";
   const connection = live.state.kind === "live" ? live.state.mesh.connection : null;
 
+  // 🚨 STABLE per connection. An inline factory recreated each render churned every nested `@@`
+  // embed (AddressAreaEmbed re-subscribes when `factory` identity changes) → doc-page regions
+  // rendered non-deterministically across refreshes. Memoized + caching, embeds subscribe once.
+  const embedFactory = useMemo(() => (connection ? createGrpcEmbeddedFactory(connection) : null), [connection]);
+
   // The live source roots at the explicit area name when the URL addressed one; the SSR seed
   // roots wherever the server said its tree roots (the rendered frame's area, or "" for the
   // synthesized preview).
@@ -125,20 +130,8 @@ export function LiveArea({ path, target, initialTree, initialRootArea = "", unau
           </MessageBarBody>
         </MessageBar>
       )}
-      {view && connection ? (
-        <EmbeddedAreaProvider
-          factory={(address, ref) => {
-            const src = new GrpcAreaSource(connection, address, {
-              area: ref.area ?? "",
-              id: ref.id as string | undefined,
-              layout: ref.layout,
-            });
-            void src.start();
-            return { source: src, rootArea: ref.area ?? "" };
-          }}
-        >
-          {view}
-        </EmbeddedAreaProvider>
+      {view && embedFactory ? (
+        <EmbeddedAreaProvider factory={embedFactory}>{view}</EmbeddedAreaProvider>
       ) : (
         view ?? (!unauthenticated ? (
           <div data-mw-connecting style={{ padding: 48, textAlign: "center", opacity: 0.7 }}>

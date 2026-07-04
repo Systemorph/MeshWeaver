@@ -8,6 +8,7 @@ import { Text } from "@fluentui/react-components";
 import type { UiControl } from "../area/types.js";
 import { RenderChildren } from "../render/ControlRenderer.js";
 import { str } from "./common.js";
+import { CollaborativeMarkdownView } from "./display.js";
 import { CodeEditorView, DiffEditorView, MarkdownEditorView } from "./monaco.js";
 
 function EditFormView({ control }: { control: UiControl }): ReactNode {
@@ -28,7 +29,9 @@ export const editorControls = {
   CodeEditor: CodeEditorView,
   Editor: CodeEditorView,
   MarkdownEditor: MarkdownEditorView,
-  CollaborativeMarkdown: MarkdownEditorView,
+  // The read-only rendered overview of markdown nodes — a DISPLAY view (display.tsx), never the
+  // editor: mapping it to MarkdownEditorView was the "markdown pages open in edit mode" parity bug.
+  CollaborativeMarkdown: CollaborativeMarkdownView,
   DiffEditor: DiffEditorView,
   EditForm: EditFormView,
 };

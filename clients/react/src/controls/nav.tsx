@@ -2,19 +2,23 @@ import type { ReactNode } from "react";
 import { Link } from "@fluentui/react-components";
 import type { UiControl } from "../area/types.js";
 import { useResolve } from "../area/context.js";
+import { useMeshLink } from "../area/navigation.js";
 import { useClick, useText } from "./common.js";
 import { resolveIconByName } from "./icon.js";
 
 function NavLink({ control }: { control: UiControl }): ReactNode {
   const title = useText(control.title);
-  const url = useText(control.url);
-  const onClick = useClick(control);
+  const link = useMeshLink(useText(control.url) || undefined);
+  const emitClick = useClick(control);
   const active = !!useResolve(control.isActive);
   const Icon = resolveIconByName(useText(control.icon));
   return (
     <Link
-      href={url || undefined}
-      onClick={onClick}
+      href={link.href}
+      onClick={(e) => {
+        emitClick?.();
+        link.onClick?.(e);
+      }}
       style={{
         display: "flex",
         alignItems: "center",

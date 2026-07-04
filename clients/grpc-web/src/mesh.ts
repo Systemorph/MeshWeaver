@@ -22,6 +22,19 @@ export interface MeshOptions extends ConnectOptions {
   meshAddress?: string; // WIRE: confirm the portal's mesh-service address
 }
 
+/**
+ * The ROUTABLE owner address for a node namespace — the address CreateNodeRequest targets
+ * (threads.ts precedent: satellites are created via the OWNER's hub). A satellite namespace
+ * ("roland/_Activity", "acme/Story/x/_Thread") strips its trailing `_Xxx` segment down to the
+ * owning node's path; a plain namespace is already the owner. Empty stays empty (caller falls
+ * back to the configured mesh address).
+ */
+export function ownerOfNamespace(namespace: string): string {
+  const segments = namespace.split("/").filter((s) => s.length > 0);
+  while (segments.length > 0 && segments[segments.length - 1].startsWith("_")) segments.pop();
+  return segments.join("/");
+}
+
 export class Mesh {
   private readonly conn: MeshWebConnection;
   private readonly meshAddress: string;
@@ -109,25 +122,43 @@ export class Mesh {
     });
   }
 
-  /** Create a node (node-lifecycle on the mesh hub — routes, doesn't mutate). */
+  /**
+   * Create a node — targets the node's OWNER partition address, exactly like startThread's
+   * `hub.Post(CreateNodeRequest, o => o.WithTarget(new Address(ns)))`. The former 'mesh/main'
+   * target only routes on the in-memory/monolith transports: the DISTRIBUTED portal's root hub
+   * is `mesh/{guid}`, so 'mesh/main' NotFounds there (the "kernel activity never became
+   * routable" bug). The response is CHECKED — a failed create throws instead of resolving
+   * silently and letting the caller wait on a node that never existed.
+   */
   async create(node: Record<string, unknown>): Promise<Record<string, unknown>> {
-    const resp = await this.conn.observe(this.meshAddress, "CreateNodeRequest", { node }); // WIRE: create request shape
-    return resp.message;
+    const target = ownerOfNamespace(String(node["namespace"] ?? "")) || this.meshAddress;
+    const resp = await this.conn.observe(target, "CreateNodeRequest", { node });
+    const m = resp.message;
+    const success = (m["success"] ?? m["Success"]) as boolean | undefined;
+    if (success === false || m["$type"] === "DeliveryFailure")
+      throw new Error(String(m["message"] ?? m["Message"] ?? `create failed for ${node["path"] ?? node["id"]}`));
+    return m;
   }
 
-  /** Delete a node by path. */
+  // The node-lifecycle handlers (Delete/Move/Copy) are registered on EVERY per-node hub
+  // (AddNodeOperationHandlers decorates any hub), so these target the NODE'S OWN path — a
+  // routable address whose hub is alive because the node exists — mirroring MeshOperations
+  // (Move posts `WithTarget(new Address(resolvedSource))`). NEVER 'mesh/main', which is
+  // unroutable on the distributed portal and NotFound-storms the router.
+
+  /** Delete a node by path — routed to the node's own hub. */
   async delete(path: string): Promise<void> {
-    await this.conn.observe(this.meshAddress, "DeleteNodeRequest", { path }); // WIRE: delete request shape
+    await this.conn.observe(path, "DeleteNodeRequest", { path });
   }
 
-  /** Move a node (and its satellites) from one path to another. */
+  /** Move a node (and its satellites) — routed to the SOURCE node's hub (MeshOperations.Move parity). */
   async move(source: string, target: string): Promise<void> {
-    await this.conn.observe(this.meshAddress, "MoveNodeRequest", { source, target }); // WIRE: MoveNodeRequest fields
+    await this.conn.observe(source, "MoveNodeRequest", { source, target });
   }
 
-  /** Copy a node to a new path. */
+  /** Copy a node to a new path — routed to the SOURCE node's hub. */
   async copy(source: string, target: string): Promise<void> {
-    await this.conn.observe(this.meshAddress, "CopyNodeRequest", { source, target }); // WIRE: CopyNodeRequest fields
+    await this.conn.observe(source, "CopyNodeRequest", { source, target });
   }
 
   /**

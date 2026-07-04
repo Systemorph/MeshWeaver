@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { Mesh } from "./mesh";
+import { Mesh, ownerOfNamespace } from "./mesh";
 import { fakeMeshTransport } from "./testTransport";
 
 // Drives the ergonomic Mesh ops surface against the same in-memory Connect+Deliver fake the connection
@@ -37,11 +37,60 @@ describe("Mesh ops (gRPC-web, in-memory)", () => {
     mesh.close();
   });
 
-  it("delete / move / copy resolve (acked by the mesh hub)", async () => {
+  it("create targets the node's OWNER partition address (never 'mesh/main' — unroutable on the distributed portal)", async () => {
+    const deliveries: { messageType: string; target: string }[] = [];
+    const mesh = await Mesh.connect("memory://", {
+      transport: fakeMeshTransport({ onDeliver: (d) => deliveries.push({ messageType: d.messageType, target: d.target }) }),
+    });
+    // A satellite namespace strips its trailing _Xxx segment: the OWNER's hub creates satellites
+    // (the threads.ts precedent — this is how the kernel Activity under {user}/_Activity routes).
+    await mesh.create({
+      id: "markdown-k1",
+      namespace: "roland/_Activity",
+      path: "roland/_Activity/markdown-k1",
+      nodeType: "Activity",
+    });
+    const create = deliveries.find((d) => d.messageType === "CreateNodeRequest");
+    expect(create?.target).toBe("roland");
+    mesh.close();
+  });
+
+  it("create THROWS on a refused create instead of resolving silently", async () => {
+    const mesh = await Mesh.connect("memory://", { transport: fakeMeshTransport() });
+    await expect(
+      mesh.create({ id: "will-fail", namespace: "ACME", path: "ACME/will-fail", nodeType: "Story" }),
+    ).rejects.toThrow("creation refused");
+    mesh.close();
+  });
+
+  it("ownerOfNamespace strips trailing satellite segments only", () => {
+    expect(ownerOfNamespace("roland/_Activity")).toBe("roland");
+    expect(ownerOfNamespace("acme/Story/x/_Thread")).toBe("acme/Story/x");
+    expect(ownerOfNamespace("acme/Project")).toBe("acme/Project");
+    expect(ownerOfNamespace("")).toBe("");
+  });
+
+  it("delete / move / copy resolve (acked by the target node hub)", async () => {
     const mesh = await Mesh.connect("memory://", { transport: fakeMeshTransport() });
     await expect(mesh.delete("ACME/Old")).resolves.toBeUndefined();
     await expect(mesh.move("ACME/A", "ACME/B")).resolves.toBeUndefined();
     await expect(mesh.copy("ACME/A", "ACME/C")).resolves.toBeUndefined();
+    mesh.close();
+  });
+
+  it("delete/move/copy target the NODE's own hub (never the unroutable 'mesh/main')", async () => {
+    const deliveries: { messageType: string; target: string }[] = [];
+    const mesh = await Mesh.connect("memory://", {
+      transport: fakeMeshTransport({ onDeliver: (d) => deliveries.push({ messageType: d.messageType, target: d.target }) }),
+    });
+    await mesh.delete("ACME/Old");
+    await mesh.move("ACME/A", "ACME/B");
+    await mesh.copy("ACME/A", "ACME/C");
+    const targetOf = (type: string) => deliveries.find((d) => d.messageType === type)?.target;
+    expect(targetOf("DeleteNodeRequest")).toBe("ACME/Old"); // the node's own path
+    expect(targetOf("MoveNodeRequest")).toBe("ACME/A"); // the SOURCE (MeshOperations.Move parity)
+    expect(targetOf("CopyNodeRequest")).toBe("ACME/A"); // the SOURCE
+    expect(deliveries.some((d) => d.target === "mesh/main")).toBe(false);
     mesh.close();
   });
 });
