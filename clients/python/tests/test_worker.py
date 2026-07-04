@@ -1,5 +1,9 @@
 """The Python kernel worker: the pure execution core + the SubmitCodeRequest handler over a fake conn."""
+import asyncio
+import contextlib
 from typing import Any
+
+import pytest
 
 from meshweaver.envelope import Delivery
 from meshweaver.worker import CodeWorker, execute_python
@@ -118,3 +122,69 @@ async def test_handle_ignores_non_submit_requests():
     await CodeWorker(conn).handle(other)
     assert conn.posts == []
     assert conn.responses == []
+
+
+# ---- serve() reconnect resilience (the co-deployed gate mode) ---------------------------------------
+
+class _GateConn:
+    """A connected participant whose stream stays open until close() — drives serve()'s wait loop."""
+    address = "py/python-kernel"
+
+    def __init__(self):
+        self._closed = asyncio.Event()
+
+    def serve(self, handler):  # CodeWorker registers its inbound handler here
+        pass
+
+    async def wait_closed(self):
+        await self._closed.wait()
+
+    async def close(self):
+        self._closed.set()
+
+
+async def test_serve_reconnects_past_connect_failures():
+    # The gate starts before the portal binds the trusted endpoint: connect fails twice, then
+    # succeeds. reconnect=True retries instead of crashing (the crash-restart we saw in the pod).
+    import meshweaver.worker as w
+
+    attempts = {"n": 0}
+    conn = _GateConn()
+
+    async def fake_connect(url, token=None, address=None):
+        attempts["n"] += 1
+        if attempts["n"] < 3:
+            raise ConnectionError("portal not ready")
+        return conn
+
+    orig_connect, orig_sleep = w._connect, w._sleep_or_stop
+    w._connect = fake_connect
+    w._sleep_or_stop = lambda stop, seconds: asyncio.sleep(0)  # no real backoff in the test
+    try:
+        task = asyncio.ensure_future(w.serve("http://127.0.0.1:8082", reconnect=True, retry_seconds=0))
+        for _ in range(500):  # let it retry past the two failures and reach the serving state
+            if attempts["n"] >= 3:
+                break
+            await asyncio.sleep(0)
+        assert attempts["n"] >= 3  # it did NOT crash on the failures — it retried and connected
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+    finally:
+        w._connect, w._sleep_or_stop = orig_connect, orig_sleep
+
+
+async def test_serve_without_reconnect_raises_on_connect_failure():
+    # Default (script/test) behaviour is unchanged: a connect failure propagates, no retry loop.
+    import meshweaver.worker as w
+    orig = w._connect
+
+    async def boom(url, token=None, address=None):
+        raise ConnectionError("no portal")
+
+    w._connect = boom
+    try:
+        with pytest.raises(ConnectionError):
+            await w.serve("http://127.0.0.1:8082")  # reconnect defaults to False
+    finally:
+        w._connect = orig
