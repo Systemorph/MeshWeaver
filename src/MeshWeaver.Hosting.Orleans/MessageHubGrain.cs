@@ -69,6 +69,76 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
     private IDisposable? _activationSubscription;
 
     /// <summary>
+    /// Set at the START of <see cref="OnDeactivateAsync"/>. Grain-lifetime calls arriving
+    /// after this point (see <see cref="TryDeactivateOnIdle"/> / <see cref="TryDelayDeactivation"/>)
+    /// are graceful no-ops: reactive continuations — an activation-source emission racing
+    /// deactivation, a heartbeat, a round start, a hub disposal action — can legally fire
+    /// after the activation completed deactivation, and must never turn into a throw against
+    /// a dead activation.
+    /// </summary>
+    private volatile bool _deactivated;
+
+    /// <summary>
+    /// <see cref="Grain.DelayDeactivation"/> guarded for the mesh↔Orleans lifetime boundary.
+    /// Stragglers (sync-stream heartbeats via <c>GrainKeepAliveCallback</c>, round starts via
+    /// <c>GrainLongRunningOperationCallback</c>) run on hub/pool threads and can fire after the
+    /// activation completed deactivation; Orleans' <c>GrainRuntime.CheckRuntimeContext</c> then
+    /// THROWS <c>InvalidOperationException("Attempt to access an invalid activation…")</c>
+    /// instead of no-opping. That throw escapes RAW into whatever Rx chain / pooled task the
+    /// straggler rode (proven: the activation-source MeshQuery emission on a
+    /// <c>TaskPoolScheduler</c> work item), faults a Task nobody observes, and xUnit v3
+    /// escalates the <c>UnobservedTaskException</c> to a Catastrophic failure that poisons the
+    /// NEXT test class (CI run 28646145008 shard 2, 2026-07-03). A dead activation is a
+    /// graceful terminal here: "keep alive" is moot once the grain is gone — log the signal,
+    /// never throw. Repro: <c>OrleansGrainTeardownStragglerTest</c>.
+    /// </summary>
+    private void TryDelayDeactivation(TimeSpan delay)
+    {
+        if (_deactivated)
+            return;
+        try
+        {
+            DelayDeactivation(delay);
+        }
+        catch (InvalidOperationException ex)
+        {
+            // The only InvalidOperationException DelayDeactivation raises is Orleans'
+            // CheckRuntimeContext invalid-activation guard — the TOCTOU window where the
+            // activation went Invalid between the _deactivated check and the call.
+            logger.LogDebug(ex,
+                "Grain {GrainId}: DelayDeactivation after the activation died — keep-alive is moot, treating as no-op",
+                this.GetPrimaryKeyString());
+        }
+    }
+
+    /// <summary>
+    /// <see cref="Grain.DeactivateOnIdle"/> guarded for the mesh↔Orleans lifetime boundary —
+    /// same rationale as <see cref="TryDelayDeactivation"/>. Callers request deactivation from
+    /// reactive continuations (activation-source terminal handlers, the NACK-fallback branch,
+    /// hub disposal via <c>RegisterForDisposal</c>, the stuck-round watchdog via
+    /// <c>GrainDeactivateCallback</c>); when the activation is already dead the requested
+    /// outcome has ALREADY happened, so the correct semantics are log-and-no-op — never a
+    /// throw that escapes into an unobserved task (the 2026-07-03 teardown-race fatal:
+    /// <c>CompleteActivation</c>'s catch block called <c>DeactivateOnIdle()</c> on an Invalid
+    /// activation and the second throw escaped the catch into the path-resolver emission).
+    /// </summary>
+    private void TryDeactivateOnIdle()
+    {
+        if (_deactivated)
+            return;
+        try
+        {
+            DeactivateOnIdle();
+        }
+        catch (InvalidOperationException ex)
+        {
+            logger.LogDebug(ex,
+                "Grain {GrainId}: DeactivateOnIdle after the activation died — deactivation already achieved, treating as no-op",
+                this.GetPrimaryKeyString());
+        }
+    }
+
+    /// <summary>
     /// Non-blocking activation: resolve the MeshNode (from the mesh-node cache or
     /// static providers), let <see cref="IMeshNodeHubFactory"/> hydrate the assembly
     /// bytes via <see cref="IAssemblyStore"/> and produce the HubConfiguration
@@ -116,10 +186,10 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
                         // Request deactivation NOW rather than waiting out the last DelayDeactivation
                         // window + CollectionAgeLimit. On deactivation OnDeactivateAsync disposes the hub,
                         // RegisterForDisposal fires executionCts.Cancel(), and the hung AI call is torn down.
-                        DeactivateOnIdle();
+                        TryDeactivateOnIdle();
                     }
                     else
-                        DelayDeactivation(TimeSpan.FromMinutes(10));
+                        TryDelayDeactivation(TimeSpan.FromMinutes(10));
                 }
                 return Task.CompletedTask;
             },
@@ -216,7 +286,7 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
                     // Retry-on-next-access: without this the grain stays a parked
                     // corpse answering Failed until idle collection; deactivating
                     // lets the next caller re-run resolution from scratch.
-                    DeactivateOnIdle();
+                    TryDeactivateOnIdle();
                 },
                 () =>
                 {
@@ -225,7 +295,7 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
                         streamId, addressPath);
                     _hubReadyRaw.OnError(new InvalidOperationException(
                         $"No MeshNode resolvable for address '{addressPath}'. Either the node does not exist or no query provider claims its partition."));
-                    DeactivateOnIdle();
+                    TryDeactivateOnIdle();
                 });
 
         return Task.CompletedTask;
@@ -241,6 +311,20 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
         MeshNode node, IObservable<MeshNode> ownNodeStream)
     {
         if (_hub is not null) return;
+        // Teardown race: the activation source (path resolver / mesh-node cache) can emit
+        // AFTER deactivation began — Rx dispose of _activationSubscription cannot stop an
+        // in-flight OnNext (the 2026-07-03 CI fatal, run 28646145008 shard 2). Building a
+        // hosted hub now would leak it on a dead grain (OnDeactivateAsync already ran its
+        // hub disposal), and every grain-lifetime call below would throw against the
+        // Invalid activation. Drop the emission: DeliverMessage parkers were already
+        // failed via the ready-signal's OnCompleted, and the next access re-activates fresh.
+        if (_deactivated)
+        {
+            logger.LogDebug(
+                "[ACTIVATE] Grain {StreamId}: activation source emitted after deactivation — dropping (next access re-activates fresh)",
+                streamId);
+            return;
+        }
         try
         {
             if (node.HubConfiguration is null)
@@ -262,14 +346,14 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
                     HubConfiguration = c => c.Set(
                         new UnhandledMessageNack(reason, ErrorType.NotFound, node.NodeType))
                 };
-                DeactivateOnIdle();
+                TryDeactivateOnIdle();
             }
             var hub = meshHub.GetHostedHub(address, config =>
             {
                 config = config.WithOwnNodeStream(ownNodeStream);
                 return node.HubConfiguration!(config)
                     .WithTaskScheduler(grainScheduler)
-                    .Set(new GrainKeepAliveCallback(() => DelayDeactivation(TimeSpan.FromMinutes(10))))
+                    .Set(new GrainKeepAliveCallback(() => TryDelayDeactivation(TimeSpan.FromMinutes(10))))
                     .Set(new GrainLongRunningOperationCallback(BeginLongRunningOperation))
                     // #147 escape hatch: the hub's action block runs on THIS grain's
                     // ActivationTaskScheduler (WithTaskScheduler above), so when a stuck round
@@ -287,11 +371,11 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
                             "the hub's message queue (#147). Deactivating so hub disposal cancels " +
                             "the in-flight operation.",
                             this.GetPrimaryKeyString());
-                        DeactivateOnIdle();
+                        TryDeactivateOnIdle();
                     }));
             })!;
 
-            hub.RegisterForDisposal(_ => DeactivateOnIdle());
+            hub.RegisterForDisposal(_ => TryDeactivateOnIdle());
             _hub = hub;
             logger.LogDebug("[ACTIVATE] Grain {StreamId} ready", streamId);
             _hubReadyRaw.OnNext(hub);
@@ -302,7 +386,12 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
             _hubReadyRaw.OnError(ex);
             // Same retry-on-next-access semantics as the activation-fault path:
             // a grain whose hub construction threw must not linger as a corpse.
-            DeactivateOnIdle();
+            // 🚨 MUST be the guarded variant: this catch runs inside the activation
+            // source's Rx chain (a TaskPool work item). The 2026-07-03 CI fatal was the
+            // raw DeactivateOnIdle() here throwing invalid-activation as the SECOND
+            // exception, escaping this catch into the chain, and surfacing as an
+            // unobserved-task Catastrophic failure that poisoned the next test class.
+            TryDeactivateOnIdle();
         }
     }
 
@@ -372,8 +461,9 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
         // bound it (see MaxLongRunningOperationDuration / #147).
         if (Interlocked.Increment(ref _activeOperations) == 1)
             Volatile.Write(ref _longRunningStartedTicks, DateTime.UtcNow.Ticks);
-        // DelayDeactivation is thread-safe in Orleans
-        DelayDeactivation(TimeSpan.FromMinutes(10));
+        // DelayDeactivation is thread-safe in Orleans; guarded because a round can start
+        // on a pool thread after the activation already died (teardown race).
+        TryDelayDeactivation(TimeSpan.FromMinutes(10));
         logger.LogInformation("Grain {GrainId}: long-running operation started (active={Count})",
             this.GetPrimaryKeyString(), Volatile.Read(ref _activeOperations));
 
@@ -436,15 +526,29 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
         var grainId = this.GetPrimaryKeyString();
         logger.LogInformation("Grain {GrainId} deactivating: reason={Reason}", grainId, reason.ReasonCode);
 
+        // FIRST: flip the lifetime flag so every straggler (activation-source emission,
+        // heartbeat KeepAlive, round BeginOperation, disposal action) that fires from here
+        // on takes the graceful no-op path in TryDeactivateOnIdle / TryDelayDeactivation
+        // instead of throwing against a soon-to-be-Invalid activation.
+        _deactivated = true;
+
         // Tear down activation subscription so any in-flight emission can't try to
-        // instantiate the hub after deactivation began.
+        // instantiate the hub after deactivation began. (Rx dispose cannot stop an
+        // ALREADY-in-flight OnNext — CompleteActivation's _deactivated guard covers that.)
         _activationSubscription?.Dispose();
         _activationSubscription = null;
 
         // Complete the ready-signal so any pending DeliverMessage subscribers wake up
         // with OnCompleted and fail-fast with DeliveryFailure.
+        //
+        // 🚨 Deliberately NOT disposed. An in-flight activation emission racing this
+        // deactivation may still call OnNext/OnError on the subject; after OnCompleted
+        // those are safe no-ops by the Rx subject contract, but after Dispose they throw
+        // ObjectDisposedException — straight into the activation source's TaskPool work
+        // item, i.e. the same unobserved-fatal channel as the invalid-activation throw
+        // (2026-07-03 teardown race). The subject holds one buffered hub reference at
+        // most and dies with the grain — GC covers it.
         try { _hubReadyRaw.OnCompleted(); } catch { /* already terminated */ }
-        _hubReadyRaw.Dispose();
 
         var hub = _hub;
         if (hub != null)

@@ -174,6 +174,58 @@ public class ApiTokenServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
     }
 
     [Fact]
+    public async Task ValidateToken_RapidBackToBackValidations_StampOnlyOnce()
+    {
+        var service = GetService();
+        var result = await service.CreateToken(
+            "user1", "Test User", "test@example.com", "Burst Stamp").Should().Emit();
+
+        // First successful validation (poll until the token becomes visible to
+        // the read side) dispatches the ONE legitimate LastUsedAt stamp — then
+        // immediately BURST more validations back-to-back, deliberately never
+        // waiting for the stamp write to land or any read side to catch up.
+        // Every read-side surface (query snapshot, stream mirror) may still
+        // carry the pre-stamp LastUsedAt here, so a freshness gate keyed on
+        // ANY read-side state re-dispatches one stamp per call — the CI
+        // failure shape (runs 28682878901 / 28684288201: 5 then 3 duplicate
+        // stamps on one token node). The dispatch-time single-flight memo
+        // must let exactly one write through.
+        await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+            .SelectMany(_ => service.ValidateToken(result.RawToken).Take(1))
+            .Should().Match(v => v is not null);
+        for (var i = 0; i < 5; i++)
+            (await service.ValidateToken(result.RawToken).Should().Emit()).Should().NotBeNull();
+
+        // The deterministic single-flight contract: exactly ONE stamp write was
+        // DISPATCHED across the whole burst, no matter how far any read side
+        // lagged. (Node-version observation alone can't distinguish one write
+        // from several coalesced by the change feed, hence the dispatch counter.)
+        service.StampDispatchCount.Should().Be(1,
+            "rapid back-to-back validations must dispatch exactly one LastUsedAt stamp");
+
+        // The stamp lands once: capture the written state, then sample across a
+        // window (sanctioned fixed wait — negative check with no positive signal)
+        // asserting NO further write ever lands: MeshNode.Version only moves when
+        // THIS node is written, and every duplicate stamp would carry a DISTINCT
+        // LastUsedAt — both must stay frozen.
+        var stamped = await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+            .SelectMany(_ => ObserveNode(result.Node.Path!).Take(1))
+            .Should().Match(n => (n?.Content as ApiToken)?.LastUsedAt != null);
+        var stampedVersion = stamped!.Version;
+        var stampedLastUsedAt = ((ApiToken)stamped.Content!).LastUsedAt;
+
+        for (var sample = 0; sample < 3; sample++)
+        {
+            await Task.Delay(300, TestContext.Current.CancellationToken);
+            var after = await ObserveNode(result.Node.Path!).Take(1).Should().Match(n => n is not null);
+            after!.Version.Should().Be(stampedVersion,
+                "no lagged read may re-dispatch a stamp while one is already in flight");
+            ((ApiToken)after.Content!).LastUsedAt.Should().Be(stampedLastUsedAt,
+                "a duplicate stamp would overwrite LastUsedAt with a later timestamp");
+        }
+    }
+
+    [Fact]
     public async Task ValidateToken_RevokedToken_ReturnsNull()
     {
         var service = GetService();

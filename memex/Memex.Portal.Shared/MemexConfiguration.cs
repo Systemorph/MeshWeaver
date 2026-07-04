@@ -27,11 +27,13 @@ using MeshWeaver.ContentCollections;
 using MeshWeaver.ContentCollections.Indexing;
 using MeshWeaver.ContentCollections.Indexing.Graph;
 using MeshWeaver.ContentCollections.Indexing.PostgreSql;
+using MeshWeaver.Courses;
 using MeshWeaver.Documentation;
 using MeshWeaver.GoogleMaps;
 using MeshWeaver.Data;
 using MeshWeaver.GitSync;
 using MeshWeaver.Graph;
+using MeshWeaver.InstanceSync;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Markdown.Export.Configuration;
 using MeshWeaver.Hosting.Activity;
@@ -257,6 +259,11 @@ public static class MemexConfiguration
         // absent a client id the Connect flow is gracefully disabled.
         services.AddGitHubSyncServices();
         services.Configure<GitHubOAuthOptions>(builder.Configuration.GetSection("GitHub:OAuth"));
+
+        // Instance sync — bidirectional Space replication to another MeshWeaver instance
+        // (per-space registry at {space}/_Sync; offline changes accumulate in the durable
+        // manifest and drain when the remote is reachable again).
+        services.AddInstanceSyncServices();
 
         // Per-user CLI Connect (Settings → Models, CLI providers). The
         // ConnectSessionManager is a mesh-scoped singleton holding the live
@@ -509,12 +516,18 @@ public static class MemexConfiguration
                 // Register GitHub-sync content types (GitHubCredential / GitHubSyncConfig)
                 // on the mesh + per-node hubs so their config nodes (de)serialize.
                 .AddGitHubSyncTypes()
+                // Register the instance-sync content type ({space}/_Sync/{sourceId} config
+                // nodes) on the mesh + per-node hubs so they (de)serialize.
+                .AddInstanceSyncTypes()
                 // Seed root-scope Admin AccessAssignments for users listed under
                 // `Auth:GlobalAdmins` so configured admins bypass per-partition
                 // RLS for cross-partition operations (list Spaces, create
                 // a new Space, etc.). Empty / missing section = no-op.
                 .AddMeshNodes(Authentication.GlobalAdminSeed.Build(configuration))
                 .AddSpaceType()
+                // Interactive courses: Course/Module/Exercise/ExerciseAttempt
+                // node types + the stream-update validation control plane.
+                .AddCourses()
                 .AddPortalType()
                 .AddAI(serveFromPartition);
 
@@ -688,6 +701,9 @@ public static class MemexConfiguration
                         .AddTokenUsageSettingsTab()
                         // GitHub Sync tab — shows only on Space nodes (self-filtered).
                         .AddGitHubSyncSettingsTab()
+                        // Instance Sync tab — replicate the Space to another MeshWeaver
+                        // instance (self-filtered to Spaces, like the GitHub Sync tab).
+                        .AddInstanceSyncSettingsTab()
                         // Code workspace tab — on-disk working-tree editor (checkout/edit/commit/push).
                         .AddWorkingTreeTab()
                         // Git history tab — read-only git browser (commit log + changes + diffs) over the same working tree.
@@ -935,16 +951,22 @@ public static class MemexConfiguration
     }
 
     /// <summary>
-    /// Adds all MeshWeaver view assemblies (Blazor, Graph, Radzen, GoogleMaps) to the Razor components endpoint.
+    /// Adds all MeshWeaver view assemblies (Blazor, Graph, Radzen, GoogleMaps) to the Razor components endpoint,
+    /// and excludes static-asset/infrastructure prefixes (_framework, _content, favicon.ico, auth, mcp, ...)
+    /// from ApplicationPage's root catch-all endpoint so asset misses fall through to 404 instead of the
+    /// HTML shell. The page templates themselves carry NO inline constraint — the Blazor Router would
+    /// interpret ":nonfile" as the built-in dot-rejecting constraint and break every mesh path ending
+    /// in a file extension (Document nodes).
     /// </summary>
     public static RazorComponentsEndpointConventionBuilder AddMeshViews(
         this RazorComponentsEndpointConventionBuilder builder)
         => builder.AddAdditionalAssemblies(
-            typeof(ApplicationPage).Assembly,              // MeshWeaver.Blazor (includes ApplicationPage with catch-all route)
-            typeof(MeshNodeEditorView).Assembly,           // MeshWeaver.Blazor.Graph
-            typeof(RadzenChartView).Assembly,              // MeshWeaver.Blazor.Radzen
-            typeof(GoogleMapView).Assembly                 // MeshWeaver.Blazor.GoogleMaps
-        );
+                typeof(ApplicationPage).Assembly,              // MeshWeaver.Blazor (includes ApplicationPage with catch-all route)
+                typeof(MeshNodeEditorView).Assembly,           // MeshWeaver.Blazor.Graph
+                typeof(RadzenChartView).Assembly,              // MeshWeaver.Blazor.Radzen
+                typeof(GoogleMapView).Assembly                 // MeshWeaver.Blazor.GoogleMaps
+            )
+            .ExcludeStaticAssetPaths();
 }
 
 public class StylesConfiguration

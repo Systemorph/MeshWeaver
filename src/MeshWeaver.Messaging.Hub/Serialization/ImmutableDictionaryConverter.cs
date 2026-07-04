@@ -11,8 +11,16 @@ namespace MeshWeaver.Messaging.Serialization;
 /// arbitrary object values, mapping a JSON object to/from the immutable dictionary and
 /// deserializing each value loosely as <see cref="object"/>.
 /// </summary>
-public class ImmutableDictionaryOfStringObjectConverter : JsonConverter<ImmutableDictionary<string, object?>>
+public class ImmutableDictionaryOfStringObjectConverter(SerializationDepthGuard? depthGuard = null)
+    : JsonConverter<ImmutableDictionary<string, object?>>
 {
+    // Depth accounting across the nested SerializeToNode sessions this converter spawns per value
+    // (fresh writer per session → depth restarts at 0). Without it a cyclic graph threading through
+    // a dictionary value recurses per edge until the native stack dies (SIGABRT) — see
+    // SerializationDepthGuard. Shared with the other session-spawning standard converters of the
+    // same options; instance state, dies with the hub.
+    private readonly SerializationDepthGuard depthGuard = depthGuard ?? new();
+
     /// <summary>
     /// Reads a JSON object into an immutable string-to-object dictionary; an empty/null
     /// payload yields an empty dictionary.
@@ -36,7 +44,12 @@ public class ImmutableDictionaryOfStringObjectConverter : JsonConverter<Immutabl
     /// <param name="value">The dictionary to serialize.</param>
     /// <param name="options">The active serializer options used to serialize values.</param>
     public override void Write(Utf8JsonWriter writer, ImmutableDictionary<string, object?> value, JsonSerializerOptions options)
-        => Serialize(value, options).WriteTo(writer);
+    {
+        JsonObject node;
+        using (depthGuard.Enter(writer, options, value.GetType()))
+            node = Serialize(value, options);
+        node.WriteTo(writer);
+    }
 
     private static JsonObject Serialize(ImmutableDictionary<string, object?> value, JsonSerializerOptions options)
     {

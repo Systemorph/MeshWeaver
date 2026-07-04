@@ -34,8 +34,19 @@ public class SatelliteAccessRule(string nodeType, IMessageHub hub) : INodeTypeAc
     /// <returns>An observable that emits whether access is permitted.</returns>
     public IObservable<bool> HasAccess(NodeValidationContext context, string? userId)
     {
+        // A missing identity is ANONYMOUS — not an automatic deny. The standard
+        // path-based check (RlsNodeValidator.CheckPermission) evaluates a null
+        // user as WellKnownUsers.Anonymous, so a partition whose policy grants
+        // PublicRead is readable by logged-out viewers. Hard-denying here made
+        // every satellite STRICTER than its MainNode: a public-read viewer could
+        // read a Code node but never its `_Activity` satellite, so the embedded
+        // run-output pane hung on its spinner forever (2026-07-03). Delegating
+        // with the Anonymous identity keeps closed-by-default semantics: only a
+        // PublicRead policy (or an explicit Anonymous role grant) yields Read,
+        // and write-class operations still require Update on the MainNode,
+        // which Anonymous never holds unless explicitly granted.
         if (string.IsNullOrEmpty(userId))
-            return Observable.Return(false);
+            userId = WellKnownUsers.Anonymous;
 
         var mainNodePath = context.Node.MainNode;
         // Degenerate case: no MainNode (or self-referencing). The rule has no

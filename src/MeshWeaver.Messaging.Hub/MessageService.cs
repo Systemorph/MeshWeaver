@@ -977,6 +977,12 @@ public class MessageService : IMessageService
         // posts a DeliveryFailure back to the sender with a clear hint.
         if (deserializedMessage is JsonElement)
         {
+            // Participant-proxy hubs forward every delivery verbatim (their catch-all route
+            // re-serializes it onto the remote wire), so a participant's own protocol types —
+            // registered nowhere on the server — must stay RawJson and pass through.
+            if (hub.Configuration.Get<RawJsonPassThrough>() is not null)
+                return delivery;
+
             var jsonType = ExtractJsonType(rawJson.Content);
             var failureMessage = $"Could not deserialize message in hub {Address} — " +
                 $"type '{jsonType}' is not registered in this hub's TypeRegistry.";

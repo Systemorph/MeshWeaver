@@ -825,15 +825,40 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     /// Default cancellation = <see cref="TestContext.Current"/>'s
     /// <see cref="ITestContext.CancellationToken"/> — never pass <c>default</c>.
     /// </para>
+    /// <para>
+    /// Teardown-safety: when the hub is disposed before the response arrives,
+    /// <c>MessageHub.CancelCallbacks</c> pushes <see cref="ObjectDisposedException"/>
+    /// ("Hub … was disposed before the response arrived …") into the pending Observe
+    /// subject. If a test ABANDONED this task (an earlier assertion threw before the
+    /// await), a <em>faulted</em> task detonates at GC as an
+    /// <c>UnobservedTaskException</c> → xUnit v3 "Catastrophic failure" poisoning the
+    /// next test class (#228's capture). Rethrowing the disposal as an
+    /// <see cref="OperationCanceledException"/> makes the async state machine's task
+    /// CANCELED instead of faulted — canceled tasks never raise
+    /// UnobservedTaskException, and an awaiting test still fails loudly with the
+    /// original disposal exception attached as the cause. Real response errors
+    /// (DeliveryFailure, Timeout) keep faulting the task unchanged.
+    /// </para>
     /// </summary>
-    protected Task<IMessageDelivery<TResponse>> AwaitResponseAsync<TResponse>(
+    protected async Task<IMessageDelivery<TResponse>> AwaitResponseAsync<TResponse>(
         IRequest<TResponse> request,
         Func<PostOptions, PostOptions>? options = null,
         IMessageHub? hub = null,
         CancellationToken? ct = null)
-        => (hub ?? Mesh).Observe(request, options)
-            .FirstAsync()
-            .ToTask(ct ?? TestContext.Current.CancellationToken);
+    {
+        try
+        {
+            return await (hub ?? Mesh).Observe(request, options)
+                .FirstAsync()
+                .ToTask(ct ?? TestContext.Current.CancellationToken);
+        }
+        catch (ObjectDisposedException disposed)
+        {
+            // Hub teardown beat the response — cancellation, not failure (see remarks).
+            throw new TaskCanceledException(
+                $"Hub torn down before the response to {request.GetType().Name} arrived.", disposed);
+        }
+    }
 
     /// <summary>
     /// Canonical CQRS-correct read primitive for tests: the per-node hub's

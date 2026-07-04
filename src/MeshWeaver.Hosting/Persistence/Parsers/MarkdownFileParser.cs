@@ -2,6 +2,7 @@ using System.Text;
 using Markdig;
 using Markdig.Extensions.Yaml;
 using Markdig.Syntax;
+using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 using YamlDotNet.Serialization;
@@ -138,6 +139,19 @@ public partial class MarkdownFileParser : IFileFormatParser
                     frontMatter.State = v;
                 }
             }
+            if (frontMatter?.Order is null)
+            {
+                var v = RegexField("Order");
+                if (!string.IsNullOrEmpty(v) && int.TryParse(v, out var order))
+                {
+                    frontMatter ??= new MarkdownFrontMatter();
+                    frontMatter.Order = order;
+                }
+            }
+            // Notes/Background are deliberately NOT regex-recovered: Notes is
+            // typically a multi-line block scalar and Background CSS contains
+            // ` #rrggbb` — both shapes the single-line extractor would mangle.
+            // The primary YamlDotNet path handles them (quoted/block scalars).
         }
 
         // Extract markdown content (without YAML block)
@@ -169,9 +183,24 @@ public partial class MarkdownFileParser : IFileFormatParser
             Abstract = frontMatter?.Abstract
         };
 
+        var nodeType = frontMatter?.NodeType ?? "Markdown";
+
+        // A Slide file reconstructs its typed SlideContent (body + presenter notes
+        // + stage background) so a git reimport no longer downgrades Slide →
+        // MarkdownContent — the slide views read SlideContent, and a MarkdownContent
+        // payload would render an empty stage.
+        object nodeContent = nodeType == SlideNodeType.NodeType
+            ? new SlideContent
+            {
+                Content = markdownContent,
+                Notes = NullIfEmpty(frontMatter?.Notes),
+                Background = NullIfEmpty(frontMatter?.Background)
+            }
+            : markdownDocument;
+
         var node = new MeshNode(id, ns)
         {
-            NodeType = frontMatter?.NodeType ?? "Markdown",
+            NodeType = nodeType,
             Name = frontMatter?.Name ?? id,
             Category = frontMatter?.Category,
             // Surface the YAML Abstract (aka the legacy `Description:` alias) on the
@@ -181,8 +210,9 @@ public partial class MarkdownFileParser : IFileFormatParser
             // Icon: prefer Icon, then Thumbnail (fallback), resolve relative paths
             Icon = ResolveIcon(frontMatter?.Icon ?? frontMatter?.Thumbnail, ns),
             State = ParseState(frontMatter?.State),
+            Order = frontMatter?.Order,
             LastModified = lastModified,
-            Content = markdownDocument,
+            Content = nodeContent,
             PreRenderedHtml = markdownDocument.PrerenderedHtml
         };
 
@@ -197,6 +227,18 @@ public partial class MarkdownFileParser : IFileFormatParser
         // Extract MarkdownContent if available
         var mdContent = node.Content as MarkdownContent;
 
+        // Slide metadata: presenter notes + stage background live on SlideContent.
+        // On a hub with the Graph types registered the content is typed; on a hub
+        // that resolved it untyped (JSON round-trip) it is a JsonElement — handle both.
+        // Gated on the Slide shape so non-Slide nodes' emission stays byte-identical.
+        var (slideNotes, slideBackground) = node.Content switch
+        {
+            SlideContent slide => (NullIfEmpty(slide.Notes), NullIfEmpty(slide.Background)),
+            System.Text.Json.JsonElement je when node.NodeType == SlideNodeType.NodeType =>
+                (ExtractStringProperty(je, "notes"), ExtractStringProperty(je, "background")),
+            _ => (null, null)
+        };
+
         // Build YAML front matter from node properties and MarkdownContent metadata
         var frontMatter = new MarkdownFrontMatter
         {
@@ -210,7 +252,10 @@ public partial class MarkdownFileParser : IFileFormatParser
             Thumbnail = mdContent?.Thumbnail,
             // Prefer the Content abstract; fall back to the node Description so a
             // Description set directly on the node still round-trips to frontmatter.
-            Abstract = mdContent?.Abstract ?? node.Description
+            Abstract = mdContent?.Abstract ?? node.Description,
+            Order = node.Order,
+            Notes = slideNotes,
+            Background = slideBackground
         };
 
         // Only write YAML block if there's meaningful content
@@ -222,7 +267,10 @@ public partial class MarkdownFileParser : IFileFormatParser
                             frontMatter.Authors?.Count > 0 ||
                             frontMatter.Tags?.Count > 0 ||
                             frontMatter.Thumbnail != null ||
-                            frontMatter.Abstract != null;
+                            frontMatter.Abstract != null ||
+                            frontMatter.Order != null ||
+                            frontMatter.Notes != null ||
+                            frontMatter.Background != null;
 
         if (hasYamlContent)
         {
@@ -238,6 +286,7 @@ public partial class MarkdownFileParser : IFileFormatParser
         var markdownText = node.Content switch
         {
             MarkdownContent doc => doc.Content,
+            SlideContent slide => slide.Content,
             string str => str,
             System.Text.Json.JsonElement jsonElement => ExtractContentFromJsonElement(jsonElement),
             _ => null
@@ -255,9 +304,12 @@ public partial class MarkdownFileParser : IFileFormatParser
     public bool CanSerialize(MeshNode node)
     {
         // Handle nodes with NodeType "Markdown", MarkdownContent content, string content,
-        // or JsonElement content (from JSON round-trip where type info was lost)
+        // typed SlideContent (the canonical .md form for slides — frontmatter carries
+        // Notes/Background), or JsonElement content (from JSON round-trip where type
+        // info was lost; a JsonElement SlideContent qualifies via its `content` string).
         return node.NodeType == "Markdown"
             || node.Content is MarkdownContent
+            || node.Content is SlideContent
             || node.Content is string
             || (node.Content is System.Text.Json.JsonElement je && HasMarkdownContent(je));
     }
@@ -281,6 +333,20 @@ public partial class MarkdownFileParser : IFileFormatParser
 
         return null;
     }
+
+    /// <summary>
+    /// Reads a non-empty string property off a JsonElement object (camelCase wire
+    /// shape), or null when absent/empty/not a string.
+    /// </summary>
+    private static string? ExtractStringProperty(System.Text.Json.JsonElement element, string propertyName) =>
+        element.ValueKind == System.Text.Json.JsonValueKind.Object
+        && element.TryGetProperty(propertyName, out var prop)
+        && prop.ValueKind == System.Text.Json.JsonValueKind.String
+        && prop.GetString() is { Length: > 0 } value
+            ? value
+            : null;
+
+    private static string? NullIfEmpty(string? value) => string.IsNullOrEmpty(value) ? null : value;
 
     /// <summary>
     /// Checks if a JsonElement looks like it contains markdown content.
@@ -433,6 +499,20 @@ public partial class MarkdownFileParser : IFileFormatParser
         public List<string>? Tags { get; set; }
         public string? Thumbnail { get; set; }
         public string? Abstract { get; set; }
+
+        // Node ordering + Slide metadata. Declared AFTER the original keys so files
+        // that don't carry them serialize with the exact same key order (and bytes)
+        // as before these fields existed — no diff churn on existing git mirrors
+        // (the YAML serializer omits nulls and emits keys in declaration order).
+        // Order round-trips MeshNode.Order for ANY node type (slide/lesson/module
+        // ordering); Notes/Background round-trip SlideContent.Notes/.Background and
+        // are only emitted for Slide nodes. On parse, stray Notes/Background keys on
+        // a NON-Slide file are ignored: MarkdownContent has no such fields, and
+        // inventing a JsonElement content to carry them would downgrade the node's
+        // content type — the platform reads them from SlideContent only.
+        public int? Order { get; set; }
+        public string? Notes { get; set; }
+        public string? Background { get; set; }
 
         // Legacy aliases. YamlDotNet doesn't follow C# property hierarchy, so we
         // expose them as plain settable properties and fold them in below

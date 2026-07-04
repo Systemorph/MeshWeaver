@@ -242,6 +242,11 @@ public static class Controls
     /// <returns>A new <see cref="MarkdownControl"/>.</returns>
     public static MarkdownControl Markdown(object data) => new(data);
 
+    /// <summary>Creates a video player control for the given source.</summary>
+    /// <param name="src">The video source URL (a media file; or an embed URL combined with <see cref="VideoControl.WithKind"/> <see cref="VideoKind.Embed"/>).</param>
+    /// <returns>A new <see cref="VideoControl"/>.</returns>
+    public static VideoControl Video(object src) => new(src);
+
     /// <summary>Creates a data grid control that renders <paramref name="elements"/> as a tabular view.</summary>
     /// <param name="elements">A collection or data-binding expression providing the rows.</param>
     /// <returns>A new <see cref="DataGridControl"/>.</returns>

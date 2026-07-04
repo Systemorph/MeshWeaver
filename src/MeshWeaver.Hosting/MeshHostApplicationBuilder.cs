@@ -48,6 +48,17 @@ public record MeshHostBuilder : MeshBuilder
         this.Host = Host;
         Host.UseServiceProviderFactory(new MessageHubServiceProviderFactory(BuildHub));
         this.RegisterMeshQueryCoreOnMeshHub();
+        // Same ordered drain as MeshHostApplicationBuilder above: quiesce the mesh root hub
+        // (action blocks + IoPool + AsyncDisposeQueue) during host StopAsync, BEFORE the host
+        // disposes the root scope — which IS the hub's Autofac container. Without it, a late
+        // continuation resolves from (or begins a nested hub scope on) the already-disposed
+        // container and throws ObjectDisposedException("LifetimeScope … has already been
+        // disposed") on a pooled task nobody observes — the pre-existing "Catastrophic failure"
+        // in Orleans TestCluster teardown (this legacy IHostBuilder path builds every
+        // TestCluster silo and client via UseOrleansMeshServer/UseOrleansMeshClient).
+        // Registered FIRST so it stops LAST — after the silo and the other hosted services
+        // have stopped feeding the mesh. Pinned by MeshHostBuilderTeardownOrderingTest.
+        Host.ConfigureServices((_, services) => services.AddHostedService<MeshTeardownHostedService>());
     }
 
 
