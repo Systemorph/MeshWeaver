@@ -91,9 +91,35 @@ fresh namespace.
 > needs write access to where activities are stored (the runner's home partition). Use a token whose user can
 > write there — the same access model as any participant.
 
+## Ship it as a trusted sidecar (no token)
+
+The command above is the *manual* / dev shape. In a deployment the worker ships **in the portal's own pod**
+as a sidecar and connects to the portal's **trusted loopback gRPC endpoint** instead of an external URL:
+
+```bash
+# built from deploy/python-gate/Dockerfile (the SDK package + the canonical proto)
+python -m meshweaver.worker --url http://127.0.0.1:8082 --address py/python-kernel
+```
+
+There is **no `--token`**: the endpoint is bound to `127.0.0.1`, reachable only from containers in the same
+pod, so reachability *is* the authentication (see `GrpcOptions.TrustedPort` and the trusted-gate note in
+[A standalone hub in Python](/Doc/DataMesh/PythonStandaloneHub)). This is the exact parity with the in-process
+Roslyn kernel: the C# kernel runs in the portal process; the python gate runs in the portal *pod*, and a run
+executes under the requesting user's identity (the gate echoes the delivery's `AccessContext`), not a
+standing service credential — nothing to rotate.
+
+Enable it in the Helm chart (OFF by default; the deployment must supply the image):
+
+```yaml
+grpc:
+  pythonGate:
+    enabled: true
+    image: <registry>/meshweaver/python-gate:<tag>   # deploy/python-gate/Dockerfile
+```
+
 Today `python` targets the single well-known `py/python-kernel` address. A worker **pool** (lease a worker
-per run, or per partition) and other languages (`node`/`bun` → a `node/*` worker) are the natural next
-step — the routing branch is the one place that grows.
+per run, or per partition) and other languages (`node`/`bun` → a `node/*` gate) are the natural next step —
+the routing branch and the sidecar list are the two places that grow.
 
 ## Related
 

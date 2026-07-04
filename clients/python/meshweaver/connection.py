@@ -54,6 +54,19 @@ class MeshConnection:
             self._reader.cancel()
         await self._channel.close()
 
+    async def wait_closed(self) -> None:
+        """Block until the inbound stream ends — the server went away / the connection dropped.
+        A long-lived participant (e.g. the gate) awaits this to know when to reconnect. A reader
+        exception (an RPC error on a dropped connection) IS "closed" for this purpose, so it is
+        swallowed rather than propagated; cancellation propagates normally."""
+        if self._reader is not None:
+            try:
+                await self._reader
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                pass
+
     async def __aenter__(self) -> "MeshConnection":
         return self
 
