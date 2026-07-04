@@ -116,19 +116,24 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     private bool isNodeMenuOpen;
     private bool isMeshMenuOpen;
     private bool isAiMenuOpen;
+    private bool isGitHubMenuOpen;
 
-    // Menu context names (must match NodeMenuItemsExtensions.NodeMenuContext / MeshMenuContext).
+    // Menu context names (must match NodeMenuItemsExtensions.*Context). Instance sync lives in the
+    // NODE menu ("Synchronizations"), so there is no separate "Sync" dropdown.
     private const string NodeMenuContext = "Node";
     private const string MeshMenuContext = "Mesh";
     private const string AiMenuContext = "AI";
+    private const string GitHubMenuContext = "GitHub";
 
     // Menu items per context from IMenuItemsProvider (populated by LayoutAreaView from $Menu:{context} streams)
     private IReadOnlyList<NodeMenuItemDefinition> _nodeMenuItems = [];
     private IReadOnlyList<NodeMenuItemDefinition> _meshMenuItems = [];
     private IReadOnlyList<NodeMenuItemDefinition> _aiMenuItems = [];
+    private IReadOnlyList<NodeMenuItemDefinition> _gitHubMenuItems = [];
     private IDisposable? _nodeMenuSubscription;
     private IDisposable? _meshMenuSubscription;
     private IDisposable? _aiMenuSubscription;
+    private IDisposable? _gitHubMenuSubscription;
 
 
     // Editable content collections
@@ -171,6 +176,11 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
         _aiMenuSubscription = MenuItemsProvider.GetMenu(AiMenuContext).Subscribe(items =>
         {
             _aiMenuItems = items;
+            InvokeAsync(StateHasChanged);
+        });
+        _gitHubMenuSubscription = MenuItemsProvider.GetMenu(GitHubMenuContext).Subscribe(items =>
+        {
+            _gitHubMenuItems = items;
             InvokeAsync(StateHasChanged);
         });
     }
@@ -256,6 +266,12 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     /// </summary>
     private IReadOnlyList<NodeMenuItemDefinition> GetAiMenuItems() => _aiMenuItems;
 
+    /// <summary>Items for the "GitHub" dropdown (GitHub sync actions) — empty hides the button.</summary>
+    private IReadOnlyList<NodeMenuItemDefinition> GetGitHubMenuItems() => _gitHubMenuItems;
+
+    private void ToggleGitHubMenu() => isGitHubMenuOpen = !isGitHubMenuOpen;
+    private void OnGitHubMenuOpenChanged(bool open) => isGitHubMenuOpen = open;
+
     /// <summary>
     /// Navigates to the Settings page — per-node Settings when on a node, Global Settings at the root.
     /// </summary>
@@ -320,6 +336,7 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
         isNodeMenuOpen = false;
         isMeshMenuOpen = false;
         isAiMenuOpen = false;
+        isGitHubMenuOpen = false;
         // Imperative actions (no Href): the AI menu's "New thread" opens the chat panel fresh.
         if (string.Equals(item.Area, AiNewThreadAction, StringComparison.Ordinal))
         {
@@ -879,6 +896,7 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
         _nodeMenuSubscription?.Dispose();
         _meshMenuSubscription?.Dispose();
         _aiMenuSubscription?.Dispose();
+        _gitHubMenuSubscription?.Dispose();
         dotNetRef?.Dispose();
         jsModule?.DisposeAsync();
     }

@@ -703,9 +703,8 @@ public static class MemexConfiguration
                         .AddGitHubSyncSettingsTab()
                         // GitHub Issues & PRs tab — browse/act on the repo's issues + pull requests.
                         .AddGitHubIssuesTab()
-                        // Instance Sync tab — replicate the Space to another MeshWeaver
-                        // instance (self-filtered to Spaces, like the GitHub Sync tab).
-                        .AddInstanceSyncSettingsTab()
+                        // Instance Sync lives in the "Synchronizations" NODE-menu item (not a
+                        // settings tab) — wired via AddInstanceSyncTypes on the mesh builder.
                         // Code workspace tab — on-disk working-tree editor (checkout/edit/commit/push).
                         .AddWorkingTreeTab()
                         // Git history tab — read-only git browser (commit log + changes + diffs) over the same working tree.
