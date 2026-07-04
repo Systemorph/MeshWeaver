@@ -16,18 +16,20 @@ namespace MeshWeaver.Portal.E2E;
 [Collection("portal-e2e")]
 public class PortalNextDocExamplesTest(PortalFixture fixture)
 {
-    public static TheoryData<string, int> ExamplePages()
+    // Just the page paths — the React sweep asserts the generic render contract (live engages, real
+    // content, no failure markers), not a per-example count, so it doesn't carry exampleCount.
+    public static TheoryData<string> ExamplePages()
     {
-        var data = new TheoryData<string, int>();
+        var data = new TheoryData<string>();
         foreach (var (docPath, count) in DocExampleCatalog.AllPages().OrderBy(p => p.Key, StringComparer.Ordinal))
             if (count > 0)
-                data.Add(docPath, count);
+                data.Add(docPath);
         return data;
     }
 
     [Theory(Timeout = 240_000)]
     [MemberData(nameof(ExamplePages))]
-    public async Task DocPage_RendersInReactShell_WithoutFailureMarkers(string docPath, int exampleCount)
+    public async Task DocPage_RendersInReactShell_WithoutFailureMarkers(string docPath)
     {
         Assert.SkipUnless(fixture.Available, fixture.SkipReason);
         // Pages whose examples need a LANGUAGE WORKER can only execute where it is deployed — the
