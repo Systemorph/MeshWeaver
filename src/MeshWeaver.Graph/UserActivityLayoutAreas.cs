@@ -275,7 +275,12 @@ public static class UserActivityLayoutAreas
     /// nothing left to create, race, or fail to provision.</para>
     /// </summary>
     internal static IObservable<UiControl?> ComposerAreaView(LayoutAreaHost host, RenderingContext _)
-        => Observable.Return<UiControl?>(new ThreadChatControl());
+        // HideEmptyState = the compact/dashboard composer: renders just the input (no inline
+        // message-history area) AND, on submit, opens the new thread FULL-SCREEN in the main pane —
+        // ThreadChatView reads HideEmptyState as `isCompact` → NavigateTo("/{path}") — instead of the
+        // side panel. The home composer is exactly the dashboard case the flag was designed for;
+        // without it the home submit opened the thread in the side pane.
+        => Observable.Return<UiControl?>(new ThreadChatControl().WithHideEmptyState(true));
 
     /// <summary>
     /// The owner's OPEN threads — their own partition only (<c>{owner}/*_Thread</c>, no cross-partition
