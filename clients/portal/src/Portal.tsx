@@ -21,7 +21,8 @@ import {
 import {
   MeshAreaView,
   EmbeddedAreaProvider,
-  GrpcAreaSource,
+  createGrpcEmbeddedFactory,
+  NavigationProvider,
   RegistryProvider,
   RenderArea,
   ScopeProvider,
@@ -30,9 +31,14 @@ import {
   fluentPack,
   useThemeMode,
 } from "@meshweaver/react";
-import type { AreaSource } from "@meshweaver/react";
+import type { AreaSource, MeshNavigation } from "@meshweaver/react";
 import { portalAreas } from "./sample";
-import { DEFAULT_ROOT_AREA, connectLive, createLiveAreaSource, type LiveMesh } from "./live";
+import {
+  DEFAULT_ROOT_AREA,
+  connectLive,
+  createLiveAreaSource,
+  type LiveMesh,
+} from "./live";
 
 // A MeshWeaver web portal: an app shell (header + nav) around a mesh layout area — the web analog
 // of the Blazor portal / MAUI app. The chrome is plain Fluent; the content is the renderer.
@@ -75,6 +81,17 @@ function useHashPath(): string {
   return path;
 }
 
+// The renderer's navigation seam mapped onto this shell's hash router: an app-absolute mesh
+// target ("/Doc/GUI") becomes the "#/Doc/GUI" route, so links inside live areas (result cards,
+// markdown anchors, navigateToHref buttons) stay inside the SPA instead of full-page loading
+// the Blazor portal.
+const hashNavigation: MeshNavigation = {
+  hrefFor: (target) => `#${target}`,
+  navigate: (target) => {
+    window.location.hash = `#${target}`;
+  },
+};
+
 export function Portal() {
   const [sampleArea, setSampleArea] = useState("home");
   const [live, setLive] = useState<LiveState>({ kind: "connecting" });
@@ -95,7 +112,11 @@ export function Portal() {
         else setLive({ kind: "live", mesh: m });
       },
       (error) => {
-        if (!cancelled) setLive({ kind: "offline", reason: String((error as Error)?.message ?? error) });
+        if (!cancelled)
+          setLive({
+            kind: "offline",
+            reason: String((error as Error)?.message ?? error),
+          });
       },
     );
     return () => {
@@ -107,14 +128,23 @@ export function Portal() {
   const connection = live.kind === "live" ? live.mesh.connection : null;
   // One live source per visited path, kept for the connection's lifetime (instant back-nav; the
   // area stream stays subscribed). The map dies with the connection.
-  const liveSources = useMemo(() => new Map<string, AreaSource>(), [connection]);
+  const liveSources = useMemo(
+    () => new Map<string, AreaSource>(),
+    [connection],
+  );
+  // 🚨 STABLE per connection — an inline embed factory recreated each render re-subscribes every
+  // nested `@@` embed on every re-render (the "different sections each refresh" bug).
+  const embedFactory = useMemo(() => (connection ? createGrpcEmbeddedFactory(connection) : null), [connection]);
   const livePath = live.kind === "live" ? hashPath || live.mesh.userId : "";
   let liveSource: AreaSource | null = null;
   if (connection && livePath) {
     liveSource = liveSources.get(livePath) ?? null;
     if (!liveSource) {
       liveSource = createLiveAreaSource(connection, livePath, (error) =>
-        setAreaErrors((e) => ({ ...e, [livePath]: String((error as Error)?.message ?? error) })),
+        setAreaErrors((e) => ({
+          ...e,
+          [livePath]: String((error as Error)?.message ?? error),
+        })),
       );
       liveSources.set(livePath, liveSource);
     }
@@ -129,142 +159,175 @@ export function Portal() {
 
   return (
     <FluentProvider theme={theme} style={{ height: "100vh" }}>
-      <div style={{ display: "grid", gridTemplateRows: "52px 1fr", height: "100vh" }}>
-        <header
+      <NavigationProvider navigation={hashNavigation}>
+        <div
           style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 16,
-            padding: "0 16px",
-            borderBottom: "1px solid var(--colorNeutralStroke2)",
+            display: "grid",
+            gridTemplateRows: "52px 1fr",
+            height: "100vh",
           }}
         >
-          <Text weight="bold" size={400}>
-            ⬡ MeshWeaver
-          </Text>
-          <Input contentBefore={<Search20Regular />} placeholder="Search the mesh…" style={{ maxWidth: 360, flex: 1 }} />
-          <div style={{ flex: 1 }} />
-          {/* The mirror of the Blazor user menu's "Try the new frontend": switch back to the classic
+          <header
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 16,
+              padding: "0 16px",
+              borderBottom: "1px solid var(--colorNeutralStroke2)",
+            }}
+          >
+            <Text weight="bold" size={400}>
+              ⬡ MeshWeaver
+            </Text>
+            <Input
+              contentBefore={<Search20Regular />}
+              placeholder="Search the mesh…"
+              style={{ maxWidth: 360, flex: 1 }}
+            />
+            <div style={{ flex: 1 }} />
+            {/* The mirror of the Blazor user menu's "Try the new frontend": switch back to the classic
               shell. Navigates to the portal's frontend-toggle endpoint (GET /frontend/blazor), which
               sets the mw-frontend override cookie to Blazor and redirects to the classic portal —
               fully reversible from the Blazor side. Also clears the cookie client-side so the choice
               sticks even when the React app is served standalone (no portal endpoint on this origin). */}
-          <Tooltip content="Switch back to the classic Blazor portal" relationship="description">
-            <Button
-              appearance="subtle"
-              icon={<ArrowHookUpLeft20Regular />}
-              onClick={() => {
-                document.cookie = "mw-frontend=Blazor; path=/; max-age=31536000; samesite=lax";
-                window.location.href = "/frontend/blazor";
-              }}
+            <Tooltip
+              content="Switch back to the classic Blazor portal"
+              relationship="description"
             >
-              Back to classic
-            </Button>
-          </Tooltip>
-          <ThemeToggle />
-          <Avatar name={userName} size={32} color="colorful" />
-        </header>
+              <Button
+                appearance="subtle"
+                icon={<ArrowHookUpLeft20Regular />}
+                onClick={() => {
+                  document.cookie =
+                    "mw-frontend=Blazor; path=/; max-age=31536000; samesite=lax";
+                  window.location.href = "/frontend/blazor";
+                }}
+              >
+                Back to classic
+              </Button>
+            </Tooltip>
+            <ThemeToggle />
+            <Avatar name={userName} size={32} color="colorful" />
+          </header>
 
-        <div style={{ display: "grid", gridTemplateColumns: "220px 1fr", minHeight: 0 }}>
-          <nav
+          <div
             style={{
-              borderRight: "1px solid var(--colorNeutralStroke2)",
-              padding: 8,
-              display: "flex",
-              flexDirection: "column",
-              gap: 2,
-              background: "var(--colorNeutralBackground2)",
+              display: "grid",
+              gridTemplateColumns: "220px 1fr",
+              minHeight: 0,
             }}
           >
-            {(isLive ? liveNav : sampleNav).map((n) => {
-              const active = isLive ? hashPath === n.key || (!hashPath && n.key === "") : sampleArea === n.key;
-              return (
-                <button
-                  key={n.key}
-                  onClick={() => {
-                    if (isLive) window.location.hash = n.key ? `#/${n.key}` : "#/";
-                    else setSampleArea(n.key);
-                  }}
+            <nav
+              style={{
+                borderRight: "1px solid var(--colorNeutralStroke2)",
+                padding: 8,
+                display: "flex",
+                flexDirection: "column",
+                gap: 2,
+                background: "var(--colorNeutralBackground2)",
+              }}
+            >
+              {(isLive ? liveNav : sampleNav).map((n) => {
+                const active = isLive
+                  ? hashPath === n.key || (!hashPath && n.key === "")
+                  : sampleArea === n.key;
+                return (
+                  <button
+                    key={n.key}
+                    onClick={() => {
+                      if (isLive)
+                        window.location.hash = n.key ? `#/${n.key}` : "#/";
+                      else setSampleArea(n.key);
+                    }}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 8,
+                      padding: "8px 10px",
+                      border: "none",
+                      borderRadius: 6,
+                      cursor: "pointer",
+                      textAlign: "left",
+                      font: "inherit",
+                      background: active
+                        ? "var(--colorNeutralBackground1Selected)"
+                        : "transparent",
+                      fontWeight: active ? 600 : 400,
+                    }}
+                  >
+                    {n.icon}
+                    {n.label}
+                  </button>
+                );
+              })}
+            </nav>
+
+            <main style={{ overflow: "auto", padding: 24, minWidth: 0 }}>
+              {live.kind === "connecting" && (
+                <div
+                  data-mw-connecting
                   style={{
                     display: "flex",
-                    alignItems: "center",
-                    gap: 8,
-                    padding: "8px 10px",
-                    border: "none",
-                    borderRadius: 6,
-                    cursor: "pointer",
-                    textAlign: "left",
-                    font: "inherit",
-                    background: active ? "var(--colorNeutralBackground1Selected)" : "transparent",
-                    fontWeight: active ? 600 : 400,
+                    justifyContent: "center",
+                    padding: 48,
                   }}
                 >
-                  {n.icon}
-                  {n.label}
-                </button>
-              );
-            })}
-          </nav>
-
-          <main style={{ overflow: "auto", padding: 24, minWidth: 0 }}>
-            {live.kind === "connecting" && (
-              <div data-mw-connecting style={{ display: "flex", justifyContent: "center", padding: 48 }}>
-                <Spinner label="Connecting to the mesh…" />
-              </div>
-            )}
-
-            {live.kind === "offline" && (
-              <>
-                <div data-mw-offline style={{ marginBottom: 16 }}>
-                  <MessageBar intent="warning">
-                    <MessageBarBody>
-                      Offline sample mode — no live mesh connection on this origin ({live.reason}). Showing bundled
-                      sample data.
-                    </MessageBarBody>
-                  </MessageBar>
+                  <Spinner label="Connecting to the mesh…" />
                 </div>
-                {/* The renderer core + the Fluent pack (no nested FluentProvider — the shell supplies it). */}
-                <RegistryProvider pack={fluentPack}>
-                  <ScopeProvider source={sampleSource} area={sampleArea}>
-                    <RenderArea areaKey={sampleArea} />
-                  </ScopeProvider>
-                </RegistryProvider>
-              </>
-            )}
+              )}
 
-            {isLive && (
-              <div data-mw-live-area data-mw-path={livePath} style={{ height: "100%" }}>
-                {areaErrors[livePath] ? (
-                  <div data-mw-area-error>
-                    <MessageBar intent="error">
+              {live.kind === "offline" && (
+                <>
+                  <div data-mw-offline style={{ marginBottom: 16 }}>
+                    <MessageBar intent="warning">
                       <MessageBarBody>
-                        Live area “{livePath}” failed: {areaErrors[livePath]}
+                        Offline sample mode — no live mesh connection on this
+                        origin ({live.reason}). Showing bundled sample data.
                       </MessageBarBody>
                     </MessageBar>
                   </div>
-                ) : liveSource && connection ? (
-                  // The live renderer: the node's default layout area streamed over gRPC-web,
-                  // with the thread ops surface (ThreadChat) provided via MeshOpsProvider and
-                  // nested LayoutAreaControl embeds hydrating through their own live sources.
-                  <EmbeddedAreaProvider
-                    factory={(address, ref) => {
-                      const src = new GrpcAreaSource(connection, address, {
-                        area: ref.area ?? "",
-                        id: ref.id as string | undefined,
-                        layout: ref.layout,
-                      });
-                      void src.start();
-                      return { source: src, rootArea: ref.area ?? "" };
-                    }}
-                  >
-                    <MeshAreaView source={liveSource} rootArea={DEFAULT_ROOT_AREA} theme={theme} ops={live.mesh.ops} />
-                  </EmbeddedAreaProvider>
-                ) : null}
-              </div>
-            )}
-          </main>
+                  {/* The renderer core + the Fluent pack (no nested FluentProvider — the shell supplies it). */}
+                  <RegistryProvider pack={fluentPack}>
+                    <ScopeProvider source={sampleSource} area={sampleArea}>
+                      <RenderArea areaKey={sampleArea} />
+                    </ScopeProvider>
+                  </RegistryProvider>
+                </>
+              )}
+
+              {isLive && (
+                <div
+                  data-mw-live-area
+                  data-mw-path={livePath}
+                  style={{ height: "100%" }}
+                >
+                  {areaErrors[livePath] ? (
+                    <div data-mw-area-error>
+                      <MessageBar intent="error">
+                        <MessageBarBody>
+                          Live area “{livePath}” failed: {areaErrors[livePath]}
+                        </MessageBarBody>
+                      </MessageBar>
+                    </div>
+                  ) : liveSource && connection ? (
+                    // The live renderer: the node's default layout area streamed over gRPC-web,
+                    // with the thread ops surface (ThreadChat) provided via MeshOpsProvider and
+                    // nested LayoutAreaControl embeds hydrating through their own live sources.
+                    <EmbeddedAreaProvider factory={embedFactory}>
+                      <MeshAreaView
+                        source={liveSource}
+                        rootArea={DEFAULT_ROOT_AREA}
+                        theme={theme}
+                        ops={live.mesh.ops}
+                      />
+                    </EmbeddedAreaProvider>
+                  ) : null}
+                </div>
+              )}
+            </main>
+          </div>
         </div>
-      </div>
+      </NavigationProvider>
     </FluentProvider>
   );
 }

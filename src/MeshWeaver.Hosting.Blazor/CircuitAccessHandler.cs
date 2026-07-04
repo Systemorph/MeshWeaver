@@ -271,7 +271,12 @@ public class CircuitAccessHandler : CircuitHandler
         if (string.IsNullOrEmpty(email))
             return email;
         var at = email.IndexOf('@');
-        return at > 0 ? email[..at] : email;
+        // 🚨 LOWERCASE — the same mapping onboarding applies (BootstrapController lowercases the
+        // username; post-v10 partition ids are lowercase). Preserving the email's casing here made
+        // the circuit ObjectId 'Roland' while the User node is 'roland' whenever the identity
+        // cache had not hydrated — the home page then rendered a TYPELESS hub ("Area not found:
+        // Activity"), and navigating it materialized a stub root that poisoned later resolutions.
+        return (at > 0 ? email[..at] : email).ToLowerInvariant();
     }
 
     /// <summary>

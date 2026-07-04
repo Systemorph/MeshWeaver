@@ -21,26 +21,24 @@ public class ComposerContextChipTest(PortalFixture fixture)
         await using var context = await fixture.NewAuthenticatedContextAsync();
         var token = await fixture.MintTokenAsync(context);
 
-        // Seed: the per-user composer node (so the composer area resolves), a User node with a DISTINCT
-        // display name, and a THREAD satellite named "hi" whose owner (mainNode) is the "Roland" partition.
-        await SeedAsync(context, token, """
-            { "id": "ThreadComposer", "namespace": "Roland/_Thread", "name": "Chat Input",
-              "nodeType": "ThreadComposer", "mainNode": "Roland", "content": { "$type": "ThreadComposer" } }
+        // Seed: the per-user composer node (so the composer area resolves) and a THREAD satellite
+        // named "hi" whose owner (mainNode) is the user's partition. All ids use the RESOLVED user
+        // node id — a hardcoded 'Roland' seeded a SECOND capital-cased User root (the casing seam).
+        var uid = fixture.UserId;
+        await SeedAsync(context, token, $$"""
+            { "id": "ThreadComposer", "namespace": "{{uid}}/_Thread", "name": "Chat Input",
+              "nodeType": "ThreadComposer", "mainNode": "{{uid}}", "content": { "$type": "ThreadComposer" } }
             """);
-        await SeedAsync(context, token, """
-            { "id": "Roland", "name": "Roland Buergi", "nodeType": "User",
-              "mainNode": "Roland", "content": { "$type": "User" } }
-            """);
-        await SeedAsync(context, token, """
-            { "id": "hi", "namespace": "Roland/_Thread", "name": "hi", "nodeType": "Thread",
-              "mainNode": "Roland", "content": { "$type": "Thread" } }
+        await SeedAsync(context, token, $$"""
+            { "id": "hi", "namespace": "{{uid}}/_Thread", "name": "hi", "nodeType": "Thread",
+              "mainNode": "{{uid}}", "content": { "$type": "Thread" } }
             """);
 
         var page = await context.NewPageAsync();
         await page.SetViewportSizeAsync(1400, 1000);
 
         // Navigate to the satellite (the thread) — mesh URL shape is {base}/{meshpath}, no /node/ segment.
-        await page.GotoAsync($"{fixture.BaseUrl}/Roland/_Thread/hi",
+        await page.GotoAsync($"{fixture.BaseUrl}/{uid}/_Thread/hi",
             new PageGotoOptions { WaitUntil = WaitUntilState.NetworkIdle, Timeout = 90_000 });
 
         // The composer rendered — proves the view did NOT disappear on a render storm.
@@ -51,8 +49,8 @@ public class ComposerContextChipTest(PortalFixture fixture)
         // 🎯 The chip pins the OWNER main node, not the satellite. The chip's title attribute IS the
         // resolved context PATH (ReferenceChipCollection: title="@attachment.Path").
         var title = await chip.GetAttributeAsync("title");
-        title.Should().Be("Roland",
-            "the composer context resolves the satellite (Roland/_Thread/hi) to its OWNER (mainNode=Roland)");
+        title.Should().Be(uid,
+            $"the composer context resolves the satellite ({uid}/_Thread/hi) to its OWNER (mainNode={uid})");
 
         // 🎯 …and the chip is LABELED by the main node, never the satellite thread's name.
         var chipText = (await chip.Locator(".chip-text").InnerTextAsync()).Trim();

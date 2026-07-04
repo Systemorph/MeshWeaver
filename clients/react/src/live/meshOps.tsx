@@ -14,6 +14,11 @@
 
 import { createContext, useContext } from "react";
 import type { ReactNode } from "react";
+import type {
+  MarkdownCellSubmission,
+  MarkdownKernelSession,
+  RenderedMarkdown,
+} from "../controls/interactiveMarkdown.js";
 
 /** One emission of a node's live stream (the shape meshNodeFromChange yields). */
 export interface MeshNodeState {
@@ -58,6 +63,39 @@ export interface MeshOps {
   patch(path: string, fields: Record<string, unknown>): void;
   /** Optional mesh query — when present it feeds the agent/model selectors (nodeType:Agent / nodeType:Model). */
   search?(query: string, basePath?: string, limit?: number): Promise<Record<string, unknown>[]>;
+  /**
+   * Optional streaming-final autocomplete snapshot (the one-shot AutocompleteRequest twin) — feeds
+   * the composer's @-mention dropdown (the Blazor MeshNodeAutocomplete parity surface). Hosts
+   * without it render the composer with no @-suggestions (no crash).
+   */
+  autocomplete?(query: string, contextPath?: string): Promise<AutocompleteSuggestion[]>;
+  /**
+   * Optional interactive-markdown kernel bootstrap — the client twin of
+   * <c>MarkdownViewLogic.CreateActivityAndSubmit</c>: creates the per-view kernel Activity under
+   * the VIEWER's partition, waits until it is routable (the subscribe-before-create storm guard),
+   * posts the initial cell submissions IN ORDER, and resolves to the live session whose result
+   * areas the executable code cells embed. Hosts without it render the cells with the
+   * "execution unavailable" notice (no crash, no phantom subscriptions).
+   */
+  startMarkdownKernel?(cells: MarkdownCellSubmission[]): Promise<MarkdownKernelSession>;
+  /**
+   * Optional server-side markdown render — THE Markdig pipeline (the one parser: executable code
+   * blocks, layout-area embeds, @@ macros, UCR links, mermaid). The client renders the returned
+   * HTML and hydrates the interactive markers (see splitRenderedHtml); it never re-parses
+   * markdown itself. Hosts without it fall back to the plain client-side renderer.
+   */
+  renderMarkdown?(markdown: string, nodePath?: string): Promise<RenderedMarkdown>;
+}
+
+export type { MarkdownCellSubmission, MarkdownKernelSession, RenderedMarkdown } from "../controls/interactiveMarkdown.js";
+
+/** One @-mention suggestion (the wire AutocompleteItem, camelCase). */
+export interface AutocompleteSuggestion {
+  label?: string;
+  insertText?: string;
+  description?: string;
+  icon?: string;
+  path?: string;
 }
 
 const MeshOpsCtx = createContext<MeshOps | null>(null);

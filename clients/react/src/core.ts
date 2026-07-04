@@ -14,6 +14,7 @@ export { ScopeProvider, useAreaState, useResolve, useBindingPointer, useEmit, us
 export { StaticAreaSource } from "./area/source.js";
 export {
   GrpcAreaSource,
+  createGrpcEmbeddedFactory,
   type MeshConnectionLike,
   type LayoutAreaReference,
   type GrpcAreaOptions,
@@ -25,6 +26,9 @@ export {
   type MeshOps,
   type MeshNodeState,
   type ThreadSubmitOptions,
+  type MarkdownCellSubmission,
+  type MarkdownKernelSession,
+  type RenderedMarkdown,
 } from "./live/meshOps.js";
 export {
   EmbeddedAreaProvider,

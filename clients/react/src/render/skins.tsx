@@ -1,5 +1,5 @@
-import type { CSSProperties, ReactNode } from "react";
-import { useState } from "react";
+import type { CSSProperties, PointerEvent as ReactPointerEvent, ReactNode } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import {
   Card,
   Divider,
@@ -115,14 +115,108 @@ function ToolbarSkin({ control }: SkinProps): ReactNode {
   );
 }
 
-function SplitterSkin({ control }: SkinProps): ReactNode {
+/** The per-pane skin (SplitterPaneSkin) carried on a splitter child control. */
+function paneSkinOf(control?: UiControl): Skin | undefined {
+  return control?.skins?.find((s) => /splitterpane/i.test(String(s.$type)));
+}
+
+function paneWeight(control?: UiControl): number {
+  const size = paneSkinOf(control)?.size;
+  const n = size == null ? NaN : parseFloat(String(size));
+  return Number.isFinite(n) && n > 0 ? n : 1;
+}
+
+/**
+ * Interactive splitter — the React port of Blazor's FluentMultiSplitter (SplitterView): panes laid
+ * out along the skin's orientation with DRAGGABLE gutters between them (was a static flex split).
+ * Initial pane fractions come from each SplitterPaneSkin.Size (relative weights) or an equal split;
+ * dragging a gutter reallocates fraction between its two adjacent panes, clamped to a 5% floor so a
+ * pane never collapses to nothing. Pointer capture via window listeners keeps the drag smooth even
+ * when the cursor leaves the thin gutter.
+ */
+function SplitterSkin({ skin, control }: SkinProps): ReactNode {
   const children = useChildAreas(control);
+  const horizontal = String(skin.orientation ?? "Horizontal").toLowerCase() !== "vertical";
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  const initial = useMemo(() => {
+    const weights = children.map((c) => paneWeight(c.control));
+    const total = weights.reduce((a, b) => a + b, 0) || 1;
+    return weights.map((w) => w / total);
+  }, [children]);
+
+  const [sizes, setSizes] = useState<number[]>(initial);
+  // Re-sync when the pane SHAPE changes — keyed on the id/weight signature, not just the count, so a
+  // DIFFERENT splitter with the same pane count (but different panes) doesn't inherit stale sizes.
+  const shapeKey = useMemo(
+    () => children.map((c, i) => `${String(c.control?.id ?? c.key ?? i)}:${paneWeight(c.control)}`).join("|"),
+    [children],
+  );
+  useEffect(() => setSizes(initial), [shapeKey]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const startDrag = (index: number) => (e: ReactPointerEvent) => {
+    const container = containerRef.current;
+    if (!container || index + 1 >= children.length) return;
+    e.preventDefault();
+    const rect = container.getBoundingClientRect();
+    const total = horizontal ? rect.width : rect.height;
+    const origin = horizontal ? e.clientX : e.clientY;
+    const startSizes = sizes.length === children.length ? [...sizes] : initial;
+    const floor = 0.05;
+
+    const move = (ev: PointerEvent) => {
+      const cur = horizontal ? ev.clientX : ev.clientY;
+      let delta = total > 0 ? (cur - origin) / total : 0;
+      // Clamp so neither adjacent pane drops below the floor.
+      delta = Math.max(delta, floor - startSizes[index]);
+      delta = Math.min(delta, startSizes[index + 1] - floor);
+      const next = [...startSizes];
+      next[index] = startSizes[index] + delta;
+      next[index + 1] = startSizes[index + 1] - delta;
+      setSizes(next);
+    };
+    // Tear the drag down on ANY terminal — pointerup, pointercancel (touch interrupted), or the
+    // window losing focus mid-drag. Without pointercancel/blur the window listeners leaked and kept
+    // resizing on later pointer moves.
+    const end = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", end);
+      window.removeEventListener("pointercancel", end);
+      window.removeEventListener("blur", end);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", end);
+    window.addEventListener("pointercancel", end);
+    window.addEventListener("blur", end);
+  };
+
+  const gutter = horizontal ? { width: 5, cursor: "col-resize", alignSelf: "stretch" as const } : { height: 5, cursor: "row-resize" };
+
   return (
-    <div style={{ display: "flex", gap: 8, width: "100%" }}>
+    <div
+      ref={containerRef}
+      style={{
+        display: "flex",
+        flexDirection: horizontal ? "row" : "column",
+        width: cssSize(skin.width) ?? "100%",
+        height: cssSize(skin.height) ?? (horizontal ? undefined : "100%"),
+        minHeight: 0,
+      }}
+    >
       {children.map((c, i) => (
-        <div key={c.key || i} style={{ flex: 1, minWidth: 0 }}>
-          <RenderArea areaKey={c.key} />
-        </div>
+        <Fragment key={c.key || i}>
+          <div style={{ flex: `0 0 ${(sizes[i] ?? 1 / children.length) * 100}%`, minWidth: 0, minHeight: 0, overflow: "auto" }}>
+            <RenderArea areaKey={c.key} />
+          </div>
+          {i < children.length - 1 ? (
+            <div
+              role="separator"
+              aria-orientation={horizontal ? "vertical" : "horizontal"}
+              onPointerDown={startDrag(i)}
+              style={{ flex: "0 0 auto", background: "var(--colorNeutralStroke2)", touchAction: "none", ...gutter }}
+            />
+          ) : null}
+        </Fragment>
       ))}
     </div>
   );

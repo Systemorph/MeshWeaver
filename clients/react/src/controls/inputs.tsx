@@ -19,6 +19,7 @@ import {
 import { Search20Regular } from "@fluentui/react-icons";
 import type { UiControl } from "../area/types.js";
 import { useResolve } from "../area/context.js";
+import { useMeshLink } from "../area/navigation.js";
 import { str, useClick, useField, useOptions, useText } from "./common.js";
 import { resolveIconByName } from "./icon.js";
 
@@ -178,16 +179,21 @@ function RadioGroupView({ control }: { control: UiControl }): ReactNode {
 }
 
 function ButtonView({ control }: { control: UiControl }): ReactNode {
-  const onClick = useClick(control);
+  const emitClick = useClick(control);
   const label = useText(control.data) || useText(control.label);
-  const href = useText(control.navigateToHref);
+  // Blazor parity (ButtonView.razor): NavigateToHref navigates client-side FIRST, then the
+  // ClickedEvent still posts so a server-side ClickAction runs too.
+  const link = useMeshLink(useText(control.navigateToHref) || undefined);
   return (
     <Button
       appearance={(useResolve(control.appearance) as any) ?? "secondary"}
       disabled={!!useResolve(control.disabled)}
       icon={iconOf(control.iconStart)}
-      onClick={onClick}
-      {...(href ? { as: "a", href } : {})}
+      onClick={(e: React.MouseEvent) => {
+        link.onClick?.(e);
+        emitClick?.();
+      }}
+      {...(link.href ? { as: "a", href: link.href } : {})}
     >
       {label}
     </Button>

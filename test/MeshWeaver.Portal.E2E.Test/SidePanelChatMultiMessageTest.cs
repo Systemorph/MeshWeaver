@@ -22,13 +22,13 @@ namespace MeshWeaver.Portal.E2E;
 [Collection("portal-e2e")]
 public class SidePanelChatMultiMessageTest(PortalFixture fixture)
 {
-    private const string ComposerSeedJson = """
+    private string ComposerSeedJson => $$"""
         {
           "id": "ThreadComposer",
-          "namespace": "Roland/_Thread",
+          "namespace": "{{fixture.UserId}}/_Thread",
           "name": "Chat Input",
           "nodeType": "ThreadComposer",
-          "mainNode": "Roland",
+          "mainNode": "{{fixture.UserId}}",
           "content": { "$type": "ThreadComposer" }
         }
         """;
@@ -67,15 +67,15 @@ public class SidePanelChatMultiMessageTest(PortalFixture fixture)
             Headers = new Dictionary<string, string> { ["authorization"] = $"Bearer {token}" },
             DataObject = new
             {
-                Path = "Roland/_Thread/ThreadComposer",
+                Path = $"{fixture.UserId}/_Thread/ThreadComposer",
                 Fields = "{\"content\":{\"$type\":\"ThreadComposer\",\"harness\":\"Harness/MeshWeaver\","
-                       + "\"modelName\":\"" + ModelPath + "\",\"contextPath\":\"Roland\"}}"
+                       + "\"modelName\":\"" + ModelPath + "\",\"contextPath\":\"" + fixture.UserId + "\"}}"
             }
         });
 
         var page = await context.NewPageAsync();
         await page.SetViewportSizeAsync(1400, 950);
-        await page.GotoAsync($"{fixture.BaseUrl}/User/Roland",
+        await page.GotoAsync($"{fixture.BaseUrl}/User/{fixture.UserId}",
             new PageGotoOptions { WaitUntil = WaitUntilState.NetworkIdle });
 
         // 1) Open the side-panel chat via the layout's "Chat" toggle button.
