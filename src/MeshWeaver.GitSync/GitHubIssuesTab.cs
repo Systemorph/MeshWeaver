@@ -114,7 +114,10 @@ public static class GitHubIssuesTab
         // Live issues grid — binds to the synced query, refreshes itself as issues land.
         host.RegisterForDisposal(issues.WatchIssueNodes(spacePath)
             .Select(nodes => MapIssues(host, nodes))
-            .Subscribe(rows => host.UpdateData(IssuesGridId, rows), _ => { }));
+            .Subscribe(
+                rows => host.UpdateData(IssuesGridId, rows),
+                // Surface a faulted synced query instead of a silently-frozen grid.
+                ex => host.UpdateData(ResultId, Err($"Issue list stopped updating: {ex.Message}"))));
         stack = stack.WithView(new DataGridControl(new JsonPointerReference(LayoutAreaReference.GetDataPointer(IssuesGridId)))
             .WithColumn(new PropertyColumnControl<int> { Property = nameof(GitHubIssueRow.Number).ToCamelCase() }.WithTitle("#"))
             .WithColumn(new PropertyColumnControl<string> { Property = nameof(GitHubIssueRow.Title).ToCamelCase() }.WithTitle("Title"))
