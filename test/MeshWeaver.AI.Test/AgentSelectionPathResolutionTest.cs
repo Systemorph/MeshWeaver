@@ -183,7 +183,9 @@ public class AgentSelectionPathResolutionTest : AITestBase
     /// list": there is no list. The stale-selection wording dead-ended users on the
     /// deployed portal ("available agents ([])" with nothing to pick); the empty-set
     /// message must name the real condition (catalog not emitted / not visible) and
-    /// the recovery (retry; check agent visibility).
+    /// the recovery (retry; check agent visibility). The root-cause of the empty
+    /// snapshot — a lost synced-query Initial gate — is pinned separately by
+    /// SyncedQueryInitialGateTest; this asserts the downstream user-facing message.
     /// </summary>
     [Fact]
     public async Task SelectAgent_WithEmptyCatalog_ReportsEmptyCatalog_NotStaleSelection()

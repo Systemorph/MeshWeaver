@@ -1134,6 +1134,9 @@ public class AgentChatClient : IAgentChat
                 // visible to this principal) — say that, and that a retry can succeed
                 // once the catalog emits. The stale-selection wording stays reserved for
                 // the non-empty case, where picking another agent is real advice.
+                // (The root-cause of the empty catalog — a lost synced-query Initial
+                // gate — is fixed in SyncedQueryMeshNodes; this message covers the
+                // residual "genuinely no agents visible" case.)
                 lastAgentCreationError = loadedAgents.Count == 0
                     ? $"Selected agent '{requested}' could not be validated: the agent "
                       + "catalog is empty — no agents are loaded in this context. Either "
@@ -1420,6 +1423,13 @@ public class AgentChatClient : IAgentChat
                 {
                     logger.LogWarning(ex, "[AgentChatClient] Agent subscription faulted — unblocking with empty");
                     ApplyAgents(Array.Empty<AgentDisplayInfo>(), contextPath);
+                    // AFTER ApplyAgents — CreateAgentsSync resets
+                    // lastAgentCreationError at the start of each attempt, so
+                    // recording the fault first would be wiped. Surfacing the
+                    // REAL load failure here means the chat output shows why
+                    // no agents are available instead of a stale-selection
+                    // "not found" message (issue #201).
+                    lastAgentCreationError = $"Agent loading failed: {ex.Message}";
                     readinessFired = true;
                     agentsLoadedSubject.OnNext(this);
                 },
