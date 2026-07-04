@@ -26,7 +26,14 @@ import {
   MenuPopover,
   MenuTrigger,
 } from "@fluentui/react-components";
-import { Cube20Regular, Grid20Regular, Settings20Regular, Sparkle20Regular } from "@fluentui/react-icons";
+import {
+  ArrowSync20Regular,
+  BranchFork20Regular,
+  Cube20Regular,
+  Grid20Regular,
+  Settings20Regular,
+  Sparkle20Regular,
+} from "@fluentui/react-icons";
 import type { AreaSource, Json, UiControl } from "@meshweaver/react";
 import { useSyncExternalStore } from "react";
 import { useLiveConnection, useNavigationState } from "./LiveConnection";
@@ -179,6 +186,10 @@ export function HeaderMenus() {
   const nodeItems = useMenuItems(source, "Node");
   const meshItems = useMenuItems(source, "Mesh");
   const aiItems = useMenuItems(source, "AI");
+  // Per-integration dropdowns — populated only when the Space has a configured registration
+  // (the server provider self-gates); hidden entirely when empty.
+  const syncItems = useMenuItems(source, "Sync");
+  const gitHubItems = useMenuItems(source, "GitHub");
 
   const currentAddress = nav.target?.address ?? "";
 
@@ -251,6 +262,18 @@ export function HeaderMenus() {
         onItem={handleItem}
       />
       <MenuButton context="AI" icon={<Sparkle20Regular />} title="AI" items={aiItems} onItem={handleItem} />
+      {syncItems.length > 0 && (
+        <MenuButton context="Sync" icon={<ArrowSync20Regular />} title="Sync" items={syncItems} onItem={handleItem} />
+      )}
+      {gitHubItems.length > 0 && (
+        <MenuButton
+          context="GitHub"
+          icon={<BranchFork20Regular />}
+          title="GitHub"
+          items={gitHubItems}
+          onItem={handleItem}
+        />
+      )}
       <Button
         appearance="transparent"
         icon={<Settings20Regular />}
