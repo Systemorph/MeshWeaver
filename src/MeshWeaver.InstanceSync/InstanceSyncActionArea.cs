@@ -55,6 +55,9 @@ public static class InstanceSyncActionArea
 
         var sourceId = host.Reference.GetParameterValue(SourceParam);
         var op = host.Reference.GetParameterValue(OpParam);
+        if (string.IsNullOrEmpty(spacePath))
+            return Observable.Return<UiControl?>(Message(
+                "Not in a Space", "Sync actions run on a Space; this node has no containing Space.", backHref));
         if (string.IsNullOrEmpty(sourceId) || string.IsNullOrEmpty(op))
             return Observable.Return<UiControl?>(Message("Nothing to do", "No sync source/operation specified.", backHref));
 

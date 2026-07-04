@@ -349,6 +349,8 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
         isNodeMenuOpen = false;
         isMeshMenuOpen = false;
         isAiMenuOpen = false;
+        isSyncMenuOpen = false;
+        isGitHubMenuOpen = false;
         // Imperative actions (no Href): the AI menu's "New thread" opens the chat panel fresh.
         if (string.Equals(item.Area, AiNewThreadAction, StringComparison.Ordinal))
         {
