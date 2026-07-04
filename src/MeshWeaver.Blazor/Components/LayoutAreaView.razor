@@ -74,4 +74,15 @@
 @code
 {
     [Parameter] public bool Top { get; set; }
+
+    /// <summary>
+    /// Whether this area drives the global header menu (Node / Mesh / AI dropdowns). ONLY the
+    /// routed primary page sets this (ApplicationPage / AreaPage). Deliberately decoupled from
+    /// <see cref="Top"/>: a modal node PREVIEW (NodePreviewDialog) and embedded areas render
+    /// <see cref="Top"/>=true for full-area layout, but must NOT hijack the header menu — that
+    /// clobbered the current node's menu with the previewed/embedded node's (e.g. a Skill's,
+    /// leaving no Delete) and stuck there after the dialog closed, since the per-circuit menu
+    /// slot keeps its last value.
+    /// </summary>
+    [Parameter] public bool DrivesMenu { get; set; }
 }
