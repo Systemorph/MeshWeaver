@@ -47,6 +47,7 @@ public static class GraphConfigurationExtensions
                 .AddNotificationRuleType()
                 .AddNotificationChannelType()
                 .AddInvitationType()
+                .AddScheduledActionType()
                 .AddEmailType()
                 .AddEaCredentialType()
                 .AddTeamsConversationType()
