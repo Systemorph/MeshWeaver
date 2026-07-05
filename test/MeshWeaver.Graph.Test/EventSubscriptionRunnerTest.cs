@@ -1,4 +1,5 @@
 using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
@@ -25,9 +26,20 @@ public class EventSubscriptionRunnerTest(ITestOutputHelper output) : MonolithMes
     private const string InviteeEmail = "newcomer@acme.com";
     private const string InviteeId = "newcomer";
 
+    /// <summary>A tiny node content with a flippable status field — the watched node for the NodeStatus test.</summary>
+    public record WatchedContent
+    {
+        public string Status { get; init; } = "";
+    }
+
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => ConfigureMeshBase(builder)
-            .AddMeshNodes(new MeshNode(Space) { Name = "Invite Space", NodeType = "Space" });
+            .AddMeshNodes(new MeshNode(Space) { Name = "Invite Space", NodeType = "Space" })
+            .AddMeshNodes(new MeshNode("Watched")
+            {
+                Name = "Watched",
+                HubConfiguration = c => c.AddMeshDataSource(s => s.WithContentType<WatchedContent>()),
+            });
 
     [Fact(Timeout = 60000)]
     public async Task PendingGrant_FiresWhenMatchingUserIsCreated()
@@ -192,6 +204,59 @@ public class EventSubscriptionRunnerTest(ITestOutputHelper output) : MonolithMes
             .FirstAsync().Timeout(40.Seconds());
         Assert.True(final!.Status == EventSubscriptionStatus.Fired,
             $"timer subscription ended {final.Status}: {final.LastError}");
+
+        await Mesh.GetWorkspace().GetMeshNodeStream($"{Space}/_Access/{InviteeId}_Access")
+            .Where(n => n?.Content is AccessAssignment a && a.Roles.Any(r => r.Role == "Editor" && !r.Denied))
+            .FirstAsync().Timeout(10.Seconds());
+    }
+
+    [Fact(Timeout = 60000)]
+    public async Task NodeStatusSubscription_FiresWhenWatchedNodeReachesResting()
+    {
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        var changeFeed = Mesh.ServiceProvider.GetRequiredService<IMeshChangeFeed>();
+        var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        const string watchId = "watched1";
+
+        // A watched node currently "Running" (active).
+        using (accessService.ImpersonateAsSystem())
+            await meshService.CreateNode(new MeshNode(watchId)
+            {
+                NodeType = "Watched",
+                Name = "Watched 1",
+                Content = new WatchedContent { Status = "Running" },
+            }).Should().Emit();
+
+        // Fire when the watched node's Status reaches "Idle" (resting), granting the subject.
+        var subscription = new EventSubscription
+        {
+            TriggerType = EventTriggerType.NodeStatus,
+            WatchPath = watchId,
+            StatusField = "Status",
+            RestingValues = ["Idle"],
+            ContinuationType = EventContinuationType.GrantSpaceAccess,
+            SubjectId = InviteeId,
+            TargetPath = Space,
+            Role = "Editor",
+        };
+        await EventSubscriptionOps.CreateSubscription(meshService, subscription).Should().Emit();
+
+        using var runner = new EventSubscriptionRunner(Mesh, changeFeed, meshService, accessService,
+            Mesh.ServiceProvider.GetService<Microsoft.Extensions.Logging.ILogger<EventSubscriptionRunner>>());
+        await runner.StartAsync(default);
+
+        // Flip the watched node to a resting status → the subscription fires.
+        using (accessService.ImpersonateAsSystem())
+            await Mesh.GetWorkspace().GetMeshNodeStream(watchId)
+                .Update(n => n with { Content = new WatchedContent { Status = "Idle" } })
+                .Timeout(30.Seconds()).ToTask();
+
+        var final = await Mesh.GetWorkspace().GetMeshNodeStream(EventSubscriptionNodeType.Path(subscription.Id))
+            .Select(n => n?.Content as EventSubscription)
+            .Where(s => s is not null and not { Status: EventSubscriptionStatus.Pending })
+            .FirstAsync().Timeout(40.Seconds());
+        Assert.True(final!.Status == EventSubscriptionStatus.Fired,
+            $"node-status subscription ended {final.Status}: {final.LastError}");
 
         await Mesh.GetWorkspace().GetMeshNodeStream($"{Space}/_Access/{InviteeId}_Access")
             .Where(n => n?.Content is AccessAssignment a && a.Roles.Any(r => r.Role == "Editor" && !r.Denied))
