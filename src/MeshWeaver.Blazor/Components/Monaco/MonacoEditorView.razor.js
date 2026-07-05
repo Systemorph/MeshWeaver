@@ -18,30 +18,44 @@ function syncMonacoTheme(effectiveTheme) {
     }
 }
 
-// Detect theme from DOM when themeHandler is not available
+// The OS preference, the ultimate arbiter when the app theme is "System".
+function osPrefersDark() {
+    return !!(window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+}
+
+// Resolve the CURRENTLY-RENDERED effective theme ('dark' | 'light'), correct even when the app theme
+// mode is "System" (follow the OS). Order of authority:
+//   1. document.documentElement[data-theme] — what themeHandler.applyTheme() ACTUALLY wrote (already
+//      resolved System→OS). This reflects what's on screen right now; it's the most reliable signal and
+//      is re-written whenever the app mode OR the OS preference changes.
+//   2. themeHandler.getEffectiveTheme() — recomputes from the current mode (also resolves System→OS).
+//   3. body[data-theme] / dark classes — legacy FluentDesignTheme signals.
+//   4. the OS preference directly.
+// A literal 'system' value anywhere is resolved via the OS — never treated as a theme name (that was
+// the "black font": 'system' !== 'dark' → the light 'vs' theme with black glyphs on the dark composer).
 function detectThemeFromDOM() {
-    // FluentDesignTheme sets data-theme on document.body
-    const bodyTheme = document.body?.getAttribute('data-theme');
-    if (bodyTheme) {
-        return bodyTheme;
+    const resolve = (v) => {
+        if (v === 'dark' || v === 'light') return v;
+        if (v === 'system' || v === 'auto') return osPrefersDark() ? 'dark' : 'light';
+        return null;
+    };
+    const htmlTheme = resolve(document.documentElement.getAttribute('data-theme'));
+    if (htmlTheme) return htmlTheme;
+    if (typeof window.themeHandler !== 'undefined'
+        && typeof window.themeHandler.getEffectiveTheme === 'function') {
+        const handlerTheme = resolve(window.themeHandler.getEffectiveTheme());
+        if (handlerTheme) return handlerTheme;
     }
-    // Also check documentElement as fallback
-    const htmlTheme = document.documentElement.getAttribute('data-theme');
-    if (htmlTheme) {
-        return htmlTheme;
-    }
-    // Check for dark/fluent-dark class on body or html
-    if (document.body?.classList.contains('dark') ||
+    const bodyTheme = resolve(document.body?.getAttribute('data-theme'));
+    if (bodyTheme) return bodyTheme;
+    if (document.documentElement.classList.contains('dark-theme') ||
+        document.body?.classList.contains('dark') ||
         document.body?.classList.contains('fluent-dark') ||
         document.documentElement.classList.contains('dark') ||
         document.documentElement.classList.contains('fluent-dark')) {
         return 'dark';
     }
-    // Fallback to system preference
-    if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
-        return 'dark';
-    }
-    return 'light';
+    return osPrefersDark() ? 'dark' : 'light';
 }
 
 // Register theme change callback (called from initEditor when Monaco is ready)
@@ -285,16 +299,11 @@ export function initEditor(editorId, placeholder, dotNetRef, codeEditMode = fals
     // BLACK on the transparent-over-dark composer background (unreadable in dark mode). Re-syncing
     // the global theme on every mount also heals a stale theme set before the app flipped to dark.
     if (typeof monaco !== 'undefined' && monaco.editor) {
-        // Prefer the AUTHORITATIVE app theme (window.themeHandler) — the SAME source the theme-change
-        // callback uses (ensureThemeCallbackRegistered) — and only fall back to DOM sniffing when it's
-        // absent. Using detectThemeFromDOM here unconditionally was the "black font on the user page"
-        // bug: FluentDesignTheme doesn't always mirror the effective theme onto body[data-theme], so DOM
-        // sniffing returned 'light' while the app was dark, and this mount-time setTheme (GLOBAL) then
-        // RESET every editor to 'vs' (black glyphs) right after the callback had correctly set 'vs-dark'.
-        const currentTheme = (typeof window.themeHandler !== 'undefined' && window.themeHandler.getEffectiveTheme)
-            ? window.themeHandler.getEffectiveTheme()
-            : detectThemeFromDOM();
-        monaco.editor.setTheme(currentTheme === 'dark' ? 'vs-dark' : 'vs');
+        // detectThemeFromDOM now resolves the EFFECTIVE theme even under the "System" mode (documentElement
+        // [data-theme] that applyTheme wrote → themeHandler.getEffectiveTheme → OS preference), so a composer
+        // mounted after the first editor (e.g. inside the user-activity area) no longer resets Monaco to the
+        // light 'vs' theme and render black glyphs on the dark composer background.
+        monaco.editor.setTheme(detectThemeFromDOM() === 'dark' ? 'vs-dark' : 'vs');
     }
     if (editorInstance) {
         // Handle content changes for placeholder AND push the value back to C#.
