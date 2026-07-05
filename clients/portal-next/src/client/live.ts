@@ -52,6 +52,31 @@ export interface LiveMesh {
   close(): void;
 }
 
+/**
+ * A STABLE PER-TAB participant id — a GUID kept in <c>sessionStorage</c> (unique per browser tab,
+ * survives reloads within that tab, cleared when the tab closes). The client joins as
+ * <c>portal/&lt;id&gt;</c> (its own server-side participant hub); because the id is stable across a
+ * tab's reloads AND reconnects, the server keeps ONE participant hub + its
+ * per-stream sync sub-hubs alive across them. A fresh random address per load (the old
+ * <c>node/&lt;newId()&gt;</c> default) made every reload a NEW participant, orphaning the previous hubs
+ * and racing sync-hub creation against incoming DataChangedEvents — the server then DROPS those events
+ * ("no synchronization hub found … never-created sync hub"), so the page renders a random subset.
+ * Per-TAB (not a shared cookie) so two tabs never collide on one participant address.
+ */
+function stableClientId(): string {
+  const key = "mw-client-id";
+  try {
+    const existing = sessionStorage.getItem(key);
+    if (existing) return existing;
+    const id = crypto.randomUUID();
+    sessionStorage.setItem(key, id);
+    return id;
+  } catch {
+    // sessionStorage unavailable (private mode / SSR) — a per-load id still beats a per-connection one.
+    return crypto.randomUUID();
+  }
+}
+
 /** Mint a short-lived API token off the browser session, then join the mesh over gRPC-web. */
 export async function connectLive(baseUrl: string = window.location.origin): Promise<LiveMesh> {
   const resp = await fetch(`${baseUrl}/api/tokens`, {
@@ -64,7 +89,9 @@ export async function connectLive(baseUrl: string = window.location.origin): Pro
   const { rawToken, nodePath } = (await resp.json()) as { rawToken?: string; nodePath?: string };
   if (!rawToken) throw new Error("token mint returned no rawToken");
 
-  const connection = await connect(baseUrl, { token: rawToken });
+  // Join as a STABLE per-tab participant `portal/<id>` so the server keeps THIS tab's participant hub
+  // + its per-stream sync sub-hubs alive across reloads/reconnects instead of dropping frames.
+  const connection = await connect(baseUrl, { token: rawToken, address: `portal/${stableClientId()}` });
   const mesh = Mesh.from(connection);
   const userId = (nodePath ?? "").split("/")[0] ?? "";
   const runQuery = (query: string, limit = 50) => queryNodes(baseUrl, rawToken, query, limit);

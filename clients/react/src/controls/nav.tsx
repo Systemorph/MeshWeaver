@@ -11,7 +11,9 @@ function NavLink({ control }: { control: UiControl }): ReactNode {
   const link = useMeshLink(useText(control.url) || undefined);
   const emitClick = useClick(control);
   const active = !!useResolve(control.isActive);
-  const Icon = resolveIconByName(useText(control.icon));
+  // Pass the RESOLVED raw value (a name string OR a FluentIcon {provider,id,…} object) — not the
+  // stringified form, which would collapse the object to "[object Object]" and render blank.
+  const Icon = resolveIconByName(useResolve(control.icon));
   return (
     <Link
       href={link.href}

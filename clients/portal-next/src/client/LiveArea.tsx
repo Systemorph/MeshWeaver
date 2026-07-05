@@ -16,8 +16,8 @@
 // connection, exactly like the Vite SPA.
 
 import { useEffect, useMemo, useSyncExternalStore } from "react";
-import { MessageBar, MessageBarBody } from "@fluentui/react-components";
-import { EmbeddedAreaProvider, MeshAreaView, StaticAreaSource, createGrpcEmbeddedFactory } from "@meshweaver/react";
+import { Button, MessageBar, MessageBarActions, MessageBarBody } from "@fluentui/react-components";
+import { EmbeddedAreaProvider, MeshAreaView, StaticAreaSource } from "@meshweaver/react";
 import type { AreaSource, AreaTree } from "@meshweaver/react";
 import { rootAreaOf, targetKey, type AreaTarget } from "./live";
 import { useLiveConnection, usePublishNavigation } from "./LiveConnection";
@@ -76,17 +76,25 @@ export function LiveArea({ path, target, initialTree, initialRootArea = "", unau
   const isLive = active != null && active === liveSource;
   const streamError = live.areaErrors[targetKey(target)];
   const offline = live.state.kind === "offline";
-  const connection = live.state.kind === "live" ? live.state.mesh.connection : null;
 
-  // 🚨 STABLE per connection. An inline factory recreated each render churned every nested `@@`
-  // embed (AddressAreaEmbed re-subscribes when `factory` identity changes) → doc-page regions
-  // rendered non-deterministically across refreshes. Memoized + caching, embeds subscribe once.
-  const embedFactory = useMemo(() => (connection ? createGrpcEmbeddedFactory(connection) : null), [connection]);
+  // ONE hub: the embed factory comes from the session's single MeshAreaRegistry (LiveConnection),
+  // the SAME registry getAreaSource uses — a page area and any `@@` embed of it share one stream.
+  // (Previously each LiveArea built its own factory over the connection: a second registry, a second
+  // subscription per embed, and — when churned — the non-deterministic "different sections" refresh.)
+  const embedFactory = live.embeddedFactory;
 
   // The live source roots at the explicit area name when the URL addressed one; the SSR seed
   // roots wherever the server said its tree roots (the rendered frame's area, or "" for the
   // synthesized preview).
   const rootArea = isLive ? rootAreaOf(target) : initialRootArea;
+
+  // Not signed in AND no snapshot to show → the page is useless; send them to the portal's unified
+  // /login page (the "proper redirect to login"). A page WITH SSR content (public) is left in place
+  // with a sign-in affordance rather than yanked away from an anonymous reader.
+  const needsLogin = !!unauthenticated && !active;
+  useEffect(() => {
+    if (needsLogin && typeof window !== "undefined") window.location.href = "/login";
+  }, [needsLogin]);
 
   const view = active ? (
     <MeshAreaView
@@ -105,16 +113,27 @@ export function LiveArea({ path, target, initialTree, initialRootArea = "", unau
       data-mw-root-area={rootArea}
       style={{ height: "100%" }}
     >
-      {offline && (
-        <div data-mw-offline style={{ marginBottom: 16 }}>
-          <MessageBar intent="warning">
-            <MessageBarBody>
-              No live mesh connection on this origin ({(live.state as { reason: string }).reason}). Showing the
-              server-rendered snapshot only.
-            </MessageBarBody>
-          </MessageBar>
-        </div>
-      )}
+      {offline && (() => {
+        const reason = (live.state as { reason: string }).reason;
+        // A 401/auth reason is really "not signed in" — offer the login redirect, not just a notice.
+        const authFailed = /\b401\b|unauth|token mint/i.test(reason);
+        return (
+          <div data-mw-offline style={{ marginBottom: 16 }}>
+            <MessageBar intent="warning">
+              <MessageBarBody>
+                No live mesh connection on this origin ({reason}). Showing the server-rendered snapshot only.
+              </MessageBarBody>
+              {authFailed && (
+                <MessageBarActions>
+                  <Button size="small" appearance="primary" onClick={() => (window.location.href = "/login")}>
+                    Sign in
+                  </Button>
+                </MessageBarActions>
+              )}
+            </MessageBar>
+          </div>
+        );
+      })()}
       {streamError && (
         <div data-mw-area-error style={{ marginBottom: 16 }}>
           <MessageBar intent="error">
@@ -124,10 +143,12 @@ export function LiveArea({ path, target, initialTree, initialRootArea = "", unau
       )}
       {unauthenticated && !active && (
         <MessageBar intent="info">
-          <MessageBarBody>
-            Not signed in — the server could not mint a mesh token from this session. Sign in to the portal on this
-            origin, then reload.
-          </MessageBarBody>
+          <MessageBarBody>Not signed in — taking you to sign in…</MessageBarBody>
+          <MessageBarActions>
+            <Button size="small" appearance="primary" onClick={() => (window.location.href = "/login")}>
+              Sign in
+            </Button>
+          </MessageBarActions>
         </MessageBar>
       )}
       {view && embedFactory ? (

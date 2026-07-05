@@ -14,8 +14,9 @@ import {
 import { ChevronDown20Regular, ChevronRight20Regular } from "@fluentui/react-icons";
 import type { Skin, UiControl } from "../area/types.js";
 import { useResolve } from "../area/context.js";
+import { resolveIconByName } from "../controls/icon.js";
 import { ControlRenderer, RenderArea, useChildAreas } from "./ControlRenderer.js";
-import { cssAlign, cssSize } from "./style.js";
+import { controlClass, cssAlign, cssSize } from "./style.js";
 
 export interface SkinProps {
   skin: Skin;
@@ -39,7 +40,7 @@ export function DefaultStackSkin({ skin, control }: SkinProps): ReactNode {
     boxSizing: "border-box",
   };
   return (
-    <div style={style}>
+    <div className={controlClass(control)} style={style}>
       <Children control={control} />
     </div>
   );
@@ -65,7 +66,7 @@ function GridSkin({ skin, control }: SkinProps): ReactNode {
     width: "100%",
   };
   return (
-    <div style={style}>
+    <div className={controlClass(control)} style={style}>
       <Children control={control} />
     </div>
   );
@@ -73,7 +74,7 @@ function GridSkin({ skin, control }: SkinProps): ReactNode {
 
 function PlainLayoutSkin({ control }: SkinProps): ReactNode {
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+    <div className={controlClass(control)} style={{ display: "flex", flexDirection: "column", gap: 8 }}>
       <Children control={control} />
     </div>
   );
@@ -89,7 +90,7 @@ function TabsSkin({ skin, control }: SkinProps): ReactNode {
   const [selected, setSelected] = useState<string>(String(skin.activeTabId ?? tabs[0]?.value ?? "0"));
   const active = tabs.find((t) => t.value === selected) ?? tabs[0];
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 8, width: cssSize(skin.width) }}>
+    <div className={controlClass(control)} style={{ display: "flex", flexDirection: "column", gap: 8, width: cssSize(skin.width) }}>
       <TabList selectedValue={selected} onTabSelect={(_: SelectTabEvent, d: SelectTabData) => setSelected(String(d.value))}>
         {tabs.map((t) => (
           <Tab key={t.value} value={t.value}>
@@ -109,7 +110,7 @@ function tabLabel(control?: UiControl): string | undefined {
 
 function ToolbarSkin({ control }: SkinProps): ReactNode {
   return (
-    <Toolbar>
+    <Toolbar className={controlClass(control)}>
       <Children control={control} />
     </Toolbar>
   );
@@ -120,60 +121,112 @@ function paneSkinOf(control?: UiControl): Skin | undefined {
   return control?.skins?.find((s) => /splitterpane/i.test(String(s.$type)));
 }
 
-function paneWeight(control?: UiControl): number {
-  const size = paneSkinOf(control)?.size;
-  const n = size == null ? NaN : parseFloat(String(size));
-  return Number.isFinite(n) && n > 0 ? n : 1;
+/** Parse a pixel size ("280px", "280", 280) to a number; `null` for star / percentage / unset. */
+function parsePx(v: unknown): number | null {
+  if (v == null) return null;
+  if (typeof v === "number") return Number.isFinite(v) ? v : null;
+  const s = String(v).trim();
+  const m = /^(-?\d*\.?\d+)\s*px$/i.exec(s) ?? /^(-?\d*\.?\d+)$/.exec(s);
+  return m ? parseFloat(m[1]) : null;
+}
+
+/**
+ * A pane's sizing spec, mirroring SplitterPaneSkin.Size semantics: a definite PIXEL width
+ * ("280px" → `fixedPx`) or a STAR weight ("*", "2*", or unspecified → `grow`, filling the
+ * remainder). This is the fix for the old `parseFloat("280px")=280` vs `parseFloat("*")=1`
+ * bug that made a 280px pane a 280:1 STAR weight (≈full width) instead of a fixed 280px.
+ */
+interface PaneSpec {
+  fixedPx: number | null;
+  grow: number;
+  minPx: number | null;
+  maxPx: number | null;
+}
+
+function paneSpec(control?: UiControl): PaneSpec {
+  const skin = paneSkinOf(control);
+  const minPx = parsePx(skin?.min);
+  const maxPx = parsePx(skin?.max);
+  const size = skin?.size;
+  const s = size == null ? "" : String(size).trim();
+  const star = /^(\d*\.?\d*)\*$/.exec(s); // "*", "2*", "1.5*"
+  if (s === "" || s === "*" || star) {
+    const w = star && star[1] ? parseFloat(star[1]) : 1;
+    return { fixedPx: null, grow: w > 0 ? w : 1, minPx, maxPx };
+  }
+  const px = parsePx(size);
+  if (px != null) return { fixedPx: px, grow: 0, minPx, maxPx };
+  // Anything else (e.g. a "50%") → treat as a star pane so it still fills.
+  return { fixedPx: null, grow: 1, minPx, maxPx };
+}
+
+function clamp(v: number, lo: number, hi: number): number {
+  return Math.min(Math.max(v, lo), hi);
 }
 
 /**
  * Interactive splitter — the React port of Blazor's FluentMultiSplitter (SplitterView): panes laid
- * out along the skin's orientation with DRAGGABLE gutters between them (was a static flex split).
- * Initial pane fractions come from each SplitterPaneSkin.Size (relative weights) or an equal split;
- * dragging a gutter reallocates fraction between its two adjacent panes, clamped to a 5% floor so a
- * pane never collapses to nothing. Pointer capture via window listeners keeps the drag smooth even
- * when the cursor leaves the thin gutter.
+ * out along the skin's orientation with DRAGGABLE gutters between them. Each pane sizes per its
+ * SplitterPaneSkin.Size: a PIXEL pane ("280px") gets a fixed flex-basis (`flex: 0 0 280px`, no grow)
+ * while a STAR pane ("*"/unspecified) fills the remaining space (`flex: <weight> 1 0`) — so a fixed
+ * 280px menu stays 280px and the content pane takes the rest, matching Blazor. Dragging a gutter
+ * resizes the adjacent FIXED pane (in px, clamped to its Min/Max), leaving the star neighbour to
+ * re-fill. Pointer capture via window listeners keeps the drag smooth even off the thin gutter.
  */
 function SplitterSkin({ skin, control }: SkinProps): ReactNode {
   const children = useChildAreas(control);
   const horizontal = String(skin.orientation ?? "Horizontal").toLowerCase() !== "vertical";
   const containerRef = useRef<HTMLDivElement>(null);
 
-  const initial = useMemo(() => {
-    const weights = children.map((c) => paneWeight(c.control));
-    const total = weights.reduce((a, b) => a + b, 0) || 1;
-    return weights.map((w) => w / total);
-  }, [children]);
+  const specs = useMemo(() => children.map((c) => paneSpec(c.control)), [children]);
 
-  const [sizes, setSizes] = useState<number[]>(initial);
-  // Re-sync when the pane SHAPE changes — keyed on the id/weight signature, not just the count, so a
-  // DIFFERENT splitter with the same pane count (but different panes) doesn't inherit stale sizes.
+  // Per-pane pixel OVERRIDE set by dragging (null = use the spec). Reset when the pane shape changes,
+  // keyed on the id/size signature so a different splitter with the same count doesn't inherit stale
+  // overrides.
   const shapeKey = useMemo(
-    () => children.map((c, i) => `${String(c.control?.id ?? c.key ?? i)}:${paneWeight(c.control)}`).join("|"),
-    [children],
+    () =>
+      children
+        .map((c, i) => `${String(c.control?.id ?? c.key ?? i)}:${specs[i].fixedPx ?? `*${specs[i].grow}`}`)
+        .join("|"),
+    [children, specs],
   );
-  useEffect(() => setSizes(initial), [shapeKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  const [overrides, setOverrides] = useState<(number | null)[]>(() => children.map(() => null));
+  useEffect(() => setOverrides(children.map(() => null)), [shapeKey]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const effectiveFixed = (i: number): number | null => overrides[i] ?? specs[i].fixedPx;
 
   const startDrag = (index: number) => (e: ReactPointerEvent) => {
     const container = containerRef.current;
     if (!container || index + 1 >= children.length) return;
     e.preventDefault();
-    const rect = container.getBoundingClientRect();
-    const total = horizontal ? rect.width : rect.height;
+    const panes = container.querySelectorAll<HTMLElement>(":scope > [data-splitter-pane]");
+    const measure = (el?: HTMLElement) => (el ? (horizontal ? el.getBoundingClientRect().width : el.getBoundingClientRect().height) : 0);
+    const startA = measure(panes[index]);
+    const startB = measure(panes[index + 1]);
     const origin = horizontal ? e.clientX : e.clientY;
-    const startSizes = sizes.length === children.length ? [...sizes] : initial;
-    const floor = 0.05;
+    const specA = specs[index];
+    const specB = specs[index + 1];
+    // Resize the FIXED side (so the star neighbour keeps filling). If neither is fixed, resize the
+    // left pane (converting it to a pixel override); if both are fixed, also resize the left.
+    const resizeLeft = effectiveFixed(index) != null || effectiveFixed(index + 1) == null;
+    const floor = 40; // keep a pane usably wide when it has no explicit Min
 
     const move = (ev: PointerEvent) => {
       const cur = horizontal ? ev.clientX : ev.clientY;
-      let delta = total > 0 ? (cur - origin) / total : 0;
-      // Clamp so neither adjacent pane drops below the floor.
-      delta = Math.max(delta, floor - startSizes[index]);
-      delta = Math.min(delta, startSizes[index + 1] - floor);
-      const next = [...startSizes];
-      next[index] = startSizes[index] + delta;
-      next[index + 1] = startSizes[index + 1] - delta;
-      setSizes(next);
+      const delta = cur - origin;
+      setOverrides((prev) => {
+        const next = [...prev];
+        if (resizeLeft) {
+          const lo = specA.minPx ?? floor;
+          const hi = specA.maxPx ?? Math.max(lo, startA + startB - (specB.minPx ?? floor));
+          next[index] = clamp(startA + delta, lo, hi);
+        } else {
+          const lo = specB.minPx ?? floor;
+          const hi = specB.maxPx ?? Math.max(lo, startA + startB - (specA.minPx ?? floor));
+          next[index + 1] = clamp(startB - delta, lo, hi);
+        }
+        return next;
+      });
     };
     // Tear the drag down on ANY terminal — pointerup, pointercancel (touch interrupted), or the
     // window losing focus mid-drag. Without pointercancel/blur the window listeners leaked and kept
@@ -195,6 +248,7 @@ function SplitterSkin({ skin, control }: SkinProps): ReactNode {
   return (
     <div
       ref={containerRef}
+      className={controlClass(control)}
       style={{
         display: "flex",
         flexDirection: horizontal ? "row" : "column",
@@ -203,21 +257,25 @@ function SplitterSkin({ skin, control }: SkinProps): ReactNode {
         minHeight: 0,
       }}
     >
-      {children.map((c, i) => (
-        <Fragment key={c.key || i}>
-          <div style={{ flex: `0 0 ${(sizes[i] ?? 1 / children.length) * 100}%`, minWidth: 0, minHeight: 0, overflow: "auto" }}>
-            <RenderArea areaKey={c.key} />
-          </div>
-          {i < children.length - 1 ? (
-            <div
-              role="separator"
-              aria-orientation={horizontal ? "vertical" : "horizontal"}
-              onPointerDown={startDrag(i)}
-              style={{ flex: "0 0 auto", background: "var(--colorNeutralStroke2)", touchAction: "none", ...gutter }}
-            />
-          ) : null}
-        </Fragment>
-      ))}
+      {children.map((c, i) => {
+        const fixedPx = effectiveFixed(i);
+        const flex = fixedPx != null ? `0 0 ${fixedPx}px` : `${specs[i].grow} 1 0%`;
+        return (
+          <Fragment key={c.key || i}>
+            <div data-splitter-pane="" style={{ flex, minWidth: 0, minHeight: 0, overflow: "auto" }}>
+              <RenderArea areaKey={c.key} />
+            </div>
+            {i < children.length - 1 ? (
+              <div
+                role="separator"
+                aria-orientation={horizontal ? "vertical" : "horizontal"}
+                onPointerDown={startDrag(i)}
+                style={{ flex: "0 0 auto", background: "var(--colorNeutralStroke2)", touchAction: "none", ...gutter }}
+              />
+            ) : null}
+          </Fragment>
+        );
+      })}
     </div>
   );
 }
@@ -225,6 +283,7 @@ function SplitterSkin({ skin, control }: SkinProps): ReactNode {
 function NavMenuSkin({ skin, control }: SkinProps): ReactNode {
   return (
     <nav
+      className={controlClass(control)}
       style={{
         display: "flex",
         flexDirection: "column",
@@ -241,13 +300,15 @@ function NavMenuSkin({ skin, control }: SkinProps): ReactNode {
 
 function NavGroupSkin({ skin, control }: SkinProps): ReactNode {
   const [open, setOpen] = useState<boolean>(skin.expanded !== false);
+  const GroupIcon = resolveIconByName(skin.icon);
   return (
-    <div>
+    <div className={controlClass(control)}>
       <div
         onClick={() => setOpen((o) => !o)}
         style={{ display: "flex", alignItems: "center", gap: 4, cursor: "pointer", padding: "4px 0" }}
       >
         {open ? <ChevronDown20Regular /> : <ChevronRight20Regular />}
+        {GroupIcon ? <GroupIcon /> : null}
         <Subtitle2>{String(skin.title ?? "")}</Subtitle2>
       </div>
       {open ? (
@@ -261,7 +322,7 @@ function NavGroupSkin({ skin, control }: SkinProps): ReactNode {
 
 function CardSkin({ control }: SkinProps): ReactNode {
   return (
-    <Card style={{ padding: 12 }}>
+    <Card className={controlClass(control)} style={{ padding: 12 }}>
       <ControlRenderer control={control} />
     </Card>
   );
@@ -276,7 +337,7 @@ function PropertySkin({ skin, control }: SkinProps): ReactNode {
   const label = useResolve(skin.label ?? skin.name ?? skin.title);
   const description = useResolve(skin.description);
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+    <div className={controlClass(control)} style={{ display: "flex", flexDirection: "column", gap: 2 }}>
       {label != null && String(label).length > 0 ? (
         <Text weight="semibold" as="span">
           <label htmlFor={skin.name != null ? String(skin.name) : undefined}>{String(label)}</label>
@@ -299,7 +360,7 @@ function PropertySkin({ skin, control }: SkinProps): ReactNode {
  */
 function EditFormSkin({ control }: SkinProps): ReactNode {
   return (
-    <form onSubmit={(e) => e.preventDefault()} style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+    <form onSubmit={(e) => e.preventDefault()} className={controlClass(control)} style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       <Children control={control} />
     </form>
   );
@@ -309,7 +370,7 @@ function semanticWrapper(tag: keyof JSX.IntrinsicElements): SkinComponent {
   return ({ control }) => {
     const Tag = tag as any;
     return (
-      <Tag>
+      <Tag className={controlClass(control)}>
         <ControlRenderer control={control} />
       </Tag>
     );

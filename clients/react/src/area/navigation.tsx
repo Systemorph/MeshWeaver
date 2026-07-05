@@ -41,6 +41,32 @@ export function isExternalTarget(target: string): boolean {
   return !target.startsWith("/") || target.startsWith("//");
 }
 
+/**
+ * Normalizes an internal mesh-path target to its app-absolute (leading-slash) form so it routes
+ * client-side under the host basePath instead of resolving relative to the current URL.
+ *
+ * Mesh links reach the client in two shapes: root-absolute ("/Doc/GUI", "/search?q=x") from result
+ * cards, and ADDRESS-RELATIVE with NO leading slash ("roland/Settings/Metadata") from nav menus /
+ * NavLinks (that is exactly what `LayoutAreaReference.ToHref(address)` emits server-side). Without
+ * this normalization a bare "roland/Settings/Metadata" is misclassified as external, so it renders
+ * as a raw <a href="roland/Settings/Metadata"> — no basePath, no client-side routing — and the
+ * browser resolves it relative to "/next/roland/Settings" into the doubled "/next/roland/roland/…".
+ *
+ * A genuinely external / non-routable target is left untouched so it still bypasses the router:
+ * anything already leading with "/" (app-absolute OR protocol-relative "//"), a fragment ("#…"), a
+ * page-relative query ("?…"), a relative path ("./x", "../Sibling" — doc siblings resolve in the
+ * browser), or a scheme URL ("http:", "https:", "mailto:", "tel:", "data:", …).
+ */
+export function normalizeTarget(target: string): string {
+  const isExternalOrRelative =
+    target.startsWith("/") || // app-absolute or protocol-relative "//"
+    target.startsWith("#") || // fragment
+    target.startsWith("?") || // page-relative query
+    target.startsWith(".") || // relative path (./x, ../Sibling)
+    /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(target); // scheme: http:, https:, mailto:, tel:, data:
+  return isExternalOrRelative ? target : `/${target}`;
+}
+
 /** True for the clicks a router may claim — plain left-clicks without modifiers on self targets. */
 function isRoutableClick(e: MouseEvent): boolean {
   return !e.defaultPrevented && e.button === 0 && !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey;
@@ -60,13 +86,14 @@ export function useMeshLink(target: string | undefined): MeshLink {
   const navigation = useNavigation();
   return useMemo(() => {
     if (!target) return {};
-    if (isExternalTarget(target)) return { href: target };
+    const normalized = normalizeTarget(target);
+    if (isExternalTarget(normalized)) return { href: normalized };
     return {
-      href: navigation.hrefFor(target),
+      href: navigation.hrefFor(normalized),
       onClick: (e: MouseEvent) => {
         if (!isRoutableClick(e)) return;
         e.preventDefault();
-        navigation.navigate(target);
+        navigation.navigate(normalized);
       },
     };
   }, [navigation, target]);
@@ -84,9 +111,9 @@ export function useHtmlLinkInterceptor(): (e: MouseEvent<HTMLElement>) => void {
     if (!isRoutableClick(e)) return;
     const anchor = (e.target as HTMLElement).closest?.("a[href]");
     if (!anchor || !e.currentTarget.contains(anchor)) return;
-    const href = anchor.getAttribute("href") ?? "";
-    if (isExternalTarget(href) || anchor.getAttribute("target") || anchor.hasAttribute("download")) return;
+    const normalized = normalizeTarget(anchor.getAttribute("href") ?? "");
+    if (isExternalTarget(normalized) || anchor.getAttribute("target") || anchor.hasAttribute("download")) return;
     e.preventDefault();
-    navigation.navigate(href);
+    navigation.navigate(normalized);
   };
 }
