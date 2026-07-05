@@ -47,8 +47,8 @@ public sealed class ClaudeCodeHarness(IOptions<ClaudeCodeConfiguration> options)
     /// </summary>
     public IReadOnlyList<HarnessCommand> Commands { get; } =
     [
-        new("login", "Log in to your Claude subscription", HarnessCommandKind.Connect),
-        new("logout", "Log out of Claude Code", HarnessCommandKind.Disconnect),
+        new("login", "Connect: paste a key — /login <console-key> · /login token <setup-token> · /login gateway <url> <token>", HarnessCommandKind.Connect),
+        new("logout", "Forget the stored Claude Code credential", HarnessCommandKind.Disconnect),
     ];
 
     /// <summary>

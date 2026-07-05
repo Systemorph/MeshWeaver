@@ -988,8 +988,25 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                     var harness = ActiveHarness();
                     var commandName = parsed.Command.Name;
                     var isRuntimeSwitch = string.Equals(commandName, "harness", StringComparison.OrdinalIgnoreCase);
-                    var isHarnessOwnedCommand = harness?.Commands.Any(
-                        c => string.Equals(c.Name, commandName, StringComparison.OrdinalIgnoreCase)) == true;
+                    var harnessCmd = harness?.Commands.FirstOrDefault(
+                        c => string.Equals(c.Name, commandName, StringComparison.OrdinalIgnoreCase));
+                    // 🔑 A harness AUTH command (/login, /logout — Connect/Disconnect) CANNOT be performed
+                    // by the headless `claude --print` CLI (no interactive OAuth), so it must NEVER be
+                    // forwarded — forwarding it was exactly why login did nothing. The PORTAL owns the
+                    // credential: HandleHarnessAuthCommand stores a pasted key / token (choose the method)
+                    // as the harness's ModelProvider node, which the ClaudeCode client reads back.
+                    var isHarnessAuthCommand = harnessCmd is
+                        { Kind: MeshWeaver.AI.HarnessCommandKind.Connect or MeshWeaver.AI.HarnessCommandKind.Disconnect };
+                    if (harness is not null && !isRuntimeSwitch && isHarnessAuthCommand)
+                    {
+                        HandleHarnessAuthCommand(harness, harnessCmd!, userMessageText);
+                        MessageText = null;
+                        if (monacoEditor != null)
+                            _ = ClearMonacoAsync();
+                        StateHasChanged();
+                        return;
+                    }
+                    var isHarnessOwnedCommand = harnessCmd is not null;
                     var isHarnessNodePick = string.Equals(commandName, "agent", StringComparison.OrdinalIgnoreCase)
                         || string.Equals(commandName, "model", StringComparison.OrdinalIgnoreCase);
                     // Forward only under a CLI harness, and never /harness (always MeshWeaver-owned).
@@ -1224,6 +1241,128 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         // /agent /model /harness + any Space/NodeType/user-defined one) — there is no C# registry.
         ResolveSkillNodeAndRun(parsedCommand);
         await InvokeAsync(StateHasChanged);
+    }
+
+    /// <summary>
+    /// Handle a harness AUTH slash-command (login/logout) LOCALLY — the portal owns the credential; the
+    /// headless CLI cannot authenticate itself, so forwarding <c>/login</c> to it did nothing. Terminal-native,
+    /// like Claude Code: paste the credential right in the composer and pick the method.
+    /// <list type="bullet">
+    /// <item><c>/login &lt;key&gt;</c> — infers the method from the token shape (Anthropic Console key
+    ///   <c>sk-ant-api…</c> → ANTHROPIC_API_KEY; subscription token <c>sk-ant-oat…</c> → CLAUDE_CODE_OAUTH_TOKEN).</item>
+    /// <item><c>/login key &lt;k&gt;</c> — force the API-key method; <c>/login token &lt;t&gt;</c> — force the
+    ///   subscription OAuth token (from <c>claude setup-token</c>).</item>
+    /// <item><c>/login gateway &lt;base-url&gt; &lt;token&gt;</c> — a gateway/proxy (ANTHROPIC_AUTH_TOKEN + ANTHROPIC_BASE_URL).</item>
+    /// <item><c>/logout</c> — forget the stored credential.</item>
+    /// </list>
+    /// The credential is encrypted at rest (<see cref="MeshWeaver.AI.IProviderKeyProtector"/>) and stored as
+    /// the harness's <c>ModelProvider</c> node at <c>{user}/_Memex/{harnessId}</c> — the SAME path
+    /// <c>ChatClientCredentialResolver.ResolveConnectCredential</c> reads, so writer and reader agree.
+    /// </summary>
+    private void HandleHarnessAuthCommand(MeshWeaver.AI.IHarness harness, MeshWeaver.AI.HarnessCommand cmd, string? rawText)
+    {
+        if (cmd.Kind == MeshWeaver.AI.HarnessCommandKind.Disconnect)
+        {
+            ClearHarnessCredential(harness);
+            return;
+        }
+        // Connect: everything after the leading "/login" word is the pasted argument(s).
+        var rest = (rawText ?? string.Empty).Trim();
+        var sp = rest.IndexOf(' ');
+        var args = sp < 0 ? string.Empty : rest[(sp + 1)..].Trim();
+        if (string.IsNullOrEmpty(args))
+        {
+            ShowSkillStatus(
+                $"To connect {harness.Definition.DisplayName}, paste a credential here — "
+                + "`/login <key>` (Anthropic Console key), `/login token <oauth-token>` "
+                + "(from `claude setup-token`), or `/login gateway <base-url> <token>`.", false);
+            return;
+        }
+        var parts = args.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+        string method, credential;
+        string? baseUrl = null;
+        var head = parts[0].ToLowerInvariant();
+        if (head == "key" && parts.Length >= 2) { method = "apiKey"; credential = parts[1]; }
+        else if (head == "token" && parts.Length >= 2) { method = "oauth"; credential = parts[1]; }
+        else if (head == "gateway" && parts.Length >= 3) { method = "authToken"; baseUrl = parts[1]; credential = parts[2]; }
+        else
+        {
+            credential = parts[0];
+            // Infer: Anthropic subscription OAuth tokens are "sk-ant-oat…"; Console keys "sk-ant-api…".
+            method = credential.StartsWith("sk-ant-oat", StringComparison.OrdinalIgnoreCase) ? "oauth" : "apiKey";
+        }
+        StoreHarnessCredential(harness, method, credential, baseUrl);
+    }
+
+    /// <summary>Encrypt + persist the pasted credential as the harness's ModelProvider node (create-or-update).</summary>
+    private void StoreHarnessCredential(MeshWeaver.AI.IHarness harness, string method, string credential, string? baseUrl)
+    {
+        var accessService = Hub.ServiceProvider.GetService<AccessService>();
+        var owner = accessService?.Context?.ObjectId ?? accessService?.CircuitContext?.ObjectId;
+        if (string.IsNullOrEmpty(owner))
+        {
+            ShowSkillStatus("Can't store the credential — you don't appear to be signed in.", true);
+            return;
+        }
+        var providerPath = $"{MeshWeaver.AI.ModelProviderNodeType.UserNamespacePath(owner)}/{harness.Id}";
+        var protector = Hub.ServiceProvider.GetService<MeshWeaver.AI.IProviderKeyProtector>();
+        var stored = protector is null ? credential : protector.Protect(credential);
+        var node = MeshWeaver.Mesh.MeshNode.FromPath(providerPath) with
+        {
+            NodeType = MeshWeaver.AI.ModelProviderNodeType.NodeType,
+            Name = harness.Definition.DisplayName,
+            Icon = "/static/NodeTypeIcons/key.svg",
+            Content = new MeshWeaver.AI.ModelProviderConfiguration
+            {
+                Provider = harness.Id,
+                ApiKey = stored,
+                AuthMethod = method,
+                Endpoint = baseUrl,
+                CreatedAt = DateTimeOffset.UtcNow
+            }
+        };
+        var label = method switch
+        {
+            "apiKey" => "API key",
+            "oauth" => "subscription token",
+            "authToken" => "gateway token",
+            _ => "credential"
+        };
+        MeshQuery.CreateOrUpdateNode(node).Subscribe(
+            _ => InvokeAsync(() =>
+            {
+                ShowSkillStatus($"{harness.Definition.DisplayName} connected with your {label} — new chats will use it.", false);
+                StateHasChanged();
+            }),
+            ex => InvokeAsync(() =>
+            {
+                ShowSkillStatus($"Couldn't store the credential: {ex.Message}", true);
+                StateHasChanged();
+            }));
+    }
+
+    /// <summary>Delete the harness's stored credential node (the <c>/logout</c> path).</summary>
+    private void ClearHarnessCredential(MeshWeaver.AI.IHarness harness)
+    {
+        var accessService = Hub.ServiceProvider.GetService<AccessService>();
+        var owner = accessService?.Context?.ObjectId ?? accessService?.CircuitContext?.ObjectId;
+        if (string.IsNullOrEmpty(owner))
+        {
+            ShowSkillStatus("Nothing to disconnect — you don't appear to be signed in.", true);
+            return;
+        }
+        var providerPath = $"{MeshWeaver.AI.ModelProviderNodeType.UserNamespacePath(owner)}/{harness.Id}";
+        MeshQuery.DeleteNode(providerPath).Subscribe(
+            _ => InvokeAsync(() =>
+            {
+                ShowSkillStatus($"{harness.Definition.DisplayName} disconnected — its stored credential was removed.", false);
+                StateHasChanged();
+            }),
+            ex => InvokeAsync(() =>
+            {
+                ShowSkillStatus($"Couldn't disconnect: {ex.Message}", true);
+                StateHasChanged();
+            }));
     }
 
     /// <summary>
