@@ -934,6 +934,11 @@ public static class MemexConfiguration
         // {userId}/_Provider/GitHub. See Doc/Architecture/GitHubSync.
         app.MapGitHubConnect();
 
+        // Instance Sync — OAuth+PKCE "connect to a remote MeshWeaver instance" endpoints
+        // (/connect/instance[/callback]). Redirects to the remote's own login and stores the
+        // returned mw_ token as the sync party's RemoteToken. See InstanceConnectEndpoints.
+        app.MapInstanceConnect();
+
         // GitHub webhooks — POST /webhooks/github. HMAC-verified (GitHub:Webhook:Secret), no
         // browser session, so it does NOT need HttpContext.User. Refreshes synced issue nodes
         // live. Register one webhook per repo (Issues + Issue comments) with the shared secret.
