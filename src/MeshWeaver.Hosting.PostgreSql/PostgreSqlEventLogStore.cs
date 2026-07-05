@@ -12,23 +12,29 @@ namespace MeshWeaver.Hosting.PostgreSql;
 /// Durable Postgres <see cref="IEventLogStore"/> — the app-level outbox persisted in the
 /// <c>events</c> schema (created by the <c>V40</c> migration), so the event log survives restarts and
 /// is queryable/replayable across silos. Append is idempotent by <c>(path, kind, version)</c> via
-/// <c>ON CONFLICT</c>. All I/O runs on the shared I/O pool (never a bare <c>FromAsync</c>).
+/// <c>ON CONFLICT</c>. All I/O runs on the Postgres I/O pools (never a bare <c>FromAsync</c>).
 /// </summary>
 public sealed class PostgreSqlEventLogStore : IEventLogStore
 {
+    private const string PoolAdapter = "eventlog";
     private readonly NpgsqlDataSource _dataSource;
-    private readonly IIoPool _ioPool;
+    // Writes on the cap-1 pg:{adapter} pool (serialises through a single connection, the adapter idiom);
+    // reads on the cap-16 pg-read:{adapter} pool. Both are bounded WELL under Npgsql's pool — unlike the
+    // FileSystem pool (cap 256), which could open enough concurrent commands to exhaust the connection pool.
+    private readonly IIoPool _writePool;
+    private readonly IIoPool _readPool;
     private static readonly JsonSerializerOptions JsonOptions = new();
 
-    /// <summary>Creates the store over the shared data source + I/O pool.</summary>
+    /// <summary>Creates the store over the shared data source + the Postgres read/write I/O pools.</summary>
     public PostgreSqlEventLogStore(NpgsqlDataSource dataSource, IoPoolRegistry? ioPoolRegistry = null)
     {
         _dataSource = dataSource;
-        _ioPool = ioPoolRegistry?.Get(IoPoolNames.FileSystem) ?? IoPool.Unbounded;
+        _writePool = ioPoolRegistry?.Get(IoPoolNames.PostgresAdapterPrefix + PoolAdapter) ?? IoPool.Unbounded;
+        _readPool = ioPoolRegistry?.Get(IoPoolNames.PostgresReadAdapterPrefix + PoolAdapter) ?? IoPool.Unbounded;
     }
 
     /// <inheritdoc />
-    public IObservable<long> Append(MeshChangeEvent change) => _ioPool.Invoke(async ct =>
+    public IObservable<long> Append(MeshChangeEvent change) => _writePool.Invoke(async ct =>
     {
         // ON CONFLICT ... DO UPDATE (a no-op touch) so RETURNING always yields the seq — existing on
         // a duplicate, new otherwise — without a second round-trip.
@@ -52,7 +58,7 @@ public sealed class PostgreSqlEventLogStore : IEventLogStore
 
     /// <inheritdoc />
     public IObservable<IReadOnlyList<EventLogEntry>> ReadFrom(long afterSeq, int limit = 500) =>
-        _ioPool.Invoke(async ct =>
+        _readPool.Invoke(async ct =>
         {
             await using var cmd = _dataSource.CreateCommand("""
                 SELECT seq, payload FROM events.event_log
@@ -74,14 +80,14 @@ public sealed class PostgreSqlEventLogStore : IEventLogStore
         });
 
     /// <inheritdoc />
-    public IObservable<long> MaxSeq() => _ioPool.Invoke(async ct =>
+    public IObservable<long> MaxSeq() => _readPool.Invoke(async ct =>
     {
         await using var cmd = _dataSource.CreateCommand("SELECT COALESCE(MAX(seq), 0) FROM events.event_log;");
         return Convert.ToInt64(await cmd.ExecuteScalarAsync(ct).ConfigureAwait(false));
     });
 
     /// <inheritdoc />
-    public IObservable<long> GetCursor(string consumerId) => _ioPool.Invoke(async ct =>
+    public IObservable<long> GetCursor(string consumerId) => _readPool.Invoke(async ct =>
     {
         await using var cmd = _dataSource.CreateCommand(
             "SELECT last_seq FROM events.action_cursor WHERE consumer_id = $1;");
@@ -91,7 +97,7 @@ public sealed class PostgreSqlEventLogStore : IEventLogStore
     });
 
     /// <inheritdoc />
-    public IObservable<Unit> SetCursor(string consumerId, long seq) => _ioPool.Invoke(async ct =>
+    public IObservable<Unit> SetCursor(string consumerId, long seq) => _writePool.Invoke(async ct =>
     {
         await using var cmd = _dataSource.CreateCommand("""
             INSERT INTO events.action_cursor (consumer_id, last_seq) VALUES ($1, $2)

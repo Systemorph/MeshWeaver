@@ -62,4 +62,25 @@ public class EventLogTest
         await new EventLogReplayService(feed, store).StartAsync(default);
         Assert.Empty(received);
     }
+
+    [Fact]
+    public async Task Replay_drains_all_pages_when_backlog_exceeds_one_page()
+    {
+        var feed = new InProcessMeshChangeFeed();
+        var store = new InMemoryEventLogStore();
+
+        // A backlog LARGER than the replay page size (500): a single ReadFrom page would leave the
+        // remainder unreplayed forever. The drain must paginate until the whole backlog is delivered.
+        const int count = 1201;
+        for (var i = 0; i < count; i++)
+            await store.Append(Created($"N{i}")).ToTask();
+
+        var received = new List<string>();
+        using var sub = feed.Subscribe(c => received.Add(c.Path));
+
+        await new EventLogReplayService(feed, store).StartAsync(default);
+
+        Assert.Equal(count, received.Count);   // every page drained, not just the first 500
+        Assert.Equal(count, await store.GetCursor(EventLogReplayService.RunnerConsumerId).FirstAsync().ToTask());
+    }
 }
