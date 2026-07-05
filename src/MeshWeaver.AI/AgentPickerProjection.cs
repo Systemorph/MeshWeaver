@@ -308,12 +308,22 @@ public static class AgentPickerProjection
                 .Select(a => a.Path)
                 .FirstOrDefault());
 
+        var credResolver = hub.ServiceProvider.GetService<ChatClientCredentialResolver>();
         var model = ObserveModels(workspace, hub, currentPath, nodeTypePath, selectedProviderPaths, userPath)
-            .Select(list => list
-                .Where(m => !string.IsNullOrEmpty(m.Path))
-                .OrderBy(m => m.Order)
-                .Select(m => m.Path)
-                .FirstOrDefault());
+            .Select(list =>
+            {
+                var ordered = list.Where(m => !string.IsNullOrEmpty(m.Path)).OrderBy(m => m.Order).ToList();
+                // Default to the lowest-Order model whose credentials actually RESOLVE — mirrors
+                // ChatClientCredentialResolver.ResolveDefaultModelId (the execution-time fallback), so the
+                // composer never DEFAULTS to a model with no provider/key configured (e.g. a "glm-5.2"
+                // catalog entry whose prices/provider were never entered). That divergence — composer picks
+                // lowest-Order, execution picks lowest-Order-that-resolves — is what surfaced as "selected
+                // model X unavailable, using default Y". Fall back to the first model so the composer is
+                // never left without a selection.
+                var resolvable = credResolver == null ? null
+                    : ordered.FirstOrDefault(m => credResolver.Resolve(m.Path!) != CredentialResolution.Missing);
+                return (resolvable ?? ordered.FirstOrDefault())?.Path;
+            });
 
         var harness = ObserveSnapshot(workspace, hub,
                 $"{HarnessesQueryId}|u={userPath ?? ""}|s={spacePath ?? ""}",

@@ -939,6 +939,11 @@ public static class MemexConfiguration
         // returned mw_ token as the sync party's RemoteToken. See InstanceConnectEndpoints.
         app.MapInstanceConnect();
 
+        // "Sign in with GitHub" — an authentication provider (distinct from the connect endpoints
+        // above). Reuses the same GitHub:OAuth creds; issues the Entra-shaped cookie so a GitHub
+        // login resolves to the same mesh user as an Entra login with that verified email.
+        app.MapGitHubLogin();
+
         // GitHub webhooks — POST /webhooks/github. HMAC-verified (GitHub:Webhook:Secret), no
         // browser session, so it does NOT need HttpContext.User. Refreshes synced issue nodes
         // live. Register one webhook per repo (Issues + Issue comments) with the shared secret.

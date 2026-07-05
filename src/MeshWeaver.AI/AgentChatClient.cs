@@ -1804,28 +1804,43 @@ public class AgentChatClient : IAgentChat
     /// </summary>
     private void ApplyStaleModelFallback()
     {
-        if (string.IsNullOrEmpty(currentModelName))
-            return;
         var resolver = hub.ServiceProvider.GetService<ChatClientCredentialResolver>();
         if (resolver is null)
             return;
-        if (resolver.Resolve(currentModelName) != CredentialResolution.Missing)
-            return; // the selected model resolves — nothing to heal.
+        // The selected model already resolves → nothing to heal. (A non-empty, resolvable selection.)
+        if (!string.IsNullOrEmpty(currentModelName)
+            && resolver.Resolve(currentModelName!) != CredentialResolution.Missing)
+            return;
+        // Either NO model is selected, or the selected one no longer resolves (deleted/refactored out of
+        // the catalog, or its provider is unconfigured). Seed the DEFAULT available model (lowest-Order
+        // resolvable) so the round runs on a working model instead of dead-ending on the first factory
+        // (OpenAI) with "(none selected)". When nothing resolves, `fallback` is empty → currentModelName
+        // stays as-is → the round surfaces the clear "No AI model available" message (FormatNoAgentError).
         var fallback = resolver.ResolveDefaultModelId();
         if (string.IsNullOrEmpty(fallback)
             || string.Equals(fallback, currentModelName, StringComparison.OrdinalIgnoreCase))
             return;
         var stale = currentModelName;
-        logger.LogWarning(
-            "[AgentChatClient] Selected model '{Stale}' does not resolve to a live model; "
-            + "falling back to default model '{Default}'.", stale, fallback);
         currentModelName = fallback;
-        // Surface the swap to the user (GetResponseAsync / GetStreamingResponseAsync emit it once).
-        // Without this the model silently changes under the user — they think their pinned model
-        // answered when it actually 404'd and the default stepped in.
-        staleModelNotice =
-            $"*The selected model `{stale}` is unavailable — it may have been removed from the catalog "
-            + $"or its provider is no longer configured. Using the default model `{fallback}` for this response.*";
+        // Only NOTIFY the user when we swapped AWAY from a model they had explicitly pinned. Seeding a
+        // default for an empty selection is silent — there was no user choice to override.
+        if (!string.IsNullOrEmpty(stale))
+        {
+            logger.LogWarning(
+                "[AgentChatClient] Selected model '{Stale}' does not resolve to a live model; "
+                + "falling back to default model '{Default}'.", stale, fallback);
+            // Surface the swap (GetResponseAsync / GetStreamingResponseAsync emit it once). Without this
+            // the model silently changes under the user — they think their pinned model answered when it
+            // actually 404'd and the default stepped in.
+            staleModelNotice =
+                $"*The selected model `{stale}` is unavailable — it may have been removed from the catalog "
+                + $"or its provider is no longer configured. Using the default model `{fallback}` for this response.*";
+        }
+        else
+        {
+            logger.LogDebug(
+                "[AgentChatClient] No model was selected; seeding default model '{Default}'.", fallback);
+        }
     }
 
     /// <summary>
