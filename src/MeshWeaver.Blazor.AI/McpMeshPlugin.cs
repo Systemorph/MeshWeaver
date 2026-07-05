@@ -375,20 +375,29 @@ Recommended: 'icon' as an inline SVG starting with <svg, using currentColor. 'co
     /// the <c>{space}/_Sync/{id}</c> registration — through the caller's session hub, so it is
     /// permission-checked (writing under <c>_Sync</c> requires Editor/Update on the Space).
     /// </summary>
-    [McpServerTool(Title = "Sync a Space with a remote instance", Destructive = false, Idempotent = true, OpenWorld = true)]
+    // NOT Idempotent: ops.Create errors if the {space}/_Sync/{id} registration already exists, so a
+    // retry fails rather than being a safe no-op (reconfigure via the GUI or delete-then-recreate).
+    [McpServerTool(Title = "Sync a Space with a remote instance", Destructive = false, Idempotent = false, OpenWorld = true)]
     [Description(@"Configures instance sync for a Space: replicate it to another MeshWeaver instance and keep changes flowing both ways. Replication starts automatically; conflicts resolve newest-writer-wins and converge on both sides. The registration is written under {space}/_Sync, so it runs under YOUR identity and requires Editor (Update) on the Space.")]
     public Task<string> Sync(
-        [Description("The Space path to sync (e.g. 'ACME').")] string space,
+        [Description("The top-level Space id to sync (e.g. 'ACME') — a single segment, NOT a nested path.")] string space,
         [Description("The remote MeshWeaver instance URL (e.g. https://memex.meshweaver.cloud).")] string remoteUrl,
         [Description("An API token (mw_…) issued by the remote instance.")] string remoteToken,
         [Description("Sync direction: 'Bidirectional' (default), 'PushOnly', or 'PullOnly'.")] string direction = "Bidirectional",
         [Description("A name for this sync party (default 'partner').")] string name = "partner",
         [Description("The Space id on the remote (blank = same id as this Space).")] string? remoteSpace = null)
     {
+        // Instance sync only recognises a registration at {space}/_Sync/{id} where {space} is a single
+        // top-level segment (the coordinator ignores any other shape) — reject a nested path up front
+        // instead of silently writing a registration that never activates.
+        space = space?.Trim().Trim('/') ?? "";
+        if (space.Length == 0 || space.Contains('/'))
+            return Task.FromResult($"Error: 'space' must be a single top-level Space id (no '/'); got '{space}'.");
         var dir = Enum.TryParse<InstanceSyncDirection>(direction, ignoreCase: true, out var d)
             ? d : InstanceSyncDirection.Bidirectional;
-        var id = new string((name ?? "partner").Trim().ToLowerInvariant()
-            .Select(c => char.IsLetterOrDigit(c) ? c : '-').ToArray()).Trim('-');
+        // Use the SAME (case-preserving) sanitizer the GUI uses, so a given name maps to ONE id — a
+        // lower-cased copy here would create a duplicate registration differing only by casing.
+        var id = InstanceSyncService.SanitizeSourceId(name ?? "partner");
         if (id.Length == 0) id = "partner";
         var node = new MeshNode(id, $"{space}/{InstanceSyncService.ConfigId}")
         {
