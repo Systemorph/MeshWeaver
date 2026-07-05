@@ -321,6 +321,13 @@ public static class PostgreSqlExtensions
         services.AddSingleton<IPartitionStorageProvider>(sp =>
             sp.GetRequiredService<PostgreSqlPartitionStorageProvider>());
 
+        // Durable event-log store (the events schema) — overrides the in-memory default from
+        // AddMeshEventLog(), so the app-level outbox survives restarts in prod.
+        services.Replace(ServiceDescriptor.Singleton<MeshWeaver.Hosting.IEventLogStore>(sp =>
+            new MeshWeaver.Hosting.PostgreSql.PostgreSqlEventLogStore(
+                sp.GetRequiredService<NpgsqlDataSource>(),
+                sp.GetService<MeshWeaver.Mesh.Threading.IoPoolRegistry>())));
+
         // Cross-schema query provider — UNION fan-out over searchable partitions.
         services.AddSingleton<ICrossSchemaQueryProvider>(sp =>
             new PostgreSqlCrossSchemaQueryProvider(
