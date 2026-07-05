@@ -2194,11 +2194,18 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         try
         {
             if (monacoEditor != null)
+            {
                 await monacoEditor.ClearAsync();
+                // Keep the composer focused after clearing so the user can immediately type the next
+                // message — including WHILE the current round streams (the composer never blocks on the
+                // running round). Clearing the editor on submit otherwise blurred it, so focus was lost
+                // the moment a round started. Best-effort: focusing an already-focused editor is a no-op.
+                await monacoEditor.FocusAsync();
+            }
         }
         catch (Exception ex) when (!_isDisposed)
         {
-            Logger.LogDebug(ex, "[ThreadChat:{InstanceId}] Failed to clear Monaco editor", _instanceId);
+            Logger.LogDebug(ex, "[ThreadChat:{InstanceId}] Failed to clear/focus Monaco editor", _instanceId);
         }
     }
 

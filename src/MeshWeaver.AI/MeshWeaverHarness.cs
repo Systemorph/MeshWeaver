@@ -21,7 +21,10 @@ public sealed class MeshWeaverHarness : IHarness
         DisplayName = "MeshWeaver",
         Description = "MeshWeaver agents with a selectable model.",
         Icon = "/static/NodeTypeIcons/meshweaver-logo.svg",
-        Order = 0,
+        // -1 = the "make this the default" convention (AgentPickerProjection.ObserveDefaultComposer
+        // picks the LOWEST-Order harness). MeshWeaver must lead the picker AND be the catalog default,
+        // ahead of ClaudeCode (1) and Copilot (2).
+        Order = -1,
         IsDefault = true,
         SupportsAgentSelection = true
     };

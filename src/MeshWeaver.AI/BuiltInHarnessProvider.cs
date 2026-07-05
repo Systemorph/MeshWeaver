@@ -45,7 +45,7 @@ public sealed class BuiltInHarnessProvider(IEnumerable<IHarness> harnesses) : IS
                 Name = def.DisplayName ?? def.Id,
                 Icon = def.Icon,
                 // Carry the harness Order onto the node so the default-composer selection (and the picker)
-                // can honor it: MeshWeaver=0 leads, ClaudeCode=1, Copilot=2. Without this every harness
+                // can honor it: MeshWeaver=-1 leads (default), ClaudeCode=1, Copilot=2. Without this every harness
                 // node has Order=null, so ObserveDefaultComposer's OrderBy(n => n.Order ?? 0) is a no-op and
                 // the default falls to an ARBITRARY harness (a CLI one). A composer stuck on a CLI harness
                 // shows the harness's slash-commands in the / menu instead of the nodeType:Skill catalog —
