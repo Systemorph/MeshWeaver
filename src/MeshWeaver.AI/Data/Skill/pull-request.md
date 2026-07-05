@@ -31,9 +31,10 @@ never discover red on CI:
    `dotnet build -c Release -p:CIRun=true -warnaserror`. A plain Debug build passes while CI fails —
    warnings are promoted to errors there (the classic miss is **CS9107**). Fix at the root, never
    `NoWarn`.
-3. **Run the affected tests** once (`dotnet test <project> --no-restore` — always restore a fresh
-   worktree first, or `--no-restore` silently runs zero tests). Never `Task.Delay` to wait; assert
-   on the condition. Read [Writing Tests](@/Doc/Architecture/WritingTests).
+3. **Run the affected tests** once. On a **fresh worktree, restore first** — a `dotnet test
+   <project> --no-restore` before anything has been restored builds no test assemblies and still
+   exits 0 (zero tests run, empty output — the silent no-op to watch for). Never `Task.Delay` to
+   wait; assert on the condition. Read [Writing Tests](@/Doc/Architecture/WritingTests).
 
 Only when that Release/`-warnaserror` build + tests are clean do you push.
 
@@ -43,11 +44,11 @@ Only when that Release/`-warnaserror` build + tests are clean do you push.
 
 Never commit or push on your own initiative — wait for the explicit "ship it" / "open a PR". Then
 commit through the working tree: `GitWorkingTreeService.CommitAndPush(userId, repoSlug, message,
-branch)` (or `git add -A && git commit` in the worktree). End the commit message with the required
-trailer:
+branch)` (or `git add -A && git commit` in the worktree). Follow the repo's commit convention —
+end the message with a `Co-Authored-By:` trailer identifying you as the author:
 
 ```
-Co-Authored-By: <your agent identity>
+Co-Authored-By: <your agent name> <your-agent@…>
 ```
 
 ## 2. Push + open the PR
@@ -58,7 +59,7 @@ available and authenticated as the user:
 
 ```bash
 git push -u origin <branch>
-gh pr create --base main --head <branch> --title "…" --body "…"   # ends the body with the Generated-with trailer
+gh pr create --base main --head <branch> --title "…" --body "…"   # what changed · why · how tested
 ```
 
 ## 3. Request the GitHub Copilot review — REST API only
