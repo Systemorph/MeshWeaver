@@ -13,7 +13,7 @@ namespace MeshWeaver.Graph.Test;
 
 /// <summary>
 /// Tests <see cref="SpaceInviteService"/> — the two invite cases: an existing account is granted
-/// immediately; an unknown email is scheduled (a <see cref="ScheduledAction"/>) and invited (an
+/// immediately; an unknown email is scheduled (an <see cref="EventSubscription"/>) and invited (an
 /// <c>Invitation</c> node), so the grant lands automatically when they sign up.
 /// </summary>
 public class SpaceInviteServiceTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
@@ -73,11 +73,12 @@ public class SpaceInviteServiceTest(ITestOutputHelper output) : MonolithMeshTest
             .FirstAsync().Timeout(30.Seconds());
         Assert.Equal(SpaceInviteOutcome.Invited, outcome);
 
-        // A scheduled action was created to grant Viewer on the Space when this email's User appears.
-        await Mesh.GetWorkspace().GetQuery("inv-actions",
-                $"path:{ScheduledActionNodeType.Namespace} scope:children nodeType:{ScheduledActionNodeType.NodeType}")
-            .Where(nodes => (nodes ?? []).Any(n => n.Content is ScheduledAction a
-                && a.MatchValue == email && a.TargetPath == Space && a.Role == "Viewer"))
+        // An event subscription was created to grant Viewer on the Space when this email's User appears.
+        await Mesh.GetWorkspace().GetQuery("inv-subs",
+                $"path:{EventSubscriptionNodeType.Namespace} scope:children nodeType:{EventSubscriptionNodeType.NodeType}")
+            .Where(nodes => (nodes ?? []).Any(n => n.Content is EventSubscription s
+                && s.TriggerType == EventTriggerType.NodeChange
+                && s.MatchValue == email && s.TargetPath == Space && s.Role == "Viewer"))
             .FirstAsync().Timeout(30.Seconds());
 
         // An Invitation node was created for the email (the InvitationEmailSender emails it).
