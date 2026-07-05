@@ -704,7 +704,10 @@ else
            token completes silently. API key / gateway store a pasted credential. *@
         @if (LoginDialogOpen)
         {
-            <div class="thread-chat-widget">
+            @* stopPropagation on the ROOT div (a native element) so Enter/Esc/arrows in the dialog don't
+               bubble to the thread shell's global shortcuts — the modifier can't sit on the FluentTextField
+               components (it conflicts with their @onkeydown parameter), so it lives here. *@
+            <div class="thread-chat-widget" @onkeydown:stopPropagation="true">
                 <div class="thread-chat-widget-header">
                     <span>Log in to @(_loginHarness!.Definition.DisplayName)</span>
                     <button class="thread-msg-action-btn" @onclick="CancelConnect" title="Close">&#10005;</button>
@@ -750,7 +753,7 @@ else
                                 {
                                     <div style="margin-top:4px;"><strong>2</strong>&nbsp; Paste the code shown, then submit:</div>
                                     <FluentTextField @bind-Value="_connectCode" Immediate="true" Placeholder="Paste code"
-                                                     @onkeydown="OnConnectInputKeyDown" @onkeydown:stopPropagation="true" Style="width:100%;" />
+                                                     @onkeydown="OnConnectInputKeyDown" Style="width:100%;" />
                                     <FluentButton Appearance="FluentAppearance.Accent" Style="width:100%;"
                                                   Disabled="@(_connectBusy || string.IsNullOrWhiteSpace(_connectCode))"
                                                   OnClick="SubmitConnectCode">@(_connectBusy ? "Verifying…" : "Submit code")</FluentButton>
@@ -776,8 +779,7 @@ else
                         @if (_loginMethod == "gateway")
                         {
                             <div>Gateway base URL:</div>
-                            <FluentTextField @bind-Value="_connectBaseUrl" Immediate="true" Placeholder="https://…"
-                                             @onkeydown:stopPropagation="true" Style="width:100%;" />
+                            <FluentTextField @bind-Value="_connectBaseUrl" Immediate="true" Placeholder="https://…" Style="width:100%;" />
                             <div style="margin-top:4px;">Gateway token:</div>
                         }
                         else
@@ -788,7 +790,7 @@ else
                         <FluentTextField @bind-Value="_connectCode" Immediate="true"
                                          Placeholder="@(_loginMethod == "gateway" ? "token" : "sk-ant-api…")"
                                          TextFieldType="Microsoft.FluentUI.AspNetCore.Components.TextFieldType.Password"
-                                         @onkeydown="OnConnectInputKeyDown" @onkeydown:stopPropagation="true" Style="width:100%;" />
+                                         @onkeydown="OnConnectInputKeyDown" Style="width:100%;" />
                         <FluentButton Appearance="FluentAppearance.Accent" Style="width:100%;"
                                       Disabled="@(_connectBusy || string.IsNullOrWhiteSpace(_connectCode))"
                                       OnClick="SubmitLoginCredential">Save</FluentButton>
