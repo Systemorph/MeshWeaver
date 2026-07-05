@@ -54,6 +54,10 @@ public static class SecurityServiceExtensions
                 // no longer lazily CREATE SCHEMAs on arbitrary writes (the atioz ghost-
                 // schema fix). See Doc/Architecture/PartitionStorageRouting.md.
                 services.AddScoped<INodeValidator, OwnsPartitionProvisioningValidator>();
+                // Makes a USER partition root undeletable by an interactive caller — the
+                // defence-in-depth behind the node-menu-delete-wiped-my-partition incident.
+                // System stays exempt (deliberate off-boarding); Spaces stay deletable.
+                services.AddScoped<INodeValidator, PartitionRootDeletionGuard>();
                 return services;
             })
             // Mesh hub: needed wherever code calls hub.CheckPermission on the

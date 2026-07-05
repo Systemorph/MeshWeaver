@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.Reactive.Linq;
 using MeshWeaver.Data;
+using MeshWeaver.Graph.Security;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh;
@@ -123,9 +124,19 @@ public static class NodeMenuItemsExtensions
             //   30-38  content / history / sync    📁 🕘 🔌 (🔄)
             //   50     lifecycle                   ♻️
 
+            // A USER partition root (the user's home) is NOT a normal editable node: Edit / Move /
+            // Copy / Delete on the root would rewrite, relocate, duplicate or WIPE the entire
+            // partition (the node-menu-delete-wiped-my-partition incident). Suppress those four on
+            // a protected root — the viewer-scoped Pin stays. Delete is additionally hard-blocked
+            // server-side by PartitionRootDeletionGuard; this keeps it off the menu in the first place.
+            var isProtectedRoot = PartitionRootDeletionGuard.IsUserPartitionRoot(menuNode);
+
             // ── Group 1: edit / organize ──
-            var edit = MeshNodeLayoutAreas.GetEditMenuItem(menuPath, perms);
-            if (edit != null) items.Add(edit with { Order = 10, Icon = "✏️" });
+            if (!isProtectedRoot)
+            {
+                var edit = MeshNodeLayoutAreas.GetEditMenuItem(menuPath, perms);
+                if (edit != null) items.Add(edit with { Order = 10, Icon = "✏️" });
+            }
 
             var accessService = host.Hub.ServiceProvider.GetService<AccessService>();
             var viewerId = accessService?.Context?.ObjectId
@@ -133,14 +144,17 @@ public static class NodeMenuItemsExtensions
             var pin = PinLayoutArea.GetMenuItem(menuPath, viewerId);
             if (pin != null) items.Add(pin with { Order = 12, Icon = "🔖" });
 
-            var move = MoveLayoutArea.GetMenuItem(menuPath, perms);
-            if (move != null) items.Add(move with { Order = 14, Icon = "➡️" });
+            if (!isProtectedRoot)
+            {
+                var move = MoveLayoutArea.GetMenuItem(menuPath, perms);
+                if (move != null) items.Add(move with { Order = 14, Icon = "➡️" });
 
-            var copy = CopyLayoutArea.GetMenuItem(menuPath, perms);
-            if (copy != null) items.Add(copy with { Order = 16, Icon = "📋" });
+                var copy = CopyLayoutArea.GetMenuItem(menuPath, perms);
+                if (copy != null) items.Add(copy with { Order = 16, Icon = "📋" });
 
-            var delete = DeleteLayoutArea.GetMenuItem(menuPath, perms);
-            if (delete != null) items.Add(delete with { Order = 18, Icon = "🗑️" });
+                var delete = DeleteLayoutArea.GetMenuItem(menuPath, perms);
+                if (delete != null) items.Add(delete with { Order = 18, Icon = "🗑️" });
+            }
             var hasGroup1 = items.Count > 0;
 
             // ── Group 2: content / history / sync ── (InstanceSync adds "Synchronizations" at 36)
@@ -194,15 +208,23 @@ public static class NodeMenuItemsExtensions
         });
 
     /// <summary>
-    /// Shared node lookup: resolves the effective menu node (satellite → main), its name,
-    /// and the user's permissions. Reads the OWN MeshNode via the canonical
-    /// <c>MeshNodeReference</c> reducer (per <c>Doc/Architecture/AsynchronousCalls.md</c> —
-    /// never <c>GetStream&lt;MeshNode&gt;().FirstOrDefault</c>); if the own node is a
-    /// satellite, fetches the main node via <see cref="MeshNodeStreamExtensions.GetMeshNodeStream(IWorkspace,string)"/>
-    /// (which routes to the owning hub's reducer remotely). The result is a <b>live</b> stream:
-    /// it re-emits on node content changes and — via the <c>CombineLatest</c> with
+    /// Shared node lookup: resolves the node being viewed, its name, and the user's permissions.
+    /// Reads the OWN MeshNode via the canonical <c>MeshNodeReference</c> reducer (per
+    /// <c>Doc/Architecture/AsynchronousCalls.md</c> — never <c>GetStream&lt;MeshNode&gt;().FirstOrDefault</c>).
+    /// The result is a <b>live</b> stream: it re-emits on node content changes and — via the
+    /// <c>CombineLatest</c> with
     /// <see cref="MeshWeaver.Mesh.HubPermissionExtensions.GetEffectivePermissions(MeshWeaver.Messaging.IMessageHub, string)"/> — on
     /// permission changes (the access-race fix).
+    ///
+    /// <para>🚨 The menu targets the node <b>being viewed</b> (<paramref name="host"/>'s own hub
+    /// path), NEVER a satellite's owner. The old code retargeted a satellite's menu to
+    /// <c>own.MainNode</c>, so opening the node menu on a thread anchored under a user's home
+    /// (<c>MainNode = {user}</c>) and hitting Delete posted
+    /// <c>DeleteNodeRequest({user}, Recursive)</c> — deleting the entire partition root, not the
+    /// thread (the catastrophic node-menu delete). Every per-node op (Edit/Move/Copy/Delete) now
+    /// operates on <c>hubPath</c>: "delete this thread" deletes the thread. A hard guard
+    /// (<see cref="MeshWeaver.Graph.Security.PartitionRootDeletionGuard"/>) additionally blocks
+    /// deleting a user partition root even if some other caller targets it.</para>
     /// </summary>
     private static IObservable<(string menuPath, string nodeName, MeshNode? menuNode, Permission perms)>
         GetMenuContext(LayoutAreaHost host)
@@ -218,23 +240,26 @@ public static class NodeMenuItemsExtensions
             .Catch<MeshNode, Exception>(_ => Observable.Return<MeshNode>(null!));
 
         var menuContext = ownNodeStream
-            .SelectMany(own =>
-            {
-                var isSatellite = own != null && own.MainNode != own.Path;
-                var menuPath = isSatellite ? own!.MainNode : hubPath;
-                if (!isSatellite || string.Equals(menuPath, hubPath, StringComparison.Ordinal))
-                {
-                    return Observable.Return((menuPath: menuPath, nodeName: own?.Name ?? "", menuNode: own));
-                }
-                // Satellite: resolve main node via the standard remote-stream path.
-                return host.Workspace.GetMeshNodeStream(menuPath)
-                    .Select(main => (menuPath: menuPath, nodeName: main?.Name ?? own?.Name ?? "", menuNode: (MeshNode?)main))
-                    .Catch<(string menuPath, string nodeName, MeshNode? menuNode), Exception>(_ =>
-                        Observable.Return((menuPath: menuPath, nodeName: own?.Name ?? "", menuNode: (MeshNode?)null)));
-            });
+            .Select(own => (menuPath: hubPath, nodeName: own?.Name ?? "", menuNode: (MeshNode?)own));
+
+        // 🔒 The node/mesh menu is an AUTHORING surface — it must fail CLOSED when logged out.
+        // A logged-out (anonymous / virtual) visitor gets NO menu items, even on a public-read
+        // node: they may still READ the content (a separate path), but every menu item is gated on
+        // the viewer's effective Permission, and anonymous would otherwise pick up the public-read
+        // grant (Read) and surface read-based items (Files, Versions). Force Permission.None for an
+        // unauthenticated viewer so the whole menu drops — each item's null-guard already reacts to
+        // it. Same anonymous/virtual test as PermissionEvaluator.ResolveUserId.
+        var accessService = host.Hub.ServiceProvider.GetService<AccessService>();
+        var viewerContext = accessService?.Context ?? accessService?.CircuitContext;
+        var isAuthenticated = !string.IsNullOrEmpty(viewerContext?.ObjectId)
+                              && viewerContext?.IsVirtual != true;
+
+        var permsStream = isAuthenticated
+            ? host.Hub.GetEffectivePermissions(hubPath)
+            : Observable.Return(Permission.None);
 
         return menuContext
-            .CombineLatest(host.Hub.GetEffectivePermissions(hubPath),
+            .CombineLatest(permsStream,
                 (ctx, perms) => (ctx.menuPath, ctx.nodeName, ctx.menuNode, perms));
     }
 
