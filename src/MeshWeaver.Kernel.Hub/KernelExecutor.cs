@@ -451,6 +451,10 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
                 "Microsoft.Extensions.Logging",
                 "MeshWeaver.Application.Styles",
                 "MeshWeaver.Layout",
+                // LayoutAreaHost + RenderingContext live here — used by the WithView((host, ctx) => …)
+                // lambda in nearly every `--render` layout cell. Companion to MeshWeaver.Layout above,
+                // so authors don't have to add the extra using for the standard layout-area pattern.
+                "MeshWeaver.Layout.Composition",
                 "MeshWeaver.Layout.DataGrid",
                 "MeshWeaver.Messaging",
                 "MeshWeaver.Mesh"
