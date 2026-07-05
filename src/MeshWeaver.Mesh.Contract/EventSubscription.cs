@@ -91,6 +91,26 @@ public record EventSubscription
     /// next startup reconcile (at-least-once, restart-safe). (Repeating/interval timers are a follow-up.)</summary>
     public DateTimeOffset? FireAt { get; init; }
 
+    // NodeStatus trigger
+    /// <summary>[NodeStatus] The node to watch — fire when its <see cref="StatusField"/> reaches a resting
+    /// value. The delegation case watches the sub-thread; a status leaves "running" → the parent continues.</summary>
+    public string? WatchPath { get; init; }
+
+    /// <summary>[NodeStatus] The content field holding the status (default <c>Status</c>). Read as a string
+    /// (an enum serialises as its name), compared case-insensitively against <see cref="RestingValues"/>.</summary>
+    public string? StatusField { get; init; }
+
+    /// <summary>[NodeStatus] The status values that count as "resting" — fire when the watched node's
+    /// <see cref="StatusField"/> enters this set (e.g. <c>Idle</c>/<c>Cancelled</c>/<c>Done</c>). Any value
+    /// NOT in this set is "active/busy".</summary>
+    public System.Collections.Immutable.ImmutableList<string> RestingValues { get; init; }
+        = System.Collections.Immutable.ImmutableList<string>.Empty;
+
+    /// <summary>[NodeStatus] Only fire AFTER the watched node was first seen in a non-resting (active) state
+    /// — so an initial replayed-resting emission (the node was never running) does not fire. The delegation
+    /// "sawRunning then terminal" semantics.</summary>
+    public bool RequireActiveFirst { get; init; }
+
     // ── Effect ───────────────────────────────────────────────────────────────
 
     /// <summary>What this does when it fires.</summary>

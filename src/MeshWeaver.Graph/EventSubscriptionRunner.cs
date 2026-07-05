@@ -49,6 +49,8 @@ public sealed class EventSubscriptionRunner(
     // Live one-shot timers, keyed by subscription id — instance (never static), disposed on fire, on the
     // subscription leaving the pending set, and on runner stop. No leak.
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, IDisposable> timerSubs = new();
+    // Live NodeStatus watches, same lifecycle contract as timerSubs.
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, IDisposable> statusSubs = new();
     private IDisposable? pendingSub;
     private IDisposable? feedSub;
     private IDisposable? legacySub;
@@ -78,14 +80,17 @@ public sealed class EventSubscriptionRunner(
                              { TriggerType: EventTriggerType.NodeChange, TriggerKind: MeshChangeKind.Created }))
                     Reconcile(s);
 
-                // Schedule one-shot timers for pending Timer subscriptions; cancel timers for any that
-                // left the pending set (fired / cancelled elsewhere).
+                // Schedule one-shot timers + NodeStatus watches for pending subscriptions; cancel any whose
+                // subscription left the pending set (fired / cancelled elsewhere).
                 foreach (var s in list.Where(s => s is { TriggerType: EventTriggerType.Timer, FireAt: not null }))
                     ScheduleTimer(s);
+                foreach (var s in list.Where(s => s is { TriggerType: EventTriggerType.NodeStatus, WatchPath.Length: > 0 }))
+                    WatchNodeStatus(s);
                 var pendingIds = list.Select(s => s.Id).ToHashSet();
-                foreach (var id in timerSubs.Keys.Where(id => !pendingIds.Contains(id)).ToList())
-                    if (timerSubs.TryRemove(id, out var d))
-                        d.Dispose();
+                foreach (var (subs, _) in new[] { (timerSubs, 0), (statusSubs, 0) })
+                    foreach (var id in subs.Keys.Where(id => !pendingIds.Contains(id)).ToList())
+                        if (subs.TryRemove(id, out var d))
+                            d.Dispose();
             }, ex => logger?.LogWarning(ex, "Event-subscriptions query failed"));
 
         // Live: fire on the actual change event.
@@ -193,6 +198,58 @@ public sealed class EventSubscriptionRunner(
         });
     }
 
+    /// <summary>
+    /// Watches the node at <see cref="EventSubscription.WatchPath"/> and fires when its
+    /// <see cref="EventSubscription.StatusField"/> enters <see cref="EventSubscription.RestingValues"/> —
+    /// after first seeing a non-resting (active) value when <see cref="EventSubscription.RequireActiveFirst"/>
+    /// (the delegation "saw-running → resting" semantics). Idempotent per id, self-disposing on fire, and
+    /// self-healing: uses <see cref="ActivityControlPlaneExtensions.SubscribeWithReEstablish"/>, which
+    /// re-establishes on a transient fault and terminally STOPS (no storm) when the watched node is gone.
+    /// On reboot the pending-set reconcile re-attaches the watch and a node that reached its resting state
+    /// during downtime fires immediately (restart-safe).
+    /// </summary>
+    private void WatchNodeStatus(EventSubscription subscription)
+    {
+        if (statusSubs.ContainsKey(subscription.Id))
+            return;
+        var slot = new System.Reactive.Disposables.SingleAssignmentDisposable();
+        if (!statusSubs.TryAdd(subscription.Id, slot))
+            return;   // lost the race
+        var sawActive = false;
+        var fired = false;
+        var statusField = subscription.StatusField is { Length: > 0 } f ? f : "Status";
+        // SingleAssignmentDisposable makes onNext firing synchronously-on-subscribe safe: slot.Dispose()
+        // marks it disposed, and the later `slot.Disposable = …` assignment then disposes the watch too.
+        slot.Disposable = ActivityControlPlaneExtensions.SubscribeWithReEstablish<MeshNode>(
+            () => AsSystem(() => hub.GetWorkspace().GetMeshNodeStream(subscription.WatchPath!)),
+            node =>
+            {
+                if (fired)
+                    return;
+                var status = node?.Content is null
+                    ? null
+                    : EventSubscriptionOps.ReadContentField(node, statusField, hub.JsonSerializerOptions);
+                if (status is null)
+                    return;
+                var resting = subscription.RestingValues.Any(v =>
+                    string.Equals(v, status, StringComparison.OrdinalIgnoreCase));
+                if (!resting)
+                {
+                    sawActive = true;
+                    return;
+                }
+                if (subscription.RequireActiveFirst && !sawActive)
+                    return;   // initial replayed-resting — the node never ran; wait for an active state first
+                fired = true;
+                statusSubs.TryRemove(subscription.Id, out _);
+                slot.Dispose();
+                Execute(subscription, subscription.SubjectId ?? "");
+            },
+            hub.Address,
+            logger,
+            $"EventSubscription.NodeStatus[{subscription.Id}]");
+    }
+
     private IObservable<MeshNode> BuildContinuation(EventSubscription subscription, string userId) =>
         subscription.ContinuationType switch
         {
@@ -289,8 +346,9 @@ public sealed class EventSubscriptionRunner(
         pendingSub?.Dispose();
         feedSub?.Dispose();
         legacySub?.Dispose();
-        foreach (var id in timerSubs.Keys.ToList())
-            if (timerSubs.TryRemove(id, out var d))
-                d.Dispose();
+        foreach (var subs in new[] { timerSubs, statusSubs })
+            foreach (var id in subs.Keys.ToList())
+                if (subs.TryRemove(id, out var d))
+                    d.Dispose();
     }
 }
