@@ -1,0 +1,52 @@
+@page "/privacy"
+@using System.Reactive.Linq
+@using MeshWeaver.Markdown
+@using MeshWeaver.Messaging
+@using Memex.Portal.Shared.Settings
+@implements IDisposable
+@inject IMessageHub Hub
+
+<PageTitle>Privacy Statement</PageTitle>
+
+<div class="privacy-container">
+    <article class="markdown-body privacy-card">
+        @if (Html is null)
+        {
+            <p><em>Loading…</em></p>
+        }
+        else
+        {
+            @((MarkupString)Html)
+        }
+    </article>
+</div>
+
+@code {
+    private string? Html { get; set; }
+    private IDisposable? _subscription;
+
+    protected override void OnInitialized()
+    {
+        // Anonymous by design — external app registrations (e.g. LinkedIn) link this URL as the
+        // privacy policy, so it must render BEFORE login. GetStatement reads Admin/Privacy as
+        // System and degrades to the built-in generic EU/CH statement on absence or any failure —
+        // this page never hangs and never errors.
+        _subscription = PrivacyStatementNode.GetStatement(Hub)
+            .Select(markdown => MarkdownViewLogic.Render(markdown, null, null).Html)
+            .Subscribe(
+                html => _ = InvokeAsync(() =>
+                {
+                    Html = html;
+                    StateHasChanged();
+                }),
+                // A render/upstream throw must not leave the page stuck on "Loading…" — show a
+                // graceful fallback so the page never hangs and never errors.
+                ex => _ = InvokeAsync(() =>
+                {
+                    Html = "<p>The privacy statement is temporarily unavailable. Please try again later.</p>";
+                    StateHasChanged();
+                }));
+    }
+
+    public void Dispose() => _subscription?.Dispose();
+}
