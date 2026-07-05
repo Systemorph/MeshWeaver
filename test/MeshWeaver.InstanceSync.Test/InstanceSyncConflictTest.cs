@@ -139,4 +139,28 @@ public class InstanceSyncConflictTest(ITestOutputHelper output) : InstanceSyncTe
         Assert.Equal("Doc", local!.Name);          // A's rename is superseded by the newer whole node
         Assert.Equal("B_body", MarkdownBody(Remote.Node(Doc)));
     }
+
+    [Fact(Timeout = 60000)]
+    public async Task PushOnly_local_edit_always_overwrites_even_a_newer_remote()
+    {
+        // A PushOnly source is authoritative-local and runs NO pull sweep, so the newest-writer-wins
+        // guard must NOT apply — otherwise a newer out-of-band remote edit would (a) never be adopted
+        // locally (no pull) AND (b) block every future local push, stranding both sides forever.
+        await CreateSpace(Space);
+        await CreateMarkdown(Doc, "Doc", "v0");
+        await AddConfiguredSource(Space, "partner", InstanceSyncDirection.PushOnly);
+        await WaitForConfig(Space, "partner", c => c.InitialSyncAt is not null);
+        await WaitForRemote(r => MarkdownBody(r.Node(Doc)) == "v0");
+
+        // Remote gets a STRICTLY-NEWER edit out of band (+5 min).
+        Remote.Seed(Remote.Node(Doc)! with { Content = new MarkdownContent { Content = "remote_newer" } },
+            DateTimeOffset.UtcNow.AddMinutes(5));
+
+        // The local edit is OLDER than the remote's — under the bidi guard the push would skip, but a
+        // PushOnly source must still overwrite the remote (local wins) and never adopt the remote edit.
+        await EditLocal(Doc, "local_wins");
+        await WaitForRemote(r => MarkdownBody(r.Node(Doc)) == "local_wins");
+        var local = await Mesh.GetWorkspace().GetMeshNodeStream(Doc).Take(1).ToTask();
+        Assert.Equal("local_wins", MarkdownBody(local));   // no pull: the newer remote was never adopted
+    }
 }
