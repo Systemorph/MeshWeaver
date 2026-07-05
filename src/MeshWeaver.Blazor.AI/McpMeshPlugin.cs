@@ -6,6 +6,8 @@ using System.Text.Json;
 using MeshWeaver.AI;
 using MeshWeaver.AI.Plugins;
 using MeshWeaver.Data.Completion;
+using MeshWeaver.InstanceSync;
+using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Mesh.Services.LanguageServer;
 using MeshWeaver.Messaging;
@@ -367,6 +369,42 @@ Recommended: 'icon' as an inline SVG starting with <svg, using currentColor. 'co
         [Description("Current path of the node (e.g., @OrgA/Child)")] string sourcePath,
         [Description("New path for the node (e.g., @OrgB/Child)")] string targetPath)
         => ops.Move(sourcePath, targetPath).FirstAsync().ToTask();
+
+    /// <summary>
+    /// Sets up bi-directional instance sync of a Space with a remote MeshWeaver instance by writing
+    /// the <c>{space}/_Sync/{id}</c> registration — through the caller's session hub, so it is
+    /// permission-checked (writing under <c>_Sync</c> requires Editor/Update on the Space).
+    /// </summary>
+    [McpServerTool(Title = "Sync a Space with a remote instance", Destructive = false, Idempotent = true, OpenWorld = true)]
+    [Description(@"Configures instance sync for a Space: replicate it to another MeshWeaver instance and keep changes flowing both ways. Replication starts automatically; conflicts resolve newest-writer-wins and converge on both sides. The registration is written under {space}/_Sync, so it runs under YOUR identity and requires Editor (Update) on the Space.")]
+    public Task<string> Sync(
+        [Description("The Space path to sync (e.g. 'ACME').")] string space,
+        [Description("The remote MeshWeaver instance URL (e.g. https://memex.meshweaver.cloud).")] string remoteUrl,
+        [Description("An API token (mw_…) issued by the remote instance.")] string remoteToken,
+        [Description("Sync direction: 'Bidirectional' (default), 'PushOnly', or 'PullOnly'.")] string direction = "Bidirectional",
+        [Description("A name for this sync party (default 'partner').")] string name = "partner",
+        [Description("The Space id on the remote (blank = same id as this Space).")] string? remoteSpace = null)
+    {
+        var dir = Enum.TryParse<InstanceSyncDirection>(direction, ignoreCase: true, out var d)
+            ? d : InstanceSyncDirection.Bidirectional;
+        var id = new string((name ?? "partner").Trim().ToLowerInvariant()
+            .Select(c => char.IsLetterOrDigit(c) ? c : '-').ToArray()).Trim('-');
+        if (id.Length == 0) id = "partner";
+        var node = new MeshNode(id, $"{space}/{InstanceSyncService.ConfigId}")
+        {
+            NodeType = InstanceSyncService.ConfigNodeType,
+            Name = name,
+            Content = new InstanceSyncConfig
+            {
+                RemoteUrl = remoteUrl,
+                RemoteToken = remoteToken,
+                RemoteSpace = string.IsNullOrWhiteSpace(remoteSpace) ? null : remoteSpace,
+                Direction = dir,
+                Active = true,
+            },
+        };
+        return ops.Create(JsonSerializer.Serialize(node, rootHub.JsonSerializerOptions)).FirstAsync().ToTask();
+    }
 
     /// <summary>
     /// Copies a node and all its descendants to a target namespace, preserving
