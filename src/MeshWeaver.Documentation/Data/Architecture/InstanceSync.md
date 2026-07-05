@@ -91,12 +91,34 @@ and push the change straight back — an infinite ping-pong. Two independent lay
    (name/type/state + canonical JSON) and drops value-equal writes. Any echo that slips past
    layer 1 terminates after one hop instead of oscillating.
 
-Conflicts resolve **newest-writer-wins** by `LastModified` (ties keep the local side). This is
-last-write-wins at node granularity — concurrent edits to the *same node* on both instances
-within one sweep interval resolve to the newer stamp, not a field merge.
+## Conflict resolution (newest-writer-wins, symmetric → the two instances converge)
+
+When the **same node** is edited on both instances within a sweep interval, the resolution is
+**newest-writer-wins by `LastModified`, applied symmetrically on BOTH the pull and the push side**,
+so the two instances always **converge** on the newer write:
+
+- **Pull** (`PullOne`) applies a remote node only when it is *strictly newer* than the local one;
+  a local node that is newer or equal is kept (ties favour the local / push direction).
+- **Push** (`PushNode`) is the mirror **for a `Bidirectional` source**: it **skips** the upsert when
+  the remote node is *strictly newer* — it never clobbers a newer remote — and the next pull sweep
+  brings that newer remote local. Without this the push upserted unconditionally, so an older local
+  edit overwrote a newer remote one and the newer edit was lost (LWW violated); the symmetric guard is
+  what makes the round trip actually converge. The guard is **scoped to `Bidirectional`**: a
+  `PushOnly` source runs no pull sweep and is authoritative-local by definition, so it always pushes
+  (skipping there would strand the newer remote *and* permanently block the local edit from
+  propagating).
+
+Net effect: the node with the greatest `LastModified` wins **on both sides**. Resolution is at
+**whole-node** granularity, not a field-level merge — two sides editing *different fields* of the
+same node still resolve to the newer whole node (the older side's field edit is superseded).
 
 ## Known limitations (v1)
 
+- **Whole-node, not field-level** — concurrent edits to *different fields* of one node do not
+  merge; the newer whole node wins. A field-level (RFC 7396) merge is the follow-up if both edits
+  must survive.
+- **Delete-vs-edit** — a local delete pushes unconditionally, so a delete supersedes a concurrent
+  remote edit (delete-wins), regardless of stamps.
 - **Remote deletes don't propagate on pull** — only local deletes push. In a symmetric setup
   (a registration on each side) deletes propagate both ways via each side's push.
 - **Clock skew** between instances shifts newest-writer-wins fairness; stamps come from each
@@ -108,9 +130,22 @@ within one sweep interval resolve to the newer stamp, not a field merge.
   `lastModified` per hit); listings beyond the per-level search cap are walked per-namespace
   and logged loudly when still truncated — never silently dropped.
 
+## Permissions (a Space-editor capability)
+
+Configuring or running instance sync is an **editor-level** operation, gated on `Permission.Update`
+on the Space — the right that comes with the **Editor** role (and Admin/Owner); Viewer/Commenter
+cannot. The "Synchronizations" node-menu item and the sync management area self-gate on it
+(`InstanceSyncMenuProvider`), so the whole feature is invisible to users who can only read the
+Space. (This is distinct from `Permission.Sync`, which governs the *static-repo* import overwrite of
+read-only partitions and is deliberately NOT part of Editor/`All`.)
+
 ## Testing
 
 `test/MeshWeaver.InstanceSync.Test` runs the full loop against an in-memory
 `IRemoteMeshClient` fake (the interface's sanctioned test seam) with tight intervals:
 initial replication, incremental push, offline accumulation → reconnect drain, restart resume,
-pull, echo suppression, and direction gating.
+pull, echo suppression, and direction gating. **`InstanceSyncConflictTest`** covers the
+conflict/round-trip/offline guarantees end-to-end: local↔remote round-trip convergence,
+concurrent same-node edits (newer wins on both sides, remote-newer and local-newer),
+the offline "long flight" (accumulate while unreachable → drain → converge on reconnect), and
+whole-node resolution of different-field concurrent edits.
