@@ -216,3 +216,4 @@ MeshWeaver.Layout.Controls.Stack
 - [Data Binding](../DataBinding) — How data flows between server and UI
 - [Adding Editable Forms](../Editor) — Auto-generated forms from records
 - [Observables](../Observables) — Reactive views that update when data changes
+- [Slides & Decks](../SlidesAndDecks) — the Slide and Deck node types, with slide order declared externally in the deck
