@@ -285,6 +285,9 @@ public static class AgentPickerProjection
     /// <summary>Named-query id for the harnesses synced subscription.</summary>
     public const string HarnessesQueryId = "Harnesses";
 
+    /// <summary>Named-query id for the user's MASTER composer ({user}/_Thread/ThreadComposer) read.</summary>
+    public const string MasterComposerQueryId = "MasterComposer";
+
     /// <summary>
     /// The DEFAULT composer selection — resolved purely by ORDER, never hardcoded. For each registry
     /// (agent / model / harness) the default is the node with the LOWEST <c>Order</c> (the <c>Order = -1</c>
@@ -308,12 +311,22 @@ public static class AgentPickerProjection
                 .Select(a => a.Path)
                 .FirstOrDefault());
 
+        var credResolver = hub.ServiceProvider.GetService<ChatClientCredentialResolver>();
         var model = ObserveModels(workspace, hub, currentPath, nodeTypePath, selectedProviderPaths, userPath)
-            .Select(list => list
-                .Where(m => !string.IsNullOrEmpty(m.Path))
-                .OrderBy(m => m.Order)
-                .Select(m => m.Path)
-                .FirstOrDefault());
+            .Select(list =>
+            {
+                var ordered = list.Where(m => !string.IsNullOrEmpty(m.Path)).OrderBy(m => m.Order).ToList();
+                // Default to the lowest-Order model whose credentials actually RESOLVE — mirrors
+                // ChatClientCredentialResolver.ResolveDefaultModelId (the execution-time fallback), so the
+                // composer never DEFAULTS to a model with no provider/key configured (e.g. a "glm-5.2"
+                // catalog entry whose prices/provider were never entered). That divergence — composer picks
+                // lowest-Order, execution picks lowest-Order-that-resolves — is what surfaced as "selected
+                // model X unavailable, using default Y". Fall back to the first model so the composer is
+                // never left without a selection.
+                var resolvable = credResolver == null ? null
+                    : ordered.FirstOrDefault(m => credResolver.Resolve(m.Path!) != CredentialResolution.Missing);
+                return (resolvable ?? ordered.FirstOrDefault())?.Path;
+            });
 
         var harness = ObserveSnapshot(workspace, hub,
                 $"{HarnessesQueryId}|u={userPath ?? ""}|s={spacePath ?? ""}",
@@ -325,9 +338,38 @@ public static class AgentPickerProjection
                 .Select(n => n.Path)
                 .FirstOrDefault());
 
-        return agent.CombineLatest(model, harness,
-            (a, m, h) => new ThreadComposer { AgentName = a, ModelName = m, Harness = h });
+        // 🎯 The user's MASTER composer ({user}/_Thread/ThreadComposer) is the single source of truth for
+        // chat defaults. Any composer WITHOUT its own selection — a new thread, or a namespace that has no
+        // standard composer of its own — INHERITS the master's harness/model/agent/effort. The catalog
+        // (lowest-Order, resolved above) is ONLY the fallback for a brand-new master the user has never
+        // touched. Read via a query (empty-on-absent — no NotFound storm), never a direct GetMeshNodeStream
+        // on the maybe-absent exact path; the seed handler normally makes it present.
+        var jsonOptions = hub.JsonSerializerOptions;
+        var masterLogger = hub.ServiceProvider.GetService<ILoggerFactory>()
+            ?.CreateLogger("MeshWeaver.AI.AgentPickerProjection");
+        var master = string.IsNullOrEmpty(userPath)
+            ? System.Reactive.Linq.Observable.Return<ThreadComposer?>(null)
+            : ObserveSnapshot(workspace, hub,
+                    $"{MasterComposerQueryId}|u={userPath}",
+                    $"namespace:{userPath}/{ThreadNodeType.ThreadPartition} nodeType:{ThreadComposerNodeType.NodeType}")
+                .Select(snapshot => snapshot
+                    .Where(n => string.Equals(n.NodeType, ThreadComposerNodeType.NodeType, StringComparison.OrdinalIgnoreCase))
+                    .Select(n => ThreadComposerNodeType.ComposerOf(n, jsonOptions, masterLogger))
+                    .FirstOrDefault(c => c is not null));
+
+        return agent.CombineLatest(model, harness, master,
+            (a, m, h, mstr) => new ThreadComposer
+            {
+                Harness   = FirstNonEmpty(mstr?.Harness, h),
+                ModelName = FirstNonEmpty(mstr?.ModelName, m),
+                AgentName = FirstNonEmpty(mstr?.AgentName, a),
+                Effort    = mstr?.Effort
+            });
     }
+
+    /// <summary>First non-empty of the two — master value wins, catalog fallback.</summary>
+    private static string? FirstNonEmpty(string? primary, string? fallback)
+        => string.IsNullOrEmpty(primary) ? fallback : primary;
 
     /// <summary>
     /// The model picker queries: the system <c>Provider</c> catalog plus per-context / per-NodeType /

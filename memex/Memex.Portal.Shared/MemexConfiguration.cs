@@ -701,9 +701,10 @@ public static class MemexConfiguration
                         .AddTokenUsageSettingsTab()
                         // GitHub Sync tab — shows only on Space nodes (self-filtered).
                         .AddGitHubSyncSettingsTab()
-                        // Instance Sync tab — replicate the Space to another MeshWeaver
-                        // instance (self-filtered to Spaces, like the GitHub Sync tab).
-                        .AddInstanceSyncSettingsTab()
+                        // GitHub Issues & PRs tab — browse/act on the repo's issues + pull requests.
+                        .AddGitHubIssuesTab()
+                        // Instance Sync lives in the "Synchronizations" NODE-menu item (not a
+                        // settings tab) — wired via AddInstanceSyncTypes on the mesh builder.
                         // Code workspace tab — on-disk working-tree editor (checkout/edit/commit/push).
                         .AddWorkingTreeTab()
                         // Git history tab — read-only git browser (commit log + changes + diffs) over the same working tree.
@@ -932,6 +933,21 @@ public static class MemexConfiguration
         // requirement: needs HttpContext.User). Stores the per-user token at
         // {userId}/_Provider/GitHub. See Doc/Architecture/GitHubSync.
         app.MapGitHubConnect();
+
+        // Instance Sync — OAuth+PKCE "connect to a remote MeshWeaver instance" endpoints
+        // (/connect/instance[/callback]). Redirects to the remote's own login and stores the
+        // returned mw_ token as the sync party's RemoteToken. See InstanceConnectEndpoints.
+        app.MapInstanceConnect();
+
+        // "Sign in with GitHub" — an authentication provider (distinct from the connect endpoints
+        // above). Reuses the same GitHub:OAuth creds; issues the Entra-shaped cookie so a GitHub
+        // login resolves to the same mesh user as an Entra login with that verified email.
+        app.MapGitHubLogin();
+
+        // GitHub webhooks — POST /webhooks/github. HMAC-verified (GitHub:Webhook:Secret), no
+        // browser session, so it does NOT need HttpContext.User. Refreshes synced issue nodes
+        // live. Register one webhook per repo (Issues + Issue comments) with the shared secret.
+        app.MapGitHubWebhook();
 
         // Use HTTPS redirection only for non-MCP paths (MCP needs HTTP for Claude Code)
         app.UseWhen(

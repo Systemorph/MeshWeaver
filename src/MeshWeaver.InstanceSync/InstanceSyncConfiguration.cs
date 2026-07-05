@@ -1,5 +1,6 @@
 using MeshWeaver.Graph;
 using MeshWeaver.Hosting.Persistence.Http;
+using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -14,8 +15,8 @@ namespace MeshWeaver.InstanceSync;
 ///     service, admin-page provider) on the app service collection;</item>
 ///   <item><see cref="AddInstanceSyncTypes{TBuilder}"/> — registers the
 ///     <see cref="InstanceSyncConfig"/> content type on the mesh hub + every per-node hub so
-///     the <c>{space}/_Sync/{sourceId}</c> nodes (de)serialize;</item>
-///   <item><see cref="InstanceSyncSettingsTab.AddInstanceSyncSettingsTab"/> — the Space-settings GUI tab.</item>
+///     the <c>{space}/_Sync/{sourceId}</c> nodes (de)serialize, plus the "Synchronizations"
+///     node-menu item and the <see cref="InstanceSyncLayoutArea"/> management view it opens.</item>
 /// </list>
 /// </summary>
 public static class InstanceSyncConfiguration
@@ -29,6 +30,9 @@ public static class InstanceSyncConfiguration
         // host (or test) that registered its own factory wins.
         services.TryAddSingleton<IRemoteMeshClientFactory, McpRemoteMeshClientFactory>();
         services.AddSingleton<InstanceSyncService>();
+        // Server-side OAuth+PKCE client for the "Connect to remote instance" flow (drives the
+        // /connect/instance endpoints; stores the returned mw_ token as the party's RemoteToken).
+        services.AddSingleton<InstanceOAuthService>();
         services.AddSingleton<InstanceSyncCoordinator>();
         services.AddHostedService(sp => sp.GetRequiredService<InstanceSyncCoordinator>());
         // Surfaces the per-space remote-instance sync sources on the partition administration
@@ -60,7 +64,17 @@ public static class InstanceSyncConfiguration
             .WithType<PendingChange>(nameof(PendingChange)));
         builder.ConfigureDefaultNodeHub(c => c
             .WithType<InstanceSyncConfig>(nameof(InstanceSyncConfig))
-            .WithType<PendingChange>(nameof(PendingChange)));
+            .WithType<PendingChange>(nameof(PendingChange))
+            // The "Synchronizations" NODE-menu item + the management area it opens. The provider is
+            // per-node-hub scoped (TryAddEnumerable) so the menu render running on the node hub
+            // resolves it; it self-gates to Spaces the viewer may Update.
+            .WithServices(s =>
+            {
+                s.TryAddEnumerable(ServiceDescriptor.Scoped<INodeMenuProvider, InstanceSyncMenuProvider>());
+                return s;
+            })
+            .AddLayout(layout => layout
+                .WithView(InstanceSyncLayoutArea.AreaName, InstanceSyncLayoutArea.Render)));
         return builder;
     }
 }

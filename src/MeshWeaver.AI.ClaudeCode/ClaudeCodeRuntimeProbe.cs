@@ -49,17 +49,21 @@ public sealed class ClaudeCodeRuntimeProbe : IHarnessRuntimeInfo
     }
 
     /// <summary>
-    /// Reads the active effort level from <c>{configDir}/settings.json</c> (<c>effortLevel</c>) — where the
-    /// CLI persists it; it is NOT in the init message. Falls back to <c>medium</c> (the CLI's documented
-    /// default/recommendation for Opus) when unset — never the non-value "default".
+    /// Reads the active effort level from <c>{userConfigDir}/settings.json</c> (<c>effortLevel</c>) — where
+    /// the <c>claude</c> CLI persists it for THIS user; it is NOT in the init message. Returns the value the
+    /// harness actually has set, or <c>null</c> when it has none — NEVER a fabricated default (the old
+    /// hardcoded "medium" showed a level the user had never chosen). A null <see cref="HarnessRuntime.Effort"/>
+    /// renders as "…" in the status bar, i.e. "the harness hasn't reported an effort", which is the truth.
     /// </summary>
-    private string ReadEffortLevel(string? userConfigDir)
+    private string? ReadEffortLevel(string? userConfigDir)
     {
+        // Resolve the dir OUTSIDE the try so the catch logs the dir actually read (the resolved
+        // fallback when userConfigDir is null), not the raw null parameter.
+        var dir = !string.IsNullOrEmpty(userConfigDir)
+            ? userConfigDir
+            : Path.Combine(Environment.GetEnvironmentVariable("HOME") ?? "/root", ".claude");
         try
         {
-            var dir = !string.IsNullOrEmpty(userConfigDir)
-                ? userConfigDir
-                : Path.Combine(Environment.GetEnvironmentVariable("HOME") ?? "/root", ".claude");
             var settingsPath = Path.Combine(dir, "settings.json");
             if (File.Exists(settingsPath))
             {
@@ -71,9 +75,9 @@ public sealed class ClaudeCodeRuntimeProbe : IHarnessRuntimeInfo
         }
         catch (Exception ex)
         {
-            logger?.LogDebug(ex, "Could not read effortLevel from {Dir}", userConfigDir);
+            logger?.LogDebug(ex, "Could not read effortLevel from {Dir}", dir);
         }
-        return "medium";
+        return null;
     }
 
     private async Task<HarnessRuntime> ProbeAsync(CancellationToken ct)

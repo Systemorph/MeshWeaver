@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
+using MeshWeaver.AI.Navigation;
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
@@ -164,21 +165,44 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
         });
     }
 
-    /// <summary>MCP/agent tool: shows a node's visual layout area inline in the chat UI.</summary>
-    /// <param name="path">The path to navigate to (resolved against context).</param>
-    /// <returns>A confirmation string naming the resolved path.</returns>
-    [Description("Displays a node's visual layout in the chat UI.")]
-    public string NavigateTo(
-        [Description("Path to navigate to (e.g., @graph/org1)")] string path)
+    /// <summary>
+    /// MCP/agent tool: takes the user to a place in the UI. Resolution is RESILIENT — a single path-shaped
+    /// argument is tried as a direct path first (with URL correction and a search fallback), free text is
+    /// interpreted (an intent→skill match, else the best-matching node) — and HONEST: it never reports
+    /// success for a place that does not exist. The resolved target renders in the chat's content view.
+    /// </summary>
+    /// <param name="path">A path (<c>@/Doc/AI/ModelProviderSettings</c>) or plain words describing where to go.</param>
+    /// <returns>A task with an honest confirmation of where it navigated, or that nothing matched.</returns>
+    [Description("Takes the user to a node, doc, or page in the UI. Resilient (resolves the best match even when the path is imperfect) and honest (NEVER claims to open a place that doesn't exist — if nothing matches it says so and lists the closest candidates). Pass a path (@/Doc/AI/ModelProviderSettings) or plain words describing where to go (\"model settings\").")]
+    public Task<string> NavigateTo(
+        [Description("A path (@/Doc/AI/ModelProviderSettings), or what the user is looking for in words.")] string path)
     {
         logger.LogInformation("NavigateTo called with path={Path}", path);
+        return WithContext(() =>
+            new NavigationResolver(hub).Resolve(path, chat.Context?.Context)
+                .Select(resolution => NavigateToResult(path, resolution)))
+            .FirstAsync().ToTask();
+    }
 
-        var resolvedPath = MeshOperations.ResolvePath(ResolveContextPath(path));
-        var address = new Address(resolvedPath);
-        var layoutControl = Controls.LayoutArea(address, string.Empty);
+    // Renders the resolved target inline and returns an honest result string. A page ROUTE can't render as
+    // a node view, so it's reported only. The pane-aware open is applied on the client (ThreadChatView).
+    private string NavigateToResult(string requested, NavigationResolution resolution)
+    {
+        if (resolution.Kind == NavigationTargetKind.Unresolved || string.IsNullOrEmpty(resolution.Target))
+        {
+            var alts = resolution.Alternatives.Count > 0
+                ? " Closest matches: " + string.Join(", ", resolution.Alternatives) + "."
+                : string.Empty;
+            return (resolution.Message ?? $"Couldn't find anywhere matching \"{requested}\".") + alts;
+        }
 
-        chat.DisplayLayoutArea(layoutControl);
-        return $"Navigating to: {resolvedPath}";
+        if (resolution.Kind != NavigationTargetKind.Route)
+            chat.DisplayLayoutArea(Controls.LayoutArea(new Address(resolution.Target.TrimStart('/')), string.Empty));
+
+        var note = resolution.WasCorrected && !string.IsNullOrEmpty(resolution.Message)
+            ? " " + resolution.Message
+            : string.Empty;
+        return $"Navigating to: {resolution.Target}.{note}";
     }
 
     /// <summary>MCP/agent tool (dev-only): runs xUnit tests via <c>dotnet test</c> on a repo-relative test project, optionally filtered.</summary>

@@ -139,6 +139,32 @@
                             <FluentIcon Value="@(new Icons.Regular.Size20.Sparkle())" Color="Color.FillInverse" />
                         </FluentButton>
 
+                        @* Instance sync lives in the Node menu ("Synchronizations") — no separate dropdown. *@
+
+                        @* GitHub menu — GitHub sync actions; shown only when the Space has GitHub configured *@
+                        @if (GetGitHubMenuItems().Count > 0)
+                        {
+                            <FluentMenu Anchor="github-menu-anchor" Open="@isGitHubMenuOpen" OpenChanged="@OnGitHubMenuOpenChanged">
+                                @foreach (var menuItem in FlattenMenuItems(GetGitHubMenuItems()))
+                                {
+                                    var item = menuItem;
+                                    @if (item.Area == "_separator")
+                                    {
+                                        <hr style="margin: 4px 8px; border: none; border-top: 1px solid var(--neutral-stroke-divider-rest);" />
+                                    }
+                                    else
+                                    {
+                                        <FluentMenuItem OnClick="@(() => HandleMenuItemClick(item))" title="@(item.Tooltip ?? item.Label)">@item.Label</FluentMenuItem>
+                                    }
+                                }
+                            </FluentMenu>
+                            <FluentButton Id="github-menu-anchor" Appearance="Appearance.Stealth" BackgroundColor="transparent"
+                                Title="GitHub" aria-label="GitHub menu"
+                                OnClick="@ToggleGitHubMenu">
+                                <FluentIcon Value="@(new Icons.Regular.Size20.BranchFork())" Color="Color.FillInverse" />
+                            </FluentButton>
+                        }
+
                         @* Settings — direct navigation *@
                         <FluentButton Appearance="Appearance.Stealth" BackgroundColor="transparent"
                             Title="Settings" aria-label="Settings"

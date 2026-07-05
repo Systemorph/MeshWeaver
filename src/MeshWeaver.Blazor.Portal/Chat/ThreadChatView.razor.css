@@ -447,6 +447,22 @@ button.thread-chat-status-item {
     opacity: 0.72;
 }
 
+/* Harness BRAND icon (Claude Code / Copilot) — an inline <svg> wrapped in a <span class="chip-svg">.
+   It carries its own colours (a terracotta burst, etc.), so it must NOT be dimmed like the monochrome
+   glyph chips, and its viewBox (20×20, no width/height) must be sized down to the chip glyph size. */
+.thread-chat-status-item span.chip-svg {
+    display: inline-flex;
+    align-items: center;
+    width: 14px;
+    height: 14px;
+    opacity: 1;
+}
+
+.thread-chat-status-item span.chip-svg svg {
+    width: 100%;
+    height: 100%;
+}
+
 .thread-chat-status-sep {
     color: var(--neutral-stroke-rest);
 }
@@ -577,10 +593,16 @@ button.thread-chat-status-item {
     /* Floating popup ABOVE the input (a command palette popping up), anchored to
        .thread-chat-input-content — does not push the Monaco DOM. Floating-popup tier (10000) so it
        opens ABOVE the menu bar (z-index 1100 in PortalLayoutBase) instead of being covered by it. */
-    position: absolute;
-    bottom: calc(100% + 6px);
+    /* position: FIXED (not absolute) so the popup escapes the chat's overflow clip — .body-content and
+       .layout(overflow:hidden) otherwise clip anything painting in the sticky header's band above the
+       scroll area, so an absolute popup could never sit over the header no matter its z-index. Fixed +
+       z-index 10000 puts it in the root/top stacking layer, above every sticky heading (≤1100). No
+       ancestor has transform/filter (verified), so fixed is NOT trapped. JS (anchorChatPopup) sets
+       left/width/bottom each frame to hover just above the composer; the fallback keeps it on-screen. */
+    position: fixed;
     left: 0;
     right: 0;
+    bottom: 96px;
     z-index: 10000;
     border: 1px solid var(--neutral-stroke-rest);
     border-radius: 8px;

@@ -6,6 +6,7 @@ slash-*commands* are skills. A skill's "doing" can be:
 
 - **open a combobox and select** a node (an agent / model / harness) → write the pick to the composer;
 - **load a document/manual into the content window**;
+- **navigate the UI to a node/doc/page** — pane-aware and resilient (`/navigate`, see below);
 - **connect / log in** a CLI harness;
 - **inject instructions** — a `SKILL.md` body mounted to the Claude Code / Copilot CLIs and advertised to
   the MeshWeaver agent to load on demand.
@@ -36,11 +37,11 @@ public record SkillDefinition
 
 public record SkillAction
 {
-    public required SkillActionKind Kind { get; init; }   // Pick | OpenContent | Connect | Disconnect
+    public required SkillActionKind Kind { get; init; }   // Pick | OpenContent | Navigate | Connect | Disconnect
     public string? Query { get; init; }        // Pick: the combobox query (+ `sort:order`)
     public string? Field { get; init; }        // Pick: camelCase ThreadComposer field (harness|agentName|modelName)
     public string? Title { get; init; }        // Pick: combobox title
-    public string? ContentPath { get; init; }  // OpenContent: node/path to load into the content window
+    public string? ContentPath { get; init; }  // OpenContent / Navigate: node/path (Navigate: optional fixed target)
     public string? Provider { get; init; }     // Connect/Disconnect: ClaudeCode | Copilot
 }
 ```
@@ -126,6 +127,23 @@ This guidance lives in the shared agent base prompt (`AgentChatClient`); the age
 
 - **`OpenContent`** — load a node/manual into the content window (side panel) via the navigation bridge
   (`SidePanelState.SetContentPath`). Set `action.contentPath`, or pair a `Pick` with the content window.
+- **`Navigate`** — **take me there.** Navigate the UI to a node, doc, or page. Ships as the built-in
+  **`/navigate`** skill (`src/MeshWeaver.AI/Data/Skill/navigate.md`). Two properties make it robust:
+  - **Pane-aware** — the target opens in the pane *opposite* the thread, so the conversation and where it
+    sent you sit side by side (the same rule as the context chip, `OnContextChipClicked`):
+    a thread in the **main pane** opens the target in the **side panel**; a thread in the **side panel**
+    **changes the URL and navigates the main pane**.
+  - **Resilient** (`NavigationResolver` + the pure, unit-tested `NavigationTargetResolver`) — a **single
+    path-shaped argument** is resolved as a **direct path first** (with URL correction: a leading `@`, a
+    stray `/node/` segment, a pasted `https://host/…` prefix, doubled slashes and percent-encoding are all
+    cleaned up), and if the exact node isn't there it **falls back to the best search match** rather than
+    dead-ending; **free text** (`/navigate model settings`) is made sense of by matching an
+    **intent → skill** first (so "change my model" runs **`/model`** — a skill *does* more than a route
+    change), otherwise the best-matching node. It **never claims to open a place that doesn't exist**.
+
+  The agent's server-side `NavigateTo` tool routes through the same resolver, so "take me there" resolves
+  honestly no matter who asks. Tested by `NavigationTargetResolverTest` (the pure algorithm) and
+  `MeshPluginTest` (resilient + honest resolution against the live mesh).
 - **`Connect` / `Disconnect`** — harness auth. Under a non-MeshWeaver harness, `/login` and `/logout` are
   owned by the harness (`IHarness.Commands`) and route to its connect flow; they take priority in dispatch.
 - **`Instructions`** (no `Action`) — a pure-instruction skill (its how-to is the markdown body). Skills are
@@ -159,8 +177,9 @@ When the user runs `/name`, the chat view (`ThreadChatView.HandleSlashCommandAsy
 1. **harness-owned command?** (`/login`, `/logout` under a non-MeshWeaver harness) → route to the harness.
 2. **otherwise** → resolve a `nodeType:Skill` **mesh node** by slash word (with namespace inheritance,
    `ResolveSkillNodeAndRun`) and run its `Action` — `Pick` pops the combobox, `OpenContent` loads the
-   content window. A pure-instruction skill with trailing text submits the task as a round with a
-   `load_skill` directive (see above); without trailing text it shows the skill's help.
+   content window, `Navigate` resolves the target and opens it pane-aware. A pure-instruction skill with
+   trailing text submits the task as a round with a `load_skill` directive (see above); without trailing
+   text it shows the skill's help.
 
 The view contains **no per-skill code** — only the generic picker + content-window callbacks. All pick
 skills write to the same `ThreadComposer`.

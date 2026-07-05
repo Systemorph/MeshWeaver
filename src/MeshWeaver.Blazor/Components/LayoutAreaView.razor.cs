@@ -147,11 +147,12 @@ public partial class LayoutAreaView
         ProgressStream = null;
     }
 
-    // Must match NodeMenuItemsExtensions.NodeMenuContext / MeshMenuContext — duplicated here to avoid
-    // a Blazor → Graph layer dependency.
+    // Must match NodeMenuItemsExtensions.*Context — duplicated here to avoid a Blazor → Graph
+    // layer dependency.
     private const string NodeMenuContext = "Node";
     private const string MeshMenuContext = "Mesh";
     private const string AiMenuContext = "AI";
+    private const string GitHubMenuContext = "GitHub";
 
     private void BindStream()
     {
@@ -184,17 +185,24 @@ public partial class LayoutAreaView
                 .Subscribe(
                     el => OnProgressStreamChanged(el.Value),
                     ex => OnReducedStreamError(ex, "progress")));
-            if (Top)
+            if (DrivesMenu)
             {
                 // Menus ride the SAME area stream, read via the renderer-agnostic hub.GetMenu API
                 // (MeshWeaver.Mesh.MenuStreamExtensions) — the framework counterpart of hub.GetQuery.
                 // No bespoke reduce + deserialize per context here; the native MAUI shell consumes the
                 // exact same observable. Each subscription registers on AreaStream so AreaStream.Dispose()
                 // tears it down (no separate menu-stream fields to track / null out).
+                // 🚨 Gated on DrivesMenu (NOT Top): only the routed primary page (ApplicationPage /
+                // AreaPage) owns the header menu. A modal preview (NodePreviewDialog) or an embedded
+                // area renders Top=true but must not clobber the current node's menu — see DrivesMenu.
                 SubscribeMenu("", null);
                 SubscribeMenu(NodeMenuContext, NodeMenuContext);
                 SubscribeMenu(MeshMenuContext, MeshMenuContext);
                 SubscribeMenu(AiMenuContext, AiMenuContext);
+                // GitHub keeps its own dropdown — populated only when the Space has a repository
+                // configured (the provider self-gates); the slot stays empty otherwise. (Instance
+                // sync is in the Node menu as "Synchronizations", not a separate dropdown.)
+                SubscribeMenu(GitHubMenuContext, GitHubMenuContext);
             }
         }
     }

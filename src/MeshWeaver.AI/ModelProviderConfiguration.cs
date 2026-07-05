@@ -56,6 +56,23 @@ public record ModelProviderConfiguration
     public string? ApiKey { get; init; }
 
     /// <summary>
+    /// How the stored <see cref="ApiKey"/> authenticates a co-hosted CLI harness (Claude Code /
+    /// Copilot), chosen at Connect time — mirrors Claude Code's own methods. Drives WHICH env var the
+    /// harness sets when it spawns the CLI (see the CLI's documented auth precedence):
+    /// <list type="bullet">
+    ///   <item><c>oauth</c> (or null) — a Claude subscription token from <c>claude setup-token</c> →
+    ///         <c>CLAUDE_CODE_OAUTH_TOKEN</c>. Null defaults here for backward compatibility with tokens
+    ///         stored before the method chooser existed.</item>
+    ///   <item><c>apiKey</c> — an Anthropic Console API key → <c>ANTHROPIC_API_KEY</c>.</item>
+    ///   <item><c>authToken</c> — a gateway/proxy bearer token → <c>ANTHROPIC_AUTH_TOKEN</c>, with
+    ///         <see cref="Endpoint"/> → <c>ANTHROPIC_BASE_URL</c>.</item>
+    /// </list>
+    /// Only the chosen method's env var is set (never two at once) so the CLI's precedence can't pick a
+    /// stale credential. Not a secret; safe to render (unlike <see cref="ApiKey"/>).
+    /// </summary>
+    public string? AuthMethod { get; init; }
+
+    /// <summary>
     /// Encrypted (<c>enc:</c>-tagged) raw MeshWeaver ApiToken (<c>mw_…</c>) auto-minted at Connect
     /// time for the co-hosted CLI's MCP back-connection. Re-read + decrypted at spawn and injected
     /// as a <c>Authorization: Bearer</c> header on the per-spawn HTTP MCP server, so the CLI calls
