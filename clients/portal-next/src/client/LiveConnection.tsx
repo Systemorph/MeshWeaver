@@ -10,9 +10,10 @@
 // resolved target (node address + area), and the shell chrome (menus, settings, search scoping)
 // reads it — the React twin of the Blazor INavigationService.NavigationContext.
 
-import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
-import type { AreaSource } from "@meshweaver/react/core";
-import { connectLive, createLiveAreaSource, targetKey, type AreaTarget, type LiveMesh } from "./live";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import type { AreaSource, AreaSourceFactory } from "@meshweaver/react/core";
+import { MeshAreaRegistry } from "@meshweaver/react/core";
+import { connectLive, targetKey, type AreaTarget, type LiveMesh } from "./live";
 
 export type LiveState =
   | { kind: "connecting" }
@@ -23,9 +24,12 @@ export interface LiveConnection {
   state: LiveState;
   /** Per-target live area stream errors (the stream faulted after subscribe), keyed by targetKey. */
   areaErrors: Record<string, string>;
-  /** The live AreaSource for a resolved area target — created on first use, cached per connection.
-   *  Returns null until the connection is live. */
+  /** The live AreaSource for a resolved area target — resolved through the session's ONE registry
+   *  (deduped per address/area/id). Returns null until the connection is live. */
   getAreaSource(target: AreaTarget): AreaSource | null;
+  /** The embed factory for nested `@@` areas — backed by the SAME registry as {@link getAreaSource}
+   *  (one hub: a page area and an embed of it share ONE stream). Null until the connection is live. */
+  embeddedFactory: AreaSourceFactory | null;
 }
 
 const LiveConnectionContext = createContext<LiveConnection>({
@@ -33,6 +37,7 @@ const LiveConnectionContext = createContext<LiveConnection>({
   state: { kind: "connecting" },
   areaErrors: {},
   getAreaSource: () => null,
+  embeddedFactory: null,
 });
 
 export function useLiveConnection(): LiveConnection {
@@ -69,8 +74,8 @@ export function LiveConnectionProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<LiveState>({ kind: "connecting" });
   const [areaErrors, setAreaErrors] = useState<Record<string, string>>({});
   const [nav, setNav] = useState<NavigationState>({ path: "", target: null });
-  // Instance (per-provider) source cache — dies with the provider/connection, never module-static.
-  const sourcesRef = useRef(new Map<string, AreaSource>());
+  // Targets whose faulted-stream surfacing we've already wired (subscribe-once per key).
+  const wiredErrors = useRef(new Set<string>());
 
   // Join the mesh once on mount (client only) — the browser mints its own token same-origin.
   useEffect(() => {
@@ -89,25 +94,44 @@ export function LiveConnectionProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true;
       mesh?.close();
-      sourcesRef.current.clear();
     };
   }, []);
 
   const connection = state.kind === "live" ? state.mesh.connection : null;
 
+  // THE session hub: ONE subscription registry over the connection. Both the routed page area
+  // (getAreaSource) and every nested `@@` embed (embeddedFactory) resolve through it, so a given
+  // (address, area, id) has exactly ONE live stream — no per-render/per-embed churn, no duplicate
+  // subscriptions racing. Recreated only when the connection itself changes; closed on teardown.
+  const registry = useMemo(() => (connection ? new MeshAreaRegistry(connection) : null), [connection]);
+  useEffect(() => {
+    if (!registry) return;
+    wiredErrors.current = new Set();
+    setAreaErrors({});
+    return () => registry.close();
+  }, [registry]);
+
+  const embeddedFactory = useMemo<AreaSourceFactory | null>(
+    () => (registry ? registry.embeddedFactory() : null),
+    [registry],
+  );
+
   const getAreaSource = useCallback(
     (target: AreaTarget): AreaSource | null => {
-      if (!connection || !target.address) return null;
+      if (!registry || !target.address) return null;
+      const source = registry.get(target.address, { area: target.area, id: target.id || undefined });
+      // Surface a faulted stream once per target — the source records `.error` and notifies.
       const key = targetKey(target);
-      const cached = sourcesRef.current.get(key);
-      if (cached) return cached;
-      const source = createLiveAreaSource(connection, target, (error) =>
-        setAreaErrors((e) => ({ ...e, [key]: String((error as Error)?.message ?? error) })),
-      );
-      sourcesRef.current.set(key, source);
+      if (!wiredErrors.current.has(key)) {
+        wiredErrors.current.add(key);
+        source.subscribe(() => {
+          const err = source.error;
+          if (err) setAreaErrors((e) => (e[key] === err ? e : { ...e, [key]: err }));
+        });
+      }
       return source;
     },
-    [connection],
+    [registry],
   );
 
   const setCurrent = useCallback((s: NavigationState) => {
@@ -115,7 +139,7 @@ export function LiveConnectionProvider({ children }: { children: ReactNode }) {
   }, []);
 
   return (
-    <LiveConnectionContext.Provider value={{ state, areaErrors, getAreaSource }}>
+    <LiveConnectionContext.Provider value={{ state, areaErrors, getAreaSource, embeddedFactory }}>
       <NavigationContext.Provider value={{ ...nav, setCurrent }}>{children}</NavigationContext.Provider>
     </LiveConnectionContext.Provider>
   );

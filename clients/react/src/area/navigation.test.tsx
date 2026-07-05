@@ -7,7 +7,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import type { ReactNode } from "react";
-import { NavigationProvider, useHtmlLinkInterceptor, useMeshLink, type MeshNavigation } from "./navigation.js";
+import { NavigationProvider, normalizeTarget, useHtmlLinkInterceptor, useMeshLink, type MeshNavigation } from "./navigation.js";
 
 function TestLink({ target }: { target?: string }): ReactNode {
   const link = useMeshLink(target);
@@ -68,6 +68,40 @@ describe("useMeshLink", () => {
     expect(navigate).not.toHaveBeenCalled();
   });
 
+  // Nav menus / NavLinks emit ADDRESS-RELATIVE hrefs with no leading slash (what
+  // LayoutAreaReference.ToHref(address) produces, e.g. "roland/Settings/Metadata"). These are
+  // internal mesh paths: they must render through hrefFor (with the host basePath) and route
+  // client-side — NOT fall through as a bare relative <a> that the browser doubles onto the URL.
+  it("treats a bare (no-leading-slash) mesh path as internal and routes it", () => {
+    const { navigation, navigate } = host();
+    render(
+      <NavigationProvider navigation={navigation}>
+        <TestLink target="roland/Settings/Metadata" />
+      </NavigationProvider>,
+    );
+    const anchor = screen.getByText("go");
+    expect(anchor.getAttribute("href")).toBe("/base/roland/Settings/Metadata");
+    fireEvent.click(anchor);
+    expect(navigate).toHaveBeenCalledWith("/roland/Settings/Metadata");
+  });
+
+  it("keeps genuinely external / non-routable targets external (no host href, no navigate)", () => {
+    const cases = ["https://x.com", "//x.com", "#frag", "mailto:a@b", "tel:+1", "../Sibling"];
+    for (const target of cases) {
+      const { navigation, navigate } = host();
+      const { unmount } = render(
+        <NavigationProvider navigation={navigation}>
+          <TestLink target={target} />
+        </NavigationProvider>,
+      );
+      const anchor = screen.getByText("go");
+      expect(anchor.getAttribute("href")).toBe(target); // unchanged — no basePath applied
+      fireEvent.click(anchor);
+      expect(navigate).not.toHaveBeenCalled();
+      unmount();
+    }
+  });
+
   it("is inert without a target and root-absolute without a provider", () => {
     render(<TestLink />);
     expect(screen.getByText("go").getAttribute("href")).toBeNull();
@@ -88,7 +122,18 @@ describe("useHtmlLinkInterceptor — anchors inside injected HTML", () => {
     expect(navigate).toHaveBeenCalledWith("/Doc/GUI/Sibling");
   });
 
-  it("skips external, targeted, and download anchors", () => {
+  it("routes a bare (no-leading-slash) mesh-path anchor client-side", () => {
+    const { navigation, navigate } = host();
+    render(
+      <NavigationProvider navigation={navigation}>
+        <InjectedHtml html='<a href="roland/Settings/Metadata">settings</a>' />
+      </NavigationProvider>,
+    );
+    fireEvent.click(screen.getByText("settings"));
+    expect(navigate).toHaveBeenCalledWith("/roland/Settings/Metadata");
+  });
+
+  it("skips external, targeted, download, and relative-path anchors", () => {
     const { navigation, navigate } = host();
     render(
       <NavigationProvider navigation={navigation}>
@@ -97,7 +142,9 @@ describe("useHtmlLinkInterceptor — anchors inside injected HTML", () => {
             '<a href="https://example.com">ext</a>' +
             '<a href="/Doc/X" target="_blank">blank</a>' +
             '<a href="/Doc/Y" download>dl</a>' +
-            '<a href="#frag">frag</a>'
+            '<a href="#frag">frag</a>' +
+            '<a href="mailto:a@b">mail</a>' +
+            '<a href="../Sibling">rel</a>'
           }
         />
       </NavigationProvider>,
@@ -106,6 +153,27 @@ describe("useHtmlLinkInterceptor — anchors inside injected HTML", () => {
     fireEvent.click(screen.getByText("blank"));
     fireEvent.click(screen.getByText("dl"));
     fireEvent.click(screen.getByText("frag"));
+    fireEvent.click(screen.getByText("mail"));
+    fireEvent.click(screen.getByText("rel"));
     expect(navigate).not.toHaveBeenCalled();
+  });
+});
+
+describe("normalizeTarget", () => {
+  it("prepends a leading slash to bare mesh paths and leaves external/relative targets alone", () => {
+    // Bare mesh paths → app-absolute
+    expect(normalizeTarget("roland/Settings/Metadata")).toBe("/roland/Settings/Metadata");
+    expect(normalizeTarget("Doc/GUI")).toBe("/Doc/GUI");
+    expect(normalizeTarget("roland/Settings?tab=x")).toBe("/roland/Settings?tab=x");
+    // Already app-absolute — untouched
+    expect(normalizeTarget("/Doc/GUI")).toBe("/Doc/GUI");
+    // Genuinely external / non-routable — untouched
+    expect(normalizeTarget("https://x.com")).toBe("https://x.com");
+    expect(normalizeTarget("//x.com")).toBe("//x.com");
+    expect(normalizeTarget("#frag")).toBe("#frag");
+    expect(normalizeTarget("mailto:a@b")).toBe("mailto:a@b");
+    expect(normalizeTarget("tel:+1")).toBe("tel:+1");
+    expect(normalizeTarget("../Sibling")).toBe("../Sibling");
+    expect(normalizeTarget("./child")).toBe("./child");
   });
 });

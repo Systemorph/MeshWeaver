@@ -215,8 +215,9 @@ function SearchBoxView({ control }: { control: UiControl }): ReactNode {
 }
 
 function iconOf(value: unknown): JSX.Element | undefined {
-  const name = value == null ? "" : String(value);
-  const Cmp = resolveIconByName(name);
+  // Pass the raw value (name string OR FluentIcon {provider,id,…} object) straight to the resolver —
+  // stringifying an object first collapsed it to "[object Object]" and rendered no icon.
+  const Cmp = resolveIconByName(value);
   return Cmp ? <Cmp /> : undefined;
 }
 

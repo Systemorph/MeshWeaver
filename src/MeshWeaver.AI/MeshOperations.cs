@@ -464,6 +464,69 @@ public class MeshOperations
     }
 
     /// <summary>
+    /// Renders markdown to HTML through the ONE server-side Markdig pipeline the Blazor
+    /// <c>MarkdownView</c> binds (<see cref="MarkdownViewLogic.Render"/>) and returns the
+    /// <c>{ html, codeSubmissions }</c> pair the view consumes — camelCase JSON matching the
+    /// portal-next client's <c>renderMarkdown</c> contract.
+    ///
+    /// <para>The HTML keeps every interactive marker EMBEDDED verbatim — executable-code-cell
+    /// toolbars, mermaid divs, layout-area (<c>@@</c>) embed divs, and the literal
+    /// <c>__KERNEL_ADDRESS__</c> kernel placeholder (see
+    /// <see cref="ExecutableCodeBlockRenderer.KernelAddressPlaceholder"/>) — so a remote React /
+    /// portal-next client hydrates them into live views and substitutes its own kernel address,
+    /// exactly as the native Blazor renderer does. This is why the client must reach the ONE
+    /// parser and never its limited fallback: the Markdig pipeline emits raw-HTML blocks (doc hero
+    /// banners) faithfully, whereas the fallback escapes them into literal source text.</para>
+    /// </summary>
+    /// <param name="markdown">The markdown source to render.</param>
+    /// <param name="nodePath">The owning node path (nullable) — fills BOTH the collection
+    /// (image-href base) and the current-node-path (UCR link base), the same way the Blazor view
+    /// passes <c>Stream.Owner</c> + <c>NodePath</c>; null renders with no node context (e.g. the
+    /// composer preview).</param>
+    /// <returns>A cold observable emitting
+    /// <c>{"html":…,"codeSubmissions":[{"id":…,"language":…,"code":…}…]}</c> (camelCase) or an
+    /// <c>"Error: …"</c> sentinel.</returns>
+    public IObservable<string> RenderMarkdown(string markdown, string? nodePath = null)
+    {
+        // Debug, not Information: this backs every markdown-bearing page render (doc hero banners,
+        // composer preview) and can fire per debounced keystroke — Information would flood Loki.
+        logger.LogDebug("RenderMarkdown called nodePath={NodePath} length={Length}",
+            nodePath, markdown?.Length ?? 0);
+
+        // Defer so the (synchronous, CPU-bound) Markdig parse runs on Subscribe — cold, like the
+        // sibling verbs. No hub round-trip: the pipeline is pure, so this is safe on the request
+        // thread that RunString bridges with .FirstAsync().ToTask(ct).
+        return Observable.Defer(() =>
+        {
+            var result = MarkdownViewLogic.Render(markdown ?? string.Empty, nodePath, nodePath);
+
+            // Build the envelope explicitly (like Search/QueryNodes) so the camelCase keys are
+            // ALWAYS present and stable regardless of the hub serializer's ignore-condition — an
+            // empty submissions list must still ship "codeSubmissions":[] rather than be dropped.
+            var submissions = new JsonArray();
+            foreach (var s in result.CodeSubmissions ?? [])
+                submissions.Add(new JsonObject
+                {
+                    ["id"] = s.Id,
+                    ["language"] = s.Language,
+                    ["code"] = s.Code,
+                });
+
+            var payload = new JsonObject
+            {
+                ["html"] = result.Html,
+                ["codeSubmissions"] = submissions,
+            };
+            return Observable.Return(payload.ToJsonString());
+        })
+        .Catch((Exception ex) =>
+        {
+            logger.LogWarning(ex, "RenderMarkdown failed for nodePath={NodePath}", nodePath);
+            return Observable.Return($"Error: {ex.Message}");
+        });
+    }
+
+    /// <summary>
     /// Parses the MCP-documented area-read route <c>{nodePath}/area/{Name[/Id]}</c>.
     /// The marker is the LAST exact <c>area</c> segment (ordinal, the documented casing) so
     /// a node path that itself contains an <c>area</c> segment still yields the deepest —

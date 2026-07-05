@@ -9,6 +9,8 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 
 There are two ways to run the React frontend: **served by a portal** (the SPA at `/app`, sharing the portal's origin, auth, and gRPC-web endpoint) and **standalone with Vite** (local development against sample data or a remote mesh).
 
+> **Two shells, one renderer.** This page walks through **`clients/portal`**, a client-only Vite shell served at `/app`. A portal's *primary* React frontend is **`clients/portal-next`**, a Next.js streaming-SSR shell served at `/next` (opt-in per deployment) — it adds a server-rendered first paint and the **stable per-tab session** described under [Live connection & session](/Doc/GUI/React). The `@meshweaver/react` renderer, the `@meshweaver/client-web` connection, and theming are identical across both.
+
 ## The served SPA at `/app`
 
 A portal deployment serves the built React app from its own `wwwroot/app` — the Vite production bundle (built with base `/app/`) copied into the portal's static files. Two pieces of middleware in the portal pipeline (`Memex.Portal.Shared/MemexConfiguration.cs`) make this work:
@@ -46,7 +48,7 @@ if (features.Grpc)
     app.MapMeshWeaverGrpc();        // meshweaver.v1.Mesh, grpc-web enabled
 ```
 
-`AddGrpcHub` / `UseMeshWeaverGrpcWeb` / `MapMeshWeaverGrpc` live in `src/MeshWeaver.Hosting.Grpc/GrpcHostingExtensions.cs`. The `node/*` address type is what the browser connection registers under (each tab connects as participant `node/<id>`); without the stream-routing declaration, replies addressed to it would be treated as node lookups and dropped. The wire details are on [Rendering Architecture](../Rendering).
+`AddGrpcHub` / `UseMeshWeaverGrpcWeb` / `MapMeshWeaverGrpc` live in `src/MeshWeaver.Hosting.Grpc/GrpcHostingExtensions.cs`. `AddGrpcHub` declares the `py/*` and `node/*` address types as **stream-routed** foreign-participant types — so a reply addressed to one routes back down its `Connect` stream instead of being resolved (and dropped) as a mesh-node lookup. The browser connection *defaults* to a random `node/<id>`; the Next.js shell (`clients/portal-next`) overrides it with a **stable per-tab `portal/<id>`** (`portal` is a built-in stream-routed type, the same family Blazor user circuits use) so the server keeps the participant and its sync sub-hubs alive across reloads — see [Live connection & session](/Doc/GUI/React). The wire details are on [Rendering Architecture](../Rendering).
 
 ### How the served SPA connects and routes
 

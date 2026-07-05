@@ -39,6 +39,12 @@ export function controlClass(control: UiControl): string | undefined {
   return typeof control.class === "string" ? control.class : undefined;
 }
 
+/** Join className fragments (a control's hardcoded class + its WithClass value), dropping empties. */
+export function mergeClass(...parts: (string | undefined | null | false)[]): string | undefined {
+  const joined = parts.filter((p): p is string => typeof p === "string" && p.length > 0).join(" ");
+  return joined.length > 0 ? joined : undefined;
+}
+
 function parseInline(s: string): CSSProperties {
   const out: Record<string, string> = {};
   for (const decl of s.split(";")) {
