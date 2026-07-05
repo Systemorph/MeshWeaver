@@ -556,50 +556,38 @@ public static class HubThreadExtensions
 
         var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.AI.HubThreadExtensions");
-        var workspace = hub.GetWorkspace();
-        var meshService = hub.ServiceProvider.GetService<IMeshService>();
 
-        // Read the current thread once to capture the ids being removed BEFORE truncating — the
-        // truncate re-reads and re-finds the index, so it stays race-safe against a concurrent writer.
-        workspace.GetMeshNodeStream(threadPath)
-            .Where(n => n is not null)
-            .Take(1)
-            .Timeout(TimeSpan.FromSeconds(10))
-            .Subscribe(node =>
+        // Capture the removed ids from the SAME snapshot the truncation applies — computed INSIDE the
+        // Update lambda, not from a separate earlier read. A separate read could drift from what the
+        // update actually dropped (a concurrent append between the two reads would orphan its cell);
+        // stream.Update applies the last lambda invocation, so the final assignment here is exactly the
+        // applied removed set. Single Update on the thread node, then delete those cells.
+        var removedIds = ImmutableList<string>.Empty;
+        hub.GetWorkspace().GetMeshNodeStream(threadPath).Update(node =>
+        {
+            var t = node.ContentAs<MeshThread>(hub.JsonSerializerOptions, logger);
+            if (t is null) return node;
+            var idx = t.Messages.IndexOf(atMessageId);
+            if (idx < 0) { removedIds = ImmutableList<string>.Empty; return node; } // id not in thread — no-op
+            removedIds = t.Messages.Skip(idx).ToImmutableList();
+            return node with { Content = t with { Messages = t.Messages.Take(idx).ToImmutableList() } };
+        }).Subscribe(
+            _ =>
             {
-                var t = node.ContentAs<MeshThread>(hub.JsonSerializerOptions, logger);
-                if (t is null) return;
-                var idx = t.Messages.IndexOf(atMessageId);
-                if (idx < 0) return; // id not in thread — no-op
-                var removedIds = t.Messages.Skip(idx).ToImmutableList();
-
-                workspace.GetMeshNodeStream(threadPath).Update(n2 =>
+                // Now that the list no longer references them, delete each removed cell RECURSIVELY — a
+                // message cell owns its output/tool-call/step children under {threadPath}/{id}/…, so a
+                // recursive DeleteNodeRequest clears the message AND its tool calls in one cascade
+                // (idempotent — a gone cell is a no-op).
+                foreach (var id in removedIds)
                 {
-                    var t2 = n2.ContentAs<MeshThread>(hub.JsonSerializerOptions, logger);
-                    if (t2 is null) return n2;
-                    var i2 = t2.Messages.IndexOf(atMessageId);
-                    if (i2 < 0) return n2;
-                    return n2 with { Content = t2 with { Messages = t2.Messages.Take(i2).ToImmutableList() } };
-                }).Subscribe(
-                    _ =>
-                    {
-                        // Now that the list no longer references them, delete each removed cell RECURSIVELY —
-                        // a message cell owns its output/tool-call/step children under {threadPath}/{id}/…, so a
-                        // recursive DeleteNodeRequest clears the message AND its tool calls in one cascade
-                        // (idempotent — a gone cell is a no-op).
-                        foreach (var id in removedIds)
-                        {
-                            var cellPath = $"{threadPath}/{id}";
-                            hub.Post(new DeleteNodeRequest(cellPath) { Recursive = true },
-                                o => o.WithTarget(new Address(cellPath)));
-                        }
-                    },
-                    ex => logger?.LogWarning(ex,
-                        "DeleteFromMessage: Update failed for thread {ThreadPath} message {MessageId}",
-                        threadPath, atMessageId));
+                    var cellPath = $"{threadPath}/{id}";
+                    hub.Post(new DeleteNodeRequest(cellPath) { Recursive = true },
+                        o => o.WithTarget(new Address(cellPath)));
+                }
             },
             ex => logger?.LogWarning(ex,
-                "DeleteFromMessage: thread read failed for {ThreadPath}", threadPath));
+                "DeleteFromMessage: Update failed for thread {ThreadPath} message {MessageId}",
+                threadPath, atMessageId));
     }
 
     // ═════════════════════════════════════════════════════════════════════
