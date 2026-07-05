@@ -50,7 +50,7 @@ public class LayoutAreaRetrievalTest(ITestOutputHelper output) : HubTestBase(out
     private static IObservable<UiControl?> Dashboard(LayoutAreaHost host, RenderingContext ctx)
         => Observable.Return<UiControl?>(Controls.Markdown("# Space Dashboard"));
 
-    [Fact]
+    [HubFact]
     public async Task GetLayoutAreasRequest_ListsVisibleAreasOnly()
     {
         GetHost();
@@ -77,7 +77,7 @@ public class LayoutAreaRetrievalTest(ITestOutputHelper output) : HubTestBase(out
         names.Should().NotContain("Threads");
     }
 
-    [Fact]
+    [HubFact]
     public async Task LayoutAreasUnifiedReference_MatchesTheTypedRequest()
     {
         GetHost();
