@@ -30,9 +30,11 @@ namespace MeshWeaver.Graph;
 ///
 /// <para>This supersedes the former <c>ScheduledActionRunner</c>. On startup it migrates any legacy
 /// <c>Admin/ScheduledAction/{id}</c> nodes (from before the generalization) into
-/// <c>Admin/EventSubscription/{id}</c> so an in-flight invite is never dropped. Timer +
-/// NodeStatus triggers are added in later stages; only <see cref="EventTriggerType.NodeChange"/> is
-/// handled here.</para>
+/// <c>Admin/EventSubscription/{id}</c> so an in-flight invite is never dropped. Handles
+/// <see cref="EventTriggerType.NodeChange"/> (live change-feed + reconcile) and
+/// <see cref="EventTriggerType.Timer"/> (a one-shot <c>Observable.Timer</c> per pending subscription,
+/// with a past <c>FireAt</c> firing on the next startup — restart-safe at-least-once). The
+/// <see cref="EventTriggerType.NodeStatus"/> trigger is added in a later stage.</para>
 /// </summary>
 public sealed class EventSubscriptionRunner(
     IMessageHub hub,
@@ -44,6 +46,9 @@ public sealed class EventSubscriptionRunner(
     private readonly object gate = new();
     private IReadOnlyList<EventSubscription> pending = [];
     private readonly HashSet<string> migratedLegacyIds = [];
+    // Live one-shot timers, keyed by subscription id — instance (never static), disposed on fire, on the
+    // subscription leaving the pending set, and on runner stop. No leak.
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, IDisposable> timerSubs = new();
     private IDisposable? pendingSub;
     private IDisposable? feedSub;
     private IDisposable? legacySub;
@@ -72,6 +77,15 @@ public sealed class EventSubscriptionRunner(
                 foreach (var s in list.Where(s => s is
                              { TriggerType: EventTriggerType.NodeChange, TriggerKind: MeshChangeKind.Created }))
                     Reconcile(s);
+
+                // Schedule one-shot timers for pending Timer subscriptions; cancel timers for any that
+                // left the pending set (fired / cancelled elsewhere).
+                foreach (var s in list.Where(s => s is { TriggerType: EventTriggerType.Timer, FireAt: not null }))
+                    ScheduleTimer(s);
+                var pendingIds = list.Select(s => s.Id).ToHashSet();
+                foreach (var id in timerSubs.Keys.Where(id => !pendingIds.Contains(id)).ToList())
+                    if (timerSubs.TryRemove(id, out var d))
+                        d.Dispose();
             }, ex => logger?.LogWarning(ex, "Event-subscriptions query failed"));
 
         // Live: fire on the actual change event.
@@ -133,11 +147,12 @@ public sealed class EventSubscriptionRunner(
         return string.Equals(actual, subscription.MatchValue, StringComparison.OrdinalIgnoreCase);
     }
 
+    // A NodeChange trigger's node id IS the subject (a User node's path IS the userId).
     private void Execute(EventSubscription subscription, MeshNode triggerNode)
-    {
-        // The triggering node's id is the user (a User node's path IS the userId).
-        var userId = triggerNode.Id;
+        => Execute(subscription, triggerNode.Id);
 
+    private void Execute(EventSubscription subscription, string userId)
+    {
         BuildContinuation(subscription, userId)
             .SelectMany(_ => AsSystem(() => EventSubscriptionOps.SetStatus(
                 hub, EventSubscriptionNodeType.Path(subscription.Id), EventSubscriptionStatus.Fired)))
@@ -152,6 +167,30 @@ public sealed class EventSubscriptionRunner(
                             hub, EventSubscriptionNodeType.Path(subscription.Id), EventSubscriptionStatus.Failed, ex.Message))
                         .Subscribe(_ => { }, _ => { });
                 });
+    }
+
+    /// <summary>
+    /// Schedules a one-shot timer for a pending <see cref="EventTriggerType.Timer"/> subscription
+    /// (idempotent per id — the slot is reserved before subscribing, so two pending-set emissions can't
+    /// double-schedule). A <see cref="EventSubscription.FireAt"/> already in the past fires immediately,
+    /// which — since the subscription node is durable and its <c>Pending → Fired</c> gates re-entry —
+    /// gives restart-safe at-least-once firing (a timer due during downtime fires on the next boot).
+    /// </summary>
+    private void ScheduleTimer(EventSubscription subscription)
+    {
+        if (timerSubs.ContainsKey(subscription.Id))
+            return;
+        var slot = new System.Reactive.Disposables.SingleAssignmentDisposable();
+        if (!timerSubs.TryAdd(subscription.Id, slot))
+            return;   // lost the race — another emission just scheduled this id
+        var delay = subscription.FireAt!.Value - DateTimeOffset.UtcNow;
+        if (delay < TimeSpan.Zero)
+            delay = TimeSpan.Zero;
+        slot.Disposable = Observable.Timer(delay).Subscribe(_tick =>
+        {
+            timerSubs.TryRemove(subscription.Id, out _);
+            Execute(subscription, subscription.SubjectId ?? "");
+        });
     }
 
     private IObservable<MeshNode> BuildContinuation(EventSubscription subscription, string userId) =>
@@ -250,5 +289,8 @@ public sealed class EventSubscriptionRunner(
         pendingSub?.Dispose();
         feedSub?.Dispose();
         legacySub?.Dispose();
+        foreach (var id in timerSubs.Keys.ToList())
+            if (timerSubs.TryRemove(id, out var d))
+                d.Dispose();
     }
 }
