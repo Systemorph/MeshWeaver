@@ -366,6 +366,10 @@ public static class MeshNodeExtensions
         // Slide MeshNode Content — presentation pages (see SlideNodeType). Registered
         // under the short name so slide nodes round-trip typed across hub boundaries.
         typeRegistry.WithType(typeof(SlideContent), nameof(SlideContent));
+        // Deck MeshNode Content — the EXTERNAL, ordered slide manifest (see DeckNodeType).
+        // Registered under the short name so a Deck round-trips typed across hub boundaries;
+        // SlideLayoutAreas reads a slide's parent Deck node to resolve the play order.
+        typeRegistry.WithType(typeof(DeckContent), nameof(DeckContent));
         // Backend-computed editable-field metadata sent to the GUI inside the node-content editor control.
         typeRegistry.WithType(typeof(MeshNodeEditorField), nameof(MeshNodeEditorField));
         // Security content types (AccessAssignment / PartitionAccessPolicy / RoleAssignment / Role).
