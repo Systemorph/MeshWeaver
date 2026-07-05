@@ -159,4 +159,42 @@ public class EventSubscriptionRunnerTest(ITestOutputHelper output) : MonolithMes
         Assert.True(final!.Status == EventSubscriptionStatus.Fired,
             $"migrated subscription ended {final.Status}: {final.LastError}");
     }
+
+    [Fact(Timeout = 60000)]
+    public async Task TimerSubscription_FiresAtItsTime_GrantingTheSubject()
+    {
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        var changeFeed = Mesh.ServiceProvider.GetRequiredService<IMeshChangeFeed>();
+        var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+
+        // A one-shot timer whose FireAt is already in the past → fires the moment the runner schedules it
+        // (the restart-safe "a timer due during downtime fires on the next boot" path). No trigger node,
+        // so the subject is carried on the subscription (SubjectId).
+        var subscription = new EventSubscription
+        {
+            TriggerType = EventTriggerType.Timer,
+            FireAt = DateTimeOffset.UtcNow.AddSeconds(-1),
+            ContinuationType = EventContinuationType.GrantSpaceAccess,
+            SubjectId = InviteeId,
+            TargetPath = Space,
+            Role = "Editor",
+        };
+        await EventSubscriptionOps.CreateSubscription(meshService, subscription).Should().Emit();
+
+        using var runner = new EventSubscriptionRunner(Mesh, changeFeed, meshService, accessService,
+            Mesh.ServiceProvider.GetService<Microsoft.Extensions.Logging.ILogger<EventSubscriptionRunner>>());
+        await runner.StartAsync(default);
+
+        // Fires: the subscription flips to Fired and the Editor grant lands for the subject.
+        var final = await Mesh.GetWorkspace().GetMeshNodeStream(EventSubscriptionNodeType.Path(subscription.Id))
+            .Select(n => n?.Content as EventSubscription)
+            .Where(s => s is not null and not { Status: EventSubscriptionStatus.Pending })
+            .FirstAsync().Timeout(40.Seconds());
+        Assert.True(final!.Status == EventSubscriptionStatus.Fired,
+            $"timer subscription ended {final.Status}: {final.LastError}");
+
+        await Mesh.GetWorkspace().GetMeshNodeStream($"{Space}/_Access/{InviteeId}_Access")
+            .Where(n => n?.Content is AccessAssignment a && a.Roles.Any(r => r.Role == "Editor" && !r.Denied))
+            .FirstAsync().Timeout(10.Seconds());
+    }
 }
