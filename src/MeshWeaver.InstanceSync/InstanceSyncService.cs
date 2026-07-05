@@ -159,6 +159,7 @@ public sealed class InstanceSyncService(
             return node with { Content = update(current) };
         });
 
+
     /// <summary>
     /// Appends a local change to the durable manifest, coalescing by path: only the LATEST
     /// pending state of a node matters because the drain pushes CURRENT content. Ordering of
