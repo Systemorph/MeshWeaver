@@ -36,7 +36,7 @@ public record MeshNodeThumbnailControl(
 
     /// <summary>
     /// Gets the image URL for a node. Public so other builders can reuse.
-    /// Priority: content.avatar > content.logo > content.icon > node.Icon > NodeType default.
+    /// Priority: content.avatar > content.logo > content.icon > MarkdownContent.Thumbnail > node.Icon > NodeType default.
     /// Handles both typed objects and JsonElement/Dictionary content.
     /// User-entered paths starting with <c>content:</c> or <c>content/</c> are resolved
     /// against the node's content collection; an inline <c>&lt;svg&gt;…&lt;/svg&gt;</c> value is
