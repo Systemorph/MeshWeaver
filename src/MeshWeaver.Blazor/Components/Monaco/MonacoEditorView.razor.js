@@ -285,7 +285,15 @@ export function initEditor(editorId, placeholder, dotNetRef, codeEditMode = fals
     // BLACK on the transparent-over-dark composer background (unreadable in dark mode). Re-syncing
     // the global theme on every mount also heals a stale theme set before the app flipped to dark.
     if (typeof monaco !== 'undefined' && monaco.editor) {
-        const currentTheme = detectThemeFromDOM();
+        // Prefer the AUTHORITATIVE app theme (window.themeHandler) — the SAME source the theme-change
+        // callback uses (ensureThemeCallbackRegistered) — and only fall back to DOM sniffing when it's
+        // absent. Using detectThemeFromDOM here unconditionally was the "black font on the user page"
+        // bug: FluentDesignTheme doesn't always mirror the effective theme onto body[data-theme], so DOM
+        // sniffing returned 'light' while the app was dark, and this mount-time setTheme (GLOBAL) then
+        // RESET every editor to 'vs' (black glyphs) right after the callback had correctly set 'vs-dark'.
+        const currentTheme = (typeof window.themeHandler !== 'undefined' && window.themeHandler.getEffectiveTheme)
+            ? window.themeHandler.getEffectiveTheme()
+            : detectThemeFromDOM();
         monaco.editor.setTheme(currentTheme === 'dark' ? 'vs-dark' : 'vs');
     }
     if (editorInstance) {
