@@ -3,6 +3,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Mesh.Threading;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Hosting.Sqlite;
@@ -36,6 +37,11 @@ public static class SqliteExtensions
             sp.GetService<ILogger<SqliteStorageAdapter>>()));
         services.AddSingleton<IPartitionStorageProvider>(sp =>
             new SqlitePartitionStorageProvider(sp.GetRequiredService<SqliteStorageAdapter>()));
+        // Durable event-log store (SQLite) — overrides the in-memory default from AddMeshEventLog(),
+        // so the app-level outbox survives restarts on the embedded / offline (MAUI) backend. Uses
+        // the same DI-provided IIoPool as the storage adapter (SQLite is single-writer + serialised).
+        services.Replace(ServiceDescriptor.Singleton<MeshWeaver.Hosting.IEventLogStore>(sp =>
+            new SqliteEventLogStore(connectionString, sp.GetService<IIoPool>())));
         services.AddPartitionedCoreAndWrapperServices();
         // Vector-ranked search + autocomplete, fanned in alongside the pedestrian provider.
         services.AddSingleton<IMeshQueryProvider>(sp => new SqliteVectorMeshQuery(
