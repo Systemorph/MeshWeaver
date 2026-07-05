@@ -72,7 +72,8 @@ public static class DomainLayoutAreas
 
     /// <summary>
     /// Renders a catalog view listing all entities of the type named in the area reference Id.
-    /// Throws when no type is specified or the type is not registered in the data context.
+    /// Returns an actionable caution when no type is specified; throws when the named type is not
+    /// registered in the data context.
     /// </summary>
     /// <param name="area">The layout area host providing workspace and type-registry access.</param>
     /// <param name="ctx">The rendering context for this area.</param>
@@ -81,7 +82,14 @@ public static class DomainLayoutAreas
     public static UiControl Catalog(LayoutAreaHost area, RenderingContext ctx)
     {
         if (area.Reference.Id is not string collection)
-            throw new InvalidOperationException("No type specified for catalog.");
+            // "Catalog" lists all entities of a registered data TYPE, so it needs one. Written bare
+            // (@@Catalog) it has no Id — that used to throw a dead-end "No type specified" error.
+            // Guide the author to the right syntax instead: a type catalog needs the type, and a
+            // Space's own contents are the separate node-children "Search" area.
+            return Error(
+                "**Catalog needs a type.** Use `@@Catalog/TypeName` to list every entity of a "
+                + "registered type (e.g. `@@Catalog/User`). To embed this node's own contents, use "
+                + "`@@(\"area/Search\")` instead.");
         var typeDefinition = area.Hub.ServiceProvider.GetRequiredService<ITypeRegistry>().GetTypeDefinition(collection);
         if (typeDefinition == null)
             throw new DataSourceConfigurationException(

@@ -54,6 +54,52 @@ public interface IGitHubRepoClient
     /// </summary>
     IObservable<GitHubPullRequestInfo> GetPullRequestStatus(
         string repositoryUrl, int number, string accessToken);
+
+    // ── Issues ───────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Lists the repository's issues (pull requests excluded — GitHub returns PRs from the
+    /// issues endpoint), optionally filtered to <paramref name="state"/> (null = all states).
+    /// One <see cref="GitHubIssue"/> per issue, WITHOUT comments (a list read).
+    /// </summary>
+    IObservable<IReadOnlyList<GitHubIssue>> ListIssues(
+        string repositoryUrl, GitHubIssueState? state, string accessToken);
+
+    /// <summary>
+    /// Reads a single issue plus its comments — the detailed read used to hydrate the
+    /// <c>{spacePath}/_Issue/{number}</c> node's full content.
+    /// </summary>
+    IObservable<GitHubIssue> GetIssue(string repositoryUrl, int number, string accessToken);
+
+    /// <summary>Opens a new issue on GitHub and emits the created issue (with its assigned number).</summary>
+    IObservable<GitHubIssue> CreateIssue(GitHubCreateIssueRequest request);
+
+    /// <summary>Posts a comment on issue <paramref name="number"/> and emits the created comment.</summary>
+    IObservable<GitHubIssueComment> CommentIssue(
+        string repositoryUrl, int number, string body, string accessToken);
+
+    // ── Pull requests (richer) ────────────────────────────────────────────────
+
+    /// <summary>
+    /// Lists the repository's pull requests, optionally filtered to <paramref name="state"/>
+    /// (null = all states). One compact <see cref="GitHubPullRequestSummary"/> per PR.
+    /// </summary>
+    IObservable<IReadOnlyList<GitHubPullRequestSummary>> ListPullRequests(
+        string repositoryUrl, PullRequestStatus? state, string accessToken);
+
+    /// <summary>
+    /// Reads a pull request's live detail — mergeability, a CI-checks roll-up (over the head
+    /// commit) and a reviews roll-up (latest decision per reviewer). Delegated, never stored.
+    /// </summary>
+    IObservable<GitHubPullRequestDetail> GetPullRequestDetail(
+        string repositoryUrl, int number, string accessToken);
+
+    /// <summary>Posts a comment on pull request <paramref name="number"/> (a PR is an issue) and emits it.</summary>
+    IObservable<GitHubIssueComment> CommentPullRequest(
+        string repositoryUrl, int number, string body, string accessToken);
+
+    /// <summary>Merges an open pull request with the requested strategy; emits the merge outcome.</summary>
+    IObservable<GitHubMergeResult> MergePullRequest(GitHubMergePullRequestRequest request);
 }
 
 /// <summary>A point-in-time snapshot of a repo subtree — the resolved commit SHA + its files.</summary>

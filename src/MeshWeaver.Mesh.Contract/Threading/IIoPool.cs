@@ -1,4 +1,5 @@
 using System.Reactive;
+using System.Reactive.Threading.Tasks;
 
 namespace MeshWeaver.Mesh.Threading;
 
@@ -59,6 +60,24 @@ public interface IIoPool
     /// duration of the enumeration and emitting each item as <c>OnNext</c>.
     /// </summary>
     IObservable<T> InvokeStream<T>(Func<CancellationToken, IAsyncEnumerable<T>> source);
+
+    /// <summary>
+    /// Bridges an <see cref="IObservable{T}"/> I/O leaf — e.g. an Octokit.Reactive
+    /// <c>ObservableGitHubClient</c> call — into the pool: the leaf is subscribed on a
+    /// ThreadPool thread behind the concurrency gate and its <b>last</b> value is emitted
+    /// once it completes. It composes on <see cref="Invoke{T}"/>, so the async gate,
+    /// <c>ConfigureAwait(false)</c> and off-hub scheduling all come from there — a reactive
+    /// SDK leaf (itself <c>FromAsync</c>-shaped and otherwise unbounded on the subscribing
+    /// hub scheduler) can never deadlock a hub/grain turn or exceed the pool's cap.
+    ///
+    /// <para>The leaf must emit at least one value (a single-item call, or a multi-item
+    /// paginated <c>GetAll…</c> reduced with <c>.ToList()</c>/<c>.Any()</c> at the call
+    /// site so the single emitted value is the whole result). This is the sanctioned
+    /// reactive-SDK counterpart to <see cref="InvokeStream{T}"/>; the <c>.ToTask()</c>
+    /// bridge lives here, in the pool — never at the call site.</para>
+    /// </summary>
+    IObservable<T> InvokeObservable<T>(Func<CancellationToken, IObservable<T>> source)
+        => Invoke(ct => source(ct).ToTask(ct));
 
     /// <summary>Operations currently in flight through this pool. Diagnostics / tests only.</summary>
     int CurrentInFlight { get; }

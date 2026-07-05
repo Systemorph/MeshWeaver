@@ -70,7 +70,46 @@ public sealed class GitHubOAuthService
     public IObservable<string?> GetLogin(string accessToken) =>
         Http.Invoke(ct => GetLoginAsync(accessToken, ct));
 
+    /// <summary>
+    /// Resolves the user's PRIMARY VERIFIED email — the identity key for "Sign in with GitHub"
+    /// (so a GitHub login maps to the SAME mesh user as an Entra login with that email). Returns
+    /// <c>null</c> when no primary verified email is obtainable — e.g. the GitHub App lacks the
+    /// "Email addresses: Read" account permission (the <c>/user/emails</c> call 403s) or the user
+    /// has no verified email. Callers MUST fail the login gracefully on null, never fabricate an
+    /// identity from the login handle. (The <c>scope=user:email</c> param is ignored by GitHub
+    /// Apps — access is governed by the App's account permissions, not the OAuth scope.)
+    /// </summary>
+    public IObservable<string?> GetPrimaryEmail(string accessToken) =>
+        Http.Invoke(ct => GetPrimaryEmailAsync(accessToken, ct));
+
     // ── HTTP leaves (run inside the I/O pool) ────────────────────────────────
+
+    private async Task<string?> GetPrimaryEmailAsync(string accessToken, CancellationToken ct)
+    {
+        using var req = new HttpRequestMessage(HttpMethod.Get, options.UserApiUrl.TrimEnd('/') + "/emails");
+        req.Headers.Accept.ParseAdd("application/vnd.github+json");
+        req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", accessToken);
+        using var resp = await http.SendAsync(req, ct).ConfigureAwait(false);
+        if (!resp.IsSuccessStatusCode) return null;
+        var json = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+        using var doc = JsonDocument.Parse(json);
+        if (doc.RootElement.ValueKind != JsonValueKind.Array) return null;
+
+        // GitHub returns the addresses in no guaranteed order — pick the primary+verified one;
+        // fall back to any verified address so a user whose primary isn't flagged still resolves.
+        string? verifiedFallback = null;
+        foreach (var e in doc.RootElement.EnumerateArray())
+        {
+            var email = GetStr(e, "email");
+            if (string.IsNullOrEmpty(email)) continue;
+            var verified = e.TryGetProperty("verified", out var v) && v.ValueKind == JsonValueKind.True;
+            var primary = e.TryGetProperty("primary", out var p) && p.ValueKind == JsonValueKind.True;
+            if (!verified) continue;
+            if (primary) return email;
+            verifiedFallback ??= email;
+        }
+        return verifiedFallback;
+    }
 
     private async Task<GitHubToken> ExchangeCodeAsync(string code, string redirectUri, CancellationToken ct)
     {
