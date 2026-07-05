@@ -1,0 +1,186 @@
+// A durable, append-only log of mesh change events + a per-consumer cursor — the React-Native twin of
+// the C# app-level event-log outbox (src/MeshWeaver.Hosting/EventLog/EventLog.cs and its Sqlite store).
+// On a long-distance flight the RN client's own pending mutations accumulate here and drain on
+// reconnect; append is idempotent by (path, kind, version), so a replayed event is not re-logged.
+//
+// The SQLite store runs against an injected EventLogDb — the minimal async SQL surface that
+// expo-sqlite's SQLiteDatabase satisfies STRUCTURALLY — so this module imports NO native package and
+// stays testable in plain Node (the tests drive it against node:sqlite). Wire the RN runtime with:
+//
+//   import * as SQLite from "expo-sqlite";
+//   const db = await SQLite.openDatabaseAsync("meshweaver-eventlog.db");
+//   const store = new SqliteEventLogStore(db); // SQLiteDatabase already IS an EventLogDb
+
+/** The mesh-node change kinds an event can carry (mirrors C# MeshChangeKind). */
+export type MeshChangeKind = "Created" | "Updated" | "Deleted";
+
+/** One change to a mesh node (mirrors C# MeshChangeEvent). */
+export interface MeshChangeEvent {
+  namespace?: string;
+  id: string;
+  path: string;
+  nodeType?: string;
+  kind: MeshChangeKind;
+  version: number;
+  /** ISO-8601 instant the change occurred. */
+  timestamp: string;
+}
+
+/** One logged event with its assigned sequence number. */
+export interface EventLogEntry {
+  seq: number;
+  event: MeshChangeEvent;
+}
+
+/** The durable event-log outbox contract (parity with C# IEventLogStore). */
+export interface EventLogStore {
+  /** Append an event, returning its seq. Idempotent by (path,kind,version): a duplicate returns the
+   *  existing seq and does not add a row. */
+  append(change: MeshChangeEvent): Promise<number>;
+  /** Events with seq &gt; afterSeq in seq order (up to limit). */
+  readFrom(afterSeq: number, limit?: number): Promise<EventLogEntry[]>;
+  /** The highest assigned seq (0 when empty). */
+  maxSeq(): Promise<number>;
+  /** The last-processed seq for a consumer (0 if none recorded). */
+  getCursor(consumerId: string): Promise<number>;
+  /** Advance a consumer's cursor — monotonic, never moves backward. */
+  setCursor(consumerId: string, seq: number): Promise<void>;
+}
+
+const keyOf = (c: MeshChangeEvent) => JSON.stringify([c.path, c.kind, c.version]);
+
+/**
+ * In-memory reference store — the default (web / tests / no-persistence) and parity with C#
+ * InMemoryEventLogStore. Idempotency is an O(1) (path,kind,version)→seq index.
+ */
+export class InMemoryEventLogStore implements EventLogStore {
+  private seq = 0;
+  private readonly entries: EventLogEntry[] = [];
+  private readonly byKey = new Map<string, number>();
+  private readonly cursors = new Map<string, number>();
+
+  async append(change: MeshChangeEvent): Promise<number> {
+    const k = keyOf(change);
+    const existing = this.byKey.get(k);
+    if (existing !== undefined) return existing;
+    const seq = ++this.seq;
+    this.entries.push({ seq, event: change });
+    this.byKey.set(k, seq);
+    return seq;
+  }
+  async readFrom(afterSeq: number, limit = 500): Promise<EventLogEntry[]> {
+    return this.entries.filter((e) => e.seq > afterSeq).slice(0, limit);
+  }
+  async maxSeq(): Promise<number> {
+    return this.seq;
+  }
+  async getCursor(consumerId: string): Promise<number> {
+    return this.cursors.get(consumerId) ?? 0;
+  }
+  async setCursor(consumerId: string, seq: number): Promise<void> {
+    this.cursors.set(consumerId, Math.max(this.cursors.get(consumerId) ?? 0, seq));
+  }
+}
+
+/**
+ * The minimal async SQL surface the SQLite store needs. expo-sqlite's `SQLiteDatabase` already
+ * exposes exactly these methods, so an opened database can be passed straight to
+ * {@link SqliteEventLogStore} with no adapter.
+ */
+export interface EventLogDb {
+  execAsync(sql: string): Promise<void>;
+  runAsync(sql: string, params: unknown[]): Promise<{ lastInsertRowId: number; changes: number }>;
+  getFirstAsync<T>(sql: string, params: unknown[]): Promise<T | null>;
+  getAllAsync<T>(sql: string, params: unknown[]): Promise<T[]>;
+}
+
+/**
+ * SQLite-backed durable store — the RN offline outbox, parity with C# SqliteEventLogStore. Append is
+ * idempotent by (path,kind,version) via `ON CONFLICT`. The schema is created once (a memoized promise
+ * — one JS thread, so no lock), then replayed to every later call.
+ */
+export class SqliteEventLogStore implements EventLogStore {
+  private ready?: Promise<void>;
+  constructor(private readonly db: EventLogDb) {}
+
+  private ensureSchema(): Promise<void> {
+    return (this.ready ??= this.db.execAsync(
+      `CREATE TABLE IF NOT EXISTS event_log (
+         seq INTEGER PRIMARY KEY AUTOINCREMENT,
+         occurred_at TEXT NOT NULL,
+         namespace TEXT,
+         path TEXT NOT NULL,
+         node_type TEXT,
+         kind TEXT NOT NULL,
+         version INTEGER NOT NULL,
+         payload TEXT NOT NULL,
+         UNIQUE(path, kind, version)
+       );
+       CREATE TABLE IF NOT EXISTS action_cursor (
+         consumer_id TEXT PRIMARY KEY,
+         last_seq INTEGER NOT NULL
+       );`,
+    ));
+  }
+
+  async append(change: MeshChangeEvent): Promise<number> {
+    await this.ensureSchema();
+    // ON CONFLICT DO UPDATE (a no-op touch) so RETURNING always yields the seq — the existing one on a
+    // duplicate, the new one otherwise — in a single round-trip.
+    const row = await this.db.getFirstAsync<{ seq: number }>(
+      `INSERT INTO event_log (occurred_at, namespace, path, node_type, kind, version, payload)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(path, kind, version) DO UPDATE SET occurred_at = occurred_at
+       RETURNING seq;`,
+      [
+        change.timestamp,
+        change.namespace ?? null,
+        change.path,
+        change.nodeType ?? null,
+        change.kind,
+        change.version,
+        JSON.stringify(change),
+      ],
+    );
+    // A successful upsert (insert OR conflict-update) always RETURNs a seq. No row means the driver
+    // silently failed — surface it rather than returning 0 (which would corrupt cursor ordering).
+    if (row == null) throw new Error(`event-log append returned no row for ${change.path}`);
+    return Number(row.seq);
+  }
+
+  async readFrom(afterSeq: number, limit = 500): Promise<EventLogEntry[]> {
+    await this.ensureSchema();
+    const rows = await this.db.getAllAsync<{ seq: number; payload: string }>(
+      `SELECT seq, payload FROM event_log WHERE seq > ? ORDER BY seq LIMIT ?;`,
+      [afterSeq, limit],
+    );
+    return rows.map((r) => ({ seq: Number(r.seq), event: JSON.parse(r.payload) as MeshChangeEvent }));
+  }
+
+  async maxSeq(): Promise<number> {
+    await this.ensureSchema();
+    const row = await this.db.getFirstAsync<{ m: number }>(
+      `SELECT COALESCE(MAX(seq), 0) AS m FROM event_log;`,
+      [],
+    );
+    return Number(row?.m ?? 0);
+  }
+
+  async getCursor(consumerId: string): Promise<number> {
+    await this.ensureSchema();
+    const row = await this.db.getFirstAsync<{ last_seq: number }>(
+      `SELECT last_seq FROM action_cursor WHERE consumer_id = ?;`,
+      [consumerId],
+    );
+    return Number(row?.last_seq ?? 0);
+  }
+
+  async setCursor(consumerId: string, seq: number): Promise<void> {
+    await this.ensureSchema();
+    await this.db.runAsync(
+      `INSERT INTO action_cursor (consumer_id, last_seq) VALUES (?, ?)
+       ON CONFLICT(consumer_id) DO UPDATE SET last_seq = MAX(action_cursor.last_seq, excluded.last_seq);`,
+      [consumerId, seq],
+    );
+  }
+}
