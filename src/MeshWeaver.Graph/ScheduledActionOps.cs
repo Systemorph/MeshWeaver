@@ -19,9 +19,11 @@ namespace MeshWeaver.Graph;
 /// </summary>
 public static class ScheduledActionOps
 {
-    /// <summary>Creates the durable <see cref="ScheduledAction"/> node at <c>Admin/ScheduledAction/{id}</c>.</summary>
+    /// <summary>Writes the durable <see cref="ScheduledAction"/> node at <c>Admin/ScheduledAction/{id}</c>.
+    /// Upsert by id — a deterministic id (e.g. per invitee+space) makes a re-invite idempotent instead
+    /// of piling up duplicate actions.</summary>
     public static IObservable<MeshNode> CreateAction(IMeshService meshService, ScheduledAction action)
-        => meshService.CreateNode(new MeshNode(action.Id, ScheduledActionNodeType.Namespace)
+        => meshService.CreateOrUpdateNode(new MeshNode(action.Id, ScheduledActionNodeType.Namespace)
         {
             NodeType = ScheduledActionNodeType.NodeType,
             Name = $"{action.ActionKind} → {action.TargetPath}",
