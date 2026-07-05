@@ -4,6 +4,7 @@ using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
+using MeshWeaver.Layout.Domain;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 
@@ -42,14 +43,20 @@ public static class SpaceLayoutAreas
         // every Space showed the node icon + the welcome placeholder instead of its own
         // logo/body. Read the Space off the node's Content via ContentAs (handles the
         // typed-instance, JsonElement, and null cases).
-        return nodeStream.Select(node =>
-        {
-            if (node == null)
-                return Controls.Markdown("*Loading...*") as UiControl;
+        // Compose with the effective-permission stream so the space's title is click-to-edit
+        // ONLY for a user who can Update the node (mirrors MeshNodeLayoutAreas.Overview) — pure
+        // observable composition, no await.
+        return nodeStream.CombineLatest(
+            host.Hub.GetEffectivePermissions(hubPath),
+            (node, permissions) =>
+            {
+                if (node == null)
+                    return Controls.Markdown("*Loading...*") as UiControl;
 
-            var space = ResolveSpace(node, options);
-            return BuildSpaceView(host, space, node);
-        });
+                var canEdit = permissions.HasFlag(Permission.Update);
+                var space = ResolveSpace(node, options);
+                return BuildSpaceView(host, space, node, canEdit);
+            });
     }
 
     /// <summary>
@@ -179,7 +186,8 @@ public static class SpaceLayoutAreas
     private static UiControl BuildSpaceView(
         LayoutAreaHost host,
         Space? space,
-        MeshNode? node)
+        MeshNode? node,
+        bool canEdit)
     {
         var spacePath = node?.Path ?? host.Hub.Address.ToString();
         var spaceName = space?.Name ?? node?.Name ?? spacePath;
@@ -188,7 +196,7 @@ public static class SpaceLayoutAreas
             .WithWidth("100%")
             .WithStyle($"height: 100%; overflow-y: auto; {ThinScrollbar}");
 
-        shell = shell.WithView(BuildHeader(space, node, spaceName));
+        shell = shell.WithView(BuildHeader(host, space, node, spaceName, spacePath, canEdit));
         shell = shell.WithView(BuildBodyContent(space, node, spacePath));
 
         if (IsSystemorph(spacePath))
@@ -203,8 +211,12 @@ public static class SpaceLayoutAreas
 
     /// <summary>
     /// Logo + name + description + stats row. GitHub-style header, fixed at the top.
+    /// The name renders as a click-to-edit title (see <see cref="BuildEditableTitle"/>) when
+    /// <paramref name="canEdit"/> — an editor renames the space in place; everyone else sees a
+    /// plain heading.
     /// </summary>
-    private static UiControl BuildHeader(Space? space, MeshNode? node, string spaceName)
+    private static UiControl BuildHeader(
+        LayoutAreaHost host, Space? space, MeshNode? node, string spaceName, string spacePath, bool canEdit)
     {
         var description = space?.Description;
         var logo = space?.Logo ?? GetNodeLogo(node);
@@ -244,8 +256,7 @@ public static class SpaceLayoutAreas
 
         var infoColumn = Controls.Stack.WithStyle("gap: 8px; flex: 1;");
 
-        infoColumn = infoColumn.WithView(Controls.Html(
-            $"<h1 style=\"margin: 0; font-size: 2rem; font-weight: 600;\">{System.Web.HttpUtility.HtmlEncode(spaceName)}</h1>"));
+        infoColumn = infoColumn.WithView(BuildEditableTitle(host, spacePath, spaceName, canEdit));
 
         if (!string.IsNullOrEmpty(description))
         {
@@ -301,6 +312,64 @@ public static class SpaceLayoutAreas
 
         return container;
     }
+
+    /// <summary>
+    /// The space's H1 title as a click-to-edit heading. Read view is a plain heading; when
+    /// <paramref name="canEdit"/> and the user clicks it, an inline <see cref="TextFieldControl"/>
+    /// bound to the Space content <c>name</c> field (node-bound DataContext) takes over, so the edit
+    /// writes straight back to the node stream — and to <see cref="MeshNode.Name"/> via the Space's
+    /// <c>[MeshNodeProperty(nameof(MeshNode.Name))]</c> mapping. Same mechanism the Space Edit area
+    /// (<see cref="BuildBodyEditor"/>) uses for the name field — the click-to-edit toggle is the only
+    /// thing living in <c>/data</c>. See Doc/GUI/DataBinding "Node-bound DataContext".
+    /// </summary>
+    private static UiControl BuildEditableTitle(
+        LayoutAreaHost host, string spacePath, string spaceName, bool canEdit)
+    {
+        var editStateId = $"editState_{EditLayoutArea.GetDataId(spacePath)}_spaceTitle";
+        var editStateStream = host.Stream.GetDataStream<bool>(editStateId);
+
+        return Controls.Stack
+            .WithView((_, _) =>
+                editStateStream
+                    .StartWith(false)
+                    .DistinctUntilChanged()
+                    .Select(isEditing =>
+                        isEditing && canEdit
+                            ? BuildTitleEditView(spacePath, editStateId)
+                            : BuildTitleReadView(spaceName, editStateId, canEdit)));
+    }
+
+    private static UiControl BuildTitleReadView(string spaceName, string editStateId, bool canEdit)
+    {
+        var titleStack = Controls.Stack
+            .WithStyle($"cursor: {(canEdit ? "pointer" : "default")};")
+            .WithView(Controls.Html(
+                $"<h1 style=\"margin: 0; font-size: 2rem; font-weight: 600;\">{System.Web.HttpUtility.HtmlEncode(spaceName)}</h1>"));
+
+        if (canEdit)
+            titleStack = titleStack.WithClickAction(ctx =>
+            {
+                ctx.Host.UpdateData(editStateId, true);
+                return Task.CompletedTask;
+            });
+
+        return titleStack;
+    }
+
+    private static UiControl BuildTitleEditView(string spacePath, string editStateId)
+        => new TextFieldControl(new JsonPointerReference("name"))
+        {
+            Immediate = true,
+            AutoFocus = true,
+            Placeholder = "Space name",
+            DataContext = LayoutAreaReference.GetMeshNodeDataContext(spacePath, bindContent: true)
+        }
+        .WithStyle("font-size: 2rem; font-weight: 600; border: none; background: transparent; min-width: 300px; width: 100%;")
+        .WithBlurAction(ctx =>
+        {
+            ctx.Host.UpdateData(editStateId, false);
+            return Task.CompletedTask;
+        });
 
     /// <summary>
     /// Body content — priority: node.PreRenderedHtml → space.Body → default welcome markdown.
