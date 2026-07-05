@@ -329,11 +329,20 @@ public sealed class MessageStormBreaker
     {
         var message = delivery.Message;
         if (message is null) return false;
-        // The lifecycle/control set is itself [CanBeIgnored], so it MUST be excluded FIRST,
-        // before the attribute check — mirror ShouldDrop's exempt block exactly so these are
-        // never shed (dropping them could deadlock teardown/init).
+        // The TRUE lifecycle/control set (teardown/init) must NEVER be shed — dropping it could
+        // deadlock teardown or init. It is [CanBeIgnored], so it MUST be excluded FIRST, before the
+        // attribute check.
+        //
+        // 🗑️ HeartBeatEvent is DELIBERATELY NOT in this set. A heartbeat is periodic grain keep-alive,
+        // not lifecycle — and it is exactly the traffic that "piles up" when a hub is over the aggregate
+        // watermark (the ONE sheddable class that used to be exempted, so it accumulated while everything
+        // else shed). Shedding it under overload is SAFE: over the watermark the grain is BUSY draining a
+        // deep queue (not idle), so a dropped keep-alive can't idle-deactivate it, and the next interval's
+        // heartbeat resumes keep-alive once the backlog clears. "Heartbeats must not pile up; if they can't
+        // be delivered under load, trash them." Below the watermark heartbeats are never shed (they pass
+        // through and keep genuinely-idle grains alive).
         if (message is ShutdownRequest or DisposeRequest or DeliveryFailure
-            or InitializeHubRequest or HeartBeatEvent)
+            or InitializeHubRequest)
             return false;
         return message.GetType().HasAttribute<CanBeIgnoredAttribute>();
     }

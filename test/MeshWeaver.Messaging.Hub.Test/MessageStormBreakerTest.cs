@@ -175,12 +175,18 @@ public class MessageStormBreakerTest
         breaker.ShouldShedAggregate(Delivery(new StormableMessage()), inboundDepth: 10_000)
             .Should().BeFalse("user-facing application messages are never shed");
 
-        // Lifecycle / control is NEVER shed (it is itself [CanBeIgnored] — the exclude-first rule).
+        // TRUE lifecycle / control is NEVER shed (dropping it deadlocks teardown/init).
         breaker.ShouldShedAggregate(Delivery(new DisposeRequest()), 10_000).Should().BeFalse();
-        breaker.ShouldShedAggregate(Delivery(new HeartBeatEvent()), 10_000).Should().BeFalse();
         breaker.ShouldShedAggregate(Delivery(new InitializeHubRequest()), 10_000).Should().BeFalse();
         breaker.ShouldShedAggregate(Delivery(new DeliveryFailure(inner, "boom")), 10_000).Should().BeFalse();
 
-        breaker.AggregateShedCount.Should().Be(1, "only the one sheddable message above the watermark was shed");
+        // HeartBeatEvent IS shed under overload — it is periodic grain keep-alive, NOT lifecycle. At the
+        // watermark the grain is busy draining a deep queue (not idle), so a dropped keep-alive can't
+        // idle-deactivate it; shedding stops heartbeats piling into an already-overloaded turn loop. This
+        // is the fix for "heartbeats must not pile up; if they can't be delivered under load, trash them".
+        breaker.ShouldShedAggregate(Delivery(new HeartBeatEvent()), 10_000)
+            .Should().BeTrue("heartbeats must be sheddable under overload so they don't accumulate");
+
+        breaker.AggregateShedCount.Should().Be(2, "the sheddable control message and the heartbeat were both shed");
     }
 }
