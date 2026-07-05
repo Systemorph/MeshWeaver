@@ -29,7 +29,7 @@ public enum ScheduledActionKind
 /// <summary>
 /// A deferred, event-triggered action — the durable record of "when THIS happens, do THAT",
 /// surviving restarts. Stored as a MeshNode in the always-present <b>Admin</b> partition
-/// (<c>Admin/_ScheduledAction/{id}</c>), so the <c>ScheduledActionRunner</c> can enumerate every
+/// (<c>Admin/ScheduledAction/{id}</c>), so the <c>ScheduledActionRunner</c> can enumerate every
 /// outstanding action on startup and reconcile it against current state (a matching event that
 /// arrived while the runner was down still fires).
 ///
