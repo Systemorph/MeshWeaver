@@ -36,17 +36,22 @@ public record MeshNodeThumbnailControl(
 
     /// <summary>
     /// Gets the image URL for a node. Public so other builders can reuse.
-    /// Priority: content.avatar > content.logo > node.Icon
+    /// Priority: content.avatar > content.logo > content.icon > node.Icon > NodeType default.
     /// Handles both typed objects and JsonElement/Dictionary content.
     /// User-entered paths starting with <c>content:</c> or <c>content/</c> are resolved
-    /// against the node's content collection.
+    /// against the node's content collection; an inline <c>&lt;svg&gt;…&lt;/svg&gt;</c> value is
+    /// returned verbatim (never treated as a path) so the client renders it inline.
     /// </summary>
     public static string? GetImageUrlForNode(MeshNode? node)
     {
         if (node == null)
             return null;
 
-        // First check content properties (avatar, logo)
+        // First check content properties (avatar, logo, icon). `icon`/`Icon` is included so a
+        // content-carried icon — commonly an inline <svg> — surfaces on the card instead of being
+        // dropped in favour of the generic NodeType default. ResolveContentPath returns inline SVG
+        // and URLs verbatim, resolves content:/content/ references, and returns null for legacy
+        // Fluent icon names (so those correctly fall through to node.Icon / the NodeType default).
         if (node.Content != null)
         {
             // Try JsonElement first (common when deserializing from JSON)
@@ -55,7 +60,9 @@ public record MeshNodeThumbnailControl(
                 var resolved = TryResolveJsonProperty(jsonElement, "avatar", node.Path)
                     ?? TryResolveJsonProperty(jsonElement, "Avatar", node.Path)
                     ?? TryResolveJsonProperty(jsonElement, "logo", node.Path)
-                    ?? TryResolveJsonProperty(jsonElement, "Logo", node.Path);
+                    ?? TryResolveJsonProperty(jsonElement, "Logo", node.Path)
+                    ?? TryResolveJsonProperty(jsonElement, "icon", node.Path)
+                    ?? TryResolveJsonProperty(jsonElement, "Icon", node.Path);
                 if (resolved != null)
                     return resolved;
             }
@@ -71,6 +78,12 @@ public record MeshNodeThumbnailControl(
                 if (dict.TryGetValue("logo", out var logo) || dict.TryGetValue("Logo", out logo))
                 {
                     var resolved = MeshNodeImageHelper.ResolveContentPath(logo?.ToString(), node.Path);
+                    if (!string.IsNullOrEmpty(resolved))
+                        return resolved;
+                }
+                if (dict.TryGetValue("icon", out var contentIcon) || dict.TryGetValue("Icon", out contentIcon))
+                {
+                    var resolved = MeshNodeImageHelper.ResolveContentPath(contentIcon?.ToString(), node.Path);
                     if (!string.IsNullOrEmpty(resolved))
                         return resolved;
                 }
@@ -95,6 +108,15 @@ public record MeshNodeThumbnailControl(
                     if (!string.IsNullOrEmpty(resolved))
                         return resolved;
                 }
+
+                var iconProperty = node.Content.GetType().GetProperty("Icon");
+                if (iconProperty != null)
+                {
+                    var resolved = MeshNodeImageHelper.ResolveContentPath(
+                        iconProperty.GetValue(node.Content) as string, node.Path);
+                    if (!string.IsNullOrEmpty(resolved))
+                        return resolved;
+                }
             }
         }
 
@@ -105,6 +127,9 @@ public record MeshNodeThumbnailControl(
         var thumbnail = GetThumbnail(node.Content);
         if (!string.IsNullOrEmpty(thumbnail))
         {
+            // Inline SVG thumbnail — return verbatim; it is markup, not a content-collection path.
+            if (MeshNodeImageHelper.IsInlineSvg(thumbnail))
+                return thumbnail;
             if (thumbnail.StartsWith("/") || thumbnail.StartsWith("http"))
                 return thumbnail;
             var ns = node.Namespace;
