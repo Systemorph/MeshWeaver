@@ -30,11 +30,12 @@ namespace MeshWeaver.Graph;
 ///
 /// <para>This supersedes the former <c>ScheduledActionRunner</c>. On startup it migrates any legacy
 /// <c>Admin/ScheduledAction/{id}</c> nodes (from before the generalization) into
-/// <c>Admin/EventSubscription/{id}</c> so an in-flight invite is never dropped. Handles
-/// <see cref="EventTriggerType.NodeChange"/> (live change-feed + reconcile) and
+/// <c>Admin/EventSubscription/{id}</c> so an in-flight invite is never dropped. Handles all three
+/// trigger kinds: <see cref="EventTriggerType.NodeChange"/> (live change-feed + reconcile),
 /// <see cref="EventTriggerType.Timer"/> (a one-shot <c>Observable.Timer</c> per pending subscription,
-/// with a past <c>FireAt</c> firing on the next startup — restart-safe at-least-once). The
-/// <see cref="EventTriggerType.NodeStatus"/> trigger is added in a later stage.</para>
+/// with a past <c>FireAt</c> firing on the next startup — restart-safe at-least-once), and
+/// <see cref="EventTriggerType.NodeStatus"/> (a self-healing node-stream watch that fires when the
+/// watched node's status reaches a resting value).</para>
 /// </summary>
 public sealed class EventSubscriptionRunner(
     IMessageHub hub,
@@ -193,7 +194,8 @@ public sealed class EventSubscriptionRunner(
             delay = TimeSpan.Zero;
         slot.Disposable = Observable.Timer(delay).Subscribe(_tick =>
         {
-            timerSubs.TryRemove(subscription.Id, out _);
+            if (timerSubs.TryRemove(subscription.Id, out var d))
+                d.Dispose();
             Execute(subscription, subscription.SubjectId ?? "");
         });
     }
@@ -253,7 +255,8 @@ public sealed class EventSubscriptionRunner(
     private IObservable<MeshNode> BuildContinuation(EventSubscription subscription, string userId) =>
         subscription.ContinuationType switch
         {
-            EventContinuationType.GrantSpaceAccess when subscription is { TargetPath.Length: > 0, Role.Length: > 0 } =>
+            EventContinuationType.GrantSpaceAccess
+                when subscription is { TargetPath.Length: > 0, Role.Length: > 0 } && !string.IsNullOrEmpty(userId) =>
                 AsSystem(() => EventSubscriptionOps.Grant(meshService, userId, subscription.TargetPath!, subscription.Role!))
                     .SelectMany(g => subscription.Pin
                         ? AsSystem(() => EventSubscriptionOps.Pin(hub, userId, subscription.TargetPath!)).Select(_ => g)
