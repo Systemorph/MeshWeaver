@@ -402,6 +402,49 @@ public class AgentChatClient : IAgentChat
         [".tiff"] = "image/tiff"
     };
 
+    /// <summary>
+    /// Approximate per-round context budget in CHARACTERS (~4 chars/token ⇒ ~16k tokens). The model
+    /// re-reads the whole conversation every round, so without a cap the input grows quadratically
+    /// with thread length. Rough by design — a conservative char count, not a real tokenizer.
+    /// </summary>
+    internal const int MaxContextChars = 64_000;
+
+    /// <summary>
+    /// Caps <paramref name="turnMessages"/> to <paramref name="maxChars"/>: keeps ALL system messages
+    /// plus the most-recent non-system messages that fit (whole messages, newest-first), dropping the
+    /// oldest. Never starts the kept window on an orphaned tool result (a <see cref="ChatRole.Tool"/>
+    /// message whose paired FunctionCall was dropped) — that errors the model. Returns the input
+    /// unchanged when it already fits. This is the concrete "trim the re-sent history" token lever;
+    /// compaction (summarising the dropped span) is the richer follow-up.
+    /// </summary>
+    internal static List<ChatMessage> TruncateToContextBudget(List<ChatMessage> turnMessages, int maxChars)
+    {
+        static int Size(ChatMessage m) => (m.Text?.Length ?? 0) + 64; // text + small per-message overhead
+        if (turnMessages.Sum(Size) <= maxChars)
+            return turnMessages;
+
+        var system = turnMessages.Where(m => m.Role == ChatRole.System).ToList();
+        var rest = turnMessages.Where(m => m.Role != ChatRole.System).ToList();
+        var budget = maxChars - system.Sum(Size);
+
+        var kept = new List<ChatMessage>();
+        var used = 0;
+        for (var i = rest.Count - 1; i >= 0; i--)
+        {
+            var c = Size(rest[i]);
+            if (used + c > budget && kept.Count > 0)
+                break; // always keep at least the newest message, even if it alone exceeds the budget
+            kept.Insert(0, rest[i]);
+            used += c;
+        }
+        // A kept window that STARTS on a tool result has lost that result's FunctionCall (dropped as
+        // "older") — an orphan that errors the model. Drop leading tool-role messages.
+        while (kept.Count > 0 && kept[0].Role == ChatRole.Tool)
+            kept.RemoveAt(0);
+
+        return system.Concat(kept).ToList();
+    }
+
     private async Task<(string Text, ImmutableList<DataContent> BinaryAttachments)> BuildMessageWithContextAsync(IReadOnlyCollection<ChatMessage> messages, string? agentName = null)
     {
         var messageText = new StringBuilder();
@@ -839,8 +882,16 @@ public class AgentChatClient : IAgentChat
         if (!string.IsNullOrEmpty(agent.Instructions))
             turnMessages.Add(new ChatMessage(ChatRole.System, agent.Instructions));
         turnMessages.AddRange(messages);
-        logger.LogDebug("[AgentChat] Sending {Count} messages (+ system) to {Agent}",
-            messages.Count, agent.Name);
+        // 🪙 Cap the per-round context (see TruncateToContextBudget): the model re-reads the WHOLE
+        // history every round, so an unbounded thread makes input tokens — and local-model compute /
+        // heat — grow quadratically (the "123k tokens / hot Ollama" report). Keep the system prompt +
+        // the most recent messages within a character budget, dropping the oldest. There is no prompt
+        // cache for a local model, so trimming the re-sent history is the real token lever. (Compaction
+        // — summarising the dropped span instead of dropping it — is the richer follow-up.)
+        var untruncatedCount = turnMessages.Count;
+        turnMessages = TruncateToContextBudget(turnMessages, MaxContextChars);
+        logger.LogDebug("[AgentChat] Sending {Count} messages (+ system) to {Agent} (from {Orig} before context cap)",
+            turnMessages.Count, agent.Name, untruncatedCount);
         currentAttachments = null;
 
         // ChatOptions MUST include the agent's tools. Without them, the inner
