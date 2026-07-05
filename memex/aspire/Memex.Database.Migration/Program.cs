@@ -150,6 +150,7 @@ var migrations = new IMigration[]
     new V37_MoveAgentsToAgentNamespaceBySchema(),
     new V38_DropLegacyProviderSchema(),
     new V39_AddSyncBehaviorColumn(),
+    new V40_CreateEventLogSchema(),
 };
 
 var ctx = new MigrationContext(dataSource, connectionString, options, logger, initResult.IsFreshDb);

@@ -38,6 +38,7 @@ using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Markdown.Export.Configuration;
 using MeshWeaver.Hosting.Activity;
 using MeshWeaver.Hosting.AzureBlob;
+using MeshWeaver.Hosting;
 using MeshWeaver.Hosting.Blazor;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Hosting.PostgreSql;
@@ -175,6 +176,9 @@ public static class MemexConfiguration
         // the moment an invited user's account is created) — live via the change feed + reconciled
         // against current state on startup so a trigger during downtime still fires.
         services.AddHostedService<MeshWeaver.Graph.ScheduledActionRunner>();
+        // App-level event-log outbox: durably records every change-feed event (Postgres in prod via
+        // PostgreSqlEventLogStore, else in-memory) + replays not-yet-processed entries on startup.
+        services.AddMeshEventLog();
 
         // Microsoft Teams bot channel (bidirectional). Registered always but INERT unless Teams:Enabled
         // and Bot credentials are set (TeamsClient.IsConfigured gates the endpoint + sender). Activate by
