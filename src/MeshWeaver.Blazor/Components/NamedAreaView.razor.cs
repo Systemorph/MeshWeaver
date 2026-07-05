@@ -184,10 +184,43 @@ public partial class NamedAreaView
                         return;
                     }
 
-                    // Access denied / validation failures / not-found are user-action
-                    // outcomes (the user lacks the right; the input was invalid; the
-                    // node was deleted) — not engineering errors. Log them as Warning
-                    // so production log dashboards don't page on every "user clicked
+                    // The target node/hub is GONE (routing NotFound). Its raw diagnostic
+                    // ("No node found at '…/_Activity/markdown-…'. Closest ancestor is '…'
+                    // (remainder='…')") is a framework-internal string that must NEVER reach an end
+                    // user. It surfaced verbatim when an embedded per-view interactive-kernel Activity
+                    // idle-disposed (KernelContainer.DisposeOnTimeout, 15 min) under a still-open area:
+                    // there is no push-signal for owner death — only this control stream's own re-read
+                    // discovers the miss, which is exactly why this handler is the right place to catch
+                    // it. Render a graceful, honest placeholder instead of the raw error, still logging
+                    // the failure for authors. NOT retried above (a gone node won't self-heal — that is
+                    // the transient "not yet online" case, a different message).
+                    if (AreaErrorClassifier.IsNodeGoneNotFound(error))
+                    {
+                        Logger.LogWarning(error,
+                            "Area {Area} target is gone (routing NotFound) — rendering unavailable placeholder instead of the raw diagnostic",
+                            AreaToBeRendered);
+                        try
+                        {
+                            InvokeAsync(() =>
+                            {
+                                if (IsViewDisposed) return;
+                                try
+                                {
+                                    RootControl = new MarkdownControl(
+                                        "**This view is no longer available.** It may have been removed, or its "
+                                        + "interactive session ended. Reload the page to retry.");
+                                    RequestStateChange();
+                                }
+                                catch (ObjectDisposedException) { /* renderer gone */ }
+                            });
+                        }
+                        catch (ObjectDisposedException) { /* renderer gone */ }
+                        return;
+                    }
+
+                    // Access denied / validation failures are user-action outcomes (the user
+                    // lacks the right; the input was invalid) — not engineering errors. Log them
+                    // as Warning so production log dashboards don't page on every "user clicked
                     // a thing they couldn't do". Real errors (NullReferenceException,
                     // IO failures, runtime crashes) still land at Error level.
                     if (AreaErrorClassifier.IsExpectedUserActionFailure(error))
