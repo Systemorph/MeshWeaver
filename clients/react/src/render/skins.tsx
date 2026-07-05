@@ -16,7 +16,7 @@ import type { Skin, UiControl } from "../area/types.js";
 import { useResolve } from "../area/context.js";
 import { resolveIconByName } from "../controls/icon.js";
 import { ControlRenderer, RenderArea, useChildAreas } from "./ControlRenderer.js";
-import { controlClass, cssAlign, cssSize } from "./style.js";
+import { controlClass, controlStyle, cssAlign, cssSize } from "./style.js";
 
 export interface SkinProps {
   skin: Skin;
@@ -39,8 +39,11 @@ export function DefaultStackSkin({ skin, control }: SkinProps): ReactNode {
     height: cssSize(skin.height),
     boxSizing: "border-box",
   };
+  // The control's own inline style (WithStyle) wins over the skin defaults — e.g. an overlay stack
+  // declared `position: absolute; top; right` (the pinned-card unpin toggle) must escape flow to sit
+  // ON the card, not render as a full-width bar below it. Blazor honours the Style the same way.
   return (
-    <div className={controlClass(control)} style={style}>
+    <div className={controlClass(control)} style={{ ...style, ...controlStyle(control) }}>
       <Children control={control} />
     </div>
   );
