@@ -352,6 +352,16 @@ public static class MemexConfiguration
                 options.LogoutPath = logoutPath;
         });
 
+        // Reserved single-segment Blazor page routes (/login, /privacy, /search, …) — derived
+        // from the SAME assemblies Routes.razor gives the Router. NavigationService short-circuits
+        // these before mesh path resolution, so a bare page URL (e.g. the anonymous /privacy) is
+        // never resolved as a partition root and anonymous-gated to /login. See PageRouteRegistry.
+        services.AddSingleton(new MeshWeaver.Hosting.Blazor.PageRouteRegistry(
+            typeof(Routes).Assembly,
+            typeof(MeshWeaver.Blazor.Pages.ApplicationPage).Assembly,
+            typeof(MeshWeaver.Blazor.Graph.MeshNodeEditorView).Assembly,
+            typeof(MeshWeaver.Blazor.Portal.Pages.CreateNode).Assembly));
+
         // Data protection: set application name here, but key persistence is deployment-specific.
         // Monolith → PersistKeysToFileSystem (in Program.cs)
         // Distributed → PersistKeysToAzureBlobStorage + ProtectKeysWithAzureKeyVault (in Program.cs)
@@ -696,6 +706,8 @@ public static class MemexConfiguration
                         .AddInboxSettingsTab()
                         // Platform auto-update strategy (Admin/UpdatePolicy) — stable/continuous/none.
                         .AddUpdatePolicySettingsTab()
+                        // Public privacy statement (Admin/Privacy, served anonymously at /privacy).
+                        .AddPrivacySettingsTab()
                         // Token-usage analytics (per-model _Usage satellites): filter by period,
                         // group by model / person / thread, cost from ModelPricing.
                         .AddTokenUsageSettingsTab()
