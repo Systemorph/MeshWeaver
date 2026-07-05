@@ -98,6 +98,14 @@ public static class MeshApiEndpoints
         group.MapPost("/render-area", (HttpContext http, IMessageHub rootHub, RenderAreaBody body, CancellationToken ct) =>
             HandleRenderArea(http, rootHub, body, ct));
 
+        // Server-side Markdig render — the ONE markdown parser (the twin of the Blazor MarkdownView
+        // pipeline). Returns {html, codeSubmissions}: the HTML keeps the executable-code-cell,
+        // mermaid, @@-embed and __KERNEL_ADDRESS__ markers so the React client hydrates them into
+        // live views instead of falling back to its limited local parser (which escapes raw-HTML
+        // blocks — doc hero banners — into literal source text).
+        group.MapPost("/render-markdown", (HttpContext http, IMessageHub rootHub, RenderMarkdownBody body, CancellationToken ct) =>
+            RunString(http, rootHub, ct, ops => ops.RenderMarkdown(body.Markdown, body.NodePath)));
+
         // GUI-shell verbs (portal-next chrome) — the browser twins of the reads the Blazor shell
         // gets in-process: full-node query (search-bar suggestions, notification bell) and URL→
         // (node, area) navigation resolution.
@@ -282,5 +290,6 @@ public static class MeshApiEndpoints
     public record PathBody(string Path);
     public record ExecuteScriptBody(string Path, int? TimeoutSeconds);
     public record RenderAreaBody(string Path, string? Area = null, string? Id = null, int? TimeoutSeconds = null);
+    public record RenderMarkdownBody(string Markdown, string? NodePath = null);
     public record NavigateBody(string Path);
 }
