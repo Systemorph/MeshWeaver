@@ -50,6 +50,12 @@ public static class SpaceLayoutAreas
             host.Hub.GetEffectivePermissions(hubPath),
             (node, permissions) =>
             {
+                // Gate on Read first (mirrors MeshNodeLayoutAreas.Overview): a user without Read
+                // must get Access Denied, not sit forever on "Loading..." should the node stream
+                // never emit for them.
+                if (!permissions.HasFlag(Permission.Read))
+                    return (UiControl?)MeshNodeLayoutAreas.BuildAccessDenied(hubPath);
+
                 if (node == null)
                     return Controls.Markdown("*Loading...*") as UiControl;
 
