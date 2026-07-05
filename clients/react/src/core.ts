@@ -29,6 +29,10 @@ export {
   type MarkdownCellSubmission,
   type MarkdownKernelSession,
   type RenderedMarkdown,
+  type DocumentDownload,
+  type DocumentExportOptions,
+  type ContentListing,
+  type ContentItem,
 } from "./live/meshOps.js";
 export {
   EmbeddedAreaProvider,

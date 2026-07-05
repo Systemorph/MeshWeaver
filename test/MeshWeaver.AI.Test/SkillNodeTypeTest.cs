@@ -29,13 +29,17 @@ public class SkillNodeTypeTest
 
         var skills = nodes.Where(n => n.NodeType == SkillNodeType.NodeType).ToList();
         skills.Should().OnlyContain(n => n.Namespace == SkillNodeType.RootNamespace);
-        skills.Select(n => n.Id).OrderBy(x => x).Should().Equal("access", "agent", "code", "create-space", "harness", "layout-area", "maui", "model", "provider-keys");
+        skills.Select(n => n.Id).OrderBy(x => x).Should().Equal("access", "agent", "code", "create-space", "harness", "layout-area", "maui", "model", "navigate", "provider-keys");
 
         var def = (SkillDefinition)skills.Single(n => n.Id == "model").Content!;
         def.Action!.Kind.Should().Be(SkillActionKind.Pick);
         def.Action.Query.Should().Be("namespace:Provider nodeType:LanguageModel scope:descendants sort:order");
         def.Action.Field.Should().Be("modelName");
         def.Action.Title.Should().Be("Choose a model");
+
+        // /navigate is a Navigate-action skill — the pane-aware, resilient "take me there".
+        var nav = (SkillDefinition)skills.Single(n => n.Id == "navigate").Content!;
+        nav.Action!.Kind.Should().Be(SkillActionKind.Navigate);
     }
 
     [Fact]

@@ -208,6 +208,16 @@ public enum SkillActionKind
     /// <summary>Load a node/document into the content window.</summary>
     OpenContent,
 
+    /// <summary>
+    /// Navigate the UI to a target path — pane-aware and resilient. The target is the typed argument
+    /// (<c>/navigate Doc/AI/ModelProviderSettings</c>) or, when the row is empty, the skill's own
+    /// <see cref="SkillAction.ContentPath"/> / path. Resolution is resilient (single arg → direct path
+    /// first, else make sense of the free-text context, always falling back to the best search hit), and
+    /// application is pane-aware: a thread in the MAIN pane opens the target in the SIDE panel; a thread in
+    /// the SIDE panel changes the URL and navigates the MAIN pane.
+    /// </summary>
+    Navigate,
+
     /// <summary>Log in / connect this provider's CLI subscription.</summary>
     Connect,
 

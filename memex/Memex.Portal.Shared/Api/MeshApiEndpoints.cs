@@ -107,6 +107,12 @@ public static class MeshApiEndpoints
         group.MapPost("/resolve", (HttpContext http, IMessageHub rootHub, PathBody body, CancellationToken ct) =>
             RunString(http, rootHub, ct, ops => ops.Resolve(body.Path)));
 
+        // Content-collection directory listing — the read half of the React FileBrowser. Path is
+        // "{node}/{collection}[/{dir}]"; download uses the existing /content|/static URLs, add uses
+        // /upload. Returns { collection, path, editable, items:[…] } (or "Error: …").
+        group.MapPost("/content/list", (HttpContext http, IMessageHub rootHub, PathBody body, CancellationToken ct) =>
+            RunString(http, rootHub, ct, ops => ops.ContentList(body.Path)));
+
         // Mirror Push/Pull — these talk to the mesh hub directly (same as MCP plugin's PostMirror).
         group.MapPost("/mirror", HandleMirror);
 

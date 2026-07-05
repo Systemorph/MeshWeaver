@@ -70,7 +70,8 @@
     }
     else
     {
-        @* Interactive phase, resolved: LayoutAreaView with stream subscription *@
-        <LayoutAreaView ViewModel="@ViewModel" Top="true" />
+        @* Interactive phase, resolved: LayoutAreaView with stream subscription. DrivesMenu:
+           this routed page owns the header menu (a modal preview / embed must not). *@
+        <LayoutAreaView ViewModel="@ViewModel" Top="true" DrivesMenu="true" />
     }
 </CascadingValue>

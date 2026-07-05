@@ -26,7 +26,13 @@ import {
   MenuPopover,
   MenuTrigger,
 } from "@fluentui/react-components";
-import { Cube20Regular, Grid20Regular, Settings20Regular, Sparkle20Regular } from "@fluentui/react-icons";
+import {
+  BranchFork20Regular,
+  Cube20Regular,
+  Grid20Regular,
+  Settings20Regular,
+  Sparkle20Regular,
+} from "@fluentui/react-icons";
 import type { AreaSource, Json, UiControl } from "@meshweaver/react";
 import { useSyncExternalStore } from "react";
 import { useLiveConnection, useNavigationState } from "./LiveConnection";
@@ -179,6 +185,10 @@ export function HeaderMenus() {
   const nodeItems = useMenuItems(source, "Node");
   const meshItems = useMenuItems(source, "Mesh");
   const aiItems = useMenuItems(source, "AI");
+  // GitHub keeps its own dropdown — populated only when the Space has a repository configured
+  // (the server provider self-gates); hidden entirely when empty. (Instance sync is in the Node
+  // menu as "Synchronizations", not a separate dropdown.)
+  const gitHubItems = useMenuItems(source, "GitHub");
 
   const currentAddress = nav.target?.address ?? "";
 
@@ -251,6 +261,15 @@ export function HeaderMenus() {
         onItem={handleItem}
       />
       <MenuButton context="AI" icon={<Sparkle20Regular />} title="AI" items={aiItems} onItem={handleItem} />
+      {gitHubItems.length > 0 && (
+        <MenuButton
+          context="GitHub"
+          icon={<BranchFork20Regular />}
+          title="GitHub"
+          items={gitHubItems}
+          onItem={handleItem}
+        />
+      )}
       <Button
         appearance="transparent"
         icon={<Settings20Regular />}

@@ -52,8 +52,21 @@ describe("React ↔ Blazor control parity", () => {
   // placeholderControlTypes AND from this pinned list. Adding a NEW placeholder fails here — every
   // new control must ship a real implementation.
   it("the placeholder long-tail only ever shrinks", () => {
-    const pinned = ["DocumentSource", "ExportDocument", "FileBrowser", "NodeExport", "NodeImport"];
+    // Every mesh control now has a real implementation (documentControls.tsx, nodeTransfer.tsx,
+    // fileBrowser.tsx). The placeholder long-tail is EMPTY — no control renders as a bare badge.
+    const pinned: string[] = [];
     expect([...placeholderControlTypes].sort()).toEqual(pinned.sort());
+  });
+
+  it("the un-placeholdered controls are all real, distinct components", () => {
+    const real = ["DocumentSource", "ExportDocument", "NodeExport", "NodeImport", "FileBrowser"].map(
+      (key) => {
+        expect(typeof controlRegistry[key]).toBe("function");
+        return controlRegistry[key];
+      },
+    );
+    // No two of them collapsed to the same component.
+    expect(new Set(real).size).toBe(real.length);
   });
 
   // RATCHET: formerly-thin controls that now have REAL implementations — regressing one to an
