@@ -1,5 +1,10 @@
 @page "/onboarding"
 @attribute [Microsoft.AspNetCore.Authorization.Authorize]
+@* No portal header/top menu on onboarding: the user has no partition/identity resolved yet,
+   so the node/mesh/AI menus have nothing to act on (and rendering them here is what surfaced
+   the "menu on the onboarding screen" issue). EmptyLayout is the same bare shell Welcome uses. *@
+@layout EmptyLayout
+@using MeshWeaver.Blazor.Layouts
 @using MeshWeaver.Blazor.Infrastructure
 @using MeshWeaver.Data
 @using MeshWeaver.Graph
@@ -239,8 +244,12 @@ else
                 existingUserFound = true;
                 checkCompleted = true;
                 StateHasChanged();
-                // Client-side only, no forceLoad — preserves the resolved circuit.
-                Navigation.NavigateTo(SafeReturnUrl());
+                // Profile already exists AND this identity resolved to it (State: Active) ⇒ the user
+                // is onboarded and has access — they must never sit on the onboarding screen. Send them
+                // HOME, not to SafeReturnUrl(): a returnUrl of "/onboarding" (the page bounced them here)
+                // would loop straight back. Client-side only, no forceLoad — preserves the resolved circuit.
+                var target = SafeReturnUrl();
+                Navigation.NavigateTo(target == "/onboarding" ? "/" : target);
             });
         }
         else

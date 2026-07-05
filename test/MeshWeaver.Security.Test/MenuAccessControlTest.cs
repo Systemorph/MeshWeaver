@@ -41,11 +41,18 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
     private const string NodePath = "TestOrg/TestProject";
     private const string TestUserId = "TestUser";
 
+    private const string UserRootPath = "userhome";
+
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => ConfigureMeshBase(builder)
             .AddMeshNodes(
                 new MeshNode("TestOrg") { Name = "Test Organization" },
-                new MeshNode("TestProject", "TestOrg") { Name = "Test Project" }
+                new MeshNode("TestProject", "TestOrg") { Name = "Test Project" },
+                // A USER partition root (the shape UserOnboardingService.CreateUser writes): bare
+                // single-segment path, namespace '', NodeType "User". The node menu must SUPPRESS
+                // Edit/Move/Copy/Delete on it (deleting the home wipes the whole partition — the
+                // node-menu-delete incident). PartitionRootDeletionGuard.IsUserPartitionRoot gates it.
+                new MeshNode(UserRootPath) { NodeType = "User", Name = "User Home" }
             )
             .ConfigureDefaultNodeHub(c => c.AddDefaultLayoutAreas());
 
@@ -327,4 +334,36 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
             ["Administrator", "Editor", "Viewer", "Commenter"],
             "static roles should not leak into generic children queries");
     }
+
+    [Fact(Timeout = 30000)]
+    public async Task Menu_UserPartitionRoot_HidesEditMoveCopyDelete()
+    {
+        // Admin ON the user partition root. WITHOUT the suppression this would show Edit/Move/Copy/Delete
+        // (Admin has every permission); the partition-root guard hides those four — deleting/moving/
+        // copying/editing a user's HOME node wipes or relocates the entire partition (the node-menu-delete
+        // incident). Read-only + lifecycle items still render, proving perms enriched (not a timing miss).
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        await meshService.CreateNode(AssignmentNodeFactory.UserRole(TestUserId, "Admin", UserRootPath)).Should().Emit();
+
+        var client = GetClientWithUser();
+        var nodeAddress = new Address(UserRootPath);
+        await client.Observe(new PingRequest(), o => o.WithTarget(nodeAddress)).Should().Within(15.Seconds()).Emit();
+
+        // Wait until Admin perms enrich — "Recycle" (requires Update) is the marker: WITHOUT suppression
+        // "Edit" would appear at the SAME enrichment, so Recycle-present + Edit-absent proves suppression,
+        // not a race.
+        var items = await FetchAllMenuItems(client, nodeAddress, its => its.Any(i => i.Label == "Recycle"));
+
+        Output.WriteLine($"Menu items for Admin on user partition root: {string.Join(", ", items.Select(i => i.Label))}");
+
+        items.Select(i => i.Label).Should().NotContain(
+            ["Edit", "Move", "Copy", "Delete"],
+            "a user partition root must never offer edit/move/copy/delete — those wipe/relocate the whole partition");
+    }
+
+    // NOTE: a logged-out/anonymous menu render test is intentionally omitted here — this test harness
+    // auto-logs-in the default admin (TestUsers.DevLogin), so GetClient() cannot produce a truly
+    // unauthenticated viewer without harness surgery. The logged-out gating (GetMenuContext forces
+    // Permission.None when AccessService has no ObjectId) is a small, self-contained change on the same
+    // path these tests exercise; it is verified end-to-end in a real (unauthenticated) browser session.
 }
