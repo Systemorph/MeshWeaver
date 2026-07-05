@@ -23,10 +23,11 @@ public static class ThreadNodeType
     public const string NodeType = "Thread";
 
     /// <summary>
-    /// Default Icon for Thread instances. Must match <see cref="CreateMeshNode"/>.
-    /// Applied explicitly in <see cref="BuildThreadNode"/>/<see cref="BuildThreadWithMessages"/>
-    /// because thread creation goes via <c>CreateNodeRequest</c> on arbitrary parent hubs,
-    /// some of which don't have <c>INodeTypeService</c> registered to auto-copy the icon.
+    /// Default Icon for the Thread <em>type</em> node (<see cref="CreateMeshNode"/>).
+    /// Per-<em>instance</em> threads instead get a deterministic identicon from
+    /// <see cref="ThreadIconGenerator"/> in <see cref="BuildThreadNode"/>/<see cref="BuildThreadWithMessages"/>
+    /// so the catalog renders a distinct visual per thread; this glyph is the fallback for
+    /// the type itself and any consumer that reads the type default.
     /// </summary>
     public const string DefaultIcon = "/static/NodeTypeIcons/chat.svg";
 
@@ -143,7 +144,11 @@ public static class ThreadNodeType
         {
             Name = name,
             NodeType = NodeType,
-            Icon = DefaultIcon,
+            // Deterministic per-thread identicon (seeded by the stable speaking id) so the
+            // thread catalog renders a distinct visual per thread instead of one shared glyph.
+            // Same id ⇒ same icon (the fallback re-anchor below reuses the id and gets the same
+            // icon); the value is inline <svg>, which the node card renders directly.
+            Icon = ThreadIconGenerator.Generate(speakingId),
             MainNode = contextPath,
             Content = new Thread { CreatedBy = createdBy }
         };
@@ -201,7 +206,9 @@ public static class ThreadNodeType
         {
             Name = name,
             NodeType = NodeType,
-            Icon = DefaultIcon,
+            // Deterministic per-thread identicon (see BuildThreadNode) so the catalog shows a
+            // distinct visual per thread; inline <svg>, rendered directly by the node card.
+            Icon = ThreadIconGenerator.Generate(speakingId),
             MainNode = contextPath,
             Content = new Thread
             {
