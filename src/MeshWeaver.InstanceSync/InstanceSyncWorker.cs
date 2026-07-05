@@ -297,7 +297,14 @@ public sealed class InstanceSyncWorker : IDisposable
             ? Observable.Return(true)
             : remote.Delete(remotePath).Select(_ => true));
 
-    /// <summary>Upsert with the convergence guard: value-equal remote content is left untouched.</summary>
+    /// <summary>
+    /// Upsert with two guards: value-equal remote content is left untouched (convergence), and a
+    /// STRICTLY-NEWER remote node is NOT overwritten — newest-writer-wins, symmetric with the pull
+    /// side (<see cref="PullOne"/>). This is what makes the two instances CONVERGE: without it, an
+    /// older local push clobbered a newer remote, and since the pull only applies a strictly-newer
+    /// remote, the sides then diverged with no self-heal. On the skip, the remote's newer version is
+    /// brought local by the next pull sweep. Ties favour the push direction (matching PullOne).
+    /// </summary>
     private IObservable<Unit> PushNode(IRemoteMeshClient remote, InstanceSyncConfig cfg, MeshNode local)
     {
         var remotePath = InstanceSyncService.RemapPath(local.Path, SpacePath, RemoteSpaceOf(cfg));
@@ -306,6 +313,8 @@ public sealed class InstanceSyncWorker : IDisposable
         {
             if (existing is not null && service.ContentEquals(payload, existing))
                 return Observable.Return(Unit.Default);
+            if (existing is not null && existing.LastModified > local.LastModified)
+                return Observable.Return(Unit.Default);   // remote is newer → let the pull bring it local
             return existing is null ? remote.Create(payload) : remote.Update(payload);
         });
     }
