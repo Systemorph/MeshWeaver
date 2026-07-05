@@ -187,13 +187,19 @@ public sealed class EventSubscriptionRunner(
                         continue;
                     lock (gate)
                         if (!migratedLegacyIds.Add(legacy.Id))
-                            continue;   // already migrated this id
+                            continue;   // in-flight or done — don't double-process this id
                     var migrated = FromLegacy(legacy);
                     AsSystem(() => EventSubscriptionOps.CreateSubscription(meshService, migrated)
                             .SelectMany(_ => meshService.DeleteNode(ScheduledActionNodeType.Path(legacy.Id))))
                         .Subscribe(
                             _ => logger?.LogInformation("Migrated legacy ScheduledAction {Id} → EventSubscription", legacy.Id),
-                            ex => logger?.LogWarning(ex, "Migrating legacy ScheduledAction {Id} failed", legacy.Id));
+                            ex =>
+                            {
+                                logger?.LogWarning(ex, "Migrating legacy ScheduledAction {Id} failed", legacy.Id);
+                                // Release the id so a later live-query emission retries — a transient store
+                                // failure must not permanently strand the legacy node.
+                                lock (gate) migratedLegacyIds.Remove(legacy.Id);
+                            });
                 }
             }, ex => logger?.LogWarning(ex, "Legacy ScheduledAction migration query failed"));
     }

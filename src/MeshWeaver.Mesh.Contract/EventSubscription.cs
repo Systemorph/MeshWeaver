@@ -52,12 +52,14 @@ public enum EventContinuationType
 /// trigger that fired while the process was down still fires.
 ///
 /// <para>The shape is flat + enum-discriminated (not polymorphic) so it serialises through the mesh
-/// content serializer exactly like the legacy <see cref="ScheduledAction"/> it generalises — and, because
-/// the field names are unchanged for the <see cref="EventTriggerType.NodeChange"/> /
+/// content serializer exactly like the legacy <see cref="ScheduledAction"/> it generalises. Because the
+/// field names are unchanged for the <see cref="EventTriggerType.NodeChange"/> /
 /// <see cref="EventContinuationType.GrantSpaceAccess"/> case, an existing <c>Admin/ScheduledAction/{id}</c>
-/// node deserialises cleanly as an <see cref="EventSubscription"/> (the runner reads both namespaces →
-/// zero-migration back-compat). New trigger/continuation kinds are added as new enum values + nullable
-/// fields (additive, no reshaping).</para>
+/// node maps to an <see cref="EventSubscription"/> field-for-field — which is how
+/// <c>EventSubscriptionRunner</c> migrates legacy nodes on startup (it enumerates only
+/// <c>Admin/EventSubscription</c>, and separately folds any legacy <c>Admin/ScheduledAction</c> nodes
+/// into it, so no in-flight subscription is dropped). New trigger/continuation kinds are added as new
+/// enum values + nullable fields (additive, no reshaping).</para>
 /// </summary>
 public record EventSubscription
 {
