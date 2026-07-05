@@ -87,6 +87,20 @@ public static class InstanceSyncLayoutArea
         // config node's stream (per-field auto-persisting; no replica, no save subscription).
         card = card.WithView(MeshNodeContentEditorControl.ForType(source.Path, typeof(InstanceSyncConfig)));
 
+        // OAuth alternative to pasting a token: full-page redirect to the remote instance's OWN
+        // login (/connect/instance → the remote's /authorize), then the callback stores the
+        // returned mw_ token as RemoteToken. Needs the Remote URL above to be set first (the
+        // endpoint reads it server-side and redirects back with a reason if it's blank).
+        var returnPath = MeshNodeLayoutAreas.BuildUrl(spacePath, AreaName);
+        var connectHref = "/connect/instance"
+            + $"?spaceId={Uri.EscapeDataString(spacePath)}"
+            + $"&sourceId={Uri.EscapeDataString(source.Id)}"
+            + $"&returnPath={Uri.EscapeDataString(returnPath)}";
+        card = card.WithView(Controls.Button("Connect with the remote's login (OAuth)")
+            .WithAppearance(Appearance.Outline)
+            .WithIconStart(FluentIcons.PlugConnected())
+            .WithNavigateToHref(connectHref));
+
         var sourcePath = source.Path;
         var configPath = InstanceSyncService.ConfigPath(spacePath, source.Id);
         var actions = Controls.Stack
