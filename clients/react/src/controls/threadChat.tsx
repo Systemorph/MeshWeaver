@@ -30,10 +30,10 @@ import { useResolve } from "../area/context.js";
 import {
   useMeshOps,
   type AutocompleteSuggestion,
-  type MeshNodeState,
   type MeshOps,
   type ThreadSubmitOptions,
 } from "../live/meshOps.js";
+import { useNodeState, watchInto } from "../live/nodeState.js";
 import { controlClass, controlStyle } from "../render/style.js";
 import { str } from "./common.js";
 
@@ -73,40 +73,7 @@ interface ThreadJson {
   createdBy?: string;
 }
 
-// ---- node-stream plumbing (the grpc-web watch primitive, via the MeshOps context) ---------------
-
-/** Drive an async-iterable node watch into a callback; returns the stop function. */
-function watchInto(ops: MeshOps, path: string, onState: (n: MeshNodeState) => void): () => void {
-  let live = true;
-  const it = ops.watch(path)[Symbol.asyncIterator]();
-  void (async () => {
-    try {
-      while (live) {
-        const r = await it.next();
-        if (r.done) break;
-        if (live && r.value) onState(r.value);
-      }
-    } catch {
-      // A missing satellite surfaces as a stream error (the cache's DeliveryFailure). The bubble
-      // keeps rendering from the pending payload — never crash the view (Blazor marks it missing).
-    }
-  })();
-  return () => {
-    live = false;
-    void Promise.resolve(it.return?.()).catch(() => undefined);
-  };
-}
-
-/** The live state of one node (null until the first emission / when unset). */
-function useNodeState(ops: MeshOps | null, path: string | null): MeshNodeState | null {
-  const [node, setNode] = useState<MeshNodeState | null>(null);
-  useEffect(() => {
-    setNode(null);
-    if (!ops || !path) return;
-    return watchInto(ops, path, setNode);
-  }, [ops, path]);
-  return node;
-}
+// ---- node-stream plumbing: watchInto / useNodeState are the shared primitives in ../live/nodeState.
 
 /** One watch per message cell at {threadPath}/{id} — Blazor's SyncMessageSubscriptions. */
 function useMessageCells(
