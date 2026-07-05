@@ -699,6 +699,104 @@ else
            module-defined one) pops THIS one menu. The command supplied the query + title; the
            host queried the mesh (OpenPicker) and listed the nodes; clicking one writes its PATH
            to the command's composer field. No per-command widget. *@
+        @* Interactive login (Connect) dialog — /login opens it. (1) choose a method, (2) account →
+           redirect to the browser auth URL, (3) paste a code/token only if the flow needs it; a still-valid
+           token completes silently. API key / gateway store a pasted credential. *@
+        @if (LoginDialogOpen)
+        {
+            <div class="thread-chat-widget">
+                <div class="thread-chat-widget-header">
+                    <span>Log in to @(_loginHarness!.Definition.DisplayName)</span>
+                    <button class="thread-msg-action-btn" @onclick="CancelConnect" title="Close">&#10005;</button>
+                </div>
+                <FluentStack Orientation="Microsoft.FluentUI.AspNetCore.Components.Orientation.Vertical" VerticalGap="10"
+                             Style="padding:12px 14px; flex:1 1 auto; min-height:0; overflow-y:auto;">
+                    @if (_loginMethod is null)
+                    {
+                        <div style="color:var(--neutral-foreground-hint);">How do you want to sign in?</div>
+                        @if (_connectProvider is not null)
+                        {
+                            <FluentButton Appearance="FluentAppearance.Accent" Style="width:100%;"
+                                          OnClick="@(() => ChooseLoginMethod("account"))">
+                                Log in with your @(_loginHarness!.Definition.DisplayName) account (browser)
+                            </FluentButton>
+                        }
+                        <FluentButton Appearance="FluentAppearance.Neutral" Style="width:100%;"
+                                      OnClick="@(() => ChooseLoginMethod("apiKey"))">Use an API key</FluentButton>
+                        <FluentButton Appearance="FluentAppearance.Neutral" Style="width:100%;"
+                                      OnClick="@(() => ChooseLoginMethod("gateway"))">Use a gateway / proxy</FluentButton>
+                    }
+                    else if (_loginMethod == "account")
+                    {
+                        @switch (_connectStatus)
+                        {
+                            case MeshWeaver.AI.Connect.ConnectStatus.Connected:
+                                <div style="color:var(--success-foreground, #16a34a);">&#10003; Connected — you can chat now.</div>
+                                break;
+
+                            case MeshWeaver.AI.Connect.ConnectStatus.Error err:
+                                <div style="color:var(--error-foreground, #dc2626);">@err.Reason</div>
+                                <FluentButton Appearance="FluentAppearance.Accent"
+                                              OnClick="@(() => StartHarnessConnect(_loginHarness!))">Try again</FluentButton>
+                                <FluentButton Appearance="FluentAppearance.Neutral"
+                                              OnClick="@(() => ChooseLoginMethod("apiKey"))">Use an API key instead</FluentButton>
+                                break;
+
+                            case MeshWeaver.AI.Connect.ConnectStatus.Connecting c when !string.IsNullOrEmpty(c.Challenge.VerificationUrl):
+                                <div><strong>1</strong>&nbsp; Open the authorization page and approve:</div>
+                                <FluentAnchor Href="@c.Challenge.VerificationUrl" Target="_blank"
+                                              Appearance="FluentAppearance.Accent">Open authorization page&nbsp;↗</FluentAnchor>
+                                @if (c.Challenge.RequiresPastedCode)
+                                {
+                                    <div style="margin-top:4px;"><strong>2</strong>&nbsp; Paste the code shown, then submit:</div>
+                                    <FluentTextField @bind-Value="_connectCode" Immediate="true" Placeholder="Paste code"
+                                                     @onkeydown="OnConnectInputKeyDown" Style="width:100%;" />
+                                    <FluentButton Appearance="FluentAppearance.Accent" Style="width:100%;"
+                                                  Disabled="@(_connectBusy || string.IsNullOrWhiteSpace(_connectCode))"
+                                                  OnClick="SubmitConnectCode">@(_connectBusy ? "Verifying…" : "Submit code")</FluentButton>
+                                }
+                                else if (!string.IsNullOrEmpty(c.Challenge.UserCode))
+                                {
+                                    <div>Enter this code in the browser: <strong>@c.Challenge.UserCode</strong></div>
+                                    <div style="color:var(--neutral-foreground-hint);">Waiting for authorization…</div>
+                                }
+                                break;
+
+                            default:
+                                <div style="color:var(--neutral-foreground-hint);">Starting login…</div>
+                                break;
+                        }
+                    }
+                    else
+                    {
+                        @if (_connectStatus is MeshWeaver.AI.Connect.ConnectStatus.Error keyErr)
+                        {
+                            <div style="color:var(--error-foreground, #dc2626);">@keyErr.Reason</div>
+                        }
+                        @if (_loginMethod == "gateway")
+                        {
+                            <div>Gateway base URL:</div>
+                            <FluentTextField @bind-Value="_connectBaseUrl" Immediate="true" Placeholder="https://…" Style="width:100%;" />
+                            <div style="margin-top:4px;">Gateway token:</div>
+                        }
+                        else
+                        {
+                            <div>Paste your Anthropic Console API key (starts with
+                                <span style="font-family:var(--monospace-font-family,ui-monospace,monospace);">sk-ant-api</span>):</div>
+                        }
+                        <FluentTextField @bind-Value="_connectCode" Immediate="true"
+                                         Placeholder="@(_loginMethod == "gateway" ? "token" : "sk-ant-api…")"
+                                         TextFieldType="Microsoft.FluentUI.AspNetCore.Components.TextFieldType.Password"
+                                         @onkeydown="OnConnectInputKeyDown" Style="width:100%;" />
+                        <FluentButton Appearance="FluentAppearance.Accent" Style="width:100%;"
+                                      Disabled="@(_connectBusy || string.IsNullOrWhiteSpace(_connectCode))"
+                                      OnClick="SubmitLoginCredential">Save</FluentButton>
+                        <FluentButton Appearance="FluentAppearance.Neutral" Style="width:100%;"
+                                      OnClick="@(() => { _loginMethod = null; _connectStatus = null; _connectCode = string.Empty; _connectBaseUrl = string.Empty; })">← Back</FluentButton>
+                    }
+                </FluentStack>
+            </div>
+        }
         @if (pendingPicker is { } picker)
         {
             <div class="thread-chat-widget"

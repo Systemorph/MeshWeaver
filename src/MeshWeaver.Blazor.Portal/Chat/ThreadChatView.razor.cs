@@ -1263,7 +1263,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     {
         if (cmd.Kind == MeshWeaver.AI.HarnessCommandKind.Disconnect)
         {
-            ClearHarnessCredential(harness);
+            DisconnectHarness(harness);
             return;
         }
         // Connect: everything after the leading "/login" word is the pasted argument(s).
@@ -1272,10 +1272,10 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         var args = sp < 0 ? string.Empty : rest[(sp + 1)..].Trim();
         if (string.IsNullOrEmpty(args))
         {
-            ShowSkillStatus(
-                $"To connect {harness.Definition.DisplayName}, paste a credential here — "
-                + "`/login <key>` (Anthropic Console key), `/login token <oauth-token>` "
-                + "(from `claude setup-token`), or `/login gateway <base-url> <token>`.", false);
+            // No args → open the interactive login DIALOG: (1) choose a method, (2) for the account
+            // method redirect to the browser auth URL, (3) collect a pasted code/token only if the flow
+            // needs one — and it completes silently when the current token is still valid.
+            OpenLoginDialog(harness);
             return;
         }
         var parts = args.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
@@ -1292,6 +1292,223 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             method = credential.StartsWith("sk-ant-oat", StringComparison.OrdinalIgnoreCase) ? "oauth" : "apiKey";
         }
         StoreHarnessCredential(harness, method, credential, baseUrl);
+    }
+
+    // ─────────────────────── Interactive login (Connect) dialog ───────────────────────
+    // /login (no args) opens this. Step 1 picks a method (Claude account / API key / gateway); step 2
+    // runs it: the ACCOUNT method drives ConnectSessionManager.StartConnect (redirect to the browser auth
+    // URL, paste the code back ONLY if the flow asks for one, complete silently when the token is still
+    // valid); API key / gateway store a pasted credential via StoreHarnessCredential.
+    private MeshWeaver.AI.IHarness? _loginHarness;
+    private string? _loginMethod;                 // null = method chooser; "account" | "apiKey" | "gateway"
+    private MeshWeaver.AI.Connect.ConnectProvider? _connectProvider;
+    private MeshWeaver.AI.Connect.ConnectStatus? _connectStatus;
+    private string _connectCode = "";             // pasted code (account) / key (apiKey) / token (gateway)
+    private string _connectBaseUrl = "";          // gateway base URL
+    private bool _connectBusy;
+    private IDisposable? _connectSub;
+
+    /// <summary>True while the login dialog is up — the composer hides its picker/selectors underneath.</summary>
+    private bool LoginDialogOpen => _loginHarness is not null;
+
+    /// <summary>Open the login dialog on the method-chooser step (mutually exclusive with the node picker).</summary>
+    private void OpenLoginDialog(MeshWeaver.AI.IHarness harness)
+    {
+        pendingPicker = null;
+        pickerNodes = [];
+        lastCommandStatus = null;
+        _connectSub?.Dispose();
+        _connectSub = null;
+        _loginHarness = harness;
+        _loginMethod = null;
+        _connectProvider = harness.AuthProvider;
+        _connectStatus = null;
+        _connectCode = "";
+        _connectBaseUrl = "";
+        _connectBusy = false;
+        StateHasChanged();
+    }
+
+    /// <summary>A login method was chosen — for the account method kick off the browser (URL) flow now.</summary>
+    private void ChooseLoginMethod(string method)
+    {
+        _loginMethod = method;
+        _connectStatus = null;
+        _connectCode = "";
+        _connectBaseUrl = "";
+        _connectBusy = false;
+        if (method == "account" && _loginHarness is { } h)
+            StartHarnessConnect(h);
+        else
+            StateHasChanged();
+    }
+
+    /// <summary>
+    /// Runs the harness's per-user ACCOUNT login (<c>ConnectSessionManager.StartConnect</c>) and renders
+    /// the challenge inline. Each <c>ConnectStatus</c> drives the dialog: Connecting → show the auth URL
+    /// (+ a paste field when <c>RequiresPastedCode</c>); Connected → "✓" then auto-close; Error → retry. A
+    /// login that finds a still-valid token completes straight to Connected with no URL/paste step.
+    /// </summary>
+    private void StartHarnessConnect(MeshWeaver.AI.IHarness harness)
+    {
+        var provider = harness.AuthProvider;
+        if (provider is null)
+        {
+            _connectStatus = new MeshWeaver.AI.Connect.ConnectStatus.Error($"{harness.Definition.DisplayName} has no account login.");
+            StateHasChanged();
+            return;
+        }
+        var sessionManager = Hub.ServiceProvider.GetService<MeshWeaver.AI.Connect.ConnectSessionManager>();
+        if (sessionManager is null || !sessionManager.Supports(provider.Value))
+        {
+            _connectStatus = new MeshWeaver.AI.Connect.ConnectStatus.Error(
+                "Account login is not available in this deployment — use an API key instead.");
+            StateHasChanged();
+            return;
+        }
+        if (string.IsNullOrEmpty(_userHome))
+        {
+            _connectStatus = new MeshWeaver.AI.Connect.ConnectStatus.Error("No user identity for login.");
+            StateHasChanged();
+            return;
+        }
+        _connectProvider = provider;
+        _connectStatus = null;   // "Starting login…" until the first emission
+        _connectCode = "";
+        _connectBusy = false;
+        _connectSub?.Dispose();
+        var configDir = ResolveProbeConfigDir(harness.Id);
+        _connectSub = sessionManager.StartConnect(_userHome!, provider.Value, configDir)
+            .Subscribe(
+                status => InvokeAsync(() =>
+                {
+                    if (_isDisposed) return;
+                    _connectStatus = status;
+                    _connectBusy = false;
+                    StateHasChanged();
+                    if (status is MeshWeaver.AI.Connect.ConnectStatus.Connected)
+                        ScheduleConnectAutoClose();
+                }),
+                ex => InvokeAsync(() =>
+                {
+                    if (_isDisposed) return;
+                    _connectStatus = new MeshWeaver.AI.Connect.ConnectStatus.Error(ex.Message);
+                    _connectBusy = false;
+                    StateHasChanged();
+                }));
+        StateHasChanged();
+    }
+
+    /// <summary>Submit the pasted code for the account paste-code flow and drive it to completion.</summary>
+    private void SubmitConnectCode()
+    {
+        if (_connectProvider is not { } provider || string.IsNullOrWhiteSpace(_connectCode) || string.IsNullOrEmpty(_userHome))
+            return;
+        var sessionManager = Hub.ServiceProvider.GetService<MeshWeaver.AI.Connect.ConnectSessionManager>();
+        if (sessionManager is null)
+            return;
+        var code = _connectCode.Trim();
+        _connectBusy = true;
+        _connectSub?.Dispose();
+        _connectSub = sessionManager.SubmitCode(_userHome!, provider, code)
+            .Subscribe(
+                status => InvokeAsync(() =>
+                {
+                    if (_isDisposed) return;
+                    _connectStatus = status;
+                    _connectBusy = false;
+                    StateHasChanged();
+                    if (status is MeshWeaver.AI.Connect.ConnectStatus.Connected)
+                        ScheduleConnectAutoClose();
+                }),
+                ex => InvokeAsync(() =>
+                {
+                    if (_isDisposed) return;
+                    _connectStatus = new MeshWeaver.AI.Connect.ConnectStatus.Error(ex.Message);
+                    _connectBusy = false;
+                    StateHasChanged();
+                }));
+        StateHasChanged();
+    }
+
+    /// <summary>Store the pasted API key / gateway token as the harness credential, then close the dialog.</summary>
+    private void SubmitLoginCredential()
+    {
+        if (_loginHarness is not { } harness || string.IsNullOrWhiteSpace(_connectCode))
+            return;
+        var isGateway = _loginMethod == "gateway";
+        var baseUrl = isGateway ? _connectBaseUrl.Trim() : null;
+        if (isGateway && string.IsNullOrWhiteSpace(baseUrl))
+        {
+            _connectStatus = new MeshWeaver.AI.Connect.ConnectStatus.Error("Enter the gateway base URL.");
+            StateHasChanged();
+            return;
+        }
+        StoreHarnessCredential(harness, isGateway ? "authToken" : "apiKey", _connectCode.Trim(), baseUrl);
+        CloseLoginDialog();
+    }
+
+    /// <summary>Enter submits the active field (account code, or the API key / gateway token).</summary>
+    private void OnConnectInputKeyDown(Microsoft.AspNetCore.Components.Web.KeyboardEventArgs e)
+    {
+        if (e.Key != "Enter") return;
+        if (_loginMethod == "account") SubmitConnectCode();
+        else SubmitLoginCredential();
+    }
+
+    /// <summary>Reactively auto-dismiss the dialog ~1.2s after a successful login (no Task.Delay).</summary>
+    private void ScheduleConnectAutoClose()
+    {
+        _connectSub?.Dispose();
+        _connectSub = System.Reactive.Linq.Observable.Timer(TimeSpan.FromSeconds(1.2))
+            .Subscribe(_ => InvokeAsync(() => { if (!_isDisposed) CloseLoginDialog(); }));
+    }
+
+    /// <summary>Dismiss the login dialog and tear down any live account-login session.</summary>
+    private void CancelConnect()
+    {
+        if (_connectProvider is { } p && !string.IsNullOrEmpty(_userHome))
+            Hub.ServiceProvider.GetService<MeshWeaver.AI.Connect.ConnectSessionManager>()?.Cancel(_userHome!, p);
+        CloseLoginDialog();
+    }
+
+    /// <summary>Clear all login-dialog UI state (does NOT cancel — used after success or by CancelConnect).</summary>
+    private void CloseLoginDialog()
+    {
+        _connectSub?.Dispose();
+        _connectSub = null;
+        _loginHarness = null;
+        _loginMethod = null;
+        _connectProvider = null;
+        _connectStatus = null;
+        _connectCode = "";
+        _connectBaseUrl = "";
+        _connectBusy = false;
+        StateHasChanged();
+    }
+
+    /// <summary>
+    /// Log out of a CLI harness: forget the stored per-user credential (the ModelProvider node the
+    /// harness reads) AND clear the CLI's own cached credentials in the per-user config dir.
+    /// </summary>
+    private void DisconnectHarness(MeshWeaver.AI.IHarness harness)
+    {
+        if (harness.AuthProvider is { } provider && !string.IsNullOrEmpty(_userHome))
+            Hub.ServiceProvider.GetService<MeshWeaver.AI.Connect.ConnectSessionManager>()?.Cancel(_userHome!, provider);
+        var configDir = ResolveProbeConfigDir(harness.Id);
+        if (!string.IsNullOrEmpty(configDir))
+        {
+            try
+            {
+                var creds = System.IO.Path.Combine(configDir, ".credentials.json");
+                if (System.IO.File.Exists(creds)) System.IO.File.Delete(creds);
+            }
+            catch (Exception ex)
+            {
+                Logger.LogDebug(ex, "[ThreadChat:{InstanceId}] logout: clear credentials failed", _instanceId);
+            }
+        }
+        ClearHarnessCredential(harness);
     }
 
     /// <summary>Encrypt + persist the pasted credential as the harness's ModelProvider node (create-or-update).</summary>
@@ -3519,6 +3736,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             _navContextSubscription?.Dispose();
             composerSubscription?.Dispose();
             composerDefaultsSubscription?.Dispose();
+            _connectSub?.Dispose();
             foreach (var sub in harnessRuntimeSubs) sub.Dispose();
             harnessRuntimeSubs.Clear();
             agentSubscription?.Dispose();
