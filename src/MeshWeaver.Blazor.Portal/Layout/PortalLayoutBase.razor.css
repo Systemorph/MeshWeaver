@@ -90,8 +90,14 @@
         min-height: 0; /* Allow flex shrinking */
         height: 100%;
         width: 100%;
+        /* position: relative WITHOUT a z-index — it must NOT create a stacking context. A `z-index: 1`
+           here trapped EVERY chat popup (the /agent · /model pickers AND the login dialog) inside a
+           z-index:1 context, so no inner z-index — not even 10000 — could rise above the sticky header
+           (z-index 1100). That is the recurring "popup renders BEHIND the top bar" bug. With no z-index
+           the popups' own z-index participates in the root stacking context and correctly paints above
+           every sticky heading. body-content is a flex column whose inner areas scroll, so it does not
+           itself overflow/clip the popups. */
         position: relative;
-        z-index: 1;
     }
 
     /* Thin auto-hiding scrollbar inside splitter panes */
