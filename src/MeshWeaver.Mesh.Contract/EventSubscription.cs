@@ -23,8 +23,7 @@ public enum EventTriggerType
     /// <summary>Fire when a node of <see cref="EventSubscription.TriggerNodeType"/> is
     /// <see cref="EventSubscription.TriggerKind"/>-changed and its field matches (the invite→grant case).</summary>
     NodeChange = 0,
-    /// <summary>Fire at (or after) a time, once, or on an interval (a <c>FireAt</c>/<c>Interval</c> —
-    /// stage 2).</summary>
+    /// <summary>Fire once at (or after) a time (<see cref="EventSubscription.FireAt"/>).</summary>
     Timer = 1,
     /// <summary>Fire when a watched node reaches a resting status — its status field enters the
     /// subscription's resting values (the delegation "sub-thread finished" case, stage 3).</summary>
@@ -87,6 +86,31 @@ public record EventSubscription
     /// <summary>[NodeChange] The value <see cref="MatchField"/> must equal (case-insensitive) to match.</summary>
     public string? MatchValue { get; init; }
 
+    // Timer trigger
+    /// <summary>[Timer] Fire once at (or after) this instant. A time already in the past fires on the
+    /// next startup reconcile (at-least-once, restart-safe). (Repeating/interval timers are a follow-up.)</summary>
+    public DateTimeOffset? FireAt { get; init; }
+
+    // NodeStatus trigger
+    /// <summary>[NodeStatus] The node to watch — fire when its <see cref="StatusField"/> reaches a resting
+    /// value. The delegation case watches the sub-thread; a status leaves "running" → the parent continues.</summary>
+    public string? WatchPath { get; init; }
+
+    /// <summary>[NodeStatus] The content field holding the status (default <c>Status</c>). Read as a string
+    /// (an enum serialises as its name), compared case-insensitively against <see cref="RestingValues"/>.</summary>
+    public string? StatusField { get; init; }
+
+    /// <summary>[NodeStatus] The status values that count as "resting" — fire when the watched node's
+    /// <see cref="StatusField"/> enters this set (e.g. <c>Idle</c>/<c>Cancelled</c>/<c>Done</c>). Any value
+    /// NOT in this set is "active/busy".</summary>
+    public System.Collections.Immutable.ImmutableList<string> RestingValues { get; init; }
+        = System.Collections.Immutable.ImmutableList<string>.Empty;
+
+    /// <summary>[NodeStatus] Only fire AFTER the watched node was first seen in a non-resting (active) state
+    /// — so an initial replayed-resting emission (the node was never running) does not fire. The delegation
+    /// "sawRunning then terminal" semantics.</summary>
+    public bool RequireActiveFirst { get; init; }
+
     // ── Effect ───────────────────────────────────────────────────────────────
 
     /// <summary>What this does when it fires.</summary>
@@ -95,6 +119,12 @@ public record EventSubscription
     /// <summary>The node the continuation targets — for <see cref="EventContinuationType.GrantSpaceAccess"/>
     /// the Space path.</summary>
     public string? TargetPath { get; init; }
+
+    /// <summary>The subject the continuation acts on when the trigger carries no node (e.g. a
+    /// <see cref="EventTriggerType.Timer"/>) — for <see cref="EventContinuationType.GrantSpaceAccess"/> the
+    /// user to grant. For a <see cref="EventTriggerType.NodeChange"/> trigger the subject is the triggering
+    /// node's id and this is ignored.</summary>
+    public string? SubjectId { get; init; }
 
     /// <summary>[GrantSpaceAccess] The role to grant (e.g. <c>Editor</c>).</summary>
     public string? Role { get; init; }
