@@ -144,6 +144,7 @@ A few rules keep such a page healthy:
 # See Also
 
 - [Layout Areas](../LayoutAreas) — what an area is and how to author one in C#
+- [Slides & Decks](../SlidesAndDecks) — Slide/Deck node types you can embed inline or sequence as a deck
 - [Configurable Pages](../ConfigurablePages) — the reusable `@@("area/…")` home-page areas
 - [Adding Controls to a UI](../ContainerControl) — `Controls.Stack`, `WithView`, and the container types
 - [Data Binding](../DataBinding) — how a view stays live as its data changes
