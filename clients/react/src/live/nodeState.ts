@@ -6,8 +6,19 @@
 import { useEffect, useState } from "react";
 import type { MeshNodeState, MeshOps } from "./meshOps.js";
 
-/** Drive an async-iterable node watch into a callback; returns the stop function. */
-export function watchInto(ops: MeshOps, path: string, onState: (n: MeshNodeState) => void): () => void {
+/**
+ * Drive an async-iterable node watch into a callback; returns the stop function. A missing
+ * node/satellite surfaces as a stream error (the cache's DeliveryFailure) — expected, so the view
+ * keeps rendering from whatever it already has; a caller that needs to distinguish a genuine
+ * transport/auth failure passes <paramref name="onError"/>. The underlying iterator is ALWAYS
+ * released (a throw from <c>it.next()</c> must not leak the watch subscription).
+ */
+export function watchInto(
+  ops: MeshOps,
+  path: string,
+  onState: (n: MeshNodeState) => void,
+  onError?: (error: unknown) => void,
+): () => void {
   let live = true;
   const it = ops.watch(path)[Symbol.asyncIterator]();
   void (async () => {
@@ -17,9 +28,10 @@ export function watchInto(ops: MeshOps, path: string, onState: (n: MeshNodeState
         if (r.done) break;
         if (live && r.value) onState(r.value);
       }
-    } catch {
-      // A missing node/satellite surfaces as a stream error (the cache's DeliveryFailure). Callers
-      // keep rendering from whatever they already have — never crash the view.
+    } catch (error) {
+      if (live) onError?.(error);
+    } finally {
+      void Promise.resolve(it.return?.()).catch(() => undefined);
     }
   })();
   return () => {
