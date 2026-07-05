@@ -33,9 +33,11 @@ public class ScheduledActionRunnerTest(ITestOutputHelper output) : MonolithMeshT
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var changeFeed = Mesh.ServiceProvider.GetRequiredService<IMeshChangeFeed>();
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        var runnerLogger = Mesh.ServiceProvider
+            .GetService<Microsoft.Extensions.Logging.ILogger<ScheduledActionRunner>>();
 
         // Start the runner BEFORE the triggering write so the live change-feed path is armed.
-        using var runner = new ScheduledActionRunner(Mesh, changeFeed, meshService, accessService);
+        using var runner = new ScheduledActionRunner(Mesh, changeFeed, meshService, accessService, runnerLogger);
         await runner.StartAsync(default);
 
         // A pending action: when a User with email == InviteeEmail is created, grant Editor on the
@@ -66,22 +68,27 @@ public class ScheduledActionRunnerTest(ITestOutputHelper output) : MonolithMeshT
             }).Should().Emit();
         }
 
+        // Wait for the action to reach a TERMINAL state first (race-free — the action node already
+        // exists, so the stream waits for the update rather than erroring on a missing node). A Failed
+        // status surfaces the runner's real error in the assertion message.
+        var final = await Mesh.GetWorkspace().GetMeshNodeStream(ScheduledActionNodeType.Path(action.Id))
+            .Select(n => n?.Content as ScheduledAction)
+            .Where(sa => sa is not null and not { Status: ScheduledActionStatus.Pending })
+            .FirstAsync().Timeout(40.Seconds());
+        Assert.True(final!.Status == ScheduledActionStatus.Fired,
+            $"action ended {final.Status}: {final.LastError}");
+
         // The grant landed: the AccessAssignment appears at {space}/_Access/{user}_Access with Editor.
         var assignmentPath = $"{Space}/_Access/{InviteeId}_Access";
         var granted = await Mesh.GetWorkspace().GetMeshNodeStream(assignmentPath)
             .Where(n => n?.Content is AccessAssignment a
                         && a.Roles.Any(r => r.Role == "Editor" && !r.Denied))
-            .FirstAsync().Timeout(30.Seconds());
+            .FirstAsync().Timeout(10.Seconds());
         Assert.NotNull(granted);
 
         // The Space was pinned to the invitee's dashboard.
         await Mesh.GetWorkspace().GetMeshNodeStream(InviteeId)
             .Where(n => n?.Content is User u && u.PinnedPaths.Contains(Space))
-            .FirstAsync().Timeout(30.Seconds());
-
-        // The action flipped to Fired (so it won't re-run).
-        await Mesh.GetWorkspace().GetMeshNodeStream(ScheduledActionNodeType.Path(action.Id))
-            .Where(n => n?.Content is ScheduledAction sa && sa.Status == ScheduledActionStatus.Fired)
-            .FirstAsync().Timeout(30.Seconds());
+            .FirstAsync().Timeout(10.Seconds());
     }
 }

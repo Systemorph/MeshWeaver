@@ -19,12 +19,20 @@ namespace MeshWeaver.Graph;
 ///     runner was down — e.g. the invitee signed up during a deploy — still fires. The durable state
 ///     is the action node itself (Pending → Fired), so nothing is lost.</item>
 /// </list>
-/// Effects run under <c>ImpersonateAsSystem</c> and are idempotent (create-or-update grant, pin is a
-/// set-add, the terminal <c>Fired</c> write gates re-entry), so the two paths can't double-grant.
+/// Effects are idempotent (create-or-update grant, pin is a set-add, the terminal <c>Fired</c> write
+/// gates re-entry), so the two paths can't double-grant.
 ///
-/// <para>NOTE: this reconciles against current state, which is exact for <see cref="MeshChangeKind.Created"/>
-/// triggers (the entity persists). A durable event-log + cursor (a separate PG queue) is the follow-up
-/// that would also give exact replay for Update/Delete triggers and a general event stream.</para>
+/// <para>🚨 The runner has NO ambient <c>AccessContext</c> (it's a background hosted service, not a
+/// request). Every read AND write goes through <see cref="AsSystem{T}"/> — <c>Using(ImpersonateAsSystem,
+/// Defer(factory))</c> — so the operation is both CONSTRUCTED and subscribed under the system identity.
+/// Both matter: the write primitives capture the caller identity when constructed (so a grant built
+/// outside the scope would capture nothing and fail closed), and reads capture it at subscribe. Deferring
+/// construction into the <c>Using</c> factory covers the <c>SelectMany</c> inners too, which would
+/// otherwise be constructed on a downstream emission thread with no system context.</para>
+///
+/// <para>Reconciliation is exact for <see cref="MeshChangeKind.Created"/> triggers (the entity persists).
+/// A durable event-log + cursor (a separate PG queue) is the follow-up that would also give exact replay
+/// for Update/Delete triggers and a general event stream.</para>
 /// </summary>
 public sealed class ScheduledActionRunner(
     IMessageHub hub,
@@ -41,10 +49,10 @@ public sealed class ScheduledActionRunner(
     /// <inheritdoc />
     public Task StartAsync(CancellationToken cancellationToken)
     {
-        // Live snapshot of outstanding actions; re-emits on add / fire / cancel.
-        pendingSub = hub.GetWorkspace()
-            .GetQuery("scheduled-actions",
-                $"path:{ScheduledActionNodeType.Namespace} scope:children nodeType:{ScheduledActionNodeType.NodeType}")
+        // Live snapshot of outstanding actions; re-emits on add / fire / cancel. Reading the Admin
+        // partition needs an identity → system. (Constant query id: one registry entry, no leak.)
+        pendingSub = AsSystem(() => hub.GetWorkspace().GetQuery("scheduled-actions",
+                $"path:{ScheduledActionNodeType.Namespace} scope:children nodeType:{ScheduledActionNodeType.NodeType}"))
             .Subscribe(nodes =>
             {
                 var list = (nodes ?? [])
@@ -75,8 +83,8 @@ public sealed class ScheduledActionRunner(
         if (candidates.Count == 0)
             return;
 
-        // Read the triggering node once; evaluate each candidate's field match against it.
-        hub.GetMeshNode(e.Path, TimeSpan.FromSeconds(10)).Subscribe(node =>
+        // Read the triggering node once (system identity); evaluate each candidate's field match.
+        AsSystem(() => hub.GetMeshNode(e.Path, TimeSpan.FromSeconds(10))).Subscribe(node =>
         {
             if (node is null)
                 return;
@@ -91,12 +99,20 @@ public sealed class ScheduledActionRunner(
         var query = $"nodeType:{action.TriggerNodeType}";
         if (action is { MatchField.Length: > 0, MatchValue.Length: > 0 })
             query += $" content.{action.MatchField}:{action.MatchValue}";
-        hub.GetWorkspace().GetQuery($"sa-recon:{action.Id}", query).Take(1).Subscribe(nodes =>
-        {
-            var node = (nodes ?? []).FirstOrDefault(n => Matches(action, n));
-            if (node is not null)
-                Execute(action, node);
-        }, ex => logger?.LogWarning(ex, "Reconcile query for action {Id} failed", action.Id));
+
+        // One-shot lookup via Query<T> (NOT the workspace GetQuery, which caches by id for the
+        // workspace lifetime — a per-action id would leak a registry entry each time). Take the
+        // initial snapshot and stop.
+        AsSystem(() => meshService.Query<MeshNode>(MeshQueryRequest.FromQuery(query))
+                .Where(c => c.ChangeType == QueryChangeType.Initial)
+                .Select(c => c.Items)
+                .Take(1))
+            .Subscribe(items =>
+            {
+                var node = items.FirstOrDefault(n => Matches(action, n));
+                if (node is not null)
+                    Execute(action, node);
+            }, ex => logger?.LogWarning(ex, "Reconcile query for action {Id} failed", action.Id));
     }
 
     private bool Matches(ScheduledAction action, MeshNode node)
@@ -113,19 +129,9 @@ public sealed class ScheduledActionRunner(
     {
         // The triggering node's id is the user (a User node's path IS the userId).
         var userId = triggerNode.Id;
-        IObservable<MeshNode> effect = action.ActionKind switch
-        {
-            ScheduledActionKind.GrantSpaceAccess
-                when action is { TargetPath.Length: > 0, Role.Length: > 0 } =>
-                GrantAndMaybePin(userId, action.TargetPath!, action.Role!, action.Pin),
-            _ => Observable.Throw<MeshNode>(
-                new InvalidOperationException($"Unsupported or incomplete scheduled action {action.Id}")),
-        };
 
-        // System identity for the grant/pin AND the terminal status write (all in the Admin/user
-        // partitions). Fire only flips to Fired after the effect lands.
-        Observable.Using(accessService.ImpersonateAsSystem,
-                _ => effect.SelectMany(_ => ScheduledActionOps.SetStatus(hub, action.Id, ScheduledActionStatus.Fired)))
+        BuildEffect(action, userId)
+            .SelectMany(_ => AsSystem(() => ScheduledActionOps.SetStatus(hub, action.Id, ScheduledActionStatus.Fired)))
             .Subscribe(
                 _ => logger?.LogInformation(
                     "Scheduled action {Id} fired: {Kind} {Role} for {User} on {Target}",
@@ -133,19 +139,27 @@ public sealed class ScheduledActionRunner(
                 ex =>
                 {
                     logger?.LogWarning(ex, "Scheduled action {Id} failed", action.Id);
-                    Observable.Using(accessService.ImpersonateAsSystem,
-                            _ => ScheduledActionOps.SetStatus(hub, action.Id, ScheduledActionStatus.Failed, ex.Message))
+                    AsSystem(() => ScheduledActionOps.SetStatus(hub, action.Id, ScheduledActionStatus.Failed, ex.Message))
                         .Subscribe(_ => { }, _ => { });
                 });
     }
 
-    private IObservable<MeshNode> GrantAndMaybePin(string userId, string space, string role, bool pin)
+    private IObservable<MeshNode> BuildEffect(ScheduledAction action, string userId) => action.ActionKind switch
     {
-        var grant = ScheduledActionOps.Grant(meshService, userId, space, role);
-        return pin
-            ? grant.SelectMany(g => ScheduledActionOps.Pin(hub, userId, space).Select(_ => g))
-            : grant;
-    }
+        ScheduledActionKind.GrantSpaceAccess when action is { TargetPath.Length: > 0, Role.Length: > 0 } =>
+            AsSystem(() => ScheduledActionOps.Grant(meshService, userId, action.TargetPath!, action.Role!))
+                .SelectMany(g => action.Pin
+                    ? AsSystem(() => ScheduledActionOps.Pin(hub, userId, action.TargetPath!)).Select(_ => g)
+                    : Observable.Return(g)),
+        _ => Observable.Throw<MeshNode>(new InvalidOperationException(
+            $"Unsupported or incomplete scheduled action {action.Id}")),
+    };
+
+    /// <summary>Runs a freshly-constructed <paramref name="factory"/> operation under the system
+    /// identity — the runner has no ambient AccessContext, and both reads and writes capture identity
+    /// at construction/subscribe. <c>Defer</c> moves construction inside the impersonation scope.</summary>
+    private IObservable<T> AsSystem<T>(Func<IObservable<T>> factory)
+        => Observable.Using(accessService.ImpersonateAsSystem, _ => Observable.Defer(factory));
 
     /// <inheritdoc />
     public Task StopAsync(CancellationToken cancellationToken)

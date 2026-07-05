@@ -10,10 +10,12 @@ namespace MeshWeaver.Graph.Configuration;
 /// search and create contexts.
 ///
 /// <para>Storage mirrors <see cref="InvitationNodeType"/>: the nodes live in the always-present
-/// <b>Admin</b> partition at <c>Admin/ScheduledAction/{id}</c>. Queries must be <b>path-scoped</b>
-/// (<c>path:Admin/ScheduledAction scope:children</c>) to route to the admin schema — a
-/// <c>namespace:Admin</c>-only query fans out cross-schema and deliberately EXCLUDES the admin
-/// schema. The runner enumerates them this way on startup to reconcile outstanding actions.</para>
+/// <b>Admin</b> partition at <c>Admin/ScheduledAction/{id}</c>. The PG query router routes purely by
+/// the path's first segment and does NOT yet consume the <c>QueryRoutingHints</c> below, so queries
+/// must be <b>path-scoped</b> (<c>path:Admin/ScheduledAction scope:children</c>) to reach the admin
+/// schema (a <c>namespace:Admin</c>-only query fans out cross-schema and deliberately EXCLUDES it).
+/// The runner enumerates them this way. The routing hint is kept so a path-less
+/// <c>nodeType:ScheduledAction</c> query works once the router honours it (same as InvitationNodeType).</para>
 /// </summary>
 public static class ScheduledActionNodeType
 {
