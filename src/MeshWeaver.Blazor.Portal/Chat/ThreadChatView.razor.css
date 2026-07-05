@@ -447,6 +447,22 @@ button.thread-chat-status-item {
     opacity: 0.72;
 }
 
+/* Harness BRAND icon (Claude Code / Copilot) — an inline <svg> wrapped in a <span class="chip-svg">.
+   It carries its own colours (a terracotta burst, etc.), so it must NOT be dimmed like the monochrome
+   glyph chips, and its viewBox (20×20, no width/height) must be sized down to the chip glyph size. */
+.thread-chat-status-item span.chip-svg {
+    display: inline-flex;
+    align-items: center;
+    width: 14px;
+    height: 14px;
+    opacity: 1;
+}
+
+.thread-chat-status-item span.chip-svg svg {
+    width: 100%;
+    height: 100%;
+}
+
 .thread-chat-status-sep {
     color: var(--neutral-stroke-rest);
 }
