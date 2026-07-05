@@ -26,12 +26,12 @@ public enum SpaceInviteOutcome
 ///     optionally pin the Space to their dashboard.</item>
 ///   <item><b>Not yet on the system</b> → create an <c>Invitation</c> (the existing
 ///     <c>InvitationEmailSender</c> emails any Pending invitation; in invitation-only mode it also
-///     unlocks onboarding) AND a <see cref="ScheduledAction"/> that grants + pins the moment a
+///     unlocks onboarding) AND an <see cref="EventSubscription"/> that grants + pins the moment a
 ///     <c>User</c> with that email is created. So the access lands automatically on sign-up — surviving
-///     restarts via <see cref="ScheduledActionRunner"/>.</item>
+///     restarts via <see cref="EventSubscriptionRunner"/>.</item>
 /// </list>
 /// The immediate grant runs under the CALLER's identity (the inviting admin, who has rights on the
-/// Space). The Admin-partition writes (invitation + scheduled action) run as system.
+/// Space). The Admin-partition writes (invitation + event subscription) run as system.
 /// </summary>
 public sealed class SpaceInviteService(
     IMessageHub hub,
@@ -62,9 +62,9 @@ public sealed class SpaceInviteService(
     private IObservable<SpaceInviteOutcome> GrantNow(string userId, string spacePath, string role, bool pin)
     {
         // Runs under the caller's identity (the inviting admin has rights on the Space).
-        var grant = ScheduledActionOps.Grant(meshService, userId, spacePath, role);
+        var grant = EventSubscriptionOps.Grant(meshService, userId, spacePath, role);
         var effect = pin
-            ? grant.SelectMany(g => ScheduledActionOps.Pin(hub, userId, spacePath).Select(_ => g))
+            ? grant.SelectMany(g => EventSubscriptionOps.Pin(hub, userId, spacePath).Select(_ => g))
             : grant;
         return effect.Select(_ =>
         {
@@ -76,16 +76,17 @@ public sealed class SpaceInviteService(
     private IObservable<SpaceInviteOutcome> ScheduleAndInvite(
         string spacePath, string email, string role, bool pin, string? invitedBy)
     {
-        var action = new ScheduledAction
+        var subscription = new EventSubscription
         {
-            // Deterministic id per invitee+space → a re-invite upserts the SAME action (idempotent)
+            // Deterministic id per invitee+space → a re-invite upserts the SAME subscription (idempotent)
             // instead of piling up duplicate pending grants.
             Id = $"grant_{Slug(email)}_{Slug(spacePath)}",
+            TriggerType = EventTriggerType.NodeChange,
             TriggerNodeType = "User",
             TriggerKind = MeshChangeKind.Created,
             MatchField = "email",
             MatchValue = email,
-            ActionKind = ScheduledActionKind.GrantSpaceAccess,
+            ContinuationType = EventContinuationType.GrantSpaceAccess,
             TargetPath = spacePath,
             Role = role,
             Pin = pin,
@@ -102,7 +103,7 @@ public sealed class SpaceInviteService(
         // Both are upserts keyed by a deterministic id/slug, so a re-invite overwrites rather than
         // duplicating. The existing InvitationEmailSender emails the Pending invitation.
         return Observable.Using(accessService.ImpersonateAsSystem, _ => Observable.Defer(() =>
-                ScheduledActionOps.CreateAction(meshService, action)
+                EventSubscriptionOps.CreateSubscription(meshService, subscription)
                     .SelectMany(_ => meshService.CreateOrUpdateNode(invitation))))
             .Select(_ =>
             {
@@ -113,7 +114,7 @@ public sealed class SpaceInviteService(
 
     private bool EmailMatches(MeshNode userNode, string email)
     {
-        var actual = ScheduledActionOps.ReadContentField(userNode, "email", hub.JsonSerializerOptions);
+        var actual = EventSubscriptionOps.ReadContentField(userNode, "email", hub.JsonSerializerOptions);
         return string.Equals(actual, email, StringComparison.OrdinalIgnoreCase);
     }
 
