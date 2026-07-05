@@ -12,8 +12,8 @@ namespace MeshWeaver.Portal.E2E;
 [Collection("portal-e2e")]
 public class NextHomeScreenshotTest(PortalFixture fixture)
 {
-    private const string OutDir =
-        "/private/tmp/claude-501/-Users-roland-code-MeshWeaver/f53d6845-e683-4096-a161-c966ac4b8ffe/scratchpad/shots";
+    private static readonly string OutDir =
+        Path.Combine(Path.GetTempPath(), "meshweaver-e2e-shots");
 
     [Fact(Timeout = 300_000)]
     public async Task Home_Screenshots_AcrossReloads()

@@ -96,7 +96,14 @@ export class MeshWebConnection {
                 this.onFrame(frame.kind.value);
               }
             }
-            // Clean end (server closed the stream) — fall through to reconnect below.
+            // Clean end (server closed the stream). If it ended BEFORE the first ack, the caller's
+            // connect() would otherwise never settle — reject instead of silently entering the
+            // reconnect loop (there was never a live connection to reconnect).
+            if (!firstAck) {
+              if (!this.abort.signal.aborted) reject(new Error("connect: stream ended before ack"));
+              return;
+            }
+            // Acked once already — fall through to reconnect below.
           } catch (error) {
             if (this.abort.signal.aborted) return;
             if (!firstAck) {
@@ -119,18 +126,18 @@ export class MeshWebConnection {
     for (const [streamId, p] of this.subscribeParams) this.post(p.target, p.type, { ...p.msg, streamId });
   }
 
-  /** Abort-aware delay for the reconnect backoff. */
+  /** Abort-aware delay for the reconnect backoff. Cleans up the abort listener on BOTH paths (normal
+   *  timer fire and abort) so listeners don't accumulate on the AbortSignal across reconnects. */
   private sleep(ms: number): Promise<void> {
     return new Promise<void>((resolve) => {
-      const timer = setTimeout(resolve, ms);
-      this.abort.signal.addEventListener(
-        "abort",
-        () => {
-          clearTimeout(timer);
-          resolve();
-        },
-        { once: true },
-      );
+      let timer: ReturnType<typeof setTimeout>;
+      const finish = () => {
+        clearTimeout(timer);
+        this.abort.signal.removeEventListener("abort", finish);
+        resolve();
+      };
+      timer = setTimeout(finish, ms);
+      this.abort.signal.addEventListener("abort", finish, { once: true });
     });
   }
 
