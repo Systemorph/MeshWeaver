@@ -27,11 +27,13 @@ public enum ScheduledActionKind
 }
 
 /// <summary>
-/// A deferred, event-triggered action — the durable record of "when THIS happens, do THAT",
+/// <b>Legacy — superseded by <see cref="EventSubscription"/>.</b> Kept only so existing
+/// <c>Admin/ScheduledAction/{id}</c> nodes still deserialize; <c>EventSubscriptionRunner</c> migrates
+/// them to <c>Admin/EventSubscription/{id}</c> on startup. Do not create new ones.
+///
+/// <para>A deferred, event-triggered action — the durable record of "when THIS happens, do THAT",
 /// surviving restarts. Stored as a MeshNode in the always-present <b>Admin</b> partition
-/// (<c>Admin/ScheduledAction/{id}</c>), so the <c>ScheduledActionRunner</c> can enumerate every
-/// outstanding action on startup and reconcile it against current state (a matching event that
-/// arrived while the runner was down still fires).
+/// (<c>Admin/ScheduledAction/{id}</c>).</para>
 ///
 /// <para>The trigger observes the mesh change feed: an action fires when a node of
 /// <see cref="TriggerNodeType"/> is <see cref="TriggerKind"/>-changed and its content field

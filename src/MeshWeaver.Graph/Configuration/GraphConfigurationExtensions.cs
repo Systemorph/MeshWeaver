@@ -50,7 +50,8 @@ public static class GraphConfigurationExtensions
                 .AddNotificationRuleType()
                 .AddNotificationChannelType()
                 .AddInvitationType()
-                .AddScheduledActionType()
+                .AddEventSubscriptionType()
+                .AddScheduledActionType()   // legacy — kept so existing Admin/ScheduledAction nodes still deserialize + migrate
                 .AddEmailType()
                 .AddEaCredentialType()
                 .AddTeamsConversationType()
