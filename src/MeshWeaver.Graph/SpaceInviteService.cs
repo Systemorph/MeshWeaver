@@ -31,7 +31,7 @@ public enum SpaceInviteOutcome
 ///     restarts via <see cref="EventSubscriptionRunner"/>.</item>
 /// </list>
 /// The immediate grant runs under the CALLER's identity (the inviting admin, who has rights on the
-/// Space). The Admin-partition writes (invitation + scheduled action) run as system.
+/// Space). The Admin-partition writes (invitation + event subscription) run as system.
 /// </summary>
 public sealed class SpaceInviteService(
     IMessageHub hub,
