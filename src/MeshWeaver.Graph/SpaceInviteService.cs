@@ -78,6 +78,9 @@ public sealed class SpaceInviteService(
     {
         var action = new ScheduledAction
         {
+            // Deterministic id per invitee+space → a re-invite upserts the SAME action (idempotent)
+            // instead of piling up duplicate pending grants.
+            Id = $"grant_{Slug(email)}_{Slug(spacePath)}",
             TriggerNodeType = "User",
             TriggerKind = MeshChangeKind.Created,
             MatchField = "email",
@@ -95,9 +98,9 @@ public sealed class SpaceInviteService(
             Content = new Invitation { Email = email, InvitedBy = invitedBy, Note = $"Invited to space {spacePath}" },
         };
 
-        // Both writes land in the Admin partition → system identity, constructed inside the scope
-        // (create-or-update = idempotent, so a re-invite is harmless). The existing
-        // InvitationEmailSender emails the Pending invitation.
+        // Both writes land in the Admin partition → system identity, constructed inside the scope.
+        // Both are upserts keyed by a deterministic id/slug, so a re-invite overwrites rather than
+        // duplicating. The existing InvitationEmailSender emails the Pending invitation.
         return Observable.Using(accessService.ImpersonateAsSystem, _ => Observable.Defer(() =>
                 ScheduledActionOps.CreateAction(meshService, action)
                     .SelectMany(_ => meshService.CreateOrUpdateNode(invitation))))
@@ -114,9 +117,9 @@ public sealed class SpaceInviteService(
         return string.Equals(actual, email, StringComparison.OrdinalIgnoreCase);
     }
 
-    /// <summary>The Invitation node id from an email — MUST match <c>InvitationService.Slugify</c>
-    /// (lower-case, non-alphanumerics → <c>_</c>, no trim) so a re-invite lands on the SAME node
-    /// rather than creating a duplicate invitation.</summary>
+    /// <summary>A node-id slug from a string — lower-case, trimmed, non-alphanumerics → <c>_</c>.
+    /// For an email this matches the effective <c>InvitationService</c> path (which trims the email
+    /// before <c>Slugify</c>), so a re-invite lands on the SAME invitation node.</summary>
     internal static string Slug(string email) =>
         new(email.Trim().ToLowerInvariant().Select(c => char.IsLetterOrDigit(c) ? c : '_').ToArray());
 }
