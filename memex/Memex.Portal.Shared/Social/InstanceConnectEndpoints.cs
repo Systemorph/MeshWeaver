@@ -6,6 +6,7 @@ using System.Text;
 using System.Threading.Tasks;
 using MeshWeaver.InstanceSync;
 using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
@@ -33,6 +34,10 @@ public static class InstanceConnectEndpoints
     /// <summary>The CSRF/PKCE state cookie name.</summary>
     public const string StateCookieName = "inst_connect_state";
     private const string CallbackPath = "/connect/instance/callback";
+    // The cookie carries the PKCE verifier AND the server-side token-exchange target, so it must be
+    // integrity-protected: a logged-in user could otherwise forge it and steer the token POST to an
+    // arbitrary URL. DataProtection encrypts + signs it; Unprotect fails closed on any tampering.
+    private const string ProtectorPurpose = "MeshWeaver.InstanceConnect.v1";
 
     /// <summary>Maps the two connect endpoints. Registered from <c>MemexConfiguration</c> next to <c>MapGitHubConnect</c>.</summary>
     public static IEndpointRouteBuilder MapInstanceConnect(this IEndpointRouteBuilder endpoints)
@@ -44,6 +49,7 @@ public static class InstanceConnectEndpoints
             [Microsoft.AspNetCore.Mvc.FromQuery] string? returnPath,
             InstanceSyncService sync,
             InstanceOAuthService oauth,
+            IDataProtectionProvider dp,
             ILoggerFactory loggers) =>
         {
             var logger = loggers.CreateLogger("InstanceConnect");
@@ -55,6 +61,7 @@ public static class InstanceConnectEndpoints
             if (string.IsNullOrWhiteSpace(spaceId) || string.IsNullOrWhiteSpace(sourceId))
                 return Task.FromResult((IResult)Results.Redirect(SafeReturn(rp, "instance-error", "missing spaceId/sourceId")));
 
+            var protector = dp.CreateProtector(ProtectorPurpose);
             var redirectUri = BuildRedirectUri(http);
 
             // Reactive: read the party's RemoteUrl (authoritative, via the node stream), discover the
@@ -68,6 +75,12 @@ public static class InstanceConnectEndpoints
                     if (string.IsNullOrWhiteSpace(remoteUrl))
                         return Observable.Return((IResult)Results.Redirect(
                             SafeReturn(rp, "instance-error", "set the remote instance URL first, then Connect")));
+                    // Only follow an absolute http(s) URL — "foo" would otherwise become "foo/authorize"
+                    // and a non-http scheme could steer the discovery/token request somewhere unintended.
+                    if (!Uri.TryCreate(remoteUrl, UriKind.Absolute, out var uri)
+                        || (uri.Scheme != Uri.UriSchemeHttps && uri.Scheme != Uri.UriSchemeHttp))
+                        return Observable.Return((IResult)Results.Redirect(
+                            SafeReturn(rp, "instance-error", "the remote URL must be an absolute http(s) URL")));
 
                     return oauth.Discover(remoteUrl!).Select(ep =>
                     {
@@ -77,11 +90,12 @@ public static class InstanceConnectEndpoints
 
                         // Cookie payload = the callback's full working set (each field base64url'd, so
                         // '|'/'.' in a returnPath can't corrupt the split): state, party, remote URL,
-                        // resolved token endpoint, PKCE verifier, returnPath.
-                        var payload = string.Join(".", new[]
+                        // resolved token endpoint, PKCE verifier, returnPath. DataProtected so it can't
+                        // be forged to steer the token exchange at a different endpoint.
+                        var payload = protector.Protect(string.Join(".", new[]
                         {
                             state, spaceId!, sourceId!, remoteUrl!, ep.Token, verifier, rp
-                        }.Select(Enc));
+                        }.Select(Enc)));
 
                         http.Response.Cookies.Append(StateCookieName, payload, new CookieOptions
                         {
@@ -111,6 +125,7 @@ public static class InstanceConnectEndpoints
             [Microsoft.AspNetCore.Mvc.FromQuery] string? error,
             InstanceSyncService sync,
             InstanceOAuthService oauth,
+            IDataProtectionProvider dp,
             ILoggerFactory loggers) =>
         {
             var logger = loggers.CreateLogger("InstanceConnect");
@@ -124,12 +139,13 @@ public static class InstanceConnectEndpoints
                 http.Response.Cookies.Delete(StateCookieName);
                 try
                 {
-                    var p = cookie.Split('.');
+                    // Unprotect first — a forged/tampered cookie throws here and fails the flow closed.
+                    var p = dp.CreateProtector(ProtectorPurpose).Unprotect(cookie).Split('.');
                     cookieState = Dec(p[0]); spaceId = Dec(p[1]); sourceId = Dec(p[2]);
                     remoteUrl = Dec(p[3]); tokenEndpoint = Dec(p[4]); verifier = Dec(p[5]);
                     returnPath = p.Length > 6 ? Dec(p[6]) : "/";
                 }
-                catch { /* malformed cookie — the state check below fails it cleanly */ }
+                catch { /* malformed / tampered cookie — the state check below fails it cleanly */ }
             }
 
             IResult Fail(string reason)
