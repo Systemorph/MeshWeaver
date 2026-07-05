@@ -11,6 +11,7 @@ import { ThreadChatView } from "./threadChat.js";
 import { MeshNodeCollectionView, MeshSearchView } from "./meshLive.js";
 import { documentControls } from "./documentControls.js";
 import { nodeTransferControls } from "./nodeTransfer.js";
+import { meshNodeEditorControls } from "./meshNodeEditor.js";
 import { fileBrowserControls } from "./fileBrowser.js";
 
 function MeshNodePickerView({ control }: { control: UiControl }): ReactNode {
@@ -187,6 +188,7 @@ export const meshControls = {
   MeshNodeCard: MeshNodeCardView,
   // SearchBox renders via inputs.tsx's bound SearchBoxView.
   MeshNodePicker: MeshNodePickerView,
+  ...meshNodeEditorControls,
   UserProfile: UserProfileView,
   ThreadMessageBubble: ThreadMessageBubbleView,
   ThreadChat: ThreadChatView,
