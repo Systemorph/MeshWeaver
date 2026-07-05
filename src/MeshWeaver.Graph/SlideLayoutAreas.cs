@@ -21,10 +21,13 @@ namespace MeshWeaver.Graph;
 ///     counter is the only overlay. Open this full-screen to present.</item>
 ///   <item><b>Notes</b>: speaker notes plus a compact preview of the slide.</item>
 /// </list>
-/// A deck is any parent whose children are Slide nodes; prev/next resolve the sibling
-/// Slide nodes of the same parent ordered by <see cref="MeshNode.Order"/> (lower first,
-/// null last, ties broken by path). Navigation uses the standard href/redirect
-/// mechanism (<c>WithNavigateToHref</c> for buttons, <see cref="RedirectControl"/>
+/// When a slide's parent is a <see cref="DeckNodeType">Deck</see> with a non-empty
+/// <see cref="DeckContent.Slides"/> manifest, prev/next/index/count follow that EXTERNAL,
+/// deck-owned order. Otherwise a deck is any parent whose children are Slide nodes and
+/// prev/next resolve the sibling Slide nodes of the same parent ordered by
+/// <see cref="MeshNode.Order"/> (lower first, null last, ties broken by path) — so existing
+/// decks with Markdown/Space parents keep working unchanged. Navigation uses the standard
+/// href/redirect mechanism (<c>WithNavigateToHref</c> for buttons, <see cref="RedirectControl"/>
 /// from the stage click action) — no bespoke messages.
 /// </summary>
 public static class SlideLayoutAreas
@@ -290,10 +293,12 @@ public static class SlideLayoutAreas
     // ── Deck resolution ──────────────────────────────────────────────────────
 
     /// <summary>
-    /// Live observable of the deck's slides: the sibling Slide nodes sharing this
-    /// node's parent, ordered by <see cref="MeshNode.Order"/> (null last), ties
-    /// broken by path. Starts with an empty list so the stage renders before the
-    /// first query emission.
+    /// Live observable of the deck's slides in play order. When this slide's PARENT is a
+    /// <see cref="DeckNodeType">Deck</see> with a non-empty <see cref="DeckContent.Slides"/>
+    /// manifest, the order comes from that EXTERNAL manifest — the deck owns the sequence,
+    /// not the slides. Otherwise a deck is any parent whose children are Slide nodes and they
+    /// play by <see cref="MeshNode.Order"/> (null last), ties broken by path. Starts with an
+    /// empty list so the stage renders before the first query emission.
     /// </summary>
     private static IObservable<IReadOnlyList<MeshNode>> ObserveDeckSlides(LayoutAreaHost host)
     {
@@ -302,7 +307,8 @@ public static class SlideLayoutAreas
         if (meshService is null || parentPath is null)
             return Observable.Return<IReadOnlyList<MeshNode>>([]);
 
-        return meshService
+        // Candidate set: the sibling Slide nodes sharing this node's parent.
+        var siblingSlides = meshService
             .Query<MeshNode>(MeshQueryRequest.FromQuery(
                 $"namespace:{parentPath} nodeType:{SlideNodeType.NodeType}"))
             .Scan(ImmutableDictionary<string, MeshNode>.Empty, (map, change) =>
@@ -317,12 +323,63 @@ public static class SlideLayoutAreas
                         _ => map
                     };
                 return map;
-            })
-            .Select(map => (IReadOnlyList<MeshNode>)map.Values
-                .OrderBy(n => n.Order ?? int.MaxValue)
-                .ThenBy(n => n.Path, StringComparer.Ordinal)
-                .ToImmutableList())
+            });
+
+        // The parent's own node — if it is a Deck with a manifest, that manifest IS the order.
+        // StartWith(null) lets the combined stream render on the Order fallback until the parent
+        // node arrives (and stays on the fallback for any non-Deck parent, e.g. a Markdown deck).
+        var parentManifest = host.Workspace.GetMeshNodeStream(parentPath)
+            .Select(parent => DeckManifestPaths(parent, parentPath, host))
+            .StartWith((IReadOnlyList<string>?)null);
+
+        return siblingSlides
+            .CombineLatest(parentManifest, OrderSlides)
             .StartWith((IReadOnlyList<MeshNode>)ImmutableList<MeshNode>.Empty);
+    }
+
+    /// <summary>
+    /// If <paramref name="parent"/> is a Deck with a non-empty manifest, returns its entries
+    /// resolved to full child paths (the deck's declared order); otherwise <c>null</c> (→ the
+    /// <see cref="MeshNode.Order"/> fallback).
+    /// </summary>
+    private static IReadOnlyList<string>? DeckManifestPaths(
+        MeshNode? parent, string parentPath, LayoutAreaHost host)
+    {
+        if (parent is null || !string.Equals(parent.NodeType, DeckNodeType.NodeType, StringComparison.Ordinal))
+            return null;
+        var refs = parent.ContentAs<DeckContent>(host.Hub.JsonSerializerOptions)?.Slides;
+        if (refs is null || refs.Count == 0)
+            return null;
+        return refs
+            .Where(r => !string.IsNullOrWhiteSpace(r))
+            .Select(r => DeckLayoutAreas.ResolveChildPath(parentPath, r))
+            .ToImmutableList();
+    }
+
+    /// <summary>
+    /// Orders the candidate slide set: by the deck-manifest position when a manifest is present
+    /// (slides absent from the manifest fall to the end, then by Order/path); otherwise by
+    /// <see cref="MeshNode.Order"/> (null last), ties broken by path.
+    /// </summary>
+    private static IReadOnlyList<MeshNode> OrderSlides(
+        IReadOnlyDictionary<string, MeshNode> slides, IReadOnlyList<string>? manifestPaths)
+    {
+        if (manifestPaths is { Count: > 0 })
+        {
+            var position = new Dictionary<string, int>(StringComparer.Ordinal);
+            for (var i = 0; i < manifestPaths.Count; i++)
+                position.TryAdd(manifestPaths[i], i);
+            return slides.Values
+                .OrderBy(n => position.TryGetValue(n.Path, out var i) ? i : int.MaxValue)
+                .ThenBy(n => n.Order ?? int.MaxValue)
+                .ThenBy(n => n.Path, StringComparer.Ordinal)
+                .ToImmutableList();
+        }
+
+        return slides.Values
+            .OrderBy(n => n.Order ?? int.MaxValue)
+            .ThenBy(n => n.Path, StringComparer.Ordinal)
+            .ToImmutableList();
     }
 
     /// <summary>
