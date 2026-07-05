@@ -56,7 +56,7 @@ public static class ThreadIconGenerator
 
         // Left half (columns 0..2) chosen by hash bits, mirrored onto the right half so the
         // avatar is vertically symmetric (the classic GitHub-identicon shape). 3 cols × 5 rows
-        // = 15 bits, read from bytes past the two hue bytes (SHA-256 has 32 bytes — ample).
+        // = 15 bits, one taken from each of hash bytes 16..30 (well past the 2 hue bytes; SHA-256 has 32).
         var bit = 16;
         for (var col = 0; col < (Grid + 1) / 2; col++)
         {
