@@ -1,4 +1,5 @@
 using MeshWeaver.AI.Connect;
+using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
@@ -93,6 +94,10 @@ public sealed class ClaudeCodeHarness(IOptions<ClaudeCodeConfiguration> options)
             : null;
         var mcp = hub.ServiceProvider.GetService<IMcpBackConnection>();
         var clientLogger = hub.ServiceProvider.GetService<ILogger<ClaudeCodeChatClient>>();
+        // The mesh-scoped Process IoPool the client routes its blocking file edges through (mkdir,
+        // credentials read) — off the subscribing thread, bounded. Null when unregistered → the client
+        // falls back to IoPool.Unbounded.
+        var ioPool = hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.Process);
 
         // Note: the shared workspace dir (configuration.SkillsDirectory) holds the AGENTS.md the reactive
         // AgentSkillSyncService maintains — base "mesh-via-MCP" instructions plus the platform skill
@@ -101,6 +106,6 @@ public sealed class ClaudeCodeHarness(IOptions<ClaudeCodeConfiguration> options)
         // `get`, never materialised to disk. No per-spawn skill writing here.
         return new ClaudeCodeChatClient(
             configuration, modelName: null, clientLogger, configDir, token,
-            mcp, userId, accessCtx?.Name, accessCtx?.Email, cred?.AuthMethod, cred?.BaseUrl);
+            mcp, userId, accessCtx?.Name, accessCtx?.Email, cred?.AuthMethod, cred?.BaseUrl, ioPool);
     }
 }

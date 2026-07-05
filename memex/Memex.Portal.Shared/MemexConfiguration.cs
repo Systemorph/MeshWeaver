@@ -104,6 +104,9 @@ public static class MemexConfiguration
         services.AddScoped<Memex.Portal.Shared.Authentication.UserOnboardingService>();
         // Invitation service — reads/writes Invitation nodes for invitation-only onboarding.
         services.AddScoped<Memex.Portal.Shared.Authentication.InvitationService>();
+        // Space invite — grant an existing user now, or schedule the grant (+ create an invitation)
+        // for when an unknown email's account is created. Backed by the ScheduledActionRunner.
+        services.AddSingleton<MeshWeaver.Graph.SpaceInviteService>();
 
         // Configure Radzen
         services.AddRadzenServices();
