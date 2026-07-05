@@ -1451,7 +1451,9 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     /// <summary>Enter submits the active field (account code, or the API key / gateway token).</summary>
     private void OnConnectInputKeyDown(Microsoft.AspNetCore.Components.Web.KeyboardEventArgs e)
     {
-        if (e.Key != "Enter") return;
+        // Don't re-fire while a submit/verify is already in flight — the button is disabled but the Enter
+        // key path is not, so a repeated Enter would dispose+restart _connectSub and spam the connect flow.
+        if (e.Key != "Enter" || _connectBusy) return;
         if (_loginMethod == "account") SubmitConnectCode();
         else SubmitLoginCredential();
     }

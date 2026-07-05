@@ -750,7 +750,7 @@ else
                                 {
                                     <div style="margin-top:4px;"><strong>2</strong>&nbsp; Paste the code shown, then submit:</div>
                                     <FluentTextField @bind-Value="_connectCode" Immediate="true" Placeholder="Paste code"
-                                                     @onkeydown="OnConnectInputKeyDown" Style="width:100%;" />
+                                                     @onkeydown="OnConnectInputKeyDown" @onkeydown:stopPropagation="true" Style="width:100%;" />
                                     <FluentButton Appearance="FluentAppearance.Accent" Style="width:100%;"
                                                   Disabled="@(_connectBusy || string.IsNullOrWhiteSpace(_connectCode))"
                                                   OnClick="SubmitConnectCode">@(_connectBusy ? "Verifying…" : "Submit code")</FluentButton>
@@ -776,7 +776,8 @@ else
                         @if (_loginMethod == "gateway")
                         {
                             <div>Gateway base URL:</div>
-                            <FluentTextField @bind-Value="_connectBaseUrl" Immediate="true" Placeholder="https://…" Style="width:100%;" />
+                            <FluentTextField @bind-Value="_connectBaseUrl" Immediate="true" Placeholder="https://…"
+                                             @onkeydown:stopPropagation="true" Style="width:100%;" />
                             <div style="margin-top:4px;">Gateway token:</div>
                         }
                         else
@@ -787,7 +788,7 @@ else
                         <FluentTextField @bind-Value="_connectCode" Immediate="true"
                                          Placeholder="@(_loginMethod == "gateway" ? "token" : "sk-ant-api…")"
                                          TextFieldType="Microsoft.FluentUI.AspNetCore.Components.TextFieldType.Password"
-                                         @onkeydown="OnConnectInputKeyDown" Style="width:100%;" />
+                                         @onkeydown="OnConnectInputKeyDown" @onkeydown:stopPropagation="true" Style="width:100%;" />
                         <FluentButton Appearance="FluentAppearance.Accent" Style="width:100%;"
                                       Disabled="@(_connectBusy || string.IsNullOrWhiteSpace(_connectCode))"
                                       OnClick="SubmitLoginCredential">Save</FluentButton>
