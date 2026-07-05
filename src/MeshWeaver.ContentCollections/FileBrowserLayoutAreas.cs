@@ -28,6 +28,7 @@ public static class FileBrowserLayoutAreas
 
         var fileBrowser = new FileBrowserControl(collection)
             .WithPath(path)
+            .WithNodePath(host.Hub.Address.ToString())
             .WithUrlBasePath(
                 $"/{host.Hub.Address}/{ContentCollectionsExtensions.FileBrowserAreaName}/{ContentCollectionsExtensions.EncodeCollectionName(collection)}");
 

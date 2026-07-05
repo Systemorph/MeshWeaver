@@ -117,12 +117,16 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
 
     /// <summary>
     /// Flattens menu items by expanding group items into their children, sorted by Order.
+    /// Skips <c>_separator</c> items — they are visual section dividers (the node menu is now
+    /// grouped into sections), not actionable menu items subject to access control.
     /// </summary>
     private static IReadOnlyList<NodeMenuItemDefinition> FlattenMenuItems(IReadOnlyList<NodeMenuItemDefinition> items)
     {
         var flat = new List<NodeMenuItemDefinition>();
         foreach (var item in items)
         {
+            if (item.Area == "_separator")
+                continue;
             if (item.Children is { Count: > 0 })
                 flat.AddRange(item.Children);
             else
