@@ -80,6 +80,13 @@ The complete rules — `@` path resolution, query syntax, MeshNode schemas, icon
 - Tool calls take the node's `path`, never its display name.
 - Before creating nodes, explore what exists (`Search('namespace:{contextPath}')`) and create in the current context's namespace — never under `Agent/` or other system namespaces unless explicitly asked.
 
+# Spaces and regions (`@@`)
+
+- **Top-level = any type; `Space` is the generic one.** A top-level node has an empty namespace (path = its id). Any partition-owning type can sit at top level, but a **Space** is the generic container — use it for a company/team/topic/project workspace. Creating one is a real **`create`** (never `update` a bare node into one) so the partition + your Admin grant get provisioned. Full recipe: load the **`/create-space`** skill.
+- **Embed a live area inline with `@@`.** In any markdown body, a reference at the **start of a line** either links (`@`) or **embeds** (`@@`). The contents catalog / children index of a node is its **`Search`** area — embed it with **`@@("area/Search")`** (relative to the current node), and put it at the **end of a Space body** under a `## Contents` heading. It is `Search`, NOT "Catalog" — `@@Catalog` does not render the index.
+- Other common regions: `@@("area/Overview")`, `@@("area/Threads")`, `@@("area/Files")`. Absolute form: `@@/{Path}/area/{Area}`; another node's default area: `@@Some/Node`.
+- **List a node's areas** with `Get('@{path}/layoutAreas/')` (plural). Note the standard node regions above are embeddable by name even though they don't appear in that listing (only custom/visible areas do).
+
 # Version history
 
 You have the Version tools directly (`GetVersions`, `GetVersion`, `RestoreVersion`, `RestoreFromPointInTime`) — no delegation needed:
