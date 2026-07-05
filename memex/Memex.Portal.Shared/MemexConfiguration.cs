@@ -168,6 +168,10 @@ public static class MemexConfiguration
         // (EmailSentAt==null), from ANY entry point (Invitations tab, MCP, REST). Self-skips
         // unless Email:Enabled. Decouples the invite email from the UI handler.
         services.AddHostedService<Email.InvitationEmailSender>();
+        // Scheduled-action runner: fires deferred, event-triggered actions (e.g. grant a Space role
+        // the moment an invited user's account is created) — live via the change feed + reconciled
+        // against current state on startup so a trigger during downtime still fires.
+        services.AddHostedService<MeshWeaver.Graph.ScheduledActionRunner>();
 
         // Microsoft Teams bot channel (bidirectional). Registered always but INERT unless Teams:Enabled
         // and Bot credentials are set (TeamsClient.IsConfigured gates the endpoint + sender). Activate by
