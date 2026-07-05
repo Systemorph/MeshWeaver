@@ -4,6 +4,7 @@ using System.Runtime.CompilerServices;
 using System.Text;
 using ClaudeAgentSdk;
 using MeshWeaver.AI.Connect;
+using MeshWeaver.Mesh.Threading;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 
@@ -16,6 +17,10 @@ namespace MeshWeaver.AI.ClaudeCode;
 public class ClaudeCodeChatClient : IChatClient
 {
     private readonly ClaudeCodeConfiguration configuration;
+    // The bounded I/O pool — the client's sync/blocking file edges (mkdir, credentials read) run OFF the
+    // subscribing thread through this, never as bare sync calls (ControlledIoPooling.md). Falls back to
+    // IoPool.Unbounded when the harness didn't supply one (e.g. a unit test constructing the client directly).
+    private readonly IIoPool ioPool;
     private readonly string? modelName;
     private readonly string? configDir;
     private readonly string? oauthToken;
@@ -53,9 +58,11 @@ public class ClaudeCodeChatClient : IChatClient
         string? userName = null,
         string? userEmail = null,
         string? authMethod = null,
-        string? baseUrl = null)
+        string? baseUrl = null,
+        IIoPool? ioPool = null)
     {
         this.configuration = configuration ?? throw new ArgumentNullException(nameof(configuration));
+        this.ioPool = ioPool ?? IoPool.Unbounded;
         this.modelName = modelName;
         this.logger = logger;
         // Per-user isolation for co-hosted multi-user (Phase 5b): each spawn
@@ -135,7 +142,11 @@ public class ClaudeCodeChatClient : IChatClient
         // reload / pod restart, fall back to the token persisted in .credentials.json on the shared
         // config-dir volume — so we still set CLAUDE_CODE_OAUTH_TOKEN and authenticate instead of
         // surfacing a spurious "Not logged in". (Sync file read; this is the off-hub SDK leaf.)
-        var effectiveToken = !string.IsNullOrEmpty(oauthToken) ? oauthToken : ReadCredentialsToken(configDir);
+        // Blocking .credentials.json read routed through the IO pool (off the subscribing thread, bounded).
+        var effectiveToken = !string.IsNullOrEmpty(oauthToken)
+            ? oauthToken
+            : await ioPool.InvokeBlocking(ct => { ct.ThrowIfCancellationRequested(); return ReadCredentialsToken(configDir); })
+                .FirstAsync().ToTask(cancellationToken);
         if (!string.IsNullOrEmpty(configDir) && string.IsNullOrEmpty(effectiveToken))
         {
             throw new AuthRequiredException(
@@ -169,7 +180,12 @@ public class ClaudeCodeChatClient : IChatClient
         if (!string.IsNullOrEmpty(configDir))
         {
             env["CLAUDE_CONFIG_DIR"] = configDir;
-            try { Directory.CreateDirectory(configDir); }
+            // Blocking mkdir routed through the IO pool (off the subscribing thread, bounded); best-effort.
+            try
+            {
+                await ioPool.InvokeBlocking(ct => { ct.ThrowIfCancellationRequested(); Directory.CreateDirectory(configDir!); return 0; })
+                    .FirstAsync().ToTask(cancellationToken);
+            }
             catch (Exception ex) { logger?.LogWarning(ex, "Could not create CLAUDE_CONFIG_DIR {Dir}", configDir); }
         }
         // Set EXACTLY the one env var the chosen auth method names — never two at once, so the CLI's
