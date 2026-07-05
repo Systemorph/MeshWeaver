@@ -145,7 +145,8 @@ public class ClaudeCodeChatClient : IChatClient
         // Blocking .credentials.json read routed through the IO pool (off the subscribing thread, bounded).
         var effectiveToken = !string.IsNullOrEmpty(oauthToken)
             ? oauthToken
-            : await ioPool.InvokeBlocking(_ => ReadCredentialsToken(configDir)).FirstAsync().ToTask(cancellationToken);
+            : await ioPool.InvokeBlocking(ct => { ct.ThrowIfCancellationRequested(); return ReadCredentialsToken(configDir); })
+                .FirstAsync().ToTask(cancellationToken);
         if (!string.IsNullOrEmpty(configDir) && string.IsNullOrEmpty(effectiveToken))
         {
             throw new AuthRequiredException(
@@ -182,7 +183,7 @@ public class ClaudeCodeChatClient : IChatClient
             // Blocking mkdir routed through the IO pool (off the subscribing thread, bounded); best-effort.
             try
             {
-                await ioPool.InvokeBlocking(_ => { Directory.CreateDirectory(configDir!); return 0; })
+                await ioPool.InvokeBlocking(ct => { ct.ThrowIfCancellationRequested(); Directory.CreateDirectory(configDir!); return 0; })
                     .FirstAsync().ToTask(cancellationToken);
             }
             catch (Exception ex) { logger?.LogWarning(ex, "Could not create CLAUDE_CONFIG_DIR {Dir}", configDir); }

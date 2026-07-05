@@ -1,5 +1,5 @@
 using System;
-using System.Collections.Generic;
+using System.Text.Json;
 using System.Threading.Tasks;
 using Microsoft.Playwright;
 using Xunit;
@@ -70,26 +70,31 @@ public class LoginDialogAboveHeaderTest(PortalFixture fixture)
 
         // Assert BY RENDERING: at a point inside the sticky header's band AND the dialog's horizontal span,
         // the topmost painted element is the dialog (not the header). Also assert it is position:fixed.
-        var verdict = await page.EvaluateAsync<Dictionary<string, object>>(@"() => {
+        // EvaluateAsync deserializes to JsonElement — read with GetBoolean()/GetString() so the assertions
+        // actually execute (a Dictionary<string,object> would leave them as JsonElement and never compare).
+        // The JS ALWAYS returns the full shape so property access is safe even when the dialog is missing.
+        var verdict = await page.EvaluateAsync<JsonElement>(@"() => {
             const w = document.querySelector('.thread-chat-widget');
             const hdr = document.querySelector('.layout > header, header');
-            if (!w || !hdr) return { found: false };
+            if (!w || !hdr) return { found: false, position: '', overlapsHeader: false, popupAboveHeader: false };
             const cs = getComputedStyle(w), wr = w.getBoundingClientRect(), hr = hdr.getBoundingClientRect();
-            let overHeader = null;
-            if (wr.top < hr.bottom) {
+            const overlaps = wr.top < hr.bottom;
+            let overHeader = false;
+            if (overlaps) {
                 const px = Math.round((Math.max(wr.left, hr.left) + Math.min(wr.right, hr.right)) / 2);
                 const py = Math.round(hr.top + hr.height / 2);
                 const el = document.elementFromPoint(px, py);
                 overHeader = !!(el && el.closest('.thread-chat-widget'));
             }
-            return { found: true, position: cs.position, overlapsHeader: wr.top < hr.bottom, popupAboveHeader: overHeader };
+            return { found: true, position: cs.position, overlapsHeader: overlaps, popupAboveHeader: overHeader };
         }");
 
-        verdict.Should().ContainKey("found");
-        verdict["found"].Should().Be(true, "the /login dialog (.thread-chat-widget) must open");
-        verdict["position"].Should().Be("fixed", "the popup must be position:fixed to escape the chat overflow clip + stacking trap");
+        verdict.GetProperty("found").GetBoolean().Should().BeTrue("the /login dialog (.thread-chat-widget) must open");
+        verdict.GetProperty("position").GetString().Should().Be("fixed",
+            "the popup must be position:fixed to escape the chat overflow clip + stacking trap");
         // When the popup overlaps the header band, the topmost element there MUST be the dialog, not the header.
-        if (verdict.TryGetValue("overlapsHeader", out var ov) && ov is true)
-            verdict["popupAboveHeader"].Should().Be(true, "the login dialog must render ABOVE the sticky header, not behind it");
+        if (verdict.GetProperty("overlapsHeader").GetBoolean())
+            verdict.GetProperty("popupAboveHeader").GetBoolean().Should().BeTrue(
+                "the login dialog must render ABOVE the sticky header, not behind it");
     }
 }
