@@ -72,7 +72,8 @@ public sealed class InMemoryEventLogStore : IEventLogStore
     private readonly object _gate = new();
     private long _seq;
     private ImmutableList<EventLogEntry> _entries = ImmutableList<EventLogEntry>.Empty;
-    private readonly HashSet<(string, MeshChangeKind, long)> _seen = new();
+    // (Path, Kind, Version) → assigned seq: O(1) idempotency dedup (a linear scan of _entries would be O(n) per append).
+    private readonly Dictionary<(string, MeshChangeKind, long), long> _byKey = new();
     private readonly ConcurrentDictionary<string, long> _cursors = new();
 
     /// <inheritdoc />
@@ -81,13 +82,11 @@ public sealed class InMemoryEventLogStore : IEventLogStore
         lock (_gate)
         {
             var key = (change.Path, change.Kind, change.Version);
-            var existing = _entries.FirstOrDefault(e =>
-                e.Event.Path == change.Path && e.Event.Kind == change.Kind && e.Event.Version == change.Version);
-            if (existing is not null)
-                return Observable.Return(existing.Seq);
+            if (_byKey.TryGetValue(key, out var existingSeq))
+                return Observable.Return(existingSeq);
             var seq = ++_seq;
             _entries = _entries.Add(new EventLogEntry(seq, change));
-            _seen.Add(key);
+            _byKey[key] = seq;
             return Observable.Return(seq);
         }
     });
@@ -163,29 +162,39 @@ public sealed class EventLogReplayService(
     /// <summary>The consumer id whose cursor this replay advances (the scheduled-action runner).</summary>
     public const string RunnerConsumerId = "scheduled-actions";
 
+    /// <summary>Page size for the replay drain — must match <see cref="IEventLogStore.ReadFrom"/>'s cap.</summary>
+    private const int PageSize = 500;
+
     /// <inheritdoc />
     public Task StartAsync(CancellationToken cancellationToken)
     {
-        // Replay durably-logged-but-unprocessed events into the feed, then checkpoint the cursor.
+        // Replay durably-logged-but-unprocessed events into the feed, checkpointing after each page and
+        // draining ALL pages (a single ReadFrom is capped at PageSize — a backlog larger than that would
+        // otherwise never fully replay). SetCursor faults propagate to the outer error sink, not swallowed.
         store.GetCursor(RunnerConsumerId)
-            .SelectMany(cursor => store.ReadFrom(cursor).Select(entries => (cursor, entries)))
-            .Subscribe(
-                x =>
-                {
-                    foreach (var entry in x.entries)
-                        changeFeed.Publish(entry.Event);
-                    if (x.entries.Count > 0)
-                    {
-                        var max = x.entries[^1].Seq;
-                        store.SetCursor(RunnerConsumerId, max).Subscribe(_ => { }, _ => { });
-                        logger?.LogInformation(
-                            "Replayed {Count} event-log entries (seq {From}→{To}) into the change feed",
-                            x.entries.Count, x.cursor, max);
-                    }
-                },
-                ex => logger?.LogWarning(ex, "Event-log replay failed"));
+            .SelectMany(ReplayFrom)
+            .Subscribe(_ => { }, ex => logger?.LogWarning(ex, "Event-log replay failed"));
         return Task.CompletedTask;
     }
+
+    /// <summary>Reads one page after <paramref name="cursor"/>, publishes it, advances the cursor, and — if
+    /// the page was full — recurses to drain the next page. A short page (or empty) ends the drain.</summary>
+    private IObservable<Unit> ReplayFrom(long cursor) =>
+        store.ReadFrom(cursor, PageSize).SelectMany(entries =>
+        {
+            if (entries.Count == 0)
+                return Observable.Return(Unit.Default);
+            foreach (var entry in entries)
+                changeFeed.Publish(entry.Event);
+            var max = entries[^1].Seq;
+            return store.SetCursor(RunnerConsumerId, max)
+                .Do(_ => logger?.LogInformation(
+                    "Replayed {Count} event-log entries (seq {From}→{To}) into the change feed",
+                    entries.Count, cursor, max))
+                .SelectMany(_ => entries.Count < PageSize
+                    ? Observable.Return(Unit.Default)   // short page → backlog drained
+                    : ReplayFrom(max));                 // full page → more may remain
+        });
 
     /// <inheritdoc />
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
