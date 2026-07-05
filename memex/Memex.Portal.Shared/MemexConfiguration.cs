@@ -934,6 +934,11 @@ public static class MemexConfiguration
         // {userId}/_Provider/GitHub. See Doc/Architecture/GitHubSync.
         app.MapGitHubConnect();
 
+        // Instance Sync — OAuth+PKCE "connect to a remote MeshWeaver instance" endpoints
+        // (/connect/instance[/callback]). Redirects to the remote's own login and stores the
+        // returned mw_ token as the sync party's RemoteToken. See InstanceConnectEndpoints.
+        app.MapInstanceConnect();
+
         // "Sign in with GitHub" — an authentication provider (distinct from the connect endpoints
         // above). Reuses the same GitHub:OAuth creds; issues the Entra-shaped cookie so a GitHub
         // login resolves to the same mesh user as an Entra login with that verified email.
