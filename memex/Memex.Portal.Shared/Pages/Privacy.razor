@@ -33,11 +33,19 @@
         // this page never hangs and never errors.
         _subscription = PrivacyStatementNode.GetStatement(Hub)
             .Select(markdown => MarkdownViewLogic.Render(markdown, null, null).Html)
-            .Subscribe(html => _ = InvokeAsync(() =>
-            {
-                Html = html;
-                StateHasChanged();
-            }));
+            .Subscribe(
+                html => _ = InvokeAsync(() =>
+                {
+                    Html = html;
+                    StateHasChanged();
+                }),
+                // A render/upstream throw must not leave the page stuck on "Loading…" — show a
+                // graceful fallback so the page never hangs and never errors.
+                ex => _ = InvokeAsync(() =>
+                {
+                    Html = "<p>The privacy statement is temporarily unavailable. Please try again later.</p>";
+                    StateHasChanged();
+                }));
     }
 
     public void Dispose() => _subscription?.Dispose();

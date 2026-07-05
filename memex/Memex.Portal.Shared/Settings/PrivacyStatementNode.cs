@@ -148,6 +148,9 @@ public static class PrivacyStatementNode
             _ => workspace
                 .GetQuery($"{NodeId}|{NodePath}", $"path:{NodePath} nodeType:Markdown")
                 .Take(1)
+                // A never-emitting query (backend routing/subscription failure) must not hang the
+                // create — trip to OnError so the caller (settings tab) degrades gracefully.
+                .Timeout(TimeSpan.FromSeconds(10))
                 .SelectMany(nodes =>
                 {
                     if (nodes.Any())
@@ -180,6 +183,9 @@ public static class PrivacyStatementNode
                 _ => workspace
                     .GetQuery($"{NodeId}|{NodePath}", $"path:{NodePath} nodeType:Markdown")
                     .Take(1)
+                    // A never-emitting query must not hang the anonymous page — trip to OnError so
+                    // the trailing Catch degrades to the default statement (honours "never hangs").
+                    .Timeout(TimeSpan.FromSeconds(10))
                     .SelectMany(nodes => nodes.Any()
                         ? workspace.GetMeshNodeStream(NodePath)
                             .Where(node => node is not null)
