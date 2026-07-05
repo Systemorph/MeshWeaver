@@ -22,8 +22,8 @@ namespace MeshWeaver.Portal.E2E;
 [Collection("portal-e2e")]
 public class BlazorVsNextCompareTest(PortalFixture fixture)
 {
-    private const string OutDir =
-        "/private/tmp/claude-501/-Users-roland-code-MeshWeaver/f53d6845-e683-4096-a161-c966ac4b8ffe/scratchpad/compare";
+    private static readonly string OutDir =
+        Path.Combine(Path.GetTempPath(), "meshweaver-e2e-compare");
 
     [Fact(Timeout = 600_000)]
     public async Task Compare_Blazor_Vs_Next_AcrossScreens()
