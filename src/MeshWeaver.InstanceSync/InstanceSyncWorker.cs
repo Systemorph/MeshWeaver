@@ -297,7 +297,18 @@ public sealed class InstanceSyncWorker : IDisposable
             ? Observable.Return(true)
             : remote.Delete(remotePath).Select(_ => true));
 
-    /// <summary>Upsert with the convergence guard: value-equal remote content is left untouched.</summary>
+    /// <summary>
+    /// Upsert with two guards: value-equal remote content is left untouched (convergence), and — for a
+    /// <see cref="InstanceSyncDirection.Bidirectional"/> source only — a STRICTLY-NEWER remote node is
+    /// NOT overwritten (newest-writer-wins, symmetric with the pull side <see cref="PullOne"/>). This
+    /// is what makes the two instances CONVERGE: without it, an older local push clobbered a newer
+    /// remote, and since the pull only applies a strictly-newer remote, the sides then diverged with no
+    /// self-heal. On the skip the remote's newer version is brought local by the next pull sweep — which
+    /// is why the guard is scoped to Bidirectional: a <see cref="InstanceSyncDirection.PushOnly"/> source
+    /// runs NO pull sweep, so skipping there would strand the newer remote AND never propagate the local
+    /// edit. PushOnly is authoritative-local by definition, so it always pushes. Ties favour the push
+    /// direction (matching PullOne).
+    /// </summary>
     private IObservable<Unit> PushNode(IRemoteMeshClient remote, InstanceSyncConfig cfg, MeshNode local)
     {
         var remotePath = InstanceSyncService.RemapPath(local.Path, SpacePath, RemoteSpaceOf(cfg));
@@ -306,6 +317,9 @@ public sealed class InstanceSyncWorker : IDisposable
         {
             if (existing is not null && service.ContentEquals(payload, existing))
                 return Observable.Return(Unit.Default);
+            if (existing is not null && cfg.Direction == InstanceSyncDirection.Bidirectional
+                && existing.LastModified > local.LastModified)
+                return Observable.Return(Unit.Default);   // bidi: remote is newer → let the pull bring it local
             return existing is null ? remote.Create(payload) : remote.Update(payload);
         });
     }
