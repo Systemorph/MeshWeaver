@@ -266,6 +266,120 @@ public class ConnectStrategyTest : AITestBase
         ClaudeConnectStrategy.ReassembleToken(new List<string> { "no token here", "just prose." }).Should().BeNull();
     }
 
+    // ── apiKey / token PASTE path (StoreHarnessCredential) ────────────────────────────────────────
+    // The login dialog's "Use an API key" / gateway methods do NOT go through StartConnect/SubmitCode
+    // (the CLI scrape) NOR through SubmitToken. They call ThreadChatView.StoreHarnessCredential, which
+    // builds a ModelProvider node at {owner}/_Memex/{harnessId} via MeshNode.FromPath (so MainNode
+    // DEFAULTS to the node's OWN path, NOT the owner) and writes it with IMeshService.CreateOrUpdateNode
+    // — WITHOUT seeding/provisioning the owner's partition root. This reproduces the user's
+    // "API key / token Save fails" report deterministically.
+
+    /// <summary>
+    /// REPRO: the apiKey-paste store for a user whose partition root has not been seeded. Mirrors
+    /// StoreHarnessCredential exactly and captures the real outcome (success or the actual error).
+    /// </summary>
+    [Fact]
+    public async Task ApiKeyPaste_StoreHarnessCredential_WithoutPartitionRoot()
+    {
+        var owner = $"user-{Guid.NewGuid():N}";
+        var meshService = Mesh.ServiceProvider.GetRequiredService<MeshWeaver.Mesh.Services.IMeshService>();
+
+        var node = BuildCredentialNode(owner, "sk-ant-oat01-USER-PASTED-TOKEN");
+        Output.WriteLine($"[diag] providerPath={node.Namespace}/{node.Id} MainNode={node.MainNode}");
+
+        string? error = null;
+        var stored = await meshService.CreateOrUpdateNode(node)
+            .Take(1).Timeout(20.Seconds())
+            .Catch((Exception ex) => { error = ex.Message; Output.WriteLine($"[diag] CreateOrUpdateNode FAILED: {ex.Message}"); return Observable.Return<MeshNode>(null!); })
+            .ToTask();
+        Output.WriteLine($"[diag] WITHOUT-seed: stored null={stored is null} error={error ?? "(none)"}");
+
+        // Ground-truth assertion: the paste-store must succeed for a signed-in user. If this fails,
+        // it reproduces "Save fails" and the message tells us the real cause.
+        error.Should().BeNull("the apiKey paste store must not error for a signed-in user");
+        stored.Should().NotBeNull();
+    }
+
+    /// <summary>Control: the SAME store with the owner partition root seeded first (as the account flow does).</summary>
+    [Fact]
+    public async Task ApiKeyPaste_StoreHarnessCredential_WithPartitionRoot_Resolves()
+    {
+        var owner = $"user-{Guid.NewGuid():N}";
+        await SeedTopLevel(new MeshNode(owner) { Name = owner, NodeType = "Markdown" });
+
+        var meshService = Mesh.ServiceProvider.GetRequiredService<MeshWeaver.Mesh.Services.IMeshService>();
+        var node = BuildCredentialNode(owner, "sk-ant-oat01-SEEDED-USER-TOKEN");
+
+        string? error = null;
+        var stored = await meshService.CreateOrUpdateNode(node)
+            .Take(1).Timeout(20.Seconds())
+            .Catch((Exception ex) => { error = ex.Message; return Observable.Return<MeshNode>(null!); })
+            .ToTask();
+        Output.WriteLine($"[diag] WITH-seed: stored null={stored is null} error={error ?? "(none)"}");
+        error.Should().BeNull("with the partition root present the store must succeed");
+        stored.Should().NotBeNull();
+
+        // The credential satellite must anchor to the OWNER (the StoreHarnessCredential fix), not itself.
+        stored!.MainNode.Should().Be(owner, "the credential node must anchor to the owner partition root");
+
+        // The stored credential must be discoverable via the SAME query the resolver uses.
+        var readBack = await Mesh.GetWorkspace().GetMeshNodeStream($"{ModelProviderNodeType.UserNamespacePath(owner)}/ClaudeCode")
+            .Should().Within(15.Seconds()).Match(n => (n.Content as ModelProviderConfiguration)?.ApiKey is { Length: > 0 });
+        ((ModelProviderConfiguration)readBack.Content!).AuthMethod.Should().Be("apiKey");
+    }
+
+    /// <summary>
+    /// FAITHFUL repro: a NON-admin user (their own circuit AccessContext) pastes an API key and it is
+    /// stored under their OWN partition — the exact prod shape (ThreadChatView derives owner from the
+    /// circuit ObjectId). Reproduces "Save fails" if a real user can't write their own credential.
+    /// </summary>
+    [Fact]
+    public async Task ApiKeyPaste_StoreHarnessCredential_AsNonAdminOwner()
+    {
+        var owner = $"user-{Guid.NewGuid():N}";
+        // Seed the user's partition root as System (onboarding does this in prod).
+        await SeedTopLevel(new MeshNode(owner) { Name = owner, NodeType = "Markdown" });
+
+        var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        var node = BuildCredentialNode(owner, "sk-ant-oat01-NONADMIN-TOKEN");
+        var meshService = Mesh.ServiceProvider.GetRequiredService<MeshWeaver.Mesh.Services.IMeshService>();
+
+        string? error = null;
+        MeshNode? stored;
+        // Write AS the owner (non-admin), exactly like the circuit does for a logged-in user.
+        accessService.SetCircuitContext(new AccessContext { ObjectId = owner, Name = owner });
+        try
+        {
+            stored = await meshService.CreateOrUpdateNode(node)
+                .Take(1).Timeout(20.Seconds())
+                .Catch((Exception ex) => { error = ex.Message; Output.WriteLine($"[diag] non-admin store FAILED: {ex.Message}"); return Observable.Return<MeshNode>(null!); })
+                .ToTask();
+        }
+        finally
+        {
+            accessService.SetCircuitContext(null);
+        }
+        Output.WriteLine($"[diag] NON-ADMIN: stored null={stored is null} error={error ?? "(none)"}");
+        error.Should().BeNull("a signed-in user must be able to store their own harness credential");
+        stored.Should().NotBeNull();
+    }
+
+    /// <summary>The node StoreHarnessCredential builds for the apiKey paste (post-fix: MainNode = owner).</summary>
+    private static MeshNode BuildCredentialNode(string owner, string token) =>
+        MeshNode.FromPath($"{ModelProviderNodeType.UserNamespacePath(owner)}/ClaudeCode") with
+        {
+            NodeType = ModelProviderNodeType.NodeType,
+            Name = "Claude Code",
+            MainNode = owner,
+            Content = new ModelProviderConfiguration
+            {
+                Provider = "ClaudeCode",
+                ApiKey = token,
+                AuthMethod = "apiKey",
+                CreatedAt = DateTimeOffset.UtcNow,
+            }
+        };
+
     [Fact]
     public async Task RealClaudeSetupToken_Gated_BehindEnvFlag()
     {

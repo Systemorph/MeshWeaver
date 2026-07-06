@@ -1531,6 +1531,14 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             NodeType = MeshWeaver.AI.ModelProviderNodeType.NodeType,
             Name = harness.Definition.DisplayName,
             Icon = "/static/NodeTypeIcons/key.svg",
+            // 🚨 Anchor the credential satellite to the OWNER partition root, exactly like
+            // ModelProviderService.CreateProvider does (MainNode = ownerPath). MeshNode.FromPath
+            // otherwise defaults MainNode to the node's OWN path ({owner}/_Memex/{id}) — a satellite
+            // pointing at itself under _Memex rather than at a real owner. On Postgres the partition
+            // routing / write guard keys off the owner anchor, so a self-anchored _Memex node can be
+            // rejected there ("Couldn't store the credential") while the monolith's in-memory store
+            // accepts it — the divergence behind the prod-only apiKey "Save fails".
+            MainNode = owner,
             Content = new MeshWeaver.AI.ModelProviderConfiguration
             {
                 Provider = harness.Id,
