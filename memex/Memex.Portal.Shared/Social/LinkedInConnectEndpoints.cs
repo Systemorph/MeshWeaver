@@ -240,6 +240,9 @@ public static class LinkedInConnectEndpoints
 
             upsertCredential
                 .SelectMany(_ => upsertProfile)
+                // Never let a stuck reactive write freeze the browser on the callback — a hang
+                // surfaces as an error redirect, not an indefinite spinner (see /async).
+                .Timeout(TimeSpan.FromSeconds(20))
                 .Subscribe(
                     _ =>
                     {
