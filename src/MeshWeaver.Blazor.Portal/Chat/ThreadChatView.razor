@@ -684,7 +684,7 @@ else
                     @if (!string.IsNullOrEmpty(boundModelPath))
                     {
                         <button type="button" class="thread-chat-status-item is-clickable"
-                                title="Model — click to change" @onclick='() => OnStatusChipClick("model", false)'>
+                                title="Model: @boundModelPath — click to change" @onclick='() => OnStatusChipClick("model", false)'>
                             @ChipSvg("model") @LastSegment(boundModelPath)
                         </button>
                     }
