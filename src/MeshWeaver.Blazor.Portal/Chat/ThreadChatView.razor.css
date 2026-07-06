@@ -410,7 +410,10 @@
 .thread-chat-status-row {
     display: flex;
     align-items: center;
-    flex-wrap: wrap;
+    /* Single row — never wrap. Overflowing chips are clipped (each chip ellipsis-truncates its own
+       text via .thread-chat-status-item), and the full value is on the chip's title (hover). */
+    flex-wrap: nowrap;
+    overflow: hidden;
     gap: 10px;
     padding: 0 2px 6px 2px;
     font-size: 11px;
@@ -427,6 +430,10 @@
     overflow: hidden;
     text-overflow: ellipsis;
     max-width: 180px;
+    /* Allow the chip to shrink below its content width so its text ellipsis-truncates when the
+       single-row status bar runs out of horizontal room (min-width:auto would block the ellipsis). */
+    min-width: 0;
+    flex: 0 1 auto;
 }
 
 /* The chips are <button> now (clickable → picker/combobox). Strip native button chrome; keep the chip look. */
