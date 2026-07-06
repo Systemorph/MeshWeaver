@@ -13,20 +13,40 @@ truth.
 
 ## Install
 
-```bash
-# Tap this repo and install the HEAD formula:
-brew tap systemorph/memex https://github.com/Systemorph/MeshWeaver.git
-brew install --HEAD systemorph/memex/memex-local
+The default (Option B) image path builds the portal locally, so **you need a
+checkout anyway** — and the CLI is designed to run straight from it. That's the
+supported route today:
 
-# …or install straight from a local checkout of this repo:
-brew install --HEAD ./deploy/homebrew/Formula/memex-local.rb
+```bash
+# Run straight from the checkout (resolves the chart + share assets from the repo):
+./deploy/homebrew/bin/memex-local up
+
+# …or put it on PATH via a symlink (a `git pull` then updates CLI + chart together):
+ln -s "$PWD/deploy/homebrew/bin/memex-local" ~/.local/bin/memex-local   # (~/.local/bin on PATH)
+memex-local up
 ```
 
-The formula declares the **exact toolchain `LocalColimaMac.md` §1 installs**:
-`colima`, `kubernetes-cli` (kubectl), `helm`, `mkcert`, `ollama`, `socket_vmnet`,
-plus the **`dotnet-sdk` cask** (needed only for the local-build image path,
-Option B). It vendors a snapshot of `deploy/helm` into the bottle so a standalone
-install works; a live `MEMEX_REPO`/`MEMEX_CHART_DIR` always overrides it.
+**Brew route (needs a local tap for now).** Current Homebrew discovers formulae
+only at a tap's root or top-level `Formula/`; this formula lives at the nested
+`deploy/homebrew/Formula/`, so `brew install ./…/memex-local.rb` and a two-arg tap
+of the monorepo are both rejected, and `systemorph/memex` isn't a published tap
+yet. Until `Systemorph/homebrew-memex` exists, build a local tap from the checkout:
+
+```bash
+brew tap-new systemorph/memex
+cp deploy/homebrew/Formula/memex-local.rb "$(brew --repo systemorph/memex)/Formula/"
+brew install --HEAD systemorph/memex/memex-local
+```
+
+The formula declares the **exact brew toolchain `LocalColimaMac.md` §1 installs**:
+`colima`, `kubernetes-cli` (kubectl), `helm`, `mkcert`, `ollama`, `socket_vmnet`.
+The **.NET SDK** (10.0) is *not* a formula dependency (`depends_on cask:` is rejected
+by current Homebrew, and only the local-build path needs it) — install it separately
+for Option B (`brew install --cask dotnet-sdk` or the standalone installer); the
+`--from-acr` path (Option A) needs no SDK. The formula vendors a snapshot of
+`deploy/helm` into the install so a brew install works standalone; that vendored
+snapshot is refreshed by `brew reinstall`. In **run-from-checkout** mode the live
+`deploy/helm` (or `MEMEX_REPO`/`MEMEX_CHART_DIR`) is used directly.
 
 ## Use
 
