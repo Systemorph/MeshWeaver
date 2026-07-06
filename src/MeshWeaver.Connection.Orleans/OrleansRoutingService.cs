@@ -308,6 +308,18 @@ public class OrleansRoutingService : IRoutingService, IDisposable
         // and a hard failure past the deadline is loud (Critical) instead of a silent wedge.
         var cts = new CancellationTokenSource();
         var subscriptionTask = SubscribeWithRetryAsync(address, callback, cts.Token);
+        // Observe the task's terminal state so a fault is NEVER an unobserved-task exception (the retry
+        // RETURNS NULL — not a throw — when it gives up, so a fault here is genuinely unexpected). Accessing
+        // t.Exception marks it observed; this is trace-only, teardown still awaits the handle below.
+        subscriptionTask.ContinueWith(t =>
+        {
+            if (t.IsFaulted)
+                OrleansRouteTrace.Write($"OrleansRoutingService.SubscribeAsync FAULTED addr={address} ex={t.Exception?.InnerException?.Message}");
+            else if (t.IsCanceled)
+                OrleansRouteTrace.Write($"OrleansRoutingService.SubscribeAsync CANCELED addr={address}");
+            else
+                OrleansRouteTrace.Write($"OrleansRoutingService.SubscribeAsync DONE addr={address} subscribed={t.Result is not null}");
+        }, TaskScheduler.Default);
 
         // Synchronous to the caller: remove the local route immediately, cancel any in-flight retry, then
         // bridge the genuinely-async Orleans UnsubscribeAsync onto the mesh IO pool (never inline on the
@@ -322,7 +334,8 @@ public class OrleansRoutingService : IRoutingService, IDisposable
                     // The retry task may have been cancelled or given up (never subscribed) — then there is
                     // nothing to unsubscribe; a faulted/cancelled await here is expected, not an error.
                     try { subscription = await subscriptionTask.ConfigureAwait(false); }
-                    catch { /* never subscribed */ }
+                    catch (OperationCanceledException) { /* cancelled before it subscribed — nothing to tear down */ }
+                    catch (Exception ex) { logger.LogDebug(ex, "Stream subscription task faulted before teardown for {Address}", address); }
                     if (subscription is not null)
                         await subscription.UnsubscribeAsync().ConfigureAwait(false);
                 })
@@ -336,7 +349,7 @@ public class OrleansRoutingService : IRoutingService, IDisposable
     // Attaches the Orleans memory-stream subscription for <paramref name="address"/>, retrying while the
     // stream provider is not yet ready (bounded by a deadline). The delivery handler is identical to the
     // former direct-subscribe path. Runs detached (never on a hub action-block / grain scheduler).
-    private async Task<StreamSubscriptionHandle<IMessageDelivery>> SubscribeWithRetryAsync(
+    private async Task<StreamSubscriptionHandle<IMessageDelivery>?> SubscribeWithRetryAsync(
         Address address, AsyncDelivery callback, CancellationToken ct)
     {
         var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(120);
@@ -385,7 +398,7 @@ public class OrleansRoutingService : IRoutingService, IDisposable
                     logger.LogCritical(ex,
                         "Orleans '{Provider}' stream provider never became ready for {Address} after {Attempts} attempts — cross-process routing for this hub is DISABLED (in-process routing remains active)",
                         StreamProviders.Memory, address, attempt);
-                    throw;
+                    return null; // give up WITHOUT faulting the task (no unobserved exception); local route stays live
                 }
                 // Surface the real cause on the first failure and periodically thereafter (not every tick).
                 if (attempt == 1 || attempt % 20 == 0)
