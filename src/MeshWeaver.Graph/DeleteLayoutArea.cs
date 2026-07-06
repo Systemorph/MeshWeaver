@@ -209,22 +209,32 @@ public static class DeleteLayoutArea
                             if (response.Message is DeleteNodeResponse { Success: true })
                             {
                                 ctx.Host.UpdateData(progressId, DeleteStatus.Done);
-                                // Redirect to the nearest ancestor that is an ACTUAL mesh node.
-                                // The node we were looking at no longer exists, and its immediate
-                                // parent PATH is frequently a virtual grouping (e.g. ".../Script")
-                                // with no node of its own — redirecting straight there would just
-                                // land the user on another "No node found" page. Resolve the closest
-                                // existing ancestor instead; a top-level node (none) goes home. The
-                                // bare node URL renders that node's default area (Mesh URL shape).
-                                ResolveNearestExistingAncestor(meshQuery, nodePath)
-                                    .Take(1)
-                                    .Timeout(TimeSpan.FromSeconds(10))
-                                    .Catch<string?, Exception>(_ => Observable.Return(GetParentPath(nodePath)))
-                                    .Subscribe(ancestor =>
-                                    {
-                                        var target = ancestor is null ? "/" : $"/{ancestor}";
-                                        ctx.Host.UpdateArea(ctx.Area, new RedirectControl(target));
-                                    });
+                                // Redirect to the parent page. The node we were looking at no longer
+                                // exists, so we must leave its page FAST — otherwise the just-deleted
+                                // node's area re-renders against a gone node and errors (the "reload
+                                // then error"). Two paths:
+                                //  • The immediate parent is a SATELLITE grouping (_Thread, _Activity,
+                                //    …) — it has no node of its own, so resolve the target by PURE PATH
+                                //    (walk up past satellite segments) IMMEDIATELY, no query. This is
+                                //    the common case (a thread → the user's home) and, crucially, a
+                                //    distributed portal's cross-partition existence probe can't stall
+                                //    the redirect behind a timeout (which is what left the dead page up
+                                //    long enough to reload + error).
+                                //  • A NON-satellite parent (a virtual grouping like ".../Script") can
+                                //    only be told apart from a real node by asking — keep the existence
+                                //    walk there, but bounded, and fall back to the pure-path ancestor
+                                //    (never the maybe-virtual immediate parent) so the fallback can't
+                                //    land on another "No node found" page.
+                                var immediateParent = GetParentPath(nodePath);
+                                var target = IsSatelliteSegment(immediateParent)
+                                    ? Observable.Return(NearestNonSatelliteAncestor(nodePath))
+                                    : ResolveNearestExistingAncestor(meshQuery, nodePath)
+                                        .Take(1)
+                                        .Timeout(TimeSpan.FromSeconds(5))
+                                        .Catch<string?, Exception>(_ => Observable.Return(NearestNonSatelliteAncestor(nodePath)));
+                                target.Subscribe(ancestor =>
+                                    ctx.Host.UpdateArea(ctx.Area,
+                                        new RedirectControl(ancestor is null ? "/" : $"/{ancestor}")));
                             }
                             else
                             {
@@ -289,6 +299,31 @@ public static class DeleteLayoutArea
     {
         var lastSlash = path.LastIndexOf('/');
         return lastSlash > 0 ? path[..lastSlash] : null;
+    }
+
+    /// <summary>Last segment of the path (the bit after the final '/'), or the whole path.</summary>
+    private static string LastSegment(string path)
+        => path[(path.LastIndexOf('/') + 1)..];
+
+    /// <summary>
+    /// True when the path's last segment is a SATELLITE grouping (<c>_Thread</c>, <c>_Activity</c>,
+    /// <c>_Comment</c>, …) — a '_'-prefixed segment that anchors satellites but is never a node of its
+    /// own. Redirecting there after a delete always lands on "No node found".
+    /// </summary>
+    private static bool IsSatelliteSegment(string? path)
+        => path is not null && LastSegment(path).StartsWith('_');
+
+    /// <summary>
+    /// Nearest ancestor whose last segment is NOT a satellite grouping — resolved by PURE PATH, no
+    /// query (so it can never stall on a distributed portal). A thread <c>{user}/_Thread/{id}</c>
+    /// resolves to <c>{user}</c>; a top-level node resolves to <c>null</c> (redirect home).
+    /// </summary>
+    internal static string? NearestNonSatelliteAncestor(string nodePath)
+    {
+        for (var p = GetParentPath(nodePath); p is not null; p = GetParentPath(p))
+            if (!LastSegment(p).StartsWith('_'))
+                return p;
+        return null;
     }
 
     /// <summary>

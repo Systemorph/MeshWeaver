@@ -122,4 +122,24 @@ public class DeleteRedirectToExistingParentTest(ITestOutputHelper output) : Mono
         var target = await DeleteLayoutArea.ResolveNearestExistingAncestor(MeshSvc, "SomeTopLevelNode").Take(1).ToTask();
         target.Should().BeNull("a top-level node has no ancestor; the flow redirects home");
     }
+
+    /// <summary>
+    /// The satellite-parent fast path: deleting a node whose immediate parent is a satellite grouping
+    /// (a thread under <c>_Thread</c>, a comment under <c>_Comment</c>) resolves the redirect target by
+    /// PURE PATH — no query — so on a distributed portal a cross-partition existence probe can't stall
+    /// the redirect and leave the just-deleted page up long enough to reload + error. This is the case
+    /// the user hit deleting a thread.
+    /// </summary>
+    [Fact]
+    public void NearestNonSatelliteAncestor_skips_satellite_grouping()
+    {
+        // Thread {user}/_Thread/{id} → skip the _Thread satellite → the user's home.
+        Assert.Equal("rbuergi", DeleteLayoutArea.NearestNonSatelliteAncestor("rbuergi/_Thread/hello-6b4c"));
+        // Comment {thread}/_Comment/{id} → skip _Comment → the owning thread (a real node).
+        Assert.Equal("rbuergi/_Thread/hello", DeleteLayoutArea.NearestNonSatelliteAncestor("rbuergi/_Thread/hello/_Comment/c1"));
+        // A real immediate parent is kept as-is.
+        Assert.Equal("Acme/Sales", DeleteLayoutArea.NearestNonSatelliteAncestor("Acme/Sales/Q3"));
+        // Top-level node → null (redirect home).
+        Assert.Null(DeleteLayoutArea.NearestNonSatelliteAncestor("SomeTopLevelNode"));
+    }
 }
