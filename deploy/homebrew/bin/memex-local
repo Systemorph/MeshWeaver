@@ -404,8 +404,15 @@ helm_deploy() {
   # /data/dataprotection-keys (persisted DP keys, 678690598) → without this it crashloops with
   # "Access to the path '/data/dataprotection-keys' is denied". Make the node dir writable so a fresh
   # node (or a first deploy) doesn't hit the crash. Idempotent; single-node k3s so all pods share it.
-  colima ssh -- 'sudo mkdir -p /var/lib/memex-portal-data && sudo chmod 0777 /var/lib/memex-portal-data' 2>/dev/null \
-    || warn "could not make /var/lib/memex-portal-data writable on the node — portal may crashloop on DataProtection keys"
+  #
+  # NB: `colima ssh -- '<compound>'` hands the single-quoted string to the remote as ONE argv token,
+  # so bash tries to exec a command literally named "sudo mkdir … && sudo chmod …" → exit 127. Wrap in
+  # `sh -c` so the remote shell parses the &&. Keep stderr (no 2>/dev/null) so a real failure is visible
+  # in the warning instead of a silent miss that later surfaces as a crash-looping DataProtection pod.
+  local perms_err
+  if ! perms_err="$(colima ssh -- sh -c 'sudo mkdir -p /var/lib/memex-portal-data && sudo chmod 0777 /var/lib/memex-portal-data' 2>&1)"; then
+    warn "could not make /var/lib/memex-portal-data writable on the node — portal may crashloop on DataProtection keys${perms_err:+: $perms_err}"
+  fi
 }
 
 # ---------------------------------------------------------------------------
@@ -1150,6 +1157,12 @@ cmd_version() { printf 'memex-local 0.1.0 (chart: memex %s)\n' "$(resolve_chart 
 # the host-built local loop (the in-pod ACR poll can't reach a local-built image — see ReleaseStrategy).
 readonly AUTOROLL_LABEL="com.memex.local.autoroll"
 readonly AUTOROLL_PLIST="$HOME/Library/LaunchAgents/${AUTOROLL_LABEL}.plist"
+# launchd execs THIS stable copy (not the checkout path): a run-from-checkout under a
+# TCC-protected folder (e.g. ~/Documents) is "Operation not permitted" for launchd, and a
+# brew Cellar path moves on `reinstall`. $LOCAL_HOME is outside TCC and stable — same reason
+# the §7 port-forward agent runs a copy in $LOCAL_HOME. The _tick needs only docker+kubectl
+# (no chart/share assets), so a plain copy of the script suffices.
+readonly AUTOROLL_TICK_SCRIPT="$LOCAL_HOME/autoroll-tick"
 readonly AUTOROLL_STATE="$LOCAL_HOME/autoroll.digest"
 readonly AUTOROLL_LOG="$LOCAL_HOME/autoroll.log"
 readonly AUTOROLL_IMAGE="memex-portal-ai-local:latest"   # the moving tag the build writes (then tags $PORTAL_IMAGE)
@@ -1205,7 +1218,11 @@ cmd_autoroll() {
       # Seed BOTH digests with the CURRENT images so the watcher rolls on the NEXT rebuild, not on install.
       docker image inspect "$AUTOROLL_IMAGE" --format '{{.Id}}' 2>/dev/null > "$AUTOROLL_STATE" || true
       docker image inspect "$AUTOROLL_MIG_IMAGE" --format '{{.Id}}' 2>/dev/null > "$AUTOROLL_MIG_STATE" || true
-      local self; self="${SELF_DIR}/$(basename "$0")"
+      # Install a stable copy of THIS script into $LOCAL_HOME and point launchd at it (see
+      # AUTOROLL_TICK_SCRIPT above) — so autoroll works regardless of where the CLI lives (a checkout
+      # under a TCC-protected folder, or a brew Cellar path that moves on reinstall).
+      install -m 0755 "${SELF_DIR}/$(basename "$0")" "$AUTOROLL_TICK_SCRIPT"
+      local self="$AUTOROLL_TICK_SCRIPT"
       cat > "$AUTOROLL_PLIST" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -1230,11 +1247,23 @@ PLIST
       ;;
     down)
       launchctl unload "$AUTOROLL_PLIST" >/dev/null 2>&1 || true
-      rm -f "$AUTOROLL_PLIST"
+      rm -f "$AUTOROLL_PLIST" "$AUTOROLL_TICK_SCRIPT"
       ok "Auto-roll OFF (portal stays on its current image)."
       ;;
     status)
-      if launchctl list 2>/dev/null | grep -q "$AUTOROLL_LABEL"; then ok "Auto-roll: RUNNING"; else info "Auto-roll: stopped"; fi
+      if launchctl list 2>/dev/null | grep -q "$AUTOROLL_LABEL"; then
+        # Surface the agent's LAST EXIT STATUS — "RUNNING" alone hides a tick that fails every pass
+        # (e.g. launchd can't exec the program). launchctl prints `"LastExitStatus" = N;`.
+        local last_exit
+        last_exit="$(launchctl list "$AUTOROLL_LABEL" 2>/dev/null | sed -n 's/.*"LastExitStatus" = \([0-9-]*\).*/\1/p')"
+        if [ -n "$last_exit" ] && [ "$last_exit" != "0" ]; then
+          warn "Auto-roll: LOADED but last tick exited $last_exit (failing every pass — check $AUTOROLL_LOG)"
+        else
+          ok "Auto-roll: RUNNING"
+        fi
+      else
+        info "Auto-roll: stopped"
+      fi
       info "portal:    $AUTOROLL_IMAGE   last: $(cat "$AUTOROLL_STATE" 2>/dev/null || echo none)"
       info "migration: $AUTOROLL_MIG_IMAGE   last: $(cat "$AUTOROLL_MIG_STATE" 2>/dev/null || echo none)"
       info "deployment image: $(kubectl -n "$NAMESPACE" get "deploy/$PORTAL_DEPLOYMENT" -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || echo '?')"

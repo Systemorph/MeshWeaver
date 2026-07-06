@@ -37,15 +37,16 @@ The template contains the complete Memex portal solution (Blazor Server monolith
 
 ### Local Kubernetes stack (macOS)
 
-A prod-like stack on Colima k3s, installable via Homebrew:
+A prod-like stack on Colima k3s. The default (local-build) path needs a checkout,
+so the CLI runs straight from it:
 
 ```bash
-brew tap systemorph/memex https://github.com/Systemorph/MeshWeaver.git
-brew install --HEAD systemorph/memex/memex-local
-memex-local up
+./deploy/homebrew/bin/memex-local up
+# …or symlink it onto your PATH: ln -s "$PWD/deploy/homebrew/bin/memex-local" ~/.local/bin/memex-local
 ```
 
-Opens at `https://memex.localhost:8443`. See [`deploy/homebrew`](deploy/homebrew) for details.
+Opens at `https://memex.localhost:8443`. A Homebrew install (via a local tap) is
+also supported — see [`deploy/homebrew`](deploy/homebrew) for details.
 
 ### Deploy to production
 

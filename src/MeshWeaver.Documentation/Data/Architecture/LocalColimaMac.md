@@ -40,7 +40,7 @@ brew install socket_vmnet
 
 You also need the **.NET SDK** (10.0) to build the portal image — install from [dotnet.microsoft.com](https://dotnet.microsoft.com/download) or `brew install --cask dotnet-sdk`.
 
-> **Prefer one command?** `deploy/homebrew/` ships a Homebrew formula + a `memex-local` CLI that automates **every step on this page**, idempotently — `brew install` the tap, then `memex-local up` (and `down` / `status` / `logs` / `update`). See `deploy/homebrew/README.md`. The rest of this page is the manual reference the CLI follows 1:1.
+> **Prefer one command?** `deploy/homebrew/` ships a `memex-local` CLI that automates **every step on this page**, idempotently. Since Option B needs a checkout anyway, run it straight from there — `./deploy/homebrew/bin/memex-local up` (or symlink it onto your PATH) — then `up` / `down` / `status` / `logs` / `update`. A brew install works too (via a local tap, until a tap repo is published). See `deploy/homebrew/README.md`. The rest of this page is the manual reference the CLI follows 1:1.
 
 The work splits across three areas, which the rest of this page walks through in order:
 
