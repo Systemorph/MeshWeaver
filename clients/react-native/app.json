@@ -6,8 +6,19 @@
     "orientation": "portrait",
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
-    "ios": { "supportsTablet": true },
-    "android": {},
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "cloud.meshweaver.mobile",
+      "infoPlist": {
+        "NSAppTransportSecurity": {
+          "NSAllowsLocalNetworking": true
+        }
+      }
+    },
+    "android": { "package": "cloud.meshweaver.mobile" },
+    "extra": {
+      "portalUrl": "http://localhost:5250"
+    },
     "plugins": [
       "expo-asset",
       "expo-font",

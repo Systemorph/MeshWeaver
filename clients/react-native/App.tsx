@@ -36,8 +36,15 @@ interface ChatOptions {
   namespacePath: string;
   speech?: { url?: string; token?: string; path?: string; language?: string } | null;
 }
-const CHAT: ChatOptions | null = null;
-// const CHAT: ChatOptions = { namespacePath: "rbuergi", speech: { language: "de" } };
+// Speech enabled for the local-simulator demo: a standalone build has no served origin, so point
+// speech at the local Whisper container explicitly (deploy/whisper → http://localhost:8080/inference;
+// localhost reaches the host Mac from the simulator). Drop `speech.url`/`speech.path` in a mesh-served
+// deployment and the endpoint follows the current instance (see the useMemo below).
+const CHAT: ChatOptions | null = {
+  namespacePath: "rbuergi",
+  speech: { url: "http://localhost:8080", path: "/inference", language: "de" },
+};
+// const CHAT: ChatOptions | null = null;
 
 export default function App() {
   ensureWebStyles();
@@ -84,7 +91,7 @@ function AppInner() {
         // The SAME gRPC-web connection carries thread submissions (Mesh.startThread / Mesh.submitMessage).
         setSubmitter(Mesh.from(l.connection));
       })
-      .catch(() => { /* connection failed — the shell stays on the last-good source */ });
+      .catch((e) => { console.warn("[live] connect failed:", e?.message ?? String(e)); /* shell stays on the last-good source */ });
     return () => {
       cancelled = true;
       live?.connection.close();

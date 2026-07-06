@@ -14,15 +14,34 @@ export interface MeshInstance {
   local: boolean;
 }
 
+import Constants from "expo-constants";
+
 const INSTANCES_KEY = "mw.instances";
 const CURRENT_KEY = "mw.currentInstance";
+
+// The mesh a NATIVE build dials by default (it has no serving origin like the web build). Configured in
+// app.json → expo.extra.portalUrl; defaults to the LOCAL monolith mesh — Memex.LocalMesh, the in-process
+// SQLite-backed mesh sidecar (the MAUI-parity local-first host), reachable from the iOS simulator at
+// http://localhost:5250 anonymously (no token). Point it at a remote portal via Connect-to-mesh + a token.
+const DEFAULT_PORTAL_URL = String((Constants.expoConfig?.extra as any)?.portalUrl ?? "http://localhost:5250");
+
+/** The default portal URL a native build dials (app.json → expo.extra.portalUrl); prefill for the connect form. */
+export function defaultPortalUrl(): string {
+  return DEFAULT_PORTAL_URL;
+}
 
 const sameOrigin = (): string =>
   typeof window !== "undefined" && window.location ? window.location.origin : "";
 
-/** The always-present "Local" instance — the mesh that served this build, dialled anonymously. */
+/**
+ * The always-present default instance. Web (served by the mesh) → same-origin, anonymous. Native has no
+ * serving origin, so it dials the configured default portal (the user supplies a token in-app).
+ */
 export function localInstance(): MeshInstance {
-  return { name: "Local", url: sameOrigin(), token: "", local: true };
+  const origin = sameOrigin();
+  return origin
+    ? { name: "Local", url: origin, token: "", local: true }
+    : { name: "Local mesh", url: DEFAULT_PORTAL_URL, token: "", local: true };
 }
 
 function read<T>(key: string): T | null {
