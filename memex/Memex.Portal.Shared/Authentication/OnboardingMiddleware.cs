@@ -314,9 +314,20 @@ public class OnboardingMiddleware(RequestDelegate next, ILogger<OnboardingMiddle
                 _ => meshService.Query<MeshNode>(MeshQueryRequest.FromQuery(query)))
             .Take(1)
             .Select(change => (MeshNode?)change.Items.FirstOrDefault())
-            .Do(node => logger?.LogInformation(
-                "FindUserByEmail({Email}): cached miss re-read authoritatively → {Result}",
-                email, node?.Id ?? "(still none — genuinely not onboarded)"));
+            // Information ONLY on actual recovery (the stale-cache condition healed) — for a
+            // genuinely-not-onboarded user this path runs on every request, so the still-missing
+            // case is Debug to keep production (Loki) log volume down.
+            .Do(node =>
+            {
+                if (node is not null)
+                    logger?.LogInformation(
+                        "FindUserByEmail({Email}): recovered stale-empty cache via authoritative re-read → {User}",
+                        email, node.Id);
+                else
+                    logger?.LogDebug(
+                        "FindUserByEmail({Email}): authoritative re-read still finds no user (not onboarded)",
+                        email);
+            });
     }
 
     /// <summary>Back-compat overload used by callers that don't yet pass a logger.</summary>
