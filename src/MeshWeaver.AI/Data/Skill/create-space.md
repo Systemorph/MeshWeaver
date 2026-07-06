@@ -26,7 +26,11 @@ A Space MUST be created with a real **`create`** (CreateNodeRequest / MCP `creat
 Two distinct fields:
 
 - **`description`** — a one-line tagline shown under the title in the header. Short.
-- **`body`** — the page itself: markdown authored in the owner's voice (purpose, what lives here, 2–4 bullets on how to use it, then the **contents catalog** — see §4). Do NOT leave `body` empty: an empty Space falls back to a generic welcome placeholder that looks broken.
+- **`body`** — the page itself: markdown authored in the owner's voice (purpose, what lives here, 2–4 bullets on how to use it, then the **contents catalog** — see §4). Do NOT leave `body` empty: an empty Space falls back to the default welcome page (which itself ends in `@@("area/Search")`), but that's a placeholder — write a real one.
+
+> 🚨 **Do NOT repeat the title in the body.** The space's **`name`** is already rendered as the page **`<h1>`** header — with its icon — from `node.Name`. Starting the body with `# {space name}` (or any restatement of the title) duplicates it. **Begin the body with the intro paragraph**, not a title heading.
+
+> 🚨 **`icon` must be a RENDERABLE value** — an image URL (e.g. `/static/NodeTypeIcons/space.svg`), an inline `<svg>…</svg>`, or an emoji. **NEVER a Fluent icon *name*** (a bare word like `"Building"` is not an image — it renders as text or a broken image). Inline SVG and emoji render on the page and in the catalog; a Fluent name renders nowhere.
 
 The body is plain markdown — headings, links, tables, and **`@@` region embeds** all work.
 
@@ -83,7 +87,7 @@ Retrieval mechanism + the visible-vs-embeddable rule are pinned by `LayoutAreaRe
 
 # 6. Give it a logo and an icon
 
-- **`icon`** — an inline SVG (or named icon like `Building`) shown in lists and menus.
+- **`icon`** — a RENDERABLE value shown in lists, menus, and the page header: an inline `<svg>`, an emoji, or an image URL (e.g. `/static/NodeTypeIcons/space.svg`). **NEVER a Fluent icon name** like `Building` (a name is not an image — it won't render). See §2.
 - **`logo`** — an image URL or data URI for the large header image (e.g. a served `/static/...svg`). Without a logo the header falls back to the node icon or the name's initials.
 
 # 7. (Optional) Link a GitHub repository
