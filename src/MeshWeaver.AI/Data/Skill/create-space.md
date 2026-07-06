@@ -58,6 +58,15 @@ A page's markdown can embed **regions** — live layout areas rendered inline. P
 
 > 🚨 The contents catalog region is named **Search**, not "Catalog". `@@Catalog` does **not** render the children index — embed the catalog with **`@@("area/Search")`**.
 
+## Links vs embeds: `[text](@/Path)` links, `@@` embeds
+
+Body text also **links** to other nodes. To link, use a normal markdown link with the `@/` prefix — the renderer strips the `@` and resolves it to the node's URL:
+
+- **Link** (navigate) → single `@`/`@/`: a markdown link `[Reinsurance](@/Systemorph/Reinsurance)`.
+- **Embed** (render inline) → double `@@`: `@@("area/Search")` renders the live area in place.
+- A **bare path is just text**, not a link — always wrap it: `[text](@/Path)`.
+- 🚨 `@/` and `@@` are **local mesh-authoring syntax — markdown body only.** NEVER put `@/` in a raw HTML `href` (an `href` needs a plain `/Path`, e.g. `<a href="/Systemorph/Reinsurance">`) or in an external HTTP URL. Full reference: [Unified Path](/Doc/DataMesh/UnifiedPath).
+
 # 4. Put the contents catalog at the END of the body
 
 The standard idiom (what the default Space template ships) is to end the `body` with a Contents section:
