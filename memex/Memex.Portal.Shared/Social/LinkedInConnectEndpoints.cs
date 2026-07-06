@@ -33,10 +33,10 @@ namespace Memex.Portal.Shared.Social;
 ///   GET /connect/linkedin?profile={path}        — start the flow (sets CSRF cookie, redirects to LinkedIn)
 ///   GET /connect/linkedin/callback?code=…       — finish the flow, persist credential + LinkedInProfile node
 ///
-/// Everything else (pulling past posts, comments, likes, computing analytics,
-/// appending telemetry samples) lives as Code on the <c>Systemorph/LinkedInProfile</c>
-/// NodeType — see the <c>LinkedInPullActions</c> Code piece. That keeps the
-/// deployed binary stable while the actual ingest logic can be edited without a deploy.
+/// Everything else (analytics dashboard, CSV telemetry import) lives as Code on the
+/// <c>LinkedIn/LinkedInProfile</c> NodeType — see the <c>LinkedInProfileLayoutAreas</c>
+/// Code piece. That keeps the deployed binary stable while the dashboard/ingest logic
+/// can be edited without a deploy.
 /// </summary>
 public static class LinkedInConnectEndpoints
 {
@@ -200,7 +200,7 @@ public static class LinkedInConnectEndpoints
             var profileNode = new MeshNode("LinkedIn", profilePath)
             {
                 Name = displayName ?? "LinkedIn",
-                NodeType = "Systemorph/LinkedInProfile",
+                NodeType = "LinkedIn/LinkedInProfile",
                 State = MeshNodeState.Active,
                 Content = new Dictionary<string, object?>
                 {
@@ -240,6 +240,9 @@ public static class LinkedInConnectEndpoints
 
             upsertCredential
                 .SelectMany(_ => upsertProfile)
+                // Never let a stuck reactive write freeze the browser on the callback — a hang
+                // surfaces as an error redirect, not an indefinite spinner (see /async).
+                .Timeout(TimeSpan.FromSeconds(20))
                 .Subscribe(
                     _ =>
                     {

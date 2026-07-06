@@ -83,7 +83,24 @@ public static class PinLayoutArea
                 var node = nodes.FirstOrDefault(n => n.Path == hubPath);
                 return BuildPinnedCard(host, node, hubPath, viewerId);
             },
-            hubPath);
+            // A COMPACT, card-shaped skeleton for the brief window before the node hub emits — NOT the
+            // default "# {path}" H1 loading markdown (StreamView's string overload), which renders a
+            // giant broken-looking heading inside a card grid when a pin's hub is slow to answer. This
+            // matches the resolved card's box (min-height, padding) so the Pinned row stays uniform.
+            BuildPinnedSkeleton(hubPath));
+    }
+
+    /// <summary>A compact, card-height loading skeleton for a pin whose node hub hasn't emitted yet —
+    /// the short name in bold plus a muted "Loading…", sized like the resolved card so the grid row
+    /// doesn't jump. Replaces the oversized <c># {path}</c> markdown placeholder.</summary>
+    private static UiControl BuildPinnedSkeleton(string hubPath)
+    {
+        var shortName = hubPath.Contains('/') ? hubPath[(hubPath.LastIndexOf('/') + 1)..] : hubPath;
+        return Controls.Stack
+            .WithStyle("width: 100%; height: 100%; min-height: 92px; padding: 10px 12px; " +
+                       "box-sizing: border-box; display: flex; flex-direction: column; gap: 4px; " +
+                       "justify-content: center; opacity: 0.6;")
+            .WithView(Controls.Markdown($"**{shortName}**\n\n_Loading…_"));
     }
 
     private static UiControl BuildPinnedCard(LayoutAreaHost host, MeshNode? node, string hubPath, string viewerId)

@@ -1,0 +1,14 @@
+.privacy-container {
+    display: flex;
+    justify-content: center;
+    padding: 2rem 1rem;
+    min-height: 100%;
+    overflow-y: auto;
+}
+
+.privacy-card {
+    max-width: 860px;
+    width: 100%;
+    background: var(--neutral-layer-1);
+    padding: 1rem 0;
+}

@@ -60,6 +60,8 @@ config:
     # ---- Instance identity (tab title + favicon badge — LocalColimaMac.md §12)
     Portal__InstanceName: "Local"
     Portal__InstanceColor: "#f59e0b"
+    # Large Safari bookmark / Start-Page tile (apple-touch-icon) — the yellow "L" tile.
+    Portal__AppleTouchIcon: "_content/Memex.Portal.Shared/brand/local-180.png"
 
     # ---- Local LLM via host-native Ollama (LocalColimaMac.md §10) ------------
     OpenAICompatible__Endpoint: "http://ollama:11434/v1"

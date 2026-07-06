@@ -95,6 +95,39 @@ public record ParsedQuery(
     }
 
     /// <summary>
+    /// Namespace filter values INCLUDING wildcard (<c>Like</c>) patterns — e.g. <c>{owner}/*_Thread</c>.
+    /// <see cref="ExtractNamespaces"/> deliberately collects only concrete <c>Equal</c>/<c>In</c>
+    /// namespaces (the aggregator ROUTES on those, and can't route a glob); this variant ALSO returns the
+    /// <c>Like</c> glob patterns, for the live change-relevance filter that decides whether a CRUD event
+    /// under a namespace should refresh a synced query (see <c>PathMatcher.ShouldNotifyForQuery</c>). The
+    /// glob is preserved verbatim (the parser keeps the <c>*</c>), so a matcher can apply it directly.
+    /// </summary>
+    public IReadOnlyList<string> ExtractNamespacePatterns()
+    {
+        if (Filter == null) return Array.Empty<string>();
+        var collected = new List<string>();
+        ExtractNamespacePatternsFromNode(Filter, collected);
+        return collected;
+    }
+
+    private static void ExtractNamespacePatternsFromNode(QueryNode node, List<string> collected)
+    {
+        switch (node)
+        {
+            case QueryComparison c when c.Condition.Selector.Equals("namespace", StringComparison.OrdinalIgnoreCase)
+                && c.Condition.Operator is QueryOperator.Equal or QueryOperator.In or QueryOperator.Like:
+                collected.AddRange(c.Condition.Values);
+                break;
+            case QueryAnd and:
+                foreach (var child in and.Children) ExtractNamespacePatternsFromNode(child, collected);
+                break;
+            case QueryOr or:
+                foreach (var child in or.Children) ExtractNamespacePatternsFromNode(child, collected);
+                break;
+        }
+    }
+
+    /// <summary>
     /// Projects an item down to only the requested properties.
     /// Returns a dictionary with the selected property names and their values.
     /// </summary>
