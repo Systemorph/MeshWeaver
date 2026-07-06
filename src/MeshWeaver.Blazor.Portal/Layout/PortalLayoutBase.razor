@@ -266,9 +266,12 @@
                             <CascadingValue Name="IsInSidePanel" Value="@true" IsFixed="true">
                                 @if (sidePanelViewModel != null)
                                 {
-                                    @* Resolved content — render via LayoutAreaView (same as main page) *@
+                                    @* Resolved content — render via LayoutAreaView (same as main page).
+                                       Fill=true (NOT Top — that would hijack the page title/menu) so a
+                                       full-height editor fills the panel instead of collapsing to ~4 lines. *@
                                     <LayoutAreaView @key="@SidePanelState.ContentPath"
                                                     ViewModel="@sidePanelViewModel"
+                                                    Fill="true"
                                                     Area="@($"sidepanel-{SidePanelState.ContentPath}")" />
                                 }
                                 else

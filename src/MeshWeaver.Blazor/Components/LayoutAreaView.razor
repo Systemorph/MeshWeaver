@@ -1,7 +1,7 @@
 @using MeshWeaver.Layout
 @inherits BlazorView<LayoutAreaControl, LayoutAreaView>
 
-<div class="layout-area-container @(IsContentLoaded ? "content-loaded" : "content-loading") @(Top ? "top-area" : "")" style="@Style">
+<div class="layout-area-container @(IsContentLoaded ? "content-loaded" : "content-loading") @((Top || Fill) ? "fill-area" : "")" style="@Style">
     @* Surface NodeType compile progress when the stream hasn't emitted yet so the
        user sees "Compiling <path> (Ns)…" instead of an indefinite spinner. *@
     @if (!IsContentLoaded)
@@ -74,6 +74,16 @@
 @code
 {
     [Parameter] public bool Top { get; set; }
+
+    /// <summary>
+    /// Make this area FILL its parent's height (the same stretch a top-level page gets),
+    /// WITHOUT the other <see cref="Top"/> semantics (page &lt;title&gt;, meta head, header menu).
+    /// The side panel hosts a resolved node area but must NOT hijack the page title/menu, so it
+    /// passes <c>Fill=true</c> instead of <c>Top=true</c>. Without it a full-height editor
+    /// (Markdown/Code at height:100%) collapses to its Monaco min-height (~4 lines) because
+    /// height:100% resolves against an auto-height parent. See LayoutAreaView.razor.css.
+    /// </summary>
+    [Parameter] public bool Fill { get; set; }
 
     /// <summary>
     /// Whether this area drives the global header menu (Node / Mesh / AI dropdowns). ONLY the

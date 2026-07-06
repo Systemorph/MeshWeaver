@@ -579,6 +579,89 @@ public class ThreadPermissionTest(ITestOutputHelper output) : MonolithMeshTestBa
     }
 
     [Fact]
+    public async Task StartThread_WithoutThreadPermission_FallsBackToUserPartition()
+    {
+        // Create context node "SecureProject" as admin
+        TestUsers.DevLogin(Mesh, new AccessContext { ObjectId = AdminUserId, Name = "Admin" });
+        await Mesh.GetEffectivePermissions("SecureProject", AdminUserId)
+            .Should().Within(10.Seconds()).Match(p => p.HasFlag(Permission.Create));
+        await NodeFactory.CreateNode(
+            new MeshNode("SecureProject") { Name = "Secure Project", NodeType = "Space" }).Should().Emit();
+
+        // The viewer has a provisioned home partition (as every onboarded user does).
+        await NodeFactory.CreateNode(
+            new MeshNode(ViewerUserId) { Name = "Viewer Home", NodeType = "Space" }).Should().Emit();
+
+        // Switch to viewer (Read+Execute only, NO Thread permission on SecureProject).
+        TestUsers.DevLogin(Mesh, new AccessContext { ObjectId = ViewerUserId, Name = "Viewer" });
+
+        var client = GetClient();
+        var createdTcs = new TaskCompletionSource<MeshNode>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var errorTcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        // Act — the viewer starts a thread while "viewing" a node they can't write to.
+        // StartThread should transparently re-anchor the thread under the viewer's OWN
+        // partition ({ViewerUserId}/_Thread/...) instead of surfacing an Access-denied error.
+        client.StartThread(
+            namespacePath: "SecureProject",
+            userText: "Viewer starting a thread on a read-only node",
+            createdBy: ViewerUserId,
+            authorName: "Viewer",
+            onCreated: node => createdTcs.TrySetResult(node),
+            onError: err => errorTcs.TrySetResult(err));
+
+        var completed = await Task.WhenAny(createdTcs.Task, errorTcs.Task)
+            .WaitAsync(15.Seconds(), TestContext.Current.CancellationToken);
+        if (completed == errorTcs.Task)
+            Assert.Fail($"StartThread should have fallen back to the user's partition, but errored: {await errorTcs.Task}");
+
+        var node = await createdTcs.Task;
+        Output.WriteLine($"Fallback thread path: {node.Path}, MainNode: {node.MainNode}");
+        // Thread lands under the viewer's OWN partition, NOT SecureProject.
+        node.Path.Should().StartWith($"{ViewerUserId}/{ThreadNodeType.ThreadPartition}/");
+        // ...and keeps MainNode pointing at the node the user was viewing.
+        node.MainNode.Should().Be("SecureProject");
+    }
+
+    [Fact]
+    public async Task StartThread_WithoutThreadPermission_NullCreatedBy_StillFallsBackToUserPartition()
+    {
+        // Create context node "SecureProject" as admin
+        TestUsers.DevLogin(Mesh, new AccessContext { ObjectId = AdminUserId, Name = "Admin" });
+        await Mesh.GetEffectivePermissions("SecureProject", AdminUserId)
+            .Should().Within(10.Seconds()).Match(p => p.HasFlag(Permission.Create));
+        await NodeFactory.CreateNode(
+            new MeshNode("SecureProject") { Name = "Secure Project", NodeType = "Space" }).Should().Emit();
+        await NodeFactory.CreateNode(
+            new MeshNode(ViewerUserId) { Name = "Viewer Home", NodeType = "Space" }).Should().Emit();
+
+        TestUsers.DevLogin(Mesh, new AccessContext { ObjectId = ViewerUserId, Name = "Viewer" });
+
+        var client = GetClient();
+        var createdTcs = new TaskCompletionSource<MeshNode>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var errorTcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        // Act — the GUI often does NOT pass createdBy (the ambient AccessContext is null at click
+        // time). StartThread must still fall back to the user's home by resolving the identity from
+        // the captured submitter — not silently no-op and surface the raw "Access denied".
+        client.StartThread(
+            namespacePath: "SecureProject",
+            userText: "Viewer starting a thread with no explicit createdBy",
+            createdBy: null,
+            onCreated: node => createdTcs.TrySetResult(node),
+            onError: err => errorTcs.TrySetResult(err));
+
+        var completed = await Task.WhenAny(createdTcs.Task, errorTcs.Task)
+            .WaitAsync(15.Seconds(), TestContext.Current.CancellationToken);
+        if (completed == errorTcs.Task)
+            Assert.Fail($"StartThread should have fallen back to the user's partition, but errored: {await errorTcs.Task}");
+
+        var node = await createdTcs.Task;
+        node.Path.Should().StartWith($"{ViewerUserId}/{ThreadNodeType.ThreadPartition}/");
+        node.MainNode.Should().Be("SecureProject");
+    }
+
+    [Fact]
     public async Task CreateThread_WithoutUpdatePermission_IsDenied()
     {
         // Create context node as admin first
