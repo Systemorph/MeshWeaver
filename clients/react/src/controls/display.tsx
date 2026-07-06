@@ -9,7 +9,7 @@ import { useHtmlLinkInterceptor } from "../area/navigation.js";
 import { RenderArea } from "../render/ControlRenderer.js";
 import { useAreaSourceFactory, type EmbeddedAreaHandle } from "../render/embeddedArea.js";
 import { useMeshOps } from "../live/meshOps.js";
-import { controlStyle } from "../render/style.js";
+import { controlClass, controlStyle, mergeClass } from "../render/style.js";
 import { str, useClick, useText } from "./common.js";
 import { resolveIconByName } from "./icon.js";
 import {
@@ -57,6 +57,7 @@ function Label({ control }: { control: UiControl }): ReactNode {
       size={t.size}
       weight={(useResolve(control.weight) as any) ?? t.weight}
       onClick={onClick}
+      className={controlClass(control)}
       style={{ cursor: onClick ? "pointer" : undefined, ...controlStyle(control) }}
     >
       {value}
@@ -92,7 +93,9 @@ export function sanitizeInlineSvg(svg: string): string {
 }
 
 function IconView({ control }: { control: UiControl }): ReactNode {
-  const name = useText(control.data);
+  // The raw value is EITHER an inline-SVG / URL / name string OR a FluentIcon {provider,id,…} object.
+  const raw = useResolve(control.data);
+  const name = str(raw);
   const onClick = useClick(control);
   const cursor = onClick ? "pointer" : undefined;
   // Inline SVG markup (node Icons, generated avatars) must render as an SVG element — NOT as
@@ -106,8 +109,10 @@ function IconView({ control }: { control: UiControl }): ReactNode {
         dangerouslySetInnerHTML={{ __html: sanitizeInlineSvg(name) }}
       />
     );
-  const Cmp = resolveIconByName(name);
+  const Cmp = resolveIconByName(raw);
   if (Cmp) return <Cmp onClick={onClick} style={{ cursor }} />;
+  // A FluentIcon object we couldn't map → render nothing (never the "[object Object]" fallback).
+  if (raw != null && typeof raw === "object") return null;
   // URL or data-URI → image; anything else → text.
   if (/^https?:|^data:|\.(svg|png|jpg|jpeg|gif|webp)$/i.test(name))
     return <img src={name} alt="" width={20} height={20} onClick={onClick} />;
@@ -117,7 +122,7 @@ function IconView({ control }: { control: UiControl }): ReactNode {
 function HtmlView({ control }: { control: UiControl }): ReactNode {
   // Injected anchors are not React elements — route their internal hrefs through the host.
   const onLinkClick = useHtmlLinkInterceptor();
-  return <div style={controlStyle(control)} onClick={onLinkClick} dangerouslySetInnerHTML={{ __html: useText(control.data) }} />;
+  return <div className={controlClass(control)} style={controlStyle(control)} onClick={onLinkClick} dangerouslySetInnerHTML={{ __html: useText(control.data) }} />;
 }
 
 // ---- Markdown (with @@("…") layout-area embeds) ---------------------------------------------------
@@ -563,7 +568,7 @@ function MarkdownView({ control }: { control: UiControl }): ReactNode {
   // Server-rendered anchors ("/Doc/…") are not React elements — route them through the host.
   const onLinkClick = useHtmlLinkInterceptor();
   return (
-    <div className="mw-markdown" style={controlStyle(control)} onClick={onLinkClick}>
+    <div className={mergeClass("mw-markdown", controlClass(control))} style={controlStyle(control)} onClick={onLinkClick}>
       {controlHtml ? (
         <RenderedMarkdownView rendered={{ html: controlHtml, codeSubmissions: [] }} nodePath={nodePath} />
       ) : serverRendered ? (
@@ -608,7 +613,7 @@ export function CollaborativeMarkdownView({ control }: { control: UiControl }): 
   );
   const onLinkClick = useHtmlLinkInterceptor();
   return (
-    <div className="mw-markdown mw-collaborative-markdown" style={controlStyle(control)} onClick={onLinkClick}>
+    <div className={mergeClass("mw-markdown mw-collaborative-markdown", controlClass(control))} style={controlStyle(control)} onClick={onLinkClick}>
       {serverRendered ? (
         <RenderedMarkdownView rendered={serverRendered} nodePath={nodePath} />
       ) : (

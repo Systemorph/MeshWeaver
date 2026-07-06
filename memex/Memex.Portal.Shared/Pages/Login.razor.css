@@ -140,3 +140,18 @@
     height: 1px;
     background: var(--neutral-stroke-rest);
 }
+
+.login-footer {
+    margin-top: 16px;
+    text-align: center;
+    font-size: 0.8rem;
+}
+
+.login-footer a {
+    color: var(--neutral-foreground-hint);
+    text-decoration: none;
+}
+
+.login-footer a:hover {
+    text-decoration: underline;
+}

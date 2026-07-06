@@ -30,11 +30,11 @@ import { useResolve } from "../area/context.js";
 import {
   useMeshOps,
   type AutocompleteSuggestion,
-  type MeshNodeState,
   type MeshOps,
   type ThreadSubmitOptions,
 } from "../live/meshOps.js";
-import { controlStyle } from "../render/style.js";
+import { useNodeState, watchInto } from "../live/nodeState.js";
+import { controlClass, controlStyle } from "../render/style.js";
 import { str } from "./common.js";
 
 // ---- wire shapes (camelCase — SerializationExtensions serialises with camelCase + string enums) ---
@@ -73,40 +73,7 @@ interface ThreadJson {
   createdBy?: string;
 }
 
-// ---- node-stream plumbing (the grpc-web watch primitive, via the MeshOps context) ---------------
-
-/** Drive an async-iterable node watch into a callback; returns the stop function. */
-function watchInto(ops: MeshOps, path: string, onState: (n: MeshNodeState) => void): () => void {
-  let live = true;
-  const it = ops.watch(path)[Symbol.asyncIterator]();
-  void (async () => {
-    try {
-      while (live) {
-        const r = await it.next();
-        if (r.done) break;
-        if (live && r.value) onState(r.value);
-      }
-    } catch {
-      // A missing satellite surfaces as a stream error (the cache's DeliveryFailure). The bubble
-      // keeps rendering from the pending payload — never crash the view (Blazor marks it missing).
-    }
-  })();
-  return () => {
-    live = false;
-    void Promise.resolve(it.return?.()).catch(() => undefined);
-  };
-}
-
-/** The live state of one node (null until the first emission / when unset). */
-function useNodeState(ops: MeshOps | null, path: string | null): MeshNodeState | null {
-  const [node, setNode] = useState<MeshNodeState | null>(null);
-  useEffect(() => {
-    setNode(null);
-    if (!ops || !path) return;
-    return watchInto(ops, path, setNode);
-  }, [ops, path]);
-  return node;
-}
+// ---- node-stream plumbing: watchInto / useNodeState are the shared primitives in ../live/nodeState.
 
 /** One watch per message cell at {threadPath}/{id} — Blazor's SyncMessageSubscriptions. */
 function useMessageCells(
@@ -324,6 +291,45 @@ function SelectorDropdown({
   );
 }
 
+/** The last path segment — the display identity Blazor's status chips show (LastSegment). */
+function lastSegment(path: string): string {
+  const p = str(path);
+  const slash = p.lastIndexOf("/");
+  return slash >= 0 ? p.slice(slash + 1) : p;
+}
+
+/**
+ * A read-only selection chip — the twin of Blazor's `.thread-chat-status-item`. Surfaces the
+ * composer's bound harness/agent/model selection so the DEFAULT is visible even when there are no
+ * mesh options to pick from (the `nodeType:Agent`/`nodeType:Model` search returned nothing, or the
+ * host exposes no `search`). Blazor's status row is likewise display-only (selection happens via the
+ * /harness /agent /model slash-commands, which the React composer has no twin for yet).
+ */
+function SelectionChip({ label, value }: { label: string; value: string }): ReactNode {
+  return (
+    <span
+      data-mw-chip={label.toLowerCase()}
+      title={`${label}: ${value}`}
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        padding: "2px 8px",
+        borderRadius: 12,
+        fontSize: 12,
+        lineHeight: "18px",
+        maxWidth: 160,
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        whiteSpace: "nowrap",
+        background: "var(--colorNeutralBackground3)",
+        color: "var(--colorNeutralForeground2)",
+      }}
+    >
+      {value}
+    </span>
+  );
+}
+
 export function ThreadChatView({ control }: { control: UiControl }): ReactNode {
   const ops = useMeshOps();
   const vm = useResolve(control.threadViewModel) as Json;
@@ -484,7 +490,7 @@ export function ThreadChatView({ control }: { control: UiControl }): ReactNode {
 
   if (!ops) {
     return (
-      <div style={{ padding: 16, color: "var(--colorNeutralForeground3)", ...controlStyle(control) }}>
+      <div className={controlClass(control)} style={{ padding: 16, color: "var(--colorNeutralForeground3)", ...controlStyle(control) }}>
         <Text size={200}>Thread chat needs a live mesh connection — wrap the app in a MeshOpsProvider.</Text>
       </div>
     );
@@ -492,6 +498,7 @@ export function ThreadChatView({ control }: { control: UiControl }): ReactNode {
 
   return (
     <div
+      className={controlClass(control)}
       style={{
         display: "flex",
         flexDirection: "column",
@@ -589,9 +596,28 @@ export function ThreadChatView({ control }: { control: UiControl }): ReactNode {
           onKeyDown={onComposerKeyDown}
           resize="vertical"
         />
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <SelectorDropdown label="Agent" value={effectiveAgent} options={agentOptions} onSelect={setAgent} />
-          <SelectorDropdown label="Model" value={effectiveModel} options={modelOptions} onSelect={setModel} />
+        {/* Selection row — the twin of Blazor's `.thread-chat-status-row`: harness · agent · model +
+            the @-reference hint. Agent/model are interactive dropdowns when the mesh returns options,
+            else the bound DEFAULT selection surfaces as a read-only chip (never blank). Harness is
+            display-only — the React composer has no harness picker (Blazor selects via slash-commands);
+            it defaults to MeshWeaver, the harness a send uses when the composer names none. */}
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <SelectionChip label="Harness" value={lastSegment(str(composer.harness)) || "MeshWeaver"} />
+          {agentOptions.length > 0 ? (
+            <SelectorDropdown label="Agent" value={effectiveAgent} options={agentOptions} onSelect={setAgent} />
+          ) : effectiveAgent ? (
+            <SelectionChip label="Agent" value={lastSegment(effectiveAgent)} />
+          ) : null}
+          {modelOptions.length > 0 ? (
+            <SelectorDropdown label="Model" value={effectiveModel} options={modelOptions} onSelect={setModel} />
+          ) : effectiveModel ? (
+            <SelectionChip label="Model" value={lastSegment(effectiveModel)} />
+          ) : null}
+          {ops.autocomplete ? (
+            <Text size={100} style={{ color: "var(--colorNeutralForeground3)" }}>
+              Use @ to reference nodes
+            </Text>
+          ) : null}
           <div style={{ flex: 1 }} />
           <Tooltip content="Send" relationship="label">
             <Button appearance="primary" icon={<Send20Filled />} disabled={!canSend} onClick={send}>

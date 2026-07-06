@@ -38,6 +38,7 @@ using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Markdown.Export.Configuration;
 using MeshWeaver.Hosting.Activity;
 using MeshWeaver.Hosting.AzureBlob;
+using MeshWeaver.Hosting;
 using MeshWeaver.Hosting.Blazor;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Hosting.PostgreSql;
@@ -103,6 +104,9 @@ public static class MemexConfiguration
         services.AddScoped<Memex.Portal.Shared.Authentication.UserOnboardingService>();
         // Invitation service — reads/writes Invitation nodes for invitation-only onboarding.
         services.AddScoped<Memex.Portal.Shared.Authentication.InvitationService>();
+        // Space invite — grant an existing user now, or schedule the grant (+ create an invitation)
+        // for when an unknown email's account is created. Backed by the ScheduledActionRunner.
+        services.AddSingleton<MeshWeaver.Graph.SpaceInviteService>();
 
         // Configure Radzen
         services.AddRadzenServices();
@@ -168,6 +172,14 @@ public static class MemexConfiguration
         // (EmailSentAt==null), from ANY entry point (Invitations tab, MCP, REST). Self-skips
         // unless Email:Enabled. Decouples the invite email from the UI handler.
         services.AddHostedService<Email.InvitationEmailSender>();
+        // Event-subscription runner: fires durable "when THIS trigger fires, run THAT continuation"
+        // subscriptions (e.g. grant a Space role the moment an invited user's account is created) —
+        // live via the change feed + reconciled against current state on startup so a trigger during
+        // downtime still fires. Migrates any legacy ScheduledAction nodes on startup.
+        services.AddHostedService<MeshWeaver.Graph.EventSubscriptionRunner>();
+        // App-level event-log outbox: durably records every change-feed event (Postgres in prod via
+        // PostgreSqlEventLogStore, else in-memory) + replays not-yet-processed entries on startup.
+        services.AddMeshEventLog();
 
         // Microsoft Teams bot channel (bidirectional). Registered always but INERT unless Teams:Enabled
         // and Bot credentials are set (TeamsClient.IsConfigured gates the endpoint + sender). Activate by
@@ -252,6 +264,12 @@ public static class MemexConfiguration
         // ProviderModelLister fetches a provider's live model list (HTTP /models via
         // the I/O pool) so the add-provider flow lets users pick which models to bring.
         services.AddSingleton<Memex.Portal.Shared.Models.ProviderModelLister>();
+        // OpenAI-compatible (Ollama) auto-discovery — keeps the OpenAICompatible provider's
+        // LanguageModel catalog in sync with the models installed on its endpoint, so a locally
+        // pulled model shows up in the picker without editing OpenAICompatible:Models[]. Opt-in
+        // (OpenAICompatible:DiscoverModels=true) and inert otherwise; only when the provider is on.
+        if (features.Ai.Providers.OpenAICompatible)
+            services.AddHostedService<Memex.Portal.Shared.Models.OpenAICompatibleModelSync>();
 
         // GitHub sync — per-user OAuth credential (device flow) + bidirectional
         // Space ↔ GitHub sync (export = "sync back"; import = create / re-import a
@@ -351,6 +369,16 @@ public static class MemexConfiguration
             if (authSection["LogoutPath"] is { } logoutPath)
                 options.LogoutPath = logoutPath;
         });
+
+        // Reserved single-segment Blazor page routes (/login, /privacy, /search, …) — derived
+        // from the SAME assemblies Routes.razor gives the Router. NavigationService short-circuits
+        // these before mesh path resolution, so a bare page URL (e.g. the anonymous /privacy) is
+        // never resolved as a partition root and anonymous-gated to /login. See PageRouteRegistry.
+        services.AddSingleton(new MeshWeaver.Hosting.Blazor.PageRouteRegistry(
+            typeof(Routes).Assembly,
+            typeof(MeshWeaver.Blazor.Pages.ApplicationPage).Assembly,
+            typeof(MeshWeaver.Blazor.Graph.MeshNodeEditorView).Assembly,
+            typeof(MeshWeaver.Blazor.Portal.Pages.CreateNode).Assembly));
 
         // Data protection: set application name here, but key persistence is deployment-specific.
         // Monolith → PersistKeysToFileSystem (in Program.cs)
@@ -519,6 +547,11 @@ public static class MemexConfiguration
                 // Register the instance-sync content type ({space}/_Sync/{sourceId} config
                 // nodes) on the mesh + per-node hubs so they (de)serialize.
                 .AddInstanceSyncTypes()
+                // Register the ApiCredential satellite NodeType (+ PlatformCredential content type)
+                // so the LinkedIn/X connect callbacks can create {profile}/_ApiCredentials/{platform}
+                // credential nodes. Without this the create throws "NodeType 'ApiCredential' is not
+                // registered" — the OAuth callback's persist step fails and sign-in reports failure.
+                .AddApiCredentialType()
                 // Seed root-scope Admin AccessAssignments for users listed under
                 // `Auth:GlobalAdmins` so configured admins bypass per-partition
                 // RLS for cross-partition operations (list Spaces, create
@@ -696,6 +729,8 @@ public static class MemexConfiguration
                         .AddInboxSettingsTab()
                         // Platform auto-update strategy (Admin/UpdatePolicy) — stable/continuous/none.
                         .AddUpdatePolicySettingsTab()
+                        // Public privacy statement (Admin/Privacy, served anonymously at /privacy).
+                        .AddPrivacySettingsTab()
                         // Token-usage analytics (per-model _Usage satellites): filter by period,
                         // group by model / person / thread, cost from ModelPricing.
                         .AddTokenUsageSettingsTab()
@@ -933,6 +968,11 @@ public static class MemexConfiguration
         // requirement: needs HttpContext.User). Stores the per-user token at
         // {userId}/_Provider/GitHub. See Doc/Architecture/GitHubSync.
         app.MapGitHubConnect();
+
+        // Instance Sync — OAuth+PKCE "connect to a remote MeshWeaver instance" endpoints
+        // (/connect/instance[/callback]). Redirects to the remote's own login and stores the
+        // returned mw_ token as the sync party's RemoteToken. See InstanceConnectEndpoints.
+        app.MapInstanceConnect();
 
         // "Sign in with GitHub" — an authentication provider (distinct from the connect endpoints
         // above). Reuses the same GitHub:OAuth creds; issues the Entra-shaped cookie so a GitHub

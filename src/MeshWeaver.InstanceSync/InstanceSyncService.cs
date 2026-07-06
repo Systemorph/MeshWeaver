@@ -137,8 +137,10 @@ public sealed class InstanceSyncService(
     public IObservable<bool> RemoveSyncSource(string spacePath, string sourceId) =>
         meshService.DeleteNode(ConfigPath(spacePath, sourceId));
 
-    /// <summary>Sanitizes a display name into a node id: letters/digits/dash/underscore only.</summary>
-    private static string SanitizeSourceId(string name) =>
+    /// <summary>Sanitizes a display name into a node id: letters/digits only, others → dash, trimmed.
+    /// Case-preserving — every writer (GUI, MCP) must go through this so the same name yields the same
+    /// id (a lower-cased copy would create a duplicate registration differing only by casing).</summary>
+    public static string SanitizeSourceId(string name) =>
         new string(name.Trim()
             .Select(c => char.IsLetterOrDigit(c) ? c : '-')
             .ToArray()).Trim('-');
@@ -158,6 +160,7 @@ public sealed class InstanceSyncService(
             var current = Extract(node) ?? new InstanceSyncConfig();
             return node with { Content = update(current) };
         });
+
 
     /// <summary>
     /// Appends a local change to the durable manifest, coalescing by path: only the LATEST

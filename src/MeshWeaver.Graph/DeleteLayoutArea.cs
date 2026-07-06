@@ -114,14 +114,22 @@ public static class DeleteLayoutArea
                 .WithNavigateToHref(backHref))
             .WithView(Controls.H2("Delete Node").WithStyle("margin: 0; color: var(--error);")));
 
+        var safePath = System.Web.HttpUtility.HtmlEncode(nodePath);
         var warningText = descendantCount > 0
-            ? $"This will permanently delete this node and <strong>{descendantCount} descendant node(s)</strong> under <code>{nodePath}</code>."
-            : $"This will permanently delete the node at <code>{nodePath}</code>.";
+            ? $"This will permanently delete this node and <strong>{descendantCount} descendant node(s)</strong> under <code>{safePath}</code>."
+            : $"This will permanently delete the node at <code>{safePath}</code>.";
 
+        // Ready-made, theme-aware styling: Fluent's status-DANGER design tokens — the SAME ones
+        // <FluentMessageBar Intent="Error"> (see MeshNodeErrorCardView) uses, so it reads correctly in
+        // BOTH light and dark. (The old hardcoded pink #fde8e8 was a light-only box that clashed on a
+        // dark page.) The var() fallbacks are cross-mode too — a translucent-red tint + mid-red text —
+        // so it degrades safely if a token is ever absent. Text inherits the danger foreground.
         stack = stack.WithView(Controls.Html(
-            "<div style=\"padding: 16px; background: var(--error-container, #fde8e8); border-radius: 8px; " +
-            "border: 1px solid var(--error, #d32f2f); margin-bottom: 24px;\">" +
-            "<p style=\"margin: 0 0 8px 0; font-weight: 600; color: var(--error, #d32f2f);\">Warning: This action cannot be undone!</p>" +
+            "<div style=\"padding: 16px; border-radius: 8px; margin-bottom: 24px; " +
+            "background: var(--colorStatusDangerBackground1, rgba(211,47,47,0.12)); " +
+            "border: 1px solid var(--colorStatusDangerBorder1, rgba(211,47,47,0.5)); " +
+            "color: var(--colorStatusDangerForeground1, #d32f2f);\">" +
+            "<p style=\"margin: 0 0 8px 0; font-weight: 600;\">Warning: This action cannot be undone!</p>" +
             $"<p style=\"margin: 0;\">{warningText}</p>" +
             "</div>"));
 
@@ -201,22 +209,32 @@ public static class DeleteLayoutArea
                             if (response.Message is DeleteNodeResponse { Success: true })
                             {
                                 ctx.Host.UpdateData(progressId, DeleteStatus.Done);
-                                // Redirect to the nearest ancestor that is an ACTUAL mesh node.
-                                // The node we were looking at no longer exists, and its immediate
-                                // parent PATH is frequently a virtual grouping (e.g. ".../Script")
-                                // with no node of its own — redirecting straight there would just
-                                // land the user on another "No node found" page. Resolve the closest
-                                // existing ancestor instead; a top-level node (none) goes home. The
-                                // bare node URL renders that node's default area (Mesh URL shape).
-                                ResolveNearestExistingAncestor(meshQuery, nodePath)
-                                    .Take(1)
-                                    .Timeout(TimeSpan.FromSeconds(10))
-                                    .Catch<string?, Exception>(_ => Observable.Return(GetParentPath(nodePath)))
-                                    .Subscribe(ancestor =>
-                                    {
-                                        var target = ancestor is null ? "/" : $"/{ancestor}";
-                                        ctx.Host.UpdateArea(ctx.Area, new RedirectControl(target));
-                                    });
+                                // Redirect to the parent page. The node we were looking at no longer
+                                // exists, so we must leave its page FAST — otherwise the just-deleted
+                                // node's area re-renders against a gone node and errors (the "reload
+                                // then error"). Two paths:
+                                //  • The immediate parent is a SATELLITE grouping (_Thread, _Activity,
+                                //    …) — it has no node of its own, so resolve the target by PURE PATH
+                                //    (walk up past satellite segments) IMMEDIATELY, no query. This is
+                                //    the common case (a thread → the user's home) and, crucially, a
+                                //    distributed portal's cross-partition existence probe can't stall
+                                //    the redirect behind a timeout (which is what left the dead page up
+                                //    long enough to reload + error).
+                                //  • A NON-satellite parent (a virtual grouping like ".../Script") can
+                                //    only be told apart from a real node by asking — keep the existence
+                                //    walk there, but bounded, and fall back to the pure-path ancestor
+                                //    (never the maybe-virtual immediate parent) so the fallback can't
+                                //    land on another "No node found" page.
+                                var immediateParent = GetParentPath(nodePath);
+                                var target = IsSatelliteSegment(immediateParent)
+                                    ? Observable.Return(NearestNonSatelliteAncestor(nodePath))
+                                    : ResolveNearestExistingAncestor(meshQuery, nodePath)
+                                        .Take(1)
+                                        .Timeout(TimeSpan.FromSeconds(5))
+                                        .Catch<string?, Exception>(_ => Observable.Return(NearestNonSatelliteAncestor(nodePath)));
+                                target.Subscribe(ancestor =>
+                                    ctx.Host.UpdateArea(ctx.Area,
+                                        new RedirectControl(ancestor is null ? "/" : $"/{ancestor}")));
                             }
                             else
                             {
@@ -246,12 +264,16 @@ public static class DeleteLayoutArea
 
         if (status.Kind == DeleteStatusKind.Done)
             return Controls.Html(
-                "<div style=\"padding: 12px 16px; background: var(--success-container, #e6f7e6); color: var(--success, #107c10); border-radius: 6px; margin-bottom: 16px;\">Node deleted. Redirecting…</div>");
+                "<div style=\"padding: 12px 16px; border-radius: 6px; margin-bottom: 16px; " +
+                "background: var(--colorStatusSuccessBackground1, rgba(16,124,16,0.12)); " +
+                "color: var(--colorStatusSuccessForeground1, #107c10);\">Node deleted. Redirecting…</div>");
 
         // Failed
         var message = System.Web.HttpUtility.HtmlEncode(status.ErrorMessage ?? "Unknown error");
         return Controls.Html(
-            $"<div style=\"padding: 12px 16px; background: var(--error-container, #fde8e8); color: var(--error, #d32f2f); border-radius: 6px; margin-bottom: 16px;\"><strong>Delete failed:</strong> {message}</div>");
+            "<div style=\"padding: 12px 16px; border-radius: 6px; margin-bottom: 16px; " +
+            "background: var(--colorStatusDangerBackground1, rgba(211,47,47,0.12)); " +
+            $"color: var(--colorStatusDangerForeground1, #d32f2f);\"><strong>Delete failed:</strong> {message}</div>");
     }
 
     private enum DeleteStatusKind { Idle, InFlight, Done, Failed }
@@ -277,6 +299,31 @@ public static class DeleteLayoutArea
     {
         var lastSlash = path.LastIndexOf('/');
         return lastSlash > 0 ? path[..lastSlash] : null;
+    }
+
+    /// <summary>Last segment of the path (the bit after the final '/'), or the whole path.</summary>
+    private static string LastSegment(string path)
+        => path[(path.LastIndexOf('/') + 1)..];
+
+    /// <summary>
+    /// True when the path's last segment is a SATELLITE grouping (<c>_Thread</c>, <c>_Activity</c>,
+    /// <c>_Comment</c>, …) — a '_'-prefixed segment that anchors satellites but is never a node of its
+    /// own. Redirecting there after a delete always lands on "No node found".
+    /// </summary>
+    private static bool IsSatelliteSegment(string? path)
+        => path is not null && LastSegment(path).StartsWith('_');
+
+    /// <summary>
+    /// Nearest ancestor whose last segment is NOT a satellite grouping — resolved by PURE PATH, no
+    /// query (so it can never stall on a distributed portal). A thread <c>{user}/_Thread/{id}</c>
+    /// resolves to <c>{user}</c>; a top-level node resolves to <c>null</c> (redirect home).
+    /// </summary>
+    internal static string? NearestNonSatelliteAncestor(string nodePath)
+    {
+        for (var p = GetParentPath(nodePath); p is not null; p = GetParentPath(p))
+            if (!LastSegment(p).StartsWith('_'))
+                return p;
+        return null;
     }
 
     /// <summary>

@@ -115,3 +115,61 @@ describe("GrpcAreaSource wire folding", () => {
     expect((source.getState().data as Record<string, Record<string, unknown>>)["model"].name).toBe("Grace");
   });
 });
+
+// The wire delivers frames DUPLICATED (RegisterStream + proxy-hub forward both fire) with no
+// cross-frame ordering guarantee. Folding by the monotonic per-stream `version` is what makes the
+// rendered tree DETERMINISTIC — the "same page renders differently on every refresh" bug was a fold
+// that replayed duplicates and applied patches against the wrong base.
+describe("GrpcAreaSource version-ordered fold (deterministic refresh)", () => {
+  const patch = (version: number, name: string) => ({
+    streamId: "s1",
+    version,
+    changeType: "Patch",
+    change: [{ op: "replace", path: '/data/"model"/name', value: name }],
+  });
+  const modelName = (source: GrpcAreaSource) =>
+    (source.getState().data as Record<string, Record<string, unknown>>)["model"].name;
+
+  async function fold(frames: Record<string, unknown>[]): Promise<GrpcAreaSource> {
+    const { connection, drained } = fakeConnection(frames);
+    const source = new GrpcAreaSource(connection, "Doc/GUI", { area: "" }, { streamId: "s1" });
+    void source.start();
+    await drained;
+    return source;
+  }
+
+  it("a duplicate Full frame folds to the same tree (idempotent, no corruption)", async () => {
+    const source = await fold([fullFrame, fullFrame]);
+    expect(modelName(source)).toBe("Ada");
+    expect(source.getState().areas!["Content"].data).toBe("# hello");
+  });
+
+  it("ignores a duplicate Patch (same version) — no double fold", async () => {
+    // A second version-2 frame (here with a different payload to make the drop observable) is dropped.
+    const source = await fold([fullFrame, patch(2, "Grace"), patch(2, "WRONG")]);
+    expect(modelName(source)).toBe("Grace");
+  });
+
+  it("drops a Patch that arrives before its base snapshot", async () => {
+    const source = await fold([patch(2, "Grace"), fullFrame]);
+    expect(modelName(source)).toBe("Ada"); // the un-baseable patch was ignored; only the Full applied
+  });
+
+  it("never regresses to a stale Full (older version) after patching", async () => {
+    const source = await fold([fullFrame, patch(2, "Grace"), { ...fullFrame, version: 1 }]);
+    expect(modelName(source)).toBe("Grace"); // the re-sent v1 Full did not clobber the v2 state
+  });
+
+  it("applies newer patches even when versions are NON-contiguous (no exact-succession requirement)", async () => {
+    // A subscriber's versions can skip (server-side coalescing); demanding current+1 would drop these
+    // and strand content on its loading frame — the "threads never load" regression. Newer = applied.
+    const source = await fold([fullFrame, patch(2, "Grace"), patch(5, "Hopper")]);
+    expect(modelName(source)).toBe("Hopper");
+  });
+
+  it("applies a versionless patch best-effort (never drops it for lack of a version)", async () => {
+    const versionlessPatch = { streamId: "s1", changeType: "Patch", change: [{ op: "replace", path: '/data/"model"/name', value: "Lovelace" }] };
+    const source = await fold([fullFrame, versionlessPatch]);
+    expect(modelName(source)).toBe("Lovelace");
+  });
+});

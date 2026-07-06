@@ -13,18 +13,18 @@ Parity with the Blazor portal is enforced by tests at three altitudes: the **reg
 
 `clients/react/src/render/parity.test.ts` pins the authoritative Blazor vocabulary: the `*Control` / `*Skin` types in `src/MeshWeaver.Layout` (the `$type` is the class name minus the suffix). When a new control is added to Layout, its `$type` is added to the list — and the test fails until the React pack covers it, keeping the port at 1:1:
 
-- **`BLAZOR_LEAF_CONTROLS`** — all 51 leaf `$type`s must exist in `controlRegistry`, must be functions (React components, not accidental values), and coverage must be exactly 51/51 — no silent shortfall.
+- **`BLAZOR_LEAF_CONTROLS`** — all 52 leaf `$type`s must exist in `controlRegistry`, must be functions (React components, not accidental values), and coverage must be exactly 52/52 — no silent shortfall.
 - **`BLAZOR_SKINS`** — the 18 container/item skins must exist in `skinRegistry` (containers like Stack/Tabs/Toolbar render via *skins*, not the control map).
-- **The placeholder ratchet** — the registered-but-placeholder long-tail (`placeholderControlTypes` in `controls/mesh.tsx`: `DocumentSource`, `ExportDocument`, `FileBrowser`, `NodeExport`, `NodeImport`) is pinned exactly:
+- **The placeholder ratchet** — the registered-but-placeholder long-tail (`placeholderControlTypes` in `controls/mesh.tsx`) is pinned exactly, and it is now **empty**: every mesh control (`DocumentSource`, `ExportDocument`, `FileBrowser`, `NodeExport`, `NodeImport` — the last controls that used to render a bare badge) has a real implementation.
 
 ```ts
 it("the placeholder long-tail only ever shrinks", () => {
-  const pinned = ["DocumentSource", "ExportDocument", "FileBrowser", "NodeExport", "NodeImport"];
+  const pinned: string[] = [];
   expect([...placeholderControlTypes].sort()).toEqual(pinned.sort());
 });
 ```
 
-Implementing one for real = remove it from `placeholderControlTypes` **and** from the pinned list. Adding a *new* placeholder fails here — every new control must ship a real implementation. The list only ever shrinks.
+Adding a *new* placeholder fails here — every new control must ship a real implementation. A companion test (`the un-placeholdered controls are all real, distinct components`) further asserts those five are real, distinct React components, so none may regress to a shared badge.
 
 ## 2. The vitest suites
 

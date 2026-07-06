@@ -42,4 +42,24 @@ public class SyncStreamOptions
     /// between the change-feed publish and the sync emission. Default: 1 second.
     /// </summary>
     public TimeSpan ChangeFeedStalenessGrace { get; set; } = TimeSpan.FromSeconds(1);
+
+    /// <summary>
+    /// Grace window <c>RouteStreamMessage</c> waits for a stream's per-stream <c>sync/{id}</c> sub-hub
+    /// to register before dropping an inbound <see cref="DataChangedEvent"/>/stream message for it.
+    ///
+    /// <para>The owner's FIRST <c>Full</c> can race AHEAD of the subscriber's sync-hub creation (the
+    /// <c>SynchronizationStream</c> ctor's <c>Host.GetHostedHub(sync/{id})</c> runs on a different
+    /// action-block turn than the one routing the Full): the Full then arrives before <c>sync/{id}</c>
+    /// is in the subscriber's <see cref="MeshWeaver.Messaging.HostedHubsCollection"/> and — pre-fix — is
+    /// dropped, so that region renders blank ("random subset / blank first load" in the React portal).
+    /// Instead of dropping immediately, the router waits reactively (on
+    /// <see cref="MeshWeaver.Messaging.HostedHubsCollection.HubAdded"/>, purpose-built for this) up to
+    /// this window for the sub-hub to appear, then re-delivers. A stream that is GENUINELY gone
+    /// (disposed circuit, released read stream) never registers a sub-hub, so its message is still
+    /// dropped — just this window later — with the same diagnostic. Bounded + self-disposing, so it
+    /// never accumulates: it distinguishes "subscribed-but-not-yet-created" (HubAdded fires) from
+    /// "gone" (window elapses). Default: 5 seconds; a cold sync-hub activation on a loaded CI runner
+    /// can lag several hundred ms behind the first Full. Tests can shorten it.</para>
+    /// </summary>
+    public TimeSpan SyncHubRegistrationGrace { get; set; } = TimeSpan.FromSeconds(5);
 }

@@ -2,7 +2,7 @@
 # parallel shards that consume the prebuilt output, and finally consolidates
 # every shard's results in a single collector job.
 #
-#   build ──▶ test (matrix shard 0..3) ──▶ collect-results
+#   build ──▶ test (matrix shard 0..5) ──▶ collect-results
 #
 # Why this shape (vs. the old "every shard restores+builds the whole solution"):
 #   * The 50+ project solution was compiled 4× — once per shard. Building once
@@ -161,7 +161,7 @@ jobs:
       # results so the PR shows the full failure picture, not just the first.
       fail-fast: false
       matrix:
-        shard: [0, 1, 2, 3]
+        shard: [0, 1, 2, 3, 4, 5]
 
     steps:
     - uses: actions/checkout@v6
@@ -206,7 +206,7 @@ jobs:
         DOTNET_ENVIRONMENT: Development
         Logging__LogLevel__Default: Warning
         SHARD_INDEX: ${{ matrix.shard }}
-        SHARD_TOTAL: 4
+        SHARD_TOTAL: 6
       run: |
         # Only Cosmos is excluded — needs the Cosmos emulator which is heavy to
         # set up on a runner. Everything else runs (PostgreSql via Testcontainers
@@ -243,6 +243,11 @@ jobs:
         # distinct shards), and round-robin the light projects on a separate counter.
         # Net: no shard carries more than two heavies, never the three ALC-heaviest
         # together. AI.Test.FakeCli is a helper exe, not a heavy test → stays light.
+        # SHARD_TOTAL was raised 4→6: with 7 heavies over 6 shards only ONE shard
+        # doubles up (Acme+Orleans) and the ALC-3 (AI/FutuRe/Orleans) still land on
+        # distinct shards, while the ~38 light projects spread over 6 instead of 4 —
+        # that's what cuts the old 24-min long-pole shard (its extra light projects
+        # move off it).
         heavy_idx=0
         light_idx=0
         for csproj in $(find test -name '*.csproj' \

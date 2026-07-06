@@ -56,7 +56,7 @@ public sealed class DocumentationStaticRepoSource(IServiceProvider serviceProvid
     {
         Name = "MeshWeaver Documentation",
         NodeType = "Space",
-        Icon = "/static/NodeTypeIcons/organization.svg",
+        Icon = "/static/NodeTypeIcons/document.svg",
         State = MeshNodeState.Active,
         Content = new MarkdownContent { Content = WelcomeMarkdown }
     };

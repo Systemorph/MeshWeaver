@@ -72,6 +72,11 @@ config:
     MEMEX_JDBCCONNECTIONSTRING: "jdbc:postgresql://memex-postgres-service:5432/memex"
     MEMEX_DATABASENAME: "memex"
     ASPNETCORE_HTTP_PORTS: "8080"
+    # ---- Instance branding (per-env) ----------------------------------------
+    # Large Safari bookmark / Start-Page / Add-to-Dock tile (apple-touch-icon, 180×180 PNG).
+    # This base is the Systemorph-owned memex portal → the Systemorph mark. Other envs override
+    # (e.g. atioz → brand/atioz-180.png) at deploy; empty leaves Safari's letter-tile fallback.
+    Portal__AppleTouchIcon: "_content/Memex.Portal.Shared/brand/systemorph-180.png"
     Deployment__Backend: "Filesystem"
     # /data holds ONLY framework caches now: DataProtection keys
     # (/data/dataprotection-keys), the NodeType assembly-cache, and the NuGet

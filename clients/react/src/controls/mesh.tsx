@@ -3,6 +3,7 @@ import { Avatar, Badge, Card, Input, Text } from "@fluentui/react-components";
 import type { Json, UiControl } from "../area/types.js";
 import { useResolve } from "../area/context.js";
 import { useMeshLink } from "../area/navigation.js";
+import { controlClass, mergeClass } from "../render/style.js";
 import { useThemeMode } from "../theme/themeMode.js";
 import { str, useField, useText } from "./common.js";
 import { AddressAreaEmbed, sanitizeInlineSvg } from "./display.js";
@@ -10,6 +11,7 @@ import { ThreadChatView } from "./threadChat.js";
 import { MeshNodeCollectionView, MeshSearchView } from "./meshLive.js";
 import { documentControls } from "./documentControls.js";
 import { nodeTransferControls } from "./nodeTransfer.js";
+import { meshNodeEditorControls } from "./meshNodeEditor.js";
 import { fileBrowserControls } from "./fileBrowser.js";
 
 function MeshNodePickerView({ control }: { control: UiControl }): ReactNode {
@@ -115,7 +117,7 @@ function MeshNodeCardView({ control }: { control: UiControl }): ReactNode {
   };
 
   const card = (
-    <Card className="mesh-node-card" style={{ cursor: link.href ? "pointer" : undefined, width: "100%", padding: 12 }}>
+    <Card className={mergeClass("mesh-node-card", controlClass(control))} style={{ cursor: link.href ? "pointer" : undefined, width: "100%", padding: 12 }}>
       <div className="mesh-node-card-content" style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 0 }}>
         {isInlineSvg ? (
           <div className="mesh-node-card-image" style={placeholderStyle} dangerouslySetInnerHTML={{ __html: sanitizeInlineSvg(imageUrl) }} />
@@ -186,6 +188,7 @@ export const meshControls = {
   MeshNodeCard: MeshNodeCardView,
   // SearchBox renders via inputs.tsx's bound SearchBoxView.
   MeshNodePicker: MeshNodePickerView,
+  ...meshNodeEditorControls,
   UserProfile: UserProfileView,
   ThreadMessageBubble: ThreadMessageBubbleView,
   ThreadChat: ThreadChatView,

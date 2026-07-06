@@ -2,6 +2,7 @@
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
 using MeshWeaver.Domain;
+using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
@@ -9,6 +10,7 @@ using MeshWeaver.Mesh.Services.LanguageServer;
 using MeshWeaver.Messaging;
 using MeshWeaver.NuGet;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace MeshWeaver.Graph.Configuration;
 
@@ -33,6 +35,7 @@ public static class GraphConfigurationExtensions
                 .AddMarkdownType()
                 .AddHtmlType()
                 .AddSlideType()
+                .AddDeckType()
                 .AddCommentType()
                 .AddTrackedChangeType()
                 .AddAccessAssignmentType()
@@ -47,6 +50,8 @@ public static class GraphConfigurationExtensions
                 .AddNotificationRuleType()
                 .AddNotificationChannelType()
                 .AddInvitationType()
+                .AddEventSubscriptionType()
+                .AddScheduledActionType()   // legacy — kept so existing Admin/ScheduledAction nodes still deserialize + migrate
                 .AddEmailType()
                 .AddEaCredentialType()
                 .AddTeamsConversationType()
@@ -127,13 +132,22 @@ public static class GraphConfigurationExtensions
             builder.ConfigureDefaultNodeHub(config => config
                 .WithGraphTypes()
                 .AddDefaultLayoutAreas()
+                // "Invite people" node-menu item on a Space + the invite form area it opens. The
+                // provider self-gates (Space + Update), so it's inert on non-Space nodes.
+                .AddLayout(layout => layout
+                    .WithView(SpaceInviteLayoutArea.AreaName, SpaceInviteLayoutArea.Render))
                 // Owner-injection at the sync chokepoint: lets SynchronizationStream.Update resolve the
                 // node OWNER (CreatedBy) from the node already in its Current when no live/creation
                 // context survives — the cold-start FIRST-write race (the owning hub establishes its
                 // standing identity asynchronously). Per-node hub so Host.ServiceProvider has it.
-                .WithServices(services => services
-                    .AddSingleton<MeshWeaver.Data.Serialization.IStreamOwnerResolver,
-                        MeshNodeStreamOwnerResolver>()));
+                .WithServices(services =>
+                {
+                    services.AddSingleton<MeshWeaver.Data.Serialization.IStreamOwnerResolver,
+                        MeshNodeStreamOwnerResolver>();
+                    services.TryAddEnumerable(
+                        ServiceDescriptor.Scoped<Mesh.INodeMenuProvider, SpaceInviteMenuProvider>());
+                    return services;
+                }));
 
             // Seed the built-in NodeCopy + Mirror script templates as Code MeshNodes
             // at Templates/Import/{NodeCopy,Mirror}. ImportLayoutArea fires

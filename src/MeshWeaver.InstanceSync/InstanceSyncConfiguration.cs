@@ -30,6 +30,9 @@ public static class InstanceSyncConfiguration
         // host (or test) that registered its own factory wins.
         services.TryAddSingleton<IRemoteMeshClientFactory, McpRemoteMeshClientFactory>();
         services.AddSingleton<InstanceSyncService>();
+        // Server-side OAuth+PKCE client for the "Connect to remote instance" flow (drives the
+        // /connect/instance endpoints; stores the returned mw_ token as the party's RemoteToken).
+        services.AddSingleton<InstanceOAuthService>();
         services.AddSingleton<InstanceSyncCoordinator>();
         services.AddHostedService(sp => sp.GetRequiredService<InstanceSyncCoordinator>());
         // Surfaces the per-space remote-instance sync sources on the partition administration

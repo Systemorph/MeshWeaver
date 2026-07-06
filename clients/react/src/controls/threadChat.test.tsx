@@ -10,7 +10,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MeshAreaView } from "../index.js";
 import { StaticAreaSource, type AreaTree } from "../core.js";
-import type { MeshNodeState, MeshOps, ThreadSubmitOptions } from "../live/meshOps.js";
+import type { AutocompleteSuggestion, MeshNodeState, MeshOps, ThreadSubmitOptions } from "../live/meshOps.js";
 
 beforeAll(() => {
   if (!window.matchMedia)
@@ -30,6 +30,9 @@ class FakeOps implements MeshOps {
   readonly submitCalls: { path: string; text: string; opts?: ThreadSubmitOptions }[] = [];
   readonly startCalls: { ns: string; text: string; opts?: ThreadSubmitOptions }[] = [];
   readonly patchCalls: { path: string; fields: Record<string, unknown> }[] = [];
+  readonly autocompleteCalls: { query: string; contextPath?: string }[] = [];
+  /** Optional (like the real MeshOps.autocomplete) — a test sets it to open the @-mention dropdown. */
+  autocomplete?: (query: string, contextPath?: string) => Promise<AutocompleteSuggestion[]>;
   constructor(private readonly nodes: Record<string, Record<string, unknown>>) {}
 
   async *watch(path: string): AsyncIterableIterator<MeshNodeState> {
@@ -209,5 +212,116 @@ describe("ThreadChat — submission through the canonical thread surface", () =>
     await screen.findByRole("alert");
     expect(screen.getByRole("alert").textContent).toContain("Access denied");
     expect((input as HTMLTextAreaElement).value).toBe("will fail");
+  });
+});
+
+// Type `value` into the composer with the caret at its end — the shape the @-token tracker reads
+// (onChange consults ev.target.selectionStart). fireEvent applies value then selectionStart.
+function typeInto(input: HTMLElement, value: string) {
+  fireEvent.change(input, { target: { value, selectionStart: value.length, selectionEnd: value.length } });
+}
+
+describe("ThreadChat — @-mention autocomplete (the Blazor MeshNodeAutocomplete parity surface)", () => {
+  function withSuggestions(sugg: AutocompleteSuggestion[]) {
+    const ops = new FakeOps({ [THREAD]: { messages: [], status: "Idle" } });
+    ops.autocomplete = async (query, contextPath) => {
+      ops.autocompleteCalls.push({ query, contextPath });
+      return sugg;
+    };
+    return ops;
+  }
+
+  it("opens a suggestion dropdown for an @-token, queries ops.autocomplete, and shows the hint", async () => {
+    const ops = withSuggestions([
+      { label: "Coder", insertText: "@agent/Coder", path: "Agent/Coder" },
+    ]);
+    renderChat(ops);
+    // The composer surfaces the @-reference hint whenever the host exposes autocomplete.
+    expect(screen.getByText("Use @ to reference nodes")).toBeTruthy();
+    const input = await screen.findByLabelText("Message");
+    typeInto(input, "look at @ag");
+    await waitFor(() => expect(document.querySelector("[data-mw-autocomplete]")).toBeTruthy());
+    // Debounced query fired with the @-token (leading @ kept — same as the search bar's @path branch).
+    expect(ops.autocompleteCalls.some((c) => c.query === "@ag")).toBe(true);
+    expect(screen.getByText("Coder")).toBeTruthy(); // primary label
+    expect(screen.getByText("Agent/Coder")).toBeTruthy(); // secondary line (path)
+  });
+
+  it("inserts the suggestion's insertText at the caret, replacing the partial @-token (mouse pick)", async () => {
+    const ops = withSuggestions([{ label: "Coder", insertText: "@agent/Coder", path: "Agent/Coder" }]);
+    renderChat(ops);
+    const input = (await screen.findByLabelText("Message")) as HTMLTextAreaElement;
+    typeInto(input, "hi @ag");
+    await screen.findByText("Coder");
+    // mousedown (not click) — the composer picks on mousedown so the textarea never loses focus first.
+    fireEvent.mouseDown(screen.getByText("Coder"));
+    expect(input.value).toBe("hi @agent/Coder ");
+    expect(document.querySelector("[data-mw-autocomplete]")).toBeNull(); // dropdown dismissed
+  });
+
+  it("arrow-navigates and accepts with Enter without submitting the message", async () => {
+    const ops = withSuggestions([
+      { label: "Coder", insertText: "@agent/Coder" },
+      { label: "Planner", insertText: "@agent/Planner" },
+    ]);
+    renderChat(ops);
+    const input = (await screen.findByLabelText("Message")) as HTMLTextAreaElement;
+    typeInto(input, "@a");
+    await screen.findByText("Planner");
+    fireEvent.keyDown(input, { key: "ArrowDown" }); // highlight 0 → 1 (Planner)
+    fireEvent.keyDown(input, { key: "Enter" }); // accepts the suggestion, does NOT send
+    expect(input.value).toBe("@agent/Planner ");
+    expect(ops.submitCalls).toEqual([]);
+    expect(ops.startCalls).toEqual([]);
+  });
+
+  it("dismisses the dropdown on Escape, and a later Enter then submits normally", async () => {
+    const ops = withSuggestions([{ label: "Coder", insertText: "@agent/Coder" }]);
+    renderChat(ops);
+    const input = (await screen.findByLabelText("Message")) as HTMLTextAreaElement;
+    typeInto(input, "hello @ag");
+    await screen.findByText("Coder");
+    fireEvent.keyDown(input, { key: "Escape" });
+    await waitFor(() => expect(document.querySelector("[data-mw-autocomplete]")).toBeNull());
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => expect(ops.submitCalls.length).toBe(1));
+    expect(ops.submitCalls[0].text).toBe("hello @ag");
+  });
+
+  it("without ops.autocomplete, typing @ opens no dropdown and shows no hint (graceful degradation)", async () => {
+    const ops = new FakeOps({ [THREAD]: { messages: [], status: "Idle" } }); // no autocomplete
+    renderChat(ops);
+    expect(screen.queryByText("Use @ to reference nodes")).toBeNull();
+    const input = await screen.findByLabelText("Message");
+    typeInto(input, "@ag");
+    // Give the debounce window a chance — nothing should open.
+    await new Promise((r) => setTimeout(r, 300));
+    expect(document.querySelector("[data-mw-autocomplete]")).toBeNull();
+  });
+});
+
+describe("ThreadChat — composer selection row (Blazor's harness · agent · model status chips)", () => {
+  it("surfaces the composer's default harness/agent/model as chips when no options load", async () => {
+    const ops = new FakeOps({
+      [THREAD]: {
+        messages: [],
+        status: "Idle",
+        composer: { harness: "MeshWeaver", agentName: "Agent/Coder", modelName: "Provider/OpenAI/gpt-4o" },
+      },
+    });
+    renderChat(ops);
+    await screen.findByLabelText("Message");
+    // FakeOps exposes no `search`, so the option dropdowns stay empty — the bound selection must still
+    // show (Blazor surfaces the default regardless), rendered as last-segment chips.
+    expect(screen.getByText("MeshWeaver")).toBeTruthy();
+    expect(screen.getByText("Coder")).toBeTruthy();
+    expect(screen.getByText("gpt-4o")).toBeTruthy();
+  });
+
+  it("defaults the harness chip to MeshWeaver even with no composer selection", async () => {
+    const ops = new FakeOps({ [THREAD]: { messages: [], status: "Idle" } });
+    renderChat(ops);
+    await screen.findByLabelText("Message");
+    expect(screen.getByText("MeshWeaver")).toBeTruthy();
   });
 });

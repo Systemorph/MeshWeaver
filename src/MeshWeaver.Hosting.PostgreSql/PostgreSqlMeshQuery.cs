@@ -592,7 +592,7 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
             // The Initial snapshot itself uses request.Queries via QueryAsync, but the
             // change-detection layer must observe the union of all branches' shapes.
             var effectiveQueries = request.EffectiveQueries;
-            var parsedFilters = new List<(string BasePath, QueryScope Scope)>(effectiveQueries.Count);
+            var parsedFilters = new List<(string BasePath, QueryScope Scope, IReadOnlyList<string> Namespaces)>(effectiveQueries.Count);
             ParsedQuery firstParsed = null!;
             for (var qi = 0; qi < effectiveQueries.Count; qi++)
             {
@@ -606,7 +606,10 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
                         effectiveScope = QueryScope.Children;
                 }
                 var normalizedBasePath = effectivePath?.Trim('/') ?? "";
-                parsedFilters.Add((normalizedBasePath, effectiveScope));
+                // Capture the query's NAMESPACE filters too: a namespace-only query (no path:) leaves
+                // BasePath empty, so the path/scope check alone judges deep changes out of scope. The
+                // namespaces let a delete/update/create under {owner}/*_Thread trigger a re-query.
+                parsedFilters.Add((normalizedBasePath, effectiveScope, pq.ExtractNamespacePatterns()));
                 if (qi == 0) firstParsed = pq;
             }
 
@@ -651,7 +654,7 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
 
             var earlySubscription = _adapter.Changes
                 .Where(n => parsedFilters.Any(f =>
-                    PathMatcher.ShouldNotify(n.Path, f.BasePath, f.Scope)))
+                    PathMatcher.ShouldNotifyForQuery(n.Path, f.BasePath, f.Scope, f.Namespaces)))
                 .Subscribe(n =>
                 {
                     lock (earlyLock)
@@ -680,7 +683,7 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
                     disposables.Add(
                         _adapter.Changes
                             .Where(n => parsedFilters.Any(f =>
-                                PathMatcher.ShouldNotify(n.Path, f.BasePath, f.Scope)))
+                                PathMatcher.ShouldNotifyForQuery(n.Path, f.BasePath, f.Scope, f.Namespaces)))
                             .Subscribe(changeBuffer));
                     // 🚨 Strict unit-of-work + zero debounce: every change
                     // triggers its own RunQuery, serialised via Concat so the

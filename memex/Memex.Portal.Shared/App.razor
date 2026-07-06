@@ -11,6 +11,12 @@
     var hasInstance = !string.IsNullOrWhiteSpace(instanceName);
     var instanceColor = Configuration["Portal:InstanceColor"];
     if (string.IsNullOrWhiteSpace(instanceColor)) instanceColor = "#f59e0b";
+
+    // The LARGE Safari bookmark / Start-Page / Add-to-Dock tile is the apple-touch-icon, NOT the
+    // favicon (Safari won't use an SVG favicon for it — with none declared it draws its own letter
+    // tile). Per-install PNG (180×180), selected by config so each deployment brands its big icon:
+    // Systemorph logo, ATIOZ mark, local yellow, … Empty = leave Safari's fallback.
+    var appleTouchIcon = Configuration["Portal:AppleTouchIcon"];
 }
 
 <!DOCTYPE html>
@@ -32,6 +38,10 @@
     else
     {
         <link rel="icon" type="image/png" href="favicon.ico" />
+    }
+    @if (!string.IsNullOrWhiteSpace(appleTouchIcon))
+    {
+        <link rel="apple-touch-icon" sizes="180x180" href="@appleTouchIcon" />
     }
     <script src="_content/Radzen.Blazor/Radzen.Blazor.js"></script>
 

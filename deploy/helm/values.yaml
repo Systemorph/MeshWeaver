@@ -64,6 +64,13 @@ ingress:
   annotations:
     nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
     nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    # 🚨 The browser's live connection is gRPC-WEB server-streaming (meshweaver.v1.Mesh/Connect,
+    # mesh→client) over THIS web ingress — not the native /Open path. nginx buffers proxied responses
+    # by DEFAULT, which holds a streaming response until its buffer fills or the upstream closes: the
+    # browser then receives only a truncated SUBSET of frames and the stream dies
+    # (ERR_CONNECTION_CLOSED) — the "page renders a random subset / stops prematurely" bug. The
+    # stream must flush frame-by-frame, so response buffering MUST be off.
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
 # ---- Next.js React portal (experimental frontend — FEATURE-FLAGGED) --------
 # When enabled, a Next.js streaming-SSR build of the React GUI (clients/portal-next)
 # runs as its OWN Deployment beside memex-portal, and the portal ingress gains a

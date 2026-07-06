@@ -16,6 +16,7 @@ using MeshWeaver.Utils;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Namotion.Reflection;
 
 namespace MeshWeaver.Data;
@@ -240,9 +241,13 @@ public static class DataExtensions
         // Without the walk, a single GetHostedHub(syncAddr, Never) at the current
         // hub returns null → message silently dropped.
         IMessageHub? syncHub = null;
+        // The hubs we searched (this hub + ancestors) — reused below to watch their HubAdded
+        // signals if the sync sub-hub isn't registered YET.
+        var walked = new List<IMessageHub>();
         var current = hub;
         while (current is not null)
         {
+            walked.Add(current);
             syncHub = current.GetHostedHub(request.Target!, create: HostedHubCreation.Never);
             if (syncHub is not null) break;
             var parent = current.Configuration.ParentHub;
@@ -261,31 +266,144 @@ public static class DataExtensions
             if (ReferenceEquals(parent, current)) break;
             current = parent;
         }
-        if (syncHub is null)
+        if (syncHub is not null)
         {
-            // The absent-target drop is intentional (a disconnected circuit's stream, a reaped or
-            // never-created sync hub) — but it must never be SILENT: data-sync traffic vanishing
-            // without a trace is unfindable in production (agentic-pensions#12 asked for exactly
-            // this signal). One Warning per drop, carrying the stream id + message type + hub.
-            try
-            {
-                hub.ServiceProvider.GetService<ILoggerFactory>()
-                    ?.CreateLogger(typeof(DataExtensions).FullName!)
-                    .LogWarning(
-                        "Dropping {MessageType} for stream {StreamId} on hub {Address}: no synchronization "
-                        + "hub found on this hub or any parent — the target stream is gone (disposed circuit, "
-                        + "released read stream, or never-created sync hub). Sender: {Sender}.",
-                        message.GetType().Name, streamMessage.StreamId, hub.Address, request.Sender);
-            }
-            catch (ObjectDisposedException)
-            {
-                // Drops routinely fire while the hub is tearing down — the diagnostic must never
-                // turn a benign Ignored into a faulted delivery.
-            }
+            syncHub.DeliverMessage(request);
+            return Observable.Return(request.Forwarded());
+        }
+
+        // 🚨 MISS — the per-stream sync sub-hub for this StreamId is not registered on this hub or
+        // any ancestor. Two cases share this shape and MUST be told apart:
+        //   (a) subscribed-but-not-yet-created: the owner's FIRST `Full` raced AHEAD of the
+        //       subscriber's sync-hub creation. The sub-hub is created SYNCHRONOUSLY in the
+        //       SynchronizationStream ctor (`Host.GetHostedHub(sync/{id})`) but on a DIFFERENT
+        //       action-block turn than the one routing this Full — so the Full can land a few
+        //       microseconds-to-milliseconds before `sync/{id}` reaches the subscriber's
+        //       HostedHubsCollection. Dropping it here loses the region's initial snapshot → it
+        //       renders blank (the React `/next` "random subset / blank first load" ship-blocker,
+        //       and the deployed `Dropping DataChangedEvent … no synchronization hub found` warning).
+        //   (b) genuinely gone: a disposed circuit's stream, a released read stream, a reaped or
+        //       never-created sync hub — no sub-hub will EVER register for this StreamId.
+        // The fix distinguishes them REACTIVELY: wait a bounded grace for `sync/{id}` to register
+        // (HostedHubsCollection.HubAdded — built for exactly this, "re-attempt delivery when the
+        // matching hub appears"), then re-deliver; if the grace elapses, drop with the SAME
+        // diagnostic (case b). No poll/timer, no lock/SemaphoreSlim, no Task, and NOT a blanket
+        // buffer — one short-lived, self-disposing subscription per miss, and a gone stream is
+        // still dropped (just this window later). During teardown the sub-hub can no longer
+        // register, so drop straight away.
+        if (hub.RunLevel >= MessageHubRunLevel.DisposeHostedHubs)
+        {
+            LogStreamMessageDrop(hub, request, streamMessage, message);
             return Observable.Return(request.Ignored());
         }
-        syncHub.DeliverMessage(request);
+
+        HoldStreamMessageUntilSyncHubRegisters(hub, walked, request, streamMessage, message);
         return Observable.Return(request.Forwarded());
+    }
+
+    /// <summary>
+    /// Reactively holds a <see cref="StreamMessage"/> whose <c>sync/{id}</c> sub-hub is not yet
+    /// registered, re-delivering it the instant the sub-hub appears (via
+    /// <see cref="HostedHubsCollection.HubAdded"/>) or dropping it after
+    /// <see cref="SyncStreamOptions.SyncHubRegistrationGrace"/> (genuinely gone). See the call site
+    /// for the full rationale. Reactive + bounded + self-disposing.
+    /// </summary>
+    private static void HoldStreamMessageUntilSyncHubRegisters(
+        IMessageHub hub, List<IMessageHub> walked, IMessageDelivery request,
+        StreamMessage streamMessage, object message)
+    {
+        var syncTarget = request.Target!;
+        var grace = hub.ServiceProvider.GetService<IOptions<SyncStreamOptions>>()
+            ?.Value?.SyncHubRegistrationGrace ?? TimeSpan.FromSeconds(5);
+
+        // The sub-hub registers on whichever searched hub (this hub or an ancestor) opened the
+        // subscriber stream — watch them all.
+        var hubAddedSignals = walked
+            .Select(h => h.ServiceProvider.GetService<HostedHubsCollection>()?.HubAdded)
+            .Where(o => o is not null)
+            .Select(o => o!)
+            .ToArray();
+        if (hubAddedSignals.Length == 0)
+        {
+            LogStreamMessageDrop(hub, request, streamMessage, message);
+            return;
+        }
+
+        // The freshly-registered sub-hub IS the match — compare its address host-agnostically (a
+        // routed target can carry a Host qualifier the sub-hub's own address does not). Cheap per
+        // HubAdded; no re-probe on every unrelated registration.
+        var syncTargetNoHost = syncTarget with { Host = null };
+        // The synchronous hot-subject-gap re-check goes through GetHostedHub (the SAME
+        // AddressComparer-keyed lookup as the walk).
+        IMessageHub? FindSyncHub()
+        {
+            foreach (var h in walked)
+            {
+                var found = h.GetHostedHub(syncTarget, HostedHubCreation.Never);
+                if (found is not null) return found;
+            }
+            return null;
+        }
+
+        var sub = new System.Reactive.Disposables.SingleAssignmentDisposable();
+        var delivered = 0;
+        void DeliverOnce(IMessageHub target)
+        {
+            if (System.Threading.Interlocked.Exchange(ref delivered, 1) != 0) return;
+            target.DeliverMessage(request);
+            sub.Dispose();
+        }
+
+        sub.Disposable = Observable.Merge(hubAddedSignals)
+            .Where(h => (h.Address with { Host = null }).Equals(syncTargetNoHost))
+            .Take(1)
+            .Timeout(grace)
+            // Complete (silently) if the hub tears down first — never outlive it, and never
+            // accumulate on its disposables (a long-lived hub with frequent gone-stream misses
+            // would otherwise pile disposed subscriptions up until it is itself disposed).
+            .TakeUntil(hub.DisposalCompleted)
+            .Subscribe(
+                DeliverOnce,
+                _ =>
+                {
+                    // Grace elapsed (Timeout) — the stream is genuinely gone; drop with the
+                    // diagnostic, exactly as before (just this window later).
+                    if (System.Threading.Interlocked.Exchange(ref delivered, 1) == 0)
+                        LogStreamMessageDrop(hub, request, streamMessage, message);
+                    sub.Dispose();
+                });
+
+        // Close the hot-subject gap: HubAdded is hot (late subscribers miss prior emissions), so the
+        // sub-hub may have registered between the walk-miss above and this subscription. Re-check
+        // synchronously now that we're armed; deliver immediately if it's already there.
+        if (FindSyncHub() is { } already)
+            DeliverOnce(already);
+    }
+
+    /// <summary>
+    /// One Warning per genuinely-dropped stream message (a disposed circuit's stream, a released read
+    /// stream, a reaped/never-created sync hub). Data-sync traffic vanishing without a trace is
+    /// unfindable in production (agentic-pensions#12 asked for exactly this signal) — the drop stays
+    /// intentional but never silent.
+    /// </summary>
+    private static void LogStreamMessageDrop(
+        IMessageHub hub, IMessageDelivery request, StreamMessage streamMessage, object message)
+    {
+        try
+        {
+            hub.ServiceProvider.GetService<ILoggerFactory>()
+                ?.CreateLogger(typeof(DataExtensions).FullName!)
+                .LogWarning(
+                    "Dropping {MessageType} for stream {StreamId} on hub {Address}: no synchronization "
+                    + "hub found on this hub or any parent — the target stream is gone (disposed circuit, "
+                    + "released read stream, or never-created sync hub). Sender: {Sender}.",
+                    message.GetType().Name, streamMessage.StreamId, hub.Address, request.Sender);
+        }
+        catch (ObjectDisposedException)
+        {
+            // Drops routinely fire while the hub is tearing down — the diagnostic must never
+            // turn a benign Ignored into a faulted delivery.
+        }
     }
 
 

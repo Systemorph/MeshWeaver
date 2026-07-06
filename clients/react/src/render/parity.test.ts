@@ -15,7 +15,7 @@ const BLAZOR_LEAF_CONTROLS = [
   "CollaborativeMarkdown", "Combobox", "DataGrid", "Date", "DateTime", "Dialog", "DiffEditor",
   "DocumentSource", "Exception", "ExportDocument", "FileBrowser", "Highlight", "Html", "Icon",
   "ItemTemplate", "Label", "LayoutArea", "LayoutAreaDefinition", "Listbox", "Markdown", "MarkdownEditor",
-  "MenuItem", "MeshNodeCard", "MeshNodeCollection", "MeshNodePicker", "MeshSearch", "NamedArea", "NavLink", "NodeExport",
+  "MenuItem", "MeshNodeCard", "MeshNodeCollection", "MeshNodeContentEditor", "MeshNodePicker", "MeshSearch", "NamedArea", "NavLink", "NodeExport",
   "NodeImport", "NumberField", "PivotGrid", "Progress", "RadioGroup", "Redirect", "SearchBox", "Select",
   "Slider", "Spacer", "Switch", "TextArea", "ThreadChat", "ThreadMessageBubble", "UserProfile",
 ];
@@ -44,7 +44,7 @@ describe("React ↔ Blazor control parity", () => {
 
   it("covers Blazor's full leaf set (no silent shortfall)", () => {
     const covered = BLAZOR_LEAF_CONTROLS.filter((t) => t in controlRegistry).length;
-    expect(covered).toBe(BLAZOR_LEAF_CONTROLS.length); // 51/51 — full $type parity
+    expect(covered).toBe(BLAZOR_LEAF_CONTROLS.length); // 52/52 — full $type parity
   });
 
   // RATCHET: the registered-but-placeholder long-tail (controls whose real rendering needs a live

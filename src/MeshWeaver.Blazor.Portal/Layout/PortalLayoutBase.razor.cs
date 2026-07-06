@@ -659,11 +659,33 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     }
 
 
+    /// <summary>
+    /// True when the routed view is a chrome-free presentation (<c>/Present</c> — a deck or a slide
+    /// presenter). In this mode the portal hides its top bar AND side navigation so the slide stage
+    /// is truly full-screen; keyboard navigation (arrows / space / page keys / Esc) drives the walk.
+    /// Computed synchronously from the URL so there is no header flash on the first paint of a Present
+    /// route; re-evaluated on every navigation (<see cref="OnNavigationContextChanged"/> re-renders).
+    /// </summary>
+    protected bool IsPresentMode => IsPresentRoute(NavigationManager.Uri);
+
+    /// <summary>True when the URL's node-address path (query/fragment stripped) ends with the <c>/Present</c> area.</summary>
+    private bool IsPresentRoute(string uri)
+    {
+        var path = NavigationManager.ToBaseRelativePath(uri);
+        var cut = path.IndexOfAny(['?', '#']);
+        if (cut >= 0)
+            path = path[..cut];
+        path = path.Trim('/');
+        return path.Equals(DeckLayoutAreas.PresentArea, StringComparison.OrdinalIgnoreCase)
+            || path.EndsWith($"/{DeckLayoutAreas.PresentArea}", StringComparison.OrdinalIgnoreCase);
+    }
+
     // Side panel is gated on auth — anonymous users see neither toggle nor pane.
     /// <summary>
-    /// Whether the side panel should render — requires both an authenticated circuit and visible state.
+    /// Whether the side panel should render — requires an authenticated circuit, visible state,
+    /// and a non-Present route (Present mode is chrome-free, so the side panel is suppressed too).
     /// </summary>
-    public bool IsSidePanelVisible => isAuthenticated && SidePanelState.IsVisible;
+    public bool IsSidePanelVisible => isAuthenticated && SidePanelState.IsVisible && !IsPresentMode;
 
     /// <summary>
     /// The side panel's current docking position.

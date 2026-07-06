@@ -22,6 +22,7 @@ import { useResolve } from "../area/context.js";
 import { useMeshLink } from "../area/navigation.js";
 import { str, useClick, useField, useOptions, useText } from "./common.js";
 import { resolveIconByName } from "./icon.js";
+import { controlStyle } from "../render/style.js";
 
 function field(control: UiControl, node: ReactNode): ReactNode {
   const label = useText(control.label);
@@ -184,11 +185,15 @@ function ButtonView({ control }: { control: UiControl }): ReactNode {
   // Blazor parity (ButtonView.razor): NavigateToHref navigates client-side FIRST, then the
   // ClickedEvent still posts so a server-side ClickAction runs too.
   const link = useMeshLink(useText(control.navigateToHref) || undefined);
+  // Honour the control's inline style (WithStyle) — e.g. the pinned-card unpin toggle sizes itself to
+  // a small circular icon button (min-width/width/height/border-radius). Without it the icon-only
+  // button renders at default width and reads as a bar. Blazor applies Style to the button the same way.
   return (
     <Button
       appearance={(useResolve(control.appearance) as any) ?? "secondary"}
       disabled={!!useResolve(control.disabled)}
       icon={iconOf(control.iconStart)}
+      style={controlStyle(control)}
       onClick={(e: React.MouseEvent) => {
         link.onClick?.(e);
         emitClick?.();
@@ -215,8 +220,9 @@ function SearchBoxView({ control }: { control: UiControl }): ReactNode {
 }
 
 function iconOf(value: unknown): JSX.Element | undefined {
-  const name = value == null ? "" : String(value);
-  const Cmp = resolveIconByName(name);
+  // Pass the raw value (name string OR FluentIcon {provider,id,…} object) straight to the resolver —
+  // stringifying an object first collapsed it to "[object Object]" and rendered no icon.
+  const Cmp = resolveIconByName(value);
   return Cmp ? <Cmp /> : undefined;
 }
 

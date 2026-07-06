@@ -187,8 +187,13 @@ public static class HubThreadExtensions
 
         // Create under the requested namespace. If that partition denies thread creation (the user
         // lacks Thread permission there — e.g. a read-only Doc/* partition), FALL BACK to the user's
-        // OWN partition ({createdBy}/_Thread/{id}), keeping MainNode = the original namespace so the
+        // OWN partition ({home}/_Thread/{id}), keeping MainNode = the original namespace so the
         // thread stays linked to the node the user was viewing and the agent keeps its context.
+        // The home partition is the caller-supplied createdBy, or — when the caller didn't pass one
+        // (e.g. a click on a Doc page where the ambient AccessContext is null at post time, so the
+        // GUI's inline createdBy resolves null) — the robustly-captured submitter identity. Without
+        // this, the fallback silently no-ops on a null createdBy and the raw "Access denied" surfaces.
+        var fallbackHome = string.IsNullOrEmpty(createdBy) ? submitterObjectId : createdBy;
         AttemptCreate(namespacePath, threadNode, canFallBack: true);
 
         void AttemptCreate(string targetNamespace, MeshNode node, bool canFallBack)
@@ -215,7 +220,7 @@ public static class HubThreadExtensions
                         var err = (response.Message as CreateNodeResponse)?.Error ?? "unknown";
                         if (canFallBack && TryBuildUserPartitionFallback(targetNamespace, err, out var fb))
                         {
-                            AttemptCreate(createdBy!, fb!, canFallBack: false);
+                            AttemptCreate(fallbackHome!, fb!, canFallBack: false);
                             return;
                         }
                         onError?.Invoke($"Thread creation failed: {err}");
@@ -224,7 +229,7 @@ public static class HubThreadExtensions
                     {
                         if (canFallBack && TryBuildUserPartitionFallback(targetNamespace, ex.Message, out var fb))
                         {
-                            AttemptCreate(createdBy!, fb!, canFallBack: false);
+                            AttemptCreate(fallbackHome!, fb!, canFallBack: false);
                             return;
                         }
                         onError?.Invoke($"Thread creation failed: {ex.Message}");
@@ -237,19 +242,19 @@ public static class HubThreadExtensions
         bool TryBuildUserPartitionFallback(string targetNamespace, string? error, out MeshNode? fallbackNode)
         {
             fallbackNode = null;
-            if (string.IsNullOrEmpty(createdBy)
+            if (string.IsNullOrEmpty(fallbackHome)
                 || string.IsNullOrEmpty(error)
                 || !error.Contains("Access denied", StringComparison.OrdinalIgnoreCase))
                 return false;
 
             // Already in the user's own partition → falling back can't help; surface the error.
             var targetPartition = targetNamespace.Split('/', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
-            if (string.Equals(targetPartition, createdBy, StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(targetPartition, fallbackHome, StringComparison.OrdinalIgnoreCase))
                 return false;
 
-            // Re-anchor the SAME thread (id + seeded content) under {createdBy}/_Thread/{id}, but keep
+            // Re-anchor the SAME thread (id + seeded content) under {fallbackHome}/_Thread/{id}, but keep
             // MainNode pointing at the original namespace so thread→source navigation + agent context hold.
-            fallbackNode = ThreadNodeType.BuildThreadNode(createdBy!, userText, createdBy, threadNode.Id) with
+            fallbackNode = ThreadNodeType.BuildThreadNode(fallbackHome!, userText, fallbackHome, threadNode.Id) with
             {
                 MainNode = string.IsNullOrEmpty(mainNode) ? namespacePath : mainNode,
                 Content = seededThread
@@ -539,8 +544,13 @@ public static class HubThreadExtensions
     /// <summary>
     /// Truncates <see cref="MeshThread.Messages"/> starting at
     /// <paramref name="atMessageId"/> (exclusive — drops <paramref name="atMessageId"/>
-    /// and everything after). Single <c>stream.Update</c> on the thread node;
-    /// no watcher indirection.
+    /// and everything after) AND deletes the removed messages' cell nodes.
+    /// <para>🗑️ Deleting a message must remove the DATA, not merely unlink it from the thread's
+    /// Messages list: each message id maps to a <c>ThreadMessage</c> cell node at
+    /// <c>{threadPath}/{id}</c>, and unlinking alone leaves those cells orphaned in the partition
+    /// forever (they keep occupying storage and are still readable by path). So we capture the ids
+    /// being removed, truncate the list, then delete each removed cell. Idempotent — a
+    /// already-gone cell is a no-op.</para>
     /// </summary>
     public static void DeleteFromMessage(
         this IMessageHub hub, string threadPath, string atMessageId)
@@ -551,18 +561,35 @@ public static class HubThreadExtensions
 
         var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.AI.HubThreadExtensions");
+
+        // Capture the removed ids from the SAME snapshot the truncation applies — computed INSIDE the
+        // Update lambda, not from a separate earlier read. A separate read could drift from what the
+        // update actually dropped (a concurrent append between the two reads would orphan its cell);
+        // stream.Update applies the last lambda invocation, so the final assignment here is exactly the
+        // applied removed set. Single Update on the thread node, then delete those cells.
+        var removedIds = ImmutableList<string>.Empty;
         hub.GetWorkspace().GetMeshNodeStream(threadPath).Update(node =>
         {
-            var t = node.ContentAs<MeshThread>(hub.JsonSerializerOptions);
+            var t = node.ContentAs<MeshThread>(hub.JsonSerializerOptions, logger);
             if (t is null) return node;
             var idx = t.Messages.IndexOf(atMessageId);
-            if (idx < 0) return node; // id not in thread — no-op
-            return node with
-            {
-                Content = t with { Messages = t.Messages.Take(idx).ToImmutableList() }
-            };
+            if (idx < 0) { removedIds = ImmutableList<string>.Empty; return node; } // id not in thread — no-op
+            removedIds = t.Messages.Skip(idx).ToImmutableList();
+            return node with { Content = t with { Messages = t.Messages.Take(idx).ToImmutableList() } };
         }).Subscribe(
-            _ => { },
+            _ =>
+            {
+                // Now that the list no longer references them, delete each removed cell RECURSIVELY — a
+                // message cell owns its output/tool-call/step children under {threadPath}/{id}/…, so a
+                // recursive DeleteNodeRequest clears the message AND its tool calls in one cascade
+                // (idempotent — a gone cell is a no-op).
+                foreach (var id in removedIds)
+                {
+                    var cellPath = $"{threadPath}/{id}";
+                    hub.Post(new DeleteNodeRequest(cellPath) { Recursive = true },
+                        o => o.WithTarget(new Address(cellPath)));
+                }
+            },
             ex => logger?.LogWarning(ex,
                 "DeleteFromMessage: Update failed for thread {ThreadPath} message {MessageId}",
                 threadPath, atMessageId));

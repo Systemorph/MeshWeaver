@@ -50,3 +50,30 @@ export function attach(container) {
         }
     };
 }
+
+// Anchor the FIXED chat popup (login dialog / agent·model picker) just above the composer.
+// The widget is position:fixed to escape the chat's overflow clip and paint OVER the sticky header;
+// here we set its left/width/bottom to hover over .thread-chat-input-content. Registered once, a resize
+// listener keeps it aligned. Idempotent + cheap; a no-op when no popup is present.
+let _popupResizeBound = false;
+export function anchorChatPopup() {
+    const reposition = () => {
+        const w = document.querySelector('.thread-chat-widget');
+        const anchor = document.querySelector('.thread-chat-input-content')
+            || document.querySelector('.thread-chat-input-area');
+        if (!w || !anchor) return;
+        const r = anchor.getBoundingClientRect();
+        if (r.width === 0) return;
+        w.style.left = Math.round(r.left) + 'px';
+        w.style.width = Math.round(r.width) + 'px';
+        w.style.right = 'auto';
+        // Sit its bottom edge 6px above the composer's top edge.
+        w.style.bottom = Math.round(window.innerHeight - r.top + 6) + 'px';
+    };
+    reposition();
+    if (!_popupResizeBound) {
+        _popupResizeBound = true;
+        window.addEventListener('resize', reposition, { passive: true });
+        window.addEventListener('scroll', reposition, { passive: true, capture: true });
+    }
+}

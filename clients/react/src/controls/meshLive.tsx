@@ -88,8 +88,14 @@ function useMeshQuery(ops: MeshOps | null, query: string, basePath?: string): { 
  * duplicating every card link).
  */
 function ItemAreaCard({ node, itemArea }: { node: NodeResult; itemArea: string }): ReactNode {
+  // minHeight keeps every cell the same card height whether the embedded area has resolved to its
+  // card or is still on its (compact) loading skeleton — so the grid row never jumps or leaves a
+  // collapsed, half-height cell. display:flex + the child stretching fills the slot.
   return (
-    <div title={`Open ${node.name}`} style={{ position: "relative", minWidth: 0 }}>
+    <div
+      title={`Open ${node.name}`}
+      style={{ position: "relative", minWidth: 0, minHeight: 92, display: "flex", flexDirection: "column" }}
+    >
       <AddressAreaEmbed address={node.path} area={itemArea} />
     </div>
   );
@@ -154,6 +160,11 @@ export function MeshSearchView({ control }: { control: UiControl }): ReactNode {
   const showLoading = useResolve(control.showLoadingIndicator) !== false;
   const createHref = str(useResolve(control.createHref));
   const itemArea = str(useResolve(control.itemArea));
+  // Honour MaxColumns like Blazor does (WithMaxColumns) — without it the auto-fill grid sprawls to
+  // 6-8 narrow columns on a wide screen, so the Pinned/Threads rows never line up with the Blazor
+  // layout. GridSpacing (WithGridSpacing) sets the gap.
+  const maxColumns = Math.trunc(Number(useResolve(control.maxColumns))) || 0;
+  const gridSpacing = Math.trunc(Number(useResolve(control.gridSpacing))) || 12;
 
   const createLink = useMeshLink(createHref || undefined);
   const [visible, setVisible] = useState(initialVisible);
@@ -203,7 +214,18 @@ export function MeshSearchView({ control }: { control: UiControl }): ReactNode {
           ))}
         </div>
       ) : (
-        <div style={{ display: "grid", gap: 12, gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))" }}>
+        <div
+          style={{
+            display: "grid",
+            gap: gridSpacing,
+            // MaxColumns set → exactly that many equal columns (Blazor parity, left-aligned, no sprawl);
+            // unset → responsive auto-fill. minmax(0,1fr) lets cards shrink instead of overflowing.
+            gridTemplateColumns:
+              maxColumns > 0
+                ? `repeat(${maxColumns}, minmax(0, 1fr))`
+                : "repeat(auto-fill, minmax(220px, 1fr))",
+          }}
+        >
           {items.map((n) =>
             itemArea ? <ItemAreaCard key={n.path} node={n} itemArea={itemArea} /> : <ResultCard key={n.path} node={n} />,
           )}

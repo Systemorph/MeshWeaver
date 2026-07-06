@@ -45,6 +45,11 @@ data:
   # InstanceColor is the badge fill (hex, e.g. "#f59e0b"); empty = amber default.
   Portal__InstanceName: "{{ .Values.config.memex_portal.Portal__InstanceName | default "" }}"
   Portal__InstanceColor: "{{ .Values.config.memex_portal.Portal__InstanceColor | default "" }}"
+  # AppleTouchIcon is the LARGE Safari bookmark / Start-Page / Add-to-Dock tile (180×180 PNG) —
+  # the favicon doesn't drive it, so with none set Safari draws its own letter tile. A URL or
+  # app-relative path; empty = none. Per-install brand assets ship at
+  # _content/Memex.Portal.Shared/brand/{systemorph,atioz,local}-180.png (or a mesh asset / absolute URL).
+  Portal__AppleTouchIcon: "{{ .Values.config.memex_portal.Portal__AppleTouchIcon | default "" }}"
 {{- if (.Values.portalNext).enabled }}
   # ---- Next.js React frontend (FEATURE-FLAGGED — see .Values.portalNext) -----
   # Non-empty ReactAppUrl is what enables FrontendSelection: it shows the user
@@ -88,6 +93,11 @@ data:
   OpenAICompatible__Endpoint: "{{ .Values.config.memex_portal.OpenAICompatible__Endpoint | default "" }}"
   OpenAICompatible__Models__0: "{{ .Values.config.memex_portal.OpenAICompatible__Models__0 | default "" }}"
   OpenAICompatible__Models__1: "{{ .Values.config.memex_portal.OpenAICompatible__Models__1 | default "" }}"
+  # Auto-discover the model list from the endpoint's /v1/models (Ollama etc.) instead of the
+  # static Models[] above — a pulled model then shows up in the picker without a config edit.
+  # When "true", leave Models[] empty (discovery owns this provider's child set). The embedding
+  # model (Embedding__Model) is excluded from the chat catalog. Empty/false = static behaviour.
+  OpenAICompatible__DiscoverModels: "{{ .Values.config.memex_portal.OpenAICompatible__DiscoverModels | default "" }}"
   # Tier → concrete model id (agents that declare ModelTier resolve through these).
   ModelTier__Heavy: "{{ .Values.config.memex_portal.ModelTier__Heavy }}"
   ModelTier__Standard: "{{ .Values.config.memex_portal.ModelTier__Standard }}"

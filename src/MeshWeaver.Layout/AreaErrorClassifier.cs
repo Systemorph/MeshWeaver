@@ -83,6 +83,33 @@ public static class AreaErrorClassifier
     }
 
     /// <summary>
+    /// True when the failure is a routing <b>NotFound</b> — the target node/hub no longer exists
+    /// (or never did). This is the "the thing you were viewing is gone" case, distinct from the
+    /// other <see cref="IsExpectedUserActionFailure"/> outcomes (access denied / validation), which
+    /// carry an actionable message worth showing verbatim.
+    ///
+    /// <para>Why it needs its own predicate: the routing layer's raw diagnostic —
+    /// <c>"No node found at 'rbuergi/_Activity/markdown-…'. Closest ancestor is 'rbuergi'
+    /// (remainder='…')"</c> — is a FRAMEWORK-INTERNAL string that must never reach an end user. It
+    /// surfaced verbatim when an ephemeral per-view interactive-kernel Activity idle-disposed under a
+    /// still-open embedded area (there is no push-signal for owner death — only the area's own re-read
+    /// discovers the miss). The GUI renders a graceful "view is no longer available" placeholder for
+    /// this case instead, while still logging the raw failure for authors. NOT retried (a gone node
+    /// won't come back on its own — that is <see cref="IsTransientHubFailure"/>'s "not yet online"
+    /// case, which is a DIFFERENT message: "target hub was not found").</para>
+    /// </summary>
+    public static bool IsNodeGoneNotFound(Exception? ex)
+    {
+        for (var e = ex; e != null; e = e.InnerException)
+        {
+            if (e is DeliveryFailureException
+                && (e.Message ?? string.Empty).StartsWith("No node found", StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+        return false;
+    }
+
+    /// <summary>
     /// The single predicate the area subscription hands to
     /// <see cref="AreaStreamRetry.RetryAreaWithBackoff{T}"/>: retry ONLY a transient hub
     /// miss — never a teardown <see cref="ObjectDisposedException"/> (benign) and never a

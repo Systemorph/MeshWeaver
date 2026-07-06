@@ -70,6 +70,35 @@ public class AreaErrorClassifierTest
     public void IsExpectedUserActionFailure_FalseForEngineeringError()
         => AreaErrorClassifier.IsExpectedUserActionFailure(new NullReferenceException()).Should().BeFalse();
 
+    // ── IsNodeGoneNotFound: routing NotFound → render a graceful placeholder, never the raw text ──
+
+    [Theory]
+    [InlineData("No node found at Foo/Bar")]
+    [InlineData("No node found at 'rbuergi/_Activity/markdown-wXXCCP7IukWc4chwFrhLbw'. Closest ancestor is 'rbuergi' (remainder='_Activity/markdown-wXXCCP7IukWc4chwFrhLbw').")]
+    public void IsNodeGoneNotFound_TrueForRoutingNotFound(string message)
+        => AreaErrorClassifier.IsNodeGoneNotFound(Failure(message, ErrorType.NotFound)).Should().BeTrue(
+            "the raw routing NotFound diagnostic must be caught and replaced with a graceful placeholder, "
+            + "not surfaced verbatim to the user (the ephemeral-kernel teardown symptom)");
+
+    [Theory]
+    [InlineData("Access denied: user lacks Read")]
+    [InlineData("Validation failed for X")]
+    public void IsNodeGoneNotFound_FalseForOtherUserActionFailures(string message)
+        => AreaErrorClassifier.IsNodeGoneNotFound(Failure(message, ErrorType.Unauthorized)).Should().BeFalse(
+            "access-denied / validation carry an actionable message worth showing verbatim — only a "
+            + "gone node gets the generic 'no longer available' placeholder");
+
+    [Fact]
+    public void IsNodeGoneNotFound_FalseForTransientHubNotYetOnline()
+        // "target hub was not found" is the transient not-yet-online case (retried), NOT a gone node.
+        => AreaErrorClassifier.IsNodeGoneNotFound(
+                Failure("The target hub was not found for address Foo/Bar", ErrorType.NotFound)).Should().BeFalse();
+
+    [Fact]
+    public void IsNodeGoneNotFound_FalseForNonDeliveryFailure()
+        => AreaErrorClassifier.IsNodeGoneNotFound(new InvalidOperationException("No node found at X")).Should().BeFalse(
+            "only a routing DeliveryFailure counts — a coincidental message on some other exception must not");
+
     // ── ShouldRetryArea: the single predicate the subscription hands the retry operator ──
 
     [Fact]

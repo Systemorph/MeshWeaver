@@ -440,6 +440,24 @@ export function initEditor(editorId, placeholder, dotNetRef, codeEditMode = fals
             }
         });
 
+        // Track text focus so the C# side can suppress external Value reconciles while the user
+        // owns the buffer. Without this, a data-bound echo (a live node-stream emission behind the
+        // Markdown editor, or a lagging MessageText round-trip behind the chat composer) reconciles
+        // via SetValue mid-edit and WIPES the in-progress keystrokes / resets the cursor — the
+        // "typing / backspace / arrows do nothing" report. onDidFocus/BlurEditorText fire for the
+        // text input specifically (not the surrounding widget), which is exactly what "the user is
+        // editing" means. Best-effort invoke: a disposed dotNetRef rejects and we swallow it.
+        editorInstance.onDidFocusEditorText(() => {
+            const st = editorState.get(editorId);
+            st?.dotNetRef?.invokeMethodAsync('HandleFocusChanged', true)
+                .catch(err => console.debug('HandleFocusChanged(true) failed (editor disposed?):', err));
+        });
+        editorInstance.onDidBlurEditorText(() => {
+            const st = editorState.get(editorId);
+            st?.dotNetRef?.invokeMethodAsync('HandleFocusChanged', false)
+                .catch(err => console.debug('HandleFocusChanged(false) failed (editor disposed?):', err));
+        });
+
         // Force layout after initialization
         setTimeout(() => {
             editorInstance.layout();

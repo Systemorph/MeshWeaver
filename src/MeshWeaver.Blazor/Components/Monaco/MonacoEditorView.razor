@@ -41,6 +41,22 @@
     private int lastCompletionItemCount = 0;
     private string? lastSetValue; // Track last value set to editor to detect external changes
 
+    // 🚨 External-echo clobber guard. A data-bound Value can arrive on a re-render WHILE the user is
+    // mid-edit — a live node-stream echo behind MarkdownEditorView, or a lagging MessageText round-trip
+    // behind the chat composer. Reconciling it into the editor via SetValue then WIPES the in-progress
+    // keystrokes and resets the cursor: the "typing / backspace / arrows do nothing" report. Two
+    // complementary suppressors (the single userIsTyping flag was removed in 9084b7ad5 and this
+    // regressed):
+    //   • userIsTyping  — set on every content change; suppresses the ONE reconcile that the keystroke
+    //                     itself triggers (synchronous echo on the same render), then re-arms.
+    //   • editorHasFocus — the user owns the buffer whenever the editor is focused, so suppress EVERY
+    //                     external reconcile then. Covers ASYNC stream echoes that land on their own
+    //                     render cycle (the Markdown case). Legitimate programmatic pushes never use
+    //                     this reconcile path — they go through SetValueAsync / SetValueSuppressTracking
+    //                     (which set lastSetValue) — so suppressing while focused blocks nothing real.
+    private bool userIsTyping;
+    private bool editorHasFocus;
+
     [CascadingParameter(Name = "ThemeMode")]
     public DesignThemeModes Mode { get; set; }
 
@@ -343,6 +359,11 @@
     public async Task HandleContentChanged(string? value)
     {
         value ??= string.Empty;
+        // The user just edited: mark active typing so the reconcile in OnAfterRenderAsync
+        // (triggered by the ValueChanged round-trip below) can't overwrite this keystroke
+        // with a lagging data-bound echo. Set synchronously here — this JS invoke carries
+        // the edit, so it beats the async focus event on the very first keystroke.
+        userIsTyping = true;
         if (value != Value)
         {
             Value = value;
@@ -362,6 +383,15 @@
     {
         await OnBlur.InvokeAsync();
     }
+
+    /// <summary>
+    /// Tracks Monaco text focus (from the JS module's onDidFocusEditorText / onDidBlurEditorText
+    /// listeners). While the editor is focused the user owns the buffer, so
+    /// <see cref="OnAfterRenderAsync"/> must not reconcile an external/echoed <see cref="Value"/>
+    /// into it — that would wipe the in-progress edit and reset the cursor.
+    /// </summary>
+    [JSInvokable]
+    public void HandleFocusChanged(bool focused) => editorHasFocus = focused;
 
     /// <summary>
     /// Fires when the user accepts a completion suggestion.
@@ -790,9 +820,13 @@
                 Theme = themeChanged ? GetMonacoTheme() : null
             });
 
-            // Check if Value changed from an external source (e.g., data binding).
+            // Reconcile a genuine EXTERNAL Value change into the editor — but NEVER while the user
+            // owns the buffer (actively typing, or simply focused). Reconciling mid-edit wiped the
+            // in-progress keystrokes and reset the cursor (the "typing / backspace / arrows do
+            // nothing" report). Legitimate programmatic pushes use SetValueAsync, not this path.
+            // See the userIsTyping / editorHasFocus fields.
             var currentValue = Value ?? "";
-            if (currentValue != lastSetValue)
+            if (currentValue != lastSetValue && !userIsTyping && !editorHasFocus)
             {
                 Logger.LogDebug("Value changed externally from '{OldValue}' to '{NewValue}'",
                     lastSetValue?.Substring(0, Math.Min(50, lastSetValue?.Length ?? 0)),
@@ -800,6 +834,9 @@
                 lastSetValue = currentValue;
                 await editor.SetValue(currentValue);
             }
+            // Re-arm: the keystroke-triggered render has passed, so a later genuine external change
+            // can reconcile again (while unfocused). editorHasFocus stays authoritative until blur.
+            userIsTyping = false;
 
             // Try to register completion provider (will skip if already registered with same items)
             await TryRegisterCompletionProvider();

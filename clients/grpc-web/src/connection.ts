@@ -42,6 +42,10 @@ export class MeshWebConnection {
   private connectionId = "";
   private readonly pending = new Map<string, (d: Delivery) => void>();
   private readonly subscriptions = new Map<string, (d: Delivery) => void>();
+  // The SubscribeRequest params per live streamId — kept so a dropped Connect stream can be
+  // re-opened and every subscription REPLAYED (see open()'s reconnect loop). Without replay, a
+  // mid-delivery drop strands the UI on whatever subset of area frames arrived first.
+  private readonly subscribeParams = new Map<string, { target: string; type: string; msg: Record<string, unknown> }>();
 
   private constructor(address: string, client: Client<typeof Mesh>, onError: (error: unknown) => void) {
     this.address = address;
@@ -58,31 +62,82 @@ export class MeshWebConnection {
     return conn.open();
   }
 
-  /** Open the `Connect` server-stream, resolve once the ack lands, then pump receives forever. */
+  /**
+   * Open the `Connect` server-stream, resolve once the FIRST ack lands, then pump receives — with an
+   * automatic RECONNECT loop. The gRPC-web server-stream can drop (proxy idle-close, network blip,
+   * a truncating port-forward): the browser then renders only the SUBSET of area frames that arrived
+   * before the drop, differently each reload ("renders a random subset / stops prematurely"). On a
+   * drop we re-open the stream and REPLAY every active SubscribeRequest, so the missing streams get a
+   * fresh Full frame; already-delivered streams dedup it by version (GrpcAreaSource), so replay
+   * completes the page without disturbing what's already rendered. Only a real close() (abort) stops it.
+   */
   private open(): Promise<MeshWebConnection> {
     return new Promise<MeshWebConnection>((resolve, reject) => {
-      let acked = false;
-      // The pump runs for the connection's whole life; the promise only gates on the first ack.
+      let firstAck = false;
+      let attempt = 0;
       void (async () => {
-        try {
-          for await (const frame of this.client.connect(
-            { address: JSON.stringify(this.address) },
-            { signal: this.abort.signal },
-          )) {
-            if (frame.kind.case === "ack") {
-              this.connectionId = frame.kind.value.connectionId;
-              acked = true;
-              resolve(this);
-            } else if (frame.kind.case === "receive") {
-              this.onFrame(frame.kind.value);
+        while (!this.abort.signal.aborted) {
+          try {
+            for await (const frame of this.client.connect(
+              { address: JSON.stringify(this.address) },
+              { signal: this.abort.signal },
+            )) {
+              if (frame.kind.case === "ack") {
+                this.connectionId = frame.kind.value.connectionId;
+                attempt = 0;
+                if (!firstAck) {
+                  firstAck = true;
+                  resolve(this);
+                } else {
+                  // A reconnect ack: re-establish every live stream on the new connection id.
+                  this.replaySubscriptions();
+                }
+              } else if (frame.kind.case === "receive") {
+                this.onFrame(frame.kind.value);
+              }
             }
+            // Clean end (server closed the stream). If it ended BEFORE the first ack, the caller's
+            // connect() would otherwise never settle — reject instead of silently entering the
+            // reconnect loop (there was never a live connection to reconnect).
+            if (!firstAck) {
+              if (!this.abort.signal.aborted) reject(new Error("connect: stream ended before ack"));
+              return;
+            }
+            // Acked once already — fall through to reconnect below.
+          } catch (error) {
+            if (this.abort.signal.aborted) return;
+            if (!firstAck) {
+              reject(error);
+              return;
+            }
+            this.onError(error); // a live stream dropped — reconnect below
           }
-          if (!acked) reject(new Error("connect: stream ended before ack"));
-        } catch (error) {
-          if (!acked) reject(error);
-          else if (!this.abort.signal.aborted) this.onError(error); // a live stream dropped, not a close()
+          if (this.abort.signal.aborted) return;
+          // Backoff before reconnecting (linear, capped ~5s); abort cancels the wait immediately.
+          attempt++;
+          await this.sleep(Math.min(250 * attempt, 5000));
         }
       })();
+    });
+  }
+
+  /** Re-post the SubscribeRequest for every live stream (after a reconnect ack). */
+  private replaySubscriptions(): void {
+    for (const [streamId, p] of this.subscribeParams) this.post(p.target, p.type, { ...p.msg, streamId });
+  }
+
+  /** Abort-aware delay for the reconnect backoff. Cleans up the abort listener on BOTH paths (normal
+   *  timer fire and abort) so listeners don't accumulate on the AbortSignal across reconnects. */
+  private sleep(ms: number): Promise<void> {
+    return new Promise<void>((resolve) => {
+      let timer: ReturnType<typeof setTimeout>;
+      const finish = () => {
+        clearTimeout(timer);
+        this.abort.signal.removeEventListener("abort", finish);
+        resolve();
+      };
+      timer = setTimeout(finish, ms);
+      this.abort.signal.addEventListener("abort", finish, { once: true });
     });
   }
 
@@ -146,6 +201,8 @@ export class MeshWebConnection {
       wake?.();
       wake = null;
     });
+    // Remember the subscribe params so a reconnect can replay this stream (see open()).
+    this.subscribeParams.set(streamId, { target, type: subscribeType, msg: subscribeMsg });
     this.post(target, subscribeType, { ...subscribeMsg, streamId });
     try {
       while (!this.abort.signal.aborted) {
@@ -154,6 +211,7 @@ export class MeshWebConnection {
       }
     } finally {
       this.subscriptions.delete(streamId);
+      this.subscribeParams.delete(streamId);
     }
   }
 
