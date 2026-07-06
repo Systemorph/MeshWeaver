@@ -10,3 +10,8 @@ declare module "text-encoding" {
   export const TextEncoder: any;
   export const TextDecoder: any;
 }
+// Native-only HTML renderer (consumed exclusively by nativeHtml.native.tsx; the web build never bundles it).
+declare module "react-native-render-html" {
+  const RenderHtml: any;
+  export default RenderHtml;
+}

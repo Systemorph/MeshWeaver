@@ -212,8 +212,20 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
         var accessService = Hub.ServiceProvider.GetService<AccessService>();
         var wrappedTools = tools.Select(tool => WrapToolWithAccessContext(tool, chat, accessService)).ToList();
 
+        // #321: when a per-round tool-call cap is configured, make the model AWARE of its
+        // budget so it wraps up gracefully with a "type continue" hand-off on reaching it.
+        // The HARD enforcement is FunctionInvokingChatClient.MaximumIterationsPerRequest (set
+        // below); this instruction only makes the limit self-documenting to the model so the
+        // graceful final answer reads as a summary rather than an abrupt stop.
+        var effectiveInstructions = instructions;
+        if (config.MaxToolCallsPerRound is { } capForPrompt && capForPrompt > 0)
+            effectiveInstructions +=
+                $"\n\n---\nTool-call budget: you may issue at most {capForPrompt} tool calls in this turn. " +
+                "If you reach this budget before finishing, stop, briefly summarise what you accomplished, " +
+                "and ask the user to reply \"continue\" to run the next batch.";
+
         var agent = new ChatClientAgent(
-            chatClient: chatClient, instructions: instructions,
+            chatClient: chatClient, instructions: effectiveInstructions,
             name: name, description: description,
             tools: wrappedTools, loggerFactory: null, services: null);
 
@@ -221,6 +233,17 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
         if (functionInvoker != null)
         {
             functionInvoker.AllowConcurrentInvocation = true;
+            // #321: per-agent HARD cap on tool-call iterations. Without this,
+            // MaximumIterationsPerRequest falls back to the Microsoft.Extensions.AI default
+            // (high), so a high-volume agent can issue hundreds of tool calls in a single
+            // round before it engages. On reaching the cap the framework strips tools on the
+            // final iteration (PrepareOptionsForLastIteration) so the model returns a graceful
+            // final answer instead of truncating — it does NOT throw. It only logs "Reached
+            // maximum iteration count" internally and surfaces no distinct limit-reached signal
+            // to the streaming consumer, so the summary hand-off is driven by the instruction
+            // appended above rather than a framework callback.
+            if (config.MaxToolCallsPerRound is { } cap && cap > 0)
+                functionInvoker.MaximumIterationsPerRequest = cap;
             // Log the maximum iterations — if the model tries more tool calls than this, it stops
             Logger.LogInformation("[AgentFactory] FunctionInvoker for {Agent}: MaximumIterationsPerRequest={Max}",
                 name, functionInvoker.MaximumIterationsPerRequest);

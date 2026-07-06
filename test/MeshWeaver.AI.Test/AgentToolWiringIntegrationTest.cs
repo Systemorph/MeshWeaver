@@ -164,6 +164,54 @@ public class AgentToolWiringIntegrationTest : MonolithMeshTestBase
         }
     }
 
+    /// <summary>
+    /// #321: <see cref="AgentConfiguration.MaxToolCallsPerRound"/> must flow into the built
+    /// agent's <see cref="FunctionInvokingChatClient.MaximumIterationsPerRequest"/> — the real,
+    /// per-agent, framework-enforced cap on tool-call iterations. When unset, the value stays at
+    /// the Microsoft.Extensions.AI default (never silently forced to the configured value).
+    /// </summary>
+    [Fact]
+    public void MaxToolCallsPerRound_FlowsInto_MaximumIterationsPerRequest()
+    {
+        var capturingClient = Mesh.ServiceProvider.GetRequiredService<CapturingChatClient>();
+        var factory = Mesh.ServiceProvider.GetServices<IChatClientFactory>()
+            .OfType<CapturingChatClientFactory>().Single();
+        var chat = new AgentChatClient(Mesh.ServiceProvider);
+
+        var cappedConfig = new AgentConfiguration
+        {
+            Id = "CapAgent",
+            Description = "agent under test",
+            Instructions = "You are a test agent.",
+            MaxToolCallsPerRound = 7,
+        };
+        var uncappedConfig = cappedConfig with { Id = "UncappedAgent", MaxToolCallsPerRound = null };
+
+        var cappedAgent = factory.CreateAgent(
+            cappedConfig, chat,
+            new Dictionary<string, Microsoft.Agents.AI.ChatClientAgent>(),
+            [cappedConfig]);
+        var uncappedAgent = factory.CreateAgent(
+            uncappedConfig, chat,
+            new Dictionary<string, Microsoft.Agents.AI.ChatClientAgent>(),
+            [uncappedConfig]);
+
+        var cappedFicc = cappedAgent.ChatClient.GetService<FunctionInvokingChatClient>();
+        var uncappedFicc = uncappedAgent.ChatClient.GetService<FunctionInvokingChatClient>();
+
+        cappedFicc.Should().NotBeNull("the agent's chat-client pipeline includes FunctionInvokingChatClient");
+        uncappedFicc.Should().NotBeNull();
+
+        cappedFicc!.MaximumIterationsPerRequest.Should().Be(7,
+            "AgentConfiguration.MaxToolCallsPerRound must be wired onto the per-round FICC cap");
+        uncappedFicc!.MaximumIterationsPerRequest.Should().NotBe(7,
+            "when MaxToolCallsPerRound is unset the FICC keeps its framework default — the cap is " +
+            "never hardcoded to the configured value");
+
+        // Sanity: the capturing client is what the factory wrapped (no live model needed).
+        _ = capturingClient;
+    }
+
     #region Capturing Infrastructure
 
     /// <summary>
