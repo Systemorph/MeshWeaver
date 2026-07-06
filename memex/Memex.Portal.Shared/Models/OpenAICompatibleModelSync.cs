@@ -55,14 +55,20 @@ public sealed class OpenAICompatibleModelSync : IHostedService, IDisposable
     private readonly IMessageHub hub;
     private readonly IConfiguration configuration;
     private readonly ProviderModelLister lister;
-    private readonly AccessService accessService;
-    private readonly IMeshService meshService;
+    // 🚨 LAZY — resolved on FIRST USE, never in the constructor. Resolving IMeshService / touching the
+    // workspace eagerly builds the process-wide MeshNodeStreamCache hub; doing that during host startup
+    // (a hosted-service ctor runs at DI build time) can construct the cache BEFORE the Orleans stream
+    // provider is ready → an NRE that kills the cache hub and wedges the whole silo. A hosted service's
+    // ctor must be cheap and side-effect-free; all cache access is deferred to BeginDiscovery (below).
+    private readonly Lazy<AccessService> accessService;
+    private readonly Lazy<IMeshService> meshService;
     private readonly ILogger<OpenAICompatibleModelSync>? logger;
 
     // Live snapshot of the current OpenAICompatible model-child ids (kept fresh by the catalog query).
     // Instance field (never static), StringComparer.OrdinalIgnoreCase — model ids are case-insensitive.
     private volatile ImmutableHashSet<string> catalogIds =
         ImmutableHashSet.Create<string>(StringComparer.OrdinalIgnoreCase);
+    private IDisposable? startupSub;
     private IDisposable? catalogSub;
     private IDisposable? timerSub;
 
@@ -76,9 +82,10 @@ public sealed class OpenAICompatibleModelSync : IHostedService, IDisposable
         this.configuration = configuration;
         this.lister = lister;
         this.logger = logger;
-        // IMeshService is scoped per hub — resolve from the mesh hub's provider, not the web root.
-        accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
-        meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
+        // Cheap, side-effect-free ctor: NO service resolution, NO workspace/cache access. IMeshService is
+        // scoped per hub — resolve lazily from the mesh hub's provider on first use, never here.
+        accessService = new Lazy<AccessService>(() => hub.ServiceProvider.GetRequiredService<AccessService>());
+        meshService = new Lazy<IMeshService>(() => hub.ServiceProvider.GetRequiredService<IMeshService>());
     }
 
     /// <inheritdoc />
@@ -96,6 +103,34 @@ public sealed class OpenAICompatibleModelSync : IHostedService, IDisposable
         var period = TimeSpan.FromSeconds(
             Math.Max(15, configuration.GetValue("OpenAICompatible:DiscoverIntervalSeconds", 120)));
 
+        // 🚨 Defer EVERY mesh-cache touch (the catalog query AND the reconcile) until initialDelay past
+        // startup, off any hub thread. StartAsync runs during host startup, when the Orleans stream
+        // provider may not be ready; touching the workspace/cache then constructs the process cache hub
+        // too early and NREs. The one-shot timer here does nothing but schedule BeginDiscovery later, so
+        // this hosted service is inert during the fragile startup window. Wrapped so it can never wedge.
+        startupSub = Observable.Timer(initialDelay, TaskPoolScheduler.Default)
+            .Subscribe(_ =>
+            {
+                try
+                {
+                    BeginDiscovery(endpoint!, apiKey, embeddingModel, period);
+                }
+                catch (Exception ex)
+                {
+                    logger?.LogError(ex, "[OpenAICompatibleModelSync] failed to start discovery — disabled for this run");
+                }
+            });
+
+        logger?.LogInformation(
+            "[OpenAICompatibleModelSync] Ollama/OpenAI-compatible model discovery enabled (endpoint {Endpoint}, first run in {Delay}s, every {Period}s)",
+            endpoint, initialDelay.TotalSeconds, period.TotalSeconds);
+        return Task.CompletedTask;
+    }
+
+    // Runs once, initialDelay past startup (Orleans is up by now), off any hub thread. Sets up the live
+    // catalog snapshot AND the periodic reconcile. This is the FIRST point the mesh cache is touched.
+    private void BeginDiscovery(string endpoint, string apiKey, string? embeddingModel, TimeSpan period)
+    {
         // (a) Live snapshot of the current OpenAICompatible LanguageModel child ids (system read — the
         //     Provider partition needs an identity). Constant query id: one registry entry, no leak.
         catalogSub = AsSystem(() => hub.GetWorkspace()
@@ -110,10 +145,10 @@ public sealed class OpenAICompatibleModelSync : IHostedService, IDisposable
                 ex => logger?.LogWarning(ex, "[OpenAICompatibleModelSync] catalog query failed"));
 
         // (b) Periodic reconcile: fetch the endpoint's live model list, diff against the catalog,
-        //     create/delete. Runs at initialDelay then every period, off any hub thread. A failed cycle
-        //     is logged and the loop continues (no watchdog resubscribe — the timer already re-fires).
-        timerSub = Observable.Timer(initialDelay, period, TaskPoolScheduler.Default)
-            .SelectMany(_ => Reconcile(endpoint!, apiKey, embeddingModel)
+        //     create/delete. Fires immediately (we're already past initialDelay) then every period. A
+        //     failed cycle is logged and the loop continues (no watchdog resubscribe — the timer re-fires).
+        timerSub = Observable.Timer(TimeSpan.Zero, period, TaskPoolScheduler.Default)
+            .SelectMany(_ => Reconcile(endpoint, apiKey, embeddingModel)
                 .Catch<Unit, Exception>(ex =>
                 {
                     logger?.LogWarning(ex,
@@ -123,11 +158,6 @@ public sealed class OpenAICompatibleModelSync : IHostedService, IDisposable
                 }))
             .Subscribe(_ => { },
                 ex => logger?.LogError(ex, "[OpenAICompatibleModelSync] discovery loop terminated"));
-
-        logger?.LogInformation(
-            "[OpenAICompatibleModelSync] Ollama/OpenAI-compatible model discovery enabled (endpoint {Endpoint}, first run in {Delay}s, every {Period}s)",
-            endpoint, initialDelay.TotalSeconds, period.TotalSeconds);
-        return Task.CompletedTask;
     }
 
     // Fetch → decide (pure ComputeDelta: drop embeddings, diff, empty-guard) → apply. Exposed internally
@@ -158,7 +188,7 @@ public sealed class OpenAICompatibleModelSync : IHostedService, IDisposable
                 catalogIds = catalogIds.Except(delta.ToRemove).Union(delta.ToAdd);
 
                 var ops = delta.ToAdd
-                    .Select(id => AsSystem(() => meshService.CreateOrUpdateNode(BuildModelNode(id)))
+                    .Select(id => AsSystem(() => meshService.Value.CreateOrUpdateNode(BuildModelNode(id)))
                         .Select(_ => Unit.Default)
                         .Catch<Unit, Exception>(ex =>
                         {
@@ -166,7 +196,7 @@ public sealed class OpenAICompatibleModelSync : IHostedService, IDisposable
                             return Observable.Return(Unit.Default);
                         }))
                     .Concat(delta.ToRemove
-                        .Select(id => AsSystem(() => meshService.DeleteNode($"{ProviderPath}/{id}"))
+                        .Select(id => AsSystem(() => meshService.Value.DeleteNode($"{ProviderPath}/{id}"))
                             .Select(_ => Unit.Default)
                             .Catch<Unit, Exception>(ex =>
                             {
@@ -254,7 +284,7 @@ public sealed class OpenAICompatibleModelSync : IHostedService, IDisposable
 
     // Construct AND subscribe under the system identity (no ambient AccessContext in a hosted service).
     private IObservable<T> AsSystem<T>(Func<IObservable<T>> factory) =>
-        Observable.Using(accessService.ImpersonateAsSystem, _ => Observable.Defer(factory));
+        Observable.Using(accessService.Value.ImpersonateAsSystem, _ => Observable.Defer(factory));
 
     /// <inheritdoc />
     public Task StopAsync(CancellationToken cancellationToken)
@@ -266,6 +296,7 @@ public sealed class OpenAICompatibleModelSync : IHostedService, IDisposable
     /// <inheritdoc />
     public void Dispose()
     {
+        startupSub?.Dispose();
         catalogSub?.Dispose();
         timerSub?.Dispose();
     }
