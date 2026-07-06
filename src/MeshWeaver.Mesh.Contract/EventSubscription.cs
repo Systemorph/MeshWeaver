@@ -39,7 +39,12 @@ public enum EventContinuationType
     GrantSpaceAccess = 0,
     /// <summary>Post the watched node's summary back into the thread at
     /// <see cref="EventSubscription.TargetPath"/> as a new round (the durable delegation backstop, stage 5).</summary>
-    PostThreadMessage = 1
+    PostThreadMessage = 1,
+    /// <summary>Add the triggering user to the group at <see cref="EventSubscription.TargetPath"/> (a
+    /// <c>GroupMembership</c> node). The group-invite twin of <see cref="GrantSpaceAccess"/>: an email
+    /// invite to a <b>group</b> that lands membership — and, transitively, whatever the group is granted —
+    /// the moment the invitee's account exists.</summary>
+    AddToGroup = 2
 }
 
 /// <summary>
@@ -117,7 +122,7 @@ public record EventSubscription
     public EventContinuationType ContinuationType { get; init; } = EventContinuationType.GrantSpaceAccess;
 
     /// <summary>The node the continuation targets — for <see cref="EventContinuationType.GrantSpaceAccess"/>
-    /// the Space path.</summary>
+    /// the Space path, for <see cref="EventContinuationType.AddToGroup"/> the Group path.</summary>
     public string? TargetPath { get; init; }
 
     /// <summary>The subject the continuation acts on when the trigger carries no node (e.g. a
