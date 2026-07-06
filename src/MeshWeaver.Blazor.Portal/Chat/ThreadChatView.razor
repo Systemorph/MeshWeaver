@@ -229,7 +229,7 @@ else
                     var isUser = state?.Role?.Equals("user", StringComparison.OrdinalIgnoreCase) ?? false;
                     var bubbleRoleClass = isUser ? "thread-msg-user" : "thread-msg-assistant";
 
-                    <div @key="@msgId" class="thread-msg-bubble @bubbleRoleClass @(IsMissing(msgId) ? "thread-msg-missing" : "")">
+                    <div @key="@msgId" class="thread-msg-bubble @bubbleRoleClass @(IsMissing(msgId) ? "thread-msg-missing" : "") @(IsEditing(msgId) ? "thread-msg-editing" : "")">
                     @if (state is null && IsMissing(msgId))
                     {
                         @* Satellite cell never delivered an emission within the

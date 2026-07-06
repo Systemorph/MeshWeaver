@@ -109,6 +109,15 @@
     min-width: 0;
 }
 
+/* Editing a message: the inline Edit composer renders INSIDE the message bubble, which for a user
+   message is width-constrained (right-aligned chat bubble). While editing, stretch the bubble to the
+   full column width so the composer is 100% wide — you're editing, not reading a chat bubble. */
+.thread-msg-bubble.thread-msg-editing {
+    max-width: 100%;
+    width: 100%;
+    align-self: stretch;
+}
+
 /* Title — nice headline; click-to-edit. The -6px side margins let the hover
    background bleed slightly past the text without shifting the layout. */
 .thread-header-title {
