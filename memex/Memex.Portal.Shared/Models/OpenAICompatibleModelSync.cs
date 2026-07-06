@@ -153,7 +153,10 @@ public sealed class OpenAICompatibleModelSync : IHostedService, IDisposable
         //     create/delete. Fires immediately (we're already past initialDelay) then every period. A
         //     failed cycle is logged and the loop continues (no watchdog resubscribe — the timer re-fires).
         timerSub = Observable.Timer(TimeSpan.Zero, period, TaskPoolScheduler.Default)
-            .SelectMany(_ => Reconcile(endpoint, apiKey, embeddingModel)
+            // Concat (not SelectMany): reconcile cycles run STRICTLY ONE AT A TIME — a tick that fires
+            // while the previous cycle is still running queues behind it instead of overlapping. This
+            // keeps the single-shot backfill flag and the catalog diff free of any concurrent access.
+            .Select(_ => Observable.Defer(() => Reconcile(endpoint, apiKey, embeddingModel))
                 .Catch<Unit, Exception>(ex =>
                 {
                     logger?.LogWarning(ex,
@@ -161,6 +164,7 @@ public sealed class OpenAICompatibleModelSync : IHostedService, IDisposable
                         endpoint);
                     return Observable.Return(Unit.Default);
                 }))
+            .Concat()
             .Subscribe(_ => { },
                 ex => logger?.LogError(ex, "[OpenAICompatibleModelSync] discovery loop terminated"));
     }
