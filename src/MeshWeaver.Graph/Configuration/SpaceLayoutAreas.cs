@@ -247,9 +247,9 @@ public static class SpaceLayoutAreas
         if (!string.IsNullOrEmpty(logoTrimmed) && logoTrimmed.StartsWith("<svg", StringComparison.OrdinalIgnoreCase))
         {
             logoControl = Controls.Html(
-                "<div style=\"height: 72px; min-width: 72px; border-radius: 12px; background: var(--neutral-layer-2); " +
-                "padding: 6px; box-sizing: border-box; display: flex; align-items: center; justify-content: center;\">" +
-                $"{logoTrimmed}</div>");
+                "<div style=\"height: 72px; width: 72px; border-radius: 12px; background: var(--neutral-layer-2); " +
+                "padding: 6px; box-sizing: border-box; overflow: hidden; display: flex; align-items: center; justify-content: center;\">" +
+                $"{OverviewLayoutArea.SizeInlineSvg(logoTrimmed)}</div>");
         }
         else if (!string.IsNullOrEmpty(logoTrimmed)
                  && (logoTrimmed.StartsWith("http", StringComparison.OrdinalIgnoreCase)

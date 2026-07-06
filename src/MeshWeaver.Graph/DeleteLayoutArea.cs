@@ -114,9 +114,10 @@ public static class DeleteLayoutArea
                 .WithNavigateToHref(backHref))
             .WithView(Controls.H2("Delete Node").WithStyle("margin: 0; color: var(--error);")));
 
+        var safePath = System.Web.HttpUtility.HtmlEncode(nodePath);
         var warningText = descendantCount > 0
-            ? $"This will permanently delete this node and <strong>{descendantCount} descendant node(s)</strong> under <code>{nodePath}</code>."
-            : $"This will permanently delete the node at <code>{nodePath}</code>.";
+            ? $"This will permanently delete this node and <strong>{descendantCount} descendant node(s)</strong> under <code>{safePath}</code>."
+            : $"This will permanently delete the node at <code>{safePath}</code>.";
 
         // Ready-made, theme-aware styling: Fluent's status-DANGER design tokens — the SAME ones
         // <FluentMessageBar Intent="Error"> (see MeshNodeErrorCardView) uses, so it reads correctly in

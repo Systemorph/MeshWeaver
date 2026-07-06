@@ -223,14 +223,31 @@ public static class OverviewLayoutArea
             return "";
         var trimmed = icon.Trim();
         if (trimmed.StartsWith("<svg", StringComparison.OrdinalIgnoreCase))
-            return $"<span style=\"display:inline-flex; width:32px; height:32px;\">{trimmed}</span>";
+            return $"<span style=\"display:inline-flex; width:32px; height:32px; overflow:hidden;\">{SizeInlineSvg(trimmed)}</span>";
+        // A `content:` UCR needs node-context resolution to a served URL — render nothing rather than a
+        // broken <img src="content:…"> (proper resolution is a follow-up).
+        if (trimmed.StartsWith("content:", StringComparison.OrdinalIgnoreCase))
+            return "";
         var looksLikeUrl = trimmed.StartsWith("http", StringComparison.OrdinalIgnoreCase)
             || trimmed.StartsWith("/") || trimmed.StartsWith("data:", StringComparison.OrdinalIgnoreCase)
             || trimmed.Contains('.');
-        return looksLikeUrl
-            ? $"<img src=\"{System.Web.HttpUtility.HtmlAttributeEncode(trimmed)}\" alt=\"\" style=\"width:32px; height:32px; object-fit:contain;\" />"
+        if (looksLikeUrl)
+            return $"<img src=\"{System.Web.HttpUtility.HtmlAttributeEncode(trimmed)}\" alt=\"\" style=\"width:32px; height:32px; object-fit:contain;\" />";
+        // A bare token: an emoji (non-ASCII glyph) renders; a legacy Fluent icon NAME (an ASCII word like
+        // "Building") is not an image and renders nothing rather than literal text.
+        return trimmed.All(char.IsAscii)
+            ? ""
             : $"<span style=\"font-size:28px; line-height:1;\">{System.Web.HttpUtility.HtmlEncode(trimmed)}</span>";
     }
+
+    /// <summary>Forces an inline <c>&lt;svg&gt;</c> to fill its container by injecting a
+    /// <c>width/height:100%</c> style onto the root element — so an icon with a <c>viewBox</c> but no
+    /// explicit <c>width</c>/<c>height</c> (which a browser would render at the ~300×150 default and
+    /// overflow the tile) scales to its box instead.</summary>
+    internal static string SizeInlineSvg(string svg) =>
+        System.Text.RegularExpressions.Regex.Replace(svg.Trim(), "^<svg\\b",
+            "<svg style=\"width:100%;height:100%\" preserveAspectRatio=\"xMidYMid meet\"",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
 
     private static UiControl BuildTitleEditView(
         LayoutAreaHost _,
