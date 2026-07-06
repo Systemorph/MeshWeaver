@@ -31,6 +31,21 @@ internal static class ThreadExecution
     // for "live typing" while keeping patch volume bounded.
     private static readonly TimeSpan StreamingSampleInterval = TimeSpan.FromMilliseconds(100);
 
+    // #321: reasoning heartbeat. When the model produces no stream update for longer
+    // than this (between tool calls, or while a tool call is in flight), the streaming
+    // Sample(100ms) hot path stops emitting and the status line would otherwise freeze on
+    // the last tool-call stamp — "thinking" indistinguishable from "stuck". A gap longer
+    // than this threshold ticks a "Reasoning… (Ns)" heartbeat onto the thread's
+    // ExecutionStatus. Also the tick period, so writes stay bounded (one per interval).
+    private static readonly TimeSpan HeartbeatIdleThreshold = TimeSpan.FromSeconds(3);
+
+    // #321: acknowledgement stamped onto MeshThread.ExecutionStatus the instant a Stop
+    // (RequestedStatus = Cancelled) is observed while a round is executing, so the UI
+    // confirms the Stop was registered rather than freezing on the previous tool-call
+    // status while the in-flight tool call drains (up to its ~30s timeout).
+    internal const string CancellationRequestedStatus =
+        "Cancellation requested — stopping after current operation…";
+
     private sealed record StreamingSnapshot(
         string Text,
         ImmutableList<ToolCallEntry> ToolCalls,
@@ -1739,6 +1754,46 @@ internal static class ThreadExecution
                             StripSummaryBlock(s.Text), s.ToolCalls, s.NodeChanges,
                             request.AgentName, request.ModelName,
                             status: ThreadMessageStatus.Streaming));
+
+                    // 💓 #321 reasoning heartbeat. Derived from the SAME `snapshots` stream:
+                    // every real emission (text chunk / tool call / result) restarts an idle
+                    // timer via Switch, so a heartbeat only fires during a genuine gap — the
+                    // stretches where the model reasons between (or during) tool calls and the
+                    // Sample(100ms) path is silent. Each tick stamps "Reasoning… (Ns)" onto the
+                    // thread's ExecutionStatus (otherwise null for the whole round, so this is
+                    // strictly additive — no existing writer competes). The write is guarded
+                    // inside the Update lambda to the still-Executing, not-cancel-requested state
+                    // so it never clobbers the cancellation ack or a terminal status, and the
+                    // subscription is disposed with the round via `using` on every exit path
+                    // (normal completion, requested cancel, timeout, error) — bounded and
+                    // self-cancelling, no hand-rolled Task/Timer/SemaphoreSlim.
+                    using var heartbeatSub = snapshots
+                        .Select(_ => 0L)
+                        .StartWith(0L)
+                        .Select(_ => Observable.Timer(HeartbeatIdleThreshold, HeartbeatIdleThreshold))
+                        .Switch()
+                        .Subscribe(ticks =>
+                        {
+                            if (ct.IsCancellationRequested)
+                                return;
+                            var elapsed = (int)((ticks + 1) * HeartbeatIdleThreshold.TotalSeconds);
+                            var heartbeatStatus = $"Reasoning… ({elapsed}s)";
+                            // Re-seed identity before the cross-thread cell/thread write — same
+                            // reason as PushToResponseMessage (the timer callback runs on a pool
+                            // thread where AsyncLocal Context was dropped).
+                            if (userAccessContext != null)
+                                parentHub.ServiceProvider.GetService<AccessService>()?.SetContext(userAccessContext);
+                            parentHub.GetWorkspace().GetMeshNodeStream(threadPath).Update(node =>
+                                node?.Content is MeshThread t
+                                    && t.Status == ThreadExecutionStatus.Executing
+                                    && t.RequestedStatus != ThreadExecutionStatus.Cancelled
+                                    ? node with { Content = t with { ExecutionStatus = heartbeatStatus } }
+                                    : node!)
+                                .Subscribe(
+                                    _ => { },
+                                    ex => logger.LogDebug(ex,
+                                        "[ThreadExec] Reasoning heartbeat stamp failed for {Path}", threadPath));
+                        });
                     var pendingCalls = ImmutableDictionary<string, FunctionCallContent>.Empty;
                     string? lastCallKey = null;
 
@@ -2729,6 +2784,24 @@ internal static class ThreadExecution
                 x =>
                 {
                     var thread = x.Thread!;
+
+                    // #321: acknowledge the Stop IMMEDIATELY. The round's own CTS self-cancel
+                    // (ExecuteMessageAsync) tears the round down only after the in-flight tool
+                    // call finishes or hits its timeout (~30s); during that window the status
+                    // line would otherwise stay frozen on the previous tool-call stamp with no
+                    // sign the Stop was received. Stamp the thread's ExecutionStatus now, guarded
+                    // to the still-executing + still-cancel-requested state so it never clobbers a
+                    // terminal write, and leaving RequestedStatus in place for the round's
+                    // terminal handler. The reasoning heartbeat is suppressed while
+                    // RequestedStatus == Cancelled, so this ack persists until the round settles.
+                    hub.GetWorkspace().GetMeshNodeStream().Update(
+                        curr => curr?.Content is MeshThread ackThread
+                                && ackThread.Status.IsExecuting()
+                                && ackThread.RequestedStatus == ThreadExecutionStatus.Cancelled
+                            ? curr with { Content = ackThread with { ExecutionStatus = CancellationRequestedStatus } }
+                            : curr!)
+                        .Subscribe(_ => { }, ex => logger?.LogDebug(ex,
+                            "[ThreadExec] Cancellation ack stamp failed for {ThreadPath}", threadPath));
 
                     // Propagate to every active delegation sub-thread via the
                     // canonical IMeshNodeStreamCache. The sub-thread is a

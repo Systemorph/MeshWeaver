@@ -46,7 +46,7 @@ public class SpaceNamespaceVisibilityTests
         {
             Name = "PartnerRe AG",
             NodeType = "Space",
-            Content = new Space { Name = "PartnerRe AG" }
+            Content = new Space()
         }, _options).Should().Within(30.Seconds()).Emit();
 
         // Seed a child node under the Space

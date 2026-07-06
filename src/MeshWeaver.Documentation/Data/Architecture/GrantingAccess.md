@@ -67,7 +67,7 @@ The **Subject (User or Group)** picker is bound to the canonical queries in `Acc
 
 The picker loads the subject set once (capped at 500 nodes) and filters **in-memory, diacritic- and case-insensitively** (`SearchText.Fold`): typing "Burgi" finds "Bürgi". On installations with more subjects than the cap, typed text additionally runs the normal server-side search and the union is shown, so users beyond the cap remain findable (that path matches by substring, without diacritic folding).
 
-**Limitation — not-yet-provisioned users.** A `User` node is created at first login/onboarding, so a person who has never logged in cannot be picked. Either invite them first (platform admin → Invitations), or grant by principal via MCP (Recipe 3 below with the exact login userId) — the assignment lies dormant until they exist.
+**Not-yet-provisioned users — grant by email.** A `User` node is created at first login/onboarding, so a person who has never signed in has no node to *pick*. The **Add** row therefore also takes an **email**: leave the subject picker empty and type the address instead. If an account already exists it is granted the selected role immediately; otherwise the person is invited and a durable deferred grant — an `EventSubscription` (see [EventSubscriptions](/Doc/Architecture/EventSubscriptions)) — lands the **same role at this exact `{scope}/_Access`** the moment they sign up. The scheduled grant is byte-identical to the immediate one, so the invitee ends up with exactly the assignment an already-provisioned subject would. (You can still grant by principal via MCP — Recipe 3 below with the exact login userId — for a fully headless setup.)
 
 ---
 

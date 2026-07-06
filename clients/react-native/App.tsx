@@ -1,6 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
-import { SafeAreaView, StatusBar } from "react-native";
-import { RegistryProvider, ScopeProvider, StaticAreaSource, type AreaSource } from "@meshweaver/react/core";
+import { SafeAreaView, StatusBar, LogBox } from "react-native";
+import {
+  RegistryProvider,
+  ScopeProvider,
+  StaticAreaSource,
+  EmbeddedAreaProvider,
+  createGrpcEmbeddedFactory,
+  type AreaSource,
+  type AreaSourceFactory,
+} from "@meshweaver/react/core";
 import { Mesh } from "@meshweaver/client-web";
 import { rnPack } from "./src/rnPack";
 import { sampleArea } from "./src/sample";
@@ -46,6 +54,11 @@ const CHAT: ChatOptions | null = {
 };
 // const CHAT: ChatOptions | null = null;
 
+// react-native-render-html (the native HTML renderer) still uses React's deprecated `defaultProps`,
+// which React 18.3 logs as a dev-only warning per node — suppress that one third-party message so it
+// doesn't bury real warnings (harmless; gone in a release build).
+LogBox.ignoreLogs([/Support for defaultProps will be removed/]);
+
 export default function App() {
   ensureWebStyles();
   return (
@@ -63,6 +76,8 @@ function AppInner() {
   const [source, setSource] = useState<AreaSource>(() => new StaticAreaSource(sampleArea));
   const [liveConnected, setLiveConnected] = useState(false);
   const [submitter, setSubmitter] = useState<ThreadSubmitter | undefined>(undefined);
+  // The factory `@@` layout-area embeds (LayoutAreaControl) open their nested area streams through.
+  const [embedFactory, setEmbedFactory] = useState<AreaSourceFactory | null>(null);
 
   const navigate = (t: NavTarget) => {
     setClientScreen(null);
@@ -88,8 +103,10 @@ function AppInner() {
         live = l;
         setSource(l.source);
         setLiveConnected(true);
-        // The SAME gRPC-web connection carries thread submissions (Mesh.startThread / Mesh.submitMessage).
+        // The SAME gRPC-web connection carries thread submissions (Mesh.startThread / Mesh.submitMessage)
+        // AND the nested streams that `@@("area/X")` layout-area embeds open.
         setSubmitter(Mesh.from(l.connection));
+        setEmbedFactory(() => createGrpcEmbeddedFactory(l.connection));
       })
       .catch((e) => { console.warn("[live] connect failed:", e?.message ?? String(e)); /* shell stays on the last-good source */ });
     return () => {
@@ -125,20 +142,22 @@ function AppInner() {
     <SafeAreaView style={{ flex: 1, backgroundColor: palette.appBg }}>
       <StatusBar />
       <RegistryProvider pack={rnPack}>
-        <NavContext.Provider value={navigate}>
-          <CurrentAddressContext.Provider value={nav.address}>
-            <ScopeProvider source={source} area={effNav.area}>
-              <Shell
-                source={source}
-                nav={effNav}
-                clientScreen={clientScreen}
-                onNavigate={navigate}
-                onClientScreen={setClientScreen}
-                onReconnect={reconnect}
-              />
-            </ScopeProvider>
-          </CurrentAddressContext.Provider>
-        </NavContext.Provider>
+        <EmbeddedAreaProvider factory={embedFactory}>
+          <NavContext.Provider value={navigate}>
+            <CurrentAddressContext.Provider value={nav.address}>
+              <ScopeProvider source={source} area={effNav.area}>
+                <Shell
+                  source={source}
+                  nav={effNav}
+                  clientScreen={clientScreen}
+                  onNavigate={navigate}
+                  onClientScreen={setClientScreen}
+                  onReconnect={reconnect}
+                />
+              </ScopeProvider>
+            </CurrentAddressContext.Provider>
+          </NavContext.Provider>
+        </EmbeddedAreaProvider>
       </RegistryProvider>
       {CHAT && (
         <ChatComposer

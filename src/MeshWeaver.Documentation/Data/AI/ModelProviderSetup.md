@@ -189,9 +189,38 @@ The Systemorph space ships three tiers, chosen to be **powerful but inexpensive 
 
 All three are deployed on the `s-meshweaver` Azure AI Foundry resource (verify with `az cognitiveservices account deployment list -n s-meshweaver -g rg-meshweaverai`). The tier → model mapping lives in `ModelTier:Heavy/Standard/Light/Utility` config (wired via the Helm overlay for the AKS deployment).
 
-> **Claude (Anthropic) works very well — noticeably stronger on the hardest agentic and coding tasks — but it comes at a price.** It is intentionally **not** wired as a shared org key. Each user connects **Claude Code** (the co-hosted CLI, `Features:Ai:Clis:ClaudeCode`) under their own account in **Settings → Models → Connect**, which stores a per-user `{user}/_Memex/ClaudeCode` provider and injects Claude into their picker on their own subscription.
+> **Claude (Anthropic) works very well — noticeably stronger on the hardest agentic and coding tasks — but it comes at a price.** It is intentionally **not** wired as a shared org key. Each user connects **Claude Code** (the co-hosted CLI, `Features:Ai:Clis:ClaudeCode`) under their own account in **Settings → Models → Connect**, which stores a per-user `{user}/_Memex/ClaudeCode` provider and injects Claude into their picker on their own subscription. To turn this on for a deployment, see [Enabling per-user Claude Code Connect](#enabling-per-user-claude-code-connect).
 
 `modelTier:` frontmatter is a strictly **optional hint** declared only by the built-in background micro-agents (notification triage, description/icon writing, thread naming) — it kicks in solely when no model was selected in the chat composer (the composer selection always wins), resolving through the `ModelTier__*` config. With no tier config the hint is inert. Keep the deployed tier mapping and the `Models[]` catalog in sync where you do configure it.
+
+---
+
+## Enabling per-user Claude Code Connect
+
+**Claude is intentionally not wired as a shared org key.** Instead each user connects **Claude Code** — the co-hosted CLI — under their **own** Claude subscription in **Settings → Models → Connect**, so their Claude usage is billed to their personal account. This is the *Connect* flow (a subscription / CLI provider), **not** a per-user Anthropic API key: the login captures the user's subscription token, never an `sk-ant-…` key. It is gated behind one deploy-time flag — `Features:Ai:Clis:ClaudeCode` (env `Features__Ai__Clis__ClaudeCode`) — and **coexists** with the shared providers: turning it on **adds** the per-user "Claude Code" card and does not touch the shared org Anthropic key (`Features:Ai:Providers:Anthropic`, a *separate* flag).
+
+### What Connect is — and is not
+
+- **Per-user, own subscription.** The card runs the CLI's native login (`claude setup-token`, `ClaudeConnectStrategy`), captures the user's token, and stores it **encrypted** as a `ModelProvider` node at `{user}/_Memex/ClaudeCode` — via `ConnectTokenSink` → `ModelProviderService.CreateProvider` / `RotateKey`, which `Protect()`-encrypt it. Each user self-connects; there is **no** per-person admin activation.
+- **Resolved by the per-user token, not by model id.** When a user runs a Claude Code round, the CLI harness (`ClaudeCodeHarness`) resolves *that user's own* token through `ChatClientCredentialResolver.ResolveConnectToken` / `ResolveConnectCredential` (reading `{user}/_Memex/ClaudeCode`). It never forwards the composer's selected-model API key, so it does not collide with the shared model catalog.
+- **Independent of the shared org key.** `Features:Ai:Providers:Anthropic` (shared org Anthropic key) and `Features:Ai:Clis:ClaudeCode` (per-user Connect) are two flags gated separately in `MemexConfiguration`. Enabling Connect neither removes nor changes the shared key; users who have not connected keep using the shared providers.
+
+### Prerequisites and enablement
+
+Connect is a **deploy-time capability**, and the packaged deployment paths ship it **off** (opt-in): `deploy/.env.example` sets `Features__Ai__Clis__ClaudeCode=false`, and the Azure Marketplace offer's *"Bundle co-hosted Claude Code + GitHub Copilot CLIs"* checkbox is unchecked by default. (In code the flag defaults to `true` — an absent `Features` section preserves the all-on, no-regression behaviour — but it is **inert unless the portal image actually bundles the `claude` CLI**.) To turn it on:
+
+1. **Run the CLI-enabled portal image.** The co-hosted CLIs ship only in the `portal-ai` image (`deploy/base-images/portal-ai/Dockerfile`, which `npm install -g @anthropic-ai/claude-code`). The lean `portal` image has no `claude` binary, so Connect cannot run there. On AKS the `memex` portal is built on this base (`memex-portal-ai`).
+2. **Set the flag.** `Features__Ai__Clis__ClaudeCode=true` in the portal config / env. This gates three registrations in `MemexConfiguration.cs`: the chat-client factory + config (`services.AddClaudeCode(...)`), the Connect backend (`ConnectSessionManager` + the `IConnectStrategy` `ClaudeConnectStrategy`), and the mesh catalog source (`mb.AddClaudeCode()`). Independent of `Features__Ai__Providers__Anthropic`.
+3. **Point each user at their own `.claude` dir.** Set `ClaudeCode:ConfigDirRoot` (env `ClaudeCode__ConfigDirRoot`) to a **writable, per-user-persistent mount**. The co-hosted image defaults it to `/mnt/users`, which on AKS / HA is an Azure Files (RWX) share so every replica sees the same per-user credentials. Each spawn (login and round) runs with `CLAUDE_CONFIG_DIR = {ConfigDirRoot}/{userId}/.claude`, so each user logs in under their own directory (`ClaudeCodeConfiguration.ConfigDirRoot`, mirrored to `ClaudeConnectOptions.ConfigDirRoot`). On the Linux portal the login also needs a PTY; `ClaudeConnect:UsePseudoTerminal` defaults on there so `claude setup-token`'s terminal UI is scrapeable.
+4. **Redeploy / roll out** so the flag and the mount take effect.
+
+### Verifying it
+
+1. **Card appears.** With the flag set, open **Settings → Models**: a **"Claude Code"** CLI card with a **Connect / Log in** button is shown. When the flag is unset the card is **absent** — CLI providers render no UI at all.
+2. **Connect uses the user's subscription.** Complete Connect as a user, then run a Claude model: the round runs on **that user's** Claude subscription, and a per-user encrypted-token `ModelProvider` node is created at `{user}/_Memex/ClaudeCode`.
+3. **Shared path unchanged.** The shared org Anthropic key path is untouched and still serves users who have not connected.
+
+For the credential-encryption master key and the general "bring your own key" layering, see the [/provider-keys](/Skill/provider-keys) skill; for the Settings → Models UI design (API vs CLI cards, the inline login state machine, and the `ConnectSessionManager` lifecycle), see [AI Model Provider Settings](/Doc/AI/ModelProviderSettings).
 
 ---
 
@@ -209,6 +238,8 @@ Work top-down — the first hit is usually the cause:
 
 ## Related
 
+- [Enabling per-user Claude Code Connect](#enabling-per-user-claude-code-connect) — turn on per-user Claude Code Connect (`Features__Ai__Clis__ClaudeCode`) so each user runs Claude on their own subscription
 - [AI Model Provider Settings](/Doc/AI/ModelProviderSettings) — the Settings → Models UI design (API vs CLI providers, inline CLI login)
+- [/provider-keys](/Skill/provider-keys) — administering AI provider keys the framework way (encryption at rest, the "bring your own key" decouple)
 - [AI Provider Configuration](/Doc/AI/ProviderConfiguration) — framework credential/endpoint wiring and model-to-factory routing
 - [Agentic AI](/Doc/AI/AgenticAI) — how agents are composed and select models

@@ -59,7 +59,7 @@ public class GlobalAdminSpaceSearchTests
                 Name = $"{org} Inc.",
                 NodeType = SpaceNodeType.NodeType,
                 State = MeshNodeState.Active,
-                Content = new Space { Name = $"{org} Inc." }
+                Content = new Space()
             }, _options, ct);
 
             // A child Markdown node under the org

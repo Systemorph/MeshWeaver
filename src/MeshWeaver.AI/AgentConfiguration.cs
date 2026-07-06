@@ -93,6 +93,21 @@ public record AgentConfiguration
     /// Additional plugins are resolved by name from DI-registered IAgentPlugin services.
     /// </summary>
     public List<AgentPluginReference>? Plugins { get; init; }
+
+    /// <summary>
+    /// Optional per-round cap on the number of tool-call iterations the agent may run in a
+    /// single turn. Maps directly onto
+    /// <c>Microsoft.Extensions.AI.FunctionInvokingChatClient.MaximumIterationsPerRequest</c>
+    /// (wired in <see cref="ChatClientAgentFactory"/>). When <c>null</c> (the default) the
+    /// Microsoft.Extensions.AI default applies — high enough that a high-volume agent can
+    /// issue hundreds of tool calls in one round before it engages. Set a small value
+    /// (e.g. 20–30) for such agents to force natural break points: on reaching the cap the
+    /// framework strips tools on the final iteration (its
+    /// <c>PrepareOptionsForLastIteration</c> path) so the model returns a graceful final
+    /// answer rather than truncating, and the agent is additionally instructed to invite the
+    /// user to reply "continue" to run the next batch.
+    /// </summary>
+    public int? MaxToolCallsPerRound { get; init; }
 }
 
 /// <summary>

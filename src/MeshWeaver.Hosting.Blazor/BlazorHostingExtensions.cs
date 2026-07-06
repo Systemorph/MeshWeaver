@@ -176,7 +176,7 @@ public static class BlazorHostingExtensions
         {
             // Pattern 1: /static/{collection}/{filePath}
             var collectionName = decodedFirstSegment;
-            var filePath = string.Join("/", pathParts.Skip(1));
+            var filePath = DecodeContentPath(string.Join("/", pathParts.Skip(1)));
             return (mainHub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.FileSystem) ?? IoPool.Unbounded)
                 .Run(_ => ServeFromCollection(context, mainHub, collectionName, filePath, collectionCache));
         }
@@ -196,7 +196,7 @@ public static class BlazorHostingExtensions
                     "Invalid path format. Expected: /static/{address}/{collection}/{filePath}"));
 
             var addressCollectionName = DecodeCollectionName(remainderParts[0]);
-            var addressFilePath = string.Join("/", remainderParts.Skip(1));
+            var addressFilePath = DecodeContentPath(string.Join("/", remainderParts.Skip(1)));
             if (string.IsNullOrEmpty(addressFilePath))
                 return Observable.Return(Results.NotFound("File path is required"));
 
@@ -337,6 +337,20 @@ public static class BlazorHostingExtensions
     /// </summary>
     private static string DecodeCollectionName(string encodedName)
         => ContentCollectionsExtensions.DecodeCollectionName(encodedName);
+
+    /// <summary>
+    /// URL-decodes a content-collection file path captured from the <c>/static/{**path}</c>
+    /// catch-all route parameter. ASP.NET Core leaves catch-all values percent-encoded (so the
+    /// path's <c>/</c> separators survive as segment boundaries), which means each segment reaches
+    /// this endpoint escaped exactly as <see cref="ContentCollections.ContentLayoutArea"/> emitted
+    /// it (<c>Uri.EscapeDataString</c> per segment). Decoding per segment is the exact inverse: it
+    /// restores spaces (<c>%20</c>) and UTF-8 escapes (e.g. <c>%C3%9C</c> → <c>Ü</c>) so the lookup
+    /// matches the real stored path — without turning any escaped slash into a false separator.
+    /// A plain ASCII path carries no escapes, so decoding is a no-op (never a double-decode of a
+    /// literal <c>%</c>, which the encoder would have written as <c>%25</c>).
+    /// </summary>
+    internal static string DecodeContentPath(string encodedPath)
+        => string.Join('/', encodedPath.Split('/').Select(Uri.UnescapeDataString));
 
 }
 

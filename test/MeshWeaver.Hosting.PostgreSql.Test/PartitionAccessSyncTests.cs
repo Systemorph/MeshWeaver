@@ -91,7 +91,7 @@ public class PartitionAccessSyncTests
             NodeType = SpaceNodeType.NodeType,
             State = MeshNodeState.Active,
             MainNode = space,
-            Content = new Space { Name = $"{space} Inc." }
+            Content = new Space()
         }, _options, ct);
 
         // Grant alice the Admin role at the Space scope via the standard
@@ -167,7 +167,7 @@ public class PartitionAccessSyncTests
             NodeType = SpaceNodeType.NodeType,
             State = MeshNodeState.Active,
             MainNode = space,
-            Content = new Space { Name = $"{space} Inc." }
+            Content = new Space()
         }, _options, ct);
 
         // Grant carol Admin the normal way — this also creates the access row + uep.

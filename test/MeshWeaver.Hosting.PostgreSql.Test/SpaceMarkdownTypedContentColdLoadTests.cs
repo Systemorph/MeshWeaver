@@ -73,7 +73,7 @@ public class SpaceMarkdownTypedContentColdLoadTests(PostgreSqlFixture fixture, I
             NodeType = SpaceNodeType.NodeType,
             Name = spaceId,
             State = MeshNodeState.Active,
-            Content = new Space { Name = spaceId },
+            Content = new Space(),
         }).Should().Within(45.Seconds()).Emit();
         space.Path.Should().Be(spaceId);
 
@@ -167,7 +167,7 @@ public class SpaceMarkdownTypedContentColdLoadTests(PostgreSqlFixture fixture, I
             NodeType = SpaceNodeType.NodeType,
             Name = spaceId,
             State = MeshNodeState.Active,
-            Content = new Space { Name = spaceId },
+            Content = new Space(),
         }).Should().Within(45.Seconds()).Emit();
 
         // The exact shape the atioz agent submitted (MCP create deserializes the
