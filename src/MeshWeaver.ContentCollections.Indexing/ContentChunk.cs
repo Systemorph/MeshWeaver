@@ -19,7 +19,15 @@ namespace MeshWeaver.ContentCollections.Indexing;
 /// <param name="Embedding">
 /// The embedding vector for <see cref="Text"/>, or null if the chunk has not been embedded yet.
 /// </param>
-/// <param name="Metadata">Optional free-form metadata (e.g. source content-type, page number).</param>
+/// <param name="Metadata">Optional free-form metadata (e.g. source content-type).</param>
+/// <param name="Page">
+/// One-based source page the chunk begins on, or null when the source format carries no layout
+/// (txt/markdown/docx) or the page could not be resolved. Provenance for citing/marking the source.
+/// </param>
+/// <param name="Position">
+/// The chunk's normalized bounding box on <see cref="Page"/> (fractions of the page, top-left origin), or
+/// null when unknown. Lets a viewer open the source page and mark the exact region the chunk came from.
+/// </param>
 public sealed record ContentChunk(
     string CollectionPath,
     string FilePath,
@@ -27,4 +35,6 @@ public sealed record ContentChunk(
     string Text,
     string ContentHash,
     float[]? Embedding,
-    ImmutableDictionary<string, string>? Metadata = null);
+    ImmutableDictionary<string, string>? Metadata = null,
+    int? Page = null,
+    ChunkPosition? Position = null);

@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using MeshWeaver.ContentCollections.Indexing;
 using Xunit;
 
@@ -5,6 +6,62 @@ namespace MeshWeaver.ContentCollections.Indexing.Test;
 
 public class TextChunkerTest
 {
+    // ── ChunkPositioned: page/position attribution ───────────────────────────
+
+    [Fact]
+    public void ChunkPositioned_PlainDocument_HasNullPageAndPosition()
+    {
+        var doc = ExtractedDocument.PlainText(new string('x', 250));
+        var chunks = TextChunker.ChunkPositioned(doc, 100, 10);
+
+        chunks.Should().HaveCountGreaterThan(1);
+        chunks.Should().OnlyContain(c => c.Page == null && c.Position == null);
+        // The text windows match the plain Chunk() windows exactly.
+        chunks.Select(c => c.Text).Should().Equal(TextChunker.Chunk(doc.Text, 100, 10));
+    }
+
+    [Fact]
+    public void ChunkPositioned_AttributesToStartPage_AndUnionsBoxesOnThatPage()
+    {
+        // "AAAA BBBB CCCC" — AAAA/BBBB on page 1, CCCC on page 2.
+        var text = "AAAA BBBB CCCC";
+        var spans = ImmutableArray.Create(
+            new PositionedSpan(0, 4, 1, new ChunkPosition(0.10, 0.10, 0.20, 0.05)),
+            new PositionedSpan(5, 4, 1, new ChunkPosition(0.10, 0.20, 0.20, 0.05)),
+            new PositionedSpan(10, 4, 2, new ChunkPosition(0.10, 0.10, 0.20, 0.05)));
+        var doc = new ExtractedDocument(text, spans);
+
+        // One window over the whole text: attributed to page 1 (where it begins); box unions the two
+        // page-1 words (AAAA + BBBB) and EXCLUDES the page-2 word.
+        var single = TextChunker.ChunkPositioned(doc, 100, 0);
+        single.Should().ContainSingle();
+        single[0].Page.Should().Be(1);
+        single[0].Position!.X.Should().BeApproximately(0.10, 1e-9);
+        single[0].Position!.Y.Should().BeApproximately(0.10, 1e-9);
+        single[0].Position!.Width.Should().BeApproximately(0.20, 1e-9);
+        single[0].Position!.Height.Should().BeApproximately(0.15, 1e-9); // 0.10..0.25
+    }
+
+    [Fact]
+    public void ChunkPositioned_ChunkStartingOnLaterPage_TakesThatPage()
+    {
+        var text = "AAAA BBBB CCCC"; // len 14
+        var spans = ImmutableArray.Create(
+            new PositionedSpan(0, 4, 1, new ChunkPosition(0.10, 0.10, 0.20, 0.05)),
+            new PositionedSpan(5, 4, 1, new ChunkPosition(0.10, 0.20, 0.20, 0.05)),
+            new PositionedSpan(10, 4, 2, new ChunkPosition(0.30, 0.40, 0.20, 0.05)));
+        var doc = new ExtractedDocument(text, spans);
+
+        // size 9, overlap 0 → windows [0,9) and [9,14). The first is page 1 (AAAA+BBBB), the second is
+        // page 2 (CCCC only) — proving per-chunk attribution across a page boundary.
+        var chunks = TextChunker.ChunkPositioned(doc, 9, 0);
+        chunks.Should().HaveCount(2);
+        chunks[0].Page.Should().Be(1);
+        chunks[1].Page.Should().Be(2);
+        chunks[1].Position!.X.Should().BeApproximately(0.30, 1e-9);
+        chunks[1].Position!.Y.Should().BeApproximately(0.40, 1e-9);
+    }
+
     [Fact]
     public void EmptyText_ProducesNoChunks()
     {
