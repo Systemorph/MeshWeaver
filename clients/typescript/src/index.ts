@@ -14,3 +14,7 @@ export { Mesh, type MeshOptions } from "./mesh.js";
 export { MeshConnection, connect, type ConnectOptions } from "./connection.js";
 export { type Delivery } from "./envelope.js";
 export { type MeshNode } from "./types.js";
+// The node kernel: execute javascript/typescript Code nodes routed from the mesh (node/node-kernel).
+export { executeCode, CodeWorker, serve as serveNodeKernel, DEFAULT_WORKER_ADDRESS, type ExecResult, type ServeOptions } from "./worker.js";
+// The hub programming model in Node (address + handlers by message type + state).
+export { Hub, type Handler } from "./examples/hub.js";

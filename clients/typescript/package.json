@@ -11,17 +11,22 @@
       "import": "./dist/index.js"
     }
   },
+  "bin": {
+    "meshweaver-node-worker": "./dist/worker.js"
+  },
   "files": ["dist", "README.md"],
   "scripts": {
     "build": "tsc",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "tsc && node --test test/*.test.mjs",
+    "demo": "tsc && node dist/worker.js --demo"
   },
   "dependencies": {
     "@grpc/grpc-js": "^1.12.0",
-    "@grpc/proto-loader": "^0.7.13"
+    "@grpc/proto-loader": "^0.7.13",
+    "typescript": "^5.6.0"
   },
   "devDependencies": {
-    "@types/node": "^22.0.0",
-    "typescript": "^5.6.0"
+    "@types/node": "^22.0.0"
   }
 }
