@@ -205,9 +205,14 @@ private static IIoPool ProcessPool(IMessageHub hub) =>
 
 ### See it run
 
-The deployed sample instance's `Report` area is embedded below (on a host without Python it shows the graceful notice — that is the pattern working, not failing):
-
-@@PythonDemo/PrimeReport/First25/area:Report
+The `PrimeReport` sample lives in `samples/Graph/Data/PythonDemo` — a portal that loads the Graph
+samples serves the live instance at `PythonDemo/PrimeReport/First25` (its `Report` area shows the
+Python-computed table, or the graceful "Python is not available" notice on a host without `python3` —
+that notice IS the pattern working, not failing). It is deliberately not embedded inline here: this
+page ships in the `Doc` partition, which is served on its own, so a live `@@PythonDemo/…` embed would
+reference a partition the docs host does not load. For an example that IS embedded live in the docs,
+see [Python Code Nodes](/Doc/Architecture/PythonCodeNodes) (a `python` Code node shipped in the Doc
+partition).
 
 ## Rules recap — what NOT to do
 
