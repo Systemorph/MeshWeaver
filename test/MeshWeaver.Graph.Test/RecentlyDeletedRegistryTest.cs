@@ -1,4 +1,3 @@
-using FluentAssertions;
 using Xunit;
 
 namespace MeshWeaver.Graph.Test;
