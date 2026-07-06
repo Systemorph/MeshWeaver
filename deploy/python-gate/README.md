@@ -24,17 +24,21 @@ docker push <registry>/meshweaver/python-gate:<tag>
 
 ## Enable
 
-OFF by default (standing arbitrary-python execution is a deliberate capability, and the image must be
-provided). Turn it on in a Helm overlay / `--set`, pointing at the pushed image:
+Language gates are **feature-flagged** under `grpc.gates`: every language is **included by default**
+(`enabled: true`), but a gate only RUNS once its image is supplied (empty image ⇒ no sidecar, so a
+bare install never crash-loops). Point the `python` gate at the pushed image in a Helm overlay /
+`--set`:
 
 ```yaml
 grpc:
   enabled: true          # the trusted endpoint the gate connects to
-  pythonGate:
-    enabled: true
-    image: <registry>/meshweaver/python-gate:<tag>
-    address: py/python-kernel
+  gates:
+    python:
+      enabled: true       # default; set false to opt python out
+      image: <registry>/meshweaver/python-gate:<tag>
+      address: py/python-kernel
 ```
 
 `MESH_GRPC_URL` and `MESH_GATE_ADDRESS` (the container's env) override the endpoint and address; the
-defaults match `deploy/helm` `values.grpc`.
+defaults match `deploy/helm` `values.grpc`. The Node gate (`javascript`/`typescript`) is the sibling —
+see `deploy/node-gate`.
