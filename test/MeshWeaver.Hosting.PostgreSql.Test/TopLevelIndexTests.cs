@@ -128,6 +128,51 @@ public class TopLevelIndexTests(PostgreSqlFixture fixture, ITestOutputHelper out
         }
     }
 
+    /// <summary>
+    /// Deterministic pin for the merge-gate flake: <c>searchable_schemas</c> LAGS a partition drop
+    /// (<c>DeletePartition</c> runs <c>DROP SCHEMA … CASCADE</c>), so under concurrent load the
+    /// rebuild's <c>UNION ALL</c> references <c>&lt;schema&gt;.mesh_nodes</c> for a schema that is gone
+    /// and <c>CREATE MATERIALIZED VIEW</c> fails with <c>42P01 relation … does not exist</c>. Reproduced
+    /// here without any race by listing a schema that has no backing schema/table — the exact stale
+    /// window. WITHOUT the <c>to_regclass</c> guard in <c>rebuild_top_level_index()</c> the rebuild call
+    /// below throws 42P01 (the flake); WITH it the vanished schema is skipped and the rebuild succeeds.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task RebuildTopLevelIndex_SkipsListedSchemaWithNoTable_NoRelationError()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var ghost = $"ghost{Guid.NewGuid():N}".ToLowerInvariant()[..14];
+
+        await using var conn = new NpgsqlConnection(_fixture.ConnectionString);
+        await conn.OpenAsync(ct);
+
+        await using (var list = new NpgsqlCommand(
+            "INSERT INTO public.searchable_schemas (schema_name) VALUES (@s) ON CONFLICT DO NOTHING", conn))
+        {
+            list.Parameters.AddWithValue("s", ghost);
+            await list.ExecuteNonQueryAsync(ct);
+        }
+        try
+        {
+            // Throws 42P01 without the guard (references ghost.mesh_nodes, which does not exist).
+            await using (var rebuild = new NpgsqlCommand("SELECT public.rebuild_top_level_index()", conn))
+                await rebuild.ExecuteNonQueryAsync(ct);
+
+            await using var q = new NpgsqlCommand(
+                "SELECT COUNT(*) FROM public.top_level_index WHERE path = @s", conn);
+            q.Parameters.AddWithValue("s", ghost);
+            Convert.ToInt64(await q.ExecuteScalarAsync(ct)).Should().Be(0L,
+                "a listed-but-dropped schema is skipped, contributing no rows to the matview");
+        }
+        finally
+        {
+            await using var cleanup = new NpgsqlCommand(
+                "DELETE FROM public.searchable_schemas WHERE schema_name = @s", conn);
+            cleanup.Parameters.AddWithValue("s", ghost);
+            await cleanup.ExecuteNonQueryAsync(ct);
+        }
+    }
+
     [Fact(Timeout = 60000)]
     public async Task AutocompleteTopLevel_ReturnsScoredMatches_FromMatview_NoFanOut()
     {
