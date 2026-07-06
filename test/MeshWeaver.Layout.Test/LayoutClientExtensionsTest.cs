@@ -1,4 +1,5 @@
 using System;
+using System.Text.Json;
 using MeshWeaver.Fixture;
 using MeshWeaver.Layout.Client;
 using MeshWeaver.Messaging;
@@ -354,7 +355,81 @@ public class LayoutClientExtensionsTest(ITestOutputHelper output) : HubTestBase(
 
         // Act & Assert
         Action act = () => hub.ConvertSingle<int?>(nullableDouble, null);
-        
+
         act.Should().Throw<OverflowException>("NaN values should throw when converting to nullable int");
+    }
+
+    // ---- Issue #322: a NUMBER/BOOL JSON token bound into a string-typed (read-only) LabelControl -------
+    // The read-only Overview binds a numeric/boolean scalar into a string Label. Before the fix,
+    // ConvertJson<string> ran Deserialize<string>("322.844") which throws JsonException on a number
+    // token → the catch returned null → the field rendered BLANK until click-to-edit. It must now
+    // render the value's text, the way a JSON array/object slot already does.
+
+    [Fact]
+    public void ConvertSingle_NumberJsonElement_ToString_RendersDecimalText()
+    {
+        var hub = GetHost();
+        var element = JsonSerializer.SerializeToElement(322.844m);
+
+        var result = hub.ConvertSingle<string>(element, null);
+
+        result.Should().Be("322.844", "a JSON number bound into a string Label must render as text, not blank");
+    }
+
+    [Fact]
+    public void ConvertSingle_IntegerJsonElement_ToString_RendersIntegerText()
+    {
+        var hub = GetHost();
+        var element = JsonSerializer.SerializeToElement(6);
+
+        var result = hub.ConvertSingle<string>(element, null);
+
+        result.Should().Be("6");
+    }
+
+    [Fact]
+    public void ConvertSingle_TrueJsonElement_ToString_RendersTrue()
+    {
+        var hub = GetHost();
+        var element = JsonSerializer.SerializeToElement(true);
+
+        var result = hub.ConvertSingle<string>(element, null);
+
+        result.Should().Be("true", "a JSON boolean bound into a string Label must render its value, not blank");
+    }
+
+    [Fact]
+    public void ConvertSingle_FalseJsonElement_ToString_RendersFalse()
+    {
+        var hub = GetHost();
+        var element = JsonSerializer.SerializeToElement(false);
+
+        var result = hub.ConvertSingle<string>(element, null);
+
+        result.Should().Be("false");
+    }
+
+    [Fact]
+    public void ConvertSingle_StringJsonElement_ToString_StillWorks()
+    {
+        // Regression: a genuine JSON string token must keep deserializing cleanly to string.
+        var hub = GetHost();
+        var element = JsonSerializer.SerializeToElement("hello");
+
+        var result = hub.ConvertSingle<string>(element, null);
+
+        result.Should().Be("hello");
+    }
+
+    [Fact]
+    public void ConvertSingle_NumberJsonElement_ToDouble_StillDeserializes()
+    {
+        // The numeric edit control binds the CLR type; that path must be untouched by the string fix.
+        var hub = GetHost();
+        var element = JsonSerializer.SerializeToElement(322.844m);
+
+        var result = hub.ConvertSingle<double>(element, null);
+
+        result.Should().Be(322.844);
     }
 }
