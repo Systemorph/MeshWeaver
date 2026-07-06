@@ -158,8 +158,13 @@ public sealed class ContentIndexingObserver : IContentUploadObserver
     /// <param name="collectionPaths">The qualified collection paths to re-index (e.g. <c>Systemorph/content</c>).</param>
     /// <param name="onActivityCreated">Fires once with the activity path the moment it is created, so a
     /// GUI (the Content Indexing settings tab) can bind its live progress panel immediately.</param>
+    /// <param name="force">
+    /// When true every file is re-extracted, re-chunked, re-embedded and replaced even if unchanged
+    /// (bypasses the hash gate) — this is how a rebuild <b>backfills</b> new per-chunk provenance
+    /// (page/position) onto files indexed before it existed. When false (default) unchanged files skip.
+    /// </param>
     public IObservable<string> ReindexAll(
-        IReadOnlyCollection<string> collectionPaths, Action<string>? onActivityCreated = null)
+        IReadOnlyCollection<string> collectionPaths, Action<string>? onActivityCreated = null, bool force = false)
     {
         ArgumentNullException.ThrowIfNull(collectionPaths);
 
@@ -183,14 +188,14 @@ public sealed class ContentIndexingObserver : IContentUploadObserver
         return ContentIndexingActivity.Run(
             hub,
             partition,
-            $"Re-index {collectionPaths.Count} collection(s)",
+            $"Re-index {collectionPaths.Count} collection(s){(force ? " (rebuild)" : "")}",
             // One collection at a time (Concat) keeps the progress log ordered. Each collection emits
             // its count of FAILED files (per-file errors are isolated below, so every file is still
             // attempted). The counts roll up: a non-zero total fails the WHOLE activity so its terminal
             // Status reflects reality (and the activity-failure → admin notification fires), while the
             // per-file errors stay in the log. A clean run completes with a single Unit.
             ctx => collectionPaths
-                .Select(c => ReindexCollection(c, ctx))
+                .Select(c => ReindexCollection(c, ctx, force))
                 .ToObservable()
                 .Concat()
                 .Aggregate(0, (total, failed) => total + failed)
@@ -209,7 +214,8 @@ public sealed class ContentIndexingObserver : IContentUploadObserver
     /// owning activity ends Failed when any file failed. Cancellation is NOT a per-file failure: it
     /// propagates so the activity terminates Cancelled.
     /// </summary>
-    private IObservable<int> ReindexCollection(string collectionPath, ContentIndexingActivityContext ctx) =>
+    private IObservable<int> ReindexCollection(
+        string collectionPath, ContentIndexingActivityContext ctx, bool force) =>
         Observable.Defer(() =>
         {
             ctx.Log($"Scanning collection '{collectionPath}'.");
@@ -226,7 +232,7 @@ public sealed class ContentIndexingObserver : IContentUploadObserver
                             if (bytes is null)
                                 return Observable.Return(0);
                             var fileName = System.IO.Path.GetFileName(filePath);
-                            return indexingService.IndexFile(collectionPath, filePath, fileName, bytes)
+                            return indexingService.IndexFile(collectionPath, filePath, fileName, bytes, force)
                                 .Take(1)
                                 .Select(result =>
                                 {

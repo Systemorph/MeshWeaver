@@ -70,6 +70,51 @@ public class SpaceEditMarkdownTest(ITestOutputHelper output) : MonolithMeshTestB
     }
 
     /// <summary>
+    /// The Doc + Skill partition roots are <c>nodeType: Space</c> but ship their landing page as a
+    /// <see cref="MeshWeaver.Markdown.MarkdownContent"/> (their seeding layer can't reference the
+    /// Space type). Such a Space keeps its markdown in <c>content</c>, NOT <c>Space.body</c> — so the
+    /// body-field editor read blank (the reported "editor is empty" bug). The Edit area must instead
+    /// route to the standard markdown editor, which LOADS the content and re-prerenders on save.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task SpaceEdit_MarkdownBackedSpace_LoadsContentIntoStandardEditor()
+    {
+        const string body = "# Welcome\n\nthis markdown must load into the editor";
+        var spaceId = $"MdSpace{Guid.NewGuid():N}"[..16];
+        var spaceNode = MeshNode.FromPath(spaceId) with
+        {
+            Name = "Markdown Space",
+            NodeType = SpaceNodeType.NodeType,
+            // MarkdownContent — the Doc/Skill shape, NOT a structured Space object.
+            Content = new MeshWeaver.Markdown.MarkdownContent { Content = body }
+        };
+        await NodeFactory.CreateNode(spaceNode).Should().Emit();
+
+        var workspace = GetClient(c => c.AddData()).GetWorkspace();
+        var reference = new LayoutAreaReference(MeshNodeLayoutAreas.EditArea);
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
+            new Address(spaceId), reference);
+
+        var controls = new List<UiControl>();
+        await CollectControls(stream, reference.Area!, controls);
+
+        var editor = controls.OfType<MarkdownEditorControl>().FirstOrDefault();
+        Assert.True(editor is not null,
+            "a markdown-backed Space Edit area must render a MarkdownEditorControl");
+
+        // The bug: the editor opened EMPTY. It must load the MarkdownContent.content verbatim.
+        editor!.Value.Should().Be(body,
+            "the markdown-backed Space editor must load its content (the empty-editor bug)");
+
+        // Standard markdown editor path: WithValue + WithAutoSave (re-prerenders on save). This is the
+        // opposite of the structured-Space case, whose editor is node-bound with AutoSaveAddress null.
+        editor.AutoSaveAddress.Should().NotBeNull(
+            "a markdown-backed Space edits via the standard WithAutoSave markdown editor");
+
+        await NodeFactory.DeleteNode(spaceId).Should().Emit();
+    }
+
+    /// <summary>
     /// Resolves the control at <paramref name="areaName"/> and, when it is a container, recurses into
     /// its child areas — accumulating every resolved control so the test can assert on the whole tree.
     /// </summary>

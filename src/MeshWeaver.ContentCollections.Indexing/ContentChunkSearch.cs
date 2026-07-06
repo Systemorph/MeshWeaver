@@ -144,7 +144,8 @@ public static class ContentChunkSearch
     {
         var results = new JsonArray();
         foreach (var hit in result.Hits)
-            results.Add(new JsonObject
+        {
+            var hitObj = new JsonObject
             {
                 ["documentPath"] = hit.DocumentPath,
                 ["collectionPath"] = hit.CollectionPath,
@@ -152,7 +153,15 @@ public static class ContentChunkSearch
                 ["chunkIndex"] = hit.ChunkIndex,
                 ["rank"] = hit.Rank,
                 ["snippet"] = hit.Snippet,
-            });
+            };
+            // Provenance (only when the source carried it): the page the chunk begins on and its normalized
+            // box there, so a consumer can cite the page and open+mark the exact region.
+            if (hit.Page is int page)
+                hitObj["page"] = page;
+            if (ChunkPositionJson.ToJsonObject(hit.Position) is { } bbox)
+                hitObj["bbox"] = bbox;
+            results.Add(hitObj);
+        }
 
         var obj = new JsonObject
         {
@@ -192,7 +201,8 @@ public static class ContentChunkSearch
         chunks.Take(limit)
             .Select((hit, rank) => new ChunkHit(
                 DocumentPaths.For(hit.CollectionPath, hit.FilePath),
-                hit.CollectionPath, hit.FilePath, hit.ChunkIndex, rank, Snippet(hit.Text)))
+                hit.CollectionPath, hit.FilePath, hit.ChunkIndex, rank, Snippet(hit.Text),
+                hit.Page, hit.Position))
             .ToArray();
 
     /// <summary>Maps a parsed <see cref="QueryScope"/> to the content-search scope, defaulting to subtree.</summary>
@@ -265,8 +275,11 @@ public static class ContentChunkSearch
 /// <param name="ChunkIndex">The 0-based chunk index within the file (feed back into <c>get_chunk</c>).</param>
 /// <param name="Rank">0-based best-first relevance position.</param>
 /// <param name="Snippet">A one-line, ~160-char preview of the chunk text.</param>
+/// <param name="Page">One-based source page the chunk begins on, or null when the source carries no layout.</param>
+/// <param name="Position">The chunk's normalized on-page box, or null when unknown — for open+mark.</param>
 public record ChunkHit(
-    string DocumentPath, string CollectionPath, string FilePath, int ChunkIndex, int Rank, string Snippet);
+    string DocumentPath, string CollectionPath, string FilePath, int ChunkIndex, int Rank, string Snippet,
+    int? Page = null, ChunkPosition? Position = null);
 
 /// <summary>
 /// The outcome of a content search: the resolved namespace + scope, the ranked hits, and a human-readable

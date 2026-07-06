@@ -14,7 +14,6 @@ public class OnboardingMiddlewareExclusionTest
         new(new ClaimsIdentity("TestAuth"));
 
     [Theory]
-    [InlineData("/onboarding")]
     [InlineData("/login")]
     [InlineData("/auth/callback")]
     [InlineData("/_framework/blazor.js")]
@@ -86,6 +85,26 @@ public class OnboardingMiddlewareExclusionTest
         var act = () => middleware.InvokeAsync(context);
         await act.Should().ThrowAsync<Exception>(
             because: "non-excluded paths should attempt onboarding check via PortalApplication");
+    }
+
+    [Fact]
+    public async Task OnboardingPage_IsResolved_NotBlanketExcluded()
+    {
+        // /onboarding is no longer blanket-excluded: it participates in the onboarded
+        // check so an ALREADY-onboarded user landing there gets redirected home. With no
+        // PortalApplication wired into RequestServices the resolution attempt surfaces
+        // (throws) — proving the path is no longer short-circuited to pass-through.
+        RequestDelegate next = _ => Task.CompletedTask;
+
+        var middleware = new OnboardingMiddleware(next, NullLogger<OnboardingMiddleware>.Instance);
+
+        var context = new DefaultHttpContext();
+        context.Request.Path = "/onboarding";
+        context.User = AuthenticatedUser;
+
+        var act = () => middleware.InvokeAsync(context);
+        await act.Should().ThrowAsync<Exception>(
+            because: "/onboarding now participates in the onboarded check to redirect onboarded users home");
     }
 
     [Theory]
