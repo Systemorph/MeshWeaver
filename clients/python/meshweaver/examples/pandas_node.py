@@ -356,15 +356,44 @@ async def run_demo() -> dict[str, Any]:
     }
 
 
-async def serve(url: str, token: Optional[str] = None, address: str = DEFAULT_ADDRESS) -> None:
-    """Connect as a stable ``py/*`` participant and serve the held frame until cancelled."""
-    conn = await _connect(url, token=token, address=address)
-    PandasNode(conn)
-    print(f"meshweaver pandas node serving as {conn.address} -> {url}")
-    try:
-        await asyncio.Event().wait()  # run forever; inbound deliveries drive the node
-    finally:
-        await conn.close()
+async def serve(url: str, token: Optional[str] = None, address: str = DEFAULT_ADDRESS,
+                *, reconnect: bool = False, retry_seconds: float = 3.0) -> None:
+    """Connect as a stable ``py/*`` participant and serve the held frame until cancelled.
+
+    ``reconnect`` (the co-deployed **gate** mode): if the connection can't be established — the portal
+    isn't up yet — or it drops later — the portal restarted — wait ``retry_seconds`` and reconnect
+    instead of exiting, so the participant outlives portal restarts. The default keeps the original
+    single-shot behaviour for scripts and tests."""
+    # Reuse the worker's tiny signal/backoff helpers — same reconnect machinery as the code gate.
+    from meshweaver.worker import _install_stop_signals, _sleep_or_stop
+    stop = asyncio.Event()
+    _install_stop_signals(stop)
+    while not stop.is_set():
+        try:
+            conn = await _connect(url, token=token, address=address)
+        except Exception as ex:  # connect/ack failed — portal not ready, DNS, TLS, …
+            if not reconnect:
+                raise
+            print(f"meshweaver pandas node: connect to {url} failed "
+                  f"({type(ex).__name__}: {ex}); retrying in {retry_seconds}s", flush=True)
+            await _sleep_or_stop(stop, retry_seconds)
+            continue
+        PandasNode(conn)
+        print(f"meshweaver pandas node serving as {conn.address} -> {url}", flush=True)
+        try:
+            closed = asyncio.ensure_future(conn.wait_closed())
+            stopping = asyncio.ensure_future(stop.wait())
+            await asyncio.wait({closed, stopping}, return_when=asyncio.FIRST_COMPLETED)
+            for task in (closed, stopping):
+                task.cancel()
+            await asyncio.gather(closed, stopping, return_exceptions=True)
+        finally:
+            await conn.close()
+        if not reconnect:
+            break
+        if not stop.is_set():
+            print(f"meshweaver pandas node: connection ended; reconnecting in {retry_seconds}s", flush=True)
+            await _sleep_or_stop(stop, retry_seconds)
 
 
 def main() -> None:
@@ -374,6 +403,8 @@ def main() -> None:
     p.add_argument("--url", default=None, help="portal gRPC endpoint, e.g. https://memex.meshweaver.cloud")
     p.add_argument("--token", default=None, help="MeshWeaver API token (validated server-side)")
     p.add_argument("--address", default=DEFAULT_ADDRESS, help="stable participant address the mesh targets")
+    p.add_argument("--reconnect", action="store_true", help="gate mode: reconnect instead of exiting when the portal restarts")
+    p.add_argument("--retry-seconds", type=float, default=3.0, help="reconnect backoff (with --reconnect)")
     args = p.parse_args()
 
     if args.demo or not args.url:
@@ -383,7 +414,8 @@ def main() -> None:
               f"(started at {result['started_rows']}, appended 2 over the mesh)")
         return
 
-    asyncio.run(serve(args.url, token=args.token, address=args.address))
+    asyncio.run(serve(args.url, token=args.token, address=args.address,
+                      reconnect=args.reconnect, retry_seconds=args.retry_seconds))
 
 
 if __name__ == "__main__":

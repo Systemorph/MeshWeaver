@@ -49,7 +49,7 @@ public static class PandasExplorerLayoutAreas
     private const string Intro =
         "This grid is rendered by a **Python** process — a `pandas.DataFrame` held live in the "
         + "`py/pandas` mesh participant, fed from a **CSV file kept in mesh content** "
-        + "(`PythonDemo/SalesData` by default). *Load* makes the participant read that node over the "
+        + "(`Doc/DataMesh/PythonPandasNode/SalesData` by default). *Load* makes the participant read that node over the "
         + "mesh and parse it with `pandas.read_csv`; the other buttons post `PandasCommand` messages "
         + "that mutate and analyse the frame, and the grid re-renders from whatever Python returns.";
 
