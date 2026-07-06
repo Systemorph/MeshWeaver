@@ -118,11 +118,14 @@ public static class DeleteLayoutArea
             ? $"This will permanently delete this node and <strong>{descendantCount} descendant node(s)</strong> under <code>{nodePath}</code>."
             : $"This will permanently delete the node at <code>{nodePath}</code>.";
 
+        // Explicit light-background + dark-text colors (NOT theme vars): --error-container/--error
+        // resolved to a saturated pink with inherited white text in some themes — the warning was
+        // illegible (white on bright pink). Fixed dark-red-on-light-pink reads in every theme.
         stack = stack.WithView(Controls.Html(
-            "<div style=\"padding: 16px; background: var(--error-container, #fde8e8); border-radius: 8px; " +
-            "border: 1px solid var(--error, #d32f2f); margin-bottom: 24px;\">" +
-            "<p style=\"margin: 0 0 8px 0; font-weight: 600; color: var(--error, #d32f2f);\">Warning: This action cannot be undone!</p>" +
-            $"<p style=\"margin: 0;\">{warningText}</p>" +
+            "<div style=\"padding: 16px; background: #fde8e8; border-radius: 8px; " +
+            "border: 1px solid #d32f2f; margin-bottom: 24px; color: #5c1a1a;\">" +
+            "<p style=\"margin: 0 0 8px 0; font-weight: 600; color: #b3261e;\">Warning: This action cannot be undone!</p>" +
+            $"<p style=\"margin: 0; color: #5c1a1a;\">{warningText}</p>" +
             "</div>"));
 
         stack = stack.WithView(Controls.Stack
