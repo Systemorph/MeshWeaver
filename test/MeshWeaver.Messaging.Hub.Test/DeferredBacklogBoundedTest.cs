@@ -45,6 +45,9 @@ public class DeferredBacklogBoundedTest(ITestOutputHelper output) : HubTestBase(
         // Poll the PUBLIC disposal diagnostics (reports "deferred=<N>" per hub) until the deferred
         // backlog is stable across two reads — the single-threaded action block defers messages one at
         // a time, so the count climbs to the cap and then holds as overflow is dropped.
+        // The HOST hub is the ONLY hub this test floods, so it holds the deepest deferred backlog;
+        // other hubs (mesh router / hosted hubs) never approach it. The max deferred= across the
+        // diagnostics therefore IS the host's backlog in this test.
         int Deferred()
         {
             var diag = host.GetDisposalDiagnostics();
@@ -54,16 +57,22 @@ public class DeferredBacklogBoundedTest(ITestOutputHelper output) : HubTestBase(
             return max;
         }
 
-        int prev = -1, cur = Deferred();
-        for (var i = 0; i < 120 && cur != prev; i++)
+        // Wait until the backlog has CLIMBED and SETTLED at a NON-ZERO value (two consecutive equal,
+        // non-zero reads). Never exit on the initial 0 before the action block starts deferring — that
+        // would flake under CI load. If it never climbs, the loop runs out and `settled` stays 0, so the
+        // first assert fails CLEARLY rather than silently passing.
+        var settled = 0;
+        for (var i = 0; i < 150; i++)
         {
             await Task.Delay(100);
-            prev = cur;
-            cur = Deferred();
+            var d = Deferred();
+            if (d > 0 && d == settled) break;   // stable + non-zero → the backlog has settled
+            settled = d;
         }
 
-        Assert.True(cur > 0, $"messages should have deferred behind the never-opening gate (sanity; saw {cur})");
-        Assert.True(cur <= Cap,
-            $"deferred backlog must stay bounded at the cap {Cap}; saw {cur} — unbounded accumulation is the wedge");
+        Assert.True(settled > 0,
+            $"backlog should climb and settle behind the never-opening gate (last saw {settled})");
+        Assert.True(settled <= Cap,
+            $"deferred backlog must stay bounded at the cap {Cap}; settled at {settled} — unbounded accumulation is the wedge");
     }
 }
