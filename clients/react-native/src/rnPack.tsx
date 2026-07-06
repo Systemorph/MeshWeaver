@@ -2,18 +2,23 @@
 // renderer core (@meshweaver/react/core). This is the RN analog of MAUI's MauiViewPack and of the web
 // Fluent pack: SAME UiControl tree, native leaves. Drop it into <RegistryProvider pack={rnPack}>.
 
-import { createElement, useState } from "react";
+import { useEffect, useState } from "react";
 import { View, Text, TextInput, Pressable, Switch, ScrollView, ActivityIndicator, StyleSheet, Platform } from "react-native";
 import { marked } from "marked";
+import { NativeHtml } from "./nativeHtml";
 import {
   ControlRenderer,
   RenderArea,
+  ScopeProvider,
+  useAreaSourceFactory,
+  useAreaState,
   useBindingPointer,
   useChildAreas,
   useEmit,
   useResolve,
   useScope,
   type ControlComponent,
+  type EmbeddedAreaHandle,
   type LeafPack,
   type SkinComponent,
 } from "@meshweaver/react/core";
@@ -183,38 +188,57 @@ const DataGrid: ControlComponent = ({ control }) => {
   );
 };
 
-// Server-prerendered HTML (doc bodies, rich text). On web (react-native-web) inject it into a real DOM
-// node; on native there is no DOM, so strip tags to text — a full native HTML renderer is future work.
-const Html: ControlComponent = ({ control }) => {
-  const html = s(useResolve(control.data));
-  if (Platform.OS === "web")
-    return createElement("div", { className: "markdown-body", dangerouslySetInnerHTML: { __html: html } });
-  return <Text style={styles.body}>{html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim()}</Text>;
-};
+// Server-prerendered HTML (doc bodies, rich text) → NativeHtml renders it: real DOM on web, native
+// components (react-native-render-html) on a device, a stripped-text fallback in tests (see nativeHtml).
+const Html: ControlComponent = ({ control }) => <NativeHtml html={s(useResolve(control.data))} />;
 
-// Markdown / collaborative-markdown editors (read-only for now). CollaborativeMarkdownControl carries
-// its markdown in `value`; the plain Markdown control uses `data`. On web, convert markdown → HTML and
-// inject; on native (no DOM) fall back to the raw text.
+// Markdown / collaborative-markdown (read-only). CollaborativeMarkdownControl carries its markdown in
+// `value`; the plain Markdown control uses `data`. Convert markdown → HTML, then render via NativeHtml.
 const Markdown: ControlComponent = ({ control }) => {
   const md = s(useResolve(control.value ?? control.data ?? control.content ?? control.markdown));
-  if (Platform.OS === "web")
-    return createElement("div", {
-      className: "markdown-body",
-      dangerouslySetInnerHTML: { __html: marked.parse(md, { async: false }) as string },
-    });
-  return <Text style={styles.body}>{md}</Text>;
+  return <NativeHtml html={marked.parse(md, { async: false }) as string} />;
 };
 
-// An embedded layout area on ANOTHER address — a distinct subscription. Show a labelled placeholder;
-// wiring a nested live GrpcAreaSource per embed is future work.
+// A nested layout area on another address — the `@@("area/X")` embed (LayoutAreaControl). Opens a SECOND
+// area stream via the host's AreaSourceFactory (App wires createGrpcEmbeddedFactory on the live connection)
+// and renders that tree in its own scope — the native mirror of the web LayoutAreaView. Without a factory
+// (offline / tests) it falls back to a labelled marker.
 const LayoutAreaEmbed: ControlComponent = ({ control }) => {
-  const ref = control.reference as any;
+  const factory = useAreaSourceFactory();
+  const rawAddress = useResolve(control.address);
+  const address = typeof rawAddress === "string" ? rawAddress : s((rawAddress as any)?.address ?? (rawAddress as any)?.path);
+  const ref = (control.reference ?? {}) as any;
+  const area = s(ref.area ?? ref.Area ?? "");
+  const id = ref.id ?? ref.Id;
+  const key = `${address}|${area}|${id == null ? "" : s(id)}`;
+
+  const [handle, setHandle] = useState<EmbeddedAreaHandle | null>(null);
+  useEffect(() => {
+    if (!factory || !address) return;
+    const h = factory(address, { area: area || undefined, id });
+    setHandle(h);
+    return () => { h?.dispose?.(); setHandle(null); };
+    // key captures address/area/id; factory identity change re-opens the nested subscription.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [factory, key]);
+
+  if (!factory || !address)
+    return <View style={styles.embed}><Text style={styles.label}>▦ {area || "layout area"} @ {address}</Text></View>;
+  if (!handle) return <ActivityIndicator />;
+  const rootArea = handle.rootArea ?? area;
   return (
-    <View style={styles.embed}>
-      <Text style={styles.label}>▦ {s(ref?.area ?? ref?.Area) || "layout area"} @ {s(useResolve(control.address))}</Text>
-    </View>
+    <ScopeProvider source={handle.source} area={rootArea}>
+      <EmbeddedAreaBody rootArea={rootArea} />
+    </ScopeProvider>
   );
 };
+
+// Inside the NESTED source's scope: spin until the embedded root area arrives, then render its tree.
+function EmbeddedAreaBody({ rootArea }: { rootArea: string }) {
+  const state = useAreaState();
+  if (state.areas?.[rootArea] == null) return <ActivityIndicator />;
+  return <RenderArea areaKey={rootArea} />;
+}
 
 // ── input / editor controls (native twins of clients/react/src/controls/inputs.tsx) ────────────────
 const NumberField: ControlComponent = ({ control }) => {
