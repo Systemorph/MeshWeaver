@@ -304,12 +304,19 @@ public static class AgentPickerProjection
     {
         var workspace = hub.GetWorkspace();
 
+        // agent → (default, ALL paths) so the master's stored agent can be VALIDATED against the current
+        // catalog on init: an agent the user deleted (or that isn't offered in this space) resets to the
+        // default instead of leaving a dead selection on the composer.
         var agent = ObserveAgents(hub, userPath, spacePath)
-            .Select(list => list
-                .Where(a => !IsUtilityAgent(a) && !string.IsNullOrEmpty(a.Path))
-                .OrderBy(a => a.Order)
-                .Select(a => a.Path)
-                .FirstOrDefault());
+            .Select(list =>
+            {
+                var paths = list
+                    .Where(a => !IsUtilityAgent(a) && !string.IsNullOrEmpty(a.Path))
+                    .OrderBy(a => a.Order)
+                    .Select(a => a.Path!)
+                    .ToList();
+                return (Default: paths.FirstOrDefault(), All: (IReadOnlyCollection<string>)paths);
+            });
 
         var credResolver = hub.ServiceProvider.GetService<ChatClientCredentialResolver>();
         var model = ObserveModels(workspace, hub, currentPath, nodeTypePath, selectedProviderPaths, userPath)
@@ -328,15 +335,21 @@ public static class AgentPickerProjection
                 return (resolvable ?? ordered.FirstOrDefault())?.Path;
             });
 
+        // harness → (default, ALL paths) so the master's stored harness is VALIDATED against the current
+        // catalog too (same reset-if-gone rule as agent/model).
         var harness = ObserveSnapshot(workspace, hub,
                 $"{HarnessesQueryId}|u={userPath ?? ""}|s={spacePath ?? ""}",
                 BuildRegistryQuery(HarnessNodeType.NodeType, HarnessNodeType.RootNamespace, userPath, spacePath, ""))
-            .Select(snapshot => snapshot
-                .Where(n => n.Path != null
-                    && string.Equals(n.NodeType, HarnessNodeType.NodeType, StringComparison.OrdinalIgnoreCase))
-                .OrderBy(n => n.Order ?? 0)
-                .Select(n => n.Path)
-                .FirstOrDefault());
+            .Select(snapshot =>
+            {
+                var paths = snapshot
+                    .Where(n => n.Path != null
+                        && string.Equals(n.NodeType, HarnessNodeType.NodeType, StringComparison.OrdinalIgnoreCase))
+                    .OrderBy(n => n.Order ?? 0)
+                    .Select(n => n.Path!)
+                    .ToList();
+                return (Default: paths.FirstOrDefault(), All: (IReadOnlyCollection<string>)paths);
+            });
 
         // 🎯 The user's MASTER composer ({user}/_Thread/ThreadComposer) is the single source of truth for
         // chat defaults. Any composer WITHOUT its own selection — a new thread, or a namespace that has no
@@ -367,16 +380,31 @@ public static class AgentPickerProjection
         return agent.CombineLatest(model, harness, master,
             (a, m, h, mstr) => new ThreadComposer
             {
-                Harness   = FirstNonEmpty(mstr?.Harness, h),
-                // VALIDATE the master's stored model against the current catalog on every init — a model
-                // whose provider/key was removed (e.g. a stale "glm-5.2") must NOT be inherited, or the
-                // composer shows a selection that execution then rejects ("selected model X unavailable,
-                // using default Y"). If the master's model no longer resolves, fall to the catalog default
-                // `m` (already the lowest-Order model whose credentials resolve). Legacy stored value → gone.
+                // VALIDATE every stored selection against the current catalog on init: a harness or agent
+                // removed since it was chosen (or not offered in this space) resets to the catalog default
+                // rather than showing a dead selection. Model uses the credential-resolution variant (a
+                // model needs a working provider/key, not just catalog membership) — the "glm-5.2" case.
+                Harness   = ValidOrDefault(mstr?.Harness, h.All, h.Default),
                 ModelName = ValidMasterModel(mstr?.ModelName, credResolver) ?? m,
-                AgentName = FirstNonEmpty(mstr?.AgentName, a),
+                AgentName = ValidOrDefault(mstr?.AgentName, a.All, a.Default),
                 Effort    = mstr?.Effort
             });
+    }
+
+    /// <summary>
+    /// The master composer's stored selection IF it still exists in the current catalog, else the catalog
+    /// default. Validates on every init so a harness/agent removed since it was chosen (or not offered in
+    /// the current space) resets to a valid choice. An EMPTY catalog (not yet loaded) keeps the stored
+    /// value — a transiently-empty snapshot must NEVER wipe a good selection.
+    /// </summary>
+    private static string? ValidOrDefault(string? masterValue, IReadOnlyCollection<string> catalog, string? catalogDefault)
+    {
+        if (string.IsNullOrEmpty(masterValue)) return catalogDefault;
+        if (catalog.Count == 0) return masterValue;
+        foreach (var path in catalog)
+            if (string.Equals(path, masterValue, StringComparison.OrdinalIgnoreCase))
+                return masterValue;
+        return catalogDefault;
     }
 
     /// <summary>
@@ -389,10 +417,6 @@ public static class AgentPickerProjection
            && (credResolver is null || credResolver.Resolve(modelPath) != CredentialResolution.Missing)
             ? modelPath
             : null;
-
-    /// <summary>First non-empty of the two — master value wins, catalog fallback.</summary>
-    private static string? FirstNonEmpty(string? primary, string? fallback)
-        => string.IsNullOrEmpty(primary) ? fallback : primary;
 
     /// <summary>
     /// The model picker queries: the system <c>Provider</c> catalog plus per-context / per-NodeType /
