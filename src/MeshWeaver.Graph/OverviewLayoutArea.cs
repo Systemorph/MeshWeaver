@@ -137,10 +137,18 @@ public static class OverviewLayoutArea
         bool canEdit)
     {
         var title = node.Name ?? node.Id ?? "";
+        var titleHtml = $"<h1 style=\"margin: 0;\">{System.Web.HttpUtility.HtmlEncode(title)}</h1>";
+
+        // The page title shows the node's OWN icon (MeshNode.Icon) beside its name — so a Space, a doc,
+        // any node with an icon carries it on the page. No icon → just the title.
+        var iconHtml = RenderNodeIconHtml(node.Icon);
+        var heading = iconHtml.Length == 0
+            ? titleHtml
+            : $"<div style=\"display: flex; align-items: center; gap: 12px;\">{iconHtml}{titleHtml}</div>";
 
         var titleStack = Controls.Stack
             .WithStyle($"cursor: {(canEdit ? "pointer" : "default")};")
-            .WithView(Controls.Html($"<h1 style=\"margin: 0;\">{System.Web.HttpUtility.HtmlEncode(title)}</h1>"));
+            .WithView(Controls.Html(heading));
 
         if (canEdit)
         {
@@ -152,6 +160,26 @@ public static class OverviewLayoutArea
         }
 
         return titleStack;
+    }
+
+    /// <summary>
+    /// Renders a node's <see cref="MeshNode.Icon"/> as a title-sized (32px) icon: an inline
+    /// <c>&lt;svg&gt;</c> is embedded, an image URL (or <c>data:</c>/path) becomes an <c>&lt;img&gt;</c>,
+    /// and anything else (an emoji / short glyph) is shown as text. Empty when there is no icon.
+    /// </summary>
+    private static string RenderNodeIconHtml(string? icon)
+    {
+        if (string.IsNullOrWhiteSpace(icon))
+            return "";
+        var trimmed = icon.Trim();
+        if (trimmed.StartsWith("<svg", StringComparison.OrdinalIgnoreCase))
+            return $"<span style=\"display:inline-flex; width:32px; height:32px;\">{trimmed}</span>";
+        var looksLikeUrl = trimmed.StartsWith("http", StringComparison.OrdinalIgnoreCase)
+            || trimmed.StartsWith("/") || trimmed.StartsWith("data:", StringComparison.OrdinalIgnoreCase)
+            || trimmed.Contains('.');
+        return looksLikeUrl
+            ? $"<img src=\"{System.Web.HttpUtility.HtmlAttributeEncode(trimmed)}\" alt=\"\" style=\"width:32px; height:32px; object-fit:contain;\" />"
+            : $"<span style=\"font-size:28px; line-height:1;\">{System.Web.HttpUtility.HtmlEncode(trimmed)}</span>";
     }
 
     private static UiControl BuildTitleEditView(

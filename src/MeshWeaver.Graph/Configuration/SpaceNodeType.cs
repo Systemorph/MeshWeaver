@@ -43,10 +43,13 @@ public record Space
     [ContentItem]
     public string? Logo { get; init; }
 
-    /// <summary>Icon used to represent the space; defaults to "Building".</summary>
+    /// <summary>Icon used to represent the space; defaults to the space icon. A RENDERABLE value — an
+    /// image URL (e.g. <c>/static/NodeTypeIcons/space.svg</c>), an inline <c>&lt;svg&gt;</c>, or an emoji
+    /// — NEVER a Fluent icon name (a bare name like "Building" can't render as an image and shows as
+    /// text or a broken image).</summary>
     [ContentItem]
     [MeshNodeProperty(nameof(MeshNode.Icon))]
-    public string Icon { get; init; } = "Building";
+    public string Icon { get; init; } = "/static/NodeTypeIcons/space.svg";
 
     /// <summary>Geographic location of the space.</summary>
     public string? Location { get; init; }
@@ -221,7 +224,7 @@ public static class SpaceNodeType
     {
         Name = "Space",
         NodeType = "NodeType",
-        Icon = "/static/NodeTypeIcons/organization.svg",
+        Icon = "/static/NodeTypeIcons/space.svg",
         Content = new NodeTypeDefinition { DefaultNamespace = "", RestrictedToNamespaces = [""], OwnsPartition = true },
         HubConfiguration = config => config
             .AddMeshDataSource(source => source
