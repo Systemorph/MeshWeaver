@@ -210,33 +210,38 @@ const LayoutAreaEmbed: ControlComponent = ({ control }) => {
   const ref = (control.reference ?? {}) as any;
   const area = s(ref.area ?? ref.Area ?? "");
   const id = ref.id ?? ref.Id;
-  const key = `${address}|${area}|${id == null ? "" : s(id)}`;
+  const layout = ref.layout ?? ref.Layout;
+  // Progress options mirror the web LayoutAreaView: ShowProgress (default true) suppressed either by a
+  // false ShowProgress or SpinnerType "None".
+  const showProgress = useResolve(control.showProgress) !== false && s(control.spinnerType) !== "None";
+  const key = `${address}|${area}|${id == null ? "" : s(id)}|${s(layout)}`;
 
   const [handle, setHandle] = useState<EmbeddedAreaHandle | null>(null);
   useEffect(() => {
     if (!factory || !address) return;
-    const h = factory(address, { area: area || undefined, id });
+    const h = factory(address, { area: area || undefined, id, layout: layout ? String(layout) : undefined });
     setHandle(h);
     return () => { h?.dispose?.(); setHandle(null); };
-    // key captures address/area/id; factory identity change re-opens the nested subscription.
+    // key captures address/area/id/layout; factory identity change re-opens the nested subscription.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [factory, key]);
 
   if (!factory || !address)
     return <View style={styles.embed}><Text style={styles.label}>▦ {area || "layout area"} @ {address}</Text></View>;
-  if (!handle) return <ActivityIndicator />;
+  if (!handle) return showProgress ? <ActivityIndicator /> : null;
   const rootArea = handle.rootArea ?? area;
   return (
     <ScopeProvider source={handle.source} area={rootArea}>
-      <EmbeddedAreaBody rootArea={rootArea} />
+      <EmbeddedAreaBody rootArea={rootArea} showProgress={showProgress} />
     </ScopeProvider>
   );
 };
 
-// Inside the NESTED source's scope: spin until the embedded root area arrives, then render its tree.
-function EmbeddedAreaBody({ rootArea }: { rootArea: string }) {
+// Inside the NESTED source's scope: spin (unless progress is suppressed) until the embedded root area
+// arrives, then render its tree.
+function EmbeddedAreaBody({ rootArea, showProgress }: { rootArea: string; showProgress: boolean }) {
   const state = useAreaState();
-  if (state.areas?.[rootArea] == null) return <ActivityIndicator />;
+  if (state.areas?.[rootArea] == null) return showProgress ? <ActivityIndicator /> : null;
   return <RenderArea areaKey={rootArea} />;
 }
 
