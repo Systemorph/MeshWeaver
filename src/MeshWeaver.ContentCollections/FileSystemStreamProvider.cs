@@ -65,7 +65,16 @@ public class FileSystemStreamProvider(string basePath) : IStreamProvider
             fullPath,
             FileMode.Create,
             FileAccess.Write,
-            FileShare.None,
+            // Single-writer / multi-reader / delete-tolerant sharing — MUST match the read path's
+            // tolerant share (GetStreamAsync/GetStreamWithMetadataAsync open FileShare.ReadWrite|Delete).
+            // FileShare.None takes an EXCLUSIVE advisory lock on Unix (.NET emulates FileShare via
+            // flock: None → LOCK_EX), which the OS refuses while a reader holds the file — and the
+            // FileSystemWatcher-driven UpdateArticle read legitimately overlaps a write. That
+            // exclusive-vs-shared clash is the "file is being used by another process" IOException
+            // this method threw under CI load. Content files are eventually-consistent and re-ingested
+            // on change, so a write must never demand exclusivity against the readers that already
+            // tolerate it. See NodeHubContentCollectionTest / ContentCollectionWriteReadRaceTest.
+            FileShare.Read | FileShare.Delete,
             4096,
             useAsync: true);
 
@@ -154,7 +163,11 @@ public class FileSystemStreamProvider(string basePath) : IStreamProvider
         {
             Directory.CreateDirectory(directory);
         }
-        await using var fileStream = new FileStream(fullPath, FileMode.Create, FileAccess.Write, FileShare.None, 4096, useAsync: true);
+        // Single-writer / multi-reader / delete-tolerant sharing — see WriteStreamAsync for the full
+        // rationale. FileShare.None takes an exclusive flock on Unix that clashes with the concurrent
+        // FileSystemWatcher-driven read (FileShare.ReadWrite|Delete) and threw the CI-only
+        // "used by another process" IOException at this exact line.
+        await using var fileStream = new FileStream(fullPath, FileMode.Create, FileAccess.Write, FileShare.Read | FileShare.Delete, 4096, useAsync: true);
         await content.CopyToAsync(fileStream, cancellationToken);
     }
 
