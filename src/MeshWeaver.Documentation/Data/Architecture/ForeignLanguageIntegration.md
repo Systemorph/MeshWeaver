@@ -80,7 +80,10 @@ where the exact request `$type` awaits a live capture.
   await mesh.patch("ACME/Stories/42", {"content": {"done": True}})  # python → mesh
   ```
 - **Node / Bun — `clients/typescript` (`@meshweaver/client`)**: `@grpc/grpc-js` transport (proto loaded at
-  runtime via `@grpc/proto-loader` — no codegen step), `AsyncIterable` streams, same surface.
+  runtime via `@grpc/proto-loader` — no codegen step), `AsyncIterable` streams, same surface. It also
+  ships the **node kernel** (`worker.ts`) that executes `javascript`/`typescript` Code nodes routed to
+  `node/node-kernel`, and the **`Hub`** helper for defining a hub in Node (see
+  [Python Code Nodes](../PythonCodeNodes) for the execution model).
 - **Browser / React Native — `clients/grpc-web` (`@meshweaver/client-web`)**: the same `observe`/`post`/`watch`
   surface over the **gRPC-web split** (Connect-ES), for platforms that can't do the bidi `Open` (no HTTP/2
   duplex / no Node `http2`). It's a `MeshConnectionLike`, so it feeds the renderer's `GrpcAreaSource` directly.

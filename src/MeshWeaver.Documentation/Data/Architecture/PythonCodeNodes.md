@@ -15,12 +15,13 @@ connected Python worker and the output attaches directly below the code:
 That is the whole feature. What you just ran is a **Code node** whose `Language` is `python`:
 `print(...)` was captured as output, the trailing bare expression became the return value (REPL
 semantics), and `Inputs` carried the caller's parameters. A `csharp` node (the default) runs
-**in-process** on the mesh's Roslyn kernel; a `python` node is **routed over the mesh to a connected
-worker** instead — the same gRPC bridge that lets any Python process join the mesh as a participant
-(see [Foreign Language Integration](../ForeignLanguageIntegration)). The worker runs
-the script and writes the result back onto the same **Activity node** every subscriber already
-watches, so a Python run surfaces output **identically** to a C# one. With no worker connected the run
-reports that in the same output pane — nothing hangs.
+**in-process** on the mesh's Roslyn kernel; a **foreign-language** node is **routed over the mesh to a
+connected worker** instead — `python` → `py/python-kernel`, `javascript`/`typescript` →
+`node/node-kernel` (`CodeNodeType.ResolveKernelAddress`) — the same gRPC bridge that lets any process
+join the mesh as a participant (see [Foreign Language Integration](../ForeignLanguageIntegration)). The
+worker runs the script and writes the result back onto the same **Activity node** every subscriber
+already watches, so a python **or** js/ts run surfaces output **identically** to a C# one. With no
+worker connected the run reports that in the same output pane — nothing hangs.
 
 ## Inside the node
 
@@ -65,11 +66,14 @@ wedges on a bad snippet.
    every subscriber (the Code node's Output pane, the activity feed, tests) sees it
 ```
 
-The only .NET-side change relative to C# is **where the submission is sent**: C# stays in-process;
-`python` is addressed to the worker. The concurrency-critical Roslyn `KernelExecutor` is untouched —
+The only .NET-side change relative to C# is **where the submission is sent** —
+`CodeNodeType.ResolveKernelAddress(language, activityPath)` picks the target: `python` →
+`py/python-kernel`, `javascript`/`typescript` → `node/node-kernel` (the Node worker, `clients/typescript`),
+everything else in-process. Each worker executes and patches the same ActivityLog, so js/ts output
+surfaces exactly like python and C#. The concurrency-critical Roslyn `KernelExecutor` is untouched —
 it only ever runs C#.
 
-## Run a Python worker
+## Run a language worker
 
 The worker lives in the Python SDK (`clients/python`). It connects as a **stable** participant
 address so the kernel can target it:
@@ -86,6 +90,11 @@ python -m meshweaver.worker \
 
 It registers under `py/python-kernel`, then waits for `SubmitCodeRequest` deliveries. Each one runs
 in a fresh namespace.
+
+> **javascript / typescript** — the **Node worker** is the exact equivalent, from `clients/typescript`:
+> `npm run build && node dist/worker.js --url … --address node/node-kernel`. It runs the snippet in a
+> `vm` sandbox with the same REPL semantics (`console.log` captured, trailing expression = return value,
+> `Inputs` global; TypeScript is transpiled first). Same wire contract, same Activity write-back.
 
 > **Identity / access.** The worker writes the Activity node under the identity of its `--token`. That
 > identity needs write access to where activities are stored (the runner's home partition). Use a token
@@ -109,18 +118,22 @@ the in-process Roslyn kernel: the C# kernel runs in the portal process; the pyth
 portal *pod*, and a run executes under the requesting user's identity (the gate echoes the delivery's
 `AccessContext`), not a standing service credential — nothing to rotate.
 
-Enable it in the Helm chart (OFF by default; the deployment must supply the image):
+Gates are **feature-flagged** per language under `grpc.gates` — every language is **included by
+default**; a gate runs once its image is supplied (empty image ⇒ no sidecar). Set `enabled: false` to
+opt a language out:
 
 ```yaml
 grpc:
-  pythonGate:
-    enabled: true
-    image: <registry>/meshweaver/python-gate:<tag>   # deploy/python-gate/Dockerfile
+  gates:
+    python:
+      image: <registry>/meshweaver/python-gate:<tag>   # deploy/python-gate/Dockerfile
+    node:
+      image: <registry>/meshweaver/node-gate:<tag>     # deploy/node-gate/Dockerfile — runs js/ts
 ```
 
-Today `python` targets the single well-known `py/python-kernel` address. A worker **pool** (lease a
-worker per run, or per partition) and other languages (`node`/`bun` → a `node/*` gate) are the natural
-next step — the routing branch and the sidecar list are the two places that grow.
+Each language is its own gate (`py/python-kernel`, `node/node-kernel`); the same shape adds the next
+(`bun`, a language pool that leases a worker per run/partition). The routing branch
+(`ResolveKernelAddress`) and the `grpc.gates` map are the two places that grow.
 
 ## Related
 
