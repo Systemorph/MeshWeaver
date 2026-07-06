@@ -87,7 +87,7 @@ Retrieval mechanism + the visible-vs-embeddable rule are pinned by `LayoutAreaRe
 
 # 6. Give it a logo and an icon
 
-- **`icon`** — an inline SVG (or named icon like `Building`) shown in lists and menus.
+- **`icon`** — a RENDERABLE value shown in lists, menus, and the page header: an inline `<svg>`, an emoji, or an image URL (e.g. `/static/NodeTypeIcons/space.svg`). **NEVER a Fluent icon name** like `Building` (a name is not an image — it won't render). See §2.
 - **`logo`** — an image URL or data URI for the large header image (e.g. a served `/static/...svg`). Without a logo the header falls back to the node icon or the name's initials.
 
 # 7. (Optional) Link a GitHub repository
