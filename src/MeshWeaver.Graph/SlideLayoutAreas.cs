@@ -41,6 +41,10 @@ public static class SlideLayoutAreas
 
     /// <summary>Area id of the slide stage inside the Content / Present / Notes areas.</summary>
     public const string StageArea = "Stage";
+    /// <summary>Area id of the slide body (markdown canvas) inside the stage.</summary>
+    public const string SlideBodyArea = "Body";
+    /// <summary>Area id of the invisible presenter-keyboard driver in the Present area.</summary>
+    public const string SlideShowArea = "SlideShow";
     /// <summary>Area id of the presenter bar beneath the stage in the Content area.</summary>
     public const string PresenterBarArea = "PresenterBar";
     /// <summary>Area id of the "Slide n / N" counter.</summary>
@@ -57,12 +61,32 @@ public static class SlideLayoutAreas
     public const string NotesBodyArea = "NotesBody";
 
     /// <summary>
-    /// Theme-aware default stage background — a subtle gradient built from the
-    /// design-token layer colors so it adapts to light and dark themes.
-    /// <see cref="SlideContent.Background"/> overrides it per slide.
+    /// The presentation theme ("Deep Indigo") exposed as CSS custom properties on the stage /
+    /// present-root, so every slide (and its author-supplied HTML) references the SAME token set —
+    /// one source of truth, theme-INDEPENDENT (it does not flip with the portal light/dark theme).
+    /// A slide that sets its own <see cref="SlideContent.Background"/> / element colors still wins;
+    /// these are the defaults so a slide with no colors already looks on-theme (and never renders
+    /// white-on-white or dark-blue-on-black).
+    /// <list type="bullet">
+    ///   <item><c>--ae-bg</c> — the slide backdrop gradient · <c>--ae-bg-solid</c> — the letterbox fill</item>
+    ///   <item><c>--ae-fg</c> — primary text · <c>--ae-muted</c> — eyebrows/captions</item>
+    ///   <item><c>--ae-accent</c> — key words / links · <c>--ae-accent2</c> — secondary / illustration</item>
+    /// </list>
     /// </summary>
-    private const string DefaultBackground =
-        "linear-gradient(150deg, var(--neutral-layer-2) 0%, var(--neutral-layer-1) 55%, var(--neutral-layer-2) 100%)";
+    internal const string ThemeTokens =
+        "--ae-bg: linear-gradient(135deg, #0b1d3a 0%, #3b1d6e 100%);" +
+        "--ae-bg-solid: #0b1d3a;" +
+        "--ae-fg: #f4f7ff;" +
+        "--ae-muted: #9db8ff;" +
+        "--ae-accent: #3b82f6;" +
+        "--ae-accent2: #818cf8;";
+
+    /// <summary>
+    /// The default stage background when a slide sets no <see cref="SlideContent.Background"/> — the
+    /// theme-independent Deep-Indigo backdrop (<c>var(--ae-bg)</c>), so default slides are readable
+    /// in any portal theme. A slide's own <see cref="SlideContent.Background"/> overrides it.
+    /// </summary>
+    private const string DefaultBackground = "var(--ae-bg)";
 
     private const string EmptySlideHint =
         "*This slide has no content yet. Edit the node's `Content` to fill the stage.*";
@@ -196,24 +220,62 @@ public static class SlideLayoutAreas
     {
         var hubPath = host.Hub.Address.ToString();
         var slide = node.ContentAs<SlideContent>(host.Hub.JsonSerializerOptions);
-        var (index, _, next) = Locate(hubPath, slides);
+        var (index, prev, next) = Locate(hubPath, slides);
         // Advancing in Present mode stays in Present mode.
         var nextHref = next is null ? null : MeshNodeLayoutAreas.BuildUrl(next.Path, PresentArea);
 
-        var root = Controls.Stack
-            .WithWidth("100%")
-            .WithStyle("position: relative; width: 100%; margin: 0 auto; max-width: 1600px; padding: 8px;");
+        var root = BuildPresentRoot();
+        root = root.WithView(BuildStage(slide, nextHref, present: true), StageArea);
 
-        root = root.WithView(BuildStage(slide, nextHref), StageArea);
+        // Minimal overlay counter, bottom-right corner chip — readable on the dark backdrop.
+        root = root.WithView(BuildPresentCounter(index, slides.Count), CounterArea);
 
-        // Minimal overlay counter, bottom-right corner — the only chrome in Present mode.
-        root = root.WithView(BuildCounter(index, slides.Count)
-                .WithStyle("position: absolute; right: 26px; bottom: 20px; " +
-                           "font-size: 12px; font-variant-numeric: tabular-nums; " +
-                           "opacity: 0.55; pointer-events: none;"),
-            CounterArea);
+        // Keyboard driver (backward-compat standalone slide walk): prev/next resolve the
+        // ordered sibling / deck-manifest slides; Esc exits to the deck (parent) overview.
+        root = root.WithView(BuildSlideShowForSlide(hubPath, prev, next, slides), SlideShowArea);
 
         return root;
+    }
+
+    /// <summary>
+    /// The full-bleed presentation root: fills the viewport (the portal hides its chrome on a
+    /// <c>/Present</c> route), centers the 16:9 stage with minimal padding, and fills the letterbox
+    /// with the theme's solid backdrop. Carries the <see cref="ThemeTokens"/> so the stage and the
+    /// overlay counter both resolve the Deep-Indigo tokens.
+    /// </summary>
+    internal static StackControl BuildPresentRoot()
+        => Controls.Stack
+            .WithWidth("100%")
+            .WithStyle(
+                ThemeTokens +
+                "position: relative; width: 100%; height: 100%; min-height: 100vh; box-sizing: border-box; " +
+                "display: flex; align-items: center; justify-content: center; " +
+                "padding: 1.5vmin; background: var(--ae-bg-solid);");
+
+    /// <summary>The Present-mode corner counter chip — <c>var(--ae-fg)</c> on a translucent pill, readable on the dark stage.</summary>
+    internal static UiControl BuildPresentCounter(int index, int count)
+        => BuildCounter(index, count)
+            .WithStyle(
+                "position: absolute; right: 2vmin; bottom: 2vmin; padding: 4px 12px; " +
+                "border-radius: 999px; background: rgba(0, 0, 0, 0.35); color: var(--ae-fg); " +
+                "font-size: 13px; font-variant-numeric: tabular-nums; opacity: 0.8; pointer-events: none;");
+
+    /// <summary>
+    /// Builds the keyboard driver for a standalone slide's Present walk: Home/End target the first /
+    /// last ordered slide, prev/next the neighbours, Esc the deck (parent) overview.
+    /// </summary>
+    private static SlideShowControl BuildSlideShowForSlide(
+        string hubPath, MeshNode? prev, MeshNode? next, IReadOnlyList<MeshNode> slides)
+    {
+        var parentPath = GetParentPath(hubPath);
+        return new SlideShowControl
+        {
+            FirstHref = slides.Count > 0 ? MeshNodeLayoutAreas.BuildUrl(slides[0].Path, PresentArea) : null,
+            LastHref = slides.Count > 0 ? MeshNodeLayoutAreas.BuildUrl(slides[^1].Path, PresentArea) : null,
+            PreviousHref = prev is null ? null : MeshNodeLayoutAreas.BuildUrl(prev.Path, PresentArea),
+            NextHref = next is null ? null : MeshNodeLayoutAreas.BuildUrl(next.Path, PresentArea),
+            ExitHref = parentPath is not null ? $"/{parentPath}" : $"/{hubPath}",
+        };
     }
 
     // ── Notes ────────────────────────────────────────────────────────────────
@@ -248,30 +310,49 @@ public static class SlideLayoutAreas
     // ── Stage ────────────────────────────────────────────────────────────────
 
     /// <summary>
-    /// The slide stage: a 16:9 rounded, drop-shadowed surface with the slide body
-    /// (markdown / HTML / SVG) vertically centered at generous padding and large
-    /// fluid type. <see cref="SlideContent.Background"/> overrides the theme-aware
-    /// default gradient. When <paramref name="nextHref"/> is set, clicking the stage
-    /// advances by rendering a <see cref="RedirectControl"/> (standard navigation).
+    /// The slide stage: a 16:9 surface whose ONE surface IS the slide's own background — the slide
+    /// body (markdown / HTML / SVG) renders directly onto it, never onto a white inner card. The
+    /// markdown control's default <c>background-color: var(--neutral-layer-1)</c> is overridden to
+    /// transparent, and the default text colour is the theme-INDEPENDENT <c>var(--ae-fg)</c>, so a
+    /// slide is readable in any portal theme (no white-on-white, no dark-blue-on-black); a slide's
+    /// own <see cref="SlideContent.Background"/> / inline element colours still win.
+    /// <para>When <paramref name="present"/> the stage is sized to fill most of the viewport (a thin
+    /// letterbox) with minimal chrome; otherwise it sits inside the page column. When
+    /// <paramref name="nextHref"/> is set, clicking the stage advances by rendering a
+    /// <see cref="RedirectControl"/> (standard navigation).</para>
     /// </summary>
-    private static UiControl BuildStage(SlideContent? slide, string? nextHref)
+    /// <param name="slide">The slide content to render on the stage.</param>
+    /// <param name="nextHref">Where a stage click advances to, or null for no click-to-advance.</param>
+    /// <param name="present">True for the full-bleed Present view; false for the in-page Content view.</param>
+    internal static UiControl BuildStage(SlideContent? slide, string? nextHref, bool present = false)
     {
         var background = string.IsNullOrWhiteSpace(slide?.Background)
             ? DefaultBackground
             : slide!.Background!;
 
+        // ONE surface: the markdown canvas is transparent and inherits the stage's colour, so the
+        // slide HTML sits directly on the slide-owned backdrop (the white-inner-card fix).
+        var body = Controls.Markdown(
+                string.IsNullOrWhiteSpace(slide?.Content) ? EmptySlideHint : slide!.Content!)
+            .WithStyle("width: 100%; background: transparent; background-color: transparent; color: inherit;");
+
+        // Full-bleed sizing (Present): width follows the viewport height at 16:9 so the slide fills
+        // most of the screen; a thin frame instead of the big letterbox/margin.
+        var sizing = present
+            ? "width: min(100%, calc((100vh - 3vmin) * 16 / 9)); max-height: 100%; " +
+              "border-radius: 6px; box-shadow: 0 10px 44px rgba(0, 0, 0, 0.45); padding: 3.2% 6%; "
+            : "width: 100%; border-radius: 14px; box-shadow: 0 14px 40px rgba(0, 0, 0, 0.28); padding: 3.6% 6.5%; ";
+
         var stage = Controls.Stack
             .WithWidth("100%")
-            .WithView(Controls.Markdown(
-                    string.IsNullOrWhiteSpace(slide?.Content) ? EmptySlideHint : slide!.Content!)
-                .WithStyle("width: 100%;"))
+            .WithView(body, SlideBodyArea)
             .WithStyle(
-                "aspect-ratio: 16 / 9; width: 100%; box-sizing: border-box; " +
-                "display: flex; flex-direction: column; justify-content: center; " +
-                "padding: 4% 7%; border-radius: 18px; overflow: hidden; " +
-                "box-shadow: 0 18px 50px rgba(0, 0, 0, 0.28); " +
+                ThemeTokens +
+                "aspect-ratio: 16 / 9; box-sizing: border-box; " +
+                "display: flex; flex-direction: column; justify-content: center; overflow: hidden; " +
+                sizing +
                 "font-size: clamp(16px, 2.2vw, 34px); line-height: 1.4; " +
-                $"background: {background};" +
+                $"background: {background}; color: var(--ae-fg);" +
                 (nextHref is null ? "" : " cursor: pointer;"));
 
         if (nextHref is not null)
@@ -352,7 +433,7 @@ public static class SlideLayoutAreas
             return null;
         return refs
             .Where(r => !string.IsNullOrWhiteSpace(r))
-            .Select(r => DeckLayoutAreas.ResolveChildPath(parentPath, r))
+            .Select(r => DeckLayoutAreas.ResolveSlidePath(parentPath, r))
             .ToImmutableList();
     }
 

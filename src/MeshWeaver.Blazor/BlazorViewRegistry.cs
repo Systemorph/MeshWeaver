@@ -135,6 +135,7 @@ public static class BlazorViewRegistry
                 SpacerControl spacer => StandardView<SpacerControl, SpacerView>(spacer, stream, area),
                 LayoutAreaDefinitionControl layoutAreaDefinition => StandardView<LayoutAreaDefinitionControl, LayoutAreaDefinitionView>(layoutAreaDefinition, stream, area),
                 RedirectControl redirect => StandardView<RedirectControl, RedirectView>(redirect, stream, area),
+                SlideShowControl slideShow => StandardView<SlideShowControl, Components.SlideShowView>(slideShow, stream, area),
                 SearchBoxControl searchBox => StandardView<SearchBoxControl, SearchBoxView>(searchBox, stream, area),
                 MeshNodePickerControl picker => StandardView<MeshNodePickerControl, MeshNodePickerView>(picker, stream, area),
                 MeshNodeCollectionControl collection => StandardView<MeshNodeCollectionControl, MeshNodeCollectionView>(collection, stream, area),
