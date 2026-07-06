@@ -407,3 +407,6 @@ samples/Graph/Data/VUser/
 !.claude/skills/debug/
 !.claude/skills/release/
 memex/aspire/Memex.Portal.Distributed/wwwroot/app/
+
+# Whisper model binaries — never commit (574MB+); belongs in LFS/artifact store
+deploy/whisper/models/
