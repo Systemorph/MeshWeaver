@@ -23,7 +23,9 @@ namespace MeshWeaver.Graph;
 /// <summary>
 /// Layout area for creating new mesh nodes.
 /// Shows a unified "Create New" form with type autocomplete, namespace, name, and id fields.
-/// For transient nodes, shows the content type editor with Create/Cancel buttons.
+/// On submit it persists ONE <see cref="MeshNodeState.Active"/> node via a single
+/// <c>CreateNode</c> (through the access-control pipeline) and navigates to the new node's Edit
+/// area — no transient placeholder is ever written to storage.
 /// </summary>
 public static class CreateLayoutArea
 {
@@ -44,11 +46,10 @@ public static class CreateLayoutArea
             Href: MeshNodeLayoutAreas.BuildUrl(hubPath, MeshNodeLayoutAreas.CreateNodeArea, createQs));
     }
     /// <summary>
-    /// Main entry point for the Create layout area.
-    /// - If current node is Transient: renders the Create editor inline (same UI as Edit).
-    ///   The user confirms via Save, which flips state to Active. No auto-redirect to Edit
-    ///   (that would race with workspace replication and report "node does not exist").
-    /// - Otherwise: shows the unified Create New form with type picker.
+    /// Main entry point for the Create layout area. Shows the unified "Create New" form with the
+    /// type picker (or a NodeType-specific <see cref="NodeTypeDefinition.BuildCreate"/> override,
+    /// e.g. Thread's chat composer). Submitting the form creates the node and navigates to its
+    /// Edit area; nothing is persisted until that single <c>CreateNode</c>.
     /// </summary>
     public static IObservable<UiControl?> Create(LayoutAreaHost host, RenderingContext _)
     {
@@ -94,9 +95,13 @@ public static class CreateLayoutArea
     }
 
     /// <summary>
-    /// The default Create UI: confirm-edit for a transient content node, else the generic
-    /// "Create New" form. Used when no NodeType-specific
+    /// The default Create UI: the generic "Create New" form. Used when no NodeType-specific
     /// <see cref="NodeTypeDefinition.BuildCreate"/> applies (or one yielded <c>null</c>).
+    /// <para>The form runs on the PARENT node's hub and never writes a placeholder/transient
+    /// node. On submit it builds one <see cref="MeshNodeState.Active"/> node and persists it with
+    /// a single <c>CreateNode</c> (flowing through the CreateNodeRequest access-control pipeline),
+    /// then navigates to the new node's Edit area — the owning hub knows the node's content type
+    /// and materialises the type-specific content editor there.</para>
     /// </summary>
     private static IObservable<UiControl?> BuildDefaultCreate(LayoutAreaHost host, string currentPath)
     {
@@ -104,388 +109,7 @@ public static class CreateLayoutArea
             ?? Observable.Return<MeshNode[]>(Array.Empty<MeshNode>());
 
         return nodeStream.Take(1).Select(nodes =>
-        {
-            var currentNode = nodes.FirstOrDefault(n => n.Path == currentPath);
-
-            if (currentNode?.State == MeshNodeState.Transient)
-            {
-                // Content-editor types (Markdown, etc.) don't need a separate "Create" confirmation —
-                // the Edit view is itself the authoring surface, so flip transient→Active and jump there.
-                if (IsDirectEditContentType(host, currentNode))
-                {
-                    ConfirmTransient(host, currentNode);
-                    var editHref = MeshNodeLayoutAreas.BuildUrl(currentNode.Path, MeshNodeLayoutAreas.EditArea);
-                    return (UiControl?)new RedirectControl(editHref);
-                }
-                return (UiControl?)BuildCreateEditor(host, currentNode);
-            }
-
-            return (UiControl?)BuildCreateNewForm(host, nodes, currentPath);
-        });
-    }
-
-    /// <summary>
-    /// True when the transient node's content is edited directly (Markdown, etc.)
-    /// — no intermediate Create form needed; go straight to Edit.
-    /// </summary>
-    private static bool IsDirectEditContentType(LayoutAreaHost host, MeshNode node)
-    {
-        if (node.NodeType == "Markdown")
-            return true;
-
-        // Inspect the hub's MeshDataSource ContentType (same resolution BuildCreateEditor uses).
-        var contentType = host.Workspace.DataContext.DataSources
-            .OfType<MeshDataSource>()
-            .FirstOrDefault(ds => ds.ContentType != null)?.ContentType;
-        return contentType != null
-            && contentType.Name.Contains("Markdown", StringComparison.OrdinalIgnoreCase);
-    }
-
-    /// <summary>
-    /// Flips a transient node to Active state. Fire-and-forget Subscribe — no await in the click path.
-    /// </summary>
-    private static void ConfirmTransient(LayoutAreaHost host, MeshNode transient)
-    {
-        var logger = host.Hub.ServiceProvider.GetService<ILogger<LayoutAreaHost>>();
-        var meshService = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
-        var active = transient with { State = MeshNodeState.Active };
-        meshService.CreateNode(active).Subscribe(
-            _ => { /* fire-and-forget success */ },
-            ex => logger?.LogWarning(ex, "Failed to confirm transient node {Path}", transient.Path));
-    }
-
-    /// <summary>
-    /// Builds the Create editor for a transient node (own node).
-    /// 1. Resolves ContentType from MeshDataSource
-    /// 2. Creates content instance using MeshDataSource.CreateContentInstance
-    /// 3. Shows edit form for content type with editable Id field
-    /// 4. Create button: If Id unchanged, confirm at same path. If Id changed, create new node + delete transient.
-    /// 5. Cancel button: removes transient node and navigates back
-    /// </summary>
-    private static UiControl BuildCreateEditor(
-        LayoutAreaHost host,
-        MeshNode node)
-    {
-        var nodePath = node.Path;
-        var parentPath = node.GetParentPath();
-        var transientId = node.Id; // The GUID-based transient Id
-        var desiredId = node.DesiredId ?? transientId; // User's intended Id (from dialog)
-
-        // Get MeshDataSource from workspace to resolve ContentType
-        var workspace = host.Workspace;
-        var meshDataSource = workspace.DataContext.DataSources
-            .OfType<MeshDataSource>()
-            .FirstOrDefault(ds => ds.ContentType != null);
-        var contentType = meshDataSource?.ContentType;
-
-        // Create content instance using MeshDataSource
-        object? contentInstance = node.Content;
-        if (contentInstance == null && meshDataSource != null)
-        {
-            contentInstance = meshDataSource.CreateContentInstance(node);
-        }
-
-        var cancelUrl = !string.IsNullOrEmpty(parentPath)
-            ? $"/{parentPath}"
-            : $"/{nodePath}";
-        var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
-        var logger = host.Hub.ServiceProvider.GetService<ILogger<LayoutAreaHost>>();
-
-        // Set up metadata data binding for Name field
-        var metadataDataId = $"create_metadata_{nodePath.Replace("/", "_")}";
-        var metadataFormData = new Dictionary<string, object?>
-        {
-            ["name"] = node.Name ?? "",
-            ["id"] = desiredId
-        };
-        host.UpdateData(metadataDataId, metadataFormData);
-
-        var stack = Controls.Stack.WithWidth("100%").WithStyle("padding: 24px; height: 100%; display: flex; flex-direction: column;");
-
-        // Header: "Create {Name}" - data-bound to name field
-        stack = stack.WithView((h, _) =>
-            h.Stream.GetDataStream<Dictionary<string, object?>>(metadataDataId)
-                .Select(metadata =>
-                {
-                    var name = metadata?.GetValueOrDefault("name")?.ToString() ?? node.Name ?? node.Id;
-                    return Controls.H2($"Create {name}").WithStyle("margin: 0 0 24px 0;");
-                }));
-
-        // Name field only (Id is hidden - computed from Name)
-        stack = stack.WithView(Controls.Stack
-            .WithWidth("100%")
-            .WithStyle("margin-bottom: 24px;")
-            .WithView(Controls.Body("Name").WithStyle("font-weight: 600; margin-bottom: 4px;"))
-            .WithView(new TextFieldControl(new JsonPointerReference("name"))
-            {
-                Placeholder = "Display name",
-                Immediate = true,
-                DataContext = LayoutAreaReference.GetDataPointer(metadataDataId)
-            }.WithStyle("width: 100%;")));
-
-        // Content type editor - use Overview with isToggleable=false for pure edit mode
-        if (contentType != null && contentInstance != null)
-        {
-            var dataId = $"create_{nodePath.Replace("/", "_")}";
-            host.UpdateData(dataId, contentInstance);
-
-            var editor = Layout.Domain.EditLayoutArea.Overview(host, contentType, dataId, canEdit: true, isToggleable: false);
-            stack = stack.WithView(Controls.Stack.WithStyle("flex: 1; min-height: 0;").WithView(editor));
-
-            // Buttons: Cancel on left, Create on right
-            stack = stack.WithView(Controls.Stack
-                .WithOrientation(Orientation.Horizontal)
-                .WithHorizontalGap(12)
-                .WithStyle("margin-top: 24px; justify-content: flex-start;")
-                .WithView(Controls.Button("Cancel")
-                    .WithAppearance(Appearance.Neutral)
-                    .WithClickAction(ctx =>
-                    {
-                        nodeFactory.DeleteNode(nodePath).Subscribe(
-                            _ => ctx.NavigateTo(cancelUrl),
-                            _ => ctx.NavigateTo(cancelUrl));
-                        return Task.CompletedTask;
-                    }))
-                .WithView(Controls.Button("Create")
-                    .WithAppearance(Appearance.Accent)
-                    .WithIconStart(FluentIcons.Add())
-                    .WithClickAction(ctx =>
-                    {
-                        // Get metadata and content from data streams
-                        ctx.Host.Stream.GetDataStream<Dictionary<string, object?>>(metadataDataId)
-                            .Take(1)
-                            .Subscribe(
-                                metadata =>
-                                {
-                                    var currentName = metadata.GetValueOrDefault("name")?.ToString()?.Trim() ?? node.Name;
-
-                                    ctx.Host.Stream.GetDataStream<JsonElement>(dataId)
-                                        .Take(1)
-                                        .Subscribe(
-                                            jsonContent =>
-                                            {
-                                                try
-                                                {
-                                                    var currentContent = jsonContent.Deserialize(contentType!, ctx.Host.Hub.JsonSerializerOptions);
-                                                    HandleConfirmCreate(ctx, host, logger, node, nodePath,
-                                                        currentName, currentContent, contentType);
-                                                }
-                                                catch (Exception ex)
-                                                {
-                                                    logger?.LogError(ex, "Error preparing CreateNodeRequest for {NodePath}", nodePath);
-                                                    ShowErrorDialog(ctx, "Creation Failed", ex.Message);
-                                                }
-                                            },
-                                            ex =>
-                                            {
-                                                logger?.LogError(ex, "Error getting content from data stream for {NodePath}", nodePath);
-                                                ShowErrorDialog(ctx, "Creation Failed", ex.Message);
-                                            });
-                                },
-                                ex =>
-                                {
-                                    logger?.LogError(ex, "Error getting metadata from data stream for {NodePath}", nodePath);
-                                    ShowErrorDialog(ctx, "Creation Failed", ex.Message);
-                                });
-                    })));
-        }
-        else if (node.NodeType == "Markdown")
-        {
-            // Markdown editor with auto-save (no Done button — Create/Cancel handles state)
-            var rawContent = MarkdownOverviewLayoutArea.GetMarkdownContent(node);
-            var editor = new MarkdownEditorControl()
-                .WithDocumentId(nodePath)
-                .WithValue(rawContent ?? "")
-                .WithHeight("100%")
-                .WithPlaceholder("Start writing your markdown content...")
-                .WithAutoSave(host.Hub.Address.ToString(), nodePath);
-            stack = stack.WithView(Controls.Stack.WithStyle("flex: 1; min-height: 0;").WithView(editor));
-
-            // Buttons: Cancel on left, Create on right
-            stack = stack.WithView(Controls.Stack
-                .WithOrientation(Orientation.Horizontal)
-                .WithHorizontalGap(12)
-                .WithStyle("margin-top: 12px; flex-shrink: 0; justify-content: flex-start;")
-                .WithView(Controls.Button("Cancel")
-                    .WithAppearance(Appearance.Neutral)
-                    .WithClickAction(ctx =>
-                    {
-                        nodeFactory.DeleteNode(nodePath).Subscribe(
-                            _ => ctx.NavigateTo(cancelUrl),
-                            _ => ctx.NavigateTo(cancelUrl));
-                        return Task.CompletedTask;
-                    }))
-                .WithView(Controls.Button("Create")
-                    .WithAppearance(Appearance.Accent)
-                    .WithIconStart(FluentIcons.Add())
-                    .WithClickAction(ctx =>
-                    {
-                        ctx.Host.Stream.GetDataStream<Dictionary<string, object?>>(metadataDataId)
-                            .Take(1)
-                            .Subscribe(
-                                metadata =>
-                                {
-                                    try
-                                    {
-                                        var currentName = metadata.GetValueOrDefault("name")?.ToString()?.Trim() ?? node.Name;
-                                        HandleConfirmCreate(ctx, host, logger, node, nodePath,
-                                            currentName, null, null);
-                                    }
-                                    catch (Exception ex)
-                                    {
-                                        logger?.LogError(ex, "Error preparing CreateNodeRequest for {NodePath}", nodePath);
-                                        ShowErrorDialog(ctx, "Creation Failed", ex.Message);
-                                    }
-                                },
-                                ex =>
-                                {
-                                    logger?.LogError(ex, "Error getting metadata from data stream for {NodePath}", nodePath);
-                                    ShowErrorDialog(ctx, "Creation Failed", ex.Message);
-                                });
-                    })));
-        }
-        else
-        {
-            // No content type editor — the metadata Name field above is sufficient.
-            // Buttons: Cancel on left, Create on right
-            stack = stack.WithView(Controls.Stack
-                .WithOrientation(Orientation.Horizontal)
-                .WithHorizontalGap(12)
-                .WithStyle("margin-top: 24px; justify-content: flex-start;")
-                .WithView(Controls.Button("Cancel")
-                    .WithAppearance(Appearance.Neutral)
-                    .WithClickAction(ctx =>
-                    {
-                        nodeFactory.DeleteNode(nodePath).Subscribe(
-                            _ => ctx.NavigateTo(cancelUrl),
-                            _ => ctx.NavigateTo(cancelUrl));
-                        return Task.CompletedTask;
-                    }))
-                .WithView(Controls.Button("Create")
-                    .WithAppearance(Appearance.Accent)
-                    .WithIconStart(FluentIcons.Add())
-                    .WithClickAction(ctx =>
-                    {
-                        ctx.Host.Stream.GetDataStream<Dictionary<string, object?>>(metadataDataId)
-                            .Take(1)
-                            .Subscribe(
-                                metadata =>
-                                {
-                                    try
-                                    {
-                                        var currentName = metadata.GetValueOrDefault("name")?.ToString()?.Trim() ?? node.Name;
-                                        HandleConfirmCreate(ctx, host, logger, node, nodePath,
-                                            currentName, null, null);
-                                    }
-                                    catch (Exception ex)
-                                    {
-                                        logger?.LogError(ex, "Error preparing CreateNodeRequest for {NodePath}", nodePath);
-                                        ShowErrorDialog(ctx, "Creation Failed", ex.Message);
-                                    }
-                                },
-                                ex =>
-                                {
-                                    logger?.LogError(ex, "Error getting metadata from data stream for {NodePath}", nodePath);
-                                    ShowErrorDialog(ctx, "Creation Failed", ex.Message);
-                                });
-                    })));
-        }
-
-        return stack;
-    }
-
-    /// <summary>
-    /// Handles Create when Id is unchanged - confirms transient node at same path.
-    /// </summary>
-    private static void HandleConfirmCreate(
-        UiActionContext ctx,
-        LayoutAreaHost host,
-        ILogger? logger,
-        MeshNode node,
-        string nodePath,
-        string? currentName,
-        object? currentContent,
-        Type? contentType)
-    {
-        // Update node with content and state=Active
-        var updatedNode = node with
-        {
-            Name = currentName ?? node.Name,
-            Content = currentContent ?? node.Content,
-            State = MeshNodeState.Active
-        };
-
-        logger?.LogInformation("Confirming transient node at {NodePath} with content type {ContentType}",
-            nodePath, contentType?.Name ?? "none");
-
-        var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
-        nodeFactory.CreateNode(updatedNode)
-            .Subscribe(
-                _ =>
-                {
-                    logger?.LogInformation("Successfully confirmed node at {NodePath}", nodePath);
-                    ctx.NavigateTo($"/{nodePath}");
-                },
-                ex =>
-                {
-                    var error = ex.Message ?? "Unknown error";
-                    logger?.LogWarning("CreateNodeRequest failed for {NodePath}: {Error}", nodePath, error);
-                    ShowErrorDialog(ctx, "Creation Failed", error);
-                });
-    }
-
-    /// <summary>
-    /// Handles Create when Id is changed - creates new node at new path and deletes transient.
-    /// </summary>
-    private static void HandleIdChangeCreate(
-        UiActionContext ctx,
-        LayoutAreaHost host,
-        IMeshService nodeFactory,
-        ILogger? logger,
-        MeshNode transientNode,
-        string? currentName,
-        string newId,
-        object? currentContent,
-        Type? contentType)
-    {
-        // Build new path with the changed Id
-        var newPath = $"{transientNode.Namespace}/{newId}";
-        var transientPath = transientNode.Path;
-
-        // Create the new node at the new path
-        var newNode = MeshNode.FromPath(newPath) with
-        {
-            Name = currentName ?? transientNode.Name,
-            NodeType = transientNode.NodeType,
-            Icon = transientNode.Icon,
-            Category = transientNode.Category,
-            Content = currentContent ?? transientNode.Content,
-            State = MeshNodeState.Active
-        };
-
-        logger?.LogInformation("Creating new node at {NewPath} (Id changed from transient {TransientPath})",
-            newPath, transientPath);
-
-        nodeFactory.CreateNode(newNode)
-            .Subscribe(
-                _ =>
-                {
-                    logger?.LogInformation("Successfully created node at {NewPath}", newPath);
-
-                    // Delete the transient node via its own Observable — no await, no InvokeAsync.
-                    nodeFactory.DeleteNode(transientPath).Subscribe(
-                        __ => logger?.LogInformation("Deleted transient node at {TransientPath}", transientPath),
-                        ex => logger?.LogWarning(ex, "Failed to delete transient node at {TransientPath}", transientPath));
-
-                    // Navigate to the new node
-                    ctx.NavigateTo($"/{newPath}");
-                },
-                ex =>
-                {
-                    var error = ex.Message ?? "Unknown error";
-                    logger?.LogWarning("CreateNodeRequest failed for {NewPath}: {Error}", newPath, error);
-                    ShowErrorDialog(ctx, "Creation Failed", error);
-                });
+            (UiControl?)BuildCreateNewForm(host, nodes, currentPath));
     }
 
     private static void ShowErrorDialog(UiActionContext ctx, string title, string message)
@@ -791,8 +415,9 @@ public static class CreateLayoutArea
             .WithAppearance(Appearance.Accent)
             .WithClickAction(actx =>
             {
-                // Reactive click — read form, CreateTransient (which completes after persist),
-                // then navigate. No await on the click path (AsynchronousCalls.md).
+                // Reactive click — read form, CreateNode (completes after the create response),
+                // then navigate to the new node's Edit area. No await on the click path
+                // (AsynchronousCalls.md).
                 actx.Host.Stream.GetDataStream<Dictionary<string, object?>>(formId)
                     .Take(1)
                     .Subscribe(formValues =>
@@ -847,22 +472,24 @@ public static class CreateLayoutArea
                             NodeType = selectedType,
                             Icon = string.IsNullOrEmpty(icon) ? typeRegistration?.Icon : icon,
                             Category = typeRegistration?.Category,
-                            DesiredId = id,
-                            State = MeshNodeState.Transient
+                            State = MeshNodeState.Active
                         };
 
-                        logger?.LogInformation("Creating transient node at {NodePath} with type {NodeType}", nodePath, selectedType);
+                        logger?.LogInformation("Creating node at {NodePath} with type {NodeType}", nodePath, selectedType);
 
-                        // CreateTransient surfaces "Node already exists" via OnError when a non-transient
-                        // node sits at this path — caught below and shown as a friendly error. No pre-flight
-                        // existence query (those go through the lagged read index — AsynchronousCalls.md).
-                        nodeFactory.CreateTransient(newNode)
+                        // ONE authoritative create through the CreateNodeRequest pipeline (identity +
+                        // access-control validators). No transient placeholder is written — the owning hub
+                        // materialises the node's default content on create, and we land on its Edit area so
+                        // the type-specific content editor renders on the hub that knows the content type.
+                        // "Node already exists" / "Access denied" surface via OnError — no pre-flight
+                        // existence query (those read the lagged index — AsynchronousCalls.md).
+                        nodeFactory.CreateNode(newNode)
                         .Subscribe(
                             _ =>
                             {
-                                logger?.LogInformation("Successfully created transient node at {NodePath}", nodePath);
-                                var createUrl = MeshNodeLayoutAreas.BuildUrl(nodePath, MeshNodeLayoutAreas.CreateNodeArea);
-                                actx.NavigateTo(createUrl);
+                                logger?.LogInformation("Successfully created node at {NodePath}", nodePath);
+                                var editUrl = MeshNodeLayoutAreas.BuildUrl(nodePath, MeshNodeLayoutAreas.EditArea);
+                                actx.NavigateTo(editUrl);
                             },
                             ex =>
                             {
@@ -944,14 +571,5 @@ public static class CreateLayoutArea
         pascalCase = Regex.Replace(pascalCase, @"[^a-zA-Z0-9]", "");
 
         return pascalCase ?? "";
-    }
-
-    /// <summary>
-    /// Gets the last segment of a path.
-    /// </summary>
-    private static string GetLastPathSegment(string path)
-    {
-        var lastSlash = path.LastIndexOf('/');
-        return lastSlash >= 0 ? path[(lastSlash + 1)..] : path;
     }
 }

@@ -178,13 +178,13 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         {
             Name = "Test Task",
             NodeType = "ACME/Project/Todo",
-            State = MeshNodeState.Transient
+            State = MeshNodeState.Active
         };
 
         try
         {
             // Create the transient node via NodeFactory
-            await NodeFactory.CreateTransient(transientNode).Should().Emit();
+            await NodeFactory.CreateNode(transientNode).Should().Emit();
             Output.WriteLine("Transient node created.");
 
             // Initialize the node's hub. 30 s Ping budget — activating a brand-new
@@ -253,12 +253,12 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         {
             Name = "Editor Test Task",
             NodeType = "ACME/Project/Todo",
-            State = MeshNodeState.Transient
+            State = MeshNodeState.Active
         };
 
         try
         {
-            await NodeFactory.CreateTransient(transientNode).Should().Emit();
+            await NodeFactory.CreateNode(transientNode).Should().Emit();
             Output.WriteLine("Transient node created successfully");
 
             var nodeAddress = new Address(nodePath);
@@ -337,15 +337,15 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         {
             Name = "Create Test Task",
             NodeType = "ACME/Project/Todo",
-            State = MeshNodeState.Transient
+            State = MeshNodeState.Active
         };
 
         try
         {
             // Step 1: Create transient node (simulates BuildCreateChildForm)
-            var createdNode = await NodeFactory.CreateTransient(transientNode).Should().Emit();
+            var createdNode = await NodeFactory.CreateNode(transientNode).Should().Emit();
             createdNode.Should().NotBeNull("Transient node should be created");
-            createdNode.State.Should().Be(MeshNodeState.Transient);
+            createdNode.State.Should().Be(MeshNodeState.Active);
             Output.WriteLine($"Transient node created: {createdNode.Path}");
 
             // Step 2: Initialize the node's hub (required for sending CreateNodeRequest).
@@ -421,23 +421,23 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         {
             Name = "E2E Test Task",
             NodeType = "ACME/Project/Todo",
-            State = MeshNodeState.Transient
+            State = MeshNodeState.Active
         };
 
         try
         {
             // Step 1: Create transient node
-            var createdNode = await NodeFactory.CreateTransient(transientNode).Should().Emit();
+            var createdNode = await NodeFactory.CreateNode(transientNode).Should().Emit();
             createdNode.Should().NotBeNull("Transient node should be created");
-            createdNode.State.Should().Be(MeshNodeState.Transient, "Node should be in Transient state");
+            createdNode.State.Should().Be(MeshNodeState.Active, "Node should be in Active state");
             createdNode.Name.Should().Be("E2E Test Task");
             Output.WriteLine($"Created transient node: {createdNode.Path}");
 
             // Step 2: Retrieve the node via stream
             var retrievedNode = await ReadNode(nodePath)
-                .Should().Within(60.Seconds()).Match(n => n is not null && n.State == MeshNodeState.Transient);
+                .Should().Within(60.Seconds()).Match(n => n is not null && n.State == MeshNodeState.Active);
             retrievedNode.Should().NotBeNull("Transient node should be retrievable");
-            retrievedNode!.State.Should().Be(MeshNodeState.Transient);
+            retrievedNode!.State.Should().Be(MeshNodeState.Active);
             retrievedNode.Name.Should().Be("E2E Test Task");
             retrievedNode.NodeType.Should().Be("ACME/Project/Todo");
             Output.WriteLine($"Retrieved transient node successfully");
@@ -509,38 +509,39 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
     #region Verification Tests
 
     /// <summary>
-    /// Test that simulates the actual UI create flow:
-    /// 1. Create transient node WITHOUT content (like CreateChild does)
-    /// 2. Initialize hub (which creates content instance via MeshDataSource.CreateContentInstance)
-    /// 3. Confirm node with content from workspace
-    /// 4. Verify content fields are preserved
+    /// Simulates the actual UI create → edit flow:
+    /// 1. Create the node WITHOUT content (one Active CreateNode, as the Create form does now)
+    /// 2. Initialize the node's hub
+    /// 3. Fill the content via UpdateNode (what the Edit area does after creation)
+    /// 4. Verify the content fields are preserved
     ///
-    /// This reproduces the bug where content fields (category, priority, etc.) are empty after create.
+    /// Guards that a node created empty and edited afterward keeps its fields (category, priority, …).
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task CreateFlow_TransientNodeWithoutContent_PreservesContentFieldsAfterConfirm()
+    public async Task CreateFlow_NodeWithoutContent_PreservesContentFieldsAfterEdit()
     {
         var client = GetClient();
 
         var uniqueId = Guid.NewGuid().ToString("N")[..8];
         var nodePath = $"ACME/ProductLaunch/Todo/UIFlowTest{uniqueId}";
 
-        Output.WriteLine($"Creating transient node at: {nodePath}");
+        Output.WriteLine($"Creating node at: {nodePath}");
 
-        // Step 1: Create transient node WITHOUT content (simulates CreateChild flow)
-        // In real UI, this is done by BuildCreateChildForm which only sets Name/Description/NodeType
-        var transientNode = MeshNode.FromPath(nodePath) with
+        // Step 1: Create the node WITHOUT content (this is how the Create form works now — one
+        // CreateNode of an Active node; the type-specific content is filled afterward on the Edit
+        // area). In real UI, the form only sets Name/Description/NodeType before CreateNode.
+        var node = MeshNode.FromPath(nodePath) with
         {
             Name = "UI Flow Test Task",
             NodeType = "ACME/Project/Todo",
-            State = MeshNodeState.Transient
-            // NOTE: No Content set - this is how CreateChild creates the node
+            State = MeshNodeState.Active
+            // NOTE: No Content set — the Edit area fills it after creation.
         };
 
         try
         {
-            await NodeFactory.CreateTransient(transientNode).Should().Emit();
-            Output.WriteLine("Transient node created (without content).");
+            await NodeFactory.CreateNode(node).Should().Emit();
+            Output.WriteLine("Node created (without content).");
 
             // Step 2: Initialize the node's hub (this triggers MeshDataSource initialization)
             var nodeAddress = new Address(nodePath);
@@ -574,23 +575,25 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
                 status = "Planning"
             };
 
-            // Step 5: Confirm the node (simulates Create button click)
-            var activeNode = transientNode with
+            // Step 5: Fill the content via an Update — exactly what the Edit area does after the
+            // node is created (the new create→edit flow). No second CreateNode: the node already
+            // exists Active, so a duplicate create would fault with "Node already exists".
+            var editedNode = node with
             {
-                State = MeshNodeState.Active,
                 Content = editedContent
             };
 
-            client.Post(
-                new CreateNodeRequest(activeNode),
-                o => o.WithTarget(nodeAddress));
+            await NodeFactory.UpdateNode(editedNode).Should().Emit();
 
-            // Step 6: Wait for node to become Active on the live stream (same
-            // rationale as step 3 — the canonical wait-for-state primitive).
+            // Step 6: Wait for the edited content to land on the live stream (same wait-for-state
+            // primitive as step 3 — the node is already Active, so gate on the content instead).
             var confirmedNode = await client.GetWorkspace().GetMeshNodeStream(nodePath)
-                .Should().Within(60.Seconds()).Match(node => node is not null && node.State == MeshNodeState.Active);
+                .Should().Within(60.Seconds()).Match(n =>
+                    n is not null
+                    && n.Content is not null
+                    && JsonSerializer.Serialize(n.Content).Contains("Testing"));
 
-            Output.WriteLine($"Node confirmed. Content type: {confirmedNode.Content?.GetType().Name ?? "null"}");
+            Output.WriteLine($"Node edited. Content type: {confirmedNode.Content?.GetType().Name ?? "null"}");
             if (confirmedNode.Content != null)
             {
                 var contentJson = JsonSerializer.Serialize(confirmedNode.Content);
@@ -656,14 +659,14 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         {
             Name = "Data Request Test Task",
             NodeType = "ACME/Project/Todo",
-            State = MeshNodeState.Transient,
+            State = MeshNodeState.Active,
             Content = todoContent
         };
 
         try
         {
             // Step 1: Create transient node
-            await NodeFactory.CreateTransient(transientNode).Should().Emit();
+            await NodeFactory.CreateNode(transientNode).Should().Emit();
             Output.WriteLine("Transient node created.");
 
             // Step 2: Initialize the node's hub. 30 s Ping budget — activating a

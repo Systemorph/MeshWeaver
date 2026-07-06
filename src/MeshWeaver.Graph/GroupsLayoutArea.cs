@@ -290,8 +290,11 @@ public static class GroupsLayoutArea
                                                     Groups = [new MembershipEntry { Group = "" }]
                                                 }
                                             };
-                                            nodeFactory.CreateTransient(newNode).Subscribe(
-                                                _ => saveCtx.NavigateTo($"/{path}/{MeshNodeLayoutAreas.CreateNodeArea}"),
+                                            // One authoritative create (Active, through the access-control
+                                            // pipeline) — the membership content is already built above, so
+                                            // land on Edit to pick the group. No transient placeholder.
+                                            nodeFactory.CreateNode(newNode).Subscribe(
+                                                _ => saveCtx.NavigateTo($"/{path}/{MeshNodeLayoutAreas.EditArea}"),
                                                 _ => { });
                                         });
                                 });

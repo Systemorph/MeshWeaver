@@ -267,7 +267,7 @@ public static class CommentsView
 
         if (canComment && !string.IsNullOrEmpty(currentUser))
         {
-            headerRow = headerRow.WithView(BuildAddCommentButton(host, nodePath, currentUser));
+            headerRow = headerRow.WithView(BuildAddCommentButton(host, nodePath));
         }
 
         container = container.WithView(headerRow);
@@ -284,7 +284,7 @@ public static class CommentsView
                     if (string.IsNullOrEmpty(commentPath))
                         return (UiControl)Controls.Stack;
 
-                    return (UiControl)BuildCommentCreateForm(h, commentPath, newCommentPathStateId);
+                    return (UiControl)BuildCommentCreateForm(h, commentPath, newCommentPathStateId, nodePath, currentUser);
                 });
         });
 
@@ -337,10 +337,10 @@ public static class CommentsView
     /// Builds the inline comment creation form with markdown editor, Cancel, and Create buttons.
     /// Matches the Reply pattern from CommentLayoutAreas.
     /// </summary>
-    private static UiControl BuildCommentCreateForm(LayoutAreaHost host, string commentPath, string stateId)
+    private static UiControl BuildCommentCreateForm(LayoutAreaHost host, string commentPath, string stateId,
+        string nodePath, string currentUser)
     {
         var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
-        var meshQuery = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
         var textDataId = $"commentText_{commentPath.Replace("/", "_")}";
 
         host.UpdateData(textDataId, new Dictionary<string, object?> { ["text"] = "" });
@@ -368,39 +368,40 @@ public static class CommentsView
                 .WithAppearance(Appearance.Neutral)
                 .WithClickAction(_ =>
                 {
-                    nodeFactory.DeleteNode(commentPath).Subscribe(
-                        __ => host.UpdateData(stateId, ""),
-                        _  => host.UpdateData(stateId, ""));
+                    // Nothing was persisted — the draft lives only in the form's data stream.
+                    // Just close the form; there is no placeholder node to delete.
+                    host.UpdateData(stateId, "");
                     return Task.CompletedTask;
                 }))
             .WithView(Controls.Button("Create")
                 .WithAppearance(Appearance.Accent)
                 .WithClickAction(ctx =>
                 {
-                    // Read text from the form data stream (canonical click-handler pattern),
-                    // then read the comment node via one-shot GetDataRequest — true
-                    // request/response, no SubscribeRequest+immediate-unsubscribe.
+                    // Read the draft text from the form data stream, then write the comment with ONE
+                    // CreateNode (Active, through the access-control pipeline). No transient placeholder
+                    // and no primary-node clobber — the comment is authored at its own commentPath.
                     ctx.Host.Stream.GetDataStream<Dictionary<string, object?>>(textDataId)
                         .Take(1)
                         .Subscribe(data =>
                         {
                             var text = data?.GetValueOrDefault("text")?.ToString() ?? "";
-
-                            var ownPath = host.Hub.Address.Path;
-                            var cache = host.Hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
-                            cache.Update(ownPath, n =>
+                            var commentId = commentPath.Split('/').Last();
+                            var commentNode = new MeshNode(commentId, $"{nodePath}/{CommentsExtensions.CommentPartition}")
                             {
-                                var c = n.ContentAs<Comment>(host.Hub.JsonSerializerOptions);
-                                // Existing node whose content can't be recovered → leave it alone, NEVER clobber.
-                                if (n.Content is not null && c is null)
-                                    return n;
-                                c ??= new Comment();
-                                return n with
+                                Name = "Comment",
+                                NodeType = CommentNodeType.NodeType,
+                                MainNode = nodePath,
+                                State = MeshNodeState.Active,
+                                Content = new Comment
                                 {
-                                    State = MeshNodeState.Active,
-                                    Content = c with { Text = text }
-                                };
-                            }, host.Hub.JsonSerializerOptions).Subscribe(
+                                    Id = commentId,
+                                    PrimaryNodePath = nodePath,
+                                    Author = currentUser,
+                                    Status = CommentStatus.Active,
+                                    Text = text
+                                }
+                            };
+                            nodeFactory.CreateNode(commentNode).Subscribe(
                                 _ => host.UpdateData(stateId, ""),
                                 _ => host.UpdateData(stateId, ""));
                         });
@@ -411,10 +412,12 @@ public static class CommentsView
     }
 
     /// <summary>
-    /// Builds the "Add Comment" emoji button. Creates a transient comment node (no MarkerId)
-    /// and shows the inline creation form.
+    /// Builds the "Add Comment" emoji button. Opens the inline creation form for a fresh comment
+    /// path — NOTHING is persisted until the user clicks Create (then a single <c>CreateNode</c>
+    /// writes the comment Active). No transient placeholder is written, so an unsent draft never
+    /// appears in the comment list and there is no PG-invisible node to resolve.
     /// </summary>
-    private static UiControl BuildAddCommentButton(LayoutAreaHost host, string nodePath, string currentUser)
+    private static UiControl BuildAddCommentButton(LayoutAreaHost host, string nodePath)
     {
         return Controls.Html("<span style=\"cursor: pointer; font-size: 0.85rem; color: var(--accent-fill-rest);\" title=\"Add Comment\">+ Comment</span>")
             .WithClickAction(_ =>
@@ -422,26 +425,7 @@ public static class CommentsView
                 var commentId = Guid.NewGuid().AsString();
                 var commentPath = $"{nodePath}/{CommentsExtensions.CommentPartition}/{commentId}";
                 var newCommentPathStateId = $"newComment_{nodePath.Replace("/", "_")}";
-
-                var commentNode = new MeshNode(commentId, $"{nodePath}/{CommentsExtensions.CommentPartition}")
-                {
-                    Name = "Comment",
-                    NodeType = CommentNodeType.NodeType,
-                    MainNode = nodePath,
-                    State = MeshNodeState.Transient,
-                    Content = new Comment
-                    {
-                        Id = commentId,
-                        PrimaryNodePath = nodePath,
-                        Author = currentUser,
-                        Status = CommentStatus.Active
-                    }
-                };
-
-                var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
-                nodeFactory.CreateTransient(commentNode).Subscribe(
-                    _ => host.UpdateData(newCommentPathStateId, commentPath),
-                    _ => { /* surfaced elsewhere */ });
+                host.UpdateData(newCommentPathStateId, commentPath);
                 return Task.CompletedTask;
             });
     }
