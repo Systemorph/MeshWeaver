@@ -57,6 +57,15 @@ In a layout area (hub-reachable): **no `async`/`await`/`Task<T>`/`Observable.Fro
 
 The same controls language renders in a native client too — same `GetMeshNodeStream` / `Update`, marshalling UI updates with `MainThread.BeginInvokeOnMainThread`: [Data Binding in a MAUI Client](/Doc/GUI/DataBindingMaui).
 
+# 6. Mesh links in markdown content
+
+Wherever you author markdown — a `Controls.Markdown`, a node body, a doc page — reference other mesh nodes with the `@` notation, never a bare path:
+
+- **Link** (navigate) → single `@`/`@/`: a markdown link `[text](@/Full/Path)`. The renderer strips the `@` and resolves it to the node's URL.
+- **Embed** (render inline) → double `@@`: `@@("path/area/Name")` renders a live layout area in place.
+- A **bare path is just text**, not a link — always wrap it in `[text](@/Path)`.
+- 🚨 `@/` and `@@` are **local mesh-authoring syntax — markdown body only.** NEVER put `@/` inside a raw HTML `href` (an `href` needs a plain `/Path`) or an HTTP URL. Full reference: [Unified Path](/Doc/DataMesh/UnifiedPath).
+
 # The litmus test
 
 If you're reaching for a string of HTML, a `/data` replica + a save subscription, a `*Request` type to change a node, or `.Take(1)` on a live stream — **stop**. You've dropped under the controls language. Find the control, the node stream, or the `RequestedXxx` field. Full reference: GUI/DataBinding, GUI/LayoutAreas, the "Never hand-roll UI" rule in AGENTS.md.
