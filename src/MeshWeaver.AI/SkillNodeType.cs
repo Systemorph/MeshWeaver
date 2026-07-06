@@ -223,6 +223,10 @@ public enum SkillActionKind
 
     /// <summary>Log out / forget this provider's CLI subscription.</summary>
     Disconnect,
+
+    /// <summary>Start a fresh, empty conversation — clears the current thread and opens the new-chat
+    /// composer (side panel) or navigates to the standalone chat page (main pane). Powers <c>/clear</c>.</summary>
+    NewThread,
 }
 
 /// <summary>

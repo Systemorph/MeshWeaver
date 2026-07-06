@@ -142,6 +142,7 @@ public static class SkillView
         SkillActionKind.Disconnect => string.IsNullOrWhiteSpace(action.Provider)
             ? "Disconnects a provider"
             : $"Disconnects {Escape(action.Provider!)}",
+        SkillActionKind.NewThread => "Starts a new, empty conversation",
         _ => action.Kind.ToString(),
     };
 
