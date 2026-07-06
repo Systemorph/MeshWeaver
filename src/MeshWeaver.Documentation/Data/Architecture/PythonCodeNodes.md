@@ -10,14 +10,14 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 Here is a **runnable `python` Code node**. Press **Run** in its toolbar — the script executes on a
 connected Python worker and the output attaches directly below the code:
 
-@@/Doc/Architecture/PythonCodeNodes/SampleStatistics
+@@SampleStatistics
 
 That is the whole feature. What you just ran is a **Code node** whose `Language` is `python`:
 `print(...)` was captured as output, the trailing bare expression became the return value (REPL
 semantics), and `Inputs` carried the caller's parameters. A `csharp` node (the default) runs
 **in-process** on the mesh's Roslyn kernel; a `python` node is **routed over the mesh to a connected
 worker** instead — the same gRPC bridge that lets any Python process join the mesh as a participant
-(see [Foreign Language Integration](/Doc/Architecture/ForeignLanguageIntegration)). The worker runs
+(see [Foreign Language Integration](../ForeignLanguageIntegration)). The worker runs
 the script and writes the result back onto the same **Activity node** every subscriber already
 watches, so a Python run surfaces output **identically** to a C# one. With no worker connected the run
 reports that in the same output pane — nothing hangs.
@@ -104,7 +104,7 @@ python -m meshweaver.worker --url http://127.0.0.1:8082 --address py/python-kern
 
 There is **no `--token`**: the endpoint is bound to `127.0.0.1`, reachable only from containers in the
 same pod, so reachability *is* the authentication (see `GrpcOptions.TrustedPort` and the trusted-gate
-note in [A standalone hub in Python](/Doc/DataMesh/PythonStandaloneHub)). This is the exact parity with
+note in [A standalone hub in Python](../../DataMesh/PythonStandaloneHub)). This is the exact parity with
 the in-process Roslyn kernel: the C# kernel runs in the portal process; the python gate runs in the
 portal *pod*, and a run executes under the requesting user's identity (the gate echoes the delivery's
 `AccessContext`), not a standing service credential — nothing to rotate.
@@ -124,7 +124,7 @@ next step — the routing branch and the sidecar list are the two places that gr
 
 ## Related
 
-- @/Doc/DataMesh/PythonPandasNode — the stateful counterpart: a Python **participant** holding a live `pandas.DataFrame`.
-- @/Doc/DataMesh/CallingPython — the stateless alternative: a C# cell shells out to `python3` through the bounded Process I/O pool.
-- @/Doc/Architecture/ForeignLanguageIntegration — the gRPC bridge and the SDK surface the worker is built on.
-- @/Doc/DataMesh/InteractiveMarkdown — executable fenced blocks in documentation pages (the fence language flows onto the submission).
+- @../../DataMesh/PythonPandasNode — the stateful counterpart: a Python **participant** holding a live `pandas.DataFrame`.
+- @../../DataMesh/CallingPython — the stateless alternative: a C# cell shells out to `python3` through the bounded Process I/O pool.
+- @../ForeignLanguageIntegration — the gRPC bridge and the SDK surface the worker is built on.
+- @../../DataMesh/InteractiveMarkdown — executable fenced blocks in documentation pages (the fence language flows onto the submission).
