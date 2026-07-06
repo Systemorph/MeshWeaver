@@ -717,13 +717,20 @@ else
                     @if (_loginMethod is null)
                     {
                         <div style="color:var(--neutral-foreground-hint);">How do you want to sign in?</div>
-                        @* The browser "account" method is intentionally NOT offered: it drives the
-                           co-hosted CLI (`claude setup-token`) server-side and scrapes the token from
-                           its output — but the CLI MASKS the token in stdout (and is TTY-gated), so the
-                           scrape can never capture it and the flow always times out. The reliable path
-                           is the direct token paste below: run `claude setup-token` yourself and paste
-                           the result. See ClaudeConnectStrategy / SubmitToken. *@
-                        <FluentButton Appearance="FluentAppearance.Accent" Style="width:100%;"
+                        @* Account/browser login is offered ONLY for providers whose device flow can
+                           complete on this portal. It is suppressed for ClaudeCode: that flow drives
+                           `claude setup-token` server-side and scrapes the token from stdout, but the CLI
+                           MASKS the token (and is TTY-gated), so the scrape always times out (the "stuck
+                           when pasting code" report). For ClaudeCode the reliable path is the direct token
+                           paste below. Other providers (e.g. Copilot) keep account login. *@
+                        @if (_connectProvider is not null and not MeshWeaver.AI.Connect.ConnectProvider.ClaudeCode)
+                        {
+                            <FluentButton Appearance="FluentAppearance.Accent" Style="width:100%;"
+                                          OnClick="@(() => ChooseLoginMethod("account"))">
+                                Log in with your @(_loginHarness!.Definition.DisplayName) account (browser)
+                            </FluentButton>
+                        }
+                        <FluentButton Appearance="@(_connectProvider is MeshWeaver.AI.Connect.ConnectProvider.ClaudeCode ? FluentAppearance.Accent : FluentAppearance.Neutral)" Style="width:100%;"
                                       OnClick="@(() => ChooseLoginMethod("apiKey"))">Paste a subscription token or API key</FluentButton>
                         <FluentButton Appearance="FluentAppearance.Neutral" Style="width:100%;"
                                       OnClick="@(() => ChooseLoginMethod("gateway"))">Use a gateway / proxy</FluentButton>

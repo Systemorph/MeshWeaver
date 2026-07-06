@@ -1444,7 +1444,16 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             StateHasChanged();
             return;
         }
-        StoreHarnessCredential(harness, isGateway ? "authToken" : "apiKey", _connectCode.Trim(), baseUrl);
+        var credential = _connectCode.Trim();
+        // Classify the pasted credential so the harness sets the RIGHT env var (ClaudeCodeChatClient:
+        // "oauth"→CLAUDE_CODE_OAUTH_TOKEN, "apiKey"→ANTHROPIC_API_KEY, "authToken"→ANTHROPIC_AUTH_TOKEN).
+        // A `claude setup-token` subscription token is sk-ant-oat…; a Console API key is sk-ant-api….
+        // Advertising the subscription token in the dialog while hardcoding "apiKey" would set the wrong
+        // env var and the subscription auth would fail.
+        var method = isGateway ? "authToken"
+            : credential.StartsWith("sk-ant-api", StringComparison.OrdinalIgnoreCase) ? "apiKey"
+            : "oauth";
+        StoreHarnessCredential(harness, method, credential, baseUrl);
         CloseLoginDialog();
     }
 
