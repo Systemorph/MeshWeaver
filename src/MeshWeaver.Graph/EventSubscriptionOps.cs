@@ -50,6 +50,28 @@ public static class EventSubscriptionOps
         return meshService.CreateOrUpdateNode(node);
     }
 
+    /// <summary>Adds <paramref name="userId"/> to the group at <paramref name="groupPath"/> by creating the
+    /// <c>{groupPath}/{user}_Membership</c> <see cref="GroupMembership"/> node (create-or-update = idempotent).
+    /// The membership node is a child of the group so it lands in the group's partition schema, where the
+    /// permission matview's group-expansion CTE reads it (<c>content.member</c> + <c>content.groups[].group</c>)
+    /// and joins the group's <c>AccessAssignment</c> — so the user inherits whatever the group is granted.</summary>
+    public static IObservable<MeshNode> AddToGroup(IMeshService meshService, string userId, string groupPath)
+    {
+        var idSafe = userId.Replace('/', '_').Replace('@', '_');
+        var node = new MeshNode($"{idSafe}_Membership", groupPath)
+        {
+            NodeType = GroupMembershipNodeType.NodeType,
+            Name = $"{userId} — {groupPath.Split('/').LastOrDefault()}",
+            Content = new GroupMembership
+            {
+                Member = userId,
+                DisplayName = userId,
+                Groups = [new MembershipEntry { Group = groupPath }],
+            },
+        };
+        return meshService.CreateOrUpdateNode(node);
+    }
+
     /// <summary>Adds <paramref name="path"/> to <paramref name="userId"/>'s pinned dashboard list (idempotent).</summary>
     public static IObservable<MeshNode> Pin(IMessageHub hub, string userId, string path)
         => hub.GetWorkspace().GetMeshNodeStream(userId).Update(node =>

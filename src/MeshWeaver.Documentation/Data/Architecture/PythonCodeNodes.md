@@ -16,19 +16,20 @@ surfaces output **identically** to a C# one.
 
 ## The node
 
-This is a real Code node — `PythonDemo/SampleStatistics` ("Sample statistics (Python)"), embedded live.
-Press **Run** in its toolbar: the run routes to the `py/python-kernel` worker and the output attaches
+This is a real Code node — `SampleStatistics` ("Sample statistics (Python)"), shipped in the Doc
+partition alongside this page (so it resolves wherever the docs are served) and embedded live. Press
+**Run** in its toolbar: the run routes to the `py/python-kernel` worker and the output attaches
 directly below the code (with no worker connected, the run's activity reports the failure in the same
 output pane — nothing hangs):
 
-@@PythonDemo/SampleStatistics
+@@Doc/Architecture/PythonCodeNodes/SampleStatistics
 
 The node is nothing more than `CodeConfiguration { Code, Language = "python", IsExecutable = true }`:
 
 ```json
 {
   "id": "SampleStatistics",
-  "namespace": "PythonDemo",
+  "namespace": "Doc/Architecture/PythonCodeNodes",
   "name": "Sample statistics (Python)",
   "nodeType": "Code",
   "content": {

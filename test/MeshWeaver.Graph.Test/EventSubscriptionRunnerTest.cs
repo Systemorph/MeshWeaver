@@ -106,6 +106,72 @@ public class EventSubscriptionRunnerTest(ITestOutputHelper output) : MonolithMes
     }
 
     [Fact(Timeout = 60000)]
+    public async Task PendingAddToGroup_FiresWhenMatchingUserIsCreated()
+    {
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        var changeFeed = Mesh.ServiceProvider.GetRequiredService<IMeshChangeFeed>();
+        var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        var runnerLogger = Mesh.ServiceProvider
+            .GetService<Microsoft.Extensions.Logging.ILogger<EventSubscriptionRunner>>();
+
+        // A group under the Space (so a membership lands in the same partition schema as the group).
+        var groupPath = $"{Space}/Team";
+        using (accessService.ImpersonateAsSystem())
+            await meshService.CreateNode(new MeshNode("Team", Space)
+            {
+                NodeType = "Group",
+                Name = "Team",
+                Content = new AccessObject { Description = "Test group" },
+            }).Should().Emit();
+
+        // Start the runner BEFORE the triggering write so the live change-feed path is armed.
+        using var runner = new EventSubscriptionRunner(Mesh, changeFeed, meshService, accessService, runnerLogger);
+        await runner.StartAsync(default);
+
+        // A pending subscription: when a User with email == InviteeEmail is created, add them to the group.
+        // (What the group-invite feature writes for an invited, not-yet-onboarded person.)
+        var subscription = new EventSubscription
+        {
+            TriggerType = EventTriggerType.NodeChange,
+            TriggerNodeType = "User",
+            TriggerKind = MeshChangeKind.Created,
+            MatchField = "email",
+            MatchValue = InviteeEmail,
+            ContinuationType = EventContinuationType.AddToGroup,
+            TargetPath = groupPath,
+        };
+        await EventSubscriptionOps.CreateSubscription(meshService, subscription).Should().Emit();
+
+        // The invitee onboards — their User node is created.
+        using (accessService.ImpersonateAsSystem())
+        {
+            await meshService.CreateNode(new MeshNode(InviteeId)
+            {
+                NodeType = "User",
+                Name = "Newcomer",
+                Content = new User { Email = InviteeEmail, FullName = "Newcomer" },
+            }).Should().Emit();
+        }
+
+        // The subscription reaches its terminal state — Fired.
+        var final = await Mesh.GetWorkspace().GetMeshNodeStream(EventSubscriptionNodeType.Path(subscription.Id))
+            .Select(n => n?.Content as EventSubscription)
+            .Where(s => s is not null and not { Status: EventSubscriptionStatus.Pending })
+            .FirstAsync().Timeout(40.Seconds());
+        Assert.True(final!.Status == EventSubscriptionStatus.Fired,
+            $"subscription ended {final.Status}: {final.LastError}");
+
+        // The membership landed: {groupPath}/{user}_Membership carries Member == userId and the group entry.
+        var membershipPath = $"{groupPath}/{InviteeId}_Membership";
+        var membership = await Mesh.GetWorkspace().GetMeshNodeStream(membershipPath)
+            .Where(n => n?.Content is GroupMembership gm
+                        && gm.Member == InviteeId
+                        && gm.Groups.Any(e => e.Group == groupPath))
+            .FirstAsync().Timeout(10.Seconds());
+        Assert.NotNull(membership);
+    }
+
+    [Fact(Timeout = 60000)]
     public async Task LegacyScheduledAction_IsMigratedAndFires()
     {
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();

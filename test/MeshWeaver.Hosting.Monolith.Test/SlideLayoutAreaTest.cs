@@ -114,8 +114,8 @@ public class SlideLayoutAreaTest(ITestOutputHelper output) : MonolithMeshTestBas
     }
 
     /// <summary>
-    /// The Present area is chrome-free: stage + corner counter only, NO prev/next
-    /// buttons — and the stage still click-advances (staying in Present mode).
+    /// The Present area is chrome-free: stage + corner counter + the invisible keyboard driver
+    /// only, NO prev/next buttons — and the stage still click-advances (staying in Present mode).
     /// </summary>
     [Fact(Timeout = 60000)]
     public async Task PresentArea_IsChromeFree_WithClickableStage()
@@ -128,11 +128,10 @@ public class SlideLayoutAreaTest(ITestOutputHelper output) : MonolithMeshTestBas
             new Address(middle), reference);
 
         var root = await stream.GetControlStream(reference.Area!)
-            .Should().Within(30.Seconds()).Match(c => c is StackControl);
+            .Should().Within(30.Seconds()).Match(c => c is StackControl s && s.Areas.Count == 3);
         var stack = (StackControl)root!;
 
-        // Exactly stage + counter — no presenter bar, no buttons.
-        stack.Areas.Should().HaveCount(2, "Present renders only the stage and the counter overlay");
+        // Exactly stage + counter + keyboard driver — no presenter bar, no visible buttons.
         foreach (var area in stack.Areas)
         {
             var name = area.Area?.ToString();
@@ -141,6 +140,10 @@ public class SlideLayoutAreaTest(ITestOutputHelper output) : MonolithMeshTestBas
                 .Should().Within(10.Seconds()).Match(c => c != null);
             child.Should().NotBeOfType<ButtonControl>("Present mode is chrome-free");
         }
+
+        // The invisible presenter-keyboard driver is present (arrows/space/page/Esc navigation).
+        await stream.GetControlStream(AreaPath(stack, SlideLayoutAreas.SlideShowArea))
+            .Should().Within(10.Seconds()).Match(c => c is SlideShowControl);
 
         // Stage click-advances once the deck query has resolved the next slide.
         await stream.GetControlStream(AreaPath(stack, SlideLayoutAreas.StageArea))

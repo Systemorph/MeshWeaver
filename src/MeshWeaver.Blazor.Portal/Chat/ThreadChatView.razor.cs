@@ -1736,6 +1736,14 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                 lastCommandStatusIsError = false;
                 RunNavigate(navRow!);
                 break;
+            case MeshWeaver.AI.SkillActionKind.NewThread:
+                // "/clear" — just instantiate a fresh new-chat composer (the same path as the "+" button:
+                // OnSidePanelAction("New") clears the open thread and shows the empty new-chat composer).
+                // No navigation — the composer replaces the current thread in place.
+                lastCommandStatus = null;
+                lastCommandStatusIsError = false;
+                SidePanelState.RequestAction("New");
+                break;
             default:
                 // Instruction skill + typed task → re-enter the normal submission path with the
                 // composed message (it never starts with '/', so it cannot re-parse as a command).
@@ -2057,9 +2065,10 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
 
                 // Group selectable nodes under their non-selectable title (model providers → their
                 // nested models). No titles present (the /agent, /harness pickers) → the flat
-                // Order/Name list above stays as-is.
+                // Order/Name list above stays as-is. Drop any group title left with no models under it
+                // (a provider present in the catalog but with nothing to pick is just an empty header).
                 if (nodes.Any(IsPickerHeaderNode))
-                    nodes = ArrangePickerGroups(nodes);
+                    nodes = RemoveEmptyPickerGroups(ArrangePickerGroups(nodes));
 
                 pendingPicker = picker;
                 pickerNodes = nodes;
@@ -2140,6 +2149,22 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             .ThenBy(n => n.Order ?? 0)
             .ThenBy(n => n.Name ?? n.Id, StringComparer.OrdinalIgnoreCase)
             .ToList();
+
+    /// <summary>
+    /// Drops group-title nodes (a model provider) that have NO selectable item under them — a provider
+    /// present in the catalog but with no models to pick is just an empty header. A model's group key is
+    /// its parent path (== its provider's path), so a title survives only if some model shares its path.
+    /// </summary>
+    private static List<MeshNode> RemoveEmptyPickerGroups(List<MeshNode> nodes)
+    {
+        var groupsWithItems = nodes
+            .Where(n => !IsPickerHeaderNode(n))
+            .Select(n => ParentPath(n.Path))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return nodes
+            .Where(n => !IsPickerHeaderNode(n) || groupsWithItems.Contains(n.Path))
+            .ToList();
+    }
 
     /// <summary>First selectable (non-title) index, or -1 when the list is titles-only / empty.</summary>
     private int FirstSelectablePickerIndex()

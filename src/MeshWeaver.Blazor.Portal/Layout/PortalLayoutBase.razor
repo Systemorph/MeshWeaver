@@ -3,8 +3,12 @@
 @inherits LayoutComponentBase
 @inject IDialogService DialogService
 
-<div class="layout @(IsSidePanelVisible ? $"panel-visible panel-position-{SidePanelPositionValue.ToString().ToLower()}" : "")"
+<div class="layout @(IsPresentMode ? "present-mode" : "") @(IsSidePanelVisible ? $"panel-visible panel-position-{SidePanelPositionValue.ToString().ToLower()}" : "")"
     style="@(IsNavMenuOpen ? "overflow: hidden;" : string.Empty)">
+    @* Present mode ( /Present ) is chrome-free: hide the logo tile, header top bar, side nav
+       and the message bar so the slide stage is truly full-screen. *@
+    @if (!IsPresentMode)
+    {
     <div class="meshweaver-icon">
         <FluentAnchor Appearance="Appearance.Stealth" Href="/" Class="logo" title="MeshWeaver" aria-label="MeshWeaver">
             <MeshWeaverLogo></MeshWeaverLogo>
@@ -223,6 +227,7 @@
     <div class="messagebar-container">
         <FluentMessageBarProvider Section="@MessageBarSection" Class="top-messagebar" />
     </div>
+    }
 
     <FluentDialogProvider />
     <PortalErrorModal />

@@ -48,6 +48,14 @@
         overflow: hidden;
     }
 
+    /* Present mode ( /Present route ) — chrome-free: the header, side nav, logo tile and
+       message bar are not rendered, so collapse the grid to a single full-viewport main cell. */
+    ::deep.layout.present-mode {
+        grid-template-columns: 1fr;
+        grid-template-rows: 1fr;
+        grid-template-areas: "main";
+    }
+
     /* When side panel is visible on desktop, main area contains the splitter */
     ::deep.layout.panel-visible.panel-position-right,
     ::deep.layout.panel-visible.panel-position-left,
@@ -271,6 +279,13 @@
         background-color: var(--fill-color);
         color: var(--neutral-foreground-rest);
         overflow: hidden;
+    }
+
+    /* Present mode ( /Present route ) — chrome-free full-viewport main cell (mobile). */
+    ::deep.layout.present-mode {
+        grid-template-columns: 1fr;
+        grid-template-rows: 1fr;
+        grid-template-areas: "main";
     }
 
     /* Mobile bottom position */

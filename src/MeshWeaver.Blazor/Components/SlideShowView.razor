@@ -1,0 +1,74 @@
+@using Microsoft.AspNetCore.Components
+@using Microsoft.JSInterop
+@inherits BlazorView<SlideShowControl, SlideShowView>
+@inject NavigationManager NavigationManager
+
+@* The presenter keyboard driver renders no visible chrome — it only wires the
+   document keydown listener that drives full-screen navigation. *@
+
+@code {
+    private IJSObjectReference? _module;
+    private DotNetObjectReference<SlideShowView>? _selfRef;
+
+    /// <inheritdoc />
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        await base.OnAfterRenderAsync(firstRender);
+        if (!firstRender)
+            return;
+        try
+        {
+            _module = await JSRuntime.InvokeAsync<IJSObjectReference>(
+                "import", "./_content/MeshWeaver.Blazor/Components/SlideShowView.razor.js");
+            _selfRef = DotNetObjectReference.Create(this);
+            // register() replaces any prior driver: a single document-level keydown
+            // listener always dispatches to the most recently rendered SlideShowView,
+            // so re-rendering the Present area (e.g. on ?i change) never stacks listeners.
+            await _module.InvokeVoidAsync("register", _selfRef);
+        }
+        catch (Exception ex) when (ex is OperationCanceledException or JSDisconnectedException)
+        {
+            // Circuit disconnected during initialization — nothing to wire.
+        }
+    }
+
+    /// <summary>
+    /// Invoked from JS on a recognized presentation key. Navigates to the matching href using
+    /// the framework's standard navigation; a null href (e.g. Next on the last slide) is a no-op.
+    /// </summary>
+    /// <param name="action">One of <c>next</c>, <c>prev</c>, <c>first</c>, <c>last</c>, <c>exit</c>.</param>
+    [JSInvokable]
+    public void OnPresentKey(string action)
+    {
+        var href = action switch
+        {
+            "next" => ViewModel?.NextHref,
+            "prev" => ViewModel?.PreviousHref,
+            "first" => ViewModel?.FirstHref,
+            "last" => ViewModel?.LastHref,
+            "exit" => ViewModel?.ExitHref,
+            _ => null
+        };
+        if (!string.IsNullOrEmpty(href))
+            NavigationManager.NavigateTo(href);
+    }
+
+    /// <inheritdoc />
+    public override async ValueTask DisposeAsync()
+    {
+        if (_module is not null && _selfRef is not null)
+        {
+            try
+            {
+                await _module.InvokeVoidAsync("unregister", _selfRef);
+                await _module.DisposeAsync();
+            }
+            catch (Exception ex) when (ex is OperationCanceledException or JSDisconnectedException)
+            {
+                // Circuit already gone — the listener dies with the page.
+            }
+        }
+        _selfRef?.Dispose();
+        await base.DisposeAsync();
+    }
+}

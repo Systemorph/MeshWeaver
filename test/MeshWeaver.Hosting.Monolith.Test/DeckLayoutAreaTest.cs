@@ -167,6 +167,133 @@ public class DeckLayoutAreaTest(ITestOutputHelper output) : MonolithMeshTestBase
     }
 
     /// <summary>
+    /// Presentation is DECOUPLED from the slide nodes: a Deck references slides by arbitrary PATH,
+    /// and the slides may live ANYWHERE (here, siblings of the deck, not children). The deck-driven
+    /// Present walk (<c>{deck}/Present?i=N</c>) must render the FIRST referenced slide at i=0 and the
+    /// SECOND at i=1, in MANIFEST order — <c>[slideB, slideA]</c> → B then A — with the counter and
+    /// the keyboard driver's prev/next all sourced from the DECK's list.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task DeckPresent_WalksReferencedSlidePaths_LivingOutsideTheDeck_InManifestOrder()
+    {
+        var space = await CreateSpaceNode();
+        // Slides live OUTSIDE the deck — plain siblings under the space, referenced by absolute path.
+        var slideA = $"{space}/slideA";
+        var slideB = $"{space}/slideB";
+        await CreateSlide(slideA, "Alpha", 1, "# Alpha\n\nthe-alpha-body");
+        await CreateSlide(slideB, "Beta", 2, "# Beta\n\nthe-beta-body");
+
+        var deck = $"{space}/show";
+        await CreateDeckNode(deck, "Widgets", [slideB, slideA]);
+
+        var workspace = GetClient(c => c.AddData()).GetWorkspace();
+
+        // i=0 → first manifest entry = B; next drives to i=1, no previous.
+        await AssertDeckPresentSlide(workspace, deck, index: 0,
+            expectBody: "the-beta-body", expectCounter: "Slide 1 / 2",
+            expectPrev: null, expectNext: $"/{deck}/Present?i=1");
+
+        // i=1 → second manifest entry = A; previous drives to i=0, no next (last slide).
+        await AssertDeckPresentSlide(workspace, deck, index: 1,
+            expectBody: "the-alpha-body", expectCounter: "Slide 2 / 2",
+            expectPrev: $"/{deck}/Present?i=0", expectNext: null);
+
+        await NodeFactory.DeleteNode(space).Should().Emit();
+    }
+
+    /// <summary>
+    /// The SAME slide path, referenced by TWO decks in OPPOSITE orders, presents in each deck's own
+    /// order — proving presentation order lives on the deck, not the slide. Deck1 = [X, Y] shows X
+    /// first; Deck2 = [Y, X] shows Y first — from the identical two slide nodes.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task SameSlide_InTwoDecks_PresentsInEachDecksOrder()
+    {
+        var space = await CreateSpaceNode();
+        var slideX = $"{space}/slideX";
+        var slideY = $"{space}/slideY";
+        await CreateSlide(slideX, "Ex", 1, "# X\n\nthe-x-body");
+        await CreateSlide(slideY, "Why", 2, "# Y\n\nthe-y-body");
+
+        var deck1 = $"{space}/deck1";
+        var deck2 = $"{space}/deck2";
+        await CreateDeckNode(deck1, "Deck One", [slideX, slideY]);
+        await CreateDeckNode(deck2, "Deck Two", [slideY, slideX]);
+
+        var workspace = GetClient(c => c.AddData()).GetWorkspace();
+
+        // Deck1's first slide is X; Deck2's first slide is Y — same nodes, different order.
+        await AssertDeckPresentSlide(workspace, deck1, index: 0,
+            expectBody: "the-x-body", expectCounter: "Slide 1 / 2",
+            expectPrev: null, expectNext: $"/{deck1}/Present?i=1");
+        await AssertDeckPresentSlide(workspace, deck2, index: 0,
+            expectBody: "the-y-body", expectCounter: "Slide 1 / 2",
+            expectPrev: null, expectNext: $"/{deck2}/Present?i=1");
+
+        await NodeFactory.DeleteNode(space).Should().Emit();
+    }
+
+    /// <summary>
+    /// Renders a deck's Present area at a given <c>?i</c> and asserts the shown slide body, the
+    /// counter, and the keyboard driver's prev/next hrefs — all sourced from the DECK's manifest.
+    /// </summary>
+    private async Task AssertDeckPresentSlide(
+        IWorkspace workspace, string deck, int index,
+        string expectBody, string expectCounter, string? expectPrev, string? expectNext)
+    {
+        var reference = new LayoutAreaReference(DeckLayoutAreas.PresentArea)
+        {
+            Id = index == 0 ? "" : $"?i={index}"
+        };
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
+            new Address(deck), reference);
+
+        // Wait for the fully-populated Present root (stage + counter + keyboard driver).
+        var root = (StackControl)(await stream.GetControlStream(reference.Area!)
+            .Should().Within(30.Seconds()).Match(c => c is StackControl s && s.Areas.Count == 3))!;
+
+        // Stage body carries the referenced slide's content (resolved by PATH, from anywhere).
+        var stage = (StackControl)(await stream.GetControlStream(AreaPath(root, SlideLayoutAreas.StageArea))
+            .Should().Within(30.Seconds()).Match(c => c is StackControl))!;
+        await stream.GetControlStream(AreaPath(stage, SlideLayoutAreas.SlideBodyArea))
+            .Should().Within(30.Seconds()).Match(c =>
+                c is MarkdownControl m && m.Markdown?.ToString()?.Contains(expectBody) == true);
+
+        // Counter reflects the manifest index/count.
+        await stream.GetControlStream(AreaPath(root, SlideLayoutAreas.CounterArea))
+            .Should().Within(10.Seconds()).Match(c =>
+                c is LabelControl l && expectCounter.Equals(l.Data?.ToString()));
+
+        // Keyboard driver prev/next come from the deck's list (?i math), not the slide.
+        var slideShow = (SlideShowControl)(await stream
+            .GetControlStream(AreaPath(root, SlideLayoutAreas.SlideShowArea))
+            .Should().Within(10.Seconds()).Match(c => c is SlideShowControl))!;
+        slideShow.PreviousHref.Should().Be(expectPrev);
+        slideShow.NextHref.Should().Be(expectNext);
+        slideShow.ExitHref.Should().Be($"/{deck}", "Esc exits to the deck overview");
+    }
+
+    private async Task<string> CreateSpaceNode()
+    {
+        var space = $"Space{Guid.NewGuid():N}"[..16];
+        await NodeFactory.CreateNode(MeshNode.FromPath(space) with
+        {
+            Name = "Training Space",
+            NodeType = SpaceNodeType.NodeType,
+            Content = new Space { Name = "Training Space" }
+        }).Should().Emit();
+        return space;
+    }
+
+    private async Task CreateDeckNode(string path, string title, ImmutableList<string> slides)
+        => await NodeFactory.CreateNode(MeshNode.FromPath(path) with
+        {
+            Name = title,
+            NodeType = DeckNodeType.NodeType,
+            Content = new DeckContent { Title = title, Slides = slides }
+        }).Should().Emit();
+
+    /// <summary>
     /// Seeds a Deck with three Slide children. The Deck's <see cref="DeckContent.Slides"/>
     /// manifest declares the order (<paramref name="slides"/>), while each Slide's
     /// <see cref="MeshNode.Order"/> (a=1, b=2, c=3) deliberately CONTRADICTS it and the slides
