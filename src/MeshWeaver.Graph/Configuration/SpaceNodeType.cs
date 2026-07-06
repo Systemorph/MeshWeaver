@@ -1,4 +1,3 @@
-using System.ComponentModel.DataAnnotations;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using MeshWeaver.Messaging;
@@ -21,11 +20,6 @@ namespace MeshWeaver.Graph;
 /// </summary>
 public record Space
 {
-    /// <summary>Display name of the space.</summary>
-    [Required]
-    [MeshNodeProperty(nameof(MeshNode.Name))]
-    public string Name { get; init; } = string.Empty;
-
     /// <summary>Short description of the space.</summary>
     public string? Description { get; init; }
 

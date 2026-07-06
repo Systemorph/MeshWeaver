@@ -287,7 +287,7 @@ public sealed class GitHubSyncService
                 NodeType = SpaceNodeType,
                 Name = newSpaceName,
                 State = MeshNodeState.Active,
-                Content = new Space { Name = newSpaceName },
+                Content = new Space(),
             };
             logger?.LogInformation("Importing {Repo}@{Ref} into new Space {Space}", repositoryUrl, commitish, newSpaceId);
             var createSpace = accessService is null || ctx is null
