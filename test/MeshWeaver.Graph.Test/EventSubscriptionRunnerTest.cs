@@ -32,6 +32,19 @@ public class EventSubscriptionRunnerTest(ITestOutputHelper output) : MonolithMes
         public string Status { get; init; } = "";
     }
 
+    /// <summary>A test continuation handler for <see cref="EventContinuationType.PostThreadMessage"/> —
+    /// records the subscription it was dispatched, proving the runner's DI seam works.</summary>
+    public sealed class RecordingContinuationHandler : IEventSubscriptionContinuationHandler
+    {
+        public volatile string? RanForWatchPath;
+        public EventContinuationType Handles => EventContinuationType.PostThreadMessage;
+        public IObservable<MeshNode> Run(EventSubscription subscription)
+        {
+            RanForWatchPath = subscription.WatchPath;
+            return Observable.Return(new MeshNode("handled"));
+        }
+    }
+
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => ConfigureMeshBase(builder)
             .AddMeshNodes(new MeshNode(Space) { Name = "Invite Space", NodeType = "Space" })
@@ -39,7 +52,10 @@ public class EventSubscriptionRunnerTest(ITestOutputHelper output) : MonolithMes
             {
                 Name = "Watched",
                 HubConfiguration = c => c.AddMeshDataSource(s => s.WithContentType<WatchedContent>()),
-            });
+            })
+            .ConfigureServices(s => s
+                .AddSingleton<RecordingContinuationHandler>()
+                .AddSingleton<IEventSubscriptionContinuationHandler>(sp => sp.GetRequiredService<RecordingContinuationHandler>()));
 
     [Fact(Timeout = 60000)]
     public async Task PendingGrant_FiresWhenMatchingUserIsCreated()
@@ -261,5 +277,54 @@ public class EventSubscriptionRunnerTest(ITestOutputHelper output) : MonolithMes
         await Mesh.GetWorkspace().GetMeshNodeStream($"{Space}/_Access/{InviteeId}_Access")
             .Where(n => n?.Content is AccessAssignment a && a.Roles.Any(r => r.Role == "Editor" && !r.Denied))
             .FirstAsync().Timeout(10.Seconds());
+    }
+
+    [Fact(Timeout = 60000)]
+    public async Task NodeStatusSubscription_DispatchesToRegisteredContinuationHandler()
+    {
+        // The delegation backstop's PostThreadMessage continuation lives above Graph (in MeshWeaver.AI),
+        // so the runner dispatches it to a registered IEventSubscriptionContinuationHandler. This pins
+        // that DI seam: a fired NodeStatus subscription with a non-native ContinuationType runs the handler.
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        var changeFeed = Mesh.ServiceProvider.GetRequiredService<IMeshChangeFeed>();
+        var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        var handler = Mesh.ServiceProvider.GetRequiredService<RecordingContinuationHandler>();
+        const string watchId = "watched-handler";
+
+        using (accessService.ImpersonateAsSystem())
+            await meshService.CreateNode(new MeshNode(watchId)
+            {
+                NodeType = "Watched", Name = "Watched Handler",
+                Content = new WatchedContent { Status = "Running" },
+            }).Should().Emit();
+
+        var subscription = new EventSubscription
+        {
+            TriggerType = EventTriggerType.NodeStatus,
+            WatchPath = watchId,
+            StatusField = "Status",
+            RestingValues = ["Idle"],
+            ContinuationType = EventContinuationType.PostThreadMessage,   // dispatched via the DI seam
+            TargetPath = "some/parent/thread",
+        };
+        await EventSubscriptionOps.CreateSubscription(meshService, subscription).Should().Emit();
+
+        using var runner = new EventSubscriptionRunner(Mesh, changeFeed, meshService, accessService,
+            Mesh.ServiceProvider.GetService<Microsoft.Extensions.Logging.ILogger<EventSubscriptionRunner>>());
+        await runner.StartAsync(default);
+
+        using (accessService.ImpersonateAsSystem())
+            await Mesh.GetWorkspace().GetMeshNodeStream(watchId)
+                .Update(n => n with { Content = new WatchedContent { Status = "Idle" } })
+                .Timeout(30.Seconds()).ToTask();
+
+        // The subscription fires and the registered handler ran for the watched path.
+        var final = await Mesh.GetWorkspace().GetMeshNodeStream(EventSubscriptionNodeType.Path(subscription.Id))
+            .Select(n => n?.Content as EventSubscription)
+            .Where(s => s is not null and not { Status: EventSubscriptionStatus.Pending })
+            .FirstAsync().Timeout(40.Seconds());
+        Assert.True(final!.Status == EventSubscriptionStatus.Fired,
+            $"subscription ended {final.Status}: {final.LastError}");
+        Assert.Equal(watchId, handler.RanForWatchPath);
     }
 }

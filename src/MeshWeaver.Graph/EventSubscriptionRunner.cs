@@ -4,6 +4,7 @@ using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
@@ -261,8 +262,15 @@ public sealed class EventSubscriptionRunner(
                     .SelectMany(g => subscription.Pin
                         ? AsSystem(() => EventSubscriptionOps.Pin(hub, userId, subscription.TargetPath!)).Select(_ => g)
                         : Observable.Return(g)),
-            _ => Observable.Throw<MeshNode>(new InvalidOperationException(
-                $"Unsupported or incomplete event subscription {subscription.Id}")),
+            // Continuations whose effect lives above Graph (e.g. PostThreadMessage in MeshWeaver.AI) run
+            // through a registered IEventSubscriptionContinuationHandler resolved from DI, wrapped in
+            // AsSystem so the handler's writes run under the system identity.
+            _ => hub.ServiceProvider
+                    .GetServices<IEventSubscriptionContinuationHandler>()
+                    .FirstOrDefault(h => h.Handles == subscription.ContinuationType) is { } handler
+                ? AsSystem(() => handler.Run(subscription))
+                : Observable.Throw<MeshNode>(new InvalidOperationException(
+                    $"No continuation handler for {subscription.ContinuationType} (subscription {subscription.Id})")),
         };
 
     /// <summary>
