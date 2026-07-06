@@ -40,7 +40,7 @@ public class EffectivePermissionTest(ITestOutputHelper output) : MonolithMeshTes
         {
             Name = "Systemorph",
             NodeType = SpaceNodeType.NodeType,
-            Content = new Space { Name = "Systemorph" }
+            Content = new Space()
         };
         await NodeFactory.CreateNode(spaceNode).Should().Within(45.Seconds()).Emit();
 

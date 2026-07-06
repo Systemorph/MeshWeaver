@@ -130,7 +130,8 @@ public static class CreateLayoutArea
         const string boxStyle = "width:48px;height:48px;display:flex;align-items:center;justify-content:center;border:1px solid var(--neutral-stroke-rest);border-radius:6px;color:var(--neutral-foreground-rest);";
         if (icon.TrimStart().StartsWith("<svg", StringComparison.OrdinalIgnoreCase))
             return Controls.Html($"<div style=\"{boxStyle}\">{icon}</div>");
-        if (icon.StartsWith("http", StringComparison.OrdinalIgnoreCase) || icon.StartsWith("/"))
+        if (icon.StartsWith("http", StringComparison.OrdinalIgnoreCase) || icon.StartsWith("/")
+            || icon.StartsWith("data:image", StringComparison.OrdinalIgnoreCase))
             return Controls.Html($"<div style=\"{boxStyle}\"><img src=\"{System.Web.HttpUtility.HtmlAttributeEncode(icon)}\" style=\"max-width:32px;max-height:32px;\" /></div>");
         return Controls.Html($"<div style=\"{boxStyle}\"><span style=\"font-size:12px;\">{System.Web.HttpUtility.HtmlEncode(icon)}</span></div>");
     }
@@ -149,28 +150,115 @@ public static class CreateLayoutArea
                 "Icon generator service is not registered. Call AddAgentChatServices().");
             return Task.CompletedTask;
         }
+
+        // Patch specific keys onto the LATEST form snapshot (re-read each time) so a field the
+        // user edits while the (multi-second) icon round runs is not clobbered by a stale copy.
+        void PatchForm(Action<Dictionary<string, object?>> mutate) =>
+            actx.Host.Stream.GetDataStream<Dictionary<string, object?>>(formId).Take(1).Subscribe(form =>
+            {
+                var next = form is null ? new Dictionary<string, object?>() : new Dictionary<string, object?>(form);
+                mutate(next);
+                actx.Host.UpdateData(formId, next);
+            });
+
+        // Single reactive chain (no nested Subscribe): read the form → generate → write back.
         actx.Host.Stream.GetDataStream<Dictionary<string, object?>>(formId)
             .Take(1)
-            .Subscribe(form =>
+            .SelectMany(form =>
             {
                 var currentName = form?.GetValueOrDefault("name")?.ToString() ?? "";
-                var currentDesc = form?.GetValueOrDefault("description")?.ToString();
-                if (string.IsNullOrWhiteSpace(currentName) && string.IsNullOrWhiteSpace(currentDesc))
+                // Prefer the dedicated icon description; fall back to the node description.
+                var iconDesc = form?.GetValueOrDefault("iconDescription")?.ToString();
+                if (string.IsNullOrWhiteSpace(iconDesc))
+                    iconDesc = form?.GetValueOrDefault("description")?.ToString();
+                if (string.IsNullOrWhiteSpace(currentName) && string.IsNullOrWhiteSpace(iconDesc))
                 {
                     ShowErrorDialog(actx, "Regenerate Icon",
                         "Enter a Name or Description first — the agent uses those to craft the icon.");
-                    return;
+                    return Observable.Empty<string>();
                 }
-                generator.GenerateSvgAsync(currentName, currentDesc).Subscribe(
-                    svg =>
-                    {
-                        var updated = form is null
-                            ? new Dictionary<string, object?> { ["icon"] = svg }
-                            : new Dictionary<string, object?>(form) { ["icon"] = svg };
-                        actx.Host.UpdateData(formId, updated);
-                    },
-                    ex => ShowErrorDialog(actx, "Icon Generation Failed", ex.Message));
+                // Spinner up immediately so the button gives feedback during the agent turn.
+                PatchForm(f => f["iconGenerating"] = true);
+                // Bound the round: a missing / non-responding utility-tier model must surface as a
+                // VISIBLE error, never an indefinite silent hang (ErrorPropagationAndWedges) — the
+                // "pressing the button does nothing" report.
+                return generator.GenerateSvgAsync(currentName, iconDesc)
+                    .Timeout(TimeSpan.FromSeconds(90));
+            })
+            .Subscribe(
+                svg => PatchForm(f => { f["icon"] = svg; f["iconGenerating"] = false; }),
+                ex =>
+                {
+                    PatchForm(f => f["iconGenerating"] = false);
+                    ShowErrorDialog(actx, "Icon Generation Failed",
+                        ex is TimeoutException
+                            ? "The icon agent didn't respond in time. Make sure a utility-tier model is configured for icon generation."
+                            : ex.Message);
+                });
+        return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// Handles the Create form's "Generate image" click: builds a prompt from Name + Icon description,
+    /// invokes <see cref="IImageGenerator"/> (a configured image model — Azure OpenAI Images, OpenAI, or a
+    /// local Stable-Diffusion endpoint), and writes the resulting PNG back into the form's "icon" slot as a
+    /// <c>data:</c> URI. Inline storage is deliberate here: the node does not exist yet, so a data URI is
+    /// self-contained and renders directly (a content-collection URL is a follow-up for large images).
+    /// </summary>
+    private static Task RegenerateFormImage(UiActionContext actx, string formId)
+    {
+        var generator = actx.Host.Hub.ServiceProvider.GetService<IImageGenerator>();
+        if (generator == null)
+        {
+            ShowErrorDialog(actx, "Generate Image",
+                "Image generator service is not registered. Call AddAgentChatServices().");
+            return Task.CompletedTask;
+        }
+
+        void PatchForm(Action<Dictionary<string, object?>> mutate) =>
+            actx.Host.Stream.GetDataStream<Dictionary<string, object?>>(formId).Take(1).Subscribe(form =>
+            {
+                var next = form is null ? new Dictionary<string, object?>() : new Dictionary<string, object?>(form);
+                mutate(next);
+                actx.Host.UpdateData(formId, next);
             });
+
+        actx.Host.Stream.GetDataStream<Dictionary<string, object?>>(formId)
+            .Take(1)
+            .SelectMany(form =>
+            {
+                var name = form?.GetValueOrDefault("name")?.ToString() ?? "";
+                // Prefer the dedicated icon description; fall back to the node description.
+                var iconDesc = form?.GetValueOrDefault("iconDescription")?.ToString();
+                if (string.IsNullOrWhiteSpace(iconDesc))
+                    iconDesc = form?.GetValueOrDefault("description")?.ToString();
+                var prompt = string.Join(". ", new[] { name, iconDesc }.Where(s => !string.IsNullOrWhiteSpace(s)));
+                if (string.IsNullOrWhiteSpace(prompt))
+                {
+                    ShowErrorDialog(actx, "Generate Image",
+                        "Enter a Name or an Icon description first — the image model uses those as the prompt.");
+                    return Observable.Empty<GeneratedImage>();
+                }
+                PatchForm(f => f["iconGenerating"] = true);
+                // Bound the round: a missing / non-responding image endpoint must surface as a VISIBLE
+                // error, never an indefinite silent hang (ErrorPropagationAndWedges).
+                return generator.GenerateImageAsync(prompt)
+                    .Timeout(TimeSpan.FromSeconds(120));
+            })
+            .Subscribe(
+                image =>
+                {
+                    var dataUrl = $"data:{image.ContentType};base64,{Convert.ToBase64String(image.Data)}";
+                    PatchForm(f => { f["icon"] = dataUrl; f["iconGenerating"] = false; });
+                },
+                ex =>
+                {
+                    PatchForm(f => f["iconGenerating"] = false);
+                    ShowErrorDialog(actx, "Image Generation Failed",
+                        ex is TimeoutException
+                            ? "The image model didn't respond in time. Check the image model / endpoint configuration."
+                            : ex.Message);
+                });
         return Task.CompletedTask;
     }
 
@@ -274,6 +362,7 @@ public static class CreateLayoutArea
             ["name"] = "",
             ["id"] = "",
             ["description"] = "",
+            ["iconDescription"] = "",
             ["icon"] = defaultTypeIcon ?? ""
         });
         var dataContext = LayoutAreaReference.GetDataPointer(formId);
@@ -378,9 +467,21 @@ public static class CreateLayoutArea
             DataContext = dataContext
         }.WithRows(3).WithStyle("width: 100%; margin-bottom: 16px;"));
 
+        // 8b. Icon description — an OPTIONAL, dedicated seed for the avatar/icon generator,
+        //     separate from the node Description so the user can steer the icon's imagery
+        //     ("a friendly robot holding a compass") without changing what the node is about.
+        //     Falls back to the Description above when left empty.
+        stack = stack.WithView(new TextAreaControl(new JsonPointerReference("iconDescription"))
+        {
+            Label = "Icon description (optional)",
+            Placeholder = "Describe the icon/avatar to generate — e.g. \"a friendly robot holding a compass\". Falls back to the description above.",
+            Immediate = true,
+            DataContext = dataContext
+        }.WithRows(2).WithStyle("width: 100%; margin-bottom: 16px;"));
+
         // 9. Icon: "Icon" label, live preview, Regenerate button.
         // Preview is data-bound so it reflects live updates (default from the chosen type,
-        // or a regenerated SVG from the Node Initializer agent).
+        // a regenerated SVG from the Node Initializer agent, or a spinner while generating).
         stack = stack.WithView(Controls.Body("Icon")
             .WithStyle("font-weight: 600; display: block; margin-bottom: 6px;"));
         stack = stack.WithView(Controls.Stack
@@ -390,6 +491,12 @@ public static class CreateLayoutArea
             .WithView((h, _) => h.Stream.GetDataStream<Dictionary<string, object?>>(formId)
                 .Select(form =>
                 {
+                    // "iconGenerating" flips true while the agent round runs so the preview shows
+                    // activity — the round is a full agent turn (seconds), so without this the
+                    // Regenerate button looks dead. Value survives a JSON round-trip as either a
+                    // CLR bool ("True") or a JsonElement ("true"), so compare case-insensitively.
+                    if (string.Equals(form?.GetValueOrDefault("iconGenerating")?.ToString(), "true", StringComparison.OrdinalIgnoreCase))
+                        return Controls.Progress("Generating…", 0);
                     var icon = form?.GetValueOrDefault("icon")?.ToString() ?? "";
                     return string.IsNullOrEmpty(icon)
                         ? Controls.Html("<div style=\"width:48px;height:48px;border:1px dashed var(--neutral-stroke-rest);border-radius:6px;\"></div>")
@@ -398,7 +505,13 @@ public static class CreateLayoutArea
             .WithView(Controls.Button("Regenerate")
                 .WithAppearance(Appearance.Neutral)
                 .WithIconStart(FluentIcons.Sparkle())
-                .WithClickAction(actx => RegenerateFormIcon(actx, formId))));
+                .WithClickAction(actx => RegenerateFormIcon(actx, formId)))
+            // "Generate image" — a real raster avatar via a configured image model (IImageGenerator),
+            // as opposed to "Regenerate" which draws a vector SVG through the NodeInitializer agent.
+            .WithView(Controls.Button("Generate image")
+                .WithAppearance(Appearance.Neutral)
+                .WithIconStart(FluentIcons.Image())
+                .WithClickAction(actx => RegenerateFormImage(actx, formId))));
 
         // 10. Button row: Cancel on left, Create on right
         var cancelUrl = MeshNodeLayoutAreas.BuildUrl(parentPath, MeshNodeLayoutAreas.OverviewArea);

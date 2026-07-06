@@ -40,7 +40,7 @@ public class UserPublicReadTest(ITestOutputHelper output) : MonolithMeshTestBase
                     Name = "Acme Corp",
                     NodeType = "Space",
                     State = MeshNodeState.Active,
-                    Content = new Space { Name = "Acme Corp" }
+                    Content = new Space()
                 },
                 // Second user for nodeType query tests
                 new MeshNode("Bob", "User")
@@ -144,7 +144,7 @@ public class UserPublicReadTest(ITestOutputHelper output) : MonolithMeshTestBase
         {
             Name = "Globex Corp",
             NodeType = "Space",
-            Content = new Space { Name = "Globex Corp" }
+            Content = new Space()
         };
         var created = await NodeFactory.CreateNode(orgNode).Should().Emit();
         created.Should().NotBeNull();

@@ -25,14 +25,14 @@ public class SpaceResolveSpaceTest
     [Fact]
     public void TypedContent_ReturnedAsIs()
     {
-        var space = new Space { Name = "Acme", Body = "BODY" };
+        var space = new Space { Body = "BODY" };
         Assert.Same(space, SpaceLayoutAreas.ResolveSpace(Node(space), Options));
     }
 
     [Fact]
     public void JsonElementContent_Deserialized()
     {
-        var je = JsonSerializer.SerializeToElement(new Space { Name = "Acme", Body = "BODY" }, Options);
+        var je = JsonSerializer.SerializeToElement(new Space { Body = "BODY" }, Options);
         SpaceLayoutAreas.ResolveSpace(Node(je), Options)!.Body.Should().Be("BODY");
     }
 
@@ -48,10 +48,13 @@ public class SpaceResolveSpaceTest
     public void PlainString_TakenAsBody()
     {
         // "just a string" that is NOT JSON — keep it as the body so the page still shows it.
-        var space = SpaceLayoutAreas.ResolveSpace(Node("# Hello\n\nplain text body"), Options);
+        // The name is no longer carried on Space.Content; it lives on MeshNode.Name (the single
+        // source of truth), so assert the node name rather than a (now-removed) space.Name.
+        var node = Node("# Hello\n\nplain text body");
+        var space = SpaceLayoutAreas.ResolveSpace(node, Options);
         space.Should().NotBeNull();
         space!.Body.Should().Contain("plain text body");
-        space.Name.Should().Be("Acme");
+        node.Name.Should().Be("Acme");
     }
 
     [Fact]
@@ -89,7 +92,7 @@ public class SpaceResolveSpaceTest
     [Fact]
     public void BuildBodyContent_AuthoredBody_CarriesSpacePathAsNodePath()
     {
-        var space = new Space { Name = "Acme", Body = "# Hi\n\n@@(\"area/Search\")" };
+        var space = new Space { Body = "# Hi\n\n@@(\"area/Search\")" };
         var control = SpaceLayoutAreas.BuildBodyContent(space, Node(space), spacePath: "Acme");
 
         var md = Assert.IsType<MarkdownControl>(control);
