@@ -347,15 +347,22 @@ public static class AgentPickerProjection
         var jsonOptions = hub.JsonSerializerOptions;
         var masterLogger = hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.AI.AgentPickerProjection");
+        // Read the master AUTHORITATIVELY by its known path via GetMeshNodeStream — which routes to the
+        // OWNING partition hub, so it resolves the user's master even when the chat is opened from ANOTHER
+        // partition (a space). The previous synced QUERY (namespace:{user}/_Thread) is eventually
+        // consistent and did NOT resolve cross-partition: opened inside a space it came back empty →
+        // master null → FirstNonEmpty fell to the (arbitrary-ordered) catalog default instead of the
+        // user's last selection — the "MeshWeaver not picked in a new space" bug. The master is seeded
+        // per-user (ThreadComposerSeedHandler), so Where(not null).Take(1) yields it; a not-yet-seeded
+        // master simply never emits and the caller's Take(1).Timeout falls back to the catalog default.
+        // This is the CLAUDE.md rule — never QUERY for a single node's content; read the exact path.
         var master = string.IsNullOrEmpty(userPath)
             ? System.Reactive.Linq.Observable.Return<ThreadComposer?>(null)
-            : ObserveSnapshot(workspace, hub,
-                    $"{MasterComposerQueryId}|u={userPath}",
-                    $"namespace:{userPath}/{ThreadNodeType.ThreadPartition} nodeType:{ThreadComposerNodeType.NodeType}")
-                .Select(snapshot => snapshot
-                    .Where(n => string.Equals(n.NodeType, ThreadComposerNodeType.NodeType, StringComparison.OrdinalIgnoreCase))
-                    .Select(n => ThreadComposerNodeType.ComposerOf(n, jsonOptions, masterLogger))
-                    .FirstOrDefault(c => c is not null));
+            : workspace.GetMeshNodeStream(ThreadComposerNodeType.PathFor(userPath))
+                .Where(n => n is not null)
+                .Select(n => ThreadComposerNodeType.ComposerOf(n, jsonOptions, masterLogger))
+                .Take(1)
+                .Catch<ThreadComposer?, Exception>(_ => System.Reactive.Linq.Observable.Return<ThreadComposer?>(null));
 
         return agent.CombineLatest(model, harness, master,
             (a, m, h, mstr) => new ThreadComposer
