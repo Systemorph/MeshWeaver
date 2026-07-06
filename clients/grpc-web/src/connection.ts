@@ -19,11 +19,16 @@ export interface ConnectOptions {
   /** Sink for background send/stream faults that have no awaiting caller (default `console.error`). */
   onError?: (error: unknown) => void;
   /**
-   * Inject the Connect transport instead of the default gRPC-web one. Use to supply a custom `fetch`
-   * (e.g. a streaming-fetch polyfill on React Native) or an in-memory transport for tests. When set,
-   * `token` is ignored — add your own auth interceptor to the transport.
+   * Inject the Connect transport instead of the default gRPC-web one. Use to supply an in-memory
+   * transport for tests. When set, `token` AND `fetch` are ignored — add your own auth interceptor.
    */
   transport?: Transport;
+  /**
+   * Custom `fetch` for the default gRPC-web transport — the seam for React Native, whose Hermes `fetch`
+   * can't stream a server response body (pass a streaming-fetch polyfill). Ignored when `transport` is
+   * set. Web/Node leave it undefined and get the platform fetch.
+   */
+  fetch?: typeof globalThis.fetch;
 }
 
 /** Bearer-token interceptor — the token rides in gRPC-web call metadata, exactly like the Node SDK. */
@@ -57,7 +62,7 @@ export class MeshWebConnection {
     const address = opts.address ?? `node/${newId()}`;
     const transport =
       opts.transport ??
-      createGrpcWebTransport({ baseUrl: url, interceptors: opts.token ? [bearer(opts.token)] : [] });
+      createGrpcWebTransport({ baseUrl: url, fetch: opts.fetch, interceptors: opts.token ? [bearer(opts.token)] : [] });
     const conn = new MeshWebConnection(address, createClient(Mesh, transport), opts.onError ?? console.error);
     return conn.open();
   }

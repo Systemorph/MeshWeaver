@@ -14,7 +14,7 @@
 // layout store as $Menu:{context} (Node / Mesh / AI; see NodeMenuItemsExtensions), plus the in-app
 // client contexts (You: profile / voice / connect) — the same split the MAUI PortalShellPage renders.
 import { useEffect, useState, useSyncExternalStore, type ReactNode } from "react";
-import { View, Text, TextInput, Pressable, ScrollView, StyleSheet } from "react-native";
+import { View, Text, TextInput, Pressable, ScrollView, StyleSheet, useWindowDimensions } from "react-native";
 import { RenderArea, type AreaSource, type AreaTree } from "@meshweaver/react/core";
 import { type NavTarget } from "./nav";
 import { CLIENT_MENUS, ClientScreen, type ClientDestination } from "./screens";
@@ -68,35 +68,68 @@ export function Shell({
 }): ReactNode {
   const tree = useTree(source);
   const styles = useSheet();
+  // Responsive: the fixed left menu (236) + right TOC (250) don't fit a phone — the content column would
+  // be squeezed to zero width. On a narrow viewport the menu becomes a slide-over (hamburger in the top
+  // bar), the TOC is hidden, and the content takes the FULL width. Wide viewports keep the 3-column shell.
+  const { width } = useWindowDimensions();
+  const isMobile = width < 760;
+  const [menuOpen, setMenuOpen] = useState(false);
+  const navigate = (t: NavTarget) => { setMenuOpen(false); onNavigate(t); };
+  const clientNav = (d: ClientDestination | null) => { setMenuOpen(false); onClientScreen(d); };
+
+  const menu = (
+    <LeftMenu tree={tree} nav={nav} clientScreen={clientScreen} onNavigate={navigate} onClientScreen={clientNav} />
+  );
+  const main = clientScreen ? (
+    <View style={styles.content}>
+      <ClientScreen destination={clientScreen} onConnected={onReconnect} />
+    </View>
+  ) : (
+    <ContentPane source={source} nav={nav} onNavigate={onNavigate} />
+  );
+
   return (
     <View style={styles.root}>
-      <TopBar onNavigate={onNavigate} />
+      <TopBar onNavigate={onNavigate} isMobile={isMobile} onToggleMenu={() => setMenuOpen((o) => !o)} />
       <Breadcrumb nav={nav} clientScreen={clientScreen} onNavigate={onNavigate} />
       <View style={styles.body}>
-        <LeftMenu tree={tree} nav={nav} clientScreen={clientScreen} onNavigate={onNavigate} onClientScreen={onClientScreen} />
-        {clientScreen ? (
-          <View style={styles.content}>
-            <ClientScreen destination={clientScreen} onConnected={onReconnect} />
-          </View>
+        {isMobile ? (
+          <>
+            {main}
+            {menuOpen ? (
+              <>
+                <Pressable style={styles.scrim} onPress={() => setMenuOpen(false)} />
+                <View style={styles.drawer}>{menu}</View>
+              </>
+            ) : null}
+          </>
         ) : (
-          <ContentPane source={source} nav={nav} onNavigate={onNavigate} />
+          <>
+            {menu}
+            {main}
+            <RightSidebar contentKey={clientScreen ?? `${nav.address}/${nav.area}`} />
+          </>
         )}
-        <RightSidebar contentKey={clientScreen ?? `${nav.address}/${nav.area}`} />
       </View>
     </View>
   );
 }
 
 // ── top bar ───────────────────────────────────────────────────────────────────
-function TopBar({ onNavigate }: { onNavigate: (t: NavTarget) => void }): ReactNode {
+function TopBar({ onNavigate, isMobile, onToggleMenu }: { onNavigate: (t: NavTarget) => void; isMobile: boolean; onToggleMenu: () => void }): ReactNode {
   const [q, setQ] = useState("");
   const styles = useSheet();
   const { mode, toggle, palette } = useTheme();
   return (
     <View style={styles.topbar}>
-      <Pressable style={styles.brand} onPress={() => onNavigate(HOME)}>
+      {isMobile ? (
+        <Pressable style={styles.hamburger} onPress={onToggleMenu} accessibilityLabel="Menu">
+          <Text style={styles.hamburgerText}>☰</Text>
+        </Pressable>
+      ) : null}
+      <Pressable style={isMobile ? styles.brandMobile : styles.brand} onPress={() => onNavigate(HOME)}>
         <View style={styles.logo}><Text style={styles.logoMark}>◆</Text></View>
-        <Text style={styles.brandText}>MeshWeaver</Text>
+        {isMobile ? null : <Text style={styles.brandText}>MeshWeaver</Text>}
       </Pressable>
       <View style={styles.searchWrap}>
         <Text style={styles.searchIcon}>⌕</Text>
@@ -308,6 +341,11 @@ const makeStyles = (p: Palette) => StyleSheet.create({
   root: { flex: 1, backgroundColor: p.appBg },
   topbar: { height: 52, flexDirection: "row", alignItems: "center", paddingHorizontal: 14, gap: 12, backgroundColor: p.topbarBg, borderBottomWidth: 1, borderBottomColor: p.border },
   brand: { flexDirection: "row", alignItems: "center", gap: 8, width: 210 },
+  brandMobile: { flexDirection: "row", alignItems: "center" },
+  hamburger: { width: 34, height: 34, borderRadius: 8, alignItems: "center", justifyContent: "center" },
+  hamburgerText: { fontSize: 20, color: "#242424" },
+  scrim: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0, backgroundColor: "rgba(0,0,0,0.35)", zIndex: 1 },
+  drawer: { position: "absolute", top: 0, left: 0, bottom: 0, zIndex: 2, elevation: 8, shadowColor: "#000", shadowOpacity: 0.2, shadowRadius: 12, shadowOffset: { width: 2, height: 0 } },
   logo: { width: 26, height: 26, borderRadius: 6, backgroundColor: p.accent, alignItems: "center", justifyContent: "center" },
   logoMark: { color: p.onAccent, fontSize: 14, fontWeight: "700" },
   brandText: { fontSize: 15, fontWeight: "700", color: p.text },
