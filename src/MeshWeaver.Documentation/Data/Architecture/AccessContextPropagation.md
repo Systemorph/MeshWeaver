@@ -487,8 +487,8 @@ If step 3 had stamped `ImpersonateAsHub(Hub.Address)` instead of carrying `user`
 
 ## Related docs
 
-- @/Doc/Architecture/AsynchronousCalls — reactive end-to-end patterns; `AccessContext` rides for free through framework primitives.
-- @/Doc/Architecture/CqrsAndContentAccess — `GetStream` is access-checked; details the TTL cache and `GetPermissionRequest` handshake.
-- @/Doc/Architecture/AccessControl — `IsPortalIdentity` and the per-NodeType access-rule pattern used to sanction hub-shaped principals.
-- @/Doc/GUI/DataBinding — Blazor views can receive `OnError(UnauthorizedAccessException)` from `IMeshNodeStreamCache.GetStream` when a user's access is revoked.
-- @/Doc/Architecture/ActivityControlPlane — operations as scripts: `RequestedX` triggers and status-machine semantics; cross-references this doc for the security model.
+- @../AsynchronousCalls — reactive end-to-end patterns; `AccessContext` rides for free through framework primitives.
+- @../CqrsAndContentAccess — `GetStream` is access-checked; details the TTL cache and `GetPermissionRequest` handshake.
+- @../AccessControl — `IsPortalIdentity` and the per-NodeType access-rule pattern used to sanction hub-shaped principals.
+- @../../GUI/DataBinding — Blazor views can receive `OnError(UnauthorizedAccessException)` from `IMeshNodeStreamCache.GetStream` when a user's access is revoked.
+- @../ActivityControlPlane — operations as scripts: `RequestedX` triggers and status-machine semantics; cross-references this doc for the security model.

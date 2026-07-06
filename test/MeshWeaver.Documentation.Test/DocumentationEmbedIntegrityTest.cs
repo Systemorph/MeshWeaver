@@ -163,6 +163,101 @@ public class DocumentationEmbedIntegrityTest
     }
 
     /// <summary>
+    /// RELATIVE references are the convention (absolute paths are the exception): a doc references a
+    /// sibling as <c>@../Sibling</c>, a child as <c>@@Child</c>, another area as <c>@../../Area/Page</c>.
+    /// This renders each relative reference through the REAL pipeline (with the referencing page's own
+    /// node path) and asserts it resolves to the expected absolute node — proving relative paths work
+    /// for both the <c>@</c> hyperlink and the <c>@@</c> embed. (<c>@@</c> yields a raw path with no
+    /// leading slash; <c>@</c> yields an href with one — hence the two expected shapes.)
+    /// </summary>
+    [Theory]
+    // child embed — the natural way to embed a node that lives under the page
+    [InlineData("Doc/Architecture/PythonCodeNodes", "@@SampleStatistics", "Doc/Architecture/PythonCodeNodes/SampleStatistics")]
+    // sibling hyperlink (one ..)
+    [InlineData("Doc/Architecture/PythonCodeNodes", "@../ForeignLanguageIntegration", "/Doc/Architecture/ForeignLanguageIntegration")]
+    // cross-area hyperlink (two .. then down)
+    [InlineData("Doc/Architecture/PythonCodeNodes", "@../../DataMesh/PythonPandasNode", "/Doc/DataMesh/PythonPandasNode")]
+    [InlineData("Doc/Architecture/AccessContextPropagation", "@../AsynchronousCalls", "/Doc/Architecture/AsynchronousCalls")]
+    [InlineData("Doc/Architecture/AccessContextPropagation", "@../../GUI/DataBinding", "/Doc/GUI/DataBinding")]
+    public void RelativeUcrReference_ResolvesToExpectedNode(string page, string reference, string expected)
+    {
+        var html = Markdig.Markdown.ToHtml(reference, MarkdownExtensions.CreateMarkdownPipeline("content", page));
+        var m = Regex.Match(html, @"href='([^']+)'|data-raw-path='([^']+)'");
+        var resolved = m.Groups[1].Success ? m.Groups[1].Value : m.Groups[2].Value;
+
+        resolved.Should().Be(expected,
+            $"the relative reference {reference} on page {page} must resolve to {expected} " +
+            "(relative paths are the convention — this is how a doc points at a sibling/child/cross-area node)");
+    }
+
+    /// <summary>
+    /// Renders the pages this change touched and asserts EVERY UCR reference they emit — each
+    /// <c>@</c> hyperlink and each <c>@@</c> embed, all written as RELATIVE paths — resolves to a node
+    /// that actually ships in the docs. Guards the real content, not just synthetic snippets: a typo'd
+    /// or over-/under-dotted relative path resolves to a non-existent node and fails here.
+    /// </summary>
+    [Theory]
+    [InlineData("Doc/Architecture/PythonCodeNodes")]
+    [InlineData("Doc/Architecture/AccessContextPropagation")]
+    public void EditedDocPage_EveryRelativeReference_ResolvesToAShippedNode(string page)
+    {
+        var known = BuildShippedNodePaths();
+        var content = LoadResources(typeof(DocumentationExtensions).Assembly, DocResourcePrefix, "Doc", ".md")
+            .Single(r => string.Equals(r.Path, page, StringComparison.OrdinalIgnoreCase)).Content;
+        var html = Markdig.Markdown.ToHtml(content, MarkdownExtensions.CreateMarkdownPipeline("content", page));
+
+        var targets = Regex.Matches(html, @"<a href='([^']+)' class='ucr-link'").Select(m => m.Groups[1].Value)
+            .Concat(Regex.Matches(html, @"class='layout-area' data-raw-path='([^']+)'").Select(m => m.Groups[1].Value))
+            .Select(t => t.TrimStart('/'))
+            .ToImmutableArray();
+
+        targets.Should().NotBeEmpty("the page carries relative UCR references to validate");
+        foreach (var target in targets)
+        {
+            // The reference resolves to a node path (possibly + area/id): some prefix must be a shipped node.
+            var segments = target.Split('/');
+            var resolvesToANode = Enumerable.Range(1, segments.Length)
+                .Select(len => string.Join('/', segments.Take(len)))
+                .Any(known.Contains);
+            resolvesToANode.Should().BeTrue(
+                $"the relative reference resolving to '{target}' on {page} must point at a shipped node");
+        }
+    }
+
+    /// <summary>Every node PATH shipped in the Doc/Agent/Skill data — markdown pages (from the resource
+    /// name) and <c>.json</c> nodes (from their declared namespace + id).</summary>
+    private static ImmutableHashSet<string> BuildShippedNodePaths()
+    {
+        var docAssembly = typeof(DocumentationExtensions).Assembly;
+        var agentAssembly = typeof(AgentNodeType).Assembly;
+        var set = ImmutableHashSet.CreateBuilder<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var (assembly, prefix, partition) in new[]
+                 {
+                     (docAssembly, DocResourcePrefix, "Doc"),
+                     (agentAssembly, AgentResourcePrefix, "Agent"),
+                     (agentAssembly, SkillResourcePrefix, "Skill"),
+                 })
+        {
+            set.Add(partition);
+            foreach (var (path, _) in LoadResources(assembly, prefix, partition, ".md"))
+                set.Add(path);
+            foreach (var (_, json) in LoadResources(assembly, prefix, partition: null, ".json"))
+            {
+                try
+                {
+                    var root = JsonDocument.Parse(json).RootElement;
+                    if (root.TryGetProperty("namespace", out var ns) && ns.ValueKind == JsonValueKind.String
+                        && root.TryGetProperty("id", out var id) && id.ValueKind == JsonValueKind.String)
+                        set.Add($"{ns.GetString()}/{id.GetString()}");
+                }
+                catch (JsonException) { /* non-node json */ }
+            }
+        }
+        return set.ToImmutable();
+    }
+
+    /// <summary>
     /// The partitions a doc-serving portal is guaranteed to have alongside the docs:
     /// Doc/Agent/Skill, the partition of every node shipped in that data, and (because a NodeType's
     /// instances address under its own name) the id of every shipped <c>NodeType</c> node.
