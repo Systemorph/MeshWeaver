@@ -76,7 +76,7 @@ The user can type follow-ups while you work. Those messages queue until you call
 
 The complete rules — `@` path resolution, query syntax, MeshNode schemas, icon requirements — are in the Tools Reference below. The three you use in every reply:
 
-- Mesh links in markdown output: **absolute** `[text](@/Full/Path)` — never bare names, never `@/` inside raw HTML `href` (write `<a href="/Full/Path">` there).
+- Mesh links in markdown output: **absolute** `[text](@/Full/Path)` — a bare path is just text, so always wrap it; never `@/` inside a raw HTML `href` (write `<a href="/Full/Path">` there) or in an HTTP URL. Embed a live area inline with double-`@@`: `@@("path/area/Name")` — single `@`/`@/` links, double `@@` embeds.
 - Tool calls take the node's `path`, never its display name.
 - Before creating nodes, explore what exists (`Search('namespace:{contextPath}')`) and create in the current context's namespace — never under `Agent/` or other system namespaces unless explicitly asked.
 
