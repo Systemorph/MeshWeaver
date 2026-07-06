@@ -37,9 +37,11 @@ public class DocumentationEmbedIntegrityTest
     private const string SkillResourcePrefix = "MeshWeaver.AI.Data.Skill.";
 
     private static readonly Regex FencedCodeRegex = new("```.*?```", RegexOptions.Singleline | RegexOptions.Compiled);
-    // A live embed: line-start (optional indent) '@@' followed by a path token (up to whitespace).
+    // A live embed: line-start '@@' + a path token. Indentation must be 0-3 spaces: LayoutAreaMarkdownParser
+    // bails on processor.IsCodeIndent (a tab or ≥4 spaces = an indented code block, CommonMark), so a
+    // deeper-indented '@@' is code, not an embed — matching that would be a false positive.
     private static readonly Regex LineStartEmbedRegex =
-        new(@"^\s*@@([^\s`<]+)", RegexOptions.Multiline | RegexOptions.Compiled);
+        new(@"^ {0,3}@@([^\s`<]+)", RegexOptions.Multiline | RegexOptions.Compiled);
 
     // Reference verbs that target the CURRENT node (its data/content/schema/…), never a partition.
     private static readonly ImmutableHashSet<string> ReservedKeywords =
@@ -116,6 +118,14 @@ public class DocumentationEmbedIntegrityTest
         node.Should().NotBeNull(
             $"the doc embeds @@{embedTarget}, so that node must ship in the Doc partition (Data/Architecture/PythonCodeNodes/SampleStatistics.json)");
         node!.NodeType.Should().Be("Code", "the embedded example is a runnable Code node");
+
+        // …and it must be a PYTHON code node (the point of the page). Assert against the shipped
+        // resource's CodeConfiguration content — the language routes the run to the python worker.
+        var json = LoadResources(typeof(DocumentationExtensions).Assembly, DocResourcePrefix, "Doc", ".json")
+            .Single(r => string.Equals(r.Path, embedTarget, StringComparison.OrdinalIgnoreCase)).Content;
+        using var doc = JsonDocument.Parse(json);
+        doc.RootElement.GetProperty("content").GetProperty("language").GetString()
+            .Should().Be("python", "the example demonstrates a python Code node routed to py/python-kernel");
     }
 
     /// <summary>
