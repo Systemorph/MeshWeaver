@@ -210,7 +210,8 @@ public static class DocumentLayoutAreas
 
         var fileName = string.IsNullOrEmpty(document.Name) ? document.FilePath : document.Name;
         var position = total > 0 ? $"{index + 1} / {total}" : (index + 1).ToString();
-        panel = panel.WithView(Controls.H3($"{fileName} · block {position}"));
+        var pageSuffix = chunk?.Page is int page ? $" · page {page}" : "";
+        panel = panel.WithView(Controls.H3($"{fileName} · block {position}{pageSuffix}"));
 
         if (chunk is null)
         {
@@ -254,16 +255,17 @@ public static class DocumentLayoutAreas
         var terms = host.GetQueryStringParamValue("q") ?? "";
         var index = ParseIndex(host.GetQueryStringParamValue("index"));
         return host.Workspace.GetMeshNodeStream()
-            .Select(node => (UiControl?)BuildSource(host, node, index, terms));
+            .Select(node => BuildSource(host, node, index, terms))
+            .Switch();
     }
 
-    private static UiControl BuildSource(LayoutAreaHost host, MeshNode? node, int index, string terms)
+    private static IObservable<UiControl?> BuildSource(LayoutAreaHost host, MeshNode? node, int index, string terms)
     {
         var container = Controls.Stack.WithWidth("100%").WithStyle(ContainerStyle);
 
         var document = node?.ContentAs<Document>(host.Hub.JsonSerializerOptions);
         if (document is null)
-            return container.WithView(Controls.Markdown("_No document data._"));
+            return Observable.Return((UiControl?)container.WithView(Controls.Markdown("_No document data._")));
 
         var nodePath = node?.Path ?? host.Hub.Address.ToString();
         var fileName = string.IsNullOrEmpty(document.Name) ? document.FilePath : document.Name;
@@ -272,9 +274,21 @@ public static class DocumentLayoutAreas
         container = container.WithView(Controls.H2(fileName));
         container = container.WithView(Controls.Button("← Back to blocks").WithAppearance(Appearance.Outline)
             .WithClickAction(c => { c.NavigateTo(BuildAreaHref(nodePath, BlocksArea, index, terms)); return Task.CompletedTask; }));
-        container = container.WithView(new DocumentSourceControl(fileUrl, document.Mime, terms, fileName)
-            .WithStyle("display:block; width:100%; min-height:600px;"));
-        return container;
+
+        // Load the deep-linked chunk's stored provenance (page + on-page box) so the viewer marks the exact
+        // region — precise and independent of whether the chunk text can be re-found by string match. When
+        // the store/chunk/position is absent the viewer falls back to the verbatim text highlight (terms).
+        var store = host.Hub.ServiceProvider.GetService<IChunkedContentVectorStore>();
+        var provenance = store is null
+            ? Observable.Return<ContentChunk?>(null)
+            : store.GetChunk(document.CollectionPath, document.FilePath, index)
+                .Take(1)
+                .Catch<ContentChunk?, Exception>(_ => Observable.Return<ContentChunk?>(null));
+
+        return provenance.Select(chunk => (UiControl?)container.WithView(
+            new DocumentSourceControl(fileUrl, document.Mime, terms, fileName)
+                .WithMark(chunk?.Page, ChunkPositionJson.Serialize(chunk?.Position))
+                .WithStyle("display:block; width:100%; min-height:600px;")));
     }
 
     /// <summary>

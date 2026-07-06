@@ -1,3 +1,5 @@
+using System.Reactive.Linq;
+
 namespace MeshWeaver.ContentCollections.Indexing;
 
 /// <summary>
@@ -13,4 +15,14 @@ public interface ITextExtractor
     /// formats) then completes.
     /// </summary>
     IObservable<string> ExtractText(string fileName, byte[] bytes);
+
+    /// <summary>
+    /// Extracts the document text <b>together with positional spans</b> (page + on-page box per run),
+    /// so chunks can carry page/position provenance. For formats with a text layout (PDF) the result's
+    /// <see cref="ExtractedDocument.Spans"/> is dense; for plain formats it is empty and this degrades to
+    /// <see cref="ExtractText"/>. Default implementation wraps <see cref="ExtractText"/> as plain text, so
+    /// an extractor with no layout information (or a test double) need not override it.
+    /// </summary>
+    IObservable<ExtractedDocument> ExtractDocument(string fileName, byte[] bytes) =>
+        ExtractText(fileName, bytes).Select(ExtractedDocument.PlainText);
 }
