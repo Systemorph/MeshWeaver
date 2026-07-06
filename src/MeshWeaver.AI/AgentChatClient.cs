@@ -894,28 +894,45 @@ public class AgentChatClient : IAgentChat
             turnMessages.Count, agent.Name, untruncatedCount);
         currentAttachments = null;
 
-        // ChatOptions MUST include the agent's tools. Without them, the inner
-        // client (AzureClaudeChatClient) never sends tool definitions to Claude,
-        // and FunctionInvokingChatClient has nothing to match against.
-        // Get tools from FunctionInvokingChatClient.AdditionalTools (where the
-        // ChatClientAgent constructor places them).
+        // ChatOptions carries the agent's tools — WHEN the selected model supports them (see the gate
+        // below). For a tool-capable model, without them the inner client (AzureClaudeChatClient) never
+        // sends tool definitions and FunctionInvokingChatClient has nothing to match against; the tools
+        // come from FunctionInvokingChatClient.AdditionalTools (where the ChatClientAgent ctor places
+        // them). For a model KNOWN not to support tools, we send NONE (a plain chat request).
         var functionInvoker = agent.ChatClient.GetService<FunctionInvokingChatClient>();
         var chatOptions = new ChatOptions();
-        var tools = functionInvoker?.AdditionalTools is { Count: > 0 } additionalTools
-            ? additionalTools.ToList()
-            : new List<AITool>();
-        // Mid-round inbox: inject check_inbox so the agent can drain follow-up messages
-        // queued DURING the in-flight round and fold them inline into the current response.
-        // This is the reactive two-stage channel the prior disable-note prescribed — NOT the
-        // old TCS-on-hub-scheduler gate that deadlocked. Stage 1: the submission watcher
-        // OFFERS newly-pending messages into the per-thread ThreadInboxChannel (in-memory,
-        // no node write). Stage 2: check_inbox DRAINS that channel SYNCHRONOUSLY — no
-        // stream.Update, no Subscribe onto the hub action-block scheduler — so the
-        // TaskCompletionSource bridge can no longer resume a continuation on the hub thread
-        // (the old deadlock/"thread disappears" cause is gone). The thread node is written
-        // only at round boundaries (start commit + terminal fold). See ThreadInboxChannel.
-        tools.Add(InboxTool.CreateCheckInboxTool(hub, logger));
-        chatOptions.Tools = tools;
+        // 🚨 Only attach tools if the selected model SUPPORTS tool/function calling. A model KNOWN not
+        // to (an Ollama roleplay model like TieFighter — capabilities=[completion]) returns HTTP 400
+        // "does not support tools" the moment ANY tool definition is sent. For such a model we send a
+        // plain, tool-free chat request so it works as a chat/creative model instead of erroring the
+        // whole round. Unknown → assume supported (historical behaviour). See
+        // ChatClientCredentialResolver.ModelSupportsTools + ModelDefinition.SupportsTools.
+        var modelSupportsTools = hub.ServiceProvider.GetService<ChatClientCredentialResolver>()
+            ?.ModelSupportsTools(currentModelName) ?? true;
+        var tools = new List<AITool>();
+        if (modelSupportsTools)
+        {
+            if (functionInvoker?.AdditionalTools is { Count: > 0 } additionalTools)
+                tools.AddRange(additionalTools);
+            // Mid-round inbox: inject check_inbox so the agent can drain follow-up messages
+            // queued DURING the in-flight round and fold them inline into the current response.
+            // This is the reactive two-stage channel the prior disable-note prescribed — NOT the
+            // old TCS-on-hub-scheduler gate that deadlocked. Stage 1: the submission watcher
+            // OFFERS newly-pending messages into the per-thread ThreadInboxChannel (in-memory,
+            // no node write). Stage 2: check_inbox DRAINS that channel SYNCHRONOUSLY — no
+            // stream.Update, no Subscribe onto the hub action-block scheduler — so the
+            // TaskCompletionSource bridge can no longer resume a continuation on the hub thread
+            // (the old deadlock/"thread disappears" cause is gone). The thread node is written
+            // only at round boundaries (start commit + terminal fold). See ThreadInboxChannel.
+            tools.Add(InboxTool.CreateCheckInboxTool(hub, logger));
+            chatOptions.Tools = tools;
+        }
+        else
+        {
+            logger.LogInformation(
+                "[AgentChat] Model '{Model}' does not support tools — sending a tool-free chat request (agent + inbox tools omitted).",
+                currentModelName ?? "(none)");
+        }
         // Tools marked [HiddenTool] are internal plumbing: their calls must not reach the chat
         // UI as tool-call chrome nor the Information logs. The filter stays generic; with the
         // inbox disabled there are currently no hidden tools, so it is a no-op. Collect their

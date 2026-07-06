@@ -159,4 +159,27 @@ public class ProviderModelListerTest(ITestOutputHelper output) : AITestBase(outp
         handler.Last.Headers.Authorization.Should().BeNull("a keyless local endpoint sends no bearer");
         ids.Should().Equal("bge-m3:latest", "qwen3.6:latest"); // sorted; the lister does not filter embedders
     }
+
+    /// <summary>
+    /// Tool-support probe: POSTs to <c>{base}/api/show</c> (the <c>/v1</c> segment dropped) and reads
+    /// Ollama's <c>capabilities</c>. "tools" present → true; capabilities without "tools" → false;
+    /// a failed/non-Ollama probe → null (indeterminate → caller assumes supported).
+    /// </summary>
+    [Fact]
+    public async Task SupportsTools_ReadsOllamaCapabilities_AtApiShow()
+    {
+        var (withTools, h1) = Make("{\"capabilities\":[\"completion\",\"tools\"]}");
+        (await withTools.SupportsTools("http://ollama:11434/v1", "qwen3.6:latest")
+            .Should().Within(10.Seconds()).Emit()).Should().Be(true);
+        h1.Last!.Method.Should().Be(HttpMethod.Post);
+        h1.Last.RequestUri!.ToString().Should().Be("http://ollama:11434/api/show"); // /v1 stripped, /api/show
+
+        var (noTools, _) = Make("{\"capabilities\":[\"completion\"]}");
+        (await noTools.SupportsTools("http://ollama:11434/v1", "tiefighter:q6_k")
+            .Should().Within(10.Seconds()).Emit()).Should().Be(false);
+
+        var (failed, _) = Make("{\"error\":\"not found\"}", System.Net.HttpStatusCode.NotFound);
+        (await failed.SupportsTools("https://openrouter.ai/api/v1", "x")
+            .Should().Within(10.Seconds()).Emit()).Should().BeNull("a non-Ollama / failed probe is indeterminate");
+    }
 }
