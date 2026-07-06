@@ -122,4 +122,58 @@ public sealed class ProviderModelLister
 
     private static string Truncate(string s) =>
         string.IsNullOrEmpty(s) ? "" : (s.Length <= 200 ? s : s[..200] + "…");
+
+    /// <summary>
+    /// Whether <paramref name="modelId"/> supports tool/function calling, per the endpoint's declared
+    /// capabilities. Ollama-specific: the OpenAI-wire base has no capabilities endpoint, so this hits
+    /// <c>{base}/api/show</c> (dropping a trailing <c>/v1</c>) and checks whether <c>capabilities</c>
+    /// contains <c>"tools"</c>. Returns:
+    /// <list type="bullet">
+    ///   <item><c>true</c> — capabilities include <c>tools</c>.</item>
+    ///   <item><c>false</c> — capabilities were returned and do NOT include <c>tools</c> (a definitively
+    ///     tool-less model, e.g. a roleplay model reporting <c>[completion]</c>).</item>
+    ///   <item><c>null</c> — indeterminate (not Ollama / no <c>/api/show</c> / probe failed): the caller
+    ///     assumes tools ARE supported (historical behaviour).</item>
+    /// </list>
+    /// Runs on the <see cref="IoPoolNames.Http"/> pool; never throws (probe failures surface as null).
+    /// </summary>
+    public IObservable<bool?> SupportsTools(string? endpoint, string modelId) =>
+        Http.Invoke(ct => SupportsToolsAsync(endpoint, modelId, ct));
+
+    private async Task<bool?> SupportsToolsAsync(string? endpoint, string modelId, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(endpoint) || string.IsNullOrWhiteSpace(modelId))
+            return null;
+        var baseUrl = endpoint.Trim().TrimEnd('/');
+        if (baseUrl.EndsWith("/v1", StringComparison.OrdinalIgnoreCase))
+            baseUrl = baseUrl[..^3].TrimEnd('/');
+        var url = baseUrl + "/api/show";
+        try
+        {
+            using var req = new HttpRequestMessage(HttpMethod.Post, url)
+            {
+                Content = new StringContent(
+                    $"{{\"model\":{JsonSerializer.Serialize(modelId)}}}",
+                    System.Text.Encoding.UTF8, "application/json")
+            };
+            using var resp = await http.SendAsync(req, ct).ConfigureAwait(false);
+            if (!resp.IsSuccessStatusCode)
+                return null; // not an Ollama endpoint, or the model is unknown → indeterminate
+            var json = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+            using var doc = JsonDocument.Parse(json);
+            if (!doc.RootElement.TryGetProperty("capabilities", out var caps)
+                || caps.ValueKind != JsonValueKind.Array)
+                return null; // no capabilities array → indeterminate
+            foreach (var c in caps.EnumerateArray())
+                if (c.ValueKind == JsonValueKind.String
+                    && string.Equals(c.GetString(), "tools", StringComparison.OrdinalIgnoreCase))
+                    return true;
+            return false; // capabilities present but no "tools" → definitively unsupported
+        }
+        catch (Exception ex)
+        {
+            logger?.LogDebug(ex, "Capability probe (/api/show) failed for {Model} at {Url}", modelId, url);
+            return null;
+        }
+    }
 }

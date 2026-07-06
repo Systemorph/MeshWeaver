@@ -857,17 +857,18 @@ internal static class ThreadExecution
     {
         // Selections arrive as picked node PATHS ("Harness/MeshWeaver",
         // "Provider/Anthropic/claude-…", "Agent/Assistant", "AgenticPension/Agent/Datenextraktion").
-        // Models and harnesses match bare REGISTERED ids (the last path segment), so they
-        // normalize at this boundary. The AGENT does NOT: a space-scoped agent
-        // ("AgenticPension/Agent/Datenextraktion") collides with a built-in of the same
-        // last segment when collapsed to the bare id, so it must resolve by FULL PATH.
-        // AgentChatClient.SetSelectedAgent / SelectAgent match the full path (with a
-        // bare-id fallback). The cell stamp's display name is normalized to the short
-        // name where it's written (PushToResponseMessage), so the persisted AgentName
-        // stays the friendly last segment, not the full path.
+        // The HARNESS matches a bare REGISTERED id (last path segment), so it normalizes here.
+        // The MODEL and the AGENT do NOT: two catalog entries can share a bare id (a keyless global
+        // Provider/OpenAICompatible/qwen3.6:latest vs a user's keyed copy, or the same id under two
+        // providers), so collapsing to the bare id resolves the WRONG node — the model must resolve by
+        // FULL PATH. AgentChatClient.Initialize already does this (ChatClientCredentialResolver.
+        // ResolveModelId → node-path lookup → the exact node's wire id + credentials + capabilities);
+        // stripping the path here defeated it. Keep the model path; the resolver collapses it to the
+        // wire id at the exact node. (The cell-stamp display name is normalized to the short name at
+        // write time in PushToResponseMessage, so the persisted friendly name is unaffected.)
         request = request with
         {
-            ModelName = SelectionId.IdOf(request.ModelName),
+            ModelName = request.ModelName,
             Harness = SelectionId.IdOf(request.Harness)
         };
         var parentHub = hub.Configuration.ParentHub!;

@@ -107,6 +107,16 @@ public record ModelDefinition
     public string? Currency { get; init; }
 
     /// <summary>
+    /// Whether the model supports tool / function calling. <c>null</c> = unknown (assume it does —
+    /// the historical behaviour). <c>false</c> = the model is KNOWN not to support tools, so the agent
+    /// round must NOT send any tool definitions (an Ollama roleplay model like TieFighter returns
+    /// HTTP 400 "does not support tools" otherwise). Set at discovery time from the endpoint's declared
+    /// capabilities (Ollama <c>/api/show</c> → <c>capabilities</c> contains <c>"tools"</c>).
+    /// </summary>
+    [System.ComponentModel.Description("Supports tool/function calling")]
+    public bool? SupportsTools { get; init; }
+
+    /// <summary>
     /// Projects this definition into the lighter <see cref="ModelInfo"/>
     /// shape consumed by the chat picker.
     /// </summary>

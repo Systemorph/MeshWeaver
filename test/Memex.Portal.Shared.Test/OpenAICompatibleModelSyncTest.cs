@@ -136,5 +136,17 @@ public class OpenAICompatibleModelSyncTest
         Assert.Equal("Provider/OpenAICompatible", def.ProviderRef); // credentials resolved via the parent node
         Assert.Null(def.Endpoint);                                   // resolver follows ProviderRef, not a copied endpoint
         Assert.Null(def.ApiKeySecretRef);                            // never a key on a publicly-readable child
+        Assert.Null(def.SupportsTools);                              // default: unknown (assume supported)
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    [InlineData(null)]
+    public void BuildModelNode_CarriesTheProbedToolSupport(bool? supportsTools)
+    {
+        var node = OpenAICompatibleModelSync.BuildModelNode("tiefighter:q6_k", supportsTools);
+        var def = Assert.IsType<ModelDefinition>(node.Content);
+        Assert.Equal(supportsTools, def.SupportsTools);
     }
 }
