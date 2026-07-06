@@ -717,15 +717,21 @@ else
                     @if (_loginMethod is null)
                     {
                         <div style="color:var(--neutral-foreground-hint);">How do you want to sign in?</div>
-                        @if (_connectProvider is not null)
+                        @* Account/browser login is offered ONLY for providers whose device flow can
+                           complete on this portal. It is suppressed for ClaudeCode: that flow drives
+                           `claude setup-token` server-side and scrapes the token from stdout, but the CLI
+                           MASKS the token (and is TTY-gated), so the scrape always times out (the "stuck
+                           when pasting code" report). For ClaudeCode the reliable path is the direct token
+                           paste below. Other providers (e.g. Copilot) keep account login. *@
+                        @if (_connectProvider is not null and not MeshWeaver.AI.Connect.ConnectProvider.ClaudeCode)
                         {
                             <FluentButton Appearance="FluentAppearance.Accent" Style="width:100%;"
                                           OnClick="@(() => ChooseLoginMethod("account"))">
                                 Log in with your @(_loginHarness!.Definition.DisplayName) account (browser)
                             </FluentButton>
                         }
-                        <FluentButton Appearance="FluentAppearance.Neutral" Style="width:100%;"
-                                      OnClick="@(() => ChooseLoginMethod("apiKey"))">Use an API key</FluentButton>
+                        <FluentButton Appearance="@(_connectProvider is MeshWeaver.AI.Connect.ConnectProvider.ClaudeCode ? FluentAppearance.Accent : FluentAppearance.Neutral)" Style="width:100%;"
+                                      OnClick="@(() => ChooseLoginMethod("apiKey"))">Paste a subscription token or API key</FluentButton>
                         <FluentButton Appearance="FluentAppearance.Neutral" Style="width:100%;"
                                       OnClick="@(() => ChooseLoginMethod("gateway"))">Use a gateway / proxy</FluentButton>
                     }
@@ -784,11 +790,16 @@ else
                         }
                         else
                         {
-                            <div>Paste your Anthropic Console API key (starts with
-                                <span style="font-family:var(--monospace-font-family,ui-monospace,monospace);">sk-ant-api</span>):</div>
+                            <div>Paste a subscription token or API key. For Claude Code, run
+                                <span style="font-family:var(--monospace-font-family,ui-monospace,monospace);">claude setup-token</span>
+                                in your terminal and paste the
+                                <span style="font-family:var(--monospace-font-family,ui-monospace,monospace);">sk-ant-oat…</span>
+                                token here (a Console
+                                <span style="font-family:var(--monospace-font-family,ui-monospace,monospace);">sk-ant-api…</span>
+                                key also works):</div>
                         }
                         <FluentTextField @bind-Value="_connectCode" Immediate="true"
-                                         Placeholder="@(_loginMethod == "gateway" ? "token" : "sk-ant-api…")"
+                                         Placeholder="@(_loginMethod == "gateway" ? "token" : "sk-ant-oat… or sk-ant-api…")"
                                          TextFieldType="Microsoft.FluentUI.AspNetCore.Components.TextFieldType.Password"
                                          @onkeydown="OnConnectInputKeyDown" Style="width:100%;" />
                         <FluentButton Appearance="FluentAppearance.Accent" Style="width:100%;"
