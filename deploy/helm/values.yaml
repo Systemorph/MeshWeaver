@@ -38,20 +38,26 @@ grpc:
   enabled: true
   port: 8081
   trustedPort: 8082
-  # ---- Python gate sidecar (executes `python` Code nodes; OFF by default) ---
-  # A trusted, co-deployed participant that runs `meshweaver.worker` as a SIDECAR in the portal pod
-  # and connects to the trusted loopback endpoint above (127.0.0.1:{trustedPort}) — reachability
-  # across the shared pod network namespace IS the authentication, no token. It is the Python
-  # counterpart of the in-process Roslyn kernel: a Code node whose Language=="python" routes to it
-  # (address `py/python-kernel`), runs, and writes its result back onto the run's Activity node.
+  # ---- Language gates (execute foreign-language Code nodes as co-deployed sidecars) ---------------
+  # A gate is a TRUSTED participant sidecar in the portal pod that connects to the trusted loopback
+  # endpoint above (127.0.0.1:{trustedPort}) — reachability across the shared pod network namespace IS
+  # the authentication, no token. It is the foreign-language counterpart of the in-process Roslyn
+  # kernel: a Code node whose Language routes to the matching gate (CodeNodeType.ResolveKernelAddress),
+  # runs, and writes its result back onto the run's Activity node.
   #
-  # OFF by default: a deployment must (a) supply the image (built from deploy/python-gate/Dockerfile,
-  # pushed to a registry the cluster can pull) and (b) opt in — standing python execution is a
-  # deliberate capability, not a default. Enable in an overlay / --set.
-  pythonGate:
-    enabled: false
-    image: "meshweaver/python-gate:local"
-    address: "py/python-kernel"
+  # FEATURE FLAG per language: by default ALL languages are INCLUDED (enabled: true) — set a gate's
+  # enabled:false to opt a language out. A gate actually RUNS when it is enabled AND its image is
+  # supplied (built from deploy/{python,node}-gate/Dockerfile, pushed to a registry the cluster can
+  # pull); image left empty ⇒ no sidecar, so a bare install never crash-loops on a missing image.
+  gates:
+    python:
+      enabled: true
+      image: ""
+      address: "py/python-kernel"
+    node:
+      enabled: true
+      image: ""
+      address: "node/node-kernel"
 # ---- Portal Ingress (TLS via an ingress controller) -----------------------
 # Off by default (cloud envs wire ingress/TLS their own way). A self-host overlay
 # enables it with a hostname + a pre-created TLS secret. The proxy-*-timeout
