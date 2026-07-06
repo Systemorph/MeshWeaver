@@ -64,6 +64,11 @@ public sealed class OpenAICompatibleModelSync : IHostedService, IDisposable
     private readonly Lazy<IMeshService> meshService;
     private readonly ILogger<OpenAICompatibleModelSync>? logger;
 
+    // One-shot: the FIRST reconcile after start re-stamps EVERY discovered model (probe + upsert), so
+    // nodes created before ModelDefinition.SupportsTools existed get their capability backfilled. After
+    // that the normal presence-diff runs (no per-cycle rewrites).
+    private bool backfilledToolSupport;
+
     // Live snapshot of the current OpenAICompatible model-child ids (kept fresh by the catalog query).
     // Instance field (never static), StringComparer.OrdinalIgnoreCase — model ids are case-insensitive.
     private volatile ImmutableHashSet<string> catalogIds =
@@ -148,7 +153,10 @@ public sealed class OpenAICompatibleModelSync : IHostedService, IDisposable
         //     create/delete. Fires immediately (we're already past initialDelay) then every period. A
         //     failed cycle is logged and the loop continues (no watchdog resubscribe — the timer re-fires).
         timerSub = Observable.Timer(TimeSpan.Zero, period, TaskPoolScheduler.Default)
-            .SelectMany(_ => Reconcile(endpoint, apiKey, embeddingModel)
+            // Concat (not SelectMany): reconcile cycles run STRICTLY ONE AT A TIME — a tick that fires
+            // while the previous cycle is still running queues behind it instead of overlapping. This
+            // keeps the single-shot backfill flag and the catalog diff free of any concurrent access.
+            .Select(_ => Observable.Defer(() => Reconcile(endpoint, apiKey, embeddingModel))
                 .Catch<Unit, Exception>(ex =>
                 {
                     logger?.LogWarning(ex,
@@ -156,6 +164,7 @@ public sealed class OpenAICompatibleModelSync : IHostedService, IDisposable
                         endpoint);
                     return Observable.Return(Unit.Default);
                 }))
+            .Concat()
             .Subscribe(_ => { },
                 ex => logger?.LogError(ex, "[OpenAICompatibleModelSync] discovery loop terminated"));
     }
@@ -176,26 +185,43 @@ public sealed class OpenAICompatibleModelSync : IHostedService, IDisposable
                         endpoint);
                     return Observable.Return(Unit.Default);
                 }
-                if (delta.ToAdd.Count == 0 && delta.ToRemove.Count == 0)
+                var toAdd = delta.ToAdd;
+                var toRemove = delta.ToRemove;
+                if (!backfilledToolSupport)
+                {
+                    // First reconcile after start: re-stamp EVERY desired chat model (== the diff against
+                    // an empty catalog) so nodes created before ModelDefinition.SupportsTools existed get
+                    // it backfilled via the idempotent CreateOrUpdate. After this, the presence-diff runs
+                    // (toAdd = genuinely new only), so there are no per-cycle rewrites.
+                    backfilledToolSupport = true;
+                    toAdd = ComputeDelta(all, Array.Empty<string>(), embeddingModel).ToAdd;
+                }
+                if (toAdd.Count == 0 && toRemove.Count == 0)
                     return Observable.Return(Unit.Default);
 
                 logger?.LogInformation(
                     "[OpenAICompatibleModelSync] reconcile: +{Add} -{Remove} at {Endpoint}",
-                    delta.ToAdd.Count, delta.ToRemove.Count, endpoint);
+                    toAdd.Count, toRemove.Count, endpoint);
 
                 // Optimistically fold the delta in so a fast next tick doesn't re-apply before the live
                 // catalog query catches up; the query re-emits the ACTUAL state and self-corrects.
-                catalogIds = catalogIds.Except(delta.ToRemove).Union(delta.ToAdd);
+                catalogIds = catalogIds.Except(toRemove).Union(toAdd);
 
-                var ops = delta.ToAdd
-                    .Select(id => AsSystem(() => meshService.Value.CreateOrUpdateNode(BuildModelNode(id)))
-                        .Select(_ => Unit.Default)
+                var ops = toAdd
+                    // Probe each NEW model's tool-calling capability (Ollama /api/show) BEFORE creating
+                    // its node, so the agent round never sends tools to a model that can't handle them
+                    // (a roleplay model would 400). Indeterminate/non-Ollama → null (assume supported).
+                    .Select(id => lister.SupportsTools(endpoint, id)
+                        .Catch<bool?, Exception>(_ => Observable.Return<bool?>(null))
+                        .SelectMany(supportsTools =>
+                            AsSystem(() => meshService.Value.CreateOrUpdateNode(BuildModelNode(id, supportsTools)))
+                                .Select(_ => Unit.Default))
                         .Catch<Unit, Exception>(ex =>
                         {
                             logger?.LogWarning(ex, "[OpenAICompatibleModelSync] add model {Id} failed", id);
                             return Observable.Return(Unit.Default);
                         }))
-                    .Concat(delta.ToRemove
+                    .Concat(toRemove
                         .Select(id => AsSystem(() => meshService.Value.DeleteNode($"{ProviderPath}/{id}"))
                             .Select(_ => Unit.Default)
                             .Catch<Unit, Exception>(ex =>
@@ -239,7 +265,8 @@ public sealed class OpenAICompatibleModelSync : IHostedService, IDisposable
 
     // The platform-provider LanguageModel child shape (mirrors ModelProviderService.CreateProvider):
     // no key on the child, endpoint/key resolved by following ProviderRef → the parent provider node.
-    internal static MeshNode BuildModelNode(string modelId)
+    // supportsTools: the endpoint's declared tool-calling capability (null = unknown → assume supported).
+    internal static MeshNode BuildModelNode(string modelId, bool? supportsTools = null)
     {
         var pricing = ModelPricing.Default(modelId); // null for local models → tokens shown without a cost
         var def = new ModelDefinition
@@ -251,6 +278,7 @@ public sealed class OpenAICompatibleModelSync : IHostedService, IDisposable
             ApiKeySecretRef = null,    // never a key on a publicly-readable model child
             ProviderRef = ProviderPath,
             Order = 5,                 // OpenAICompatible catalog order
+            SupportsTools = supportsTools, // gates whether the agent round sends tool definitions
             InputPricePerMillionTokens = pricing?.InputPerMillion,
             OutputPricePerMillionTokens = pricing?.OutputPerMillion,
             Currency = pricing?.Currency
