@@ -894,11 +894,11 @@ public class AgentChatClient : IAgentChat
             turnMessages.Count, agent.Name, untruncatedCount);
         currentAttachments = null;
 
-        // ChatOptions MUST include the agent's tools. Without them, the inner
-        // client (AzureClaudeChatClient) never sends tool definitions to Claude,
-        // and FunctionInvokingChatClient has nothing to match against.
-        // Get tools from FunctionInvokingChatClient.AdditionalTools (where the
-        // ChatClientAgent constructor places them).
+        // ChatOptions carries the agent's tools — WHEN the selected model supports them (see the gate
+        // below). For a tool-capable model, without them the inner client (AzureClaudeChatClient) never
+        // sends tool definitions and FunctionInvokingChatClient has nothing to match against; the tools
+        // come from FunctionInvokingChatClient.AdditionalTools (where the ChatClientAgent ctor places
+        // them). For a model KNOWN not to support tools, we send NONE (a plain chat request).
         var functionInvoker = agent.ChatClient.GetService<FunctionInvokingChatClient>();
         var chatOptions = new ChatOptions();
         // 🚨 Only attach tools if the selected model SUPPORTS tool/function calling. A model KNOWN not
