@@ -77,7 +77,7 @@ public abstract class GitHubSyncTestBase(ITestOutputHelper output) : MonolithMes
             NodeType = "Space",
             Name = name ?? id,
             State = MeshNodeState.Active,
-            Content = new Space { Name = name ?? id },
+            Content = new Space(),
         }).Timeout(60.Seconds()).ToTask();
 
     protected async Task<MeshNode> CreateMarkdown(string path, string name, string body)

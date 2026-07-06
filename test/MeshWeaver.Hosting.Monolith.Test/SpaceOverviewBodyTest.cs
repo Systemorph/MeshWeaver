@@ -44,7 +44,7 @@ public class SpaceOverviewBodyTest(ITestOutputHelper output) : MonolithMeshTestB
         {
             Name = "Body Space",
             NodeType = SpaceNodeType.NodeType,
-            Content = new Space { Name = "Body Space", Body = $"# Overview\n\n{BodyMarker}" }
+            Content = new Space { Body = $"# Overview\n\n{BodyMarker}" }
         };
         await NodeFactory.CreateNode(spaceNode).Should().Emit();
 

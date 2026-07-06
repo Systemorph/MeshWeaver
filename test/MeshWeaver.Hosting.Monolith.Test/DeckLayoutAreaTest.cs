@@ -123,7 +123,7 @@ public class DeckLayoutAreaTest(ITestOutputHelper output) : MonolithMeshTestBase
         {
             Name = "Training Space",
             NodeType = SpaceNodeType.NodeType,
-            Content = new Space { Name = "Training Space" }
+            Content = new Space()
         }).Should().Emit();
 
         // Slides directly under the Space (a non-Deck parent), created out of order; Order,
@@ -280,7 +280,7 @@ public class DeckLayoutAreaTest(ITestOutputHelper output) : MonolithMeshTestBase
         {
             Name = "Training Space",
             NodeType = SpaceNodeType.NodeType,
-            Content = new Space { Name = "Training Space" }
+            Content = new Space()
         }).Should().Emit();
         return space;
     }
@@ -307,7 +307,7 @@ public class DeckLayoutAreaTest(ITestOutputHelper output) : MonolithMeshTestBase
         {
             Name = "Training Space",
             NodeType = SpaceNodeType.NodeType,
-            Content = new Space { Name = "Training Space" }
+            Content = new Space()
         }).Should().Emit();
 
         var deck = $"{space}/widgets";
