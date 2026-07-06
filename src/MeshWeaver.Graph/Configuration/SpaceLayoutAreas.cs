@@ -238,17 +238,36 @@ public static class SpaceLayoutAreas
             .WithOrientation(Orientation.Horizontal)
             .WithStyle($"gap: 24px; align-items: flex-start; width: 100%; {ContentInset}");
 
-        // Logo (large, rounded square like GitHub)
+        // Logo (large, rounded square like GitHub). A logo may be an inline <svg>, an image URL, or
+        // an emoji/glyph — a node's own Icon is often inline SVG (e.g. the YouTube space), and an
+        // <img src="<svg…>"> NEVER renders (src must be a URL/data-URI), so embed SVG directly like the
+        // catalog card does. That is the exact reason the icon showed in the catalog but not on the page.
         UiControl logoControl;
-        if (!string.IsNullOrEmpty(logo))
+        var logoTrimmed = logo?.Trim();
+        if (!string.IsNullOrEmpty(logoTrimmed) && logoTrimmed.StartsWith("<svg", StringComparison.OrdinalIgnoreCase))
         {
-            // Natural-aspect, never cropped: a wide banner logo (e.g. ATIOZ) and a square
-            // avatar both render whole. `object-fit: cover` in a fixed 100×100 box cropped wide
-            // logos to their middle strip — use max-box + auto sizing so the image scales to fit
-            // within the bounds at its own aspect ratio (contain just backs that up for any
-            // intrinsic-size oddities).
             logoControl = Controls.Html(
-                $"<img src=\"{System.Web.HttpUtility.HtmlAttributeEncode(logo)}\" alt=\"\" style=\"max-height: 96px; max-width: 340px; width: auto; height: auto; border-radius: 12px; object-fit: contain; background: var(--neutral-layer-2); padding: 6px; box-sizing: border-box;\" />");
+                "<div style=\"height: 72px; min-width: 72px; border-radius: 12px; background: var(--neutral-layer-2); " +
+                "padding: 6px; box-sizing: border-box; display: flex; align-items: center; justify-content: center;\">" +
+                $"{logoTrimmed}</div>");
+        }
+        else if (!string.IsNullOrEmpty(logoTrimmed)
+                 && (logoTrimmed.StartsWith("http", StringComparison.OrdinalIgnoreCase)
+                     || logoTrimmed.StartsWith("/") || logoTrimmed.StartsWith("data:", StringComparison.OrdinalIgnoreCase)
+                     || logoTrimmed.Contains('.')))
+        {
+            // Natural-aspect, never cropped: a wide banner logo (e.g. ATIOZ) and a square avatar both
+            // render whole. max-box + auto sizing scales the image to fit its own aspect ratio.
+            logoControl = Controls.Html(
+                $"<img src=\"{System.Web.HttpUtility.HtmlAttributeEncode(logoTrimmed)}\" alt=\"\" style=\"max-height: 96px; max-width: 340px; width: auto; height: auto; border-radius: 12px; object-fit: contain; background: var(--neutral-layer-2); padding: 6px; box-sizing: border-box;\" />");
+        }
+        else if (!string.IsNullOrEmpty(logoTrimmed))
+        {
+            // Emoji / glyph.
+            logoControl = Controls.Html(
+                "<div style=\"width: 72px; height: 72px; border-radius: 12px; background: var(--neutral-layer-2); " +
+                "display: flex; align-items: center; justify-content: center; font-size: 2.5rem;\">" +
+                $"{System.Web.HttpUtility.HtmlEncode(logoTrimmed)}</div>");
         }
         else
         {

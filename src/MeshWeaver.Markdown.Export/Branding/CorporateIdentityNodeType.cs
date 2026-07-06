@@ -18,7 +18,7 @@ public static class CorporateIdentityNodeType
     public static MeshNode CreateMeshNode() => new(NodeType)
     {
         Name = "Corporate Identity",
-        Icon = "/static/NodeTypeIcons/organization.svg",
+        Icon = "/static/NodeTypeIcons/building.svg",
         HubConfiguration = config => config
             .WithTypes(typeof(CorporateIdentity))
     };
