@@ -226,6 +226,29 @@ public class EducationStartExerciseTest(ITestOutputHelper output) : MonolithMesh
         pages.Select(p => p.Name).Should().Equal("Your Turn", "Solutions");
     }
 
+    [Fact]
+    public void SelectCoursePages_FiltersInternalSatelliteNodes()
+    {
+        // The nav rail is learner-facing: internal / satellite nodes (any whose final path segment starts
+        // with '_' — _GitSync, _Access, _Thread, _Activity, …) are plumbing and must NOT appear as pages.
+        const string moduleRoot = "TestCourse/Module1";
+        var nodes = new[]
+        {
+            new MeshNode("Module1", "TestCourse") { Name = "Module 1" }, // the module root itself
+            new MeshNode("Intro", moduleRoot) { Name = "Intro", Order = 1 },
+            new MeshNode("_GitSync", moduleRoot) { Name = "GitHub Sync", Order = 2 }, // internal — filtered
+            new MeshNode("TDD", moduleRoot) { Name = "TDD", Order = 3 },
+            new MeshNode("_Access", moduleRoot) { Name = "Access", Order = 4 },        // satellite — filtered
+        };
+
+        var pages = EducationLayoutAreas.SelectCoursePages(moduleRoot, nodes);
+
+        // Only the real pages survive, order (Order then Name) preserved; every '_'-prefixed node is gone.
+        pages.Select(p => p.Path).Should().Equal(
+            "TestCourse/Module1/Intro",
+            "TestCourse/Module1/TDD");
+    }
+
     [Fact(Timeout = 120_000)]
     public async Task Learn_ReaderShell_IsSplitter_WithCollapsibleNavPane()
     {
