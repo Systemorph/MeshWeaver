@@ -85,21 +85,4 @@ internal sealed class HubNodePersistence(
                 });
             });
     }
-
-    /// <summary>
-    /// Persists a node in <see cref="MeshNodeState.Transient"/> via the
-    /// storage adapter directly — the CreateNodeRequest pipeline would force
-    /// the node to <c>Active</c>. This is the only CRUD path that bypasses
-    /// hub messaging, mirroring <see cref="MeshService.CreateTransient"/>.
-    /// </summary>
-    public IObservable<MeshNode> CreateTransient(MeshNode node)
-    {
-        var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
-        if (persistence is null)
-            return CreateNode(node);
-        var transient = node with { State = MeshNodeState.Transient };
-        return persistence.Write(transient, hub.JsonSerializerOptions)
-            .Where(n => n is not null)
-            .Select(n => n!);
-    }
 }
