@@ -30,6 +30,16 @@ public interface IStaticRepoSource
     bool Versioned { get; }
 
     /// <summary>
+    /// The partition's <see cref="PartitionSyncMode"/> — what the import PRUNES after upserting this
+    /// source's nodes. Defaults to <see cref="PartitionSyncMode.FullReplace"/> (mirror the partition to
+    /// the repo), which is the pre-existing behavior for every source that does not opt in. The built-in
+    /// AI catalogs (Skill / Agent / Provider / Harness) override to <see cref="PartitionSyncMode.Additive"/>
+    /// so a user's own skills/agents survive re-import. Independent of the per-node
+    /// <see cref="SyncBehavior"/>, which still claims/protects individual nodes in any mode.
+    /// </summary>
+    PartitionSyncMode SyncMode => PartitionSyncMode.FullReplace;
+
+    /// <summary>
     /// All source nodes <b>with full content</b> (e.g. <c>MarkdownContent</c>), in any order
     /// (the fingerprint + import are order-independent). This is the authored content, read
     /// straight from the assembly — never from the live mesh.

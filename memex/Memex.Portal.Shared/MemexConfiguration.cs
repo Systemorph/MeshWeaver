@@ -615,7 +615,7 @@ public static class MemexConfiguration
             return (TBuilder)mb
                 .AddSelfRegistry()
                 .AddDocumentation(serveFromPartition)
-                .AddStaticRepoSync(serveFromPartition)
+                .AddStaticRepoSync(serveFromPartition, features.StaticRepoSync.Modes)
                 // Ship compiled releases WHEREVER we ship code NodeTypes — Doc AND the sample
                 // partitions (ACME, FutuRe, Northwind, Cornerstone, MeshWeaver). Pre-build every
                 // shipped code NodeType's release at boot, as System, so the runtime path is a

@@ -27,6 +27,12 @@ public sealed class ModelStaticRepoSource(BuiltInLanguageModelProvider provider)
     public bool Versioned => false;
 
     /// <inheritdoc />
+    // Additive: admins add their OWN providers/models (e.g. a bring-your-own OpenAI-compatible
+    // endpoint) into the Provider partition; the import must never prune them. Only providers/models the
+    // build PREVIOUSLY shipped (in the manifest) but has since dropped are removed.
+    public PartitionSyncMode SyncMode => PartitionSyncMode.Additive;
+
+    /// <inheritdoc />
     // ALL catalog nodes go to the partition — provider/model content AND the read-only _Policy
     // (PartitionAccessPolicy). On the SYNCED path the in-memory provider that served the policy is
     // gated off, so the policy MUST be imported or the partition has no read policy → its nodes are
