@@ -100,12 +100,62 @@ public static class OverviewLayoutArea
                 => c2.GetString(),
             _ => null
         };
-        var hasHtml = !string.IsNullOrWhiteSpace(node.PreRenderedHtml);
+        // The page header already renders node.Name as the H1. If the body ALSO opens with a top-level
+        // heading that repeats the name (a common authoring habit — e.g. a course/markdown page starting
+        // `# Agentic Engineering`), it shows the title TWICE. Strip that leading duplicate from both the
+        // raw markdown and the pre-rendered HTML — only when it MATCHES the name, so a different first
+        // heading is left untouched.
+        var name = node.Name;
+        var html = node.PreRenderedHtml;
+        if (!string.IsNullOrEmpty(name))
+        {
+            rawMarkdown = StripLeadingTitleMarkdown(rawMarkdown, name);
+            html = StripLeadingTitleHtml(html, name);
+        }
+
+        var hasHtml = !string.IsNullOrWhiteSpace(html);
         var hasRaw = !string.IsNullOrWhiteSpace(rawMarkdown);
         if (!hasHtml && !hasRaw)
             return null;
-        return new MarkdownControl(rawMarkdown ?? "") { Html = node.PreRenderedHtml }
+        return new MarkdownControl(rawMarkdown ?? "") { Html = html }
             .WithStyle("padding: 0 0 48px 0;");
+    }
+
+    /// <summary>Removes a leading <c># {name}</c> ATX heading from markdown when it duplicates the node
+    /// name (the header already shows it). Only a MATCHING leading H1 is stripped.</summary>
+    internal static string? StripLeadingTitleMarkdown(string? markdown, string name)
+    {
+        if (string.IsNullOrEmpty(markdown))
+            return markdown;
+        var lines = markdown.Split('\n');
+        var i = 0;
+        while (i < lines.Length && string.IsNullOrWhiteSpace(lines[i]))
+            i++;
+        if (i < lines.Length && lines[i].TrimStart().StartsWith("# ", StringComparison.Ordinal))
+        {
+            var heading = lines[i].Trim()[2..].Trim();
+            if (string.Equals(heading, name, StringComparison.OrdinalIgnoreCase))
+                return string.Join('\n', lines.Skip(i + 1)).TrimStart('\n');
+        }
+        return markdown;
+    }
+
+    /// <summary>Removes a leading <c>&lt;h1&gt;{name}&lt;/h1&gt;</c> from pre-rendered HTML when it
+    /// duplicates the node name.</summary>
+    internal static string? StripLeadingTitleHtml(string? html, string name)
+    {
+        if (string.IsNullOrEmpty(html))
+            return html;
+        var trimmed = html.TrimStart();
+        var m = System.Text.RegularExpressions.Regex.Match(trimmed, "^<h1\\b[^>]*>(?<t>.*?)</h1>\\s*",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Singleline);
+        if (m.Success)
+        {
+            var text = System.Web.HttpUtility.HtmlDecode(m.Groups["t"].Value).Trim();
+            if (string.Equals(text, name, StringComparison.OrdinalIgnoreCase))
+                return trimmed[m.Length..];
+        }
+        return html;
     }
 
     /// <summary>
@@ -137,10 +187,18 @@ public static class OverviewLayoutArea
         bool canEdit)
     {
         var title = node.Name ?? node.Id ?? "";
+        var titleHtml = $"<h1 style=\"margin: 0;\">{System.Web.HttpUtility.HtmlEncode(title)}</h1>";
+
+        // The page title shows the node's OWN icon (MeshNode.Icon) beside its name — so a Space, a doc,
+        // any node with an icon carries it on the page. No icon → just the title.
+        var iconHtml = RenderNodeIconHtml(node.Icon);
+        var heading = iconHtml.Length == 0
+            ? titleHtml
+            : $"<div style=\"display: flex; align-items: center; gap: 12px;\">{iconHtml}{titleHtml}</div>";
 
         var titleStack = Controls.Stack
             .WithStyle($"cursor: {(canEdit ? "pointer" : "default")};")
-            .WithView(Controls.Html($"<h1 style=\"margin: 0;\">{System.Web.HttpUtility.HtmlEncode(title)}</h1>"));
+            .WithView(Controls.Html(heading));
 
         if (canEdit)
         {
@@ -153,6 +211,43 @@ public static class OverviewLayoutArea
 
         return titleStack;
     }
+
+    /// <summary>
+    /// Renders a node's <see cref="MeshNode.Icon"/> as a title-sized (32px) icon: an inline
+    /// <c>&lt;svg&gt;</c> is embedded, an image URL (or <c>data:</c>/path) becomes an <c>&lt;img&gt;</c>,
+    /// and anything else (an emoji / short glyph) is shown as text. Empty when there is no icon.
+    /// </summary>
+    private static string RenderNodeIconHtml(string? icon)
+    {
+        if (string.IsNullOrWhiteSpace(icon))
+            return "";
+        var trimmed = icon.Trim();
+        if (trimmed.StartsWith("<svg", StringComparison.OrdinalIgnoreCase))
+            return $"<span style=\"display:inline-flex; width:32px; height:32px; overflow:hidden;\">{SizeInlineSvg(trimmed)}</span>";
+        // A `content:` UCR needs node-context resolution to a served URL — render nothing rather than a
+        // broken <img src="content:…"> (proper resolution is a follow-up).
+        if (trimmed.StartsWith("content:", StringComparison.OrdinalIgnoreCase))
+            return "";
+        var looksLikeUrl = trimmed.StartsWith("http", StringComparison.OrdinalIgnoreCase)
+            || trimmed.StartsWith("/") || trimmed.StartsWith("data:", StringComparison.OrdinalIgnoreCase)
+            || trimmed.Contains('.');
+        if (looksLikeUrl)
+            return $"<img src=\"{System.Web.HttpUtility.HtmlAttributeEncode(trimmed)}\" alt=\"\" style=\"width:32px; height:32px; object-fit:contain;\" />";
+        // A bare token: an emoji (non-ASCII glyph) renders; a legacy Fluent icon NAME (an ASCII word like
+        // "Building") is not an image and renders nothing rather than literal text.
+        return trimmed.All(char.IsAscii)
+            ? ""
+            : $"<span style=\"font-size:28px; line-height:1;\">{System.Web.HttpUtility.HtmlEncode(trimmed)}</span>";
+    }
+
+    /// <summary>Forces an inline <c>&lt;svg&gt;</c> to fill its container by injecting a
+    /// <c>width/height:100%</c> style onto the root element — so an icon with a <c>viewBox</c> but no
+    /// explicit <c>width</c>/<c>height</c> (which a browser would render at the ~300×150 default and
+    /// overflow the tile) scales to its box instead.</summary>
+    internal static string SizeInlineSvg(string svg) =>
+        System.Text.RegularExpressions.Regex.Replace(svg.Trim(), "^<svg\\b",
+            "<svg style=\"width:100%;height:100%\" preserveAspectRatio=\"xMidYMid meet\"",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
 
     private static UiControl BuildTitleEditView(
         LayoutAreaHost _,
