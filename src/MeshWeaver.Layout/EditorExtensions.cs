@@ -971,6 +971,15 @@ public static class EditorExtensions
             var format = displayFormatAttr?.DataFormatString ?? "{0:d}";
             readOnlyControl = BuildFormattedDateLabel(host, propName, dataId, format);
         }
+        else if (propType.IsIntegerType() || propType.IsRealType())
+        {
+            // A numeric scalar (int/decimal/double/… and their nullable variants) bound straight into a
+            // string LabelControl renders BLANK: the client's ConvertJson<string> can't deserialize a JSON
+            // number token to System.String (issue #322). Pre-stringify — honouring [DisplayFormat] so the
+            // read-only Overview matches the DataGrid (PropertyViewBuilder) — into a display /data slot and
+            // bind the label to that string, mirroring the DateTime/options branches.
+            readOnlyControl = BuildFormattedNumberLabel(host, propName, dataId, displayFormatAttr?.DataFormatString);
+        }
         else if (propType == typeof(bool) || propType == typeof(bool?))
         {
             readOnlyControl = new LabelControl(new JsonPointerReference(propName))
@@ -1161,6 +1170,72 @@ public static class EditorExtensions
                     return;
                 lastFormattedDate = formattedDate;
                 host.UpdateData(displayLabelId, formattedDate);
+            }));
+
+        return new LabelControl(new JsonPointerReference(LayoutAreaReference.GetDataPointer(displayLabelId)))
+            .WithStyle("padding: 8px; min-height: 32px;");
+    }
+
+    /// <summary>
+    /// Read-only display for a numeric scalar property: pre-stringifies the value into a display
+    /// <c>/data</c> slot and binds a <see cref="LabelControl"/> to it, mirroring
+    /// <see cref="BuildFormattedDateLabel"/>. Binding a JSON number straight into a string-typed label
+    /// renders BLANK (the client cannot deserialize a number token to <see cref="string"/> — issue #322),
+    /// so the value is formatted server-side here instead. When a <paramref name="format"/> from
+    /// <c>[DisplayFormat]</c> is supplied it is honoured (consistent with the DataGrid); a null/absent
+    /// numeric renders EMPTY, never <c>"0"</c>.
+    /// </summary>
+    private static UiControl BuildFormattedNumberLabel(
+        LayoutAreaHost host,
+        string propName,
+        string dataId,
+        string? format)
+    {
+        var displayLabelId = $"displayLabel_{dataId}_{propName}";
+
+        var dataStream = host.Stream.GetDataStream<JsonElement>(dataId);
+        // Use ReplaceDisposable to prevent duplicate subscriptions when the control is rebuilt.
+        string? lastFormatted = null;
+        host.ReplaceDisposable(displayLabelId,
+            dataStream.Select(data =>
+            {
+                if (data.ValueKind == JsonValueKind.Undefined)
+                    return "";
+
+                if (!data.TryGetProperty(propName, out var valueElement))
+                    return "";
+
+                // A nullable numeric that is null → EMPTY (not "0"); an unexpected shape → its raw text.
+                if (valueElement.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
+                    return "";
+                if (valueElement.ValueKind != JsonValueKind.Number)
+                    return valueElement.ToString();
+
+                // No [DisplayFormat] → the JSON's own numeric text (no spurious ".0", no culture drift).
+                if (string.IsNullOrEmpty(format))
+                    return valueElement.GetRawText();
+
+                // [DisplayFormat] → format a real numeric value; decimal preserves precision for currency.
+                try
+                {
+                    if (valueElement.TryGetDecimal(out var dec))
+                        return string.Format(format, dec);
+                    if (valueElement.TryGetDouble(out var dbl))
+                        return string.Format(format, dbl);
+                }
+                catch (FormatException)
+                {
+                    // Malformed format string — fall through to the raw numeric text.
+                }
+                return valueElement.GetRawText();
+            })
+            .Subscribe(formatted =>
+            {
+                // Manual DistinctUntilChanged to avoid unnecessary emissions.
+                if (formatted == lastFormatted)
+                    return;
+                lastFormatted = formatted;
+                host.UpdateData(displayLabelId, formatted);
             }));
 
         return new LabelControl(new JsonPointerReference(LayoutAreaReference.GetDataPointer(displayLabelId)))

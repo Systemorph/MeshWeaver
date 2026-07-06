@@ -638,3 +638,223 @@ public class MarkdownToggleTest(ITestOutputHelper output) : HubTestBase(output)
         stack.Areas.Should().NotBeEmpty();
     }
 }
+
+/// <summary>
+/// Issue #322: numeric and boolean scalar content fields rendered BLANK in the read-only Overview
+/// (visible only after click-to-edit). The read-only numeric branch now pre-stringifies the value —
+/// honouring <c>[DisplayFormat]</c> — into a display <c>/data</c> slot, and the client's
+/// <c>ConvertJson&lt;string&gt;</c> renders number/bool tokens as text. These tests pin both:
+/// numeric values (formatted and raw), nullable-null → empty, boolean read-only, and that clicking
+/// a numeric still swaps to a <see cref="NumberFieldControl"/> and round-trips.
+/// </summary>
+[Collection("ReadonlyNumericRenderingTests")]
+public class ReadonlyNumericRenderingTest(ITestOutputHelper output) : HubTestBase(output)
+{
+    public record NumericEntity
+    {
+        [Key]
+        public string Id { get; init; } = string.Empty;
+
+        [Display(Name = "Amount")]
+        [DisplayFormat(DataFormatString = "{0:N1}")]
+        public decimal Amount { get; init; }
+
+        [Display(Name = "Page")]
+        public int? Page { get; init; }
+
+        [Display(Name = "Empty Page")]
+        public int? EmptyPage { get; init; }
+
+        [Display(Name = "Ratio")]
+        public double Ratio { get; init; }
+
+        [Display(Name = "Flag")]
+        public bool Flag { get; init; }
+    }
+
+    // Value chosen so the {0:N1} rendering ("322.8") differs from the stored value (322.844) —
+    // proving [DisplayFormat] is applied, not just the raw number.
+    private static NumericEntity TestData => new()
+    {
+        Id = "num-1",
+        Amount = 322.844m,
+        Page = 6,
+        EmptyPage = null,
+        Ratio = 2.5,
+        Flag = true
+    };
+
+    private const string DataId = "numeric_test";
+    private const string NumericView = nameof(NumericView);
+
+    private UiControl NumericViewDefinition(LayoutAreaHost host, RenderingContext ctx)
+    {
+        host.UpdateData(DataId, TestData);
+
+        var grid = Controls.LayoutGrid.WithSkin(s => s.WithSpacing(2));
+        foreach (var prop in typeof(NumericEntity).GetProperties())
+        {
+            var control = host.Hub.ServiceProvider.MapToToggleableControl(prop, DataId, canEdit: true, host);
+            grid = grid.WithView(control, s => s.WithXs(12).WithMd(6));
+        }
+        return grid;
+    }
+
+    protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
+    {
+        return base.ConfigureHost(configuration)
+            .AddLayout(layout => layout.WithView(NumericView, NumericViewDefinition));
+    }
+
+    protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
+    {
+        return base.ConfigureClient(configuration).AddLayoutClient();
+    }
+
+    private static string DisplayPointer(string propName)
+        => LayoutAreaReference.GetDataPointer($"displayLabel_{DataId}_{propName}");
+
+    /// <summary>
+    /// Renders the numeric view on a fresh client and forces every property cell's reactive
+    /// read-only view to materialise — a named area (and thus <see cref="BuildFormattedNumberLabel"/>'s
+    /// display-slot subscription) only runs once its control stream is subscribed, exactly as the real
+    /// Overview subscribes each cell. Returns the client stream to read the resulting display slots.
+    /// </summary>
+    private async Task<ISynchronizationStream<JsonElement>> RenderNumericView()
+    {
+        var client = GetClient();
+        var stream = client.GetWorkspace().GetRemoteStream<JsonElement, LayoutAreaReference>(
+            CreateHostAddress(), new LayoutAreaReference(NumericView));
+
+        var control = await stream.GetControlStream(NumericView)
+            .Should().Within(10.Seconds()).Match(x => x is LayoutGridControl);
+        var grid = control.Should().BeOfType<LayoutGridControl>().Subject;
+
+        foreach (var area in grid.Areas)
+        {
+            var cellId = area.Area.ToString()!;
+            var cell = await stream.GetControlStream(cellId).Should().Within(5.Seconds()).Match(x => x is not null);
+            if (cell is StackControl cellStack && cellStack.Areas.Count > 1)
+            {
+                var reactiveId = cellStack.Areas.Skip(1).First().Area.ToString()!;
+                await stream.GetControlStream(reactiveId).Should().Within(5.Seconds()).Match(x => x is not null);
+            }
+        }
+
+        return stream;
+    }
+
+    [Fact]
+    public async Task ReadonlyDecimal_WithDisplayFormat_RendersFormattedValue()
+    {
+        var stream = await RenderNumericView();
+
+        // [DisplayFormat("{0:N1}")] applied → "322.8" (culture-computed here so the assertion is
+        // culture-independent), NOT the raw "322.844" and NOT blank.
+        var expected = string.Format("{0:N1}", 322.844m);
+        expected.Should().NotBe("322.844");
+        await stream
+            .GetDataStream<string>(new JsonPointerReference(DisplayPointer("amount")))
+            .Should().Within(5.Seconds()).Match(x => x == expected);
+    }
+
+    [Fact]
+    public async Task ReadonlyNullableInt_WithValue_RendersValue()
+    {
+        var stream = await RenderNumericView();
+
+        // No [DisplayFormat] → the number's own text; must be the value, not blank.
+        await stream
+            .GetDataStream<string>(new JsonPointerReference(DisplayPointer("page")))
+            .Should().Within(5.Seconds()).Match(x => x == "6");
+    }
+
+    [Fact]
+    public async Task ReadonlyNullableInt_Null_RendersEmpty()
+    {
+        var stream = await RenderNumericView();
+
+        // A nullable numeric that is null renders EMPTY, never "0".
+        await stream
+            .GetDataStream<string>(new JsonPointerReference(DisplayPointer("emptyPage")))
+            .Should().Within(5.Seconds()).Match(x => x == "");
+    }
+
+    [Fact]
+    public async Task ReadonlyDouble_RendersValue()
+    {
+        var stream = await RenderNumericView();
+
+        await stream
+            .GetDataStream<string>(new JsonPointerReference(DisplayPointer("ratio")))
+            .Should().Within(5.Seconds()).Match(x => x == "2.5");
+    }
+
+    [Fact]
+    public async Task ReadonlyBool_RendersItsValue()
+    {
+        var client = GetClient();
+        var stream = client.GetWorkspace().GetRemoteStream<JsonElement, LayoutAreaReference>(
+            CreateHostAddress(), new LayoutAreaReference(NumericView));
+
+        var control = await stream.GetControlStream(NumericView)
+            .Should().Within(10.Seconds()).Match(x => x is LayoutGridControl);
+
+        var grid = control.Should().BeOfType<LayoutGridControl>().Subject;
+
+        // The bool ("Flag") is the last property; its toggleable cell is a Stack whose reactive
+        // read-only view is a LabelControl bound to the "flag" pointer (not a blank/missing control).
+        var flagAreaId = grid.Areas.Last().Area.ToString()!;
+        var flagStack = await stream.GetControlStream(flagAreaId)
+            .Should().Within(5.Seconds()).Match(x => x is StackControl);
+        var reactiveAreaId = flagStack.Should().BeOfType<StackControl>().Subject
+            .Areas.Skip(1).First().Area.ToString()!;
+
+        var readonlyView = await stream.GetControlStream(reactiveAreaId)
+            .Should().Within(5.Seconds()).Match(x => x is not null);
+        // The read-only bool cell wraps a clickable Stack around the LabelControl; unwrap to the label.
+        readonlyView.Should().BeOfType<StackControl>();
+
+        // The value the bool label binds to is present (true) — the ConvertJson<string> rendering of
+        // that true token to "true" is pinned by LayoutClientExtensionsTest.
+        await stream
+            .GetDataStream<bool>(new JsonPointerReference(LayoutAreaReference.GetDataPointer(DataId, "flag")))
+            .Should().Within(5.Seconds()).Match(x => x);
+    }
+
+    [Fact]
+    public async Task ClickNumeric_SwitchesToNumberField_AndRoundTrips()
+    {
+        var client = GetClient();
+        var stream = client.GetWorkspace().GetRemoteStream<JsonElement, LayoutAreaReference>(
+            CreateHostAddress(), new LayoutAreaReference(NumericView));
+
+        var control = await stream.GetControlStream(NumericView)
+            .Should().Within(10.Seconds()).Match(x => x is LayoutGridControl);
+        var grid = control.Should().BeOfType<LayoutGridControl>().Subject;
+
+        // "Amount" is the second property (after the [Key] Id) → its toggleable cell.
+        var amountAreaId = grid.Areas.Skip(1).First().Area.ToString()!;
+        var amountStack = await stream.GetControlStream(amountAreaId)
+            .Should().Within(5.Seconds()).Match(x => x is StackControl);
+        var reactiveAreaId = amountStack.Should().BeOfType<StackControl>().Subject
+            .Areas.Skip(1).First().Area.ToString()!;
+
+        // Read-only first.
+        await stream.GetControlStream(reactiveAreaId).Should().Within(5.Seconds()).Match(x => x is StackControl);
+
+        var editStream = stream.GetControlStream(reactiveAreaId).Where(x => x is NumberFieldControl);
+
+        // Click → edit control must be a NumberFieldControl (the numeric edit path is untouched).
+        client.Post(new ClickedEvent(reactiveAreaId, stream.StreamId), o => o.WithTarget(CreateHostAddress()));
+        var editControl = await editStream.Should().Within(5.Seconds()).Emit();
+        editControl.Should().BeOfType<NumberFieldControl>();
+
+        // Round-trip: an edit persists to the bound /data slot.
+        stream.UpdatePointer(400.5m, LayoutAreaReference.GetDataPointer(DataId), new JsonPointerReference("amount"));
+        var updated = await stream
+            .GetDataStream<NumericEntity>(new JsonPointerReference(LayoutAreaReference.GetDataPointer(DataId)))
+            .Should().Within(5.Seconds()).Match(x => x != null && x.Amount == 400.5m);
+        updated!.Amount.Should().Be(400.5m);
+    }
+}
