@@ -1634,6 +1634,7 @@ button.thread-chat-status-item {
 }
 
 .thread-nav-cycle,
+.thread-nav-new,
 .thread-nav-reveal {
     appearance: none;
     -webkit-appearance: none;
@@ -1648,7 +1649,12 @@ button.thread-chat-status-item {
     color: var(--neutral-foreground-rest);
 }
 .thread-nav-cycle:hover,
+.thread-nav-new:hover,
 .thread-nav-reveal:hover { background: var(--neutral-fill-stealth-hover); }
+
+/* "New chat" sits at the end of the toolbar (after the title, which is hidden in top-bar mode). */
+.thread-nav-new { margin-left: auto; }
+.nav-topbar .thread-nav-new { margin-left: 0; }
 
 /* Hidden state: a small inline reveal toggle above the conversation. */
 .thread-nav-reveal {

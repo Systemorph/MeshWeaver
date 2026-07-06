@@ -696,6 +696,10 @@ public static class MemexConfiguration
                         .WithHeartBeatHandler() // silently ack heartbeats on every per-node hub
                         .AddDefaultLayoutAreas()
                         .AddThreadsLayoutArea()
+                        // Scope-tabbed AI catalogs (Agents/Skills/Providers/Models) with per-tab
+                        // create buttons — the AI-menu targets below point here. Registered on every
+                        // per-node hub so they resolve when anchored on the type roots (/Agent/AiAgents …).
+                        .AddAiCatalogLayoutAreas()
                         .AddApiTokensSettingsTab()
                         // AI menu (top bar) — replaces the retired Models + AI Settings tabs. Each entry
                         // opens mesh search grouped by namespace, so every tier (global / space / user)
@@ -711,17 +715,19 @@ public static class MemexConfiguration
                             new NodeMenuItemDefinition("Threads", "AiThreads", Icon: "/static/NodeTypeIcons/chat.svg", Order: 10,
                                 Href: "/search?q=nodeType%3AThread&groupBy=Namespace",
                                 Tooltip: "Conversation threads across every namespace"),
+                            // Scope-tabbed catalogs (This space · User · Global) with per-tab "+" create,
+                            // anchored on the type roots so the catalog area resolves (AddAiCatalogLayoutAreas).
                             new NodeMenuItemDefinition("Models", "AiModels", Icon: "/static/NodeTypeIcons/sparkle.svg", Order: 20,
-                                Href: "/search?q=nodeType%3ALanguageModel&groupBy=Namespace",
-                                Tooltip: "Language models, grouped by provider"),
+                                Href: $"/{ModelProviderNodeType.RootNamespace}/{AiCatalogLayoutAreas.ModelsArea}",
+                                Tooltip: "Language models — global, space, and user"),
                             new NodeMenuItemDefinition("Agents", "AiAgents", Icon: "/static/NodeTypeIcons/bot.svg", Order: 30,
-                                Href: "/search?q=nodeType%3AAgent&groupBy=Namespace",
+                                Href: $"/Agent/{AiCatalogLayoutAreas.AgentsArea}",
                                 Tooltip: "AI agents — global, space, and user"),
                             new NodeMenuItemDefinition("Skills", "AiSkills", Icon: "/static/NodeTypeIcons/rocket.svg", Order: 40,
-                                Href: "/search?q=nodeType%3ASkill&groupBy=Namespace",
-                                Tooltip: "Reusable skills"),
+                                Href: $"/{SkillNodeType.RootNamespace}/{AiCatalogLayoutAreas.SkillsArea}",
+                                Tooltip: "Reusable skills — global, space, and user"),
                             new NodeMenuItemDefinition("Providers", "AiProviders", Icon: "/static/NodeTypeIcons/key.svg", Order: 25,
-                                Href: "/search?q=nodeType%3AModelProvider&groupBy=Namespace",
+                                Href: $"/{ModelProviderNodeType.RootNamespace}/{AiCatalogLayoutAreas.ProvidersArea}",
                                 Tooltip: "AI providers — endpoints + keys"))
                         // Dedicated Admin menu (platform-wide GlobalSettings area), gated on root
                         // Permission.All: Invitations + Inbox.
