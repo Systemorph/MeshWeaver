@@ -90,10 +90,19 @@ public sealed class ContentIndexingService
     /// every chunk (bounded merge), and replaces the file's chunks in the store. Cold: subscribe to
     /// run. Emits exactly one <see cref="IndexResult"/>.
     /// </summary>
+    /// <param name="force">
+    /// When true the hash gate is bypassed: the file is always re-extracted, re-chunked, re-embedded and
+    /// its chunks replaced, even if its content is unchanged. This is how a reindex <b>backfills</b> new
+    /// per-chunk provenance (page/position) onto files that were indexed before it existed — the content
+    /// is identical, so the plain hash gate would skip them forever.
+    /// </param>
     public IObservable<IndexResult> IndexFile(
-        string collectionPath, string filePath, string fileName, byte[] bytes)
+        string collectionPath, string filePath, string fileName, byte[] bytes, bool force = false)
     {
         var hash = ComputeSha256(bytes);
+
+        if (force)
+            return IndexChanged(collectionPath, filePath, fileName, bytes, hash);
 
         return _store.GetFileHash(collectionPath, filePath)
             .Take(1)
@@ -153,12 +162,12 @@ public sealed class ContentIndexingService
 
     private IObservable<IndexResult> IndexChanged(
         string collectionPath, string filePath, string fileName, byte[] bytes, string hash) =>
-        _extractor.ExtractText(fileName, bytes)
+        _extractor.ExtractDocument(fileName, bytes)
             .Take(1)
-            .SelectMany(text =>
+            .SelectMany(document =>
             {
-                var chunkTexts = TextChunker.Chunk(text, _options.ChunkSize, _options.ChunkOverlap);
-                if (chunkTexts.Count == 0)
+                var chunks = TextChunker.ChunkPositioned(document, _options.ChunkSize, _options.ChunkOverlap);
+                if (chunks.Count == 0)
                 {
                     _logger.LogInformation(
                         "No text extracted from '{FilePath}' in '{Collection}'; recording NoText.",
@@ -169,12 +178,12 @@ public sealed class ContentIndexingService
                         .Select(_ => IndexResult.NoText);
                 }
 
-                // Chunk branch: embed every chunk, replace the file's stored chunk set, and report
-                // how many were stored. This is exactly the original behavior.
-                var chunkBranch = EmbedChunks(collectionPath, filePath, hash, chunkTexts)
-                    .SelectMany(chunks =>
-                        _store.ReplaceFileChunks(collectionPath, filePath, chunks)
-                            .Select(_ => chunks.Count));
+                // Chunk branch: embed every chunk (carrying its page/position provenance), replace the
+                // file's stored chunk set, and report how many were stored.
+                var chunkBranch = EmbedChunks(collectionPath, filePath, hash, chunks)
+                    .SelectMany(embedded =>
+                        _store.ReplaceFileChunks(collectionPath, filePath, embedded)
+                            .Select(_ => embedded.Count));
 
                 // Document branch: ONE summarize per document (never per chunk), then write the
                 // per-file Document via the sink. Only runs when BOTH summarizer + sink are wired;
@@ -182,7 +191,7 @@ public sealed class ContentIndexingService
                 // — giving exactly today's behavior when either is absent. The summarize call is
                 // its own IIoPool leaf inside the ISummarizer impl; the orchestration holds no slot.
                 return chunkBranch.SelectMany(storedCount =>
-                    WriteDocumentBranch(collectionPath, filePath, fileName, text, bytes, hash, storedCount)
+                    WriteDocumentBranch(collectionPath, filePath, fileName, document.Text, bytes, hash, storedCount)
                         .Select(_ => IndexResult.Indexed(storedCount)));
             });
 
@@ -216,23 +225,26 @@ public sealed class ContentIndexingService
     }
 
     /// <summary>
-    /// Embeds every chunk text via the embedder, bounded-merged (NOT a held-slot serial loop), and
-    /// reassembles them back into <see cref="ContentChunk"/>s in their original order.
+    /// Embeds every chunk's text via the embedder, bounded-merged (NOT a held-slot serial loop), and
+    /// reassembles them back into <see cref="ContentChunk"/>s in their original order — each carrying its
+    /// page/position provenance from the <see cref="PositionedChunk"/>.
     /// </summary>
     private IObservable<IReadOnlyList<ContentChunk>> EmbedChunks(
-        string collectionPath, string filePath, string hash, IReadOnlyList<string> chunkTexts) =>
-        chunkTexts
-            // Pair each text with its index up front so order survives the unordered merge.
-            .Select((chunkText, index) =>
-                _embedder.Embed(chunkText)
+        string collectionPath, string filePath, string hash, IReadOnlyList<PositionedChunk> chunks) =>
+        chunks
+            // Pair each chunk with its index up front so order survives the unordered merge.
+            .Select((chunk, index) =>
+                _embedder.Embed(chunk.Text)
                     .Take(1)
                     .Select(embedding => new ContentChunk(
                         CollectionPath: collectionPath,
                         FilePath: filePath,
                         ChunkIndex: index,
-                        Text: chunkText,
+                        Text: chunk.Text,
                         ContentHash: hash,
-                        Embedding: embedding)))
+                        Embedding: embedding,
+                        Page: chunk.Page,
+                        Position: chunk.Position)))
             .ToObservable()
             // Each Embed leaf acquires its OWN pool slot; this merge just bounds how many we
             // subscribe to at once. The orchestration holds no slot while they run.

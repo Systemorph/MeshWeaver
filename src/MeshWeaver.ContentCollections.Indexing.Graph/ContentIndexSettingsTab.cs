@@ -105,11 +105,14 @@ public static class ContentIndexSettingsTab
 
         stack = stack.WithView(Controls.Html(StatusHtml(true,
             "Active — new uploads to this space index automatically. Use <em>Re-index all content</em> to " +
-            "(re)index files already in the collection; unchanged files are skipped.")));
+            "(re)index files already in the collection; unchanged files are skipped. Use <em>Rebuild</em> to " +
+            "force re-extraction of every file — e.g. to backfill page/position provenance onto files that " +
+            "were indexed before it existed.")));
 
         // ── Re-index (operations-as-script Activity) ──────────────────────────
         stack = stack.WithView(Section("Re-index"));
-        stack = stack.WithView(Controls.Button("Re-index all content")
+        var reindexRow = Controls.Stack.WithWidth("100%").WithStyle("flex-direction:row; gap:8px; flex-wrap:wrap;");
+        reindexRow = reindexRow.WithView(Controls.Button("Re-index all content")
             .WithAppearance(Appearance.Accent)
             .WithClickAction(c =>
             {
@@ -118,6 +121,18 @@ public static class ContentIndexSettingsTab
                     .Subscribe(_ => { }, ex => c.Host.UpdateData(ResultId, Err(ex.Message)));
                 return Task.CompletedTask;
             }));
+        // Rebuild: forces re-extraction past the hash gate — backfills page/position onto already-indexed
+        // (content-unchanged) files, which a plain re-index would skip.
+        reindexRow = reindexRow.WithView(Controls.Button("Rebuild (re-extract page/position)")
+            .WithAppearance(Appearance.Outline)
+            .WithClickAction(c =>
+            {
+                observer.ReindexAll(new[] { collectionPath },
+                        onActivityCreated: path => c.Host.UpdateData(ActivityPathId, path), force: true)
+                    .Subscribe(_ => { }, ex => c.Host.UpdateData(ResultId, Err(ex.Message)));
+                return Task.CompletedTask;
+            }));
+        stack = stack.WithView(reindexRow);
 
         // Live activity progress panel: binds to the running re-index activity (Messages + Status stream
         // live; Cancel flips RequestedStatus = Cancelled). Empty until a run starts.

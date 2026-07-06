@@ -23,16 +23,21 @@ public partial class DocumentSourceView
     private object? MimeRaw { get; set; }
     private object? HighlightRaw { get; set; }
     private object? FileNameRaw { get; set; }
+    private object? PageRaw { get; set; }
+    private object? BoxRaw { get; set; }
 
     private string? FileUrl { get; set; }
     private string? Mime { get; set; }
     private string? Highlight { get; set; }
     private string? FileName { get; set; }
+    private int? Page { get; set; }
+    private string? Box { get; set; }
 
-    // Guards against re-invoking the (expensive) render when neither the file nor the passage changed
+    // Guards against re-invoking the (expensive) render when nothing that affects it changed
     // — the base re-runs BindData on every parameter set.
     private string? _renderedUrl;
     private string? _renderedHighlight;
+    private string? _renderedMark;
 
     /// <inheritdoc />
     protected override void BindData()
@@ -42,11 +47,15 @@ public partial class DocumentSourceView
         DataBind(ViewModel.Mime, x => x.MimeRaw);
         DataBind(ViewModel.Highlight, x => x.HighlightRaw);
         DataBind(ViewModel.FileName, x => x.FileNameRaw);
+        DataBind(ViewModel.Page, x => x.PageRaw);
+        DataBind(ViewModel.Box, x => x.BoxRaw);
 
         FileUrl = Coerce(FileUrlRaw);
         Mime = Coerce(MimeRaw);
         Highlight = Coerce(HighlightRaw);
         FileName = Coerce(FileNameRaw);
+        Box = Coerce(BoxRaw);
+        Page = int.TryParse(Coerce(PageRaw), out var page) ? page : null;
     }
 
     /// <summary>
@@ -69,14 +78,16 @@ public partial class DocumentSourceView
         if (jsModule is null || string.IsNullOrEmpty(FileUrl))
             return;
 
-        if (FileUrl == _renderedUrl && Highlight == _renderedHighlight)
+        var mark = $"{Page}|{Box}";
+        if (FileUrl == _renderedUrl && Highlight == _renderedHighlight && mark == _renderedMark)
             return;
         _renderedUrl = FileUrl;
         _renderedHighlight = Highlight;
+        _renderedMark = mark;
 
         try
         {
-            await jsModule.InvokeVoidAsync("render", containerRef, FileUrl, Mime, Highlight, FileName);
+            await jsModule.InvokeVoidAsync("render", containerRef, FileUrl, Mime, Highlight, FileName, Page, Box);
         }
         catch (JSDisconnectedException) { /* circuit gone — best-effort */ }
         catch (Exception ex)

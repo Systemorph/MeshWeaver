@@ -99,7 +99,7 @@ public static class ChunkNavigation
                                 : $"No chunk at index {chunkIndex}; valid range is 0..{total - 1}.",
                         }.ToJsonString();
 
-                    return new JsonObject
+                    var envelope = new JsonObject
                     {
                         ["found"] = true,
                         ["collectionPath"] = chunk.CollectionPath,
@@ -109,7 +109,13 @@ public static class ChunkNavigation
                         ["prevIndex"] = chunk.ChunkIndex > 0 ? chunk.ChunkIndex - 1 : null,
                         ["nextIndex"] = chunk.ChunkIndex < total - 1 ? chunk.ChunkIndex + 1 : null,
                         ["totalChunks"] = total,
-                    }.ToJsonString();
+                    };
+                    // Provenance for citing/marking the source page (present only when the source carried it).
+                    if (chunk.Page is int page)
+                        envelope["page"] = page;
+                    if (ChunkPositionJson.ToJsonObject(chunk.Position) is { } bbox)
+                        envelope["bbox"] = bbox;
+                    return envelope.ToJsonString();
                 }));
     }
 

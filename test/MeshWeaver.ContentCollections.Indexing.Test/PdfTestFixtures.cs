@@ -26,4 +26,18 @@ internal static class PdfTestFixtures
 
         return builder.Build();
     }
+
+    /// <summary>Builds a multi-page PDF; each element of <paramref name="pages"/> is one page's single line.</summary>
+    public static byte[] MultiPagePdf(params string[] pages)
+    {
+        var builder = new PdfDocumentBuilder();
+        var font = builder.AddStandard14Font(Standard14Font.Helvetica);
+        foreach (var line in pages)
+        {
+            var page = builder.AddPage(595, 842);
+            page.AddText(line, 12, new PdfPoint(50, 800), font);
+        }
+
+        return builder.Build();
+    }
 }

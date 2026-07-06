@@ -37,6 +37,11 @@ public class PostgreSqlContentChunkSchemaTests
         ddl.Should().Contain("metadata        JSONB");
         ddl.Should().Contain("source_address  TEXT");
 
+        // Per-chunk provenance columns — added idempotently so existing partitions gain them on next
+        // provision (no separate DbVersion migration; the content-index schema is self-provisioning).
+        ddl.Should().Contain("ADD COLUMN IF NOT EXISTS page INT");
+        ddl.Should().Contain("ADD COLUMN IF NOT EXISTS bbox JSONB");
+
         // The HNSW cosine index — the nearest-neighbour search path.
         ddl.Should().Contain("USING hnsw (embedding vector_cosine_ops)");
 

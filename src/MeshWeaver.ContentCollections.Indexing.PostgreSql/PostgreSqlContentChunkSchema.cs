@@ -55,6 +55,15 @@ public static class PostgreSqlContentChunkSchema
             UNIQUE (collection_path, file_path, chunk_index)
         );
 
+        -- Per-chunk source provenance (added after the table's first release; ADD COLUMN IF NOT EXISTS is
+        -- idempotent and runs on every boot, so existing partitions gain the columns on next provision —
+        -- no separate DbVersion migration, the content-index schema is self-provisioning per partition).
+        --   page — one-based source page the chunk begins on (NULL for non-paged formats).
+        --   bbox — normalized top-left-origin box {x,y,w,h} (fractions of the page) so a viewer can open
+        --          the page and mark the region; NULL when the position is unknown.
+        ALTER TABLE "{{schema}}".content_chunks ADD COLUMN IF NOT EXISTS page INT;
+        ALTER TABLE "{{schema}}".content_chunks ADD COLUMN IF NOT EXISTS bbox JSONB;
+
         CREATE INDEX IF NOT EXISTS idx_content_chunks_collection_file
             ON "{{schema}}".content_chunks (collection_path, file_path);
 
