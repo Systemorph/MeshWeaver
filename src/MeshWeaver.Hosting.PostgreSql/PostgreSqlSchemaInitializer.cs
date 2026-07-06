@@ -138,6 +138,14 @@ public static class PostgreSqlSchemaInitializer
             BEGIN
                 FOR schema_rec IN SELECT schema_name FROM public.searchable_schemas ORDER BY schema_name
                 LOOP
+                    -- Skip a listed schema whose mesh_nodes table no longer exists. searchable_schemas
+                    -- can LAG a concurrent partition drop (DeletePartition does DROP SCHEMA … CASCADE):
+                    -- under load a just-dropped partition is still listed here, and referencing its
+                    -- gone table in the UNION fails the CREATE MATERIALIZED VIEW with
+                    -- `42P01 relation "<schema>.mesh_nodes" does not exist` — the flaky
+                    -- RebuildTopLevelIndex / SpaceDeletion class of failures. to_regclass returns NULL
+                    -- (no error) for an absent relation, so this is the race-safe existence guard.
+                    CONTINUE WHEN to_regclass(format('%I.mesh_nodes', schema_rec.schema_name)) IS NULL;
                     IF union_sql != '' THEN union_sql := union_sql || ' UNION ALL '; END IF;
                     -- Exactly the PARTITION ROOT: the namespace='' node whose id matches the
                     -- schema (partition) name CASE-INSENSITIVELY. The schema is the lowercased
