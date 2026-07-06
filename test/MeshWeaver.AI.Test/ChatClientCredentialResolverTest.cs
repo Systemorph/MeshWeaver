@@ -278,8 +278,9 @@ public class ChatClientCredentialResolverTest : AITestBase
             "the canonical wire id of a path selection is the node's ModelDefinition.Id");
         resolver.ResolveModelId(modelId).Should().Be(modelId,
             "bare ids pass through unchanged");
-        resolver.ResolveModelId($"{root}/nope/never-{suffix}").Should().Be($"{root}/nope/never-{suffix}",
-            "an unknown path passes through unchanged (caller falls back)");
+        resolver.ResolveModelId($"{root}/nope/never-{suffix}").Should().Be($"never-{suffix}",
+            "an UNRESOLVED path yields its LAST SEGMENT as the wire id — sending the whole path as the " +
+            "model name 400s (ResolveModelId's documented fallback); only a bare id passes through unchanged");
     }
 
     [Fact]
