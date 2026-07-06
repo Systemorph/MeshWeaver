@@ -264,6 +264,12 @@ public static class MemexConfiguration
         // ProviderModelLister fetches a provider's live model list (HTTP /models via
         // the I/O pool) so the add-provider flow lets users pick which models to bring.
         services.AddSingleton<Memex.Portal.Shared.Models.ProviderModelLister>();
+        // OpenAI-compatible (Ollama) auto-discovery — keeps the OpenAICompatible provider's
+        // LanguageModel catalog in sync with the models installed on its endpoint, so a locally
+        // pulled model shows up in the picker without editing OpenAICompatible:Models[]. Opt-in
+        // (OpenAICompatible:DiscoverModels=true) and inert otherwise; only when the provider is on.
+        if (features.Ai.Providers.OpenAICompatible)
+            services.AddHostedService<Memex.Portal.Shared.Models.OpenAICompatibleModelSync>();
 
         // GitHub sync — per-user OAuth credential (device flow) + bidirectional
         // Space ↔ GitHub sync (export = "sync back"; import = create / re-import a
