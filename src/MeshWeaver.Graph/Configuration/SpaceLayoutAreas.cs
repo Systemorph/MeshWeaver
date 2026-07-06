@@ -5,6 +5,7 @@ using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.Domain;
+using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 
@@ -77,16 +78,43 @@ public static class SpaceLayoutAreas
     /// <c>MarkdownContent</c>, which would destroy the structured Space; the node-bound field pointer
     /// is the content-object-preserving variant of the same mechanism. See Doc/GUI/DataBinding.
     /// </summary>
-    public static IObservable<UiControl?> Edit(LayoutAreaHost host, RenderingContext _)
+    public static IObservable<UiControl?> Edit(LayoutAreaHost host, RenderingContext ctx)
     {
         var hubPath = host.Hub.Address.ToString();
         // Compose with the permission stream — pure observable, no await (mirrors MeshNodeLayoutAreas.EditNode).
         return host.Workspace.GetMeshNodeStream().CombineLatest(
             host.Hub.GetEffectivePermissions(hubPath),
-            (node, permissions) => !permissions.HasFlag(Permission.Update)
-                ? (UiControl?)MeshNodeLayoutAreas.BuildAccessDenied(hubPath)
-                : (UiControl?)BuildBodyEditor(node, hubPath));
+            (node, permissions) =>
+            {
+                if (!permissions.HasFlag(Permission.Update))
+                    return (UiControl?)MeshNodeLayoutAreas.BuildAccessDenied(hubPath);
+
+                // 🚨 A markdown-backed Space (the Doc + Skill partition roots ship their landing page
+                // as a MarkdownContent, NOT a structured Space — their seeding layer can't reference
+                // the Space type) keeps its editable markdown in `content`, not `Space.body`. Binding
+                // the editor to the `body` field pointer (BuildBodyEditor) therefore reads NOTHING →
+                // the blank editor. Edit those with the SAME standard markdown editor a Markdown node
+                // uses: it loads MarkdownContent.content and re-prerenders on save (safe — the content
+                // already IS a MarkdownContent, so WithAutoSave replaces nothing structured).
+                if (IsMarkdownBacked(node))
+                    return (UiControl?)MarkdownEditLayoutArea.Edit(host, ctx);
+
+                return (UiControl?)BuildBodyEditor(node, hubPath);
+            });
     }
+
+    /// <summary>
+    /// True when the Space's node content is a <see cref="MarkdownContent"/> (or its degraded
+    /// JsonElement form) rather than a structured <see cref="Space"/>. The Doc and Skill partition
+    /// roots ship this way, so their editable markdown lives in <c>content</c> — they must be edited
+    /// with the standard markdown editor, not the <c>Space.body</c> field editor (which reads blank).
+    /// </summary>
+    private static bool IsMarkdownBacked(MeshNode? node) =>
+        node?.Content is MarkdownContent
+        || (node?.Content is JsonElement je
+            && je.ValueKind == JsonValueKind.Object
+            && je.TryGetProperty("$type", out var t)
+            && t.GetString() is "MarkdownContent" or "MarkdownDocument");
 
     /// <summary>
     /// Builds the body editor: a back link, an editable name, and the markdown editor — all bound to
