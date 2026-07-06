@@ -66,5 +66,8 @@ public static class MauiControlManifest
         // Courses — video player (Blazor renders <video controls>/<iframe> by Kind); no native
         // MediaElement/WebView wiring in the MAUI view pack yet.
         "VideoControl",
+        // Presentation — invisible presenter-mode keyboard driver. Blazor wires a document
+        // keydown listener via JS interop; no native key-binding equivalent in the MAUI pack yet.
+        "SlideShowControl",
     }.ToImmutableHashSet(StringComparer.Ordinal);
 }
