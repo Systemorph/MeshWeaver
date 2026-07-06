@@ -183,6 +183,7 @@ public static class AIExtensions
         public IServiceCollection AddAgentChatServices()
         {
             services.AddTransient<IIconGenerator, IconGenerator>();
+            services.AddTransient<IImageGenerator, ImageGenerator>();
             services.AddTransient<IDescriptionGenerator, DescriptionGenerator>();
 
             // Slash-skills are declarative nodeType:Skill mesh nodes (BuiltInSkillProvider, imported to

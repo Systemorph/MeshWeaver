@@ -107,6 +107,16 @@ public record ModelDefinition
     public string? Currency { get; init; }
 
     /// <summary>
+    /// What the model DOES — chat completion (default), text embedding, or raster
+    /// image generation. Lets one catalog hold chat models AND image models: the
+    /// image generator (<c>IImageGenerator</c>) selects the first model whose
+    /// <see cref="Capability"/> is <see cref="ModelCapability.Image"/>. Existing chat
+    /// catalog rollouts leave this at the default (<see cref="ModelCapability.Chat"/>).
+    /// </summary>
+    [System.ComponentModel.Description("Capability: Chat, Embedding, or Image")]
+    public ModelCapability Capability { get; init; } = ModelCapability.Chat;
+
+    /// <summary>
     /// Projects this definition into the lighter <see cref="ModelInfo"/>
     /// shape consumed by the chat picker.
     /// </summary>
@@ -116,4 +126,18 @@ public record ModelDefinition
         Provider = Provider,
         Order = Order != 0 ? Order : factoryOrder
     };
+}
+
+/// <summary>
+/// What a <see cref="ModelDefinition"/> is used for. A single model catalog can hold
+/// chat, embedding, and image models side by side; the consumer filters by capability.
+/// </summary>
+public enum ModelCapability
+{
+    /// <summary>Chat completion (the default) — consumed by <c>IChatClientFactory</c>.</summary>
+    Chat = 0,
+    /// <summary>Text embedding — consumed by the embedding pipeline.</summary>
+    Embedding = 1,
+    /// <summary>Text-to-image (raster) generation — consumed by <c>IImageGenerator</c>.</summary>
+    Image = 2,
 }

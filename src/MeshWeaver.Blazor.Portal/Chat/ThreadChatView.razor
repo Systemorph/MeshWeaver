@@ -67,6 +67,10 @@ else
                     <FluentIcon Value="@(new Icons.Regular.Size16.Navigation())" Color="Color.Neutral" />
                 </button>
                 <span class="thread-nav-title">Threads</span>
+                <button class="thread-nav-new" @onclick="StartNewComposer"
+                        title="New chat — start a fresh, empty composer (keeps your harness/agent/model)">
+                    <FluentIcon Value="@(new Icons.Regular.Size16.Add())" Color="Color.Neutral" />
+                </button>
             </div>
 
             @if (!string.IsNullOrEmpty(navCtx))

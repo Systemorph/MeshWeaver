@@ -2915,6 +2915,44 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     }
 
     /// <summary>
+    /// "New chat" from the in-thread navigation menu: clears the in-progress draft (message text +
+    /// attachments) on the per-user default <c>ThreadComposer</c> node — KEEPING harness/agent/model —
+    /// then navigates to the standalone composer page (<c>/chat</c>). Mirrors the side panel's New-Chat
+    /// button (<see cref="ThreadSidePanelContent.OnNewChat"/>); no thread is created here (a thread is
+    /// only created on submit). Ensures the node exists first (benign create) so clearing a
+    /// not-yet-materialised default composer does not NotFound-storm the partition hub on Update.
+    /// </summary>
+    private void StartNewComposer()
+    {
+        var defaultPath = string.IsNullOrEmpty(_userHome)
+            ? null : MeshWeaver.AI.ThreadComposerNodeType.PathFor(_userHome);
+        if (!string.IsNullOrEmpty(defaultPath))
+        {
+            void Clear() => UpdateMeshNodeAsCircuitUser(defaultPath!, node =>
+            {
+                if (node is null) return node!;
+                var ci = node.ContentAs<MeshWeaver.AI.ThreadComposer>(Hub.JsonSerializerOptions, Logger);
+                if (ci is null) return node;
+                if (string.IsNullOrEmpty(ci.MessageContent)
+                    && (ci.Attachments is null || ci.Attachments.Count == 0)
+                    && ci.OpenThreadPath is null)
+                    return node;
+                return node with { Content = ci with { MessageContent = null, Attachments = null, OpenThreadPath = null } };
+            }, ex => SurfaceError(ex, "Starting a new chat"));
+
+            // Create the node (benign if it already exists), THEN clear — CreateNode registers a routable
+            // node, unlike Update which only patches an existing one (see ApplyComposerSelection).
+            MeshQuery.CreateNode(MeshWeaver.Mesh.MeshNode.FromPath(defaultPath!) with
+            {
+                NodeType = MeshWeaver.AI.ThreadComposerNodeType.NodeType,
+                Name = "Chat Input",
+                Content = new MeshWeaver.AI.ThreadComposer()
+            }).Subscribe(_ => InvokeAsync(Clear), _ => InvokeAsync(Clear));
+        }
+        NavigationManager.NavigateTo("/chat");
+    }
+
+    /// <summary>
     /// Option-Tab handler: cycles to the NEXT of my other open threads and opens it. Wraps around;
     /// no-op when there are none. Bound on the thread container's keydown (Alt+Tab / Option-Tab).
     /// </summary>
