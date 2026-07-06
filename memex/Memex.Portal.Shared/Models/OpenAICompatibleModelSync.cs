@@ -205,7 +205,10 @@ public sealed class OpenAICompatibleModelSync : IHostedService, IDisposable
                             })))
                     .ToArray();
 
-                return Observable.Merge(ops).LastOrDefaultAsync().Select(_ => Unit.Default);
+                // Concat (not Merge): apply the create/delete writes SEQUENTIALLY, so a large discovered
+                // list never fans out into a concurrent write storm against the mesh (Ollama lists are
+                // small, but a generic OpenAI-compatible endpoint could return hundreds).
+                return Observable.Concat(ops).LastOrDefaultAsync().Select(_ => Unit.Default);
             });
 
     /// <summary>The reconcile decision, split out as a pure function so it is deterministically testable.</summary>
