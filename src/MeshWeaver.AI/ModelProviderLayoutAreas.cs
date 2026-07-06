@@ -52,8 +52,14 @@ public static class ModelProviderLayoutAreas
         => host.Workspace.GetMeshNodeStream()
             .Select(node =>
             {
-                if (node?.Content is not ModelProviderConfiguration cfg)
+                if (node is null)
                     return (UiControl?)Controls.Markdown("_No provider data._");
+
+                // A freshly-created provider has no config yet — the create flow persists an Active
+                // node with null Content and edits it here (Overview doubles as the Edit area). Show a
+                // default config so the endpoint + Enter Key controls render; writes persist it.
+                var cfg = node.ContentAs<ModelProviderConfiguration>(host.Hub.JsonSerializerOptions)
+                          ?? new ModelProviderConfiguration { Provider = node.Name ?? node.Id };
 
                 var path = node.Path;
                 var title = cfg.Label ?? cfg.Provider ?? path.Split('/').Last();

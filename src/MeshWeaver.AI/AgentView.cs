@@ -118,9 +118,13 @@ public static class AgentView
                 (h, c) => host.Workspace.GetMeshNodeStream()
                     .Select(node =>
                     {
-                        var agent = AsAgentConfiguration(node, host.Hub.JsonSerializerOptions);
-                        if (node == null || agent == null)
+                        if (node == null)
                             return RenderLoading("Loading agent...");
+                        // A freshly-created Agent has no AgentConfiguration content yet — the create
+                        // flow persists an Active node with null Content and edits it afterward. Show a
+                        // default (empty) config instead of an endless "Loading…".
+                        var agent = AsAgentConfiguration(node, host.Hub.JsonSerializerOptions)
+                                    ?? new AgentConfiguration { Id = node.Id };
                         return BuildDetailsLayout(host, node, agent);
                     }),
                 "Content"
@@ -260,9 +264,12 @@ public static class AgentView
                 (h, c) => host.Workspace.GetMeshNodeStream()
                     .Select(node =>
                     {
-                        var agent = AsAgentConfiguration(node, host.Hub.JsonSerializerOptions);
-                        if (node == null || agent == null)
+                        if (node == null)
                             return RenderLoading("Loading agent...");
+                        // A freshly-created Agent has no AgentConfiguration content yet — edit a
+                        // default (empty) config; the first Save persists it to the node stream.
+                        var agent = AsAgentConfiguration(node, host.Hub.JsonSerializerOptions)
+                                    ?? new AgentConfiguration { Id = node.Id };
                         return BuildEditLayout(host, node, agent);
                     }),
                 "Content"

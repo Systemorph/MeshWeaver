@@ -16,7 +16,6 @@ There are three access patterns, each covering a distinct class of operation:
 | Create node | Service | `meshService.CreateNode(node).Subscribe(...)` |
 | Update node | Service | `meshService.UpdateNode(node).Subscribe(...)` (routes through `GetMeshNodeStream(path).Update`) |
 | Create-or-update (upsert) | Request | `hub.Observe<CreateOrUpdateNodeResponse>(new CreateOrUpdateNodeRequest(node)).Subscribe(...)` |
-| Create transient | Service | `meshService.CreateTransient(node).Subscribe(...)` |
 | Delete node | Service | `meshService.DeleteNode(path).Subscribe(...)` |
 | Write as system / hub | AccessService | `using (accessService.ImpersonateAsSystem()) { … }` / `ImpersonateAsHub(hub)` |
 | Move node | Message | `hub.Observe(new MoveNodeRequest(src, dst)).Subscribe(...)` |
@@ -131,9 +130,6 @@ meshService.CreateNode(node)
     .SelectMany(created => meshService.UpdateNode(created with { Name = "Renamed Team" }))
     .Subscribe(_ => { }, ex => logger.LogWarning(ex, "create+update failed"));
 
-// Transient node (UI edit-then-confirm flows)
-meshService.CreateTransient(node).Subscribe(...);
-
 // Delete — removes the node and all its descendants, bottom to top
 meshService.DeleteNode("org/Acme/OldTeam").Subscribe(...);
 
@@ -146,7 +142,6 @@ hub.Observe<CreateOrUpdateNodeResponse>(new CreateOrUpdateNodeRequest(node))
 
 - `CreateNode` — runs `INodeValidator`, sets state to Active.
 - `UpdateNode` — validates; routes through the canonical `GetMeshNodeStream(path).Update` write path on the owning hub.
-- `CreateTransient` — persists in Transient state; caller confirms or discards.
 - `DeleteNode` — removes the node and all descendants (bottom to top).
 - `CreateOrUpdateNodeRequest` — upsert; checks existence on the handler side and dispatches create or merge-patch update (see [CQRS](/Doc/Architecture/CqrsAndContentAccess)).
 - Identity is auto-captured from `AccessService` and carried across `.Subscribe()` boundaries — see [AccessContextPropagation](/Doc/Architecture/AccessContextPropagation).

@@ -14,7 +14,7 @@ public interface IMeshService
     // Returns cold IObservable that captures AccessContext at call time.
     // Emits a single item then completes, or errors on failure.
     // For await-based callers, use the extension methods in MeshServiceExtensions
-    // (CreateNodeAsync, UpdateNodeAsync, DeleteNodeAsync, CreateTransientAsync).
+    // (CreateNodeAsync, UpdateNodeAsync, DeleteNodeAsync).
 
     /// <summary>
     /// Creates a new node with validation.
@@ -47,13 +47,6 @@ public interface IMeshService
     /// Routes through DeleteNodeRequest for proper security enforcement.
     /// </summary>
     IObservable<bool> DeleteNode(string path);
-
-    /// <summary>
-    /// Creates a transient node for UI creation flows.
-    /// The node is persisted in Transient state but NOT confirmed.
-    /// Call DeleteNode to cancel or CreateNode to confirm.
-    /// </summary>
-    IObservable<MeshNode> CreateTransient(MeshNode node);
 
     /// <summary>
     /// Copies a node (and optionally its subtree and satellites) to a new path.
