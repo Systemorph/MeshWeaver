@@ -134,6 +134,10 @@ public static class SpaceLayoutAreas
         // Field pointers resolve against the node's Content JSON (the Space). Every control's edit
         // is a per-field read-modify-write straight to the node — see Doc/GUI/DataBinding "Node-bound DataContext".
         var contentCtx = LayoutAreaReference.GetMeshNodeDataContext(spacePath, bindContent: true);
+        // The name lives on MeshNode.Name (single source of truth), NOT on Space.Content — so the
+        // name field binds to the NODE (bindContent:false) and its "name" pointer resolves to
+        // MeshNode.Name. The body/logo/etc. fields stay on the content-bound context above.
+        var nodeCtx = LayoutAreaReference.GetMeshNodeDataContext(spacePath, bindContent: false);
 
         var container = Controls.Stack
             .WithWidth("100%")
@@ -156,7 +160,7 @@ public static class SpaceLayoutAreas
         {
             Immediate = true,
             Placeholder = "Space name",
-            DataContext = contentCtx
+            DataContext = nodeCtx
         }.WithStyle("flex: 1; font-size: 1.25rem; font-weight: 600;"));
 
         headerRow = headerRow.WithView(Controls.Html(
@@ -218,7 +222,7 @@ public static class SpaceLayoutAreas
             try { return JsonSerializer.Deserialize<Space>(raw, options); }
             catch (JsonException) { /* not Space JSON — fall through and treat it as the body */ }
         }
-        return new Space { Name = node.Name ?? node.Path, Body = raw };
+        return new Space { Body = raw };
     }
 
     private static UiControl BuildSpaceView(
@@ -228,7 +232,7 @@ public static class SpaceLayoutAreas
         bool canEdit)
     {
         var spacePath = node?.Path ?? host.Hub.Address.ToString();
-        var spaceName = space?.Name ?? node?.Name ?? spacePath;
+        var spaceName = node?.Name ?? spacePath;
 
         var shell = Controls.Stack
             .WithWidth("100%")
@@ -337,11 +341,12 @@ public static class SpaceLayoutAreas
     /// <summary>
     /// The space's H1 title as a click-to-edit heading. Read view is a plain heading; when
     /// <paramref name="canEdit"/> and the user clicks it, an inline <see cref="TextFieldControl"/>
-    /// bound to the Space content <c>name</c> field (node-bound DataContext) takes over, so the edit
-    /// writes straight back to the node stream — and to <see cref="MeshNode.Name"/> via the Space's
-    /// <c>[MeshNodeProperty(nameof(MeshNode.Name))]</c> mapping. Same mechanism the Space Edit area
-    /// (<see cref="BuildBodyEditor"/>) uses for the name field — the click-to-edit toggle is the only
-    /// thing living in <c>/data</c>. See Doc/GUI/DataBinding "Node-bound DataContext".
+    /// bound to <see cref="MeshNode.Name"/> via a node-bound DataContext (<c>bindContent:false</c>)
+    /// takes over, so the edit renames the node directly — <see cref="MeshNode.Name"/> is the single
+    /// source of truth for the space name (the <see cref="Space"/> content no longer carries a name).
+    /// Same mechanism the Space Edit area (<see cref="BuildBodyEditor"/>) uses for the name field —
+    /// the click-to-edit toggle is the only thing living in <c>/data</c>. See Doc/GUI/DataBinding
+    /// "Node-bound DataContext".
     /// </summary>
     private static UiControl BuildEditableTitle(
         LayoutAreaHost host, string spacePath, string spaceName, bool canEdit)
@@ -383,7 +388,10 @@ public static class SpaceLayoutAreas
             Immediate = true,
             AutoFocus = true,
             Placeholder = "Space name",
-            DataContext = LayoutAreaReference.GetMeshNodeDataContext(spacePath, bindContent: true)
+            // Bind to the NODE (bindContent:false): the space's name IS MeshNode.Name — the single
+            // source of truth — so the "name" pointer resolves to MeshNode.Name and the click-to-edit
+            // title renames the node directly.
+            DataContext = LayoutAreaReference.GetMeshNodeDataContext(spacePath, bindContent: false)
         }
         .WithStyle("font-size: 2rem; font-weight: 600; border: none; background: transparent; min-width: 300px; width: 100%;")
         .WithBlurAction(ctx =>

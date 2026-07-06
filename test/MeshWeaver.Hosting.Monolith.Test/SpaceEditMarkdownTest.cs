@@ -37,7 +37,7 @@ public class SpaceEditMarkdownTest(ITestOutputHelper output) : MonolithMeshTestB
         {
             Name = "Edit Space",
             NodeType = SpaceNodeType.NodeType,
-            Content = new Space { Name = "Edit Space", Body = "# Overview\n\nhello" }
+            Content = new Space { Body = "# Overview\n\nhello" }
         };
         await NodeFactory.CreateNode(spaceNode).Should().Emit();
 

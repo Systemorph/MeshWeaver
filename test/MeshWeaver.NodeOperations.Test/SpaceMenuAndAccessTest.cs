@@ -44,7 +44,7 @@ public class SpaceMenuAndAccessTest(ITestOutputHelper output) : MonolithMeshTest
         {
             Name = "Test Space",
             NodeType = SpaceNodeType.NodeType,
-            Content = new Space { Name = "Test Space" }
+            Content = new Space()
         };
         var created = await NodeFactory.CreateNode(spaceNode).Should().Emit();
         created.Should().NotBeNull();
@@ -76,7 +76,7 @@ public class SpaceMenuAndAccessTest(ITestOutputHelper output) : MonolithMeshTest
         {
             Name = "Test Space",
             NodeType = SpaceNodeType.NodeType,
-            Content = new Space { Name = "Test Space" }
+            Content = new Space()
         };
         await NodeFactory.CreateNode(spaceNode).Should().Emit();
 
@@ -108,7 +108,7 @@ public class SpaceMenuAndAccessTest(ITestOutputHelper output) : MonolithMeshTest
         {
             Name = "Test Space",
             NodeType = SpaceNodeType.NodeType,
-            Content = new Space { Name = "Test Space" }
+            Content = new Space()
         };
         await NodeFactory.CreateNode(spaceNode).Should().Emit();
 
@@ -134,7 +134,7 @@ public class SpaceMenuAndAccessTest(ITestOutputHelper output) : MonolithMeshTest
         {
             Name = "Test Space",
             NodeType = SpaceNodeType.NodeType,
-            Content = new Space { Name = "Test Space" }
+            Content = new Space()
         };
         await NodeFactory.CreateNode(spaceNode).Should().Emit();
 

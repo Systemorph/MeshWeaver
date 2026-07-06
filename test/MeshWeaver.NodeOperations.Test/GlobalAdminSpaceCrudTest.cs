@@ -40,7 +40,7 @@ public class GlobalAdminSpaceCrudTest(ITestOutputHelper output) : MonolithMeshTe
         {
             Name = "Test Space",
             NodeType = SpaceNodeType.NodeType,
-            Content = new Space { Name = "Test Space" }
+            Content = new Space()
         };
 
         var created = await NodeFactory.CreateNode(spaceNode).Should().Emit();
@@ -61,7 +61,7 @@ public class GlobalAdminSpaceCrudTest(ITestOutputHelper output) : MonolithMeshTe
         {
             Name = "Test Space",
             NodeType = SpaceNodeType.NodeType,
-            Content = new Space { Name = "Test Space" }
+            Content = new Space()
         };
         await NodeFactory.CreateNode(spaceNode).Should().Emit();
 
@@ -82,14 +82,14 @@ public class GlobalAdminSpaceCrudTest(ITestOutputHelper output) : MonolithMeshTe
         {
             Name = "Original Name",
             NodeType = SpaceNodeType.NodeType,
-            Content = new Space { Name = "Original Name" }
+            Content = new Space()
         };
         await NodeFactory.CreateNode(spaceNode).Should().Emit();
 
         var updated = spaceNode with
         {
             Name = "Updated Name",
-            Content = new Space { Name = "Updated Name", Description = "Updated description" }
+            Content = new Space { Description = "Updated description" }
         };
         await NodeFactory.UpdateNode(updated).Should().Emit();
 
@@ -110,7 +110,7 @@ public class GlobalAdminSpaceCrudTest(ITestOutputHelper output) : MonolithMeshTe
         {
             Name = "To Delete",
             NodeType = SpaceNodeType.NodeType,
-            Content = new Space { Name = "To Delete" }
+            Content = new Space()
         };
         await NodeFactory.CreateNode(spaceNode).Should().Emit();
 
@@ -131,7 +131,7 @@ public class GlobalAdminSpaceCrudTest(ITestOutputHelper output) : MonolithMeshTe
         {
             Name = "Partition Cleanup",
             NodeType = SpaceNodeType.NodeType,
-            Content = new Space { Name = "Partition Cleanup" }
+            Content = new Space()
         };
         await NodeFactory.CreateNode(spaceNode).Should().Emit();
 
@@ -167,7 +167,7 @@ public class GlobalAdminSpaceCrudTest(ITestOutputHelper output) : MonolithMeshTe
         {
             Name = "Permission Test Space",
             NodeType = SpaceNodeType.NodeType,
-            Content = new Space { Name = "Permission Test Space" }
+            Content = new Space()
         };
         await NodeFactory.CreateNode(spaceNode).Should().Emit();
 
@@ -198,7 +198,7 @@ public class GlobalAdminSpaceCrudTest(ITestOutputHelper output) : MonolithMeshTe
         {
             Name = "Test Space",
             NodeType = SpaceNodeType.NodeType,
-            Content = new Space { Name = "Test Space" }
+            Content = new Space()
         };
         await NodeFactory.CreateNode(spaceNode).Should().Emit();
 

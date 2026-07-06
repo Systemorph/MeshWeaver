@@ -109,7 +109,7 @@ public class AnonymousSpaceReadSecurityTests(PostgreSqlFixture fixture, ITestOut
         {
             Name = space,
             NodeType = SpaceNodeType.NodeType,
-            Content = new Space { Name = space }
+            Content = new Space()
         };
         await NodeFactory.CreateNode(spaceNode).Should().Within(90.Seconds()).Emit();
 
