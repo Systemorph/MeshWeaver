@@ -1,0 +1,104 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "whisper.fullname" . }}
+  labels:
+    {{- include "whisper.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "whisper.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "whisper.selectorLabels" . | nindent 8 }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      # Fetch the (large, un-baked) model once per pod into a shared emptyDir. Reuses the whisper
+      # image — it ships curl — so no extra image dependency. whisper-server then loads /models/model.bin.
+      initContainers:
+        - name: fetch-model
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -e
+              if [ ! -s /models/model.bin ]; then
+                echo "Downloading whisper model from $MODEL_URL ..."
+                curl -fSL --retry 3 --retry-delay 5 "$MODEL_URL" -o /models/model.bin
+              fi
+              echo "Model ready: $(wc -c < /models/model.bin) bytes"
+          env:
+            - name: MODEL_URL
+              value: {{ .Values.model.url | quote }}
+          volumeMounts:
+            - name: models
+              mountPath: /models
+      containers:
+        - name: whisper
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          # The image CMD already runs whisper-server with these envs on :8080 (see Dockerfile).
+          env:
+            - name: WHISPER_MODEL
+              value: /models/model.bin
+            - name: WHISPER_LANGUAGE
+              value: {{ .Values.model.language | quote }}
+            - name: WHISPER_THREADS
+              value: {{ .Values.model.threads | quote }}
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          # A bare GET returns a non-5xx once the server is up AND the model is loaded — so the
+          # startupProbe gates the model download + load before readiness/liveness begin.
+          startupProbe:
+            httpGet:
+              path: /
+              port: http
+            {{- with .Values.startupProbe }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            {{- with .Values.readinessProbe }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            {{- with .Values.livenessProbe }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: models
+              mountPath: /models
+      volumes:
+        - name: models
+          emptyDir: {}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
