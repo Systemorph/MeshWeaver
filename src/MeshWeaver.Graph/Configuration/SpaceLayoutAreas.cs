@@ -238,46 +238,10 @@ public static class SpaceLayoutAreas
             .WithOrientation(Orientation.Horizontal)
             .WithStyle($"gap: 24px; align-items: flex-start; width: 100%; {ContentInset}");
 
-        // Logo (large, rounded square like GitHub). A logo may be an inline <svg>, an image URL, or
-        // an emoji/glyph — a node's own Icon is often inline SVG (e.g. the YouTube space), and an
-        // <img src="<svg…>"> NEVER renders (src must be a URL/data-URI), so embed SVG directly like the
-        // catalog card does. That is the exact reason the icon showed in the catalog but not on the page.
-        UiControl logoControl;
-        var logoTrimmed = logo?.Trim();
-        if (!string.IsNullOrEmpty(logoTrimmed) && logoTrimmed.StartsWith("<svg", StringComparison.OrdinalIgnoreCase))
-        {
-            logoControl = Controls.Html(
-                "<div style=\"height: 72px; width: 72px; border-radius: 12px; background: var(--neutral-layer-2); " +
-                "padding: 6px; box-sizing: border-box; overflow: hidden; display: flex; align-items: center; justify-content: center;\">" +
-                $"{OverviewLayoutArea.SizeInlineSvg(logoTrimmed)}</div>");
-        }
-        else if (!string.IsNullOrEmpty(logoTrimmed)
-                 && (logoTrimmed.StartsWith("http", StringComparison.OrdinalIgnoreCase)
-                     || logoTrimmed.StartsWith("/") || logoTrimmed.StartsWith("data:", StringComparison.OrdinalIgnoreCase)
-                     || logoTrimmed.Contains('.')))
-        {
-            // Natural-aspect, never cropped: a wide banner logo (e.g. ATIOZ) and a square avatar both
-            // render whole. max-box + auto sizing scales the image to fit its own aspect ratio.
-            logoControl = Controls.Html(
-                $"<img src=\"{System.Web.HttpUtility.HtmlAttributeEncode(logoTrimmed)}\" alt=\"\" style=\"max-height: 96px; max-width: 340px; width: auto; height: auto; border-radius: 12px; object-fit: contain; background: var(--neutral-layer-2); padding: 6px; box-sizing: border-box;\" />");
-        }
-        else if (!string.IsNullOrEmpty(logoTrimmed))
-        {
-            // Emoji / glyph.
-            logoControl = Controls.Html(
-                "<div style=\"width: 72px; height: 72px; border-radius: 12px; background: var(--neutral-layer-2); " +
-                "display: flex; align-items: center; justify-content: center; font-size: 2.5rem;\">" +
-                $"{System.Web.HttpUtility.HtmlEncode(logoTrimmed)}</div>");
-        }
-        else
-        {
-            var initials = GetInitials(spaceName);
-            logoControl = Controls.Html(
-                $"<div style=\"width: 100px; height: 100px; border-radius: 12px; background: var(--accent-fill-rest); display: flex; align-items: center; justify-content: center; color: white; font-size: 2.5rem; font-weight: 600;\">" +
-                $"{System.Web.HttpUtility.HtmlEncode(initials)}</div>");
-        }
-
-        headerRow = headerRow.WithView(logoControl);
+        // Logo (large, rounded square like GitHub). An inline-SVG icon renders as REAL svg (never
+        // <img src="<svg…">, which shows a broken-image dot); an image URL/data-URI keeps <img>; an
+        // emoji/glyph gets a tile; empty falls back to the space initials. See BuildLogoMarkup.
+        headerRow = headerRow.WithView(Controls.Html(BuildLogoMarkup(logo, spaceName)));
 
         var infoColumn = Controls.Stack.WithStyle("gap: 8px; flex: 1;");
 
@@ -626,6 +590,59 @@ public static class SpaceLayoutAreas
     private static string? GetNodeLogo(MeshNode? node)
     {
         return MeshNodeThumbnailControl.GetImageUrlForNode(node);
+    }
+
+    /// <summary>
+    /// Builds the space header logo markup, detecting the icon shape so an inline
+    /// <c>&lt;svg&gt;</c> renders as REAL svg (never wrapped in <c>&lt;img src="&lt;svg…"&gt;</c>,
+    /// which shows a broken-image dot). A real logo URL / content-ref keeps the <c>&lt;img&gt;</c>;
+    /// an empty logo falls back to the space initials tile.
+    /// </summary>
+    /// <param name="logo">The space logo value: an inline svg, an image URL/data URI, or null/empty.</param>
+    /// <param name="spaceName">The space name used for the initials fallback.</param>
+    internal static string BuildLogoMarkup(string? logo, string spaceName)
+    {
+        const string boxStyle =
+            "max-height: 96px; max-width: 340px; border-radius: 12px; background: var(--neutral-layer-2); " +
+            "padding: 6px; box-sizing: border-box;";
+
+        if (MeshNodeImageHelper.IsInlineSvg(logo))
+        {
+            // Emit the svg DIRECTLY. Inject a fit style right after "<svg" so a viewBox-only
+            // icon scales to the logo box instead of the browser default ~300×150 (the first
+            // duplicate style attribute wins in HTML parsing, so the injected size takes effect).
+            var idx = logo!.IndexOf("<svg", StringComparison.OrdinalIgnoreCase);
+            var sized = logo.Insert(idx + "<svg".Length,
+                " style=\"max-height: 84px; max-width: 328px; width: auto; height: auto; display: block;\"");
+            return $"<div style=\"{boxStyle} display: inline-flex; align-items: center; justify-content: center;\">"
+                   + sized + "</div>";
+        }
+
+        var logoTrimmed = logo?.Trim();
+        if (!string.IsNullOrEmpty(logoTrimmed)
+            && (logoTrimmed.StartsWith("http", StringComparison.OrdinalIgnoreCase)
+                || logoTrimmed.StartsWith("/")
+                || logoTrimmed.StartsWith("data:", StringComparison.OrdinalIgnoreCase)
+                || logoTrimmed.Contains('.')))
+        {
+            // A real image (URL / content-ref / data-URI). Natural-aspect, never cropped: a wide banner
+            // logo (e.g. ATIOZ) and a square avatar both render whole via max-box + auto sizing.
+            return $"<img src=\"{System.Web.HttpUtility.HtmlAttributeEncode(logoTrimmed)}\" alt=\"\" "
+                   + $"style=\"{boxStyle} width: auto; height: auto; object-fit: contain;\" />";
+        }
+
+        if (!string.IsNullOrEmpty(logoTrimmed))
+        {
+            // Emoji / glyph — a plain character is NOT a valid <img src>, so render it as a tile.
+            return "<div style=\"width: 72px; height: 72px; border-radius: 12px; background: var(--neutral-layer-2); "
+                   + "display: flex; align-items: center; justify-content: center; font-size: 2.5rem;\">"
+                   + $"{System.Web.HttpUtility.HtmlEncode(logoTrimmed)}</div>";
+        }
+
+        var initials = GetInitials(spaceName);
+        return "<div style=\"width: 100px; height: 100px; border-radius: 12px; background: var(--accent-fill-rest); "
+               + "display: flex; align-items: center; justify-content: center; color: white; font-size: 2.5rem; "
+               + $"font-weight: 600;\">{System.Web.HttpUtility.HtmlEncode(initials)}</div>";
     }
 
     private static string GetInitials(string name)

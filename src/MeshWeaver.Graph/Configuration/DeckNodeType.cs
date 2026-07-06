@@ -78,11 +78,15 @@ public record DeckContent
     public string? Description { get; init; }
 
     /// <summary>
-    /// The ordered list of child slide (or page) references — this IS the deck's order,
-    /// declared EXTERNALLY here rather than on each slide. Each entry is either the child's
-    /// id (relative to the deck, e.g. <c>"intro"</c>) or its full path; both resolve to a
-    /// child node under the deck. The side-nav, prev/next, and Present walk follow this order.
-    /// Default empty.
+    /// The ordered list of slide (or page) <b>references</b> — this IS the deck's order,
+    /// declared EXTERNALLY here rather than on each slide. A referenced slide may live
+    /// <b>anywhere in the mesh</b>: presentation is fully decoupled from the slide nodes, so the
+    /// SAME slide path may appear in many decks, in different orders and selections. Each entry is
+    /// either a bare id (relative to the deck — <c>"intro"</c> → <c>"{deck}/intro"</c>, kept for
+    /// backward compatibility) or an <b>absolute path</b> to a slide node anywhere (any entry
+    /// containing a <c>/</c> is treated as an absolute path). Each is resolved to its node via
+    /// <c>workspace.GetMeshNodeStream(path)</c>. The side-nav, prev/next/index/count, and the
+    /// Present walk all follow this order. Default empty.
     /// </summary>
     public ImmutableList<string> Slides { get; init; } = ImmutableList<string>.Empty;
 }
