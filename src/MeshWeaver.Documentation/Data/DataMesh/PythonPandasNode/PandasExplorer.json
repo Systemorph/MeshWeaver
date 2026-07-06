@@ -1,6 +1,6 @@
 {
   "id": "PandasExplorer",
-  "namespace": "PythonDemo",
+  "namespace": "Doc/DataMesh/PythonPandasNode",
   "name": "Pandas Explorer",
   "nodeType": "NodeType",
   "category": "Types",
@@ -8,7 +8,7 @@
   "isPersistent": true,
   "content": {
     "$type": "NodeTypeDefinition",
-    "namespace": "PythonDemo",
+    "namespace": "Doc/DataMesh/PythonPandasNode",
     "displayName": "Pandas Explorer",
     "iconName": "Table",
     "description": "Buttons + text input that control a Python-held pandas DataFrame over the mesh; the grid renders the live frame returned by the participant.",

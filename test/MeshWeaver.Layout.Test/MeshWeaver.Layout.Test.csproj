@@ -19,8 +19,8 @@
        interactive frontend has a single source of truth: the same files deployed to the mesh are
        compiled + tested here, and the -warnaserror gate covers them. -->
   <ItemGroup>
-    <Compile Include="..\..\samples\Graph\Data\PythonDemo\PandasExplorer\Source\PandasExplorer.cs" Link="PandasExplorerSample\PandasExplorer.cs" />
-    <Compile Include="..\..\samples\Graph\Data\PythonDemo\PandasExplorer\Source\PandasExplorerLayoutAreas.cs" Link="PandasExplorerSample\PandasExplorerLayoutAreas.cs" />
+    <Compile Include="..\..\src\MeshWeaver.Documentation\Data\DataMesh\PythonPandasNode\PandasExplorer\Source\PandasExplorer.cs" Link="PandasExplorerSample\PandasExplorer.cs" />
+    <Compile Include="..\..\src\MeshWeaver.Documentation\Data\DataMesh\PythonPandasNode\PandasExplorer\Source\PandasExplorerLayoutAreas.cs" Link="PandasExplorerSample\PandasExplorerLayoutAreas.cs" />
   </ItemGroup>
 
 </Project>
