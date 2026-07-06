@@ -118,14 +118,18 @@ public static class DeleteLayoutArea
             ? $"This will permanently delete this node and <strong>{descendantCount} descendant node(s)</strong> under <code>{nodePath}</code>."
             : $"This will permanently delete the node at <code>{nodePath}</code>.";
 
-        // Explicit light-background + dark-text colors (NOT theme vars): --error-container/--error
-        // resolved to a saturated pink with inherited white text in some themes — the warning was
-        // illegible (white on bright pink). Fixed dark-red-on-light-pink reads in every theme.
+        // Ready-made, theme-aware styling: Fluent's status-DANGER design tokens — the SAME ones
+        // <FluentMessageBar Intent="Error"> (see MeshNodeErrorCardView) uses, so it reads correctly in
+        // BOTH light and dark. (The old hardcoded pink #fde8e8 was a light-only box that clashed on a
+        // dark page.) The var() fallbacks are cross-mode too — a translucent-red tint + mid-red text —
+        // so it degrades safely if a token is ever absent. Text inherits the danger foreground.
         stack = stack.WithView(Controls.Html(
-            "<div style=\"padding: 16px; background: #fde8e8; border-radius: 8px; " +
-            "border: 1px solid #d32f2f; margin-bottom: 24px; color: #5c1a1a;\">" +
-            "<p style=\"margin: 0 0 8px 0; font-weight: 600; color: #b3261e;\">Warning: This action cannot be undone!</p>" +
-            $"<p style=\"margin: 0; color: #5c1a1a;\">{warningText}</p>" +
+            "<div style=\"padding: 16px; border-radius: 8px; margin-bottom: 24px; " +
+            "background: var(--colorStatusDangerBackground1, rgba(211,47,47,0.12)); " +
+            "border: 1px solid var(--colorStatusDangerBorder1, rgba(211,47,47,0.5)); " +
+            "color: var(--colorStatusDangerForeground1, #d32f2f);\">" +
+            "<p style=\"margin: 0 0 8px 0; font-weight: 600;\">Warning: This action cannot be undone!</p>" +
+            $"<p style=\"margin: 0;\">{warningText}</p>" +
             "</div>"));
 
         stack = stack.WithView(Controls.Stack
@@ -249,12 +253,16 @@ public static class DeleteLayoutArea
 
         if (status.Kind == DeleteStatusKind.Done)
             return Controls.Html(
-                "<div style=\"padding: 12px 16px; background: var(--success-container, #e6f7e6); color: var(--success, #107c10); border-radius: 6px; margin-bottom: 16px;\">Node deleted. Redirecting…</div>");
+                "<div style=\"padding: 12px 16px; border-radius: 6px; margin-bottom: 16px; " +
+                "background: var(--colorStatusSuccessBackground1, rgba(16,124,16,0.12)); " +
+                "color: var(--colorStatusSuccessForeground1, #107c10);\">Node deleted. Redirecting…</div>");
 
         // Failed
         var message = System.Web.HttpUtility.HtmlEncode(status.ErrorMessage ?? "Unknown error");
         return Controls.Html(
-            $"<div style=\"padding: 12px 16px; background: var(--error-container, #fde8e8); color: var(--error, #d32f2f); border-radius: 6px; margin-bottom: 16px;\"><strong>Delete failed:</strong> {message}</div>");
+            "<div style=\"padding: 12px 16px; border-radius: 6px; margin-bottom: 16px; " +
+            "background: var(--colorStatusDangerBackground1, rgba(211,47,47,0.12)); " +
+            $"color: var(--colorStatusDangerForeground1, #d32f2f);\"><strong>Delete failed:</strong> {message}</div>");
     }
 
     private enum DeleteStatusKind { Idle, InFlight, Done, Failed }
