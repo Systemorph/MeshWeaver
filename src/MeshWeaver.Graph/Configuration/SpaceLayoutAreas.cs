@@ -405,8 +405,15 @@ public static class SpaceLayoutAreas
         // room below it (the catalog is no longer a fixed LayoutArea — see BuildSpaceView).
         var bodyStyle = $"{ContentInset} padding-top: 24px; padding-bottom: 48px;";
 
+        // The header already shows node.Name as the H1 — strip a leading duplicate title from the body
+        // (a course/markdown page whose content opens with `# {name}` would show the title twice).
         if (!string.IsNullOrWhiteSpace(node?.PreRenderedHtml))
-            return new MarkdownControl("") { Html = node.PreRenderedHtml }.WithStyle(bodyStyle);
+            return new MarkdownControl("")
+            {
+                Html = string.IsNullOrEmpty(node!.Name)
+                    ? node.PreRenderedHtml
+                    : OverviewLayoutArea.StripLeadingTitleHtml(node.PreRenderedHtml, node.Name),
+            }.WithStyle(bodyStyle);
 
         // 🚨 NodePath is what makes the body's RELATIVE @@-embeds resolve. The default
         // welcome ships @@("area/Search"); the body MarkdownControl is a CHILD of the Overview
@@ -415,6 +422,10 @@ public static class SpaceLayoutAreas
         // Space path makes @@("area/Search") resolve to {spacePath}/area/Search. Authored
         // bodies may also use the absolute @@/{space}/area/Search, which resolves either way.
         var body = !string.IsNullOrWhiteSpace(space?.Body) ? space!.Body! : SpaceNodeType.WelcomeMarkdown;
+        // Strip a leading `# {name}` the header already shows (a no-op for the welcome default, whose
+        // heading is "# Welcome", not the space name).
+        if (!string.IsNullOrEmpty(node?.Name))
+            body = OverviewLayoutArea.StripLeadingTitleMarkdown(body, node.Name) ?? body;
         return (Controls.Markdown(body) with { NodePath = spacePath }).WithStyle(bodyStyle);
     }
 

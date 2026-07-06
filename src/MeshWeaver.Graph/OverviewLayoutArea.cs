@@ -100,12 +100,62 @@ public static class OverviewLayoutArea
                 => c2.GetString(),
             _ => null
         };
-        var hasHtml = !string.IsNullOrWhiteSpace(node.PreRenderedHtml);
+        // The page header already renders node.Name as the H1. If the body ALSO opens with a top-level
+        // heading that repeats the name (a common authoring habit — e.g. a course/markdown page starting
+        // `# Agentic Engineering`), it shows the title TWICE. Strip that leading duplicate from both the
+        // raw markdown and the pre-rendered HTML — only when it MATCHES the name, so a different first
+        // heading is left untouched.
+        var name = node.Name;
+        var html = node.PreRenderedHtml;
+        if (!string.IsNullOrEmpty(name))
+        {
+            rawMarkdown = StripLeadingTitleMarkdown(rawMarkdown, name);
+            html = StripLeadingTitleHtml(html, name);
+        }
+
+        var hasHtml = !string.IsNullOrWhiteSpace(html);
         var hasRaw = !string.IsNullOrWhiteSpace(rawMarkdown);
         if (!hasHtml && !hasRaw)
             return null;
-        return new MarkdownControl(rawMarkdown ?? "") { Html = node.PreRenderedHtml }
+        return new MarkdownControl(rawMarkdown ?? "") { Html = html }
             .WithStyle("padding: 0 0 48px 0;");
+    }
+
+    /// <summary>Removes a leading <c># {name}</c> ATX heading from markdown when it duplicates the node
+    /// name (the header already shows it). Only a MATCHING leading H1 is stripped.</summary>
+    internal static string? StripLeadingTitleMarkdown(string? markdown, string name)
+    {
+        if (string.IsNullOrEmpty(markdown))
+            return markdown;
+        var lines = markdown.Split('\n');
+        var i = 0;
+        while (i < lines.Length && string.IsNullOrWhiteSpace(lines[i]))
+            i++;
+        if (i < lines.Length && lines[i].TrimStart().StartsWith("# ", StringComparison.Ordinal))
+        {
+            var heading = lines[i].Trim()[2..].Trim();
+            if (string.Equals(heading, name, StringComparison.OrdinalIgnoreCase))
+                return string.Join('\n', lines.Skip(i + 1)).TrimStart('\n');
+        }
+        return markdown;
+    }
+
+    /// <summary>Removes a leading <c>&lt;h1&gt;{name}&lt;/h1&gt;</c> from pre-rendered HTML when it
+    /// duplicates the node name.</summary>
+    internal static string? StripLeadingTitleHtml(string? html, string name)
+    {
+        if (string.IsNullOrEmpty(html))
+            return html;
+        var trimmed = html.TrimStart();
+        var m = System.Text.RegularExpressions.Regex.Match(trimmed, "^<h1\\b[^>]*>(?<t>.*?)</h1>\\s*",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Singleline);
+        if (m.Success)
+        {
+            var text = System.Web.HttpUtility.HtmlDecode(m.Groups["t"].Value).Trim();
+            if (string.Equals(text, name, StringComparison.OrdinalIgnoreCase))
+                return trimmed[m.Length..];
+        }
+        return html;
     }
 
     /// <summary>
