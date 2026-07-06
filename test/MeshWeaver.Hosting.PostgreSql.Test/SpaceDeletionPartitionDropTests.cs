@@ -1,5 +1,6 @@
 using System;
 using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Fixture;
 using MeshWeaver.Graph;
@@ -50,6 +51,15 @@ public class SpaceDeletionPartitionDropTests(PostgreSqlFixture fixture, ITestOut
             "SELECT COUNT(*) FROM information_schema.schemata WHERE schema_name = @s",
             new[] { ("s", (object)schema) });
 
+    // AUTHORITATIVE count of the Admin/Partition/{id} definition row — direct PG, past every
+    // per-node-hub cache / OwnNodeCache / catalog-stream layer. The Admin partition schema
+    // ('admin') is a standard partition and is never dropped, so this row's presence is the
+    // ground truth for "was the definition resurrected".
+    private IObservable<long> AdminPartitionDefRowCount(string id) =>
+        _fixture.DataSource.ScalarLong(
+            "SELECT COUNT(*) FROM admin.mesh_nodes WHERE namespace = @ns AND id = @id",
+            new[] { ("ns", (object)PartitionNodeType.Namespace), ("id", (object)id) });
+
     /// <summary>
     /// The real user flow end-to-end: create a Space (partition provisioned), delete it,
     /// and the whole partition is gone — schema dropped, <c>Admin/Partition/{id}</c>
@@ -91,6 +101,22 @@ public class SpaceDeletionPartitionDropTests(PostgreSqlFixture fixture, ITestOut
             .SelectMany(_ => ReadNode($"{PartitionNodeType.Namespace}/{spaceId}"))
             .Should().Within(15.Seconds()).Match(n => n is null,
                 "deleting a Space must remove its Admin/Partition definition");
+
+        // 🚨 RESURRECTION GUARD — pins the RecentlyDeletedRegistry "delete wins" fix.
+        // A per-node hub that (re)activates AFTER the delete holds a STALE own-node snapshot
+        // (the routing catalog's Replay(1) buffer) and, unguarded, RE-PERSISTS the deleted
+        // definition ~200 ms later via its activation-save — resurrecting the row so every
+        // read then correctly sees a live node (the intermittent bulk flake this pins). Assert
+        // AUTHORITATIVE storage (direct PG, past all hub caches) stays 0 for a sustained window;
+        // a resurrecting write would land inside it. Negative-assertion window (confirm nothing
+        // reappears) — the sanctioned Task.Delay use.
+        for (var i = 0; i < 15; i++)
+        {
+            (await AdminPartitionDefRowCount(spaceId).FirstAsync().ToTask())
+                .Should().Be(0L,
+                    "a per-node hub activating after the delete must not resurrect the Admin/Partition definition");
+            await Task.Delay(100);
+        }
 
         // Same id can be recreated — provisioning starts from scratch and writes work.
         await meshService.CreateNode(new MeshNode(spaceId)
