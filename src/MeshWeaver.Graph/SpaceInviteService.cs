@@ -39,9 +39,26 @@ public sealed class SpaceInviteService(
     AccessService accessService,
     ILogger<SpaceInviteService>? logger = null)
 {
-    /// <summary>Invites <paramref name="email"/> to <paramref name="spacePath"/> with <paramref name="role"/>.</summary>
+    /// <summary>Invites <paramref name="email"/> to <paramref name="spacePath"/> with <paramref name="role"/>
+    /// (the Space flavour — also pins the Space to the dashboard when <paramref name="pin"/>).</summary>
     public IObservable<SpaceInviteOutcome> Invite(
         string spacePath, string email, string role, bool pin, string? invitedBy)
+        => GrantOrScheduleAccess(spacePath, email, role, pin, invitedBy, note: $"Invited to space {spacePath}");
+
+    /// <summary>
+    /// The general grant-or-schedule primitive behind BOTH the Space invite and the granular Access
+    /// Control "grant by email" path. Grants <paramref name="role"/> at <c>{nodePath}/_Access</c> to an
+    /// existing account NOW; or — when no account exists yet — creates an <c>Invitation</c> plus a durable
+    /// deferred <see cref="EventSubscription"/> (<see cref="EventContinuationType.GrantSpaceAccess"/> with
+    /// <see cref="EventSubscription.TargetPath"/> = <paramref name="nodePath"/>,
+    /// <see cref="EventSubscription.Role"/> = <paramref name="role"/>) that lands the SAME role at the SAME
+    /// node path the moment a <c>User</c> with that email is created. The scheduled grant is byte-identical
+    /// to the immediate one, so an invitee ends up with exactly the assignment an already-provisioned
+    /// subject would. Space invites pass <paramref name="pin"/> = true (also pin the Space); the Access
+    /// Control UI passes <paramref name="pin"/> = false (a bare granular grant — pinning is Space-only).
+    /// </summary>
+    public IObservable<SpaceInviteOutcome> GrantOrScheduleAccess(
+        string nodePath, string email, string role, bool pin, string? invitedBy, string? note = null)
     {
         var normalizedEmail = email.Trim();
 
@@ -54,8 +71,8 @@ public sealed class SpaceInviteService(
             {
                 var existing = users.FirstOrDefault(u => EmailMatches(u, normalizedEmail));
                 return existing is not null
-                    ? GrantNow(existing.Id, spacePath, role, pin)
-                    : ScheduleAndInvite(spacePath, normalizedEmail, role, pin, invitedBy);
+                    ? GrantNow(existing.Id, nodePath, role, pin)
+                    : ScheduleAndInvite(nodePath, normalizedEmail, role, pin, invitedBy, note);
             });
     }
 
@@ -74,7 +91,7 @@ public sealed class SpaceInviteService(
     }
 
     private IObservable<SpaceInviteOutcome> ScheduleAndInvite(
-        string spacePath, string email, string role, bool pin, string? invitedBy)
+        string spacePath, string email, string role, bool pin, string? invitedBy, string? note = null)
     {
         var subscription = new EventSubscription
         {
@@ -96,7 +113,7 @@ public sealed class SpaceInviteService(
         {
             NodeType = InvitationNodeType.NodeType,
             Name = $"Invitation {email}",
-            Content = new Invitation { Email = email, InvitedBy = invitedBy, Note = $"Invited to space {spacePath}" },
+            Content = new Invitation { Email = email, InvitedBy = invitedBy, Note = note ?? $"Invited to space {spacePath}" },
         };
 
         // Both writes land in the Admin partition → system identity, constructed inside the scope.
