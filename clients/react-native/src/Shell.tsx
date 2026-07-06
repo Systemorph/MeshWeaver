@@ -343,7 +343,7 @@ const makeStyles = (p: Palette) => StyleSheet.create({
   brand: { flexDirection: "row", alignItems: "center", gap: 8, width: 210 },
   brandMobile: { flexDirection: "row", alignItems: "center" },
   hamburger: { width: 34, height: 34, borderRadius: 8, alignItems: "center", justifyContent: "center" },
-  hamburgerText: { fontSize: 20, color: "#242424" },
+  hamburgerText: { fontSize: 20, color: p.text },
   scrim: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0, backgroundColor: "rgba(0,0,0,0.35)", zIndex: 1 },
   drawer: { position: "absolute", top: 0, left: 0, bottom: 0, zIndex: 2, elevation: 8, shadowColor: "#000", shadowOpacity: 0.2, shadowRadius: 12, shadowOffset: { width: 2, height: 0 } },
   logo: { width: 26, height: 26, borderRadius: 6, backgroundColor: p.accent, alignItems: "center", justifyContent: "center" },

@@ -227,7 +227,13 @@ const NumberField: ControlComponent = ({ control }) => {
         keyboardType="numeric"
         editable={!f.disabled}
         placeholder={f.placeholder}
-        onChangeText={(t) => f.setValue(t === "" ? null : Number(t))}
+        // Empty → null; otherwise only commit a FINITE parse. Intermediate input ("-", "1.", "1e")
+        // parses to NaN — never push that into the bound mesh data.
+        onChangeText={(t) => {
+          if (t === "") { f.setValue(null); return; }
+          const n = Number(t);
+          if (Number.isFinite(n)) f.setValue(n);
+        }}
         onBlur={f.onBlur}
       />
     </Labeled>

@@ -40,16 +40,20 @@ export function bytesToBase64(bytes: Uint8Array): string {
 // Decode a base64 string whose length is a multiple of 4 (may carry '=' padding at group ends). Over-
 // allocates then trims, so mid-stream padded groups (per-block base64) decode correctly too. Non-base64
 // bytes (stray whitespace) are skipped rather than throwing.
+// REV is only 128 wide; a char code ≥ 128 (or NaN past the end) indexes out of bounds → `undefined`,
+// which is NOT caught by a `< 0` check. Fold every out-of-range/non-base64 char to -1 so it's skipped.
+const rev = (cc: number): number => (cc >= 0 && cc < 128 ? REV[cc] : -1);
+
 export function base64GroupsToBytes(s: string): Uint8Array {
   const out = new Uint8Array((Math.ceil(s.length / 4)) * 3);
   let o = 0;
   for (let i = 0; i + 3 < s.length; i += 4) {
     const c2 = s.charCodeAt(i + 2);
     const c3 = s.charCodeAt(i + 3);
-    const a = REV[s.charCodeAt(i)];
-    const b = REV[s.charCodeAt(i + 1)];
-    const c = c2 === 61 ? 0 : REV[c2]; // 61 = '='
-    const d = c3 === 61 ? 0 : REV[c3];
+    const a = rev(s.charCodeAt(i));
+    const b = rev(s.charCodeAt(i + 1));
+    const c = c2 === 61 ? 0 : rev(c2); // 61 = '='
+    const d = c3 === 61 ? 0 : rev(c3);
     if (a < 0 || b < 0 || c < 0 || d < 0) continue;
     const n = (a << 18) | (b << 12) | (c << 6) | d;
     out[o++] = (n >> 16) & 255;

@@ -123,7 +123,7 @@ function ConnectScreen({ onConnected }: { onConnected: () => void }): ReactNode 
   const [instances, setInstances] = useState<MeshInstance[]>(loadInstances());
   const [current, setCurrent] = useState(currentInstance().name);
   const [name, setName] = useState("");
-  const [url, setUrl] = useState(defaultPortalUrl()); // prefill the cloud portal — just paste a token
+  const [url, setUrl] = useState(defaultPortalUrl()); // prefill the default portal (the local monolith) — edit + paste a token for a remote one
   const [token, setToken] = useState("");
 
   const refresh = () => {
