@@ -238,8 +238,9 @@ public static class SpaceLayoutAreas
             .WithOrientation(Orientation.Horizontal)
             .WithStyle($"gap: 24px; align-items: flex-start; width: 100%; {ContentInset}");
 
-        // Logo (large, rounded square like GitHub). An inline-SVG icon is emitted INLINE (raw
-        // svg), never as <img src="<svg…"> — that rendered a broken-image dot.
+        // Logo (large, rounded square like GitHub). An inline-SVG icon renders as REAL svg (never
+        // <img src="<svg…">, which shows a broken-image dot); an image URL/data-URI keeps <img>; an
+        // emoji/glyph gets a tile; empty falls back to the space initials. See BuildLogoMarkup.
         headerRow = headerRow.WithView(Controls.Html(BuildLogoMarkup(logo, spaceName)));
 
         var infoColumn = Controls.Stack.WithStyle("gap: 8px; flex: 1;");
@@ -368,8 +369,15 @@ public static class SpaceLayoutAreas
         // room below it (the catalog is no longer a fixed LayoutArea — see BuildSpaceView).
         var bodyStyle = $"{ContentInset} padding-top: 24px; padding-bottom: 48px;";
 
+        // The header already shows node.Name as the H1 — strip a leading duplicate title from the body
+        // (a course/markdown page whose content opens with `# {name}` would show the title twice).
         if (!string.IsNullOrWhiteSpace(node?.PreRenderedHtml))
-            return new MarkdownControl("") { Html = node.PreRenderedHtml }.WithStyle(bodyStyle);
+            return new MarkdownControl("")
+            {
+                Html = string.IsNullOrEmpty(node!.Name)
+                    ? node.PreRenderedHtml
+                    : OverviewLayoutArea.StripLeadingTitleHtml(node.PreRenderedHtml, node.Name),
+            }.WithStyle(bodyStyle);
 
         // 🚨 NodePath is what makes the body's RELATIVE @@-embeds resolve. The default
         // welcome ships @@("area/Search"); the body MarkdownControl is a CHILD of the Overview
@@ -378,6 +386,10 @@ public static class SpaceLayoutAreas
         // Space path makes @@("area/Search") resolve to {spacePath}/area/Search. Authored
         // bodies may also use the absolute @@/{space}/area/Search, which resolves either way.
         var body = !string.IsNullOrWhiteSpace(space?.Body) ? space!.Body! : SpaceNodeType.WelcomeMarkdown;
+        // Strip a leading `# {name}` the header already shows (a no-op for the welcome default, whose
+        // heading is "# Welcome", not the space name).
+        if (!string.IsNullOrEmpty(node?.Name))
+            body = OverviewLayoutArea.StripLeadingTitleMarkdown(body, node.Name) ?? body;
         return (Controls.Markdown(body) with { NodePath = spacePath }).WithStyle(bodyStyle);
     }
 
@@ -606,12 +618,25 @@ public static class SpaceLayoutAreas
                    + sized + "</div>";
         }
 
-        if (!string.IsNullOrEmpty(logo))
+        var logoTrimmed = logo?.Trim();
+        if (!string.IsNullOrEmpty(logoTrimmed)
+            && (logoTrimmed.StartsWith("http", StringComparison.OrdinalIgnoreCase)
+                || logoTrimmed.StartsWith("/")
+                || logoTrimmed.StartsWith("data:", StringComparison.OrdinalIgnoreCase)
+                || logoTrimmed.Contains('.')))
         {
-            // Natural-aspect, never cropped: a wide banner logo (e.g. ATIOZ) and a square avatar both
-            // render whole via max-box + auto sizing (object-fit: contain backs that up).
-            return $"<img src=\"{System.Web.HttpUtility.HtmlAttributeEncode(logo)}\" alt=\"\" "
+            // A real image (URL / content-ref / data-URI). Natural-aspect, never cropped: a wide banner
+            // logo (e.g. ATIOZ) and a square avatar both render whole via max-box + auto sizing.
+            return $"<img src=\"{System.Web.HttpUtility.HtmlAttributeEncode(logoTrimmed)}\" alt=\"\" "
                    + $"style=\"{boxStyle} width: auto; height: auto; object-fit: contain;\" />";
+        }
+
+        if (!string.IsNullOrEmpty(logoTrimmed))
+        {
+            // Emoji / glyph — a plain character is NOT a valid <img src>, so render it as a tile.
+            return "<div style=\"width: 72px; height: 72px; border-radius: 12px; background: var(--neutral-layer-2); "
+                   + "display: flex; align-items: center; justify-content: center; font-size: 2.5rem;\">"
+                   + $"{System.Web.HttpUtility.HtmlEncode(logoTrimmed)}</div>";
         }
 
         var initials = GetInitials(spaceName);
