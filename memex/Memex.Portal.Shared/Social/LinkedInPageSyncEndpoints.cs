@@ -75,8 +75,8 @@ public static class LinkedInPageSyncEndpoints
             var clientId = config["Social:LinkedIn:ClientId"];
             if (string.IsNullOrEmpty(clientId))
                 return Results.Problem("LinkedIn client id is not configured (Social:LinkedIn:ClientId).", statusCode: 500);
-            if (string.IsNullOrWhiteSpace(page))
-                return Results.BadRequest("page query parameter is required.");
+            if (!IsSafePagePath(page))
+                return Results.BadRequest("page must be a mesh node path, e.g. LinkedIn/Systemorph.");
 
             var state = GenerateState();
             http.Response.Cookies.Append(OrgStateCookie,
@@ -135,6 +135,10 @@ public static class LinkedInPageSyncEndpoints
                 return Results.BadRequest("State mismatch (CSRF).");
             if (string.IsNullOrEmpty(code))
                 return Results.BadRequest("No authorization code.");
+            // pagePath comes from our own CSRF cookie (validated at /connect/linkedin/org),
+            // but re-validate before it lands in a Location header — defence in depth.
+            if (!IsSafePagePath(pagePath))
+                return Results.BadRequest("Invalid page path in state.");
 
             var clientId = config["Social:LinkedIn:ClientId"]!;
             var clientSecret = config["Social:LinkedIn:ClientSecret"] ?? "";
@@ -214,8 +218,8 @@ public static class LinkedInPageSyncEndpoints
             var logger = loggers.CreateLogger("LinkedInPageSync");
             if (!http.User.Identity?.IsAuthenticated ?? true)
                 return Results.Challenge(new AuthenticationProperties { RedirectUri = http.Request.Path + http.Request.QueryString });
-            if (string.IsNullOrWhiteSpace(page))
-                return Results.BadRequest("page query parameter is required.");
+            if (!IsSafePagePath(page))
+                return Results.BadRequest("page must be a mesh node path, e.g. LinkedIn/Systemorph.");
 
             // Read the stored org credential (typed — ApiCredentialNodeType registers PlatformCredential).
             PlatformCredential? credential;
@@ -353,7 +357,9 @@ public static class LinkedInPageSyncEndpoints
                 throw new LinkedInApiException("posts", (int)resp.StatusCode, await resp.Content.ReadAsStringAsync(ct));
 
             using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(ct));
-            if (!doc.RootElement.TryGetProperty("elements", out var els) || els.GetArrayLength() == 0)
+            if (!doc.RootElement.TryGetProperty("elements", out var els)
+                || els.ValueKind != JsonValueKind.Array
+                || els.GetArrayLength() == 0)
                 break;
 
             var count = 0;
@@ -438,6 +444,19 @@ public static class LinkedInPageSyncEndpoints
         RandomNumberGenerator.Fill(buf);
         return WebEncoders.Base64UrlEncode(buf);
     }
+
+    /// <summary>
+    /// A <c>page</c> value is a mesh node path (e.g. <c>LinkedIn/Systemorph</c>) that we
+    /// interpolate into <c>Results.Redirect($"/{page}...")</c>. Reject anything that could
+    /// turn a Location header into an open redirect: a leading slash (<c>//evil.com</c>),
+    /// a protocol-relative or scheme prefix, or path traversal.
+    /// </summary>
+    private static bool IsSafePagePath(string? page) =>
+        !string.IsNullOrWhiteSpace(page)
+        && !page.StartsWith('/')
+        && !page.Contains("//", StringComparison.Ordinal)
+        && !page.Contains("..", StringComparison.Ordinal)
+        && !page.Contains(':');
 
     private static string ShortReason(string body)
     {
