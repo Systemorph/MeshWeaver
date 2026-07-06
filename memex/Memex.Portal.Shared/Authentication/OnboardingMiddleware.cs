@@ -22,6 +22,9 @@ namespace Memex.Portal.Shared.Authentication;
 /// <list type="bullet">
 /// <item><description>No user node (or Transient) → redirect /onboarding</description></item>
 /// <item><description>Active node → update AccessContext with username, pass through</description></item>
+/// <item><description>Active node but sitting ON /onboarding (bookmark, or a cold-start
+/// race that bounced them here before the User catalog hydrated) → redirect home;
+/// the profile form is not for an already-onboarded user</description></item>
 /// </list>
 /// </para>
 ///
@@ -60,9 +63,12 @@ public class OnboardingMiddleware(RequestDelegate next, ILogger<OnboardingMiddle
     /// </summary>
     private static readonly TimeSpan RetryDelay = TimeSpan.FromMilliseconds(750);
 
+    // NOTE: "/onboarding" is deliberately NOT here. It still must never redirect a
+    // not-yet-onboarded user back TO onboarding (that would loop), but an ALREADY-
+    // onboarded user who lands there must be redirected home — so the page is resolved
+    // (not blanket-excluded) and handled explicitly in BuildPipeline via onOnboardingPage.
     private static readonly HashSet<string> ExcludedPrefixes = new(StringComparer.OrdinalIgnoreCase)
     {
-        "/onboarding",
         "/welcome",
         "/login",
         "/auth/",
@@ -96,13 +102,22 @@ public class OnboardingMiddleware(RequestDelegate next, ILogger<OnboardingMiddle
         //     unauthenticated / virtual / excluded path); fall through to next.
         var outcome = await BuildPipeline(context).FirstAsync().ToTask();
 
+        if (outcome == OnboardingOutcome.RedirectHome)
+        {
+            // Already-onboarded user hit /onboarding — the profile form is not for them.
+            // Server-side 302 home, BEFORE the page renders: no circuit dependency, no
+            // "Loading…/Redirecting…" spinner, no chance of the form flashing up.
+            context.Response.Redirect("/");
+            return;
+        }
+
         if (outcome == OnboardingOutcome.Redirect)
         {
             // Carry the page the user was trying to reach into the onboarding URL so
             // the form can send them back there on completion — instead of dumping
             // everyone on "/". The target is always THIS request's own path+query on
             // this host, so it is inherently local (no open-redirect surface), and
-            // excluded paths (/onboarding, /login, assets, …) never reach here. A bare
+            // excluded paths (/login, assets, …) never reach here. A bare
             // "/" carries no returnUrl — onboarding falls back to "/" anyway.
             var target = $"{context.Request.Path}{context.Request.QueryString}";
             var location = string.IsNullOrEmpty(target) || target == "/"
@@ -115,7 +130,7 @@ public class OnboardingMiddleware(RequestDelegate next, ILogger<OnboardingMiddle
         await next(context);
     }
 
-    private enum OnboardingOutcome { PassThrough, Redirect }
+    private enum OnboardingOutcome { PassThrough, Redirect, RedirectHome }
 
     /// <summary>
     /// Builds the reactive onboarding pipeline. Returns an observable that
@@ -127,7 +142,13 @@ public class OnboardingMiddleware(RequestDelegate next, ILogger<OnboardingMiddle
     /// </summary>
     private IObservable<OnboardingOutcome> BuildPipeline(HttpContext context)
     {
-        if (context.User?.Identity?.IsAuthenticated != true || IsExcludedPath(context.Request.Path))
+        if (context.User?.Identity?.IsAuthenticated != true)
+            return Observable.Return(OnboardingOutcome.PassThrough);
+
+        // /onboarding is resolved (not blanket-excluded): a not-yet-onboarded user
+        // stays on the form, but an already-onboarded one is redirected home.
+        var onOnboardingPage = context.Request.Path.StartsWithSegments("/onboarding");
+        if (!onOnboardingPage && IsExcludedPath(context.Request.Path))
             return Observable.Return(OnboardingOutcome.PassThrough);
 
         var portalApp = context.RequestServices.GetService<PortalApplication>();
@@ -164,12 +185,27 @@ public class OnboardingMiddleware(RequestDelegate next, ILogger<OnboardingMiddle
         return FindUserByEmail(workspace, email, logger)
             .SelectMany(node =>
             {
+                // Not onboarded (no node, or only a Transient shell).
                 if (node == null || node.State == MeshNodeState.Transient)
                 {
+                    // On /onboarding: stay on the form — NEVER redirect back to
+                    // /onboarding (that would loop). Everywhere else: bounce there.
+                    if (onOnboardingPage)
+                        return Observable.Return(OnboardingOutcome.PassThrough);
+
                     logger.LogInformation(
                         "OnboardingMiddleware: Redirecting to onboarding for {Email} (node={NodeState})",
                         email, node?.State.ToString() ?? "(null — lookup returned no match)");
                     return Observable.Return(OnboardingOutcome.Redirect);
+                }
+
+                // Onboarded but sitting on /onboarding → the form isn't for them; go home.
+                if (onOnboardingPage)
+                {
+                    logger.LogInformation(
+                        "OnboardingMiddleware: {Email} is already onboarded — redirecting off /onboarding to home",
+                        email);
+                    return Observable.Return(OnboardingOutcome.RedirectHome);
                 }
 
                 var username = node.Id;
@@ -221,18 +257,29 @@ public class OnboardingMiddleware(RequestDelegate next, ILogger<OnboardingMiddle
     internal static IObservable<MeshNode?> FindUserByEmail(
         IWorkspace workspace, string email, ILogger? logger)
     {
-        // Cache id per-email — synced query result snapshot is shared across
-        // any concurrent request for the same email. The synced registry holds
-        // the entry for the workspace's lifetime; live mesh change events keep
-        // the snapshot fresh, so subsequent requests see up-to-date state.
-        return workspace.GetQuery(
-                $"auth:userByEmail:{email}",
-                $"nodeType:User content.email:{email} limit:1")
+        var query = $"nodeType:User content.email:{email} limit:1";
+
+        // Fast path: the shared, cross-request synced-query snapshot. For a user this process
+        // has ALREADY seen, this replays the cached hit with no DB round-trip.
+        return workspace.GetQuery($"auth:userByEmail:{email}", query)
             .Do(items => logger?.LogDebug(
                 "FindUserByEmail({Email}): synced query emit, items={Count}",
                 email, items.Count()))
             .Take(1)
             .Select(items => (MeshNode?)items.FirstOrDefault())
+            .SelectMany(cached => cached is not null
+                ? Observable.Return<MeshNode?>(cached)
+                // A cached HIT is authoritative; a cached MISS is NOT. This lookup is a pathless,
+                // auth-routed one-shot fan-out query, and workspace.GetQuery caches its result
+                // PERMANENTLY (Replay(1).AutoConnect(1)) with no live-delta source in the partitioned
+                // portal (the pg_notify listener is disabled). The middleware itself seeds an EMPTY
+                // snapshot while rendering the pre-onboarding / /onboarding requests — so a user
+                // onboarded afterwards would replay that empty snapshot and get bounced to
+                // /onboarding forever ("cannot advance", until a process restart clears the cache).
+                // On a miss, re-read the source of truth (auth.mesh_nodes) before concluding "no
+                // account". The DB row exists synchronously (the auth-mirror trigger fires inside the
+                // onboarding write), so the authoritative re-read finds the just-onboarded user.
+                : QueryUserByEmailAuthoritative(workspace, query, email, logger))
             .Timeout(LookupTimeout, Observable.Defer(() =>
             {
                 logger?.LogWarning(
@@ -240,6 +287,47 @@ public class OnboardingMiddleware(RequestDelegate next, ILogger<OnboardingMiddle
                     email, LookupTimeout);
                 return Observable.Return<MeshNode?>(null);
             }));
+    }
+
+    /// <summary>
+    /// Authoritative one-shot re-read of the User-by-email lookup that BYPASSES the permanent
+    /// synced-query cache. <see cref="IMeshService.Query{T}"/>'s first emission is a fresh
+    /// <c>Initial</c> fan-out snapshot straight off <c>auth.mesh_nodes</c>, so a user materialised
+    /// after the cache seeded empty is found. Invoked ONLY on a cached miss — the common
+    /// already-known-user path keeps its zero-DB cache hit. This is the read-after-write authoritative
+    /// path CQRS mandates for a gate that decides whether to bounce a user to onboarding.
+    ///
+    /// <para>Runs as System (<c>Observable.Using</c> holding an
+    /// <c>ImpersonateAsSystem</c> scope for the subscription) so the re-read has the SAME
+    /// RLS-bypassing visibility the synced layer uses internally — a not-yet-onboarded caller must
+    /// not be denied reading the infrastructure <c>auth</c> schema, or the recovery would never
+    /// fire.</para>
+    /// </summary>
+    private static IObservable<MeshNode?> QueryUserByEmailAuthoritative(
+        IWorkspace workspace, string query, string email, ILogger? logger)
+    {
+        var sp = workspace.Hub.ServiceProvider;
+        var meshService = sp.GetRequiredService<IMeshService>();
+        var accessService = sp.GetRequiredService<AccessService>();
+        return Observable.Using(
+                () => accessService.ImpersonateAsSystem(),
+                _ => meshService.Query<MeshNode>(MeshQueryRequest.FromQuery(query)))
+            .Take(1)
+            .Select(change => (MeshNode?)change.Items.FirstOrDefault())
+            // Information ONLY on actual recovery (the stale-cache condition healed) — for a
+            // genuinely-not-onboarded user this path runs on every request, so the still-missing
+            // case is Debug to keep production (Loki) log volume down.
+            .Do(node =>
+            {
+                if (node is not null)
+                    logger?.LogInformation(
+                        "FindUserByEmail({Email}): recovered stale-empty cache via authoritative re-read → {User}",
+                        email, node.Id);
+                else
+                    logger?.LogDebug(
+                        "FindUserByEmail({Email}): authoritative re-read still finds no user (not onboarded)",
+                        email);
+            });
     }
 
     /// <summary>Back-compat overload used by callers that don't yet pass a logger.</summary>
