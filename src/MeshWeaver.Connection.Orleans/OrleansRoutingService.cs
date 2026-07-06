@@ -290,62 +290,111 @@ public class OrleansRoutingService : IRoutingService, IDisposable
     /// (the async unsubscribe is bridged onto the mesh IO pool).</returns>
     public IDisposable RegisterStream(Address address, AsyncDelivery callback)
     {
+        // The LOCAL route goes live immediately and unconditionally — this is what makes in-process
+        // delivery work, and it never fails. The Orleans cross-process subscription is attached
+        // separately and RESILIENTLY below.
         streams[address] = callback;
         OrleansRouteTrace.Write($"OrleansRoutingService.RegisterStream addr={address} streamName={address}");
 
-        // Subscribe to the Orleans memory stream in the background. The returned
-        // disposable holds the subscription Task; DisposeAsync awaits it so we
-        // can call UnsubscribeAsync on the resolved handle. A tiny window exists
-        // between Register returning and SubscribeAsync completing during which
-        // cross-process messages on the stream are buffered by Orleans (memory
-        // streams replay-on-subscribe), so no messages are lost.
-        var stream = GetStreamProvider(StreamProviders.Memory)
-            .GetStream<IMessageDelivery>(address.ToString());
-        var subscriptionTask = stream.SubscribeAsync((v, _) =>
-        {
-            OrleansRouteTrace.Write($"OrleansRoutingService.STREAM_CALLBACK addr={address} msg={v.Message?.GetType().Name} id={v.Id}");
-            // Orleans stream handlers must return Task; the AsyncDelivery callback
-            // is a cold IObservable now — Subscribe to run the delivery (the hub
-            // queues it), then signal Orleans the message was accepted.
-            // 🚨 onError is mandatory: we return Task.CompletedTask below, so Orleans
-            // considers the item accepted and nothing retries — a faulted delivery
-            // here IS a lost message and must be loud, never an unobserved rethrow.
-            callback.Invoke(v, CancellationToken.None).Subscribe(
-                _ => { },
-                ex =>
-                {
-                    logger.LogError(ex,
-                        "Delivery callback faulted for {MessageType} ({Id}) on stream {Address} — message dropped",
-                        v.Message?.GetType().Name, v.Id, address);
-                    OrleansRouteTrace.Write(
-                        $"OrleansRoutingService.STREAM_CALLBACK FAULTED addr={address} msg={v.Message?.GetType().Name} id={v.Id} ex={ex.Message}");
-                });
-            return Task.CompletedTask;
-        });
-        subscriptionTask.ContinueWith(t =>
-        {
-            if (t.IsFaulted)
-                OrleansRouteTrace.Write($"OrleansRoutingService.SubscribeAsync FAULTED addr={address} ex={t.Exception?.InnerException?.Message}");
-            else
-                OrleansRouteTrace.Write($"OrleansRoutingService.SubscribeAsync OK addr={address}");
-        }, TaskScheduler.Default);
+        // 🚨 Attach the Orleans memory-stream subscription on a bounded background retry. GetStreamProvider
+        // (Memory) throws (an NRE from deep in the Orleans stream runtime) when the silo/client stream
+        // provider is not yet started — the process-wide cache hub is created eagerly at silo startup and
+        // can lose the race with Orleans init. This subscribe USED to run synchronously here, so that throw
+        // propagated out of the cache hub's construction, KILLED the cache hub, and left every DataChanged
+        // Event deferred >30s → a silo-wide "deferred without opening init gates" storm that wedged the
+        // whole portal — with the real NullReferenceException swallowed into Autofac activation noise. Now
+        // the hub is always fully created (the local route above already routes in-process), and the cross-
+        // process subscription attaches as soon as the provider is ready. Each failure is surfaced (Error),
+        // and a hard failure past the deadline is loud (Critical) instead of a silent wedge.
+        var cts = new CancellationTokenSource();
+        var subscriptionTask = SubscribeWithRetryAsync(address, callback, cts.Token);
 
-        // Synchronous to the caller: remove the local route immediately, then bridge the
-        // genuinely-async Orleans UnsubscribeAsync onto the mesh IO pool (never inline on the
-        // disposing hub/grain scheduler). Fire-and-forget on the pool — teardown is
-        // best-effort; errors are swallowed (the grain/silo may already be going away).
+        // Synchronous to the caller: remove the local route immediately, cancel any in-flight retry, then
+        // bridge the genuinely-async Orleans UnsubscribeAsync onto the mesh IO pool (never inline on the
+        // disposing hub/grain scheduler). Fire-and-forget on the pool — teardown is best-effort.
         return Disposable.Create(() =>
         {
             streams.TryRemove(address, out _);
+            cts.Cancel();
             ioPool.Invoke(async _ =>
                 {
-                    var subscription = await subscriptionTask.ConfigureAwait(false);
-                    await subscription.UnsubscribeAsync().ConfigureAwait(false);
+                    StreamSubscriptionHandle<IMessageDelivery>? subscription = null;
+                    // The retry task may have been cancelled or given up (never subscribed) — then there is
+                    // nothing to unsubscribe; a faulted/cancelled await here is expected, not an error.
+                    try { subscription = await subscriptionTask.ConfigureAwait(false); }
+                    catch { /* never subscribed */ }
+                    if (subscription is not null)
+                        await subscription.UnsubscribeAsync().ConfigureAwait(false);
                 })
                 .Subscribe(
                     _ => { },
                     ex => logger.LogDebug(ex, "Failed to unsubscribe Orleans stream for {Address}", address));
+            cts.Dispose();
         });
+    }
+
+    // Attaches the Orleans memory-stream subscription for <paramref name="address"/>, retrying while the
+    // stream provider is not yet ready (bounded by a deadline). The delivery handler is identical to the
+    // former direct-subscribe path. Runs detached (never on a hub action-block / grain scheduler).
+    private async Task<StreamSubscriptionHandle<IMessageDelivery>> SubscribeWithRetryAsync(
+        Address address, AsyncDelivery callback, CancellationToken ct)
+    {
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(120);
+        for (var attempt = 1; ; attempt++)
+        {
+            ct.ThrowIfCancellationRequested();
+            try
+            {
+                var stream = GetStreamProvider(StreamProviders.Memory)
+                    .GetStream<IMessageDelivery>(address.ToString());
+                var handle = await stream.SubscribeAsync((v, _) =>
+                {
+                    OrleansRouteTrace.Write($"OrleansRoutingService.STREAM_CALLBACK addr={address} msg={v.Message?.GetType().Name} id={v.Id}");
+                    // Orleans stream handlers must return Task; the AsyncDelivery callback is a cold
+                    // IObservable — Subscribe to run the delivery (the hub queues it), then signal Orleans
+                    // the message was accepted. 🚨 onError is mandatory: we return Task.CompletedTask below,
+                    // so Orleans considers the item accepted and nothing retries — a faulted delivery here
+                    // IS a lost message and must be loud, never an unobserved rethrow.
+                    callback.Invoke(v, CancellationToken.None).Subscribe(
+                        _ => { },
+                        ex =>
+                        {
+                            logger.LogError(ex,
+                                "Delivery callback faulted for {MessageType} ({Id}) on stream {Address} — message dropped",
+                                v.Message?.GetType().Name, v.Id, address);
+                            OrleansRouteTrace.Write(
+                                $"OrleansRoutingService.STREAM_CALLBACK FAULTED addr={address} msg={v.Message?.GetType().Name} id={v.Id} ex={ex.Message}");
+                        });
+                    return Task.CompletedTask;
+                }).ConfigureAwait(false);
+
+                if (attempt > 1)
+                    logger.LogInformation(
+                        "Orleans '{Provider}' stream subscription attached for {Address} after {Attempts} attempt(s)",
+                        StreamProviders.Memory, address, attempt);
+                OrleansRouteTrace.Write($"OrleansRoutingService.SubscribeAsync OK addr={address} attempt={attempt}");
+                return handle;
+            }
+            catch (Exception ex) when (!ct.IsCancellationRequested)
+            {
+                OrleansRouteTrace.Write($"OrleansRoutingService.SubscribeAsync RETRY addr={address} attempt={attempt} ex={ex.Message}");
+                if (DateTime.UtcNow > deadline)
+                {
+                    // Give up — surface loudly. The local route is still live, so in-process delivery keeps
+                    // working; only this hub's cross-process routing is degraded (never a silent silo wedge).
+                    logger.LogCritical(ex,
+                        "Orleans '{Provider}' stream provider never became ready for {Address} after {Attempts} attempts — cross-process routing for this hub is DISABLED (in-process routing remains active)",
+                        StreamProviders.Memory, address, attempt);
+                    throw;
+                }
+                // Surface the real cause on the first failure and periodically thereafter (not every tick).
+                if (attempt == 1 || attempt % 20 == 0)
+                    logger.LogError(ex,
+                        "Orleans '{Provider}' stream provider not ready for {Address} (attempt {Attempt}) — retrying; in-process routing is active meanwhile",
+                        StreamProviders.Memory, address, attempt);
+                await Task.Delay(TimeSpan.FromMilliseconds(Math.Min(1000, 50 * attempt)), ct).ConfigureAwait(false);
+            }
+        }
     }
 
     private IStreamProvider GetStreamProvider(string streamProvider) =>
