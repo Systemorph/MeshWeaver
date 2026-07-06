@@ -69,6 +69,25 @@ public class MessageService : IMessageService
     private static readonly TimeSpan DeferralTimeout = TimeSpan.FromSeconds(30);
 
     /// <summary>
+    /// Hard cap on the deferred backlog held behind closed init gates. A hub that is legitimately
+    /// initialising drains its gate in well under a second, so it never accrues a deep deferred
+    /// backlog. A backlog past this cap means the gate is STUCK — a client sync/cache hub whose
+    /// <c>[Initialize]</c> never opens (the Safari sync-race wedge). Past the cap, every further
+    /// message would otherwise be queued AND armed with its own <see cref="DeferralTimeout"/> timer,
+    /// so a writer flooding a never-initialising hub accumulates deferred deliveries + timers without
+    /// bound until the action block starves and <c>/healthz</c> times out — the confirmed OOM wedge.
+    /// Past the cap we DROP overflow deferrals instead (see the deferral path). This is a stuck-gate
+    /// SAFETY NET, not a tuning knob: raising it does not fix a stuck gate, it just delays the wedge.
+    /// </summary>
+    private const int MaxDeferredMessages = 512;
+
+    /// <summary>
+    /// One-shot latch so a gate-stuck overflow logs ONE Error per stuck episode (not per dropped
+    /// message). Reset to 0 when a gate opens and the deferred queue drains (<see cref="OpenGate"/>).
+    /// </summary>
+    private int _deferralOverflowLogged;
+
+    /// <summary>
     /// Tracks every delivery currently in <see cref="deferredQueue"/>. Removed
     /// when <see cref="ProcessDeferredMessage"/> drains it. The deferral-timeout
     /// timer fires <see cref="ReportFailure"/> for any entry still here when its
@@ -238,6 +257,9 @@ public class MessageService : IMessageService
                         lock (turnGate)
                             while (deferredQueue.Count > 0)
                                 mainQueue.Enqueue(deferredQueue.Dequeue());
+                        // Gate opened + drained — the hub is no longer stuck, so re-arm the one-shot
+                        // gate-stuck logger for any future episode.
+                        Interlocked.Exchange(ref _deferralOverflowLogged, 0);
                         KickDrain();
 
                         logger.LogDebug("Message hub {address} fully initialized (all gates opened)", Address);
@@ -655,6 +677,28 @@ public class MessageService : IMessageService
                         // If we still need to defer, post to deferred buffer and return
                         if (shouldDefer)
                         {
+                            // 🛡️ Stuck-gate safety net. A legitimately-initialising hub drains its gate in
+                            // well under a second, so it never accrues a deep deferred backlog; a backlog
+                            // past MaxDeferredMessages means the gate is STUCK (a client sync/cache hub whose
+                            // [Initialize] never opens). Deferring further messages there would queue them AND
+                            // arm a 30s timer each, accumulating unbounded memory until the action block starves
+                            // and /healthz times out — the confirmed OOM wedge. DROP the overflow (Ignored — NOT
+                            // a DeliveryFailure, so a fire-and-forget writer's retry isn't fed; a client re-syncs
+                            // a fresh Full on reconnect) so memory stays bounded. Log ONE Error per stuck episode.
+                            int deferredDepth;
+                            lock (turnGate) deferredDepth = deferredQueue.Count;
+                            if (deferredDepth >= MaxDeferredMessages)
+                            {
+                                if (Interlocked.Exchange(ref _deferralOverflowLogged, 1) == 0)
+                                    logger.LogError(
+                                        "GATE-STUCK in hub {Address}: {Depth} messages deferred behind gates [{Gates}] past "
+                                        + "the {Cap} cap — the gate is not opening (a dependency's [Initialize] never fired, "
+                                        + "e.g. a client sync/cache hub). Dropping overflow deferrals to bound memory and keep "
+                                        + "the action block draining. Find and fix why the gate never opens.",
+                                        Address, deferredDepth, string.Join(",", gates.Keys), MaxDeferredMessages);
+                                MessageTrace.Write($"hub={Address} msg={name} id={delivery.Id} DROPPED_GATE_STUCK depth={deferredDepth}");
+                                return Observable.Return(delivery.Ignored());
+                            }
                             logger.LogDebug("Deferring on-target message {MessageType} (ID: {MessageId}) in {Address}",
                                 delivery.Message.GetType().Name, delivery.Id, Address);
                             MessageTrace.Write($"hub={Address} msg={name} id={delivery.Id} DEFERRED gates=[{string.Join(",", gates.Keys)}]");
