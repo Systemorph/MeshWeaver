@@ -1,9 +1,9 @@
 {
   "id": "SampleStatistics",
-  "namespace": "PythonDemo",
+  "namespace": "Doc/Architecture/PythonCodeNodes",
   "name": "Sample statistics (Python)",
   "nodeType": "Code",
-  "description": "A runnable Python Code node: press Run to execute it on the connected py/python-kernel worker; the output lands directly below the code.",
+  "description": "A runnable Python Code node embedded in the docs: press Run to route it to the py/python-kernel worker; the output lands directly below the code (with no worker connected, the run reports the failure in the same output pane).",
   "isPersistent": true,
   "content": {
     "$type": "CodeConfiguration",
