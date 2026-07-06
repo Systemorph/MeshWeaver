@@ -57,6 +57,42 @@ public static class AreaErrorClassifier
     }
 
     /// <summary>
+    /// Returns the init-failure reason of a target hub whose <c>Initialize</c> gate FAILED to open
+    /// (a BuildupAction faulted or hung → the hub entered its FAILED state and now answers every
+    /// request with a typed <see cref="DeliveryFailure"/> carrying
+    /// <c>"Hub '&lt;addr&gt;' initialization failed: &lt;reason&gt;"</c>), or <c>null</c>.
+    ///
+    /// <para>This is a TERMINAL-with-reason case — distinct from both
+    /// <see cref="IsTransientHubFailure"/> (a not-yet-online hub that self-heals on retry) and
+    /// <see cref="TryGetCompilationInProgressNodeType"/> (a transient mid-compile NACK swapped to
+    /// the Progress view). A durably-failed hub will NOT recover on resubscribe, so it must NOT be
+    /// retried; and its failure carries the ACTUAL reason, so the GUI renders that reason instead of
+    /// the generic "did not become addressable after N retries" spinner (which, when the gate never
+    /// opened, doesn't even carry an area name). The reason string is authoritative — the same one
+    /// <c>MessageHub.EnterInitializationFailedState</c> stamped from <c>InitializationError</c>. See
+    /// <c>Doc/Architecture/HubInitializationFailure.md</c> and issue #323.</para>
+    /// </summary>
+    public static string? TryGetInitializationFailureReason(Exception? ex)
+    {
+        for (var e = ex; e != null; e = e.InnerException)
+        {
+            if (e is DeliveryFailureException dfe)
+            {
+                // Both init-failure banners the hub emits — the first request's
+                // "initialization failed — <reason>" (HandleInitialize's .Catch) and every later
+                // request's "initialization failed: <reason>" (EnterInitializationFailedState's
+                // refusal rule) — carry this distinctive substring. Match on the typed failure's
+                // message, not a bare Exception.Message, so a coincidental string on some other
+                // exception can't be mistaken for a hub init failure.
+                var msg = dfe.Failure.Message ?? string.Empty;
+                if (msg.Contains("initialization failed", StringComparison.OrdinalIgnoreCase))
+                    return msg;
+            }
+        }
+        return null;
+    }
+
+    /// <summary>
     /// True for outcomes caused by the user's action (access denied, validation rejection,
     /// node not found) rather than an engineering fault — used to pick a Warning (not Error)
     /// log level so dashboards don't page on "user clicked a thing they couldn't do".
@@ -112,12 +148,14 @@ public static class AreaErrorClassifier
     /// <summary>
     /// The single predicate the area subscription hands to
     /// <see cref="AreaStreamRetry.RetryAreaWithBackoff{T}"/>: retry ONLY a transient hub
-    /// miss — never a teardown <see cref="ObjectDisposedException"/> (benign) and never a
+    /// miss — never a teardown <see cref="ObjectDisposedException"/> (benign), never a
     /// <see cref="ErrorType.CompilationInProgress"/> NACK (handled immediately by swapping
-    /// to the Progress view, not by spinning).
+    /// to the Progress view, not by spinning), and never a hub init failure (durably FAILED —
+    /// a resubscribe hits the same failed hub, so the reason is rendered once, not retried).
     /// </summary>
     public static bool ShouldRetryArea(Exception? ex)
         => ex is not ObjectDisposedException
            && TryGetCompilationInProgressNodeType(ex) is null
+           && TryGetInitializationFailureReason(ex) is null
            && IsTransientHubFailure(ex);
 }
