@@ -1,4 +1,5 @@
 using System.Reactive.Linq;
+using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
 using Microsoft.Extensions.Logging;
 using MeshWeaver.Domain;
@@ -33,8 +34,8 @@ public static class AccessAssignmentLayoutAreas
             .WithView(MeshNodeLayoutAreas.DeleteArea, DeleteLayoutArea.Delete));
 
     /// <summary>
-    /// Thumbnail — one row for the assignment: <c>[person/group] [role ▾ + Deny]… [× per role]
-    /// [+ Add role] [✕ remove user]</c>. The person and each role are path-/node-bound controls; the
+    /// Thumbnail — one row for the assignment: <c>[person/group] [role ▾ + Deny] [dismiss role]…
+    /// [+ Add role] [remove user]</c>. The person and each role are path-/node-bound controls; the
     /// backend only declares structure. Edit controls render only when the caller has the
     /// <see cref="Permission.Delete"/> (manage-access) permission on the node.
     /// </summary>
@@ -68,19 +69,26 @@ public static class AccessAssignmentLayoutAreas
         var subject = new MeshNodeThumbnailControl(subjectPath, subjectFallback)
             .WithStyle("flex: 1; min-width: 0;");
 
-        // Roles — one node-bound editor per role, with a per-role × and an "Add role" button.
-        var rolesBlock = Controls.Stack.WithStyle("gap: 6px; min-width: 0;");
+        // Roles — one node-bound editor per role, with a per-role remove and an "Add role" button.
+        // flex-shrink: 0 + nowrap keeps the role dropdown + "Deny" checkbox at their natural size so
+        // the "Deny" label can't clip to "Der…" (issue #236) — the subject (min-width: 0) absorbs the
+        // squeeze and its name truncates instead.
+        var rolesBlock = Controls.Stack.WithStyle("gap: 6px; flex-shrink: 0;");
         for (var i = 0; i < assignment.Roles.Count; i++)
         {
             var index = i;
             var roleRow = Controls.Stack
                 .WithOrientation(Orientation.Horizontal)
-                .WithStyle("align-items: center; gap: 6px;")
+                .WithStyle("align-items: center; gap: 6px; white-space: nowrap;")
                 .WithView(new MeshNodeRoleEditorControl(nodePath, index) { CanEdit = canEdit });
 
+            // Per-role remove — a subtle dismiss (×) with a tooltip so it's distinct from the
+            // remove-user action at the end of the row (issue #236: the two were indistinguishable).
             if (canEdit)
-                roleRow = roleRow.WithView(Controls.Button("×")
+                roleRow = roleRow.WithView(Controls.Button("")
                     .WithAppearance(Appearance.Stealth)
+                    .WithIconStart(FluentIcons.Dismiss(IconSize.Size16))
+                    .WithLabel("Remove role")
                     .WithStyle("min-width: 24px; padding: 0 4px; height: 24px;")
                     .WithClickAction(ctx =>
                     {
@@ -103,16 +111,20 @@ public static class AccessAssignmentLayoutAreas
 
         var row = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
-            .WithStyle("align-items: flex-start; gap: 16px; padding: 8px 0; " +
+            .WithStyle("align-items: flex-start; gap: 16px; padding: 8px 0; flex-wrap: wrap; " +
                        "border-bottom: 1px solid var(--neutral-stroke-divider-rest); width: 100%;")
             .WithView(subject)
             .WithView(rolesBlock);
 
-        // Remove the user/group from this scope entirely.
+        // Remove the whole assignment (the user/group) from this scope. A person-remove icon (not a
+        // bare ×) with a name-bearing tooltip + a left margin, so it reads as "remove this person from
+        // the scope" and is clearly separated from the per-role × (issue #236).
         if (canEdit)
-            row = row.WithView(Controls.Button("✕")
+            row = row.WithView(Controls.Button("")
                 .WithAppearance(Appearance.Stealth)
-                .WithStyle("min-width: 28px; height: 28px; color: var(--error-foreground);")
+                .WithIconStart(FluentIcons.PersonDelete(IconSize.Size16))
+                .WithLabel($"Remove {subjectFallback} from this scope")
+                .WithStyle("min-width: 28px; height: 28px; margin-left: 8px; color: var(--error-foreground);")
                 .WithClickAction(ctx =>
                 {
                     RemoveUser(ctx.Host, nodePath);
