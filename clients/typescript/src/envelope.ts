@@ -15,6 +15,7 @@ export interface Delivery {
   requestId?: string;
   messageType?: string;
   message: Record<string, unknown>;
+  accessContext?: Record<string, unknown>;
   raw: Record<string, unknown>;
 }
 
@@ -24,15 +25,21 @@ export function buildDeliver(opts: {
   target: string;
   messageType: string;
   message: Record<string, unknown>;
+  requestId?: string;
+  accessContext?: Record<string, unknown>;
 }): string {
-  return JSON.stringify({
+  const envelope: Record<string, unknown> = {
     [TYPE_KEY]: DELIVERY_TYPE,
     id: opts.deliveryId,
     sender: opts.sender,
     target: opts.target,
     message: { [TYPE_KEY]: opts.messageType, ...opts.message },
-    properties: {},
-  });
+    // A response carries the request's id under RequestId so the requester correlates it.
+    properties: opts.requestId ? { [REQUEST_ID]: opts.requestId } : {},
+  };
+  // Echo the caller's identity so a trusted worker writes AS the requesting user (see worker.ts).
+  if (opts.accessContext) envelope.accessContext = opts.accessContext;
+  return JSON.stringify(envelope);
 }
 
 export function parseDelivery(payload: string): Delivery {
@@ -46,6 +53,7 @@ export function parseDelivery(payload: string): Delivery {
     requestId: get(props, REQUEST_ID) as string | undefined,
     messageType: typeof message === "object" ? (message[TYPE_KEY] as string | undefined) : undefined,
     message: typeof message === "object" ? message : {},
+    accessContext: get(root, "accessContext") as Record<string, unknown> | undefined,
     raw: root,
   };
 }

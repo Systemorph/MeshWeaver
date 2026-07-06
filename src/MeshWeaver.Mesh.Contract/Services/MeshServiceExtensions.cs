@@ -30,13 +30,6 @@ public static class MeshServiceExtensions
         => ToTask<bool>(service.DeleteNode(path), ct);
 
     /// <summary>
-    /// Creates a transient node asynchronously via the mesh service.
-    /// </summary>
-    public static Task<MeshNode> CreateTransientAsync(
-        this IMeshService service, MeshNode node, CancellationToken ct = default)
-        => ToTask(service.CreateTransient(node), ct);
-
-    /// <summary>
     /// Converts an observable to a task that completes with the first emitted value.
     /// </summary>
     public static Task<T> ToTask<T>(IObservable<T> observable, CancellationToken ct = default)

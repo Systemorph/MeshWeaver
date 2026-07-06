@@ -35,6 +35,41 @@ for await (const node of mesh.watch("ACME/Backlog")) handle(node);   // live str
 mesh.close();
 ```
 
+## The node kernel — run `javascript` / `typescript` Code nodes
+
+A Code node whose `Language` is `javascript` or `typescript` has no in-process runtime on the mesh,
+so the .NET kernel routes its `SubmitCodeRequest` to a connected `node/*` worker
+(`CodeNodeType.ResolveKernelAddress` → `node/node-kernel`). This package ships that worker. It runs
+the snippet in a `vm` sandbox with REPL semantics (`console.log` captured; a trailing bare expression
+is the return value; `Inputs` exposes caller parameters; TypeScript is transpiled first) and patches
+the run's Activity node — so js/ts output surfaces identically to C# and python.
+
+```bash
+npm run build
+node dist/worker.js --url https://memex.meshweaver.cloud --token mw_... --address node/node-kernel
+# co-deployed gate (trusted loopback endpoint, no token; --reconnect outlives portal restarts):
+node dist/worker.js --url http://127.0.0.1:8082 --address node/node-kernel --reconnect
+node dist/worker.js --demo     # self-contained smoke test: execute a JS + a TS snippet
+```
+
+`npm test` executes real js/ts snippets through the kernel's `executeCode` core.
+
+## Define and run a hub in Node
+
+A hub is an **address** deliveries route to, **handlers** by message type (the C# `WithHandler<T>`),
+and **state** the handlers own. `Hub` (`src/examples/hub.ts`) is exactly that:
+
+```ts
+import { connect, Hub } from "@meshweaver/client";
+
+const conn = await connect("https://memex.meshweaver.cloud", { token: "mw_...", address: "node/counter" });
+let count = 0;
+new Hub(conn)
+  .register("Increment", (d) => { count += Number(d.message.by ?? 1); return ["Count", { value: count }]; })
+  .register("GetCount", () => ["Count", { value: count }]);
+// any participant: observe("node/counter", "Increment", { by: 5 }) → { value: 5 }
+```
+
 ## Status
 
 - **Transport / correlation / stream-demux** — complete and protocol-faithful (mirrors

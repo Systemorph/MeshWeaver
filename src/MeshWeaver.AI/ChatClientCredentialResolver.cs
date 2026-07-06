@@ -383,7 +383,29 @@ public sealed class ChatClientCredentialResolver : IDisposable
     {
         if (string.IsNullOrEmpty(modelNameOrPath) || !modelNameOrPath.Contains('/'))
             return modelNameOrPath;
-        return FindDefinitionByNodePath(ReadSnapshot(), modelNameOrPath)?.Id ?? modelNameOrPath;
+        var def = FindDefinitionByNodePath(ReadSnapshot(), modelNameOrPath);
+        if (def != null)
+            return def.Id;
+        // Unresolved path (node not yet in the warm snapshot): the wire id is the LAST SEGMENT — never
+        // the whole path (sending "Provider/OpenAICompatible/qwen3.6:latest" as the model name 400s).
+        return modelNameOrPath[(modelNameOrPath.LastIndexOf('/') + 1)..];
+    }
+
+    /// <summary>
+    /// Whether the selected model may be sent tool/function definitions. Returns FALSE only when the
+    /// resolved catalog entry is KNOWN not to support tools (<see cref="ModelDefinition.SupportsTools"/>
+    /// == <c>false</c>) — an Ollama roleplay model (TieFighter) that returns HTTP 400 "does not support
+    /// tools". Unknown / not-found / not-set → TRUE (assume supported — the historical behaviour).
+    /// Accepts a bare id or a full node PATH; for a bare id that matches several catalog entries, a
+    /// declared "no tools" on ANY of them wins (safer to omit tools than to 400 the whole round).
+    /// </summary>
+    public bool ModelSupportsTools(string? modelNameOrPath)
+    {
+        if (string.IsNullOrEmpty(modelNameOrPath)) return true;
+        var snapshot = ReadSnapshot();
+        if (modelNameOrPath.Contains('/'))
+            return FindDefinitionByNodePath(snapshot, modelNameOrPath)?.SupportsTools != false;
+        return !FindModelDefinitions(snapshot, modelNameOrPath).Any(d => d.SupportsTools == false);
     }
 
     /// <summary>

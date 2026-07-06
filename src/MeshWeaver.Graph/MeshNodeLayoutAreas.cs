@@ -1680,6 +1680,20 @@ public static class MeshNodeLayoutAreas
 
         var instance = node.Content;
         if (instance == null)
+        {
+            // A freshly-created node carries no Content yet — the create flow persists an Active
+            // node with null Content (never a transient placeholder) and lands here on its own hub.
+            // That hub knows the node's content type via its MeshDataSource, so materialise a default
+            // instance to resolve the form SHAPE (contentType). The form binds to the node stream
+            // below, so the first field write persists it — we deliberately do NOT seed the /data
+            // projection here: this method re-runs on every render (the permissions CombineLatest),
+            // and an unconditional seed could reset in-progress edits before the first write lands.
+            var dataSource = host.Workspace.DataContext.DataSources
+                .OfType<MeshDataSource>()
+                .FirstOrDefault(ds => ds.ContentType != null);
+            instance = dataSource?.CreateContentInstance(node);
+        }
+        if (instance == null)
             return Controls.Stack.WithWidth("100%").WithStyle(GetContainerStyle(host))
                 .WithView(BuildHeader(host, node, false))
                 .WithView(Controls.Markdown("*No content type configured for this node.*")

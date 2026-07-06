@@ -3,7 +3,7 @@
 // mesh): Voice (speech), Connect (remote instances), Profile, Settings.
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { View, Text, TextInput, Pressable, ScrollView, StyleSheet } from "react-native";
-import { loadInstances, saveInstance, removeInstance, setCurrentInstance, currentInstance, type MeshInstance } from "./connection";
+import { loadInstances, saveInstance, removeInstance, setCurrentInstance, currentInstance, defaultPortalUrl, type MeshInstance } from "./connection";
 import { useStyles, useTheme, type Palette } from "./theme";
 
 const useSheet = () => useStyles(makeStyles);
@@ -123,7 +123,7 @@ function ConnectScreen({ onConnected }: { onConnected: () => void }): ReactNode 
   const [instances, setInstances] = useState<MeshInstance[]>(loadInstances());
   const [current, setCurrent] = useState(currentInstance().name);
   const [name, setName] = useState("");
-  const [url, setUrl] = useState("");
+  const [url, setUrl] = useState(defaultPortalUrl()); // prefill the default portal (the local monolith) — edit + paste a token for a remote one
   const [token, setToken] = useState("");
 
   const refresh = () => {

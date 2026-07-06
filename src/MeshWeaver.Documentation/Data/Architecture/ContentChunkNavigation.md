@@ -21,7 +21,9 @@ When a content file is indexed, its extracted text is sliced into overlapping **
 
 The overlap means a sentence straddling a window boundary still lands wholly inside at least one chunk, so a semantic hit is never split across two windows. Every chunk of one file carries the same whole-file `content_hash` (the hash gate's "did this file change?" key); per-chunk identity is `chunk_index`.
 
-Chunks live in a per-partition Postgres `content_chunks` table — one schema per partition, exactly like `mesh_nodes` and the satellite tables (see [Postgres Schema Architecture](../PostgresSchemaArchitecture)). The columns are `collection_path, file_path, chunk_index, content_hash, chunk_text, metadata, embedding, last_modified`. The in-memory store (`InMemoryChunkedContentVectorStore`) backs the unit-tested core with the identical contract.
+Chunks live in a per-partition Postgres `content_chunks` table — one schema per partition, exactly like `mesh_nodes` and the satellite tables (see [Postgres Schema Architecture](../PostgresSchemaArchitecture)). The columns are `collection_path, file_path, chunk_index, content_hash, chunk_text, metadata, embedding, page, bbox, last_modified`. The in-memory store (`InMemoryChunkedContentVectorStore`) backs the unit-tested core with the identical contract.
+
+The `page` + `bbox` columns are **source provenance** — see [Source provenance](#source-provenance-page--position) below. They are added by an idempotent `ADD COLUMN IF NOT EXISTS` in the (self-provisioning, per-partition) schema script, so an existing partition gains them on its next provision — there is no separate `DbVersion` migration.
 
 ## Retrieval vs. extraction
 
@@ -37,8 +39,8 @@ The chunk tools are deliberately **not** a substitute for a full-document read. 
 | Tool | Granularity | Returns | Use when |
 |---|---|---|---|
 | `search` | **Document node** | the file's `Document` node (chunk index dropped) | "which file is about X?" — navigation, linking |
-| `search_chunks` | **chunk** | `{documentPath, collectionPath, filePath, chunkIndex, rank, snippet}` per hit | "find the passages about X" — gather context |
-| `get_chunk` | **one chunk** | `{text, prevIndex, nextIndex, totalChunks, …}` | read a known chunk + step to neighbours |
+| `search_chunks` | **chunk** | `{documentPath, collectionPath, filePath, chunkIndex, rank, snippet, page?, bbox?}` per hit | "find the passages about X" — gather context |
+| `get_chunk` | **one chunk** | `{text, prevIndex, nextIndex, totalChunks, page?, bbox?, …}` | read a known chunk + step to neighbours |
 
 ### `search` — Document-level
 
@@ -76,11 +78,13 @@ When a query carries a `namespace:` token the targeted form wins and the `scope`
   "text": "…the full 1000-char window…",
   "prevIndex": 3,
   "nextIndex": 5,
-  "totalChunks": 12
+  "totalChunks": 12,
+  "page": 4,
+  "bbox": { "x": 0.12, "y": 0.34, "w": 0.61, "h": 0.08 }
 }
 ```
 
-`prevIndex` is `null` at index 0; `nextIndex` is `null` at the last chunk; `totalChunks` lets the caller bound the range. An out-of-range index (or a file that was never indexed) returns `{found:false, totalChunks, message}` carrying the valid range, never an error. This is how an agent reads a `search_chunks` hit in full and then walks forward or backward through the document a window at a time.
+`prevIndex` is `null` at index 0; `nextIndex` is `null` at the last chunk; `totalChunks` lets the caller bound the range. An out-of-range index (or a file that was never indexed) returns `{found:false, totalChunks, message}` carrying the valid range, never an error. This is how an agent reads a `search_chunks` hit in full and then walks forward or backward through the document a window at a time. `page` + `bbox` are present only when the source carried a layout (PDFs) — see [Source provenance](#source-provenance-page--position).
 
 ## Where the tools live
 
@@ -99,6 +103,19 @@ The Content Indexing settings tab is the in-portal surface for the index. Beside
 - A **tool-call inspector**: each search shows the exact `search_chunks(query: "namespace:… scope:subtree …", limit: N)` it maps to, and an opened chunk shows its `get_chunk(collectionPath, filePath, chunkIndex)`. Because the box drives the *same* `ContentChunkSearch` engine the agent tools use, the displayed call is the real one — a way to see how the agent retrieves content, and to debug what a given query actually matches.
 
 The store reads (`GetChunk`, `GetChunkCount`) are on `IChunkedContentVectorStore`. Like every read in the indexing core they are reactive and cold (`IObservable<T>`), and the Postgres implementation runs the DB round-trip through the cap-1 `pg:vector` I/O pool (see [Controlled I/O Pooling](../ControlledIoPooling)) — never a bare `Observable.FromAsync`. When content indexing is not wired into a host, the store/embedder are absent and the tools degrade to a clear "not available" envelope instead of throwing.
+
+## Source provenance (page + position)
+
+Every chunk carries **where it came from** in the source document, so a consumer can cite the page and *open the source page and mark the exact region* — not just quote text.
+
+- **`page`** — the one-based source page the chunk begins on.
+- **`bbox`** — the chunk's normalized bounding box on that page: `{x, y, w, h}`, each a fraction of the page in `[0,1]` with a **top-left origin**. Normalized so a viewer can overlay the highlight at any render scale without knowing the page's point size.
+
+**Extraction is positional.** For PDFs the extractor (`TextExtractor`) builds the text word-by-word from PdfPig's laid-out words and records one span (page + box, in PDF points → normalized top-left) per word. The chunker (`TextChunker.ChunkPositioned`) then attributes each character window to the page it *begins* on and unions the boxes of the words inside the window on that page — so a chunk that straddles a line break still gets one tight box, and a chunk that crosses a page boundary is pinned to its starting page. Formats with no layout (txt/markdown/docx) carry a null `page`/`bbox` and degrade gracefully.
+
+**Marking in the viewer.** The `Document` node's **Source** area renders the original PDF (PDF.js) and, given the deep-linked chunk's `page` + `bbox`, scrolls to that page and overlays a highlight rectangle at the exact region — precise and robust, independent of whether the chunk text can be re-found by string match. When the position is absent it falls back to the verbatim text-match highlight. The block reader also shows `· page N` in each block's header.
+
+**Backfilling existing collections.** The plain re-index is hash-gated — an unchanged file is skipped, so it would never gain provenance. The Content Indexing tab's **Rebuild** button (and `ContentIndexingObserver.ReindexAll(..., force: true)`) bypasses the hash gate to re-extract, re-chunk and re-store every file, populating `page`/`bbox` on files indexed before the feature existed.
 
 ## Reading a document end to end
 

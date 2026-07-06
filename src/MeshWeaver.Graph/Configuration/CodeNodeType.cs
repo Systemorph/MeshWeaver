@@ -65,10 +65,30 @@ public static class CodeNodeType
     };
 
     /// <summary>
+    /// The address a Code node's <see cref="SubmitCodeRequest"/> is dispatched to, by language.
+    /// C# (the default) — and any non-executing language (json/sql/markdown) — has no separate runtime,
+    /// so it runs in-process on the Activity hub's Roslyn kernel (its own <paramref name="activityPath"/>).
+    /// A foreign language routes to the stable address where its worker participant registers over the
+    /// mesh (the gRPC bridge), which executes and patches the SAME ActivityLog so output surfaces
+    /// identically regardless of language:
+    /// <list type="bullet">
+    ///   <item><c>python</c> → <c>py/python-kernel</c> (clients/python: <c>meshweaver.worker</c>).</item>
+    ///   <item><c>javascript</c> / <c>typescript</c> → <c>node/node-kernel</c> (clients/typescript worker).</item>
+    /// </list>
+    /// </summary>
+    public static Address ResolveKernelAddress(string? language, string activityPath) =>
+        language?.ToLowerInvariant() switch
+        {
+            "python" => new Address("py", "python-kernel"),
+            "javascript" or "typescript" => new Address("node", "node-kernel"),
+            _ => new Address(activityPath),
+        };
+
+    /// <summary>
     /// Runs the Code node's own script. Reads the local workspace for the node's
     /// <see cref="CodeConfiguration"/>, validates <c>IsExecutable</c>, dispatches
-    /// <see cref="SubmitCodeRequest"/> to the internal kernel address, and posts
-    /// an <see cref="ExecuteScriptResponse"/> with the submission id + output-area
+    /// <see cref="SubmitCodeRequest"/> to the <see cref="ResolveKernelAddress">language kernel</see>,
+    /// and posts an <see cref="ExecuteScriptResponse"/> with the submission id + output-area
     /// reference so callers can subscribe to live progress without ever addressing
     /// the kernel themselves.
     /// </summary>
@@ -181,16 +201,9 @@ public static class CodeNodeType
                             // the caller-supplied Inputs so the script can read
                             // them off the `Inputs` global â€” the canonical channel
                             // for script-templated operations (export, importâ€¦).
-                            // C# runs in-process on the Activity hub's Roslyn kernel. A foreign
-                            // language (python) has no in-process runtime here, so it routes to a
-                            // connected worker participant over the mesh (the gRPC bridge); that worker
-                            // executes and patches THIS same ActivityLog node, so output surfaces
-                            // identically. The stable worker address is where the Python kernel registers
-                            // (clients/python: `python -m meshweaver.worker --address py/python-kernel`).
-                            var isPython = string.Equals(code.Language, "python", StringComparison.OrdinalIgnoreCase);
-                            var submitTarget = isPython
-                                ? new Address("py", "python-kernel")
-                                : new Address(activityPath);
+                            // C# runs in-process on the Activity hub's Roslyn kernel; a foreign language
+                            // routes to the worker that owns its runtime (see ResolveKernelAddress).
+                            var submitTarget = ResolveKernelAddress(code.Language, activityPath);
                             hub.Post(
                                 new SubmitCodeRequest(code.Code ?? string.Empty)
                                 {

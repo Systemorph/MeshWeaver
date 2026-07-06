@@ -257,7 +257,7 @@ The legacy `workspace.UpdateMeshNode(update)` extension is `[Obsolete]` and poin
 ### Subscribe is mandatory on every cold-write surface
 
 - `meshService.CreateNode(node)` / `UpdateNode(node)` / `DeleteNode(path)` — cold; subscribe to commit.
-- `meshService.MoveNode(...)` / `meshService.CreateTransient(node)` — cold; subscribe.
+- `meshService.MoveNode(...)` / `meshService.CopyNode(...)` — cold; subscribe.
 - `remoteStream.Update(current => updated, ex => …)` — the `ex` callback fires on the stream's hub; the returned `void` IS the subscription.
 
 ---
@@ -486,7 +486,7 @@ If you find yourself using `.Take(N)` outside a `SelectMany` that immediately pr
 
 1. **No `Task<T>` / `async` / `await` in mesh-reachable code.** Public methods on services, handlers, layout areas, and click actions return `IObservable<T>` (or `void`). An `async Task` method that awaits a hub operation deadlocks the hub ActionBlock.
 
-2. **No `*Async` extension shims on `IMeshService`.** Use `meshService.CreateNode(node)` / `UpdateNode(node)` / `DeleteNode(path)` / `CreateTransient(node)` — these return `IObservable<MeshNode>`. Never use `.CreateNodeAsync(...)` / `.UpdateNodeAsync(...)` / `.DeleteNodeAsync(...)` / `.CreateTransientAsync(...)` — those extensions bridge to Task via `.ToTask()` and deadlock every time they are reached from a hub handler.
+2. **No `*Async` extension shims on `IMeshService`.** Use `meshService.CreateNode(node)` / `UpdateNode(node)` / `DeleteNode(path)` — these return `IObservable<MeshNode>`. Never use `.CreateNodeAsync(...)` / `.UpdateNodeAsync(...)` / `.DeleteNodeAsync(...)` — those extensions bridge to Task via `.ToTask()` and deadlock every time they are reached from a hub handler.
 
 3. **Use `hub.Observe(...)` instead of `RegisterCallback` / `AwaitResponse`.** The Task-returning overloads are `[Obsolete]`. Production code MUST use `hub.Observe(delivery)` (already-posted) or `hub.Observe(request, options?)` (also posts) — both return `IObservable<IMessageDelivery[<TResponse>]>`. `DeliveryFailure` flows via `OnError`; no Task-await deadlock surface, no silently-skipped callback.
 
