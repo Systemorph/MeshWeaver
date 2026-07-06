@@ -141,6 +141,32 @@ A few rules keep such a page healthy:
 - **Keep each executable cell self-contained.** A `--render` block compiles on its own; declare the records and data it needs inside it.
 - **`@@` embeds the *default* area unless you name one.** `@@("/Doc/GUI/DataGrid")` renders that page's default view; add `/area/Overview` to pick a specific one.
 
+# Course affordances: "Go to Exercise" and a collapsible side-nav
+
+Any markdown page — a course page especially — gets two ready-made embeds that turn a wall of prose into a place a learner can *work*. Both resolve against the page's own path, so you enable each with a single line and nothing else.
+
+## "Go to Exercise" — copy-to-home button
+
+Drop this on an exercise page and the reader gets a button that gives them their **own writable copy** to work in:
+
+```markdown
+@@("area/GoToMyCopy")
+```
+
+On the first press it copies the page's parent *module* subtree into the reader's home space and opens the copy; on the second press it just goes to the copy — idempotent, never a duplicate. A signed-out visitor sees a gentle "sign in to take this" instead, and the author of the template (anyone with edit rights) is taken straight to the template rather than a copy. It reuses the same copy-to-home machinery as the read-only-node "copy to my home" flow, so the learner always lands on something they can edit.
+
+> Why a button and not a plain link? An embedded *auto-redirect* area only navigates when it is the top-level route — inline in a page it appears to "do nothing". A button's click drives navigation from anywhere, which is exactly what an inline embed needs.
+
+## A collapsible course side-nav
+
+To wrap a page in a reader shell — a collapsible left rail listing the containing space's pages, the page content on the right — link a learner to the page's **`/Learn`** area, or embed just the rail inline:
+
+```markdown
+@@("area/CourseNav")
+```
+
+`CourseNav` lists the current page's sibling pages (the containing space's direct children, ordered by their `Order` then name) with the current page highlighted, so a learner always sees where they are. `/Learn` puts that same nav in a collapsible splitter pane beside the page's Overview. Both work for any markdown space — there is no course-specific node type to declare; the nav is sourced from the space's own children. "Go to Exercise" lands the learner directly in the `/Learn` shell, so the two compose: press the button, get your copy, and read it with the side-nav already beside you.
+
 # See Also
 
 - [Layout Areas](../LayoutAreas) — what an area is and how to author one in C#
