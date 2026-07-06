@@ -20,7 +20,7 @@ using MeshWeaver.Messaging;
 public record PandasExplorer
 {
     /// <summary>The CSV file kept in content that feeds the frame when no per-node override is set.</summary>
-    public const string DefaultSourcePath = "PythonDemo/SalesData";
+    public const string DefaultSourcePath = "Doc/DataMesh/PythonPandasNode/SalesData";
 
     /// <summary>Display name of the explorer node (mirrored onto <see cref="MeshNode.Name"/>).</summary>
     [Required]
