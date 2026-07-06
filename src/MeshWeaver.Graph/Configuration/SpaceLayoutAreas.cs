@@ -104,16 +104,20 @@ public static class SpaceLayoutAreas
     }
 
     /// <summary>
-    /// True when the Space's node content is a <see cref="MarkdownContent"/> (or its degraded
-    /// JsonElement form) rather than a structured <see cref="Space"/>. The Doc and Skill partition
-    /// roots ship this way, so their editable markdown lives in <c>content</c> — they must be edited
-    /// with the standard markdown editor, not the <c>Space.body</c> field editor (which reads blank).
+    /// True when the Space's node content is a <see cref="MarkdownContent"/> — or its degraded
+    /// JsonElement form, including the legacy <c>MarkdownDocument</c> discriminator — rather than a
+    /// structured <see cref="Space"/>. The Doc and Skill partition roots ship this way, so their
+    /// editable markdown lives in <c>content</c>: they must be edited with the standard markdown
+    /// editor, not the <c>Space.body</c> field editor (which reads blank).
     /// </summary>
     private static bool IsMarkdownBacked(MeshNode? node) =>
         node?.Content is MarkdownContent
         || (node?.Content is JsonElement je
             && je.ValueKind == JsonValueKind.Object
             && je.TryGetProperty("$type", out var t)
+            // Guard the ValueKind before GetString(): a non-string $type (malformed content / a
+            // future serializer change) would otherwise throw out of the render lambda.
+            && t.ValueKind == JsonValueKind.String
             && t.GetString() is "MarkdownContent" or "MarkdownDocument");
 
     /// <summary>
