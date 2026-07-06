@@ -361,11 +361,27 @@ public static class AgentPickerProjection
             (a, m, h, mstr) => new ThreadComposer
             {
                 Harness   = FirstNonEmpty(mstr?.Harness, h),
-                ModelName = FirstNonEmpty(mstr?.ModelName, m),
+                // VALIDATE the master's stored model against the current catalog on every init — a model
+                // whose provider/key was removed (e.g. a stale "glm-5.2") must NOT be inherited, or the
+                // composer shows a selection that execution then rejects ("selected model X unavailable,
+                // using default Y"). If the master's model no longer resolves, fall to the catalog default
+                // `m` (already the lowest-Order model whose credentials resolve). Legacy stored value → gone.
+                ModelName = ValidMasterModel(mstr?.ModelName, credResolver) ?? m,
                 AgentName = FirstNonEmpty(mstr?.AgentName, a),
                 Effort    = mstr?.Effort
             });
     }
+
+    /// <summary>
+    /// The master composer's stored model path IF it still resolves against the current catalog
+    /// (its provider/key are configured), else <c>null</c> so the caller falls back to a valid default.
+    /// A null resolver (no credential resolution available) trusts the stored value unchanged.
+    /// </summary>
+    private static string? ValidMasterModel(string? modelPath, ChatClientCredentialResolver? credResolver)
+        => !string.IsNullOrEmpty(modelPath)
+           && (credResolver is null || credResolver.Resolve(modelPath) != CredentialResolution.Missing)
+            ? modelPath
+            : null;
 
     /// <summary>First non-empty of the two — master value wins, catalog fallback.</summary>
     private static string? FirstNonEmpty(string? primary, string? fallback)
