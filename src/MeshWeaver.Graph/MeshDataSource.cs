@@ -234,6 +234,20 @@ public static class MeshDataSourceExtensions
         // persisted JSON always carries the field.
         if (node.Version == 0)
             node = node with { Version = 1 };
+        // 🚨 "Delete wins": drop a resurrecting write to a just-deleted path. The persistence
+        // sampler (SubscribeToOwnDeletion) posts SaveMeshNodeRequest on every own-node change;
+        // a per-node hub that activated AFTER a delete holds a stale Current (IsDeleted=false,
+        // so the sampler's own gate doesn't fire) and would RE-PERSIST the deleted row here —
+        // the confirmed SpaceDeletionPartitionDropTests resurrection. The owning hub recorded the
+        // delete in the mesh-scoped registry, so tombstone this hub's cache and skip the write.
+        var recentlyDeleted = hub.ServiceProvider.GetService<RecentlyDeletedRegistry>();
+        if (recentlyDeleted?.IsRecentlyDeleted(node.Path) == true)
+        {
+            var ownCache = hub.ServiceProvider.GetService<OwnNodeCache>();
+            if (ownCache is not null) ownCache.IsDeleted = true;
+            logger?.LogDebug("[SaveMeshNode] skip resurrecting write to recently-deleted {Path}", node.Path);
+            return request.Processed();
+        }
         logger?.LogDebug("[SaveMeshNode] start path={Path} version={Version}",
             node.Path, node.Version);
         // Storage adapter's own Changes feed publishes the Updated event
@@ -640,6 +654,12 @@ public static class MeshDataSourceExtensions
         if (cache == null)
             return;
 
+        // Mesh-scoped "delete wins" tombstone. The owning hub's storage.Changes handler below
+        // records/clears this so a per-node hub that (re)activates AFTER a delete can see the
+        // delete and drop its resurrecting activation-save (MeshNodeTypeSource.UpdateImpl) —
+        // the per-hub cache.IsDeleted only covers THIS hub instance. See RecentlyDeletedRegistry.
+        var recentlyDeleted = hub.ServiceProvider.GetService<RecentlyDeletedRegistry>();
+
         // Long-standing subscription to the own-node reducer: every new emission
         // updates the cache and feeds the persistence sampler. No Take(1); the
         // cache stays current for the hub's entire lifetime, so the read
@@ -837,6 +857,9 @@ public static class MeshDataSourceExtensions
             {
                 case DataChangeKind.Deleted:
                     cache.IsDeleted = true;
+                    // Publish the delete to the mesh-scoped tombstone so a DIFFERENT hub instance
+                    // that later activates for this path drops its resurrecting activation-save.
+                    recentlyDeleted?.MarkDeleted(ownPath);
                     return;
 
                 case DataChangeKind.Created:
@@ -849,6 +872,9 @@ public static class MeshDataSourceExtensions
                     if (newNode.Version == lastSelfWrite.Value)
                         return;
                     cache.IsDeleted = false;
+                    // A genuine (re)create/update clears the tombstone so a same-id recreate
+                    // persists normally (a self-write echo was already suppressed above).
+                    recentlyDeleted?.Clear(ownPath);
                     try
                     {
                         // 🚨 FORWARD-ONLY refresh — never move the in-RAM node BACKWARD.

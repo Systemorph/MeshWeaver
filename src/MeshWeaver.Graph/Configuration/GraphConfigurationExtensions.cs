@@ -235,6 +235,10 @@ public static class GraphConfigurationExtensions
                     // PartitionDefinition.DefaultActivityParentPath without
                     // bridging an async catalog query into the sync handler.
                     services.AddSingleton<PartitionRegistry>();
+                    // Mesh-scoped "delete wins" tombstone shared across every per-node hub —
+                    // stops a hub that (re)activates after a delete from resurrecting the row
+                    // via its activation-triggered save. See RecentlyDeletedRegistry.
+                    services.AddSingleton<RecentlyDeletedRegistry>();
                     return services;
                 })
                 .WithHandler<GetDataRequest>(HandleNodeTypeRequest));

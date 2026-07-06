@@ -65,6 +65,13 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
     private static readonly TimeSpan RecentlyDeletedTtl = TimeSpan.FromSeconds(30);
     private readonly ConcurrentDictionary<string, DateTimeOffset> _recentlyDeleted = new();
 
+    // Mesh-scoped "delete wins" tombstone (shared across hub instances). The per-hub
+    // _recentlyDeleted above only guards a delete-then-add WITHIN this hub instance; this
+    // registry carries a delete recorded by the owning hub across to a DIFFERENT hub instance
+    // that activates afterward (with a stale Replay(1) own-node snapshot) and would otherwise
+    // resurrect the row via the activation-save below. See RecentlyDeletedRegistry.
+    private readonly RecentlyDeletedRegistry? _recentlyDeletedRegistry;
+
     internal MeshNodeTypeSource(
         IWorkspace workspace,
         object dataSource,
@@ -89,6 +96,8 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
         _logger = workspace.Hub.ServiceProvider.GetService<ILogger<MeshNodeTypeSource>>();
         _ownNodeCache = workspace.Hub.ServiceProvider
             .GetService<MeshDataSourceExtensions.OwnNodeCache>();
+        _recentlyDeletedRegistry = workspace.Hub.ServiceProvider
+            .GetService<RecentlyDeletedRegistry>();
         _logger?.LogDebug("MeshNodeTypeSource: Created for hubPath={HubPath} (routingSuppliedStream={Supplied})",
             hubPath, ownNodeStream != null);
 
@@ -240,9 +249,15 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
         PruneRecentlyDeleted(nowUtc);
         foreach (var node in adds)
         {
-            if (!string.IsNullOrEmpty(node.Path)
+            var perHubRecentlyDeleted = !string.IsNullOrEmpty(node.Path)
                 && _recentlyDeleted.TryGetValue(node.Path, out var deletedAt)
-                && nowUtc - deletedAt < RecentlyDeletedTtl)
+                && nowUtc - deletedAt < RecentlyDeletedTtl;
+            // Also honour the MESH-scoped tombstone: this per-node hub may have activated
+            // AFTER the delete (fresh instance, empty per-hub set) and be about to resurrect
+            // the row from a stale Replay(1) own-node snapshot. The owning hub recorded the
+            // delete in the shared registry, so drop the add here. See RecentlyDeletedRegistry.
+            if (perHubRecentlyDeleted
+                || (_recentlyDeletedRegistry?.IsRecentlyDeleted(node.Path) ?? false))
             {
                 _logger?.LogDebug(
                     "MeshNodeTypeSource[{HubPath}]: skip save for recently-deleted {Path}",
