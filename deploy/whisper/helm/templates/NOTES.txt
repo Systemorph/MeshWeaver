@@ -1,0 +1,25 @@
+whisper-swiss-german is deploying.
+
+The server is cluster-internal (Service type {{ .Values.service.type }}) at:
+
+    http://{{ include "whisper.fullname" . }}:{{ .Values.service.port }}
+
+Point the portal at it so POST /api/speech/transcribe has somewhere to forward:
+
+    Speech__Endpoint = http://{{ include "whisper.fullname" . }}:{{ .Values.service.port }}
+    Speech__Enabled = true
+    Speech__Language = {{ .Values.model.language }}
+
+First pod start downloads the model (~547 MB) via an initContainer, then loads it — the
+startupProbe covers this, so give the pod a minute or two to become Ready.
+
+Check readiness from inside the cluster (a bare GET returns non-5xx once the model is loaded):
+
+    kubectl run -it --rm curl --image=curlimages/curl --restart=Never -- \
+      -sf http://{{ include "whisper.fullname" . }}:{{ .Values.service.port }}/
+
+To transcribe, POST an audio file to /inference:
+
+    kubectl run -it --rm curl --image=curlimages/curl --restart=Never -- \
+      -F file=@your-audio.wav -F language={{ .Values.model.language }} -F response_format=json \
+      http://{{ include "whisper.fullname" . }}:{{ .Values.service.port }}/inference

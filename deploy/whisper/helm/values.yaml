@@ -1,0 +1,58 @@
+# Values for the centralized Swiss-German whisper.cpp server (deploy/whisper/Dockerfile).
+# The container is cluster-internal: the portal reaches it at http://<release>-whisper-swiss-german:8080
+# and forwards audio via ISpeechTranscriber. Point the portal at it with:
+#   Speech__Endpoint = http://<release>-whisper-swiss-german:8080
+#   Speech__Enabled  = true
+
+replicaCount: 1
+
+image:
+  # Build deploy/whisper/Dockerfile and push to your registry (e.g. ACR):
+  #   az acr build -r meshweaver -t whisper-swiss-german:1.7.4 deploy/whisper
+  repository: meshweaver.azurecr.io/whisper-swiss-german
+  tag: "1.7.4"
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+# The whisper model is NOT baked into the image (it's ~547 MB and swappable). An initContainer
+# fetches it once per pod into a shared emptyDir; whisper-server then loads it from /models/model.bin.
+model:
+  # Default: the GitHub-release asset that VoiceModelCatalog + deploy/whisper also use.
+  url: "https://github.com/Systemorph/MeshWeaver/releases/download/voice-model-swiss-german/ggml-swiss-german-turbo-q5_0.bin"
+  # Whisper language hint. "de" transcribes Swiss German OUT as Standard German (best for strong
+  # dialect); "auto" detects (en/de/…) at some accuracy cost on heavy dialect.
+  language: "de"
+  threads: 4
+
+service:
+  type: ClusterIP
+  port: 8080
+
+# whisper.cpp (CPU large-v3-turbo q5) wants a few cores + RAM for the model + compute buffers.
+resources:
+  requests:
+    cpu: "1"
+    memory: 2Gi
+  limits:
+    cpu: "4"
+    memory: 6Gi
+
+# Model load + first request take time; probes are generous so the pod isn't killed while warming.
+startupProbe:
+  # Gates readiness/liveness until the server answers — covers the model download + load.
+  failureThreshold: 60
+  periodSeconds: 10
+readinessProbe:
+  periodSeconds: 15
+  timeoutSeconds: 5
+livenessProbe:
+  periodSeconds: 30
+  timeoutSeconds: 5
+  failureThreshold: 5
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+podAnnotations: {}
