@@ -155,7 +155,7 @@ public static class CommentLayoutAreas
                         return Task.CompletedTask;
                     }));
         if (canAct)
-            rightGroup = rightGroup.WithView(BuildReplyButton(host, hubPath, comment, currentUser));
+            rightGroup = rightGroup.WithView(BuildReplyButton(host, hubPath));
         if (canAct && !isResolved && IsTopLevelComment(hubPath, comment))
             rightGroup = rightGroup.WithView(BuildResolveButton(host, hubPath, comment));
         if (canDelete || canComment)
@@ -215,7 +215,7 @@ public static class CommentLayoutAreas
                     .DistinctUntilChanged()
                     .Select(replyPath => string.IsNullOrEmpty(replyPath)
                         ? (UiControl?)null
-                        : BuildReplyCreateForm(h, replyPath, replyPathStateId));
+                        : BuildReplyCreateForm(h, replyPath, replyPathStateId, comment, currentUser));
             });
         }
 
@@ -365,13 +365,13 @@ public static class CommentLayoutAreas
 
     /// <summary>
     /// Builds the inline reply creation form with markdown editor, Cancel, and Create buttons.
-    /// Cancel deletes the transient node and hides the form.
-    /// Create sets the reply text, marks the node Active, and hides the form.
+    /// Cancel just closes the draft form (nothing was persisted).
+    /// Create writes the reply Active with its text in a single <c>CreateNode</c>.
     /// </summary>
-    private static UiControl BuildReplyCreateForm(LayoutAreaHost host, string replyPath, string replyPathStateId)
+    private static UiControl BuildReplyCreateForm(LayoutAreaHost host, string replyPath, string replyPathStateId,
+        Comment comment, string currentUser)
     {
         var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
-        var meshQuery = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
         var replyTextDataId = $"replyText_{replyPath.Replace("/", "_")}";
 
         host.UpdateData(replyTextDataId, new Dictionary<string, object?> { ["text"] = "" });
@@ -399,9 +399,8 @@ public static class CommentLayoutAreas
                 .WithAppearance(Appearance.Neutral)
                 .WithClickAction(_ =>
                 {
-                    nodeFactory.DeleteNode(replyPath).Subscribe(
-                        __ => host.UpdateData(replyPathStateId, ""),
-                        _  => host.UpdateData(replyPathStateId, ""));
+                    // Nothing was persisted — the draft lives only in the form's data stream.
+                    host.UpdateData(replyPathStateId, "");
                     return Task.CompletedTask;
                 }))
             .WithView(Controls.Button("Create")
@@ -409,30 +408,36 @@ public static class CommentLayoutAreas
                 .WithIconStart(FluentIcons.Add())
                 .WithClickAction(ctx =>
                 {
-                    // Read text, then look up the transient reply in the workspace stream
-                    // (not QueryAsync — AsynchronousCalls.md) and flip it to Active with the text.
+                    // Read the draft text, then write the reply with ONE CreateNode (Active, through the
+                    // access-control pipeline). No transient placeholder — the reply is authored at its
+                    // own replyPath, a child of the comment being replied to.
                     ctx.Host.Stream.GetDataStream<Dictionary<string, object?>>(replyTextDataId)
                         .Take(1)
                         .Subscribe(data =>
                         {
                             var text = data?.GetValueOrDefault("text")?.ToString() ?? "";
-
-                            var cache = host.Hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
-                            cache.Update(replyPath, n =>
+                            var replyId = replyPath.Split('/').Last();
+                            var replyNamespace = replyPath[..replyPath.LastIndexOf('/')];
+                            var replyNode = new MeshNode(replyId, replyNamespace)
                             {
-                                var replyComment = n.ContentAs<Comment>(host.Hub.JsonSerializerOptions);
-                                // Existing node whose content can't be recovered → leave it alone, NEVER clobber.
-                                if (n.Content is not null && replyComment is null)
-                                    return n;
-                                replyComment ??= new Comment();
-                                return n with
+                                Name = $"Reply to {comment.Author}",
+                                NodeType = CommentNodeType.NodeType,
+                                State = MeshNodeState.Active,
+                                Content = new Comment
                                 {
-                                    State = MeshNodeState.Active,
-                                    Content = replyComment with { Text = text }
-                                };
-                            }, host.Hub.JsonSerializerOptions).Subscribe(
+                                    Id = replyId,
+                                    PrimaryNodePath = comment.PrimaryNodePath,
+                                    Author = currentUser,
+                                    Status = CommentStatus.Active,
+                                    Text = text
+                                }
+                            };
+                            nodeFactory.CreateNode(replyNode).Subscribe(
                                 _ => host.UpdateData(replyPathStateId, ""),
-                                _ => host.UpdateData(replyPathStateId, ""));
+                                // Keep the draft form OPEN on failure (don't clear the state) so the user's
+                                // reply isn't silently lost, and log so the failure is diagnosable.
+                                ex => host.Hub.ServiceProvider.GetService<ILogger<LayoutAreaHost>>()
+                                    ?.LogWarning(ex, "Failed to create reply at {Path}", replyPath));
                         });
                     return Task.CompletedTask;
                 })));
@@ -441,9 +446,12 @@ public static class CommentLayoutAreas
     }
 
     /// <summary>
-    /// Builds the Reply icon button. Creates a transient reply node via IMeshService and shows inline Create area.
+    /// Builds the Reply icon button. Opens the inline reply form for a fresh reply path — NOTHING is
+    /// persisted until the user clicks Create (then one <c>CreateNode</c> writes the reply Active).
+    /// No transient placeholder is written, so an unsent draft never appears and there is no
+    /// PG-invisible node to resolve.
     /// </summary>
-    private static UiControl BuildReplyButton(LayoutAreaHost host, string hubPath, Comment comment, string currentUser)
+    private static UiControl BuildReplyButton(LayoutAreaHost host, string hubPath)
     {
         return Controls.Html("<span style=\"cursor: pointer; font-size: 0.8rem; color: var(--accent-fill-rest);\" title=\"Reply\">↩</span>")
             .WithClickAction(_ =>
@@ -451,30 +459,9 @@ public static class CommentLayoutAreas
                 var replyId = Guid.NewGuid().AsString();
                 var replyPath = $"{hubPath}/{replyId}";
                 var replyPathStateId = $"replyPath_{hubPath.Replace("/", "_")}";
-
-                var replyNode = new MeshNode(replyId, hubPath)
-                {
-                    Name = $"Reply to {comment.Author}",
-                    NodeType = CommentNodeType.NodeType,
-                    State = MeshNodeState.Transient,
-                    Content = new Comment
-                    {
-                        Id = replyId,
-                        PrimaryNodePath = comment.PrimaryNodePath,
-                        Author = currentUser,
-                        Status = CommentStatus.Active
-                    }
-                };
-
-                var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
-                nodeFactory.CreateTransient(replyNode).Subscribe(
-                    _ =>
-                    {
-                        var expandedStateId = $"replies_expanded_{hubPath.Replace("/", "_")}";
-                        host.UpdateData(expandedStateId, true);
-                        host.UpdateData(replyPathStateId, replyPath);
-                    },
-                    _ => { });
+                var expandedStateId = $"replies_expanded_{hubPath.Replace("/", "_")}";
+                host.UpdateData(expandedStateId, true);
+                host.UpdateData(replyPathStateId, replyPath);
                 return Task.CompletedTask;
             });
     }

@@ -5,6 +5,7 @@ using MeshWeaver.Domain;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.Domain;
+using Microsoft.Extensions.Logging;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
@@ -290,9 +291,13 @@ public static class GroupsLayoutArea
                                                     Groups = [new MembershipEntry { Group = "" }]
                                                 }
                                             };
-                                            nodeFactory.CreateTransient(newNode).Subscribe(
-                                                _ => saveCtx.NavigateTo($"/{path}/{MeshNodeLayoutAreas.CreateNodeArea}"),
-                                                _ => { });
+                                            // One authoritative create (Active, through the access-control
+                                            // pipeline) — the membership content is already built above, so
+                                            // land on Edit to pick the group. No transient placeholder.
+                                            nodeFactory.CreateNode(newNode).Subscribe(
+                                                _ => saveCtx.NavigateTo($"/{path}/{MeshNodeLayoutAreas.EditArea}"),
+                                                ex => saveCtx.Hub.ServiceProvider.GetService<ILogger<LayoutAreaHost>>()
+                                                    ?.LogWarning(ex, "Failed to create group membership at {Path}", path));
                                         });
                                 });
                         });

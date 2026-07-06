@@ -734,43 +734,43 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
     }
 
     /// <summary>
-    /// Test that creating a TRANSIENT node and then requesting Edit view works.
+    /// Test that creating a node and then requesting Edit view works.
     /// This is the exact flow from the simplified Create form:
     /// 1. User fills in Name + Description
-    /// 2. CreateTransientNodeAsync is called (NOT CreateNodeAsync which confirms immediately)
+    /// 2. CreateNode is called, persisting a single Active node
     /// 3. Redirect to /{nodePath}/Edit
-    /// 4. Edit view should load and show "Draft" badge
+    /// 4. Edit view should load
     /// </summary>
     [Fact(Timeout = 20000)]
-    public async Task CreateTransientNode_ThenRequestEditView_Succeeds()
+    public async Task CreateNode_ThenRequestEditView_Succeeds()
     {
         // Arrange - Create a unique node path
         var uniqueId = Guid.NewGuid().ToString("N")[..8];
-        var nodePath = $"test-transient-{uniqueId}";
+        var nodePath = $"test-node-{uniqueId}";
         var nodeAddress = new Address(nodePath);
 
-        Output.WriteLine($"Test: Creating TRANSIENT node at {nodePath}");
+        Output.WriteLine($"Test: Creating node at {nodePath}");
 
-        // Step 1: Create TRANSIENT node via IMeshCatalog (like the new Create form does)
+        // Step 1: Create node via IMeshCatalog (like the new Create form does)
         var node = MeshNode.FromPath(nodePath) with
         {
-            Name = "Test Transient Node",
+            Name = "Test Node",
             NodeType = "Markdown",
-            State = MeshNodeState.Transient, // Explicitly transient
-            Content = MarkdownContent.Parse($"# Test Transient\n\nThis is transient.", nodePath)
+            State = MeshNodeState.Active,
+            Content = MarkdownContent.Parse($"# Test Node\n\nThis is a node.", nodePath)
         };
 
-        Output.WriteLine($"Step 1: Calling NodeFactory.CreateTransientAsync for {nodePath}");
+        Output.WriteLine($"Step 1: Calling NodeFactory.CreateNode for {nodePath}");
 
-        var createdNode = await NodeFactory.CreateTransient(node).Should().Within(20.Seconds()).Emit();
-        Output.WriteLine($"CreateTransientAsync completed: Path={createdNode.Path}, State={createdNode.State}");
-        createdNode.State.Should().Be(MeshNodeState.Transient, "Node should be in Transient state");
+        var createdNode = await NodeFactory.CreateNode(node).Should().Within(20.Seconds()).Emit();
+        Output.WriteLine($"CreateNode completed: Path={createdNode.Path}, State={createdNode.State}");
+        createdNode.State.Should().Be(MeshNodeState.Active, "Node should be in Active state");
 
-        // Step 2: Verify node exists with Transient state via stream
-        Output.WriteLine($"Step 2: Verifying transient node exists");
+        // Step 2: Verify node exists with Active state via stream
+        Output.WriteLine($"Step 2: Verifying node exists");
         var persistedNode = await ReadNode(nodePath).Should().Within(ReadNodeTimeout).Emit();
-        persistedNode.Should().NotBeNull($"Transient node {nodePath} should exist");
-        persistedNode!.State.Should().Be(MeshNodeState.Transient, "Persisted node should be Transient");
+        persistedNode.Should().NotBeNull($"Node {nodePath} should exist");
+        persistedNode!.State.Should().Be(MeshNodeState.Active, "Persisted node should be Active");
         Output.WriteLine($"Node found: State={persistedNode.State}, Name={persistedNode.Name}");
 
         // Diagnostic: Check what's in the static-node provider chain
@@ -804,7 +804,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
         // Step 3: Verify via stream (CQRS-correct)
         Output.WriteLine($"Step 3: Getting node via per-node stream");
         var catalogNode = await ReadNode(nodePath).Should().Within(ReadNodeTimeout).Emit();
-        catalogNode.Should().NotBeNull($"Stream should return the transient node");
+        catalogNode.Should().NotBeNull($"Stream should return the node");
 
         // Step 4: Request Edit view (simulates redirect)
         Output.WriteLine($"Step 4: Requesting Edit layout (simulates redirect to /{nodePath}/Edit)");
@@ -828,9 +828,9 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
             Output.WriteLine($"Edit layout content: {rawText[..Math.Min(500, rawText.Length)]}...");
         }
 
-        editLayout.Value.ValueKind.Should().NotBe(JsonValueKind.Undefined, "Edit layout should not be undefined for transient node");
+        editLayout.Value.ValueKind.Should().NotBe(JsonValueKind.Undefined, "Edit layout should not be undefined for the node");
 
-        Output.WriteLine("SUCCESS: CreateTransientNode -> Edit flow completed");
+        Output.WriteLine("SUCCESS: CreateNode -> Edit flow completed");
 
         // Cleanup
         Output.WriteLine($"Cleanup: Deleting test node {nodePath}");
