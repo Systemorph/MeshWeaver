@@ -8,9 +8,13 @@ namespace MeshWeaver.Graph;
 /// posts a sub-thread's result back into the parent thread, which needs <c>MeshWeaver.AI</c>'s thread
 /// submission surface that Graph cannot reference. Register an implementation in DI; the
 /// <c>EventSubscriptionRunner</c> resolves the one whose <see cref="Handles"/> matches a fired
-/// subscription's <see cref="EventSubscription.ContinuationType"/> and runs it (already under the system
-/// identity — do NOT re-impersonate). The natively-handled <see cref="EventContinuationType.GrantSpaceAccess"/>
-/// continuation does NOT go through this seam.
+/// subscription's <see cref="EventSubscription.ContinuationType"/> and runs it. The runner wraps the
+/// returned observable in a system-impersonation scope, so <see cref="Run"/>'s construction and the
+/// initial subscribe are under the system identity. Because <c>AccessContext</c> is AsyncLocal, if your
+/// handler defers work onto a NEW async/reactive boundary it created itself, re-establish the identity
+/// there (the framework's write primitives already carry it through <c>.Subscribe</c>). The
+/// natively-handled <see cref="EventContinuationType.GrantSpaceAccess"/> continuation does NOT go through
+/// this seam.
 /// </summary>
 public interface IEventSubscriptionContinuationHandler
 {

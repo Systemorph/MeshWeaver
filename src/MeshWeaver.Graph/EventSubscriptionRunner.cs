@@ -262,6 +262,10 @@ public sealed class EventSubscriptionRunner(
                     .SelectMany(g => subscription.Pin
                         ? AsSystem(() => EventSubscriptionOps.Pin(hub, userId, subscription.TargetPath!)).Select(_ => g)
                         : Observable.Return(g)),
+            // A GrantSpaceAccess that failed the guard (missing TargetPath/Role/subject) is INCOMPLETE —
+            // surface that, don't fall through to the handler seam (which is only for non-native types).
+            EventContinuationType.GrantSpaceAccess => Observable.Throw<MeshNode>(new InvalidOperationException(
+                $"Incomplete GrantSpaceAccess event subscription {subscription.Id} (needs TargetPath, Role, and a subject)")),
             // Continuations whose effect lives above Graph (e.g. PostThreadMessage in MeshWeaver.AI) run
             // through a registered IEventSubscriptionContinuationHandler resolved from DI, wrapped in
             // AsSystem so the handler's writes run under the system identity.
