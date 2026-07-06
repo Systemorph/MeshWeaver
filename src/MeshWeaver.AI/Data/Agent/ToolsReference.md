@@ -51,7 +51,26 @@ The leading `/` after `@` is load-bearing: `@/X` ≠ `@X`.
 
 ### Context comes from the user message
 
-Every user message carries a **"Current Application Context"** header with the canonical path of the node the user is currently viewing. **That is the path to use when resolving `@...` relative references.** Examples:
+Every user message carries a **"Current Application Context"** header. **You DO know where the user is — do not claim otherwise.** The header is a JSON object with the current node's IDENTITY fully resolved, shipped on every round:
+
+```json
+{
+  "address": "PartnerRe/AIConsulting",   // owner (main-node) address of what the user is viewing
+  "area": "Overview",                     // layout area, if any
+  "areaId": "…",                          // layout area id, if any
+  "path": "Tasks/123",                    // remaining path after the node, if any
+  "parameters": { "from": "5" },          // optional ?k=v query params on the URL
+  "node": {                               // the current node — IDENTITY only (content via Get)
+    "path": "PartnerRe/AIConsulting/FinalReport",
+    "namespace": "PartnerRe/AIConsulting",
+    "id": "FinalReport",
+    "nodeType": "Markdown",
+    "name": "Final Report – …"
+  }
+}
+```
+
+`node.path` (== `namespace`/`id`) **is the canonical path to use when resolving `@...` relative references** and to act on the current node. It is IDENTITY only — load the node's CONTENT on demand with the `Get` tool. Examples:
 
 - Context = `PartnerRe/AIConsulting`, agent calls `Get('@FinalReport')` → resolves to `@/PartnerRe/AIConsulting/FinalReport`.
 - Context = `PartnerRe/AIConsulting`, agent calls `Get('@/OrgA/Docs/other')` → resolves to `@/OrgA/Docs/other` (absolute — context ignored).

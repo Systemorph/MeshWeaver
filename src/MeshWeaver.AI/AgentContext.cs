@@ -55,6 +55,33 @@ public record AgentContext
     public IReadOnlyList<AgentConfiguration>? AvailableAgents { get; init; }
 
     /// <summary>
+    /// Projects this context into the compact IDENTITY object shipped to the agent's system
+    /// prompt ("# Current Application Context"). It resolves the current node fully — its
+    /// <c>path</c>, <c>namespace</c>, <c>id</c>, <c>nodeType</c>, <c>name</c> — alongside the
+    /// owner <c>address</c>, the layout <c>area</c>/<c>areaId</c>, the remaining <c>path</c>, and
+    /// the optional query <c>parameters</c>. Reference only — never node content (loaded on demand
+    /// via the Get tool). Kept as ONE method so the prompt and its unit test assert the SAME shape.
+    /// </summary>
+    public object ToPromptContext() => new
+    {
+        address = Address?.ToString() ?? Context,
+        area = LayoutArea?.Area,
+        areaId = LayoutArea?.Id,
+        path = Path,
+        parameters = Parameters,
+        node = Node is null
+            ? null
+            : new
+            {
+                path = Node.Path,
+                @namespace = Node.Namespace,
+                id = Node.Id,
+                nodeType = Node.NodeType,
+                name = Node.Name,
+            },
+    };
+
+    /// <summary>
     /// Standard prefixes that indicate the reference type when used as first segment.
     /// These get stripped and the remaining path is parsed as addressType/addressId/...
     /// </summary>
