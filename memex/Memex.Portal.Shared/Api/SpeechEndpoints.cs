@@ -20,12 +20,19 @@ namespace Memex.Portal.Shared.Api;
 /// <para>Every client — React Native, the Blazor composer, MAUI — posts audio HERE, behind the portal's
 /// Bearer auth, and the portal forwards it to the (typically cluster-internal) Whisper container via
 /// <see cref="ISpeechTranscriber"/>. The model host never faces clients directly — they only ever see this
-/// endpoint. The contract mirrors whisper.cpp's <c>/inference</c> (and the RN client's
-/// <c>SpeechTranscriptionClient</c>): multipart <c>{ file, language?, response_format? }</c> →
-/// <c>{"text": "…", "language": "…"}</c>.</para>
+/// endpoint. Request: multipart <c>{ file, language? }</c> (the whisper.cpp <c>response_format</c>
+/// part the RN client sends is accepted for compatibility but ignored — the portal ALWAYS
+/// normalizes the container's reply to JSON). Response: <c>{"text": "…", "language": "…"}</c>.</para>
 /// </summary>
 public static class SpeechEndpoints
 {
+    /// <summary>
+    /// Cap on a single audio upload. Generous for speech (a minute of WAV ≈ a few MB) but bounds the
+    /// in-memory buffer well under the 200 MB multipart ceiling that <c>AddMeshApi</c> raises — so this
+    /// endpoint can't be turned into a large-allocation DoS.
+    /// </summary>
+    private const long MaxAudioBytes = 25L * 1024 * 1024;
+
     /// <summary>
     /// Maps <c>POST /api/speech/transcribe</c>. Same Bearer policy as the rest of the REST surface
     /// (<c>/api/mesh/*</c>); antiforgery is disabled because a Bearer-auth multipart post carries no
@@ -53,9 +60,14 @@ public static class SpeechEndpoints
             return Results.BadRequest(new { error = "Content-Type must be multipart/form-data." });
 
         var form = await http.Request.ReadFormAsync(ct);
-        var file = form.Files.FirstOrDefault();
+        var file = form.Files.GetFile("file");
         if (file is null || file.Length == 0)
-            return Results.BadRequest(new { error = "Form file 'file' is required." });
+            return Results.BadRequest(new { error = "Multipart file part 'file' is required." });
+        // Reject oversized uploads BEFORE buffering into memory (see MaxAudioBytes).
+        if (file.Length > MaxAudioBytes)
+            return Results.Json(
+                new { error = $"Audio too large: {file.Length} bytes (max {MaxAudioBytes})." },
+                statusCode: StatusCodes.Status413PayloadTooLarge);
 
         using var ms = new MemoryStream();
         await using (var stream = file.OpenReadStream())
