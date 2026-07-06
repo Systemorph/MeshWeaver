@@ -261,6 +261,9 @@ public sealed class EventSubscriptionRunner(
                     .SelectMany(g => subscription.Pin
                         ? AsSystem(() => EventSubscriptionOps.Pin(hub, userId, subscription.TargetPath!)).Select(_ => g)
                         : Observable.Return(g)),
+            EventContinuationType.AddToGroup
+                when subscription is { TargetPath.Length: > 0 } && !string.IsNullOrEmpty(userId) =>
+                AsSystem(() => EventSubscriptionOps.AddToGroup(meshService, userId, subscription.TargetPath!)),
             _ => Observable.Throw<MeshNode>(new InvalidOperationException(
                 $"Unsupported or incomplete event subscription {subscription.Id}")),
         };
