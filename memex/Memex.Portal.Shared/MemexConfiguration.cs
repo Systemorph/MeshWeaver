@@ -541,6 +541,11 @@ public static class MemexConfiguration
                 // Register the instance-sync content type ({space}/_Sync/{sourceId} config
                 // nodes) on the mesh + per-node hubs so they (de)serialize.
                 .AddInstanceSyncTypes()
+                // Register the ApiCredential satellite NodeType (+ PlatformCredential content type)
+                // so the LinkedIn/X connect callbacks can create {profile}/_ApiCredentials/{platform}
+                // credential nodes. Without this the create throws "NodeType 'ApiCredential' is not
+                // registered" — the OAuth callback's persist step fails and sign-in reports failure.
+                .AddApiCredentialType()
                 // Seed root-scope Admin AccessAssignments for users listed under
                 // `Auth:GlobalAdmins` so configured admins bypass per-partition
                 // RLS for cross-partition operations (list Spaces, create
