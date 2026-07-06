@@ -12,6 +12,7 @@ using MeshWeaver.AI.OpenAI;
 using MeshWeaver.AI.ClaudeCode;
 using MeshWeaver.AI.Copilot;
 using MeshWeaver.Blazor.AI;
+using MeshWeaver.Speech;
 using MeshWeaver.Blazor.GoogleMaps;
 using MeshWeaver.Blazor.Graph;
 using MeshWeaver.Blazor.Infrastructure;
@@ -432,6 +433,12 @@ public static class MemexConfiguration
         // REST surface for the mesh — same Bearer-token policy as MCP, lifts the
         // multipart upload size cap. See MeshApiEndpoints.
         services.AddMeshApi();
+
+        // Centralized speech-to-text: registers ISpeechTranscriber (the Whisper container client)
+        // and binds the `Speech` config section (Endpoint/Language/Enabled). The client-facing
+        // POST /api/speech/transcribe endpoint (MapSpeechApi) forwards audio to the container, so
+        // the model host stays behind portal auth. See Doc/Architecture/CentralizedSpeech.
+        services.AddSpeechTranscription(builder.Configuration);
     }
 
     extension<TBuilder>(TBuilder builder) where TBuilder : MeshBuilder
@@ -958,6 +965,10 @@ public static class MemexConfiguration
         // REST surface that mirrors MCP — POST /api/mesh/* (1:1 with MCP tools).
         // Same Bearer auth policy as /mcp; multipart upload at /api/mesh/upload.
         app.MapMeshApi();
+
+        // Centralized speech-to-text — POST /api/speech/transcribe (multipart audio → text),
+        // behind the same Bearer policy; forwards to the Whisper container via ISpeechTranscriber.
+        app.MapSpeechApi();
 
         app.MapMeshWeaver();
 
