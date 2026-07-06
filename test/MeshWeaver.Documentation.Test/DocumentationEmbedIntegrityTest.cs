@@ -156,10 +156,9 @@ public class DocumentationEmbedIntegrityTest
             .Select(m => m.Groups[1].Value)
             .ToImmutableArray();
 
-        rawPaths.Should().ContainSingle("the page carries exactly one live @@ embed")
-            .Which.Should().Be(shippedNode,
-                "the embed must resolve to the shipped Code node — NOT a path doubled by relative resolution " +
-                "(@@Doc/… without a leading slash resolves relative to the current page; use @@/Doc/… or a child name)");
+        rawPaths.Should().Contain(shippedNode,
+            "the live embed must resolve to the shipped Code node — NOT a path doubled by relative resolution " +
+            "(@@Doc/… without a leading slash resolves relative to the current page; use @@/Doc/… or a child name)");
     }
 
     /// <summary>

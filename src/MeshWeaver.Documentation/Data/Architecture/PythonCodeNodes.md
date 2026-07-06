@@ -2,7 +2,7 @@
 Name: Python Code Nodes
 Category: Architecture
 Description: Code nodes with Language = python route over the mesh to a connected Python worker — the actual node, the worker command, and the execution flow.
-Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2c-4 0-5 2-5 4v3h5v1H5c-2 0-3 1.5-3 4s1 4 3 4h2v-3c0-2 1-3 3-3h5c1.7 0 3-1.3 3-3V6c0-2-1-4-6-4z"/><path d="M12 22c4 0 5-2 5-4v-3h-5v-1h7c2 0 3-1.3 3-3"/></svg>
+Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2c-4 0-5 2-5 4v3h5v1H5c-2 0-3 1.5-3 4s1 4 3 4h2v-3c0-2 1-3 3-3h5c1.7 0 3-1.3 3-3V6c0-2-1-4-6-4z"/><path d="M12 22c4 0 5-2 5-4v-3h-5v-1h7c2 0 3-1.5 3-4"/></svg>
 ---
 
 # Python Code Nodes
