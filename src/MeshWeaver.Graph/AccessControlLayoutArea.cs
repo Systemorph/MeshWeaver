@@ -139,8 +139,10 @@ public static class AccessControlLayoutArea
             .WithStyle("width: 100%;");
 
     /// <summary>
-    /// The inline add row: a user picker (root-namespace users) + a role select (default Editor) + an
-    /// Add button that creates the AccessAssignment node. The created assignment appears in the current
+    /// The inline add row: a user/group picker (already-provisioned subjects) OR an email field (invite
+    /// someone who hasn't signed up yet) + a role select (default Editor) + an Add button. A picked subject
+    /// creates the AccessAssignment node directly; an email grants the role now when an account exists, or
+    /// invites + schedules a deferred grant otherwise. Either way the assignment appears in the current
     /// section automatically (reactive MeshSearch).
     /// </summary>
     private static UiControl BuildAddRow(LayoutAreaHost host, string nodePath)
@@ -149,6 +151,7 @@ public static class AccessControlLayoutArea
         host.UpdateData(formId, new Dictionary<string, object?>
         {
             ["accessObject"] = "",
+            ["email"] = "",
             ["role"] = Role.Editor.Id
         });
         var dataContext = LayoutAreaReference.GetDataPointer(formId);
@@ -160,6 +163,10 @@ public static class AccessControlLayoutArea
             Label = "Add user or group",
             DataContext = dataContext
         }.WithStyle("flex: 1; min-width: 220px;");
+
+        var emailField = (new TextFieldControl(new JsonPointerReference("email"))
+            { Label = "…or invite by email", DataContext = dataContext })
+            .WithStyle("flex: 1; min-width: 220px;");
 
         var roleSelect = (new SelectControl(new JsonPointerReference("role"), Array.Empty<object>())
                 .WithOptions(new[] { Role.Admin.Id, Role.Editor.Id, Role.Viewer.Id, Role.Commenter.Id }))
@@ -174,24 +181,77 @@ public static class AccessControlLayoutArea
                     .Subscribe(form =>
                     {
                         var subject = form.GetValueOrDefault("accessObject")?.ToString()?.Trim();
+                        var email = form.GetValueOrDefault("email")?.ToString()?.Trim();
                         var role = form.GetValueOrDefault("role")?.ToString()?.Trim();
-                        if (string.IsNullOrEmpty(subject))
+                        if (string.IsNullOrEmpty(role)) role = Role.Editor.Id;
+
+                        // A picked, already-provisioned subject wins; otherwise fall back to the email
+                        // path (grant now if the account exists, else invite + deferred grant on sign-up).
+                        if (!string.IsNullOrEmpty(subject))
                         {
-                            ShowValidationError(ctx, "Please select a **user**.");
+                            CreateAssignment(ctx, nodePath, subject, role);
                             return;
                         }
-                        if (string.IsNullOrEmpty(role)) role = Role.Editor.Id;
-                        CreateAssignment(ctx, nodePath, subject, role);
+                        if (!string.IsNullOrEmpty(email))
+                        {
+                            if (!email.Contains('@'))
+                            {
+                                ShowValidationError(ctx, "Please enter a valid **email address**.");
+                                return;
+                            }
+                            GrantByEmail(ctx, nodePath, email, role);
+                            return;
+                        }
+                        ShowValidationError(ctx,
+                            "Select a **user or group**, or enter an **email address** to invite someone "
+                            + "who hasn't signed up yet.");
                     });
             }));
 
         return Controls.Stack
-            .WithOrientation(Orientation.Horizontal)
-            .WithStyle("align-items: flex-end; gap: 12px; margin-top: 8px;")
-            .WithView(userPicker)
-            .WithView(roleSelect)
-            .WithView(addButton);
+            .WithView(Controls.Stack
+                .WithOrientation(Orientation.Horizontal)
+                .WithStyle("align-items: flex-end; gap: 12px; margin-top: 8px; flex-wrap: wrap;")
+                .WithView(userPicker)
+                .WithView(emailField)
+                .WithView(roleSelect)
+                .WithView(addButton))
+            .WithView(Controls.Markdown(
+                    "Pick an existing user or group — or enter an email to grant access to someone who "
+                    + "hasn't signed up yet: they're invited, and the grant lands automatically the moment "
+                    + "they sign in.")
+                .WithStyle("font-size: 12px; opacity: .75; margin-top: 4px;"));
     }
+
+    /// <summary>
+    /// Grants <paramref name="role"/> at <c>{nodePath}/_Access</c> to <paramref name="email"/> — immediately
+    /// when an account already exists, otherwise via an Invitation + a durable deferred EventSubscription
+    /// that lands the SAME role at the SAME node path the moment that person signs up. Reuses
+    /// <see cref="SpaceInviteService"/>'s grant-or-schedule primitive with pinning OFF (a granular grant,
+    /// not a Space invite). The immediate grant runs under the caller's (admin's) identity; the Admin-partition
+    /// invitation + subscription writes run as system inside the service.
+    /// </summary>
+    private static void GrantByEmail(UiActionContext ctx, string nodePath, string email, string role)
+    {
+        var sp = ctx.Host.Hub.ServiceProvider;
+        var accessService = sp.GetRequiredService<AccessService>();
+        var svc = new SpaceInviteService(ctx.Host.Hub, sp.GetRequiredService<IMeshService>(), accessService);
+        var invitedBy = accessService.Context?.ObjectId;
+
+        svc.GrantOrScheduleAccess(nodePath, email, role, pin: false, invitedBy,
+                note: $"Invited to {(string.IsNullOrEmpty(nodePath) ? "the root scope" : nodePath)}")
+            .Subscribe(
+                outcome => ShowInfoDialog(ctx,
+                    outcome == SpaceInviteOutcome.Granted
+                        ? $"**{email}** already has an account — granted **{role}** here."
+                        : $"Invited **{email}** as **{role}**. Access is granted automatically when they sign up.",
+                    "Access"),
+                ex => ShowInfoDialog(ctx, $"Failed to grant access: {ex.Message}", "Error"));
+    }
+
+    private static void ShowInfoDialog(UiActionContext ctx, string markdown, string title) =>
+        ctx.Host.UpdateArea(DialogControl.DialogArea,
+            Controls.Dialog(Controls.Markdown(markdown), title).WithSize("S").WithClosable(true));
 
     /// <summary>
     /// Creates an AccessAssignment node for <paramref name="subject"/> with a single
