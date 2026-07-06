@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Threading;
 
 namespace MeshWeaver.Graph;
 
@@ -35,12 +36,31 @@ public sealed class RecentlyDeletedRegistry
     private readonly ConcurrentDictionary<string, DateTimeOffset> _deleted =
         new(StringComparer.OrdinalIgnoreCase);
 
+    // UtcTicks of the last opportunistic prune sweep — gates the O(n) sweep in MarkDeleted to at
+    // most once per TTL so a delete burst stays amortised O(1) while the map stays TTL-bounded even
+    // for tombstones that are never re-checked (IsRecentlyDeleted only prunes the key it looks up).
+    private long _lastPruneTicks;
+
     /// <summary>Records <paramref name="path"/> as just-deleted. Called from the owning hub's
-    /// <c>storage.Changes</c> Deleted handler.</summary>
+    /// <c>storage.Changes</c> Deleted handler. Opportunistically prunes expired tombstones (time-gated)
+    /// so a delete that is never re-read afterwards doesn't leak an entry forever.</summary>
     public void MarkDeleted(string? path)
     {
-        if (!string.IsNullOrEmpty(path))
-            _deleted[path] = DateTimeOffset.UtcNow;
+        if (string.IsNullOrEmpty(path))
+            return;
+        var now = DateTimeOffset.UtcNow;
+        _deleted[path] = now;
+
+        // Time-gated sweep: only one thread prunes per TTL window (CAS on _lastPruneTicks), so the
+        // map can't accumulate tombstones for one-off deletes that are never checked/cleared again.
+        var last = Interlocked.Read(ref _lastPruneTicks);
+        if (now.UtcTicks - last > Ttl.Ticks
+            && Interlocked.CompareExchange(ref _lastPruneTicks, now.UtcTicks, last) == last)
+        {
+            foreach (var kv in _deleted)
+                if (now - kv.Value > Ttl)
+                    _deleted.TryRemove(kv.Key, out _);
+        }
     }
 
     /// <summary>Clears the tombstone for <paramref name="path"/> — a legitimate (re)create so a
