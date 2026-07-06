@@ -183,6 +183,9 @@ public static class AIExtensions
         public IServiceCollection AddAgentChatServices()
         {
             services.AddTransient<IIconGenerator, IconGenerator>();
+            // Named, factory-pooled HttpClient for the image generator (avoids per-instance
+            // `new HttpClient()` socket exhaustion; also guarantees IHttpClientFactory is present).
+            services.AddHttpClient(nameof(ImageGenerator));
             services.AddTransient<IImageGenerator, ImageGenerator>();
             services.AddTransient<IDescriptionGenerator, DescriptionGenerator>();
 

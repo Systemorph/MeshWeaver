@@ -42,7 +42,9 @@ public sealed class ImageGenerator : IImageGenerator
         meshService = services.GetRequiredService<IMeshService>();
         resolver = services.GetRequiredService<ChatClientCredentialResolver>();
         httpPool = services.GetRequiredService<IoPoolRegistry>().Get(IoPoolNames.Http);
-        httpClient = services.GetService<IHttpClientFactory>()?.CreateClient(nameof(ImageGenerator)) ?? new HttpClient();
+        // Named, factory-pooled client — never a raw `new HttpClient()` per transient instance
+        // (handler/socket exhaustion). AddAgentChatServices registers the named client + the factory.
+        httpClient = services.GetRequiredService<IHttpClientFactory>().CreateClient(nameof(ImageGenerator));
         jsonOptions = services.GetRequiredService<IMessageHub>().JsonSerializerOptions;
         logger = services.GetService<ILogger<ImageGenerator>>();
     }
@@ -57,8 +59,13 @@ public sealed class ImageGenerator : IImageGenerator
                 // to any endpoint stamped directly on the model.
                 var creds = resolver.Resolve(def.Id);
                 var endpoint = FirstNonEmpty(creds.Endpoint, def.Endpoint);
-                // Bound + off-hub: the whole HTTP round runs on the shared Http I/O pool.
-                return httpPool.Invoke(token => GenerateCore(def, endpoint, creds.ApiKey, prompt, size, token));
+                // Bound + off-hub: the whole HTTP round runs on the shared Http I/O pool. Link the
+                // caller's token with the pool's so an explicit cancellation is honoured too.
+                return httpPool.Invoke(async token =>
+                {
+                    using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, token);
+                    return await GenerateCore(def, endpoint, creds.ApiKey, prompt, size, linked.Token).ConfigureAwait(false);
+                });
             });
 
     /// <summary>
@@ -146,8 +153,11 @@ public sealed class ImageGenerator : IImageGenerator
                 return new GeneratedImage(Convert.FromBase64String(b64.GetString()!), "image/png");
             if (first.TryGetProperty("url", out var urlEl) && urlEl.ValueKind == JsonValueKind.String)
             {
-                var bytes = await httpClient.GetByteArrayAsync(urlEl.GetString()!, ct).ConfigureAwait(false);
-                return new GeneratedImage(bytes, "image/png");
+                using var imgResp = await httpClient.GetAsync(urlEl.GetString()!, ct).ConfigureAwait(false);
+                imgResp.EnsureSuccessStatusCode();
+                var mediaType = imgResp.Content.Headers.ContentType?.MediaType ?? "image/png";
+                var bytes = await imgResp.Content.ReadAsByteArrayAsync(ct).ConfigureAwait(false);
+                return new GeneratedImage(bytes, mediaType);
             }
             throw new InvalidOperationException("Image API response contained no image bytes.");
         }
