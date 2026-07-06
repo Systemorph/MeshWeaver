@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using MeshWeaver.AI;
+using MeshWeaver.Markdown;
 using Xunit;
 
 namespace MeshWeaver.Documentation.Test;
@@ -126,6 +127,39 @@ public class DocumentationEmbedIntegrityTest
         using var doc = JsonDocument.Parse(json);
         doc.RootElement.GetProperty("content").GetProperty("language").GetString()
             .Should().Be("python", "the example demonstrates a python Code node routed to py/python-kernel");
+    }
+
+    /// <summary>
+    /// Renders the PythonCodeNodes page through the real markdown pipeline (with the page's own node
+    /// path, the way the portal renders it) and asserts the live embed resolves to the EXACTLY shipped
+    /// node. This catches the relative-vs-absolute trap the partition check cannot: <c>@@Doc/…</c>
+    /// WITHOUT a leading slash resolves RELATIVE to the current node (<c>ResolveToken</c> →
+    /// <c>PathUtils.ResolveRelativePath</c>), so <c>@@Doc/Architecture/PythonCodeNodes/…</c> on this very
+    /// page doubles to <c>…/PythonCodeNodes/Doc/Architecture/PythonCodeNodes/…</c> and never resolves.
+    /// The correct forms are the absolute <c>@@/Doc/…</c> or a bare child name.
+    /// </summary>
+    [Fact]
+    public void PythonCodeNodes_LiveEmbed_ResolvesToTheShippedNode()
+    {
+        const string page = "Doc/Architecture/PythonCodeNodes";
+        const string shippedNode = "Doc/Architecture/PythonCodeNodes/SampleStatistics";
+
+        var content = LoadResources(typeof(DocumentationExtensions).Assembly, DocResourcePrefix, "Doc", ".md")
+            .Single(r => string.Equals(r.Path, page, StringComparison.OrdinalIgnoreCase)).Content;
+
+        // Render exactly as the portal does — the page's own path drives relative resolution.
+        var html = Markdig.Markdown.ToHtml(content, MarkdownExtensions.CreateMarkdownPipeline("content", page));
+
+        // The @@ embed becomes <div class='layout-area' data-raw-path='…'>. That raw-path is what the
+        // client feeds to IMeshCatalog.ResolvePathAsync — it must be the shipped node, not a doubled path.
+        var rawPaths = Regex.Matches(html, @"class='layout-area' data-raw-path='([^']+)'")
+            .Select(m => m.Groups[1].Value)
+            .ToImmutableArray();
+
+        rawPaths.Should().ContainSingle("the page carries exactly one live @@ embed")
+            .Which.Should().Be(shippedNode,
+                "the embed must resolve to the shipped Code node — NOT a path doubled by relative resolution " +
+                "(@@Doc/… without a leading slash resolves relative to the current page; use @@/Doc/… or a child name)");
     }
 
     /// <summary>
