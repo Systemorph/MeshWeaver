@@ -138,6 +138,41 @@ public partial class NamedAreaView
                         return;
                     }
 
+                    // The target hub's INITIALIZATION FAILED — a BuildupAction faulted or hung, so
+                    // the hub opened its Initialize gate in a FAILED state and now answers every
+                    // request with a typed DeliveryFailure carrying the real reason ("Hub '…'
+                    // initialization failed: <reason>"; see HubInitializationFailure.md). This is
+                    // TERMINAL-with-reason: a durably-failed hub will NOT recover on resubscribe, so
+                    // it is neither retried (the bounded reactive retry above already skips it — see
+                    // AreaErrorClassifier.ShouldRetryArea) nor collapsed into the generic "did not
+                    // become addressable" spinner. Render the actual reason so operators see WHAT
+                    // broke without reading server logs — and, because the reason stands on its own,
+                    // it stays informative even when the gate never opened and AreaToBeRendered is
+                    // empty (no area name ever resolved). Detected on the typed Failure — no NodeType
+                    // path lookup, no retry. Issue #323.
+                    if (AreaErrorClassifier.TryGetInitializationFailureReason(error) is { } initReason)
+                    {
+                        Logger.LogWarning(error,
+                            "Area {Area} target hub initialization failed — rendering the init-error reason instead of the generic 'did not become addressable' banner. Reason={Reason}",
+                            AreaToBeRendered, initReason);
+                        try
+                        {
+                            InvokeAsync(() =>
+                            {
+                                if (IsViewDisposed) return;
+                                try
+                                {
+                                    RootControl = new MarkdownControl(
+                                        $"**This view could not be initialised.**\n\n{initReason}");
+                                    RequestStateChange();
+                                }
+                                catch (ObjectDisposedException) { /* renderer gone */ }
+                            });
+                        }
+                        catch (ObjectDisposedException) { /* renderer gone */ }
+                        return;
+                    }
+
                     // Transient hub/network failures (request timeouts, undeliverable
                     // routing, dropped circuit) are usually self-healing — the upstream
                     // hub finishes initialising, the security pipeline emits its first

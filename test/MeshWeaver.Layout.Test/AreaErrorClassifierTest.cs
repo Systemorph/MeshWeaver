@@ -99,6 +99,46 @@ public class AreaErrorClassifierTest
         => AreaErrorClassifier.IsNodeGoneNotFound(new InvalidOperationException("No node found at X")).Should().BeFalse(
             "only a routing DeliveryFailure counts — a coincidental message on some other exception must not");
 
+    // ── TryGetInitializationFailureReason: a FAILED hub → render the reason, terminal, no retry (#323) ──
+
+    [Theory]
+    // The first request that triggered init (HandleInitialize's .Catch — em-dash form):
+    [InlineData("Hub 'AgenticPension/x' initialization failed — a BuildupAction faulted (InvalidOperationException: seed missing)")]
+    // Every later request (EnterInitializationFailedState's refusal rule — colon form):
+    [InlineData("Hub 'AgenticPension/x' initialization failed: seed missing")]
+    public void TryGetInitializationFailureReason_ReturnsReasonForBothBanners(string message)
+        => AreaErrorClassifier.TryGetInitializationFailureReason(Failure(message, ErrorType.Failed))
+            .Should().Be(message,
+                "a hub that failed initialization carries the real reason in its DeliveryFailure — the "
+                + "client must surface it, not the generic 'did not become addressable' banner");
+
+    [Fact]
+    public void TryGetInitializationFailureReason_NullForCompilationInProgress()
+        // A CompilationInProgress NACK is a DISTINCT, transient case (swap to Progress) — not an init failure.
+        => AreaErrorClassifier.TryGetInitializationFailureReason(
+                Failure("compiling", ErrorType.CompilationInProgress, "Foo/Bar")).Should().BeNull();
+
+    [Fact]
+    public void TryGetInitializationFailureReason_NullForOtherDeliveryFailure()
+        => AreaErrorClassifier.TryGetInitializationFailureReason(
+                Failure("The target hub was not found for address Foo/Bar", ErrorType.NotFound)).Should().BeNull();
+
+    [Fact]
+    public void TryGetInitializationFailureReason_NullForNonDeliveryFailure()
+        => AreaErrorClassifier.TryGetInitializationFailureReason(
+                new InvalidOperationException("Hub 'x' initialization failed: boom")).Should().BeNull(
+            "only a typed DeliveryFailure counts — a coincidental message on some other exception must not");
+
+    [Fact]
+    public void InitializationFailure_ClassifiesAsTerminalWithReason_NotTransient()
+    {
+        // The init-failure banner must NOT be mistaken for a transient (retried) miss — otherwise the
+        // client would spin against a durably-failed hub instead of showing the reason once.
+        var initFailure = Failure("Hub 'x' initialization failed: seed missing", ErrorType.Failed);
+        AreaErrorClassifier.TryGetInitializationFailureReason(initFailure).Should().NotBeNull();
+        AreaErrorClassifier.IsTransientHubFailure(initFailure).Should().BeFalse();
+    }
+
     // ── ShouldRetryArea: the single predicate the subscription hands the retry operator ──
 
     [Fact]
@@ -113,6 +153,12 @@ public class AreaErrorClassifierTest
     [Fact]
     public void ShouldRetryArea_FalseForDisposal_BenignTeardown()
         => AreaErrorClassifier.ShouldRetryArea(new ObjectDisposedException("circuit")).Should().BeFalse();
+
+    [Fact]
+    public void ShouldRetryArea_FalseForInitializationFailure_TerminalNotRetried()
+        // A durably-failed hub won't recover on resubscribe — render the reason once, never spin (#323).
+        => AreaErrorClassifier.ShouldRetryArea(
+                Failure("Hub 'x' initialization failed: seed missing", ErrorType.Failed)).Should().BeFalse();
 
     [Fact]
     public void ShouldRetryArea_FalseForPermanentError()
