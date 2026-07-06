@@ -5,39 +5,41 @@ using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh;
-using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
-using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Graph;
 
 /// <summary>
 /// Layout views for Deck nodes — a presentation (or a course sequence) whose slide/page
 /// order is declared EXTERNALLY in <see cref="DeckContent.Slides"/> (on the deck node,
-/// not on each slide).
+/// not on each slide). Presentation is fully DECOUPLED from the slide nodes: a referenced
+/// slide may live anywhere in the mesh, and the SAME slide path may appear in many decks in
+/// different orders — each deck presents it in its own order.
 /// <list type="bullet">
 ///   <item><b>Overview</b> (default): a <see cref="SplitterControl"/> — a <b>hidable</b>
-///     (collapsible) left <see cref="NavMenuControl"/> listing the deck's slides in
-///     manifest order, and a right welcome stage with the deck intro and a "Present" entry
-///     point that opens the first slide chrome-free.</item>
-///   <item><b>Present</b>: redirects straight to the first manifest slide's Present view,
-///     starting the click-to-advance walk.</item>
+///     (collapsible) left <see cref="NavMenuControl"/> listing the deck's referenced slides in
+///     manifest order (each resolved by path for its label), and a right welcome stage with the
+///     deck intro and a "Present" entry point that opens the walk chrome-free.</item>
+///   <item><b>Present</b>: the deck-DRIVEN full-screen walk. <c>{deck}/Present</c> shows the
+///     first referenced slide's stage full-screen; <c>?i=N</c> selects the slide, and prev /
+///     next / index / count all come from the DECK's manifest — so a slide shared by two decks
+///     presents correctly in each deck's order. Keyboard + click both advance.</item>
 /// </list>
-/// The slides themselves stay pure content (see <see cref="SlideLayoutAreas"/>); the deck
-/// alone owns the order, so re-sequencing is one edit to the manifest.
+/// The slides themselves stay pure content (see <see cref="SlideLayoutAreas"/>); the deck alone
+/// owns the order, so re-sequencing is one edit to the manifest.
 /// </summary>
 public static class DeckLayoutAreas
 {
-    /// <summary>Area name for the chrome-free Present redirect area.</summary>
+    /// <summary>Area name for the deck-driven full-screen Present walk.</summary>
     public const string PresentArea = "Present";
 
     private const string DefaultIntro =
         "Use the side navigation to jump to any slide, or press **Present** to start the walk-through. "
-        + "Slides advance on click.";
+        + "Slides advance on click, or with the arrow / space / page keys.";
 
     private const string EmptyDeckHint =
-        "*This deck has no slides yet. Create Slide children and list their ids, in order, "
-        + "in the deck's `Slides` manifest.*";
+        "*This deck has no slides yet. Add slide references (ids or paths), in order, "
+        + "to the deck's `Slides` manifest.*";
 
     /// <summary>
     /// Registers the Deck node views (Overview, Present and the standard create/delete
@@ -59,10 +61,10 @@ public static class DeckLayoutAreas
     // ── Overview ─────────────────────────────────────────────────────────────
 
     /// <summary>
-    /// Renders the default Overview: a splitter with a collapsible left NavMenu built from
-    /// the deck's ordered <see cref="DeckContent.Slides"/> manifest (resolving each child
-    /// for its label), and a right welcome stage. The splitter renders once; only its panes
-    /// re-render reactively, so the user's collapse state survives content updates.
+    /// Renders the default Overview: a splitter with a collapsible left NavMenu built from the
+    /// deck's ordered <see cref="DeckContent.Slides"/> manifest (each referenced slide resolved
+    /// by path for its label), and a right welcome stage. The splitter renders once; only its
+    /// panes re-render reactively, so the user's collapse state survives content updates.
     /// </summary>
     /// <param name="host">The layout area host rendering the area.</param>
     /// <param name="_">The rendering context for the area.</param>
@@ -72,49 +74,41 @@ public static class DeckLayoutAreas
     {
         var deckPath = host.Hub.Address.ToString();
         var deckNodeStream = host.Workspace.GetMeshNodeStream();
-        var childrenStream = ObserveDeckChildren(host, deckPath);
+        var slidesStream = ObserveSlideNodes(host, deckPath);
 
         return Controls.Splitter
             .WithClass("shell-splitter")
             .WithSkin(s => s.WithOrientation(Orientation.Horizontal).WithWidth("100%").WithHeight("100%"))
             .WithView(
                 // Left pane: hidable NavMenu from the ordered manifest.
-                (h, c) => deckNodeStream.CombineLatest(childrenStream,
-                    (node, children) => BuildDeckNav(host, deckPath, node, children)),
+                (h, c) => deckNodeStream.CombineLatest(slidesStream,
+                    (node, slides) => BuildDeckNav(deckPath, node, slides)),
                 skin => skin.WithSize("300px").WithMin("220px").WithMax("440px").WithCollapsible(true))
             .WithView(
                 // Right pane: the welcome stage with the intro + Present entry point.
-                (h, c) => deckNodeStream.CombineLatest(childrenStream,
-                    (node, children) => BuildDeckStage(host, deckPath, node, children)),
+                (h, c) => deckNodeStream.CombineLatest(slidesStream,
+                    (node, slides) => BuildDeckStage(host, deckPath, node, slides)),
                 skin => skin.WithSize("*"));
     }
 
     /// <summary>
-    /// Builds the left NavMenu: one entry per manifest slide, in order, resolving each
-    /// child node for its display label. The manifest is the source of truth for order.
+    /// Builds the left NavMenu: one entry per manifest slide, in order, using each resolved
+    /// node's display label. The manifest is the source of truth for order.
     /// </summary>
     private static UiControl BuildDeckNav(
-        LayoutAreaHost host, string deckPath, MeshNode? deckNode,
-        IReadOnlyDictionary<string, MeshNode> children)
+        string deckPath, MeshNode? deckNode, IReadOnlyList<(string Path, MeshNode? Node)> slides)
     {
-        var deck = deckNode.ContentAs<DeckContent>(host.Hub.JsonSerializerOptions);
-        var refs = (deck?.Slides ?? ImmutableList<string>.Empty)
-            .Where(r => !string.IsNullOrWhiteSpace(r))
-            .ToImmutableList();
-
         var navMenu = Controls.NavMenu.WithSkin(s => s.WithWidth(300).WithCollapsible(false));
         var group = new NavGroupControl(deckNode?.Name ?? deckNode?.Id ?? "Slides")
             .WithSkin(s => s.WithExpanded(true));
 
-        if (refs.Count > 0)
+        if (slides.Count > 0)
         {
             var n = 0;
-            foreach (var slideRef in refs)
+            foreach (var (path, node) in slides)
             {
                 n++;
-                var path = ResolveChildPath(deckPath, slideRef);
-                children.TryGetValue(path, out var child);
-                var label = child?.Name ?? child?.Id ?? LastSegment(slideRef);
+                var label = node?.Name ?? node?.Id ?? LastSegment(path);
                 group = group.WithView(new NavLinkControl($"{n}. {label}", null, $"/{path}"));
             }
         }
@@ -129,20 +123,19 @@ public static class DeckLayoutAreas
 
     /// <summary>
     /// Builds the right welcome stage: the deck title, its markdown intro, and — when the
-    /// manifest has at least one slide — a "Present" button opening the first slide's
-    /// chrome-free Present view.
+    /// manifest has at least one slide — a "Present" button opening the deck's chrome-free
+    /// full-screen walk.
     /// </summary>
     private static UiControl BuildDeckStage(
         LayoutAreaHost host, string deckPath, MeshNode? deckNode,
-        IReadOnlyDictionary<string, MeshNode> children)
+        IReadOnlyList<(string Path, MeshNode? Node)> slides)
     {
         var deck = deckNode.ContentAs<DeckContent>(host.Hub.JsonSerializerOptions);
         var title = string.IsNullOrWhiteSpace(deck?.Title)
             ? deckNode?.Name ?? deckNode?.Id ?? "Deck"
             : deck!.Title!;
 
-        var firstRef = (deck?.Slides ?? ImmutableList<string>.Empty)
-            .FirstOrDefault(r => !string.IsNullOrWhiteSpace(r));
+        var hasSlides = slides.Count > 0;
 
         var container = Controls.Stack
             .WithWidth("100%")
@@ -150,18 +143,17 @@ public static class DeckLayoutAreas
 
         container = container.WithView(Controls.H1(title).WithStyle("margin: 0 0 12px 0;"));
 
-        var intro = firstRef is null
+        var intro = !hasSlides
             ? EmptyDeckHint
             : string.IsNullOrWhiteSpace(deck?.Description) ? DefaultIntro : deck!.Description!;
         container = container.WithView(Controls.Markdown(intro)
             .WithStyle("width: 100%; margin-bottom: 20px;"));
 
-        if (firstRef is not null)
+        if (hasSlides)
         {
-            var firstPath = ResolveChildPath(deckPath, firstRef);
             container = container.WithView(Controls.Button("▶ Present")
                 .WithAppearance(Appearance.Accent)
-                .WithNavigateToHref(MeshNodeLayoutAreas.BuildUrl(firstPath, SlideLayoutAreas.PresentArea)));
+                .WithNavigateToHref(MeshNodeLayoutAreas.BuildUrl(deckPath, PresentArea)));
         }
 
         return container;
@@ -170,8 +162,9 @@ public static class DeckLayoutAreas
     // ── Present ──────────────────────────────────────────────────────────────
 
     /// <summary>
-    /// Renders the Present area: a redirect to the first manifest slide's Present view,
-    /// starting the click-to-advance walk. Reactive so it settles once the deck node loads.
+    /// Renders the deck-driven Present walk: the referenced slide at <c>?i</c> (default 0,
+    /// clamped) rendered full-screen, with the deck's manifest driving prev / next / index /
+    /// count. Reactive so it settles as the deck and its referenced slides load.
     /// </summary>
     /// <param name="host">The layout area host rendering the area.</param>
     /// <param name="_">The rendering context for the area.</param>
@@ -180,35 +173,71 @@ public static class DeckLayoutAreas
     public static IObservable<UiControl?> Present(LayoutAreaHost host, RenderingContext _)
     {
         var deckPath = host.Hub.Address.ToString();
-        return host.Workspace.GetMeshNodeStream()
-            .Select(node =>
-            {
-                var deck = node.ContentAs<DeckContent>(host.Hub.JsonSerializerOptions);
-                var firstRef = (deck?.Slides ?? ImmutableList<string>.Empty)
-                    .FirstOrDefault(r => !string.IsNullOrWhiteSpace(r));
-                if (firstRef is null)
-                    return (UiControl?)Controls.Markdown(EmptyDeckHint);
-                var firstPath = ResolveChildPath(deckPath, firstRef);
-                return new RedirectControl(
-                    MeshNodeLayoutAreas.BuildUrl(firstPath, SlideLayoutAreas.PresentArea));
-            });
+        var requested = ReadIndex(host);
+        return ObserveSlideNodes(host, deckPath)
+            .Select(slides => (UiControl?)BuildDeckPresent(host, deckPath, slides, requested));
     }
 
-    // ── Deck resolution helpers (shared with SlideLayoutAreas) ────────────────
+    /// <summary>
+    /// Builds the full-screen stage for the deck's slide at <paramref name="requested"/> (clamped
+    /// into range), plus the corner counter and the keyboard driver — all sequenced by the DECK's
+    /// manifest so the same slide path presents in each deck's own order.
+    /// </summary>
+    private static UiControl BuildDeckPresent(
+        LayoutAreaHost host, string deckPath,
+        IReadOnlyList<(string Path, MeshNode? Node)> slides, int requested)
+    {
+        var count = slides.Count;
+        if (count == 0)
+            return SlideLayoutAreas.BuildPresentRoot()
+                .WithView(Controls.Markdown(EmptyDeckHint)
+                    .WithStyle("color: var(--ae-fg);"), SlideLayoutAreas.StageArea);
+
+        var index = Math.Clamp(requested, 0, count - 1);
+        var slideContent = slides[index].Node.ContentAs<SlideContent>(host.Hub.JsonSerializerOptions);
+        var nextHref = index < count - 1 ? DeckPresentUrl(deckPath, index + 1) : null;
+
+        var root = SlideLayoutAreas.BuildPresentRoot();
+        root = root.WithView(
+            SlideLayoutAreas.BuildStage(slideContent, nextHref, present: true), SlideLayoutAreas.StageArea);
+        root = root.WithView(
+            SlideLayoutAreas.BuildPresentCounter(index, count), SlideLayoutAreas.CounterArea);
+        root = root.WithView(new SlideShowControl
+        {
+            FirstHref = DeckPresentUrl(deckPath, 0),
+            LastHref = DeckPresentUrl(deckPath, count - 1),
+            PreviousHref = index > 0 ? DeckPresentUrl(deckPath, index - 1) : null,
+            NextHref = nextHref,
+            ExitHref = $"/{deckPath}",
+        }, SlideLayoutAreas.SlideShowArea);
+
+        return root;
+    }
+
+    /// <summary>Reads the <c>?i</c> slide index off the layout-area query (default 0, negative clamped to 0).</summary>
+    private static int ReadIndex(LayoutAreaHost host)
+        => int.TryParse(host.GetQueryStringParamValue("i"), out var i) && i > 0 ? i : 0;
+
+    /// <summary>The deck Present URL for slide index <paramref name="index"/> — <c>/{deck}/Present?i={index}</c>.</summary>
+    private static string DeckPresentUrl(string deckPath, int index)
+        => MeshNodeLayoutAreas.BuildUrl(deckPath, PresentArea, $"i={index}");
+
+    // ── Slide resolution (decoupled: references may point anywhere) ────────────
 
     /// <summary>
-    /// Resolves a manifest reference to a full child path under the deck. A reference is
-    /// either the child's id (relative — <c>"intro"</c> → <c>"{deck}/intro"</c>) or already
-    /// a full path under the deck, in which case it is returned unchanged.
+    /// Resolves a manifest reference to a full slide path. A reference is either a bare id
+    /// (relative to the deck — <c>"intro"</c> → <c>"{deck}/intro"</c>, kept for backward
+    /// compatibility) or an ABSOLUTE path to a slide anywhere in the mesh (any reference
+    /// containing a <c>/</c> is treated as an absolute path and returned as-is).
     /// </summary>
-    internal static string ResolveChildPath(string deckPath, string slideRef)
+    internal static string ResolveSlidePath(string deckPath, string slideRef)
     {
         var trimmed = slideRef.Trim().TrimStart('/');
         if (trimmed.Length == 0)
             return deckPath;
-        if (trimmed.StartsWith(deckPath + "/", StringComparison.Ordinal))
-            return trimmed;
-        return $"{deckPath}/{trimmed}";
+        // A reference that names a path (contains '/') points at a slide ANYWHERE — presentation
+        // is decoupled from the deck's children. A bare id is a child under the deck.
+        return trimmed.Contains('/') ? trimmed : $"{deckPath}/{trimmed}";
     }
 
     private static string LastSegment(string reference)
@@ -219,34 +248,43 @@ public static class DeckLayoutAreas
     }
 
     /// <summary>
-    /// Live observable of the deck's direct children (any node type), as a path → node map,
-    /// used to resolve manifest references to display labels. Starts empty so the shell
-    /// renders before the first query emission.
+    /// The deck's ordered, resolved slide paths — read off the deck node's
+    /// <see cref="DeckContent.Slides"/> manifest (blanks dropped, each mapped via
+    /// <see cref="ResolveSlidePath"/>).
     /// </summary>
-    private static IObservable<IReadOnlyDictionary<string, MeshNode>> ObserveDeckChildren(
-        LayoutAreaHost host, string deckPath)
+    private static ImmutableList<string> ResolveSlidePaths(
+        LayoutAreaHost host, string deckPath, MeshNode? deckNode)
     {
-        var meshService = host.Hub.ServiceProvider.GetService<IMeshService>();
-        if (meshService is null)
-            return Observable.Return<IReadOnlyDictionary<string, MeshNode>>(
-                ImmutableDictionary<string, MeshNode>.Empty);
-
-        return meshService
-            .Query<MeshNode>(MeshQueryRequest.FromQuery($"namespace:{deckPath}"))
-            .Scan(ImmutableDictionary<string, MeshNode>.Empty, (map, change) =>
-            {
-                if (change.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset)
-                    return change.Items.ToImmutableDictionary(n => n.Path);
-                foreach (var item in change.Items)
-                    map = change.ChangeType switch
-                    {
-                        QueryChangeType.Added or QueryChangeType.Updated => map.SetItem(item.Path, item),
-                        QueryChangeType.Removed => map.Remove(item.Path),
-                        _ => map
-                    };
-                return map;
-            })
-            .Select(map => (IReadOnlyDictionary<string, MeshNode>)map)
-            .StartWith((IReadOnlyDictionary<string, MeshNode>)ImmutableDictionary<string, MeshNode>.Empty);
+        var refs = deckNode.ContentAs<DeckContent>(host.Hub.JsonSerializerOptions)?.Slides
+                   ?? ImmutableList<string>.Empty;
+        return refs
+            .Where(r => !string.IsNullOrWhiteSpace(r))
+            .Select(r => ResolveSlidePath(deckPath, r))
+            .ToImmutableList();
     }
+
+    /// <summary>
+    /// Live observable of the deck's referenced slides, in manifest order, each resolved by PATH
+    /// via <c>workspace.GetMeshNodeStream(path)</c> (the slides may live ANYWHERE — presentation
+    /// is decoupled from the slide nodes). Re-subscribes the per-slide streams only when the
+    /// resolved path list itself changes (<c>DistinctUntilChanged</c> on the joined paths);
+    /// starts empty so the shell renders before the first emission.
+    /// </summary>
+    internal static IObservable<IReadOnlyList<(string Path, MeshNode? Node)>> ObserveSlideNodes(
+        LayoutAreaHost host, string deckPath)
+        => host.Workspace.GetMeshNodeStream()
+            .Select(node => ResolveSlidePaths(host, deckPath, node))
+            .DistinctUntilChanged(paths => string.Join("\n", paths))
+            .Select(paths => paths.Count == 0
+                ? Observable.Return((IReadOnlyList<(string, MeshNode?)>)ImmutableList<(string, MeshNode?)>.Empty)
+                : Observable.CombineLatest(paths.Select(ObserveSlide(host)))
+                    .Select(items => (IReadOnlyList<(string, MeshNode?)>)items.ToImmutableList()))
+            .Switch()
+            .StartWith((IReadOnlyList<(string, MeshNode?)>)ImmutableList<(string, MeshNode?)>.Empty);
+
+    /// <summary>One resolved slide stream: its path paired with the live node (null until it loads / if missing).</summary>
+    private static Func<string, IObservable<(string Path, MeshNode? Node)>> ObserveSlide(LayoutAreaHost host)
+        => path => host.Workspace.GetMeshNodeStream(path)
+            .Select(node => (Path: path, Node: (MeshNode?)node))
+            .StartWith((path, (MeshNode?)null));
 }

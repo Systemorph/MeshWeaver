@@ -238,27 +238,9 @@ public static class SpaceLayoutAreas
             .WithOrientation(Orientation.Horizontal)
             .WithStyle($"gap: 24px; align-items: flex-start; width: 100%; {ContentInset}");
 
-        // Logo (large, rounded square like GitHub)
-        UiControl logoControl;
-        if (!string.IsNullOrEmpty(logo))
-        {
-            // Natural-aspect, never cropped: a wide banner logo (e.g. ATIOZ) and a square
-            // avatar both render whole. `object-fit: cover` in a fixed 100×100 box cropped wide
-            // logos to their middle strip — use max-box + auto sizing so the image scales to fit
-            // within the bounds at its own aspect ratio (contain just backs that up for any
-            // intrinsic-size oddities).
-            logoControl = Controls.Html(
-                $"<img src=\"{System.Web.HttpUtility.HtmlAttributeEncode(logo)}\" alt=\"\" style=\"max-height: 96px; max-width: 340px; width: auto; height: auto; border-radius: 12px; object-fit: contain; background: var(--neutral-layer-2); padding: 6px; box-sizing: border-box;\" />");
-        }
-        else
-        {
-            var initials = GetInitials(spaceName);
-            logoControl = Controls.Html(
-                $"<div style=\"width: 100px; height: 100px; border-radius: 12px; background: var(--accent-fill-rest); display: flex; align-items: center; justify-content: center; color: white; font-size: 2.5rem; font-weight: 600;\">" +
-                $"{System.Web.HttpUtility.HtmlEncode(initials)}</div>");
-        }
-
-        headerRow = headerRow.WithView(logoControl);
+        // Logo (large, rounded square like GitHub). An inline-SVG icon is emitted INLINE (raw
+        // svg), never as <img src="<svg…"> — that rendered a broken-image dot.
+        headerRow = headerRow.WithView(Controls.Html(BuildLogoMarkup(logo, spaceName)));
 
         var infoColumn = Controls.Stack.WithStyle("gap: 8px; flex: 1;");
 
@@ -596,6 +578,46 @@ public static class SpaceLayoutAreas
     private static string? GetNodeLogo(MeshNode? node)
     {
         return MeshNodeThumbnailControl.GetImageUrlForNode(node);
+    }
+
+    /// <summary>
+    /// Builds the space header logo markup, detecting the icon shape so an inline
+    /// <c>&lt;svg&gt;</c> renders as REAL svg (never wrapped in <c>&lt;img src="&lt;svg…"&gt;</c>,
+    /// which shows a broken-image dot). A real logo URL / content-ref keeps the <c>&lt;img&gt;</c>;
+    /// an empty logo falls back to the space initials tile.
+    /// </summary>
+    /// <param name="logo">The space logo value: an inline svg, an image URL/data URI, or null/empty.</param>
+    /// <param name="spaceName">The space name used for the initials fallback.</param>
+    internal static string BuildLogoMarkup(string? logo, string spaceName)
+    {
+        const string boxStyle =
+            "max-height: 96px; max-width: 340px; border-radius: 12px; background: var(--neutral-layer-2); " +
+            "padding: 6px; box-sizing: border-box;";
+
+        if (MeshNodeImageHelper.IsInlineSvg(logo))
+        {
+            // Emit the svg DIRECTLY. Inject a fit style right after "<svg" so a viewBox-only
+            // icon scales to the logo box instead of the browser default ~300×150 (the first
+            // duplicate style attribute wins in HTML parsing, so the injected size takes effect).
+            var idx = logo!.IndexOf("<svg", StringComparison.OrdinalIgnoreCase);
+            var sized = logo.Insert(idx + "<svg".Length,
+                " style=\"max-height: 84px; max-width: 328px; width: auto; height: auto; display: block;\"");
+            return $"<div style=\"{boxStyle} display: inline-flex; align-items: center; justify-content: center;\">"
+                   + sized + "</div>";
+        }
+
+        if (!string.IsNullOrEmpty(logo))
+        {
+            // Natural-aspect, never cropped: a wide banner logo (e.g. ATIOZ) and a square avatar both
+            // render whole via max-box + auto sizing (object-fit: contain backs that up).
+            return $"<img src=\"{System.Web.HttpUtility.HtmlAttributeEncode(logo)}\" alt=\"\" "
+                   + $"style=\"{boxStyle} width: auto; height: auto; object-fit: contain;\" />";
+        }
+
+        var initials = GetInitials(spaceName);
+        return "<div style=\"width: 100px; height: 100px; border-radius: 12px; background: var(--accent-fill-rest); "
+               + "display: flex; align-items: center; justify-content: center; color: white; font-size: 2.5rem; "
+               + $"font-weight: 600;\">{System.Web.HttpUtility.HtmlEncode(initials)}</div>";
     }
 
     private static string GetInitials(string name)
