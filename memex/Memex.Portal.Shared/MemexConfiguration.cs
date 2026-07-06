@@ -981,6 +981,10 @@ public static class MemexConfiguration
         // UseAuthentication so HttpContext.User is populated.
         app.MapLinkedInConnect();
 
+        // LinkedIn company-Page sync (Community Management API) — org-scope OAuth +
+        // posts/statistics pull. Same ordering requirement (needs HttpContext.User).
+        app.MapLinkedInPageSync();
+
         // GitHub Sync — OAuth authorization-code connect endpoints (same ordering
         // requirement: needs HttpContext.User). Stores the per-user token at
         // {userId}/_Provider/GitHub. See Doc/Architecture/GitHubSync.
