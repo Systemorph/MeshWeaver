@@ -129,6 +129,38 @@ public class PostgreSqlChunkedContentVectorStoreTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task ReplaceAndSearch_RoundTripsPageAndPosition()
+    {
+        const string collection = "Prov";
+        const string file = "Prov/report.pdf";
+        var box = new ChunkPosition(0.10, 0.20, 0.30, 0.05);
+
+        var chunk = new ContentChunk(
+            CollectionPath: collection,
+            FilePath: file,
+            ChunkIndex: 0,
+            Text: "page-marked chunk",
+            ContentHash: "h1",
+            Embedding: OneHot(0),
+            Metadata: null,
+            Page: 7,
+            Position: box);
+
+        await _store.ReplaceFileChunks(collection, file, [chunk]).Should().Within(60.Seconds()).Emit();
+
+        // Search round-trips the page + normalized box…
+        var nearest = await _store.Search(collection, OneHot(0), topK: 1).Should().Within(30.Seconds()).Emit();
+        nearest.Should().HaveCount(1);
+        nearest[0].Page.Should().Be(7);
+        nearest[0].Position.Should().Be(box);
+
+        // …and so does GetChunk by index (the get_chunk / block-reader read path).
+        var byIndex = await _store.GetChunk(collection, file, 0).Should().Within(30.Seconds()).Emit();
+        byIndex!.Page.Should().Be(7);
+        byIndex.Position.Should().Be(box);
+    }
+
+    [Fact]
     public async Task ReplaceWithEmptySet_ClearsHash_AndRemovesChunks()
     {
         const string collection = "Empty";

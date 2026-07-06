@@ -188,4 +188,27 @@ public class ContentChunkSearchTest
         json.Should().Contain("\"results\":");
         json.Should().Contain("\"chunkIndex\":");
     }
+
+    [Fact]
+    public async Task ToJson_IncludesPageAndBbox_WhenChunkCarriesProvenance()
+    {
+        var pos = new ChunkPosition(0.1, 0.2, 0.3, 0.05);
+        _store.ReplaceFileChunks("PROV/content", "p.pdf", new[]
+        {
+            new ContentChunk("PROV/content", "p.pdf", 0, "provenance carrying chunk",
+                ContentHash: "h", Embedding: _embedder.Embed("provenance carrying chunk").Wait(),
+                Metadata: null, Page: 3, Position: pos),
+        }).Wait();
+
+        var result = await Search("namespace:PROV/content provenance");
+
+        var hit = result.Hits.Should().ContainSingle().Subject;
+        hit.Page.Should().Be(3);
+        hit.Position.Should().Be(pos);
+
+        var json = ContentChunkSearch.ToJson(result);
+        json.Should().Contain("\"page\":3");
+        json.Should().Contain("\"bbox\":");
+        json.Should().Contain("\"x\":0.1");
+    }
 }

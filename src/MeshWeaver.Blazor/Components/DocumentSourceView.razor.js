@@ -15,15 +15,17 @@ const MAMMOTH_URL = new URL('mammoth/mammoth.browser.min.js', LIB_BASE).href;
 let pdfjsPromise = null;
 let mammothPromise = null;
 
-/** Render `fileUrl` into `container` and highlight `highlight`. Entry point called from .NET. */
-export async function render(container, fileUrl, mime, highlight, fileName) {
+/** Render `fileUrl` into `container` and highlight `highlight`. Entry point called from .NET.
+ *  `page` (1-based) + `bbox` ({x,y,w,h} normalized, or its JSON) mark the exact region on a PDF page. */
+export async function render(container, fileUrl, mime, highlight, fileName, page, bbox) {
     if (!container) return;
     container.innerHTML = '<div class="mw-docsource-loading">Loading document…</div>';
 
     const kind = classify(mime, fileUrl);
+    const box = parseBox(bbox);
     try {
         if (kind === 'pdf') {
-            await renderPdf(container, fileUrl, highlight);
+            await renderPdf(container, fileUrl, highlight, page, box);
         } else if (kind === 'docx') {
             await renderDocx(container, fileUrl, highlight);
         } else {
@@ -34,6 +36,18 @@ export async function render(container, fileUrl, mime, highlight, fileName) {
         console.warn('DocumentSourceView render failed', err);
         fallback(container, fileUrl, highlight, fileName,
             'The document could not be displayed inline.');
+    }
+}
+
+/** Normalize the bbox argument (a {x,y,w,h} object or its JSON string) to an object, or null. */
+function parseBox(bbox) {
+    if (!bbox) return null;
+    if (typeof bbox === 'object') return bbox;
+    try {
+        const b = JSON.parse(bbox);
+        return (b && typeof b === 'object') ? b : null;
+    } catch {
+        return null;
     }
 }
 
@@ -62,7 +76,7 @@ function loadPdfjs() {
     return pdfjsPromise;
 }
 
-async function renderPdf(container, url, highlight) {
+async function renderPdf(container, url, highlight, targetPage, box) {
     const pdfjsLib = await loadPdfjs();
     const doc = await pdfjsLib.getDocument({ url }).promise;
 
@@ -71,12 +85,18 @@ async function renderPdf(container, url, highlight) {
     pages.className = 'mw-docsource-pages';
     container.appendChild(pages);
 
+    // If a stored bbox is given, remember the target page's element + viewport so we can overlay the
+    // highlight rectangle once it's rendered (precise, unlike the string-match fallback).
+    let markPageEl = null;
+    let markViewport = null;
+
     for (let n = 1; n <= doc.numPages; n++) {
         const page = await doc.getPage(n);
         const viewport = page.getViewport({ scale: 1.35 });
 
         const pageEl = document.createElement('div');
         pageEl.className = 'mw-pdf-page';
+        pageEl.style.position = 'relative';
         pageEl.style.width = viewport.width + 'px';
         pageEl.style.height = viewport.height + 'px';
 
@@ -107,10 +127,39 @@ async function renderPdf(container, url, highlight) {
         }
 
         pages.appendChild(pageEl);
+        if (box && targetPage === n) {
+            markPageEl = pageEl;
+            markViewport = viewport;
+        }
     }
 
-    const first = highlightInElement(container, highlight);
-    scrollToMark(first);
+    // Prefer the precise stored-bbox rectangle; fall back to the verbatim text match when there's none.
+    let boxMark = null;
+    if (markPageEl && box)
+        boxMark = drawBoxOverlay(markPageEl, markViewport, box);
+    const textMark = highlightInElement(container, highlight);
+    scrollToMark(boxMark || textMark);
+}
+
+/**
+ * Overlays a highlight rectangle at the normalized `box` ({x,y,w,h}, top-left origin) on a rendered page.
+ * The page element is positioned relative, so the absolute rectangle lands over the exact glyphs.
+ */
+function drawBoxOverlay(pageEl, viewport, box) {
+    const el = document.createElement('div');
+    el.className = 'mw-pdf-boxmark';
+    el.style.position = 'absolute';
+    el.style.left = (box.x * viewport.width) + 'px';
+    el.style.top = (box.y * viewport.height) + 'px';
+    el.style.width = Math.max(4, box.w * viewport.width) + 'px';
+    el.style.height = Math.max(4, box.h * viewport.height) + 'px';
+    el.style.background = 'rgba(255, 209, 0, 0.30)';
+    el.style.outline = '2px solid #ffb300';
+    el.style.borderRadius = '2px';
+    el.style.pointerEvents = 'none';
+    el.style.zIndex = '3';
+    pageEl.appendChild(el);
+    return el;
 }
 
 // ── DOCX (mammoth) ───────────────────────────────────────────────────────────

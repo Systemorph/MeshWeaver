@@ -3,6 +3,7 @@ using System.Collections.Immutable;
 using System.Reactive;
 using System.Reactive.Linq;
 using System.Text.Json;
+using System.Threading;
 using MeshWeaver.Mesh.Threading;
 using Npgsql;
 using NpgsqlTypes;
@@ -85,6 +86,51 @@ public sealed class PostgreSqlChunkedContentVectorStore : IChunkedContentVectorS
 
     /// <summary>The mesh database the indexer writes/queries (content-index tables in partition schemas).</summary>
     internal NpgsqlDataSource DataSource => _dataSource;
+
+    /// <summary>
+    /// The column list every chunk read projects, in the order <see cref="ReadChunkAsync"/> expects. One
+    /// constant so the three read paths (Search / SearchSubtree / GetChunk) can never drift in column order.
+    /// </summary>
+    private const string ChunkColumns =
+        "collection_path, file_path, chunk_index, content_hash, chunk_text, metadata, embedding, page, bbox";
+
+    /// <summary>
+    /// Maps the current reader row (projected via <see cref="ChunkColumns"/>) to a <see cref="ContentChunk"/>,
+    /// including its page + normalized bbox provenance. Shared by all three read paths.
+    /// </summary>
+    private static async Task<ContentChunk> ReadChunkAsync(NpgsqlDataReader reader, CancellationToken ct)
+    {
+        ImmutableDictionary<string, string>? metadata = null;
+        if (!await reader.IsDBNullAsync(5, ct).ConfigureAwait(false))
+        {
+            var json = reader.GetString(5);
+            var dict = JsonSerializer.Deserialize<Dictionary<string, string>>(json);
+            if (dict is { Count: > 0 })
+                metadata = dict.ToImmutableDictionary(StringComparer.Ordinal);
+        }
+
+        float[]? embedding = null;
+        if (!await reader.IsDBNullAsync(6, ct).ConfigureAwait(false))
+            embedding = reader.GetFieldValue<Vector>(6).ToArray();
+
+        int? page = await reader.IsDBNullAsync(7, ct).ConfigureAwait(false)
+            ? null
+            : reader.GetInt32(7);
+        var position = await reader.IsDBNullAsync(8, ct).ConfigureAwait(false)
+            ? null
+            : ChunkPositionJson.Deserialize(reader.GetString(8));
+
+        return new ContentChunk(
+            CollectionPath: reader.GetString(0),
+            FilePath: reader.GetString(1),
+            ChunkIndex: reader.GetInt32(2),
+            Text: await reader.IsDBNullAsync(4, ct).ConfigureAwait(false) ? string.Empty : reader.GetString(4),
+            ContentHash: await reader.IsDBNullAsync(3, ct).ConfigureAwait(false) ? string.Empty : reader.GetString(3),
+            Embedding: embedding,
+            Metadata: metadata,
+            Page: page,
+            Position: position);
+    }
 
     /// <summary>
     /// The partition schema for a collection path: the first path segment, lower-cased — exactly how the
@@ -206,8 +252,8 @@ public sealed class PostgreSqlChunkedContentVectorStore : IChunkedContentVectorS
                 ins.CommandText = $"""
                     INSERT INTO "{schema}".content_chunks
                         (collection_path, file_path, chunk_index, source_address, content_hash,
-                         chunk_text, metadata, embedding, last_modified)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+                         chunk_text, metadata, embedding, page, bbox, last_modified)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
                     """;
                 ins.Parameters.AddWithValue(chunk.CollectionPath);
                 ins.Parameters.AddWithValue(chunk.FilePath);
@@ -227,6 +273,13 @@ public sealed class PostgreSqlChunkedContentVectorStore : IChunkedContentVectorS
                     ins.Parameters.AddWithValue(new Vector(chunk.Embedding));
                 else
                     ins.Parameters.AddWithValue(DBNull.Value);
+                // page + bbox provenance: the source page the chunk begins on and its normalized box there.
+                ins.Parameters.AddWithValue((object?)chunk.Page ?? DBNull.Value);
+                ins.Parameters.Add(new NpgsqlParameter
+                {
+                    Value = (object?)ChunkPositionJson.Serialize(chunk.Position) ?? DBNull.Value,
+                    NpgsqlDbType = NpgsqlDbType.Jsonb,
+                });
                 await ins.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
             }
 
@@ -242,7 +295,7 @@ public sealed class PostgreSqlChunkedContentVectorStore : IChunkedContentVectorS
         return EnsureProvisioned(schema).SelectMany(_ => _pool.Invoke<IReadOnlyList<ContentChunk>>(async ct =>
         {
             await using var cmd = _dataSource.CreateCommand($"""
-                SELECT collection_path, file_path, chunk_index, content_hash, chunk_text, metadata, embedding
+                SELECT {ChunkColumns}
                 FROM "{schema}".content_chunks
                 WHERE collection_path = $1 AND embedding IS NOT NULL
                 ORDER BY embedding <=> $2
@@ -255,29 +308,7 @@ public sealed class PostgreSqlChunkedContentVectorStore : IChunkedContentVectorS
             var results = new List<ContentChunk>();
             await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
             while (await reader.ReadAsync(ct).ConfigureAwait(false))
-            {
-                ImmutableDictionary<string, string>? metadata = null;
-                if (!await reader.IsDBNullAsync(5, ct).ConfigureAwait(false))
-                {
-                    var json = reader.GetString(5);
-                    var dict = JsonSerializer.Deserialize<Dictionary<string, string>>(json);
-                    if (dict is { Count: > 0 })
-                        metadata = dict.ToImmutableDictionary(StringComparer.Ordinal);
-                }
-
-                float[]? embedding = null;
-                if (!await reader.IsDBNullAsync(6, ct).ConfigureAwait(false))
-                    embedding = reader.GetFieldValue<Vector>(6).ToArray();
-
-                results.Add(new ContentChunk(
-                    CollectionPath: reader.GetString(0),
-                    FilePath: reader.GetString(1),
-                    ChunkIndex: reader.GetInt32(2),
-                    Text: await reader.IsDBNullAsync(4, ct).ConfigureAwait(false) ? string.Empty : reader.GetString(4),
-                    ContentHash: await reader.IsDBNullAsync(3, ct).ConfigureAwait(false) ? string.Empty : reader.GetString(3),
-                    Embedding: embedding,
-                    Metadata: metadata));
-            }
+                results.Add(await ReadChunkAsync(reader, ct).ConfigureAwait(false));
 
             return results;
         }));
@@ -294,7 +325,7 @@ public sealed class PostgreSqlChunkedContentVectorStore : IChunkedContentVectorS
         return EnsureProvisioned(schema).SelectMany(_ => _pool.Invoke<IReadOnlyList<ContentChunk>>(async ct =>
         {
             await using var cmd = _dataSource.CreateCommand($"""
-                SELECT collection_path, file_path, chunk_index, content_hash, chunk_text, metadata, embedding
+                SELECT {ChunkColumns}
                 FROM "{schema}".content_chunks
                 WHERE (collection_path = $1 OR collection_path LIKE $2 ESCAPE '\') AND embedding IS NOT NULL
                 ORDER BY embedding <=> $3
@@ -308,29 +339,7 @@ public sealed class PostgreSqlChunkedContentVectorStore : IChunkedContentVectorS
             var results = new List<ContentChunk>();
             await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
             while (await reader.ReadAsync(ct).ConfigureAwait(false))
-            {
-                ImmutableDictionary<string, string>? metadata = null;
-                if (!await reader.IsDBNullAsync(5, ct).ConfigureAwait(false))
-                {
-                    var json = reader.GetString(5);
-                    var dict = JsonSerializer.Deserialize<Dictionary<string, string>>(json);
-                    if (dict is { Count: > 0 })
-                        metadata = dict.ToImmutableDictionary(StringComparer.Ordinal);
-                }
-
-                float[]? embedding = null;
-                if (!await reader.IsDBNullAsync(6, ct).ConfigureAwait(false))
-                    embedding = reader.GetFieldValue<Vector>(6).ToArray();
-
-                results.Add(new ContentChunk(
-                    CollectionPath: reader.GetString(0),
-                    FilePath: reader.GetString(1),
-                    ChunkIndex: reader.GetInt32(2),
-                    Text: await reader.IsDBNullAsync(4, ct).ConfigureAwait(false) ? string.Empty : reader.GetString(4),
-                    ContentHash: await reader.IsDBNullAsync(3, ct).ConfigureAwait(false) ? string.Empty : reader.GetString(3),
-                    Embedding: embedding,
-                    Metadata: metadata));
-            }
+                results.Add(await ReadChunkAsync(reader, ct).ConfigureAwait(false));
 
             return results;
         }));
@@ -360,7 +369,7 @@ public sealed class PostgreSqlChunkedContentVectorStore : IChunkedContentVectorS
         return EnsureProvisioned(schema).SelectMany(_ => _pool.Invoke<ContentChunk?>(async ct =>
         {
             await using var cmd = _dataSource.CreateCommand($"""
-                SELECT collection_path, file_path, chunk_index, content_hash, chunk_text, metadata, embedding
+                SELECT {ChunkColumns}
                 FROM "{schema}".content_chunks
                 WHERE collection_path = $1 AND file_path = $2 AND chunk_index = $3
                 """);
@@ -372,27 +381,7 @@ public sealed class PostgreSqlChunkedContentVectorStore : IChunkedContentVectorS
             if (!await reader.ReadAsync(ct).ConfigureAwait(false))
                 return null;
 
-            ImmutableDictionary<string, string>? metadata = null;
-            if (!await reader.IsDBNullAsync(5, ct).ConfigureAwait(false))
-            {
-                var json = reader.GetString(5);
-                var dict = JsonSerializer.Deserialize<Dictionary<string, string>>(json);
-                if (dict is { Count: > 0 })
-                    metadata = dict.ToImmutableDictionary(StringComparer.Ordinal);
-            }
-
-            float[]? embedding = null;
-            if (!await reader.IsDBNullAsync(6, ct).ConfigureAwait(false))
-                embedding = reader.GetFieldValue<Vector>(6).ToArray();
-
-            return new ContentChunk(
-                CollectionPath: reader.GetString(0),
-                FilePath: reader.GetString(1),
-                ChunkIndex: reader.GetInt32(2),
-                Text: await reader.IsDBNullAsync(4, ct).ConfigureAwait(false) ? string.Empty : reader.GetString(4),
-                ContentHash: await reader.IsDBNullAsync(3, ct).ConfigureAwait(false) ? string.Empty : reader.GetString(3),
-                Embedding: embedding,
-                Metadata: metadata);
+            return await ReadChunkAsync(reader, ct).ConfigureAwait(false);
         }));
     }
 

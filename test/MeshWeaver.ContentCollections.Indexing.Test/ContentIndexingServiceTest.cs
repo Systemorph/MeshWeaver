@@ -43,8 +43,8 @@ public class ContentIndexingServiceTest : IDisposable
         return path;
     }
 
-    private async Task<IndexResult> Index(string filePath, string fileName) =>
-        await _service.IndexFile(Collection, filePath, fileName, File.ReadAllBytes(filePath))
+    private async Task<IndexResult> Index(string filePath, string fileName, bool force = false) =>
+        await _service.IndexFile(Collection, filePath, fileName, File.ReadAllBytes(filePath), force)
             .FirstAsync().ToTask();
 
     private async Task<IReadOnlyList<ContentChunk>> Search(string text, int topK) =>
@@ -129,6 +129,45 @@ public class ContentIndexingServiceTest : IDisposable
         var hits = await Search("revenue regions", topK: 10);
         hits.Should().NotBeEmpty();
         hits.Should().Contain(c => c.Text.Contains("Revenue"));
+    }
+
+    [Fact]
+    public async Task PdfFile_ChunksCarryPageAndPosition()
+    {
+        var bytes = PdfTestFixtures.OnePagePdf(
+            "Quarterly report",
+            "Revenue grew across all regions this quarter.");
+        var filePath = Path.Combine(_tempDir, "prov.pdf");
+        File.WriteAllBytes(filePath, bytes);
+
+        (await Index(filePath, "prov.pdf")).Status.Should().Be(IndexStatus.Indexed);
+
+        var hits = await Search("revenue regions", topK: 50);
+        hits.Should().NotBeEmpty();
+        // Every chunk of a paged PDF carries its source page + on-page box (provenance for open+mark).
+        hits.Should().OnlyContain(c => c.Page == 1);
+        hits.Should().OnlyContain(c => c.Position != null);
+    }
+
+    [Fact]
+    public async Task ForceReindex_BypassesHashGate_AndReExtractsProvenance()
+    {
+        var bytes = PdfTestFixtures.OnePagePdf(
+            "Balance sheet 2024",
+            "Total assets grew year over year.");
+        var filePath = Path.Combine(_tempDir, "backfill.pdf");
+        File.WriteAllBytes(filePath, bytes);
+
+        (await Index(filePath, "backfill.pdf")).Status.Should().Be(IndexStatus.Indexed);
+        // Unchanged bytes → a normal re-index is skipped by the hash gate.
+        (await Index(filePath, "backfill.pdf")).Status.Should().Be(IndexStatus.Skipped);
+        // force → re-extracted + re-stored even though the content is identical — the backfill path.
+        var forced = await Index(filePath, "backfill.pdf", force: true);
+        forced.Status.Should().Be(IndexStatus.Indexed);
+        forced.ChunkCount.Should().BeGreaterThan(0);
+
+        (await Search("total assets", topK: 50))
+            .Should().OnlyContain(c => c.Page == 1 && c.Position != null);
     }
 
     [Fact]
