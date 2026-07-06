@@ -403,7 +403,10 @@ public static class CommentsView
                             };
                             nodeFactory.CreateNode(commentNode).Subscribe(
                                 _ => host.UpdateData(stateId, ""),
-                                _ => host.UpdateData(stateId, ""));
+                                // Keep the draft form OPEN on failure (don't clear stateId) so the user's
+                                // text isn't silently lost, and log so the failure is diagnosable.
+                                ex => host.Hub.ServiceProvider.GetService<ILogger<LayoutAreaHost>>()
+                                    ?.LogWarning(ex, "Failed to create comment at {Path}", commentPath));
                         });
                     return Task.CompletedTask;
                 })));

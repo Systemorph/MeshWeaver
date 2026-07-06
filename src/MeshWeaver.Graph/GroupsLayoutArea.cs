@@ -5,6 +5,7 @@ using MeshWeaver.Domain;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.Domain;
+using Microsoft.Extensions.Logging;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
@@ -295,7 +296,8 @@ public static class GroupsLayoutArea
                                             // land on Edit to pick the group. No transient placeholder.
                                             nodeFactory.CreateNode(newNode).Subscribe(
                                                 _ => saveCtx.NavigateTo($"/{path}/{MeshNodeLayoutAreas.EditArea}"),
-                                                _ => { });
+                                                ex => saveCtx.Hub.ServiceProvider.GetService<ILogger<LayoutAreaHost>>()
+                                                    ?.LogWarning(ex, "Failed to create group membership at {Path}", path));
                                         });
                                 });
                         });

@@ -434,7 +434,10 @@ public static class CommentLayoutAreas
                             };
                             nodeFactory.CreateNode(replyNode).Subscribe(
                                 _ => host.UpdateData(replyPathStateId, ""),
-                                _ => host.UpdateData(replyPathStateId, ""));
+                                // Keep the draft form OPEN on failure (don't clear the state) so the user's
+                                // reply isn't silently lost, and log so the failure is diagnosable.
+                                ex => host.Hub.ServiceProvider.GetService<ILogger<LayoutAreaHost>>()
+                                    ?.LogWarning(ex, "Failed to create reply at {Path}", replyPath));
                         });
                     return Task.CompletedTask;
                 })));
