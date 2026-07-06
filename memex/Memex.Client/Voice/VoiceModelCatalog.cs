@@ -50,19 +50,19 @@ public sealed class VoiceModelCatalog
         _provisionAppleImage = provisionAppleImage;
         (_fileName, _url) = model switch
         {
-            // The converted Flurin17 Swiss-German fine-tune (no public GGML), quantized to q5_0 (~547 MB
-            // vs 1.5 GB f16 — faster + iPhone-RAM-friendly, negligible quality loss). Hosted as a GitHub
-            // release asset (the earlier memex.meshweaver.cloud/static/Speech URL was never published —
-            // it returned the portal's SPA index.html, so every first-use download got 88 KB of HTML).
-            // The CoreML "apple image" (…-encoder.mlmodelc.zip) lives in the SAME release so the derived
-            // URL resolves. Downloaded on first use like the others.
+            // The converted Flurin17 Swiss-German fine-tune (no public GGML), quantized to q5_0:
+            // ~547 MB vs 1.5 GB f16 — faster + iPhone-RAM-friendly, negligible quality loss. Hosted as
+            // a GitHub release asset. The earlier memex.meshweaver.cloud/static/Speech URL was never
+            // published — it returned the portal's SPA index.html, so every first-use download got
+            // 88 KB of HTML. The CoreML "apple image" (…-encoder.mlmodelc.zip) lives in the SAME release
+            // so the derived URL resolves. Downloaded on first use like the others.
             WhisperModelSize.SwissGerman => ("ggml-swiss-german-turbo-q5_0.bin",
                 "https://github.com/Systemorph/MeshWeaver/releases/download/voice-model-swiss-german/ggml-swiss-german-turbo-q5_0.bin"),
             WhisperModelSize.LargeV3Turbo => ("ggml-large-v3-turbo.bin", GgmlBaseUrl + "ggml-large-v3-turbo.bin"),
             _ => ("ggml-base.bin", GgmlBaseUrl + "ggml-base.bin"),
         };
         // The CoreML "apple image" (encoder) is hosted next to the ggml model as a .zip when one exists
-        // (our static collection for Swiss German; ggerganov's HF repo for base/large). Same directory,
+        // (our GitHub release for Swiss German; ggerganov's HF repo for base/large). Same directory,
         // filename derived by whisper.cpp's own rule so the runtime auto-loads it.
         _appleImageUrl = _url is null ? null : DeriveAppleImageZipUrl(_url);
     }
