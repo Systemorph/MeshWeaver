@@ -52,9 +52,16 @@ public sealed class ProviderModelLister
     /// shape (Anthropic vs the OpenAI family). Sorted, de-duplicated. Throws (via
     /// OnError) on a non-success response so the UI can show the reason and fall back.
     /// </summary>
-    public IObservable<IReadOnlyList<string>> ListModels(string? endpoint, string apiKey, string? providerName = null)
+    /// <param name="allowKeyless">
+    /// When <c>true</c>, a blank <paramref name="apiKey"/> is permitted and the request is sent
+    /// without an <c>Authorization</c> header — for keyless local OpenAI-compatible endpoints
+    /// (Ollama, a bare vLLM/LM Studio) whose <c>/v1/models</c> needs no credential. The interactive
+    /// add-provider flow keeps the default (<c>false</c>): a user pasting a remote provider URL still
+    /// gets the "API key required" error rather than a silent 401.
+    /// </param>
+    public IObservable<IReadOnlyList<string>> ListModels(string? endpoint, string apiKey, string? providerName = null, bool allowKeyless = false)
     {
-        if (string.IsNullOrWhiteSpace(apiKey))
+        if (string.IsNullOrWhiteSpace(apiKey) && !allowKeyless)
             return Observable.Throw<IReadOnlyList<string>>(
                 new InvalidOperationException("An API key is required to fetch the model list."));
         return Http.Invoke(ct => ListAsync(endpoint, apiKey, providerName, ct));
@@ -81,8 +88,10 @@ public sealed class ProviderModelLister
             req.Headers.TryAddWithoutValidation("x-api-key", apiKey);
             req.Headers.TryAddWithoutValidation("anthropic-version", "2023-06-01");
         }
-        else
+        else if (!string.IsNullOrWhiteSpace(apiKey))
         {
+            // Keyless endpoints (Ollama) send no Authorization header; a remote OpenAI-family
+            // endpoint always has a non-blank key here (the ListModels guard enforces it).
             req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
         }
         req.Headers.Accept.ParseAdd("application/json");
