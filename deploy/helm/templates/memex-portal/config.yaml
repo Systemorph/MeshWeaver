@@ -93,6 +93,11 @@ data:
   OpenAICompatible__Endpoint: "{{ .Values.config.memex_portal.OpenAICompatible__Endpoint | default "" }}"
   OpenAICompatible__Models__0: "{{ .Values.config.memex_portal.OpenAICompatible__Models__0 | default "" }}"
   OpenAICompatible__Models__1: "{{ .Values.config.memex_portal.OpenAICompatible__Models__1 | default "" }}"
+  # Auto-discover the model list from the endpoint's /v1/models (Ollama etc.) instead of the
+  # static Models[] above — a pulled model then shows up in the picker without a config edit.
+  # When "true", leave Models[] empty (discovery owns this provider's child set). The embedding
+  # model (Embedding__Model) is excluded from the chat catalog. Empty/false = static behaviour.
+  OpenAICompatible__DiscoverModels: "{{ .Values.config.memex_portal.OpenAICompatible__DiscoverModels | default "" }}"
   # Tier → concrete model id (agents that declare ModelTier resolve through these).
   ModelTier__Heavy: "{{ .Values.config.memex_portal.ModelTier__Heavy }}"
   ModelTier__Standard: "{{ .Values.config.memex_portal.ModelTier__Standard }}"

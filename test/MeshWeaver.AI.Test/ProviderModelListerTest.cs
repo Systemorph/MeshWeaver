@@ -141,4 +141,22 @@ public class ProviderModelListerTest(ITestOutputHelper output) : AITestBase(outp
 
         handler.Last.Should().BeNull("a blank key must short-circuit before any HTTP call");
     }
+
+    /// <summary>
+    /// Keyless mode (Ollama): <c>allowKeyless: true</c> with a blank key fetches
+    /// <c>{base}/models</c> with NO <c>Authorization</c> header, instead of throwing.
+    /// This is the local-endpoint path the OpenAICompatible auto-discovery uses.
+    /// </summary>
+    [Fact]
+    public async Task AllowKeyless_BlankKey_FetchesWithoutAuthorizationHeader()
+    {
+        var (lister, handler) = Make("{\"data\":[{\"id\":\"qwen3.6:latest\"},{\"id\":\"bge-m3:latest\"}]}");
+
+        var ids = await lister.ListModels("http://ollama:11434/v1", apiKey: "", "OpenAICompatible", allowKeyless: true)
+            .Should().Within(10.Seconds()).Emit();
+
+        handler.Last!.RequestUri!.ToString().Should().Be("http://ollama:11434/v1/models");
+        handler.Last.Headers.Authorization.Should().BeNull("a keyless local endpoint sends no bearer");
+        ids.Should().Equal("bge-m3:latest", "qwen3.6:latest"); // sorted; the lister does not filter embedders
+    }
 }
