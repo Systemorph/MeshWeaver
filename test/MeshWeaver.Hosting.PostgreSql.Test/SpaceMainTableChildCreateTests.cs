@@ -73,7 +73,7 @@ public class SpaceMainTableChildCreateTests(PostgreSqlFixture fixture, ITestOutp
             NodeType = SpaceNodeType.NodeType,
             Name = spaceId,
             State = MeshNodeState.Active,
-            Content = new Space { Name = spaceId },
+            Content = new Space(),
         }).Should().Within(45.Seconds()).Emit();
         space.Path.Should().Be(spaceId);
 

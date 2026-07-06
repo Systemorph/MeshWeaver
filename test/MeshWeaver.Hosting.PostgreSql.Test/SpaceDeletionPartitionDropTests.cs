@@ -68,7 +68,7 @@ public class SpaceDeletionPartitionDropTests(PostgreSqlFixture fixture, ITestOut
             NodeType = SpaceNodeType.NodeType,
             Name = "To Drop",
             State = MeshNodeState.Active,
-            Content = new Space { Name = "To Drop" },
+            Content = new Space(),
         }).Should().Within(60.Seconds()).Emit();
         created.Should().NotBeNull();
         await SchemaCount(spaceId).Should().Within(30.Seconds()).Be(1L);
@@ -98,7 +98,7 @@ public class SpaceDeletionPartitionDropTests(PostgreSqlFixture fixture, ITestOut
             NodeType = SpaceNodeType.NodeType,
             Name = "Recreated",
             State = MeshNodeState.Active,
-            Content = new Space { Name = "Recreated" },
+            Content = new Space(),
         }).Should().Within(60.Seconds()).Emit();
         await SchemaCount(spaceId).Should().Within(30.Seconds()).Be(1L);
         var reseeded = await meshService.CreateNode(new MeshNode("page", spaceId)

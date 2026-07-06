@@ -39,7 +39,7 @@ public class SpaceEditableTitleTest(ITestOutputHelper output) : MonolithMeshTest
         {
             Name = spaceName,
             NodeType = SpaceNodeType.NodeType,
-            Content = new Space { Name = spaceName }
+            Content = new Space()
         };
         await NodeFactory.CreateNode(spaceNode).Should().Emit();
 

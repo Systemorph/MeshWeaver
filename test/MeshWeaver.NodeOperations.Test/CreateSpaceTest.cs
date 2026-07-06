@@ -37,7 +37,7 @@ public class CreateSpaceTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
         {
             Name = "Test Space",
             NodeType = SpaceNodeType.NodeType,
-            Content = new Space { Name = "Test Space" }
+            Content = new Space()
         };
         var created = await NodeFactory.CreateNode(spaceNode).Should().Emit();
 

@@ -180,7 +180,7 @@ public class SpaceOnboardingIntegrationTests(PostgreSqlFixture fixture, ITestOut
             NodeType = SpaceNodeType.NodeType,
             Name = spaceId,
             State = MeshNodeState.Active,
-            Content = new Space { Name = spaceId },
+            Content = new Space(),
         }).Should().Within(45.Seconds()).Emit();
         created.Should().NotBeNull();
         string.IsNullOrEmpty(created.Namespace).Should().BeTrue(
@@ -271,7 +271,7 @@ public class SpaceOnboardingIntegrationTests(PostgreSqlFixture fixture, ITestOut
             NodeType = SpaceNodeType.NodeType,
             Name = spaceId,
             State = MeshNodeState.Active,
-            Content = new Space { Name = spaceId },
+            Content = new Space(),
         }).Should().Within(45.Seconds()).Emit();
         created.Should().NotBeNull("creating a Space over a pre-existing bare schema must heal it, not fail");
         created.Path.Should().Be(spaceId);
@@ -405,7 +405,7 @@ public class SpaceOnboardingIntegrationTests(PostgreSqlFixture fixture, ITestOut
                 NodeType = SpaceNodeType.NodeType,
                 Name = spaceId,
                 State = MeshNodeState.Active,
-                Content = new Space { Name = spaceId },
+                Content = new Space(),
             })
             .Take(1)
             .Materialize()
@@ -456,7 +456,7 @@ public class SpaceOnboardingIntegrationTests(PostgreSqlFixture fixture, ITestOut
             NodeType = "Space",
             Name = orgId,
             State = MeshNodeState.Active,
-            Content = new Space { Name = orgId },
+            Content = new Space(),
         }).Should().Within(30.Seconds()).Emit();
         orgRoot.Should().NotBeNull();
 
@@ -521,7 +521,7 @@ public class SpaceOnboardingIntegrationTests(PostgreSqlFixture fixture, ITestOut
             NodeType = SpaceNodeType.NodeType,
             Name = spaceId,
             State = MeshNodeState.Active,
-            Content = new Space { Name = spaceId },
+            Content = new Space(),
         }).Should().Within(45.Seconds()).Emit();
         created.Should().NotBeNull("any authenticated user must be able to create a top-level Space");
         created.Path.Should().Be(spaceId);
@@ -555,7 +555,7 @@ public class SpaceOnboardingIntegrationTests(PostgreSqlFixture fixture, ITestOut
             NodeType = SpaceNodeType.NodeType,
             Name = spaceId,
             State = MeshNodeState.Active,
-            Content = new Space { Name = spaceId },
+            Content = new Space(),
         }).Should().Within(45.Seconds()).Emit();
 
         var firstAdminPath = $"{spaceId}/_Access/{TestUsers.Admin.ObjectId}_Access";
