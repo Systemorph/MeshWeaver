@@ -227,8 +227,19 @@ public static class CatalogLayoutAreas
             return;
         }
 
+        // Capture the caller's identity NOW — the click delivery stamped AccessService.Context. The
+        // fetch runs on the Process IIoPool (GitCli), so the install continuation lands on a pool
+        // thread where that AsyncLocal is wiped; re-establish it for the install's whole lifetime via
+        // Observable.Using so the CreateOrUpdate writes run as the user and don't fail closed.
+        var accessService = host.Hub.ServiceProvider.GetService<AccessService>();
+        var user = accessService?.Context;
+
         source.FetchPackageFiles(pkg, cfg!.SourceRef)
-            .SelectMany(files => PackageInstaller.Install(host.Hub, pkg, files, cfg.SourceRef, logger))
+            .SelectMany(files => accessService is null
+                ? PackageInstaller.Install(host.Hub, pkg, files, cfg.SourceRef, logger)
+                : Observable.Using(
+                    () => accessService.SwitchAccessContext(user),
+                    _ => PackageInstaller.Install(host.Hub, pkg, files, cfg.SourceRef, logger)))
             .Subscribe(
                 count => logger?.LogInformation("Installed {Id}: {Count} node(s).", pkg.Id, count),
                 ex => logger?.LogWarning(ex, "Install of {Id} failed.", pkg.Id));

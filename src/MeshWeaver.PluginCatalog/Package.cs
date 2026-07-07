@@ -13,8 +13,9 @@ public enum PackageKind
     /// course material) — installed by importing the folder's nodes into a partition.</summary>
     Content,
 
-    /// <summary>Compiled capability (a NodeType renderer / layout areas) shipped as source
-    /// compiled on the mesh. Reserved for the runtime-code-load stage — not installed yet.</summary>
+    /// <summary>A capability shipped as SOURCE: the manifest's <c>nodeTypeConfiguration</c> plus the
+    /// package's <c>Source/*.cs</c> become a NodeType the mesh compiles live (Roslyn) on install via
+    /// its existing compile/release flow — no rebuild, no NuGet.</summary>
     Code,
 }
 
