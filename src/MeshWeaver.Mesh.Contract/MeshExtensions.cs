@@ -898,6 +898,10 @@ public static class MeshExtensions
         var accessService = hub.ServiceProvider.GetService<AccessService>();
         var workspace = hub.ServiceProvider.GetRequiredService<IWorkspace>();
         var meshHub = ResolveMeshHub(hub);
+        // "Delete wins" tombstone — populated SYNCHRONOUSLY here so it is in place before this
+        // delete's response returns, i.e. before any later hub activation can resurrect the row.
+        // (Null on meshes without Graph — the resurrect race is Graph's per-node-hub save path.)
+        var recentlyDeleted = hub.ServiceProvider.GetService<RecentlyDeletedRegistry>();
 
         var deleteRequest = request.Message;
         // 🚨 Capture the caller's identity FROM THE DELIVERY at handler entry.
@@ -1080,6 +1084,19 @@ public static class MeshExtensions
                                         logger.LogDebug(
                                             "[DeleteNode] committing path={Path} count={Count}",
                                             path, collected.ToDelete.Count);
+
+                                        // 🚨 "Delete wins" — tombstone every path BEFORE the fan-out.
+                                        // FanOutDeleteSubtree ACTIVATES each leaf's per-node hub to
+                                        // process its own delete, and that activation's save (the
+                                        // workspace sees the just-loaded node as an "add") is exactly
+                                        // what resurrects the row. Marking here — before any leaf hub
+                                        // is activated — guarantees the resurrecting save's guard
+                                        // already sees the tombstone. Marking only on success (after
+                                        // the delete) lost a check-before-mark race: the activation
+                                        // save checked ~14 ms before the mark and slipped through.
+                                        foreach (var dp in collected.ToDelete)
+                                            recentlyDeleted?.MarkDeleted(dp);
+                                        recentlyDeleted?.MarkDeleted(path);
 
                                         return FanOutDeleteSubtree(
                                                 meshHub, storage, path, collected.ToDelete,
