@@ -58,8 +58,10 @@ app.MapGet("/static/{**path}", async (HttpContext ctx, string path) =>
 {
     var slash = path.IndexOf('/');
     if (slash <= 0) return Results.NotFound();
-    var collection = Uri.UnescapeDataString(path[..slash]);   // e.g. "NodeTypeIcons"
-    var filePath = path[(slash + 1)..];                        // e.g. "box.svg"
+    // Match BlazorHostingExtensions: collection names encode '/' as '~', and file-path segments are
+    // percent-encoded - decode both so names/files with spaces or UTF-8 resolve instead of false-404ing.
+    var collection = ContentCollectionsExtensions.DecodeCollectionName(path[..slash]);   // "~" -> "/"
+    var filePath = string.Join('/', path[(slash + 1)..].Split('/').Select(Uri.UnescapeDataString));
     var content = app.Services.GetRequiredService<IMessageHub>().ServiceProvider.GetService<IContentService>();
     if (content is null) return Results.NotFound();
     var stream = await content.GetContentAsync(collection, filePath, ctx.RequestAborted);
