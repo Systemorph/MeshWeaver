@@ -85,13 +85,14 @@ public static class LinkedInConnectEndpoints
                 + $"&client_id={Uri.EscapeDataString(clientId!)}"
                 + $"&redirect_uri={Uri.EscapeDataString(redirectUri)}"
                 + $"&state={Uri.EscapeDataString(state)}"
-                // Keep scopes minimal: openid/profile/email is plain OIDC sign-in,
-                // which is all we need for the analytics dashboard (posts come in
-                // via CSV import since r_member_social is closed). w_member_social
-                // (publishing) is not requested — it causes LinkedIn to render
-                // "share on your behalf" on the consent screen which isn't what
-                // this flow is for today.
-                + "&scope=" + Uri.EscapeDataString("openid profile email");
+                // openid/profile/email  → OIDC sign-in + the member's `sub` (person id), which we
+                //                         persist as the credential SubjectId so publishing knows
+                //                         the author (see LinkedInPostsApi.NormalizeMemberUrn).
+                // w_member_social       → "Create, modify, and delete posts, comments, and reactions
+                //                         on your behalf" — the publishing scope the app is approved
+                //                         for. Grants the consent-screen "share on your behalf" line;
+                //                         that IS the intent now (POST /linkedin/publish → /rest/posts).
+                + "&scope=" + Uri.EscapeDataString("openid profile email w_member_social");
 
             return Results.Redirect(url);
         }).RequireAuthorization();
