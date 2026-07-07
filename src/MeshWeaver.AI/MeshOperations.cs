@@ -1,9 +1,11 @@
 using System.Collections.Immutable;
 using System.IO;
+using System.IO.Compression;
 using System.Reactive.Concurrency;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
+using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Schema;
@@ -16,6 +18,7 @@ using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
 using MeshWeaver.Kernel;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
@@ -2303,6 +2306,442 @@ public class MeshOperations
                 return Observable.Return($"Error: {ex.Message}");
             });
     }
+
+    /// <summary>
+    /// Exports the subtree rooted at <paramref name="path"/> as a self-contained ZIP archive: a
+    /// <c>manifest.json</c> (the export-root path plus every descendant <see cref="MeshNode"/>'s full
+    /// JSON — Code source and Markdown bodies ride inside each node's Content) plus a <c>files/</c>
+    /// tree holding the raw bytes of every editable content-collection file. The exact inverse of
+    /// <see cref="Import"/>.
+    ///
+    /// <para>Subtree traversal reuses the same snapshot query <see cref="Copy"/> uses
+    /// (<c>path:{root} scope:subtree</c>). Each node's content collections are discovered exactly as
+    /// <see cref="Upload"/> resolves a write target (a <see cref="GetDataRequest"/> for a
+    /// <see cref="ContentCollectionReference"/> against the owning node hub), and the files are read +
+    /// zipped on the file-system <see cref="IIoPool"/> — never on the hub action block, never via
+    /// <c>Observable.FromAsync</c>.</para>
+    /// </summary>
+    /// <param name="path">The subtree root to export.</param>
+    /// <returns>A cold observable emitting the ZIP bytes. Nodes the caller lacks the
+    /// <see cref="Permission.Export"/> permission on are silently skipped (partial access → subset;
+    /// no access → an empty-manifest ZIP). A non-existent path resolves to an empty-manifest ZIP too.</returns>
+    public IObservable<byte[]> Export(string path)
+    {
+        logger.LogInformation("Export called: {Path}", path);
+
+        if (string.IsNullOrWhiteSpace(path))
+            return Observable.Throw<byte[]>(new ArgumentException("path is required.", nameof(path)));
+
+        var root = ResolvePath(path).Trim('/');
+        if (string.IsNullOrWhiteSpace(root))
+            return Observable.Throw<byte[]>(new ArgumentException("path is required.", nameof(path)));
+
+        var pool = hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.FileSystem)
+                   ?? IoPool.Unbounded;
+
+        // Access control: Export is its OWN permission (granted by Editor + Admin). Enforce it per
+        // node against the caller's real effective permissions — never bypass as system. The check
+        // runs on the mesh hub (which carries the RowLevelSecurity evaluator; when RLS is not
+        // configured the evaluator returns Permission.All, so an unsecured host exports everything).
+        // The caller identity is captured here, on the calling thread, before any Rx scheduler hop.
+        var permissionHub = hub.ServiceProvider.GetRequiredService<IMessageHub>();
+        var callerUserId = ResolveCallerUserId();
+
+        // 1. Snapshot the subtree (root + descendants) — the same query Copy traverses. Ancestor-first
+        //    ordering so an inherited collection is attributed to its owning ancestor on dedup.
+        return mesh.Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{root} scope:subtree"))
+            .Take(1)
+            .Select(change => change.Items
+                .Where(n => !string.IsNullOrEmpty(n.Path))
+                .ToList())
+            .SelectMany(allNodes =>
+                // 2. Access filter: keep only nodes the caller may Export. PARTIAL access → subset;
+                //    NO access → empty. Bounded parallel; fail-closed on error (never leak a node).
+                allNodes
+                    .Select(n => permissionHub
+                        .CheckPermission(n.Path, callerUserId, Permission.Export)
+                        .Take(1)
+                        .Timeout(TimeSpan.FromSeconds(30))
+                        .Catch((Exception ex) =>
+                        {
+                            logger.LogDebug(ex, "Export: permission check failed for {Path} — skipping", n.Path);
+                            return Observable.Return(false);
+                        })
+                        .Select(allowed => (Node: n, Allowed: allowed)))
+                    .ToObservable()
+                    .Merge(NodeCopyHelper.DefaultBatchSize)
+                    .Where(x => x.Allowed)
+                    .Select(x => x.Node)
+                    .ToList())
+            .SelectMany(permitted =>
+            {
+                // Ancestor-first so an inherited collection is attributed to its owning ancestor.
+                var nodes = permitted
+                    .OrderBy(n => n.Segments.Count)
+                    .ThenBy(n => n.Path, StringComparer.Ordinal)
+                    .ToList();
+
+                // No permitted nodes (no access, or nothing at the path) → a valid empty-manifest ZIP.
+                if (nodes.Count == 0)
+                    return pool.InvokeBlocking(_ => BuildExportZip(root, nodes, new List<ExportedFile>()));
+
+                // 3. Discover each permitted node's content collections (tolerant, bounded, parallel).
+                return nodes
+                    .Select(n => GetNodeCollectionConfigs(n.Path)
+                        .Select(configs => (NodePath: n.Path, Configs: configs)))
+                    .ToObservable()
+                    .Merge(NodeCopyHelper.DefaultBatchSize)
+                    .ToList()
+                    .SelectMany(nodeConfigs =>
+                    {
+                        // Re-establish ancestor-first order (Merge reorders) and flatten to targets.
+                        var targets = nodeConfigs
+                            .OrderBy(nc => nc.NodePath.Count(c => c == '/'))
+                            .ThenBy(nc => nc.NodePath, StringComparer.Ordinal)
+                            .SelectMany(nc => nc.Configs
+                                .Where(c => c.IsEditable && !string.IsNullOrEmpty(c.Name))
+                                .Select(c => (nc.NodePath, Config: c)))
+                            .ToList();
+
+                        // 4. Gather file bytes OFF the hub (async stream reads on the IO pool), then
+                        //    5. build the ZIP on the pool (pure CPU/memory) — never on the action block.
+                        return pool.Invoke(ct => GatherContentFilesAsync(targets, ct))
+                            .SelectMany(files =>
+                                pool.InvokeBlocking(_ => BuildExportZip(root, nodes, files)));
+                    });
+            });
+    }
+
+    /// <summary>
+    /// Resolves the caller's user id from the hub's <see cref="AccessService"/> context (the same
+    /// precedence <c>HubPermissionExtensions</c> uses), defaulting to
+    /// <see cref="WellKnownUsers.Anonymous"/> when no real identity is present.
+    /// </summary>
+    private string ResolveCallerUserId()
+    {
+        var accessService = hub.ServiceProvider.GetService<AccessService>();
+        var ctx = accessService?.Context ?? accessService?.CircuitContext;
+        var userId = ctx?.ObjectId;
+        if (string.IsNullOrEmpty(userId) || ctx?.IsVirtual == true)
+            userId = WellKnownUsers.Anonymous;
+        return userId;
+    }
+
+    /// <summary>
+    /// Imports a ZIP produced by <see cref="Export"/> under <paramref name="targetNamespace"/>:
+    /// unpacks the archive, recreates every MeshNode with its path rewritten from the export root to
+    /// the target (via <see cref="IMeshService.CreateNode"/>, carrying the caller's AccessContext),
+    /// then re-uploads every content-collection file through the standard <see cref="Upload"/> path.
+    /// </summary>
+    /// <param name="targetNamespace">The namespace to recreate the subtree under (the export root's
+    /// path prefix is rewritten to this).</param>
+    /// <param name="zipBytes">The ZIP archive bytes from <see cref="Export"/>.</param>
+    /// <returns>A cold observable emitting a JSON summary
+    /// <c>{status,exportRoot,targetNamespace,nodesImported,filesImported}</c> or an <c>Error: …</c>
+    /// string.</returns>
+    public IObservable<string> Import(string targetNamespace, byte[] zipBytes)
+    {
+        logger.LogInformation("Import called: target={Target} bytes={Bytes}",
+            targetNamespace, zipBytes?.Length ?? 0);
+
+        if (string.IsNullOrWhiteSpace(targetNamespace))
+            return Observable.Return("Error: targetNamespace is required.");
+        if (zipBytes is null || zipBytes.Length == 0)
+            return Observable.Return("Error: zip content is required.");
+
+        var target = ResolvePath(targetNamespace).Trim('/');
+        if (string.IsNullOrWhiteSpace(target))
+            return Observable.Return("Error: targetNamespace is required.");
+
+        var pool = hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.FileSystem)
+                   ?? IoPool.Unbounded;
+
+        // 1. Parse the ZIP OFF the hub (pure CPU/memory on the IO pool).
+        return pool.InvokeBlocking(_ => ParseExportZip(zipBytes))
+            .SelectMany(parsed =>
+            {
+                var (manifest, fileBytes) = parsed;
+                var root = manifest.ExportRoot?.Trim('/') ?? string.Empty;
+                var nodes = (manifest.Nodes ?? new List<MeshNode>())
+                    .Where(n => !string.IsNullOrEmpty(n.Path))
+                    // Parents first — deterministic, and lets a partition root land before children.
+                    .OrderBy(n => n.Segments.Count)
+                    .ThenBy(n => n.Path, StringComparer.Ordinal)
+                    .ToList();
+
+                // 2. Recreate nodes under the target, sequentially (parent-first order preserved).
+                var createNodes = nodes
+                    .Select(n => CreateRemappedNode(n, root, target))
+                    .ToObservable()
+                    .Concat()
+                    .Sum();
+
+                return createNodes.SelectMany(createdCount =>
+                {
+                    // 3. Re-upload every content-collection file into the rewritten target node.
+                    var fileEntries = manifest.Files ?? new List<MeshExportFileEntry>();
+                    return fileEntries
+                        .Select(fe =>
+                        {
+                            var entryName = ExportFileEntryName(fe.NodePath, fe.Collection, fe.FilePath);
+                            if (!fileBytes.TryGetValue(entryName, out var bytes))
+                                return Observable.Return(0);
+                            var newNodePath = RemapExportPath(fe.NodePath, root, target);
+                            return Upload($"{newNodePath}/{fe.Collection}/{fe.FilePath}", bytes)
+                                .Select(r => r.StartsWith("Error:", StringComparison.Ordinal) ? 0 : 1);
+                        })
+                        .ToObservable()
+                        .Concat()
+                        .Sum()
+                        // Explicit JsonObject so the count keys are ALWAYS present — a 0 count (e.g.
+                        // an access-denied import that wrote nothing) would otherwise be dropped by
+                        // the hub serializer's WhenWritingDefault, breaking consumers that read them.
+                        .Select(uploadedCount => new JsonObject
+                        {
+                            ["status"] = "Imported",
+                            ["exportRoot"] = root,
+                            ["targetNamespace"] = target,
+                            ["nodesImported"] = createdCount,
+                            ["filesImported"] = uploadedCount,
+                        }.ToJsonString());
+                });
+            })
+            .Catch((Exception ex) =>
+            {
+                logger.LogWarning(ex, "Import failed for target {Target}", target);
+                return Observable.Return($"Error: {ex.Message}");
+            });
+    }
+
+    /// <summary>
+    /// Discovers the content-collection configs on the node hub at <paramref name="nodePath"/>, unioned
+    /// from two <see cref="GetDataRequest"/>s (by name):
+    /// <list type="bullet">
+    ///   <item>an EMPTY <see cref="ContentCollectionReference"/> → <c>GetAllCollectionConfigs</c>, which
+    ///     returns only collections with <c>ExposeInChildren=true</c> (the memex portal sets this on its
+    ///     <c>content</c> collection);</item>
+    ///   <item>an explicit <see cref="ContentCollectionsExtensions.DefaultCollectionName"/> request →
+    ///     <c>GetCollectionConfig</c>, which is UNFILTERED, so a node's own default <c>content</c> store
+    ///     is captured even when <c>ExposeInChildren=false</c> (the Monolith portal leaves it false).</item>
+    /// </list>
+    /// Tolerant: a node hub without the content handler simply yields an empty list rather than faulting
+    /// the export.
+    /// </summary>
+    private IObservable<IReadOnlyList<ContentCollectionConfig>> GetNodeCollectionConfigs(string nodePath)
+    {
+        var address = new Address(nodePath);
+        return RequestCollectionConfigs(address, Array.Empty<string>())
+            .CombineLatest(
+                RequestCollectionConfigs(address, [ContentCollectionsExtensions.DefaultCollectionName]),
+                (exposed, defaults) => (IReadOnlyList<ContentCollectionConfig>)exposed
+                    .Concat(defaults)
+                    .GroupBy(c => c.Name, StringComparer.Ordinal)
+                    .Select(g => g.First())
+                    .ToList());
+    }
+
+    /// <summary>
+    /// Single <see cref="GetDataRequest"/> for a node's content-collection configs (empty
+    /// <paramref name="names"/> = all exposed; specific names = those configs, unfiltered). Tolerant:
+    /// a missing content handler or a timeout yields an empty list.
+    /// </summary>
+    private IObservable<IReadOnlyList<ContentCollectionConfig>> RequestCollectionConfigs(
+        Address address, IReadOnlyCollection<string> names)
+    {
+        return hub.Observe(
+                new GetDataRequest(new ContentCollectionReference(names)),
+                o => o.WithTarget(address))
+            .Take(1)
+            .Timeout(TimeSpan.FromSeconds(20))
+            .Select(delivery =>
+            {
+                IReadOnlyCollection<ContentCollectionConfig>? configs = delivery?.Message switch
+                {
+                    GetDataResponse { Data: JsonElement je } =>
+                        JsonSerializer.Deserialize<ContentCollectionConfig[]>(je, hub.JsonSerializerOptions),
+                    GetDataResponse { Data: IReadOnlyCollection<ContentCollectionConfig> direct } => direct,
+                    _ => null
+                };
+                return (IReadOnlyList<ContentCollectionConfig>)(configs?.ToList()
+                    ?? new List<ContentCollectionConfig>());
+            })
+            .Catch((Exception ex) =>
+            {
+                logger.LogDebug(ex, "Export: content-collection lookup failed for {Address}", address);
+                return Observable.Return(
+                    (IReadOnlyList<ContentCollectionConfig>)new List<ContentCollectionConfig>());
+            });
+    }
+
+    /// <summary>
+    /// Reads every file from each (node, editable collection) target into memory. Runs on the
+    /// file-system <see cref="IIoPool"/> (async stream reads). Dedupes by resolved physical location so
+    /// an inherited collection reported by multiple descendants is exported once, attributed to the
+    /// first (ancestor) node that reported it.
+    /// </summary>
+    private async Task<List<ExportedFile>> GatherContentFilesAsync(
+        IReadOnlyList<(string NodePath, ContentCollectionConfig Config)> targets, CancellationToken ct)
+    {
+        var result = new List<ExportedFile>();
+        var contentService = hub.ServiceProvider.GetService<IContentService>();
+        if (contentService is null || targets.Count == 0)
+            return result;
+
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var (nodePath, config) in targets)
+        {
+            var collectionName = config.Name!;
+            var qualified = $"{nodePath}/{collectionName}";
+            // Register the config on this hub's content service (same mechanism as Upload) so the
+            // collection resolves locally against its backing store (FileSystem BasePath, blob, …).
+            contentService.AddConfiguration(config with { Name = qualified, Address = new Address(nodePath) });
+            var collection = await contentService.GetCollectionAsync(qualified, ct).ConfigureAwait(false);
+            if (collection is null)
+                continue;
+
+            await foreach (var file in EnumerateAllFilesAsync(collection, string.Empty, ct).ConfigureAwait(false))
+            {
+                var rel = file.Path.TrimStart('/');
+                var dedupKey = (config.BasePath ?? qualified) + "|" + rel;
+                if (!seen.Add(dedupKey))
+                    continue;
+
+                var stream = await collection.GetContentAsync(file.Path, ct).ConfigureAwait(false);
+                if (stream is null)
+                    continue;
+                byte[] bytes;
+                await using (stream.ConfigureAwait(false))
+                {
+                    using var ms = new MemoryStream();
+                    await stream.CopyToAsync(ms, ct).ConfigureAwait(false);
+                    bytes = ms.ToArray();
+                }
+                result.Add(new ExportedFile(nodePath, collectionName, rel, bytes));
+            }
+        }
+        return result;
+    }
+
+    /// <summary>Recursively enumerates every file under <paramref name="dir"/> in a collection
+    /// (files first at each level, then recurse into sub-folders).</summary>
+    private static async IAsyncEnumerable<FileItem> EnumerateAllFilesAsync(
+        ContentCollection collection, string dir, [EnumeratorCancellation] CancellationToken ct)
+    {
+        await foreach (var file in collection.GetFiles(dir, ct).ConfigureAwait(false))
+            yield return file;
+        await foreach (var folder in collection.GetFolders(dir, ct).ConfigureAwait(false))
+            await foreach (var file in EnumerateAllFilesAsync(collection, folder.Path, ct).ConfigureAwait(false))
+                yield return file;
+    }
+
+    /// <summary>Builds the export ZIP (manifest.json + files/ tree) from the gathered nodes and file
+    /// bytes. Pure CPU/memory — runs on the <see cref="IIoPool"/> blocking scheduler.</summary>
+    private byte[] BuildExportZip(string root, List<MeshNode> nodes, List<ExportedFile> files)
+    {
+        var manifest = new MeshExportManifest
+        {
+            ExportRoot = root,
+            ExportedAt = DateTimeOffset.UtcNow,
+            Nodes = nodes,
+            Files = files
+                .Select(f => new MeshExportFileEntry(f.NodePath, f.Collection, f.RelPath, f.Bytes.Length))
+                .ToList(),
+        };
+
+        using var ms = new MemoryStream();
+        using (var zip = new ZipArchive(ms, ZipArchiveMode.Create, leaveOpen: true))
+        {
+            var manifestEntry = zip.CreateEntry("manifest.json", CompressionLevel.Optimal);
+            using (var writer = new StreamWriter(manifestEntry.Open()))
+                writer.Write(JsonSerializer.Serialize(manifest, hub.JsonSerializerOptions));
+
+            foreach (var f in files)
+            {
+                var entry = zip.CreateEntry(
+                    ExportFileEntryName(f.NodePath, f.Collection, f.RelPath), CompressionLevel.Optimal);
+                using var es = entry.Open();
+                es.Write(f.Bytes, 0, f.Bytes.Length);
+            }
+        }
+        return ms.ToArray();
+    }
+
+    /// <summary>Parses an export ZIP into its manifest + a map of <c>files/…</c> entry name → bytes.
+    /// Pure CPU/memory — runs on the <see cref="IIoPool"/> blocking scheduler.</summary>
+    private (MeshExportManifest Manifest, Dictionary<string, byte[]> Files) ParseExportZip(byte[] zipBytes)
+    {
+        using var ms = new MemoryStream(zipBytes);
+        using var zip = new ZipArchive(ms, ZipArchiveMode.Read);
+
+        var manifestEntry = zip.GetEntry("manifest.json")
+            ?? throw new InvalidOperationException("Invalid export: manifest.json not found in the ZIP.");
+        MeshExportManifest manifest;
+        using (var reader = new StreamReader(manifestEntry.Open()))
+            manifest = JsonSerializer.Deserialize<MeshExportManifest>(reader.ReadToEnd(), hub.JsonSerializerOptions)
+                ?? throw new InvalidOperationException("Invalid export: manifest.json did not deserialize.");
+
+        var files = new Dictionary<string, byte[]>(StringComparer.Ordinal);
+        foreach (var entry in zip.Entries)
+        {
+            if (!entry.FullName.StartsWith("files/", StringComparison.Ordinal)
+                || entry.FullName.EndsWith('/'))
+                continue;
+            using var es = entry.Open();
+            using var mem = new MemoryStream();
+            es.CopyTo(mem);
+            files[entry.FullName] = mem.ToArray();
+        }
+        return (manifest, files);
+    }
+
+    /// <summary>Recreates one exported node under the target namespace with its path rewritten.
+    /// Emits 1 on success, 0 on a per-node failure (logged) so one bad node doesn't abort the import.</summary>
+    private IObservable<int> CreateRemappedNode(MeshNode node, string root, string target)
+    {
+        var newPath = RemapExportPath(node.Path, root, target);
+        var newNode = MeshNode.FromPath(newPath) with
+        {
+            Name = node.Name,
+            Description = node.Description,
+            NodeType = node.NodeType,
+            Icon = node.Icon,
+            Category = node.Category,
+            Order = node.Order,
+            Content = node.Content,
+            PreRenderedHtml = node.PreRenderedHtml,
+            MainNode = RemapExportPath(node.MainNode, root, target),
+            State = MeshNodeState.Active,
+        };
+        return mesh.CreateNode(newNode)
+            .Select(_ => 1)
+            .Catch((Exception ex) =>
+            {
+                logger.LogWarning(ex, "Import: create failed for {Path}", newPath);
+                return Observable.Return(0);
+            });
+    }
+
+    /// <summary>Rewrites a path from the export root prefix to the target namespace.
+    /// <c>root</c>→<c>target</c>, <c>root/x</c>→<c>target/x</c>.</summary>
+    private static string RemapExportPath(string path, string root, string target)
+    {
+        if (string.IsNullOrEmpty(path))
+            return path;
+        if (string.IsNullOrEmpty(root))
+            return string.IsNullOrEmpty(target) ? path : $"{target}/{path}";
+        if (string.Equals(path, root, StringComparison.Ordinal))
+            return target;
+        if (path.StartsWith(root + "/", StringComparison.Ordinal))
+            return $"{target}/{path[(root.Length + 1)..]}";
+        return path; // outside the export root — leave unchanged (defensive; shouldn't occur)
+    }
+
+    /// <summary>The ZIP entry name a content-collection file's bytes are stored at.</summary>
+    private static string ExportFileEntryName(string nodePath, string collection, string relPath)
+        => $"files/{nodePath}/{collection}/{relPath}";
+
+    /// <summary>A gathered content-collection file held in memory during export.</summary>
+    private sealed record ExportedFile(string NodePath, string Collection, string RelPath, byte[] Bytes);
 
     /// <summary>
     /// Recycles the hub at <paramref name="path"/> by posting a
