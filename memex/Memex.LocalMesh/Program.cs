@@ -5,6 +5,7 @@ using MeshWeaver.Hosting;
 using MeshWeaver.Hosting.Grpc;
 using MeshWeaver.Hosting.Monolith;
 using MeshWeaver.Hosting.Sqlite;
+using MeshWeaver.Markdown;
 using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
 
@@ -33,6 +34,7 @@ builder.UseMeshWeaver(
     mesh => mesh
         .AddPartitionedSqlitePersistence($"Data Source={dbPath}")
         .AddGraph()          // node types + graph
+        .AddKernel()         // C# kernel (Roslyn, MeshWeaver.Kernel.Hub) — lets doc code samples Run on the sidecar
         .AddDocumentation()  // the embedded "Doc" partition — real layout areas the client can render
         .AddGrpcHub()        // py/node stream-routed address types + the gRPC services
         .UseMonolithMesh()); // in-process single-silo runtime (NOT Orleans)
@@ -73,6 +75,23 @@ app.MapGet("/static/{**path}", async (HttpContext ctx, string path) =>
     return Results.Stream(stream, contentType);
 });
 
+// Server-side Markdig render (POST /api/mesh/render-markdown) — the ONE markdown parser (the web portal
+// exposes this via MeshApiEndpoints/MeshOperations.RenderMarkdown, but that surface is MCP-auth-gated and
+// portal-coupled). RenderMarkdown is a thin wrapper over the pure MarkdownViewLogic.Render pipeline, so the
+// headless sidecar calls it directly — anonymous, no hub round-trip. Clients (portal-next + React-Native)
+// POST {markdown, nodePath} and hydrate the returned HTML + codeSubmissions (splitRenderedHtml). This is
+// what makes interactive markdown — inline @@ embeds and runnable code cells — resolve on the RN app.
+app.MapPost("/api/mesh/render-markdown", (RenderMarkdownBody body) =>
+{
+    var result = MarkdownViewLogic.Render(body.Markdown ?? string.Empty, body.NodePath, body.NodePath);
+    return Results.Json(new
+    {
+        html = result.Html,
+        codeSubmissions = (result.CodeSubmissions ?? [])
+            .Select(sub => new { id = sub.Id, language = sub.Language, code = sub.Code }),
+    });
+});
+
 var wwwroot = app.Environment.WebRootPath ?? Path.Combine(app.Environment.ContentRootPath, "wwwroot");
 if (File.Exists(Path.Combine(wwwroot, "index.html")))
     app.MapFallbackToFile("index.html"); // SPA fallback: any non-gRPC, non-file route → the packaged app
@@ -82,3 +101,6 @@ else
         $"(http/2 bidi + gRPC-web). No web app in wwwroot; point a client at http://localhost:{port}."));
 
 app.Run();
+
+/// <summary>POST body for /api/mesh/render-markdown — mirrors MeshApiEndpoints.RenderMarkdownBody.</summary>
+internal sealed record RenderMarkdownBody(string? Markdown, string? NodePath);
