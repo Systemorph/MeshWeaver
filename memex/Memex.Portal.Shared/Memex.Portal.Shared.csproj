@@ -23,6 +23,8 @@
     <ProjectReference Include="..\..\src\MeshWeaver.Speech\MeshWeaver.Speech.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Courses\MeshWeaver.Courses.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.GitSync\MeshWeaver.GitSync.csproj" />
+    <!-- Git-based plugin catalog / installer (the mesh's "app store"). -->
+    <ProjectReference Include="..\..\src\MeshWeaver.PluginCatalog\MeshWeaver.PluginCatalog.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.InstanceSync\MeshWeaver.InstanceSync.csproj" />
     <!-- Content → vector index (core tech): chunk/embed/store on a separate Postgres vector DB,
          per-file Document nodes, chunk-search autocomplete. Inert unless ConnectionStrings:contentindex
