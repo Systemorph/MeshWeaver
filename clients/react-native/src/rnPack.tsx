@@ -10,16 +10,19 @@ import {
   ControlRenderer,
   RenderArea,
   ScopeProvider,
+  splitRenderedHtml,
   useAreaSourceFactory,
   useAreaState,
   useBindingPointer,
   useChildAreas,
   useEmit,
+  useMeshOps,
   useResolve,
   useScope,
   type ControlComponent,
   type EmbeddedAreaHandle,
   type LeafPack,
+  type MarkdownKernelSession,
   type SkinComponent,
 } from "@meshweaver/react/core";
 
@@ -205,37 +208,92 @@ const DataGrid: ControlComponent = ({ control }) => {
 // components (react-native-render-html) on a device, a stripped-text fallback in tests (see nativeHtml).
 const Html: ControlComponent = ({ control }) => <NativeHtml html={s(useResolve(control.data))} />;
 
-// Markdown / collaborative-markdown (read-only). CollaborativeMarkdownControl carries its markdown in
-// `value`; the plain Markdown control uses `data`. Convert markdown → HTML, then render via NativeHtml.
+// Markdown / collaborative-markdown. The ONE parser is server-side Markdig (meshOps.renderMarkdown): it
+// resolves inline @@ embeds + runnable code cells into markers the SHARED splitRenderedHtml hydrates. We
+// render HTML chunks via NativeHtml, area markers via <AreaEmbed>, code-cell toolbars as a Run button wired
+// to the per-view kernel. Without a MeshOps host (offline/tests) fall back to the plain `marked` render.
 const Markdown: ControlComponent = ({ control }) => {
   const md = s(useResolve(control.value ?? control.data ?? control.content ?? control.markdown));
-  return <NativeHtml html={marked.parse(md, { async: false }) as string} />;
+  const nodePath = s((control as any).nodePath ?? (control as any).hubAddress) || undefined;
+  const ops = useMeshOps();
+  return ops?.renderMarkdown
+    ? <InteractiveMarkdown markdown={md} nodePath={nodePath} />
+    : <NativeHtml html={marked.parse(md, { async: false }) as string} />;
 };
 
-// A nested layout area on another address — the `@@("area/X")` embed (LayoutAreaControl). Opens a SECOND
-// area stream via the host's AreaSourceFactory (App wires createGrpcEmbeddedFactory on the live connection)
-// and renders that tree in its own scope — the native mirror of the web LayoutAreaView. Without a factory
-// (offline / tests) it falls back to a labelled marker.
-const LayoutAreaEmbed: ControlComponent = ({ control }) => {
-  const factory = useAreaSourceFactory();
-  const rawAddress = useResolve(control.address);
-  const address = typeof rawAddress === "string" ? rawAddress : s((rawAddress as any)?.address ?? (rawAddress as any)?.path);
-  const ref = (control.reference ?? {}) as any;
-  const area = s(ref.area ?? ref.Area ?? "");
-  const id = ref.id ?? ref.Id;
-  const layout = ref.layout ?? ref.Layout;
-  // Progress options mirror the web LayoutAreaView: ShowProgress (default true) suppressed either by a
-  // false ShowProgress or SpinnerType "None".
-  const showProgress = useResolve(control.showProgress) !== false && s(control.spinnerType) !== "None";
-  const key = `${address}|${area}|${id == null ? "" : s(id)}|${s(layout)}`;
+// Interactive markdown: server Markdig render → shared splitRenderedHtml → native segment leaves. A single
+// per-view kernel (meshOps.startMarkdownKernel) hosts every runnable cell's result area + Run affordance —
+// the RN twin of the web MarkdownView (clients/react/src/controls/display.tsx).
+function InteractiveMarkdown({ markdown, nodePath }: { markdown: string; nodePath?: string }) {
+  const ops = useMeshOps();
+  const [segments, setSegments] = useState<ReturnType<typeof splitRenderedHtml> | null>(null);
+  const [subs, setSubs] = useState<{ id: string; code: string; language?: string }[]>([]);
+  const [kernel, setKernel] = useState<MarkdownKernelSession | null>(null);
+  useEffect(() => {
+    let live = true;
+    let session: MarkdownKernelSession | null = null;
+    ops?.renderMarkdown?.(markdown, nodePath)
+      .then((r) => {
+        if (!live) return;
+        setSegments(splitRenderedHtml(r.html));
+        setSubs(r.codeSubmissions);
+        if (r.codeSubmissions.length && ops.startMarkdownKernel)
+          ops.startMarkdownKernel(r.codeSubmissions)
+            .then((sess) => { if (live) { session = sess; setKernel(sess); } })
+            .catch(() => { /* kernel unavailable — cells still render, Run stays disabled */ });
+      })
+      .catch(() => { if (live) setSegments([{ kind: "html", html: `<p>${markdown}</p>` }]); });
+    return () => { live = false; session?.dispose?.(); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [markdown, nodePath]);
 
+  if (!segments) return <ActivityIndicator />;
+  return (
+    <>
+      {segments.map((seg, i) => {
+        if (seg.kind === "html") return <NativeHtml key={i} html={seg.html} />;
+        if (seg.kind === "area") {
+          const address = seg.isKernel ? kernel?.kernelAddress : (seg.address ?? seg.rawPath);
+          if (!address) return null; // kernel result area before its session is live
+          return <AreaEmbed key={i} address={address} area={s(seg.area ?? "")} id={seg.id} />;
+        }
+        if (seg.kind === "toolbar") {
+          const sub = subs.find((x) => x.id === seg.submissionId);
+          return <RunCell key={i} kernel={kernel} submission={sub ?? { id: seg.submissionId, code: "", language: seg.language }} />;
+        }
+        return null; // mermaidHtml — not rendered natively (yet)
+      })}
+    </>
+  );
+}
+
+// The Run affordance for a --render code cell: re-submits the cell's code to the per-view kernel; the output
+// streams into the sibling kernel result AreaEmbed. Disabled until the kernel session is live.
+function RunCell({ kernel, submission }: { kernel: MarkdownKernelSession | null; submission: { id: string; code: string; language?: string } }) {
+  return (
+    <Pressable
+      style={[styles.button, styles.runCell, !kernel && { opacity: 0.5 }]}
+      onPress={() => kernel?.submit(submission)}
+      disabled={!kernel}
+    >
+      <Text style={styles.buttonText}>▶ Run</Text>
+    </Pressable>
+  );
+}
+
+// A nested layout area on another address — the shared embed under `@@` macros (LayoutAreaControl), the
+// interactive-markdown segment embeds, and kernel result areas. Opens a SECOND area stream via the host's
+// AreaSourceFactory (App wires createGrpcEmbeddedFactory on the live connection) and renders it in its own
+// scope — the native mirror of the web LayoutAreaView. Without a factory (offline/tests) → a labelled marker.
+function AreaEmbed({ address, area, id, layout, showProgress = true }: { address: string; area: string; id?: unknown; layout?: unknown; showProgress?: boolean }) {
+  const factory = useAreaSourceFactory();
+  const key = `${address}|${area}|${id == null ? "" : s(id)}|${s(layout)}`;
   const [handle, setHandle] = useState<EmbeddedAreaHandle | null>(null);
   useEffect(() => {
     if (!factory || !address) return;
     const h = factory(address, { area: area || undefined, id, layout: layout ? String(layout) : undefined });
     setHandle(h);
     return () => { h?.dispose?.(); setHandle(null); };
-    // key captures address/area/id/layout; factory identity change re-opens the nested subscription.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [factory, key]);
 
@@ -248,6 +306,15 @@ const LayoutAreaEmbed: ControlComponent = ({ control }) => {
       <EmbeddedAreaBody rootArea={rootArea} showProgress={showProgress} />
     </ScopeProvider>
   );
+}
+
+// The @@("area/X") embed control (LayoutAreaControl) → the shared <AreaEmbed>.
+const LayoutAreaEmbed: ControlComponent = ({ control }) => {
+  const rawAddress = useResolve(control.address);
+  const address = typeof rawAddress === "string" ? rawAddress : s((rawAddress as any)?.address ?? (rawAddress as any)?.path);
+  const ref = (control.reference ?? {}) as any;
+  const showProgress = useResolve(control.showProgress) !== false && s(control.spinnerType) !== "None";
+  return <AreaEmbed address={address} area={s(ref.area ?? ref.Area ?? "")} id={ref.id ?? ref.Id} layout={ref.layout ?? ref.Layout} showProgress={showProgress} />;
 };
 
 // Inside the NESTED source's scope: spin (unless progress is suppressed) until the embedded root area
@@ -644,6 +711,7 @@ const styles = StyleSheet.create({
   badge: { alignSelf: "flex-start", backgroundColor: "#0f6cbd", borderRadius: 10, paddingHorizontal: 8, paddingVertical: 2 },
   badgeText: { color: "white", fontSize: 12 },
   button: { backgroundColor: "#0f6cbd", paddingVertical: 10, paddingHorizontal: 14, borderRadius: 6, alignItems: "center" },
+  runCell: { alignSelf: "flex-start", marginVertical: 8, paddingVertical: 6, paddingHorizontal: 12 },
   buttonText: { color: "white", fontWeight: "600" },
   input: { borderWidth: 1, borderColor: "#ccc", borderRadius: 4, padding: 8, fontSize: 14 },
   row: { flexDirection: "row" },
