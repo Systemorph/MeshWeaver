@@ -91,19 +91,30 @@ message:       M1    M2    M3    M4    M5
 
 ## One Operation, One Version Stamp
 
-When a `MeshNode` is mutated through the framework write path — `MeshNodeStreamHandle.Update`, for both the own-node and remote-node branches — the framework stamps the result:
+When a `MeshNode` is mutated through the framework write path — `MeshNodeStreamHandle.Update`, for both the own-node and remote-node branches — the framework stamps the result via `MeshNode.NextVersion`:
 
 ```csharp
-updated = updated with { Version = _workspace.Hub.Version };
+updated = updated with { Version = MeshNode.NextVersion(_workspace.Hub.Version, current.Version) };
+// NextVersion(hubVersion, currentVersion) => max(hubVersion, currentVersion + 1)
 ```
 
-The lambda you pass to `Update` does **not** set `Version` itself. The framework owns the clock. One operation (one message handler running one `Update`) produces exactly one new `Version` value, equal to the hub clock at that point.
+The lambda you pass to `Update` does **not** set `Version` itself. The framework owns the clock. One operation (one message handler running one `Update`) produces exactly one new `Version` value: the hub clock at that point **or** one above the node's own version, whichever is higher.
 
 This has three practical consequences:
 
-- **A node mutated during message N has `Version == N`.** Two different nodes changed by the same message share that version — they were touched by the same operation.
+- **A node mutated during message N normally has `Version == N`.** While the hub clock leads, `NextVersion` returns it, so two different nodes changed by the same message share that version — they were touched by the same operation.
 - **`Version` is monotonic per node but not contiguous.** A node updated under message 3 and again under message 47 jumps `3 → 47`. Never assert `newVersion == oldVersion + 1`; always assert `newVersion > oldVersion`.
 - **Subscribers rely on monotonicity, not contiguity.** The `UpdateOwn` baseline check and `DistinctUntilChanged(n => n.Version)` both work correctly under non-contiguous version sequences.
+
+## Monotonic Across Activations — the `NextVersion` Floor (#325)
+
+The hub clock (`MessageHub.Version`) resets to **0 on every activation** and is the *same* clock that stamps the owning hub's **layout-area render Fulls**. If a node's `Version` were stamped straight off that clock, a deactivate → reactivate cycle (idle-release, `Recycle`/`DisposeRequest`, or a replica restart) would stamp the node's next write with the fresh *low* clock — rolling its `Version` **backward** below the value it already carried. A caller that re-reads the node (`get`/`UpdateNode`) then sees an OLDER version than the writes it just confirmed — the write-rollback / "v113 read back as v3" of [issue #325](https://github.com/Systemorph/MeshWeaver/issues/325).
+
+`MeshNode.NextVersion` fixes this **without touching the hub clock**: it floors the stamp at `current.Version + 1`. The node loads its persisted `Version` verbatim on activation (`MeshNodeTypeSource.BuildInstanceCollection` leaves it alone — a load is a read), so the floor keeps every post-reactivation write **strictly above** the last persisted version. The node's `Version` is therefore a persistence clock that is monotonic *across* activations, while `Hub.Version` stays the per-activation render clock. The floor is applied at every place the owner mints a node `Version`: the own-write path (`MeshNodeStreamExtensions.UpdateOwn`), the persistence re-stamp (`MeshNodeTypeSource.UpdateImpl`), and the cross-hub merge apply (`DataExtensions.NextMeshNodeVersion`).
+
+> **Why not re-seed `Hub.Version` from the node?** That was tried (`SetInitialVersion(node.Version)`) and reverted: `Hub.Version` also stamps layout Fulls, which advance per *render* and run far ahead of a doc/static node's low `Version`. Re-seeding the shared clock *backward* to the node version on a catalog push made the monotonicity guard drop every later layout Full — the atioz 2026-06-18 "cannot find pinned doc" wedge. The node-version floor keeps the two clocks separate: layout Fulls keep using `Hub.Version` untouched.
+
+> **Frame version stays `Hub.Version`.** The sync-stream *frame* version (what the receive-side monotonicity guard compares) is deliberately left on `Hub.Version` — it is reliably monotonic **within** an activation (the owner `++`s it per message), whereas the node's content `Version` is *not* present on every emitted frame (a partial cross-hub patch carries no `Version` field, so its reduced value reads `0`). Tying the frame version to the content `Version` therefore makes it flap `7 → 0/incoming → 11` and the guard drops legitimate mid-stream frames — it broke the activity/export relay. The remaining cross-**silo** mirror-drop after a recycle (the "index vs node-resolution split-brain" symptom, observable only on a multi-replica portal) is a separate mirror-side concern, tracked on #325.
 
 ## Every Change Is Stamped — Including Updates — and Only by the Owner
 
