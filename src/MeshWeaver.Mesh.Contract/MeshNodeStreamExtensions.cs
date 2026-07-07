@@ -589,7 +589,14 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                     // by the OWNING hub here (this is an own write on the owner).
                     // DateTime/LastModified is NOT a cross-machine clock, so it must
                     // never drive reconciliation; the owner's monotonic Version does.
-                    updated = updated with { Version = _workspace.Hub.Version };
+                    // 🚨 #325: advance forward-only from the node's OWN version, not straight
+                    // off Hub.Version (which resets to 0 on every reactivation and would stamp a
+                    // LOWER version after a recycle → rollback + split-brain). See
+                    // MeshNode.NextVersion / Doc/Architecture/MeshNodeVersioning.md.
+                    updated = updated with
+                    {
+                        Version = MeshNode.NextVersion(_workspace.Hub.Version, current.Version)
+                    };
                     var newStore = store.Update(nameof(MeshNode), c => c.Update(updated.Id, updated));
                     return dsStream.ApplyChanges(new EntityStoreAndUpdates(newStore,
                         [new EntityUpdate(nameof(MeshNode), updated.Id, updated) { OldValue = current }],
