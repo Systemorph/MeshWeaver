@@ -274,8 +274,13 @@ public static class EducationLayoutAreas
 
         // Module + its main descendants in one live query; BuildCourseNav renders the module as the group
         // header and its direct children as links (reactive — the nav follows adds/renames).
+        // GitHubSyncConfig (`{space}/_GitSync`) is a non-satellite internal config node — it's a real main
+        // node (MainNode == Path), so `is:main` correctly keeps it; exclude it by type here so it never
+        // appears as a learner-facing page in the rail. (See SatelliteEntityPatterns.md — the reader
+        // filters internal main-nodes; we do NOT forge a satellite MainNode on the node itself.)
         return meshService
-            .Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{moduleRoot} scope:subtree is:main"))
+            .Query<MeshNode>(MeshQueryRequest.FromQuery(
+                $"path:{moduleRoot} scope:subtree is:main -nodeType:GitHubSyncConfig"))
             .Select(change => BuildCourseNav(moduleRoot, currentPath, change.Items));
     }
 
