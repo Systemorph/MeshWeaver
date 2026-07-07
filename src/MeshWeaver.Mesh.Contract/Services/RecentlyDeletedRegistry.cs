@@ -1,29 +1,30 @@
 using System.Collections.Concurrent;
 using System.Threading;
 
-namespace MeshWeaver.Graph;
+namespace MeshWeaver.Mesh.Services;
 
 /// <summary>
-/// Mesh-scoped durable tombstone for just-deleted node paths — the "delete wins" guard
-/// against the resurrect-after-delete write race.
+/// Mesh-scoped durable tombstone for just-deleted node paths — the "delete wins" guard against the
+/// resurrect-after-delete write race.
 ///
-/// <para>When a node is deleted, a per-node hub that (re)activates AFTER the delete gets a
-/// STALE own-node snapshot from the routing catalog stream's <c>Replay(1)</c> buffer. Its
-/// <see cref="MeshNodeTypeSource"/> workspace then sees that snapshot as an "add" and queues a
-/// debounced save that RE-PERSISTS (resurrects) the deleted row — confirmed as the intermittent
-/// <c>SpaceDeletionPartitionDropTests</c> bulk flake (a <c>SAVE-WRITE</c> lands on the deleted
-/// path ~200 ms after the delete, and every subsequent read then correctly sees a live row).</para>
+/// <para>When a node is deleted, a per-node hub that (re)activates AFTER the delete gets a STALE
+/// own-node snapshot from the routing catalog stream's <c>Replay(1)</c> buffer. Its per-node
+/// TypeSource workspace then sees that snapshot as an "add" and queues a debounced save that
+/// RE-PERSISTS (resurrects) the deleted row — the intermittent <c>SpaceDeletionPartitionDropTests</c>
+/// flake (a save lands on the deleted path ~200 ms after the delete, so every later read correctly
+/// sees a live row).</para>
 ///
-/// <para>The per-hub <c>MeshNodeTypeSource._recentlyDeleted</c> guard only covers the SAME hub
-/// instance; it can't stop a resurrection driven by a DIFFERENT hub instance that activated after
-/// the delete (which starts with an empty per-hub set). This registry is a single MESH-scoped
-/// instance (registered in <c>AddGraph</c> alongside <c>PartitionRegistry</c>), so the delete
-/// notification caught by the owning hub is visible to any later-activating hub for the same path,
-/// which drops its resurrecting save.</para>
+/// <para>Population is <b>synchronous, at the delete source</b>: <c>HandleDeleteNodeRequest</c> marks
+/// every path it deletes here BEFORE it returns its response — so the tombstone is in place before the
+/// deleting call completes, and therefore before any later hub can activate and resurrect the row.
+/// This is what makes the guard deterministic: an earlier attempt that populated only from the async
+/// per-hub <c>storage.Changes</c> subscriber still raced at cold start (no per-node hub was active yet
+/// to observe the delete). Per-node hubs (via the Graph MeshDataSource guards) then READ this registry
+/// and drop a resurrecting save; a legitimate re-create <see cref="Clear"/>s the tombstone.</para>
 ///
-/// <para>Instance-only state (a <see cref="ConcurrentDictionary{TKey,TValue}"/> — the lifetime is
-/// the mesh singleton's, never <c>static</c>; see NoStaticState.md). TTL-bounded so the map can't
-/// grow unbounded, and cleared on a legitimate re-create so a same-id recreate persists normally.</para>
+/// <para>Instance-only state (a <see cref="ConcurrentDictionary{TKey,TValue}"/> — the lifetime is the
+/// mesh singleton's, never <c>static</c>; see NoStaticState.md). TTL-bounded so the map can't grow
+/// unbounded, and cleared on a legitimate re-create so a same-id recreate persists normally.</para>
 /// </summary>
 public sealed class RecentlyDeletedRegistry
 {
@@ -41,9 +42,9 @@ public sealed class RecentlyDeletedRegistry
     // for tombstones that are never re-checked (IsRecentlyDeleted only prunes the key it looks up).
     private long _lastPruneTicks;
 
-    /// <summary>Records <paramref name="path"/> as just-deleted. Called from the owning hub's
-    /// <c>storage.Changes</c> Deleted handler. Opportunistically prunes expired tombstones (time-gated)
-    /// so a delete that is never re-read afterwards doesn't leak an entry forever.</summary>
+    /// <summary>Records <paramref name="path"/> as just-deleted. Called synchronously from the delete
+    /// handler for every deleted path. Opportunistically prunes expired tombstones (time-gated) so a
+    /// delete that is never re-read afterwards doesn't leak an entry forever.</summary>
     public void MarkDeleted(string? path)
     {
         if (string.IsNullOrEmpty(path))
@@ -64,7 +65,7 @@ public sealed class RecentlyDeletedRegistry
     }
 
     /// <summary>Clears the tombstone for <paramref name="path"/> — a legitimate (re)create so a
-    /// same-id node persists normally. Called from the Created/Updated change handler.</summary>
+    /// same-id node persists normally. Called from the Created change handler.</summary>
     public void Clear(string? path)
     {
         if (!string.IsNullOrEmpty(path))
