@@ -1,3 +1,4 @@
+using MeshWeaver.ContentCollections;
 using MeshWeaver.Documentation;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting;
@@ -47,6 +48,28 @@ app.UseStaticFiles();
 
 app.UseMeshWeaverGrpcWeb();     // browser / React-Native gRPC-web (Connect + Deliver)
 app.MapMeshWeaverGrpc();        // the mesh gRPC service (Open + Connect + Deliver)
+
+// Serve mesh content collections at /static/{collection}/{filePath} — e.g. the NodeType icons
+// (/static/NodeTypeIcons/box.svg) the doc headers <img> reference. The full Blazor portal maps this
+// (BlazorHostingExtensions.MapStaticContent); the headless sidecar didn't, so those icons 404'd and the
+// React-Native client couldn't render them. AddGraph() already registers the NodeTypeIcons collection
+// (embedded resources) on the mesh hub — this just exposes the "known collection" pattern over HTTP.
+app.MapGet("/static/{**path}", async (HttpContext ctx, string path) =>
+{
+    var slash = path.IndexOf('/');
+    if (slash <= 0) return Results.NotFound();
+    var collection = Uri.UnescapeDataString(path[..slash]);   // e.g. "NodeTypeIcons"
+    var filePath = path[(slash + 1)..];                        // e.g. "box.svg"
+    var content = app.Services.GetRequiredService<IMessageHub>().ServiceProvider.GetService<IContentService>();
+    if (content is null) return Results.NotFound();
+    var stream = await content.GetContentAsync(collection, filePath, ctx.RequestAborted);
+    if (stream is null) return Results.NotFound();
+    var contentType = filePath.EndsWith(".svg", StringComparison.OrdinalIgnoreCase) ? "image/svg+xml"
+        : filePath.EndsWith(".png", StringComparison.OrdinalIgnoreCase) ? "image/png"
+        : filePath.EndsWith(".jpg", StringComparison.OrdinalIgnoreCase) || filePath.EndsWith(".jpeg", StringComparison.OrdinalIgnoreCase) ? "image/jpeg"
+        : "application/octet-stream";
+    return Results.Stream(stream, contentType);
+});
 
 var wwwroot = app.Environment.WebRootPath ?? Path.Combine(app.Environment.ContentRootPath, "wwwroot");
 if (File.Exists(Path.Combine(wwwroot, "index.html")))
