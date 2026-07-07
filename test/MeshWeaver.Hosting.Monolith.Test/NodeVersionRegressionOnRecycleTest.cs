@@ -1,6 +1,7 @@
 using System;
 using System.Reactive.Linq;
 using System.Threading.Tasks;
+using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
@@ -11,39 +12,38 @@ using Xunit;
 namespace MeshWeaver.Hosting.Monolith.Test;
 
 /// <summary>
-/// Deterministic repro for issue #325 — a MeshNode's <see cref="MeshNode.Version"/>
-/// regresses (rolls BACKWARD) after the owning per-node hub is recycled / reactivated
-/// (idle-release, <c>Recycle</c>/<see cref="DisposeRequest"/>, or a replica restart).
+/// Deterministic proof for the fix of issue #325 — a MeshNode's <see cref="MeshNode.Version"/>
+/// must NOT regress (roll BACKWARD) when the owning per-node hub's <see cref="IMessageHub.Version"/>
+/// clock is low relative to the version the node already carries. That "low hub clock + high node
+/// version" state is exactly what a recycle / idle-release / replica restart produces: the hub
+/// clock is "incremented once per message processed" and starts at <b>0 on every activation</b>,
+/// while the node reloads its persisted (high) Version verbatim.
 ///
-/// <para><b>Root cause (verified here).</b> Every owner-side write stamps the node's
-/// Version from the owning hub's per-activation monotonic message counter
-/// (<c>_workspace.Hub.Version</c> — <c>MeshNodeStreamExtensions.cs:592</c>). The SAME
-/// clock stamps every sync-stream frame the owner originates — the init/base Full, value
-/// updates, and layout renders — via <c>SynchronizationStream.OwnerVersion()</c>
-/// (<c>Owner.Equals(Host.Address) ? Hub.Version : …</c>). <see cref="IMessageHub.Version"/>
-/// is "incremented once per message processed" and starts at 0 on EVERY activation; it is
-/// NEVER seeded from the persisted node's Version (the <c>SetInitialVersion(node.Version)</c>
-/// seed was removed from <c>MeshNodeTypeSource</c> because it re-stamped the clock BACKWARD
-/// on catalog pushes and dropped live layout Fulls). So after a deactivate → reactivate
-/// cycle the fresh hub's LOW counter sits BELOW the version the node already carries, and
-/// the node's next write stamps a Version below the old one → the counter rolls back
-/// (the "v113 read back as v3" symptom).</para>
+/// <para><b>The #325 trigger, reproduced deterministically.</b> Rather than race a recycle against
+/// the debounced persistence sampler (a bursty write followed by an immediate deactivate can drop
+/// unflushed writes AND races the data-source reload — a SEPARATE effect), this test DURABLY seeds
+/// the node at a high Version (1000) via <c>CreateNode</c> (which preserves a caller-supplied
+/// Version &gt; 0). The owner then activates with a fresh, LOW hub clock — the identical
+/// post-recycle state — with no reload race to confound the measurement.</para>
 ///
-/// <para><b>Downstream (why the writes "vanish" / a write "hangs").</b> A mirror that
-/// cached the higher pre-recycle version applies the sync monotonicity guard
-/// (<c>SynchronizationStream</c> drops an incoming frame whose <c>Version &lt; Current.Version</c>).
-/// It therefore DROPS the regressed post-recycle Full — staying stuck on the stale snapshot
-/// and never confirming the write (the "index/resolution split-brain", "no initial state",
-/// and "first UpdateNode hung indefinitely" symptoms). This test pins the trigger (the clock
-/// reset below the live node version) directly, without depending on that downstream hang.</para>
+/// <para><b>The fix (what this proves).</b> The node's persistence version is decoupled from the
+/// per-activation hub clock: every place the owner mints a node Version advances it forward-only
+/// from the node's OWN version via <see cref="MeshNode.NextVersion(long, long)"/>
+/// (<c>max(Hub.Version, current.Version + 1)</c>) — the own-write path (UpdateOwn), the persistence
+/// re-stamp (MeshNodeTypeSource.UpdateImpl), and the cross-hub merge apply
+/// (DataExtensions.NextMeshNodeVersion). So a write made while the hub clock sits far below the node
+/// version still lands a Version strictly ABOVE it — the authoritative <c>get</c> never regresses.
+/// Crucially the fix does NOT touch <c>Hub.Version</c> (re-seeding that shared clock backward is
+/// what dropped live layout Fulls, the atioz 2026-06-18 "cannot find pinned doc" wedge), and it
+/// does NOT retie the sync-stream FRAME version to the content Version (that version is absent on a
+/// partial cross-hub patch frame, so the frame would flap and drop legitimate mid-stream updates —
+/// it broke the activity/export relay). The residual cross-SILO mirror-drop after a recycle (the
+/// "index vs node-resolution split-brain", observable only on a multi-replica portal) is a separate
+/// mirror-side concern tracked on #325.</para>
 ///
-/// <para><b>Status: pins the cause; does NOT fix it.</b> The fix is to seed the owner hub's
-/// Version clock forward-only on activation (a guarded <c>SetInitialVersion</c> that never
-/// regresses the clock and never reintroduces the catalog-push Full-drop) — a change to a
-/// pervasive, load-bearing clock, out of scope for this repro. The final assertion therefore
-/// documents the CURRENT (defective) behaviour so the test is green until the fix lands; when
-/// the root cause is fixed, FLIP it to <c>clockAfter &gt;= nodeVersionBefore</c> and this test
-/// becomes the fix's proof.</para>
+/// <para>Before the fix the low hub clock stamped a Version BELOW the live node version (the repro
+/// measured 64 → 2, "v113 read back as v3"). This test was GREEN while it asserted that defect; it
+/// now asserts <c>afterVersion &gt; nodeVersionBefore</c> — the fix's proof.</para>
 /// </summary>
 public class NodeVersionRegressionOnRecycleTest(ITestOutputHelper output)
     : MonolithMeshTestBase(output)
@@ -52,71 +52,62 @@ public class NodeVersionRegressionOnRecycleTest(ITestOutputHelper output)
     protected override bool ShareMeshAcrossTests => true;
 
     [Fact(Timeout = 60000)]
-    public async Task OwnerVersionClock_ResetsBelowLiveNodeVersion_OnRecycle_Pins325()
+    public async Task NodeVersion_DoesNotRegress_WhenHubClockIsBelowNodeVersion_Proves325Fix()
     {
         var path = $"{TestPartition}/version-regress-target";
+        const long seededVersion = 1000L;
 
-        // Arrange — create the node. Markdown activates without a Roslyn compile.
+        // Arrange — DURABLY persist the node at a HIGH version (1000). CreateNode preserves a
+        // caller-supplied Version > 0 (HandleCreateNodeRequest, pinned by MeshNodeVersionSyncTest),
+        // so 1000 is persisted verbatim and the owner loads it verbatim on activation. This is the
+        // faithful post-recycle state: high persisted node version, fresh low hub clock.
         await NodeFactory.CreateNode(
                 new MeshNode("version-regress-target", TestPartition)
-                { Name = "v0", NodeType = "Markdown" })
+                { Name = "seed", NodeType = "Markdown", Version = seededVersion })
             .Should().Within(30.Seconds()).Emit();
 
-        // Resolve the owning per-node hub address (the hub that stamps this node's writes).
+        // Confirm the owner loaded the seeded high version (authoritative owner round-trip).
+        var before = await ReadNode(path).Should().Within(30.Seconds())
+            .Match(n => n is { Version: seededVersion });
+        var nodeVersionBefore = before!.Version;
+
+        // The #325 TRIGGER is present: the owning hub's per-activation clock sits FAR BELOW the
+        // node version. The old code stamped the node's next write straight off this low clock →
+        // the version rolled backward. (Resolve the owner and read its live Hub.Version to prove
+        // the gap; the fix must survive it WITHOUT re-seeding this shared clock.)
         var resolution = await PathResolver.ResolvePath(path).Should().Within(30.Seconds()).Emit();
         resolution.Should().NotBeNull($"path '{path}' should resolve to an owning hub");
         var address = new Address(resolution!.Prefix.ToString()!);
-
-        // Drive the owning hub's Version clock UP with a burst of distinct writes. Each
-        // write is a message on the owner → Hub.Version climbs and is stamped onto
-        // node.Version. Distinct names guarantee every write applies (the no-op guard
-        // drops value-equal updates).
-        for (var i = 1; i <= 30; i++)
-        {
-            var name = $"v{i}";
-            await NodeFactory.UpdateNode(
-                    new MeshNode("version-regress-target", TestPartition)
-                    { Name = name, NodeType = "Markdown" })
-                .Should().Within(30.Seconds()).Match(n => n.Name == name);
-        }
-
-        // The authoritative version the node now carries, and the owner clock behind it.
-        var before = await ReadNode(path).Should().Within(30.Seconds())
-            .Match(n => n is { Name: "v30" });
-        var nodeVersionBefore = before!.Version;
-        var ownerBefore = Mesh.GetHostedHub(address, HostedHubCreation.Never);
-        ownerBefore.Should().NotBeNull("the owner hub must be live after the write burst");
-        var clockBefore = ownerBefore!.Version;
+        var owner = Mesh.GetHostedHub(address, HostedHubCreation.Never);
+        owner.Should().NotBeNull("the owner hub must be live after the seeded read");
+        var hubClock = owner!.Version;
         Output.WriteLine(
-            $"[#325] nodeVersionBefore={nodeVersionBefore}, ownerClockBefore={clockBefore}");
-        nodeVersionBefore.Should().BeGreaterThan(0,
-            "the write burst must have advanced the node Version off the owner clock");
+            $"[#325] nodeVersionBefore(seeded)={nodeVersionBefore}, ownerHubClock={hubClock}");
+        hubClock.Should().BeLessThan(nodeVersionBefore,
+            $"the owner hub clock ({hubClock}) sits BELOW the live node Version ({nodeVersionBefore}) "
+            + "— the exact #325 trigger the fix must survive WITHOUT re-seeding Hub.Version.");
 
-        // Act — recycle the owner hub (DisposeRequest). Its next activation resets
-        // Hub.Version to 0.
-        Mesh.Post(new DisposeRequest(), o => o.WithTarget(address));
+        // Act — write through the canonical mesh-node stream (the same surface the GUI/agents use).
+        var client = GetClient(c => c.AddData());
+        var stream = client.GetWorkspace().GetMeshNodeStream(path);
+        stream.Update(n => n with { Name = "after" })
+            .Subscribe(_ => { }, ex => Output.WriteLine($"[#325] write error: {ex.Message}"));
 
-        // Reactively wait for the reset: keep pinging to force reactivation, then read the
-        // (re)activated owner's Version. The pre-dispose hub still reports its high clock
-        // (filtered out); the reset is proven the moment the reactivated owner reports a
-        // clock strictly BELOW clockBefore. No fixed delay — we wait on the actual condition.
-        var clockAfter = await Observable.Interval(TimeSpan.FromMilliseconds(200)).StartWith(0L)
-            .SelectMany(_ => Mesh.Observe(new PingRequest(), o => o.WithTarget(address))
-                .Select(_ => Mesh.GetHostedHub(address, HostedHubCreation.Never)?.Version ?? -1L)
-                .Catch((Exception _) => Observable.Return(-1L)))
-            .Should().Within(30.Seconds()).Match(v => v >= 0 && v < clockBefore);
-        Output.WriteLine($"[#325] ownerClockAfter(reactivated)={clockAfter}");
+        // Assert — THE FIX. Read the authoritative post-write node from the owner. Its Version must
+        // have advanced FORWARD, above the pre-write version — never rolled back to the low hub
+        // clock (MeshNode.NextVersion floors it at current.Version + 1). Before the fix it stamped
+        // ~hubClock, so the authoritative get read a version BELOW the confirmed writes ("v113 read
+        // back as v3").
+        var after = await Observable.Interval(TimeSpan.FromMilliseconds(200)).StartWith(0L)
+            .SelectMany(_ => ReadNode(path).Catch((Exception _) => Observable.Return<MeshNode?>(null)))
+            .Should().Within(30.Seconds()).Match(n => n is { Name: "after" });
+        Output.WriteLine(
+            $"[#325] nodeVersionBefore={nodeVersionBefore}, nodeVersionAfterWrite={after!.Version}");
 
-        // Assert — PIN #325. The reactivated owner's Version clock (the SAME clock that
-        // stamps the node's next write, and every sync Full) sits BELOW the version the
-        // node already carries. So the node's very next write rolls the version backward,
-        // and any mirror that cached the higher version drops the regressed frame. The
-        // CORRECT post-fix invariant is clockAfter >= nodeVersionBefore (seed the clock
-        // forward-only on activation).
-        clockAfter.Should().BeLessThan(nodeVersionBefore,
-            $"#325 repro: the reactivated owner clock ({clockAfter}) is below the live node "
-            + $"Version ({nodeVersionBefore}) — the next write rolls the Version backward. "
-            + "This documents the defect; the correct post-fix invariant is "
-            + "clockAfter >= nodeVersionBefore.");
+        after.Version.Should().BeGreaterThan(nodeVersionBefore,
+            $"#325 FIX: the write's node Version ({after.Version}) must stay ABOVE the pre-write "
+            + $"Version ({nodeVersionBefore}) even though the owner hub clock is only {hubClock} — "
+            + "the node's persistence version is monotonic (MeshNode.NextVersion), decoupled from "
+            + "the per-activation Hub.Version clock that resets on every reactivation.");
     }
 }

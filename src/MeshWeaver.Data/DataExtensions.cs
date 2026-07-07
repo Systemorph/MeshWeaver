@@ -864,6 +864,29 @@ public static class DataExtensions
     }
 
     /// <summary>
+    /// The version the OWNER mints when it applies a cross-hub MeshNode patch. 🚨 #325: advance
+    /// FORWARD-ONLY from the node's OWN current version, not straight off the per-message hub clock
+    /// (<paramref name="hubVersion"/>). <see cref="IMessageHub.Version"/> resets to 0 on every
+    /// (re)activation, so stamping it verbatim rolls the node's Version BACKWARD after a recycle /
+    /// idle-release / replica restart — mirrors holding the higher pre-recycle version then DROP the
+    /// regressed frame under the sync monotonicity guard (the write-rollback + index-vs-resolution
+    /// split-brain of #325). Flooring at <c>currentVersion + 1</c> keeps it strictly increasing
+    /// across activations WITHOUT touching Hub.Version, so layout-area Fulls (which ride Hub.Version)
+    /// are unaffected — the 2026-06-18 "cannot find pinned doc" wedge cannot recur. Mirrors
+    /// <c>MeshNode.NextVersion</c>; inlined because this assembly cannot reference MeshNode
+    /// (same string-keyed approach used throughout this handler).
+    /// </summary>
+    private static long NextMeshNodeVersion(
+        System.Text.Json.Nodes.JsonObject currentNode, string versionKey, long hubVersion)
+    {
+        long currentVersion = 0;
+        if (currentNode[versionKey] is System.Text.Json.Nodes.JsonValue jv
+            && jv.TryGetValue<long>(out var parsed))
+            currentVersion = parsed;
+        return System.Math.Max(hubVersion, currentVersion + 1);
+    }
+
+    /// <summary>
     /// 🚨 Out-of-order / stale cross-hub patch guard for MeshNode MONOTONIC control fields.
     /// Applied to the parsed patch (against the LIVE node) BEFORE <see cref="MergePatchRecursive"/>.
     ///
@@ -1018,7 +1041,9 @@ public static class DataExtensions
                     if (typeof(T).FullName == "MeshWeaver.Mesh.MeshNode")
                     {
                         var versionKey = jsonOpts.PropertyNamingPolicy?.ConvertName("Version") ?? "Version";
-                        currentNode[versionKey] = version;
+                        // 🚨 #325: advance forward-only from the node's own version (max(hub, cur+1)),
+                        // never straight off the per-activation hub clock — see NextMeshNodeVersion.
+                        currentNode[versionKey] = NextMeshNodeVersion(currentNode, versionKey, version);
                     }
 
                     var mergedJson = currentNode.ToJsonString(jsonOpts);
@@ -1230,7 +1255,8 @@ public static class DataExtensions
                     ApplyMeshNodeMerge(currentNode, patchNode, isMeshNode: true,
                         request.Message, jsonOpts, mergeGuardLogger, hubPath);
                     // The OWNER mints the monotonic Version on apply (same rule as the deferred path).
-                    currentNode[versionKey] = version;
+                    // 🚨 #325: forward-only from the node's own version — see NextMeshNodeVersion.
+                    currentNode[versionKey] = NextMeshNodeVersion(currentNode, versionKey, version);
                     var merged = System.Text.Json.JsonSerializer
                         .Deserialize<T>(currentNode.ToJsonString(jsonOpts), jsonOpts);
                     if (merged is null)
