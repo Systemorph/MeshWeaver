@@ -17,14 +17,22 @@ public class FileFormatParserRegistry
     /// adding a JSON parser only when serializer options are supplied.
     /// </summary>
     /// <param name="jsonOptions">Serializer options used to construct the JSON parser; when null, no JSON parser is registered.</param>
-    public FileFormatParserRegistry(JsonSerializerOptions? jsonOptions = null)
+    /// <param name="contentMappers">
+    /// Optional plugin-owned content mappers passed to the markdown parser so node types defined
+    /// outside core hosting (for example Slide) round-trip typed through import/export. When null,
+    /// the markdown parser handles only generic <c>MarkdownContent</c>. See
+    /// <see cref="IMarkdownContentMapper"/>.
+    /// </param>
+    public FileFormatParserRegistry(
+        JsonSerializerOptions? jsonOptions = null,
+        IReadOnlyList<IMarkdownContentMapper>? contentMappers = null)
     {
         // Parsers are listed in priority order for each extension
         // AgentFileParser comes before MarkdownFileParser for .md files
         _parsers =
         [
-            new AgentFileParser(),      // High priority for .md with nodeType: Agent
-            new MarkdownFileParser(),   // Fallback for other .md files
+            new AgentFileParser(),                      // High priority for .md with nodeType: Agent
+            new MarkdownFileParser(contentMappers),     // Fallback for other .md files
             new CSharpFileParser(),
             ..( jsonOptions != null ? [new JsonFileParser(jsonOptions)] : Array.Empty<IFileFormatParser>())
         ];

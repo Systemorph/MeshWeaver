@@ -9,6 +9,7 @@ using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using MeshWeaver.Slides;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
@@ -29,6 +30,9 @@ public abstract class GitHubSyncTestBase(ITestOutputHelper output) : MonolithMes
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => base.ConfigureMesh(builder)
+            // Slides are an extracted module (MeshWeaver.Plugins); AddGraph no longer ships them.
+            // Register so the Slide round-trip test exercises the SlideMarkdownContentMapper seam.
+            .AddSlides()
             .AddGitHubSyncTypes()
             .ConfigureDefaultNodeHub(c => c.AddGitHubSyncSettingsTab().AddGitHubIssuesTab())
             .ConfigureServices(s =>

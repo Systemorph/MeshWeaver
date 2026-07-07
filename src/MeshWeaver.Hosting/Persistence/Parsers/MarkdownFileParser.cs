@@ -2,7 +2,6 @@ using System.Text;
 using Markdig;
 using Markdig.Extensions.Yaml;
 using Markdig.Syntax;
-using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 using YamlDotNet.Serialization;
@@ -27,6 +26,19 @@ public partial class MarkdownFileParser : IFileFormatParser
     private static readonly ISerializer YamlSerializer = new SerializerBuilder()
         .ConfigureDefaultValuesHandling(DefaultValuesHandling.OmitNull | DefaultValuesHandling.OmitDefaults)
         .Build();
+
+    private readonly IReadOnlyList<IMarkdownContentMapper> _contentMappers;
+
+    /// <summary>
+    /// Creates the parser. Plugin-owned node types (for example Slide) round-trip through the
+    /// supplied <paramref name="contentMappers"/>; with none supplied the parser handles only
+    /// generic <see cref="MarkdownContent"/>. See <see cref="IMarkdownContentMapper"/>.
+    /// </summary>
+    /// <param name="contentMappers">The registered content mappers, or null for none.</param>
+    public MarkdownFileParser(IReadOnlyList<IMarkdownContentMapper>? contentMappers = null)
+    {
+        _contentMappers = contentMappers ?? [];
+    }
 
     /// <inheritdoc />
     public IReadOnlyList<string> SupportedExtensions => [".md"];
@@ -185,17 +197,16 @@ public partial class MarkdownFileParser : IFileFormatParser
 
         var nodeType = frontMatter?.NodeType ?? "Markdown";
 
-        // A Slide file reconstructs its typed SlideContent (body + presenter notes
-        // + stage background) so a git reimport no longer downgrades Slide →
-        // MarkdownContent — the slide views read SlideContent, and a MarkdownContent
-        // payload would render an empty stage.
-        object nodeContent = nodeType == SlideNodeType.NodeType
-            ? new SlideContent
-            {
-                Content = markdownContent,
-                Notes = NullIfEmpty(frontMatter?.Notes),
-                Background = NullIfEmpty(frontMatter?.Background)
-            }
+        // A plugin-owned node type (for example Slide) reconstructs its typed content via the
+        // registered IMarkdownContentMapper, so a git reimport no longer downgrades it to
+        // MarkdownContent — the plugin's views read the typed content, and a MarkdownContent
+        // payload would render empty. With no mapper for this node type, generic markdown wins.
+        var contentMapper = _contentMappers.FirstOrDefault(m => m.Handles(nodeType));
+        object nodeContent = contentMapper is not null
+            ? contentMapper.CreateContent(
+                markdownContent,
+                NullIfEmpty(frontMatter?.Notes),
+                NullIfEmpty(frontMatter?.Background))
             : markdownDocument;
 
         var node = new MeshNode(id, ns)
@@ -227,17 +238,14 @@ public partial class MarkdownFileParser : IFileFormatParser
         // Extract MarkdownContent if available
         var mdContent = node.Content as MarkdownContent;
 
-        // Slide metadata: presenter notes + stage background live on SlideContent.
-        // On a hub with the Graph types registered the content is typed; on a hub
-        // that resolved it untyped (JSON round-trip) it is a JsonElement — handle both.
-        // Gated on the Slide shape so non-Slide nodes' emission stays byte-identical.
-        var (slideNotes, slideBackground) = node.Content switch
-        {
-            SlideContent slide => (NullIfEmpty(slide.Notes), NullIfEmpty(slide.Background)),
-            System.Text.Json.JsonElement je when node.NodeType == SlideNodeType.NodeType =>
-                (ExtractStringProperty(je, "notes"), ExtractStringProperty(je, "background")),
-            _ => (null, null)
-        };
+        // Plugin-owned presenter metadata (for example a Slide's speaker notes + stage
+        // background) is projected back to front matter by the registered
+        // IMarkdownContentMapper, which handles both the typed content and the untyped
+        // JsonElement (post JSON round-trip) shapes. Non-plugin nodes project to null, so
+        // their emission stays byte-identical.
+        var contentProjection = ProjectContent(node);
+        var slideNotes = contentProjection?.Notes;
+        var slideBackground = contentProjection?.Background;
 
         // Build YAML front matter from node properties and MarkdownContent metadata
         var frontMatter = new MarkdownFrontMatter
@@ -283,10 +291,9 @@ public partial class MarkdownFileParser : IFileFormatParser
 
         // Append markdown content - extract from MarkdownContent if needed
         // Handle JsonElement for cases where Content type was lost during JSON round-trip
-        var markdownText = node.Content switch
+        var markdownText = contentProjection?.Body ?? node.Content switch
         {
             MarkdownContent doc => doc.Content,
-            SlideContent slide => slide.Content,
             string str => str,
             System.Text.Json.JsonElement jsonElement => ExtractContentFromJsonElement(jsonElement),
             _ => null
@@ -304,13 +311,14 @@ public partial class MarkdownFileParser : IFileFormatParser
     public bool CanSerialize(MeshNode node)
     {
         // Handle nodes with NodeType "Markdown", MarkdownContent content, string content,
-        // typed SlideContent (the canonical .md form for slides — frontmatter carries
-        // Notes/Background), or JsonElement content (from JSON round-trip where type
-        // info was lost; a JsonElement SlideContent qualifies via its `content` string).
+        // plugin-owned content a registered mapper recognises (for example a typed Slide —
+        // the canonical .md form whose frontmatter carries Notes/Background), or JsonElement
+        // content (from JSON round-trip where type info was lost; a JsonElement with a
+        // `content` string qualifies).
         return node.NodeType == "Markdown"
             || node.Content is MarkdownContent
-            || node.Content is SlideContent
             || node.Content is string
+            || ProjectContent(node) is not null
             || (node.Content is System.Text.Json.JsonElement je && HasMarkdownContent(je));
     }
 
@@ -335,16 +343,24 @@ public partial class MarkdownFileParser : IFileFormatParser
     }
 
     /// <summary>
-    /// Reads a non-empty string property off a JsonElement object (camelCase wire
-    /// shape), or null when absent/empty/not a string.
+    /// Projects a node's Content to the markdown-file form via the first registered
+    /// <see cref="IMarkdownContentMapper"/> that both handles the node's type and recognises
+    /// its content shape; null when no mapper applies (generic MarkdownContent handling).
     /// </summary>
-    private static string? ExtractStringProperty(System.Text.Json.JsonElement element, string propertyName) =>
-        element.ValueKind == System.Text.Json.JsonValueKind.Object
-        && element.TryGetProperty(propertyName, out var prop)
-        && prop.ValueKind == System.Text.Json.JsonValueKind.String
-        && prop.GetString() is { Length: > 0 } value
-            ? value
-            : null;
+    private MarkdownContentProjection? ProjectContent(MeshNode node)
+    {
+        if (node.NodeType is null)
+            return null;
+        foreach (var mapper in _contentMappers)
+        {
+            if (!mapper.Handles(node.NodeType))
+                continue;
+            var projection = mapper.Project(node);
+            if (projection is not null)
+                return projection;
+        }
+        return null;
+    }
 
     private static string? NullIfEmpty(string? value) => string.IsNullOrEmpty(value) ? null : value;
 
@@ -500,16 +516,15 @@ public partial class MarkdownFileParser : IFileFormatParser
         public string? Thumbnail { get; set; }
         public string? Abstract { get; set; }
 
-        // Node ordering + Slide metadata. Declared AFTER the original keys so files
-        // that don't carry them serialize with the exact same key order (and bytes)
-        // as before these fields existed — no diff churn on existing git mirrors
-        // (the YAML serializer omits nulls and emits keys in declaration order).
-        // Order round-trips MeshNode.Order for ANY node type (slide/lesson/module
-        // ordering); Notes/Background round-trip SlideContent.Notes/.Background and
-        // are only emitted for Slide nodes. On parse, stray Notes/Background keys on
-        // a NON-Slide file are ignored: MarkdownContent has no such fields, and
-        // inventing a JsonElement content to carry them would downgrade the node's
-        // content type — the platform reads them from SlideContent only.
+        // Node ordering + generic presenter metadata. Declared AFTER the original keys so
+        // files that don't carry them serialize with the exact same key order (and bytes)
+        // as before these fields existed — no diff churn on existing git mirrors (the YAML
+        // serializer omits nulls and emits keys in declaration order). Order round-trips
+        // MeshNode.Order for ANY node type (slide/lesson/module ordering); Notes/Background
+        // are the presenter fields a registered IMarkdownContentMapper reads on parse and
+        // writes on serialize (the Slides plugin maps them to/from its Slide content). On
+        // parse, stray Notes/Background keys on a node whose type has no mapper are ignored:
+        // MarkdownContent has no such fields, so they simply don't round-trip.
         public int? Order { get; set; }
         public string? Notes { get; set; }
         public string? Background { get; set; }

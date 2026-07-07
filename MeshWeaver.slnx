@@ -67,7 +67,6 @@
     <Project Path="src/MeshWeaver.ContentCollections.Indexing.PostgreSql/MeshWeaver.ContentCollections.Indexing.PostgreSql.csproj" />
     <Project Path="src/MeshWeaver.Connection.SignalR/MeshWeaver.Connection.SignalR.csproj" />
     <Project Path="src/MeshWeaver.ContentCollections.Indexing.Graph/MeshWeaver.ContentCollections.Indexing.Graph.csproj" />
-    <Project Path="src/MeshWeaver.Courses/MeshWeaver.Courses.csproj" />
     <Project Path="src/MeshWeaver.Data.Contract/MeshWeaver.Data.Contract.csproj" />
     <Project Path="src/MeshWeaver.Data/MeshWeaver.Data.csproj" />
     <Project Path="src/MeshWeaver.DataSetReader.Csv/MeshWeaver.DataSetReader.Csv.csproj" />
@@ -110,12 +109,21 @@
     <Project Path="src/MeshWeaver.Messaging.Hub/MeshWeaver.Messaging.Hub.csproj" />
     <Project Path="src/MeshWeaver.NuGet.AzureBlob/MeshWeaver.NuGet.AzureBlob.csproj" />
     <Project Path="src/MeshWeaver.NuGet/MeshWeaver.NuGet.csproj" />
+    <Project Path="src/MeshWeaver.PluginCatalog/MeshWeaver.PluginCatalog.csproj" />
     <Project Path="src/MeshWeaver.Reflection/MeshWeaver.Reflection.csproj" />
     <Project Path="src/MeshWeaver.ServiceProvider/MeshWeaver.ServiceProvider.csproj" />
     <Project Path="src/MeshWeaver.ShortGuid/MeshWeaver.ShortGuid.csproj" />
-    <Project Path="src/MeshWeaver.Social/MeshWeaver.Social.csproj" />
-    <Project Path="src/MeshWeaver.Speech/MeshWeaver.Speech.csproj" />
     <Project Path="src/MeshWeaver.Utils/MeshWeaver.Utils.csproj" />
+  </Folder>
+  <Folder Name="/plugins/">
+    <Project Path="plugins/src/MeshWeaver.Courses/MeshWeaver.Courses.csproj" />
+    <Project Path="plugins/src/MeshWeaver.Slides/MeshWeaver.Slides.csproj" />
+    <Project Path="plugins/src/MeshWeaver.Social/MeshWeaver.Social.csproj" />
+    <Project Path="plugins/src/MeshWeaver.Speech/MeshWeaver.Speech.csproj" />
+    <Project Path="plugins/test/MeshWeaver.Courses.Test/MeshWeaver.Courses.Test.csproj" />
+    <Project Path="plugins/test/MeshWeaver.Slides.Test/MeshWeaver.Slides.Test.csproj" />
+    <Project Path="plugins/test/MeshWeaver.Social.Test/MeshWeaver.Social.Test.csproj" />
+    <Project Path="plugins/test/MeshWeaver.Speech.Test/MeshWeaver.Speech.Test.csproj" />
   </Folder>
   <Folder Name="/test/">
     <File Path="test/appsettings.json" />
@@ -130,7 +138,6 @@
     <Project Path="test/MeshWeaver.ContentCollections.Indexing.Test/MeshWeaver.ContentCollections.Indexing.Test.csproj" />
     <Project Path="test/MeshWeaver.ContentCollections.Indexing.PostgreSql.Test/MeshWeaver.ContentCollections.Indexing.PostgreSql.Test.csproj" />
     <Project Path="test/MeshWeaver.ContentCollections.Indexing.Graph.Test/MeshWeaver.ContentCollections.Indexing.Graph.Test.csproj" />
-    <Project Path="test/MeshWeaver.Courses.Test/MeshWeaver.Courses.Test.csproj" />
     <Project Path="test/MeshWeaver.Data.Test/MeshWeaver.Data.Test.csproj" />
     <Project Path="test/MeshWeaver.Documentation.Test/MeshWeaver.Documentation.Test.csproj" />
     <Project Path="test/MeshWeaver.Data.TestDomain/MeshWeaver.Data.TestDomain.csproj" />
@@ -148,11 +155,10 @@
     <Project Path="test/MeshWeaver.Maui.Integration.Test/MeshWeaver.Maui.Integration.Test.csproj" />
     <Project Path="test/MeshWeaver.Messaging.Hub.Test/MeshWeaver.Messaging.Hub.Test.csproj" />
     <Project Path="test/MeshWeaver.NodeOperations.Test/MeshWeaver.NodeOperations.Test.csproj" />
+    <Project Path="test/MeshWeaver.PluginCatalog.Test/MeshWeaver.PluginCatalog.Test.csproj" />
     <Project Path="test/MeshWeaver.Northwind.Test/MeshWeaver.Northwind.Test.csproj" />
     <Project Path="test/MeshWeaver.Search.Test/MeshWeaver.Search.Test.csproj" />
     <Project Path="test/MeshWeaver.Security.Test/MeshWeaver.Security.Test.csproj" />
-    <Project Path="test/MeshWeaver.Social.Test/MeshWeaver.Social.Test.csproj" />
-    <Project Path="test/MeshWeaver.Speech.Test/MeshWeaver.Speech.Test.csproj" />
     <Project Path="test/MeshWeaver.TestDomain/MeshWeaver.TestDomain.csproj" />
     <Project Path="test/MeshWeaver.Graph.Test/MeshWeaver.Graph.Test.csproj" />
     <Project Path="test/MeshWeaver.GitSync.Test/MeshWeaver.GitSync.Test.csproj" />

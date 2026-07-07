@@ -20,7 +20,12 @@
     <ProjectReference Include="..\..\src\MeshWeaver.Hosting.SignalR\MeshWeaver.Hosting.SignalR.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Grpc\MeshWeaver.Hosting.Grpc.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Graph\MeshWeaver.Graph.csproj" />
-    <ProjectReference Include="..\..\src\MeshWeaver.Courses\MeshWeaver.Courses.csproj" />
+    <!-- MeshWeaver.Plugins modules — extracted feature modules that live in the plugins/
+         submodule (MeshWeaver.Plugins repo) and compile into the portal image via ProjectReference. -->
+    <ProjectReference Include="..\..\plugins\src\MeshWeaver.Courses\MeshWeaver.Courses.csproj" />
+    <ProjectReference Include="..\..\plugins\src\MeshWeaver.Slides\MeshWeaver.Slides.csproj" />
+    <!-- Git-based plugin catalog/installer (core capability; the mesh's "app store"). -->
+    <ProjectReference Include="..\..\src\MeshWeaver.PluginCatalog\MeshWeaver.PluginCatalog.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.GitSync\MeshWeaver.GitSync.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.InstanceSync\MeshWeaver.InstanceSync.csproj" />
     <!-- Content → vector index (core tech): chunk/embed/store on a separate Postgres vector DB,
@@ -39,8 +44,8 @@
     <ProjectReference Include="..\..\src\MeshWeaver.AI.OpenAI\MeshWeaver.AI.OpenAI.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.AI.ClaudeCode\MeshWeaver.AI.ClaudeCode.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.AI.Copilot\MeshWeaver.AI.Copilot.csproj" />
-    <!-- Social publishing -->
-    <ProjectReference Include="..\..\src\MeshWeaver.Social\MeshWeaver.Social.csproj" />
+    <!-- Social publishing (MeshWeaver.Plugins module) -->
+    <ProjectReference Include="..\..\plugins\src\MeshWeaver.Social\MeshWeaver.Social.csproj" />
   </ItemGroup>
 
   <ItemGroup>

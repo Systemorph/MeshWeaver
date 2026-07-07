@@ -58,7 +58,12 @@ public sealed class GitHubSyncService
         this.repoClient = repoClient;
         this.credentials = credentials;
         this.logger = logger;
-        parsers = new FileFormatParserRegistry(hub.JsonSerializerOptions);
+        // Plugin-owned node types (for example Slide, registered by the Slides plugin's
+        // AddSlides()) contribute an IMarkdownContentMapper so their content round-trips typed
+        // through git export/import instead of downgrading to MarkdownContent. Resolved from the
+        // hub's DI so core GitSync never references a plugin content type.
+        var contentMappers = hub.ServiceProvider.GetServices<IMarkdownContentMapper>().ToArray();
+        parsers = new FileFormatParserRegistry(hub.JsonSerializerOptions, contentMappers);
     }
 
     /// <summary>The sync-config node path for a Space: <c>{spacePath}/_GitSync</c>.</summary>

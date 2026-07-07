@@ -3,6 +3,13 @@
 ##
 ## Get latest from https://github.com/github/gitignore/blob/master/VisualStudio.gitignore
 
+# MeshWeaver.Plugins — developed in place at plugins/ as a nested git repo until it has a
+# remote. Ignored here so the main repo doesn't track the module sources; the .slnx and portal
+# csproj reference plugins/... paths (present on disk) to compile them into the build.
+# TO PROMOTE TO A SUBMODULE: delete this line, push the plugins repo, then
+#   git submodule add <remote URL> plugins   (and CI: git submodule update --init --recursive)
+/plugins/
+
 # User-specific files
 *.suo
 *.csproj.user
