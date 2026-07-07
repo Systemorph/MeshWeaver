@@ -176,7 +176,18 @@ meshService.CreateNode(node)
 
 ---
 
-## MainNode: Access Control for Satellite Nodes
+## MainNode: the node-identity invariant
+
+> 🚨 **Invariant: `MainNode == Path` for every node — EXCEPT satellites.** A node's `MainNode` is its *identity* for access control and for querying. For an ordinary **main node** (the common case) `MainNode` equals the node's own `Path`. **Only a satellite sets `MainNode` to a different path** (the content entity it belongs to). So the rule is bidirectional: **`MainNode != Path` ⟺ the node is a satellite.**
+
+**Satellite-ness is decided by the `IsSatelliteType` NodeType flag — NOT by a `_`-prefix on the path.** A leading `_` on a path segment (`_GitSync`, `_Provider`, …) is only a naming *convention* meaning "internal / not a user-facing page." Whether a node is a satellite is decided solely by its NodeType:
+
+- `IsSatelliteType = true` (e.g. `Thread`/`_Thread`, `_PullRequest`, `_Issue`, `_Access`) → **satellite** → `MainNode = owner`, so `MainNode != Path`; dropped by `is:main`; skipped by the repo export.
+- `IsSatelliteType = false` (e.g. `GitHubSyncConfig` = `_GitSync`) → **main node** → `MainNode == its own Path` is CORRECT. It legitimately appears in `is:main`. To keep such an internal node out of a *user-facing* listing (e.g. a course rail), filter it out by the `_`-prefix convention — **do NOT** forge a satellite `MainNode` (e.g. pointing `_GitSync` at the partition root). That would violate the invariant, misrepresent a main node as a satellite, and break access-control identity.
+
+**Corollary — `is:main`:** the query filter `is:main` keeps exactly the nodes where `MainNode == Path` (see `PostgreSqlSqlGenerator` / `CosmosMeshQuery`: `IsMain && node.MainNode != node.Path` is excluded) — every main node, no satellite. Any "main descendants" listing (a space/course rail, an activity feed) relies on this. If an internal main node leaks into such a listing, the fix is a path-convention filter on the *reader*, never a `MainNode` change on the node.
+
+### Satellites: MainNode points at the owning content entity
 
 > **Every satellite node MUST set `MainNode` to the content entity it belongs to.** Without this, access control fails because the hub uses the node's own path as its identity — a path that has no permissions attached.
 
