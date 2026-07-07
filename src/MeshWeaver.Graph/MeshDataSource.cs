@@ -857,9 +857,9 @@ public static class MeshDataSourceExtensions
             {
                 case DataChangeKind.Deleted:
                     cache.IsDeleted = true;
-                    // Publish the delete to the mesh-scoped tombstone so a DIFFERENT hub instance
-                    // that later activates for this path drops its resurrecting activation-save.
-                    recentlyDeleted?.MarkDeleted(ownPath);
+                    // The mesh-scoped tombstone is populated synchronously by the delete handler
+                    // (HandleDeleteNodeRequest, before the fan-out that activates this hub) — no
+                    // MarkDeleted needed here; this only tracks the own-node cache flag.
                     return;
 
                 case DataChangeKind.Created:
