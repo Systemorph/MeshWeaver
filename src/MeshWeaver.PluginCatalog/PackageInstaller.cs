@@ -1,5 +1,7 @@
 using System.Reactive.Linq;
 using MeshWeaver.GitSync;
+using MeshWeaver.Graph;
+using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Persistence.Parsers;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
@@ -43,9 +45,8 @@ public static class PackageInstaller
         logger ??= hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.PluginCatalog.PackageInstaller");
 
-        if (manifest.Kind != PackageKind.Content)
-            return Observable.Throw<int>(new NotSupportedException(
-                $"Package '{manifest.Id}' is kind {manifest.Kind}; only Content packages install yet."));
+        if (manifest.Kind == PackageKind.Code)
+            return InstallCode(hub, manifest, files, installedFromRef, logger, batchSize);
 
         var partition = manifest.TargetPartition;
         if (string.IsNullOrWhiteSpace(partition))
@@ -65,16 +66,8 @@ public static class PackageInstaller
             return Observable.Throw<int>(new InvalidOperationException(
                 $"Package '{manifest.Id}' has no installable content files."));
 
-        IObservable<int> UpsertOne(MeshNode node) =>
-            hub.Observe<CreateOrUpdateNodeResponse>(new CreateOrUpdateNodeRequest(node))
-                .FirstAsync().Select(d => d.Message)
-                .SelectMany(resp => resp.Success
-                    ? Observable.Return(1)
-                    : Observable.Throw<int>(new InvalidOperationException(
-                        $"Install of '{node.Path}' failed: {resp.Error}")));
-
         return nodes
-            .Select(UpsertOne)
+            .Select(n => Upsert(hub, n))
             .ToObservable()
             .Merge(batchSize)
             .Sum()
@@ -109,6 +102,67 @@ public static class PackageInstaller
                 : Observable.Throw<MeshNode>(new InvalidOperationException(
                     $"Recording install of '{manifest.Id}' failed: {resp.Error}")));
     }
+
+    // Installs a Code package: synthesize the NodeType node from the manifest's configuration, import
+    // the package's Source/*.cs files as its Code nodes (rebased UNDER the NodeType so its default
+    // Sources query finds them), and record the install. Creating the NodeType + Source nodes drives
+    // the mesh's first-build Roslyn compile, so the type goes live — no rebuild, no NuGet.
+    private static IObservable<int> InstallCode(
+        IMessageHub hub, PackageManifest manifest, IReadOnlyList<PackageFile> files,
+        string installedFromRef, ILogger? logger, int batchSize)
+    {
+        if (string.IsNullOrWhiteSpace(manifest.NodeTypeConfiguration))
+            return Observable.Throw<int>(new InvalidOperationException(
+                $"Code package '{manifest.Id}' has no nodeTypeConfiguration."));
+
+        var partition = string.IsNullOrWhiteSpace(manifest.TargetPartition) ? "type" : manifest.TargetPartition!;
+        var nodeTypePath = $"{partition}/{manifest.Id}";
+        var sourceFolder = manifest.SourceFolder ?? manifest.Id;
+        var parsers = new FileFormatParserRegistry(hub.JsonSerializerOptions);
+
+        var sourceNodes = files
+            .Where(f => !IsManifest(f.RelativePath))
+            .Select(f => ParseNode(parsers, nodeTypePath, sourceFolder, f, logger))
+            .Where(n => n is not null).Select(n => n!)
+            .ToArray();
+
+        if (sourceNodes.Length == 0)
+            return Observable.Throw<int>(new InvalidOperationException(
+                $"Code package '{manifest.Id}' has no Source/*.cs files."));
+
+        var nodeTypeNode = MeshNode.FromPath(nodeTypePath) with
+        {
+            NodeType = MeshNode.NodeTypePath,
+            Name = manifest.Name ?? manifest.Id,
+            State = MeshNodeState.Active,
+            Content = new NodeTypeDefinition { Configuration = manifest.NodeTypeConfiguration },
+        };
+
+        // NodeType first, then its Source Code nodes — the mesh compiles the first build automatically.
+        return Upsert(hub, nodeTypeNode)
+            .SelectMany(_ => sourceNodes.Select(n => Upsert(hub, n)).ToObservable().Merge(batchSize).Sum())
+            .SelectMany(srcCount =>
+            {
+                var total = srcCount + 1;
+                logger?.LogInformation(
+                    "Installed code package {Id} v{Version}: NodeType {Path} + {Count} source node(s) @ {Ref}",
+                    manifest.Id, manifest.Version, nodeTypePath, srcCount, installedFromRef);
+                // Trigger the compile explicitly (belt-and-suspenders — creating the NodeType +
+                // Source nodes also kicks the first build) so the installed type goes live.
+                hub.RequestNodeTypeRelease(nodeTypePath,
+                    onError: msg => logger?.LogWarning(
+                        "Release request for {Path} failed: {Msg}", nodeTypePath, msg));
+                return WriteInstalledRecord(hub, manifest, installedFromRef, total).Select(_ => total);
+            });
+    }
+
+    private static IObservable<int> Upsert(IMessageHub hub, MeshNode node) =>
+        hub.Observe<CreateOrUpdateNodeResponse>(new CreateOrUpdateNodeRequest(node))
+            .FirstAsync().Select(d => d.Message)
+            .SelectMany(resp => resp.Success
+                ? Observable.Return(1)
+                : Observable.Throw<int>(new InvalidOperationException(
+                    $"Install of '{node.Path}' failed: {resp.Error}")));
 
     // Parse one package file into a node rebased under the target partition (mirrors
     // GitHubSyncService.ParseFile). The package.json manifest is filtered out before this.

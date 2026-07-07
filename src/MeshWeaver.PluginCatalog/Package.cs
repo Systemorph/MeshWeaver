@@ -48,6 +48,15 @@ public record PackageManifest
     /// not authored in <c>package.json</c>.</summary>
     public string? SourceFolder { get; init; }
 
+    /// <summary>
+    /// For <see cref="PackageKind.Code"/> packages only: the NodeType configuration lambda source
+    /// (e.g. <c>"config =&gt; config.WithContentType&lt;Widget&gt;().AddLayout(...)"</c>). The installer
+    /// synthesizes a <c>NodeType</c> node with this configuration and imports the package's
+    /// <c>Source/*.cs</c> files as its Code nodes; the mesh then compiles it live (Roslyn) — no
+    /// rebuild, no NuGet.
+    /// </summary>
+    public string? NodeTypeConfiguration { get; init; }
+
     /// <summary>Ids of other packages this one depends on. Advisory for now.</summary>
     public ImmutableList<string> Requires { get; init; } = [];
 
