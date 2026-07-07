@@ -24,8 +24,6 @@
          submodule (MeshWeaver.Plugins repo) and compile into the portal image via ProjectReference. -->
     <ProjectReference Include="..\..\plugins\src\MeshWeaver.Courses\MeshWeaver.Courses.csproj" />
     <ProjectReference Include="..\..\plugins\src\MeshWeaver.Slides\MeshWeaver.Slides.csproj" />
-    <!-- Git-based plugin catalog/installer (core capability; the mesh's "app store"). -->
-    <ProjectReference Include="..\..\src\MeshWeaver.PluginCatalog\MeshWeaver.PluginCatalog.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.GitSync\MeshWeaver.GitSync.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.InstanceSync\MeshWeaver.InstanceSync.csproj" />
     <!-- Content → vector index (core tech): chunk/embed/store on a separate Postgres vector DB,

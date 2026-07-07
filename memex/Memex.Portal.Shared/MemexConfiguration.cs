@@ -29,7 +29,6 @@ using MeshWeaver.ContentCollections.Indexing.Graph;
 using MeshWeaver.ContentCollections.Indexing.PostgreSql;
 using MeshWeaver.Courses;
 using MeshWeaver.Slides;
-using MeshWeaver.PluginCatalog;
 using MeshWeaver.Documentation;
 using MeshWeaver.GoogleMaps;
 using MeshWeaver.Data;
@@ -540,14 +539,6 @@ public static class MemexConfiguration
                 // Slides / Decks — a presentation module extracted to the MeshWeaver.Plugins
                 // repo. AddGraph no longer ships these; a portal opts in explicitly.
                 .AddSlides()
-                // The git-based plugin catalog: browse installable folders in a repo and install
-                // each folder's content into the mesh by picking a git commit + folder. Seeds a
-                // Plugins space + catalog node pointed at PluginCatalog:SourceRepoPath (the local
-                // plugins checkout; empty → the catalog shows a "configure me" prompt).
-                .AddPluginCatalog(
-                    configuration["PluginCatalog:SourceRepoPath"] ?? "",
-                    configuration["PluginCatalog:SourceSubdir"] ?? "catalog",
-                    configuration["PluginCatalog:SourceRef"] ?? "HEAD")
                 // Register GitHub-sync content types (GitHubCredential / GitHubSyncConfig)
                 // on the mesh + per-node hubs so their config nodes (de)serialize.
                 .AddGitHubSyncTypes()

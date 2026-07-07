@@ -109,7 +109,6 @@
     <Project Path="src/MeshWeaver.Messaging.Hub/MeshWeaver.Messaging.Hub.csproj" />
     <Project Path="src/MeshWeaver.NuGet.AzureBlob/MeshWeaver.NuGet.AzureBlob.csproj" />
     <Project Path="src/MeshWeaver.NuGet/MeshWeaver.NuGet.csproj" />
-    <Project Path="src/MeshWeaver.PluginCatalog/MeshWeaver.PluginCatalog.csproj" />
     <Project Path="src/MeshWeaver.Reflection/MeshWeaver.Reflection.csproj" />
     <Project Path="src/MeshWeaver.ServiceProvider/MeshWeaver.ServiceProvider.csproj" />
     <Project Path="src/MeshWeaver.ShortGuid/MeshWeaver.ShortGuid.csproj" />
@@ -155,7 +154,6 @@
     <Project Path="test/MeshWeaver.Maui.Integration.Test/MeshWeaver.Maui.Integration.Test.csproj" />
     <Project Path="test/MeshWeaver.Messaging.Hub.Test/MeshWeaver.Messaging.Hub.Test.csproj" />
     <Project Path="test/MeshWeaver.NodeOperations.Test/MeshWeaver.NodeOperations.Test.csproj" />
-    <Project Path="test/MeshWeaver.PluginCatalog.Test/MeshWeaver.PluginCatalog.Test.csproj" />
     <Project Path="test/MeshWeaver.Northwind.Test/MeshWeaver.Northwind.Test.csproj" />
     <Project Path="test/MeshWeaver.Search.Test/MeshWeaver.Search.Test.csproj" />
     <Project Path="test/MeshWeaver.Security.Test/MeshWeaver.Security.Test.csproj" />
