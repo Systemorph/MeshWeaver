@@ -15,3 +15,8 @@ declare module "react-native-render-html" {
   const RenderHtml: any;
   export default RenderHtml;
 }
+// Native-only SVG renderer (nativeHtml.native.tsx renders <img src="*.svg"> via SvgUri).
+declare module "react-native-svg" {
+  export const SvgUri: any;
+  export const SvgXml: any;
+}

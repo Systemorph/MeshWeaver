@@ -28,6 +28,7 @@
     "react-native": "0.76.5",
     "react-native-fetch-api": "^3.0.0",
     "react-native-render-html": "^6.3.4",
+    "react-native-svg": "15.8.0",
     "react-native-web": "~0.19.13",
     "text-encoding": "^0.7.0",
     "web-streams-polyfill": "^4.3.0"

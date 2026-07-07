@@ -3,7 +3,9 @@
 // this .native file, while web/tsc/vitest use nativeHtml.tsx (no render-html dep). Same split as nativeFetch.
 import { useMemo } from "react";
 import RenderHtml from "react-native-render-html";
-import { View, useWindowDimensions, Platform, StyleSheet } from "react-native";
+import { SvgUri } from "react-native-svg";
+import { View, Image, useWindowDimensions, Platform, StyleSheet } from "react-native";
+import { currentInstance } from "./connection";
 
 export function NativeHtml({ html }: { html: string }) {
   const { width } = useWindowDimensions();
@@ -24,15 +26,44 @@ export function NativeHtml({ html }: { html: string }) {
         tagsStyles={TAGS}
         systemFonts={SYSTEM_FONTS}
         defaultTextProps={{ selectable: true }}
-        // RN's Image can't load SVGs or the doc's relative/about: URLs (that crashed the render), and the
-        // NodeType icons 404 on the headless mesh sidecar — drop images/SVG so text/tables/links render.
+        renderers={RENDERERS}
+        // Inline <svg>/<picture>/<source> aren't handled; <img> is (see RENDERERS.img).
         ignoredDomTags={IGNORED_TAGS}
       />
     </View>
   );
 }
 
-const IGNORED_TAGS = ["img", "svg", "picture", "source"];
+// Resolve a relative asset URL (e.g. "/static/NodeTypeIcons/box.svg") against the connected mesh so the
+// device can fetch it; the local monolith (Memex.LocalMesh) serves /static/{collection}/{file}.
+function resolveUrl(src: string): string {
+  if (!src || /^https?:\/\//i.test(src) || src.startsWith("data:")) return src;
+  const base = (currentInstance().url || "").replace(/\/+$/, "");
+  return base ? `${base}/${src.replace(/^\/+/, "")}` : src;
+}
+
+function px(tnode: any, attr: string, prop: string): number | undefined {
+  const a = Number(tnode?.attributes?.[attr]);
+  if (Number.isFinite(a) && a > 0) return a;
+  const m = String(tnode?.attributes?.style ?? "").match(new RegExp(`${prop}\\s*:\\s*(\\d+(?:\\.\\d+)?)\\s*px`, "i"));
+  return m ? Number(m[1]) : undefined;
+}
+
+// Custom <img>: RN's Image can't decode SVG, and relative/`about:` URLs crash the loader. Resolve the URL
+// against the mesh, render SVGs via react-native-svg (SvgUri), raster via Image; skip anything unresolvable.
+const RENDERERS = {
+  img: ({ tnode }: any) => {
+    const url = resolveUrl(String(tnode?.attributes?.src ?? ""));
+    if (!/^https?:\/\//i.test(url)) return null;
+    const w = px(tnode, "width", "width") ?? 40;
+    const h = px(tnode, "height", "height") ?? w;
+    return /\.svg(\?|$)/i.test(url)
+      ? <SvgUri uri={url} width={w} height={h} />
+      : <Image source={{ uri: url }} style={{ width: w, height: h }} resizeMode="contain" />;
+  },
+};
+
+const IGNORED_TAGS = ["svg", "picture", "source"];
 const SYSTEM_FONTS = Platform.OS === "ios" ? ["System", "Menlo"] : ["sans-serif", "monospace"];
 const BASE = { color: "#242424", fontSize: 15, lineHeight: 22 } as any;
 const TAGS = {
