@@ -85,11 +85,24 @@ function Children({ control }: { control: any }) {
 }
 
 // ── skins (layout) ──────────────────────────────────────────────────────────
-const stack: SkinComponent = ({ skin, control }) => (
-  <View style={{ flexDirection: s(skin.orientation).toLowerCase() === "horizontal" ? "row" : "column", gap: (skin.verticalGap ?? skin.horizontalGap ?? 8) as number }}>
-    <Children control={control} />
-  </View>
-);
+const stack: SkinComponent = ({ skin, control }) => {
+  const horizontal = s(skin.orientation).toLowerCase() === "horizontal";
+  return (
+    <View
+      style={{
+        flexDirection: horizontal ? "row" : "column",
+        // Row: WRAP (a toolbar of node actions overflows a phone otherwise) and size children to their
+        // content height (default `stretch` blew buttons up to fill the row). Column: keep `stretch` so
+        // children fill the width (cards, text, the doc body).
+        flexWrap: horizontal ? "wrap" : "nowrap",
+        alignItems: horizontal ? "flex-start" : "stretch",
+        gap: (skin.verticalGap ?? skin.horizontalGap ?? 8) as number,
+      }}
+    >
+      <Children control={control} />
+    </View>
+  );
+};
 
 const card: SkinComponent = ({ control }) => (
   <View style={styles.card}>
