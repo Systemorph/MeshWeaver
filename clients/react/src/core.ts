@@ -21,6 +21,21 @@ export {
   type GrpcAreaOptions,
 } from "./live/grpcSource.js";
 export { normalizeEntityStore } from "./live/wire.js";
+// Interactive-markdown parsing — the ONE shared, non-proprietary parser (twin of the server Markdig
+// pipeline). splitRenderedHtml hydrates the server-rendered HTML (render-markdown) into text chunks +
+// @@ area markers + code-cell toolbars; both the web pack and the RN pack render those with their own leaves.
+export {
+  splitRenderedHtml,
+  parseInteractiveMarkdown,
+  cellSubmissions,
+  KERNEL_ADDRESS_PLACEHOLDER,
+  type RenderedHtmlSegment,
+  type HtmlChunkSegment,
+  type HtmlAreaSegment,
+  type HtmlToolbarSegment,
+  type HtmlMermaidSegment,
+  type InteractiveSegment,
+} from "./controls/interactiveMarkdown.js";
 export {
   MeshOpsProvider,
   useMeshOps,
