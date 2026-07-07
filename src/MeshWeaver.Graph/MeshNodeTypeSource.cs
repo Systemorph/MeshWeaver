@@ -217,11 +217,15 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
         // content change. The owner re-stamps Version on every update (below), so without
         // this guard each re-fire of the workspace pipeline would look like a fresh change
         // (a new version per dispatch) and spin an infinite re-stamp loop.
+        // Pair each updated node with the version it PREVIOUSLY carried (_lastSaved) so the
+        // re-stamp below can advance forward-only from the node's own version (#325) — a fresh
+        // Hub.Version alone regresses it after a recycle.
         var updates = instances.Instances
             .Where(x => _lastSaved.Instances.TryGetValue(x.Key, out var existing)
                         && existing is MeshNode ex && x.Value is MeshNode nv
                         && !ex.Equals(nv with { Version = ex.Version }))
-            .Select(x => (MeshNode)x.Value)
+            .Select(x => (Node: (MeshNode)x.Value,
+                          PreviousVersion: ((MeshNode)_lastSaved.Instances[x.Key]).Version))
             .ToArray();
 
         var deletes = _lastSaved.Instances
@@ -280,8 +284,18 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
         // then saves the bumped version.
         if (updates.Length > 0)
         {
+            // 🚨 #325: advance forward-only from each node's OWN previous version, never straight
+            // off hubVersion. hubVersion resets to 0 on reactivation, so a plain `Version =
+            // hubVersion` re-stamp regresses the node's version after a recycle — the authoritative
+            // `get`/read then returns a version BELOW the writes it just confirmed (the write-
+            // rollback / "v113 read back as v3" of #325). MeshNode.NextVersion keeps it strictly
+            // increasing across activations WITHOUT touching Hub.Version (so layout Fulls, which
+            // ride Hub.Version, are unaffected — the 2026-06-18 wedge cannot recur).
             var stampedUpdates = updates
-                .Select(n => n with { Version = hubVersion })
+                .Select(u => u.Node with
+                {
+                    Version = MeshNode.NextVersion(hubVersion, u.PreviousVersion)
+                })
                 .ToArray();
             instances = instances with
             {
