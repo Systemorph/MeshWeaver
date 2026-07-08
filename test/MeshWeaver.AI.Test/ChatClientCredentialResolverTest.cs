@@ -354,6 +354,29 @@ public class ChatClientCredentialResolverTest : AITestBase
         resolver.ResolveModelId($"{root}/nope/never-{suffix}").Should().Be($"never-{suffix}");
     }
 
+    /// <summary>
+    /// Cold-start guard (Copilot review finding on #367): a slash-bearing value with NO catalog
+    /// marker segment (Provider / _Memex) is an org/model wire id we simply don't know — an
+    /// UNRECOGNIZED slug (cold snapshot, unseeded model) passes through rather than being
+    /// last-segmented into an unresolvable id. Only node-path-shaped values keep the fallback.
+    /// </summary>
+    [Fact]
+    public void ResolveModelId_UnknownOrgSlashModelSlug_PassesThrough_NodePathsStillLastSegment()
+    {
+        var resolver = Mesh.ServiceProvider.GetRequiredService<ChatClientCredentialResolver>();
+
+        // Never registered anywhere — no snapshot entry, no config seed. Must NOT be mangled.
+        resolver.ResolveModelId("some-org/some-model-nobody-seeded").Should()
+            .Be("some-org/some-model-nobody-seeded",
+                "an unrecognized org/model slug is a wire id, not a node path — mangling it can only break the round");
+
+        // Node-path-shaped values (catalog marker segment) keep the documented last-segment fallback.
+        resolver.ResolveModelId("Provider/OpenAICompatible/qwen-unseeded:latest").Should()
+            .Be("qwen-unseeded:latest");
+        resolver.ResolveModelId("someuser/_Memex/OpenRouter/own-model-unseeded").Should()
+            .Be("own-model-unseeded");
+    }
+
     [Fact]
     public async Task GetProviderForModel_LooksUpProviderStamp()
     {

@@ -357,6 +357,7 @@ internal class NavigationService : INavigationService
         // … lacks Thread permission on 'Doc'". A visitor WITHOUT a home partition — anonymous,
         // or a System/hub principal (test fixtures, pre-identity circuits) — clears the context
         // like a page route instead (no stale replay; the login redirect is handled elsewhere).
+        var isHomeRoute = false;
         if (string.IsNullOrEmpty(route))
         {
             var homeUser = ResolveCurrentUserId();
@@ -374,6 +375,7 @@ internal class NavigationService : INavigationService
                 return;
             }
             route = homeUser;
+            isHomeRoute = true;
         }
 
         // 🚨 A single-segment route that carries query parameters is a parametrized Blazor
@@ -392,7 +394,10 @@ internal class NavigationService : INavigationService
         // whenever the writable provider's PartitionExists probe is indeterminate
         // (InMemory/monolith), and the anonymous hard-gate then bounces the deliberately-PUBLIC
         // page to /login — the /privacy regression. See PageRouteRegistry.
-        if (!string.IsNullOrEmpty(route) && !route.Contains('/')
+        // The home rewrite above produced a NODE route (the user's partition) by construction —
+        // never a Blazor page — so it is exempt: "/?utm=…" (home + query params) must still
+        // resolve the user's home with the args riding on the context, not clear it here.
+        if (!isHomeRoute && !string.IsNullOrEmpty(route) && !route.Contains('/')
             && (!args.IsEmpty || _pageRoutes?.IsPageRoute(route) == true))
         {
             _resolutionSubscription?.Dispose();

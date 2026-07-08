@@ -397,9 +397,32 @@ public sealed class ChatClientCredentialResolver : IDisposable
         // latter are warm even when the snapshot isn't).
         if (IsRegisteredModelId(snapshot, modelNameOrPath))
             return modelNameOrPath;
-        // Unresolved path (node not yet in the warm snapshot): the wire id is the LAST SEGMENT — never
-        // the whole path (sending "Provider/OpenAICompatible/qwen3.6:latest" as the model name 400s).
-        return modelNameOrPath[(modelNameOrPath.LastIndexOf('/') + 1)..];
+        // Unresolved NODE PATH (node not yet in the warm snapshot): the wire id is the LAST SEGMENT
+        // — never the whole path (sending "Provider/OpenAICompatible/qwen3.6:latest" as the model
+        // name 400s). Every LanguageModel node-path shape carries a catalog marker segment —
+        // Provider/{p}/{id}, {space}/Provider/{p}/{id}, {user}/_Memex/{p}/{id} — so ONLY those
+        // last-segment. A slash-bearing value WITHOUT a marker is an org/model wire id we simply
+        // don't know (yet) — cold snapshot, unseeded model: pass it through rather than mangle it.
+        if (LooksLikeCatalogNodePath(modelNameOrPath))
+            return modelNameOrPath[(modelNameOrPath.LastIndexOf('/') + 1)..];
+        return modelNameOrPath;
+    }
+
+    /// <summary>
+    /// True when <paramref name="value"/> is shaped like a LanguageModel node PATH: it contains a
+    /// catalog marker segment (<c>Provider</c> — <see cref="ModelProviderNodeType.RootNamespace"/> —
+    /// or the user dotfile namespace <c>_Memex</c>). Org/model wire ids ("z-ai/glm-5.2") carry
+    /// neither, so an UNRECOGNIZED slug is never last-segmented even before the snapshot warms.
+    /// </summary>
+    private static bool LooksLikeCatalogNodePath(string value)
+    {
+        foreach (var segment in value.Split('/'))
+        {
+            if (string.Equals(segment, ModelProviderNodeType.RootNamespace, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(segment, ModelProviderNodeType.UserNamespace, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+        return false;
     }
 
     /// <summary>

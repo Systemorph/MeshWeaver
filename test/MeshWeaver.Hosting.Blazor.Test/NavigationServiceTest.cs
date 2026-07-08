@@ -1245,6 +1245,30 @@ public class NavigationServiceTest
     }
 
     /// <summary>
+    /// A home URL CARRYING QUERY PARAMS ("/?utm=…") must still resolve the user's home: the
+    /// rewritten route is single-segment WITH args, which pattern-matches the Blazor page-route
+    /// gate — but the home rewrite is a NODE route by construction, so it is exempt and the args
+    /// ride on the context (Copilot review finding on #367).
+    /// </summary>
+    [Fact]
+    public async Task HomeRoute_WithQueryParams_StillResolvesUserHome()
+    {
+        MakeAmbientContextClearedButCircuitAuthenticated("rbuergi");
+
+        var service = CreateService();
+        _pathResolver.ResolveNavigationPath("rbuergi")
+            .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(
+                new AddressResolution("rbuergi", null)));
+
+        service.Initialize();
+        _navigationManager.SimulateLocationChanged("http://localhost/?utm=newsletter");
+
+        var home = await service.NavigationContext.Should().Within(WaitTimeout)
+            .Match(c => c?.Namespace == "rbuergi");
+        home!.Args["utm"].Should().Be("newsletter", "query params ride on the context, never clear it");
+    }
+
+    /// <summary>
     /// An anonymous visitor at "/" has no home partition: the context CLEARS (no stale replay
     /// of the previous page) and nothing is resolved — the home page is not a node for them,
     /// and no login redirect fires from here (that's the node-navigation gate's job).
