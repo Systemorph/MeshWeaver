@@ -34,6 +34,7 @@ using MeshWeaver.GoogleMaps;
 using MeshWeaver.Data;
 using MeshWeaver.GitSync;
 using MeshWeaver.Graph;
+using MeshWeaver.PluginCatalog;
 using MeshWeaver.InstanceSync;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Markdown.Export.Configuration;
@@ -554,6 +555,14 @@ public static class MemexConfiguration
                 .AddRowLevelSecurity()
                 // Configure graph from the same base path
                 .AddGraph()
+                // Git-based plugin catalog: browse installable folders in a repo and install each
+                // folder's content (and runtime-compiled code) into the mesh by picking a git
+                // commit + folder. Seeds a Plugins space + catalog node pointed at
+                // PluginCatalog:SourceRepoPath (empty -> the catalog shows a "configure me" prompt).
+                .AddPluginCatalog(
+                    configuration["PluginCatalog:SourceRepoPath"] ?? "",
+                    configuration["PluginCatalog:SourceSubdir"] ?? "catalog",
+                    configuration["PluginCatalog:SourceRef"] ?? "HEAD")
                 // Register GitHub-sync content types (GitHubCredential / GitHubSyncConfig)
                 // on the mesh + per-node hubs so their config nodes (de)serialize.
                 .AddGitHubSyncTypes()
