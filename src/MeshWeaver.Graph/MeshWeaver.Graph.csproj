@@ -48,6 +48,11 @@
        NOT propagate to downstream builds). We MSBuild it (no ProjectReference — that would re-add it
        as an analyzer) and copy the DLL as a runtime item that flows to every consumer's output. -->
   <Target Name="ShipScopeGenerator" BeforeTargets="AssignTargetPaths">
+    <!-- Restore first (separate invocation — Restore+Build in one MSBuild call is unreliable):
+         a fresh checkout building Graph alone has no assets file for the generator, since it is
+         invoked as a build TOOL here, not referenced (so no transitive restore). -->
+    <MSBuild Projects="..\MeshWeaver.BusinessRules.Generator\MeshWeaver.BusinessRules.Generator.csproj"
+             Targets="Restore" Properties="Configuration=$(Configuration)" />
     <MSBuild Projects="..\MeshWeaver.BusinessRules.Generator\MeshWeaver.BusinessRules.Generator.csproj"
              Targets="Build" Properties="Configuration=$(Configuration)" />
     <ItemGroup>

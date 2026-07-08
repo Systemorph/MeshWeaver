@@ -1296,10 +1296,15 @@ internal class MeshNodeCompilationService(
     private static CSharpCompilation RunSourceGenerators(
         CSharpCompilation compilation, IReadOnlyList<string> generatorAssemblyPaths, ILogger logger, CancellationToken ct)
     {
-        // Always include the built-in scope generator, plus any generator a node #r'd explicitly.
+        // Always include the built-in scope generator, plus any OTHER generator a node #r'd. Filter a
+        // node's own `#r "nuget:MeshWeaver.BusinessRules.Generator"` OUT — otherwise the same generator
+        // loads from two paths (built-in + baked) and runs twice → duplicate IScope<,> implementations
+        // → CS0101. Legacy nodes that still carry that #r keep compiling (built-in supersedes it).
         IReadOnlyList<string> allPaths = BuiltInGeneratorPaths.Count == 0
             ? generatorAssemblyPaths
-            : [.. BuiltInGeneratorPaths, .. generatorAssemblyPaths];
+            : [.. BuiltInGeneratorPaths,
+               .. generatorAssemblyPaths.Where(p => !string.Equals(
+                   Path.GetFileName(p), "MeshWeaver.BusinessRules.Generator.dll", StringComparison.OrdinalIgnoreCase))];
         if (allPaths.Count == 0)
             return compilation;
         var generators = SourceGeneratorLoader.Discover(allPaths, logger);
