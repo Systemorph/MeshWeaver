@@ -11,15 +11,22 @@ namespace MeshWeaver.AI;
 /// <param name="InputPerMillion">Price per 1,000,000 input (prompt) tokens.</param>
 /// <param name="OutputPerMillion">Price per 1,000,000 output (completion) tokens.</param>
 /// <param name="Currency">ISO currency code (e.g. <c>USD</c>).</param>
-/// <param name="CacheReadPerMillion">Price per 1,000,000 cache-READ (cache-hit) tokens. Null ⇒ derive as 0.1× input (Anthropic standard).</param>
-/// <param name="CacheWritePerMillion">Price per 1,000,000 cache-WRITE (cache-creation) tokens. Null ⇒ derive as 1.25× input (Anthropic 5-min TTL).</param>
-public record ModelPriceRate(
-    decimal InputPerMillion,
-    decimal OutputPerMillion,
-    string Currency,
-    decimal? CacheReadPerMillion = null,
-    decimal? CacheWritePerMillion = null)
+public record ModelPriceRate(decimal InputPerMillion, decimal OutputPerMillion, string Currency)
 {
+    /// <summary>
+    /// Price per 1,000,000 cache-READ (cache-hit) tokens. Null ⇒ derive as 0.1× input (Anthropic
+    /// standard). Init-only property (NOT a primary-ctor parameter) so adding it doesn't change the
+    /// record's <c>Deconstruct</c> arity — a source/binary break for external positional callers.
+    /// </summary>
+    public decimal? CacheReadPerMillion { get; init; }
+
+    /// <summary>
+    /// Price per 1,000,000 cache-WRITE (cache-creation) tokens. Null ⇒ derive as 1.25× input
+    /// (Anthropic 5-min TTL). Init-only property for the same API-compat reason as
+    /// <see cref="CacheReadPerMillion"/>.
+    /// </summary>
+    public decimal? CacheWritePerMillion { get; init; }
+
     /// <summary>
     /// Monetary cost of the given token counts at this rate:
     /// <c>in/1e6 × InputPerMillion + out/1e6 × OutputPerMillion</c>.
