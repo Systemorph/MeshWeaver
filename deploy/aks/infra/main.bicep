@@ -143,6 +143,9 @@ param postgresSkuName string = 'Standard_D2ds_v5'
 @description('Flexible Server zone-redundant HA (standby in another AZ). Off by default — not every region allows it (e.g. westeurope returns HADisabledForRegion); enable only where supported.')
 param postgresHighAvailability bool = false
 
+@description('Store PG managed backups geo-redundantly (paired-region copy for regional DR). IMMUTABLE after server creation — see DatabaseBackups.md for enabling on an existing server. On by default.')
+param postgresGeoRedundantBackup bool = true
+
 @description('Tags applied to all resources.')
 param tags object = {
   project: 'meshweaver-memex'
@@ -289,6 +292,7 @@ module postgres 'modules/postgres.bicep' = if (deployPostgresFlexible) {
     administratorPassword: postgresAdminPassword
     skuName: postgresSkuName
     highAvailability: postgresHighAvailability
+    geoRedundantBackup: postgresGeoRedundantBackup
     tags: tags
   }
 }
