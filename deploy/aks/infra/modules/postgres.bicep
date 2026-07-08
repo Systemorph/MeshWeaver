@@ -59,6 +59,9 @@ param postgresVersion string = '16'
 @maxValue(35)
 param backupRetentionDays int = 14
 
+@description('Store the managed backups geo-redundantly (a read-only copy in the Azure-paired region, e.g. swedencentral → germanywestcentral) so backups survive a regional outage. IMMUTABLE after server creation: enabling it on an EXISTING server is NOT an in-place flag flip — it requires a geo-restore/PITR into a NEW server with this on, then a connection-string cutover (see DatabaseBackups.md). On by default for regional DR.')
+param geoRedundantBackup bool = true
+
 @description('Enable zone-redundant HA (a standby in a second zone). Costs ~2x compute.')
 param highAvailability bool = true
 
@@ -86,7 +89,7 @@ resource postgres 'Microsoft.DBforPostgreSQL/flexibleServers@2024-08-01' = {
     }
     backup: {
       backupRetentionDays: backupRetentionDays
-      geoRedundantBackup: 'Disabled'
+      geoRedundantBackup: geoRedundantBackup ? 'Enabled' : 'Disabled'
     }
     highAvailability: {
       // Zone-redundant HA pairs a hot standby in another AZ — matches the
