@@ -1,4 +1,5 @@
 using System.Reactive.Subjects;
+using MeshWeaver.Layout;
 using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Blazor.Infrastructure;
@@ -53,6 +54,20 @@ public static class PortalErrorReporting
         this MessageHubConfiguration config, PortalErrorSink sink)
         => config.WithHandler<DeliveryFailure>((_, delivery) =>
             {
+                // 🚨 A routing NotFound for a gone / not-yet-created node is benign infrastructure
+                // churn — NOT "Something went wrong". It reaches this un-awaited handler when a
+                // fire-and-forget post (a stream.Update write, or a subscribe/heartbeat/unsubscribe
+                // on an interactive-kernel Activity area — e.g. a course lesson's `--render` output
+                // at `{viewer}/_Activity/markdown-{id}` that the viewer has not run yet) targets an
+                // address the router cannot resolve. The NamedAreaView control-stream path already
+                // renders this as a quiet "no longer available" placeholder (via the same
+                // AreaErrorClassifier); the un-awaited copy that escapes here must be SWALLOWED, not
+                // shown verbatim in the global modal ("No node found at 'thomager12/_Activity/
+                // markdown-…'. Closest ancestor is 'thomager12' …"). Everything else still surfaces —
+                // a genuinely failed portal post must pop.
+                if (AreaErrorClassifier.IsRoutingNotFoundFailure(delivery.Message))
+                    return delivery.Processed();
+
                 sink.Report(Describe(delivery.Message));
                 return delivery.Processed();
             },
