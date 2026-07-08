@@ -32,4 +32,13 @@ public record SocialMediaPost
     public int Impressions { get; init; }
 
     public int Likes { get; init; }
+
+    public int Comments { get; init; }
+
+    // Publishing lifecycle: Draft → Published (or Failed). Written back by the
+    // /linkedin/publish endpoint; drives the Post-node "Publish to LinkedIn" menu action.
+    public string Status { get; init; } = "Draft";
+
+    [DisplayName("Published URN")]
+    public string? PublishedUrn { get; init; }
 }

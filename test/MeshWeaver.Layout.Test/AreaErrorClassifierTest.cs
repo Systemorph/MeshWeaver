@@ -163,4 +163,30 @@ public class AreaErrorClassifierTest
     [Fact]
     public void ShouldRetryArea_FalseForPermanentError()
         => AreaErrorClassifier.ShouldRetryArea(new InvalidOperationException("boom")).Should().BeFalse();
+
+    // ── IsRoutingNotFoundFailure: raw-message twin the portal error sink uses to swallow a benign
+    //    routing NotFound (a not-yet-run per-viewer Activity area) from the global "Something went wrong" modal ──
+
+    [Theory]
+    [InlineData("No node found at 'u/_Activity/markdown-abc'. Closest ancestor is 'u' (remainder='_Activity/markdown-abc').")]
+    [InlineData("No node found at 'x/y'.")]
+    public void IsRoutingNotFoundFailure_TrueForRoutingNotFound(string message)
+        => AreaErrorClassifier.IsRoutingNotFoundFailure(
+                new DeliveryFailure(null!, message) { ErrorType = ErrorType.NotFound }).Should().BeTrue(
+            "a routing NotFound for a gone / not-yet-created node is benign churn — swallowed, never the modal");
+
+    [Fact]
+    public void IsRoutingNotFoundFailure_FalseForNotFoundWithoutBanner()
+        => AreaErrorClassifier.IsRoutingNotFoundFailure(
+                new DeliveryFailure(null!, "access denied") { ErrorType = ErrorType.NotFound }).Should().BeFalse();
+
+    [Fact]
+    public void IsRoutingNotFoundFailure_FalseForOtherErrorTypeWithBanner()
+        // A genuine failure that happens to start "No node found" but isn't a routing NotFound stays visible.
+        => AreaErrorClassifier.IsRoutingNotFoundFailure(
+                new DeliveryFailure(null!, "No node found") { ErrorType = ErrorType.Failed }).Should().BeFalse();
+
+    [Fact]
+    public void IsRoutingNotFoundFailure_FalseForNull()
+        => AreaErrorClassifier.IsRoutingNotFoundFailure(null).Should().BeFalse();
 }

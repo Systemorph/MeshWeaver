@@ -146,6 +146,31 @@ public static class AreaErrorClassifier
     }
 
     /// <summary>
+    /// True when a raw <see cref="DeliveryFailure"/> message (NOT wrapped in a
+    /// <see cref="DeliveryFailureException"/>) is a routing <b>NotFound</b> for a node/hub that no
+    /// longer exists — or has not yet been created. This is the <see cref="IsNodeGoneNotFound"/>
+    /// predicate at the raw-message layer, for the portal hub's un-awaited-<c>DeliveryFailure</c>
+    /// handler (<c>PortalErrorReporting</c>).
+    ///
+    /// <para>Why it needs a message-level twin: a fire-and-forget post (a <c>stream.Update</c> write,
+    /// a heartbeat/subscribe/unsubscribe on an interactive-kernel area, a run-cell re-post) whose
+    /// target has already been reaped returns to the portal hub as a bare <see cref="DeliveryFailure"/>
+    /// with NO awaiting callback to consume it. The <c>NamedAreaView</c> control-stream path already
+    /// classifies this gracefully (via <see cref="IsNodeGoneNotFound"/>) and renders a "no longer
+    /// available" placeholder — but the un-awaited copy escapes to the portal-wide error MODAL, which
+    /// reported it VERBATIM ("<c>No node found at 'thomager12/_Activity/markdown-…'. Closest ancestor
+    /// is 'thomager12' …</c>") the instant a fresh viewer opened a course lesson whose <c>--render</c>
+    /// output areas point at a not-yet-run per-viewer Activity. A routing NotFound for a gone /
+    /// not-yet-created node is benign infrastructure churn — it must be SWALLOWED from the modal, never
+    /// shown as "Something went wrong". Matched on the typed <see cref="ErrorType.NotFound"/> AND the
+    /// "No node found" banner so a genuine engineering failure with the same ErrorType is untouched.</para>
+    /// </summary>
+    public static bool IsRoutingNotFoundFailure(DeliveryFailure? failure)
+        => failure is not null
+           && failure.ErrorType == ErrorType.NotFound
+           && (failure.Message ?? string.Empty).StartsWith("No node found", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
     /// The single predicate the area subscription hands to
     /// <see cref="AreaStreamRetry.RetryAreaWithBackoff{T}"/>: retry ONLY a transient hub
     /// miss — never a teardown <see cref="ObjectDisposedException"/> (benign), never a
