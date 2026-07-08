@@ -287,7 +287,11 @@ else
                                 }
                                 @if (state.InputTokens.HasValue || state.OutputTokens.HasValue)
                                 {
-                                    <span class="thread-msg-tokens" title="Token usage">@($"{state.InputTokens ?? 0:N0} in / {state.OutputTokens ?? 0:N0} out")</span>
+                                    var cachedTok = (state.CacheReadTokens ?? 0) + (state.CacheWriteTokens ?? 0);
+                                    <span class="thread-msg-tokens"
+                                          title="@($"Token usage — {state.InputTokens ?? 0:N0} input (incl. {cachedTok:N0} cached) / {state.OutputTokens ?? 0:N0} output")">
+                                        @($"{state.InputTokens ?? 0:N0} in / {state.OutputTokens ?? 0:N0} out")@(cachedTok > 0 ? $" (⚡{cachedTok:N0})" : "")
+                                    </span>
                                 }
                             </div>
                         }

@@ -11,7 +11,14 @@ namespace MeshWeaver.AI;
 /// <param name="InputPerMillion">Price per 1,000,000 input (prompt) tokens.</param>
 /// <param name="OutputPerMillion">Price per 1,000,000 output (completion) tokens.</param>
 /// <param name="Currency">ISO currency code (e.g. <c>USD</c>).</param>
-public record ModelPriceRate(decimal InputPerMillion, decimal OutputPerMillion, string Currency)
+/// <param name="CacheReadPerMillion">Price per 1,000,000 cache-READ (cache-hit) tokens. Null ⇒ derive as 0.1× input (Anthropic standard).</param>
+/// <param name="CacheWritePerMillion">Price per 1,000,000 cache-WRITE (cache-creation) tokens. Null ⇒ derive as 1.25× input (Anthropic 5-min TTL).</param>
+public record ModelPriceRate(
+    decimal InputPerMillion,
+    decimal OutputPerMillion,
+    string Currency,
+    decimal? CacheReadPerMillion = null,
+    decimal? CacheWritePerMillion = null)
 {
     /// <summary>
     /// Monetary cost of the given token counts at this rate:
@@ -20,6 +27,24 @@ public record ModelPriceRate(decimal InputPerMillion, decimal OutputPerMillion, 
     public decimal Cost(long inputTokens, long outputTokens)
         => inputTokens / 1_000_000m * InputPerMillion
          + outputTokens / 1_000_000m * OutputPerMillion;
+
+    /// <summary>
+    /// Cache-aware cost. <paramref name="inputTokens"/> is the FULL prompt-token count (cache read +
+    /// write are SUBSETS of it, per <see cref="UsageTokens"/>), so the non-cached portion is
+    /// <c>inputTokens − cacheReadTokens − cacheWriteTokens</c>, priced at the input rate; cache reads
+    /// at the reduced read rate; cache writes at the premium write rate. Read/write rates fall back to
+    /// the Anthropic-standard 0.1× / 1.25× of input when the model doesn't specify them.
+    /// </summary>
+    public decimal Cost(long inputTokens, long outputTokens, long cacheReadTokens, long cacheWriteTokens)
+    {
+        var baseInput = Math.Max(0, inputTokens - cacheReadTokens - cacheWriteTokens);
+        var readRate = CacheReadPerMillion ?? InputPerMillion * 0.1m;
+        var writeRate = CacheWritePerMillion ?? InputPerMillion * 1.25m;
+        return baseInput / 1_000_000m * InputPerMillion
+             + cacheReadTokens / 1_000_000m * readRate
+             + cacheWriteTokens / 1_000_000m * writeRate
+             + outputTokens / 1_000_000m * OutputPerMillion;
+    }
 }
 
 /// <summary>
