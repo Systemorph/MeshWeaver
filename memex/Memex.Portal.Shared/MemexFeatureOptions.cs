@@ -1,3 +1,5 @@
+using MeshWeaver.Mesh;
+
 namespace Memex.Portal.Shared;
 
 /// <summary>
@@ -73,6 +75,18 @@ public sealed record StaticRepoSyncFeatureOptions
     /// Empty = no sync.
     /// </summary>
     public string[] Partitions { get; init; } = [];
+
+    /// <summary>
+    /// Optional per-partition <see cref="PartitionSyncMode"/> override, keyed by partition name
+    /// (matched case-insensitively at read). Selects what a partition's import PRUNES after upserting
+    /// the source: <c>FullReplace</c> (mirror — prune all extras), <c>Additive</c> (prune only
+    /// previously-shipped nodes, so user-added nodes survive), or <c>UpsertOnly</c> (never prune). A
+    /// partition NOT listed uses its source's own default — <c>FullReplace</c> for most, but the built-in
+    /// AI catalogs (Skill/Agent/Provider/Harness) default to <c>Additive</c>. Bind by name, e.g.
+    /// <c>Features__StaticRepoSync__Modes__Skill=UpsertOnly</c>. Distinct from the per-NODE
+    /// <c>SyncBehavior</c>, which still claims individual nodes in any mode.
+    /// </summary>
+    public Dictionary<string, PartitionSyncMode> Modes { get; init; } = new();
 
     /// <summary>True when <paramref name="partition"/> is configured for DB sync.</summary>
     public bool Includes(string partition) =>
