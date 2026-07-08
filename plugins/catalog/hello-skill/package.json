@@ -1,0 +1,8 @@
+{
+  "id": "hello-skill",
+  "name": "Hello Skill",
+  "description": "A sample skill installed from the catalog into the Skill partition.",
+  "kind": "content",
+  "targetPartition": "Skill",
+  "version": "1.0.0"
+}

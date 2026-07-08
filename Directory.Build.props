@@ -130,4 +130,29 @@
     <PackageReference Include="OpenTelemetry.Api" />
     <PackageReference Include="Microsoft.AspNetCore.DataProtection" />
   </ItemGroup>
+  <!-- Bake the git commit SHA into every assembly as AssemblyMetadata("CommitHash") so the About
+       page can show EXACTLY which build is running and link to the GitHub commit. This is kept
+       SEPARATE from InformationalVersion on purpose: CI overrides InformationalVersion to
+       $(Version)+build.<ticks> (above), which drops the SDK's default +<sha> suffix — so the SHA
+       has to ride on its own metadata attribute to survive a CI build.
+       SHA source, in order: the SDK's source-control $(SourceRevisionId) (populated locally and in
+       any git checkout by InitializeSourceControlInformation), else $(GITHUB_SHA) — MSBuild imports
+       environment variables as properties, so the GitHub Actions commit SHA is available with NO
+       workflow change. When neither is set (a git-less source drop) the attribute is simply omitted
+       and the About page falls back to the version string. -->
+  <Target Name="AddCommitHashMetadata"
+          BeforeTargets="CoreGenerateAssemblyInfo"
+          DependsOnTargets="InitializeSourceControlInformation"
+          Condition="'$(GenerateAssemblyInfo)' != 'false'">
+    <PropertyGroup>
+      <_CommitHash Condition="'$(SourceRevisionId)' != ''">$(SourceRevisionId)</_CommitHash>
+      <_CommitHash Condition="'$(_CommitHash)' == '' and '$(GITHUB_SHA)' != ''">$(GITHUB_SHA)</_CommitHash>
+    </PropertyGroup>
+    <ItemGroup Condition="'$(_CommitHash)' != ''">
+      <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+        <_Parameter1>CommitHash</_Parameter1>
+        <_Parameter2>$(_CommitHash)</_Parameter2>
+      </AssemblyAttribute>
+    </ItemGroup>
+  </Target>
 </Project>

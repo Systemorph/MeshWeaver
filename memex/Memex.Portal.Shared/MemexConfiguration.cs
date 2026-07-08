@@ -34,6 +34,7 @@ using MeshWeaver.GoogleMaps;
 using MeshWeaver.Data;
 using MeshWeaver.GitSync;
 using MeshWeaver.Graph;
+using MeshWeaver.PluginCatalog;
 using MeshWeaver.InstanceSync;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Markdown.Export.Configuration;
@@ -554,6 +555,14 @@ public static class MemexConfiguration
                 .AddRowLevelSecurity()
                 // Configure graph from the same base path
                 .AddGraph()
+                // Git-based plugin catalog: browse installable folders in a repo and install each
+                // folder's content (and runtime-compiled code) into the mesh by picking a git
+                // commit + folder. Seeds a Plugins space + catalog node pointed at
+                // PluginCatalog:SourceRepoPath (empty -> the catalog shows a "configure me" prompt).
+                .AddPluginCatalog(
+                    configuration["PluginCatalog:SourceRepoPath"] ?? "",
+                    configuration["PluginCatalog:SourceSubdir"] ?? "catalog",
+                    configuration["PluginCatalog:SourceRef"] ?? "HEAD")
                 // Register GitHub-sync content types (GitHubCredential / GitHubSyncConfig)
                 // on the mesh + per-node hubs so their config nodes (de)serialize.
                 .AddGitHubSyncTypes()
@@ -628,7 +637,7 @@ public static class MemexConfiguration
             return (TBuilder)mb
                 .AddSelfRegistry()
                 .AddDocumentation(serveFromPartition)
-                .AddStaticRepoSync(serveFromPartition)
+                .AddStaticRepoSync(serveFromPartition, features.StaticRepoSync.Modes)
                 // Ship compiled releases WHEREVER we ship code NodeTypes — Doc AND the sample
                 // partitions (ACME, FutuRe, Northwind, Cornerstone, MeshWeaver). Pre-build every
                 // shipped code NodeType's release at boot, as System, so the runtime path is a
@@ -750,6 +759,10 @@ public static class MemexConfiguration
                         .AddUpdatePolicySettingsTab()
                         // Public privacy statement (Admin/Privacy, served anonymously at /privacy).
                         .AddPrivacySettingsTab()
+                        // About — exact running build (version + git commit) with a GitHub link. Ungated.
+                        .AddAboutSettingsTab()
+                        // What's New — per-entry release notes shipped as Doc/WhatsNew nodes. Ungated.
+                        .AddWhatsNewSettingsTab()
                         // Token-usage analytics (per-model _Usage satellites): filter by period,
                         // group by model / person / thread, cost from ModelPricing.
                         .AddTokenUsageSettingsTab()

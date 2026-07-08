@@ -42,4 +42,22 @@ public class AiContentSourcesTest
         AiContentSources.ContentPartitions.OrderBy(p => p, System.StringComparer.Ordinal)
             .Should().Equal("Agent", "Harness", "Provider", "Skill");
     }
+
+    /// <summary>
+    /// Every built-in AI catalog defaults to <see cref="PartitionSyncMode.Additive"/> — so a user's own
+    /// skills/agents/providers/harnesses survive the boot re-import (only nodes the build previously
+    /// shipped and has since dropped are pruned). The provider dependency is unused by the
+    /// <c>SyncMode</c> getter (a constant), so a <c>null!</c> provider is fine here.
+    /// </summary>
+    [Fact]
+    public void All_built_in_AI_sources_default_to_Additive_sync_mode()
+    {
+        new IStaticRepoSource[]
+        {
+            new AgentStaticRepoSource(null!),
+            new ModelStaticRepoSource(null!),
+            new HarnessStaticRepoSource(null!),
+            new SkillStaticRepoSource(null!)
+        }.Should().AllSatisfy(s => s.SyncMode.Should().Be(PartitionSyncMode.Additive));
+    }
 }

@@ -35,8 +35,6 @@ public partial class SiteSettingsPanel
     /// <summary>The selected text direction (left-to-right or right-to-left), or <c>null</c> for default.</summary>
     public LocalizationDirection? Direction { get; set; }
 
-    private static IEnumerable<DesignThemeModes> AllModes => Enum.GetValues<DesignThemeModes>();
-
 
     /// <summary>
     /// On the first render, seeds the direction toggle from the shared global state.

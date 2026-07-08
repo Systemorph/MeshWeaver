@@ -58,13 +58,22 @@ public static class StaticRepoImporter
     /// intended mechanism for built-in static-repo content.
     /// Sources are imported sequentially (bounded boot load). Reactive — Subscribe to run.
     /// </summary>
-    public static IObservable<StaticRepoImportResult> ImportAll(IMessageHub hub, ILogger? logger = null)
+    public static IObservable<StaticRepoImportResult> ImportAll(
+        IMessageHub hub, ILogger? logger = null,
+        IReadOnlyDictionary<string, PartitionSyncMode>? syncModeOverrides = null)
     {
         logger ??= hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.Graph.StaticRepoImporter");
         var sources = hub.ServiceProvider.GetServices<IStaticRepoSource>().ToArray();
         if (sources.Length == 0)
             return Observable.Empty<StaticRepoImportResult>();
+
+        // Deploy-time per-partition mode override (Features:StaticRepoSync:Modes) — case-insensitive.
+        // When a partition isn't listed the source's own default SyncMode is used (FullReplace for most,
+        // Additive for the built-in AI catalogs). Null/empty = every source keeps its own default.
+        var modeOverrides = syncModeOverrides is { Count: > 0 }
+            ? new Dictionary<string, PartitionSyncMode>(syncModeOverrides, StringComparer.OrdinalIgnoreCase)
+            : null;
 
         logger?.LogInformation("[StaticRepoImport] sync-context init: {Count} source(s).", sources.Length);
         var accessService = hub.ServiceProvider.GetService<AccessService>();
@@ -96,7 +105,9 @@ public static class StaticRepoImporter
             // continues to the next source. (Per-FILE isolation lives one level deeper, in
             // Run's upsert loop, so a single bad node never fails its whole partition.)
             _ => sources
-                .Select(s => Import(importHub, s, logger)
+                .Select(s => Import(importHub, s, logger,
+                        modeOverrides is not null && modeOverrides.TryGetValue(s.Partition, out var m)
+                            ? m : null)
                     .Catch<StaticRepoImportResult, Exception>(ex =>
                     {
                         logger?.LogWarning(ex, "[StaticRepoImport] source {Partition} failed.", s.Partition);
@@ -137,6 +148,51 @@ public static class StaticRepoImporter
         return previouslyOwned
             .Where(p => !string.IsNullOrEmpty(p) && !current.Contains(p))
             .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    /// <summary>
+    /// The nodes an import should PRUNE for a partition running <paramref name="mode"/>: existing
+    /// partition nodes absent from the current source (<paramref name="sourcePaths"/>), still
+    /// <see cref="SyncBehavior.Include"/>, not governance (<c>_Policy</c>/<c>_Access</c>/<c>_Activity</c>),
+    /// and not at/under a claimed/excluded root (<paramref name="excludedRoots"/>). The mode narrows the
+    /// candidate set:
+    /// <list type="bullet">
+    ///   <item><see cref="PartitionSyncMode.FullReplace"/> — every such extra (mirror the partition to the repo).</item>
+    ///   <item><see cref="PartitionSyncMode.Additive"/> — ONLY extras the source PREVIOUSLY owned
+    ///     (<paramref name="previouslyOwnedPaths"/> = the prior manifest's keys); a user-added node
+    ///     that was never in any manifest is kept.</item>
+    ///   <item><see cref="PartitionSyncMode.UpsertOnly"/> — none (never prune).</item>
+    /// </list>
+    /// Pure + case-insensitive so the prune DECISION is unit-testable without a database. This is the
+    /// per-partition policy; the per-node <see cref="SyncBehavior"/> guard above applies in every mode
+    /// (a claimed node is never a candidate).
+    /// </summary>
+    public static IReadOnlyList<MeshNode> ComputePrunableNodes(
+        IEnumerable<MeshNode> existing,
+        IEnumerable<string> sourcePaths,
+        IEnumerable<string> previouslyOwnedPaths,
+        IEnumerable<string> excludedRoots,
+        PartitionSyncMode mode)
+    {
+        if (mode == PartitionSyncMode.UpsertOnly)
+            return Array.Empty<MeshNode>();
+
+        var source = new HashSet<string>(
+            sourcePaths.Where(p => !string.IsNullOrEmpty(p)), StringComparer.OrdinalIgnoreCase);
+        var previouslyOwned = new HashSet<string>(
+            previouslyOwnedPaths.Where(p => !string.IsNullOrEmpty(p)), StringComparer.OrdinalIgnoreCase);
+        var excluded = excludedRoots.ToArray();
+
+        return existing
+            .Where(t => !string.IsNullOrEmpty(t.Path)
+                        && !source.Contains(t.Path)
+                        && t.SyncBehavior == SyncBehavior.Include
+                        && !IsGovernance(t)
+                        && !excluded.Any(root => IsAtOrUnder(t.Path, root))
+                        // Additive: only prune what the source PREVIOUSLY owned — a user-added node
+                        // (never in a manifest) survives. FullReplace prunes every extra.
+                        && (mode != PartitionSyncMode.Additive || previouslyOwned.Contains(t.Path)))
             .ToArray();
     }
 
@@ -283,13 +339,19 @@ public static class StaticRepoImporter
     /// <param name="hub">The hub the import runs on (typically the dedicated import hub).</param>
     /// <param name="source">The static-repo source to materialize.</param>
     /// <param name="logger">Optional logger; resolved from the hub when null.</param>
+    /// <param name="syncModeOverride">Optional deploy-time override of the partition's
+    /// <see cref="PartitionSyncMode"/>; when null the source's own <see cref="IStaticRepoSource.SyncMode"/>
+    /// is used.</param>
     /// <returns>An observable that emits the import outcome for the partition.</returns>
     public static IObservable<StaticRepoImportResult> Import(
-        IMessageHub hub, IStaticRepoSource source, ILogger? logger = null)
+        IMessageHub hub, IStaticRepoSource source, ILogger? logger = null,
+        PartitionSyncMode? syncModeOverride = null)
     {
         logger ??= hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.Graph.StaticRepoImporter");
         var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
+        // Effective per-partition prune policy: the deploy-time override wins, else the source's default.
+        var syncMode = syncModeOverride ?? source.SyncMode;
 
         var nodes = source.EnumerateSourceNodes();
         // The partition root (namespace="", id=Partition) is a STANDARD part of every import — a
@@ -373,7 +435,7 @@ public static class StaticRepoImporter
                         }
                     };
                     return Upsert(hub, activityNode)
-                        .SelectMany(_ => Run(hub, source, nodes, root, activityPath, fingerprint, logger))
+                        .SelectMany(_ => Run(hub, source, nodes, root, activityPath, fingerprint, syncMode, logger))
                         .Catch<StaticRepoImportResult, Exception>(ex =>
                         {
                             logger?.LogWarning(ex,
@@ -421,7 +483,7 @@ public static class StaticRepoImporter
 
     private static IObservable<StaticRepoImportResult> Run(
         IMessageHub hub, IStaticRepoSource source, IReadOnlyList<MeshNode> nodes,
-        MeshNode root, string activityPath, string fingerprint, ILogger? logger)
+        MeshNode root, string activityPath, string fingerprint, PartitionSyncMode syncMode, ILogger? logger)
     {
         var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
         NodeTypeCompilationActivity.AppendLog(
@@ -568,20 +630,16 @@ public static class StaticRepoImporter
 
                 return upserted.SelectMany(count =>
                 {
-                    // Prune (full-replace): targets absent from source AND still Include AND not
-                    // governance/satellite AND not under a claimed subtree. User-claimed nodes,
-                    // _Policy/_Access governance, and the _Activity import history all survive.
-                    var sourcePaths = nodes
-                        .Select(n => n.Path)
-                        .ToHashSet(StringComparer.OrdinalIgnoreCase);
-                    var toPrune = existing.Values
-                        .Where(t => !sourcePaths.Contains(t.Path)
-                                    && t.SyncBehavior == SyncBehavior.Include
-                                    && !IsGovernance(t)
-                                    && !excludedRoots.Any(root => IsAtOrUnder(t.Path, root)))
-                        .ToArray();
+                    // Prune per the partition's PartitionSyncMode. In every mode the guards hold: a
+                    // pruned node is absent from the source AND still Include AND not governance
+                    // (_Policy/_Access/_Activity) AND not under a claimed subtree. The MODE narrows the
+                    // candidate set: FullReplace prunes every such extra (mirror the partition to the
+                    // repo); Additive prunes ONLY nodes the source PREVIOUSLY owned (the prior manifest's
+                    // keys) so user-added nodes survive; UpsertOnly prunes nothing. See ComputePrunableNodes.
+                    var toPrune = ComputePrunableNodes(
+                        existing.Values, nodes.Select(n => n.Path), manifest.Keys, excludedRoots, syncMode);
 
-                    var pruned = toPrune.Length == 0
+                    var pruned = toPrune.Count == 0
                         ? Observable.Return(0)
                         : toPrune
                             .Select(t => AsSystem(hub, () => meshService.DeleteNode(t.Path))
