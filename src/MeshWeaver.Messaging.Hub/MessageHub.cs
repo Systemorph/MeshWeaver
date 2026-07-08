@@ -1147,7 +1147,13 @@ public sealed class MessageHub : IMessageHub
         if (traceEnabled)
             logger.LogTrace("MESSAGE_FLOW: HUB_CALLBACKS_COMPLETE | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
                 messageTypeName, Address, delivery.Id);
-        return Observable.Return(delivery.Processed());
+        // Stamp "a live Observe callback consumed this" so later rules can tell an AWAITED
+        // response apart from an un-awaited one. The rule chain keeps running after this rule
+        // (HandleCallbacks runs first), and the portal's DeliveryFailure→modal handler must NOT
+        // re-surface a failure the call site's OnError already handled (e.g. StartThread's
+        // user-partition fallback) — that double-report was the raw "Access denied … lacks
+        // Thread permission" modal popping despite the fallback succeeding.
+        return Observable.Return(delivery.Processed().SetProperty(PostOptions.CallbackDispatched, true));
     }
 
     Address IMessageHub.Address => Address;
