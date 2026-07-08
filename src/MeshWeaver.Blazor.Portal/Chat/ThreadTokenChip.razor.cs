@@ -41,13 +41,19 @@ public partial class ThreadTokenChip : ComponentBase, IDisposable
 
     private long _totalInput;
     private long _totalOutput;
+    private long _totalCacheRead;
+    private long _totalCacheWrite;
     private decimal _totalCost;
     private IReadOnlyList<ModelRow> _rows = [];
 
     private bool HasData => _rows.Count > 0;
 
+    // When any prompt caching happened, surface how much of the input was cache hits — the whole
+    // point of the fix is that this used to be invisible. e.g. "↑1.2M ↓3.4k ⚡0.9M cached · $2.10".
     private string ChipLabel
-        => $"↑{FormatCompact(_totalInput)} ↓{FormatCompact(_totalOutput)} · {FormatCost(_totalCost)}";
+        => _totalCacheRead > 0 || _totalCacheWrite > 0
+            ? $"↑{FormatCompact(_totalInput)} ↓{FormatCompact(_totalOutput)} ⚡{FormatCompact(_totalCacheRead + _totalCacheWrite)} cached · {FormatCost(_totalCost)}"
+            : $"↑{FormatCompact(_totalInput)} ↓{FormatCompact(_totalOutput)} · {FormatCost(_totalCost)}";
 
     /// <summary>
     /// Resolves the logger for the chip. Subscription setup is deferred to
@@ -102,6 +108,8 @@ public partial class ThreadTokenChip : ComponentBase, IDisposable
     {
         long totalIn = 0;
         long totalOut = 0;
+        long totalCacheRead = 0;
+        long totalCacheWrite = 0;
         decimal cost = 0m;
         var rows = new List<ModelRow>();
         foreach (var node in nodes ?? [])
@@ -111,12 +119,20 @@ public partial class ThreadTokenChip : ComponentBase, IDisposable
                 continue;
             totalIn += usage.InputTokens;
             totalOut += usage.OutputTokens;
-            cost += ModelPricing.Default(usage.Model)?.Cost(usage.InputTokens, usage.OutputTokens) ?? 0m;
-            rows.Add(new ModelRow(usage.Model, usage.InputTokens, usage.OutputTokens));
+            totalCacheRead += usage.CacheReadTokens;
+            totalCacheWrite += usage.CacheWriteTokens;
+            // Cache-aware cost: cache reads bill at the reduced rate, writes at the premium — pricing
+            // the whole input at the standard rate would badly over-state a cache-heavy agent's cost.
+            cost += ModelPricing.Default(usage.Model)
+                ?.Cost(usage.InputTokens, usage.OutputTokens, usage.CacheReadTokens, usage.CacheWriteTokens) ?? 0m;
+            rows.Add(new ModelRow(usage.Model, usage.InputTokens, usage.OutputTokens,
+                usage.CacheReadTokens, usage.CacheWriteTokens));
         }
 
         _totalInput = totalIn;
         _totalOutput = totalOut;
+        _totalCacheRead = totalCacheRead;
+        _totalCacheWrite = totalCacheWrite;
         _totalCost = cost;
         _rows = rows
             .OrderByDescending(r => r.Input + r.Output)
@@ -174,5 +190,5 @@ public partial class ThreadTokenChip : ComponentBase, IDisposable
         _subscription = null;
     }
 
-    private sealed record ModelRow(string Model, long Input, long Output);
+    private sealed record ModelRow(string Model, long Input, long Output, long CacheRead, long CacheWrite);
 }

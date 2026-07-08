@@ -17,6 +17,15 @@ public class AzureClaudeChatClient : IChatClient
     private const string AnthropicVersion = "2023-06-01";
     private const int DefaultMaxTokens = 16384;
 
+    /// <summary>
+    /// Ephemeral prompt-cache breakpoint (<c>{"type":"ephemeral"}</c>). Attached to the LAST tool and
+    /// the system prompt so Anthropic caches the large, static prefix (tool schemas + the agent's
+    /// instructions) — on a multi-round agent turn every round after the first re-reads that prefix at
+    /// the reduced cache-read rate instead of full input price. Below the model's minimum cacheable
+    /// size Anthropic simply doesn't cache (no error), so it is always safe to mark.
+    /// </summary>
+    private static readonly object EphemeralCacheControl = new { type = "ephemeral" };
+
     private readonly HttpClient httpClient;
     private readonly string endpoint;
     private readonly string apiKey;
@@ -146,6 +155,11 @@ public class AzureClaudeChatClient : IChatClient
         // once on message_start and cumulative output-tokens on message_delta).
         var inputTokens = 0;
         var outputTokens = 0;
+        // Prompt-cache counts, reported alongside input_tokens on message_start. On the
+        // Anthropic wire input_tokens EXCLUDES these, so they used to be invisible; capture
+        // them and fold into the reported total below (UsageTokens convention).
+        var cacheReadTokens = 0;
+        var cacheCreationTokens = 0;
 
         while ((line = await reader.ReadLineAsync(cancellationToken)) != null)
         {
@@ -179,6 +193,8 @@ public class AzureClaudeChatClient : IChatClient
                         // Anthropic reports cumulative output tokens on message_delta;
                         // seed with any initial value on message_start.
                         outputTokens = startUsage.OutputTokens;
+                        cacheReadTokens = startUsage.CacheReadInputTokens;
+                        cacheCreationTokens = startUsage.CacheCreationInputTokens;
                     }
                     break;
 
@@ -254,20 +270,43 @@ public class AzureClaudeChatClient : IChatClient
                 case "message_stop":
                     // Final UsageContent carries the totals — ThreadExecution stamps the
                     // response cell's InputTokens/OutputTokens/TotalTokens from this.
-                    if (inputTokens > 0 || outputTokens > 0)
+                    if (inputTokens > 0 || outputTokens > 0 || cacheReadTokens > 0 || cacheCreationTokens > 0)
                     {
                         yield return new ChatResponseUpdate(ChatRole.Assistant, [
-                            new UsageContent(new UsageDetails
-                            {
-                                InputTokenCount = inputTokens,
-                                OutputTokenCount = outputTokens,
-                                TotalTokenCount = inputTokens + outputTokens
-                            })
+                            BuildUsageContent(inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens)
                         ]);
                     }
                     break;
             }
         }
+    }
+
+    /// <summary>
+    /// Builds the final <see cref="UsageContent"/> from the Anthropic usage counters, NORMALISING to
+    /// the <see cref="UsageTokens"/> convention: Anthropic's <c>input_tokens</c> EXCLUDES cached
+    /// tokens, so the true prompt-token total is <c>input + cache_read + cache_creation</c>. That full
+    /// total becomes <see cref="UsageDetails.InputTokenCount"/> (so the "in" counter stops
+    /// under-reporting cached context), and the cache breakdown is carried in
+    /// <see cref="UsageDetails.AdditionalCounts"/> for accurate cost + the counter's cache line.
+    /// </summary>
+    private static UsageContent BuildUsageContent(int inputTokens, int outputTokens, int cacheReadTokens, int cacheCreationTokens)
+    {
+        var totalInput = inputTokens + cacheReadTokens + cacheCreationTokens;
+        var details = new UsageDetails
+        {
+            InputTokenCount = totalInput,
+            OutputTokenCount = outputTokens,
+            TotalTokenCount = totalInput + outputTokens
+        };
+        if (cacheReadTokens > 0 || cacheCreationTokens > 0)
+        {
+            details.AdditionalCounts = new AdditionalPropertiesDictionary<long>();
+            if (cacheReadTokens > 0)
+                details.AdditionalCounts[UsageTokens.CacheReadKey] = cacheReadTokens;
+            if (cacheCreationTokens > 0)
+                details.AdditionalCounts[UsageTokens.CacheWriteKey] = cacheCreationTokens;
+        }
+        return new UsageContent(details);
     }
 
     /// <inheritdoc />
@@ -384,8 +423,15 @@ public class AzureClaudeChatClient : IChatClient
         var request = new ClaudeRequest
         {
             Model = modelId,
+            // System sent as a content-block array so the agent's (large, static) instructions carry a
+            // prompt-cache breakpoint; a bare string when there's no system prompt.
+            System = string.IsNullOrEmpty(systemPrompt)
+                ? null
+                : new List<ClaudeSystemBlock>
+                {
+                    new() { Type = "text", Text = systemPrompt, CacheControl = EphemeralCacheControl }
+                },
             Messages = claudeMessages,
-            System = systemPrompt,
             MaxTokens = options?.MaxOutputTokens ?? DefaultMaxTokens,
             Temperature = options?.Temperature,
             TopP = options?.TopP,
@@ -399,6 +445,10 @@ public class AzureClaudeChatClient : IChatClient
                 .OfType<AIFunction>()
                 .Select(ConvertToClaudeTool)
                 .ToList();
+            // Cache breakpoint on the LAST tool → Anthropic caches the whole tools block (order is
+            // tools → system → messages), so tool schemas + instructions are the cached prefix.
+            if (request.Tools.Count > 0)
+                request.Tools[^1].CacheControl = EphemeralCacheControl;
         }
 
         return request;
@@ -525,12 +575,12 @@ public class AzureClaudeChatClient : IChatClient
         {
             FinishReason = ConvertStopReason(response.StopReason),
             ModelId = response.Model,
+            // Same normalisation as the streaming path — fold the prompt-cache counts into the
+            // input total and carry the breakdown in AdditionalCounts (UsageTokens convention).
             Usage = response.Usage != null
-                ? new UsageDetails
-                {
-                    InputTokenCount = response.Usage.InputTokens,
-                    OutputTokenCount = response.Usage.OutputTokens
-                }
+                ? BuildUsageContent(
+                    response.Usage.InputTokens, response.Usage.OutputTokens,
+                    response.Usage.CacheReadInputTokens, response.Usage.CacheCreationInputTokens).Details
                 : null
         };
     }
@@ -553,12 +603,21 @@ public class AzureClaudeChatClient : IChatClient
     {
         public string Model { get; set; } = null!;
         public List<ClaudeMessage> Messages { get; set; } = new();
-        public string? System { get; set; }
+        /// <summary>String OR a <c>List&lt;ClaudeSystemBlock&gt;</c> (blocks carry the cache breakpoint).</summary>
+        public object? System { get; set; }
         public int MaxTokens { get; set; }
         public float? Temperature { get; set; }
         public float? TopP { get; set; }
         public bool Stream { get; set; }
         public List<ClaudeTool>? Tools { get; set; }
+    }
+
+    private class ClaudeSystemBlock
+    {
+        public string Type { get; set; } = "text";
+        public string? Text { get; set; }
+        /// <summary>Serialised as <c>cache_control</c> (snake_case); omitted when null.</summary>
+        public object? CacheControl { get; set; }
     }
 
     private class ClaudeMessage
@@ -585,6 +644,8 @@ public class AzureClaudeChatClient : IChatClient
         public string Name { get; set; } = null!;
         public string? Description { get; set; }
         public object InputSchema { get; set; } = null!;
+        /// <summary>Serialised as <c>cache_control</c> (snake_case); set on the last tool to cache the tools block. Omitted when null.</summary>
+        public object? CacheControl { get; set; }
     }
 
     private class ClaudeResponse
@@ -611,6 +672,11 @@ public class AzureClaudeChatClient : IChatClient
     {
         public int InputTokens { get; set; }
         public int OutputTokens { get; set; }
+        // Prompt-cache counts (JsonOptions uses snake_case → cache_read_input_tokens /
+        // cache_creation_input_tokens). Anthropic reports these SEPARATELY from input_tokens; they
+        // used to be dropped, so the counter under-reported the real cached context.
+        public int CacheReadInputTokens { get; set; }
+        public int CacheCreationInputTokens { get; set; }
     }
 
     private class ClaudeStreamEvent
