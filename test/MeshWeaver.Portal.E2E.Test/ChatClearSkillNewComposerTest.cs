@@ -26,7 +26,11 @@ public class ChatClearSkillNewComposerTest(PortalFixture fixture)
     // FIRST message on a cold portal cold-starts several hubs before the side-panel swap renders the bubble.
     private static readonly int BubbleMs = 90_000;
 
-    // A LanguageModel node that actually EXISTS in the catalog.
+    // A LanguageModel node that actually EXISTS in the catalog (env-overridable via E2E_MODEL). NOTE: the
+    // older chat E2E tests default to "…/qwen-small", but that path has drifted to a ":latest" tag and no
+    // longer resolves — so we default to a current node. This test is robust to the model anyway: the user
+    // bubble it asserts is optimistic (StartThread does not resolve the model), and SkipIfNoModelAsync skips
+    // when the catalog is empty; the model only affects the (unawaited) assistant round.
     private static readonly string ModelPath =
         Environment.GetEnvironmentVariable("E2E_MODEL") ?? "Provider/OpenAICompatible/qwen3.6-code:latest";
 
@@ -101,17 +105,12 @@ public class ChatClearSkillNewComposerTest(PortalFixture fixture)
         var token = await fixture.MintTokenAsync(context);
         try { await fixture.CreateNodeAsync(context, token, ComposerSeedJson); }
         catch (InvalidOperationException) { /* already seeded — fine */ }
-        await context.APIRequest.PostAsync($"{fixture.BaseUrl}/api/mesh/patch", new APIRequestContextOptions
-        {
-            Headers = new Dictionary<string, string> { ["authorization"] = $"Bearer {token}" },
-            DataObject = new
-            {
-                Path = $"{fixture.UserId}/_Thread/ThreadComposer",
-                Fields = "{\"content\":{\"$type\":\"ThreadComposer\",\"harness\":\"Harness/MeshWeaver\","
-                       + "\"agentName\":\"Agent/Assistant\",\"modelName\":\"" + ModelPath + "\","
-                       + "\"contextPath\":\"" + fixture.UserId + "\",\"messageContent\":null,\"openThreadPath\":null}}"
-            }
-        });
+        // PatchNodeAsync throws on a non-success response, so setup is deterministic (never silently
+        // inherits a prior test's harness/model left on the shared composer node).
+        await fixture.PatchNodeAsync(context, token, $"{fixture.UserId}/_Thread/ThreadComposer",
+            "{\"content\":{\"$type\":\"ThreadComposer\",\"harness\":\"Harness/MeshWeaver\","
+            + "\"agentName\":\"Agent/Assistant\",\"modelName\":\"" + ModelPath + "\","
+            + "\"contextPath\":\"" + fixture.UserId + "\",\"messageContent\":null,\"openThreadPath\":null}}");
         return context;
     }
 
