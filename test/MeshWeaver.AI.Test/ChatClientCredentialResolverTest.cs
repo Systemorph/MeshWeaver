@@ -278,8 +278,103 @@ public class ChatClientCredentialResolverTest : AITestBase
             "the canonical wire id of a path selection is the node's ModelDefinition.Id");
         resolver.ResolveModelId(modelId).Should().Be(modelId,
             "bare ids pass through unchanged");
-        resolver.ResolveModelId($"{root}/nope/never-{suffix}").Should().Be($"{root}/nope/never-{suffix}",
-            "an unknown path passes through unchanged (caller falls back)");
+        resolver.ResolveModelId($"{root}/nope/never-{suffix}").Should().Be($"never-{suffix}",
+            "an UNRESOLVED path yields its LAST SEGMENT as the wire id — sending the whole path as the " +
+            "model name 400s (ResolveModelId's documented fallback); only a bare id passes through unchanged");
+    }
+
+    /// <summary>
+    /// OpenRouter-style org/model slugs ("z-ai/glm-5.2") are WIRE IDS that themselves contain
+    /// '/'. The factory re-normalizes the already-bare id through
+    /// <see cref="ChatClientCredentialResolver.ResolveModelId"/> (double normalization: the
+    /// round's Initialize collapsed the picker path first) — the unresolved-path last-segment
+    /// fallback must NOT fire on a REGISTERED slug id, else "z-ai/glm-5.2" becomes "glm-5.2",
+    /// resolves no credentials, and every round dies with "ApiKey is missing for model
+    /// 'glm-5.2'" on a fully configured deployment (memex prod, 2026-07-07).
+    /// </summary>
+    [Fact]
+    public async Task ResolveModelId_OrgSlashModelSlugId_SurvivesDoubleNormalization()
+    {
+        var root = ModelProviderNodeType.RootNamespace; // "Provider"
+        var suffix = Guid.NewGuid().ToString("N")[..8];
+        var providerName = $"OpenRouter{suffix}";
+        var providerPath = $"{root}/{providerName}";
+        var modelId = $"z-ai/glm-{suffix}";            // the wire id CONTAINS '/'
+        var modelPath = $"{providerPath}/{modelId}";   // node path = Provider/{p}/z-ai/glm-…
+
+        await MeshService.CreateNode(new MeshNode(providerName, root)
+        {
+            NodeType = ModelProviderNodeType.NodeType,
+            Name = providerName,
+            State = MeshNodeState.Active,
+            Content = new ModelProviderConfiguration
+            {
+                Provider = providerName,
+                ApiKey = "sk-openrouter-key",
+                Endpoint = "https://openrouter.example/api/v1",
+            }
+        }).Should().Within(15.Seconds()).Emit();
+
+        await MeshService.CreateNode(new MeshNode(modelId, providerPath)
+        {
+            NodeType = LanguageModelNodeType.NodeType,
+            Name = modelId,
+            State = MeshNodeState.Active,
+            Content = new ModelDefinition
+            {
+                Id = modelId,
+                Provider = providerName,
+                ProviderRef = providerPath,
+            }
+        }).Should().Within(15.Seconds()).Emit();
+
+        var resolver = Mesh.ServiceProvider.GetRequiredService<ChatClientCredentialResolver>();
+        resolver.EnsureSubscription();
+
+        // Warm-gate: the slug id resolves its provider credentials once the snapshot is warm.
+        await Observable.Interval(TimeSpan.FromMilliseconds(50))
+            .Select(_ => resolver.Resolve(modelId))
+            .Should().Within(10.Seconds()).Match(r => r.ApiKey != null);
+
+        // The picker-path form collapses to the FULL slug id — never its last segment.
+        resolver.ResolveModelId(modelPath).Should().Be(modelId,
+            "the canonical wire id of a path selection is the node's ModelDefinition.Id — including its 'org/' prefix");
+
+        // 🎯 The regression: re-normalizing the ALREADY-BARE slug id (what the factory does)
+        // must pass it through unchanged, not last-segment it into an unresolvable id.
+        resolver.ResolveModelId(modelId).Should().Be(modelId,
+            "a registered wire id that itself contains '/' must survive double normalization");
+
+        // End-to-end: the (double-normalized) id still resolves the provider's credentials.
+        var resolution = resolver.Resolve(resolver.ResolveModelId(modelId)!);
+        resolution.ApiKey.Should().Be("sk-openrouter-key");
+        resolution.Endpoint.Should().Be("https://openrouter.example/api/v1");
+
+        // A genuinely unresolved path (not a registered id) keeps the documented last-segment fallback.
+        resolver.ResolveModelId($"{root}/nope/never-{suffix}").Should().Be($"never-{suffix}");
+    }
+
+    /// <summary>
+    /// Cold-start guard (Copilot review finding on #367): a slash-bearing value with NO catalog
+    /// marker segment (Provider / _Memex) is an org/model wire id we simply don't know — an
+    /// UNRECOGNIZED slug (cold snapshot, unseeded model) passes through rather than being
+    /// last-segmented into an unresolvable id. Only node-path-shaped values keep the fallback.
+    /// </summary>
+    [Fact]
+    public void ResolveModelId_UnknownOrgSlashModelSlug_PassesThrough_NodePathsStillLastSegment()
+    {
+        var resolver = Mesh.ServiceProvider.GetRequiredService<ChatClientCredentialResolver>();
+
+        // Never registered anywhere — no snapshot entry, no config seed. Must NOT be mangled.
+        resolver.ResolveModelId("some-org/some-model-nobody-seeded").Should()
+            .Be("some-org/some-model-nobody-seeded",
+                "an unrecognized org/model slug is a wire id, not a node path — mangling it can only break the round");
+
+        // Node-path-shaped values (catalog marker segment) keep the documented last-segment fallback.
+        resolver.ResolveModelId("Provider/OpenAICompatible/qwen-unseeded:latest").Should()
+            .Be("qwen-unseeded:latest");
+        resolver.ResolveModelId("someuser/_Memex/OpenRouter/own-model-unseeded").Should()
+            .Be("own-model-unseeded");
     }
 
     [Fact]

@@ -12,7 +12,7 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 | | [Calling Python](../CallingPython) | This page |
 |---|---|---|
 | Python is a… | short-lived process | connected mesh **participant** (`py/pandas`) |
-| Data source | inline in the script | a **CSV file kept in content** (`PythonDemo/SalesData`) |
+| Data source | inline in the script | a **CSV file kept in content** (`Doc/DataMesh/PythonPandasNode/SalesData`) |
 | State | none (fresh each call) | a **live DataFrame held in the participant** |
 | Output | markdown text | a real **`DataGridControl`** (sortable, formatted) |
 
@@ -20,7 +20,7 @@ The working code lives in the Python client package: `clients/python/meshweaver/
 
 ## The file kept in content
 
-The data source is an ordinary mesh node, `PythonDemo/SalesData` — a Markdown node whose body carries the CSV in a fenced block, so it renders as a readable table-of-text in the portal and stays **hand-editable** like any other content:
+The data source is an ordinary mesh node, `Doc/DataMesh/PythonPandasNode/SalesData` — a Markdown node whose body carries the CSV in a fenced block, so it renders as a readable table-of-text in the portal and stays **hand-editable** like any other content:
 
 ````markdown
 # Sales Data
@@ -56,7 +56,7 @@ Both surfaces act on the **same** held DataFrame:
 
 ```mermaid
 graph LR
-    S[(PythonDemo/SalesData<br/>CSV file in content)] -- Mesh.get --> B[py/pandas participant]
+    S[(Doc/…/SalesData<br/>CSV file in content)] -- Mesh.get --> B[py/pandas participant]
     A[C# frontend / agent] -- PandasCommand / SubmitCode --> B
     B -- holds --> D[(live pandas DataFrame)]
     B -- render --> G[DataGridControl JSON]
@@ -119,7 +119,7 @@ A `render` (or any analytical command) replies with the grid **as a `DataGridCon
 
 ## The interactive frontend — the `PandasExplorer` node
 
-The Python participant is the backend. **A .NET NodeType is the frontend that drives it.** `PandasExplorer` (`samples/Graph/Data/PythonDemo/PandasExplorer/`) is an ordinary mesh NodeType whose layout area (`PandasExplorerLayoutAreas.Explorer`) is a toolbar of **real framework controls** above a **live `DataGridControl`** — no hand-rolled HTML, no markdown for the data. Its content record carries `SourcePath` — the mesh path of the CSV file in content — so different explorer instances can point at different data files.
+The Python participant is the backend. **A .NET NodeType is the frontend that drives it.** `PandasExplorer` (`src/MeshWeaver.Documentation/Data/DataMesh/PythonPandasNode/PandasExplorer/`) is an ordinary mesh NodeType whose layout area (`PandasExplorerLayoutAreas.Explorer`) is a toolbar of **real framework controls** above a **live `DataGridControl`** — no hand-rolled HTML, no markdown for the data. Its content record carries `SourcePath` — the mesh path of the CSV file in content — so different explorer instances can point at different data files.
 
 ```mermaid
 graph LR
@@ -174,7 +174,16 @@ python -m meshweaver.examples.pandas_node --url https://memex.meshweaver.cloud -
 
 The bidi participant connection is native gRPC at the ordinary portal URL (the deployment routes `meshweaver.v1.Mesh/Open` to a dedicated HTTP/2 port — see the transport note in [A standalone hub in Python](../PythonStandaloneHub)); a gate shipping in the portal's own pod uses the trusted loopback endpoint instead, with no token at all. The `PandasCommand` protocol itself needs **no server-side registration**: the participant's proxy hub forwards unregistered types verbatim (`RawJsonPassThrough`).
 
-Then open the `PythonDemo/PandasExplorer/LiveFrame` node in the portal and press **Load sales CSV**: the participant reads `PythonDemo/SalesData` over the mesh, parses it, and the grid renders the file's contents. Edit the CSV node and load again to see the change flow through.
+### See it live
+
+The `LiveFrame` explorer ships in this partition and is embedded below — a real toolbar over a live
+`DataGridControl`. Press **Load sales CSV**: the participant reads `SalesData` over the mesh, parses it
+with `pandas.read_csv`, and the grid renders the file. With no `py/pandas` participant attached it shows
+the informative notice instead (the pattern working, not failing):
+
+@@/Doc/DataMesh/PythonPandasNode/PandasExplorer/LiveFrame
+
+Edit the CSV node and load again to see the change flow through.
 
 ## Proof it's a real grid, not markdown
 

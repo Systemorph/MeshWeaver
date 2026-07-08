@@ -10,3 +10,13 @@ declare module "text-encoding" {
   export const TextEncoder: any;
   export const TextDecoder: any;
 }
+// Native-only HTML renderer (consumed exclusively by nativeHtml.native.tsx; the web build never bundles it).
+declare module "react-native-render-html" {
+  const RenderHtml: any;
+  export default RenderHtml;
+}
+// Native-only SVG renderer (nativeHtml.native.tsx renders <img src="*.svg"> via SvgUri).
+declare module "react-native-svg" {
+  export const SvgUri: any;
+  export const SvgXml: any;
+}

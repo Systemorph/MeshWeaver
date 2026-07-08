@@ -58,7 +58,6 @@ public class SpaceNodeCreationTest(ITestOutputHelper output) : MonolithMeshTestB
 
         var spaceContent = new Space
         {
-            Name = "Acme Corp",
             Description = "A test space",
             Website = "https://acme.example.com",
             Location = "Switzerland",

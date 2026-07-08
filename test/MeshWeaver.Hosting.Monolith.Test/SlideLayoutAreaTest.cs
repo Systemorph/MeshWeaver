@@ -164,7 +164,7 @@ public class SlideLayoutAreaTest(ITestOutputHelper output) : MonolithMeshTestBas
         {
             Name = "Training Deck",
             NodeType = SpaceNodeType.NodeType,
-            Content = new Space { Name = "Training Deck" }
+            Content = new Space()
         }).Should().Emit();
 
         var first = $"{deck}/intro";

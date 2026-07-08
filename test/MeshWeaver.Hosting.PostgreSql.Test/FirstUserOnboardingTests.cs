@@ -176,7 +176,7 @@ public class FirstUserOnboardingTests
                 Name = $"{org} Corp",
                 NodeType = SpaceNodeType.NodeType,
                 State = MeshNodeState.Active,
-                Content = new Space { Name = $"{org} Corp" }
+                Content = new Space()
             }, _options).Should().Within(30.Seconds()).Emit();
 
             // Register Organization as public_read in each org schema

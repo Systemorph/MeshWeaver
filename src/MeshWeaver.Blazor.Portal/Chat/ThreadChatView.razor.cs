@@ -3492,8 +3492,12 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             ? itProp.GetInt32() : null;
         int? outputTokens = je.TryGetProperty("outputTokens", out var otProp) && otProp.ValueKind == JsonValueKind.Number
             ? otProp.GetInt32() : null;
+        int? cacheReadTokens = je.TryGetProperty("cacheReadTokens", out var crProp) && crProp.ValueKind == JsonValueKind.Number
+            ? crProp.GetInt32() : null;
+        int? cacheWriteTokens = je.TryGetProperty("cacheWriteTokens", out var cwProp) && cwProp.ValueKind == JsonValueKind.Number
+            ? cwProp.GetInt32() : null;
 
-        var newState = new MessageBubbleState(role, author, modelName, timestamp, text, toolCalls, updatedNodes, status, completedAt, harness, inputTokens, outputTokens);
+        var newState = new MessageBubbleState(role, author, modelName, timestamp, text, toolCalls, updatedNodes, status, completedAt, harness, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens);
         var prev = messageStates.GetValueOrDefault(id);
         if (Equals(prev, newState)) return;
 

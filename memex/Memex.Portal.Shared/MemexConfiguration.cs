@@ -12,6 +12,7 @@ using MeshWeaver.AI.OpenAI;
 using MeshWeaver.AI.ClaudeCode;
 using MeshWeaver.AI.Copilot;
 using MeshWeaver.Blazor.AI;
+using MeshWeaver.Speech;
 using MeshWeaver.Blazor.GoogleMaps;
 using MeshWeaver.Blazor.Graph;
 using MeshWeaver.Blazor.Infrastructure;
@@ -332,6 +333,12 @@ public static class MemexConfiguration
                     MeshWeaver.Mesh.INodeMenuProvider,
                     Memex.Portal.Shared.Social.LinkedInCredentialMenuProvider>());
 
+            // Add the Publish/Refresh-engagement actions to a social-media Post node's menu.
+            services.TryAddEnumerable(
+                Microsoft.Extensions.DependencyInjection.ServiceDescriptor.Scoped<
+                    MeshWeaver.Mesh.INodeMenuProvider,
+                    Memex.Portal.Shared.Social.SocialPostMenuProvider>());
+
             // (Removed: SocialMediaUserMenuProvider — hardcoded a NodeType
             // ("Systemorph/SocialMediaHub") that isn't registered anywhere in
             // the codebase. NodeTypes belong in the database (NodeTypeDefinition
@@ -432,6 +439,12 @@ public static class MemexConfiguration
         // REST surface for the mesh — same Bearer-token policy as MCP, lifts the
         // multipart upload size cap. See MeshApiEndpoints.
         services.AddMeshApi();
+
+        // Centralized speech-to-text: registers ISpeechTranscriber (the Whisper container client)
+        // and binds the `Speech` config section (Endpoint/Language/Enabled). The client-facing
+        // POST /api/speech/transcribe endpoint (MapSpeechApi) forwards audio to the container, so
+        // the model host stays behind portal auth. See Doc/Architecture/CentralizedSpeech.
+        services.AddSpeechTranscription(builder.Configuration);
     }
 
     extension<TBuilder>(TBuilder builder) where TBuilder : MeshBuilder
@@ -737,6 +750,10 @@ public static class MemexConfiguration
                         .AddUpdatePolicySettingsTab()
                         // Public privacy statement (Admin/Privacy, served anonymously at /privacy).
                         .AddPrivacySettingsTab()
+                        // About — exact running build (version + git commit) with a GitHub link. Ungated.
+                        .AddAboutSettingsTab()
+                        // What's New — per-entry release notes shipped as Doc/WhatsNew nodes. Ungated.
+                        .AddWhatsNewSettingsTab()
                         // Token-usage analytics (per-model _Usage satellites): filter by period,
                         // group by model / person / thread, cost from ModelPricing.
                         .AddTokenUsageSettingsTab()
@@ -959,6 +976,10 @@ public static class MemexConfiguration
         // Same Bearer auth policy as /mcp; multipart upload at /api/mesh/upload.
         app.MapMeshApi();
 
+        // Centralized speech-to-text — POST /api/speech/transcribe (multipart audio → text),
+        // behind the same Bearer policy; forwards to the Whisper container via ISpeechTranscriber.
+        app.MapSpeechApi();
+
         app.MapMeshWeaver();
 
         // Frontend toggle endpoint: GET /frontend/{react|blazor|clear} sets/clears the per-user
@@ -969,6 +990,15 @@ public static class MemexConfiguration
         // Social publishing — LinkedIn connect/pull endpoints. Must be AFTER
         // UseAuthentication so HttpContext.User is populated.
         app.MapLinkedInConnect();
+
+        // LinkedIn company-Page sync (Community Management API) — org-scope OAuth +
+        // posts/statistics pull. Same ordering requirement (needs HttpContext.User).
+        app.MapLinkedInPageSync();
+
+        // LinkedIn member publishing + engagement — POST /linkedin/publish (JSON API) plus
+        // GET /linkedin/publish and GET /linkedin/engagement triggers surfaced from the Post
+        // node menu (w_member_social scope). Same ordering requirement (needs HttpContext.User).
+        app.MapLinkedInPublish();
 
         // GitHub Sync — OAuth authorization-code connect endpoints (same ordering
         // requirement: needs HttpContext.User). Stores the per-user token at

@@ -274,17 +274,24 @@ public static class EducationLayoutAreas
 
         // Module + its main descendants in one live query; BuildCourseNav renders the module as the group
         // header and its direct children as links (reactive — the nav follows adds/renames).
+        // GitHubSyncConfig (`{space}/_GitSync`) is a non-satellite internal config node — it's a real main
+        // node (MainNode == Path), so `is:main` correctly keeps it; exclude it by type here so it never
+        // appears as a learner-facing page in the rail. (See SatelliteEntityPatterns.md — the reader
+        // filters internal main-nodes; we do NOT forge a satellite MainNode on the node itself.)
         return meshService
-            .Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{moduleRoot} scope:subtree is:main"))
+            .Query<MeshNode>(MeshQueryRequest.FromQuery(
+                $"path:{moduleRoot} scope:subtree is:main -nodeType:GitHubSyncConfig"))
             .Select(change => BuildCourseNav(moduleRoot, currentPath, change.Items));
     }
 
     /// <summary>
     /// The pages a course side-nav lists for <paramref name="moduleRoot"/>: the module's DIRECT children
     /// (deeper support nodes such as <c>Source/…</c> are excluded to keep the TOC a clean page list), ordered
-    /// by <see cref="MeshNode.Order"/> then <see cref="MeshNode.Name"/> (case-insensitive). Pure — the
-    /// nav-rendering and the ordering contract are the same function, so a test can pin the order without
-    /// reaching through the render/serialization layer.
+    /// by <see cref="MeshNode.Order"/> then <see cref="MeshNode.Name"/> (case-insensitive). Internal /
+    /// satellite nodes — any whose final path segment starts with <c>_</c> (<c>_GitSync</c>, <c>_Access</c>,
+    /// <c>_Thread</c>, <c>_Activity</c>, …) — are filtered out: they are plumbing, never learner-facing pages.
+    /// Pure — the nav-rendering and the ordering contract are the same function, so a test can pin the order
+    /// without reaching through the render/serialization layer.
     /// </summary>
     /// <param name="moduleRoot">The containing space (the current page's parent module) whose children are listed.</param>
     /// <param name="mainNodes">The module + its main descendants (the <c>scope:subtree is:main</c> query result).</param>
@@ -293,12 +300,20 @@ public static class EducationLayoutAreas
     {
         var prefix = moduleRoot + "/";
         return mainNodes
-            .Where(n => !string.IsNullOrEmpty(n.Path)
-                        && n.Path.StartsWith(prefix, StringComparison.Ordinal)
-                        && !n.Path.AsSpan(prefix.Length).Contains('/'))
+            .Where(n => !string.IsNullOrEmpty(n.Path) && IsDirectChildPage(n.Path.AsSpan(), prefix))
             .OrderBy(n => n.Order)
             .ThenBy(n => n.Name, StringComparer.OrdinalIgnoreCase)
             .ToList();
+    }
+
+    // A direct-child PAGE of the module: sits immediately under moduleRoot (no deeper), and its own segment
+    // is not an internal/satellite node (leading '_' — _GitSync, _Access, _Thread, …).
+    private static bool IsDirectChildPage(ReadOnlySpan<char> path, string prefix)
+    {
+        if (!path.StartsWith(prefix, StringComparison.Ordinal))
+            return false;
+        var segment = path[prefix.Length..];
+        return segment.Length > 0 && !segment.Contains('/') && segment[0] != '_';
     }
 
     private static UiControl BuildCourseNav(

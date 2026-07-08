@@ -4,7 +4,7 @@
 #
 # The model is NOT baked into the image (it's ~547 MB and swappable) — drop it in ./models/model.bin first:
 #   mkdir -p models && curl -fSL \
-#     https://memex.meshweaver.cloud/MeshWeaver/static/Speech/ggml-swiss-german-turbo-q5_0.bin \
+#     https://github.com/Systemorph/MeshWeaver/releases/download/voice-model-swiss-german/ggml-swiss-german-turbo-q5_0.bin \
 #     -o models/model.bin
 # (Same file the on-device MAUI client downloads — see Doc/Architecture/OnDeviceVoice.)
 

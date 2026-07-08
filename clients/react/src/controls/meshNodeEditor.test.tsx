@@ -75,7 +75,11 @@ describe("MeshNodeContentEditor", () => {
   it("writes a bool field as a field-level content patch", async () => {
     const ops = new FakeOps({ remoteUrl: "u", active: true, direction: "Bidirectional" });
     renderEditor(ops);
-    const cb = await screen.findByLabelText("Active");
+    // Wait for the node content to HYDRATE before clicking: the "Active" label renders immediately (it
+    // comes from the static `fields`), but the checkbox's checked value arrives async via watch(). Clicking
+    // before it lands toggles the default (false→true) and records the wrong patch — the source of the flake.
+    await screen.findByDisplayValue("u"); // the text field's loaded value ⇒ all fields have hydrated together
+    const cb = screen.getByLabelText("Active");
     fireEvent.click(cb); // true → false
     expect(ops.patchCalls).toContainEqual({ path: NODE, fields: { content: { active: false } } });
   });

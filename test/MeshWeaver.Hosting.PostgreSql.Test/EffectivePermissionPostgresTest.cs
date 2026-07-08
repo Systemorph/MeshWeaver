@@ -152,7 +152,7 @@ public class EffectivePermissionPostgresTest(PostgreSqlFixture fixture, ITestOut
         {
             Name = orgId,
             NodeType = SpaceNodeType.NodeType,
-            Content = new Space { Name = orgId }
+            Content = new Space()
         };
         await NodeFactory.CreateNode(orgNode).Should().Within(90.Seconds()).Emit();
 

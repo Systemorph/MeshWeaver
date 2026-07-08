@@ -432,6 +432,42 @@ Recommended: 'icon' as an inline SVG starting with <svg, using currentColor. 'co
         => ops.Copy(sourcePath, targetNamespace, force).FirstAsync().ToTask();
 
     /// <summary>
+    /// Exports a node and its entire subtree as a portable ZIP archive (returned base64-encoded),
+    /// bundling every descendant node's JSON plus its content-collection and code/source files.
+    /// </summary>
+    /// <param name="path">The subtree root to export.</param>
+    /// <returns>The ZIP archive as a base64 string, or an <c>Error: …</c> string.</returns>
+    [McpServerTool(Title = "Export a subtree to a ZIP", ReadOnly = true, Idempotent = true, OpenWorld = false)]
+    [Description(@"Exports a node and its ENTIRE subtree as a portable ZIP archive, returned base64-encoded. The archive contains a `manifest.json` (the export-root path + every descendant MeshNode's full JSON — Code source and Markdown bodies ride inside each node's Content) plus a `files/` tree with the raw bytes of every editable content-collection file. Feed the base64 straight back into `import` (optionally on another instance) to recreate the subtree under a new namespace. Use this to snapshot, back up, or move a whole subtree (space, project, folder) with its attachments in one shot.")]
+    public Task<string> Export(
+        [Description("Path of the subtree root to export (e.g., @ACME/Project). The node and all descendants are included.")] string path)
+        => ops.Export(path)
+            .Select(Convert.ToBase64String)
+            .Catch((Exception ex) => Observable.Return($"Error: {ex.Message}"))
+            .FirstAsync().ToTask();
+
+    /// <summary>
+    /// Imports a ZIP archive (base64-encoded, produced by <see cref="Export"/>) under a target
+    /// namespace, recreating every node with paths rewritten and re-uploading content files.
+    /// </summary>
+    /// <param name="targetNamespace">The namespace to recreate the subtree under.</param>
+    /// <param name="base64Zip">The export ZIP as a base64 string.</param>
+    /// <returns>A JSON summary of the import, or an <c>Error: …</c> string.</returns>
+    [McpServerTool(Title = "Import a subtree from a ZIP", Destructive = false, Idempotent = false, OpenWorld = false)]
+    [Description(@"Imports a ZIP archive (base64-encoded, as produced by `export`) under a target namespace. Recreates every MeshNode with its path rewritten from the export root to the target namespace (nodes via create, carrying your identity), then re-uploads every content-collection file. Use this to restore a snapshot or move a subtree between namespaces / instances. Returns JSON `{status:'Imported', exportRoot, targetNamespace, nodesImported, filesImported}` on success, or an `Error: …` string.")]
+    public Task<string> Import(
+        [Description("Target namespace to recreate the subtree under (e.g., @ACME/Restored). The export root's path prefix is rewritten to this.")] string targetNamespace,
+        [Description("The export ZIP as a base64-encoded string (no data:URI prefix; just the raw base64 payload), as returned by `export`.")] string base64Zip)
+    {
+        if (string.IsNullOrEmpty(base64Zip))
+            return Task.FromResult("Error: base64Zip is required.");
+        byte[] bytes;
+        try { bytes = Convert.FromBase64String(base64Zip); }
+        catch (FormatException ex) { return Task.FromResult($"Error: invalid base64 zip: {ex.Message}"); }
+        return ops.Import(targetNamespace, bytes).FirstAsync().ToTask();
+    }
+
+    /// <summary>
     /// Returns a browser URL to view a node in the MeshWeaver UI, shaped as
     /// <c>{baseUrl}/{path}</c>; an empty path returns the base URL alone.
     /// </summary>

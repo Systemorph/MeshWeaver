@@ -424,15 +424,18 @@ public static class LayoutClientExtensions
         if (value == null)
             return default;
 
-        // A string-typed control bound to a JSON array/object must DISPLAY it, not crash. The generic
-        // property form (EditorExtensions) has no control for an arbitrary IEnumerable<T> property, so it
-        // falls back to a string-bound LabelControl/TextFieldControl; deserializing "[...]"/"{...}" to
-        // string throws JsonException — which spammed the log 30x and left the field blank for the atioz
-        // Anthropic `models` array (["claude-opus-4-8",...]). Render a readable text form instead — a
-        // sensible, non-fatal display for a collection in a scalar slot. Genuine scalar-conversion
-        // failures (a malformed number/bool/date) still fall through to the catch below and are logged.
+        // A string-typed control bound to a non-string JSON scalar/collection must DISPLAY it, not crash.
+        // The generic read-only property form (EditorExtensions) has no control for an IEnumerable<T> and
+        // binds a NUMBER/BOOL scalar into a string-typed LabelControl; `Deserialize<string>("322.844")`
+        // (or `"[...]"`/`"{...}"`) throws JsonException — the catch below then returns null, so the field
+        // renders BLANK until you click to edit (issue #322; the atioz Anthropic `models` array crash).
+        // Render the readable text form instead: a scalar array becomes "a, b, c", and a Number/True/False
+        // token becomes its own text ("322.844"/"true"/"false"). This is the string-slot analogue of the
+        // numeric edit control deserializing the CLR type fine. Only a genuine string target is affected;
+        // any other T still deserializes as before and a real failure still falls through to the catch.
         if (conversion == null && typeof(T) == typeof(string)
-            && value.Value.ValueKind is JsonValueKind.Array or JsonValueKind.Object)
+            && value.Value.ValueKind is JsonValueKind.Array or JsonValueKind.Object
+                or JsonValueKind.Number or JsonValueKind.True or JsonValueKind.False)
             return (T)(object)JsonElementToDisplayString(value.Value);
 
         try
@@ -469,10 +472,11 @@ public static class LayoutClientExtensions
     }
 
     /// <summary>
-    /// Renders a JSON array/object as readable text for a string-typed (read-only) control: a scalar
-    /// array becomes "a, b, c"; anything containing nested objects/arrays falls back to the raw JSON.
-    /// Lets a collection property that the generic form bound to a Label/TextField DISPLAY rather than
-    /// throw a string-conversion JsonException (the atioz `models` array crash).
+    /// Renders a non-string JSON value as readable text for a string-typed (read-only) control: a scalar
+    /// array becomes "a, b, c"; a Number/True/False/Object token becomes its raw JSON text ("322.844",
+    /// "true", "false"); anything containing nested objects/arrays falls back to the raw JSON. Lets a
+    /// numeric/boolean/collection property that the generic form bound to a Label/TextField DISPLAY
+    /// rather than throw a string-conversion JsonException (issue #322; the atioz `models` array crash).
     /// </summary>
     private static string JsonElementToDisplayString(JsonElement element)
     {

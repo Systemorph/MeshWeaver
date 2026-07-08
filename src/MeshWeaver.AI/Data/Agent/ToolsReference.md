@@ -307,7 +307,7 @@ Creates a new node in the mesh. The node is validated before being persisted.
 |----------|------|----------|-------------|
 | `id` | string | Yes | Simple slug identifier — **no slashes** (e.g., "NewOrg", "Task1") |
 | `namespace` | string | For nested nodes | Full parent path (e.g., "ACME", "ACME/Projects"). Omit for root-level nodes. |
-| `name` | string | Yes | Descriptive human-readable title. Make it clear and meaningful. |
+| `name` | string | Yes | Descriptive human-readable title. Make it clear and meaningful. **It is already rendered as the page's `<h1>` title header** (with the icon) on every node — so do NOT repeat it as a `# Heading` at the top of a Markdown `content` body (that shows the title twice). Begin the body with the intro paragraph/blockquote, not a title. |
 | `nodeType` | string | Yes | Type category (must match an existing NodeType) |
 | `category` | string | No | Grouping category |
 | `icon` | string | **Yes** | Inline SVG icon (start with `<svg`) — **ALWAYS** create a unique, visually appealing SVG that represents the node's topic. Use `currentColor` for fill/stroke so it adapts to light/dark theme, and set `width`/`height`/`viewBox`. Never a file path, never blank. See **Icons** above. |

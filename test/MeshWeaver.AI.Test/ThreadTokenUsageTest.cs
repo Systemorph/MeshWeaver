@@ -41,6 +41,10 @@ public class ThreadTokenUsageTest : AITestBase
     private const int InTokens = 137;
     private const int OutTokens = 89;
     private const int TotalTokens = InTokens + OutTokens; // 226
+    // Prompt-cache subset of InTokens (137 includes the 40 read + 25 write, per the UsageTokens
+    // convention). Distinct so a test can tell read from write.
+    private const int CacheReadTokens = 40;
+    private const int CacheWriteTokens = 25;
 
     private const string TestUser = "rbuergi@systemorph.com";
     // Streamed AFTER the usage update — when this lands on the cell, the streaming loop has
@@ -60,6 +64,7 @@ public class ThreadTokenUsageTest : AITestBase
                 services.AddSingleton<IChatClientFactory>(new UsageNoTotalChatClientFactory());
                 services.AddSingleton<IChatClientFactory>(new UsageBlockChatClientFactory());
                 services.AddSingleton<IChatClientFactory>(new UsageThrowChatClientFactory());
+                services.AddSingleton<IChatClientFactory>(new UsageCacheChatClientFactory());
                 return services;
             });
 
@@ -210,6 +215,32 @@ public class ThreadTokenUsageTest : AITestBase
         cell.TotalTokens.Should().Be(TotalTokens, "derived total = in + out");
     }
 
+    // ─── Prompt cache (pins the dropped cache-token hole across providers) ───
+
+    [Fact]
+    public async Task CompletedRound_WithPromptCache_RecordsCacheTokens_OnCellAndSatellite()
+    {
+        var threadPath = await SeedThread();
+        var client = GetClient();
+        client.SubmitMessage(threadPath, "cache me", modelName: "usage-cache-model", createdBy: TestUser);
+
+        var thread = await WaitForThread(threadPath,
+            t => t.Status == ThreadExecutionStatus.Idle && t.Messages.Count >= 2, 20_000);
+
+        // The cache read/write counts must survive from UsageDetails.AdditionalCounts (mixed provider
+        // keys) all the way onto the per-model satellite — they used to be dropped entirely.
+        var usage = await WaitForUsage(threadPath, "usage_cache_model",
+            u => u.CacheReadTokens == CacheReadTokens && u.CacheWriteTokens == CacheWriteTokens, 10_000);
+        usage.InputTokens.Should().Be(InTokens, "input is the full prompt total; cache is a subset");
+        usage.OutputTokens.Should().Be(OutTokens);
+
+        var cell = await WaitForCell(threadPath, thread.Messages[^1],
+            m => m.Status == ThreadMessageStatus.Completed, 10_000);
+        cell.CacheReadTokens.Should().Be(CacheReadTokens);
+        cell.CacheWriteTokens.Should().Be(CacheWriteTokens);
+        cell.InputTokens.Should().Be(InTokens);
+    }
+
     // ─── Helpers ───
 
     private async Task<string> SeedThread()
@@ -259,7 +290,7 @@ public class ThreadTokenUsageTest : AITestBase
     /// the round CTS until cancelled (→ OperationCanceledException → Cancelled path), or throw
     /// (→ Error path). <paramref name="reportTotal"/> toggles whether TotalTokenCount is reported.
     /// </summary>
-    private sealed class UsageChatClient(bool reportTotal, PostUsage mode) : IChatClient
+    private sealed class UsageChatClient(bool reportTotal, PostUsage mode, bool emitCache = false) : IChatClient
     {
         public ChatClientMetadata Metadata => new("UsageProvider");
 
@@ -274,15 +305,25 @@ public class ThreadTokenUsageTest : AITestBase
         {
             // Text first — the round is genuinely streaming past the Executing flip.
             yield return new ChatResponseUpdate(ChatRole.Assistant, "Working. ");
-            // The usage report — this is what ThreadExecution aggregates.
+            // The usage report — this is what ThreadExecution aggregates. When emitCache is set, the
+            // cache breakdown rides in AdditionalCounts under MIXED provider keys (OpenAI's
+            // "InputTokenDetails.CachedTokenCount" for read, Claude's "CacheCreationInputTokens" for
+            // write) so the test proves UsageTokens.SplitCache is provider-agnostic.
+            var details = new UsageDetails
+            {
+                InputTokenCount = InTokens,
+                OutputTokenCount = OutTokens,
+                TotalTokenCount = reportTotal ? TotalTokens : (long?)null
+            };
+            if (emitCache)
+                details.AdditionalCounts = new AdditionalPropertiesDictionary<long>
+                {
+                    ["InputTokenDetails.CachedTokenCount"] = CacheReadTokens,
+                    [UsageTokens.CacheWriteKey] = CacheWriteTokens
+                };
             yield return new ChatResponseUpdate(ChatRole.Assistant, new AIContent[]
             {
-                new UsageContent(new UsageDetails
-                {
-                    InputTokenCount = InTokens,
-                    OutputTokenCount = OutTokens,
-                    TotalTokenCount = reportTotal ? TotalTokens : (long?)null
-                })
+                new UsageContent(details)
             });
             // Post-usage marker — once it lands on the cell, the usage above was provably pulled.
             yield return new ChatResponseUpdate(ChatRole.Assistant, UsageMarker);
@@ -364,5 +405,12 @@ public class ThreadTokenUsageTest : AITestBase
         public override string Name => "UsageThrowFactory";
         public override IReadOnlyList<string> Models => ["usage-error-model"];
         protected override IChatClient CreateClient() => new UsageChatClient(reportTotal: true, PostUsage.Throw);
+    }
+
+    private sealed class UsageCacheChatClientFactory : UsageFactoryBase
+    {
+        public override string Name => "UsageCacheFactory";
+        public override IReadOnlyList<string> Models => ["usage-cache-model"];
+        protected override IChatClient CreateClient() => new UsageChatClient(reportTotal: true, PostUsage.Complete, emitCache: true);
     }
 }

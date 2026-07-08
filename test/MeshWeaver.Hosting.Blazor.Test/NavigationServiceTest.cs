@@ -1198,6 +1198,100 @@ public class NavigationServiceTest
 
     #endregion
 
+    #region Home Route Tests
+
+    /// <summary>
+    /// 🚨 Regression ("chat does not update context — am in user home and it thinks it's docs"):
+    /// the logo links to "/" (empty route). PublishPath used to DROP the empty path, so
+    /// ProcessLocationChange never ran and the ReplaySubject(1) NavigationContext kept replaying
+    /// the PREVIOUS page — after Doc-page → logo-click the composer chip still showed the Doc
+    /// context and StartThread anchored threads on Doc ("Access denied: … lacks Thread permission
+    /// on 'Doc'"). The home route must resolve to the signed-in user's OWN partition — the same
+    /// target every other home navigation uses (/User/{id} rewrites there).
+    /// </summary>
+    [Fact]
+    public async Task HomeRoute_ResolvesUserHomePartition_ReplacingThePreviousPageContext()
+    {
+        // Authenticated circuit shape (identity on the circuit-stable accessor, ambient cleared)
+        // — same fixture as AuthenticatedCircuit_NavigationFromClearedAmbientContext, which also
+        // keeps TrackNavigationActivity inert for the mock hub.
+        MakeAmbientContextClearedButCircuitAuthenticated("rbuergi");
+
+        var service = CreateService();
+        _pathResolver.ResolveNavigationPath("Doc/Architecture")
+            .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(
+                new AddressResolution("Doc/Architecture", null)));
+        _pathResolver.ResolveNavigationPath("rbuergi")
+            .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(
+                new AddressResolution("rbuergi", null)));
+
+        service.Initialize();
+
+        // 1. The user reads a Doc page — the context follows it.
+        _navigationManager.SimulateLocationChanged("http://localhost/Doc/Architecture");
+        await service.NavigationContext.Should().Within(WaitTimeout)
+            .Match(c => c?.Namespace == "Doc/Architecture");
+
+        // 2. Logo click → "/" — the context must flip to the user's home partition,
+        //    never keep replaying the Doc page.
+        _navigationManager.SimulateLocationChanged("http://localhost/");
+        var home = await service.NavigationContext.Should().Within(WaitTimeout)
+            .Match(c => c?.Namespace == "rbuergi");
+
+        home.Should().NotBeNull();
+        service.Context!.Namespace.Should().Be("rbuergi");
+        service.CurrentNamespace.Should().Be("rbuergi");
+        _ = _pathResolver.Received().ResolveNavigationPath("rbuergi");
+    }
+
+    /// <summary>
+    /// A home URL CARRYING QUERY PARAMS ("/?utm=…") must still resolve the user's home: the
+    /// rewritten route is single-segment WITH args, which pattern-matches the Blazor page-route
+    /// gate — but the home rewrite is a NODE route by construction, so it is exempt and the args
+    /// ride on the context (Copilot review finding on #367).
+    /// </summary>
+    [Fact]
+    public async Task HomeRoute_WithQueryParams_StillResolvesUserHome()
+    {
+        MakeAmbientContextClearedButCircuitAuthenticated("rbuergi");
+
+        var service = CreateService();
+        _pathResolver.ResolveNavigationPath("rbuergi")
+            .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(
+                new AddressResolution("rbuergi", null)));
+
+        service.Initialize();
+        _navigationManager.SimulateLocationChanged("http://localhost/?utm=newsletter");
+
+        var home = await service.NavigationContext.Should().Within(WaitTimeout)
+            .Match(c => c?.Namespace == "rbuergi");
+        home!.Args["utm"].Should().Be("newsletter", "query params ride on the context, never clear it");
+    }
+
+    /// <summary>
+    /// An anonymous visitor at "/" has no home partition: the context CLEARS (no stale replay
+    /// of the previous page) and nothing is resolved — the home page is not a node for them,
+    /// and no login redirect fires from here (that's the node-navigation gate's job).
+    /// </summary>
+    [Fact]
+    public async Task HomeRoute_Anonymous_ClearsContext_WithoutResolvingOrRedirecting()
+    {
+        MakeVisitorAnonymous();
+
+        var service = CreateService();
+        service.Initialize();
+
+        _navigationManager.SimulateLocationChanged("http://localhost/");
+        await service.NavigationContext.Should().Within(WaitTimeout).Match(ctx => ctx == null);
+
+        service.Context.Should().BeNull();
+        service.CurrentNamespace.Should().BeNull();
+        _navigationManager.Uri.Should().NotContain("/login");
+        _ = _pathResolver.DidNotReceive().ResolveNavigationPath(Arg.Any<string>());
+    }
+
+    #endregion
+
     [Fact]
     public async Task NavigationContext_ReplaysLastValueToLateSubscriber()
     {
