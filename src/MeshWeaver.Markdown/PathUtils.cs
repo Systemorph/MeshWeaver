@@ -28,6 +28,15 @@ public static class PathUtils
         // and everything after them. Links in satellite content should resolve relative
         // to the main entity, not the satellite path.
         var basePath = StripSatellitePartition(currentNodePath);
+
+        // Self-prefixed absolute path: the raw path already BEGINS with the base (at a segment boundary),
+        // so it's already the full path — don't prepend the base again (that doubled it: base/base/rest).
+        // E.g. `@@Doc/Architecture/PythonCodeNodes/SampleStatistics` written on the node
+        // `Doc/Architecture/PythonCodeNodes`. The trailing '/' makes it a SEGMENT match, so a sibling like
+        // `DocSomething` (relative) still resolves against the base rather than false-matching.
+        if (!string.IsNullOrEmpty(basePath) && (path == basePath || path.StartsWith(basePath + "/", StringComparison.Ordinal)))
+            return path;
+
         while (path.StartsWith("../"))
         {
             var lastSlash = basePath.LastIndexOf('/');
