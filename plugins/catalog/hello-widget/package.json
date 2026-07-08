@@ -1,0 +1,9 @@
+{
+  "id": "hello-widget",
+  "name": "Hello Widget (code)",
+  "description": "A sample CODE package — a custom NodeType whose C# source is compiled live on the mesh (no app rebuild, no NuGet). Installed by picking a git commit + folder.",
+  "kind": "code",
+  "targetPartition": "type",
+  "version": "1.0.0",
+  "nodeTypeConfiguration": "config => config.WithContentType<HelloWidget>()"
+}

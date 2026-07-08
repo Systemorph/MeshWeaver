@@ -1,0 +1,8 @@
+{
+  "id": "welcome-note",
+  "name": "Welcome Note",
+  "description": "A sample content package — installs a welcome markdown page into the Welcome space.",
+  "kind": "content",
+  "targetPartition": "Welcome",
+  "version": "1.0.0"
+}
