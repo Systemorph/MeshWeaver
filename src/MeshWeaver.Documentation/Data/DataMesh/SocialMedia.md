@@ -9,7 +9,7 @@ Icon: Code
 
 This page is the **canonical reference example** for a custom model node type. When you — or an agent operating with the [/code skill](/Skill/code) — are asked to build something "as code" (a typed model with its own data and views), this is the shape to mirror.
 
-> **See also:** [Creating Node Types](/Doc/DataMesh/CreatingNodeTypes) for step-by-step theory, and [Business Rules](/Doc/Architecture/BusinessRules) for a calculation-heavy example with charts.
+> **See also:** [Creating Node Types](/Doc/DataMesh/CreatingNodeTypes) for step-by-step theory, [Business Rules](/Doc/Architecture/BusinessRules) for a calculation-heavy example with charts, and [LinkedIn Publishing — Setup](/Doc/DataMesh/SocialMedia/LinkedInPublishing) for wiring these posts up to actually publish to LinkedIn.
 
 ---
 
