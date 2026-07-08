@@ -164,10 +164,15 @@ internal class NavigationService : INavigationService
     /// single source of truth. The synchronous _currentPathSnapshot mirror is
     /// updated via the Subscribe in the constructor, not here, so every code
     /// site that pushes a path goes through the reactive subject.
+    /// <para>The EMPTY path (the portal home "/" — the logo's Href) is published like any
+    /// other: dropping it left the previous page's <see cref="NavigationContext"/> replaying
+    /// forever, so after Doc-page → logo-click the chat composer still anchored threads on the
+    /// Doc partition ("chat does not update context"). <see cref="ProcessLocationChange"/>
+    /// resolves the empty route to the signed-in user's home partition.</para>
     /// </summary>
     private void PublishPath(string? path)
     {
-        if (string.IsNullOrEmpty(path)) return;
+        if (path is null) return;
         _pathSubject.OnNext(path);
     }
 
@@ -343,6 +348,36 @@ internal class NavigationService : INavigationService
         var route = target.Path;
         var args = target.Args;
 
+        // The portal HOME ("/", the logo's Href) has an EMPTY route. It shows the signed-in
+        // user's own space, so resolve it AS the user's home partition — the same target every
+        // other home navigation uses (/User/{id} rewrites there via RewriteLegacyUserHome).
+        // Before this, the empty path was silently dropped (PublishPath) and the PREVIOUS
+        // page's NavigationContext kept replaying: after Doc-page → logo-click the composer
+        // chip still showed the Doc context and StartThread anchored on Doc → "Access denied:
+        // … lacks Thread permission on 'Doc'". A visitor WITHOUT a home partition — anonymous,
+        // or a System/hub principal (test fixtures, pre-identity circuits) — clears the context
+        // like a page route instead (no stale replay; the login redirect is handled elsewhere).
+        var isHomeRoute = false;
+        if (string.IsNullOrEmpty(route))
+        {
+            var homeUser = ResolveCurrentUserId();
+            if (string.Equals(homeUser, WellKnownUsers.Anonymous, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(homeUser, WellKnownUsers.System, StringComparison.OrdinalIgnoreCase)
+                || AccessService.LooksLikeHubPrincipal(homeUser))
+            {
+                _resolutionSubscription?.Dispose();
+                _notFoundWatchdog?.Dispose();
+                IsResolving = false;
+                Context = null;
+                CurrentNamespace = null;
+                _status.OnNext(NavigationStatus.Idle());
+                _navigationContext.OnNext(null);
+                return;
+            }
+            route = homeUser;
+            isHomeRoute = true;
+        }
+
         // 🚨 A single-segment route that carries query parameters is a parametrized Blazor
         // PAGE route (/search?q=…, /create?type=…, /login?returnUrl=…) — NEVER a mesh node.
         // A node address is always the bare path and its areas/ids are path SEGMENTS, never
@@ -359,7 +394,10 @@ internal class NavigationService : INavigationService
         // whenever the writable provider's PartitionExists probe is indeterminate
         // (InMemory/monolith), and the anonymous hard-gate then bounces the deliberately-PUBLIC
         // page to /login — the /privacy regression. See PageRouteRegistry.
-        if (!string.IsNullOrEmpty(route) && !route.Contains('/')
+        // The home rewrite above produced a NODE route (the user's partition) by construction —
+        // never a Blazor page — so it is exempt: "/?utm=…" (home + query params) must still
+        // resolve the user's home with the args riding on the context, not clear it here.
+        if (!isHomeRoute && !string.IsNullOrEmpty(route) && !route.Contains('/')
             && (!args.IsEmpty || _pageRoutes?.IsPageRoute(route) == true))
         {
             _resolutionSubscription?.Dispose();

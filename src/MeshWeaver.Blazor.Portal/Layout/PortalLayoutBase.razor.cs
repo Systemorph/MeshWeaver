@@ -14,7 +14,9 @@ using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.Authorization;
 using Microsoft.Extensions.Logging;
+using Microsoft.FluentUI.AspNetCore.Components;
 using Microsoft.JSInterop;
+using Icons = Microsoft.FluentUI.AspNetCore.Components.Icons;
 
 namespace MeshWeaver.Blazor.Portal.Layout;
 
@@ -78,6 +80,25 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     // (ThreadChatView / LayoutAreaView) accesses the workspace and throws for
     // anonymous users — so we hide it when not authenticated.
     private bool isAuthenticated;
+
+    // ── Light/dark theme toggle (top-bar chrome, matching the mobile client) ──
+    // The header hosts a <FluentDesignTheme @bind-Mode="ThemeMode" StorageName="theme"/>; because it
+    // shares StorageName with the page's FluentDesignTheme and applies its tokens to the whole
+    // document, flipping ThemeMode here re-themes the app and persists — same proven pattern the
+    // site-settings panel used before the control moved out here. Binary light↔dark toggle.
+    private DesignThemeModes ThemeMode { get; set; }
+
+    private void ToggleTheme()
+        => ThemeMode = ThemeMode == DesignThemeModes.Dark ? DesignThemeModes.Light : DesignThemeModes.Dark;
+
+    private string ThemeToggleTitle
+        => ThemeMode == DesignThemeModes.Dark ? "Switch to light theme" : "Switch to dark theme";
+
+    // Sun while dark (click → light), moon otherwise (click → dark).
+    private Icon ThemeToggleIcon
+        => ThemeMode == DesignThemeModes.Dark
+            ? new Icons.Regular.Size20.WeatherSunny()
+            : new Icons.Regular.Size20.WeatherMoon();
 
     // Splitter pane sizes - default 3:1 ratio (75% main, 25% side panel)
     private string MainPaneSize => SidePanelState.Width.HasValue ? $"{100 - SidePanelState.Width.Value}%" : "75%";

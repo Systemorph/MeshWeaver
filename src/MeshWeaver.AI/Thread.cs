@@ -564,6 +564,10 @@ public record ThreadMessage
     public int? OutputTokens { get; init; }
     /// <summary>Total tokens the provider billed for this response. May exceed <see cref="InputTokens"/> + <see cref="OutputTokens"/> when cached / reasoning tokens are included.</summary>
     public int? TotalTokens { get; init; }
+    /// <summary>Cache-READ (cache-hit) prompt tokens for this response — a subset of <see cref="InputTokens"/>. Null when the provider reports no prompt caching.</summary>
+    public int? CacheReadTokens { get; init; }
+    /// <summary>Cache-WRITE (cache-creation) prompt tokens for this response — a subset of <see cref="InputTokens"/>. Null on the OpenAI wire and when the provider reports no prompt caching.</summary>
+    public int? CacheWriteTokens { get; init; }
 
     /// <summary>
     /// Wall-clock time when the assistant response finished streaming. Null while

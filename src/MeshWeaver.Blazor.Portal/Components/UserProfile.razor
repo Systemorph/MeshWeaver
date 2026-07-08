@@ -29,6 +29,13 @@
                             <FluentButton Appearance="Appearance.Stealth" OnClick="SwitchToNewFrontend">Try the new frontend</FluentButton>
                         </FluentStack>
                     }
+                    @* Platform info — What's New feed + About (exact build). *@
+                    <FluentStack Orientation="Orientation.Vertical" VerticalGap="2" Style="margin-top: 8px;">
+                        <FluentButton Appearance="Appearance.Stealth" OnClick="NavigateToWhatsNew"
+                                      IconStart="@(new Icons.Regular.Size20.Sparkle())">What's New</FluentButton>
+                        <FluentButton Appearance="Appearance.Stealth" OnClick="NavigateToAbout"
+                                      IconStart="@(new Icons.Regular.Size20.Info())">About</FluentButton>
+                    </FluentStack>
                 </ChildContent>
             </FluentProfileMenu>
         </div>

@@ -48,7 +48,7 @@
     protected override void BindData()
     {
         base.BindData();
-        DataBind(ViewModel.Progress, x => x.Progress, defaultValue:0);
+        DataBind(ViewModel.Progress, x => x.Progress);
         DataBind(ViewModel.Min, x => x.Min, defaultValue:0);
         DataBind(ViewModel.Max, x => x.Max,defaultValue:100);
         DataBind(ViewModel.Paused, x => x.Paused, defaultValue:true);

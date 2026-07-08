@@ -56,4 +56,49 @@ public class PortalErrorPopupTest(ITestOutputHelper output) : HubTestBase(output
         shown.Should().Contain("boom",
             "a failed post originating from the portal hub must surface to the GUI as a popup");
     }
+
+    record UnansweredRequest : IRequest<UnansweredResponse>;
+    record UnansweredResponse;
+
+    /// <summary>
+    /// The inverse contract: an AWAITED failure must NOT pop the modal. A
+    /// <c>hub.Observe(...)</c> caller receives the <see cref="DeliveryFailure"/> through its
+    /// own <c>OnError</c> and handles it there (retry, fallback, user message) —
+    /// <c>HandleCallbacks</c> stamps the delivery <see cref="PostOptions.CallbackDispatched"/>
+    /// and the error-reporting filter skips it. Before this filter, the raw failure text
+    /// popped as a blocking modal EVEN WHEN the caller recovered — the "Access denied: …
+    /// lacks Thread permission on 'Doc'" modal shown while StartThread's user-partition
+    /// fallback had already re-anchored the thread.
+    /// </summary>
+    [Fact]
+    public async Task AwaitedFailure_DoesNotSurfaceToTheErrorSink()
+    {
+        using var sink = new PortalErrorSink();
+        var reported = new List<string>();
+        using var _ = sink.Errors.Subscribe(reported.Add);
+
+        var portal = Mesh.GetHostedHub(new Address("portal", "2"), c => c
+            .WithPortalErrorReporting(sink));
+        // A hub with NO handler for the request: FinishDelivery answers the awaited request
+        // with a DeliveryFailure (NotFound) routed back to the portal — the awaited-failure shape.
+        var silent = Mesh.GetHostedHub(new Address("silent", "1"), c => c);
+
+        // The Observe caller consumes the failure via OnError — the per-callsite surface.
+        var observed = await portal
+            .Observe(new UnansweredRequest(), o => o.WithTarget(silent.Address))
+            .Materialize()
+            .FirstAsync()
+            .ToTask()
+            .WaitAsync(TimeSpan.FromSeconds(10));
+
+        observed.Kind.Should().Be(System.Reactive.NotificationKind.OnError,
+            "the unhandled request must come back to the Observe caller as a failure");
+        observed.Exception.Should().BeOfType<DeliveryFailureException>();
+
+        // Negative assertion: give a residual report a short window to land, then require none.
+        // (Sanctioned "confirm nothing happened" delay — there is no positive signal to await.)
+        await Task.Delay(500);
+        reported.Should().BeEmpty(
+            "an awaited failure is handled at its call site's OnError and must not ALSO pop the global error modal");
+    }
 }

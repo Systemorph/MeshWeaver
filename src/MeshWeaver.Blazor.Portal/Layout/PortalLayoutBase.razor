@@ -177,6 +177,15 @@
                         </FluentButton>
                     </Authorized>
                 </AuthorizeView>
+                @* Light/dark theme toggle — top-bar chrome, matching the mobile client. Owns a
+                   FluentDesignTheme sharing StorageName="theme" so flipping ThemeMode re-themes the
+                   whole app and persists. Visible to everyone (outside AuthorizeView). *@
+                <FluentDesignTheme @bind-Mode="@ThemeMode" StorageName="theme" />
+                <FluentButton Appearance="Appearance.Stealth" BackgroundColor="transparent"
+                    Title="@ThemeToggleTitle" aria-label="@ThemeToggleTitle"
+                    OnClick="@ToggleTheme">
+                    <FluentIcon Value="@ThemeToggleIcon" Color="Color.FillInverse" />
+                </FluentButton>
                 @HeaderLinks
             </div>
             <div class="notifications">

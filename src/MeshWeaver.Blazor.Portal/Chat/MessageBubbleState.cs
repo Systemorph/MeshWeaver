@@ -28,7 +28,9 @@ internal record MessageBubbleState(
     DateTime? CompletedAt = null,
     string? Harness = null,
     int? InputTokens = null,
-    int? OutputTokens = null)
+    int? OutputTokens = null,
+    int? CacheReadTokens = null,
+    int? CacheWriteTokens = null)
 {
     /// <summary>
     /// Value equality over all bound bubble state, comparing the tool-call and updated-node lists
@@ -49,6 +51,8 @@ internal record MessageBubbleState(
                && Harness == other.Harness
                && InputTokens == other.InputTokens
                && OutputTokens == other.OutputTokens
+               && CacheReadTokens == other.CacheReadTokens
+               && CacheWriteTokens == other.CacheWriteTokens
                && SequenceEqualOrBothEmpty(ToolCalls, other.ToolCalls)
                && SequenceEqualOrBothEmpty(UpdatedNodes, other.UpdatedNodes);
     }
@@ -68,6 +72,8 @@ internal record MessageBubbleState(
         hash.Add(Harness);
         hash.Add(InputTokens);
         hash.Add(OutputTokens);
+        hash.Add(CacheReadTokens);
+        hash.Add(CacheWriteTokens);
         foreach (var tc in ToolCalls ?? [])
             hash.Add(tc);
         foreach (var un in UpdatedNodes ?? [])
