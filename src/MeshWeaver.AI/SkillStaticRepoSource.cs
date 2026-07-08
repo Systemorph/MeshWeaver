@@ -21,6 +21,11 @@ public sealed class SkillStaticRepoSource(BuiltInSkillProvider provider) : IStat
     public bool Versioned => false;
 
     /// <inheritdoc />
+    // Additive: users add their OWN skills to this partition; the import must never prune them.
+    // Only skills the build PREVIOUSLY shipped (in the manifest) but has since dropped are removed.
+    public PartitionSyncMode SyncMode => PartitionSyncMode.Additive;
+
+    /// <inheritdoc />
     // Skill content nodes PLUS the partition's PublicRead "_Policy" (PartitionAccessPolicy). On the
     // SYNCED path the in-memory provider that served the policy is gated off, so the policy MUST be
     // imported or the partition has no read policy → its skills are unreadable (the Harness wedge —

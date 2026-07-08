@@ -24,7 +24,9 @@ namespace Memex.Portal.Shared;
 public static class StaticRepoSyncExtensions
 {
     public static TBuilder AddStaticRepoSync<TBuilder>(this TBuilder builder,
-        IReadOnlySet<string> serveFromPartition) where TBuilder : MeshBuilder
+        IReadOnlySet<string> serveFromPartition,
+        IReadOnlyDictionary<string, PartitionSyncMode>? syncModeOverrides = null)
+        where TBuilder : MeshBuilder
     {
         if (serveFromPartition.Count == 0)
             return builder; // sync disabled — in-memory serving everywhere, no import.
@@ -50,7 +52,13 @@ public static class StaticRepoSyncExtensions
 
             // Runs after the PG schema-provisioning hosted service (registered earlier by
             // AddPartitionedPostgreSqlPersistence) — hosted services start in registration order.
-            services.AddHostedService<StaticRepoImportHostedService>();
+            // A factory (not AddHostedService<T>) so the deploy-time per-partition mode overrides
+            // (Features:StaticRepoSync:Modes) reach ImportAll; null/empty = every source keeps its default.
+            services.AddSingleton<IHostedService>(sp => new StaticRepoImportHostedService(
+                sp.GetRequiredService<IMessageHub>(),
+                sp.GetServices<IStaticRepoSource>(),
+                syncModeOverrides,
+                sp.GetService<ILogger<StaticRepoImportHostedService>>()));
             return services;
         });
         return builder;
@@ -67,6 +75,7 @@ public static class StaticRepoSyncExtensions
 internal sealed class StaticRepoImportHostedService(
     IMessageHub hub,
     IEnumerable<IStaticRepoSource> sources,
+    IReadOnlyDictionary<string, PartitionSyncMode>? syncModeOverrides = null,
     ILogger<StaticRepoImportHostedService>? logger = null) : IHostedService
 {
     private IDisposable? _subscription;
@@ -85,7 +94,7 @@ internal sealed class StaticRepoImportHostedService(
         // SubscribeOn moves the entire subscription cleanly off the startup thread. StartAsync
         // returns immediately (Task.CompletedTask) — no async/await, no blocking. See
         // Doc/Architecture/AsynchronousCalls.md.
-        _subscription = StaticRepoImporter.ImportAll(hub, logger)
+        _subscription = StaticRepoImporter.ImportAll(hub, logger, syncModeOverrides)
             .SubscribeOn(System.Reactive.Concurrency.TaskPoolScheduler.Default)
             .Subscribe(
                 r => logger?.LogInformation(

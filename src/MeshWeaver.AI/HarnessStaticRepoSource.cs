@@ -21,6 +21,11 @@ public sealed class HarnessStaticRepoSource(BuiltInHarnessProvider provider) : I
     public bool Versioned => false;
 
     /// <inheritdoc />
+    // Additive: users may register their OWN harnesses in this partition; the import must never prune
+    // them. Only harnesses the build PREVIOUSLY shipped (in the manifest) but has since dropped are removed.
+    public PartitionSyncMode SyncMode => PartitionSyncMode.Additive;
+
+    /// <inheritdoc />
     // Content harness nodes PLUS the partition's PublicRead "_Policy" (PartitionAccessPolicy). On the
     // SYNCED path the in-memory provider that used to serve the policy is gated off, so WITHOUT
     // importing it the Harness partition has NO read policy → every user (even admins — partitions are
