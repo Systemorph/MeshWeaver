@@ -78,6 +78,20 @@ public partial class NamedAreaView
                             try
                             {
                                 var control = x as UiControl;
+                                // Keep-last-good: a TRANSIENT null control emission — the node/area
+                                // stream momentarily reducing to empty mid-round (the "round-N vanish")
+                                // — must NOT tear down a live child view. Ignore null once we already
+                                // have a control: clearing RootControl flips `@if (RootControl != null)`
+                                // to false, DISPOSING the child DispatchView and its component. For a
+                                // data-bound child like the thread's ThreadChatControl that meant the
+                                // whole ThreadChatView (and its Monaco composer) was destroyed and
+                                // recreated the instant a round started executing, so the composer lost
+                                // keyboard focus mid-stream (ChatComposerStreamingFocusTest). A genuine
+                                // area change still clears RootControl in BindData, and real
+                                // unavailability comes through the error/retry handler below — never as a
+                                // null next-emission on the same area.
+                                if (control is null && RootControl is not null)
+                                    return;
                                 if (RootControl is null && control is null || RootControl != null && RootControl.Equals(control))
                                     return;
                                 RootControl = control;
