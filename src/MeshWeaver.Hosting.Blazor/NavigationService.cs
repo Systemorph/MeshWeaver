@@ -164,10 +164,15 @@ internal class NavigationService : INavigationService
     /// single source of truth. The synchronous _currentPathSnapshot mirror is
     /// updated via the Subscribe in the constructor, not here, so every code
     /// site that pushes a path goes through the reactive subject.
+    /// <para>The EMPTY path (the portal home "/" — the logo's Href) is published like any
+    /// other: dropping it left the previous page's <see cref="NavigationContext"/> replaying
+    /// forever, so after Doc-page → logo-click the chat composer still anchored threads on the
+    /// Doc partition ("chat does not update context"). <see cref="ProcessLocationChange"/>
+    /// resolves the empty route to the signed-in user's home partition.</para>
     /// </summary>
     private void PublishPath(string? path)
     {
-        if (string.IsNullOrEmpty(path)) return;
+        if (path is null) return;
         _pathSubject.OnNext(path);
     }
 
@@ -342,6 +347,34 @@ internal class NavigationService : INavigationService
         var target = NavigationTarget.Parse(rawPath);
         var route = target.Path;
         var args = target.Args;
+
+        // The portal HOME ("/", the logo's Href) has an EMPTY route. It shows the signed-in
+        // user's own space, so resolve it AS the user's home partition — the same target every
+        // other home navigation uses (/User/{id} rewrites there via RewriteLegacyUserHome).
+        // Before this, the empty path was silently dropped (PublishPath) and the PREVIOUS
+        // page's NavigationContext kept replaying: after Doc-page → logo-click the composer
+        // chip still showed the Doc context and StartThread anchored on Doc → "Access denied:
+        // … lacks Thread permission on 'Doc'". A visitor WITHOUT a home partition — anonymous,
+        // or a System/hub principal (test fixtures, pre-identity circuits) — clears the context
+        // like a page route instead (no stale replay; the login redirect is handled elsewhere).
+        if (string.IsNullOrEmpty(route))
+        {
+            var homeUser = ResolveCurrentUserId();
+            if (string.Equals(homeUser, WellKnownUsers.Anonymous, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(homeUser, WellKnownUsers.System, StringComparison.OrdinalIgnoreCase)
+                || AccessService.LooksLikeHubPrincipal(homeUser))
+            {
+                _resolutionSubscription?.Dispose();
+                _notFoundWatchdog?.Dispose();
+                IsResolving = false;
+                Context = null;
+                CurrentNamespace = null;
+                _status.OnNext(NavigationStatus.Idle());
+                _navigationContext.OnNext(null);
+                return;
+            }
+            route = homeUser;
+        }
 
         // 🚨 A single-segment route that carries query parameters is a parametrized Blazor
         // PAGE route (/search?q=…, /create?type=…, /login?returnUrl=…) — NEVER a mesh node.

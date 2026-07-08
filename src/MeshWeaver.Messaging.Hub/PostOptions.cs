@@ -16,6 +16,17 @@ public record PostOptions(Address Sender)
     /// match a response delivery back to the request that triggered it.
     /// </summary>
     public const string RequestId = nameof(RequestId);
+
+    /// <summary>
+    /// Well-known property key stamped (value <c>true</c>) on a response delivery that
+    /// <c>MessageHub.HandleCallbacks</c> dispatched to a live <c>hub.Observe</c> callback.
+    /// Distinguishes an AWAITED response — already surfaced to its caller via
+    /// <c>OnNext</c>/<c>OnError</c> — from an un-awaited one (fire-and-forget post, or a
+    /// response whose observer is gone). Consumers like the portal's
+    /// <c>DeliveryFailure</c>-to-modal reporter use it to skip failures the call site
+    /// already handled.
+    /// </summary>
+    public const string CallbackDispatched = nameof(CallbackDispatched);
     internal Address Target { get; init; } = null!;
 
     /// <summary>

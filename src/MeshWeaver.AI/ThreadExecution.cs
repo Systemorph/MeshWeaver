@@ -1190,10 +1190,12 @@ internal static class ThreadExecution
                 {
                     AgentName = request.AgentName ?? cell!.AgentName,
                     // The persisted cell carries the COMPOSER form of the model — the full
-                    // node path ("Provider/OpenAICompatible/qwen-small"). Normalize exactly
-                    // like the entry boundary above (and like Harness on the next line):
-                    // factories/credential resolution key on the bare model id.
-                    ModelName = SelectionId.IdOf(request.ModelName ?? cell!.ModelName),
+                    // node path ("Provider/OpenAICompatible/qwen-small"). Pass it through RAW,
+                    // exactly like the normal submit path: AgentChatClient.Initialize normalizes
+                    // via the credential resolver's node-path lookup. SelectionId.IdOf here
+                    // mangled org/model-shaped wire ids ("z-ai/glm-5.2" → "glm-5.2"), which
+                    // resolve no credentials — the "ApiKey is missing" round failure.
+                    ModelName = request.ModelName ?? cell!.ModelName,
                     Harness = SelectionId.IdOf(request.Harness ?? cell!.Harness)
                 })
                 .Catch<RoundParams, Exception>(ex =>

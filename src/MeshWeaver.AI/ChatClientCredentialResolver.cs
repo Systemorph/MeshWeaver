@@ -7,6 +7,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -383,12 +384,60 @@ public sealed class ChatClientCredentialResolver : IDisposable
     {
         if (string.IsNullOrEmpty(modelNameOrPath) || !modelNameOrPath.Contains('/'))
             return modelNameOrPath;
-        var def = FindDefinitionByNodePath(ReadSnapshot(), modelNameOrPath);
+        var snapshot = ReadSnapshot();
+        var def = FindDefinitionByNodePath(snapshot, modelNameOrPath);
         if (def != null)
             return def.Id;
+        // A slash-bearing value that is itself a REGISTERED wire id (an org/model slug like
+        // "z-ai/glm-5.2" — OpenRouter's id shape) must pass through UNCHANGED. This is the
+        // double-normalization case: Initialize already collapsed the picker path to the bare id,
+        // and the factory calls ResolveModelId again on that id — last-segmenting it here ("glm-5.2")
+        // makes it resolve NO credentials ("ApiKey is missing for model 'glm-5.2'" on a configured
+        // deployment). Match against the catalog snapshot AND the config-seeded model lists (the
+        // latter are warm even when the snapshot isn't).
+        if (IsRegisteredModelId(snapshot, modelNameOrPath))
+            return modelNameOrPath;
         // Unresolved path (node not yet in the warm snapshot): the wire id is the LAST SEGMENT — never
         // the whole path (sending "Provider/OpenAICompatible/qwen3.6:latest" as the model name 400s).
         return modelNameOrPath[(modelNameOrPath.LastIndexOf('/') + 1)..];
+    }
+
+    /// <summary>
+    /// True when <paramref name="value"/> is a registered model wire id: a LanguageModel node in the
+    /// snapshot carries it as <see cref="ModelDefinition.Id"/>, or a configured catalog source lists it
+    /// in its <c>{Section}:Models</c> array (the exact list <c>BuiltInLanguageModelProvider</c> seeds
+    /// from — readable before the snapshot warms).
+    /// </summary>
+    private bool IsRegisteredModelId(IReadOnlyList<MeshNode> snapshot, string value)
+    {
+        foreach (var node in snapshot)
+        {
+            if (!string.Equals(node.NodeType, LanguageModelNodeType.NodeType, StringComparison.OrdinalIgnoreCase))
+                continue;
+            if (string.Equals(ExtractContent<ModelDefinition>(node.Content)?.Id, value, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+
+        var sources = hub.ServiceProvider.GetService<LanguageModelCatalogOptions>();
+        var configuration = hub.ServiceProvider.GetService<IConfiguration>();
+        if (sources is null || configuration is null) return false;
+        foreach (var source in sources.Sources)
+        {
+            string[]? models;
+            try
+            {
+                models = configuration.GetSection($"{source.SectionName}:Models")
+                    .Get<string[]>();
+            }
+            catch
+            {
+                continue; // malformed section — same skip as the catalog seeder.
+            }
+            if (models is not null
+                && models.Any(m => string.Equals(m, value, StringComparison.OrdinalIgnoreCase)))
+                return true;
+        }
+        return false;
     }
 
     /// <summary>
