@@ -92,7 +92,7 @@ public partial class NamedAreaView
                                 // null next-emission on the same area.
                                 if (control is null && RootControl is not null)
                                     return;
-                                if (RootControl is null && control is null || RootControl != null && RootControl.Equals(control))
+                                if ((RootControl is null && control is null) || (RootControl != null && RootControl.Equals(control)))
                                     return;
                                 RootControl = control;
                                 if (RootControl is not null)
