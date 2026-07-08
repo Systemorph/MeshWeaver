@@ -18,6 +18,7 @@ import { View, Text, TextInput, Pressable, ScrollView, StyleSheet, useWindowDime
 import { RenderArea, type AreaSource, type AreaTree } from "@meshweaver/react/core";
 import { type NavTarget } from "./nav";
 import { CLIENT_MENUS, ClientScreen, type ClientDestination } from "./screens";
+import { loadInstances, currentInstance, setCurrentInstance, instanceIdentity, type InstanceIdentity } from "./connection";
 import { useStyles, useTheme, type Palette } from "./theme";
 
 const useSheet = () => useStyles(makeStyles);
@@ -90,7 +91,13 @@ export function Shell({
 
   return (
     <View style={styles.root}>
-      <TopBar onNavigate={onNavigate} isMobile={isMobile} onToggleMenu={() => setMenuOpen((o) => !o)} />
+      <TopBar
+        onNavigate={onNavigate}
+        isMobile={isMobile}
+        onToggleMenu={() => setMenuOpen((o) => !o)}
+        onReconnect={onReconnect}
+        onManageInstances={() => onClientScreen("instances")}
+      />
       <Breadcrumb nav={nav} clientScreen={clientScreen} onNavigate={onNavigate} />
       <View style={styles.body}>
         {isMobile ? (
@@ -116,12 +123,14 @@ export function Shell({
 }
 
 // ── top bar ───────────────────────────────────────────────────────────────────
-function TopBar({ onNavigate, isMobile, onToggleMenu }: { onNavigate: (t: NavTarget) => void; isMobile: boolean; onToggleMenu: () => void }): ReactNode {
+function TopBar({ onNavigate, isMobile, onToggleMenu, onReconnect, onManageInstances }: { onNavigate: (t: NavTarget) => void; isMobile: boolean; onToggleMenu: () => void; onReconnect: () => void; onManageInstances: () => void }): ReactNode {
   const [q, setQ] = useState("");
   const styles = useSheet();
   const { mode, toggle, palette } = useTheme();
+  // The env color tints the top bar's bottom edge so the whole chrome signals WHICH mesh you're on.
+  const envColor = instanceIdentity(currentInstance()).color;
   return (
-    <View style={styles.topbar}>
+    <View style={[styles.topbar, { borderBottomColor: envColor, borderBottomWidth: 3 }]}>
       {isMobile ? (
         <Pressable style={styles.hamburger} onPress={onToggleMenu} accessibilityLabel="Menu">
           <Text style={styles.hamburgerText}>☰</Text>
@@ -131,6 +140,7 @@ function TopBar({ onNavigate, isMobile, onToggleMenu }: { onNavigate: (t: NavTar
         <View style={styles.logo}><Text style={styles.logoMark}>◆</Text></View>
         {isMobile ? null : <Text style={styles.brandText}>MeshWeaver</Text>}
       </Pressable>
+      <InstanceSwitcher isMobile={isMobile} onReconnect={onReconnect} onManage={onManageInstances} />
       <View style={styles.searchWrap}>
         <Text style={styles.searchIcon}>⌕</Text>
         <TextInput
@@ -150,6 +160,73 @@ function TopBar({ onNavigate, isMobile, onToggleMenu }: { onNavigate: (t: NavTar
         <Text style={styles.themeBtnText}>{mode === "dark" ? "☀" : "☾"}</Text>
       </Pressable>
       <View style={styles.avatar}><Text style={styles.avatarText}>R</Text></View>
+    </View>
+  );
+}
+
+// ── instance / environment switcher ──────────────────────────────────────────────
+// A top-bar pill showing the CURRENT environment (icon + name, tinted + typeset by env), opening a
+// menu to switch between all instances and to add/manage more. Switching re-dials the live source
+// (onReconnect) and returns Home. Icons + typesetting differ per env class (see instanceIdentity):
+// prod/client are UPPERCASE + heavy, local is calm — so you always know which mesh you're pointed at.
+function InstanceSwitcher({ isMobile, onReconnect, onManage }: { isMobile: boolean; onReconnect: () => void; onManage: () => void }): ReactNode {
+  const styles = useSheet();
+  const [open, setOpen] = useState(false);
+  const [current, setCurrent] = useState(() => currentInstance().name);
+  const instances = loadInstances();
+  const cur = instances.find((i) => i.name === current) ?? instances[0];
+  const id = instanceIdentity(cur);
+  const pick = (n: string) => {
+    setCurrentInstance(n);
+    setCurrent(n);
+    setOpen(false);
+    onReconnect();
+  };
+  const nameStyle = (t: InstanceIdentity, color: string) => [
+    styles.switchName,
+    { color },
+    (t.tone === "prod" || t.tone === "client") && styles.switchNameLoud,
+    t.tone === "k8s" && styles.switchNameMedium,
+  ];
+  return (
+    <View style={styles.switchWrap}>
+      <Pressable style={[styles.switchBtn, { borderColor: id.color }]} onPress={() => setOpen((o) => !o)} accessibilityLabel="Switch environment">
+        <Text style={styles.switchIcon}>{id.icon}</Text>
+        {isMobile ? null : (
+          <View style={styles.switchLabels}>
+            <Text style={nameStyle(id, id.color)} numberOfLines={1}>{cur?.name ?? "Local"}</Text>
+            <Text style={styles.switchKind} numberOfLines={1}>{id.kind}</Text>
+          </View>
+        )}
+        <Text style={[styles.switchCaret, { color: id.color }]}>▾</Text>
+      </Pressable>
+      {open ? (
+        <>
+          <Pressable style={styles.switchScrim} onPress={() => setOpen(false)} />
+          <View style={styles.switchMenu}>
+            <Text style={styles.switchMenuLabel}>Environments</Text>
+            {instances.map((i) => {
+              const iid = instanceIdentity(i);
+              const active = i.name === current;
+              return (
+                <Pressable key={i.name} style={({ hovered }: any) => [styles.switchItem, hovered && styles.navItemHover, active && styles.switchItemActive]} onPress={() => pick(i.name)}>
+                  <View style={[styles.switchDot, { backgroundColor: iid.color }]} />
+                  <Text style={styles.switchItemIcon}>{iid.icon}</Text>
+                  <View style={{ flex: 1 }}>
+                    <Text style={nameStyle(iid, iid.color)} numberOfLines={1}>{i.name}{active ? "  ✓" : ""}</Text>
+                    <Text style={styles.switchItemSub} numberOfLines={1}>{iid.kind}{i.url ? "  ·  " + i.url.replace(/^https?:\/\//, "") : "  ·  same origin"}</Text>
+                  </View>
+                </Pressable>
+              );
+            })}
+            <View style={styles.switchDivider} />
+            <Pressable style={({ hovered }: any) => [styles.switchItem, hovered && styles.navItemHover]} onPress={() => { setOpen(false); onManage(); }}>
+              <Text style={styles.switchItemIcon}>＋</Text>
+              <Text style={styles.switchAdd}>Add / manage instances…</Text>
+            </Pressable>
+          </View>
+        </>
+      ) : null}
     </View>
   );
 }
@@ -339,7 +416,9 @@ function scrollToId(id: string): void {
 // ── styles (Outlook-for-macOS palette, themed) ───────────────────────────────────
 const makeStyles = (p: Palette) => StyleSheet.create({
   root: { flex: 1, backgroundColor: p.appBg },
-  topbar: { height: 52, flexDirection: "row", alignItems: "center", paddingHorizontal: 14, gap: 12, backgroundColor: p.topbarBg, borderBottomWidth: 1, borderBottomColor: p.border },
+  // zIndex lifts the top bar's stacking context above the breadcrumb + body so the instance-switcher
+  // dropdown (which overflows the bar) paints — and is clickable — on top of the content below it.
+  topbar: { height: 52, flexDirection: "row", alignItems: "center", paddingHorizontal: 14, gap: 12, backgroundColor: p.topbarBg, borderBottomWidth: 1, borderBottomColor: p.border, zIndex: 30, ...({ position: "relative" } as any) },
   brand: { flexDirection: "row", alignItems: "center", gap: 8, width: 210 },
   brandMobile: { flexDirection: "row", alignItems: "center" },
   hamburger: { width: 34, height: 34, borderRadius: 8, alignItems: "center", justifyContent: "center" },
@@ -357,6 +436,27 @@ const makeStyles = (p: Palette) => StyleSheet.create({
   themeBtnText: { fontSize: 16, color: p.textSubtle },
   avatar: { width: 30, height: 30, borderRadius: 15, backgroundColor: "#5b5fc7", alignItems: "center", justifyContent: "center" },
   avatarText: { color: "#ffffff", fontSize: 13, fontWeight: "600" },
+
+  // instance / environment switcher
+  switchWrap: { position: "relative", zIndex: 50 },
+  switchBtn: { flexDirection: "row", alignItems: "center", gap: 7, height: 34, paddingHorizontal: 10, borderRadius: 8, borderWidth: 1.5, backgroundColor: p.surface },
+  switchIcon: { fontSize: 15 },
+  switchLabels: { maxWidth: 150 },
+  switchName: { fontSize: 13, fontWeight: "600" },
+  switchNameLoud: { fontWeight: "800", textTransform: "uppercase", letterSpacing: 0.6, fontSize: 12 },
+  switchNameMedium: { fontWeight: "700", letterSpacing: 0.3 },
+  switchKind: { fontSize: 10, color: p.textMuted, marginTop: -1 },
+  switchCaret: { fontSize: 11 },
+  switchScrim: { position: "absolute", top: -100, left: -1000, right: -1000, height: 3000, ...({ cursor: "default" } as any) },
+  switchMenu: { position: "absolute", top: 40, left: 0, minWidth: 300, backgroundColor: p.surface, borderWidth: 1, borderColor: p.border, borderRadius: 10, paddingVertical: 6, zIndex: 51, elevation: 12, shadowColor: "#000", shadowOpacity: 0.22, shadowRadius: 16, shadowOffset: { width: 0, height: 6 } },
+  switchMenuLabel: { fontSize: 10, fontWeight: "700", color: p.textMuted, letterSpacing: 0.6, textTransform: "uppercase", paddingHorizontal: 14, paddingTop: 4, paddingBottom: 6 },
+  switchItem: { flexDirection: "row", alignItems: "center", gap: 9, paddingHorizontal: 12, paddingVertical: 8, marginHorizontal: 5, borderRadius: 7 },
+  switchItemActive: { backgroundColor: p.navActiveBg },
+  switchDot: { width: 8, height: 8, borderRadius: 4 },
+  switchItemIcon: { fontSize: 15, width: 20, textAlign: "center" },
+  switchItemSub: { fontSize: 11, color: p.textMuted, marginTop: 1 },
+  switchDivider: { height: 1, backgroundColor: p.border, marginVertical: 5, marginHorizontal: 10 },
+  switchAdd: { fontSize: 13, color: p.accent, fontWeight: "600" },
 
   crumbs: { flexDirection: "row", alignItems: "center", height: 40, paddingHorizontal: 10, backgroundColor: p.surface, borderBottomWidth: 1, borderBottomColor: p.border, gap: 1 },
   crumbSeg: { flexDirection: "row", alignItems: "center", gap: 1 },
