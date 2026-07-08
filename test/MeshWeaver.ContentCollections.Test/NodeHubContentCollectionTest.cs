@@ -195,4 +195,73 @@ public class NodeHubContentCollectionTest(ITestOutputHelper output) : HubTestBas
             await collection!.DeleteFileAsync("/sub/hello.md");
         }
     }
+
+    /// <summary>
+    /// Regression for #364: clicking a file or folder whose name contains a space (or any other
+    /// character the browser percent-encodes) navigated to a percent-encoded URL — the collection
+    /// browser lists such items correctly but opening them returned
+    /// <c>'my%20report.md' not found in collection 'content'</c>, because the raw URL id
+    /// (<c>Data%20Extraction/my%20report.md</c>) was matched directly against the stored item names
+    /// (<c>Data Extraction/my report.md</c>). The layout-area boundaries now URL-decode each path
+    /// segment first, so the encoded id renders the same content/folder as the decoded one.
+    /// </summary>
+    [Fact]
+    public async Task CollectionNamedArea_UrlDecodesEncodedPathSegments()
+    {
+        var client = GetClient();
+        var contentService = client.ServiceProvider.GetRequiredService<IContentService>();
+        var ct = TestContext.Current.CancellationToken;
+        var collection = await contentService.GetCollectionAsync("content", ct);
+        collection.Should().NotBeNull();
+
+        // A folder AND a file whose names both contain a space — the exact shape the browser
+        // percent-encodes into "Data%20Extraction/my%20report.md".
+        var bytes = "# Quarterly report with a space in its name"u8.ToArray();
+        using (var stream = new MemoryStream(bytes))
+            await collection!.SaveFileAsync("/Data Extraction", "my report.md", stream);
+
+        try
+        {
+            // A hub cannot GetRemoteStream its own address — subscribe from the HOST hub.
+            var workspace = GetHost().GetWorkspace();
+
+            // File → the PERCENT-ENCODED id must resolve to the file's content, not "not found".
+            var fileControl = await workspace
+                .GetRemoteStream<System.Text.Json.JsonElement, LayoutAreaReference>(
+                    client.Address,
+                    new LayoutAreaReference("content") { Id = "Data%20Extraction/my%20report.md" })
+                .GetControlStream("content")
+                .Should().Within(30.Seconds())
+                .Match(c => c != null && c.ToString()!.Contains("Quarterly report with a space in its name"));
+            var fileJson = fileControl!.ToString()!;
+            fileJson.Should().NotContain("not found", "the encoded path must be decoded before matching");
+            fileJson.Should().NotContain("%20", "the literal encoded form must never reach the item match");
+
+            // Folder → the PERCENT-ENCODED id must open the browser scoped to the decoded folder.
+            var folderControl = await workspace
+                .GetRemoteStream<System.Text.Json.JsonElement, LayoutAreaReference>(
+                    client.Address,
+                    new LayoutAreaReference("content") { Id = "Data%20Extraction" })
+                .GetControlStream("content")
+                .Should().Within(30.Seconds()).Match(c => c != null && c.ToString()!.Contains("FileBrowser"));
+            folderControl!.ToString().Should().Contain("/Data Extraction",
+                "the browser is scoped to the DECODED folder path");
+
+            // Same guarantee via the unified $Content area (the second decode boundary).
+            var unifiedControl = await workspace
+                .GetRemoteStream<System.Text.Json.JsonElement, LayoutAreaReference>(
+                    client.Address,
+                    new LayoutAreaReference(ContentCollectionsExtensions.ContentAreaName)
+                        { Id = "content/Data%20Extraction/my%20report.md" })
+                .GetControlStream(ContentCollectionsExtensions.ContentAreaName)
+                .Should().Within(30.Seconds())
+                .Match(c => c != null && c.ToString()!.Contains("Quarterly report with a space in its name"));
+            unifiedControl!.ToString().Should().NotContain("%20",
+                "the $Content boundary must decode the file path too");
+        }
+        finally
+        {
+            await collection!.DeleteFileAsync("/Data Extraction/my report.md");
+        }
+    }
 }

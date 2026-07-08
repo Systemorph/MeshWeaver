@@ -297,6 +297,11 @@ public static class ContentLayoutArea
             filePath = contentPath[(firstSlash + 1)..];
         }
 
+        // The URL id is percent-encoded by the browser; decode each segment of the file path
+        // before it is matched against the collection's stored item names (RenderFile re-encodes
+        // it with Uri.EscapeDataString when building the static URL — this is its inverse).
+        filePath = ContentCollectionsExtensions.DecodeCollectionPath(filePath);
+
         if (string.IsNullOrEmpty(filePath))
             return Observable.Return<UiControl?>(new MarkdownControl($"Empty file path in: {contentPath}"));
 
