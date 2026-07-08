@@ -37,7 +37,7 @@ public record SkillDefinition
 
 public record SkillAction
 {
-    public required SkillActionKind Kind { get; init; }   // Pick | OpenContent | Navigate | Connect | Disconnect
+    public required SkillActionKind Kind { get; init; }   // Pick | OpenContent | Navigate | Connect | Disconnect | NewThread
     public string? Query { get; init; }        // Pick: the combobox query (+ `sort:order`)
     public string? Field { get; init; }        // Pick: camelCase ThreadComposer field (harness|agentName|modelName)
     public string? Title { get; init; }        // Pick: combobox title
@@ -144,6 +144,11 @@ This guidance lives in the shared agent base prompt (`AgentChatClient`); the age
   The agent's server-side `NavigateTo` tool routes through the same resolver, so "take me there" resolves
   honestly no matter who asks. Tested by `NavigationTargetResolverTest` (the pure algorithm) and
   `MeshPluginTest` (resilient + honest resolution against the live mesh).
+- **`NewThread`** — **start a fresh chat.** Ships as the built-in **`/clear`** skill
+  (`src/MeshWeaver.AI/Data/Skill/clear.md`). It REPLACES whatever is showing in the **side panel** with an
+  empty new-chat composer and **leaves the main pane alone** — the same target as the "+" button
+  (`SidePanelState.SetContentPath(null)` drops the open thread so `ThreadSidePanelContent` swaps in the
+  composer; the panel is opened if it was closed). No navigation. Handled by `ThreadChatView.RunSkill`.
 - **`Connect` / `Disconnect`** — harness auth. Under a non-MeshWeaver harness, `/login` and `/logout` are
   owned by the harness (`IHarness.Commands`) and route to its connect flow; they take priority in dispatch.
 - **`Instructions`** (no `Action`) — a pure-instruction skill (its how-to is the markdown body). Skills are
@@ -177,9 +182,9 @@ When the user runs `/name`, the chat view (`ThreadChatView.HandleSlashCommandAsy
 1. **harness-owned command?** (`/login`, `/logout` under a non-MeshWeaver harness) → route to the harness.
 2. **otherwise** → resolve a `nodeType:Skill` **mesh node** by slash word (with namespace inheritance,
    `ResolveSkillNodeAndRun`) and run its `Action` — `Pick` pops the combobox, `OpenContent` loads the
-   content window, `Navigate` resolves the target and opens it pane-aware. A pure-instruction skill with
-   trailing text submits the task as a round with a `load_skill` directive (see above); without trailing
-   text it shows the skill's help.
+   content window, `Navigate` resolves the target and opens it pane-aware, `NewThread` (`/clear`) replaces
+   the side panel with a fresh new-chat composer. A pure-instruction skill with trailing text submits the
+   task as a round with a `load_skill` directive (see above); without trailing text it shows the skill's help.
 
 The view contains **no per-skill code** — only the generic picker + content-window callbacks. All pick
 skills write to the same `ThreadComposer`.
