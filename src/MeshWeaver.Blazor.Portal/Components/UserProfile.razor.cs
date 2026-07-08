@@ -163,6 +163,14 @@ public partial class UserProfile : ComponentBase
             Navigation.NavigateTo("/_settings");
     }
 
+    // Platform info lives in the ungated global-settings tabs; the user menu is where users find
+    // "About" / "What's New" (a regular user's Settings goes to their own User node, not here). Tab
+    // ids are literals here because those tabs live in the higher Memex.Portal.Shared layer — this
+    // (framework) project can't reference them; the ids ("About"/"WhatsNew") are stable.
+    private void NavigateToWhatsNew() => Navigation.NavigateTo("/_settings/GlobalSettings/WhatsNew");
+
+    private void NavigateToAbout() => Navigation.NavigateTo("/_settings/GlobalSettings/About");
+
     private void Logout()
     {
         var logoutUrl = AuthNavigation.GetLogoutUrl();
