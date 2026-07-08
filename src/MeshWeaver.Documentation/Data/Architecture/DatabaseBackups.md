@@ -2,7 +2,7 @@
 Name: DatabaseBackups
 Category: Architecture
 Description: How the MeshWeaver databases are backed up — managed point-in-time restore, geo-redundancy for regional DR, and the runbook to enable it on an existing live server
-Icon: DatabaseArrowUp
+Icon: CloudArrowUp
 ---
 
 # Database Backups & Disaster Recovery
