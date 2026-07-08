@@ -333,6 +333,12 @@ public static class MemexConfiguration
                     MeshWeaver.Mesh.INodeMenuProvider,
                     Memex.Portal.Shared.Social.LinkedInCredentialMenuProvider>());
 
+            // Add the Publish/Refresh-engagement actions to a social-media Post node's menu.
+            services.TryAddEnumerable(
+                Microsoft.Extensions.DependencyInjection.ServiceDescriptor.Scoped<
+                    MeshWeaver.Mesh.INodeMenuProvider,
+                    Memex.Portal.Shared.Social.SocialPostMenuProvider>());
+
             // (Removed: SocialMediaUserMenuProvider — hardcoded a NodeType
             // ("Systemorph/SocialMediaHub") that isn't registered anywhere in
             // the codebase. NodeTypes belong in the database (NodeTypeDefinition
@@ -984,6 +990,11 @@ public static class MemexConfiguration
         // LinkedIn company-Page sync (Community Management API) — org-scope OAuth +
         // posts/statistics pull. Same ordering requirement (needs HttpContext.User).
         app.MapLinkedInPageSync();
+
+        // LinkedIn member publishing + engagement — POST /linkedin/publish (JSON API) plus
+        // GET /linkedin/publish and GET /linkedin/engagement triggers surfaced from the Post
+        // node menu (w_member_social scope). Same ordering requirement (needs HttpContext.User).
+        app.MapLinkedInPublish();
 
         // GitHub Sync — OAuth authorization-code connect endpoints (same ordering
         // requirement: needs HttpContext.User). Stores the per-user token at
