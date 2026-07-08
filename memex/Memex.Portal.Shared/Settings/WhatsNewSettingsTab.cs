@@ -6,6 +6,8 @@ using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace Memex.Portal.Shared.Settings;
 
@@ -52,10 +54,17 @@ public static class WhatsNewSettingsTab
         // lagging query index). Sorted newest-first by node path — entries are named with a leading
         // ISO date, so path order is chronological.
         stack = stack.WithView((h, _) =>
-            h.Hub.GetQuery("whatsnew-list", $"path:{WhatsNewNamespace} scope:children")
+            h.Hub.GetQuery("whatsnew:list", $"path:{WhatsNewNamespace} scope:children")
             .Select(nodes => (UiControl?)Controls.Markdown(RenderList(nodes)))
-            .Catch<UiControl?, Exception>(ex => Observable.Return(
-                (UiControl?)Controls.Markdown($"_Could not load What's New: {ex.Message}_")))
+            // Generic message to the (ungated, any-user) UI — never surface the raw exception; log it
+            // server-side instead so an internal detail can't leak into the page.
+            .Catch<UiControl?, Exception>(ex =>
+            {
+                h.Hub.ServiceProvider.GetService<ILoggerFactory>()?
+                    .CreateLogger(nameof(WhatsNewSettingsTab))
+                    .LogWarning(ex, "What's New listing failed for {Namespace}", WhatsNewNamespace);
+                return Observable.Return((UiControl?)Controls.Markdown("_Could not load What's New right now._"));
+            })
             .StartWith((UiControl?)Controls.Markdown("_Loading…_")));
 
         return stack;
