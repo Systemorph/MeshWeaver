@@ -46,4 +46,21 @@
     <ProjectReference Include="..\MeshWeaver.NuGet\MeshWeaver.NuGet.csproj" />
   </ItemGroup>
 
+  <!-- Ship the BusinessRules scope generator DLL WITH the platform, so IScope<,> node types compile
+       with NO `#r "nuget:MeshWeaver.BusinessRules.Generator"` and NO mesh-local NuGet feed. It is
+       loaded by MeshNodeCompilationService as a build TOOL only (never a project analyzer, so it does
+       NOT propagate to downstream builds). We MSBuild it (no ProjectReference — that would re-add it
+       as an analyzer) and copy the DLL as a runtime item that flows to every consumer's output. -->
+  <Target Name="ShipScopeGenerator" BeforeTargets="AssignTargetPaths">
+    <MSBuild Projects="..\MeshWeaver.BusinessRules.Generator\MeshWeaver.BusinessRules.Generator.csproj"
+             Targets="Build" Properties="Configuration=$(Configuration)" />
+    <ItemGroup>
+      <None Include="..\MeshWeaver.BusinessRules.Generator\bin\$(Configuration)\netstandard2.0\MeshWeaver.BusinessRules.Generator.dll">
+        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        <Link>MeshWeaver.BusinessRules.Generator.dll</Link>
+        <Visible>false</Visible>
+      </None>
+    </ItemGroup>
+  </Target>
+
 </Project>

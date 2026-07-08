@@ -1279,18 +1279,30 @@ internal class MeshNodeCompilationService(
     /// scopes framework: declare the interface, the compiler generates the
     /// proxy, and <c>services.AddBusinessRules(assembly)</c> discovers it.
     /// </summary>
+    // The BusinessRules scope generator ships WITH the platform — its DLL is copied into the Graph
+    // runtime output (see MeshWeaver.Graph.csproj) and always fed to the compile. So an IScope<,>
+    // node compiles with NO `#r "nuget:MeshWeaver.BusinessRules.Generator"` and NO NuGet round-trip
+    // (no mesh-local feed, no BakeMeshLocalFeed). It runs as a build TOOL only — never a project
+    // analyzer, so it does NOT propagate to downstream builds. A node may still `#r` a DIFFERENT
+    // generator; those add to this built-in one. Resolved once (the file is stable per process).
+    private static readonly IReadOnlyList<string> BuiltInGeneratorPaths = ResolveBuiltInGenerators();
+
+    private static IReadOnlyList<string> ResolveBuiltInGenerators()
+    {
+        var path = Path.Combine(AppContext.BaseDirectory, "MeshWeaver.BusinessRules.Generator.dll");
+        return File.Exists(path) ? [path] : [];
+    }
+
     private static CSharpCompilation RunSourceGenerators(
         CSharpCompilation compilation, IReadOnlyList<string> generatorAssemblyPaths, ILogger logger, CancellationToken ct)
     {
-        // The scope generator is supplied EXPLICITLY: only nodes whose Source declares
-        // `#r "nuget:MeshWeaver.BusinessRules.Generator"` resolve it (into generatorAssemblyPaths)
-        // — there is NO auto-inject heuristic. The generator is never a framework reference (that
-        // propagated the analyzer and bloated every build). Nothing #r'd → nothing to discover →
-        // pass through unchanged (a scope source that forgot the #r fails to compile and surfaces
-        // the error on the Progress page; it never hangs).
-        if (generatorAssemblyPaths.Count == 0)
+        // Always include the built-in scope generator, plus any generator a node #r'd explicitly.
+        IReadOnlyList<string> allPaths = BuiltInGeneratorPaths.Count == 0
+            ? generatorAssemblyPaths
+            : [.. BuiltInGeneratorPaths, .. generatorAssemblyPaths];
+        if (allPaths.Count == 0)
             return compilation;
-        var generators = SourceGeneratorLoader.Discover(generatorAssemblyPaths, logger);
+        var generators = SourceGeneratorLoader.Discover(allPaths, logger);
         if (generators.IsDefaultOrEmpty)
             return compilation;
         var driver = CSharpGeneratorDriver.Create(generators);
