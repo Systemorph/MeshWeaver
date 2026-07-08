@@ -179,7 +179,7 @@ You build a **Markdown** node ONLY when the user explicitly asks for a document,
 
 ## Canonical Example
 
-The walkthrough at [SocialMedia model node type](@/Doc/DataMesh/SocialMedia) is the reference implementation. It has exactly the shape you should produce:
+The [Plugins](@/Doc/Architecture/Plugins) architecture — and the real node types it ships (`Slides/Slide`, `Edu/Course`, `LinkedIn/Position`: content record + layout areas + instances, each compiling live) — show the reference shape you should produce:
 
 - `Post.json`, `Profile.json` — NodeType definitions with a `configuration` lambda
 - `Post/Source/*.cs`, `Profile/Source/*.cs` — content record, reference data (`Platform`), layout areas
@@ -481,7 +481,7 @@ For domain-specific logic (financial models, reinsurance cession, risk analysis,
 2. **Business Rules** — pure C# calculation engines with no framework dependencies
 3. **Layout Areas** — reactive charts with `Chart.Create(DataSet.Bar(...))`, filter toolbars via `host.Toolbar(model, id)`, and `host.GetDataStream<T>(id).Select(...)` for reactive updates
 
-See [SocialMedia](@/Doc/DataMesh/SocialMedia) for a plain-CRUD reference example, and [Business Rules & Calculations](@/Doc/Architecture/BusinessRules) for a chart/calculation-heavy reinsurance-cession example.
+See [Plugins](@/Doc/Architecture/Plugins) for the node-repo shape (real plain-CRUD examples: `Slides/Slide`, `Edu/Course`, `LinkedIn/Position`), and [Business Rules & Calculations](@/Doc/Architecture/BusinessRules) for a chart/calculation-heavy reinsurance-cession example.
 
 For a production implementation, see:
 - [CededCashflows.cs](https://github.com/Systemorph/MeshWeaver.Reinsurance/blob/main/src/MeshWeaver.Reinsurance/Cession/CededCashflows.cs) — cession calculation engine
@@ -571,4 +571,4 @@ When creating `Source/` files, create them as MeshNodes with:
 - `namespace: "{typePath}/Source"`
 - `content` shaped as `{ "$type": "CodeConfiguration", "code": "…", "language": "csharp" }` containing the C# source
 
-See [SocialMedia/Post/Source](@/Doc/DataMesh/SocialMedia) for the concrete file naming and content shape to mirror.
+See [Plugins](@/Doc/Architecture/Plugins) (and any node repo under `LinkedIn/` / `Edu/` / `Slides/` in the plugins repo) for the concrete file naming and content shape to mirror.

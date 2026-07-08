@@ -143,7 +143,7 @@ Which Code nodes feed a compile is declared on `NodeTypeDefinition.Sources` /
 `Tests` as mesh queries (defaults: `namespace:Source scope:subtree` /
 `namespace:Test scope:subtree` — the conventional sibling namespaces). Each entry
 may carry an optional `name=` prefix, e.g.
-`"shared=@SocialMedia/Post/Source/Platform"`. The name is display-only: the
+`"shared=@Common/Source/ReferenceData"`. The name is display-only: the
 NodeType side menu groups the resolved files under it (unnamed entries land in
 the default `src` / `test` group), while the compiler strips the prefix and
 behaves identically. `CodeQueryResolver` is the single expansion/grouping
