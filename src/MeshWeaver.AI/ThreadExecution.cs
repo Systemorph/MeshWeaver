@@ -932,7 +932,8 @@ internal static class ThreadExecution
             DateTime? completedAt = null,
             ThreadMessageStatus? status = null,
             string? summary = null,
-            string? harness = null)
+            string? harness = null,
+            int? cacheReadTokens = null, int? cacheWriteTokens = null)
         {
             // Re-read the segment's CURRENT target + text baseline on every push so
             // writes follow a mid-round check_inbox split to the new cell. The cell
@@ -1046,6 +1047,8 @@ internal static class ThreadExecution
                     InputTokens = inputTokens ?? current.InputTokens,
                     OutputTokens = outputTokens ?? current.OutputTokens,
                     TotalTokens = totalTokens ?? current.TotalTokens,
+                    CacheReadTokens = cacheReadTokens ?? current.CacheReadTokens,
+                    CacheWriteTokens = cacheWriteTokens ?? current.CacheWriteTokens,
                     CompletedAt = completedAt ?? current.CompletedAt,
                     Status = nextStatus,
                     Summary = summary ?? current.Summary
@@ -1725,6 +1728,12 @@ internal static class ThreadExecution
                     int? inputTokens = null;
                     int? outputTokens = null;
                     int? totalTokens = null;
+                    // Prompt-cache breakdown — SUBSETS of inputTokens (see UsageTokens). Accumulated
+                    // from UsageDetails.AdditionalCounts across rounds so the counter and the per-model
+                    // TokenUsage satellite reflect the real (billable) cached context, not just the
+                    // non-cached delta the raw "in" number used to show.
+                    int? cacheReadTokens = null;
+                    int? cacheWriteTokens = null;
                     // Total-token normalization is the static NormalizeTotal helper (below),
                     // assigned per terminal path — NOT a local function here. A mutable-capturing
                     // local function threaded through this ~1400-line method's branches exploded
@@ -1912,6 +1921,15 @@ internal static class ThreadExecution
                             outputTokens = (outputTokens ?? 0) + (int)ot;
                         if (d?.TotalTokenCount is { } tt)
                             totalTokens = (totalTokens ?? 0) + (int)tt;
+                        // Prompt-cache breakdown — provider-agnostic (OpenAI/OpenRouter put the cached
+                        // subset in AdditionalCounts["InputTokenDetails.CachedTokenCount"]; the Claude
+                        // client normalises to the same shape). Subsets of InputTokenCount; used for
+                        // accurate cost + the counter's cache line. Used to be dropped entirely.
+                        var (roundCacheRead, roundCacheWrite) = UsageTokens.SplitCache(d);
+                        if (roundCacheRead > 0)
+                            cacheReadTokens = (cacheReadTokens ?? 0) + (int)roundCacheRead;
+                        if (roundCacheWrite > 0)
+                            cacheWriteTokens = (cacheWriteTokens ?? 0) + (int)roundCacheWrite;
                     }
                     else if (content is FunctionResultContent functionResult)
                     {
@@ -2085,7 +2103,8 @@ internal static class ThreadExecution
                         inputTokens: inputTokens, outputTokens: outputTokens,
                         totalTokens: totalTokens, completedAt: DateTime.UtcNow,
                         status: ThreadMessageStatus.Completed,
-                        summary: summaryText, harness: request.Harness).Subscribe(
+                        summary: summaryText, harness: request.Harness,
+                        cacheReadTokens: cacheReadTokens, cacheWriteTokens: cacheWriteTokens).Subscribe(
                         _ => { },
                         ex => execLogger?.LogWarning(ex,
                             "PushToResponseMessage(Completed) failed for {ThreadPath}", threadPath));
@@ -2109,7 +2128,8 @@ internal static class ThreadExecution
                     // never touches the round on the no-usage path.
                     TokenUsageNodeType.RecordUsage(parentHub, threadPath,
                         AgentPickerProjection.PartitionOf(threadPath),
-                        actualModel ?? request.ModelName, inputTokens, outputTokens, execLogger)
+                        actualModel ?? request.ModelName, inputTokens, outputTokens, execLogger,
+                        cacheReadTokens, cacheWriteTokens)
                     .Subscribe(
                         _ => { },
                         ex => execLogger?.LogWarning(ex,
@@ -2179,7 +2199,8 @@ internal static class ThreadExecution
                             inputTokens: inputTokens, outputTokens: outputTokens,
                             totalTokens: totalTokens,
                             completedAt: DateTime.UtcNow,
-                            status: ThreadMessageStatus.Cancelled).Subscribe(
+                            status: ThreadMessageStatus.Cancelled,
+                            cacheReadTokens: cacheReadTokens, cacheWriteTokens: cacheWriteTokens).Subscribe(
                             _ => { },
                             ex => execLogger?.LogWarning(ex,
                                 "PushToResponseMessage(Cancelled) failed for {ThreadPath}", threadPath));
@@ -2200,7 +2221,8 @@ internal static class ThreadExecution
                         // after the terminal Cancelled status). Fail-open + no-op on zero tokens.
                         TokenUsageNodeType.RecordUsage(parentHub, threadPath,
                             AgentPickerProjection.PartitionOf(threadPath),
-                            request.ModelName, inputTokens, outputTokens, execLogger)
+                            request.ModelName, inputTokens, outputTokens, execLogger,
+                            cacheReadTokens, cacheWriteTokens)
                         .Subscribe(
                             _ => { },
                             ex => execLogger?.LogWarning(ex,
@@ -2280,7 +2302,8 @@ internal static class ThreadExecution
                             inputTokens: inputTokens, outputTokens: outputTokens,
                             totalTokens: totalTokens,
                             completedAt: DateTime.UtcNow,
-                            status: ThreadMessageStatus.Error)
+                            status: ThreadMessageStatus.Error,
+                            cacheReadTokens: cacheReadTokens, cacheWriteTokens: cacheWriteTokens)
                             .Timeout(TimeSpan.FromSeconds(10));
                         var errorTextLocal = errorText;
                         var errorNodeChangesLocal = errorNodeChanges;
@@ -2306,7 +2329,8 @@ internal static class ThreadExecution
                                 // Fail-open + no-op on zero tokens.
                                 TokenUsageNodeType.RecordUsage(parentHub, threadPath,
                                     AgentPickerProjection.PartitionOf(threadPath),
-                                    request.ModelName, inputTokens, outputTokens, execLogger)
+                                    request.ModelName, inputTokens, outputTokens, execLogger,
+                                    cacheReadTokens, cacheWriteTokens)
                                 .Subscribe(
                                     _ => { },
                                     recEx => execLogger?.LogWarning(recEx,

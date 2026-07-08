@@ -34,15 +34,38 @@ public record TokenUsage
     /// <summary>The bare model id (e.g. <c>claude-opus-4-8</c>) — the satellite's key dimension.</summary>
     public string Model { get; init; } = string.Empty;
 
-    /// <summary>Cumulative input (prompt) tokens for this model in this thread.</summary>
+    /// <summary>
+    /// Cumulative input (prompt) tokens for this model in this thread — the FULL prompt-token
+    /// count including any cache hits/writes. <see cref="CacheReadTokens"/> and
+    /// <see cref="CacheWriteTokens"/> are SUBSETS of this (see <see cref="UsageTokens"/>).
+    /// </summary>
     public long InputTokens { get; init; }
 
     /// <summary>Cumulative output (completion) tokens for this model in this thread.</summary>
     public long OutputTokens { get; init; }
 
+    /// <summary>
+    /// Cumulative cache-READ (cache-hit) prompt tokens — a subset of <see cref="InputTokens"/>.
+    /// Billed at the reduced cache-read rate. Zero when the provider reports no prompt caching.
+    /// </summary>
+    public long CacheReadTokens { get; init; }
+
+    /// <summary>
+    /// Cumulative cache-WRITE (cache-creation) prompt tokens — a subset of <see cref="InputTokens"/>.
+    /// Billed at the premium cache-write rate. Zero on the OpenAI wire (no separate write) and when
+    /// the provider reports no prompt caching.
+    /// </summary>
+    public long CacheWriteTokens { get; init; }
+
     /// <summary>Returns a copy with the given round's counts added.</summary>
-    public TokenUsage Add(long inputTokens, long outputTokens)
-        => this with { InputTokens = InputTokens + inputTokens, OutputTokens = OutputTokens + outputTokens };
+    public TokenUsage Add(long inputTokens, long outputTokens, long cacheReadTokens = 0, long cacheWriteTokens = 0)
+        => this with
+        {
+            InputTokens = InputTokens + inputTokens,
+            OutputTokens = OutputTokens + outputTokens,
+            CacheReadTokens = CacheReadTokens + cacheReadTokens,
+            CacheWriteTokens = CacheWriteTokens + cacheWriteTokens,
+        };
 }
 
 /// <summary>
@@ -114,11 +137,14 @@ public static class TokenUsageNodeType
     /// </summary>
     public static IObservable<System.Reactive.Unit> RecordUsage(
         IMessageHub hub, string threadPath, string? userId,
-        string? modelId, int? inputTokens, int? outputTokens, ILogger? logger = null)
+        string? modelId, int? inputTokens, int? outputTokens, ILogger? logger = null,
+        int? cacheReadTokens = null, int? cacheWriteTokens = null)
     {
         long inTok = inputTokens ?? 0;
         long outTok = outputTokens ?? 0;
-        if (inTok == 0 && outTok == 0)
+        long cacheReadTok = cacheReadTokens ?? 0;
+        long cacheWriteTok = cacheWriteTokens ?? 0;
+        if (inTok == 0 && outTok == 0 && cacheReadTok == 0 && cacheWriteTok == 0)
             return Observable.Return(System.Reactive.Unit.Default); // no-token round → no-op
 
         var model = string.IsNullOrWhiteSpace(modelId) ? "(unknown)" : modelId!;
@@ -175,7 +201,7 @@ public static class TokenUsageNodeType
                 {
                     var cur = node.ContentAs<TokenUsage>(hub.JsonSerializerOptions, logger)
                               ?? new TokenUsage { UserId = userId, ThreadId = threadPath, Model = model };
-                    return node with { Content = cur.Add(inTok, outTok) };
+                    return node with { Content = cur.Add(inTok, outTok, cacheReadTok, cacheWriteTok) };
                 }))
             .Select(_ => System.Reactive.Unit.Default)
             // Subscribed as an INDEPENDENT side effect (NOT chained before the terminal status write),

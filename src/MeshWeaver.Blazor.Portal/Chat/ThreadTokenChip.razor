@@ -25,8 +25,12 @@
                 {
                     <span class="thread-token-chip-row">
                         <span class="thread-token-chip-model" title="@row.Model">@row.Model</span>
-                        <span title="Input tokens">↑@FormatCompact(row.Input)</span>
+                        <span title="Input tokens (incl. cached)">↑@FormatCompact(row.Input)</span>
                         <span title="Output tokens">↓@FormatCompact(row.Output)</span>
+                        @if (row.CacheRead > 0 || row.CacheWrite > 0)
+                        {
+                            <span title="Cached prompt tokens (read + write) — a subset of input">⚡@FormatCompact(row.CacheRead + row.CacheWrite)</span>
+                        }
                     </span>
                 }
             </span>
