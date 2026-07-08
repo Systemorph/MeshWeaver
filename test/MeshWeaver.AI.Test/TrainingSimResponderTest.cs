@@ -121,3 +121,26 @@ public class TrainingSimResponderTest(ITestOutputHelper output) : MonolithMeshTe
             "the LIVE adapter selects the dedicated training agent on the composer");
     }
 }
+
+/// <summary>
+/// Host-free coverage of the model-config classifier that lets a training cell DEGRADE GRACEFULLY
+/// (a calm "configure a model to run this" notice) instead of echoing the raw "ApiKey is missing …"
+/// factory error into a course page.
+/// </summary>
+public class TrainingSimResponderClassificationTest
+{
+    [Theory]
+    [InlineData("ApiKey is missing for model 'glm-5.2'. Configure a ModelProvider node (Provider 'OpenAI').")]
+    [InlineData("No AI model is available for this hub.")]
+    [InlineData("Selected agent 'Agent/TrainingSim' was found, but creating it failed via factory 'OpenAI' for model 'z-ai/glm-5.2'.")]
+    public void LooksLikeMissingModel_TrueForModelConfigSignatures(string text)
+        => TrainingSimResponder.LooksLikeMissingModel(text).Should().BeTrue();
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("Here is a DataGrid of the five orders.")]
+    [InlineData("The order total is 1,211.25.")]
+    public void LooksLikeMissingModel_FalseForRealAnswersAndEmpty(string? text)
+        => TrainingSimResponder.LooksLikeMissingModel(text).Should().BeFalse();
+}

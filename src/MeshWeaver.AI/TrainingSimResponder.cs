@@ -2,6 +2,7 @@ using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using MeshWeaver.Layout;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.AI;
 
@@ -54,6 +55,21 @@ public static class TrainingSimResponder
 
         return prompt => Observable.Create<PromptCellResponse>(observer =>
         {
+            // 🚨 DEGRADE GRACEFULLY when no language model is configured. Submitting a doomed round
+            // would surface the raw factory error ("ApiKey is missing for model 'glm-5.2'. Configure
+            // a ModelProvider node …") inline in the training cell — hostile on a course page whose
+            // point is to DEMONSTRATE the one-prompt-in / one-cell-out shape, not to debug config.
+            // The credential resolver already answers "is any model available?" reactively from its
+            // warm catalog snapshot (ResolveDefaultModelId → null when none resolves); when there is
+            // none, emit the calm notice instead of starting a thread. NOT a fabricated model / hard-
+            // coded key — the cell just says "configure a model to run this" and stays inert.
+            if (!IsAnyModelConfigured(hub))
+            {
+                observer.OnNext(NoModelNotice());
+                observer.OnCompleted();
+                return Disposable.Empty;
+            }
+
             var replySubscription = new SerialDisposable();
             hub.StartThread(
                 namespacePath,
@@ -67,13 +83,71 @@ public static class TrainingSimResponder
                         .Subscribe(
                             reply =>
                             {
-                                observer.OnNext(Project(reply.Message));
+                                // A round that RAN but whose reply IS the model-config error (the
+                                // factory failure surfaced as the assistant's text, not as an
+                                // OnError) must also degrade to the calm notice rather than echo the
+                                // raw "ApiKey is missing" into the cell.
+                                observer.OnNext(reply.Message is null || LooksLikeMissingModel(reply.Message.Text)
+                                    ? NoModelNotice()
+                                    : Project(reply.Message));
                                 observer.OnCompleted();
                             },
-                            observer.OnError),
+                            error =>
+                            {
+                                // A round that ERRORED with the model-config failure degrades too;
+                                // any other error still surfaces to the cell's exchange pane.
+                                if (LooksLikeMissingModel(error.Message))
+                                {
+                                    observer.OnNext(NoModelNotice());
+                                    observer.OnCompleted();
+                                }
+                                else
+                                    observer.OnError(error);
+                            }),
                 onError: error => observer.OnError(new InvalidOperationException(error)));
             return replySubscription;
         });
+    }
+
+    /// <summary>
+    /// The calm inline notice a training cell shows when no usable language model is configured —
+    /// empty code pane, a friendly explanation in the output pane. Keeps the one-prompt-in /
+    /// one-result-out SHAPE (a code pane + an output pane) so the cell still reads as a demo,
+    /// without a fabricated model or a hard-coded key.
+    /// </summary>
+    public static PromptCellResponse NoModelNotice() =>
+        new(string.Empty, Controls.Markdown(
+            "▶ **Live agent demo** — configure a language model to run this. "
+            + "_(This cell shows how an agent turns your prompt into one code cell.)_"));
+
+    /// <summary>
+    /// Reactive "is any model available?" check for the LIVE responder, off the same warm catalog
+    /// snapshot the credential resolver maintains: <c>ResolveDefaultModelId()</c> returns the lowest-
+    /// Order LanguageModel whose credentials actually resolve, or <c>null</c> when none does. When the
+    /// resolver isn't registered (a hub without the AI stack), assume a model MIGHT exist and let the
+    /// round proceed — the reply-text / OnError classification below still catches a config failure.
+    /// </summary>
+    private static bool IsAnyModelConfigured(IMessageHub hub)
+    {
+        var resolver = hub.ServiceProvider.GetService<ChatClientCredentialResolver>();
+        return resolver is null || resolver.ResolveDefaultModelId() is not null;
+    }
+
+    /// <summary>
+    /// True when <paramref name="text"/> carries the signature of a missing-model / model-creation
+    /// failure — the factory's "ApiKey is missing …" / "Configure a ModelProvider …" error, or the
+    /// agent client's "No AI model is available …" banner. Used to convert a raw config error (whether
+    /// it arrived as the reply text or as an OnError) into the calm <see cref="NoModelNotice"/> instead
+    /// of echoing it into a course cell. Deliberately narrow: only the model-config signatures, so a
+    /// genuine agent answer or a real runtime error is never masked.
+    /// </summary>
+    internal static bool LooksLikeMissingModel(string? text)
+    {
+        if (string.IsNullOrEmpty(text)) return false;
+        return text.Contains("ApiKey is missing", StringComparison.OrdinalIgnoreCase)
+               || text.Contains("Configure a ModelProvider", StringComparison.OrdinalIgnoreCase)
+               || text.Contains("No AI model is available", StringComparison.OrdinalIgnoreCase)
+               || text.Contains("creating it failed via factory", StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>
