@@ -9,6 +9,7 @@
 
 import { GrpcAreaSource, type AreaSource } from "@meshweaver/react/core";
 import { connect, type MeshWebConnection } from "@meshweaver/client-web";
+import { nativeStreamingFetch } from "./nativeFetch";
 
 export interface LiveOptions {
   /** Portal base URL, e.g. https://atioz.meshweaver.cloud */
@@ -30,7 +31,9 @@ export interface LiveSource {
 
 /** Connect over gRPC-web and return a started AreaSource the renderer consumes, plus the connection to close. */
 export async function createLiveSource(opts: LiveOptions): Promise<LiveSource> {
-  const connection = await connect(opts.url, { token: opts.token });
+  // On a device the Hermes fetch can't stream the Connect server-stream; nativeStreamingFetch() supplies
+  // the polyfilled streaming fetch (undefined on web → the browser fetch is used unchanged).
+  const connection = await connect(opts.url, { token: opts.token, fetch: nativeStreamingFetch() });
   const source = new GrpcAreaSource(connection, opts.address, { area: opts.area, id: opts.id });
   void source.start(); // folds the live area stream into the tree as merge-patches arrive
   return { source, connection };
