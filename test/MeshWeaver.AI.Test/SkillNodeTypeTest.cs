@@ -40,6 +40,10 @@ public class SkillNodeTypeTest
         // /navigate is a Navigate-action skill — the pane-aware, resilient "take me there".
         var nav = (SkillDefinition)skills.Single(n => n.Id == "navigate").Content!;
         nav.Action!.Kind.Should().Be(SkillActionKind.Navigate);
+
+        // /clear is a NewThread-action skill — replaces the side panel with a fresh new-chat composer.
+        var clear = (SkillDefinition)skills.Single(n => n.Id == "clear").Content!;
+        clear.Action!.Kind.Should().Be(SkillActionKind.NewThread);
     }
 
     [Fact]

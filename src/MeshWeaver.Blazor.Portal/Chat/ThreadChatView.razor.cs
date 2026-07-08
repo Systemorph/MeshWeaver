@@ -1746,12 +1746,20 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                 RunNavigate(navRow!);
                 break;
             case MeshWeaver.AI.SkillActionKind.NewThread:
-                // "/clear" — just instantiate a fresh new-chat composer (the same path as the "+" button:
-                // OnSidePanelAction("New") clears the open thread and shows the empty new-chat composer).
-                // No navigation — the composer replaces the current thread in place.
+                // "/clear" — REPLACE whatever is showing with a fresh new-chat composer, in the SIDE PANEL,
+                // and leave the main pane alone (no navigation). This is the same target as the "+" button
+                // (PortalLayoutBase.OpenNewThreadInSidePanel): drop the open thread so ThreadSidePanelContent
+                // swaps the thread layout area for the empty composer (SetContentPath(null) drives that
+                // directly — it does not merely rely on a mounted composer reacting to RequestAction), reset
+                // any already-mounted composer's draft/mode, and open the panel if it was closed (e.g. /clear
+                // typed from a full-screen thread). The main-pane view is never touched.
                 lastCommandStatus = null;
                 lastCommandStatusIsError = false;
+                SidePanelState.SetContentPath(null);
+                SidePanelState.SetTitle(null);
                 SidePanelState.RequestAction("New");
+                if (!SidePanelState.IsVisible)
+                    SidePanelState.SetVisible(true);
                 break;
             default:
                 // Instruction skill + typed task → re-enter the normal submission path with the
