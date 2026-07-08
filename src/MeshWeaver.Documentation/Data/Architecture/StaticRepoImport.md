@@ -20,6 +20,7 @@ To materialize partition **`P`** from a static repo:
 1. **Implement `IStaticRepoSource`:**
    - `Partition` → **the target partition name** (e.g. `"Doc"`). This *is* the target; it defaults to the repo's own partition — there is no separate "target" argument, you set it here.
    - `Versioned` → `false` for authored content (fingerprint on content hash so an edited file re-imports); `true` if the nodes carry meaningful versions.
+   - `SyncMode` (optional) → the partition's [`PartitionSyncMode`](#per-partition-sync-mode-what-gets-pruned) — what the import PRUNES. Defaults to `FullReplace` (mirror the partition to the repo). Override to `Additive` if users add their own nodes to this partition (the built-in AI catalogs do), or `UpsertOnly` to never prune.
    - `EnumerateSourceNodes()` → the partition's **children, with full `Content`** (e.g. `MarkdownContent`). Children + satellites only — never the `namespace=""` root.
    - `PartitionRoot` (optional) → a curated `Space` root (`NodeType = "Space"`, `MarkdownContent` welcome). Return `null` to get a generic synthesized root.
 2. **Register it:** `services.AddSingleton<IStaticRepoSource>(new MyRepoSource())`, gated behind `Features:StaticRepoSync:Partitions` via `AddStaticRepoSync(serveFromPartition)`. For a synced partition the in-memory read-only static provider is skipped so Postgres serves + accepts the import.
@@ -55,13 +56,33 @@ meshHub.GetHostedHub(
 4. **Lock** — `CreateNode({P}/_Activity/import-{fingerprint})`. The node lifecycle makes the **first caller win**; concurrent replicas get "already exists" and stop. The activity *is* the lock and the durable "version vN imported at T" record.
 5. **Ensure the Space root** (standard step) via the canonical upsert — creating a `Space` triggers eager schema provisioning + the `Admin/Partition/{P}` routing prime + the admin grant; an existing root is updated. This makes the partition routable, listed in `public.top_level_index`, and gives it a landing page. **Exception — a *claimed* root is left untouched:** if the existing root carries `SyncBehavior != Include` (i.e. an admin set `ExcludeThisAndChildren` = "sync: none"), `EnsureRoot` does **not** re-materialise it. Re-materialising would reset the root's `SyncBehavior` back to `Include` and silently re-enable sync — see *Decoupling a partition (sync: none)* below.
 6. **Upsert every source node** through **`CreateOrUpdateNodeRequest`** — the single canonical verb (the same one `NodeCopyHelper` uses). It **creates** absent nodes and **updates** existing ones (the owner **re-stamps Version**), running the full pipeline: prerender (`MarkdownContent.Parse`), embedding, satellites, access. **Claimed subtrees are skipped** — both a **child** claimed in the snapshot (`SyncBehavior != Include`) and an **entire partition whose root is claimed** (`ExcludeThisAndChildren`). The partition-root claim is read **authoritatively** (`GetMeshNodeStream`), NOT from the eventually-consistent query snapshot, so a *just-set* decouple is honoured before the read-model catches up (the snapshot lags writes — reading the claim from it re-synced the partition and clobbered the admin's edits: a production `Provider/Anthropic` key reset, 2026-06-25). **Each upsert is independently guarded** (per-file `try/catch`): a single node faulting (bad content, a validator reject, a transient owner timeout) logs a `⚠ Failed to import {path}` line **into the import activity** and the import **continues** — the first failure never aborts the rest of the partition. Failures are tallied.
-7. **Prune (full-replace)** — delete target nodes absent from the source (except governance `_Policy`/`_Access`/`_Activity`), then write the **terminal status atomically** via `NodeTypeCompilationActivity.Complete`: **`Succeeded`** when every node imported, **`Warning`** (`"N FAILED (see ⚠ above)"`) when any per-file upsert failed — so the activity log never shows a green Succeeded while hiding failures, and the `⚠` lines pinpoint exactly which files to investigate. A hard fault in provisioning/root/read still `MarkFailed`s the whole run.
+7. **Prune (per the partition's [sync mode](#per-partition-sync-mode-what-gets-pruned))** — delete target nodes absent from the source (except governance `_Policy`/`_Access`/`_Activity`, claimed subtrees, and — in `Additive` mode — user-added nodes the source never owned), then write the **terminal status atomically** via `NodeTypeCompilationActivity.Complete`: **`Succeeded`** when every node imported, **`Warning`** (`"N FAILED (see ⚠ above)"`) when any per-file upsert failed — so the activity log never shows a green Succeeded while hiding failures, and the `⚠` lines pinpoint exactly which files to investigate. A hard fault in provisioning/root/read still `MarkFailed`s the whole run.
 
 All writes run under `AccessService.ImpersonateAsSystem` (re-established at each write's own subscribe, since the System identity must reach the cross-hub write — see [AccessContextPropagation.md](/Doc/Architecture/AccessContextPropagation)).
 
+## Per-partition sync mode (what gets pruned)
+
+Upserting the source's nodes is the same in every partition; what **differs is the prune** — which live nodes an import *removes* after the upsert. That policy is the partition's **`PartitionSyncMode`** (`MeshWeaver.Mesh.Contract`), set on the source via `IStaticRepoSource.SyncMode`:
+
+| `PartitionSyncMode` | Prune behavior | Use it when |
+|---|---|---|
+| `FullReplace` *(default)* | **Mirror.** Prune EVERY live node absent from the current source. The partition is an exact copy of the repo. | The partition is fully build-owned (e.g. `Doc`) — anything not in the repo is stale and should be removed. |
+| `Additive` | Prune ONLY nodes the source **previously** owned (recorded in the prior import's *manifest*) that are now absent. A node a **user added** — never in any manifest — is **kept**. | Users add their own nodes alongside the shipped ones (the built-in AI catalogs). |
+| `UpsertOnly` | **Never prune.** The source can only add/update; nothing is ever removed. | You want the repo to seed content but never delete anything. |
+
+**How `Additive` knows what to keep.** Every import writes a per-partition **manifest** (`{P}/_Activity/import-manifest`) listing exactly the paths the source owned that run. On the next import, `Additive` prunes only *(previous-manifest paths) ∖ (current-source paths)* — so a node the repo **dropped** is still cleaned up, while a node the user **created** (never in a manifest) is never a prune candidate. On the very first import the manifest is empty, so `Additive` prunes nothing.
+
+**Defaults.** `FullReplace` is the default for any source that doesn't opt in. The built-in AI catalogs — **`Skill`, `Agent`, `Provider`, `Harness`** — default to **`Additive`** (their `IStaticRepoSource.SyncMode` returns it), so a user's own skills/agents live safely next to the shipped ones. An operator can override any partition's mode by name via config: `Features:StaticRepoSync:Modes:{Partition}` = `FullReplace` | `Additive` | `UpsertOnly` (env form `Features__StaticRepoSync__Modes__Skill=UpsertOnly`).
+
+> **Sync mode is per-partition; `SyncBehavior` is per-node — they compose.** The mode decides *which extras get pruned*; the per-node `SyncBehavior` (below) still claims/protects *individual* nodes in **every** mode. A node marked `ExcludeThisAndChildren` is never overwritten or pruned regardless of the partition's mode; `Additive`/`UpsertOnly` additionally spare nodes the source never owned.
+
+### Add your own skill/agent that survives sync
+
+Because `Skill`/`Agent`/`Provider`/`Harness` are `Additive`, you can simply **create a node in that partition** (e.g. a new `nodeType:Skill` node under `Skill`, from the GUI or MCP `create`) and it **survives every re-import** — it was never in a shipped manifest, so the importer never prunes it. Editing a *shipped* node instead? Claim it with `SyncBehavior = ExcludeThisAndChildren` (see below) so the next content-version doesn't overwrite your edit. (In a `FullReplace` partition like `Doc`, a hand-added node WOULD be pruned — claim its subtree or switch the partition's mode if you need it to persist.)
+
 ## Decoupling a partition (sync: none)
 
-A partition is **DB-owned once seeded**: an admin edits a synced node (a provider's API key, a doc page) and the change must survive the next import. The control is the node's `SyncBehavior` (`MeshWeaver.Mesh.Contract`):
+A partition is **DB-owned once seeded**: an admin edits a synced node (a provider's API key, a doc page) and the change must survive the next import. The control is the node's `SyncBehavior` (`MeshWeaver.Mesh.Contract`) — which applies **within every [sync mode](#per-partition-sync-mode-what-gets-pruned)**:
 
 | `SyncBehavior` | Import behavior |
 |---|---|
@@ -166,7 +187,7 @@ Shipped and enabled for `Doc` / `Agent` / `Model` on the distributed portal. The
 - Only the **lowercased** partition schema is provisioned — never a verbatim/capital ghost.
 - A **changed** source re-imports and **increments the Version** of updated nodes (the canonical-upsert guarantee).
 - An import over a **content-NULL row refills its content** (the migration-backfill shadow case).
-- A node **absent from the source is pruned** (full-replace).
+- A node **absent from the source is pruned** in `FullReplace`; in `Additive` only a node the source **previously owned** is pruned (a user-added node survives); `UpsertOnly` prunes nothing (`StaticRepoImporterSyncModeTest`).
 - Re-run with an unchanged source is a **no-op** (fingerprint short-circuit).
 - The import runs on the **dedicated `import/{meshHubId}` hub**, not the root mesh hub — the bulk create/upsert traffic never touches the router (verified end-to-end by `OrleansStaticRepoImportTest` / `OrleansContentImportSyncTest`, which complete only because the import hub is reachable).
 - A **single node failing does not abort the import**; it logs a `⚠` line and the activity ends **`Warning`**, not a green `Succeeded`.
