@@ -8,12 +8,9 @@
                        StorageName="theme" />
 
     <FluentStack Orientation="Orientation.Vertical" VerticalGap="0">
-        <FluentSelect Label="Theme"
-                      Width="100%"
-                      Style="margin-bottom: 30px;"
-                      Items="@AllModes"
-                      @bind-SelectedOption="@Mode" />
-
+        @* Theme (light/dark) moved to the top-bar toggle in PortalLayoutBase. This panel keeps the
+           accent color, direction, and reset. The FluentDesignTheme above still binds Mode so the
+           reset can return to the system theme. *@
         <FluentSelect Label="Color"
                       Style="margin-bottom: 30px;"
                       Width="100%"
