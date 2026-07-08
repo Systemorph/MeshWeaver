@@ -86,6 +86,29 @@ public static class ShippedReleaseSeed
         }
     }
 
+    /// <summary>The GitHub repository the platform is built from.</summary>
+    public const string RepositoryUrl = "https://github.com/Systemorph/MeshWeaver";
+
+    /// <summary>
+    /// The git commit SHA this build was produced from — baked in as <c>AssemblyMetadata("CommitHash")</c>
+    /// by the <c>AddCommitHashMetadata</c> target in <c>Directory.Build.props</c> (from the SDK's
+    /// <c>SourceRevisionId</c> or the CI <c>GITHUB_SHA</c>). Null when the build carried no source-control
+    /// info (a git-less source drop) — the About page then falls back to the version string alone.
+    /// </summary>
+    public static string? CommitHash
+    {
+        get
+        {
+            var asm = Assembly.GetEntryAssembly() ?? typeof(ShippedReleaseSeed).Assembly;
+            var sha = asm.GetCustomAttributes<AssemblyMetadataAttribute>()
+                .FirstOrDefault(a => string.Equals(a.Key, "CommitHash", StringComparison.OrdinalIgnoreCase))?.Value;
+            return string.IsNullOrWhiteSpace(sha) ? null : sha;
+        }
+    }
+
+    /// <summary>Link to the GitHub commit this build was produced from, or null when the SHA is unknown.</summary>
+    public static string? CommitUrl => CommitHash is { } sha ? $"{RepositoryUrl}/commit/{sha}" : null;
+
     /// <summary>
     /// THE single robust startup entry point. Runs the existing shipped-release pre-build FIRST (the
     /// critical, owned per-NodeType release path), THEN ensures the Admin platform-version anchor node

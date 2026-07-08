@@ -37,4 +37,11 @@ public record SocialMediaPost
 
     [DisplayName("Media URL")]
     public string? MediaUrl { get; init; }
+
+    // Publishing lifecycle: Draft → Published (or Failed). Written back by the
+    // /linkedin/publish endpoint; drives the Post-node "Publish to LinkedIn" menu action.
+    public string Status { get; init; } = "Draft";
+
+    [DisplayName("Published URN")]
+    public string? PublishedUrn { get; init; }
 }

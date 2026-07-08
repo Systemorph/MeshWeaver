@@ -208,11 +208,34 @@ public record MeshNode([property: Key] string Id, [property: Editable(false)] st
     public string? LastModifiedBy { get; init; }
 
     /// <summary>
-    /// The hub version when this node was last saved.
-    /// Used to restore hub version on restart.
+    /// The node's persistence clock — a version that increases <b>monotonically across
+    /// activations</b> and identifies the last operation that mutated this node.
+    /// <para>🚨 This is deliberately NOT the same clock as <see cref="IMessageHub.Version"/>.
+    /// The hub clock resets to 0 on every (re)activation and also stamps the owning hub's
+    /// LAYOUT-render Fulls; stamping <see cref="Version"/> straight from the fresh hub clock
+    /// made it REGRESS after a deactivate → reactivate cycle (idle-release / recycle / replica
+    /// restart) — the write-rollback / "v113 read back as v3" version regression of issue #325.
+    /// The node's Version is advanced forward-only from its OWN persisted value via
+    /// <see cref="NextVersion(long, long)"/>, so it survives a recycle without regressing while
+    /// the hub clock (and thus layout Fulls) is never touched. See
+    /// <c>Doc/Architecture/MeshNodeVersioning.md</c>.</para>
     /// </summary>
     [Editable(false)]
     public long Version { get; init; }
+
+    /// <summary>
+    /// Computes the next persistence <see cref="Version"/> for a write to a node that currently
+    /// carries <paramref name="currentVersion"/>, given the owning hub's per-message clock
+    /// <paramref name="hubVersion"/>. The result is <c>max(hubVersion, currentVersion + 1)</c>:
+    /// it tracks the hub clock while that clock leads (preserving the "1 op = 1 version stamp"
+    /// model within an activation), but never falls to or below the version the node already
+    /// carries. After a recycle the hub clock has reset toward 0 while the node loaded its
+    /// persisted <paramref name="currentVersion"/> verbatim, so the <c>+ 1</c> floor keeps the
+    /// node's Version strictly increasing across activations — the fix for issue #325 that does
+    /// NOT re-seed the shared hub clock (which would drop layout Fulls, the 2026-06-18 wedge).
+    /// </summary>
+    public static long NextVersion(long hubVersion, long currentVersion)
+        => Math.Max(hubVersion, currentVersion + 1);
 
     /// <summary>
     /// The lifecycle state of this node.

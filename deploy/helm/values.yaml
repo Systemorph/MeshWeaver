@@ -38,17 +38,20 @@ grpc:
   enabled: true
   port: 8081
   trustedPort: 8082
-  # ---- Language gates (execute foreign-language Code nodes as co-deployed sidecars) ---------------
-  # A gate is a TRUSTED participant sidecar in the portal pod that connects to the trusted loopback
-  # endpoint above (127.0.0.1:{trustedPort}) — reachability across the shared pod network namespace IS
-  # the authentication, no token. It is the foreign-language counterpart of the in-process Roslyn
-  # kernel: a Code node whose Language routes to the matching gate (CodeNodeType.ResolveKernelAddress),
-  # runs, and writes its result back onto the run's Activity node.
+  # ---- Gates (TRUSTED co-deployed participant sidecars) ------------------------------------------
+  # A gate is a participant sidecar in the portal pod that connects to the trusted loopback endpoint
+  # above (127.0.0.1:{trustedPort}) — reachability across the shared pod network namespace IS the
+  # authentication, no token. Two kinds:
+  #   • LANGUAGE gates (python, node) — foreign-language counterparts of the in-process Roslyn kernel:
+  #     a Code node whose Language routes to the matching gate (CodeNodeType.ResolveKernelAddress),
+  #     runs, and writes its result back onto the run's Activity node.
+  #   • EXAMPLE participants (pandas) — a long-lived stateful participant the docs drive (the pandas
+  #     node holds a live DataFrame at py/pandas for Doc/DataMesh/PythonPandasNode).
   #
-  # FEATURE FLAG per language: by default ALL languages are INCLUDED (enabled: true) — set a gate's
-  # enabled:false to opt a language out. A gate actually RUNS when it is enabled AND its image is
-  # supplied (built from deploy/{python,node}-gate/Dockerfile, pushed to a registry the cluster can
-  # pull); image left empty ⇒ no sidecar, so a bare install never crash-loops on a missing image.
+  # FEATURE FLAG per gate: by default ALL are INCLUDED (enabled: true) — set enabled:false to opt out.
+  # A gate actually RUNS when it is enabled AND its image is supplied (built from
+  # deploy/{python,node,pandas}-gate/Dockerfile, pushed to a registry the cluster can pull); image
+  # left empty ⇒ no sidecar, so a bare install never crash-loops on a missing image.
   gates:
     python:
       enabled: true
@@ -58,6 +61,10 @@ grpc:
       enabled: true
       image: ""
       address: "node/node-kernel"
+    pandas:
+      enabled: true
+      image: ""
+      address: "py/pandas"
 # ---- Portal Ingress (TLS via an ingress controller) -----------------------
 # Off by default (cloud envs wire ingress/TLS their own way). A self-host overlay
 # enables it with a hostname + a pre-created TLS secret. The proxy-*-timeout

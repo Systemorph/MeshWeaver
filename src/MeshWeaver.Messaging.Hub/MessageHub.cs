@@ -675,7 +675,7 @@ public sealed class MessageHub : IMessageHub
 
     private IObservable<IMessageDelivery> HandleMessageAsync(
         IMessageDelivery delivery,
-        LinkedListNode<AsyncDelivery> node,
+        AsyncDelivery[] ruleChain,
         CancellationToken cancellationToken
     )
     {
@@ -686,18 +686,19 @@ public sealed class MessageHub : IMessageHub
         // subscribe (on the action-block thread), genuinely-async rules complete
         // later via the pool. The chain is BUILT here (one SelectMany per rule);
         // it runs when the actor-loop edge subscribes (.ToTask).
-        var inputMessageType = delivery.Message.GetType();
+        //
+        // 🚨 ruleChain is a SNAPSHOT taken under ThreadSafeLinkedList's read lock — NOT a live
+        // walk of LinkedListNode.Next. A raw .Next walk races a concurrent rules.Remove(node)
+        // (a handler disposable firing during hub teardown / rapid sync-hub churn): LinkedList
+        // invalidates the removed node's owning-list reference before its next pointer, so a
+        // racing get_Next() dereferences list.head and throws NRE → the delivery fails → sync
+        // streams see it as [SYNC_STREAM] OnError and their subscribers time out (a different
+        // sync-hub test flakes each bulk run). Iterating the snapshot is immune to that race.
+        if (ruleChain.Length > 500)
+            throw new InvalidOperationException($"HandleMessageAsync rule count exceeded 500 in hub {Address} for {delivery.Message.GetType().Name}");
         IObservable<IMessageDelivery> result = Observable.Return(delivery);
-        LinkedListNode<AsyncDelivery>? current = node;
-        var depth = 0;
-        while (current is not null)
-        {
-            if (depth++ > 500)
-                throw new InvalidOperationException($"HandleMessageAsync recursion depth exceeded 500 in hub {Address} for {inputMessageType.Name}");
-            var rule = current.Value;
+        foreach (var rule in ruleChain)
             result = result.SelectMany(d => rule.Invoke(d, cancellationToken));
-            current = current.Next;
-        }
         return result;
     }
 
@@ -752,14 +753,17 @@ public sealed class MessageHub : IMessageHub
             && !AccessService.LooksLikeHubPrincipal(delivery.AccessContext.ObjectId))
             accessService.SetContext(delivery.AccessContext);
 
+        // Snapshot the rule chain ONCE under the list's read lock (see HandleMessageAsync) so a
+        // concurrent rules.Remove during teardown can't NRE the iteration.
+        var ruleChain = rules.Snapshot();
         if (traceEnabled)
-            logger.LogTrace(rules.First != null
+            logger.LogTrace(ruleChain.Length > 0
                     ? "MESSAGE_FLOW: HUB_PROCESSING_RULES | {MessageType} | Hub: {Address} | MessageId: {MessageId}"
                     : "MESSAGE_FLOW: HUB_NO_RULES | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
                 messageTypeName, Address, delivery.Id);
 
-        var chain = rules.First != null
-            ? HandleMessageAsync(delivery, rules.First, cancellationToken)
+        var chain = ruleChain.Length > 0
+            ? HandleMessageAsync(delivery, ruleChain, cancellationToken)
             : Observable.Return(delivery);
 
         return chain
@@ -1143,7 +1147,13 @@ public sealed class MessageHub : IMessageHub
         if (traceEnabled)
             logger.LogTrace("MESSAGE_FLOW: HUB_CALLBACKS_COMPLETE | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
                 messageTypeName, Address, delivery.Id);
-        return Observable.Return(delivery.Processed());
+        // Stamp "a live Observe callback consumed this" so later rules can tell an AWAITED
+        // response apart from an un-awaited one. The rule chain keeps running after this rule
+        // (HandleCallbacks runs first), and the portal's DeliveryFailure→modal handler must NOT
+        // re-surface a failure the call site's OnError already handled (e.g. StartThread's
+        // user-partition fallback) — that double-report was the raw "Access denied … lacks
+        // Thread permission" modal popping despite the fallback succeeding.
+        return Observable.Return(delivery.Processed().SetProperty(PostOptions.CallbackDispatched, true));
     }
 
     Address IMessageHub.Address => Address;

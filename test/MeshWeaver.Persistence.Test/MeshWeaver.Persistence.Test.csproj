@@ -16,6 +16,12 @@
         <Content Include="Markdown\**">
             <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
         </Content>
+        <!-- Committed course cell-execution fixtures (see Courses/README.md). Copied next to the test
+             assembly so CourseCellExecutionTest can enumerate + run every course cell offline. -->
+        <Content Include="Courses\**">
+            <Link>Courses\%(RecursiveDir)%(Filename)%(Extension)</Link>
+            <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        </Content>
         <!-- Pre-copy samples/Graph for tests - avoids runtime directory copying -->
         <Content Include="..\..\samples\Graph\**">
             <Link>SamplesGraph\%(RecursiveDir)%(Filename)%(Extension)</Link>

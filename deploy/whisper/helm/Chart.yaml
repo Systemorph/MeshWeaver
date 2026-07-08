@@ -1,0 +1,11 @@
+apiVersion: v2
+name: whisper-swiss-german
+description: >-
+  Centralized Swiss-German speech-to-text — a whisper.cpp server bound to the fine-tuned
+  Swiss-German model, exposed cluster-internally so the portal's POST /api/speech/transcribe
+  can forward audio to it (the model host never faces clients directly). See
+  deploy/whisper/ and Doc/Architecture/CentralizedSpeech.
+type: application
+version: 0.1.0
+# The whisper.cpp server tag baked into the image (deploy/whisper/Dockerfile pins v1.7.4).
+appVersion: "1.7.4"

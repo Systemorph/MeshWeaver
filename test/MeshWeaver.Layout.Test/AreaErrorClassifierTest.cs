@@ -99,6 +99,46 @@ public class AreaErrorClassifierTest
         => AreaErrorClassifier.IsNodeGoneNotFound(new InvalidOperationException("No node found at X")).Should().BeFalse(
             "only a routing DeliveryFailure counts — a coincidental message on some other exception must not");
 
+    // ── TryGetInitializationFailureReason: a FAILED hub → render the reason, terminal, no retry (#323) ──
+
+    [Theory]
+    // The first request that triggered init (HandleInitialize's .Catch — em-dash form):
+    [InlineData("Hub 'AgenticPension/x' initialization failed — a BuildupAction faulted (InvalidOperationException: seed missing)")]
+    // Every later request (EnterInitializationFailedState's refusal rule — colon form):
+    [InlineData("Hub 'AgenticPension/x' initialization failed: seed missing")]
+    public void TryGetInitializationFailureReason_ReturnsReasonForBothBanners(string message)
+        => AreaErrorClassifier.TryGetInitializationFailureReason(Failure(message, ErrorType.Failed))
+            .Should().Be(message,
+                "a hub that failed initialization carries the real reason in its DeliveryFailure — the "
+                + "client must surface it, not the generic 'did not become addressable' banner");
+
+    [Fact]
+    public void TryGetInitializationFailureReason_NullForCompilationInProgress()
+        // A CompilationInProgress NACK is a DISTINCT, transient case (swap to Progress) — not an init failure.
+        => AreaErrorClassifier.TryGetInitializationFailureReason(
+                Failure("compiling", ErrorType.CompilationInProgress, "Foo/Bar")).Should().BeNull();
+
+    [Fact]
+    public void TryGetInitializationFailureReason_NullForOtherDeliveryFailure()
+        => AreaErrorClassifier.TryGetInitializationFailureReason(
+                Failure("The target hub was not found for address Foo/Bar", ErrorType.NotFound)).Should().BeNull();
+
+    [Fact]
+    public void TryGetInitializationFailureReason_NullForNonDeliveryFailure()
+        => AreaErrorClassifier.TryGetInitializationFailureReason(
+                new InvalidOperationException("Hub 'x' initialization failed: boom")).Should().BeNull(
+            "only a typed DeliveryFailure counts — a coincidental message on some other exception must not");
+
+    [Fact]
+    public void InitializationFailure_ClassifiesAsTerminalWithReason_NotTransient()
+    {
+        // The init-failure banner must NOT be mistaken for a transient (retried) miss — otherwise the
+        // client would spin against a durably-failed hub instead of showing the reason once.
+        var initFailure = Failure("Hub 'x' initialization failed: seed missing", ErrorType.Failed);
+        AreaErrorClassifier.TryGetInitializationFailureReason(initFailure).Should().NotBeNull();
+        AreaErrorClassifier.IsTransientHubFailure(initFailure).Should().BeFalse();
+    }
+
     // ── ShouldRetryArea: the single predicate the subscription hands the retry operator ──
 
     [Fact]
@@ -115,6 +155,38 @@ public class AreaErrorClassifierTest
         => AreaErrorClassifier.ShouldRetryArea(new ObjectDisposedException("circuit")).Should().BeFalse();
 
     [Fact]
+    public void ShouldRetryArea_FalseForInitializationFailure_TerminalNotRetried()
+        // A durably-failed hub won't recover on resubscribe — render the reason once, never spin (#323).
+        => AreaErrorClassifier.ShouldRetryArea(
+                Failure("Hub 'x' initialization failed: seed missing", ErrorType.Failed)).Should().BeFalse();
+
+    [Fact]
     public void ShouldRetryArea_FalseForPermanentError()
         => AreaErrorClassifier.ShouldRetryArea(new InvalidOperationException("boom")).Should().BeFalse();
+
+    // ── IsRoutingNotFoundFailure: raw-message twin the portal error sink uses to swallow a benign
+    //    routing NotFound (a not-yet-run per-viewer Activity area) from the global "Something went wrong" modal ──
+
+    [Theory]
+    [InlineData("No node found at 'u/_Activity/markdown-abc'. Closest ancestor is 'u' (remainder='_Activity/markdown-abc').")]
+    [InlineData("No node found at 'x/y'.")]
+    public void IsRoutingNotFoundFailure_TrueForRoutingNotFound(string message)
+        => AreaErrorClassifier.IsRoutingNotFoundFailure(
+                new DeliveryFailure(null!, message) { ErrorType = ErrorType.NotFound }).Should().BeTrue(
+            "a routing NotFound for a gone / not-yet-created node is benign churn — swallowed, never the modal");
+
+    [Fact]
+    public void IsRoutingNotFoundFailure_FalseForNotFoundWithoutBanner()
+        => AreaErrorClassifier.IsRoutingNotFoundFailure(
+                new DeliveryFailure(null!, "access denied") { ErrorType = ErrorType.NotFound }).Should().BeFalse();
+
+    [Fact]
+    public void IsRoutingNotFoundFailure_FalseForOtherErrorTypeWithBanner()
+        // A genuine failure that happens to start "No node found" but isn't a routing NotFound stays visible.
+        => AreaErrorClassifier.IsRoutingNotFoundFailure(
+                new DeliveryFailure(null!, "No node found") { ErrorType = ErrorType.Failed }).Should().BeFalse();
+
+    [Fact]
+    public void IsRoutingNotFoundFailure_FalseForNull()
+        => AreaErrorClassifier.IsRoutingNotFoundFailure(null).Should().BeFalse();
 }
