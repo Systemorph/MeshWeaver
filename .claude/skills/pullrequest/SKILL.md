@@ -33,6 +33,25 @@ green CI image. So `main`'s CI is not a formality — it is the source of the im
 git status --porcelain | grep '^??'        # untracked files a committed file might reference
 dotnet build src/<TheProjectYouTouched> -c Release -warnaserror --no-restore   # match the CI flags
 
+# 0.5 RELEASE NOTE — every USER-FACING PR ships a "What's New" entry as a doc node (one node per
+#     entry → no cross-PR merge conflicts). It's shipped in the docs partition and surfaced by the
+#     What's New settings tab (Doc/WhatsNew, newest first). SKIP only for pure-internal changes
+#     (refactor/test/CI/deps with NO user-visible effect) — say so in the PR body when you skip.
+DATE=$(date -u +%Y-%m-%d)                   # no clock in scripts elsewhere, but this is a shell step
+cat > src/MeshWeaver.Documentation/Data/WhatsNew/${DATE}-<slug>.md <<'NOTE'
+---
+Name: <short human title of the change>
+Category: What's New
+Description: <one-line summary shown in the What's New list>
+Icon: Sparkle
+---
+
+# <title>
+
+<2–5 plain-language sentences on what changed and why it matters to a user — not the how.>
+NOTE
+git add src/MeshWeaver.Documentation/Data/WhatsNew/${DATE}-<slug>.md
+
 # 1. CREATE the PR (branch must be pushed first; push only when the user asked — AGENTS.md).
 git push -u origin "$(git branch --show-current)"
 gh pr create --base main --head "$(git branch --show-current)" --title "…" --body "…"
@@ -80,6 +99,21 @@ that only runs post-merge can still turn main red.
 > Do **not** rely on `gh pr merge --auto` either: GitHub auto-merge only waits for *required* status
 > checks. This repo currently merges with checks pending (no branch protection), so `--auto` merges
 > immediately — defeating the rule. Gate it yourself with `gh run watch`.
+
+## What's New entry (step 0.5) — one doc node per user-facing PR
+
+The platform's **What's New** feed is not a hand-maintained changelog: it's the set of per-entry
+markdown nodes under `src/MeshWeaver.Documentation/Data/WhatsNew/` (shipped in the `Doc` partition,
+so every self-updating deployment shows the same feed). The **What's New** settings tab lists them
+newest-first; each entry is a normal doc node you can open.
+
+- **One file per PR** (`<YYYY-MM-DD>-<slug>.md`) — the date prefix drives newest-first ordering, and
+  a distinct filename per PR means two concurrent PRs never conflict on the feed (the reason we do
+  NOT prepend to a single rolling file).
+- **Front-matter**: `Name` (title shown in the list), `Category: What's New`, `Description`
+  (one-liner), `Icon` (a Fluent icon name, e.g. `Sparkle`). Body is plain-language user-facing prose.
+- **When to skip**: pure-internal PRs (refactors, tests, CI, dependency bumps) with no user-visible
+  change don't need an entry — note the skip in the PR body so a reviewer knows it was deliberate.
 
 ## The half-committed-WIP trap (how main went red on a clean CI)
 

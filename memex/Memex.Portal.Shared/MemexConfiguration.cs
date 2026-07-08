@@ -750,6 +750,10 @@ public static class MemexConfiguration
                         .AddUpdatePolicySettingsTab()
                         // Public privacy statement (Admin/Privacy, served anonymously at /privacy).
                         .AddPrivacySettingsTab()
+                        // About — exact running build (version + git commit) with a GitHub link. Ungated.
+                        .AddAboutSettingsTab()
+                        // What's New — per-entry release notes shipped as Doc/WhatsNew nodes. Ungated.
+                        .AddWhatsNewSettingsTab()
                         // Token-usage analytics (per-model _Usage satellites): filter by period,
                         // group by model / person / thread, cost from ModelPricing.
                         .AddTokenUsageSettingsTab()
