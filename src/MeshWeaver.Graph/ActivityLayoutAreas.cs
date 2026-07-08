@@ -51,9 +51,11 @@ public static class ActivityLayoutAreas
 
     /// <summary>
     /// Overview for an Activity node. Header (user / category / status / timestamps),
-    /// followed by the structured message log (per-message rows with log-level
-    /// colour coding), terminal-status badge, and Re-run button (when the activity
-    /// originated from an executable hub and isn't currently running).
+    /// followed by the live progress indicator (indeterminate bar while running, a
+    /// status line once terminal) and the structured message log (per-message rows
+    /// with log-level colour coding), plus a Cancel button (while running) and a
+    /// Re-run button (once terminal, when the activity originated from an
+    /// executable hub). Built entirely from framework controls — no hand-rolled HTML.
     /// </summary>
     public static IObservable<UiControl?> Overview(LayoutAreaHost host, RenderingContext _)
     {
@@ -61,12 +63,14 @@ public static class ActivityLayoutAreas
             .Select(node =>
             {
                 if (node?.Content is not ActivityLog log)
-                    return (UiControl?)Controls.Html("<div>No activity data.</div>");
+                    return (UiControl?)Controls.Label("No activity data.")
+                        .WithStyle("font-style: italic; color: var(--neutral-foreground-hint);");
 
                 var stack = Controls.Stack
                     .WithStyle("padding: 16px; gap: 12px;")
-                    .WithView(Controls.Html(BuildHeaderHtml(log)))
-                    .WithView(Controls.Html(BuildMessagesHtml(log)));
+                    .WithView(BuildHeader(log))
+                    .WithView(BuildProgressIndicator(log))
+                    .WithView(BuildLog(log));
 
                 // While running: Cancel button. Per the Activity Control Plane
                 // pattern (Doc/Architecture/ActivityControlPlane.md), cancellation
@@ -143,8 +147,8 @@ public static class ActivityLayoutAreas
     /// Compact running-progress view for embedding next to an executable Code
     /// node (or anywhere a caller wants live script feedback). Streams the same
     /// ActivityLog content as <see cref="Overview"/> but trims chrome and shows
-    /// only the messages + inline Cancel button (while running) + status badge.
-    /// No header, no Re-run.
+    /// only the live progress indicator + message log + inline Cancel button
+    /// (while running). No header, no Re-run. Built from framework controls.
     /// </summary>
     public static IObservable<UiControl?> Progress(LayoutAreaHost host, RenderingContext _)
     {
@@ -152,11 +156,13 @@ public static class ActivityLayoutAreas
             .Select(node =>
             {
                 if (node?.Content is not ActivityLog log)
-                    return (UiControl?)Controls.Html("<em>No activity yet.</em>");
+                    return (UiControl?)Controls.Label("No activity yet.")
+                        .WithStyle("font-style: italic; color: var(--neutral-foreground-hint);");
 
                 var stack = Controls.Stack
                     .WithStyle("gap: 8px;")
-                    .WithView(Controls.Html(BuildMessagesHtml(log)));
+                    .WithView(BuildProgressIndicator(log))
+                    .WithView(BuildLog(log));
 
                 // Inline Cancel: same content-patch pattern as the Overview's
                 // button. Only rendered while the activity is actually running
@@ -175,71 +181,127 @@ public static class ActivityLayoutAreas
             });
     }
 
-    private static string BuildHeaderHtml(ActivityLog log)
+    /// <summary>
+    /// The activity header row: the triggering user (bold), a status badge
+    /// coloured by <see cref="ActivityStatus"/>, and a right-aligned timestamp
+    /// hint (started / ended). Control-based — replaces the former hand-rolled
+    /// header HTML.
+    /// </summary>
+    public static StackControl BuildHeader(ActivityLog log)
     {
         var userName = log.User?.DisplayName ?? log.User?.Email ?? "System";
         var startStr = log.Start.ToString("g");
         var endStr = log.End is { } end ? end.ToString("g") : "—";
-        var statusColor = log.Status switch
-        {
-            ActivityStatus.Failed => "var(--error)",
-            ActivityStatus.Warning => "var(--warning)",
-            ActivityStatus.Running => "var(--neutral-foreground-hint)",
-            _ => "var(--accent-fill-rest)",
-        };
-        var statusLabel = log.Status.ToString();
-        Func<string, string> enc = s => System.Net.WebUtility.HtmlEncode(s);
-        return
-            "<div style=\"display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap;\">" +
-                $"<span style=\"font-weight: 600; font-size: 1rem;\">{enc(userName)}</span>" +
-                $"<span style=\"font-size: 0.85rem; padding: 2px 8px; border-radius: 10px; background: {statusColor}20; color: {statusColor};\">{enc(log.Category)} · {enc(statusLabel)}</span>" +
-                $"<span style=\"font-size: 0.8rem; color: var(--neutral-foreground-hint); margin-left: auto;\">started {enc(startStr)} · ended {enc(endStr)}</span>" +
-            "</div>";
+
+        return Controls.Stack
+            .WithOrientation(Orientation.Horizontal)
+            .WithHorizontalGap(12)
+            .WithStyle("align-items: baseline; flex-wrap: wrap;")
+            .WithView(Controls.Label(userName)
+                .WithStyle("font-weight: 600; font-size: 1rem;"))
+            .WithView(Controls.Label($"{log.Category} · {log.Status}")
+                .WithStyle(
+                    "font-size: 0.85rem; padding: 2px 8px; border-radius: 10px; "
+                    + $"color: {StatusColor(log.Status)}; "
+                    + $"background: color-mix(in srgb, {StatusColor(log.Status)} 12%, transparent);"))
+            .WithView(Controls.Label($"started {startStr} · ended {endStr}")
+                .WithStyle("font-size: 0.8rem; color: var(--neutral-foreground-hint); margin-left: auto;"));
     }
 
-    private static string BuildMessagesHtml(ActivityLog log)
+    /// <summary>
+    /// The activity's progress indicator — the "progress" of the generic activity GUI.
+    /// While <see cref="ActivityStatus.Running"/> it is an INDETERMINATE (animated)
+    /// <see cref="ProgressControl"/> whose message is the latest log line (or
+    /// "Running…" if none yet). Once terminal it is a coloured status line
+    /// (✓ Done / ✗ Failed / ⚠ Completed with warnings / Cancelled) preceded by the
+    /// final message. Passing <c>null</c> as the progress value is what drives the
+    /// indeterminate FluentProgress in <c>ProgressView.razor</c>.
+    /// </summary>
+    public static UiControl BuildProgressIndicator(ActivityLog log)
     {
-        if (log.Messages.Count == 0 && log.Status == ActivityStatus.Running)
-            return "<div style=\"font-style: italic; color: var(--neutral-foreground-hint);\">Running…</div>";
+        var latest = log.Messages.Count > 0 ? log.Messages[^1].Message : null;
 
-        Func<string, string> enc = s => System.Net.WebUtility.HtmlEncode(s);
-        var sb = new System.Text.StringBuilder();
-        sb.Append("<div style=\"font-family: var(--font-monospace, ui-monospace, SFMono-Regular, monospace); font-size: 0.85rem; line-height: 1.5;\">");
+        if (log.Status == ActivityStatus.Running)
+        {
+            // Indeterminate bar: progress == null → animated FluentProgress.
+            return Controls.Progress((object?)latest ?? "Running…", null!)
+                .WithWidth("100%")
+                .WithHideNumber(true)
+                .WithMessagePosition(MessagePosition.Top);
+        }
+
+        var (glyph, label) = log.Status switch
+        {
+            ActivityStatus.Succeeded => ("✓", "Done"),
+            ActivityStatus.Failed    => ("✗", "Failed"),
+            ActivityStatus.Warning   => ("⚠", "Completed with warnings"),
+            ActivityStatus.Cancelled => ("⊘", "Cancelled"),
+            _                        => ("", log.Status.ToString()),
+        };
+
+        var text = string.IsNullOrEmpty(latest) ? $"{glyph} {label}" : $"{latest}\n{glyph} {label}";
+        return Controls.H4(text)
+            .WithStyle($"color: {StatusColor(log.Status)}; white-space: pre-wrap; margin: 0;");
+    }
+
+    /// <summary>
+    /// The activity log — one row per <see cref="LogMessage"/>: a fixed-width
+    /// level tag (INFO / WARN / ERROR / DBG, coloured by severity) beside the
+    /// message text. An empty log on a running activity renders a single
+    /// "Running…" row. Control-based (a vertical <see cref="StackControl"/> of
+    /// horizontal rows) — replaces the former hand-rolled messages HTML and is
+    /// unit-testable without a layout host.
+    /// </summary>
+    public static StackControl BuildLog(ActivityLog log)
+    {
+        var stack = Controls.Stack
+            .WithStyle(
+                "font-family: var(--font-monospace, ui-monospace, monospace); "
+                + "font-size: .85rem; gap: 2px; max-height: 320px; overflow: auto;");
+
+        if (log.Messages.Count == 0)
+        {
+            return stack.WithView(Controls.Label("Running…")
+                .WithStyle("font-style: italic; color: var(--neutral-foreground-hint);"));
+        }
+
         foreach (var msg in log.Messages)
         {
-            var (color, prefix) = msg.LogLevel switch
-            {
-                Microsoft.Extensions.Logging.LogLevel.Critical or Microsoft.Extensions.Logging.LogLevel.Error =>
-                    ("var(--error)", "ERROR"),
-                Microsoft.Extensions.Logging.LogLevel.Warning =>
-                    ("var(--warning)", "WARN"),
-                Microsoft.Extensions.Logging.LogLevel.Debug or Microsoft.Extensions.Logging.LogLevel.Trace =>
-                    ("var(--neutral-foreground-hint)", "DBG"),
-                _ => ("inherit", "INFO"),
-            };
-            sb.Append($"<div style=\"display: flex; gap: 8px; padding: 2px 0;\">");
-            sb.Append($"<span style=\"color: {color}; font-weight: 600; min-width: 40px;\">{prefix}</span>");
-            sb.Append($"<span style=\"color: {color}; flex: 1; white-space: pre-wrap;\">{enc(msg.Message)}</span>");
-            sb.Append("</div>");
+            var (color, tag) = LevelTag(msg.LogLevel);
+            stack = stack.WithView(Controls.Stack
+                .WithOrientation(Orientation.Horizontal)
+                .WithHorizontalGap(8)
+                .WithView(Controls.Label(tag)
+                    .WithStyle($"min-width: 44px; font-weight: 600; color: {color};"))
+                .WithView(Controls.Label(msg.Message)
+                    .WithStyle($"flex: 1; white-space: pre-wrap; color: {color};")));
         }
-        // Terminal-state badge.
-        var statusBadge = log.Status switch
-        {
-            ActivityStatus.Succeeded => "<div style=\"margin-top: 8px; color: var(--accent-fill-rest);\">✓ Done</div>",
-            ActivityStatus.Failed    => "<div style=\"margin-top: 8px; color: var(--error);\">✗ Failed</div>",
-            ActivityStatus.Warning   => "<div style=\"margin-top: 8px; color: var(--warning);\">⚠ Completed with warnings</div>",
-            _ => "<div style=\"margin-top: 8px; font-style: italic; color: var(--neutral-foreground-hint);\">Running…</div>",
-        };
-        sb.Append(statusBadge);
-        sb.Append("</div>");
-        return sb.ToString();
+
+        return stack;
     }
+
+    private static string StatusColor(ActivityStatus status) => status switch
+    {
+        ActivityStatus.Failed    => "var(--error)",
+        ActivityStatus.Warning   => "var(--warning)",
+        ActivityStatus.Running   => "var(--neutral-foreground-hint)",
+        ActivityStatus.Cancelled => "var(--neutral-foreground-hint)",
+        _                        => "var(--accent-fill-rest)",
+    };
+
+    private static (string Color, string Tag) LevelTag(LogLevel level) => level switch
+    {
+        LogLevel.Critical or LogLevel.Error => ("var(--error)", "ERROR"),
+        LogLevel.Warning                    => ("var(--warning)", "WARN"),
+        LogLevel.Debug or LogLevel.Trace    => ("var(--neutral-foreground-hint)", "DBG"),
+        _                                   => ("inherit", "INFO"),
+    };
 
     /// <summary>
     /// Thumbnail view — compact label for activity entries.
     /// </summary>
     public static UiControl Thumbnail(LayoutAreaHost host, RenderingContext _)
     {
-        return Controls.Html("<div>Activity</div>");
+        return Controls.Label("Activity");
     }
 }

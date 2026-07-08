@@ -24,6 +24,15 @@ public record ProgressControl(object Message, object Progress)
     public object? Color { get; init; }
     /// <summary>Position of the message text relative to the progress bar. Accepts a <see cref="Layout.MessagePosition"/> value.</summary>
     public object? MessagePosition { get; init; }
+
+    /// <summary>Sets the width of the progress bar (CSS size string, e.g. "100%").</summary>
+    public ProgressControl WithWidth(object width) => this with { Width = width };
+
+    /// <summary>Hides (or shows) the numeric percentage label rendered next to the bar.</summary>
+    public ProgressControl WithHideNumber(object hideNumber) => this with { HideNumber = hideNumber };
+
+    /// <summary>Sets where the message text is rendered relative to the bar.</summary>
+    public ProgressControl WithMessagePosition(object messagePosition) => this with { MessagePosition = messagePosition };
 }
 
 /// <summary>
