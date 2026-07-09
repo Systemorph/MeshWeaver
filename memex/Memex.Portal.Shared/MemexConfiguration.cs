@@ -2,6 +2,7 @@
 using Memex.Portal.Shared.Api;
 using Memex.Portal.Shared.Authentication;
 using Memex.Portal.Shared.Email;
+using Memex.Portal.Shared.Instances;
 using Memex.Portal.Shared.SelfUpdate;
 using Memex.Portal.Shared.Settings;
 using Memex.Portal.Shared.Social;
@@ -757,6 +758,9 @@ public static class MemexConfiguration
                         .AddInboxSettingsTab()
                         // Platform auto-update strategy (Admin/UpdatePolicy) — stable/continuous/none.
                         .AddUpdatePolicySettingsTab()
+                        // Platform-admin Instances overview: live cluster query (namespaces, versions,
+                        // replica health) + Grafana log links + guided create-instance plan generator.
+                        .AddInstancesAdminSettingsTab()
                         // Public privacy statement (Admin/Privacy, served anonymously at /privacy).
                         .AddPrivacySettingsTab()
                         // About — exact running build (version + git commit) with a GitHub link. Ungated.
@@ -788,7 +792,10 @@ public static class MemexConfiguration
                 // Platform self-update: the Admin/UpdatePolicy node + the poller that watches ACR and
                 // (on Kubernetes) patches the portal+migration deployments to the newest version per
                 // policy. On a non-k8s host it degrades to detect-and-notify. See ReleaseStrategy.md.
-                .AddSelfUpdate();
+                .AddSelfUpdate()
+                // Platform-admin Instances feature: binds InstancesOptions (Instances:*) and the
+                // live cluster-query service backing the admin Instances tab (see Instances.md).
+                .AddInstancesAdmin();
         }
 
         /// <summary>
