@@ -12,6 +12,13 @@ persistDataVolume: false
 # leave empty for local/self-host (the in-cluster patch still works; ACR polling just won't auth).
 selfUpdate:
   azureClientId: ""
+# ---- Platform-admin Instances overview -------------------------------------
+# The admin "Instances" tab lists every portal on the cluster by querying the k8s API. Reading
+# deployments/ingresses ACROSS namespaces needs a cluster-scoped read grant — enable it ONLY on the
+# company/control instance, never on public or customer instances (a tenant pod must not be able to
+# enumerate the whole cluster). Off by default; the company env sets clusterRead: true.
+instancesAdmin:
+  clusterRead: false
 # ---- External Ollama (local self-host) ------------------------------------
 # Front a host-native Ollama with an in-cluster Service so the portal addresses
 # it by name (http://ollama:11434/v1) instead of a host-gateway IP. On macOS the
