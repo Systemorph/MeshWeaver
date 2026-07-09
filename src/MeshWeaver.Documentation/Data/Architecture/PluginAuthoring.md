@@ -98,6 +98,19 @@ GitSync fetches the folder and parses every file into nodes:
 Authentication resolves user-credential-first, then the **App installation token** — so a headless
 server instance imports with no personal login at all.
 
+**Into an EXISTING Space** (the partition already has content): `ImportFromGitHub` is create-only —
+it fails with `Node already exists`. Configure the source and reimport instead:
+
+```csharp
+sync.SaveConfig(spacePath, repoUrl, branch, subdir, false, false)   // register the source
+sync.ReimportAtCommit(spacePath, branch, userId)                    // mirror add/update/prune
+```
+
+Two operational notes: a **failed** `ImportFromGitHub` (e.g. auth error) leaves an **empty orphan
+Space** behind — inspect (`version:1`, no children) and delete it before retrying; and running
+`SaveConfig` + `ReimportAtCommit` back-to-back can race the config read — a retry reads the settled
+config. Re-running a reimport is idempotent (fingerprint-matched).
+
 ## 5. Set up your own instance as a registry
 
 Any MeshWeaver instance can be the distribution point for its own plugins. One-time setup:
@@ -120,6 +133,23 @@ Any MeshWeaver instance can be the distribution point for its own plugins. One-t
 
 The App credential lives on this ONE instance; every consumer pulls over HTTP — that's the whole
 point ([Plugin Registry](/Doc/Architecture/PluginRegistry) → credential encapsulation).
+
+### App-grant gotchas (each one bites)
+
+- **The grant is TWO steps**: the App's *Permissions & events* (Contents: Read [& Write]) **and** the
+  installation's *Repository access* (which repos it can see). Either missing → API calls **404**
+  (not 403) on the repo. A permission change on an installed App may also sit **pending approval**
+  on the installation page until an org admin approves it.
+- **Installation tokens fix their permissions at mint.** Granting repos/permissions does NOT upgrade
+  already-minted tokens — and the platform caches its token until near expiry. After changing the
+  grant, **restart the portal** to drop the cached token.
+- **Client-id prefixes**: `Iv23li…` = GitHub **App**, `Ov23li…` = **OAuth App**. A client secret
+  generated on one never matches the other's client id ("client_id and/or client_secret passed are
+  incorrect" at token exchange while the authorize step succeeds).
+- **Verify from outside** (no portal involved): sign an RS256 JWT with the PEM (`iss` = client id),
+  then `GET /app/installations` → `POST /app/installations/{id}/access_tokens` → check the response
+  `permissions`, then `GET /installation/repositories` with the token — the granted repos must list
+  the plugin repo.
 
 ## 6. Push back (mesh → git)
 
@@ -144,3 +174,5 @@ Trigger it from the Space's GitHub Sync settings (Sync back) or
 | `The GitHub App has no installations` | The App exists but isn't installed on the org — App page → Install App, grant the repo. |
 | Import succeeds but the type doesn't render | Compile failed — check the NodeType's diagnostics (`get_diagnostics`/the node's Configuration tab); usual causes are the runtime-compile rules in §2.5. |
 | Push-back 403 | The App's Contents permission is Read-only — set Read & Write and re-approve the installation. |
+| `Octokit.NotFoundException` (404) on a repo that exists | The installation can't SEE the repo — repo missing from the installation's *Repository access*, or the token was minted before the grant (restart the portal to drop the cached token). |
+| `Node already exists: {space}` on import | `ImportFromGitHub` is create-only. For an existing Space use `SaveConfig` + `ReimportAtCommit` (§4). If the existing node is an empty orphan from a previously failed import, delete it and retry. |
