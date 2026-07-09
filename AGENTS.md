@@ -6,6 +6,22 @@ This file provides guidance to AI agents working with this repository.
 
 **NEVER commit or push automatically.** Always wait for the user to explicitly ask.
 
+### 🚨 Work in a dedicated git worktree — NEVER the shared primary checkout
+
+**Every agent session works in its OWN `git worktree`, not the primary checkout (`/Users/roland/code/MeshWeaver`).** Many Claude/agent sessions run against this repo at once; the primary checkout's working tree + index are shared, so editing, committing, or `reset`ing there clobbers other sessions' uncommitted WIP (a `reset --hard` there once wiped live work across every concurrent session). Create an isolated worktree on a fresh branch and do ALL edits, commits, builds, and pushes there:
+
+```bash
+# base on origin/main for a fresh change, or on the feature branch you're extending
+git worktree add -b feat/my-change /Users/roland/code/MW-my-change origin/main
+cd /Users/roland/code/MW-my-change      # isolated tree + index — your edits can't touch other sessions
+# …edit, commit, build with CI's flags, push, open the PR — all from here…
+git worktree remove /Users/roland/code/MW-my-change   # once merged/abandoned
+```
+
+- `git worktree list` shows every active worktree (and which branch each holds — a branch can be checked out in only one).
+- **Never `git stash`** — the stash stack is repo-global and collides across worktrees; use `git diff > patch` + `git apply` instead.
+- Parallel PR-building sub-agents must pass `isolation: "worktree"` as a tool PARAM (a prompt-only "work in a worktree" does nothing).
+
 ### 🚨 Before you push: make CI green LOCALLY first — don't discover red on CI
 
 CI builds **Release with warnings-as-errors**: `dotnet build --no-restore -c Release -p:CIRun=true -warnaserror`. A plain local `dotnet build` (Debug, no `-warnaserror`) passes while CI fails — warnings are promoted to errors there. Pushing a red branch wastes a CI cycle and, per the green-merge gate, blocks the pull-based self-update if it reaches main. So **before every push**:
