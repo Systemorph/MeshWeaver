@@ -3,7 +3,8 @@ using System.ComponentModel.DataAnnotations;
 
 namespace MeshWeaver.Mesh;
 
-/// <summary>Type of notification.</summary>
+/// <summary>Type of notification. New values are APPENDED (never inserted) so the
+/// serialized ordinals of existing rows stay stable.</summary>
 public enum NotificationType
 {
     /// <summary>An approval is required from this user.</summary>
@@ -12,8 +13,14 @@ public enum NotificationType
     ApprovalGiven,
     /// <summary>An approval was rejected.</summary>
     ApprovalRejected,
-    /// <summary>General notification.</summary>
-    General
+    /// <summary>General notification (maps to the <see cref="NotificationCategory.System"/> preference).</summary>
+    General,
+    /// <summary>A user was granted access (a role) on a node.</summary>
+    AccessGranted,
+    /// <summary>An AI thread round finished and a response is ready.</summary>
+    ChatReady,
+    /// <summary>A platform/system event (indexing/import failure, compile park, …).</summary>
+    System
 }
 
 /// <summary>

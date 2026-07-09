@@ -216,11 +216,14 @@ public class ApprovalAndNotificationTest
     [Fact]
     public void NotificationType_HasExpectedValues()
     {
-        Enum.GetValues<NotificationType>().Should().HaveCount(4);
+        Enum.GetValues<NotificationType>().Should().HaveCount(7);
         Enum.GetValues<NotificationType>().Should().Contain(NotificationType.ApprovalRequired);
         Enum.GetValues<NotificationType>().Should().Contain(NotificationType.ApprovalGiven);
         Enum.GetValues<NotificationType>().Should().Contain(NotificationType.ApprovalRejected);
         Enum.GetValues<NotificationType>().Should().Contain(NotificationType.General);
+        Enum.GetValues<NotificationType>().Should().Contain(NotificationType.AccessGranted);
+        Enum.GetValues<NotificationType>().Should().Contain(NotificationType.ChatReady);
+        Enum.GetValues<NotificationType>().Should().Contain(NotificationType.System);
     }
 
     #endregion

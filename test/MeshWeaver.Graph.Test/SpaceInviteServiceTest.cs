@@ -81,9 +81,10 @@ public class SpaceInviteServiceTest(ITestOutputHelper output) : MonolithMeshTest
                 && s.MatchValue == email && s.TargetPath == Space && s.Role == "Viewer"))
             .FirstAsync().Timeout(30.Seconds());
 
-        // An Invitation node was created for the email (the InvitationEmailSender emails it).
+        // An Invitation node was created for the email (the InvitationEmailSender emails it),
+        // carrying the target Space so the email addresses it by name + links to it.
         await Mesh.GetWorkspace().GetMeshNodeStream($"{InvitationNodeType.Namespace}/{SpaceInviteService.Slug(email)}")
-            .Where(n => n?.Content is Invitation inv && inv.Email == email)
+            .Where(n => n?.Content is Invitation inv && inv.Email == email && inv.SpacePath == Space)
             .FirstAsync().Timeout(30.Seconds());
     }
 }
