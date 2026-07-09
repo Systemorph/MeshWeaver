@@ -67,7 +67,8 @@ nodes, never data *instances* of those types nor runtime satellites (`/_Activity
 queries the `Source` / `Test` Code satellites explicitly (a plain subtree query misses them — they
 live in a separate schema, the same reason the compiler queries `namespace:…/Source scope:subtree`).
 A consumer installs by feeding the returned `nodes` straight to its own `POST /api/mesh/update` — no
-GitHub credential on the consumer at all.
+GitHub credential on the consumer at all. Full reference: [Plugin
+Registry](/Doc/Architecture/PluginRegistry).
 
 ## Dynamic node types — a module that compiles itself
 
