@@ -75,6 +75,32 @@ Container names are `memex-portal` and `memex-migration`; deployments are `memex
 - **Portal serves:** `curl -sS -o /dev/null -w '%{http_code}' https://<NS>.meshweaver.cloud/` → `200`.
 - **Schema/index applied** (when the change was a migration): spot-check via `az aks command invoke … "kubectl -n <NS> exec deployment/memex-portal-deployment -- …"` or an MCP query.
 
+## Self-update ops — pausing, pinning, and the rules that bite
+
+Operational facts about the in-pod updater (learned the hard way — each cost a debugging session):
+
+- **Tags must be dotted SemVer** (`3.0.0` / `3.0.0-ci.749`). The updater treats any other deployed
+  tag (a hand-built `myfix-<sha>`) as invalid and **reverts the Deployment to the newest valid ci
+  tag within minutes**. Manual rolls therefore only work with CI-built `ci.<N>` tags — ship code
+  via a merged PR, never a hand-tagged image.
+- **Pause switch** = the `Admin/UpdatePolicy` node: patch `content.policy` to `None`
+  (`Continuous`/`Stable`/`None`). BUT a **freshly booted pod races the policy read** — the poller
+  starts with the configured default (`Continuous`) and runs one check before the node's value
+  arrives, so `None` alone does not protect a roll that restarts the pod.
+- **Hard pause** (break-glass, e.g. pinning a diagnostic image): delete the RoleBinding
+  `memex-portal-self-update` (namespace-local; role + SA are both named per chart) — the updater's
+  Deployment PATCH then fails closed. Recreate the RoleBinding to resume. Always restore promptly.
+- **KeyVault CSI env timing**: a new/changed KV secret needs **two rollout restarts** — the first
+  pod's mount populates the synced k8s Secret, but that pod's `envFrom` snapshot predates it; the
+  second restart reads the populated Secret. Verify with `printenv <key> | md5sum` in the NEWEST
+  pod (sort by `creationTimestamp`).
+- **🚨 Namespace ↔ instance mapping**: this cluster hosts several instances whose Deployments all
+  share names (`memex-portal-deployment`): namespace `memex` = the systemorph.com company portal,
+  `memex-cloud` = **memex.meshweaver.cloud** (SPC `memexcloud-portal-ai-secrets`, KeyVault
+  `Systemorph`, `memexcloud-`-prefixed secret names), `atioz` = the customer portal. Before ANY
+  kubectl change, confirm the namespace matches the instance you mean — e.g. run a diagnostic on
+  the target portal that prints its pod hostname and `kubectl get pods -A | grep <hostname>`.
+
 ## Portal self-update — Workload Identity for ACR polling
 
 Steady state is **self-update** (see [ReleaseStrategy.md](/Doc/Architecture/ReleaseStrategy)): the portal polls ACR and patches its own Deployment to a newer image. The in-cluster PATCH uses the `memex-portal-sa` service-account token (RBAC ships in the Helm chart and works everywhere). **Listing the ACR tags** to discover a newer image needs an Azure credential — that is wired with **AKS Workload Identity**, mirroring the existing pgBackRest wiring (`infra/modules/storage.bicep`).
