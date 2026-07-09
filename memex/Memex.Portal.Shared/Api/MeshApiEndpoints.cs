@@ -63,6 +63,17 @@ public static class MeshApiEndpoints
         group.MapPost("/search", (HttpContext http, IMessageHub rootHub, SearchBody body, CancellationToken ct) =>
             RunString(http, rootHub, ct, ops => ops.Search(body.Query, body.BasePath)));
 
+        // Plugin registry — memex as the distribution point. `/catalog` lists installable plugins
+        // (partitions that ship NodeTypes); `/catalog/download` returns a plugin's definition
+        // (Space + NodeTypes + Source/Test Code + docs) as {name, nodeCount, nodes:[…]} for a
+        // consumer to import via `/update` — no GitHub creds on the consumer, the credential stays
+        // here, encapsulated in the registry (npm/NuGet-style).
+        group.MapPost("/catalog", (HttpContext http, IMessageHub rootHub, CancellationToken ct) =>
+            RunString(http, rootHub, ct, ops => ops.Catalog()));
+
+        group.MapPost("/catalog/download", (HttpContext http, IMessageHub rootHub, CatalogDownloadBody body, CancellationToken ct) =>
+            RunString(http, rootHub, ct, ops => ops.CatalogDownload(body.Plugin)));
+
         group.MapPost("/create", (HttpContext http, IMessageHub rootHub, CreateBody body, CancellationToken ct) =>
             RunString(http, rootHub, ct, ops => ops.Create(body.Node)));
 
@@ -280,6 +291,7 @@ public static class MeshApiEndpoints
     // by property name (case-insensitive). All optional fields default to null / false.
     public record GetBody(string Path);
     public record SearchBody(string Query, string? BasePath);
+    public record CatalogDownloadBody(string Plugin);
     public record QueryNodesBody(string Query, int? Limit = null);
     public record CreateBody(string Node);
     public record UpdateBody(string Nodes);

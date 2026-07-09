@@ -31,6 +31,15 @@ public static class GitHubSyncConfiguration
     public static IServiceCollection AddGitHubSyncServices(this IServiceCollection services)
     {
         services.AddOptions<GitHubOAuthOptions>();
+        // GitHub App (machine identity): server-side operations — the plugin registry's sync of
+        // the plugins repo, boot imports — authenticate as the App installation instead of a
+        // personal credential. The host binds GitHub:App next to GitHub:OAuth; left unconfigured,
+        // GitHubSyncService.ResolveAuth simply skips the App fallback.
+        services.AddOptions<GitHubAppOptions>();
+        services.AddSingleton(sp => new GitHubAppTokenService(
+            sp.GetRequiredService<IoPoolRegistry>(),
+            sp.GetRequiredService<IOptions<GitHubAppOptions>>(),
+            sp.GetService<ILogger<GitHubAppTokenService>>()));
         services.AddSingleton<IGitHubRepoClient, OctokitGitHubRepoClient>();
         services.AddSingleton<GitHubCredentialService>();
         services.AddSingleton<GitHubSyncService>();
