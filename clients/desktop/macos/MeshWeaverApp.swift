@@ -64,7 +64,7 @@ final class MeshProcess {
     }
 }
 
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate {
     var window: NSWindow!
     var webView: WKWebView!
     let mesh = MeshProcess()
@@ -83,6 +83,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.setFrameAutosaveName("MeshWeaverMain")
 
         webView = WKWebView(frame: rect, configuration: WKWebViewConfiguration())
+        webView.uiDelegate = self   // grant the composer's dictation mic (see requestMediaCapturePermissionFor)
         webView.autoresizingMask = [.width, .height]
         window.contentView = webView
         window.makeKeyAndOrderFront(nil)
@@ -148,6 +149,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
     func applicationWillTerminate(_ notification: Notification) { mesh.stop() }
+
+    // Grant the local UI's getUserMedia (the composer's dictation mic). WKWebView denies media capture
+    // by default; the app still needs NSMicrophoneUsageDescription in Info.plist for the OS-level prompt.
+    func webView(_ webView: WKWebView,
+                 requestMediaCapturePermissionFor origin: WKSecurityOrigin,
+                 initiatedByFrame frame: WKFrameInfo,
+                 type: WKMediaCaptureType,
+                 decisionHandler: @escaping (WKPermissionDecision) -> Void) {
+        decisionHandler(.grant)
+    }
 }
 
 let app = NSApplication.shared

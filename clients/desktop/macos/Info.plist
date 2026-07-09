@@ -24,6 +24,10 @@
 	<true/>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
+	<!-- The composer's dictation records the mic via getUserMedia in the WebView; macOS requires this
+	     usage string or the app is denied mic access (and crashes on the capture attempt). -->
+	<key>NSMicrophoneUsageDescription</key>
+	<string>MeshWeaver uses the microphone to dictate chat messages (speech-to-text).</string>
 	<!-- Talks to the local mesh over plain http on loopback (memex.localhost / 127.0.0.1). -->
 	<key>NSAppTransportSecurity</key>
 	<dict>
