@@ -46,6 +46,29 @@ compile makes the type live. No app rebuild, no NuGet.
 
 The version is the node's version, so "update available" is a git diff, not a hand-edited number.
 
+## The registry — one credentialed hub, many consumers
+
+GitSync needs credentials for a private plugins repo — and you don't want *every* installation to
+hold them. So one MeshWeaver instance (memex) is the **registry**: it alone holds the source
+credential, syncs the plugins repo into its mesh, and re-serves plugins over HTTP. Every other
+installation pulls from the registry, never from git — the credential is **encapsulated in the
+registry**, exactly like npm / NuGet (the registry has source access; clients just speak HTTP).
+
+The surface is two verbs on the mesh REST API (`MeshOperations`, mirrored at `/api/mesh/*` next to
+`get` / `search` / `update`):
+
+| Verb | Returns |
+|---|---|
+| `POST /api/mesh/catalog` | `{count, plugins:[{name, typeCount, types:[path]}]}` — every partition that ships NodeTypes is an installable plugin |
+| `POST /api/mesh/catalog/download` `{plugin}` | `{name, nodeCount, nodes:[…]}` — the plugin's **definition**: Space + NodeType + `Source`/`Test` Code + docs |
+
+`download` ships the **capability**, not the data — `Space` / `NodeType` / `Code` / `Markdown`
+nodes, never data *instances* of those types nor runtime satellites (`/_Activity`, `/Release/`). It
+queries the `Source` / `Test` Code satellites explicitly (a plain subtree query misses them — they
+live in a separate schema, the same reason the compiler queries `namespace:…/Source scope:subtree`).
+A consumer installs by feeding the returned `nodes` straight to its own `POST /api/mesh/update` — no
+GitHub credential on the consumer at all.
+
 ## Dynamic node types — a module that compiles itself
 
 A **NodeType node** whose `Source/*.cs` defines its content type + layout areas is a **dynamic node

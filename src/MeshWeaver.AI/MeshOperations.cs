@@ -1002,6 +1002,112 @@ public class MeshOperations
     }
 
     /// <summary>
+    /// Plugin catalog — lists every partition that ships NodeTypes as an installable plugin. This is
+    /// the registry model: memex holds the source access (the GitHub credential), syncs plugins into
+    /// its mesh, and exposes them here so ANY installation pulls a plugin over HTTP without needing
+    /// its own GitHub creds — the credential is encapsulated in the registry (npm/NuGet-style).
+    /// Returns <c>{count, plugins:[{name, typeCount, types:[path]}]}</c> or an <c>"Error: …"</c> string.
+    /// </summary>
+    public IObservable<string> Catalog()
+    {
+        return mesh.Query<MeshNode>(new MeshQueryRequest { Query = "nodeType:NodeType", Limit = 1000 })
+            .Take(1)
+            .Select(change =>
+            {
+                var plugins = change.Items
+                    .Where(n => !string.IsNullOrEmpty(n.Path))
+                    .GroupBy(n => PartitionOf(n.Path))
+                    .Where(g => !string.IsNullOrEmpty(g.Key))
+                    .OrderBy(g => g.Key, StringComparer.Ordinal)
+                    .Select(g => (object)new
+                    {
+                        name = g.Key,
+                        typeCount = g.Count(),
+                        types = g.Select(n => n.Path).OrderBy(p => p, StringComparer.Ordinal).ToImmutableList(),
+                    })
+                    .ToImmutableList();
+                var payload = new JsonObject
+                {
+                    ["count"] = plugins.Count,
+                    ["plugins"] = JsonSerializer.SerializeToNode(plugins, hub.JsonSerializerOptions) ?? new JsonArray(),
+                };
+                return payload.ToJsonString();
+            })
+            .Catch((Exception ex) =>
+            {
+                logger.LogWarning(ex, "Catalog listing failed");
+                return Observable.Return($"Error: {ex.Message}");
+            });
+    }
+
+    /// <summary>
+    /// Downloads a plugin's installable definition — the Space root + NodeType nodes + their
+    /// Source/Test <c>Code</c> satellites (queried explicitly because they live in a separate schema
+    /// a plain subtree query misses) + Markdown docs — ready for a consumer to import via
+    /// <see cref="Update"/>. Ships the CAPABILITY (types + code + docs), NOT bulk data instances or
+    /// runtime satellites (activities, releases). Returns <c>{name, nodeCount, nodes:[MeshNode]}</c>
+    /// or an <c>"Error: …"</c> string.
+    /// </summary>
+    public IObservable<string> CatalogDownload(string plugin)
+    {
+        var name = (plugin ?? "").Trim().Trim('/');
+        if (string.IsNullOrEmpty(name) || name.Contains('/'))
+            return Observable.Return("Error: invalid plugin name (expected a single partition name)");
+
+        var main = mesh.Query<MeshNode>(new MeshQueryRequest { Query = $"path:{name} scope:subtree", Limit = 5000 })
+            .Take(1).Select(c => (IEnumerable<MeshNode>)c.Items);
+        var code = mesh.Query<MeshNode>(new MeshQueryRequest { Query = $"namespace:{name} scope:subtree nodeType:Code", Limit = 5000 })
+            .Take(1).Select(c => (IEnumerable<MeshNode>)c.Items);
+
+        return main.Zip(code, (m, c) =>
+            {
+                var all = m.Concat(c)
+                    .Where(IsShippablePluginNode)
+                    .GroupBy(n => n.Path)
+                    .Select(g => g.First())
+                    .OrderBy(n => n.Path, StringComparer.Ordinal)
+                    .ToImmutableList();
+                if (all.Count == 0)
+                    return $"Error: no installable plugin '{name}' (no Space/NodeType/Code nodes found)";
+                var payload = new JsonObject
+                {
+                    ["name"] = name,
+                    ["nodeCount"] = all.Count,
+                    ["nodes"] = JsonSerializer.SerializeToNode(all, hub.JsonSerializerOptions) ?? new JsonArray(),
+                };
+                return payload.ToJsonString();
+            })
+            .Catch((Exception ex) =>
+            {
+                logger.LogWarning(ex, "Catalog download failed for {Plugin}", plugin);
+                return Observable.Return($"Error: {ex.Message}");
+            });
+    }
+
+    /// <summary>The partition (first path segment) that owns a node — its plugin.</summary>
+    private static string PartitionOf(string path)
+    {
+        var i = path.IndexOf('/');
+        return i < 0 ? path : path[..i];
+    }
+
+    /// <summary>
+    /// A node that belongs in a plugin PACKAGE (the capability): the Space root, its NodeType
+    /// definitions, the Source/Test <c>Code</c> that compiles them, and Markdown docs — NOT data
+    /// instances of those types, nor runtime satellites (<c>/_Activity</c>, <c>/Release/</c>, …).
+    /// </summary>
+    private static readonly ImmutableHashSet<string> ShippablePluginNodeTypes =
+        ImmutableHashSet.Create(StringComparer.Ordinal, "Space", "NodeType", "Code", "Markdown", "Group");
+
+    private static bool IsShippablePluginNode(MeshNode n)
+    {
+        var p = n.Path ?? "";
+        if (p.Contains("/_", StringComparison.Ordinal) || p.Contains("/Release/", StringComparison.Ordinal))
+            return false;
+        return ShippablePluginNodeTypes.Contains(n.NodeType ?? "");
+    }
+
+    /// <summary>
     /// Full-node query for remote GUI shells — the transport twin of the Blazor shell's
     /// <c>IMeshService.Query&lt;MeshNode&gt;</c> reads (search-bar suggestions, the notification
     /// bell). Unlike <see cref="Search"/> (which projects to path/name/nodeType for agents), this
