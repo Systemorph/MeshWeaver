@@ -103,6 +103,13 @@ export interface MeshOps {
   listContent?(path: string): Promise<ContentListing>;
   /** Optional content upload (multipart) — `path` is `{node}/{collection}/{filePath}`. */
   uploadContent?(path: string, file: File): Promise<void>;
+  /**
+   * Optional speech-to-text — POSTs recorded audio (multipart) to the mesh's
+   * `POST /api/speech/transcribe` (the ISpeechTranscriber → Whisper surface every backend now bakes in:
+   * the portal AND the local sidecar). The composer shows a mic button only when a host wires this;
+   * absent → no mic (no crash). Returns the recognized transcript.
+   */
+  transcribe?(audio: Blob, language?: string): Promise<{ text: string; language?: string }>;
 }
 
 /** A content-collection directory listing (the /api/mesh/content/list shape). */
