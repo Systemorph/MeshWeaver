@@ -35,15 +35,11 @@ dotnet publish memex/aspire/Memex.Database.Migration/Memex.Database.Migration.cs
 
 Pick a `<tag>` that pins the change (e.g. `bugfix-2026-06-05`). CI also builds images on push, but it lags — check `az acr repository show-tags -n meshweaver --repository memex-portal-ai --orderby time_desc --top 5` before assuming your commit is built; if it isn't, build manually as above. If only portal code changed (no migration/schema change), you can reuse the live `memex-migration` tag and skip the migration build.
 
-### The node-compile `#r` feed is auto-baked into the image (no manual pack step)
+### The scope source generator ships WITH the platform (no NuGet)
 
-Node Source pulls MeshWeaver libraries in at compile time via `#r "nuget:MeshWeaver.X"` — most importantly the scope **source generator** every `IScope<,>` node needs (e.g. the PensionFund balance sheet):
+Every `IScope<,>` node (e.g. the PensionFund balance sheet) needs the BusinessRules scope **source generator**. That generator now **ships with the platform**: its DLL is copied into `MeshWeaver.Graph`'s runtime output (the `ShipScopeGenerator` target), flows into the published image, and `MeshNodeCompilationService` always feeds it to the compile. So a new `IScope<,>` node compiles with **no `#r` directive and no NuGet round-trip** — just declare the interface. The `IScope<,>` surface itself (`MeshWeaver.BusinessRules`) is a loaded framework assembly, so it's already in the compile references too.
 
-```csharp
-#r "nuget:MeshWeaver.BusinessRules.Generator"
-```
-
-These resolve **offline from a feed baked into the image**, never from nuget.org (they are not published there). The portal publish above runs the `BakeMeshLocalFeed` MSBuild target (in `Memex.Portal.Distributed.csproj`; **Release-only**, `BeforeTargets="ComputeFilesToPublish"`): it packs the curated set — `MeshWeaver.BusinessRules` (the `IScope<,>` surface) + `MeshWeaver.BusinessRules.Generator` (its scope generator) — into `dist/packages` at the single global `$(Version)` from `Directory.Build.props`, then copies that folder next to `nuget.config` into `/app`. At runtime `NuGetAssemblyResolver` reads `nuget.config` from the app dir and resolves `MeshWeaver.*` against that local folder.
+**Transition:** legacy nodes that still carry `#r "nuget:MeshWeaver.BusinessRules.Generator"` keep working — the compile filters that `#r`'d copy out (the built-in generator supersedes it, so it never runs twice). During the transition the `BakeMeshLocalFeed` target (in `Memex.Portal.Distributed.csproj`) still bakes the mesh-local feed so those `#r` directives *resolve*; it will be removed once no node source carries the `#r`.
 
 **So the `dotnet publish -t:PublishContainer` command above is self-contained — there is no separate pack step.** Notes:
 
@@ -74,6 +70,32 @@ Container names are `memex-portal` and `memex-migration`; deployments are `memex
 - **Migration ran:** `az aks command invoke … --command "kubectl -n <NS> logs deployment/memex-migration-deployment --tail=40"` → expect `Database migration completed. Version: N`. The migration pod exits 0 and the Deployment restarts it, so a *benign* `CrashLoopBackOff` on `memex-migration` is normal — read the log, don't panic on the status.
 - **Portal serves:** `curl -sS -o /dev/null -w '%{http_code}' https://<NS>.meshweaver.cloud/` → `200`.
 - **Schema/index applied** (when the change was a migration): spot-check via `az aks command invoke … "kubectl -n <NS> exec deployment/memex-portal-deployment -- …"` or an MCP query.
+
+## Self-update ops — pausing, pinning, and the rules that bite
+
+Operational facts about the in-pod updater (learned the hard way — each cost a debugging session):
+
+- **Tags must be dotted SemVer** (`3.0.0` / `3.0.0-ci.749`). The updater treats any other deployed
+  tag (a hand-built `myfix-<sha>`) as invalid and **reverts the Deployment to the newest valid ci
+  tag within minutes**. Manual rolls therefore only work with CI-built `ci.<N>` tags — ship code
+  via a merged PR, never a hand-tagged image.
+- **Pause switch** = the `Admin/UpdatePolicy` node: patch `content.policy` to `None`
+  (`Continuous`/`Stable`/`None`). BUT a **freshly booted pod races the policy read** — the poller
+  starts with the configured default (`Continuous`) and runs one check before the node's value
+  arrives, so `None` alone does not protect a roll that restarts the pod.
+- **Hard pause** (break-glass, e.g. pinning a diagnostic image): delete the RoleBinding
+  `memex-portal-self-update` (namespace-local; role + SA are both named per chart) — the updater's
+  Deployment PATCH then fails closed. Recreate the RoleBinding to resume. Always restore promptly.
+- **KeyVault CSI env timing**: a new/changed KV secret needs **two rollout restarts** — the first
+  pod's mount populates the synced k8s Secret, but that pod's `envFrom` snapshot predates it; the
+  second restart reads the populated Secret. Verify with `printenv <key> | md5sum` in the NEWEST
+  pod (sort by `creationTimestamp`).
+- **🚨 Namespace ↔ instance mapping**: this cluster hosts several instances whose Deployments all
+  share names (`memex-portal-deployment`): namespace `memex` = the systemorph.com company portal,
+  `memex-cloud` = **memex.meshweaver.cloud** (SPC `memexcloud-portal-ai-secrets`, KeyVault
+  `Systemorph`, `memexcloud-`-prefixed secret names), `atioz` = the customer portal. Before ANY
+  kubectl change, confirm the namespace matches the instance you mean — e.g. run a diagnostic on
+  the target portal that prints its pod hostname and `kubectl get pods -A | grep <hostname>`.
 
 ## Portal self-update — Workload Identity for ACR polling
 

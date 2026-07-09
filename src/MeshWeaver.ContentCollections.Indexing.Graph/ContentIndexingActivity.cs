@@ -242,24 +242,22 @@ internal static class ContentIndexingActivity
         if (meshService is null)
             return Observable.Return(Unit.Default);
 
-        // ImpersonateAsSystem is set when CreateNotification CALLS CreateNode (the write primitive
-        // snapshots the ambient AccessContext at call time and carries it through the later
-        // Subscribe — see AccessContextPropagation.md), so the cold write still runs as System.
-        using (accessService?.ImpersonateAsSystem())
-            return NotificationService.CreateNotification(
-                    meshService,
-                    "Admin",
-                    "Content indexing failed",
-                    $"The indexing activity '{activityPath}' ended in failure: {error}",
-                    NotificationType.General,
-                    targetNodePath: activityPath,
-                    createdBy: "system")
-                .Select(_ => Unit.Default)
-                .Catch<Unit, Exception>(ex =>
-                {
-                    logger?.LogWarning(ex,
-                        "Failed to emit admin notification for failed indexing activity {Path}", activityPath);
-                    return Observable.Return(Unit.Default);
-                });
+        // Dispatch runs the whole flow under the system identity itself (Admin-broadcast: no single
+        // recipient → in-app bell only, no email). System notification category.
+        return NotificationService.Dispatch(
+                hub,
+                recipient: null,
+                mainNodePath: "Admin",
+                title: "Content indexing failed",
+                message: $"The indexing activity '{activityPath}' ended in failure: {error}",
+                type: NotificationType.System,
+                targetNodePath: activityPath,
+                createdBy: "system")
+            .Catch<Unit, Exception>(ex =>
+            {
+                logger?.LogWarning(ex,
+                    "Failed to emit admin notification for failed indexing activity {Path}", activityPath);
+                return Observable.Return(Unit.Default);
+            });
     }
 }
