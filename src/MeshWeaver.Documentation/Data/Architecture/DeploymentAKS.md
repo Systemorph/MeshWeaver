@@ -35,15 +35,11 @@ dotnet publish memex/aspire/Memex.Database.Migration/Memex.Database.Migration.cs
 
 Pick a `<tag>` that pins the change (e.g. `bugfix-2026-06-05`). CI also builds images on push, but it lags — check `az acr repository show-tags -n meshweaver --repository memex-portal-ai --orderby time_desc --top 5` before assuming your commit is built; if it isn't, build manually as above. If only portal code changed (no migration/schema change), you can reuse the live `memex-migration` tag and skip the migration build.
 
-### The node-compile `#r` feed is auto-baked into the image (no manual pack step)
+### The scope source generator ships WITH the platform (no NuGet)
 
-Node Source pulls MeshWeaver libraries in at compile time via `#r "nuget:MeshWeaver.X"` — most importantly the scope **source generator** every `IScope<,>` node needs (e.g. the PensionFund balance sheet):
+Every `IScope<,>` node (e.g. the PensionFund balance sheet) needs the BusinessRules scope **source generator**. That generator now **ships with the platform**: its DLL is copied into `MeshWeaver.Graph`'s runtime output (the `ShipScopeGenerator` target), flows into the published image, and `MeshNodeCompilationService` always feeds it to the compile. So a new `IScope<,>` node compiles with **no `#r` directive and no NuGet round-trip** — just declare the interface. The `IScope<,>` surface itself (`MeshWeaver.BusinessRules`) is a loaded framework assembly, so it's already in the compile references too.
 
-```csharp
-#r "nuget:MeshWeaver.BusinessRules.Generator"
-```
-
-These resolve **offline from a feed baked into the image**, never from nuget.org (they are not published there). The portal publish above runs the `BakeMeshLocalFeed` MSBuild target (in `Memex.Portal.Distributed.csproj`; **Release-only**, `BeforeTargets="ComputeFilesToPublish"`): it packs the curated set — `MeshWeaver.BusinessRules` (the `IScope<,>` surface) + `MeshWeaver.BusinessRules.Generator` (its scope generator) — into `dist/packages` at the single global `$(Version)` from `Directory.Build.props`, then copies that folder next to `nuget.config` into `/app`. At runtime `NuGetAssemblyResolver` reads `nuget.config` from the app dir and resolves `MeshWeaver.*` against that local folder.
+**Transition:** legacy nodes that still carry `#r "nuget:MeshWeaver.BusinessRules.Generator"` keep working — the compile filters that `#r`'d copy out (the built-in generator supersedes it, so it never runs twice). During the transition the `BakeMeshLocalFeed` target (in `Memex.Portal.Distributed.csproj`) still bakes the mesh-local feed so those `#r` directives *resolve*; it will be removed once no node source carries the `#r`.
 
 **So the `dotnet publish -t:PublishContainer` command above is self-contained — there is no separate pack step.** Notes:
 
