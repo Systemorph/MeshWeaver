@@ -639,7 +639,14 @@ public static class MemexConfiguration
                         embedderFactory: sp => new EmbeddingProviderChunkEmbedder(
                             sp.GetRequiredService<IEmbeddingProvider>(),
                             sp.GetService<IoPoolRegistry>()),
-                        summarizerFactory: _ => new ExtractiveSummarizer())
+                        summarizerFactory: _ => new ExtractiveSummarizer(),
+                        // Images have no extractable text: caption them on save with the mesh's default
+                        // (multimodal) chat model so the description is embedded for search AND written
+                        // to the file's Document node. Degrades to no-text when no vision model resolves.
+                        imageDescriberFactory: sp => new ChatClientImageDescriber(
+                            () => sp.GetRequiredService<DefaultChatClientProvider>().TryCreate(),
+                            sp.GetRequiredService<IoPoolRegistry>(),
+                            sp.GetService<ILogger<ChatClientImageDescriber>>()))
                     .AddContentSearch();
             }
 
