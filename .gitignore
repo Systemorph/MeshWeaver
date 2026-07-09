@@ -407,3 +407,7 @@ samples/Graph/Data/VUser/
 !.claude/skills/debug/
 !.claude/skills/release/
 memex/aspire/Memex.Portal.Distributed/wwwroot/app/
+
+# The plugins/ dir is a SEPARATE git repo (Systemorph/MeshWeaver.Plugins) nested locally —
+# never tracked here. Content ships via the plugin registry / GitSync, not this repo.
+plugins/

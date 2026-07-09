@@ -1,8 +1,0 @@
-{
-  "id": "getting-started",
-  "name": "Getting Started Guide",
-  "description": "A sample content package — installs a short getting-started guide into the Guide space.",
-  "kind": "content",
-  "targetPartition": "Guide",
-  "version": "1.0.0"
-}

@@ -1,8 +1,0 @@
-{
-  "id": "echo-agent",
-  "name": "Echo Agent",
-  "description": "A sample AI agent installed from the catalog into the Agent partition.",
-  "kind": "content",
-  "targetPartition": "Agent",
-  "version": "1.0.0"
-}
