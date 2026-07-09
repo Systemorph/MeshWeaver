@@ -8,6 +8,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>MeshWeaver</AssemblyName>
     <RootNamespace>MeshWeaver.Windows</RootNamespace>
+    <ApplicationIcon>AppIcon.ico</ApplicationIcon>
     <!-- Standalone Windows app, built via build.ps1 on Windows — NOT part of MeshWeaver.slnx (a
          net10.0-windows target can't build on the Linux/macOS CI runners). Opt out of the repo's
          central package management so this self-contained csproj carries its own WebView2 version. -->
