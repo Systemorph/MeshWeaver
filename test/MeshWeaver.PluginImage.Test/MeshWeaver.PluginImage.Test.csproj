@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Container-based facility that runs a MeshWeaver PORTAL IMAGE (injected via MW_TEST_IMAGE)
+       against a throwaway Postgres, and asserts the image is deployable + ships the mesh/registry
+       surface. Pure Testcontainers + HTTP — no MeshWeaver project references, so it exercises the
+       image as a black box exactly as a deployment would. Skips cleanly when MW_TEST_IMAGE is unset
+       or Docker is unavailable, so the normal test run is unaffected. -->
+  <ItemGroup>
+    <PackageReference Include="Testcontainers" />
+    <PackageReference Include="Testcontainers.PostgreSql" />
+  </ItemGroup>
+
+  <!-- This is a black-box HTTP/container test with NO MeshWeaver project references, so the
+       test-tree's in-house assertion global using isn't resolvable here — drop it and use xUnit
+       Assert directly. -->
+  <ItemGroup>
+    <Using Remove="MeshWeaver.Reactive.Assertions" />
+  </ItemGroup>
+
+</Project>
