@@ -113,7 +113,9 @@ public sealed class SpaceInviteService(
         {
             NodeType = InvitationNodeType.NodeType,
             Name = $"Invitation {email}",
-            Content = new Invitation { Email = email, InvitedBy = invitedBy, Note = note ?? $"Invited to space {spacePath}" },
+            // SpacePath (structured) drives the space-aware invite email + the settings-tab list;
+            // the grant itself lands on sign-up via the EventSubscription above.
+            Content = new Invitation { Email = email, InvitedBy = invitedBy, Note = note, SpacePath = spacePath },
         };
 
         // Both writes land in the Admin partition → system identity, constructed inside the scope.

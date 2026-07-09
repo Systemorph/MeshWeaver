@@ -60,6 +60,17 @@ public record Invitation
     public string? Note { get; init; }
 
     /// <summary>
+    /// Optional path of the Space this person was invited to (set by
+    /// <c>SpaceInviteService</c> when inviting a not-yet-onboarded email to a specific Space).
+    /// When set, the invitation email addresses the Space by name and links straight to it
+    /// (<c>{baseUrl}/{SpacePath}</c>) instead of the generic "invited to Memex" wording; the
+    /// access grant itself lands on sign-up via the matching <c>EventSubscription</c>.
+    /// <c>null</c> = a deployment-wide invitation (the Invitations settings tab).
+    /// </summary>
+    [Browsable(false)]
+    public string? SpacePath { get; init; }
+
+    /// <summary>
     /// When the invitation email was sent (set by the node-driven
     /// <c>InvitationEmailSender</c> hosted service). <c>null</c> = not yet emailed —
     /// the sender stamps this so it never re-sends, regardless of how the invitation was

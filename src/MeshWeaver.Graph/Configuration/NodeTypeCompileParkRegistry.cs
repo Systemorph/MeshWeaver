@@ -185,24 +185,25 @@ public sealed class NodeTypeCompileParkRegistry
             $"The node type '{nodeTypePath}' was parked after a compile failure and will not be " +
             $"retried until its source is fixed. {SummarizeError(error)}";
 
-        // Emit as System: the compile already runs as System, the recipient's bell partition
-        // (or the failing type's read-only partition, e.g. Doc) admits no ambient user write.
-        // Infrastructure observability, not a user-attributed write.
-        using (accessService?.ImpersonateAsSystem())
-            NotificationService.CreateNotification(
-                    meshService,
-                    mainNodePath,
-                    title,
-                    message,
-                    NotificationType.General,
-                    targetNodePath: nodeTypePath,
-                    createdBy: "system")
-                .Subscribe(
-                    _ => logger?.LogInformation(
-                        "Emitted compile-failure notification for {NodeTypePath} (recipient {Recipient})",
-                        nodeTypePath, mainNodePath),
-                    ex => logger?.LogWarning(ex,
-                        "Failed to emit compile-failure notification for {NodeTypePath}", nodeTypePath));
+        // Dispatch runs the whole flow as System itself (the compile runs as System; the recipient's
+        // bell partition — or the failing type's read-only partition, e.g. Doc — admits no ambient
+        // user write). Infrastructure observability under the System notification category. When
+        // recipient is null (System-driven build), it falls to the failing type (in-app only).
+        NotificationService.Dispatch(
+                hub,
+                recipient: recipient,
+                mainNodePath: mainNodePath,
+                title: title,
+                message: message,
+                type: NotificationType.System,
+                targetNodePath: nodeTypePath,
+                createdBy: "system")
+            .Subscribe(
+                _ => logger?.LogInformation(
+                    "Emitted compile-failure notification for {NodeTypePath} (recipient {Recipient})",
+                    nodeTypePath, mainNodePath),
+                ex => logger?.LogWarning(ex,
+                    "Failed to emit compile-failure notification for {NodeTypePath}", nodeTypePath));
     }
 
     private static string? NonSystem(string? userId) =>

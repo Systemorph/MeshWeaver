@@ -2525,13 +2525,17 @@ internal static class ThreadExecution
         var threadName = (hub.GetWorkspace().GetStream(new MeshNodeReference())
             as ISynchronizationStream<MeshNode>)?.Current?.Value?.Name ?? "Thread";
         var preview = Truncate(responseText, 120) ?? "";
+        // The thread lives under its owner's partition ({owner}/_Thread/{id}); the owner is the
+        // recipient whose delivery preferences (bell/email for the ChatReady category) apply.
+        var owner = threadPath.Split('/', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
 
-        NotificationService.CreateNotification(
-            meshService,
+        NotificationService.Dispatch(
+            hub,
+            recipient: owner,
             mainNodePath: threadPath,
             title: $"\"{threadName}\" is ready",
             message: preview,
-            type: NotificationType.General,
+            type: NotificationType.ChatReady,
             targetNodePath: threadPath,
             // agentName arrives as a full PATH (resolution form); store the friendly short name.
             createdBy: SelectionId.IdOf(agentName) ?? "agent",
