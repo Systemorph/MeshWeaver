@@ -180,6 +180,10 @@ public static class MemexConfiguration
         // live via the change feed + reconciled against current state on startup so a trigger during
         // downtime still fires. Migrates any legacy ScheduledAction nodes on startup.
         services.AddHostedService<MeshWeaver.Graph.EventSubscriptionRunner>();
+        // Access-grant notifier: watches AccessAssignment creations on the change feed and notifies the
+        // granted user ("You've been given <role> access to <node>") through NotificationService.Dispatch
+        // (honours their per-category bell/email preferences). Covers every grant path in one place.
+        services.AddHostedService<MeshWeaver.Graph.AccessGrantNotifier>();
         // App-level event-log outbox: durably records every change-feed event (Postgres in prod via
         // PostgreSqlEventLogStore, else in-memory) + replays not-yet-processed entries on startup.
         services.AddMeshEventLog();
@@ -280,6 +284,10 @@ public static class MemexConfiguration
         // absent a client id the Connect flow is gracefully disabled.
         services.AddGitHubSyncServices();
         services.Configure<GitHubOAuthOptions>(builder.Configuration.GetSection("GitHub:OAuth"));
+        // GitHub App machine identity (GitHub:App:ClientId + PrivateKey [+ InstallationId/Owner]):
+        // server-side sync — the plugin registry pulling the plugins repo — logs on AS THE APP
+        // (installation token), never with a user's personal credential.
+        services.Configure<GitHubAppOptions>(builder.Configuration.GetSection("GitHub:App"));
 
         // Instance sync — bidirectional Space replication to another MeshWeaver instance
         // (per-space registry at {space}/_Sync; offline changes accumulate in the durable
@@ -724,6 +732,8 @@ public static class MemexConfiguration
                         // per-node hub so they resolve when anchored on the type roots (/Agent/AiAgents …).
                         .AddAiCatalogLayoutAreas()
                         .AddApiTokensSettingsTab()
+                        // Per-user "Notifications" tab: choose bell/email per notification category.
+                        .AddNotificationsSettingsTab()
                         // AI menu (top bar) — replaces the retired Models + AI Settings tabs. Each entry
                         // opens mesh search grouped by namespace, so every tier (global / space / user)
                         // where the concern is defined shows as its own section. Per-item configurable

@@ -37,6 +37,7 @@ public sealed class GitHubSyncService
     private readonly IMeshService meshService;
     private readonly IGitHubRepoClient repoClient;
     private readonly GitHubCredentialService credentials;
+    private readonly GitHubAppTokenService? appTokens;
     private readonly ILogger? logger;
     private readonly FileFormatParserRegistry parsers;
 
@@ -51,12 +52,14 @@ public sealed class GitHubSyncService
         IMeshService meshService,
         IGitHubRepoClient repoClient,
         GitHubCredentialService credentials,
-        ILogger<GitHubSyncService>? logger = null)
+        ILogger<GitHubSyncService>? logger = null,
+        GitHubAppTokenService? appTokens = null)
     {
         this.hub = hub;
         this.meshService = meshService;
         this.repoClient = repoClient;
         this.credentials = credentials;
+        this.appTokens = appTokens;
         this.logger = logger;
         parsers = new FileFormatParserRegistry(hub.JsonSerializerOptions);
     }
@@ -105,16 +108,16 @@ public sealed class GitHubSyncService
                     $"This sync source is import-only (repo → mesh): exporting to {repoUrl} is not allowed. " +
                     "Change the source's Sync direction to Bidirectional or Export-only to commit."));
 
-            return credentials.Get(userId).Take(1).SelectMany(cred =>
+            return ResolveAuth(userId).SelectMany(auth =>
             {
-                if (cred?.AccessToken is not { Length: > 0 } token)
-                    return Observable.Throw<GitHubPushResult>(new InvalidOperationException(
-                        "Connect your GitHub account first (GitHub Sync settings → Connect)."));
-
+                var token = auth.Token;
                 return SnapshotNodes(spacePath).SelectMany(nodes =>
                     SerializeAll(nodes, spacePath).SelectMany(files =>
                     {
-                        var (name, email) = AuthorIdentity(cred);
+                        // App-identity exports author as the bot (no personal credential involved).
+                        var (name, email) = auth.Credential is null
+                            ? ("meshweaver-app[bot]", "meshweaver-app[bot]@users.noreply.github.com")
+                            : AuthorIdentity(auth.Credential);
                         var request = new GitHubPushRequest
                         {
                             RepositoryUrl = repoUrl,
@@ -274,12 +277,9 @@ public sealed class GitHubSyncService
         // UpdateConfig / EnsureConfigNode — the GitSync CI access-context flake.)
         var accessService = hub.ServiceProvider.GetService<AccessService>();
         var ctx = accessService?.Context ?? accessService?.CircuitContext;
-        return credentials.Get(userId).Take(1).SelectMany(cred =>
+        return ResolveAuth(userId).SelectMany(auth =>
         {
-            if (cred?.AccessToken is not { Length: > 0 } token)
-                return Observable.Throw<StaticRepoImportResult>(new InvalidOperationException(
-                    "Connect your GitHub account first."));
-
+            var token = auth.Token;
             // Pre-create the Space under the USER so they become its admin and the
             // partition is provisioned, THEN import the content (under System, per-write).
             var spaceNode = new MeshNode(newSpaceId)
@@ -319,11 +319,9 @@ public sealed class GitHubSyncService
                 return Observable.Throw<StaticRepoImportResult>(new InvalidOperationException(
                     $"This sync source is export-only (mesh → repo): importing from {repoUrl} is not allowed. " +
                     "Change the source's Sync direction to Bidirectional or Import-only to re-import."));
-            return credentials.Get(userId).Take(1).SelectMany(cred =>
+            return ResolveAuth(userId).SelectMany(auth =>
             {
-                if (cred?.AccessToken is not { Length: > 0 } token)
-                    return Observable.Throw<StaticRepoImportResult>(new InvalidOperationException(
-                        "Connect your GitHub account first."));
+                var token = auth.Token;
                 logger?.LogInformation("Re-importing {Space} at {Ref}", spacePath, commitish);
                 return FetchAndImport(repoUrl, commitish, config.Subdirectory, token, spacePath)
                     .SelectMany(x => RecordLastSync(spacePath, x.CommitSha, sourceId).Select(_ => x.Result));
@@ -344,11 +342,9 @@ public sealed class GitHubSyncService
             if (config?.RepositoryUrl is not { Length: > 0 } repoUrl)
                 return Observable.Throw<BranchState>(new InvalidOperationException(
                     "No GitHub repository configured for this Space."));
-            return credentials.Get(userId).Take(1).SelectMany(cred =>
+            return ResolveAuth(userId).SelectMany(auth =>
             {
-                if (cred?.AccessToken is not { Length: > 0 } token)
-                    return Observable.Throw<BranchState>(new InvalidOperationException(
-                        "Connect your GitHub account first."));
+                var token = auth.Token;
                 var branch = string.IsNullOrWhiteSpace(config.Branch) ? "main" : config.Branch;
                 // Fetch resolves the branch ref to its current HEAD commit on GitHub.
                 return repoClient.Fetch(repoUrl, branch, config.Subdirectory, token)
@@ -360,6 +356,25 @@ public sealed class GitHubSyncService
             });
         });
     }
+
+    /// <summary>A resolved GitHub authentication: the token plus the user credential when the token is theirs (null = App identity).</summary>
+    private sealed record ResolvedGitHubAuth(string Token, GitHubCredential? Credential);
+
+    /// <summary>
+    /// Resolves the token for a GitHub operation: the user's connected credential when present,
+    /// else the platform's <b>GitHub App installation token</b> (the machine identity — server-side
+    /// operations like the plugin registry's sync never require a personal login). Errors only when
+    /// neither identity is available.
+    /// </summary>
+    private IObservable<ResolvedGitHubAuth> ResolveAuth(string userId) =>
+        credentials.Get(userId).Take(1).SelectMany(cred =>
+            cred?.AccessToken is { Length: > 0 } token
+                ? Observable.Return(new ResolvedGitHubAuth(token, cred))
+                : appTokens is { IsConfigured: true }
+                    ? appTokens.GetInstallationToken().Select(t => new ResolvedGitHubAuth(t, null))
+                    : Observable.Throw<ResolvedGitHubAuth>(new InvalidOperationException(
+                        "Connect your GitHub account first (GitHub Sync settings → Connect), or configure the " +
+                        "GitHub App identity (GitHub:App:ClientId + GitHub:App:PrivateKey).")));
 
     private IObservable<(StaticRepoImportResult Result, string CommitSha)> FetchAndImport(
         string repoUrl, string commitish, string? subdirectory, string token, string spaceId)
