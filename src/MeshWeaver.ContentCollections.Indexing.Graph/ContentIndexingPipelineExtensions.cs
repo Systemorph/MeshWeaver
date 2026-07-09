@@ -37,7 +37,8 @@ public static class ContentIndexingPipelineExtensions
         Func<IServiceProvider, IChunkedContentVectorStore> storeFactory,
         Func<IServiceProvider, IChunkEmbedder> embedderFactory,
         Func<IServiceProvider, ISummarizer>? summarizerFactory = null,
-        ContentIndexingOptions? options = null)
+        ContentIndexingOptions? options = null,
+        Func<IServiceProvider, IImageDescriber>? imageDescriberFactory = null)
         where TBuilder : MeshBuilder
     {
         ArgumentNullException.ThrowIfNull(storeFactory);
@@ -58,6 +59,8 @@ public static class ContentIndexingPipelineExtensions
             services.AddSingleton(embedderFactory);
             if (summarizerFactory is not null)
                 services.AddSingleton(summarizerFactory);
+            if (imageDescriberFactory is not null)
+                services.AddSingleton(imageDescriberFactory);
 
             services.AddSingleton(sp => new ContentIndexingService(
                 sp.GetRequiredService<ITextExtractor>(),
@@ -68,7 +71,10 @@ public static class ContentIndexingPipelineExtensions
                 // Summarizer + sink are OPTIONAL inputs to the service: both present ⇒ the per-file
                 // Document branch runs; either absent ⇒ chunk-embed-store only.
                 sp.GetService<ISummarizer>(),
-                sp.GetService<IDocumentSink>()));
+                sp.GetService<IDocumentSink>(),
+                // Optional vision describer: when wired, image files are captioned (searchable text +
+                // Document summary) instead of extracting to empty.
+                sp.GetService<IImageDescriber>()));
 
             // The upload→Activity reactor. Registered as its concrete type so a host/GUI can resolve it
             // to call ReindexAll(...), AND forwarded to the IContentUploadObserver seam so the same

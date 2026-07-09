@@ -302,6 +302,24 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
     /// </summary>
     protected abstract IChatClient CreateChatClient(AgentConfiguration agentConfig);
 
+    /// <inheritdoc />
+    public IChatClient CreateChatClient(string modelName)
+    {
+        if (string.IsNullOrEmpty(modelName))
+            throw new ArgumentException("Model name is required.", nameof(modelName));
+        return CreateChatClientForModel(modelName);
+    }
+
+    /// <summary>
+    /// The STATELESS half of <see cref="CreateChatClient(AgentConfiguration)"/>: given an
+    /// already-resolved model name, resolve its credentials and construct the provider-specific
+    /// <see cref="IChatClient"/> — WITHOUT consulting or mutating <see cref="CurrentModelName"/> and
+    /// without an agent. Concrete non-persistent factories override this; the agent path also routes
+    /// through it after resolving the model. The base throws so persistent factories stay unsupported.
+    /// </summary>
+    protected virtual IChatClient CreateChatClientForModel(string modelName) =>
+        throw new NotSupportedException($"Factory '{Name}' does not support creating a bare chat client.");
+
     /// <summary>
     /// Gets tools for the specified agent configuration including both plugins and delegation functions.
     /// </summary>

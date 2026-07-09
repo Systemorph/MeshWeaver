@@ -10,6 +10,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Schema;
 using MeshWeaver.ContentCollections;
+using MeshWeaver.ContentCollections.Indexing;
 using MeshWeaver.Data;
 using MeshWeaver.Markdown;
 using MeshWeaver.Layout;
@@ -246,6 +247,30 @@ public class MeshOperations
         if (TryParseAreaRoute(resolvedPath, out var areaNodePath, out var routeArea, out var routeAreaId))
             return GetAreaRoute(resolvedPath, areaNodePath, routeArea, routeAreaId);
 
+        // Image content files: return the AI description (the file's Document node) instead of the raw
+        // bytes. When the file has been indexed its Document carries {Name, Summary}; otherwise fall
+        // through to the normal read, which returns a short placeholder — never the bytes (issue #379).
+        if (TryGetContentImagePath(resolvedPath, out var imgCollectionPath, out var imgFilePath))
+        {
+            var documentPath = DocumentPaths.For(imgCollectionPath, imgFilePath);
+            // Short timeout: a missing Document (image not yet indexed, or indexing disabled) maps to
+            // null and falls through to the guarded file read — don't make an image get hang.
+            return FetchNode(documentPath, timeoutSeconds: 3)
+                .SelectMany(doc => doc is not null
+                    ? Observable.Return(JsonSerializer.Serialize(doc, hub.JsonSerializerOptions))
+                    : ReadNodeOrUnified(resolvedPath));
+        }
+
+        return ReadNodeOrUnified(resolvedPath);
+    }
+
+    /// <summary>
+    /// The core single-node / unified-reference read: resolves a UCR path (content/data/schema/area/…)
+    /// or falls back to an authoritative node read. Factored out of <see cref="Get"/> so the image
+    /// branch can reuse it as its "no Document yet" fallback.
+    /// </summary>
+    private IObservable<string> ReadNodeOrUnified(string resolvedPath)
+    {
         // Single-node content read via GetDataRequest + MeshNodeReference + RegisterCallback.
         // See Doc/Architecture/CqrsAndContentAccess.md — queries are for sets only.
         return TryResolveUnifiedPath(resolvedPath)
@@ -282,6 +307,57 @@ public class MeshOperations
                 logger.LogWarning(ex, "Error getting data at path {Path}", resolvedPath);
                 return Observable.Return($"Error: {ex.Message}");
             });
+    }
+
+    /// <summary>Raster image extensions whose <c>get</c> is routed to the file's Document node.</summary>
+    private static readonly ImmutableHashSet<string> ImageExtensions = ImmutableHashSet.Create(
+        StringComparer.OrdinalIgnoreCase,
+        ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tiff", ".tif");
+
+    /// <summary>
+    /// Detects a <c>{node}/content/{file}</c> (or legacy <c>{node}/content:{file}</c>) path pointing at
+    /// an IMAGE in the default <c>content</c> collection, and returns the qualified collection path
+    /// (<c>{node}/content</c>) and the file path within it. These feed <see cref="DocumentPaths.For"/>
+    /// so <see cref="Get"/> can return the image's Document (name + AI description) instead of its bytes.
+    /// Scoped to the <c>content</c> collection; named collections (and the <c>_Documents</c> subtree
+    /// itself) fall through to the normal read (which still guards against dumping raw bytes).
+    /// </summary>
+    internal static bool TryGetContentImagePath(string resolvedPath, out string collectionPath, out string filePath)
+    {
+        collectionPath = string.Empty;
+        filePath = string.Empty;
+        if (string.IsNullOrWhiteSpace(resolvedPath))
+            return false;
+
+        // Locate the 'content' collection segment, in either the slash ("/content/") or the legacy
+        // colon ("/content:") form.
+        const string slashMarker = "/content/";
+        const string colonMarker = "/content:";
+        int markerIdx = resolvedPath.IndexOf(slashMarker, StringComparison.Ordinal);
+        int markerLen = slashMarker.Length;
+        if (markerIdx < 0)
+        {
+            markerIdx = resolvedPath.IndexOf(colonMarker, StringComparison.Ordinal);
+            markerLen = colonMarker.Length;
+        }
+        if (markerIdx <= 0)
+            return false;
+
+        var node = resolvedPath[..markerIdx];
+        var file = resolvedPath[(markerIdx + markerLen)..].TrimStart('/');
+        if (node.Length == 0 || file.Length == 0)
+            return false;
+
+        // Never route the Document nodes themselves back into a Document lookup.
+        if (file.StartsWith(DocumentPaths.DocumentsSubNamespace + "/", StringComparison.Ordinal))
+            return false;
+
+        if (!ImageExtensions.Contains(System.IO.Path.GetExtension(file)))
+            return false;
+
+        collectionPath = $"{node}/{ContentCollectionsExtensions.DefaultCollectionName}";
+        filePath = file;
+        return true;
     }
 
     /// <summary>

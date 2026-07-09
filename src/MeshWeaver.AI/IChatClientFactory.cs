@@ -1,4 +1,5 @@
 using Microsoft.Agents.AI;
+using Microsoft.Extensions.AI;
 
 namespace MeshWeaver.AI;
 
@@ -68,4 +69,15 @@ public interface IChatClientFactory
         IReadOnlyDictionary<string, ChatClientAgent> existingAgents,
         IReadOnlyList<AgentConfiguration> hierarchyAgents,
         string? modelName = null);
+
+    /// <summary>
+    /// Creates a BARE <see cref="IChatClient"/> for an EXPLICIT model — no agent, no tools, and
+    /// (critically) NO mutation of shared factory state (unlike the agent path, which stamps
+    /// <c>CurrentModelName</c> on the singleton factory). Safe to call from a background job — e.g.
+    /// the content-indexing image describer — concurrently with live chats. Persistent, server-side-thread
+    /// factories have no plain chat client, so the default throws <see cref="NotSupportedException"/>.
+    /// </summary>
+    /// <param name="modelName">The exact model id/name to target (already resolved — not a tier or path).</param>
+    IChatClient CreateChatClient(string modelName) =>
+        throw new NotSupportedException($"Factory '{Name}' does not support creating a bare chat client.");
 }

@@ -80,6 +80,10 @@ public static class LanguageModelNodeType
             services.TryAddSingleton<IMasterKeyProvider, ConfigMasterKeyProvider>();
             services.TryAddSingleton<IProviderKeyProtector, ProviderKeyProtector>();
             services.TryAddSingleton<ChatClientCredentialResolver>();
+            // Headless default chat client (for background one-shot model calls, e.g. the
+            // content-indexing image describer). Resolves the lowest-Order resolvable LanguageModel
+            // and its serving factory — no agent, no shared-state mutation.
+            services.TryAddSingleton<DefaultChatClientProvider>();
             // ModelDiscoveryService MUST be a top-level singleton on the
             // mesh hub — never on a per-thread / exec hub where its
             // synced subscriptions could get stuck behind an in-flight

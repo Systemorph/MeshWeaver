@@ -130,6 +130,12 @@ public class OpenAIChatClientAgentFactory(
         if (string.IsNullOrEmpty(modelName))
             throw new InvalidOperationException("No model configured for OpenAI");
 
+        return CreateChatClientForModel(modelName);
+    }
+
+    /// <inheritdoc />
+    protected override IChatClient CreateChatClientForModel(string modelName)
+    {
         var resolver = Hub.ServiceProvider.GetRequiredService<ChatClientCredentialResolver>();
         // The selection may arrive as the full LanguageModel node PATH (the composer's
         // persisted form) — canonicalise to the bare wire id the endpoint expects.
@@ -150,8 +156,8 @@ public class OpenAIChatClientAgentFactory(
                 $"ApiKey is missing for model '{modelName}'. Configure a ModelProvider node (Provider 'OpenAI') or set OpenAI:ApiKey in config.");
 
         logger.LogInformation(
-            "[OpenAI] Creating chat client agent={AgentName} model={ModelName} endpoint={Endpoint} source={Source} apiKeyFp={ApiKeyFingerprint}",
-            agentConfig.Id, modelName, endpoint ?? "(default api.openai.com)", source, Fingerprint(apiKey));
+            "[OpenAI] Creating chat client model={ModelName} endpoint={Endpoint} source={Source} apiKeyFp={ApiKeyFingerprint}",
+            modelName, endpoint ?? "(default api.openai.com)", source, Fingerprint(apiKey));
 
         var clientOptions = new OpenAIClientOptions();
         if (!string.IsNullOrEmpty(endpoint))

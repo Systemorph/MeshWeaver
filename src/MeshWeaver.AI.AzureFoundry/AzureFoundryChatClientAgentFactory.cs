@@ -89,6 +89,12 @@ public class AzureFoundryChatClientAgentFactory(
         if (string.IsNullOrEmpty(modelName))
             throw new InvalidOperationException("At least one model must be configured in AzureFoundryConfiguration.Models");
 
+        return CreateChatClientForModel(modelName);
+    }
+
+    /// <inheritdoc />
+    protected override IChatClient CreateChatClientForModel(string modelName)
+    {
         // Resolver follows ModelDefinition.ProviderRef → ModelProvider node
         // for Endpoint + ApiKey. Falls back to IOptions configuration when
         // no provider node is present (legacy single-tenant deployments).
@@ -108,8 +114,8 @@ public class AzureFoundryChatClientAgentFactory(
                 $"ApiKey is missing for model '{modelName}'. Configure a ModelProvider node (Model/AzureFoundry) or set AzureFoundry:ApiKey in config.");
 
         logger.LogInformation(
-            "[AzureFoundry] Creating chat client agent={AgentName} model={ModelName} endpoint={Endpoint} source={Source} apiKeyFp={ApiKeyFingerprint}",
-            agentConfig.Id, modelName, endpoint, source, Fingerprint(apiKey));
+            "[AzureFoundry] Creating chat client model={ModelName} endpoint={Endpoint} source={Source} apiKeyFp={ApiKeyFingerprint}",
+            modelName, endpoint, source, Fingerprint(apiKey));
 
         try
         {
@@ -123,9 +129,9 @@ public class AzureFoundryChatClientAgentFactory(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Failed to create Azure Foundry chat client for agent {AgentName}", agentConfig.Id);
+            logger.LogError(ex, "Failed to create Azure Foundry chat client for model {ModelName}", modelName);
             throw new InvalidOperationException(
-                $"Failed to create Azure Foundry chat client for agent {agentConfig.Id}: {ex.Message}", ex);
+                $"Failed to create Azure Foundry chat client for model {modelName}: {ex.Message}", ex);
         }
     }
 
