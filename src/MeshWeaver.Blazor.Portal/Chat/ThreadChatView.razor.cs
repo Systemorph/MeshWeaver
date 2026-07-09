@@ -189,6 +189,9 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                 // Keep the nav menu's sub-thread (children) list bound to the current thread.
                 if (!string.IsNullOrEmpty(value.ThreadPath))
                     SetupChildThreadsSubscription(value.ThreadPath);
+
+                // Viewing a thread clears its bell notifications (backlog + live arrivals).
+                MarkThreadNotificationsRead(value?.ThreadPath);
             }
 
             // Open per-message cache subscriptions AFTER threadPath is set —
@@ -299,6 +302,10 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     private IDisposable? myThreadsSubscription;
     private IReadOnlyList<MeshNode> childThreads = [];     // sub-threads (delegations) of THIS thread
     private IDisposable? childThreadsSubscription;
+    // While a thread is being viewed, its bell notifications are auto-marked read (backlog + any that
+    // arrive live). Re-subscribed only when the viewed thread changes; disposed with the component.
+    private IDisposable? _threadNotificationsSub;
+    private string? _notificationsThread;
 
     // Agent/model lists — fed by AgentPickerProjection; consumed by the /agent and /model
     // slash commands + @-reference agent detection. The visible harness/agent/model SELECTION
@@ -426,6 +433,8 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         {
             _templatePath = threadPath;
             OpenComposerProjection(threadPath);
+            // Opening an existing thread clears its bell notifications.
+            MarkThreadNotificationsRead(threadPath);
         }
         else if (!string.IsNullOrEmpty(_userHome))
         {
@@ -2861,6 +2870,43 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     /// not immediate children. Re-opened whenever the thread path changes.
     /// </summary>
     private string? _childThreadsPath;
+    /// <summary>
+    /// While this thread is the one being viewed, mark its bell notifications
+    /// (<c>{threadPath}/_Notification/*</c>) read — both the backlog on open and any that arrive live
+    /// (e.g. a completion notification while you're watching). Re-subscribes only when the viewed
+    /// thread changes. RLS scopes the query to the current user, so only their own notifications are
+    /// touched. Idempotent: already-read rows are skipped and the write is a no-op merge.
+    /// </summary>
+    private void MarkThreadNotificationsRead(string? path)
+    {
+        if (string.Equals(_notificationsThread, path, StringComparison.Ordinal))
+            return;                                       // already watching this thread
+        _notificationsThread = path;
+        _threadNotificationsSub?.Dispose();
+        _threadNotificationsSub = null;
+        if (string.IsNullOrEmpty(path))
+            return;
+        _threadNotificationsSub = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(
+                $"path:{path}/_Notification scope:children nodeType:Notification"))
+            .Subscribe(
+                change =>
+                {
+                    foreach (var node in change.Items ?? [])
+                    {
+                        if (node.ContentAs<Notification>(Hub.JsonSerializerOptions) is not { IsRead: false })
+                            continue;
+                        // Re-establish the DURABLE circuit user: this write runs from a background query
+                        // emission where the AsyncLocal identity is cleared, so a direct stream Update
+                        // would fail closed under RLS and silently leave the notification unread.
+                        UpdateMeshNodeAsCircuitUser(node.Path, x =>
+                            x.ContentAs<Notification>(Hub.JsonSerializerOptions) is { IsRead: false } cur
+                                ? x with { Content = cur with { IsRead = true } }
+                                : x);
+                    }
+                },
+                _ => { /* query error: leave notifications as-is */ });
+    }
+
     private void SetupChildThreadsSubscription(string path)
     {
         if (string.Equals(_childThreadsPath, path, StringComparison.OrdinalIgnoreCase))
@@ -3852,6 +3898,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             resumeSubscription?.Dispose();
             myThreadsSubscription?.Dispose();
             childThreadsSubscription?.Dispose();
+            _threadNotificationsSub?.Dispose();
             _navContextSubscription?.Dispose();
             composerSubscription?.Dispose();
             composerDefaultsSubscription?.Dispose();
