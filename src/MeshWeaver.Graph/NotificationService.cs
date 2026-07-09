@@ -122,14 +122,26 @@ public static class NotificationService
             }));
     }
 
-    /// <summary>Reads a user's deterministic notification preferences (defaults when absent/unreadable).</summary>
+    /// <summary>
+    /// Reads a user's deterministic notification preferences (defaults when absent/unreadable).
+    /// Uses a synced <c>GetQuery</c> (empty-on-absent) rather than a <c>GetMeshNodeStream</c> point-read:
+    /// the settings node usually does NOT exist (a user only has one once they visit the Notifications
+    /// tab), and a point-read of a not-yet-present node NotFound-resubscribe-storms the owner's partition
+    /// hub — which would wedge the very hub a completing thread needs. Same rationale as
+    /// <c>NotificationSettingsNodeType.EnsureExists</c> / the AiSettings/UpdatePolicy nodes.
+    /// </summary>
     private static IObservable<NotificationSettings> ReadSettings(IMessageHub hub, string? recipient)
     {
         if (string.IsNullOrEmpty(recipient))
             return Observable.Return(new NotificationSettings());
-        return hub.GetWorkspace().GetMeshNodeStream(NotificationSettingsPaths.PathFor(recipient))
+        var path = NotificationSettingsPaths.PathFor(recipient);
+        return hub.GetWorkspace()
+            .GetQuery($"{NotificationSettingsNodeType.NodeType}|{path}",
+                $"path:{path} nodeType:{NotificationSettingsNodeType.NodeType}")
             .Take(1)
-            .Select(n => n?.ContentAs<NotificationSettings>(hub.JsonSerializerOptions) ?? new NotificationSettings())
+            .Select(nodes => nodes
+                .Select(n => n.ContentAs<NotificationSettings>(hub.JsonSerializerOptions))
+                .FirstOrDefault(s => s is not null) ?? new NotificationSettings())
             .Timeout(LookupTimeout, Observable.Return(new NotificationSettings()))
             .Catch(Observable.Return(new NotificationSettings()));
     }
