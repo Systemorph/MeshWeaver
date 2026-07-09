@@ -189,14 +189,15 @@ public static class ApprovalLayoutAreas
 
         activityWrite
             .DefaultIfEmpty()
-            .SelectMany(_ => NotificationService.CreateNotification(
-                nodeFactory,
-                approval.Requester,
-                $"Approval {newStatus}",
-                $"Your approval request for \"{approval.Purpose}\" has been {newStatus.ToString().ToLowerInvariant()}.",
-                notificationType,
-                approval.PrimaryNodePath,
-                currentUser))
+            .SelectMany(_ => NotificationService.Dispatch(
+                host.Hub,
+                recipient: approval.Requester,
+                mainNodePath: approval.Requester,
+                title: $"Approval {newStatus}",
+                message: $"Your approval request for \"{approval.Purpose}\" has been {newStatus.ToString().ToLowerInvariant()}.",
+                type: notificationType,
+                targetNodePath: approval.PrimaryNodePath,
+                createdBy: currentUser))
             .Subscribe(
                 _ => { /* fire-and-forget success */ },
                 _ => { /* errors already logged by hub */ });

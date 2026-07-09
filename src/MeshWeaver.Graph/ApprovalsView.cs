@@ -157,14 +157,15 @@ public static class ApprovalsView
                 };
 
                 nodeFactory.CreateNode(approvalNode)
-                    .SelectMany(_ => NotificationService.CreateNotification(
-                        nodeFactory,
-                        approver,
-                        "Approval Requested",
-                        $"{currentUser} requested your approval for \"{purpose}\".",
-                        NotificationType.ApprovalRequired,
-                        nodePath,
-                        currentUser))
+                    .SelectMany(_ => NotificationService.Dispatch(
+                        host.Hub,
+                        recipient: approver,
+                        mainNodePath: approver,
+                        title: "Approval Requested",
+                        message: $"{currentUser} requested your approval for \"{purpose}\".",
+                        type: NotificationType.ApprovalRequired,
+                        targetNodePath: nodePath,
+                        createdBy: currentUser))
                     .Subscribe(
                         _ => host.Hub.ServiceProvider.GetService<INavigationService>()
                                 ?.NavigateTo($"/{nodePath}"),

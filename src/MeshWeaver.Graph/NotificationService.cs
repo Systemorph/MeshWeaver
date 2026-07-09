@@ -1,7 +1,14 @@
+using System.Reactive.Linq;
+using MeshWeaver.Data;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging;
 using MeshWeaver.ShortGuid;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Unit = System.Reactive.Unit;
 
 namespace MeshWeaver.Graph;
 
@@ -61,5 +68,122 @@ public static class NotificationService
         };
 
         return nodeFactory.CreateNode(node);
+    }
+
+    private static readonly TimeSpan LookupTimeout = TimeSpan.FromSeconds(10);
+
+    /// <summary>
+    /// Preference-aware notification dispatch — the single entry point every emitter should use.
+    /// Reads the <paramref name="recipient"/>'s <see cref="NotificationSettings"/> and, per the
+    /// notification's <see cref="NotificationCategory"/>, delivers to the enabled channels:
+    /// <list type="bullet">
+    ///   <item><b>In-app</b> → creates the bell <see cref="Notification"/> satellite (as
+    ///     <see cref="CreateNotification"/> does).</item>
+    ///   <item><b>Email</b> → sends via <see cref="HubEmailExtensions.SendEmail"/> to the recipient's
+    ///     <see cref="Mesh.Security.User.Email"/>, UNLESS the recipient authored AI routing rules
+    ///     (<see cref="NotificationRule"/>) — then the advanced <c>NotificationTriageService</c> owns
+    ///     escalation and we skip the deterministic email to avoid double-sending.</item>
+    /// </list>
+    /// Runs the whole flow under the system identity (it reads arbitrary users' settings and writes
+    /// to arbitrary partitions — a legitimate infrastructure write). Returns a cold observable;
+    /// subscribe to drive. A <c>null</c>/empty <paramref name="recipient"/> (e.g. an "Admin" broadcast)
+    /// falls back to defaults and never emails.
+    /// </summary>
+    public static IObservable<Unit> Dispatch(
+        IMessageHub hub,
+        string? recipient,
+        string mainNodePath,
+        string title,
+        string message,
+        NotificationType type,
+        string? targetNodePath = null,
+        string? createdBy = null,
+        string? icon = null)
+    {
+        var meshService = hub.ServiceProvider.GetService<IMeshService>();
+        if (meshService is null)
+            return Observable.Return(Unit.Default);
+        var access = hub.ServiceProvider.GetRequiredService<AccessService>();
+        var category = type.ToCategory();
+
+        return Observable.Using(
+            access.ImpersonateAsSystem,
+            _ => ReadSettings(hub, recipient).SelectMany(settings =>
+            {
+                var ops = new List<IObservable<Unit>>(2);
+                if (settings.InApp(category))
+                    ops.Add(CreateNotification(
+                            meshService, mainNodePath, title, message, type, targetNodePath, createdBy, icon)
+                        .Select(_ => Unit.Default));
+                if (!string.IsNullOrEmpty(recipient) && settings.Email(category))
+                    ops.Add(MaybeSendEmail(hub, recipient!, title, message, targetNodePath)
+                        .Select(_ => Unit.Default));
+                return ops.Count == 0 ? Observable.Return(Unit.Default) : Observable.Merge(ops);
+            }));
+    }
+
+    /// <summary>Reads a user's deterministic notification preferences (defaults when absent/unreadable).</summary>
+    private static IObservable<NotificationSettings> ReadSettings(IMessageHub hub, string? recipient)
+    {
+        if (string.IsNullOrEmpty(recipient))
+            return Observable.Return(new NotificationSettings());
+        return hub.GetWorkspace().GetMeshNodeStream(NotificationSettingsPaths.PathFor(recipient))
+            .Take(1)
+            .Select(n => n?.ContentAs<NotificationSettings>(hub.JsonSerializerOptions) ?? new NotificationSettings())
+            .Timeout(LookupTimeout, Observable.Return(new NotificationSettings()))
+            .Catch(Observable.Return(new NotificationSettings()));
+    }
+
+    /// <summary>
+    /// Sends the deterministic notification email — unless the recipient authored AI routing rules,
+    /// in which case the triage service owns escalation (no double-send). No-op if the recipient has
+    /// no email on file or no <see cref="IEmailSender"/> is registered.
+    /// </summary>
+    private static IObservable<bool> MaybeSendEmail(
+        IMessageHub hub, string recipient, string title, string message, string? targetNodePath)
+    {
+        return HasRoutingRules(hub, recipient).SelectMany(hasRules =>
+        {
+            if (hasRules)
+                return Observable.Return(false);
+            return hub.GetMeshNode(recipient, LookupTimeout)
+                .Select(n => n?.ContentAs<User>(hub.JsonSerializerOptions)?.Email)
+                .SelectMany(email => string.IsNullOrWhiteSpace(email)
+                    ? Observable.Return(false)
+                    : hub.SendEmail(email!, title, BuildEmailHtml(hub, title, message, targetNodePath)))
+                .Catch(Observable.Return(false));
+        });
+    }
+
+    /// <summary>True when the recipient authored at least one AI routing rule (defer email to triage).</summary>
+    private static IObservable<bool> HasRoutingRules(IMessageHub hub, string recipient) =>
+        hub.ServiceProvider.GetRequiredService<IMeshService>()
+            .Query<MeshNode>(MeshQueryRequest.FromQuery(
+                $"nodeType:{NotificationRuleNodeType.NodeType} " +
+                $"namespace:{recipient}/{NotificationRuleNodeType.UserSegment} limit:1"))
+            .Where(c => c.ChangeType == QueryChangeType.Initial)
+            .Select(c => c.Items.Count > 0)
+            .Take(1)
+            .Timeout(LookupTimeout, Observable.Return(false))
+            .Catch(Observable.Return(false));
+
+    private static string BuildEmailHtml(IMessageHub hub, string title, string message, string? targetNodePath)
+    {
+        var baseUrl = ResolveBaseUrl(hub);
+        var link = (!string.IsNullOrEmpty(baseUrl) && !string.IsNullOrWhiteSpace(targetNodePath))
+            ? $"<p style=\"margin:16px 0;\"><a href=\"{System.Net.WebUtility.HtmlEncode($"{baseUrl!.TrimEnd('/')}/{targetNodePath!.TrimStart('/')}")}\" " +
+              "style=\"background:#2563eb;color:#fff;padding:10px 18px;border-radius:6px;text-decoration:none;\">Open</a></p>"
+            : "";
+        return $"<div style=\"font-family:sans-serif;font-size:14px;color:#111;\">" +
+               $"<h2 style=\"margin:0 0 12px 0;\">{System.Net.WebUtility.HtmlEncode(title)}</h2>" +
+               (string.IsNullOrEmpty(message) ? "" : $"<p>{System.Net.WebUtility.HtmlEncode(message)}</p>") +
+               link +
+               "</div>";
+    }
+
+    private static string? ResolveBaseUrl(IMessageHub hub)
+    {
+        var config = hub.ServiceProvider.GetService<IConfiguration>();
+        return config?["Portal:BaseUrl"] ?? config?["PublicBaseUrl"] ?? config?["Email:WebhookBaseUrl"];
     }
 }
