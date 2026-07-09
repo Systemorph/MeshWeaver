@@ -133,12 +133,15 @@ function debounce(fn, delay) {
     const style = document.createElement('style');
     style.id = 'monaco-suggest-styles';
     style.textContent = `
-        /* Target suggest widget in overflow widgets container */
+        /* Target suggest widget in overflow widgets container. Responsive width:
+           never wider than the viewport (minus a gutter) so a narrow side-panel
+           composer doesn't get a fixed 550px popup spilling off-screen. The exact
+           per-editor clamp to the editor's own bounds is done in JS (clampSuggestWidget). */
         .overflowingContentWidgets .suggest-widget,
         .monaco-editor .suggest-widget {
-            width: 550px !important;
-            min-width: 550px !important;
-            max-width: 550px !important;
+            width: min(550px, calc(100vw - 24px)) !important;
+            min-width: 240px !important;
+            max-width: min(550px, calc(100vw - 24px)) !important;
         }
 
         /* Force the list to use full width */
@@ -214,33 +217,10 @@ function debounce(fn, delay) {
             color: #8a8a8a !important;
         }
 
-        /* Also apply dark mode via system preference as fallback */
-        @media (prefers-color-scheme: dark) {
-            .suggest-widget {
-                background-color: #252526 !important;
-                border: 1px solid #454545 !important;
-                color: #cccccc !important;
-            }
-
-            .suggest-widget .monaco-list {
-                background-color: #252526 !important;
-            }
-
-            .suggest-widget .monaco-list-row {
-                color: #cccccc !important;
-                background-color: transparent !important;
-            }
-
-            .suggest-widget .monaco-list-row.focused,
-            .suggest-widget .monaco-list-row.selected {
-                background-color: #094771 !important;
-                color: #ffffff !important;
-            }
-
-            .suggest-widget .details-label {
-                color: #8a8a8a !important;
-            }
-        }
+        /* NOTE: no @media (prefers-color-scheme: dark) block. The popup must follow the
+           APP theme (html[data-theme=...]) — see the data-theme rules above — NOT the OS
+           setting. The old prefers-color-scheme override forced a dark popup whenever macOS
+           was in dark mode even though the app was in LIGHT theme (dark box in a white panel). */
     `;
     document.head.appendChild(style);
 })();
@@ -357,6 +337,47 @@ export function initEditor(editorId, placeholder, dotNetRef, codeEditMode = fals
                     }
                 }, 50);
             });
+        }
+
+        // Keep the suggest (autocomplete) widget inside THIS editor's own horizontal bounds.
+        // Monaco renders it at document level (FixedOverflowWidgets), up to the CSS width, so in a
+        // narrow side-panel composer it otherwise spilled LEFT into the page. On each content /
+        // cursor change (which is also when the widget first appears + repositions) we cap the
+        // widget's width to the editor's width and re-anchor it if it reaches past the editor's
+        // edges. Uses setProperty(..,'important') so it beats the stylesheet's `!important` width.
+        // Writing the widget's inline style does NOT fire onDidChange* — no feedback loop — and a
+        // rAF debounce coalesces bursts. Wrapped so a stray DOM state can never throw into Monaco.
+        {
+            let clampPending = false;
+            const clampSuggestWidget = () => {
+                clampPending = false;
+                try {
+                    if (!editorInstance.hasTextFocus || !editorInstance.hasTextFocus()) return;
+                    const node = editorInstance.getDomNode && editorInstance.getDomNode();
+                    if (!node) return;
+                    const widget = document.querySelector('.overflowingContentWidgets .suggest-widget.visible')
+                        || node.querySelector('.suggest-widget.visible');
+                    if (!widget) return;
+                    const rect = node.getBoundingClientRect();
+                    if (rect.width < 40) return;
+                    const maxW = Math.max(220, Math.round(rect.width));
+                    widget.style.setProperty('width', maxW + 'px', 'important');
+                    widget.style.setProperty('max-width', maxW + 'px', 'important');
+                    widget.style.setProperty('min-width', Math.min(220, maxW) + 'px', 'important');
+                    const wr = widget.getBoundingClientRect();
+                    if (wr.left < rect.left - 1)
+                        widget.style.left = Math.round(rect.left) + 'px';
+                    else if (wr.right > rect.right + 1)
+                        widget.style.left = Math.round(Math.max(rect.left, rect.right - wr.width)) + 'px';
+                } catch { /* never break Monaco's render loop */ }
+            };
+            const scheduleClamp = () => {
+                if (clampPending) return;
+                clampPending = true;
+                requestAnimationFrame(clampSuggestWidget);
+            };
+            editorInstance.onDidChangeModelContent(scheduleClamp);
+            editorInstance.onDidChangeCursorSelection(scheduleClamp);
         }
 
         // Handle Enter key - in code edit mode, Enter inserts newline; in chat mode, Enter submits
