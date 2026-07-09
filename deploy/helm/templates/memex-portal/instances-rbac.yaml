@@ -1,10 +1,12 @@
 {{- if .Values.instancesAdmin.clusterRead }}
 ---
 # Cluster-scoped READ for the platform-admin Instances overview (Doc/Architecture/Instances.md):
-# list portal deployments + ingresses + namespaces across the cluster so the company/control
-# instance can show every portal, its version and its host. Least-privilege: get/list only, and
-# ONLY created when instancesAdmin.clusterRead is set — which must be the company instance alone,
-# never a public or customer instance (else a tenant pod could enumerate the whole cluster).
+# list portal deployments + ingresses across the cluster so the company/control instance can show
+# every portal, its version and its host. Least-privilege: get/list on exactly the two resources
+# the query reads (deployments + ingresses — the namespace comes from each object's metadata, so no
+# `namespaces` grant is needed), and ONLY created when instancesAdmin.clusterRead is set — which
+# must be the company instance alone, never a public or customer instance (else a tenant pod could
+# enumerate the whole cluster).
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -14,9 +16,6 @@ metadata:
     app.kubernetes.io/component: "memex-portal"
     app.kubernetes.io/instance: "{{ .Release.Name }}"
 rules:
-  - apiGroups: [""]
-    resources: ["namespaces"]
-    verbs: ["get", "list"]
   - apiGroups: ["apps"]
     resources: ["deployments"]
     verbs: ["get", "list"]

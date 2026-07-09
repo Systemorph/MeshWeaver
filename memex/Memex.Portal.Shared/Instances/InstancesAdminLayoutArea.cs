@@ -118,6 +118,12 @@ public static class InstancesAdminLayoutArea
         var logger = host.Hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger(typeof(InstancesAdminLayoutArea));
 
+        // Seed the create-instance form ONCE (outside the refresh loop, so typed values survive a
+        // Refresh) so clicking "Generate plan" before touching any field still emits — the plan
+        // generator then returns actionable "fill in the fields" feedback instead of silence.
+        host.RegisterForDisposal(Observable.Return(new Dictionary<string, object?>())
+            .Subscribe(seed => host.UpdateData(CreateFormId, seed)));
+
         // Re-query on each Refresh click (a fresh guid retriggers the Switch).
         return host.Stream.GetDataStream<string>(RefreshId).StartWith("")
             .Select(_ =>
@@ -205,7 +211,7 @@ public static class InstancesAdminLayoutArea
             }
         }
 
-        stack = stack.WithView(BuildCreateSection(options));
+        stack = stack.WithView(BuildCreateSection(options, logger));
         return stack;
     }
 
@@ -213,7 +219,7 @@ public static class InstancesAdminLayoutArea
     /// Guided create-instance: inputs → a generated provisioning PLAN (commands), rendered below.
     /// Mutates no infrastructure — the admin runs the emitted commands themselves.
     /// </summary>
-    private static UiControl BuildCreateSection(InstancesOptions options)
+    private static UiControl BuildCreateSection(InstancesOptions options, ILogger? logger)
     {
         var form = Controls.Stack
             .WithView(Controls.Title("Create a new instance", 2))
@@ -255,7 +261,8 @@ public static class InstancesAdminLayoutArea
                         string? Get(string k) => f.GetValueOrDefault(k)?.ToString()?.Trim();
                         var plan = InstanceProvisioningPlan.Generate(Get("name"), Get("domain"), Get("database"), options);
                         ctx.Host.UpdateData(CreatePlanId, plan);
-                    });
+                    },
+                    ex => logger?.LogWarning(ex, "[Instances] reading the create-instance form failed"));
                 return Task.CompletedTask;
             }));
 
