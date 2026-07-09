@@ -48,6 +48,20 @@ public static class ContentCollectionsExtensions
     public static string DecodeCollectionName(string encodedName) => encodedName.Replace('~', '/');
 
     /// <summary>
+    /// Percent-decodes each segment of a collection path taken from a URL id so it matches the
+    /// provider's stored item names. Browsers percent-encode segments that contain spaces or other
+    /// reserved characters (a folder <c>Data Extraction</c> arrives as <c>Data%20Extraction</c>,
+    /// a file <c>my report.md</c> as <c>my%20report.md</c>), while the collection's real item names
+    /// carry the decoded characters — so the raw URL form never matches and the resolver falls
+    /// through to "not found". Splits on '/' first so the separators between segments are preserved,
+    /// then <see cref="Uri.UnescapeDataString(string)"/>s each segment. This mirrors the re-encoding
+    /// <see cref="ContentLayoutArea.RenderFile"/> performs (<see cref="Uri.EscapeDataString(string)"/>
+    /// per segment), and is idempotent for paths that contain no encoded characters.
+    /// </summary>
+    public static string DecodeCollectionPath(string path) =>
+        string.Join('/', path.Split('/').Select(Uri.UnescapeDataString));
+
+    /// <summary>
     /// Area name for unified content references. Uses $ prefix to avoid name collisions.
     /// </summary>
     public const string ContentAreaName = "$Content";
