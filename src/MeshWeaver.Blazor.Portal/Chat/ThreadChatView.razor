@@ -951,6 +951,24 @@ else
                 </div>
             }
             <div class="selector-bar" style="flex: 0 0 auto; margin-left: auto;">
+                @* Dictate — record with the browser mic, transcribe via the DI ISpeechTranscriber
+                   (→ Whisper), append to the composer. Shown only when a Whisper endpoint is configured. *@
+                @if (SpeechAvailable)
+                {
+                    <FluentButton Appearance="@(_dictationState == "recording" ? FluentAppearance.Accent : FluentAppearance.Stealth)"
+                                  OnClick="ToggleDictation"
+                                  Disabled="@(_dictationState == "transcribing")"
+                                  Title="@(_dictationError ?? (_dictationState == "recording" ? "Stop & transcribe" : "Dictate"))">
+                        @if (_dictationState == "transcribing")
+                        {
+                            <FluentProgressRing Style="width: 20px; height: 20px;" />
+                        }
+                        else
+                        {
+                            <FluentIcon Value="@(new Icons.Regular.Size20.Mic())" Color="Color.Neutral" />
+                        }
+                    </FluentButton>
+                }
                 @if (!submissionHandler.IsInputEnabled)
                 {
                     <FluentButton Appearance="FluentAppearance.Accent" Disabled="true" Title="Sending...">

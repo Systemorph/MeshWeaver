@@ -14,6 +14,7 @@ using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using MeshWeaver.Reactive;
+using MeshWeaver.Speech;
 using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.Configuration;
 using Microsoft.FluentUI.AspNetCore.Components;
@@ -141,6 +142,109 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         }
         return _cache;
     }
+
+    // ── Dictation (composer mic) ─────────────────────────────────────────────────────────────────
+    private ISpeechTranscriber? _transcriber;
+    private bool _transcriberResolved;
+    private IJSObjectReference? _speechModule;
+    private string _dictationState = "idle"; // idle | recording | transcribing
+    private string? _dictationError;
+
+    /// <summary>The DI speech transcriber (resolved once). Null when speech isn't wired into this host.</summary>
+    private ISpeechTranscriber? Transcriber()
+    {
+        if (_transcriberResolved) return _transcriber;
+        _transcriberResolved = true;
+        try { _transcriber = Hub.ServiceProvider.GetService<ISpeechTranscriber>(); }
+        catch { _transcriber = null; }
+        return _transcriber;
+    }
+
+    /// <summary>True when a Whisper endpoint is configured — the composer shows the mic only then.</summary>
+    private bool SpeechAvailable => Transcriber()?.IsConfigured ?? false;
+
+    /// <summary>
+    /// Mic toggle: click to record (browser MediaRecorder in ThreadChatView.razor.js), click again to
+    /// stop → the captured audio is transcribed through the DI <see cref="ISpeechTranscriber"/> (→ the
+    /// Whisper container, the SAME surface /api/speech/transcribe exposes) and appended to the composer
+    /// draft. The transcription is a cold observable we Subscribe (never await); only the JS-interop
+    /// mic calls are awaited (Blazor's own bridge, as OnAfterRenderAsync already does for the scroller).
+    /// </summary>
+    private async Task ToggleDictation()
+    {
+        if (_dictationState == "transcribing") return;
+        _speechModule ??= await JSRuntime.InvokeAsync<IJSObjectReference>(
+            "import", "./_content/MeshWeaver.Blazor.Portal/Chat/ThreadChatView.razor.js");
+
+        if (_dictationState == "idle")
+        {
+            _dictationError = null;
+            try
+            {
+                await _speechModule.InvokeAsync<string>("startDictation");
+                _dictationState = "recording";
+            }
+            catch (Exception ex)
+            {
+                _dictationError = "Microphone unavailable";
+                Logger.LogWarning(ex, "[ThreadChat:{InstanceId}] startDictation failed", _instanceId);
+            }
+            return;
+        }
+
+        // recording → stop + transcribe.
+        _dictationState = "transcribing";
+        StateHasChanged();
+        DictationResult? audio;
+        try
+        {
+            audio = await _speechModule.InvokeAsync<DictationResult?>("stopDictation");
+        }
+        catch (Exception ex)
+        {
+            _dictationError = ex.Message;
+            _dictationState = "idle";
+            Logger.LogWarning(ex, "[ThreadChat:{InstanceId}] stopDictation failed", _instanceId);
+            return;
+        }
+        if (audio is null || string.IsNullOrEmpty(audio.Base64))
+        {
+            _dictationState = "idle";
+            return;
+        }
+
+        var transcriber = Transcriber();
+        if (transcriber is null)
+        {
+            _dictationState = "idle";
+            return;
+        }
+        var bytes = Convert.FromBase64String(audio.Base64);
+        transcriber
+            .Transcribe(bytes, new SpeechTranscriptionOptions
+            {
+                ContentType = string.IsNullOrWhiteSpace(audio.ContentType) ? "audio/webm" : audio.ContentType!,
+                FileName = "audio.webm",
+            })
+            .Take(1)
+            .Subscribe(
+                t => InvokeAsync(() =>
+                {
+                    var add = (t.Text ?? string.Empty).Trim();
+                    if (add.Length > 0)
+                        OnMessageTextChanged(string.IsNullOrWhiteSpace(MessageText) ? add : $"{MessageText} {add}");
+                    _dictationState = "idle";
+                    StateHasChanged();
+                }),
+                ex => InvokeAsync(() =>
+                {
+                    _dictationError = ex.Message;
+                    _dictationState = "idle";
+                    StateHasChanged();
+                }));
+    }
+
+    private sealed record DictationResult(string? Base64, string? ContentType);
 
 
     private ThreadViewModel? _threadViewModel;
@@ -3884,6 +3988,8 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                 }
                 if (_scrollModule is not null)
                     await _scrollModule.DisposeAsync();
+                if (_speechModule is not null)
+                    await _speechModule.DisposeAsync();
             }
             catch (JSDisconnectedException) { /* circuit already gone — nothing to tear down */ }
             catch (Exception) { /* best-effort cleanup on teardown */ }
