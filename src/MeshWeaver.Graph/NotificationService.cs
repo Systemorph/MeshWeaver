@@ -110,14 +110,18 @@ public static class NotificationService
             access.ImpersonateAsSystem,
             _ => ReadSettings(hub, recipient).SelectMany(settings =>
             {
+                // The two channels are independent — isolate each with Catch so a transient email
+                // fault can't suppress the bell write (or vice versa).
                 var ops = new List<IObservable<Unit>>(2);
                 if (settings.InApp(category))
                     ops.Add(CreateNotification(
                             meshService, mainNodePath, title, message, type, targetNodePath, createdBy, icon)
-                        .Select(_ => Unit.Default));
+                        .Select(_ => Unit.Default)
+                        .Catch(Observable.Return(Unit.Default)));
                 if (!string.IsNullOrEmpty(recipient) && settings.Email(category))
                     ops.Add(MaybeSendEmail(hub, recipient!, title, message, targetNodePath)
-                        .Select(_ => Unit.Default));
+                        .Select(_ => Unit.Default)
+                        .Catch(Observable.Return(Unit.Default)));
                 return ops.Count == 0 ? Observable.Return(Unit.Default) : Observable.Merge(ops);
             }));
     }

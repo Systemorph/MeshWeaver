@@ -244,8 +244,10 @@
     private void OnGroupClick(NotificationGroup g)
     {
         // Mark every unread notification in the group read, then navigate to the shared target.
+        // The synced query delivers Content as a JsonElement, so deserialize via ContentAs — a
+        // `node.Content is Notification` pattern would never match and nothing would be marked read.
         foreach (var node in g.Nodes)
-            if (node.Content is Notification n && !n.IsRead)
+            if (node.ContentAs<Notification>(Hub.JsonSerializerOptions) is { IsRead: false } n)
                 MarkRead(node, n);
         if (!string.IsNullOrEmpty(g.Key))
             NavigationManager.NavigateTo($"/{g.Key}");
@@ -277,7 +279,9 @@
         var changed = false;
         foreach (var n in notifications)
         {
-            if (n.Content is Notification notif && !notif.IsRead)
+            // Synced-query nodes carry Content as a JsonElement — deserialize via ContentAs (a
+            // `n.Content is Notification` check would never match, so nothing would be marked read).
+            if (n.ContentAs<Notification>(Hub.JsonSerializerOptions) is { IsRead: false } notif)
             {
                 MarkRead(n, notif);                                   // durable cross-hub write
                 updated.Add(n with { Content = notif with { IsRead = true } }); // optimistic

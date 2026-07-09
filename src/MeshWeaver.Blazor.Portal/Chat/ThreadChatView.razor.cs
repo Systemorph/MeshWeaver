@@ -2886,9 +2886,6 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         _threadNotificationsSub = null;
         if (string.IsNullOrEmpty(path))
             return;
-        var cache = EnsureCache();
-        if (cache is null)
-            return;
         _threadNotificationsSub = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(
                 $"path:{path}/_Notification scope:children nodeType:Notification"))
             .Subscribe(
@@ -2896,14 +2893,15 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                 {
                     foreach (var node in change.Items ?? [])
                     {
-                        var n = node.ContentAs<Notification>(Hub.JsonSerializerOptions);
-                        if (n is null || n.IsRead)
+                        if (node.ContentAs<Notification>(Hub.JsonSerializerOptions) is not { IsRead: false })
                             continue;
-                        cache.Update(node.Path, x =>
-                                x.Content is Notification cur && !cur.IsRead
-                                    ? x with { Content = cur with { IsRead = true } }
-                                    : x, Hub.JsonSerializerOptions)
-                            .Subscribe(_ => { }, _ => { });
+                        // Re-establish the DURABLE circuit user: this write runs from a background query
+                        // emission where the AsyncLocal identity is cleared, so a direct stream Update
+                        // would fail closed under RLS and silently leave the notification unread.
+                        UpdateMeshNodeAsCircuitUser(node.Path, x =>
+                            x.ContentAs<Notification>(Hub.JsonSerializerOptions) is { IsRead: false } cur
+                                ? x with { Content = cur with { IsRead = true } }
+                                : x);
                     }
                 },
                 _ => { /* query error: leave notifications as-is */ });
