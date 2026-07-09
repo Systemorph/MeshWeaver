@@ -16,6 +16,10 @@
     <!-- Node types + content to render: Graph (sample data + node types) and the embedded Documentation. -->
     <ProjectReference Include="..\..\src\MeshWeaver.Graph\MeshWeaver.Graph.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Documentation\MeshWeaver.Documentation.csproj" />
+    <!-- Centralized speech-to-text (the Whisper client) — bakes POST /api/speech/transcribe into the
+         local sidecar so the packaged shells (macOS/Windows/web) have voice input against a local
+         whisper.cpp server, exactly like the portal exposes it. -->
+    <ProjectReference Include="..\..\src\MeshWeaver.Speech\MeshWeaver.Speech.csproj" />
   </ItemGroup>
 
 </Project>

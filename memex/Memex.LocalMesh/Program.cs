@@ -13,7 +13,9 @@ using MeshWeaver.Hosting.Sqlite;
 using MeshWeaver.Markdown;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using MeshWeaver.Speech;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
+using Microsoft.Extensions.Configuration;
 
 // Headless local mesh host: the in-process ("monolith") mesh backed by SQLite, exposed over gRPC. This is
 // the JS-world counterpart of the MAUI client's in-process mesh — MAUI embeds the mesh in the C# app; a
@@ -44,6 +46,17 @@ builder.UseMeshWeaver(
         .AddDocumentation()  // the embedded "Doc" partition — real layout areas the client can render
         .AddGrpcHub()        // py/node stream-routed address types + the gRPC services
         .UseMonolithMesh()); // in-process single-silo runtime (NOT Orleans)
+
+// Bake speech-to-text into the sidecar: default the Whisper endpoint to a local whisper.cpp server
+// (deploy/whisper → http://localhost:8080), enabled — so the packaged shells have voice input out of the
+// box. Env / appsettings (Speech:Endpoint, Speech:Enabled, Speech:Language) still override, since the
+// value we set here is read-then-defaulted from the already-loaded configuration.
+builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
+{
+    ["Speech:Endpoint"] = builder.Configuration["Speech:Endpoint"] ?? "http://localhost:8080",
+    ["Speech:Enabled"] = builder.Configuration["Speech:Enabled"] ?? "true",
+});
+builder.Services.AddSpeechTranscription(builder.Configuration);
 
 var app = builder.Build();
 
@@ -105,6 +118,50 @@ app.MapPost("/api/mesh/render-markdown", async (RenderMarkdownBody body, Cancell
         codeSubmissions = (result.CodeSubmissions ?? [])
             .Select(sub => new { id = sub.Id, language = sub.Language, code = sub.Code }),
     });
+});
+
+// Speech-to-text (POST /api/speech/transcribe) — the SAME client contract the portal exposes
+// (Memex.Portal.Shared/Api/SpeechEndpoints), here anonymous on the local sidecar. Every shell served by
+// this backend (RN, the macOS/Windows desktop apps, the web app) POSTs multipart { file, language? } and
+// gets back {"text","language"}. The transcriber forwards to the configured whisper.cpp server on the HTTP
+// IIoPool; a missing/disabled endpoint returns 503 (mic UI stays hidden), a Whisper fault surfaces as 502.
+app.MapPost("/api/speech/transcribe", async (HttpContext http, ISpeechTranscriber transcriber, CancellationToken ct) =>
+{
+    if (!transcriber.IsConfigured)
+        return Results.Json(new { error = "Speech transcription is not configured (no Whisper endpoint, or disabled)." },
+            statusCode: StatusCodes.Status503ServiceUnavailable);
+    if (!http.Request.HasFormContentType)
+        return Results.BadRequest(new { error = "Content-Type must be multipart/form-data." });
+
+    var form = await http.Request.ReadFormAsync(ct);
+    var file = form.Files.GetFile("file");
+    if (file is null || file.Length == 0)
+        return Results.BadRequest(new { error = "Multipart file part 'file' is required." });
+    if (file.Length > 25L * 1024 * 1024) // bound the in-memory buffer (a minute of WAV ≈ a few MB)
+        return Results.Json(new { error = $"Audio too large: {file.Length} bytes (max {25L * 1024 * 1024})." },
+            statusCode: StatusCodes.Status413PayloadTooLarge);
+
+    using var ms = new MemoryStream();
+    await using (var stream = file.OpenReadStream())
+        await stream.CopyToAsync(ms, ct);
+
+    var options = new SpeechTranscriptionOptions
+    {
+        Language = form["language"].FirstOrDefault() is { Length: > 0 } lang ? lang : null,
+    };
+    if (!string.IsNullOrWhiteSpace(file.ContentType)) options = options with { ContentType = file.ContentType };
+    if (!string.IsNullOrWhiteSpace(file.FileName)) options = options with { FileName = file.FileName };
+
+    try
+    {
+        var transcript = await transcriber.Transcribe(ms.ToArray(), options).FirstAsync().ToTask(ct);
+        return Results.Json(new { text = transcript.Text, language = transcript.Language });
+    }
+    catch (OperationCanceledException) { throw; }
+    catch (Exception ex)
+    {
+        return Results.Json(new { error = $"Transcription failed: {ex.Message}" }, statusCode: StatusCodes.Status502BadGateway);
+    }
 });
 
 // Rewrite layout-area markers whose raw-path is a WHOLE node (empty remainder) to a node/default-area embed,
