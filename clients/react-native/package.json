@@ -9,7 +9,7 @@
     "ios": "expo run:ios",
     "android": "expo run:android",
     "web": "expo start --web",
-    "web:export": "expo export --platform web",
+    "web:export": "expo export --platform web && node scripts/pwa-inject.mjs dist/index.html",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "e2e": "playwright test"
