@@ -884,6 +884,16 @@ cmd_up() {
   [ "$with_obs" = "yes" ] && cmd_observability    # §11 (opt-in)
   verify_endpoint                                 # §14
 
+  # BAKE-IN self-update: a --from-acr (production-like) install auto-updates itself, the standard
+  # behaviour per ReleaseStrategy.md. It's the LOCAL analog of the AKS in-pod SelfUpdateHostedService
+  # (which can't run on Colima — no Azure workload identity to reach ACR): a launchd watcher polls the
+  # moving :main tag with the host's az creds and rolls on every new green ci image. A --build install
+  # has no ACR image to track, so it's skipped there (use `autoroll up` to auto-roll LOCAL rebuilds).
+  if [ "$image_source" = "acr" ]; then
+    step "Enabling self-update: track main via ACR (§ReleaseStrategy — the default for a released install)"
+    cmd_autoroll up --from-acr || warn "could not enable ACR self-update (run 'memex-local autoroll up --from-acr' manually)"
+  fi
+
   echo
   ok "memex is up — open https://${HOSTNAME_LOCAL}:${HOST_PORT}"
   info "logs:   memex-local logs"
@@ -1100,7 +1110,8 @@ COMMANDS:
   up [--build|--from-acr|--skip-image] [--tag T] [--with-observability]
                   Bring the whole stack up (idempotent). Default image source:
                   --build (Option B, native arm64 into Colima's Docker store —
-                  the no-cloud-creds path). --from-acr pulls multi-arch from ACR.
+                  the no-cloud-creds path). --from-acr pulls multi-arch from ACR
+                  AND enables self-update (tracks main; see 'autoroll' below).
   down [--purge] [--stop-colima]
                   Uninstall the release (keeps the Postgres PVC). --purge wipes
                   data (namespace + PVC + ingress-nginx); --stop-colima stops VM.
@@ -1115,10 +1126,15 @@ COMMANDS:
                   Tail logs (portal by default). Log level: $LOG_LEVEL.
   update [--build|--from-acr] [--tag T]
                   Roll portal+migration to a newer image, then refresh forward.
-  autoroll <up|down|status>
-                  Auto-redeploy the portal whenever a fresh local image is built
-                  (launchd watcher → rollout restart on a new :latest digest).
-                  The local equivalent of the AKS in-pod self-update.
+  autoroll <up [--from-acr]|down|status>
+                  Auto-redeploy the portal without a manual 'update'. The local
+                  equivalent of the AKS in-pod self-update (which can't run on
+                  Colima — no Azure workload identity to reach ACR).
+                    up            watch LOCAL rebuilds → rollout restart on a new
+                                  :latest digest (every ${AUTOROLL_LOCAL_INTERVAL}s).
+                    up --from-acr TRACK MAIN: poll the moving :main tag on ACR every
+                                  ${AUTOROLL_ACR_INTERVAL}s → pull + re-migrate + roll on every
+                                  new green ci image (auto-enabled by 'up --from-acr').
   port-forward    (Re)start the host:${HOST_PORT} -> ingress:443 forward.
   observability   Install Grafana/Loki/Promtail/Prometheus (§11).
   doctor          Preflight: tools, chart/assets, cluster.
@@ -1156,6 +1172,17 @@ readonly AUTOROLL_IMAGE="memex-portal-ai-local:latest"   # the moving tag the bu
 readonly AUTOROLL_MIG_IMAGE="memex-migration-local:latest" # the migration moving tag (then tagged $MIGRATION_IMAGE)
 readonly AUTOROLL_MIG_STATE="$LOCAL_HOME/autoroll.migration.digest"
 readonly AUTOROLL_MIG_JOB="memex-migration-autoroll"
+# TRACK-MAIN (ACR) mode — the local analog of the in-pod SelfUpdateHostedService (which can't run
+# on Colima: it authenticates to ACR via Azure workload identity, absent locally). Instead the
+# launchd tick polls the moving `main` tag ($ACR/memex-portal-ai:main, published by main-cd.yml on
+# every green merge) using the HOST's `az`/docker creds, and on a digest change pulls + re-migrates
+# + rolls — so memex.localhost tracks merged main like prod. Persisted `source` tells the tick which
+# watcher to run (`local` = watch a local rebuild; `acr` = poll ACR :main).
+readonly AUTOROLL_SOURCE_STATE="$LOCAL_HOME/autoroll.source"          # "local" | "acr"
+readonly AUTOROLL_ACR_STATE="$LOCAL_HOME/autoroll.acr.digest"         # last-seen ACR :main manifest digest
+readonly AUTOROLL_ACR_TAG="main"                                     # CI's moving newest-green-main tag
+readonly AUTOROLL_ACR_INTERVAL="${MEMEX_AUTOROLL_ACR_INTERVAL:-1800}" # ACR poll cadence, seconds (30 min)
+readonly AUTOROLL_LOCAL_INTERVAL="30"                                # local rebuild → near-instant roll
 readonly PORTAL_DEPLOYMENT="memex-portal-deployment"
 
 # Re-run the migration as a one-shot Job against the MAIN DB (the chart's connection string from
@@ -1166,8 +1193,10 @@ readonly PORTAL_DEPLOYMENT="memex-portal-deployment"
 _autoroll_migrate() {
   # Retag the freshly-built local image onto the chart ref the Job references ($MIGRATION_IMAGE) — a bare
   # `dotnet publish` only writes memex-migration-local:latest, so without this the Job would re-run the OLD
-  # image (IfNotPresent reuses the chart ref from the Docker store).
-  docker tag "$AUTOROLL_MIG_IMAGE" "$MIGRATION_IMAGE" >/dev/null 2>&1 || true
+  # image (IfNotPresent reuses the chart ref from the Docker store). The ACR (track-main) tick passes
+  # `no-retag` — it has ALREADY retagged the ACR-pulled migration image onto $MIGRATION_IMAGE, so the
+  # local retag here would clobber it with a stale local build.
+  [ "${1:-}" = "no-retag" ] || docker tag "$AUTOROLL_MIG_IMAGE" "$MIGRATION_IMAGE" >/dev/null 2>&1 || true
   kubectl -n "$NAMESPACE" delete job "$AUTOROLL_MIG_JOB" --ignore-not-found >/dev/null 2>&1 || true
   kubectl -n "$NAMESPACE" apply -f - >/dev/null 2>&1 <<YAML || return 1
 apiVersion: batch/v1
@@ -1190,21 +1219,85 @@ YAML
   kubectl -n "$NAMESPACE" wait --for=condition=complete "job/$AUTOROLL_MIG_JOB" --timeout=300s >/dev/null 2>&1
 }
 
+# Returns the change-token (manifest digest) of the ACR moving :main tag, or empty on failure.
+# The multi-arch manifest LIST changes whenever the tag moves to a new build, so hashing it detects
+# "a new ci image was published on main" without needing to enumerate/sort ci.N tags.
+_autoroll_acr_digest() {
+  docker manifest inspect "$ACR/memex-portal-ai:$AUTOROLL_ACR_TAG" 2>/dev/null | shasum 2>/dev/null | awk '{print $1}'
+}
+
+# One ACR (track-main) tick: refresh creds from the HOST az session, and if the moving :main tag's
+# digest changed since last roll, pull portal+migration for that tag, re-migrate, and rollout restart.
+# Idempotent + fail-safe: any failure leaves the portal on its current image and retries next tick.
+_autoroll_acr_tick() {
+  # ACR needs a token — refresh it from the logged-in az session (short-lived; re-minted each tick).
+  # If az isn't logged in / the session expired, skip this tick (don't roll blind) and retry later.
+  if ! az acr login -n "${ACR%%.*}" >/dev/null 2>&1; then
+    printf '%s autoroll(acr): `az acr login -n %s` failed — run `az login`; skipping this tick\n' \
+      "$(date -u +%FT%TZ)" "${ACR%%.*}"
+    return 0
+  fi
+  local cur last
+  cur="$(_autoroll_acr_digest)"
+  if [ -z "$cur" ]; then
+    printf '%s autoroll(acr): manifest inspect failed for %s:%s — skipping\n' \
+      "$(date -u +%FT%TZ)" "$ACR/memex-portal-ai" "$AUTOROLL_ACR_TAG"
+    return 0
+  fi
+  last="$(cat "$AUTOROLL_ACR_STATE" 2>/dev/null || true)"
+  [ "$cur" != "$last" ] || return 0   # no new ci image on main since last roll
+
+  printf '%s autoroll(acr): new ci image on :%s (%s -> %s) — pulling + migrating + rolling %s\n' \
+    "$(date -u +%FT%TZ)" "$AUTOROLL_ACR_TAG" "${last:-none}" "$cur" "$PORTAL_DEPLOYMENT"
+  # Pull the moving tag's portal + migration and retag onto the chart refs the pods run (IfNotPresent
+  # reuses the local docker store — no per-restart registry round-trip). Portal pull must succeed.
+  if ! { docker pull "$ACR/memex-portal-ai:$AUTOROLL_ACR_TAG" >/dev/null 2>&1 \
+         && docker tag "$ACR/memex-portal-ai:$AUTOROLL_ACR_TAG" "$PORTAL_IMAGE" >/dev/null 2>&1; }; then
+    printf '%s autoroll(acr): portal pull failed — retry next tick\n' "$(date -u +%FT%TZ)"
+    return 0
+  fi
+  docker pull "$ACR/memex-migration:$AUTOROLL_ACR_TAG" >/dev/null 2>&1 \
+    && docker tag "$ACR/memex-migration:$AUTOROLL_ACR_TAG" "$MIGRATION_IMAGE" >/dev/null 2>&1 || true
+  # Schema first (portal's DbVersionGate blocks boot until current); no-retag so the ACR migration
+  # image we just retagged isn't clobbered by the local one. On failure, keep current + retry.
+  if _autoroll_migrate no-retag; then
+    kubectl -n "$NAMESPACE" rollout restart "deploy/$PORTAL_DEPLOYMENT" >/dev/null 2>&1 || true
+    printf '%s\n' "$cur" > "$AUTOROLL_ACR_STATE"
+    printf '%s autoroll(acr): rolled portal to newest main ci image\n' "$(date -u +%FT%TZ)"
+  else
+    printf '%s autoroll(acr): MIGRATION FAILED — keeping current image, will retry\n' "$(date -u +%FT%TZ)"
+  fi
+}
+
 cmd_autoroll() {
   local action="${1:-status}"
   case "$action" in
     up)
       need docker docker; need kubectl kubectl
+      # Source: `up` = watch local rebuilds (default); `up --from-acr` = TRACK MAIN (poll the moving
+      # :main tag on ACR — "update on every ci image"). Interval differs: local rolls near-instantly,
+      # ACR polls the registry (network + az login) on a slower cadence.
+      local source="local" interval="$AUTOROLL_LOCAL_INTERVAL"
+      if [ "${2:-}" = "--from-acr" ] || [ "${2:-}" = "--acr" ]; then
+        source="acr"; interval="$AUTOROLL_ACR_INTERVAL"
+      fi
       mkdir -p "$LOCAL_HOME" "$(dirname "$AUTOROLL_PLIST")"
-      # Pin the portal to the MOVING tag so `rollout restart` picks up a rebuilt image (IfNotPresent
-      # reuses whatever the docker store now holds at that tag — no registry pull needed).
-      step "Pinning $PORTAL_DEPLOYMENT to $PORTAL_IMAGE (IfNotPresent) so rebuilds roll in"
+      printf '%s\n' "$source" > "$AUTOROLL_SOURCE_STATE"
+      # Pin the portal to the MOVING chart ref so `rollout restart` picks up a retagged image
+      # (local rebuild OR ACR pull) via IfNotPresent — no per-restart registry round-trip.
+      step "Pinning $PORTAL_DEPLOYMENT to $PORTAL_IMAGE (IfNotPresent) so new images roll in"
       kubectl -n "$NAMESPACE" set image "deploy/$PORTAL_DEPLOYMENT" "memex-portal=$PORTAL_IMAGE" >/dev/null 2>&1 || true
       kubectl -n "$NAMESPACE" patch "deploy/$PORTAL_DEPLOYMENT" --type=json \
         -p='[{"op":"replace","path":"/spec/template/spec/containers/0/imagePullPolicy","value":"IfNotPresent"}]' >/dev/null 2>&1 || true
-      # Seed BOTH digests with the CURRENT images so the watcher rolls on the NEXT rebuild, not on install.
-      docker image inspect "$AUTOROLL_IMAGE" --format '{{.Id}}' 2>/dev/null > "$AUTOROLL_STATE" || true
-      docker image inspect "$AUTOROLL_MIG_IMAGE" --format '{{.Id}}' 2>/dev/null > "$AUTOROLL_MIG_STATE" || true
+      # Seed the watched digest(s) with the CURRENT state so the watcher rolls on the NEXT change,
+      # not immediately on install.
+      if [ "$source" = "acr" ]; then
+        az acr login -n "${ACR%%.*}" >/dev/null 2>&1 || warn "az acr login failed — run 'az login' so the watcher can poll ACR"
+        _autoroll_acr_digest > "$AUTOROLL_ACR_STATE" 2>/dev/null || true
+      else
+        docker image inspect "$AUTOROLL_IMAGE" --format '{{.Id}}' 2>/dev/null > "$AUTOROLL_STATE" || true
+        docker image inspect "$AUTOROLL_MIG_IMAGE" --format '{{.Id}}' 2>/dev/null > "$AUTOROLL_MIG_STATE" || true
+      fi
       local self; self="${SELF_DIR}/$(basename "$0")"
       cat > "$AUTOROLL_PLIST" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -1213,7 +1306,7 @@ cmd_autoroll() {
   <key>Label</key><string>${AUTOROLL_LABEL}</string>
   <key>ProgramArguments</key>
   <array><string>${self}</string><string>autoroll</string><string>_tick</string></array>
-  <key>StartInterval</key><integer>30</integer>
+  <key>StartInterval</key><integer>${interval}</integer>
   <key>RunAtLoad</key><true/>
   <key>EnvironmentVariables</key>
   <dict>
@@ -1226,7 +1319,11 @@ cmd_autoroll() {
 PLIST
       launchctl unload "$AUTOROLL_PLIST" >/dev/null 2>&1 || true
       launchctl load "$AUTOROLL_PLIST"
-      ok "Auto-roll ON — watching portal + migration images every 30s; a new build → re-migrate then rollout restart. Log: $AUTOROLL_LOG"
+      if [ "$source" = "acr" ]; then
+        ok "Auto-roll ON — TRACKING MAIN via $ACR/memex-portal-ai:$AUTOROLL_ACR_TAG every ${interval}s; a new ci image → pull + re-migrate + rollout restart. Log: $AUTOROLL_LOG"
+      else
+        ok "Auto-roll ON — watching local portal + migration builds every ${interval}s; a new build → re-migrate then rollout restart. Log: $AUTOROLL_LOG"
+      fi
       ;;
     down)
       launchctl unload "$AUTOROLL_PLIST" >/dev/null 2>&1 || true
@@ -1234,12 +1331,21 @@ PLIST
       ok "Auto-roll OFF (portal stays on its current image)."
       ;;
     status)
-      if launchctl list 2>/dev/null | grep -q "$AUTOROLL_LABEL"; then ok "Auto-roll: RUNNING"; else info "Auto-roll: stopped"; fi
-      info "portal:    $AUTOROLL_IMAGE   last: $(cat "$AUTOROLL_STATE" 2>/dev/null || echo none)"
-      info "migration: $AUTOROLL_MIG_IMAGE   last: $(cat "$AUTOROLL_MIG_STATE" 2>/dev/null || echo none)"
+      local source; source="$(cat "$AUTOROLL_SOURCE_STATE" 2>/dev/null || echo local)"
+      if launchctl list 2>/dev/null | grep -q "$AUTOROLL_LABEL"; then ok "Auto-roll: RUNNING (source=$source)"; else info "Auto-roll: stopped"; fi
+      if [ "$source" = "acr" ]; then
+        info "tracking:  $ACR/memex-portal-ai:$AUTOROLL_ACR_TAG   last: $(cat "$AUTOROLL_ACR_STATE" 2>/dev/null || echo none)"
+      else
+        info "portal:    $AUTOROLL_IMAGE   last: $(cat "$AUTOROLL_STATE" 2>/dev/null || echo none)"
+        info "migration: $AUTOROLL_MIG_IMAGE   last: $(cat "$AUTOROLL_MIG_STATE" 2>/dev/null || echo none)"
+      fi
       info "deployment image: $(kubectl -n "$NAMESPACE" get "deploy/$PORTAL_DEPLOYMENT" -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || echo '?')"
       ;;
-    _tick)   # invoked by launchd every 30s — re-migrate + roll iff a watched image digest changed
+    _tick)   # invoked by launchd — track main (ACR) OR a local rebuild, per the persisted source
+      if [ "$(cat "$AUTOROLL_SOURCE_STATE" 2>/dev/null || echo local)" = "acr" ]; then
+        _autoroll_acr_tick
+        exit 0
+      fi
       local pcur plast mcur mlast
       # 1. Migration FIRST (schema must lead the portal). If it changed, re-run + wait; on failure
       #    leave everything on the current images and retry next tick (don't roll the portal blind).
@@ -1271,7 +1377,7 @@ PLIST
         printf '%s\n' "$pcur" > "$AUTOROLL_STATE"
       fi
       ;;
-    *) die "usage: memex-local autoroll {up|down|status}" ;;
+    *) die "usage: memex-local autoroll {up [--from-acr]|down|status}" ;;
   esac
 }
 
