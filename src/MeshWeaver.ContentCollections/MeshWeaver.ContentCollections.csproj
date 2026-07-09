@@ -5,8 +5,10 @@
 
   <ItemGroup>
     <PackageReference Include="Azure.Storage.Blobs" />
+    <PackageReference Include="ClosedXML" />
     <PackageReference Include="DocSharp.Markdown" />
     <PackageReference Include="Markdig" />
+    <PackageReference Include="UglyToad.PdfPig" />
     <PackageReference Include="Microsoft.Extensions.Azure" />
     <PackageReference Include="Microsoft.Extensions.Configuration.Binder" />
   </ItemGroup>
