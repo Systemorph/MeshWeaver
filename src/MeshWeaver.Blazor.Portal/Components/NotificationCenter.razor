@@ -45,8 +45,16 @@
             .Subscribe(change =>
             {
                 var items = change.Items ?? Array.Empty<MeshNode>();
-                var newCount = items.Count(n =>
-                    n.ContentAs<Notification>(Hub.JsonSerializerOptions)?.IsRead == false);
+                // Count distinct SOURCES with unread notifications, not raw rows — five unread
+                // messages in one thread read as a single "1" on the bell, matching the grouped panel.
+                var newCount = items
+                    .Select(n => (node: n, notif: n.ContentAs<Notification>(Hub.JsonSerializerOptions)))
+                    .Where(x => x.notif is { IsRead: false })
+                    .Select(x => !string.IsNullOrEmpty(x.notif!.TargetNodePath)
+                        ? x.notif!.TargetNodePath!
+                        : (x.node.MainNode ?? x.node.Path))
+                    .Distinct()
+                    .Count();
                 if (newCount != unreadCount)
                 {
                     unreadCount = newCount;
@@ -70,15 +78,9 @@
             return;
         }
 
-        // Opening acknowledges the notifications — clear the badge immediately.
-        // The panel persists IsRead durably; this is the optimistic UX so the
-        // count doesn't linger while the writes propagate.
-        if (unreadCount != 0)
-        {
-            unreadCount = 0;
-            StateHasChanged();
-        }
-
+        // Opening the panel no longer marks everything read (the panel groups by source and marks a
+        // group read on click / on viewing its node), so the badge keeps reflecting the true unread
+        // count from the live query rather than being optimistically zeroed here.
         var dialog = await DialogService.ShowPanelAsync<NotificationCenterPanel>(new DialogParameters<GlobalState>()
         {
             Alignment = HorizontalAlignment.Right,
