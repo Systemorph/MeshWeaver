@@ -3,6 +3,7 @@ using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.Blazor.Infrastructure;
+using MeshWeaver.Data;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -41,7 +42,10 @@ public sealed class InvitationEmailSender(
     IConfiguration configuration,
     ILogger<InvitationEmailSender>? logger = null) : IHostedService, IDisposable
 {
-    private const string InviteSubject = "You've been invited to Memex";
+    private const string GenericSubject = "You've been invited to Memex";
+    // Cap on resolving the invited Space's display name for the email — a nice-to-have, so we fall
+    // back to the raw space path (never block the send) if the cross-partition read is slow.
+    private static readonly TimeSpan SpaceLookupTimeout = TimeSpan.FromSeconds(10);
     private readonly CompositeDisposable subscriptions = new();
     // In-process single-claim guard: path → claimed. Instance (mesh/process-scoped), never static.
     // Prevents the live-query snapshot lag from re-claiming+re-sending the same invitation while
@@ -74,6 +78,7 @@ public sealed class InvitationEmailSender(
             var meshService = sp.GetRequiredService<IMeshService>();
             var accessService = sp.GetRequiredService<AccessService>();
             var emailSender = sp.GetRequiredService<IEmailSender>();
+            var workspace = hub.GetWorkspace();
             var jsonOptions = hub.JsonSerializerOptions;
             var baseUrl = configuration["Portal:BaseUrl"]
                           ?? configuration["PublicBaseUrl"]
@@ -102,7 +107,7 @@ public sealed class InvitationEmailSender(
                     items =>
                     {
                         foreach (var node in items)
-                            Send(node, meshService, accessService, emailSender, jsonOptions, baseUrl);
+                            Send(node, meshService, accessService, emailSender, workspace, jsonOptions, baseUrl);
                     },
                     ex => logger?.LogWarning(ex, "InvitationEmailSender: query failed")));
         }
@@ -114,7 +119,7 @@ public sealed class InvitationEmailSender(
 
     private void Send(
         MeshNode node, IMeshService meshService, AccessService accessService,
-        IEmailSender emailSender, JsonSerializerOptions jsonOptions, string? baseUrl)
+        IEmailSender emailSender, IWorkspace workspace, JsonSerializerOptions jsonOptions, string? baseUrl)
     {
         var invitation = InvitationService.TryGetInvitation(node, jsonOptions);
         if (invitation is null
@@ -136,7 +141,12 @@ public sealed class InvitationEmailSender(
         // the rare multi-replica race — worst case one duplicate email, never a lost one.)
         var claimedAt = DateTimeOffset.UtcNow;
         SetEmailSentAt(node, invitation, claimedAt, meshService, accessService)
-            .SelectMany(_ => emailSender.SendEmail(invitation.Email!, InviteSubject, BuildInviteEmailHtml(baseUrl)))
+            .SelectMany(_ => ResolveSpaceName(invitation, workspace, accessService))
+            .SelectMany(spaceName =>
+            {
+                var (subject, html) = BuildInviteEmail(invitation, spaceName, baseUrl);
+                return emailSender.SendEmail(invitation.Email!, subject, html);
+            })
             .Subscribe(
                 ok => logger?.LogInformation(
                     "InvitationEmailSender: {Email} emailed (sent={Sent})", invitation.Email, ok),
@@ -159,7 +169,51 @@ public sealed class InvitationEmailSender(
             () => accessService.ImpersonateAsSystem(),
             _ => meshService.UpdateNode(node with { Content = current with { EmailSentAt = to } }));
 
-    private static string BuildInviteEmailHtml(string? baseUrl)
+    /// <summary>
+    /// Resolves the invited Space's display name for a space-scoped invitation (reads the Space
+    /// node's <see cref="MeshNode.Name"/> as System, since this hosted service has no user context).
+    /// Emits <c>null</c> for a deployment-wide invitation (no <see cref="Invitation.SpacePath"/>),
+    /// and falls back to the raw space path if the read is slow or the node isn't visible — the
+    /// name is cosmetic, so we never block or fail the send on it.
+    /// </summary>
+    private static IObservable<string?> ResolveSpaceName(
+        Invitation invitation, IWorkspace workspace, AccessService accessService)
+    {
+        if (string.IsNullOrWhiteSpace(invitation.SpacePath))
+            return Observable.Return<string?>(null);
+
+        var spacePath = invitation.SpacePath!.Trim();
+        return Observable.Using(
+            accessService.ImpersonateAsSystem,
+            _ => workspace.GetMeshNodeStream(spacePath)
+                .Where(n => n is not null)
+                .Select(n => string.IsNullOrWhiteSpace(n!.Name) ? spacePath : n.Name)
+                .Take(1)
+                .Timeout(SpaceLookupTimeout, Observable.Return<string?>(spacePath))
+                .Catch(Observable.Return<string?>(spacePath)));
+    }
+
+    /// <summary>
+    /// Builds the invitation email. When the invitation targets a Space
+    /// (<see cref="Invitation.SpacePath"/> set) it addresses the Space by <paramref name="spaceName"/>
+    /// (falling back to the path) and links straight to it (<c>{baseUrl}/{SpacePath}</c>); otherwise
+    /// it renders the generic deployment-wide invite. Pure + static so it is directly unit-testable.
+    /// </summary>
+    internal static (string Subject, string Html) BuildInviteEmail(
+        Invitation invitation, string? spaceName, string? baseUrl)
+    {
+        if (string.IsNullOrWhiteSpace(invitation.SpacePath))
+            return (GenericSubject, BuildGenericHtml(baseUrl));
+
+        var spacePath = invitation.SpacePath!.Trim();
+        var display = string.IsNullOrWhiteSpace(spaceName) ? spacePath : spaceName!.Trim();
+        var spaceUrl = string.IsNullOrEmpty(baseUrl)
+            ? null
+            : $"{baseUrl!.TrimEnd('/')}/{spacePath.TrimStart('/')}";
+        return ($"You've been invited to {display}", BuildSpaceHtml(display, spaceUrl));
+    }
+
+    private static string BuildGenericHtml(string? baseUrl)
     {
         var link = string.IsNullOrEmpty(baseUrl)
             ? ""
@@ -168,6 +222,20 @@ public sealed class InvitationEmailSender(
               + "Open Memex</a></p>"
               + $"<p style=\"color:#888;font-size:12px;\">{System.Net.WebUtility.HtmlEncode(baseUrl)}</p>";
         return "<p>You've been invited to Memex.</p>"
+               + "<p>Sign in with this email address to get started.</p>"
+               + link;
+    }
+
+    private static string BuildSpaceHtml(string spaceName, string? spaceUrl)
+    {
+        var name = System.Net.WebUtility.HtmlEncode(spaceName);
+        var link = string.IsNullOrEmpty(spaceUrl)
+            ? ""
+            : $"<p style=\"margin:16px 0;\"><a href=\"{System.Net.WebUtility.HtmlEncode(spaceUrl)}\" " +
+              "style=\"background:#2563eb;color:#fff;padding:10px 18px;border-radius:6px;text-decoration:none;\">"
+              + $"Open {name}</a></p>"
+              + $"<p style=\"color:#888;font-size:12px;\">{System.Net.WebUtility.HtmlEncode(spaceUrl)}</p>";
+        return $"<p>You've been invited to <strong>{name}</strong>.</p>"
                + "<p>Sign in with this email address to get started.</p>"
                + link;
     }

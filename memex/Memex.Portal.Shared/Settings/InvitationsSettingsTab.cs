@@ -181,6 +181,7 @@ public static class InvitationsSettingsTab
                 $"<div style=\"font-size: 0.8rem; color: var(--neutral-foreground-hint);\">" +
                 $"Invited {inv.InvitedAt:yyyy-MM-dd}" +
                 (string.IsNullOrEmpty(inv.InvitedBy) ? "" : $" by {Esc(inv.InvitedBy!)}") +
+                (string.IsNullOrEmpty(inv.SpacePath) ? "" : $" · Space: {Esc(inv.SpacePath!)}") +
                 (string.IsNullOrEmpty(inv.Note) ? "" : $" · {Esc(inv.Note!)}") +
                 "</div></div>"));
 
@@ -205,25 +206,6 @@ public static class InvitationsSettingsTab
         }
 
         return container;
-    }
-
-    private const string InviteSubject = "You've been invited to Memex";
-
-    private static string BuildInviteEmailHtml(string? baseUrl)
-    {
-        var link = string.IsNullOrEmpty(baseUrl)
-            ? ""
-            : $"<p style=\"margin:16px 0;\"><a href=\"{Esc(baseUrl)}\" " +
-              $"style=\"background:#2563eb;color:#fff;padding:10px 18px;border-radius:6px;" +
-              $"text-decoration:none;\">Open Memex</a></p>";
-        return
-            "<div style=\"font-family:sans-serif;font-size:14px;color:#111;\">" +
-            "<h2 style=\"margin:0 0 12px 0;\">You've been invited to Memex</h2>" +
-            "<p>An administrator has invited you to join the Memex portal. " +
-            "Sign in with <strong>this email address</strong> to complete your onboarding.</p>" +
-            link +
-            "<p style=\"color:#666;font-size:12px;\">If you weren't expecting this invitation, you can ignore this email.</p>" +
-            "</div>";
     }
 
     private static string StatusBadge(InvitationStatus status)
