@@ -47,7 +47,9 @@ public static class CollectionNamedLayoutArea
     {
         var collectionName = ContentCollectionsExtensions.DecodeCollectionName(context.Area);
         var idString = host.Reference.Id?.ToString() ?? "";
-        var path = idString.Split('?')[0].Trim('/');
+        // The URL id is percent-encoded by the browser; decode each segment before it becomes a
+        // collection path so names with spaces (or other reserved chars) match the stored items.
+        var path = ContentCollectionsExtensions.DecodeCollectionPath(idString.Split('?')[0].Trim('/'));
 
         var contentService = host.Hub.GetContentService();
         var ioPool = ContentLayoutArea.GetIoPool(host.Hub);
