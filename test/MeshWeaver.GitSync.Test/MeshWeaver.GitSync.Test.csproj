@@ -11,7 +11,6 @@
     <ProjectReference Include="..\..\src\MeshWeaver.Graph\MeshWeaver.Graph.csproj" />
     <!-- Slides plugin (MeshWeaver.Plugins submodule) — the Slide round-trip test exercises its
          SlideMarkdownContentMapper through the extracted-module seam. -->
-    <ProjectReference Include="..\..\plugins\src\MeshWeaver.Slides\MeshWeaver.Slides.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Monolith.TestBase\MeshWeaver.Hosting.Monolith.TestBase.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Hosting\MeshWeaver.Hosting.csproj" />
     <ProjectReference Include="..\..\memex\Memex.Portal.Shared\Memex.Portal.Shared.csproj" />

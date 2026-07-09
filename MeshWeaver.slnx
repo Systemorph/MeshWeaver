@@ -115,10 +115,8 @@
     <Project Path="src/MeshWeaver.Utils/MeshWeaver.Utils.csproj" />
   </Folder>
   <Folder Name="/plugins/">
-    <Project Path="plugins/src/MeshWeaver.Slides/MeshWeaver.Slides.csproj" />
     <Project Path="plugins/src/MeshWeaver.Social/MeshWeaver.Social.csproj" />
     <Project Path="plugins/src/MeshWeaver.Speech/MeshWeaver.Speech.csproj" />
-    <Project Path="plugins/test/MeshWeaver.Slides.Test/MeshWeaver.Slides.Test.csproj" />
     <Project Path="plugins/test/MeshWeaver.Social.Test/MeshWeaver.Social.Test.csproj" />
     <Project Path="plugins/test/MeshWeaver.Speech.Test/MeshWeaver.Speech.Test.csproj" />
   </Folder>

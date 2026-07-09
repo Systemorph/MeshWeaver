@@ -9,8 +9,8 @@ using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
-using MeshWeaver.Slides;
 using Microsoft.Extensions.DependencyInjection;
+using System.Text.Json;
 using Xunit;
 
 namespace MeshWeaver.GitSync.Test;
@@ -30,14 +30,24 @@ public abstract class GitHubSyncTestBase(ITestOutputHelper output) : MonolithMes
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => base.ConfigureMesh(builder)
-            // Slides are an extracted module (MeshWeaver.Plugins); AddGraph no longer ships them.
-            // Register so the Slide round-trip test exercises the SlideMarkdownContentMapper seam.
-            .AddSlides()
+            // Test-local typed content + IMarkdownContentMapper — the seam plugin-owned types
+            // (e.g. the extracted Slides module) use to round-trip TYPED through git export/import.
+            // A local twin keeps the seam covered without referencing any compiled plugin.
+            .AddMeshNodes(new MeshNode("TestDeck")
+            {
+                Name = "Test Deck",
+                HubConfiguration = config => config
+                    .AddMeshDataSource(source => source.WithContentType<TestDeckContent>())
+                    .AddDefaultLayoutAreas(),
+            })
             .AddGitHubSyncTypes()
             .ConfigureDefaultNodeHub(c => c.AddGitHubSyncSettingsTab().AddGitHubIssuesTab())
             .ConfigureServices(s =>
             {
                 s.AddGitHubSyncServices();
+                // The typed-markdown round-trip seam under test (plugin-owned types register
+                // exactly such a mapper — e.g. the Slides plugin's SlideMarkdownContentMapper).
+                s.AddSingleton<IMarkdownContentMapper, TestDeckMarkdownContentMapper>();
                 // Override the Octokit client with the in-memory fake (last registration wins).
                 s.AddSingleton<IGitHubRepoClient>(Fake);
                 // Override the AI draft with the deterministic stub (last registration wins) so the
@@ -141,6 +151,42 @@ public abstract class GitHubSyncTestBase(ITestOutputHelper output) : MonolithMes
         private static readonly byte[] Key = Enumerable.Range(1, 32).Select(i => (byte)i).ToArray();
         public byte[]? GetMasterKey() => Key;
     }
+}
+
+/// <summary>
+/// Test-local typed content for the <see cref="IMarkdownContentMapper"/> round-trip — the shape a
+/// plugin-owned presenter type (e.g. the extracted Slides module's SlideContent) carries: a
+/// markdown body plus presenter front-matter fields.
+/// </summary>
+public sealed record TestDeckContent
+{
+    public string Content { get; init; } = "";
+    public string? Notes { get; init; }
+    public string? Background { get; init; }
+}
+
+/// <summary>
+/// Test-local <see cref="IMarkdownContentMapper"/> — the seam plugin-owned node types use to
+/// round-trip TYPED through git export/import (mirrors the Slides plugin's mapper). Handles both
+/// the typed content and the untyped <see cref="JsonElement"/> shape after a JSON round-trip.
+/// </summary>
+public sealed class TestDeckMarkdownContentMapper : IMarkdownContentMapper
+{
+    public bool Handles(string nodeType) => nodeType == "TestDeck";
+
+    public object CreateContent(string markdownBody, string? notes, string? background) =>
+        new TestDeckContent { Content = markdownBody, Notes = notes, Background = background };
+
+    public MarkdownContentProjection? Project(MeshNode node) => node.Content switch
+    {
+        TestDeckContent c => new(c.Content, c.Notes, c.Background),
+        JsonElement je when je.ValueKind == JsonValueKind.Object =>
+            new(Get(je, "content"), Get(je, "notes"), Get(je, "background")),
+        _ => null,
+    };
+
+    private static string? Get(JsonElement e, string name) =>
+        e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
 }
 
 /// <summary>

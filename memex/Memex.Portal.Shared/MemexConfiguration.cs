@@ -27,7 +27,6 @@ using MeshWeaver.ContentCollections;
 using MeshWeaver.ContentCollections.Indexing;
 using MeshWeaver.ContentCollections.Indexing.Graph;
 using MeshWeaver.ContentCollections.Indexing.PostgreSql;
-using MeshWeaver.Slides;
 using MeshWeaver.Documentation;
 using MeshWeaver.GoogleMaps;
 using MeshWeaver.Data;
@@ -545,7 +544,6 @@ public static class MemexConfiguration
                 .AddGraph()
                 // Slides / Decks — a presentation module extracted to the MeshWeaver.Plugins
                 // repo. AddGraph no longer ships these; a portal opts in explicitly.
-                .AddSlides()
                 // Register GitHub-sync content types (GitHubCredential / GitHubSyncConfig)
                 // on the mesh + per-node hubs so their config nodes (de)serialize.
                 .AddGitHubSyncTypes()

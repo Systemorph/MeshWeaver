@@ -52,18 +52,18 @@ public class GitHubExportImportTest(ITestOutputHelper output) : GitHubSyncTestBa
     }
 
     [Fact(Timeout = 120000)]
-    public async Task Export_Then_Import_RoundTripsSlideNotesBackgroundAndOrder()
+    public async Task Export_Then_Import_RoundTripsTypedContentNotesBackgroundAndOrder()
     {
         await Connect();
         var a = "GhD" + Guid.NewGuid().ToString("N")[..8];
         await CreateSpace(a, "Deck A");
         await NodeFactory.CreateNode(MeshNode.FromPath($"{a}/S01") with
         {
-            NodeType = "Slide",
+            NodeType = "TestDeck",
             Name = "Opening",
             Order = 1,
             State = MeshNodeState.Active,
-            Content = new SlideContent
+            Content = new TestDeckContent
             {
                 Content = "# Opening\n\nWelcome to the deck.",
                 Notes = "Speak slowly.",
@@ -75,24 +75,24 @@ public class GitHubExportImportTest(ITestOutputHelper output) : GitHubSyncTestBa
         await Sync.SaveConfig(a, repo, "main", null, true, true).Timeout(30.Seconds()).ToTask();
         await Sync.SyncToGitHub(a, UserId).Timeout(60.Seconds()).ToTask();
 
-        // The slide mirrors as canonical .md whose frontmatter carries the slide metadata.
+        // The node mirrors as canonical .md whose frontmatter carries the presenter metadata.
         var file = Fake.Tree(repo).FirstOrDefault(f => f.Path == "S01.md");
         Assert.NotNull(file);
-        Assert.Contains("NodeType: Slide", file!.Content);
+        Assert.Contains("NodeType: TestDeck", file!.Content);
         Assert.Contains("Order: 1", file.Content);
         Assert.Contains("Speak slowly.", file.Content);
         Assert.Contains("667eea", file.Content);
         Assert.Contains("# Opening", file.Content);
 
-        // Import into a fresh Space — the Slide must round-trip typed, not downgrade to Markdown.
+        // Import into a fresh Space — the typed content must round-trip via the mapper seam, not downgrade to Markdown.
         var b = "GhE" + Guid.NewGuid().ToString("N")[..8];
         await Sync.ImportFromGitHub(repo, "main", b, "Deck B", subdirectory: null, UserId)
             .Timeout(90.Seconds()).ToTask();
 
         var slideNode = await WaitForNode($"{b}/S01");
-        Assert.Equal("Slide", slideNode.NodeType);
+        Assert.Equal("TestDeck", slideNode.NodeType);
         Assert.Equal(1, slideNode.Order);
-        var slide = slideNode.ContentAs<SlideContent>(Mesh.JsonSerializerOptions);
+        var slide = slideNode.ContentAs<TestDeckContent>(Mesh.JsonSerializerOptions);
         Assert.NotNull(slide);
         Assert.Contains("Welcome to the deck.", slide!.Content);
         Assert.Equal("Speak slowly.", slide.Notes);

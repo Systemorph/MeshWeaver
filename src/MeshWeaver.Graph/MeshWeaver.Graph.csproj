@@ -10,10 +10,6 @@
     <InternalsVisibleTo Include="MeshWeaver.Graph.Test" />
     <InternalsVisibleTo Include="MeshWeaver.Query.Test" />
     <InternalsVisibleTo Include="MeshWeaver.Hosting.Monolith.Test" />
-    <!-- MeshWeaver.Slides is the extracted Slides/Decks plugin (MeshWeaver.Plugins repo).
-         Its layout areas reuse Graph's node-shell helpers (e.g. the internal
-         MeshNodeLayoutAreas.GetContainerStyle) — the same internals Graph's own views use. -->
-    <InternalsVisibleTo Include="MeshWeaver.Slides" />
   </ItemGroup>
 
   <ItemGroup>
