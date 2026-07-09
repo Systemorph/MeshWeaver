@@ -133,12 +133,17 @@ Writing goes through `upload` with the mirror shape `{nodePath}/{collection}/{fi
 | Extension | Behavior |
 |---|---|
 | `.docx` | Converted to **markdown** (DocSharp transformer) |
+| `.pdf` | Extracted to **page text** (PdfPig transformer) |
+| `.xlsx`, `.xls` | Converted to **markdown tables**, one per worksheet (ClosedXML transformer) |
 | `.md`, `.csv`, `.txt`, source files | Returned as text verbatim |
-| `.xlsx`, `.pdf`, images | **No transformer yet** — bytes are decoded as text and arrive corrupted (binary is not JSON-safe) |
+| images (`.png`, `.jpg`, `.gif`, `.webp`, `.tif`/`.tiff`, …) | **Never returned as bytes.** `get` returns the image's `Document` node (name + AI description) when content indexing has captioned it; otherwise a short placeholder (name, media type, size). |
+| other binaries | **No transformer** — bytes would decode as corrupted text (binary is not JSON-safe); do not `get` these into an agent context |
 
-For `.xlsx` / `.pdf` content, two reliable patterns until transformers ship:
+The transformer seam is a single registration (`AddContentService`), so the agent `Get` tool and the MCP `get` tool return byte-for-byte the same text for a given file — there is no second code path.
 
-1. **Server-side executable Code node** ([ExecuteScript](/Doc/AI/ExecuteScript)): resolve `IContentService`, open the stream, and parse in-process — an `.xlsx` is a ZIP, so `System.IO.Compression.ZipArchive` + `XDocument` over `xl/worksheets/sheet1.xml` and `xl/sharedStrings.xml` needs no NuGet package. Print rows to the activity log or create mesh nodes directly.
+For a binary format with no transformer, two reliable patterns:
+
+1. **Server-side executable Code node** ([ExecuteScript](/Doc/AI/ExecuteScript)): resolve `IContentService`, open the stream, and parse in-process — no bytes cross the agent boundary. Print results to the activity log or create mesh nodes directly.
 2. **Lossless export through the collection**: a script converts the file to Base64 text and saves it back via `collection.SaveFileAsync(...)`; `get` on the resulting `.b64` file is lossless text, which the client decodes back to the original bytes.
 
 A note on collection resolution inside scripts: the kernel's `IContentService` does not know node-scoped collections by their plain name. Fetch the node's collection config first and register it under a qualified name — the same handshake `upload` performs:

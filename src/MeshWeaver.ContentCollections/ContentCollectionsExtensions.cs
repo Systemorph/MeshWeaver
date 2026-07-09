@@ -374,6 +374,8 @@ public static class ContentCollectionsExtensions
                 .AddScoped<IContentService, ContentService>()
                 .AddScoped<Data.IFileContentProvider, FileContentProvider>()
                 .AddSingleton<IContentTransformer, DocSharpContentTransformer>()
+                .AddSingleton<IContentTransformer, PdfPigContentTransformer>()
+                .AddSingleton<IContentTransformer, ClosedXmlContentTransformer>()
                 .AddKeyedScoped<IStreamProviderFactory, FileSystemStreamProviderFactory>(FileSystemStreamProvider.SourceType)
                 .AddKeyedScoped<IStreamProviderFactory, EmbeddedResourceStreamProviderFactory>(EmbeddedResourceStreamProvider.SourceType)
                 .AddKeyedScoped<IStreamProviderFactory, HubStreamProviderFactory>(HubStreamProviderFactory.SourceType);
