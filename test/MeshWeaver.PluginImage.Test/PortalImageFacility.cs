@@ -185,6 +185,21 @@ public sealed class PortalImageFacility : IAsyncLifetime
         Assert.NotEqual(HttpStatusCode.NotFound, resp.StatusCode);
     }
 
+    /// <summary>
+    /// The image ships <c>MeshWeaver.BusinessRules.dll</c> (the <c>IScope&lt;,&gt;</c> runtime surface) in
+    /// its TPA. A live-compiled scope node resolves those types from TPA — that's why the mesh-local
+    /// <c>#r</c> feed (BakeMeshLocalFeed) could be removed. This guards that safety net: if a future
+    /// change drops the runtime lib from the portal's deps, scope nodes would silently fail to compile
+    /// in prod, and this fails first.
+    /// </summary>
+    [Fact]
+    public async Task InjectedImage_ShipsBusinessRulesRuntime_ForFeedlessScopeCompile()
+    {
+        SkipIfUnavailable();
+        var probe = await _portal!.ExecAsync(new[] { "test", "-f", "/app/MeshWeaver.BusinessRules.dll" });
+        Assert.Equal(0L, probe.ExitCode);
+    }
+
     public async ValueTask DisposeAsync() => await SafeDisposeAsync();
 
     private async ValueTask SafeDisposeAsync()
