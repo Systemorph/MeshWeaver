@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>MeshWeaver</AssemblyName>
+    <RootNamespace>MeshWeaver.Windows</RootNamespace>
+    <!-- Standalone Windows app, built via build.ps1 on Windows — NOT part of MeshWeaver.slnx (a
+         net10.0-windows target can't build on the Linux/macOS CI runners). Opt out of the repo's
+         central package management so this self-contained csproj carries its own WebView2 version. -->
+    <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- WebView2 (the Edge Chromium control). The Evergreen runtime is preinstalled on Windows 11; on
+         Windows 10 the installer should chain the WebView2 bootstrapper. -->
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.2903.40" />
+  </ItemGroup>
+
+</Project>
