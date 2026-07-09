@@ -7,6 +7,8 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 
 # Plugin Registry
 
+For the step-by-step how-to (author → publish → install → own registry) see the [Plugin Manual](/Doc/Architecture/PluginAuthoring).
+
 [Plugins](/Doc/Architecture/Plugins) install by importing a repo of mesh nodes over
 [GitSync](/Doc/Architecture/StaticRepoImport). That works, but GitSync needs **credentials** for a
 private plugins repo — and you do not want *every* installation to hold GitHub credentials just to
