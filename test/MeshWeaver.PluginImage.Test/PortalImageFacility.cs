@@ -186,18 +186,30 @@ public sealed class PortalImageFacility : IAsyncLifetime
     }
 
     /// <summary>
-    /// The image ships <c>MeshWeaver.BusinessRules.dll</c> (the <c>IScope&lt;,&gt;</c> runtime surface) in
-    /// its TPA. A live-compiled scope node resolves those types from TPA — that's why the mesh-local
-    /// <c>#r</c> feed (BakeMeshLocalFeed) could be removed. This guards that safety net: if a future
-    /// change drops the runtime lib from the portal's deps, scope nodes would silently fail to compile
-    /// in prod, and this fails first.
+    /// The image ships <c>MeshWeaver.BusinessRules.dll</c> (the <c>IScope&lt;,&gt;</c> runtime surface)
+    /// AND lists it in the app's <c>.deps.json</c> — i.e. it is part of the runtime reference set the
+    /// host turns into TRUSTED_PLATFORM_ASSEMBLIES (TPA), which IS the mesh compiler's scope-compile
+    /// reference set. That's why the mesh-local <c>#r</c> feed (BakeMeshLocalFeed) could be removed: a
+    /// live-compiled scope node resolves those types from TPA, not from a baked feed. This guards that
+    /// safety net — if a future change drops the runtime lib from the portal's published deps, scope
+    /// nodes would silently fail to compile in prod, and this fails first. File presence alone would
+    /// not prove the assembly is a resolvable reference; deps.json membership does.
     /// </summary>
     [Fact]
     public async Task InjectedImage_ShipsBusinessRulesRuntime_ForFeedlessScopeCompile()
     {
         SkipIfUnavailable();
-        var probe = await _portal!.ExecAsync(new[] { "test", "-f", "/app/MeshWeaver.BusinessRules.dll" });
-        Assert.Equal(0L, probe.ExitCode);
+
+        // (a) the runtime DLL is physically present in the image.
+        var file = await _portal!.ExecAsync(new[] { "test", "-f", "/app/MeshWeaver.BusinessRules.dll" });
+        Assert.Equal(0L, file.ExitCode);
+
+        // (b) it is listed in the published .deps.json — the runtime-assembly list the host resolves
+        //     into TPA, and thus the mesh compiler's scope-compile reference set. This is the assertion
+        //     that actually backs the "resolves from TPA, no #r feed needed" claim above.
+        var deps = await _portal!.ExecAsync(new[]
+            { "sh", "-c", "grep -q '\"MeshWeaver.BusinessRules.dll\"' /app/*.deps.json" });
+        Assert.Equal(0L, deps.ExitCode);
     }
 
     public async ValueTask DisposeAsync() => await SafeDisposeAsync();
