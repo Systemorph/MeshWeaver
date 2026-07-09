@@ -280,6 +280,10 @@ public static class MemexConfiguration
         // absent a client id the Connect flow is gracefully disabled.
         services.AddGitHubSyncServices();
         services.Configure<GitHubOAuthOptions>(builder.Configuration.GetSection("GitHub:OAuth"));
+        // GitHub App machine identity (GitHub:App:ClientId + PrivateKey [+ InstallationId/Owner]):
+        // server-side sync — the plugin registry pulling the plugins repo — logs on AS THE APP
+        // (installation token), never with a user's personal credential.
+        services.Configure<GitHubAppOptions>(builder.Configuration.GetSection("GitHub:App"));
 
         // Instance sync — bidirectional Space replication to another MeshWeaver instance
         // (per-space registry at {space}/_Sync; offline changes accumulate in the durable
