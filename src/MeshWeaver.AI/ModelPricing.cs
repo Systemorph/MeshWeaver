@@ -107,17 +107,41 @@ public static class ModelPricing
 
     /// <summary>
     /// The built-in default rate for a model id, or null when the model isn't in
-    /// the table. Case-insensitive; tolerates a leading provider/path prefix by
-    /// also trying the last path segment.
+    /// the table. Case-insensitive; tolerates a leading provider/path prefix (by
+    /// also trying the last path segment) AND a trailing context/variant marker
+    /// (by also stripping a <c>[…]</c> / <c>:…</c> suffix off that segment). So the
+    /// bare-id rows still price the deployed variants — e.g. <c>claude-opus-4-8[1m]</c>
+    /// (the 1M context window) and <c>llama3:latest</c> both resolve to their base
+    /// row instead of falling through to <c>$0</c>.
     /// </summary>
     public static ModelPriceRate? Default(string? modelId)
     {
         if (string.IsNullOrWhiteSpace(modelId))
             return null;
-        if (Defaults.TryGetValue(modelId, out var rate))
-            return rate;
         var lastSegment = modelId[(modelId.LastIndexOf('/') + 1)..];
-        return Defaults.TryGetValue(lastSegment, out rate) ? rate : null;
+        return Lookup(modelId)
+            ?? Lookup(lastSegment)
+            ?? Lookup(StripVariant(lastSegment));
+    }
+
+    private static ModelPriceRate? Lookup(string id)
+        => Defaults.TryGetValue(id, out var rate) ? rate : null;
+
+    /// <summary>
+    /// Strips a trailing context/variant marker off a bare id segment so a priced
+    /// base id still matches: <c>claude-opus-4-8[1m]</c> → <c>claude-opus-4-8</c>,
+    /// <c>llama3:latest</c> → <c>llama3</c>. Applied only to the LAST path segment —
+    /// a provider prefix is split on <c>/</c>, so a stray <c>:</c> earlier in the id
+    /// is never mistaken for a variant marker. (The 1M variant bills at a higher rate
+    /// above 200k tokens; the base rate is a close-enough fallback, far better than $0.)
+    /// </summary>
+    private static string StripVariant(string segment)
+    {
+        var bracket = segment.IndexOf('[');
+        if (bracket > 0) segment = segment[..bracket];
+        var colon = segment.IndexOf(':');
+        if (colon > 0) segment = segment[..colon];
+        return segment.Trim();
     }
 
     /// <summary>
