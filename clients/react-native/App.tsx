@@ -47,13 +47,14 @@ interface ChatOptions {
   namespacePath: string;
   speech?: { url?: string; token?: string; path?: string; language?: string } | null;
 }
-// Speech enabled for the local-simulator demo: a standalone build has no served origin, so point
-// speech at the local Whisper container explicitly (deploy/whisper → http://localhost:8080/inference;
-// localhost reaches the host Mac from the simulator). Drop `speech.url`/`speech.path` in a mesh-served
-// deployment and the endpoint follows the current instance (see the useMemo below).
+// Speech follows the CURRENT mesh instance: with no `speech.url`/`speech.path`, the transcription client
+// POSTs to `{instance}/api/speech/transcribe` — the endpoint every backend now bakes in (the portal AND
+// the local sidecar Memex.LocalMesh), so voice input works in every shell (web, the macOS/Windows desktop
+// apps, and against a remote portal) with no separate container URL. To point at a bare dev Whisper
+// container instead, set `speech: { url: "http://localhost:8080", path: "/inference" }`.
 const CHAT: ChatOptions | null = {
   namespacePath: "rbuergi",
-  speech: { url: "http://localhost:8080", path: "/inference", language: "de" },
+  speech: { language: "de" },
 };
 // const CHAT: ChatOptions | null = null;
 
