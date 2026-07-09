@@ -10,8 +10,6 @@
         <PackageReference Include="Azure.Core" />
         <PackageReference Include="HtmlAgilityPack" />
         <PackageReference Include="Microsoft.Extensions.Http" />
-        <PackageReference Include="ClosedXML" />
-        <PackageReference Include="DocumentFormat.OpenXml" />
         <PackageReference Include="Microsoft.Extensions.AI" />
         <PackageReference Include="Microsoft.Extensions.AI.Abstractions" />
         <PackageReference Include="Microsoft.Agents.AI" />
@@ -19,8 +17,6 @@
         <PackageReference Include="Microsoft.Agents.AI.Workflows" />
         <PackageReference Include="Microsoft.Agents.AI.AzureAI" />
         <PackageReference Include="OpenAI" />
-        <PackageReference Include="UglyToad.PdfPig" />
-
     </ItemGroup>
     <ItemGroup>
       <ProjectReference Include="..\MeshWeaver.Application.Styles\MeshWeaver.Application.Styles.csproj" />

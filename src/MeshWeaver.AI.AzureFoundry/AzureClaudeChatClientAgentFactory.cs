@@ -80,6 +80,12 @@ public class AzureClaudeChatClientAgentFactory(
             throw new InvalidOperationException(
                 "No model selected. Pick one in the chat dropdown.");
 
+        return CreateChatClientForModel(modelName);
+    }
+
+    /// <inheritdoc />
+    protected override IChatClient CreateChatClientForModel(string modelName)
+    {
         // Driver config: resolver walks parent ModelProvider → root ModelProvider
         // → legacy ModelDefinition fields. Fall back to IOptions if the resolver
         // returns Missing.
@@ -99,8 +105,8 @@ public class AzureClaudeChatClientAgentFactory(
                 $"ApiKey is missing for model '{modelName}'. Configure a ModelProvider node (e.g. Model/Anthropic) or set Anthropic:ApiKey in config.");
 
         logger.LogInformation(
-            "[AzureClaude] Creating chat client agent={AgentName} model={ModelName} endpoint={Endpoint} source={Source} apiKeyFp={ApiKeyFingerprint}",
-            agentConfig.Id, modelName, endpoint, source, Fingerprint(apiKey));
+            "[AzureClaude] Creating chat client model={ModelName} endpoint={Endpoint} source={Source} apiKeyFp={ApiKeyFingerprint}",
+            modelName, endpoint, source, Fingerprint(apiKey));
 
         try
         {
@@ -108,9 +114,9 @@ public class AzureClaudeChatClientAgentFactory(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Failed to create Azure Claude chat client for agent {AgentName}", agentConfig.Id);
+            logger.LogError(ex, "Failed to create Azure Claude chat client for model {ModelName}", modelName);
             throw new InvalidOperationException(
-                $"Failed to create Azure Claude chat client for agent {agentConfig.Id}: {ex.Message}", ex);
+                $"Failed to create Azure Claude chat client for model {modelName}: {ex.Message}", ex);
         }
     }
 

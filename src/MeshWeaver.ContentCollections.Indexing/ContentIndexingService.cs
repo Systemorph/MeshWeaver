@@ -50,6 +50,7 @@ public sealed class ContentIndexingService
     private readonly IChunkedContentVectorStore _store;
     private readonly ISummarizer? _summarizer;
     private readonly IDocumentSink? _documentSink;
+    private readonly IImageDescriber? _imageDescriber;
     private readonly ContentIndexingOptions _options;
     private readonly ILogger<ContentIndexingService> _logger;
 
@@ -63,6 +64,7 @@ public sealed class ContentIndexingService
     /// <param name="logger">Logger for the indexing pipeline; a no-op logger is used when <c>null</c>.</param>
     /// <param name="summarizer">Optional per-document summarizer; the document branch runs only when both this and <paramref name="documentSink"/> are supplied.</param>
     /// <param name="documentSink">Optional sink that persists the per-file <see cref="DocumentInfo"/>; paired with <paramref name="summarizer"/>.</param>
+    /// <param name="imageDescriber">Optional vision describer; when supplied, an image file (by extension) is described by it instead of the text extractor, and the description becomes both the indexed text and the Document summary.</param>
     public ContentIndexingService(
         ITextExtractor extractor,
         IChunkEmbedder embedder,
@@ -70,7 +72,8 @@ public sealed class ContentIndexingService
         ContentIndexingOptions? options = null,
         ILogger<ContentIndexingService>? logger = null,
         ISummarizer? summarizer = null,
-        IDocumentSink? documentSink = null)
+        IDocumentSink? documentSink = null,
+        IImageDescriber? imageDescriber = null)
     {
         _extractor = extractor ?? throw new ArgumentNullException(nameof(extractor));
         _embedder = embedder ?? throw new ArgumentNullException(nameof(embedder));
@@ -80,6 +83,8 @@ public sealed class ContentIndexingService
         // written only when BOTH are present.
         _summarizer = summarizer;
         _documentSink = documentSink;
+        // imageDescriber is OPTIONAL: absent ⇒ images extract to empty text (today's NoText behavior).
+        _imageDescriber = imageDescriber;
         _options = options ?? new ContentIndexingOptions();
         _logger = logger ?? NullLogger<ContentIndexingService>.Instance;
     }
@@ -136,7 +141,9 @@ public sealed class ContentIndexingService
     private IObservable<Unit> EnsureDocument(
         string collectionPath, string filePath, string fileName, byte[] bytes, string hash)
     {
-        if (_summarizer is null || _documentSink is null)
+        // Nothing to heal without a sink; a summary can still come from the summarizer OR an image
+        // describer, so do NOT gate on _summarizer here (WriteDocumentBranch decides).
+        if (_documentSink is null)
             return Observable.Return(Unit.Default);
 
         return _documentSink.DocumentExists(collectionPath, filePath)
@@ -151,21 +158,21 @@ public sealed class ContentIndexingService
                     filePath, collectionPath);
                 return _store.GetChunkCount(collectionPath, filePath)
                     .Take(1)
-                    .SelectMany(chunkCount => _extractor.ExtractText(fileName, bytes)
-                        .Take(1)
-                        .SelectMany(text => string.IsNullOrWhiteSpace(text)
+                    .SelectMany(chunkCount => ExtractIndexable(fileName, bytes)
+                        .SelectMany(extracted => string.IsNullOrWhiteSpace(extracted.Document.Text)
                             ? Observable.Return(Unit.Default)
                             : WriteDocumentBranch(
-                                collectionPath, filePath, fileName, text, bytes, hash, chunkCount)));
+                                collectionPath, filePath, fileName, extracted.Document.Text, bytes, hash, chunkCount,
+                                extracted.SummaryOverride)));
             });
     }
 
     private IObservable<IndexResult> IndexChanged(
         string collectionPath, string filePath, string fileName, byte[] bytes, string hash) =>
-        _extractor.ExtractDocument(fileName, bytes)
-            .Take(1)
-            .SelectMany(document =>
+        ExtractIndexable(fileName, bytes)
+            .SelectMany(extracted =>
             {
+                var (document, summaryOverride) = extracted;
                 var chunks = TextChunker.ChunkPositioned(document, _options.ChunkSize, _options.ChunkOverlap);
                 if (chunks.Count == 0)
                 {
@@ -190,29 +197,64 @@ public sealed class ContentIndexingService
                 // otherwise it's a no-op that emits a single Unit so the Zip below still completes
                 // — giving exactly today's behavior when either is absent. The summarize call is
                 // its own IIoPool leaf inside the ISummarizer impl; the orchestration holds no slot.
+                // For an image, summaryOverride carries the vision description → used verbatim as the
+                // summary (the describe call already happened once in ExtractIndexable).
                 return chunkBranch.SelectMany(storedCount =>
-                    WriteDocumentBranch(collectionPath, filePath, fileName, document.Text, bytes, hash, storedCount)
+                    WriteDocumentBranch(collectionPath, filePath, fileName, document.Text, bytes, hash, storedCount, summaryOverride)
                         .Select(_ => IndexResult.Indexed(storedCount)));
             });
 
     /// <summary>
-    /// Summarizes the document (once) and writes the per-file <see cref="DocumentInfo"/> through the
-    /// sink — but ONLY when both <see cref="ISummarizer"/> and <see cref="IDocumentSink"/> are wired.
-    /// When either is absent this is a no-op emitting a single <see cref="Unit"/>, so the caller's
-    /// composition completes identically to the original (chunk-only) flow.
+    /// Produces the file's indexable document plus an optional summary override, dispatched by
+    /// extension: a normal file goes through <see cref="ITextExtractor.ExtractDocument"/> (no override —
+    /// the summarizer produces the Document summary); an IMAGE (a describer is wired and its extension
+    /// matches) goes through <see cref="IImageDescriber"/>, whose description is wrapped as positionless
+    /// text and is BOTH the indexable content AND the summary (ONE model call, no re-summarize). With no
+    /// describer, images fall to the extractor → empty → NoText, exactly today's behavior.
+    /// </summary>
+    private IObservable<(ExtractedDocument Document, string? SummaryOverride)> ExtractIndexable(
+        string fileName, byte[] bytes)
+    {
+        var ext = System.IO.Path.GetExtension(fileName).ToLowerInvariant();
+        if (_imageDescriber is not null && _imageDescriber.SupportedExtensions.Contains(ext))
+            return _imageDescriber.Describe(bytes, fileName)
+                .Take(1)
+                .Select(description => (
+                    ExtractedDocument.PlainText(description ?? string.Empty),
+                    string.IsNullOrWhiteSpace(description) ? (string?)null : description));
+
+        return _extractor.ExtractDocument(fileName, bytes)
+            .Take(1)
+            .Select(document => (document, (string?)null));
+    }
+
+    /// <summary>
+    /// Writes the per-file <see cref="DocumentInfo"/> through the sink, deriving the summary from
+    /// <paramref name="summaryOverride"/> when present (e.g. an image's vision description, used
+    /// verbatim) or otherwise from the <see cref="ISummarizer"/> condensing the extracted text. A
+    /// no-op emitting a single <see cref="Unit"/> when there is no sink, or no way to produce a summary
+    /// (no override and no summarizer) — so the caller's composition completes identically to the
+    /// original (chunk-only) flow when the document branch isn't wired.
     /// </summary>
     private IObservable<Unit> WriteDocumentBranch(
         string collectionPath, string filePath, string fileName, string text, byte[] bytes,
-        string hash, int chunkCount)
+        string hash, int chunkCount, string? summaryOverride = null)
     {
-        if (_summarizer is null || _documentSink is null)
+        if (_documentSink is null)
             return Observable.Return(Unit.Default);
 
-        var summarizer = _summarizer;
-        var documentSink = _documentSink;
+        // Summary source: an override (image description) is used verbatim; otherwise the summarizer
+        // condenses the extracted text. With neither, there is nothing to write.
+        IObservable<string> summarySource;
+        if (summaryOverride is not null)
+            summarySource = Observable.Return(summaryOverride);
+        else if (_summarizer is not null)
+            summarySource = _summarizer.Summarize(text, fileName).Take(1);
+        else
+            return Observable.Return(Unit.Default);
 
-        return summarizer.Summarize(text, fileName)
-            .Take(1)
+        var documentSink = _documentSink;
+        return summarySource
             .SelectMany(summary => documentSink.WriteDocument(new DocumentInfo(
                 CollectionPath: collectionPath,
                 FilePath: filePath,

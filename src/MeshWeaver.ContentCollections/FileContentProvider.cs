@@ -18,6 +18,24 @@ public class FileContentProvider : IFileContentProvider
     private readonly IIoPool _ioPool;
 
     /// <summary>
+    /// Raster image extensions → media type. A file with one of these and no registered
+    /// <see cref="IContentTransformer"/> is guarded (a descriptive placeholder is returned) rather than
+    /// having its raw bytes decoded as text. Read-only constant lookup — never mutated at runtime.
+    /// </summary>
+    private static readonly IReadOnlyDictionary<string, string> ImageMediaTypes =
+        new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            [".png"] = "image/png",
+            [".jpg"] = "image/jpeg",
+            [".jpeg"] = "image/jpeg",
+            [".gif"] = "image/gif",
+            [".webp"] = "image/webp",
+            [".bmp"] = "image/bmp",
+            [".tiff"] = "image/tiff",
+            [".tif"] = "image/tiff"
+        };
+
+    /// <summary>
     /// Initializes the provider with the content service, the available document transformers,
     /// and the file-system I/O pool used to run file access off the hub.
     /// </summary>
@@ -63,6 +81,28 @@ public class FileContentProvider : IFileContentProvider
 
                 var markdown = await transformer.TransformToMarkdownAsync(stream, ct).ConfigureAwait(false);
                 return FileContentResult.Ok(markdown);
+            }
+
+            if (ImageMediaTypes.TryGetValue(ext, out var imageMediaType))
+            {
+                // A binary image has no text transformer. NEVER decode its bytes as text (issue #379 —
+                // multi-MB of binary floods a model context and fails the next request with 400). Return
+                // a short descriptive placeholder instead. When content indexing is enabled, an AI
+                // description of the image is surfaced through the file's Document node.
+                long? size = null;
+                await using (var probe = await collection.GetContentAsync(filePath, ct).ConfigureAwait(false))
+                {
+                    if (probe == null)
+                        return FileContentResult.Fail($"File '{filePath}' not found in collection '{collectionName}'");
+                    if (probe.CanSeek)
+                        size = probe.Length;
+                }
+
+                var sizeText = size is { } s ? $", {s} bytes" : string.Empty;
+                return FileContentResult.Ok(
+                    $"[image: {Path.GetFileName(filePath)} ({imageMediaType}{sizeText})] "
+                    + "Binary image content is not returned as text. When content indexing is enabled, an "
+                    + "AI-generated description is available on the file's Document node.");
             }
 
             await using var textStream = await collection.GetContentAsync(filePath, ct).ConfigureAwait(false);

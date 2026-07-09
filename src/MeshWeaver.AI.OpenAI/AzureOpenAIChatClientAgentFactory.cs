@@ -58,6 +58,12 @@ public class AzureOpenAIChatClientAgentFactory(
         if (string.IsNullOrEmpty(modelName))
             throw new InvalidOperationException("No model configured for Azure OpenAI");
 
+        return CreateChatClientForModel(modelName);
+    }
+
+    /// <inheritdoc />
+    protected override IChatClient CreateChatClientForModel(string modelName)
+    {
         // Resolver follows ModelDefinition.ProviderRef → ModelProvider node.
         // Falls back to IOptions when no provider node has been configured.
         var resolver = Hub.ServiceProvider.GetRequiredService<ChatClientCredentialResolver>();
@@ -75,8 +81,8 @@ public class AzureOpenAIChatClientAgentFactory(
                 $"ApiKey is missing for model '{modelName}'. Configure a ModelProvider node (Model/AzureOpenAI) or set AzureOpenAI:ApiKey in config.");
 
         logger.LogInformation(
-            "[AzureOpenAI] Creating chat client agent={AgentName} model={ModelName} endpoint={Endpoint} source={Source} apiKeyFp={ApiKeyFingerprint}",
-            agentConfig.Id, modelName, endpoint, source, Fingerprint(apiKey));
+            "[AzureOpenAI] Creating chat client model={ModelName} endpoint={Endpoint} source={Source} apiKeyFp={ApiKeyFingerprint}",
+            modelName, endpoint, source, Fingerprint(apiKey));
 
         // Create Azure OpenAI client and get chat client
         var azureClient = new AzureOpenAIClient(
