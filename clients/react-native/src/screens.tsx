@@ -3,7 +3,7 @@
 // mesh): Voice (speech), Connect (remote instances), Profile, Settings.
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { View, Text, TextInput, Pressable, ScrollView, StyleSheet } from "react-native";
-import { loadInstances, saveInstance, removeInstance, setCurrentInstance, currentInstance, defaultPortalUrl, type MeshInstance } from "./connection";
+import { loadInstances, saveInstance, removeInstance, setCurrentInstance, currentInstance, defaultPortalUrl, instanceIdentity, type MeshInstance } from "./connection";
 import { useStyles, useTheme, type Palette } from "./theme";
 
 const useSheet = () => useStyles(makeStyles);
@@ -142,19 +142,27 @@ function ConnectScreen({ onConnected }: { onConnected: () => void }): ReactNode 
 
   return (
     <ScreenScroll title="Connect to a mesh" subtitle="Point the app at any MeshWeaver portal by URL + API token — the same idea as the MAUI app's instance manager. Local is the mesh that served this app.">
-      {instances.map((i) => (
-        <View key={i.name} style={s.instRow}>
-          <Pressable onPress={() => select(i.name)} style={[s.inst, current === i.name && s.instActive]}>
-            <Text style={[s.instName, current === i.name && s.instNameActive]}>{i.name}{current === i.name ? "  ✓" : ""}</Text>
-            <Text style={s.instUrl}>{i.local ? "same origin (anonymous)" : i.url}</Text>
-          </Pressable>
-          {!i.local && (
-            <Pressable onPress={() => { removeInstance(i.name); refresh(); onConnected(); }} style={s.instDel}>
-              <Text style={s.instDelText}>Remove</Text>
+      {instances.map((i) => {
+        const id = instanceIdentity(i);
+        const loud = id.tone === "prod" || id.tone === "client";
+        return (
+          <View key={i.name} style={s.instRow}>
+            <Pressable onPress={() => select(i.name)} style={[s.inst, { borderLeftColor: id.color, borderLeftWidth: 4 }, current === i.name && s.instActive]}>
+              <View style={s.instHead}>
+                <Text style={s.instIcon}>{id.icon}</Text>
+                <Text style={[s.instName, { color: id.color }, loud && s.instNameLoud, current === i.name && s.instNameActive]}>{i.name}{current === i.name ? "  ✓" : ""}</Text>
+                <Text style={[s.instBadge, { color: id.color, borderColor: id.color }]}>{id.kind}</Text>
+              </View>
+              <Text style={s.instUrl}>{i.local ? "same origin (anonymous)" : i.url}{i.token ? "  ·  🔑 token" : "  ·  anonymous"}</Text>
             </Pressable>
-          )}
-        </View>
-      ))}
+            {!i.local && (
+              <Pressable onPress={() => { removeInstance(i.name); refresh(); onConnected(); }} style={s.instDel}>
+                <Text style={s.instDelText}>Remove</Text>
+              </Pressable>
+            )}
+          </View>
+        );
+      })}
       <Text style={[s.sectionLabel, { marginTop: 18 }]}>Add a portal</Text>
       <Field label="Name" value={name} onChange={setName} placeholder="e.g. Memex" />
       <Field label="URL" value={url} onChange={setUrl} placeholder="https://memex.meshweaver.cloud" />
@@ -226,10 +234,14 @@ const makeStyles = (p: Palette) => StyleSheet.create({
   transcript: { fontSize: 16, color: p.text, lineHeight: 24, minHeight: 60, backgroundColor: p.sidebarBg, borderRadius: 8, padding: 14, borderWidth: 1, borderColor: p.border },
   instRow: { flexDirection: "row", alignItems: "stretch", gap: 8, marginBottom: 8 },
   inst: { flex: 1, padding: 12, borderRadius: 8, borderWidth: 1, borderColor: p.border, backgroundColor: p.surface },
-  instActive: { borderColor: p.accent, backgroundColor: p.navActiveBg },
+  instActive: { backgroundColor: p.navActiveBg },
+  instHead: { flexDirection: "row", alignItems: "center", gap: 8 },
+  instIcon: { fontSize: 16 },
   instName: { fontSize: 14, fontWeight: "600", color: p.text },
-  instNameActive: { color: p.navActiveText },
-  instUrl: { fontSize: 12, color: p.textMuted, marginTop: 2 },
+  instNameLoud: { fontWeight: "800", textTransform: "uppercase", letterSpacing: 0.6, fontSize: 13 },
+  instNameActive: {},
+  instBadge: { fontSize: 10, fontWeight: "700", letterSpacing: 0.4, textTransform: "uppercase", borderWidth: 1, borderRadius: 10, paddingHorizontal: 7, paddingVertical: 1, marginLeft: "auto" },
+  instUrl: { fontSize: 12, color: p.textMuted, marginTop: 4 },
   instDel: { justifyContent: "center", paddingHorizontal: 12, borderRadius: 8, borderWidth: 1, borderColor: p.border },
   instDelText: { color: "#e06c6c", fontSize: 12 },
   fieldLabel: { fontSize: 12, color: p.textSubtle, marginBottom: 4 },

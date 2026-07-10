@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleName</key>
+	<string>MeshWeaver</string>
+	<key>CFBundleDisplayName</key>
+	<string>MeshWeaver</string>
+	<key>CFBundleIdentifier</key>
+	<string>cloud.meshweaver.desktop</string>
+	<key>CFBundleVersion</key>
+	<string>1.0.0</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.0.0</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleExecutable</key>
+	<string>MeshWeaver</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>12.0</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSPrincipalClass</key>
+	<string>NSApplication</string>
+	<!-- The composer's dictation records the mic via getUserMedia in the WebView; macOS requires this
+	     usage string or the app is denied mic access (and crashes on the capture attempt). -->
+	<key>NSMicrophoneUsageDescription</key>
+	<string>MeshWeaver uses the microphone to dictate chat messages (speech-to-text).</string>
+	<!-- Talks to the local mesh over plain http on loopback (memex.localhost / 127.0.0.1). -->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
+</dict>
+</plist>

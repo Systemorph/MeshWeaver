@@ -19,7 +19,7 @@ import { buildMeshOps } from "./src/liveOps";
 import { NavContext, CurrentAddressContext, type NavTarget } from "./src/nav";
 import { Shell, HOME } from "./src/Shell";
 import { ensureWebStyles } from "./src/webStyles";
-import { currentInstance } from "./src/connection";
+import { currentInstance, seedDefaultInstances } from "./src/connection";
 import { type ClientDestination } from "./src/screens";
 import { ThemeProvider, useTheme } from "./src/theme";
 import { ChatComposer } from "./src/chat";
@@ -64,6 +64,7 @@ LogBox.ignoreLogs([/Support for defaultProps will be removed/]);
 
 export default function App() {
   ensureWebStyles();
+  seedDefaultInstances(); // populate the switcher with the known environments on first run (idempotent)
   return (
     <ThemeProvider>
       <AppInner />
