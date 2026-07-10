@@ -2157,8 +2157,32 @@ public static class MeshExtensions
         var logger = hub.ServiceProvider.GetRequiredService<ILoggerFactory>().CreateLogger("MeshWeaver.Mesh.Services.IMeshCatalog");
         var copyRequest = request.Message;
         var meshService = hub.ServiceProvider.GetRequiredService<MeshWeaver.Mesh.Services.IMeshService>();
+        var accessService = hub.ServiceProvider.GetService<AccessService>();
         var sourcePath = copyRequest.SourcePath;
         var targetPath = copyRequest.TargetPath;
+
+        // 🚨 Capture the caller's identity at handler entry — it is live on the delivery here
+        // (MessageHub restored it from delivery.AccessContext before this body ran). The per-node
+        // CreateNode calls below are subscribed from SelectMany continuations on the workspace
+        // emission scheduler, where the AsyncLocal AccessContext is WIPED. Without re-establishing
+        // the caller's identity at each create's post site, MeshService.CaptureContext reads null,
+        // the CreateNodeRequest posts with no AccessContext, and the PostPipeline fails closed —
+        // the cross-partition copy/move bug (only the root landed; recursive children errored with
+        // "AccessContext must never be null … message=CreateNodeRequest"). Mirrors the explicit
+        // WithAccessContext stamping FanOutDeleteSubtree already does for recursive deletes.
+        var callerAccessContext = request.AccessContext
+            ?? accessService?.Context ?? accessService?.CircuitContext;
+
+        // Wraps a per-node CreateNode so its eager AccessContext capture (MeshService.CaptureContext)
+        // sees the caller's identity even though this runs on a scheduler thread. Observable.Using
+        // opens the SwitchAccessContext scope on Subscribe — exactly when the cold CreateNode's Defer
+        // reads the AsyncLocal and posts — and disposes it as the create completes.
+        IObservable<MeshNode> CreateUnderCaller(MeshNode node) =>
+            callerAccessContext is null || accessService is null
+                ? meshService.CreateNode(node)
+                : Observable.Using(
+                    () => accessService.SwitchAccessContext(callerAccessContext),
+                    _ => meshService.CreateNode(node));
 
         logger.LogDebug("[CopyNode] start source={Source} target={Target} (descendants={Desc} satellites={Sat})",
             sourcePath, targetPath, copyRequest.IncludeDescendants, copyRequest.IncludeSatellites);
@@ -2204,15 +2228,17 @@ public static class MeshExtensions
                 var satCount = others.Count - descCount;
 
                 // Create root, then create all children in parallel via Merge — Move semantics
-                // require all inserts to complete before the source is deleted.
-                return meshService.CreateNode(RetargetNode(sourceNode, sourcePath, targetPath))
+                // require all inserts to complete before the source is deleted. Every create runs
+                // under the caller's identity (CreateUnderCaller) so the routed per-descendant
+                // CreateNodeRequest carries a valid AccessContext across the scheduler hop.
+                return CreateUnderCaller(RetargetNode(sourceNode, sourcePath, targetPath))
                     .SelectMany(rootCreated =>
                     {
                         if (others.Count == 0)
                             return Observable.Return<(MeshNode Root, int Desc, int Sat)>((rootCreated, descCount, satCount));
                         return others.ToObservable()
                             .Select(n => RetargetNode(n, sourcePath, targetPath))
-                            .SelectMany(retargeted => meshService.CreateNode(retargeted))
+                            .SelectMany(retargeted => CreateUnderCaller(retargeted))
                             .ToList()
                             .Select(_ => ((MeshNode Root, int Desc, int Sat))(rootCreated, descCount, satCount));
                     });
