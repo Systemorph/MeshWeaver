@@ -6,6 +6,7 @@ using System.Text.Json;
 using MeshWeaver.AI;
 using MeshWeaver.AI.Plugins;
 using MeshWeaver.Data.Completion;
+using MeshWeaver.GitSync;
 using MeshWeaver.InstanceSync;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -18,7 +19,7 @@ using Microsoft.Extensions.Options;
 using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
 
-namespace MeshWeaver.Blazor.AI;
+namespace MeshWeaver.Mcp;
 
 /// <summary>
 /// MCP wrapper exposing mesh operations as MCP tools.
@@ -413,6 +414,118 @@ Recommended: 'icon' as an inline SVG starting with <svg, using currentColor. 'co
             },
         };
         return ops.Create(JsonSerializer.Serialize(node, rootHub.JsonSerializerOptions)).FirstAsync().ToTask();
+    }
+
+    /// <summary>
+    /// Triggers a Space's GitHub sync headlessly — the same one-click Commit / Update / Check the
+    /// browser's <c>GitHubAction</c> layout area runs, reachable now from MCP. Each op runs as a mesh
+    /// <b>Activity</b> (progress / cancel / persisted log) via <see cref="GitHubActivityExtensions"/>;
+    /// the tool FIRES the activity under the caller's identity and returns its handle IMMEDIATELY —
+    /// it never blocks the MCP handler on the long-running GitHub I/O. The caller observes progress
+    /// reactively with <c>get @{activityPath}</c> (its live <c>ActivityLog</c> carries the commit sha
+    /// + files-written line and the terminal Status).
+    /// </summary>
+    // NOT Idempotent: 'commit' mints a new commit on each call. OpenWorld: it pushes to / reads from
+    // GitHub, an external service (same classification as the instance Sync tool).
+    [McpServerTool(Title = "Sync a Space to GitHub", Destructive = false, Idempotent = false, OpenWorld = true)]
+    [Description(@"Triggers a Space's GitHub sync headlessly — the same 'Sync now' / 'Update to latest' / 'Check branch' the browser's GitHub action runs, now reachable from MCP.
+
+Operations (`op`):
+  • commit (default) — mirror the Space's current content into its configured GitHub repo/subdirectory as ONE commit on the configured branch HEAD (the repo is created if it doesn't exist).
+  • update           — pull the branch HEAD from GitHub and import the deltas back into the Space.
+  • check            — ask GitHub (live) for the branch HEAD and whether the Space is up to date.
+
+Runs under YOUR identity (needs Editor/Update on the Space for commit) and requires the Space's GitHub sync config (`{space}/_GitSync`) to already exist — configure it once in the Space's GitHub settings tab. Each op runs as an Activity: this returns the activity path immediately (it does NOT wait for the push to finish). Observe progress + result with `get` on that path — the activity log carries the commit sha and files written, and its Status goes Succeeded/Failed. `sourceId` selects a specific sync source (blank = the primary).")]
+    public Task<string> GitHubSync(
+        [Description("The Space path/id to sync (e.g. 'ACME'). GitHub sync acts on the containing top-level Space.")] string space,
+        [Description("Operation: 'commit' (default, Space → GitHub), 'update' (GitHub → Space), or 'check' (compare, read-only).")] string op = "commit",
+        [Description("The sync source id to act on (blank = the Space's primary GitHub source).")] string? sourceId = null)
+    {
+        space = space?.Trim().Trim('/') ?? "";
+        if (space.Length == 0)
+            return Task.FromResult("Error: 'space' is required — the top-level Space to sync to GitHub.");
+        // GitHub sync acts on the containing Space (the top path segment), mirroring GitHubActionArea.
+        var spacePath = space.Split('/', 2)[0];
+
+        var operation = op?.Trim().ToLowerInvariant();
+        if (operation is not ("commit" or "update" or "check"))
+            return Task.FromResult($"Error: 'op' must be 'commit', 'update', or 'check'; got '{op}'.");
+
+        // The GitSync feature must be installed on this host (services registered via AddGitHubSyncServices).
+        if (rootHub.ServiceProvider.GetService<MeshWeaver.GitSync.GitHubSyncService>() is null)
+            return Task.FromResult("Error: GitHub sync is not enabled on this instance (the GitSync feature is not installed).");
+
+        // Resolve the caller's effective identity the way every write primitive does —
+        // `Context ?? CircuitContext` (request context, set by UserContextMiddleware on the portal
+        // hub for this MCP request, falling back to the session context). Reading the FULL
+        // AccessContext (not just the id) lets us re-establish it at the .Subscribe hop below.
+        var accessService = rootHub.ServiceProvider.GetService<AccessService>();
+        var user = accessService?.Context ?? accessService?.CircuitContext;
+        var userId = user?.ObjectId ?? "";
+        if (accessService is null || string.IsNullOrEmpty(userId))
+            return Task.FromResult("Error: sign-in required — could not resolve your identity for the GitHub operation.");
+
+        var normalizedSource = string.IsNullOrWhiteSpace(sourceId) ? null : sourceId;
+
+        // Fire the op as an activity and return its HANDLE — not its completion. The activity runs a
+        // long GitHub round-trip on the IoPool; the MCP handler must NOT block on that. onActivityCreated
+        // fires with the activity path the moment the Activity NODE is created (a fast, bounded step,
+        // BEFORE the GitHub I/O) — so we bridge that callback to the returned Task (the same MCP-boundary
+        // pattern as StartThread) and complete as soon as the handle exists. The activity keeps running
+        // via the retained subscription after this Task completes.
+        // 🚨 AccessContext is an AsyncLocal wiped across the .Subscribe hop: re-establish the caller's
+        // identity AT the trigger so CreateNode stamps them as the activity owner (ActivityRunner then
+        // re-stamps that owner on every subsequent cross-hub write).
+        var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        cts.Token.Register(() => tcs.TrySetResult(JsonSerializer.Serialize(new
+        {
+            status = "Started",
+            op = operation,
+            space = spacePath,
+            activityPath = (string?)null,
+            hint = "The GitHub sync was started as an activity, but its handle did not confirm within 30s. " +
+                   $"Find it under the Space's activity feed: search 'nodeType:ActivityLog namespace:{spacePath}/_Activity'.",
+        })));
+
+        void OnCreated(string activityPath) => tcs.TrySetResult(JsonSerializer.Serialize(new
+        {
+            status = "Started",
+            op = operation,
+            space = spacePath,
+            activityPath,
+            hint = $"The GitHub {operation} runs as an activity. Observe it with: get @{activityPath} — its " +
+                   "content.status goes Succeeded/Failed and the log carries the commit sha + files written.",
+        }));
+
+        // The subscription must live until the ACTIVITY completes (long after the handle returns), so it
+        // is rooted for the op's lifetime and self-disposes on the observable's terminal — never on the
+        // handle Task. Disposing it when the handle returns would tear down the in-flight GitHub op.
+        var opRun = new System.Reactive.Disposables.SingleAssignmentDisposable();
+        using (accessService.SwitchAccessContext(user))
+        {
+            IObservable<string> action = operation switch
+            {
+                "commit" => rootHub.CommitToGitHub(spacePath, userId, OnCreated, normalizedSource),
+                "update" => rootHub.UpdateToLatestFromGitHub(spacePath, userId, OnCreated, normalizedSource),
+                _ => rootHub.CheckBranchStateOnGitHub(spacePath, userId, OnCreated, normalizedSource),
+            };
+            opRun.Disposable = action
+                .Finally(() => opRun.Dispose())
+                .Subscribe(
+                    _ => { },
+                    ex =>
+                    {
+                        logger.LogWarning(ex, "MCP github_sync {Op} failed for {Space}", operation, spacePath);
+                        // If the op fails BEFORE the activity node was created, surface it in the handle
+                        // (otherwise the handle already returned and the failure lands on the activity's
+                        // terminal Status, observed via get @{activityPath}).
+                        tcs.TrySetResult($"Error: GitHub {operation} failed to start for {spacePath}: {ex.Message}");
+                    });
+        }
+
+        // Only the handle-timeout cts is disposed when the handle Task completes — the activity keeps running.
+        return tcs.Task.ContinueWith(t => { cts.Dispose(); return t.Result; }, TaskScheduler.Default);
     }
 
     /// <summary>

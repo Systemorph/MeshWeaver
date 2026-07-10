@@ -2,7 +2,7 @@ using System.ComponentModel;
 using MeshWeaver.AI;
 using ModelContextProtocol.Server;
 
-namespace MeshWeaver.Blazor.AI;
+namespace MeshWeaver.Mcp;
 
 /// <summary>
 /// MCP resources: reference documentation an MCP client reads once instead of
