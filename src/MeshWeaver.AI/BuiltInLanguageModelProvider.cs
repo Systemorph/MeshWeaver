@@ -147,8 +147,10 @@ public class BuiltInLanguageModelProvider : IStaticNodeProvider
                 Name = source.ProviderName,
                 Category = "Providers",
                 // Brand logo when the provider name resolves to a known maker; the
-                // generic key otherwise. See ModelProviderIcons.
-                Icon = ModelProviderIcons.ForProvider(source.ProviderName) ?? "Key",
+                // generic key SVG otherwise. Fall back to the self-contained SVG URL
+                // (not the legacy "Key" Fluent name, which MeshNodeImageHelper filters
+                // out) so node.Icon is always directly renderable. See ModelProviderIcons.
+                Icon = ModelProviderIcons.ForProvider(source.ProviderName) ?? "/static/NodeTypeIcons/key.svg",
                 // create-if-absent: importer seeds it once, then admin owns it.
                 SyncBehavior = SyncBehavior.ExcludeThisAndChildren,
                 Content = providerConfig
@@ -197,8 +199,10 @@ public class BuiltInLanguageModelProvider : IStaticNodeProvider
                     Name = modelId,
                     Category = "Models",
                     // Brand logo inferred from the model id (then provider) so a model reads
-                    // as its maker; the generic sparkle when unknown. See ModelProviderIcons.
-                    Icon = ModelProviderIcons.ForModel(source.ProviderName, modelId) ?? "Sparkle",
+                    // as its maker; the generic sparkle SVG when unknown. Fall back to the
+                    // self-contained SVG URL (not the legacy "Sparkle" Fluent name, which
+                    // MeshNodeImageHelper filters out). See ModelProviderIcons.
+                    Icon = ModelProviderIcons.ForModel(source.ProviderName, modelId) ?? "/static/NodeTypeIcons/sparkle.svg",
                     Content = def
                 });
             }
