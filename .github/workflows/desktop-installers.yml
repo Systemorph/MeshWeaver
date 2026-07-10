@@ -1,0 +1,104 @@
+# Build the RN-based local-first desktop apps and publish them to memex for DIRECT DOWNLOAD.
+#
+# Builds the WKWebView (macOS) and WebView2 (Windows) shells that bundle the self-contained LocalMesh
+# (clients/desktop/{macos,windows}), packages them as a .dmg and .msi, and uploads both to
+# memex.meshweaver.cloud via POST /api/mesh/upload (the multipart content-upload endpoint), served
+# for download under /static/…
+#
+# Distinct from memex-mac-distribute.yml / memex-ios-testflight.yml — those build the MAUI client
+# (Memex.Client) for the Apple App Store. This is the direct-download route for the newer RN apps.
+#
+# PREREQUISITES
+#   * clients/desktop/macos  (PR #383) and clients/desktop/windows (PR #393) merged to main.
+#   * Repo secret MEMEX_API_TOKEN — a memex API token with WRITE access to the Downloads collection.
+#   * A "Downloads" content collection mapped on the memex node named in UPLOAD_PATH below.
+#   * (optional, for warning-free installers) macOS Developer-ID + notarization secrets; a Windows
+#     Authenticode cert. Without them the artifacts are ad-hoc/unsigned (Gatekeeper/SmartScreen warn).
+#
+# This is the FIRST run of the WiX/Windows-shell build off a hosted runner — validate + iterate on the
+# first dispatch (net10.0-windows + WiX can't be built on the Linux/macOS dev machines).
+
+name: Desktop installers (DMG + MSI → memex)
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version (e.g. 1.0.0)"
+        required: true
+        default: "1.0.0"
+
+env:
+  DOTNET_VERSION: '10.0.x'
+  NODE_VERSION: '20'
+  MEMEX_BASE: https://memex.meshweaver.cloud
+  UPLOAD_PATH: MeshWeaver/Downloads   # {node}/{collection} — the /api/mesh/upload target
+
+jobs:
+  dmg:
+    name: macOS .dmg
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Build self-contained app + DMG
+        run: |
+          set -euo pipefail
+          bash clients/desktop/macos/build-macos-app.sh --self-contained --out "$RUNNER_TEMP/mac"
+          STAGE="$RUNNER_TEMP/stage"; mkdir -p "$STAGE"
+          cp -R "$RUNNER_TEMP/mac/MeshWeaver.app" "$STAGE/"
+          ln -s /Applications "$STAGE/Applications"
+          hdiutil create -volname MeshWeaver -srcfolder "$STAGE" -ov -format UDZO "$RUNNER_TEMP/MeshWeaver.dmg"
+      - name: Deploy DMG → memex
+        env:
+          MEMEX_API_TOKEN: ${{ secrets.MEMEX_API_TOKEN }}
+        run: |
+          curl -fsS -X POST "$MEMEX_BASE/api/mesh/upload" \
+            -H "Authorization: Bearer $MEMEX_API_TOKEN" \
+            -F "path=$UPLOAD_PATH/MeshWeaver.dmg" \
+            -F "file=@$RUNNER_TEMP/MeshWeaver.dmg"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MeshWeaver-dmg
+          path: ${{ runner.temp }}/MeshWeaver.dmg
+
+  msi:
+    name: Windows .msi
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Build shell + mesh (win-x64, self-contained)
+        shell: pwsh
+        run: clients/desktop/windows/build.ps1 -Out "$env:RUNNER_TEMP/win"
+      - name: Build MSI (WiX)
+        shell: pwsh
+        run: |
+          dotnet tool install --global wix
+          wix build clients/desktop/windows/Package.wxs `
+            -d SourceDir="$env:RUNNER_TEMP/win/MeshWeaver" `
+            -d Version="${{ github.event.inputs.version }}" `
+            -o "$env:RUNNER_TEMP/MeshWeaver.msi"
+      - name: Deploy MSI → memex
+        shell: pwsh
+        env:
+          MEMEX_API_TOKEN: ${{ secrets.MEMEX_API_TOKEN }}
+        run: |
+          curl.exe -fsS -X POST "$env:MEMEX_BASE/api/mesh/upload" `
+            -H "Authorization: Bearer $env:MEMEX_API_TOKEN" `
+            -F "path=$env:UPLOAD_PATH/MeshWeaver.msi" `
+            -F "file=@$env:RUNNER_TEMP/MeshWeaver.msi"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MeshWeaver-msi
+          path: ${{ runner.temp }}/MeshWeaver.msi
