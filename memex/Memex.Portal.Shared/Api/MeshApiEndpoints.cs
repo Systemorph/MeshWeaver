@@ -2,7 +2,7 @@ using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using MeshWeaver.AI;
-using MeshWeaver.Blazor.AI;
+using MeshWeaver.Mcp;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Memex.Portal.Shared.Authentication;

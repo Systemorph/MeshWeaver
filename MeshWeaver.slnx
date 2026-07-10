@@ -51,7 +51,6 @@
     <Project Path="src/MeshWeaver.AI/MeshWeaver.AI.csproj" />
     <Project Path="src/MeshWeaver.AI.ClaudeCode/MeshWeaver.AI.ClaudeCode.csproj" />
     <Project Path="src/MeshWeaver.AI.Copilot/MeshWeaver.AI.Copilot.csproj" />
-    <Project Path="src/MeshWeaver.Blazor.AI/MeshWeaver.Blazor.AI.csproj" />
     <Project Path="src/MeshWeaver.Application.Styles/MeshWeaver.Application.Styles.csproj" />
     <Project Path="src/MeshWeaver.Blazor.Radzen/MeshWeaver.Blazor.Radzen.csproj" />
     <Project Path="src/MeshWeaver.Blazor.GoogleMaps/MeshWeaver.Blazor.GoogleMaps.csproj" />
@@ -105,6 +104,7 @@
     <Project Path="src/MeshWeaver.Markdown.Collaboration/MeshWeaver.Markdown.Collaboration.csproj" />
     <Project Path="src/MeshWeaver.Markdown.Export/MeshWeaver.Markdown.Export.csproj" />
     <Project Path="src/MeshWeaver.Maui.Abstractions/MeshWeaver.Maui.Abstractions.csproj" />
+    <Project Path="src/MeshWeaver.Mcp/MeshWeaver.Mcp.csproj" />
     <Project Path="src/MeshWeaver.Mesh.Contract/MeshWeaver.Mesh.Contract.csproj" />
     <Project Path="src/MeshWeaver.Messaging.Contract/MeshWeaver.Messaging.Contract.csproj" />
     <Project Path="src/MeshWeaver.Messaging.Hub/MeshWeaver.Messaging.Hub.csproj" />

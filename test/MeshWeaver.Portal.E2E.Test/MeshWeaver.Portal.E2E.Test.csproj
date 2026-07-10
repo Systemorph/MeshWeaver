@@ -8,6 +8,10 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Playwright" />
+    <!-- MCP client SDK — the github_sync E2E drives the portal's /mcp endpoint exactly as a real
+         MCP client (Claude Code / Copilot) would, over the streamable-HTTP transport with a Bearer
+         ApiToken. Client library only; the project stays framework-project-ref-free. -->
+    <PackageReference Include="ModelContextProtocol" />
   </ItemGroup>
 
   <ItemGroup>

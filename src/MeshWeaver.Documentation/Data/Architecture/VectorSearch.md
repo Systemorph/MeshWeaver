@@ -85,7 +85,7 @@ The same call sites every consumer already uses continue to work without modific
 // Search bar in the portal
 meshService.Query<MeshNode>(new MeshQueryRequest { Query = "laptop", Limit = 20 });
 
-// MCP `Search` tool (Blazor.AI/McpMeshPlugin.cs)
+// MCP `Search` tool (Mcp/McpMeshPlugin.cs)
 ops.Search("laptop", basePath: "@graph");
 
 // Agent `Search` tool (AI/MeshPlugin.cs)
