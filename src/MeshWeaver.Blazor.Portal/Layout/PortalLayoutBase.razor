@@ -239,11 +239,13 @@
        (/{cumulative}); the current node is plain bold text; a trailing "· {area}" shows the
        active area when it isn't the node's default content page. Desktop only, and hidden at
        the mesh root (no segments) so it never adds an empty chrome row. *@
-    @if (ViewportInformation.IsDesktop && Breadcrumbs.Count > 0)
+    @* Bind the trail once via the property pattern (evaluated a single time, and short-circuited
+       off-desktop) so Count and the loop reuse the same list. *@
+    @if (ViewportInformation.IsDesktop && Breadcrumbs is { Count: > 0 } crumbs)
     {
         <nav class="breadcrumb-bar" aria-label="Breadcrumb">
             <a class="crumb crumb-home" href="/" title="Home">⌂ Home</a>
-            @foreach (var crumb in Breadcrumbs)
+            @foreach (var crumb in crumbs)
             {
                 <span class="crumb-sep" aria-hidden="true">›</span>
                 @if (crumb.IsLast)

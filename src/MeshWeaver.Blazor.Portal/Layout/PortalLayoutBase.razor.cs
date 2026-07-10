@@ -266,7 +266,10 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     {
         get
         {
-            var segments = (_currentNavContext?.Namespace ?? "")
+            // Address.Path is the host-independent node path — use it rather than Namespace
+            // (== Address.ToString()), which appends "~{Host}" for hosted addresses and would
+            // split into a bogus trailing crumb.
+            var segments = (_currentNavContext?.Address.Path ?? "")
                 .Split('/', StringSplitOptions.RemoveEmptyEntries);
             if (segments.Length == 0)
                 return Array.Empty<Crumb>();
@@ -275,7 +278,10 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
             var cumulative = "";
             for (var i = 0; i < segments.Length; i++)
             {
-                cumulative = i == 0 ? segments[i] : $"{cumulative}/{segments[i]}";
+                // Encode each segment for the href (escaping reserved chars like spaces/#/%),
+                // preserving the "/" separators; the Label keeps the raw segment for display.
+                var encoded = Uri.EscapeDataString(segments[i]);
+                cumulative = i == 0 ? encoded : $"{cumulative}/{encoded}";
                 crumbs[i] = new Crumb(segments[i], $"/{cumulative}", i == segments.Length - 1);
             }
             return crumbs;
