@@ -22,7 +22,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent, ReactNode } from "react";
 import { Button, Dropdown, Option, Spinner, Text, Textarea, Tooltip } from "@fluentui/react-components";
-import { Send20Filled, Stop20Regular } from "@fluentui/react-icons";
+import { Mic20Filled, Mic20Regular, Send20Filled, Stop20Regular } from "@fluentui/react-icons";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { Json, UiControl } from "../area/types.js";
@@ -330,6 +330,99 @@ function SelectionChip({ label, value }: { label: string; value: string }): Reac
   );
 }
 
+/**
+ * Dictate button — the web twin of the RN ChatComposer mic. Records with the browser's MediaRecorder
+ * (click to start, click to stop), POSTs the audio through `ops.transcribe` (→ POST /api/speech/transcribe
+ * → Whisper), and appends the transcript to the composer draft. Rendered only when the host wires
+ * `ops.transcribe`; a mic-permission or transcription failure surfaces inline (never a silent no-op).
+ */
+function MicButton({
+  transcribe,
+  disabled,
+  onText,
+}: {
+  transcribe: (audio: Blob, language?: string) => Promise<{ text: string; language?: string }>;
+  disabled: boolean;
+  onText: (text: string) => void;
+}): ReactNode {
+  const [state, setState] = useState<"idle" | "recording" | "transcribing">("idle");
+  const [error, setError] = useState<string | null>(null);
+  const recRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<BlobPart[]>([]);
+
+  useEffect(
+    () => () => {
+      try {
+        recRef.current?.stop();
+      } catch {
+        /* already stopped */
+      }
+    },
+    [],
+  );
+
+  const start = async () => {
+    setError(null);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const rec = new MediaRecorder(stream);
+      chunksRef.current = [];
+      rec.ondataavailable = (e) => {
+        if (e.data.size > 0) chunksRef.current.push(e.data);
+      };
+      rec.onstop = () => {
+        stream.getTracks().forEach((t) => t.stop());
+        const blob = new Blob(chunksRef.current, { type: rec.mimeType || "audio/webm" });
+        setState("transcribing");
+        transcribe(blob)
+          .then(({ text }) => {
+            if (text && text.trim()) onText(text.trim());
+            setState("idle");
+          })
+          .catch((e) => {
+            setError(e instanceof Error ? e.message : String(e));
+            setState("idle");
+          });
+      };
+      rec.start();
+      recRef.current = rec;
+      setState("recording");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "microphone unavailable");
+      setState("idle");
+    }
+  };
+
+  const toggle = () => {
+    if (state === "recording") {
+      recRef.current?.stop();
+      recRef.current = null;
+    } else if (state === "idle") {
+      void start();
+    }
+  };
+
+  return (
+    <Tooltip content={error ?? (state === "recording" ? "Stop & transcribe" : "Dictate")} relationship="label">
+      <Button
+        appearance={state === "recording" ? "primary" : "subtle"}
+        aria-label={state === "recording" ? "Stop dictation" : "Dictate"}
+        disabled={disabled || state === "transcribing"}
+        icon={
+          state === "transcribing" ? (
+            <Spinner size="extra-tiny" />
+          ) : state === "recording" ? (
+            <Mic20Filled />
+          ) : (
+            <Mic20Regular />
+          )
+        }
+        onClick={toggle}
+      />
+    </Tooltip>
+  );
+}
+
 export function ThreadChatView({ control }: { control: UiControl }): ReactNode {
   const ops = useMeshOps();
   const vm = useResolve(control.threadViewModel) as Json;
@@ -619,6 +712,13 @@ export function ThreadChatView({ control }: { control: UiControl }): ReactNode {
             </Text>
           ) : null}
           <div style={{ flex: 1 }} />
+          {ops.transcribe ? (
+            <MicButton
+              transcribe={ops.transcribe}
+              disabled={isExecuting}
+              onText={(t) => setText((prev) => (prev.trim() ? `${prev.trim()} ${t}` : t))}
+            />
+          ) : null}
           <Tooltip content="Send" relationship="label">
             <Button appearance="primary" icon={<Send20Filled />} disabled={!canSend} onClick={send}>
               Send

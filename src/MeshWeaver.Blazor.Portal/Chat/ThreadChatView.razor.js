@@ -77,3 +77,44 @@ export function anchorChatPopup() {
         window.addEventListener('scroll', reposition, { passive: true, capture: true });
     }
 }
+
+// ── Dictation: record with MediaRecorder, hand the audio to C# as base64 ─────────────────────────
+// The composer's mic button calls startDictation() (getUserMedia + start), then stopDictation()
+// which resolves with { base64, contentType } after the recorder flushes. C# decodes the bytes and
+// runs them through the DI ISpeechTranscriber (→ POST /api/speech/transcribe → Whisper). Keeping the
+// recorder here (not in C#) is the only way to reach the browser mic; the transcription itself stays
+// server-side so the model is configured in ONE place.
+let _rec = null, _chunks = [], _stream = null;
+
+export async function startDictation() {
+    _stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    _rec = new MediaRecorder(_stream);
+    _chunks = [];
+    _rec.ondataavailable = (e) => { if (e.data && e.data.size > 0) _chunks.push(e.data); };
+    _rec.start();
+    return _rec.mimeType || 'audio/webm';
+}
+
+export function stopDictation() {
+    return new Promise((resolve, reject) => {
+        const rec = _rec;
+        if (!rec) { resolve(null); return; }
+        rec.onstop = async () => {
+            try {
+                if (_stream) _stream.getTracks().forEach((t) => t.stop());
+                const blob = new Blob(_chunks, { type: rec.mimeType || 'audio/webm' });
+                const bytes = new Uint8Array(await blob.arrayBuffer());
+                let bin = '';
+                const chunk = 0x8000; // chunked to avoid a fromCharCode arg-count blowup on long clips
+                for (let i = 0; i < bytes.length; i += chunk)
+                    bin += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+                resolve({ base64: btoa(bin), contentType: blob.type });
+            } catch (e) {
+                reject(e);
+            } finally {
+                _rec = null; _chunks = []; _stream = null;
+            }
+        };
+        rec.stop();
+    });
+}

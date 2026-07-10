@@ -104,9 +104,10 @@ export async function connectLive(baseUrl: string = window.location.origin): Pro
     startMarkdownKernel(connection, mesh, userId, cells, runDeleteNode);
   const runListContent = (path: string) => listContent(baseUrl, rawToken, path);
   const runUploadContent = (path: string, file: File) => uploadContent(baseUrl, rawToken, path, file);
+  const runTranscribe = (audio: Blob, language?: string) => transcribe(baseUrl, rawToken, audio, language);
   return {
     connection,
-    ops: adaptOps(mesh, runQuery, runAutocomplete, runRenderMarkdown, runStartKernel, runListContent, runUploadContent),
+    ops: adaptOps(mesh, runQuery, runAutocomplete, runRenderMarkdown, runStartKernel, runListContent, runUploadContent, runTranscribe),
     userId,
     getNode: (path: string) => mesh.get(path).then((n) => n.raw as MeshNodeRow).catch(() => null),
     queryNodes: runQuery,
@@ -144,6 +145,26 @@ async function renderMarkdown(
   if (text.startsWith("Error:")) throw new Error(text);
   const parsed = JSON.parse(text) as { html?: string; codeSubmissions?: MarkdownCellSubmission[] };
   return { html: parsed.html ?? "", codeSubmissions: parsed.codeSubmissions ?? [] };
+}
+
+/** Speech-to-text (`POST /api/speech/transcribe`) — multipart audio → {text, language}, Bearer-auth. */
+async function transcribe(
+  baseUrl: string,
+  token: string,
+  audio: Blob,
+  language?: string,
+): Promise<{ text: string; language?: string }> {
+  const form = new FormData();
+  form.append("file", audio, "audio.webm");
+  if (language) form.append("language", language);
+  const resp = await fetch(`${baseUrl}/api/speech/transcribe`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${token}` },
+    body: form,
+  });
+  const parsed = (await resp.json().catch(() => ({}))) as { text?: string; language?: string; error?: string };
+  if (!resp.ok || parsed.error) throw new Error(parsed.error ?? `transcribe failed (${resp.status})`);
+  return { text: parsed.text ?? "", language: parsed.language };
 }
 
 /**
@@ -328,6 +349,7 @@ function adaptOps(
   runStartKernel: (cells: MarkdownCellSubmission[]) => Promise<MarkdownKernelSession>,
   runListContent: (path: string) => Promise<ContentListing>,
   runUploadContent: (path: string, file: File) => Promise<void>,
+  runTranscribe: (audio: Blob, language?: string) => Promise<{ text: string; language?: string }>,
 ): MeshOps {
   return {
     watch: (path: string) => watchNode(mesh, path),
@@ -351,6 +373,8 @@ function adaptOps(
     // File browser: list a content-collection directory + upload (REST — content isn't a mesh node).
     listContent: runListContent,
     uploadContent: runUploadContent,
+    // Speech-to-text: the composer's mic records + POSTs here (→ /api/speech/transcribe → Whisper).
+    transcribe: runTranscribe,
   };
 }
 

@@ -15,6 +15,8 @@
     <ProjectReference Include="..\MeshWeaver.AI.Application\MeshWeaver.AI.Application.csproj" />
     <ProjectReference Include="..\MeshWeaver.Blazor\MeshWeaver.Blazor.csproj" />
     <ProjectReference Include="..\MeshWeaver.Graph\MeshWeaver.Graph.csproj" />
+    <!-- Centralized speech-to-text: the composer's mic dictates via the DI ISpeechTranscriber. -->
+    <ProjectReference Include="..\MeshWeaver.Speech\MeshWeaver.Speech.csproj" />
   </ItemGroup>
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
