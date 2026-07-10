@@ -15,11 +15,16 @@ using Microsoft.Extensions.Logging;
 namespace MeshWeaver.PluginCatalog;
 
 /// <summary>
-/// The catalog browse/install view for a <c>PluginCatalog</c> node: lists the installable packages
-/// found in the node's configured source git repo at its ref, shows each package's install status
-/// (comparing against the <c>Plugins</c> install registry), and offers an Install / Update button
-/// that runs the git-based install. Reactive end to end — after an install the registry stream
-/// re-emits and the affected card flips to "Installed" with no manual refresh.
+/// The catalog browse/install view: lists the installable packages a <see cref="IPackageSource"/>
+/// offers at a git ref, shows each package's install status (comparing against the <c>Plugins</c>
+/// install registry), and offers an Install / Update button that runs the install. Reactive end to
+/// end — after an install the registry stream re-emits and the affected card flips to "Installed"
+/// with no manual refresh.
+///
+/// <para>The rendering is source-agnostic (<see cref="RenderFromSource"/>): the <c>PluginCatalog</c>
+/// node Overview builds its source from the node's <see cref="PluginCatalogContent"/>, while the
+/// platform-admin <see cref="PluginCatalogSettingsTab"/> builds a <see cref="RegistryPackageSource"/>
+/// pointed at the configured registry — both render + install through the same helpers here.</para>
 /// </summary>
 public static class CatalogLayoutAreas
 {
@@ -47,8 +52,8 @@ public static class CatalogLayoutAreas
     public static IObservable<UiControl?> Overview(LayoutAreaHost host, RenderingContext ctx) => Catalog(host, ctx);
 
     /// <summary>
-    /// Renders the catalog: the configured source's packages (live) joined with the install
-    /// registry (live) into a list of package cards with Install / Update / Installed status.
+    /// Renders the catalog for a <c>PluginCatalog</c> node: builds the source from the node's
+    /// <see cref="PluginCatalogContent"/> and renders through <see cref="RenderFromSource"/>.
     /// </summary>
     /// <param name="host">The layout area host rendering the area.</param>
     /// <param name="_">The rendering context for the area.</param>
@@ -56,60 +61,50 @@ public static class CatalogLayoutAreas
     [Browsable(false)]
     public static IObservable<UiControl?> Catalog(LayoutAreaHost host, RenderingContext _)
     {
-        var installed = ObserveInstalled(host);
         return host.Workspace.GetMeshNodeStream()
             .Select(node => node.ContentAs<PluginCatalogContent>(host.Hub.JsonSerializerOptions))
-            .Select(cfg => ObserveAvailable(host, cfg).Select(available => (Cfg: cfg, Available: available)))
+            .Select(cfg => RenderFromSource(
+                host, BuildSource(host, cfg?.SourceRepoPath, cfg?.SourceSubdir),
+                cfg?.SourceRef ?? "HEAD", cfg?.Description,
+                cfg?.SourceRepoPath is { Length: > 0 } p ? $"{p} @ {cfg.SourceRef}" : null))
             .Switch()
-            .CombineLatest(installed, (a, inst) => (UiControl?)BuildCatalog(host, a.Cfg, a.Available, inst))
             .StartWith((UiControl?)Controls.Markdown("*Loading catalog…*"));
     }
 
-    // Live list of installable packages from the node's configured source (local git repo or a
-    // remote GitHub repo) at its ref.
-    private static IObservable<IReadOnlyList<PackageManifest>> ObserveAvailable(
-        LayoutAreaHost host, PluginCatalogContent? cfg)
+    /// <summary>
+    /// Renders the catalog from an arbitrary <paramref name="source"/>: the source's packages (live)
+    /// joined with the install registry (live) into package cards with Install / Update / Installed
+    /// status. Shared by the node Overview and the platform-admin settings tab.
+    /// </summary>
+    internal static IObservable<UiControl?> RenderFromSource(
+        LayoutAreaHost host, IPackageSource? source, string sourceRef, string? description, string? sourceLabel)
     {
-        var source = BuildSource(host, cfg);
+        var installed = ObserveInstalled(host);
+        return ObserveAvailable(host, source, sourceRef)
+            .CombineLatest(installed, (available, inst) =>
+                (UiControl?)BuildCatalog(host, source, sourceRef, description, sourceLabel, available, inst))
+            .StartWith((UiControl?)Controls.Markdown("*Loading catalog…*"));
+    }
+
+    // Live list of installable packages from the given source at its ref.
+    private static IObservable<IReadOnlyList<PackageManifest>> ObserveAvailable(
+        LayoutAreaHost host, IPackageSource? source, string sourceRef)
+    {
         if (source is null)
             return Observable.Return<IReadOnlyList<PackageManifest>>([]);
-        return source.ListPackages(cfg!.SourceRef)
+        return source.ListPackages(sourceRef)
             .Catch<IReadOnlyList<PackageManifest>, Exception>(ex =>
             {
-                Logger(host)?.LogWarning(ex,
-                    "Catalog: failed to list packages from {Src}@{Ref}", cfg.SourceRepoPath, cfg.SourceRef);
+                Logger(host)?.LogWarning(ex, "Catalog: failed to list packages @ {Ref}", sourceRef);
                 return Observable.Return<IReadOnlyList<PackageManifest>>([]);
             })
             .StartWith((IReadOnlyList<PackageManifest>)[]);
     }
 
-    // Selects the package source from the catalog config: a URL uses the GitHub-fetch source (reusing
-    // GitSync's client — anonymous for a public repo), a local path uses the git-CLI source. Both are
-    // git-based, no NuGet.
-    private static IPackageSource? BuildSource(LayoutAreaHost host, PluginCatalogContent? cfg)
-    {
-        if (cfg?.SourceRepoPath is not { Length: > 0 } src)
-            return null;
-        var subdir = cfg.SourceSubdir ?? "";
-        if (IsUrl(src))
-        {
-            var client = host.Hub.ServiceProvider.GetService<IGitHubRepoClient>();
-            if (client is null)
-            {
-                Logger(host)?.LogWarning(
-                    "Catalog source {Src} is a URL but no IGitHubRepoClient is registered.", src);
-                return null;
-            }
-            return new GitHubPackageSource(client.Fetch, src, token: "", subdir, Logger(host));
-        }
-        var git = new GitCli(host.Hub.ServiceProvider.GetRequiredService<IoPoolRegistry>());
-        return new GitPackageSource(git, src, subdir, Logger(host));
-    }
-
-    private static bool IsUrl(string s) =>
-        s.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
-        || s.StartsWith("https://", StringComparison.OrdinalIgnoreCase)
-        || s.StartsWith("git@", StringComparison.Ordinal);
+    // Selects the git-based package source for a repo path/subdir (delegates to the shared factory so
+    // the node view and the registry endpoints build sources identically). Null when unconfigured.
+    internal static IPackageSource? BuildSource(LayoutAreaHost host, string? sourceRepoPath, string? sourceSubdir) =>
+        PackageSources.FromRepo(host.Hub, sourceRepoPath, sourceSubdir, Logger(host));
 
     // Live map of installed packages (the Plugins registry children), as a list.
     private static IObservable<IReadOnlyList<MeshNode>> ObserveInstalled(LayoutAreaHost host)
@@ -138,7 +133,7 @@ public static class CatalogLayoutAreas
     }
 
     private static UiControl BuildCatalog(
-        LayoutAreaHost host, PluginCatalogContent? cfg,
+        LayoutAreaHost host, IPackageSource? source, string sourceRef, string? description, string? sourceLabel,
         IReadOnlyList<PackageManifest> available, IReadOnlyList<MeshNode> installed)
     {
         var installedById = installed
@@ -153,13 +148,13 @@ public static class CatalogLayoutAreas
 
         container = container.WithView(Controls.H1("Plugin Catalog").WithStyle("margin: 0 0 4px 0;"));
 
-        if (!string.IsNullOrWhiteSpace(cfg?.Description))
-            container = container.WithView(Controls.Markdown(cfg!.Description!).WithStyle("margin-bottom: 8px;"));
+        if (!string.IsNullOrWhiteSpace(description))
+            container = container.WithView(Controls.Markdown(description!).WithStyle("margin-bottom: 8px;"));
 
         container = container.WithView(Controls.Body(
-                cfg?.SourceRepoPath is { Length: > 0 } p
-                    ? $"Source: {p} @ {cfg.SourceRef} — {available.Count} package(s) available."
-                    : "No source configured. Set SourceRepoPath on this catalog node.")
+                source is null
+                    ? "No source configured."
+                    : $"Source: {sourceLabel ?? "registry"} — {available.Count} package(s) available.")
             .WithStyle("color: var(--neutral-foreground-hint); margin-bottom: 16px; display: block;"));
 
         if (available.Count == 0)
@@ -170,14 +165,14 @@ public static class CatalogLayoutAreas
         {
             n++;
             installedById.TryGetValue(pkg.Id, out var inst);
-            container = container.WithView(BuildCard(host, cfg, pkg, inst), $"pkg-{n}");
+            container = container.WithView(BuildCard(host, source, sourceRef, pkg, inst), $"pkg-{n}");
         }
 
         return container;
     }
 
     private static UiControl BuildCard(
-        LayoutAreaHost host, PluginCatalogContent? cfg, PackageManifest pkg, PackageManifest? installed)
+        LayoutAreaHost host, IPackageSource? source, string sourceRef, PackageManifest pkg, PackageManifest? installed)
     {
         var card = Controls.Stack
             .WithWidth("100%")
@@ -201,14 +196,14 @@ public static class CatalogLayoutAreas
             card = card.WithView(Controls.Body($"✓ Installed v{installed!.Version}")
                 .WithStyle("color: var(--success-foreground, #107c10); font-weight: 600;"));
         }
-        else
+        else if (source is not null)
         {
             var label = installed is null ? "Install" : $"Update to v{pkg.Version}";
             card = card.WithView(Controls.Button(label)
                 .WithAppearance(Appearance.Accent)
                 .WithClickAction(ctx =>
                 {
-                    InstallPackage(host, cfg, pkg);
+                    InstallPackage(host, source, sourceRef, pkg);
                     return Task.CompletedTask;
                 }));
         }
@@ -216,30 +211,24 @@ public static class CatalogLayoutAreas
         return card;
     }
 
-    // Fire the git-based install; the Plugins-registry stream re-emits on completion → card flips.
-    private static void InstallPackage(LayoutAreaHost host, PluginCatalogContent? cfg, PackageManifest pkg)
+    // Fire the install; the Plugins-registry stream re-emits on completion → card flips.
+    internal static void InstallPackage(LayoutAreaHost host, IPackageSource source, string sourceRef, PackageManifest pkg)
     {
         var logger = Logger(host);
-        var source = BuildSource(host, cfg);
-        if (source is null)
-        {
-            logger?.LogWarning("Install '{Id}' skipped: catalog has no usable source.", pkg.Id);
-            return;
-        }
 
         // Capture the caller's identity NOW — the click delivery stamped AccessService.Context. The
-        // fetch runs on the Process IIoPool (GitCli), so the install continuation lands on a pool
+        // fetch runs off-hub (GitCli / Http IIoPool), so the install continuation lands on a pool
         // thread where that AsyncLocal is wiped; re-establish it for the install's whole lifetime via
         // Observable.Using so the CreateOrUpdate writes run as the user and don't fail closed.
         var accessService = host.Hub.ServiceProvider.GetService<AccessService>();
         var user = accessService?.Context;
 
-        source.FetchPackageFiles(pkg, cfg!.SourceRef)
+        source.FetchPackageFiles(pkg, sourceRef)
             .SelectMany(files => accessService is null
-                ? PackageInstaller.Install(host.Hub, pkg, files, cfg.SourceRef, logger)
+                ? PackageInstaller.Install(host.Hub, pkg, files, sourceRef, logger)
                 : Observable.Using(
                     () => accessService.SwitchAccessContext(user),
-                    _ => PackageInstaller.Install(host.Hub, pkg, files, cfg.SourceRef, logger)))
+                    _ => PackageInstaller.Install(host.Hub, pkg, files, sourceRef, logger)))
             .Subscribe(
                 count => logger?.LogInformation("Installed {Id}: {Count} node(s).", pkg.Id, count),
                 ex => logger?.LogWarning(ex, "Install of {Id} failed.", pkg.Id));

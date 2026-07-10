@@ -54,20 +54,19 @@ credential, syncs the plugins repo into its mesh, and re-serves plugins over HTT
 installation pulls from the registry, never from git — the credential is **encapsulated in the
 registry**, exactly like npm / NuGet (the registry has source access; clients just speak HTTP).
 
-The surface is two verbs on the mesh REST API (`MeshOperations`, mirrored at `/api/mesh/*` next to
-`get` / `search` / `update`):
+The surface is two **public** endpoints on the registry (`PluginRegistryEndpoints`), backed by its
+configured git source (the plugins repo):
 
 | Verb | Returns |
 |---|---|
-| `POST /api/mesh/catalog` | `{count, plugins:[{name, typeCount, types:[path]}]}` — every partition that ships NodeTypes is an installable plugin |
-| `POST /api/mesh/catalog/download` `{plugin}` | `{name, nodeCount, nodes:[…]}` — the plugin's **definition**: Space + NodeType + `Source`/`Test` Code + docs |
+| `GET /api/plugins` | `{ packages:[PackageManifest…] }` — the curated modules (folders carrying a `package.json`) |
+| `POST /api/plugins/files` `{id}` | `{ files:[{relativePath, content}…] }` — one package's folder files |
 
-`download` ships the **capability**, not the data — `Space` / `NodeType` / `Code` / `Markdown`
-nodes, never data *instances* of those types nor runtime satellites (`/_Activity`, `/Release/`). It
-queries the `Source` / `Test` Code satellites explicitly (a plain subtree query misses them — they
-live in a separate schema, the same reason the compiler queries `namespace:…/Source scope:subtree`).
-A consumer installs by feeding the returned `nodes` straight to its own `POST /api/mesh/update` — no
-GitHub credential on the consumer at all. Full reference: [Plugin
+A consuming instance browses this from its **Plugin Catalog** admin tab (Settings ▸ Administration,
+platform admins only) and installs on click: the package's files are parsed into nodes and upserted
+locally — a **Code** package synthesizes its `NodeType` + `Source` Code and compiles live; a
+**Content** package imports its folder. The registry ships the **capability**, never data *instances*
+— and no GitHub credential lives on the consumer at all. Full reference: [Plugin
 Registry](/Doc/Architecture/PluginRegistry).
 
 ## Dynamic node types — a module that compiles itself
