@@ -56,6 +56,9 @@ public static class PackageInstaller
         if (manifest.Kind == PackageKind.Code)
             return InstallCode(hub, manifest, files, installedFromRef, logger, batchSize);
 
+        if (manifest.Kind == PackageKind.NodeRepo)
+            return InstallNodeRepo(hub, manifest, files, installedFromRef, logger, batchSize);
+
         var partition = manifest.TargetPartition;
         if (string.IsNullOrWhiteSpace(partition))
             return Observable.Throw<InstallResult>(new InvalidOperationException(
@@ -232,6 +235,75 @@ public static class PackageInstaller
     // structurally (both sides are typed records → deterministic JSON).
     private static string ContentSignature(object? content, JsonSerializerOptions options) =>
         content is null ? "" : JsonSerializer.Serialize(content, options);
+
+    // Installs a NODE-NATIVE plugin repo (node-per-file): the files ARE MeshNodes at their canonical
+    // paths, so parse them verbatim (no partition rebase), upsert only the changed ones, and request a
+    // live compile for every NodeType node. This is the shape MeshWeaver.Plugins ships.
+    private static IObservable<InstallResult> InstallNodeRepo(
+        IMessageHub hub, PackageManifest manifest, IReadOnlyList<PackageFile> files,
+        string installedFromRef, ILogger? logger, int batchSize)
+    {
+        _ = batchSize; // node-repo installs are ordered (Concat), not fanned out
+        var parsers = new FileFormatParserRegistry(hub.JsonSerializerOptions);
+        var nodes = files
+            .Select(f => ParseCanonical(parsers, f, logger))
+            .Where(n => n is not null).Select(n => n!)
+            .ToArray();
+
+        if (nodes.Length == 0)
+            return Observable.Throw<InstallResult>(new InvalidOperationException(
+                $"Node-repo plugin '{manifest.Id}' has no installable nodes."));
+
+        var options = hub.JsonSerializerOptions;
+        var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
+        var nodeTypePaths = nodes.Where(n => n.Content is NodeTypeDefinition).Select(n => n.Path).ToArray();
+
+        // Order so the Space root and a NodeType's Source land BEFORE the NodeType itself — creating
+        // the NodeType triggers the live compile, which reads its Source children.
+        static int Order(MeshNode n) =>
+            n.Content is NodeTypeDefinition ? 2 : (n.Path.Contains('/', StringComparison.Ordinal) ? 1 : 0);
+
+        return nodes.OrderBy(Order)
+            .Select(n => UpsertIfChanged(hub, persistence, n, options))
+            .ToObservable().Concat().ToList() // sequential to respect the ordering above
+            .SelectMany(writes =>
+            {
+                var result = new InstallResult(nodes.Length, writes.Count(w => w));
+                logger?.LogInformation(
+                    "Installed node-repo plugin {Id}: {Written} written, {Unchanged} unchanged ({Count} node(s)) @ {Ref}",
+                    manifest.Id, result.Written, result.Unchanged, nodes.Length, installedFromRef);
+                // Recompile only the NodeTypes, and only when something changed.
+                if (result.Written > 0)
+                    foreach (var path in nodeTypePaths)
+                        hub.RequestNodeTypeRelease(path,
+                            onError: msg => logger?.LogWarning("Release request for {Path} failed: {Msg}", path, msg));
+                return WriteInstalledRecord(hub, manifest, installedFromRef, nodes.Length).Select(_ => result);
+            });
+    }
+
+    // Parses a node-per-file file into a MeshNode at its CANONICAL path (no partition rebase) — the
+    // file's repo-relative path IS the node's path. The export's top-level README.md is a GitHub
+    // display file, never a node (mirrors GitHubSyncService.ParseFile, minus the space rebase).
+    private static MeshNode? ParseCanonical(FileFormatParserRegistry parsers, PackageFile file, ILogger? logger)
+    {
+        if (string.Equals(file.RelativePath, "README.md", StringComparison.OrdinalIgnoreCase))
+            return null;
+        var ext = System.IO.Path.GetExtension(file.RelativePath);
+        var parsed = parsers.TryParse(ext, file.RelativePath, file.Content, file.RelativePath);
+        if (parsed is null)
+        {
+            logger?.LogWarning("No parser for node-repo file {Path}; skipped.", file.RelativePath);
+            return null;
+        }
+        var (id, ns) = NodeFileMapper.FromRelativePath(file.RelativePath);
+        return parsed with
+        {
+            Id = id,
+            Namespace = ns,
+            MainNode = string.IsNullOrEmpty(ns) ? id : $"{ns}/{id}",
+            State = MeshNodeState.Active,
+        };
+    }
 
     private static IObservable<int> Upsert(IMessageHub hub, MeshNode node) =>
         hub.Observe<CreateOrUpdateNodeResponse>(new CreateOrUpdateNodeRequest(node))

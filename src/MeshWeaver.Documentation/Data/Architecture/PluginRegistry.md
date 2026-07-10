@@ -37,9 +37,12 @@ the registry has source access and clients just speak HTTP.
 
 Two endpoints, mapped by `PluginRegistryEndpoints` (`memex/Memex.Portal.Shared/Api`). Unlike the
 authenticated `/api/mesh/*` surface, these are **anonymous** — a plugin registry is meant to be
-pulled by any installation. That is safe because the registry only exposes **curated packages**:
-folders that carry a `package.json` in its configured source. Nothing else — and the registry's own
-credential never leaves.
+pulled by any installation. That is safe because the registry only exposes **curated plugins**:
+by default the node-native repos the [`MeshWeaver.Plugins`](/Doc/Architecture/Plugins) repo ships —
+top-level `<Plugin>.json` **Space** roots carrying a `PluginManifest`, node-per-file — via a
+`NodeRepoPackageSource` (`PluginCatalog:SourceFormat=node-repo`, the default). A `package.json`-manifest
+repo can be served instead with `SourceFormat=package-json`. Nothing outside a published plugin is
+exposed, and the registry's own credential never leaves.
 
 | Verb | Body | Returns |
 |---|---|---|
