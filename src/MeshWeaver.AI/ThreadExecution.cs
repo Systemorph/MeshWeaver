@@ -919,6 +919,17 @@ internal static class ThreadExecution
         // visible to the scanner before its next tick.
         var lastActivityStamped = DateTime.MinValue;
         var heartbeatStampInterval = TimeSpan.FromSeconds(1);
+        // 🚨 Circuit breaker for a DEAD response cell. If the cell's per-node hub never delivers
+        // initial state, cache.Update throws "no initial state arrived" INSTANTLY on every push —
+        // and the streaming loop pushes once per token, so without this the round STORMS failed
+        // writes (seq 744,745,746… + [STALE-CALLBACK], flooding Loki and backing up the mesh/cache
+        // hub until the portal wedges — the failure the user hit). Latch on the FIRST such permanent
+        // failure: every later push short-circuits to Observable.Empty (no cache.Update, no storm),
+        // we log ONCE at Info (a dead cell is a graceful degradation, not a per-token warning
+        // flood), and the round ends normally. Interlocked because the update-error callback and the
+        // next push can run on different hub threads. (Follow-up: also cancel the in-flight LLM
+        // stream once latched, to stop spending the model call on a response nobody can read.)
+        var responseCellDead = 0;   // 0 = writable, 1 = permanently unavailable (no initial state)
         // Returns the cache.Update IObservable so terminal-status callers can
         // AWAIT the write before signalling round completion — without this,
         // the test base's quiesce phase trips on the in-flight DataChangeRequest
@@ -935,6 +946,13 @@ internal static class ThreadExecution
             string? harness = null,
             int? cacheReadTokens = null, int? cacheWriteTokens = null)
         {
+            // Cell already latched dead (no initial state ever arrived) — skip the write entirely.
+            // Never construct/subscribe a doomed cache.Update; that is the storm. Empty completes
+            // without emitting, which every caller here handles (all Subscribe fire-and-forget, no
+            // FirstAsync), so a dead cell simply produces no further writes and the round ends.
+            if (System.Threading.Volatile.Read(ref responseCellDead) != 0)
+                return System.Reactive.Linq.Observable.Empty<MeshNode>();
+
             // Re-read the segment's CURRENT target + text baseline on every push so
             // writes follow a mid-round check_inbox split to the new cell. The cell
             // receives only the accumulated text PAST the baseline (the prior cells'
@@ -1067,8 +1085,29 @@ internal static class ThreadExecution
             // hot observable lets terminal-status callers await via FirstAsync.
             updateObs.Subscribe(
                 _ => { },
-                ex => logger.LogWarning(ex,
-                    "[ThreadExec] cache.Update failed for {Path}", curResponsePath));
+                ex =>
+                {
+                    // A "no initial state arrived" TimeoutException means the response cell's
+                    // per-node hub will NEVER deliver — the cell is permanently unwritable. Trip
+                    // the circuit breaker ONCE (so every later push short-circuits and the storm
+                    // stops), and log at Info: this is a graceful degradation, not a fault to
+                    // flood the log with a warning per token.
+                    var isDeadCell = ex is TimeoutException
+                        && ex.Message.Contains("no initial state arrived", StringComparison.Ordinal);
+                    if (isDeadCell)
+                    {
+                        if (System.Threading.Interlocked.Exchange(ref responseCellDead, 1) == 0)
+                            logger.LogInformation(
+                                "[ThreadExec] response cell {Path} unavailable (no initial state arrived); " +
+                                "ending this round gracefully — no further streaming writes to it", curResponsePath);
+                        // already latched → stay silent, no per-token spam
+                    }
+                    else
+                    {
+                        // A transient/other failure — keep the existing loud signal (one-off).
+                        logger.LogWarning(ex, "[ThreadExec] cache.Update failed for {Path}", curResponsePath);
+                    }
+                });
 
             // Heartbeat stamp on the OWN thread. Throttled to one write per
             // heartbeatStampInterval so the streaming hot path (Sample(100ms))
