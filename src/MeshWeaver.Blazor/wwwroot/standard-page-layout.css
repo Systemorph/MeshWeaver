@@ -73,6 +73,19 @@ body {
     min-height: 0;
 }
 
+/* Ultra-wide screens: keep the reader shell (nav rail + content) a comfortably
+   sized, centered block instead of letting the content pane stretch edge-to-edge.
+   Without a cap, on an ultra-wide monitor the pane is enormous and — offset by the
+   300px rail — the page's own max-width text column (max-width: 1200px; margin: 0
+   auto) centers WITHIN the pane, so it floats far right of the viewport centre
+   beside a large empty gutter. Capping + centering the whole shell keeps rail and
+   content balanced. Below the cap this is a no-op (the shell stays full width). */
+.shell-splitter {
+    width: 100%;
+    max-width: 1600px;
+    margin-inline: auto;
+}
+
 /* NOTE: the pane is a <div class="fluent-multi-splitter-pane"> (a CLASS), not a
    <fluent-multi-splitter-pane> element. The leading dot is mandatory — without it
    these rules match nothing, the pane keeps FluentUI's default
