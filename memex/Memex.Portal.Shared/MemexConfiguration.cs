@@ -564,14 +564,18 @@ public static class MemexConfiguration
                 .AddRowLevelSecurity()
                 // Configure graph from the same base path
                 .AddGraph()
-                // Git-based plugin catalog: browse installable folders in a repo and install each
-                // folder's content (and runtime-compiled code) into the mesh by picking a git
-                // commit + folder. Seeds a Plugins space + catalog node pointed at
-                // PluginCatalog:SourceRepoPath (empty -> the catalog shows a "configure me" prompt).
-                .AddPluginCatalog(
-                    configuration["PluginCatalog:SourceRepoPath"] ?? "",
-                    configuration["PluginCatalog:SourceSubdir"] ?? "catalog",
-                    configuration["PluginCatalog:SourceRef"] ?? "HEAD")
+                // Plugin catalog: registers the Package/PluginCatalog content types + (below) the
+                // platform-admin "Plugin Catalog" settings tab — NOT a browsable Plugins Space. This
+                // instance ALSO acts as the registry: /api/plugins serves its configured source
+                // (PluginCatalog:SourceRepoPath — the plugins repo) to other installations, and the
+                // admin tab installs from PluginCatalog:RegistryUrl. The options carry the consumer's
+                // registry URL/ref (empty RegistryUrl -> the tab shows a "not configured" note).
+                .AddPluginCatalog()
+                .ConfigureServices(pcs => pcs.AddSingleton(new PluginCatalogOptions
+                {
+                    RegistryUrl = configuration["PluginCatalog:RegistryUrl"] ?? "",
+                    RegistryRef = configuration["PluginCatalog:RegistryRef"] ?? "HEAD",
+                }))
                 // Register GitHub-sync content types (GitHubCredential / GitHubSyncConfig)
                 // on the mesh + per-node hubs so their config nodes (de)serialize.
                 .AddGitHubSyncTypes()
@@ -791,6 +795,9 @@ public static class MemexConfiguration
                         .AddGitHubSyncSettingsTab()
                         // GitHub Issues & PRs tab — browse/act on the repo's issues + pull requests.
                         .AddGitHubIssuesTab()
+                        // Plugin Catalog tab (platform admins only) — browse the registry's modules
+                        // and Install / Update them onto this instance. Replaces the old Plugins Space.
+                        .AddPluginCatalogSettingsTab()
                         // Instance Sync lives in the "Synchronizations" NODE-menu item (not a
                         // settings tab) — wired via AddInstanceSyncTypes on the mesh builder.
                         // Code workspace tab — on-disk working-tree editor (checkout/edit/commit/push).
@@ -1008,6 +1015,11 @@ public static class MemexConfiguration
         // REST surface that mirrors MCP — POST /api/mesh/* (1:1 with MCP tools).
         // Same Bearer auth policy as /mcp; multipart upload at /api/mesh/upload.
         app.MapMeshApi();
+
+        // PUBLIC plugin registry — GET /api/plugins + POST /api/plugins/files. This instance is the
+        // distribution point; consumers pull the catalog + packages without their own git credentials
+        // (only curated packages, addressed by plugin id, are exposed; the registry's credential stays here).
+        app.MapPluginRegistry();
 
         // Centralized speech-to-text — POST /api/speech/transcribe (multipart audio → text),
         // behind the same Bearer policy; forwards to the Whisper container via ISpeechTranscriber.

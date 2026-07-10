@@ -1,9 +1,11 @@
 using System.Reactive.Linq;
+using System.Text.Json;
 using MeshWeaver.GitSync;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Persistence.Parsers;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -15,9 +17,15 @@ namespace MeshWeaver.PluginCatalog;
 /// rebase them under the package's target partition, and upsert them INCREMENTALLY via
 /// <see cref="CreateOrUpdateNodeRequest"/> — never through the static-repo importer, whose
 /// full-replace/prune semantics would wipe the rest of a shared partition (installing one agent
-/// must not delete every other agent). After the content lands, an install record (a
-/// <c>Package</c> node) is written under the <see cref="InstalledPartition"/> registry so the
-/// catalog can show installed / update-available status. Reactive end-to-end; Subscribe to run.
+/// must not delete every other agent).
+///
+/// <para><b>Update only on real change.</b> Before upserting, the installer reads the partition's
+/// current nodes and writes only the ones whose content (or a synced field) actually differs — an
+/// unchanged re-install writes nothing and bumps no versions. This matters because the upsert stamps
+/// <c>LastModified = UtcNow</c> unconditionally, so without this guard a re-install would churn every
+/// node's version. For a Code package the live recompile is requested only when its source changed.
+/// After the content lands, an install record (a <c>Package</c> node) is written under the
+/// <see cref="InstalledPartition"/> registry. Reactive end-to-end; Subscribe to run.</para>
 /// </summary>
 public static class PackageInstaller
 {
@@ -32,9 +40,9 @@ public static class PackageInstaller
 
     /// <summary>
     /// Installs <paramref name="manifest"/>'s content <paramref name="files"/> into its target
-    /// partition and records the install. Emits the number of content nodes upserted.
+    /// partition and records the install, writing only the nodes that actually changed.
     /// </summary>
-    public static IObservable<int> Install(
+    public static IObservable<InstallResult> Install(
         IMessageHub hub,
         PackageManifest manifest,
         IReadOnlyList<PackageFile> files,
@@ -48,9 +56,12 @@ public static class PackageInstaller
         if (manifest.Kind == PackageKind.Code)
             return InstallCode(hub, manifest, files, installedFromRef, logger, batchSize);
 
+        if (manifest.Kind == PackageKind.NodeRepo)
+            return InstallNodeRepo(hub, manifest, files, installedFromRef, logger, batchSize);
+
         var partition = manifest.TargetPartition;
         if (string.IsNullOrWhiteSpace(partition))
-            return Observable.Throw<int>(new InvalidOperationException(
+            return Observable.Throw<InstallResult>(new InvalidOperationException(
                 $"Package '{manifest.Id}' has no targetPartition."));
 
         var sourceFolder = manifest.SourceFolder ?? manifest.Id;
@@ -63,20 +74,21 @@ public static class PackageInstaller
             .ToArray();
 
         if (nodes.Length == 0)
-            return Observable.Throw<int>(new InvalidOperationException(
+            return Observable.Throw<InstallResult>(new InvalidOperationException(
                 $"Package '{manifest.Id}' has no installable content files."));
 
+        var options = hub.JsonSerializerOptions;
+        var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
         return nodes
-            .Select(n => Upsert(hub, n))
-            .ToObservable()
-            .Merge(batchSize)
-            .Sum()
-            .SelectMany(count =>
+            .Select(n => UpsertIfChanged(hub, persistence, n, options))
+            .ToObservable().Merge(batchSize).ToList()
+            .SelectMany(writes =>
             {
+                var result = new InstallResult(nodes.Length, writes.Count(w => w));
                 logger?.LogInformation(
-                    "Installed package {Id} v{Version}: {Count} node(s) into {Partition} @ {Ref}",
-                    manifest.Id, manifest.Version, count, partition, installedFromRef);
-                return WriteInstalledRecord(hub, manifest, installedFromRef, count).Select(_ => count);
+                    "Installed package {Id} v{Version}: {Written} written, {Unchanged} unchanged into {Partition} @ {Ref}",
+                    manifest.Id, manifest.Version, result.Written, result.Unchanged, partition, installedFromRef);
+                return WriteInstalledRecord(hub, manifest, installedFromRef, nodes.Length).Select(_ => result);
             });
     }
 
@@ -105,14 +117,15 @@ public static class PackageInstaller
 
     // Installs a Code package: synthesize the NodeType node from the manifest's configuration, import
     // the package's Source/*.cs files as its Code nodes (rebased UNDER the NodeType so its default
-    // Sources query finds them), and record the install. Creating the NodeType + Source nodes drives
-    // the mesh's first-build Roslyn compile, so the type goes live — no rebuild, no NuGet.
-    private static IObservable<int> InstallCode(
+    // Sources query finds them), and record the install. Creating/updating the NodeType + Source nodes
+    // drives the mesh's Roslyn compile — but only when something actually changed, so an unchanged
+    // re-install neither rewrites nodes nor recompiles.
+    private static IObservable<InstallResult> InstallCode(
         IMessageHub hub, PackageManifest manifest, IReadOnlyList<PackageFile> files,
         string installedFromRef, ILogger? logger, int batchSize)
     {
         if (string.IsNullOrWhiteSpace(manifest.NodeTypeConfiguration))
-            return Observable.Throw<int>(new InvalidOperationException(
+            return Observable.Throw<InstallResult>(new InvalidOperationException(
                 $"Code package '{manifest.Id}' has no nodeTypeConfiguration."));
 
         var partition = string.IsNullOrWhiteSpace(manifest.TargetPartition) ? "type" : manifest.TargetPartition!;
@@ -127,7 +140,7 @@ public static class PackageInstaller
             .ToArray();
 
         if (sourceNodes.Length == 0)
-            return Observable.Throw<int>(new InvalidOperationException(
+            return Observable.Throw<InstallResult>(new InvalidOperationException(
                 $"Code package '{manifest.Id}' has no Source/*.cs files."));
 
         var nodeTypeNode = MeshNode.FromPath(nodeTypePath) with
@@ -138,22 +151,158 @@ public static class PackageInstaller
             Content = new NodeTypeDefinition { Configuration = manifest.NodeTypeConfiguration },
         };
 
-        // NodeType first, then its Source Code nodes — the mesh compiles the first build automatically.
-        return Upsert(hub, nodeTypeNode)
-            .SelectMany(_ => sourceNodes.Select(n => Upsert(hub, n)).ToObservable().Merge(batchSize).Sum())
-            .SelectMany(srcCount =>
+        var all = new[] { nodeTypeNode }.Concat(sourceNodes).ToArray();
+        var options = hub.JsonSerializerOptions;
+        var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
+
+        // NodeType first (so its Source nodes attach under a present type), then the Source nodes;
+        // each is skipped when unchanged.
+        return UpsertIfChanged(hub, persistence, nodeTypeNode, options)
+            .SelectMany(typeWritten => sourceNodes
+                .Select(n => UpsertIfChanged(hub, persistence, n, options))
+                .ToObservable().Merge(batchSize).ToList()
+                .Select(srcWrites => typeWritten
+                    ? srcWrites.Count(w => w) + 1
+                    : srcWrites.Count(w => w)))
+            .SelectMany(written =>
             {
-                var total = srcCount + 1;
+                var result = new InstallResult(all.Length, written);
                 logger?.LogInformation(
-                    "Installed code package {Id} v{Version}: NodeType {Path} + {Count} source node(s) @ {Ref}",
-                    manifest.Id, manifest.Version, nodeTypePath, srcCount, installedFromRef);
-                // Trigger the compile explicitly (belt-and-suspenders — creating the NodeType +
-                // Source nodes also kicks the first build) so the installed type goes live.
-                hub.RequestNodeTypeRelease(nodeTypePath,
-                    onError: msg => logger?.LogWarning(
-                        "Release request for {Path} failed: {Msg}", nodeTypePath, msg));
-                return WriteInstalledRecord(hub, manifest, installedFromRef, total).Select(_ => total);
+                    "Installed code package {Id} v{Version}: {Written} written, {Unchanged} unchanged ({Path}) @ {Ref}",
+                    manifest.Id, manifest.Version, result.Written, result.Unchanged, nodeTypePath, installedFromRef);
+                // Only recompile when something actually changed — an unchanged re-install must not
+                // kick a redundant Roslyn build.
+                if (written > 0)
+                    hub.RequestNodeTypeRelease(nodeTypePath,
+                        onError: msg => logger?.LogWarning(
+                            "Release request for {Path} failed: {Msg}", nodeTypePath, msg));
+                return WriteInstalledRecord(hub, manifest, installedFromRef, all.Length).Select(_ => result);
             });
+    }
+
+    // Upserts a node only if it is new or meaningfully changed; returns true if it wrote, false if it
+    // skipped an unchanged node. Reads the CURRENT persisted node authoritatively via the storage
+    // adapter (the SAME read the CreateOrUpdate handler uses) — no eventual-consistency lag and no
+    // per-node hub activation. Absent path -> null -> written; a read failure falls back to writing.
+    private static IObservable<bool> UpsertIfChanged(
+        IMessageHub hub, IStorageAdapter? persistence, MeshNode node, JsonSerializerOptions options)
+    {
+        var existing = persistence is not null
+            ? persistence.Read(node.Path, options)
+            : Observable.Return<MeshNode?>(null);
+        return existing
+            .Take(1)
+            .SelectMany(current => current is not null && IsUnchanged(current, node, options)
+                ? Observable.Return(false)
+                : Upsert(hub, node).Select(_ => true))
+            .Catch<bool, Exception>(_ => Upsert(hub, node).Select(_ => true));
+    }
+
+    /// <summary>
+    /// True when applying <paramref name="incoming"/> onto <paramref name="current"/> would produce no
+    /// real change — i.e. the fields the upsert actually applies (mirrors <c>UpdateAccordingToSourceNode</c>:
+    /// Content + Name/NodeType/Icon/Category/State/PreRenderedHtml) are identical, ignoring the churn
+    /// fields (LastModified/Version). This is the content-checksum that makes an update touch only what
+    /// really changed.
+    /// </summary>
+    private static bool IsUnchanged(MeshNode current, MeshNode incoming, JsonSerializerOptions options)
+    {
+        if (!ScalarsUnchanged(current, incoming))
+            return false;
+        // A NodeType node's stored content is ENRICHED by the live compile (CompilationStatus, release
+        // stamps, …), so a whole-content compare would ALWAYS look "changed" on re-install and pointlessly
+        // rewrite + recompile it. Compare only the authored field the installer writes — the
+        // Configuration lambda (the source .cs are separate Code nodes, diffed on their own).
+        if (current.Content is NodeTypeDefinition curDef && incoming.Content is NodeTypeDefinition inDef)
+            return string.Equals(curDef.Configuration, inDef.Configuration, StringComparison.Ordinal);
+        // Otherwise compare the full content, applying the incoming over current so an omitted field
+        // does not read as a change.
+        return ContentSignature(incoming.Content ?? current.Content, options)
+            == ContentSignature(current.Content, options);
+    }
+
+    // The node's scalar fields, applying the incoming's non-null values over the current (mirrors
+    // UpdateAccordingToSourceNode) — unchanged? The churn fields (LastModified/Version) are ignored.
+    private static bool ScalarsUnchanged(MeshNode current, MeshNode incoming) =>
+        (incoming.Name ?? current.Name) == current.Name
+        && (incoming.NodeType ?? current.NodeType) == current.NodeType
+        && (incoming.Icon ?? current.Icon) == current.Icon
+        && (incoming.Category ?? current.Category) == current.Category
+        && (incoming.State == default ? current.State : incoming.State) == current.State
+        && (incoming.PreRenderedHtml ?? current.PreRenderedHtml) == current.PreRenderedHtml;
+
+    // Content serialized with the hub options ($type discriminators) so typed content compares
+    // structurally (both sides are typed records → deterministic JSON).
+    private static string ContentSignature(object? content, JsonSerializerOptions options) =>
+        content is null ? "" : JsonSerializer.Serialize(content, options);
+
+    // Installs a NODE-NATIVE plugin repo (node-per-file): the files ARE MeshNodes at their canonical
+    // paths, so parse them verbatim (no partition rebase), upsert only the changed ones, and request a
+    // live compile for every NodeType node. This is the shape MeshWeaver.Plugins ships.
+    private static IObservable<InstallResult> InstallNodeRepo(
+        IMessageHub hub, PackageManifest manifest, IReadOnlyList<PackageFile> files,
+        string installedFromRef, ILogger? logger, int batchSize)
+    {
+        _ = batchSize; // node-repo installs are ordered (Concat), not fanned out
+        var parsers = new FileFormatParserRegistry(hub.JsonSerializerOptions);
+        var nodes = files
+            .Select(f => ParseCanonical(parsers, f, logger))
+            .Where(n => n is not null).Select(n => n!)
+            .ToArray();
+
+        if (nodes.Length == 0)
+            return Observable.Throw<InstallResult>(new InvalidOperationException(
+                $"Node-repo plugin '{manifest.Id}' has no installable nodes."));
+
+        var options = hub.JsonSerializerOptions;
+        var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
+        var nodeTypePaths = nodes.Where(n => n.Content is NodeTypeDefinition).Select(n => n.Path).ToArray();
+
+        // Order so the Space root and a NodeType's Source land BEFORE the NodeType itself — creating
+        // the NodeType triggers the live compile, which reads its Source children.
+        static int Order(MeshNode n) =>
+            n.Content is NodeTypeDefinition ? 2 : (n.Path.Contains('/', StringComparison.Ordinal) ? 1 : 0);
+
+        return nodes.OrderBy(Order)
+            .Select(n => UpsertIfChanged(hub, persistence, n, options))
+            .ToObservable().Concat().ToList() // sequential to respect the ordering above
+            .SelectMany(writes =>
+            {
+                var result = new InstallResult(nodes.Length, writes.Count(w => w));
+                logger?.LogInformation(
+                    "Installed node-repo plugin {Id}: {Written} written, {Unchanged} unchanged ({Count} node(s)) @ {Ref}",
+                    manifest.Id, result.Written, result.Unchanged, nodes.Length, installedFromRef);
+                // Recompile only the NodeTypes, and only when something changed.
+                if (result.Written > 0)
+                    foreach (var path in nodeTypePaths)
+                        hub.RequestNodeTypeRelease(path,
+                            onError: msg => logger?.LogWarning("Release request for {Path} failed: {Msg}", path, msg));
+                return WriteInstalledRecord(hub, manifest, installedFromRef, nodes.Length).Select(_ => result);
+            });
+    }
+
+    // Parses a node-per-file file into a MeshNode at its CANONICAL path (no partition rebase) — the
+    // file's repo-relative path IS the node's path. The export's top-level README.md is a GitHub
+    // display file, never a node (mirrors GitHubSyncService.ParseFile, minus the space rebase).
+    private static MeshNode? ParseCanonical(FileFormatParserRegistry parsers, PackageFile file, ILogger? logger)
+    {
+        if (string.Equals(file.RelativePath, "README.md", StringComparison.OrdinalIgnoreCase))
+            return null;
+        var ext = System.IO.Path.GetExtension(file.RelativePath);
+        var parsed = parsers.TryParse(ext, file.RelativePath, file.Content, file.RelativePath);
+        if (parsed is null)
+        {
+            logger?.LogWarning("No parser for node-repo file {Path}; skipped.", file.RelativePath);
+            return null;
+        }
+        var (id, ns) = NodeFileMapper.FromRelativePath(file.RelativePath);
+        return parsed with
+        {
+            Id = id,
+            Namespace = ns,
+            MainNode = string.IsNullOrEmpty(ns) ? id : $"{ns}/{id}",
+            State = MeshNodeState.Active,
+        };
     }
 
     private static IObservable<int> Upsert(IMessageHub hub, MeshNode node) =>
@@ -196,4 +345,16 @@ public static class PackageInstaller
     private static bool IsManifest(string relativePath) =>
         relativePath.EndsWith("/package.json", StringComparison.OrdinalIgnoreCase)
         || string.Equals(relativePath, "package.json", StringComparison.OrdinalIgnoreCase);
+}
+
+/// <summary>
+/// The outcome of installing a package: how many capability nodes it carried (<see cref="Total"/>),
+/// how many were actually written (<see cref="Written"/>), and — derived — how many were left
+/// untouched because their content was unchanged (<see cref="Unchanged"/>). A clean re-install of an
+/// unchanged package has <c>Written == 0</c>.
+/// </summary>
+public readonly record struct InstallResult(int Total, int Written)
+{
+    /// <summary>Nodes left untouched because their content did not change.</summary>
+    public int Unchanged => Total - Written;
 }
