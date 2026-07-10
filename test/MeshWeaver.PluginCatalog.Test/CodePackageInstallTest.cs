@@ -53,8 +53,9 @@ public class CodePackageInstallTest(ITestOutputHelper output) : MonolithMeshTest
             pkg.Kind.Should().Be(PackageKind.Code);
             var files = await source.FetchPackageFiles(pkg, "HEAD").FirstAsync().ToTask();
 
-            var count = await PackageInstaller.Install(Mesh, pkg, files, "HEAD").FirstAsync().ToTask();
-            count.Should().Be(2); // the NodeType node + one Source Code node
+            var result = await PackageInstaller.Install(Mesh, pkg, files, "HEAD").FirstAsync().ToTask();
+            result.Total.Should().Be(2); // the NodeType node + one Source Code node
+            result.Written.Should().Be(2); // both freshly written on first install
 
             // The mesh compiles the just-installed NodeType (first build) and settles Ok — the custom
             // type is now live in a running mesh, installed purely by picking a git commit + folder.

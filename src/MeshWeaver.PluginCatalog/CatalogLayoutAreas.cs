@@ -230,7 +230,8 @@ public static class CatalogLayoutAreas
                     () => accessService.SwitchAccessContext(user),
                     _ => PackageInstaller.Install(host.Hub, pkg, files, sourceRef, logger)))
             .Subscribe(
-                count => logger?.LogInformation("Installed {Id}: {Count} node(s).", pkg.Id, count),
+                result => logger?.LogInformation("Installed {Id}: {Written} written, {Unchanged} unchanged.",
+                    pkg.Id, result.Written, result.Unchanged),
                 ex => logger?.LogWarning(ex, "Install of {Id} failed.", pkg.Id));
     }
 
