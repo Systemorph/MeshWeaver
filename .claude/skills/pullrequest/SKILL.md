@@ -24,7 +24,9 @@ green CI image. So `main`'s CI is not a formality — it is the source of the im
   failed on a clean-checkout `-warnaserror` build, and the self-update was blocked until the
   hotfix landed). The merge succeeding is not the goal — a green `main` after the merge is.
 
-> If you only remember one thing: **`gh pr checks <PR> --watch --fail-fast` BEFORE `gh pr merge`.**
+> If you only remember one thing: **poll the CI via GraphQL until the check SUITE is `COMPLETED`, and
+> merge only on `conclusion == SUCCESS`** (step 3). Do NOT use `gh run watch` — it polls REST and
+> drains the shared token budget into 403s that masquerade as CI-red.
 
 ## The procedure
 
@@ -62,43 +64,80 @@ gh api -X POST repos/Systemorph/MeshWeaver/pulls/<PR>/requested_reviewers \
   -f "reviewers[]=copilot-pull-request-reviewer[bot]"
 #    Confirm it took: the response reviewers list contains "login":"Copilot".
 
-# 3. WAIT for CI to finish — this is the gate. --fail-fast exits non-zero the moment any check fails.
-gh pr checks <PR> --watch --fail-fast        # blocks until all checks complete; exit 0 = all green
+# 3. WAIT for CI via GraphQL — this is the gate. NOT `gh run watch` (it polls REST every ~3s and
+#    drains the shared 5000/hr user-token budget → 403s that look like CI-red). GraphQL has its OWN
+#    budget (~1 point/query). Poll the "MeshWeaver Build and Test" check SUITE until COMPLETED — the
+#    suite finishes only when every shard job does, so there's no late-shard race — then read its
+#    conclusion. Merge ONLY on SUCCESS.
+#
+#    🔔 RUN THIS BLOCK IN THE BACKGROUND (harness: run_in_background: true) so you get ONE completion
+#    NOTIFICATION and keep working meanwhile — the background task IS your "CI finished" event. The
+#    loop exits 0 iff green, so the notification's exit code tells you whether to merge. (This is the
+#    push-style event a local session can have; GitHub can't webhook a CLI directly — see below.)
+PR=<PR>
+Q='query($o:String!,$r:String!,$p:Int!){repository(owner:$o,name:$r){pullRequest(number:$p){commits(last:1){nodes{commit{checkSuites(first:20){nodes{status conclusion workflowRun{workflow{name}}}}}}}}}}'
+suite(){ gh api graphql -f query="$Q" -f o=Systemorph -f r=MeshWeaver -F p=$PR \
+  --jq "[.data.repository.pullRequest.commits.nodes[0].commit.checkSuites.nodes[]|select(.workflowRun.workflow.name==\"MeshWeaver Build and Test\")]|last|.$1 // empty"; }
+# `last` collapses to the most-recent suite — a re-run adds another suite for the same commit; without
+# this, $(suite …) is multi-line and the compare below never matches COMPLETED even when CI is green.
+until [ "$(suite status)" = "COMPLETED" ]; do sleep 45; done   # cheap: ~1 GraphQL point per poll
+c=$(suite conclusion); echo "PR $PR CI: $c"; [ "$c" = "SUCCESS" ]   # exit 0 iff green → the merge signal
 
 # 4. ADDRESS findings BEFORE merge:
-#    - CI red  → pull the failing job log, diagnose, fix, push, GOTO 3.
+#    - CI red  → pull the failing job log (REST, but ONE call — not a poll — so it's fine), fix, push, GOTO 3.
 #        gh run view <run-id> --log-failed | grep -iE 'error|##\[error\]'
 #    - Copilot review → read its comments, address actionable ones, resolve threads, push, GOTO 3.
 #        gh pr view <PR> --json reviews,comments
 
 # 5. MERGE — only now, only if step 3 was green.
 gh pr merge <PR> --merge
+
+# 6. UPDATE local main to the merge you just landed — in place, WITHOUT switching branches or
+#    touching your working tree. `git checkout main && git pull` is WRONG here: work in this repo
+#    happens on long-lived feature branches with a dirty tree (uncommitted WIP), so a checkout
+#    fails or thrashes it. This fast-forwards the local `main` REF while you stay on your branch:
+git fetch origin main:main        # local main -> origin/main (ff-only); current branch untouched
 ```
 
-### ⚠️ `gh pr checks --watch` exits too early — watch the RUN, not the checks
+### Why GraphQL, not `gh run watch` — the rate limit and the late-shard race, solved together
 
-`gh pr checks <PR> --watch --fail-fast` returns "all passed" **as soon as the checks visible at
-that moment complete** — but the test shards on this repo register *after* `Build solution`
-finishes, so the watch exits green while `Run tests (shard 2/3)` are still `pending`, and you merge
-before tests ran (this defeated the gate on #138 — only the build had passed). **Watch the whole
-workflow RUN instead**, which waits for every job/shard:
+`gh run watch` and `gh pr checks --watch` poll the **REST** API every few seconds. Two distinct
+failures come from that, and the GraphQL poll in step 3 kills both:
 
-```bash
-# robust merge-iff-FULLY-green: watch the run, then merge
-RID=$(gh run list --branch "$(git branch --show-current)" --limit 1 --json databaseId -q '.[0].databaseId')
-if gh run watch "$RID" --exit-status; then
-  gh pr merge <PR> --merge        # all jobs incl. test shards green → land it
-else
-  echo "CI RED — NOT merging"; gh run view "$RID" --log-failed | grep -iE '##\[error\]|error CS|Failed!' | head
-fi
-```
+- **Rate limit → false CI-red.** The `gho_…` CLI login is a *user* OAuth token: **5000 REST req/hour
+  shared across every session and tool under your account**. One 20-min run (build + 6 shards) is
+  hundreds of polls, and several concurrent worktree sessions drain the pool together → `403 API rate
+  limit exceeded`, whose exit=1 *looks* like CI-red but is not. Never merge or abort off a 403 —
+  check the reset with the **exempt** `gh api /rate_limit` and wait. GraphQL draws on a **separate**
+  5000-point budget at ~1 point/query, so a whole run costs a few dozen points; it does not compete
+  with your interactive `gh`.
+- **Late-shard race → merged before tests ran.** `gh pr checks --watch` returns "all passed" as soon
+  as the *currently visible* checks complete, but the test shards register **after** `Build solution`
+  — so it exits green while shards are still pending and you merge before tests ran (this turned main
+  red after #138). Gating on the **check SUITE** status (step 3) has no such window: the suite is
+  `COMPLETED` only when every job/shard in the run has finished.
 
-After a merge, **also watch the run on `main`** (the merge commit re-runs the full suite) — a test
-that only runs post-merge can still turn main red.
+**After the merge (step 5–6):** poll `main`'s post-merge run the SAME way — re-target the step-3
+`suite()` helper at the ref (`repository.ref("refs/heads/main").target … checkSuites`) — because a
+test that only runs post-merge can still turn main red. Then `git fetch origin main:main` (step 6).
+
+**Durable fix for heavy parallel CI-watching:** authenticate agent/automation `gh` as the repo's
+**GitHub App installation** (its own rate-limit budget — org apps up to ~15k/hr) instead of the
+human's shared 5000; see the GitHub App machine-identity notes.
+
+**Push instead of poll — why step 3 runs in the background, and the future upgrade.** GitHub can't
+webhook a local CLI session (no inbound endpoint), so the closest thing to "subscribe to a CI-done
+event" is to run the step-3 loop as a **background task**: it exits when the suite completes and the
+harness delivers a single completion notification — a push from the session's POV, off the REST
+budget. A *true* server-side push is possible but not built: the portal already receives GitHub
+webhooks at `POST /webhooks/github` (`GitHubWebhookProcessor`, currently `issues`/`issue_comment`
+only); adding a `workflow_run` branch + a raw-WS `/events/ci` endpoint would let a session subscribe
+with the harness `Monitor` `ws:` source for zero-poll delivery. Deferred — the background loop is
+enough today.
 
 > Do **not** rely on `gh pr merge --auto` either: GitHub auto-merge only waits for *required* status
 > checks. This repo currently merges with checks pending (no branch protection), so `--auto` merges
-> immediately — defeating the rule. Gate it yourself with `gh run watch`.
+> immediately — defeating the rule. Gate it yourself with the step-3 GraphQL check-suite poll.
 
 ## What's New entry (step 0.5) — one doc node per user-facing PR
 
