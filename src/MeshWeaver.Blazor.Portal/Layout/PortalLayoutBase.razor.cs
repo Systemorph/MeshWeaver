@@ -249,6 +249,53 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
         }
     }
 
+    /// <summary>A single breadcrumb crumb: its display <paramref name="Label"/>, the
+    /// <paramref name="Href"/> to that ancestor's default page, and whether it is the
+    /// <paramref name="IsLast"/> (current) segment — rendered as plain bold text, not a link.</summary>
+    protected readonly record struct Crumb(string Label, string Href, bool IsLast);
+
+    /// <summary>
+    /// Breadcrumb trail for the current node — one crumb per segment of the resolved address, each
+    /// linking to that ancestor's default page (<c>/{cumulative}</c>, empty area); the last segment
+    /// (the current node) is flagged <see cref="Crumb.IsLast"/> so the view shows it as bold text.
+    /// Empty at the mesh root (only the ⌂ Home affordance shows, and the bar is hidden). Mirrors the
+    /// React-Native shell's breadcrumb toolbar and the server-side <c>BuildBreadcrumbs</c> trail —
+    /// derived reactively from <see cref="_currentNavContext"/>, which re-renders on every nav change.
+    /// </summary>
+    protected IReadOnlyList<Crumb> Breadcrumbs
+    {
+        get
+        {
+            var segments = (_currentNavContext?.Namespace ?? "")
+                .Split('/', StringSplitOptions.RemoveEmptyEntries);
+            if (segments.Length == 0)
+                return Array.Empty<Crumb>();
+
+            var crumbs = new Crumb[segments.Length];
+            var cumulative = "";
+            for (var i = 0; i < segments.Length; i++)
+            {
+                cumulative = i == 0 ? segments[i] : $"{cumulative}/{segments[i]}";
+                crumbs[i] = new Crumb(segments[i], $"/{cumulative}", i == segments.Length - 1);
+            }
+            return crumbs;
+        }
+    }
+
+    /// <summary>
+    /// The active area, shown as a trailing "· {area}" after the trail when it isn't the node's
+    /// default content page (empty area). Null hides the suffix. Peer of the React-Native shell's
+    /// <c>· {nav.area}</c> hint.
+    /// </summary>
+    protected string? CurrentBreadcrumbArea
+    {
+        get
+        {
+            var area = _currentNavContext?.Area;
+            return string.IsNullOrEmpty(area) ? null : area;
+        }
+    }
+
     private void ToggleNodeMenu()
     {
         isNodeMenuOpen = !isNodeMenuOpen;

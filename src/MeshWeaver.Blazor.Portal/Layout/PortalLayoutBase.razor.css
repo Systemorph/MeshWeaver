@@ -37,9 +37,10 @@
            wider than the viewport and push the `auto` nav column off the left
            edge — the "broken left" after toggling the side panel. */
         grid-template-columns: auto minmax(0, 1fr);
-        grid-template-rows: auto auto 1fr;
+        grid-template-rows: auto auto auto 1fr;
         grid-template-areas:
             "icon head"
+            "nav breadcrumb"
             "nav messagebar"
             "nav main";
         background-color: var(--fill-color);
@@ -63,6 +64,7 @@
         grid-template-columns: auto minmax(0, 1fr);
         grid-template-areas:
             "icon head"
+            "nav breadcrumb"
             "nav messagebar"
             "nav main";
     }
@@ -79,6 +81,56 @@
         grid-area: head;
         position: relative;
         z-index: 1100;
+    }
+
+    /* Breadcrumb bar — chrome-level "where am I" trail below the top bar. Themed with Fluent
+       tokens so it follows light/dark like the rest of the shell. */
+    ::deep.layout>.breadcrumb-bar {
+        grid-area: breadcrumb;
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 2px;
+        min-height: 34px;
+        padding: 2px 14px;
+        font-size: 0.85rem;
+        background: var(--neutral-layer-1);
+        border-bottom: 1px solid var(--neutral-stroke-divider-rest);
+    }
+
+    ::deep.breadcrumb-bar .crumb {
+        display: inline-flex;
+        align-items: center;
+        padding: 3px 8px;
+        border-radius: 5px;
+        text-decoration: none;
+        color: var(--neutral-foreground-hint);
+        white-space: nowrap;
+    }
+
+    ::deep.breadcrumb-bar a.crumb:hover {
+        background: var(--neutral-fill-stealth-hover);
+        color: var(--neutral-foreground-rest);
+    }
+
+    ::deep.breadcrumb-bar .crumb-home {
+        color: var(--accent-foreground-rest);
+        font-weight: 600;
+    }
+
+    ::deep.breadcrumb-bar .crumb-current {
+        color: var(--neutral-foreground-rest);
+        font-weight: 600;
+    }
+
+    ::deep.breadcrumb-bar .crumb-sep {
+        color: var(--neutral-foreground-hint);
+        user-select: none;
+    }
+
+    ::deep.breadcrumb-bar .crumb-area {
+        margin-left: 4px;
+        color: var(--neutral-foreground-hint);
     }
 
     ::deep.layout>.fluent-appbar {

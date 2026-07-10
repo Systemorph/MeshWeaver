@@ -233,6 +233,35 @@
         @MobileNavMenu
     }
 
+    @* Breadcrumb bar — the chrome-level "where am I" trail (⌂ Home › Doc › Architecture …),
+       the Blazor peer of the React-Native shell's breadcrumb toolbar and the server-side
+       BuildBreadcrumbs content trail. Each ancestor crumb links to its default page
+       (/{cumulative}); the current node is plain bold text; a trailing "· {area}" shows the
+       active area when it isn't the node's default content page. Desktop only, and hidden at
+       the mesh root (no segments) so it never adds an empty chrome row. *@
+    @if (ViewportInformation.IsDesktop && Breadcrumbs.Count > 0)
+    {
+        <nav class="breadcrumb-bar" aria-label="Breadcrumb">
+            <a class="crumb crumb-home" href="/" title="Home">⌂ Home</a>
+            @foreach (var crumb in Breadcrumbs)
+            {
+                <span class="crumb-sep" aria-hidden="true">›</span>
+                @if (crumb.IsLast)
+                {
+                    <span class="crumb crumb-current" aria-current="page">@crumb.Label</span>
+                }
+                else
+                {
+                    <a class="crumb" href="@crumb.Href">@crumb.Label</a>
+                }
+            }
+            @if (!string.IsNullOrEmpty(CurrentBreadcrumbArea))
+            {
+                <span class="crumb-area">· @CurrentBreadcrumbArea</span>
+            }
+        </nav>
+    }
+
     <div class="messagebar-container">
         <FluentMessageBarProvider Section="@MessageBarSection" Class="top-messagebar" />
     </div>
