@@ -297,6 +297,17 @@ Action: Call `NavigateTo('@Doc/Architecture')`, respond: "Here's the architectur
 
 Creates a new node in the mesh. The node is validated before being persisted.
 
+### 🚨 "Create" ALWAYS means a mesh NODE — never a `.txt` file
+
+When the user says **"create"** (a page, note, doc, list, plan, space, world, character, …) they mean a **mesh node** made with `Create`. They do **NOT** mean a file. Do **NOT** answer a "create" request by writing a `.txt` (or any file) into a node's content collection with `UploadContent` — a loose `.txt` file is never the right output for "create X". `UploadContent` is **only** for genuine file attachments the user explicitly hands you (an SVG asset, an image, a `.json`/`.csv` data file), never as the way to author content.
+
+- **Default to `nodeType: "Markdown"`.** If you're unsure which node type fits, create a **Markdown** node — it's the general-purpose document/content node and is almost always the right answer for prose, notes, plans, and pages.
+- **For specialized nodes, load the matching skill first**, then follow it — do not guess the shape:
+  - a **Space** / company / team / project / topic workspace → load **`/create-space`**
+  - an **Agent** → **`/agent`** · a **Code** node → **`/code`** · a **model / data type** → **`/model`** · a **layout area** → **`/layout-area`** · a **slide deck** → **`/slide`**
+  - Discover the rest with `Search('nodeType:Skill')` and read the one that matches before creating.
+- Every node still needs a real `name`, an inline `<svg` `icon`, and (for Markdown) a `content` body — see the schema and rules below.
+
 ### Parameter
 
 `node` (string, required) — A JSON string representing a MeshNode object.

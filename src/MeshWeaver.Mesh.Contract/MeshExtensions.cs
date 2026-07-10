@@ -1140,11 +1140,26 @@ public static class MeshExtensions
                                                 // publishes that already happened during descendant
                                                 // re-entries through this same handler.
 
+                                                // 🚨 ResponseFor(request) — NOT a hand-rolled
+                                                // WithTarget(request.Sender)+WithProperty(RequestId).
+                                                // Both set the same target + request-id correlation,
+                                                // but ResponseFor ALSO auto-propagates the request's
+                                                // AccessContext. This post runs deep inside the fan-out
+                                                // .Do/.SelectMany continuation, on the workspace
+                                                // emission scheduler where the ambient AsyncLocal
+                                                // AccessContext is WIPED (the same reason the handler
+                                                // captures senderUserId at entry). Without the
+                                                // propagated context the fail-closed PostPipeline DROPS
+                                                // this success response — the caller then never gets a
+                                                // reply and its DeleteNodeRequest times out at 60s even
+                                                // though the delete SUCCEEDED ("DeleteNodeResponse posted
+                                                // with no AccessContext" → "[STALE-CALLBACK]
+                                                // DeleteNodeRequest > 30000ms" → the delete wedges).
+                                                // PostFailed already uses ResponseFor, so failure
+                                                // responses were fine — only success wedged.
                                                 meshHub.Post(
                                                     DeleteNodeResponse.Ok() with { Log = okLog },
-                                                    o => o
-                                                        .WithTarget(request.Sender)
-                                                        .WithProperty(PostOptions.RequestId, request.Id));
+                                                    o => o.ResponseFor(request));
                                             })
                                             .Select(_ => System.Reactive.Unit.Default);
                                         });
