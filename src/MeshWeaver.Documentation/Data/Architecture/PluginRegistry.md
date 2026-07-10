@@ -1,7 +1,7 @@
 ---
 Name: Plugin Registry
 Category: Architecture
-Description: One MeshWeaver instance acts as the plugin registry — it holds the source credential, syncs plugins from git, and re-serves them over REST so any installation pulls plugins without its own GitHub access. The credential is encapsulated in the registry, npm/NuGet-style.
+Description: One MeshWeaver instance acts as the plugin registry — it holds the source credential, syncs plugins from git, and re-serves them over a public REST surface so any installation's platform admin can browse and install plugins without its own GitHub access. The credential is encapsulated in the registry, npm/NuGet-style.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3h18v4H3z"/><path d="M5 7v14h14V7"/><path d="M10 12h4"/></svg>
 ---
 
@@ -9,114 +9,92 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 
 For the step-by-step how-to (author → publish → install → own registry) see the [Plugin Manual](/Doc/Architecture/PluginAuthoring).
 
-[Plugins](/Doc/Architecture/Plugins) install by importing a repo of mesh nodes over
-[GitSync](/Doc/Architecture/StaticRepoImport). That works, but GitSync needs **credentials** for a
-private plugins repo — and you do not want *every* installation to hold GitHub credentials just to
-receive a plugin.
+[Plugins](/Doc/Architecture/Plugins) are folders of mesh nodes in a git repo, each carrying a
+`package.json` [manifest](/Doc/Architecture/PluginAuthoring). Installing one means importing its
+nodes and compiling its node types live. But you do **not** want *every* installation to hold GitHub
+credentials for a private plugins repo just to receive a plugin.
 
-The registry solves that. **One** MeshWeaver instance (memex) is the registry: it alone holds the
-source credential, syncs the plugins repo into its mesh, and **re-serves plugins over HTTP**. Every
-other installation pulls from the registry, never from git. The credential is **encapsulated in the
-registry** — exactly like npm or NuGet, where the registry has source access and clients just speak
-HTTP.
+The registry solves that. **One** MeshWeaver instance (memex.meshweaver.cloud) is the registry: it
+alone holds the source credential, reads the plugins repo, and **re-serves the catalog over a public
+HTTP surface**. Every other installation's platform admin browses and installs from the registry,
+never from git. The credential is **encapsulated in the registry** — exactly like npm or NuGet, where
+the registry has source access and clients just speak HTTP.
 
 ```text
   Systemorph/MeshWeaver.Plugins (git, private)
-                │  GitSync — ONE credentialed sync
+                │  the registry reads it with its ONE GitHub App credential
                 ▼
-        ┌───────────────┐        POST /api/mesh/catalog            ┌──────────────┐
-        │    memex       │◀───────────────────────────────────────│ installation │
-        │  (registry)    │  POST /api/mesh/catalog/download {plugin}│  (consumer)  │
-        │ holds the cred │────────────────────────────────────────▶│ no GitHub    │
-        └───────────────┘         {nodes:[…]}  ─── /api/mesh/update │  credential  │
-                                                                    └──────────────┘
+        ┌───────────────┐   GET  /api/plugins            ┌────────────────────────┐
+        │   registry     │◀───────────────────────────────│ installation (consumer)│
+        │ memex.mesh…    │   POST /api/plugins/files {id}  │  Settings ▸ Admin ▸     │
+        │ holds the cred │────────────────────────────────▶│  Plugin Catalog        │
+        └───────────────┘     {packages} / {files}         │  (platform admins)     │
+                                                            │  no GitHub credential  │
+                                                            └────────────────────────┘
 ```
 
-## The surface
+## The surface — public, curated
 
-Two verbs on the mesh REST API (`/api/mesh/*`, the transport-mirror of the MCP tools). They live on
-`MeshOperations` — the shared core behind BOTH REST and MCP — so the two transports cannot drift.
+Two endpoints, mapped by `PluginRegistryEndpoints` (`memex/Memex.Portal.Shared/Api`). Unlike the
+authenticated `/api/mesh/*` surface, these are **anonymous** — a plugin registry is meant to be
+pulled by any installation. That is safe because the registry only exposes **curated packages**:
+folders that carry a `package.json` in its configured source. Nothing else — and the registry's own
+credential never leaves.
 
 | Verb | Body | Returns |
 |---|---|---|
-| `POST /api/mesh/catalog` | — | `{count, plugins:[{name, typeCount, types:[path]}]}` |
-| `POST /api/mesh/catalog/download` | `{plugin}` | `{name, nodeCount, nodes:[MeshNode…]}` |
+| `GET /api/plugins` | — (`?ref=` advisory) | `{ packages: [PackageManifest…] }` |
+| `POST /api/plugins/files` | `{ id, sourceFolder }` | `{ files: [{ relativePath, content }…] }` |
 
-Both are gated by the same `Authorization: Bearer mw_…` token as the rest of `/api/mesh/*` — a
-consumer authenticates to the registry with a mesh token (the same token
-[instance sync](/Doc/Architecture/InstanceSync) uses), never with GitHub credentials.
+Both are backed by the registry's configured git [`IPackageSource`](/Doc/Architecture/Plugins) —
+`PluginCatalog:SourceRepoPath` (a URL → the plugins repo via GitSync's client, or a local path). The
+registry is authoritative on the git ref (`PluginCatalog:SourceRef`); a consumer's `ref` is advisory.
+The wire shapes are produced by `PluginRegistryPayloads` and parsed by `RegistryPackageSource`, one
+place each, so producer and consumer cannot drift.
 
-### `catalog` — discovery
+## The consumer — a platform-admin tab, not a Space
 
-Lists every **partition that ships NodeTypes** as an installable plugin. A partition with one or
-more `nodeType:NodeType` nodes is, by definition, a plugin (it ships a capability).
+On every installation the catalog is a **Settings tab** — `PluginCatalogSettingsTab`, grouped under
+**Administration** beside Global Administration, and gated the same way (`hub.IsGlobalAdmin`). It is
+**not** a browsable `Plugins` Space: a catalog is a platform-admin feature, and a Space partition
+would (correctly) deny read to everyone else — the very "Access denied on 'Plugins'" a Space produced.
 
-```json
-{
-  "count": 3,
-  "plugins": [
-    { "name": "Edu",      "typeCount": 4,  "types": ["Edu/Course", "Edu/Exercise", "Edu/Module", "Edu/Quiz"] },
-    { "name": "LinkedIn", "typeCount": 13, "types": ["LinkedIn/Connections", "LinkedIn/Education", "…"] },
-    { "name": "Slides",   "typeCount": 1,  "types": ["Slides/Slide"] }
-  ]
-}
-```
+The tab reads `PluginCatalog:RegistryUrl` (e.g. `https://memex.meshweaver.cloud`), lists the
+registry's packages via `RegistryPackageSource` (an `IPackageSource` over HTTP, on the mesh's Http
+I/O pool), and joins them against this instance's install registry — the `Package` nodes under the
+`Plugins` partition — to render **Install / Update / Installed** per module.
 
-### `catalog/download` — the package
+## Installing
 
-Returns a plugin's **definition** — the installable capability, ready to import:
+An admin clicks **Install** (or **Update**). No GitHub credential is involved on the consumer:
 
-- **Ships**: the Space root, the `NodeType` nodes, their `Source/` and `Test/` **Code** (the C# that
-  compiles the types), and `Markdown` docs.
-- **Does NOT ship**: data **instances** of those types, nor runtime satellites (`/_Activity` compile
-  logs, `/Release/` snapshots, notifications). The registry distributes the *capability*, not the
-  data — so downloading the `LinkedIn` plugin gives you the 13 types and their code, never anyone's
-  personal LinkedIn records.
+1. `POST /api/plugins/files {id}` on the registry → the package's folder files.
+2. `PackageInstaller.Install` **on the consumer** parses the files into MeshNodes and upserts them —
+   a **Content** package imports its folder into the target partition; a **Code** package synthesizes
+   its `NodeType` node from the manifest's `nodeTypeConfiguration`, imports its `Source/*.cs` as Code
+   children, and requests a release so the mesh [compiles](/Doc/Architecture/NodeTypeCompilation) the
+   type live. No app rebuild, no NuGet.
+3. An install record (a `Package` node) is written under the `Plugins` partition so the tab flips the
+   card to **Installed** and can offer **Update** when the registry's version moves on.
 
-The `Source`/`Test` Code nodes are queried **explicitly** (`namespace:{plugin} scope:subtree
-nodeType:Code`) because they live in a separate schema a plain subtree query misses — the same reason
-the [compiler](/Doc/Architecture/NodeTypeCompilation) queries `namespace:…/Source scope:subtree`.
-
-```json
-{
-  "name": "Slides",
-  "nodeCount": 4,
-  "nodes": [
-    { "path": "Slides",                              "nodeType": "Space",    "content": { … } },
-    { "path": "Slides/Slide",                        "nodeType": "NodeType", "content": { "$type": "NodeTypeDefinition", … } },
-    { "path": "Slides/Slide/Source/SlideContent",    "nodeType": "Code",     "content": { "$type": "CodeConfiguration", "code": "…" } },
-    { "path": "Slides/Slide/Source/SlideLayoutAreas","nodeType": "Code",     "content": { … } }
-  ]
-}
-```
-
-## Installing from the registry
-
-A consumer installs a plugin with **no GitHub credential** — it pulls from the registry and imports
-locally through the existing update verb:
-
-1. `POST /api/mesh/catalog` on the registry → pick a plugin.
-2. `POST /api/mesh/catalog/download {plugin}` on the registry → the `{nodes:[…]}` package.
-3. `POST /api/mesh/update` **on the consumer** with those `nodes` → the NodeTypes land with their
-   Code children and the mesh's first-build [compile](/Doc/Architecture/NodeTypeCompilation) makes
-   the types live. No app rebuild, no NuGet.
-
-The nodes carry their paths, so a plugin installs into the same partition names it was published
-under (`Slides`, `Edu`, …). Re-running an install is an upsert — `update` replaces by path/version.
+Re-installing is an upsert (create-or-update by path); installing one module never disturbs another
+in a shared partition.
 
 ## Why this shape
 
-- **Credential encapsulation.** GitHub access lives on exactly one hub. Onboarding a new
-  installation is "point it at the registry with a mesh token," not "provision it a GitHub App."
-- **No drift.** The verbs are on `MeshOperations`, so the REST surface and the MCP tools share one
-  implementation. A change to what a plugin *is* happens once.
-- **Capability, not data.** Shipping `NodeType`/`Code`/`Markdown` and excluding instances keeps the
-  package small and keeps user data (e.g. LinkedIn records) from leaking through the registry.
+- **Credential encapsulation.** GitHub access lives on exactly one instance. Onboarding a new
+  installation is "point `PluginCatalog:RegistryUrl` at the registry," not "provision it a GitHub App."
+- **Not a Space.** The catalog is an admin tab reading a remote registry; there is no partition for a
+  non-admin to navigate into and be denied.
+- **Curated + public.** Only `package.json` folders are exposed, so anonymous read is safe and the
+  catalog lists real modules (Slides, Edu, …), not every partition that happens to define a type.
+- **Capability, not data.** A package ships its `NodeType`/`Code`/content folder — never a partition's
+  user data — so installing a plugin gives you the types and their code, not anyone's records.
 
 ## Relationship to GitSync
 
-GitSync is still how the registry itself gets plugins — memex `ImportFromGitHub`s the plugins repo
-with its one credential. The registry adds the *fan-out*: git → registry (credentialed, once) →
-many installations (credential-free, over HTTP). See [Plugins](/Doc/Architecture/Plugins) for the
-node-native plugin model and [Static Repo Import](/Doc/Architecture/StaticRepoImport) for the import
-pipeline both paths share.
+GitSync is how the registry itself reads plugins — the registry's `IGitHubRepoClient` fetches the
+plugins repo with its one credential. The registry adds the *fan-out*: git → registry (credentialed,
+once) → many installations (credential-free, over HTTP). See [Plugins](/Doc/Architecture/Plugins) for
+the node-native plugin model and [Static Repo Import](/Doc/Architecture/StaticRepoImport) for the
+import pipeline both paths share.
