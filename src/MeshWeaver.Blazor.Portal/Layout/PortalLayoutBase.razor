@@ -233,36 +233,30 @@
         @MobileNavMenu
     }
 
-    @* Breadcrumb bar — the chrome-level "where am I" trail (⌂ Home › Doc › Architecture …),
-       the Blazor peer of the React-Native shell's breadcrumb toolbar and the server-side
-       BuildBreadcrumbs content trail. Each ancestor crumb links to its default page
-       (/{cumulative}); the current node is plain bold text; a trailing "· {area}" shows the
-       active area when it isn't the node's default content page. Desktop only, and hidden at
-       the mesh root (no segments) so it never adds an empty chrome row. *@
-    @* Bind the trail once via the property pattern (evaluated a single time, and short-circuited
-       off-desktop) so Count and the loop reuse the same list. *@
-    @if (ViewportInformation.IsDesktop && Breadcrumbs is { Count: > 0 } crumbs)
-    {
-        <nav class="breadcrumb-bar" aria-label="Breadcrumb">
-            <a class="crumb crumb-home" href="/" title="Home">⌂ Home</a>
-            @foreach (var crumb in crumbs)
+    @* Chrome-level breadcrumb trail — rendered on EVERY page, desktop AND mobile (present mode
+       hides it via CSS). "⌂ Home" always shows; the ancestor crumbs (each linking to its default
+       page /{cumulative}), the bold current node, and a trailing "· {area}" appear when the route
+       has a node path. Blazor peer of the React-Native shell's breadcrumb toolbar and the
+       server-side BuildBreadcrumbs content trail. *@
+    <nav class="breadcrumb-bar" aria-label="Breadcrumb">
+        <a class="crumb crumb-home" href="/" title="Home">⌂ Home</a>
+        @foreach (var crumb in Breadcrumbs)
+        {
+            <span class="crumb-sep" aria-hidden="true">›</span>
+            @if (crumb.IsLast)
             {
-                <span class="crumb-sep" aria-hidden="true">›</span>
-                @if (crumb.IsLast)
-                {
-                    <span class="crumb crumb-current" aria-current="page">@crumb.Label</span>
-                }
-                else
-                {
-                    <a class="crumb" href="@crumb.Href">@crumb.Label</a>
-                }
+                <span class="crumb crumb-current" aria-current="page">@crumb.Label</span>
             }
-            @if (!string.IsNullOrEmpty(CurrentBreadcrumbArea))
+            else
             {
-                <span class="crumb-area">· @CurrentBreadcrumbArea</span>
+                <a class="crumb" href="@crumb.Href">@crumb.Label</a>
             }
-        </nav>
-    }
+        }
+        @if (!string.IsNullOrEmpty(CurrentBreadcrumbArea))
+        {
+            <span class="crumb-area">· @CurrentBreadcrumbArea</span>
+        }
+    </nav>
 
     <div class="messagebar-container">
         <FluentMessageBarProvider Section="@MessageBarSection" Class="top-messagebar" />

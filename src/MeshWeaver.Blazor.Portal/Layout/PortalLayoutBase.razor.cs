@@ -258,7 +258,7 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     /// Breadcrumb trail for the current node — one crumb per segment of the resolved address, each
     /// linking to that ancestor's default page (<c>/{cumulative}</c>, empty area); the last segment
     /// (the current node) is flagged <see cref="Crumb.IsLast"/> so the view shows it as bold text.
-    /// Empty at the mesh root (only the ⌂ Home affordance shows, and the bar is hidden). Mirrors the
+    /// Empty at the mesh root, where the bar still renders the lone ⌂ Home affordance. Mirrors the
     /// React-Native shell's breadcrumb toolbar and the server-side <c>BuildBreadcrumbs</c> trail —
     /// derived reactively from <see cref="_currentNavContext"/>, which re-renders on every nav change.
     /// </summary>

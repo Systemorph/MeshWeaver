@@ -83,55 +83,8 @@
         z-index: 1100;
     }
 
-    /* Breadcrumb bar — chrome-level "where am I" trail below the top bar. Themed with Fluent
-       tokens so it follows light/dark like the rest of the shell. */
-    ::deep.layout>.breadcrumb-bar {
-        grid-area: breadcrumb;
-        display: flex;
-        align-items: center;
-        flex-wrap: wrap;
-        gap: 2px;
-        min-height: 34px;
-        padding: 2px 14px;
-        font-size: 0.85rem;
-        background: var(--neutral-layer-1);
-        border-bottom: 1px solid var(--neutral-stroke-divider-rest);
-    }
-
-    ::deep.breadcrumb-bar .crumb {
-        display: inline-flex;
-        align-items: center;
-        padding: 3px 8px;
-        border-radius: 5px;
-        text-decoration: none;
-        color: var(--neutral-foreground-hint);
-        white-space: nowrap;
-    }
-
-    ::deep.breadcrumb-bar a.crumb:hover {
-        background: var(--neutral-fill-stealth-hover);
-        color: var(--neutral-foreground-rest);
-    }
-
-    ::deep.breadcrumb-bar .crumb-home {
-        color: var(--accent-foreground-rest);
-        font-weight: 600;
-    }
-
-    ::deep.breadcrumb-bar .crumb-current {
-        color: var(--neutral-foreground-rest);
-        font-weight: 600;
-    }
-
-    ::deep.breadcrumb-bar .crumb-sep {
-        color: var(--neutral-foreground-hint);
-        user-select: none;
-    }
-
-    ::deep.breadcrumb-bar .crumb-area {
-        margin-left: 4px;
-        color: var(--neutral-foreground-hint);
-    }
+    /* Breadcrumb bar styles are shared across desktop + mobile — see the top-level
+       ::deep.breadcrumb-bar rules at the end of this file. */
 
     ::deep.layout>.fluent-appbar {
         grid-area: nav;
@@ -322,10 +275,11 @@
         width: 100vw;
         display: grid;
         grid-template-columns: auto minmax(0, 1fr);
-        grid-template-rows: auto auto auto 1fr;
+        grid-template-rows: auto auto auto auto 1fr;
         grid-template-areas:
             "icon head"
             "nav-menu nav-menu"
+            "breadcrumb breadcrumb"
             "messagebar messagebar"
             "main main";
         background-color: var(--fill-color);
@@ -343,10 +297,11 @@
     /* Mobile bottom position */
     ::deep.layout.panel-visible.panel-position-bottom {
         --panel-height: 250px;
-        grid-template-rows: auto auto auto 1fr var(--panel-height);
+        grid-template-rows: auto auto auto auto 1fr var(--panel-height);
         grid-template-areas:
             "icon head"
             "nav-menu nav-menu"
+            "breadcrumb breadcrumb"
             "messagebar messagebar"
             "main main"
             "panel panel";
@@ -532,4 +487,60 @@
     min-height: 0;
     min-width: 0;
     background-color: var(--neutral-layer-1);
+}
+
+/* Breadcrumb bar — chrome-level "where am I" trail below the top bar, shared across desktop and
+   mobile (each .layout grid defines a "breadcrumb" area). Themed with Fluent tokens so it follows
+   light/dark like the rest of the shell. Present mode is chrome-free (its grid omits the area), so
+   the bar is hidden there. */
+::deep.layout>.breadcrumb-bar {
+    grid-area: breadcrumb;
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 2px;
+    min-height: 34px;
+    padding: 2px 14px;
+    font-size: 0.85rem;
+    background: var(--neutral-layer-1);
+    border-bottom: 1px solid var(--neutral-stroke-divider-rest);
+}
+
+::deep.layout.present-mode>.breadcrumb-bar {
+    display: none;
+}
+
+::deep.breadcrumb-bar .crumb {
+    display: inline-flex;
+    align-items: center;
+    padding: 3px 8px;
+    border-radius: 5px;
+    text-decoration: none;
+    color: var(--neutral-foreground-hint);
+    white-space: nowrap;
+}
+
+::deep.breadcrumb-bar a.crumb:hover {
+    background: var(--neutral-fill-stealth-hover);
+    color: var(--neutral-foreground-rest);
+}
+
+::deep.breadcrumb-bar .crumb-home {
+    color: var(--accent-foreground-rest);
+    font-weight: 600;
+}
+
+::deep.breadcrumb-bar .crumb-current {
+    color: var(--neutral-foreground-rest);
+    font-weight: 600;
+}
+
+::deep.breadcrumb-bar .crumb-sep {
+    color: var(--neutral-foreground-hint);
+    user-select: none;
+}
+
+::deep.breadcrumb-bar .crumb-area {
+    margin-left: 4px;
+    color: var(--neutral-foreground-hint);
 }
