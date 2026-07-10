@@ -17,6 +17,13 @@ public enum PackageKind
     /// package's <c>Source/*.cs</c> become a NodeType the mesh compiles live (Roslyn) on install via
     /// its existing compile/release flow — no rebuild, no NuGet.</summary>
     Code,
+
+    /// <summary>A whole node-native plugin repo (node-per-file): a Space root carrying a
+    /// <c>PluginManifest</c>, its <c>NodeType</c> nodes and their <c>Source/*.cs</c>, docs and data —
+    /// each file is already a MeshNode at its CANONICAL path (no per-partition rebase). Installed by
+    /// importing the nodes verbatim and compiling every NodeType live. This is the shape the
+    /// <c>MeshWeaver.Plugins</c> repo ships (the node IS the manifest).</summary>
+    NodeRepo,
 }
 
 /// <summary>

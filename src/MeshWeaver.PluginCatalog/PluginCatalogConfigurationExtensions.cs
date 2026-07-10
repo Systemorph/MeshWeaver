@@ -39,47 +39,12 @@ public static class PluginCatalogConfigurationExtensions
                 return config;
             });
 
-    /// <summary>
-    /// Registers the plugin catalog AND seeds a ready-to-use catalog: a <c>Plugins</c> Space (a valid
-    /// partition root — a custom type can't be one) whose <c>Plugins/catalog</c> child is a
-    /// <c>PluginCatalog</c> node pointed at <paramref name="sourceRepoPath"/>. Install records land in
-    /// the same <c>Plugins</c> partition (as siblings), so the catalog is the space's home. When
-    /// <paramref name="sourceRepoPath"/> is empty the catalog renders a "configure me" prompt.
-    /// </summary>
-    /// <typeparam name="TBuilder">The concrete mesh builder type.</typeparam>
-    /// <param name="builder">The mesh builder.</param>
-    /// <param name="sourceRepoPath">Local path to the source git repo (the plugins checkout).</param>
-    /// <param name="sourceSubdir">Subdirectory holding the package folders (default <c>"catalog"</c>).</param>
-    /// <param name="sourceRef">Git ref to browse/install from (default <c>"HEAD"</c>).</param>
-    /// <returns>The same builder, for chaining.</returns>
-    public static TBuilder AddPluginCatalog<TBuilder>(
-        this TBuilder builder, string sourceRepoPath, string sourceSubdir = "catalog", string sourceRef = "HEAD")
-        where TBuilder : MeshBuilder
-        => (TBuilder)builder
-            .AddPluginCatalog()
-            .AddMeshNodes(
-                new MeshNode(PackageInstaller.InstalledPartition)
-                {
-                    Name = "Plugins",
-                    NodeType = "Space",
-                    State = MeshNodeState.Active,
-                    Content = new MarkdownContent
-                    {
-                        Content = "# Plugins\n\nThe plugin catalog and installed packages.",
-                    },
-                },
-                new MeshNode("catalog", PackageInstaller.InstalledPartition)
-                {
-                    Name = "Plugin Catalog",
-                    NodeType = CatalogNodeType,
-                    State = MeshNodeState.Active,
-                    Content = new PluginCatalogContent
-                    {
-                        SourceRepoPath = sourceRepoPath,
-                        SourceSubdir = sourceSubdir,
-                        SourceRef = sourceRef,
-                    },
-                });
+    // NOTE: the old AddPluginCatalog(sourceRepoPath, …) overload — which seeded a browsable
+    // "Plugins" Space + a PluginCatalog node — was removed. The catalog is now a platform-admin
+    // Settings tab (PluginCatalogSettingsTab) reading a REMOTE registry over HTTP, and a registry
+    // instance exposes its source via /api/plugins. Install records still live in the "Plugins"
+    // partition (as Package nodes), but there is no browsable Space root, so no user can navigate
+    // into it and hit "Access denied on 'Plugins'".
 
     /// <summary>Registers the plugin-catalog content types under their short names.</summary>
     /// <param name="typeRegistry">The type registry to populate.</param>
@@ -87,7 +52,8 @@ public static class PluginCatalogConfigurationExtensions
     public static ITypeRegistry AddPluginCatalogTypes(this ITypeRegistry typeRegistry)
         => typeRegistry
             .WithType(typeof(PackageManifest), nameof(PackageManifest))
-            .WithType(typeof(PluginCatalogContent), nameof(PluginCatalogContent));
+            .WithType(typeof(PluginCatalogContent), nameof(PluginCatalogContent))
+            .WithType(typeof(PluginManifest), nameof(PluginManifest));
 
     private static MeshNode CreatePackageNodeType() => new(PackageInstaller.PackageNodeType)
     {

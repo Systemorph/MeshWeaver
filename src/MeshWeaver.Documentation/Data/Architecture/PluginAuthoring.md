@@ -70,22 +70,26 @@ and check the type's page.
 1. Push your folder to a branch of **`Systemorph/MeshWeaver.Plugins`** and open a PR.
 2. CI runs `scripts/validate-repos.py` — every node `.json` must parse, carry `id` + `nodeType`,
    and every NodeType must ship `Source/*.cs`.
-3. On merge, the plugin is published: the registry (memex) syncs the repo — as the **GitHub App**,
-   never a person — and the plugin appears in `POST /api/mesh/catalog` for every consumer.
+3. On merge, the plugin is published: the registry (memex) reads the repo — as the **GitHub App**,
+   never a person — and the plugin appears in the registry's `GET /api/plugins` catalog, ready to
+   install from any instance's **Plugin Catalog** admin tab.
 
 ## 4. Install a plugin
 
 ### From the registry (any instance — no GitHub access needed)
 
+A platform admin installs from the GUI: **Settings ▸ Administration ▸ Plugin Catalog**. The tab
+lists the registry's modules with Install / Update / Installed status and installs on click — the
+consumer pulls the package over HTTP and compiles it locally; no GitHub credential is involved. The
+tab reads `PluginCatalog:RegistryUrl` (the registry base URL) and the registry's public endpoints:
+
 ```text
-POST {registry}/api/mesh/catalog                       → pick a plugin
-POST {registry}/api/mesh/catalog/download {plugin}     → its definition {nodes:[…]}
-POST {your-instance}/api/mesh/update                   → feed the nodes in
+GET  {registry}/api/plugins             → the catalog { packages:[…] }    (anonymous)
+POST {registry}/api/plugins/files {id}  → a package's files { files:[…] } (anonymous)
 ```
 
-Both calls use a mesh `Bearer mw_…` token (the same auth as the rest of `/api/mesh/*`). The types
-compile on first import; re-running is an upsert. See [Plugin
-Registry](/Doc/Architecture/PluginRegistry) for the payload shapes.
+The types compile on first import; re-running is an upsert. See [Plugin
+Registry](/Doc/Architecture/PluginRegistry) for the payload shapes and the install flow.
 
 ### Straight from git (your own instance, own repos)
 
@@ -128,8 +132,10 @@ Any MeshWeaver instance can be the distribution point for its own plugins. One-t
 | `GitHub__App__PrivateKey` | the PEM text |
 | `GitHub__App__InstallationOwner` | your org login (picks the installation; or pin `GitHub__App__InstallationId`) |
 
-5. **Sync your plugins repo** into a Space (GitSync import, §4) — the instance now serves the
-   plugins at `POST /api/mesh/catalog` to any consumer with a mesh token.
+5. **Point the instance's catalog source at your plugins repo** — set
+   `PluginCatalog:SourceRepoPath` to the repo URL (the App credential above lets it read a private
+   repo). The instance now serves the catalog anonymously at `GET /api/plugins`; consumers set their
+   `PluginCatalog:RegistryUrl` to this instance and install from the **Plugin Catalog** admin tab.
 
 The App credential lives on this ONE instance; every consumer pulls over HTTP — that's the whole
 point ([Plugin Registry](/Doc/Architecture/PluginRegistry) → credential encapsulation).

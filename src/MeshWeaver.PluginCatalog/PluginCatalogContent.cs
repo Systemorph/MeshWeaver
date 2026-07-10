@@ -21,3 +21,18 @@ public record PluginCatalogContent
     /// <summary>Optional markdown intro shown above the package list.</summary>
     public string? Description { get; init; }
 }
+
+/// <summary>
+/// The content of a node-native plugin's Space root (<c>&lt;Plugin&gt;.json</c> in the plugins repo) —
+/// "the node is the manifest". Registered so a consumer deserializes the root verbatim on install
+/// instead of degrading it to a raw <c>JsonElement</c>. Deliberately tiny; the plugin's real payload
+/// is its <c>NodeType</c> + <c>Source</c> nodes.
+/// </summary>
+public record PluginManifest
+{
+    /// <summary>One-line description of what the plugin adds.</summary>
+    public string? Description { get; init; }
+
+    /// <summary>Minimum mesh version the plugin needs (advisory).</summary>
+    public string? MinMeshVersion { get; init; }
+}
