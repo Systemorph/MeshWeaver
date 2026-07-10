@@ -7,7 +7,6 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.PluginCatalog;
 
@@ -85,9 +84,7 @@ public static class PluginCatalogSettingsTab
                 "No plugin registry is configured. Set <code>PluginCatalog:RegistryUrl</code> (for " +
                 "example <code>https://memex.meshweaver.cloud</code>) to enable the catalog.</p>"));
 
-        var logger = host.Hub.ServiceProvider.GetService<ILoggerFactory>()
-            ?.CreateLogger("MeshWeaver.PluginCatalog.SettingsTab");
-        var source = new RegistryPackageSource(host.Hub, options.RegistryUrl, logger);
+        var source = new RegistryPackageSource(host.Hub, options.RegistryUrl);
 
         // Reuse the shared catalog rendering: live package list from the registry joined with this
         // instance's install registry into Install / Update / Installed cards.
