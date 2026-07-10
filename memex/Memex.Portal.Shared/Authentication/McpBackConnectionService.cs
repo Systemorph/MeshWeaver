@@ -1,7 +1,7 @@
 using System.Collections.Concurrent;
 using System.Reactive.Linq;
 using MeshWeaver.AI.Connect;
-using MeshWeaver.Blazor.AI;
+using MeshWeaver.Mcp;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
