@@ -62,8 +62,9 @@ public class PackageInstallTest(ITestOutputHelper output) : MonolithMeshTestBase
 
             // Fetch + install.
             var files = await source.FetchPackageFiles(pkg, "HEAD").FirstAsync().ToTask();
-            var count = await PackageInstaller.Install(Mesh, pkg, files, "HEAD").FirstAsync().ToTask();
-            count.Should().Be(1);
+            var result = await PackageInstaller.Install(Mesh, pkg, files, "HEAD").FirstAsync().ToTask();
+            result.Total.Should().Be(1);
+            result.Written.Should().Be(1);
 
             // The content landed under the target partition, rebased off the package folder.
             var installed = await Mesh.GetWorkspace().GetMeshNodeStream("CatalogTest/Greeting")
@@ -152,8 +153,8 @@ public class PackageInstallTest(ITestOutputHelper output) : MonolithMeshTestBase
         pkg.SourceFolder.Should().Be("catalog/gh-pack");
 
         var files = await source.FetchPackageFiles(pkg, "HEAD").FirstAsync().ToTask();
-        var count = await PackageInstaller.Install(Mesh, pkg, files, "main").FirstAsync().ToTask();
-        count.Should().Be(1);
+        var result = await PackageInstaller.Install(Mesh, pkg, files, "main").FirstAsync().ToTask();
+        result.Written.Should().Be(1);
 
         var node = await Mesh.GetWorkspace().GetMeshNodeStream("GhPart/Doc")
             .Where(n => n is not null).FirstAsync().Timeout(30.Seconds()).ToTask();
