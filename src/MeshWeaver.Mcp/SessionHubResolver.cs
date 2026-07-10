@@ -7,7 +7,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
-namespace MeshWeaver.Blazor.AI;
+namespace MeshWeaver.Mcp;
 
 /// <summary>
 /// Resolves a per-caller hosted hub at <c>portal/{prefix}-{sessionId}</c> for

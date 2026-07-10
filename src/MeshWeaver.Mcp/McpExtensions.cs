@@ -6,7 +6,7 @@ using Microsoft.Extensions.DependencyInjection;
 using ModelContextProtocol.AspNetCore;
 using ModelContextProtocol.Server;
 
-namespace MeshWeaver.Blazor.AI;
+namespace MeshWeaver.Mcp;
 
 /// <summary>
 /// Extension methods for registering MCP (Model Context Protocol) services and endpoints.

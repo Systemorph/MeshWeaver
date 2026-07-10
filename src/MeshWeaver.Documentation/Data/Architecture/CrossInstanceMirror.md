@@ -212,7 +212,7 @@ If you want strictly zero LLM tokens, the same `MirrorOperations` logic is also 
 | HTTP storage adapter | `src/MeshWeaver.Hosting/Persistence/Http/HttpMeshStorageAdapter.cs` |
 | MCP transport | `src/MeshWeaver.Hosting/Persistence/Http/McpRemoteMeshClient.cs` |
 | Path remapping (source → target prefix) | `src/MeshWeaver.Hosting/Persistence/Http/PathRemappingStorageAdapter.cs` |
-| MCP tools (`MirrorToRemote`, `PullFromRemote`) | `src/MeshWeaver.Blazor.AI/McpMeshPlugin.cs` |
+| MCP tools (`MirrorToRemote`, `PullFromRemote`) | `src/MeshWeaver.Mcp/McpMeshPlugin.cs` |
 | REST endpoint (`POST /api/mesh/mirror`) | `memex/Memex.Portal.Shared/Api/MeshApiEndpoints.cs` |
 | Mesh-hub handler | *not yet registered — see status note* |
 | Tests | `test/MeshWeaver.Hosting.Test/HttpMeshStorageAdapterTests.cs` · `MirrorOperationsTests.cs` |

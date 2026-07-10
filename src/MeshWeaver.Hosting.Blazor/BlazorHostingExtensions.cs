@@ -2,8 +2,8 @@
 using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using MeshWeaver.Blazor;
-using MeshWeaver.Blazor.AI;
 using MeshWeaver.Blazor.Infrastructure;
+using MeshWeaver.Mcp;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
 using MeshWeaver.Layout.Client;

@@ -12,7 +12,7 @@ using MeshWeaver.AI.AzureFoundry;
 using MeshWeaver.AI.OpenAI;
 using MeshWeaver.AI.ClaudeCode;
 using MeshWeaver.AI.Copilot;
-using MeshWeaver.Blazor.AI;
+using MeshWeaver.Mcp;
 using MeshWeaver.Speech;
 using MeshWeaver.Blazor.GoogleMaps;
 using MeshWeaver.Blazor.Graph;

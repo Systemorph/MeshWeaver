@@ -1,6 +1,6 @@
 using System.Collections.Generic;
-using MeshWeaver.Blazor.AI;
 using MeshWeaver.Hosting.Monolith.TestBase;
+using MeshWeaver.Mcp;
 using MeshWeaver.Mesh;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;

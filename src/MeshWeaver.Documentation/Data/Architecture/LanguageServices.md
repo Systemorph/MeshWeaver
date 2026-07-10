@@ -176,7 +176,7 @@ The following capabilities were considered but are not yet implemented:
 | `GetCompilationInputsAsync` (the per-file pipeline) | `src/MeshWeaver.Graph/Configuration/MeshNodeCompilationService.cs` |
 | DI registration | `src/MeshWeaver.Graph/Configuration/GraphConfigurationExtensions.cs` (`AddGraph`) |
 | Agent plugin | `src/MeshWeaver.AI/Plugins/LspPlugin.cs` |
-| MCP tools | `src/MeshWeaver.Blazor.AI/McpMeshPlugin.cs` (the `Lsp*` methods) |
+| MCP tools | `src/MeshWeaver.Mcp/McpMeshPlugin.cs` (the `Lsp*` methods) |
 | Monaco wiring | `src/MeshWeaver.Blazor/Components/Monaco/MonacoEditorView.razor[.js]`, `CodeEditorView.razor` |
 | Editor opt-in | `src/MeshWeaver.Layout/CodeEditorControl.cs` (`LanguageServer` property) |
 | Edit-view opt-in | `src/MeshWeaver.Graph/CodeLayoutAreas.cs` (`Edit` area) |

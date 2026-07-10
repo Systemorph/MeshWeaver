@@ -3,7 +3,7 @@ using System.Reactive.Threading.Tasks;
 using MeshWeaver.Mesh.Services;
 using Microsoft.Extensions.Logging;
 
-namespace MeshWeaver.Blazor.AI;
+namespace MeshWeaver.Mcp;
 
 /// <summary>
 /// Provides autocomplete suggestions for mesh paths.
