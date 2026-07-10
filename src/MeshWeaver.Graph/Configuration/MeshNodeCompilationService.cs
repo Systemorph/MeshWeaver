@@ -1010,6 +1010,10 @@ internal class MeshNodeCompilationService(
             strippedSources.Add((p.Path, stripped, p.LastModifiedTicks));
         }
 
+        // A legacy `#r "nuget:MeshWeaver.BusinessRules.Generator"` must NOT reach the NuGet resolver
+        // (the generator ships built-in now) — see StripBuiltInScopeGeneratorRef.
+        StripBuiltInScopeGeneratorRef(allNugetRefs, builtInPresent: BuiltInGeneratorPaths.Count > 0);
+
         // 🚨 100% reactive — NO await, and the input assembly is NOT wrapped in
         // _ioPool.Run. The only async leaf is NuGet restore (network IO), and it runs
         // ONLY when a `#r "nuget:"` directive is present — bridged through the IoPool
@@ -1287,10 +1291,40 @@ internal class MeshNodeCompilationService(
     // generator; those add to this built-in one. Resolved once (the file is stable per process).
     private static readonly IReadOnlyList<string> BuiltInGeneratorPaths = ResolveBuiltInGenerators();
 
+    /// <summary>
+    /// NuGet package id (and, with <c>.dll</c>, assembly file name) of the BusinessRules scope
+    /// source generator. It ships BUILT-IN with the platform, so a legacy
+    /// <c>#r "nuget:MeshWeaver.BusinessRules.Generator"</c> is redundant and is filtered out of
+    /// BOTH the generator list (avoid a double-run → CS0101, see <see cref="RunSourceGenerators"/>)
+    /// and the NuGet resolve set (avoid a round-trip to the removed mesh-local feed, see
+    /// <see cref="AssembleCompilationInputs"/>).
+    /// </summary>
+    private const string BuiltInScopeGeneratorId = "MeshWeaver.BusinessRules.Generator";
+
     private static IReadOnlyList<string> ResolveBuiltInGenerators()
     {
-        var path = Path.Combine(AppContext.BaseDirectory, "MeshWeaver.BusinessRules.Generator.dll");
+        var path = Path.Combine(AppContext.BaseDirectory, BuiltInScopeGeneratorId + ".dll");
         return File.Exists(path) ? [path] : [];
+    }
+
+    /// <summary>
+    /// Removes a legacy <c>#r "nuget:MeshWeaver.BusinessRules.Generator"</c> from the NuGet resolve
+    /// set when the generator ships built-in (<paramref name="builtInPresent"/>). The generator is
+    /// now part of the platform, so that <c>#r</c> is redundant — and RESOLVING it hard-fails on a
+    /// deployed image: after <c>BakeMeshLocalFeed</c> was removed (#395) the mesh-local feed
+    /// (<c>dist/packages</c>) is gone, so NuGet throws
+    /// <c>"The local source '/app/dist/packages' doesn't exist"</c> and breaks every deployed scope
+    /// node still carrying the legacy <c>#r</c> (the atioz BalanceSheet failure). Behaviour is
+    /// unchanged: the built-in generator still emits the <c>IScope&lt;,&gt;</c> implementations, and
+    /// <see cref="RunSourceGenerators"/> already de-dups the generator itself (CS0101). When the
+    /// built-in is somehow absent the <c>#r</c> is kept so the generator can still resolve via NuGet.
+    /// Other package references are never touched.
+    /// </summary>
+    internal static void StripBuiltInScopeGeneratorRef(List<NuGetPackageReference> refs, bool builtInPresent)
+    {
+        if (builtInPresent)
+            refs.RemoveAll(r => string.Equals(
+                r.Id, BuiltInScopeGeneratorId, StringComparison.OrdinalIgnoreCase));
     }
 
     private static CSharpCompilation RunSourceGenerators(
@@ -1299,12 +1333,13 @@ internal class MeshNodeCompilationService(
         // Always include the built-in scope generator, plus any OTHER generator a node #r'd. Filter a
         // node's own `#r "nuget:MeshWeaver.BusinessRules.Generator"` OUT — otherwise the same generator
         // loads from two paths (built-in + baked) and runs twice → duplicate IScope<,> implementations
-        // → CS0101. Legacy nodes that still carry that #r keep compiling (built-in supersedes it).
+        // → CS0101. Legacy nodes that still carry that #r keep compiling (built-in supersedes it, and
+        // AssembleCompilationInputs strips the #r from the NuGet resolve set so it never round-trips).
         IReadOnlyList<string> allPaths = BuiltInGeneratorPaths.Count == 0
             ? generatorAssemblyPaths
             : [.. BuiltInGeneratorPaths,
                .. generatorAssemblyPaths.Where(p => !string.Equals(
-                   Path.GetFileName(p), "MeshWeaver.BusinessRules.Generator.dll", StringComparison.OrdinalIgnoreCase))];
+                   Path.GetFileName(p), BuiltInScopeGeneratorId + ".dll", StringComparison.OrdinalIgnoreCase))];
         if (allPaths.Count == 0)
             return compilation;
         var generators = SourceGeneratorLoader.Discover(allPaths, logger);
