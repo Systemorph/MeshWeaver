@@ -47,7 +47,10 @@ exposed, and the registry's own credential never leaves.
 | Verb | Body | Returns |
 |---|---|---|
 | `GET /api/plugins` | — (`?ref=` advisory) | `{ packages: [PackageManifest…] }` |
-| `POST /api/plugins/files` | `{ id, sourceFolder }` | `{ files: [{ relativePath, content }…] }` |
+| `POST /api/plugins/files` | `{ id }` (`ref` optional/advisory) | `{ files: [{ relativePath, content }…] }` |
+
+A package is addressed by its **id** only; the registry resolves what that plugin ships from its
+configured source — the consumer never supplies a folder path.
 
 Both are backed by the registry's configured git [`IPackageSource`](/Doc/Architecture/Plugins) —
 `PluginCatalog:SourceRepoPath` (a URL → the plugins repo via GitSync's client, or a local path). The

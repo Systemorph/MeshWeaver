@@ -1018,7 +1018,7 @@ public static class MemexConfiguration
 
         // PUBLIC plugin registry — GET /api/plugins + POST /api/plugins/files. This instance is the
         // distribution point; consumers pull the catalog + packages without their own git credentials
-        // (only curated package.json folders are exposed; the registry's own credential stays here).
+        // (only curated packages, addressed by plugin id, are exposed; the registry's credential stays here).
         app.MapPluginRegistry();
 
         // Centralized speech-to-text — POST /api/speech/transcribe (multipart audio → text),
