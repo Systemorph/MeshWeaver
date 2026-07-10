@@ -146,7 +146,9 @@ public class BuiltInLanguageModelProvider : IStaticNodeProvider
                 NodeType = ModelProviderNodeType.NodeType,
                 Name = source.ProviderName,
                 Category = "Providers",
-                Icon = "Key",
+                // Brand logo when the provider name resolves to a known maker; the
+                // generic key otherwise. See ModelProviderIcons.
+                Icon = ModelProviderIcons.ForProvider(source.ProviderName) ?? "Key",
                 // create-if-absent: importer seeds it once, then admin owns it.
                 SyncBehavior = SyncBehavior.ExcludeThisAndChildren,
                 Content = providerConfig
@@ -194,7 +196,9 @@ public class BuiltInLanguageModelProvider : IStaticNodeProvider
                     NodeType = LanguageModelNodeType.NodeType,
                     Name = modelId,
                     Category = "Models",
-                    Icon = "Sparkle",
+                    // Brand logo inferred from the model id (then provider) so a model reads
+                    // as its maker; the generic sparkle when unknown. See ModelProviderIcons.
+                    Icon = ModelProviderIcons.ForModel(source.ProviderName, modelId) ?? "Sparkle",
                     Content = def
                 });
             }
