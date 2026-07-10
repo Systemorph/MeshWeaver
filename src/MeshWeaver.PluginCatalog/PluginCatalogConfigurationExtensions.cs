@@ -52,7 +52,8 @@ public static class PluginCatalogConfigurationExtensions
     public static ITypeRegistry AddPluginCatalogTypes(this ITypeRegistry typeRegistry)
         => typeRegistry
             .WithType(typeof(PackageManifest), nameof(PackageManifest))
-            .WithType(typeof(PluginCatalogContent), nameof(PluginCatalogContent));
+            .WithType(typeof(PluginCatalogContent), nameof(PluginCatalogContent))
+            .WithType(typeof(PluginManifest), nameof(PluginManifest));
 
     private static MeshNode CreatePackageNodeType() => new(PackageInstaller.PackageNodeType)
     {

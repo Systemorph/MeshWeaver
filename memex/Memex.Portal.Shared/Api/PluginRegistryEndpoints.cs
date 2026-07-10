@@ -50,7 +50,11 @@ public static class PluginRegistryEndpoints
         var repo = config["PluginCatalog:SourceRepoPath"] ?? "";
         var subdir = config["PluginCatalog:SourceSubdir"] ?? "catalog";
         var gitRef = config["PluginCatalog:SourceRef"] ?? "HEAD";
-        return (PackageSources.FromRepo(hub, repo, subdir, logger), gitRef);
+        // Default to the node-native repo format (what MeshWeaver.Plugins ships); a package.json repo
+        // can opt in with PluginCatalog:SourceFormat=package-json.
+        var format = config["PluginCatalog:SourceFormat"] ?? "node-repo";
+        var nodeRepo = !string.Equals(format, "package-json", StringComparison.OrdinalIgnoreCase);
+        return (PackageSources.FromRepo(hub, repo, subdir, logger, nodeRepo), gitRef);
     }
 
     private static Task<IResult> List(IMessageHub hub, IConfiguration config, CancellationToken ct)
