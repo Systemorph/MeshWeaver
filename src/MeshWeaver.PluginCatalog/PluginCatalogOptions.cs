@@ -19,7 +19,9 @@ public sealed class PluginCatalogOptions
     /// </summary>
     public string RegistryUrl { get; set; } = "";
 
-    /// <summary>The git ref the registry browses/installs from (default <c>HEAD</c>). The registry may
-    /// override this with its own configured ref; passed through so a pinned rollout is possible.</summary>
+    /// <summary>The git ref requested when reading the registry (default <c>HEAD</c>). This is
+    /// <b>advisory</b>: the registry is authoritative on the ref it serves (its own
+    /// <c>PluginCatalog:SourceRef</c>) and currently ignores the consumer-supplied value — it is sent
+    /// so the registry could honor a pinned rollout later without a consumer change.</summary>
     public string RegistryRef { get; set; } = "HEAD";
 }

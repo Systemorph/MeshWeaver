@@ -1,3 +1,4 @@
+using System.Linq;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using MeshWeaver.Messaging;
@@ -77,9 +78,24 @@ public static class PluginRegistryEndpoints
         var (source, gitRef) = Source(hub, config);
         if (source is null || string.IsNullOrWhiteSpace(body.Id))
             return Task.FromResult(Results.Content(PluginRegistryPayloads.Files([]), "application/json"));
-        var manifest = new PackageManifest { Id = body.Id, SourceFolder = body.SourceFolder };
-        return source.FetchPackageFiles(manifest, gitRef)
-            .Select(files => (IResult)Results.Content(PluginRegistryPayloads.Files(files), "application/json"))
+
+        // 🚨 Resolve the requested package from the registry's CURATED catalog and fetch ITS folder —
+        // never a client-supplied path. Trusting a caller-provided folder would let an anonymous caller
+        // read arbitrary repo files (the whole repo with folder ""); the id must match a published
+        // package.json folder, anything else is 404. Curated-only is a security property, not a hint.
+        return source.ListPackages(gitRef)
+            .SelectMany(packages =>
+            {
+                var pkg = packages.FirstOrDefault(p => string.Equals(p.Id, body.Id, StringComparison.Ordinal));
+                if (pkg is null)
+                {
+                    logger?.LogWarning("Plugin registry: files requested for unknown package '{Id}'", body.Id);
+                    return Observable.Return((IResult)Results.Json(
+                        new { error = $"Unknown package '{body.Id}'" }, statusCode: StatusCodes.Status404NotFound));
+                }
+                return source.FetchPackageFiles(pkg, gitRef)
+                    .Select(files => (IResult)Results.Content(PluginRegistryPayloads.Files(files), "application/json"));
+            })
             .Catch((Exception ex) =>
             {
                 logger?.LogWarning(ex, "Plugin registry: fetching files for {Id} @ {Ref} failed", body.Id, gitRef);
@@ -89,7 +105,8 @@ public static class PluginRegistryEndpoints
             .FirstAsync().ToTask(ct);
     }
 
-    /// <summary>Fetch-files request: the package <paramref name="Id"/> + its <paramref name="SourceFolder"/>
-    /// (from the catalog listing). <paramref name="Ref"/> is advisory — the registry serves its own ref.</summary>
-    public record FilesBody(string Id, string? SourceFolder = null, string? Ref = null);
+    /// <summary>Fetch-files request: only the package <paramref name="Id"/> is authoritative — the
+    /// registry resolves the folder from its curated catalog. <paramref name="Ref"/> is advisory (the
+    /// registry serves its own configured ref).</summary>
+    public record FilesBody(string Id, string? Ref = null);
 }

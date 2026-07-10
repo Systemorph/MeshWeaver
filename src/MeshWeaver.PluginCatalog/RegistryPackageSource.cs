@@ -1,9 +1,9 @@
+using System.Net.Http;
 using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.PluginCatalog;
 
@@ -15,7 +15,9 @@ namespace MeshWeaver.PluginCatalog;
 /// git <see cref="IPackageSource"/> (e.g. <see cref="GitHubPackageSource"/> on the plugins repo).
 ///
 /// <para>🚨 Reactive end-to-end — the HTTP leaves run on the mesh's Http I/O pool, never a bare
-/// <c>Observable.FromAsync</c> (mirrors <c>InstanceOAuthService</c>).</para>
+/// <c>Observable.FromAsync</c> (mirrors <c>InstanceOAuthService</c>). The <see cref="HttpClient"/>
+/// comes from <see cref="IHttpClientFactory"/> when the host registered one, else a single shared
+/// long-lived client — never a per-instance <c>new HttpClient()</c> (socket exhaustion).</para>
 /// </summary>
 public sealed class RegistryPackageSource : IPackageSource
 {
@@ -24,22 +26,24 @@ public sealed class RegistryPackageSource : IPackageSource
 
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
+    // Shared fallback when no IHttpClientFactory is registered — HttpClient is designed to be
+    // long-lived and shared (per Microsoft guidance); a per-call `new HttpClient()` leaks sockets.
+    // Immutable shared resource, not a cache, so it does not fall under the no-static-state rule.
+    private static readonly HttpClient SharedHttp = new();
+
     private readonly string _registryUrl;
     private readonly IIoPool _httpPool;
     private readonly HttpClient _http;
-    private readonly ILogger? _logger;
 
     /// <summary>Creates the source. <paramref name="registryUrl"/> is the registry instance base URL
     /// (e.g. <c>https://memex.meshweaver.cloud</c>); trailing slash is trimmed.</summary>
-    public RegistryPackageSource(IMessageHub hub, string registryUrl, ILogger? logger = null)
+    public RegistryPackageSource(IMessageHub hub, string registryUrl)
     {
         _registryUrl = (registryUrl ?? "").TrimEnd('/');
         _httpPool = hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.Http) ?? IoPool.Unbounded;
-        _http = new HttpClient();
-        _logger = logger;
+        _http = hub.ServiceProvider.GetService<IHttpClientFactory>()?.CreateClient("plugin-registry") ?? SharedHttp;
     }
 
-    /// <summary>The list-catalog response shape (mirrors what <see cref="PluginRegistryPayloads"/> writes).</summary>
     private sealed record ListResponse(IReadOnlyList<PackageManifest>? Packages);
     private sealed record FilesResponse(IReadOnlyList<PackageFile>? Files);
 
@@ -57,8 +61,9 @@ public sealed class RegistryPackageSource : IPackageSource
     public IObservable<IReadOnlyList<PackageFile>> FetchPackageFiles(PackageManifest package, string gitRef) =>
         _httpPool.Invoke(async ct =>
         {
-            var body = JsonSerializer.Serialize(
-                new { id = package.Id, sourceFolder = package.SourceFolder, @ref = gitRef }, Json);
+            // Only the package id is authoritative — the registry resolves the folder from its own
+            // curated catalog (see PluginRegistryEndpoints), so a consumer can't reach arbitrary paths.
+            var body = JsonSerializer.Serialize(new { id = package.Id, @ref = gitRef }, Json);
             using var content = new StringContent(body, System.Text.Encoding.UTF8, "application/json");
             using var resp = await _http.PostAsync($"{_registryUrl}{RoutePrefix}/files", content, ct)
                 .ConfigureAwait(false);
