@@ -19,7 +19,9 @@ namespace Memex.Portal.Shared.Api;
 /// (<c>PluginCatalog:SourceRepoPath</c> — e.g. the plugins repo via GitSync), so a consuming instance
 /// browses/installs over HTTP with NO git/GitHub credentials of its own: the registry's GitHub App
 /// credential stays here and is never handed out (npm/NuGet-style encapsulation). Only curated
-/// packages (folders carrying <c>package.json</c>) are exposed, so anonymous read is safe by design.
+/// packages — each addressed by its plugin id in the configured source (node-native
+/// <c>&lt;Plugin&gt;.json</c> Space roots by default, or <c>package.json</c> folders) — are exposed,
+/// so anonymous read is safe by design.
 ///
 /// <para>Consumed by <see cref="RegistryPackageSource"/>; the wire shapes are produced by
 /// <see cref="PluginRegistryPayloads"/> so producer and consumer cannot drift.</para>
@@ -79,14 +81,18 @@ public static class PluginRegistryEndpoints
     private static Task<IResult> Files(IMessageHub hub, IConfiguration config, FilesBody body, CancellationToken ct)
     {
         var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger(typeof(PluginRegistryEndpoints));
+        // A missing id is a malformed request → 400 (don't disguise it as a valid empty package).
+        if (string.IsNullOrWhiteSpace(body.Id))
+            return Task.FromResult(Results.Json(
+                new { error = "Field 'id' is required." }, statusCode: StatusCodes.Status400BadRequest));
         var (source, gitRef) = Source(hub, config);
-        if (source is null || string.IsNullOrWhiteSpace(body.Id))
+        if (source is null) // registry not configured → an empty (not erroneous) response
             return Task.FromResult(Results.Content(PluginRegistryPayloads.Files([]), "application/json"));
 
-        // 🚨 Resolve the requested package from the registry's CURATED catalog and fetch ITS folder —
-        // never a client-supplied path. Trusting a caller-provided folder would let an anonymous caller
-        // read arbitrary repo files (the whole repo with folder ""); the id must match a published
-        // package.json folder, anything else is 404. Curated-only is a security property, not a hint.
+        // 🚨 Resolve the requested package from the registry's CURATED catalog by ID and fetch what THAT
+        // package ships — never a client-supplied path. The logic is "the id must match a published
+        // package", independent of source format; trusting a caller-provided folder would let an
+        // anonymous caller read arbitrary repo files. An unknown id is 404. A security property, not a hint.
         return source.ListPackages(gitRef)
             .SelectMany(packages =>
             {

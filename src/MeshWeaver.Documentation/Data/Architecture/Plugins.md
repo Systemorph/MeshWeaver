@@ -59,8 +59,8 @@ configured git source (the plugins repo):
 
 | Verb | Returns |
 |---|---|
-| `GET /api/plugins` | `{ packages:[PackageManifest…] }` — the curated modules (folders carrying a `package.json`) |
-| `POST /api/plugins/files` `{id}` | `{ files:[{relativePath, content}…] }` — one package's folder files |
+| `GET /api/plugins` | `{ packages:[PackageManifest…] }` — the curated modules from the configured source (node-native `<Plugin>.json` Space roots by default) |
+| `POST /api/plugins/files` `{id}` | `{ files:[{relativePath, content}…] }` — the files that plugin (by id) ships |
 
 A consuming instance browses this from its **Plugin Catalog** admin tab (Settings ▸ Administration,
 platform admins only) and installs on click: the package's files are parsed into nodes and upserted
