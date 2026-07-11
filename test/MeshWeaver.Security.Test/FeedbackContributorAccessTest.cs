@@ -1,4 +1,6 @@
+using System.Linq;
 using System.Threading.Tasks;
+using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Graph.Security;
 using MeshWeaver.Hosting;
 using MeshWeaver.Hosting.Monolith;
@@ -30,8 +32,10 @@ public class FeedbackContributorAccessTest(ITestOutputHelper output) : MonolithM
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder) =>
         ConfigureMeshBase(builder)
             .AddRowLevelSecurity()
-            // The dedicated Feedback space grants the Public subject the Contributor role.
-            .AddMeshNodes(AssignmentNodeFactory.UserRole(WellKnownUsers.Public, "Contributor", FeedbackScope));
+            // Seed EXACTLY what the platform ships for the Feedback space — the Public → Contributor
+            // grant AND the BreaksInheritance lock on the _Access subtree — so this test exercises the
+            // real access surface, self-escalation guard included.
+            .AddMeshNodes(new FeedbackStaticRepoSource().EnumerateSourceNodes().ToArray());
 
     // Granular permissions — skip the blanket PublicAdminAccess the base seeds.
     protected override Task SetupAccessRightsAsync() => Task.CompletedTask;
@@ -67,5 +71,15 @@ public class FeedbackContributorAccessTest(ITestOutputHelper output) : MonolithM
     {
         await Mesh.GetEffectivePermissions("SomeOtherSpace", "some-random-user")
             .Should().Match(p => p == Permission.None);
+    }
+
+    [Fact(Timeout = 20000)]
+    public async Task PublicContributorGrant_CannotSelfEscalate_ViaTheAccessSubtree()
+    {
+        // The BreaksInheritance policy at Feedback/_Access discards the inherited Contributor role
+        // there, so a user has NO Create on the access-config subtree — they cannot write a
+        // self-granting AccessAssignment. (They can still create feedback entries at Feedback/{id}.)
+        await Mesh.GetEffectivePermissions($"{FeedbackScope}/_Access", "some-random-user")
+            .Should().Match(p => (p & Permission.Create) == Permission.None);
     }
 }
