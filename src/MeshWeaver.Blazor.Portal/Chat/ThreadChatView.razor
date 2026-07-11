@@ -210,13 +210,6 @@ else
                 </div>
             }
             @{
-                var header = GetHeaderCell();
-            }
-            @if (header != null)
-            {
-                <LayoutAreaView @key="@($"hdr-{threadPath}")" ViewModel="@header" Stream="@Stream" Area="@($"hdr-{threadPath}")" />
-            }
-            @{
                 var pendingTexts = ThreadViewModel?.PendingMessageTexts ?? Array.Empty<string>();
                 var hasAnyMessage = ThreadMessages.Count > 0 || pendingTexts.Count > 0;
             }
@@ -319,6 +312,11 @@ else
                                         <button class="thread-msg-action-btn" @onclick="() => StartEdit(msgId)" title="Edit">&#9998;</button>
                                         <button class="thread-msg-action-btn" @onclick="() => ResubmitMessage(msgId)" title="Resubmit">&#8635;</button>
                                         <button class="thread-msg-action-btn" @onclick="() => DeleteFromMessage(msgId)" title="Delete from here">&#128465;</button>
+                                    }
+                                    @if (state.UpdatedNodes is { Count: > 0 } && !IsReadOnlyThread)
+                                    {
+                                        <button class="thread-msg-action-btn" @onclick="() => UndoMessageChanges(msgId)"
+                                                title="Undo the @(state.UpdatedNodes.Count) node change(s) this message made">&#8630;</button>
                                     }
                                     <button class="thread-msg-action-btn" @onclick="() => NewThreadFromCell(msgId)" title="New thread from this cell">&#8599;</button>
                                 </div>
@@ -483,6 +481,16 @@ else
                     <p>Start a conversation</p>
                     <p class="hint">Use @("@") references to include context from other nodes</p>
                 </div>
+            }
+            @* Thread-total impact — the aggregate of every node changed across this thread's
+               messages (with per-node + "Undo all"), pinned at the BOTTOM of the history as a
+               running summary. Reuses the server Header area (parent back-link + totals). *@
+            @{
+                var totalSummary = GetHeaderCell();
+            }
+            @if (totalSummary != null)
+            {
+                <LayoutAreaView @key="@($"hdr-{threadPath}")" ViewModel="@totalSummary" Stream="@Stream" Area="@($"hdr-{threadPath}")" />
             }
         </div>
     }
@@ -707,6 +715,35 @@ else
            module-defined one) pops THIS one menu. The command supplied the query + title; the
            host queried the mesh (OpenPicker) and listed the nodes; clicking one writes its PATH
            to the command's composer field. No per-command widget. *@
+        @* Delete-with-undo confirm — deleting a message removes the conversation cells but NOT the
+           node changes those cells made; offer to roll those changes back too. *@
+        @if (_deleteConfirmId is not null)
+        {
+            <div class="thread-chat-widget" @onkeydown:stopPropagation="true">
+                <div class="thread-chat-widget-header">
+                    <span>Delete @_deleteConfirmMessageCount message@(_deleteConfirmMessageCount == 1 ? "" : "s")?</span>
+                    <button class="thread-msg-action-btn" @onclick="CancelDelete" title="Close">&#10005;</button>
+                </div>
+                <div style="padding:12px 14px; display:flex; flex-direction:column; gap:12px;">
+                    <div style="color:var(--neutral-foreground-hint); line-height:1.4;">
+                        This removes this message and everything after it. Those messages also changed
+                        <strong>@_deleteConfirmChangeCount</strong> node@(_deleteConfirmChangeCount == 1 ? "" : "s").
+                        Undo those changes too?
+                    </div>
+                    <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                        <button type="button" class="thread-msg-action-btn"
+                                style="padding:6px 12px; background:var(--accent-fill-rest); color:#fff; border-radius:4px;"
+                                @onclick="() => ConfirmDelete(true)">Delete &amp; undo @_deleteConfirmChangeCount change@(_deleteConfirmChangeCount == 1 ? "" : "s")</button>
+                        <button type="button" class="thread-msg-action-btn"
+                                style="padding:6px 12px; border:1px solid var(--neutral-stroke-rest); border-radius:4px;"
+                                @onclick="() => ConfirmDelete(false)">Delete only</button>
+                        <button type="button" class="thread-msg-action-btn"
+                                style="padding:6px 12px; border-radius:4px;"
+                                @onclick="CancelDelete">Cancel</button>
+                    </div>
+                </div>
+            </div>
+        }
         @* Interactive login (Connect) dialog — /login opens it. (1) choose a method, (2) account →
            redirect to the browser auth URL, (3) paste a code/token only if the flow needs it; a still-valid
            token completes silently. API key / gateway store a pasted credential. *@

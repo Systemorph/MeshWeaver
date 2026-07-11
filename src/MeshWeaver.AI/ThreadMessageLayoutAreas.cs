@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Reactive.Linq;
 using System.Text.Json;
 using Humanizer;
@@ -305,6 +306,25 @@ public static class ThreadMessageLayoutAreas
                         meta.In, meta.Out, meta.Total));
             });
         }
+
+        // Per-message "modified nodes" — the version-before/after of every node THIS message
+        // changed, with per-node + "Undo all" actions. Reactive: UpdatedNodes populate as the
+        // round's tool calls land, so bind to the message stream (not the render-time snapshot).
+        // Renders nothing for messages that changed no nodes (e.g. plain user prompts).
+        container = container.WithView((h, c) =>
+        {
+            var stream = h.Workspace.GetStream(new MeshNodeReference());
+            if (stream is null) return Observable.Return<UiControl?>(null);
+
+            return stream
+                .Select(change => change.Value.ContentAs<ThreadMessage>(h.Hub.JsonSerializerOptions))
+                .Where(m => m is not null)
+                .Select(m => m!.UpdatedNodes ?? ImmutableList<NodeChangeEntry>.Empty)
+                .DistinctUntilChanged()
+                .Select(nodes => nodes.IsEmpty
+                    ? null
+                    : ThreadLayoutAreas.BuildModifiedNodesView(nodes, threadPath, "Changes", undoAll: true));
+        });
 
         // Delegation sub-threads are already shown inline inside the bubble (via the bubble's
         // tool-calls data binding). An extra embedded LayoutAreaControl here produced a
