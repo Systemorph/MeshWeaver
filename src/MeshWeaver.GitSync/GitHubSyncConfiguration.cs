@@ -63,6 +63,9 @@ public static class GitHubSyncConfiguration
             });
         services.AddSingleton<GitCli>();
         services.AddSingleton<GitWorkingTreeService>();
+        // Writes the live Agent + Skill partitions back to the repo's content/ai section — the inverse
+        // of the built-in providers that READ that section. Dev-time (source checkout) only.
+        services.AddSingleton<AiContentDiskWriter>();
         // AI-drafted PR title/body. Default delegates to the PullRequestWriter agent via the
         // existing chat surface (mirrors DescriptionGenerator); tests override with a stub.
         services.AddSingleton<IPullRequestDraftService, PullRequestDraftService>();
@@ -141,10 +144,13 @@ public static class GitHubSyncConfiguration
             .WithServices(s =>
             {
                 s.TryAddEnumerable(ServiceDescriptor.Scoped<INodeMenuProvider, GitHubSyncMenuProvider>());
+                // "Sync to repo" on Agent/Skill nodes — self-gates to a source checkout + platform admin.
+                s.TryAddEnumerable(ServiceDescriptor.Scoped<INodeMenuProvider, AiContentSyncMenuProvider>());
                 return s;
             })
             .AddLayout(layout => layout
-                .WithView(GitHubActionArea.AreaName, GitHubActionArea.Render)));
+                .WithView(GitHubActionArea.AreaName, GitHubActionArea.Render)
+                .WithView(AiContentSyncArea.AreaName, AiContentSyncArea.Render)));
         return builder;
     }
 }

@@ -1,11 +1,6 @@
-using Markdig;
-using Markdig.Extensions.Yaml;
-using Markdig.Syntax;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
-using YamlDotNet.Serialization;
-using YamlDotNet.Serialization.NamingConventions;
 
 namespace MeshWeaver.AI;
 
@@ -20,15 +15,6 @@ namespace MeshWeaver.AI;
 public class BuiltInSkillProvider : IStaticNodeProvider
 {
     private static readonly Lazy<MeshNode[]> LazyNodes = new(LoadEmbeddedNodes);
-
-    private static readonly MarkdownPipeline Pipeline = new MarkdownPipelineBuilder()
-        .UseYamlFrontMatter()
-        .Build();
-
-    private static readonly IDeserializer Yaml = new DeserializerBuilder()
-        .WithNamingConvention(CamelCaseNamingConvention.Instance)
-        .IgnoreUnmatchedProperties()
-        .Build();
 
     /// <inheritdoc />
     public IEnumerable<MeshNode> GetStaticNodes()
@@ -96,49 +82,9 @@ public class BuiltInSkillProvider : IStaticNodeProvider
         return nodes.ToArray();
     }
 
-    private static MeshNode? ParseSkillNode(string content, string id)
-    {
-        if (string.IsNullOrEmpty(id)) return null;
-
-        var document = Markdig.Markdown.Parse(content, Pipeline);
-        var yamlBlock = document.Descendants<YamlFrontMatterBlock>().FirstOrDefault();
-        if (yamlBlock == null) return null;
-
-        var fm = Yaml.Deserialize<SkillFrontMatter>(yamlBlock.Lines.ToString());
-        if (fm == null) return null;
-
-        var body = content[(yamlBlock.Span.End + 1)..].TrimStart('\r', '\n').Trim();
-
-        var definition = new SkillDefinition
-        {
-            Instructions = string.IsNullOrWhiteSpace(body) ? null : body,
-            AutoMount = fm.AutoMount,
-            LaunchesSubThread = fm.LaunchesSubThread,
-            Harness = fm.Harness,
-            Action = fm.Action is null ? null : new SkillAction
-            {
-                Kind = Enum.TryParse<SkillActionKind>(fm.Action.Kind, ignoreCase: true, out var kind)
-                    ? kind : SkillActionKind.Pick,
-                Query = fm.Action.Query,
-                Field = fm.Action.Field,
-                Title = fm.Action.Title,
-                ContentPath = fm.Action.ContentPath,
-                Provider = fm.Action.Provider,
-            },
-        };
-
-        return new MeshNode(id, SkillNodeType.RootNamespace)
-        {
-            NodeType = SkillNodeType.NodeType,
-            Name = fm.Name ?? $"/{id}",
-            Description = fm.Description,
-            Category = fm.Category ?? "Skills",
-            Icon = fm.Icon ?? "Sparkle",
-            Order = fm.Order,
-            State = MeshNodeState.Active,
-            Content = definition,
-        };
-    }
+    // The one skill md↔node conversion lives in SkillMarkdown, shared with the sync-back writer
+    // (AiContentDiskWriter serializes via SkillMarkdown.Serialize) — so read and write can never drift.
+    private static MeshNode? ParseSkillNode(string content, string id) => SkillMarkdown.Parse(content, id);
 
     private static string ResourceNameToId(string resourceName, string skillPrefix)
     {
@@ -147,27 +93,4 @@ public class BuiltInSkillProvider : IStaticNodeProvider
         return lastDot > 0 ? rest[..lastDot] : rest;
     }
 
-    private sealed class SkillFrontMatter
-    {
-        public string? NodeType { get; set; }
-        public string? Name { get; set; }
-        public string? Description { get; set; }
-        public string? Icon { get; set; }
-        public string? Category { get; set; }
-        public int Order { get; set; }
-        public bool AutoMount { get; set; } = true;
-        public bool LaunchesSubThread { get; set; }
-        public string? Harness { get; set; }
-        public SkillActionFrontMatter? Action { get; set; }
-    }
-
-    private sealed class SkillActionFrontMatter
-    {
-        public string? Kind { get; set; }
-        public string? Query { get; set; }
-        public string? Field { get; set; }
-        public string? Title { get; set; }
-        public string? ContentPath { get; set; }
-        public string? Provider { get; set; }
-    }
 }
