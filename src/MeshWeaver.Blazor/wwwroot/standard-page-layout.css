@@ -61,13 +61,18 @@ body {
     padding: 16px
 }
 
-/* Side-menu splitters (Settings page, NodeType shell) — give each pane a
-   definite-height flex context so menu and content scroll INDEPENDENTLY instead
-   of the whole page overflowing. Mirrors the treatment PortalLayoutBase applies
-   to its outer .body-splitter. The splitter fills its parent
-   .layout-area-container (a flex column) rather than a viewport-minus-magic-number
-   guess. */
-.settings-splitter,
+/* Side-menu splitter (NodeType shell) — give each pane a definite-height flex
+   context so menu and content scroll INDEPENDENTLY instead of the whole page
+   overflowing. Mirrors the treatment PortalLayoutBase applies to its outer
+   .body-splitter. The splitter fills its parent .layout-area-container (a flex
+   column) rather than a viewport-minus-magic-number guess.
+
+   The SETTINGS splitter deliberately does NOT get this treatment (any more):
+   settings pages flow at their natural content height and the PAGE scrolls in
+   .body-content, like every other page. FluentMultiSplitter's own stylesheet
+   pins `.fluent-multi-splitter { height: 100% }`, so the settings skin sets an
+   inline `height: auto; flex: 1 0 auto` (SettingsLayoutArea.BuildSettingsPage)
+   — grow-to-fill short pages, never shrink-and-clip long ones. */
 .shell-splitter {
     flex: 1 1 auto;
     min-height: 0;
@@ -91,12 +96,21 @@ body {
    these rules match nothing, the pane keeps FluentUI's default
    `display:block; overflow:hidden`, and the content stack below never gets a
    definite height to scroll within (it just clips). */
-.settings-splitter .fluent-multi-splitter-pane,
 .shell-splitter .fluent-multi-splitter-pane {
     overflow: hidden;
     display: flex;
     flex-direction: column;
     min-height: 0;
+}
+
+/* Settings panes must NOT clip: the settings page flows at content height and
+   scrolls in .body-content, so the pane only needs to stop hiding overflow
+   (FluentUI's pane default is overflow:hidden). Kept a flex column so the
+   > div fill rule below still applies. */
+.settings-splitter .fluent-multi-splitter-pane {
+    overflow: visible;
+    display: flex;
+    flex-direction: column;
 }
 
 .settings-splitter .fluent-multi-splitter-pane > div,
@@ -121,10 +135,10 @@ body {
     overflow-x: hidden;
 }
 
-/* Menu pane scrolls on its own. NavMenuView ignores inline Style on its root,
+/* Shell menu pane scrolls on its own. NavMenuView ignores inline Style on its root,
    so the scroll context has to come from the stylesheet. flex:1 1 auto (not
-   height:100%) for the same indefinite-percentage-height reason as the content pane. */
-.settings-splitter .navmenu,
+   height:100%) for the same indefinite-percentage-height reason as the content pane.
+   The settings nav menu is NOT listed here: it flows with the page scroll. */
 .shell-splitter .navmenu {
     flex: 1 1 auto;
     min-height: 0;
@@ -157,11 +171,17 @@ body {
     padding: 8px 0;
 }
 
+/* No inner scroller and no min-height:0 here — the settings page scrolls as a
+   whole in .body-content. flex:1 1 auto only lets a SHORT page's background
+   reach the bottom of the pane; a long page sizes the pane (and the page scroll)
+   by its content. overflow-x CLIP (not hidden!) keeps wide content (tables/code)
+   from widening the whole page: `hidden` would force overflow-y to compute to
+   `auto` and quietly reintroduce the inner vertical scroller this fix removed,
+   while `clip` contains the axis without creating a scroll container (same
+   treatment as mobile .body-content). */
 .settings-content-pane {
     flex: 1 1 auto;
-    min-height: 0;
-    overflow-y: auto;
-    overflow-x: hidden;
+    overflow-x: clip;
     padding: 32px 40px 56px;
     background: var(--neutral-layer-1);
 }
