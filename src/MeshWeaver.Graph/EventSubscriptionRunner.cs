@@ -261,9 +261,16 @@ public sealed class EventSubscriptionRunner(
                     .SelectMany(g => subscription.Pin
                         ? AsSystem(() => EventSubscriptionOps.Pin(hub, userId, subscription.TargetPath!)).Select(_ => g)
                         : Observable.Return(g)),
+            // Membership, plus — when the invite chose a role — the matching AccessAssignment on the group
+            // (groups aren't publicly readable; the grant is what lets the new member see the group).
             EventContinuationType.AddToGroup
                 when subscription is { TargetPath.Length: > 0 } && !string.IsNullOrEmpty(userId) =>
-                AsSystem(() => EventSubscriptionOps.AddToGroup(meshService, userId, subscription.TargetPath!)),
+                AsSystem(() => EventSubscriptionOps.AddToGroup(meshService, userId, subscription.TargetPath!))
+                    .SelectMany(m => subscription.Role is { Length: > 0 }
+                        ? AsSystem(() => EventSubscriptionOps.Grant(
+                                meshService, userId, subscription.TargetPath!, subscription.Role!))
+                            .Select(_ => m)
+                        : Observable.Return(m)),
             _ => Observable.Throw<MeshNode>(new InvalidOperationException(
                 $"Unsupported or incomplete event subscription {subscription.Id}")),
         };

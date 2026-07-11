@@ -69,6 +69,8 @@ The picker loads the subject set once (capped at 500 nodes) and filters **in-mem
 
 **Not-yet-provisioned users — grant by email.** A `User` node is created at first login/onboarding, so a person who has never signed in has no node to *pick*. The **Add** row therefore also takes an **email**: leave the subject picker empty and type the address instead. If an account already exists it is granted the selected role immediately; otherwise the person is invited and a durable deferred grant — an `EventSubscription` (see [EventSubscriptions](/Doc/Architecture/EventSubscriptions)) — lands the **same role at this exact `{scope}/_Access`** the moment they sign up. The scheduled grant is byte-identical to the immediate one, so the invitee ends up with exactly the assignment an already-provisioned subject would. (You can still grant by principal via MCP — Recipe 3 below with the exact login userId — for a fully headless setup.)
 
+**Bulk-inviting a whole list into a group.** A Group node's **Edit** area has an **Invite by Email** button: paste a list of emails (newline / comma / semicolon separated; `Name <email>` entries work) and pick a role. Every entry becomes a group member with that role granted on the group — existing accounts immediately, everyone else via invitation email + the same deferred `EventSubscription` mechanics (`AddToGroup` carrying the role), landing membership + grant the moment they register. Junk tokens are skipped and reported, and re-running a list is idempotent.
+
 ---
 
 ## Anatomy of an AccessAssignment
