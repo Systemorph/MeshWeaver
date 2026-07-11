@@ -151,6 +151,7 @@ var migrations = new IMigration[]
     new V38_DropLegacyProviderSchema(),
     new V39_AddSyncBehaviorColumn(),
     new V40_CreateEventLogSchema(),
+    new V41_RetrofitModelCatalogIcons(),
 };
 
 var ctx = new MigrationContext(dataSource, connectionString, options, logger, initResult.IsFreshDb);
