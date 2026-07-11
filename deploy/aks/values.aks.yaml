@@ -196,6 +196,18 @@ config:
 selfUpdate:
   azureClientId: ""   # set per-env from the portalIdentityClientId bicep output
 
+# --- Platform-admin Instances overview ---------------------------------------
+# memex.systemorph.com is the company/control instance — the ONE install that gets the Instances
+# admin tab (Settings ▸ Administration ▸ Instances) and the cluster-scoped read RBAC behind it.
+# clusterRead drives BOTH: the RBAC grant and Instances__Enabled (the menu item's existence).
+# Customer/public envs (atioz, memex-cloud) must NOT set this — their overlays inherit the chart
+# default (false), so the tab does not exist there at all.
+instancesAdmin:
+  clusterRead: true
+  # In-cluster Grafana (loki-stack, `monitoring` ns) has no public host yet — set this to the
+  # Grafana base URL once it is exposed to get per-instance Loki log deep links on the tab.
+  grafanaBaseUrl: ""
+
 # --- Container images -------------------------------------------------------
 # Default = pull straight from GHCR (no ACR needed). To use the private ACR,
 # `az acr import` the images (see README) and set registry to the ACR login

@@ -149,9 +149,15 @@ public sealed class GitHubSyncService
     {
         var root = hub.GetWorkspace().GetMeshNodeStream(spacePath)
             .Where(n => n is not null).Take(1).Timeout(TimeSpan.FromSeconds(30));
+        // Wait for the query's INITIAL snapshot — a bare Take(1) can capture an empty pre-Initial
+        // emission, silently exporting the Space as root-only (observed on a live instance: a
+        // commit that wrote just index.json + README.md for a Space with ~50 descendants). Same
+        // pattern as PartitionSyncAdminLayoutArea.DiscoverPartitions.
         var descendants = meshService
             .Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{spacePath} scope:descendants"))
-            .Take(1).Select(c => (IEnumerable<MeshNode>)c.Items);
+            .Where(c => c.ChangeType == QueryChangeType.Initial)
+            .Take(1).Timeout(TimeSpan.FromSeconds(30))
+            .Select(c => (IEnumerable<MeshNode>)c.Items);
         return root.CombineLatest(descendants, (r, desc) =>
         {
             var all = new List<MeshNode>();
