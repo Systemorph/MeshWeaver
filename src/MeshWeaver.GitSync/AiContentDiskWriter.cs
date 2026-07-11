@@ -99,7 +99,15 @@ public sealed class AiContentDiskWriter(
                     ? path[(partition.Length + 1)..]
                     : node!.Id;
                 var repoRel = Path.Combine(partition, rel.Replace('/', Path.DirectorySeparatorChar) + ".md");
-                var full = Path.Combine(sectionRoot, repoRel);
+                // Containment: a hostile/odd node path (traversal segments) must never let the write
+                // escape the section root and clobber arbitrary files (cf. GitWorkingTreeService.ResolveInTree).
+                var sectionFull = Path.GetFullPath(sectionRoot);
+                var full = Path.GetFullPath(Path.Combine(sectionFull, repoRel));
+                if (!full.StartsWith(sectionFull + Path.DirectorySeparatorChar, StringComparison.Ordinal))
+                {
+                    logger?.LogWarning("AI content sync-back: skipping {Path} — resolves outside the section root.", path);
+                    return Observable.Return<string?>(null);
+                }
                 return FileSystem.InvokeBlocking<string?>(_ =>
                 {
                     Directory.CreateDirectory(Path.GetDirectoryName(full)!);

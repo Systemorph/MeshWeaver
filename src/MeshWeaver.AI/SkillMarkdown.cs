@@ -84,7 +84,13 @@ public static class SkillMarkdown
     /// </summary>
     public static string Serialize(MeshNode node)
     {
-        var def = node.Content as SkillDefinition ?? new SkillDefinition();
+        // Fail fast rather than silently serialize an empty skill — a lossy write would clobber the
+        // source file during sync-back. Callers normalise a JsonElement fallback to a typed
+        // SkillDefinition (or skip) before reaching here.
+        if (node.Content is not SkillDefinition def)
+            throw new ArgumentException(
+                $"Skill node '{node.Id}' has {node.Content?.GetType().Name ?? "null"} content, not a {nameof(SkillDefinition)}.",
+                nameof(node));
 
         var fm = new SkillFrontMatterOut
         {
