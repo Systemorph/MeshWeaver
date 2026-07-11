@@ -582,7 +582,7 @@ public static class ThreadLayoutAreas
 
     /// <summary>
     /// Full-page Changes view. Reuses the header's <see cref="CollectUpdatedNodes"/>
-    /// aggregation + <see cref="BuildModifiedNodesHtml"/> grid, plus a
+    /// aggregation + <see cref="BuildModifiedNodesView"/> grid, plus a
     /// "Revert All" bulk action that posts one
     /// <c>RollbackNodeRequest</c> per entry sequentially (order-sensitive to
     /// avoid parent-deleted-before-child issues).
@@ -647,9 +647,9 @@ public static class ThreadLayoutAreas
             return container;
         }
 
-        // Reuse the same git-like grid as the header summary — single source of truth
-        // for path / version chips / Diff / per-row Restore links.
-        container = container.WithView(Controls.Html(BuildModifiedNodesHtml(updates, threadPath)));
+        // Reuse the same control-based grid as the header summary — single source of truth
+        // for path / version chips / Diff / per-row Undo. (Header already has "Revert all".)
+        container = container.WithView(BuildModifiedNodesView(updates, threadPath, "Modified nodes", undoAll: false));
         return container;
     }
 
@@ -753,25 +753,22 @@ public static class ThreadLayoutAreas
             stack = stack.WithView(parentLink);
 
         if (!updates.IsEmpty)
-            stack = stack.WithView(Controls.Html(BuildModifiedNodesHtml(updates, threadPath)));
+            stack = stack.WithView(BuildModifiedNodesView(updates, threadPath, "Modified nodes", undoAll: false));
 
         return stack;
     }
 
     /// <summary>
-    /// Git-like panel for the aggregated UpdatedNodes list:
-    /// - Tabular layout (CSS grid): path · old-ver · → · new-ver · Diff · Restore v{old} · Restore v{new}.
-    /// - All action links visible inline on each row (no hidden ⋯ menu).
-    /// - Theme-safe colours that work in dark + light mode (no white-on-light-blue).
-    /// - Paths rendered relative to the thread's parent namespace so the most
-    ///   interesting segment (leaf) stays visible when the table narrows.
-    /// - On screens &lt; 720 px the whole section collapses behind a summary row.
+    /// Framework-control renderer for a <see cref="NodeChangeEntry"/> list — the control-based
+    /// replacement for the old hand-built HTML grid (forbidden by the no-hand-rolled-HTML rule, and
+    /// whose <c>1fr</c> path column made the version chips float to the right edge). One row per
+    /// changed node: {node link} · v{before} → v{after} · Diff · Undo. When <paramref name="undoAll"/>
+    /// is set, appends a single "Undo all" button. Undo semantics (per node): a prior version exists
+    /// → roll back to it; a freshly Created node (no prior version) → delete it. See <see cref="UndoNodeChange"/>.
     /// </summary>
-    private static string BuildModifiedNodesHtml(ImmutableList<NodeChangeEntry> updates, string threadPath)
+    internal static UiControl BuildModifiedNodesView(
+        ImmutableList<NodeChangeEntry> updates, string threadPath, string headerLabel, bool undoAll)
     {
-        // Derive the ancestor prefix we can strip from each node path to produce a
-        // shorter display form. For a thread at "Org/_Thread/abc", the interesting
-        // prefix to strip is "Org/" (the thread's root namespace, above _Thread).
         var threadIdx = threadPath.IndexOf("/_Thread/", StringComparison.Ordinal);
         var shortenPrefix = threadIdx > 0 ? threadPath[..(threadIdx + 1)] : null;
 
@@ -780,161 +777,83 @@ public static class ThreadLayoutAreas
                 ? path[prefix.Length..]
                 : path;
 
-        var sb = new System.Text.StringBuilder();
+        var container = Controls.Stack.WithStyle("gap:6px; width:100%;");
+        container = container.WithView(Controls.Text($"{headerLabel} ({updates.Count})")
+            .WithStyle("font-size:0.8rem; font-weight:600; color:var(--neutral-foreground-hint);"));
 
-        // Inline <style> block scoped by a unique class so the grid + media-query
-        // rules apply to the rendered HTML. Lives inside the injected markdown; Blazor
-        // passes it through untouched.
-        sb.Append("""
-            <style>
-            .thread-mod-nodes { width:100%; }
-            .thread-mod-nodes > summary {
-                list-style:none; cursor:pointer;
-                font-size:0.8rem; font-weight:600;
-                color:var(--neutral-foreground-hint);
-                padding:4px 0;
-            }
-            .thread-mod-nodes > summary::-webkit-details-marker { display:none; }
-            .thread-mod-grid {
-                display:grid;
-                grid-template-columns: minmax(0,1fr) auto auto auto auto auto auto;
-                align-items:center;
-                gap:6px 10px;
-                margin-top:6px;
-                font-size:0.78rem;
-                color:var(--neutral-foreground-rest);
-            }
-            .thread-mod-grid a {
-                text-decoration:none;
-                color:var(--accent-fill-rest);
-            }
-            .thread-mod-grid a:hover { text-decoration:underline; }
-            .thread-mod-row {
-                display:contents;
-            }
-            .thread-mod-path {
-                min-width:0;
-                overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
-                padding:4px 6px;
-                border-radius:4px;
-            }
-            .thread-mod-path:hover { background:var(--neutral-layer-2); }
-            .thread-mod-chip {
-                padding:1px 6px; border-radius:10px;
-                background:var(--neutral-layer-3);
-                color:var(--neutral-foreground-rest) !important;
-                font-family:monospace; font-size:0.72rem;
-                border:1px solid var(--neutral-stroke-rest);
-            }
-            .thread-mod-chip-new {
-                color:var(--accent-fill-rest) !important;
-                border-color:var(--accent-fill-rest);
-                font-weight:600;
-            }
-            .thread-mod-arrow { color:var(--neutral-foreground-hint); }
-            .thread-mod-action {
-                padding:2px 8px; border-radius:4px;
-                font-size:0.74rem;
-                color:var(--accent-fill-rest) !important;
-                white-space:nowrap;
-            }
-            .thread-mod-action:hover { background:var(--neutral-layer-2); }
-            .thread-mod-action-muted {
-                color:var(--neutral-foreground-hint) !important;
-            }
-            .thread-mod-marker {
-                font-size:0.72rem; color:var(--neutral-foreground-hint); font-style:italic;
-            }
-            /* Small-screen: collapse the whole section under its summary. */
-            @media (max-width: 720px) {
-                .thread-mod-nodes[data-wide-inline="true"] > .thread-mod-grid { display:none; }
-                .thread-mod-nodes[data-wide-inline="true"][open] > .thread-mod-grid { display:grid; }
-                .thread-mod-grid {
-                    grid-template-columns: minmax(0,1fr) auto auto;
-                }
-                .thread-mod-action-mobile-hide { display:none; }
-            }
-            /* Wide-screen: the <details> is always open (summary acts as header). */
-            @media (min-width: 721px) {
-                .thread-mod-nodes[data-wide-inline="true"] > .thread-mod-grid { display:grid; }
-                .thread-mod-nodes[data-wide-inline="true"] > summary { pointer-events:none; }
-            }
-            </style>
-            """);
-
-        sb.Append("<details class=\"thread-mod-nodes\" data-wide-inline=\"true\" open>");
-        sb.Append($"<summary><span style=\"display:inline-block; width:10px;\">&#9656;</span> Modified nodes ({updates.Count})</summary>");
-
-        sb.Append("<div class=\"thread-mod-grid\">");
-
+        var rows = Controls.Stack.WithStyle("gap:4px; width:100%;");
         foreach (var entry in updates)
         {
             var path = entry.Path;
-            var pathEnc = System.Web.HttpUtility.HtmlEncode(path);
-            var displayEnc = System.Web.HttpUtility.HtmlEncode(Shorten(path, shortenPrefix));
             var op = entry.Operation ?? "";
 
-            sb.Append("<div class=\"thread-mod-row\">");
+            // Horizontal row; the node link shrinks (flex:0 1 auto) but never GROWS, so the whole
+            // row packs to the left — no 1fr column stretching the actions to the far right edge.
+            var row = Controls.Stack
+                .WithOrientation(Orientation.Horizontal)
+                .WithStyle("gap:8px; align-items:center; flex-wrap:wrap;");
 
-            // Column 1: path (truncates on narrow layouts)
-            sb.Append(
-                $"<a href=\"/{pathEnc}\" title=\"{pathEnc}\" class=\"thread-mod-path\">{displayEnc}</a>");
+            row = row.WithView(Controls.NavLink(Shorten(path, shortenPrefix), $"/{path}")
+                .WithStyle("flex:0 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; " +
+                           "white-space:nowrap; font-size:0.78rem;"));
 
-            // Column 2: old version chip or "new" marker
             if (entry.VersionBefore is { } vb)
-                sb.Append(
-                    $"<a href=\"/{pathEnc}/Versions?version={vb}\" class=\"thread-mod-chip\" title=\"View v{vb}\">v{vb}</a>");
+                row = row.WithView(Controls.Badge($"v{vb}").WithStyle("font-family:monospace; font-size:0.72rem;"));
             else if (op.Equals("Created", StringComparison.OrdinalIgnoreCase))
-                sb.Append("<span class=\"thread-mod-marker\">new</span>");
-            else
-                sb.Append("<span></span>");
+                row = row.WithView(Controls.Text("new")
+                    .WithStyle("font-size:0.72rem; font-style:italic; color:var(--neutral-foreground-hint);"));
 
-            // Column 3: arrow
-            sb.Append("<span class=\"thread-mod-arrow\">&#8594;</span>");
+            row = row.WithView(Controls.Text("→").WithStyle("color:var(--neutral-foreground-hint);"));
 
-            // Column 4: new version chip or "deleted" marker
             if (entry.VersionAfter is { } va)
-                sb.Append(
-                    $"<a href=\"/{pathEnc}/Versions?version={va}\" class=\"thread-mod-chip thread-mod-chip-new\" title=\"View v{va}\">v{va}</a>");
+                row = row.WithView(Controls.Badge($"v{va}")
+                    .WithStyle("font-family:monospace; font-size:0.72rem; font-weight:600;"));
             else if (op.Equals("Deleted", StringComparison.OrdinalIgnoreCase))
-                sb.Append("<span class=\"thread-mod-marker\">deleted</span>");
-            else
-                sb.Append("<span></span>");
+                row = row.WithView(Controls.Text("deleted")
+                    .WithStyle("font-size:0.72rem; font-style:italic; color:var(--neutral-foreground-hint);"));
 
-            // Column 5: Diff (old ↔ new) — points to VersionDiff with from/to params.
             if (entry.VersionBefore.HasValue && entry.VersionAfter.HasValue)
-                sb.Append(
-                    $"<a href=\"/{pathEnc}/VersionDiff?from={entry.VersionBefore.Value}&to={entry.VersionAfter.Value}\" " +
-                    $"class=\"thread-mod-action thread-mod-action-mobile-hide\" " +
-                    $"title=\"Compare v{entry.VersionBefore.Value} to v{entry.VersionAfter.Value}\">Diff</a>");
-            else
-                sb.Append("<span class=\"thread-mod-action-mobile-hide\"></span>");
+                row = row.WithView(Controls.NavLink("Diff",
+                        $"/{path}/VersionDiff?from={entry.VersionBefore.Value}&to={entry.VersionAfter.Value}")
+                    .WithStyle("font-size:0.74rem;"));
 
-            // Column 6: Restore to old — opens VersionDiff (which has the Restore button).
-            if (entry.VersionBefore.HasValue)
-                sb.Append(
-                    $"<a href=\"/{pathEnc}/VersionDiff?version={entry.VersionBefore.Value}\" " +
-                    $"class=\"thread-mod-action thread-mod-action-muted thread-mod-action-mobile-hide\" " +
-                    $"title=\"Revert to v{entry.VersionBefore.Value}\">Restore v{entry.VersionBefore.Value}</a>");
-            else
-                sb.Append("<span class=\"thread-mod-action-mobile-hide\"></span>");
+            var e = entry; // capture per-iteration for the click closure
+            row = row.WithView(Controls.Button("Undo")
+                .WithAppearance(Appearance.Stealth)
+                .WithIconStart(FluentIcons.ArrowUndo(IconSize.Size16))
+                .WithClickAction(ctx => UndoNodeChange(ctx.Hub, e)));
 
-            // Column 7: Restore to new — opens VersionDiff (which has the Restore button).
-            if (entry.VersionAfter.HasValue)
-                sb.Append(
-                    $"<a href=\"/{pathEnc}/VersionDiff?version={entry.VersionAfter.Value}\" " +
-                    $"class=\"thread-mod-action thread-mod-action-muted thread-mod-action-mobile-hide\" " +
-                    $"title=\"Restore v{entry.VersionAfter.Value}\">Restore v{entry.VersionAfter.Value}</a>");
-            else
-                sb.Append("<span class=\"thread-mod-action-mobile-hide\"></span>");
+            rows = rows.WithView(row);
+        }
+        container = container.WithView(rows);
 
-            sb.Append("</div>");
+        if (undoAll && updates.Count > 0)
+        {
+            var all = updates;
+            container = container.WithView(Controls.Button($"Undo all ({all.Count})")
+                .WithAppearance(Appearance.Neutral)
+                .WithIconStart(FluentIcons.ArrowUndo(IconSize.Size16))
+                .WithClickAction(ctx => { foreach (var en in all) UndoNodeChange(ctx.Hub, en); }));
         }
 
-        sb.Append("</div>");
-        sb.Append("</details>");
-        return sb.ToString();
+        return container;
     }
+
+    /// <summary>
+    /// Undo a single node change: restore the pre-change version when one exists
+    /// (Updated/Deleted → <see cref="RollbackNodeRequest"/> to VersionBefore), or delete a freshly
+    /// Created node (no prior version). Routed to the node's OWN hub via <c>WithTarget</c>, where the
+    /// rollback handler is registered (see <c>AddDefaultLayoutAreas</c>).
+    /// </summary>
+    private static void UndoNodeChange(IMessageHub hub, NodeChangeEntry entry)
+    {
+        if (entry.VersionBefore is { } vb)
+            hub.Post(new RollbackNodeRequest(entry.Path, vb), o => o.WithTarget(new Address(entry.Path)));
+        else
+            hub.Post(new DeleteNodeRequest(entry.Path) { Recursive = true },
+                o => o.WithTarget(new Address(entry.Path)));
+    }
+
 
     /// <summary>
     /// Reads the still-pending user-message texts from <paramref name="thread"/>.

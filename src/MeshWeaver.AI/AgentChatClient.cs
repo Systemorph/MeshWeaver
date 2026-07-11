@@ -445,72 +445,20 @@ public class AgentChatClient : IAgentChat
         return system.Concat(kept).ToList();
     }
 
-    private async Task<(string Text, ImmutableList<DataContent> BinaryAttachments)> BuildMessageWithContextAsync(IReadOnlyCollection<ChatMessage> messages, string? agentName = null)
+    /// <summary>
+    /// Appends the DYNAMIC per-round context block to <paramref name="messageText"/> — the current
+    /// application context (node IDENTITY as JSON) plus any attached content (text inlined, binary
+    /// returned) — and returns the binary attachments. This is the single source of truth shared by
+    /// BOTH the non-streaming <see cref="BuildMessageWithContextAsync"/> path and the streaming
+    /// <see cref="GetStreamingResponseAsync(IReadOnlyCollection{ChatMessage}, CancellationToken)"/>
+    /// path, so the streaming chat ships the same context/attachments the user set (contextPath +
+    /// attachments) instead of dropping them and forcing the agent to Search for what was attached.
+    /// 🚨 It deliberately does NOT enumerate context children (no IMeshService.QueryAsync fan-out) —
+    /// that fan-out bridges back through hub messaging and can park the streaming task indefinitely
+    /// ("Generating response…" forever). The agent's Search tool pulls children when it needs them.
+    /// </summary>
+    private async Task<ImmutableList<DataContent>> AppendContextAndAttachmentsAsync(StringBuilder messageText)
     {
-        var messageText = new StringBuilder();
-
-        // Static part: agent instructions + tool docs (built once, cached)
-        if (cachedSystemPrompt == null && !isPersistentFactory)
-        {
-            var sb = new StringBuilder();
-            if (!string.IsNullOrEmpty(agentName))
-            {
-                var agentInfo = loadedAgents.FirstOrDefault(a => a.Name == agentName);
-                var agentInstructions = agentInfo?.AgentConfiguration?.Instructions;
-                if (!string.IsNullOrEmpty(agentInstructions))
-                {
-                    sb.AppendLine("# Agent Identity and Instructions");
-                    sb.AppendLine();
-                    sb.AppendLine("You are acting as the following agent. Follow these instructions strictly:");
-                    sb.AppendLine();
-                    sb.AppendLine(agentInstructions);
-                    sb.AppendLine();
-                }
-            }
-
-            var toolDocs = cachedToolDocs ?? await LoadToolDocumentationAsync().ConfigureAwait(false);
-            if (!string.IsNullOrEmpty(toolDocs))
-            {
-                sb.AppendLine("# Available Tools Documentation");
-                sb.AppendLine();
-                sb.AppendLine(toolDocs);
-                sb.AppendLine();
-            }
-
-            cachedSystemPrompt = sb.ToString();
-        }
-
-        if (!string.IsNullOrEmpty(cachedSystemPrompt))
-            messageText.Append(cachedSystemPrompt);
-
-        // User identity
-        var accessService = hub.ServiceProvider.GetService<AccessService>();
-        var userContext = accessService?.Context ?? accessService?.CircuitContext;
-        if (userContext != null)
-        {
-            messageText.AppendLine("# Current User");
-            messageText.AppendLine();
-            messageText.AppendLine($"- **User ID:** `{userContext.ObjectId}`");
-            if (!string.IsNullOrEmpty(userContext.Name))
-                messageText.AppendLine($"- **Name:** {userContext.Name}");
-            messageText.AppendLine($"- **User namespace:** `User/{userContext.ObjectId}`");
-            messageText.AppendLine();
-        }
-
-        // Turn repetition into a reusable Skill — PROACTIVE. The trigger is a repeating
-        // user, so one-shot / utility agents (NodeInitializer, DescriptionWriter, …) simply
-        // never fire it. Kept in the shared base prompt so every conversational agent offers it.
-        messageText.AppendLine("# Turn repetition into a Skill (proactive)");
-        messageText.AppendLine();
-        messageText.AppendLine("When the user asks for the SAME multi-step task more than once (in this thread or across threads), proactively offer to save it as a reusable **Skill** — e.g. \"Want me to save this as a `/<name>` skill you can re-run anytime?\". Don't wait to be asked.");
-        messageText.AppendLine();
-        messageText.AppendLine("\"Create a skill\" means create a `nodeType:Skill` node (the same mechanism behind `/agent`, `/model`, `/harness`). Use `create` with `content` = a `SkillDefinition`:");
-        messageText.AppendLine("- node **id** = the slash word (`/<id>`); **name** + **description** = its display name and help text.");
-        messageText.AppendLine("- `Instructions` = a how-to (the SKILL.md body) the agent loads on demand — for \"run these steps\" skills — and/or `Action` = a behaviour (`Pick` a node by a query and write it to the composer, `OpenContent`, `Connect`/`Disconnect`).");
-        messageText.AppendLine("- Place it under the user's own namespace + `/Skill` (private to them) or the Space's `{space}/Skill` (shared with everyone in that Space); the platform-wide catalog is `Skill`.");
-        messageText.AppendLine("Once created, `/<id>` works in chat immediately — no code. Full SkillDefinition shape: `/Doc/AI/ChatCommands`.");
-        messageText.AppendLine();
-
         // Dynamic part: context (changes per navigation)
         if (Context != null)
         {
@@ -620,6 +568,78 @@ public class AgentChatClient : IAgentChat
                 }
             }
         }
+
+        return binaryAttachments;
+    }
+
+    private async Task<(string Text, ImmutableList<DataContent> BinaryAttachments)> BuildMessageWithContextAsync(IReadOnlyCollection<ChatMessage> messages, string? agentName = null)
+    {
+        var messageText = new StringBuilder();
+
+        // Static part: agent instructions + tool docs (built once, cached)
+        if (cachedSystemPrompt == null && !isPersistentFactory)
+        {
+            var sb = new StringBuilder();
+            if (!string.IsNullOrEmpty(agentName))
+            {
+                var agentInfo = loadedAgents.FirstOrDefault(a => a.Name == agentName);
+                var agentInstructions = agentInfo?.AgentConfiguration?.Instructions;
+                if (!string.IsNullOrEmpty(agentInstructions))
+                {
+                    sb.AppendLine("# Agent Identity and Instructions");
+                    sb.AppendLine();
+                    sb.AppendLine("You are acting as the following agent. Follow these instructions strictly:");
+                    sb.AppendLine();
+                    sb.AppendLine(agentInstructions);
+                    sb.AppendLine();
+                }
+            }
+
+            var toolDocs = cachedToolDocs ?? await LoadToolDocumentationAsync().ConfigureAwait(false);
+            if (!string.IsNullOrEmpty(toolDocs))
+            {
+                sb.AppendLine("# Available Tools Documentation");
+                sb.AppendLine();
+                sb.AppendLine(toolDocs);
+                sb.AppendLine();
+            }
+
+            cachedSystemPrompt = sb.ToString();
+        }
+
+        if (!string.IsNullOrEmpty(cachedSystemPrompt))
+            messageText.Append(cachedSystemPrompt);
+
+        // User identity
+        var accessService = hub.ServiceProvider.GetService<AccessService>();
+        var userContext = accessService?.Context ?? accessService?.CircuitContext;
+        if (userContext != null)
+        {
+            messageText.AppendLine("# Current User");
+            messageText.AppendLine();
+            messageText.AppendLine($"- **User ID:** `{userContext.ObjectId}`");
+            if (!string.IsNullOrEmpty(userContext.Name))
+                messageText.AppendLine($"- **Name:** {userContext.Name}");
+            messageText.AppendLine($"- **User namespace:** `User/{userContext.ObjectId}`");
+            messageText.AppendLine();
+        }
+
+        // Turn repetition into a reusable Skill — PROACTIVE. The trigger is a repeating
+        // user, so one-shot / utility agents (NodeInitializer, DescriptionWriter, …) simply
+        // never fire it. Kept in the shared base prompt so every conversational agent offers it.
+        messageText.AppendLine("# Turn repetition into a Skill (proactive)");
+        messageText.AppendLine();
+        messageText.AppendLine("When the user asks for the SAME multi-step task more than once (in this thread or across threads), proactively offer to save it as a reusable **Skill** — e.g. \"Want me to save this as a `/<name>` skill you can re-run anytime?\". Don't wait to be asked.");
+        messageText.AppendLine();
+        messageText.AppendLine("\"Create a skill\" means create a `nodeType:Skill` node (the same mechanism behind `/agent`, `/model`, `/harness`). Use `create` with `content` = a `SkillDefinition`:");
+        messageText.AppendLine("- node **id** = the slash word (`/<id>`); **name** + **description** = its display name and help text.");
+        messageText.AppendLine("- `Instructions` = a how-to (the SKILL.md body) the agent loads on demand — for \"run these steps\" skills — and/or `Action` = a behaviour (`Pick` a node by a query and write it to the composer, `OpenContent`, `Connect`/`Disconnect`).");
+        messageText.AppendLine("- Place it under the user's own namespace + `/Skill` (private to them) or the Space's `{space}/Skill` (shared with everyone in that Space); the platform-wide catalog is `Skill`.");
+        messageText.AppendLine("Once created, `/<id>` works in chat immediately — no code. Full SkillDefinition shape: `/Doc/AI/ChatCommands`.");
+        messageText.AppendLine();
+
+        // Dynamic part: context + attachments (shared with the streaming path).
+        var binaryAttachments = await AppendContextAndAttachmentsAsync(messageText).ConfigureAwait(false);
 
         // Inject conversation history from persisted ThreadMessage nodes (resume scenario)
         if (conversationHistory is { Count: > 0 })
@@ -873,7 +893,33 @@ public class AgentChatClient : IAgentChat
         var turnMessages = new List<ChatMessage>();
         if (!string.IsNullOrEmpty(agent.Instructions))
             turnMessages.Add(new ChatMessage(ChatRole.System, agent.Instructions));
+
+        // 🚨 Ship the current application context + attachments (the contextPath / attachments the
+        // user set) into the prompt — the SAME dynamic block the non-streaming path injects via
+        // BuildMessageWithContextAsync. Without this the streaming chat sent NONE of it, so the agent
+        // had to Search to rediscover what was already attached (the "context not shipped" flail that
+        // pegs a local model). Injected as a System message so TruncateToContextBudget always keeps
+        // it. (AppendContextAndAttachmentsAsync does NOT fan out over children — see its remarks.)
+        var contextBlock = new StringBuilder();
+        var binaryAttachments = await AppendContextAndAttachmentsAsync(contextBlock).ConfigureAwait(false);
+        if (contextBlock.Length > 0)
+            turnMessages.Add(new ChatMessage(ChatRole.System, contextBlock.ToString()));
         turnMessages.AddRange(messages);
+        // Binary attachments (images/PDFs) ride on the last user message so the model receives them.
+        if (!binaryAttachments.IsEmpty)
+        {
+            var lastUserIdx = turnMessages.FindLastIndex(m => m.Role == ChatRole.User);
+            if (lastUserIdx >= 0)
+            {
+                var lastUser = turnMessages[lastUserIdx];
+                var mergedContents = new List<AIContent>(lastUser.Contents);
+                mergedContents.AddRange(binaryAttachments);
+                turnMessages[lastUserIdx] = new ChatMessage(ChatRole.User, mergedContents)
+                {
+                    AuthorName = lastUser.AuthorName
+                };
+            }
+        }
         // 🪙 Cap the per-round context (see TruncateToContextBudget): the model re-reads the WHOLE
         // history every round, so an unbounded thread makes input tokens — and local-model compute /
         // heat — grow quadratically (the "123k tokens / hot Ollama" report). Keep the system prompt +
