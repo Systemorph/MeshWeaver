@@ -3869,10 +3869,95 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             agentName: boundAgentPath, modelName: boundModelPath, harness: boundHarness);
     }
 
+    // Delete-with-undo confirm state. When deleting a message (and everything after it) that
+    // changed nodes, we first ASK whether to roll those node changes back too — a delete only
+    // removes the conversation cells, not the changes those cells made to the mesh.
+    private string? _deleteConfirmId;
+    private int _deleteConfirmChangeCount;
+    private int _deleteConfirmMessageCount;
+
     private void DeleteFromMessage(string id)
     {
         if (string.IsNullOrEmpty(threadPath)) return;
+        // If the deleted range changed any nodes, pause and ask whether to also undo them.
+        var changeCount = CollectChangesFrom(id).Count;
+        if (changeCount > 0)
+        {
+            _deleteConfirmId = id;
+            _deleteConfirmChangeCount = changeCount;
+            _deleteConfirmMessageCount = CountMessagesFrom(id);
+            StateHasChanged();
+            return;
+        }
         Hub.DeleteFromMessage(threadPath, id);
+    }
+
+    /// <summary>Confirms a pending delete; when <paramref name="alsoUndo"/> is set, rolls back
+    /// every node change the deleted messages made before removing the cells.</summary>
+    private void ConfirmDelete(bool alsoUndo)
+    {
+        var id = _deleteConfirmId;
+        _deleteConfirmId = null;
+        if (string.IsNullOrEmpty(id) || string.IsNullOrEmpty(threadPath)) return;
+        if (alsoUndo) UndoChanges(CollectChangesFrom(id)); // collect BEFORE the cells are deleted
+        Hub.DeleteFromMessage(threadPath, id);
+    }
+
+    private void CancelDelete() => _deleteConfirmId = null;
+
+    /// <summary>Aggregates the UpdatedNodes of the message <paramref name="id"/> and every message
+    /// after it (the range <see cref="HubThreadExtensions.DeleteFromMessage"/> would remove).</summary>
+    private IReadOnlyList<NodeChangeEntry> CollectChangesFrom(string id)
+    {
+        var result = new List<NodeChangeEntry>();
+        var found = false;
+        foreach (var mid in ThreadMessages)
+        {
+            if (!found && mid == id) found = true;
+            if (!found) continue;
+            var ch = GetMessageState(mid)?.UpdatedNodes;
+            if (ch is { Count: > 0 }) result.AddRange(ch);
+        }
+        return result;
+    }
+
+    private int CountMessagesFrom(string id)
+    {
+        var count = 0;
+        var found = false;
+        foreach (var mid in ThreadMessages)
+        {
+            if (!found && mid == id) found = true;
+            if (found) count++;
+        }
+        return count;
+    }
+
+    /// <summary>
+    /// Reverts every node change a single message made: rolls each affected node back to its
+    /// pre-change version (<see cref="RollbackNodeRequest"/>), or deletes a node this message
+    /// CREATED (no prior version existed). Each request is TARGETED at the node's own hub, where
+    /// the rollback handler lives (AddDefaultLayoutAreas) — see <see cref="UndoChanges"/>.
+    /// </summary>
+    private void UndoMessageChanges(string id)
+    {
+        var changes = GetMessageState(id)?.UpdatedNodes;
+        if (changes is { Count: > 0 })
+            UndoChanges(changes);
+    }
+
+    /// <summary>Rolls back a set of node changes (see <see cref="UndoMessageChanges"/>).</summary>
+    private void UndoChanges(IReadOnlyList<NodeChangeEntry> changes)
+    {
+        foreach (var e in changes)
+        {
+            if (string.IsNullOrEmpty(e.Path)) continue;
+            if (e.VersionBefore is { } vb)
+                Hub.Post(new RollbackNodeRequest(e.Path, vb), o => o.WithTarget(new Address(e.Path)));
+            else
+                Hub.Post(new DeleteNodeRequest(e.Path) { Recursive = true },
+                    o => o.WithTarget(new Address(e.Path)));
+        }
     }
 
     // ─── Tool-call display helpers ────────────────────────────────────────

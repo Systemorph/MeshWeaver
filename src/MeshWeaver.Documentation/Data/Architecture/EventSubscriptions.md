@@ -32,7 +32,7 @@ Because the mesh node is the durable source of truth (Postgres), durability is *
 | NodeChange | `TriggerNodeType`, `TriggerKind`, `MatchField`, `MatchValue` | fire when a node of this type is created/updated/deleted and its field matches |
 | Timer | `FireAt` | fire once at/after this instant (a past time fires on the next boot) |
 | NodeStatus | `WatchPath`, `StatusField`, `RestingValues`, `RequireActiveFirst` | fire when the watched node's status enters a resting value |
-| **Effect** | `ContinuationType` | `GrantSpaceAccess` \| `PostThreadMessage` |
+| **Effect** | `ContinuationType` | `GrantSpaceAccess` \| `AddToGroup` \| `PostThreadMessage` |
 | | `TargetPath`, `SubjectId`, `Role`, `Pin` | what the continuation does (and to whom) |
 | **Lifecycle** | `Status`, `CreatedBy`, `CreatedAt`, `FiredAt`, `LastError` | runner-managed (`Pending → Fired \| Failed \| Cancelled`) |
 
@@ -59,6 +59,8 @@ EventSubscriptionOps.CreateSubscription(meshService, subscription).Subscribe();
 ```
 
 When the invitee onboards, their `User` node is created → the change feed fires the subscription live; the reconcile path is the safety net if the sign-up happened during downtime. The continuation (`GrantSpaceAccess`) creates the `{space}/_Access/{user}_Access` assignment and pins the Space — both idempotent create-or-updates, so live + reconcile can never double-grant. The subject is the **triggering node's id** (a `User` node's path IS the userId).
+
+The group twin is `AddToGroup` (written by `GroupInviteExtensions.InviteToGroup` / the bulk `InviteAllToGroup` behind the group's "Invite by Email" dialog): on sign-up it creates the `{group}/{user}_Membership` node, and — when the invite chose a `Role` — additionally the `{group}/_Access/{user}_Access` assignment (groups are not publicly readable, so the grant is what lets the new member see the group; `Admin` makes them a group manager). Same idempotent upserts, same deterministic id per invitee+group.
 
 ## Trigger 2 — react to a timer
 

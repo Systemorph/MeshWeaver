@@ -72,8 +72,15 @@ public static class RoleNodeType
         "<path d=\"M5 6.5A1.5 1.5 0 0 1 6.5 5h7A1.5 1.5 0 0 1 15 6.5v5A1.5 1.5 0 0 1 13.5 13H9.4l-2.8 2.3A.5.5 0 0 1 5.8 15v-2A1.5 1.5 0 0 1 4.5 11.5v-5H5Zm2.5 1.75a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Zm2.5 0a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Zm2.5 0a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Z\" fill=\"white\"/>" +
         "</svg>";
 
+    // Contributor: teal, distinct from Editor's green — a "+" (can add, cannot modify others').
+    private const string ContributorIcon =
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 20 20\">" +
+        "<rect width=\"20\" height=\"20\" rx=\"4\" fill=\"#0D9488\"/>" +
+        "<path d=\"M10 4.5a.9.9 0 0 1 .9.9v3.7h3.7a.9.9 0 1 1 0 1.8h-3.7v3.7a.9.9 0 1 1-1.8 0v-3.7H5.4a.9.9 0 1 1 0-1.8h3.7V5.4a.9.9 0 0 1 .9-.9Z\" fill=\"white\"/>" +
+        "</svg>";
+
     /// <summary>
-    /// Provides the four built-in roles as static MeshNodes
+    /// Provides the built-in roles as static MeshNodes
     /// so they appear in query results regardless of scope.
     /// </summary>
     private class BuiltInRolesProvider : IStaticNodeProvider
@@ -98,6 +105,7 @@ public static class RoleNodeType
             new("Editor", "Role") { Name = "Editor", NodeType = NodeType, Icon = EditorIcon, Content = Role.Editor },
             new("Viewer", "Role") { Name = "Viewer", NodeType = NodeType, Icon = ViewerIcon, Content = Role.Viewer },
             new("Commenter", "Role") { Name = "Commenter", NodeType = NodeType, Icon = CommenterIcon, Content = Role.Commenter },
+            new("Contributor", "Role") { Name = "Contributor", NodeType = NodeType, Icon = ContributorIcon, Content = Role.Contributor },
         ];
 
         public IEnumerable<MeshNode> GetStaticNodes() => Nodes;

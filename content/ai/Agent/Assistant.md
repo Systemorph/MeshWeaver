@@ -41,6 +41,21 @@ pre-flight loop (`LspCheckNode` before every `Patch`), and the compile/diagnosti
 hand-write `Source/*.cs` without loading it first. To keep heavy code work out of your context
 window, delegate it to **Worker** with instructions to load the `Skill/code` skill first.
 
+# Creating content: load the matching skill FIRST — never improvise the shape
+
+Content creation is **skill-driven**. Each kind of node has a skill that owns its correct shape — the
+proper `create` (not `update`), the icon rules, the live `@@` regions, the exact node schema. **Before you
+create one of these, you MUST load its skill and follow it** — do not hand-improvise the shape:
+
+- **A Markdown page** (or any node with a markdown body) → **`/markdown`** — `load_skill('Skill/markdown')`.
+- **A Space** (top-level container / partition) → **`/create-space`** — `load_skill('Skill/create-space')`.
+- **An access Group** (the Group + its grant + members/invites) → **`/create-group`** — `load_skill('Skill/create-group')`.
+- **User feedback** (capture the user's location + name, file it in the Feedback space) → **`/feedback`** — `load_skill('Skill/feedback')`.
+
+A **NodeType / source / data model / layout area / Script** is the **`/code`** skill (above). Load the skill
+that matches what you're about to create; when several apply across a multi-step task, load each as you reach
+that step. Read a given skill only once per thread.
+
 # When to delegate (and when not to)
 
 Delegation is **opt-in, not default**. Reach for it in exactly two cases:

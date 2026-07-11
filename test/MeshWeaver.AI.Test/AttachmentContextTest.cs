@@ -149,6 +149,10 @@ public class AttachmentContextTest : MonolithMeshTestBase
             .LastOrDefault();
     }
 
+    /// <summary>Extracts the text of a single captured message (any role).</summary>
+    private static string MessageText(ChatMessage m) =>
+        m.Text ?? string.Join("", m.Contents.OfType<Microsoft.Extensions.AI.TextContent>().Select(t => t.Text));
+
     /// <summary>
     /// Helper: sets up an AgentChatClient with context pointing to Software.
     /// </summary>
@@ -266,6 +270,47 @@ public class AttachmentContextTest : MonolithMeshTestBase
         userMessageIndex.Should().BeGreaterThan(0, "user message should be present");
         contextIndex.Should().BeLessThan(userMessageIndex,
             "context should appear BEFORE the user message");
+    }
+
+    /// <summary>
+    /// Regression test for the STREAMING path. <c>GetStreamingResponseAsync</c> must inject the
+    /// current application context (contextPath) AND attachment content into the prompt — the same
+    /// as the non-streaming <c>GetResponseAsync</c>. It used to drop BOTH (it set
+    /// <c>currentAttachments = null</c> and never called the context builder), so the agent received
+    /// no context and had to Search to rediscover what was already attached. The streaming path
+    /// injects the block as a System message ahead of the user turn, so this asserts across the full
+    /// captured message sequence rather than a single combined user message.
+    /// </summary>
+    [Fact]
+    public async Task Streaming_InjectsContextAndAttachments_BeforeUserMessage()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (agentChat, factory) = await SetupAgentChatAsync(ct);
+
+        agentChat.SetAttachments(["ACME"]);
+
+        const string userText = "What is the launch status?";
+        await foreach (var _ in agentChat.GetStreamingResponseAsync(
+            [new ChatMessage(ChatRole.User, userText)], ct)) { }
+
+        factory.AllCapturedMessages.Should().NotBeEmpty("the streaming path should send messages to the model");
+
+        // Concatenate every captured message IN ORDER — context + attachments ride on a System
+        // message that precedes the user turn, so ordering across messages is what we assert.
+        var assembled = string.Join("\n", factory.AllCapturedMessages.Select(MessageText));
+
+        var contextIndex = assembled.IndexOf("# Current Application Context", StringComparison.Ordinal);
+        var attachmentIndex = assembled.IndexOf("# Attached Content", StringComparison.Ordinal);
+        var userMessageIndex = assembled.IndexOf(userText, StringComparison.Ordinal);
+
+        contextIndex.Should().BeGreaterThanOrEqualTo(0,
+            "the STREAMING prompt must include the current application context");
+        attachmentIndex.Should().BeGreaterThanOrEqualTo(0,
+            "the STREAMING prompt must include the attachment content");
+        userMessageIndex.Should().BeGreaterThan(0, "the user message should be present");
+        contextIndex.Should().BeLessThan(attachmentIndex, "context should come before attachments");
+        attachmentIndex.Should().BeLessThan(userMessageIndex,
+            "attachments should come before the user message");
     }
 
     /// <summary>
