@@ -44,3 +44,5 @@ export {
 } from "./render/embeddedArea.js";
 export { getPointer, setPointer, mergePatch, resolve, bindingPointer } from "./area/pointer.js";
 export type { AreaSource, AreaTree, UiControl, Skin, NamedArea, MeshEvent, Json } from "./area/types.js";
+// Pure (import-free) markdown-HTML splitter — the RN leaf pack hydrates interactive markdown with it.
+export { splitRenderedHtml, type RenderedHtmlSegment } from "./controls/interactiveMarkdown.js";
