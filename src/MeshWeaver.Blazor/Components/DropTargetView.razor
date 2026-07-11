@@ -1,0 +1,39 @@
+@using MeshWeaver.Layout
+@using MeshWeaver.Blazor
+@using MeshWeaver.Blazor.Components
+@using MeshWeaver.Messaging
+@inherits BlazorView<DropTargetControl, DropTargetView>
+@inject BlazorDragDropState DragState
+
+<div @ondragover:preventDefault="true"
+     @ondrop:preventDefault="true"
+     @ondrop="OnDrop"
+     class="@Class"
+     style="@Style"
+     id="@Id"
+     data-drop-target="true">
+    @if (ViewModel.ContentArea is not null)
+    {
+        <NamedAreaView Stream="@Stream"
+                       ViewModel="@ViewModel.ContentArea"
+                       Area="@ViewModel.ContentArea.Area.ToString()" />
+    }
+</div>
+
+@code {
+    // On drop, post a DropEvent carrying the dragged payload to the stream owner — the same
+    // user-driven message path ButtonView.OnClick uses, stamping the circuit user's AccessContext
+    // so the owning hub does not deny it. The hub invokes the DropTargetControl's DropAction.
+    private void OnDrop()
+    {
+        if (Stream is null)
+            return;
+        var payload = DragState.Payload;
+        DragState.Payload = null;
+        var userContext = AccessService?.Context ?? AccessService?.CircuitContext;
+        Stream.Hub.Post(new DropEvent(Area, Stream.StreamId) { Payload = payload }, o =>
+            userContext is not null
+                ? o.WithTarget(Stream.Owner).WithAccessContext(userContext)
+                : o.WithTarget(Stream.Owner));
+    }
+}

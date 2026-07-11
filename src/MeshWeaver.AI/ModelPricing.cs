@@ -30,7 +30,7 @@ public record ModelPriceRate(
 
     /// <summary>
     /// Cache-aware cost. <paramref name="inputTokens"/> is the FULL prompt-token count (cache read +
-    /// write are SUBSETS of it, per <see cref="UsageTokens"/>), so the non-cached portion is
+    /// write are SUBSETS of it, per <see cref="TokenUsage"/>), so the non-cached portion is
     /// <c>inputTokens − cacheReadTokens − cacheWriteTokens</c>, priced at the input rate; cache reads
     /// at the reduced read rate; cache writes at the premium write rate. Read/write rates fall back to
     /// the Anthropic-standard 0.1× / 1.25× of input when the model doesn't specify them.

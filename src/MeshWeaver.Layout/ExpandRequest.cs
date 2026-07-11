@@ -31,6 +31,28 @@ public record BlurEvent(string Area, string StreamId) : StreamMessage(StreamId)
 }
 
 /// <summary>
+/// Represents an event that occurs when a draggable is dropped onto a <see cref="DropTargetControl"/>.
+/// </summary>
+/// <param name="Area">The area of the drop target that received the drop.</param>
+/// <param name="StreamId">The stream identifier.</param>
+public record DropEvent(string Area, string StreamId) : StreamMessage(StreamId)
+{
+    /// <summary>
+    /// The payload of the dropped <see cref="DraggableControl"/>, carried from the drag source.
+    /// </summary>
+    public object? Payload { get; init; }
+}
+
+/// <summary>
+/// Context provided to a <see cref="DropTargetControl"/>'s drop handler when a draggable is dropped.
+/// </summary>
+/// <param name="Area">The area of the drop target that received the drop.</param>
+/// <param name="Payload">The payload carried from the dropped draggable.</param>
+/// <param name="Hub">The message hub for posting messages.</param>
+/// <param name="Host">The layout area host.</param>
+public record DropContext(string Area, object? Payload, IMessageHub Hub, LayoutAreaHost Host);
+
+/// <summary>
 /// Represents an event that occurs when a dialog is closed.
 /// </summary>
 /// <param name="Area">The area where the dialog was displayed.</param>

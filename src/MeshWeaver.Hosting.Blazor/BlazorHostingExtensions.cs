@@ -48,6 +48,7 @@ public static class BlazorHostingExtensions
                 .AddScoped<IMenuItemsProvider, MenuItemsProvider>()
                 .AddScoped<CircuitAccessHandler>()
                 .AddScoped<CircuitHandler>(sp => sp.GetRequiredService<CircuitAccessHandler>())
+                .AddScoped<MeshWeaver.Blazor.BlazorDragDropState>()
                 .AddMeshMcp()
             )
             .ConfigureHub(hub => hub.AddBlazor(clientConfig));

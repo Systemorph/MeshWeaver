@@ -3,7 +3,6 @@ import { SafeAreaView, StatusBar, LogBox } from "react-native";
 import {
   RegistryProvider,
   ScopeProvider,
-  StaticAreaSource,
   EmbeddedAreaProvider,
   MeshOpsProvider,
   createGrpcEmbeddedFactory,
@@ -13,7 +12,7 @@ import {
 } from "@meshweaver/react/core";
 import { Mesh } from "@meshweaver/client-web";
 import { rnPack } from "./src/rnPack";
-import { sampleArea } from "./src/sample";
+import { createSampleSource } from "./src/sample";
 import { createLiveSource } from "./src/live";
 import { buildMeshOps } from "./src/liveOps";
 import { NavContext, CurrentAddressContext, type NavTarget } from "./src/nav";
@@ -77,7 +76,7 @@ function AppInner() {
   const [nav, setNav] = useState<NavTarget>(HOME);
   const [clientScreen, setClientScreen] = useState<ClientDestination | null>(null);
   const [instanceTick, setInstanceTick] = useState(0);
-  const [source, setSource] = useState<AreaSource>(() => new StaticAreaSource(sampleArea));
+  const [source, setSource] = useState<AreaSource>(() => createSampleSource());
   const [liveConnected, setLiveConnected] = useState(false);
   const [submitter, setSubmitter] = useState<ThreadSubmitter | undefined>(undefined);
   // The factory `@@` layout-area embeds (LayoutAreaControl) open their nested area streams through.

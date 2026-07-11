@@ -2,7 +2,7 @@
 // renderer core (@meshweaver/react/core). This is the RN analog of MAUI's MauiViewPack and of the web
 // Fluent pack: SAME UiControl tree, native leaves. Drop it into <RegistryProvider pack={rnPack}>.
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { View, Text, TextInput, Pressable, Switch, ScrollView, ActivityIndicator, StyleSheet, Platform } from "react-native";
 import { marked } from "marked";
 import { NativeHtml } from "./nativeHtml";
@@ -27,6 +27,11 @@ import {
 } from "@meshweaver/react/core";
 
 const s = (v: unknown): string => (v == null ? "" : String(v));
+
+// A browser has one active HTML5 drag at a time, so a module-level slot models "the payload in
+// flight" — read on drop so it works even when a synthetic drag (Playwright) does not carry the
+// DataTransfer. Native (iOS/Android) has no HTML5 DnD, so Draggable/DropTarget are plain wrappers there.
+let activeDragPayload: unknown = undefined;
 
 // ── shared binding helpers (the native twins of clients/react/src/controls/common.ts, which is NOT
 //    exported from @meshweaver/react/core — the binding primitives it builds on ARE). Every editor reads
@@ -134,6 +139,86 @@ const Button: ControlComponent = ({ control }) => {
     <Pressable style={styles.button} onPress={() => control.isClickable && emit({ kind: "click", area })}>
       <Text style={styles.buttonText}>{s(useResolve(control.data)) || s(useResolve(control.label))}</Text>
     </Pressable>
+  );
+};
+
+// A generic drag source. On web the wrapping <View>'s DOM node gets draggable + the HTML5 drag
+// listeners; the payload is stashed in the module-level slot on dragstart. On native it is a plain
+// wrapper (no HTML5 DnD). The wrapped control is rendered via its contentArea NamedArea.
+const Draggable: ControlComponent = ({ control }) => {
+  const ref = useRef<unknown>(null);
+  const payload = useResolve(control.payload);
+  const contentArea = (control.contentArea as { area?: string } | undefined)?.area;
+  useEffect(() => {
+    if (Platform.OS !== "web" || !ref.current) return;
+    const el = ref.current as unknown as HTMLElement;
+    el.setAttribute("draggable", "true");
+    el.setAttribute("data-draggable", s(payload));
+    const onDragStart = (e: DragEvent) => {
+      activeDragPayload = payload;
+      try {
+        e.dataTransfer?.setData("text/plain", s(payload));
+        if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
+      } catch {
+        /* no DataTransfer — the module-level slot still carries the payload */
+      }
+    };
+    const onDragEnd = () => {
+      activeDragPayload = undefined;
+    };
+    el.addEventListener("dragstart", onDragStart);
+    el.addEventListener("dragend", onDragEnd);
+    return () => {
+      el.removeEventListener("dragstart", onDragStart);
+      el.removeEventListener("dragend", onDragEnd);
+    };
+  }, [payload]);
+  return (
+    <View ref={ref as never} style={styles.draggable}>
+      {contentArea ? <RenderArea areaKey={contentArea} /> : null}
+    </View>
+  );
+};
+
+// A generic drop target. On web its DOM node gets the dragover/drop listeners; on drop it emits the
+// "drop" MeshEvent carrying the dragged payload, scoped to this target's area (what the server's
+// LayoutAreaHost.OnDrop consumes to invoke the DropTargetControl's DropAction).
+const DropTarget: ControlComponent = ({ control }) => {
+  const emit = useEmit();
+  const { area } = useScope();
+  const ref = useRef<unknown>(null);
+  const contentArea = (control.contentArea as { area?: string } | undefined)?.area;
+  useEffect(() => {
+    if (Platform.OS !== "web" || !ref.current) return;
+    const el = ref.current as unknown as HTMLElement;
+    el.setAttribute("data-drop-target", "true");
+    const onDragOver = (e: DragEvent) => {
+      e.preventDefault();
+      if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+    };
+    const onDrop = (e: DragEvent) => {
+      e.preventDefault();
+      let payload = activeDragPayload;
+      if (payload === undefined) {
+        try {
+          payload = e.dataTransfer?.getData("text/plain");
+        } catch {
+          /* ignore */
+        }
+      }
+      emit({ kind: "drop", area, value: payload });
+    };
+    el.addEventListener("dragover", onDragOver);
+    el.addEventListener("drop", onDrop);
+    return () => {
+      el.removeEventListener("dragover", onDragOver);
+      el.removeEventListener("drop", onDrop);
+    };
+  }, [area, emit]);
+  return (
+    <View ref={ref as never} style={styles.dropTarget}>
+      {contentArea ? <RenderArea areaKey={contentArea} /> : null}
+    </View>
   );
 };
 
@@ -658,6 +743,8 @@ export const rnPack: LeafPack = {
     LayoutArea: LayoutAreaEmbed,
     Badge,
     Button,
+    Draggable,
+    DropTarget,
     TextField,
     TextArea: TextField,
     CheckBox,
@@ -711,6 +798,8 @@ const styles = StyleSheet.create({
   badge: { alignSelf: "flex-start", backgroundColor: "#0f6cbd", borderRadius: 10, paddingHorizontal: 8, paddingVertical: 2 },
   badgeText: { color: "white", fontSize: 12 },
   button: { backgroundColor: "#0f6cbd", paddingVertical: 10, paddingHorizontal: 14, borderRadius: 6, alignItems: "center" },
+  draggable: { padding: 10, borderRadius: 6, borderWidth: 1, borderColor: "#b0bec5", backgroundColor: "white" },
+  dropTarget: { padding: 16, borderRadius: 6, borderWidth: 2, borderColor: "#90a4ae", borderStyle: "dashed", backgroundColor: "#f5f5f5" },
   runCell: { alignSelf: "flex-start", marginVertical: 8, paddingVertical: 6, paddingHorizontal: 12 },
   buttonText: { color: "white", fontWeight: "600" },
   input: { borderWidth: 1, borderColor: "#ccc", borderRadius: 4, padding: 8, fontSize: 14 },

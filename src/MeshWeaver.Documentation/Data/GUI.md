@@ -76,6 +76,7 @@ Browse the full set of controls, layout primitives, and data-binding guides:
 | [Layout Areas](LayoutAreas) | Named rendering slots — how the hub decides what to show and where |
 | [Container Controls](ContainerControl) | Stack, Tabs, Toolbar, Splitter, Layout — composing areas together |
 | [Layout Grid](LayoutGrid) | CSS-grid-based two-dimensional layouts |
+| [Drag & Drop](DragAndDrop) | Generic Draggable / DropTarget primitives — drag any control, drop into any zone, handle it server-side |
 | [Data Binding](DataBinding) | Two-way reactive binding via JSON Pointers — the contract every backend area must follow |
 | [Static vs. Dynamic Views](Observables) | When areas re-render and how to control update frequency |
 | [DataGrid](DataGrid) | Tabular data with sorting, filtering, and row actions |

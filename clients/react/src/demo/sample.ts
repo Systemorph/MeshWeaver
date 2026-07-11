@@ -28,7 +28,7 @@ export const sampleArea: AreaTree = {
       $type: "Stack",
       skins: [{ $type: "LayoutStack", orientation: "Vertical", verticalGap: 20 }],
       style: { padding: 24, maxWidth: 980, margin: "0 auto" },
-      areas: [ref("header"), ref("intro"), ref("metrics"), ref("tabs"), ref("formCard"), ref("chartCard"), ref("navCard"), ref("feedbackCard"), ref("footer")],
+      areas: [ref("header"), ref("intro"), ref("metrics"), ref("tabs"), ref("formCard"), ref("dndCard"), ref("chartCard"), ref("navCard"), ref("feedbackCard"), ref("footer")],
     },
     header: { $type: "Label", typo: "PageTitle", data: "MeshWeaver × Fluent UI" },
     intro: {
@@ -77,6 +77,18 @@ export const sampleArea: AreaTree = {
     level: { $type: "Slider", min: 0, max: 100, step: 5, data: ptr("/data/level") },
     when: { $type: "Date", label: "Joined", data: ptr("/data/when") },
     saveBtn: { $type: "Button", data: "Save", appearance: "primary", iconStart: "Save", isClickable: true },
+
+    dndCard: { $type: "Stack", skins: [{ $type: "Card" }], areas: [ref("dndTitle"), ref("dndRow")] },
+    dndTitle: { $type: "Label", typo: "Subject", data: "Drag & drop" },
+    dndRow: {
+      $type: "Stack",
+      skins: [{ $type: "LayoutStack", orientation: "Horizontal", horizontalGap: 16 }],
+      areas: [ref("dragCard"), ref("dropZone")],
+    },
+    dragCard: { $type: "Draggable", payload: "card-1", contentArea: ref("dragCardContent") },
+    dragCardContent: { $type: "Label", data: "Drag me" },
+    dropZone: { $type: "DropTarget", contentArea: ref("dropZoneContent") },
+    dropZoneContent: { $type: "Label", data: "Drop here" },
 
     chartCard: { $type: "Stack", skins: [{ $type: "Card" }], areas: [ref("chart")] },
     chart: {
