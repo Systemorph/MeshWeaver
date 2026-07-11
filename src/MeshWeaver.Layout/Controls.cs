@@ -112,6 +112,17 @@ public static class Controls
     /// <returns>A new <see cref="ButtonControl"/> with the "button" style applied.</returns>
     public static ButtonControl Button(object title) => new(title) { Style = "button" };
 
+    /// <summary>Creates a draggable wrapper around <paramref name="content"/> carrying <paramref name="payload"/>.</summary>
+    /// <param name="content">The control to make draggable.</param>
+    /// <param name="payload">The payload delivered to the drop target when this element is dropped.</param>
+    /// <returns>A new <see cref="DraggableControl"/>.</returns>
+    public static DraggableControl Draggable(UiControl content, object payload) => new(content, payload);
+
+    /// <summary>Creates a drop target that renders <paramref name="content"/> as its drop zone.</summary>
+    /// <param name="content">The control rendered inside the drop zone.</param>
+    /// <returns>A new <see cref="DropTargetControl"/>; attach a handler with <see cref="DropTargetControl.WithDropAction(System.Action{DropContext})"/>.</returns>
+    public static DropTargetControl DropTarget(UiControl content) => new(content);
+
     /// <summary>Creates a control that displays the message and type of <paramref name="ex"/>.</summary>
     /// <param name="ex">The exception whose message and type name are rendered.</param>
     /// <returns>A new <see cref="ExceptionControl"/>.</returns>

@@ -156,6 +156,12 @@ public record LayoutAreaHost : IDisposable
                 delivery => Stream.ClientId.Equals(delivery.Message.StreamId)
             )
         );
+        Stream.RegisterForDisposal(
+            Stream.Hub.Register<DropEvent>(
+                OnDrop,
+                delivery => Stream.ClientId.Equals(delivery.Message.StreamId)
+            )
+        );
     }
 
     /// <summary>
@@ -410,6 +416,18 @@ public record LayoutAreaHost : IDisposable
         if (GetControl(request.Message.Area) is DialogControl { CloseAction: not null } control)
             InvokeAsync(() => control.CloseAction.Invoke(
                 new(request.Message.Area, request.Message.State, request.Message.Payload ?? new object(), Hub, this)
+            ), ex => FailRequest(ex, request));
+        return request.Processed();
+    }
+
+    private IMessageDelivery OnDrop(IMessageDelivery<DropEvent> request)
+    {
+        // Like OnCloseDialog: the drop handler is a Func<…, Task>, so schedule it via InvokeAsync and
+        // route BOTH sync and async failures through FailRequest — a bare Invoke would leave exceptions
+        // thrown after the first await unobserved.
+        if (GetControl(request.Message.Area) is DropTargetControl { DropAction: not null } control)
+            InvokeAsync(() => control.DropAction.Invoke(
+                new(request.Message.Area, request.Message.Payload, Hub, this)
             ), ex => FailRequest(ex, request));
         return request.Processed();
     }

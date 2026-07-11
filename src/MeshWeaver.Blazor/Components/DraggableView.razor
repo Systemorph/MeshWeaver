@@ -1,0 +1,31 @@
+@using MeshWeaver.Layout
+@using MeshWeaver.Blazor
+@using MeshWeaver.Blazor.Components
+@inherits BlazorView<DraggableControl, DraggableView>
+@inject BlazorDragDropState DragState
+
+<div draggable="true"
+     @ondragstart="OnDragStart"
+     @ondragend="OnDragEnd"
+     class="@Class"
+     style="@Style"
+     id="@Id"
+     data-draggable="@PayloadText">
+    @if (ViewModel.ContentArea is not null)
+    {
+        <NamedAreaView Stream="@Stream"
+                       ViewModel="@ViewModel.ContentArea"
+                       Area="@ViewModel.ContentArea.Area.ToString()" />
+    }
+</div>
+
+@code {
+    private string? PayloadText => ViewModel?.Payload?.ToString();
+
+    // dragstart fires before the target's drop, so recording the payload here makes it
+    // available to whichever DropTargetView receives the drop (same circuit).
+    private void OnDragStart() => DragState.Payload = ViewModel.Payload;
+
+    // dragend fires AFTER drop, so clearing here never races the drop's read.
+    private void OnDragEnd() => DragState.Payload = null;
+}

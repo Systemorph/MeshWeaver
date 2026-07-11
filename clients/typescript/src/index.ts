@@ -14,3 +14,11 @@ export { Mesh, type MeshOptions } from "./mesh.js";
 export { MeshConnection, connect, type ConnectOptions } from "./connection.js";
 export { type Delivery } from "./envelope.js";
 export { type MeshNode } from "./types.js";
+export {
+  dropEvent,
+  dropEventFromMessage,
+  type DraggableControl,
+  type DropTargetControl,
+  type DropEvent,
+  type NamedArea,
+} from "./controls.js";

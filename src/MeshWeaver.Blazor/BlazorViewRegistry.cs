@@ -114,6 +114,8 @@ public static class BlazorViewRegistry
                 ListboxControl listbox => StandardView<ListboxControl, Listbox>(listbox, stream, area),
                 SelectControl select => StandardView<SelectControl, SelectView>(select, stream, area),
                 ButtonControl button => StandardView<ButtonControl, ButtonView>(button, stream, area),
+                DraggableControl draggable => StandardView<DraggableControl, DraggableView>(draggable, stream, area),
+                DropTargetControl dropTarget => StandardView<DropTargetControl, DropTargetView>(dropTarget, stream, area),
                 IconControl icon => StandardView<IconControl, IconView>(icon, stream, area),
                 BadgeControl badge => StandardView<BadgeControl, BadgeView>(badge, stream, area),
                 FileBrowserControl fileBrowser => StandardView<FileBrowserControl, FileBrowserView>(fileBrowser, stream, area),
