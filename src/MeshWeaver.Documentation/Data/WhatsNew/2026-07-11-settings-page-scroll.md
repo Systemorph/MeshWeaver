@@ -1,7 +1,7 @@
 ---
 Name: Settings pages scroll like normal pages
 Category: What's New
-Description: Settings no longer pins itself to the screen height — long settings pages now scroll with the page, so nothing is clipped out of reach.
+Description: Settings pages no longer pin themselves to the screen height — long settings pages now scroll with the page, so nothing is clipped out of reach.
 Icon: Sparkle
 ---
 

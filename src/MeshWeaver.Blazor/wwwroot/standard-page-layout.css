@@ -174,9 +174,14 @@ body {
 /* No inner scroller and no min-height:0 here — the settings page scrolls as a
    whole in .body-content. flex:1 1 auto only lets a SHORT page's background
    reach the bottom of the pane; a long page sizes the pane (and the page scroll)
-   by its content. */
+   by its content. overflow-x CLIP (not hidden!) keeps wide content (tables/code)
+   from widening the whole page: `hidden` would force overflow-y to compute to
+   `auto` and quietly reintroduce the inner vertical scroller this fix removed,
+   while `clip` contains the axis without creating a scroll container (same
+   treatment as mobile .body-content). */
 .settings-content-pane {
     flex: 1 1 auto;
+    overflow-x: clip;
     padding: 32px 40px 56px;
     background: var(--neutral-layer-1);
 }
