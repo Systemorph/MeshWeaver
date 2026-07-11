@@ -56,6 +56,12 @@ public static class InstancesAdminLayoutArea
     {
         IReadOnlyList<SettingsMenuItemDefinition> none = Array.Empty<SettingsMenuItemDefinition>();
 
+        // Config-gated: the Instances tab exists ONLY where Instances:Enabled is set — the
+        // company/control instance. Everywhere else (public/customer instances) the menu item
+        // never appears, matching the cluster-read RBAC which is likewise granted only there.
+        if (!IsEnabled(host))
+            return Observable.Return(none);
+
         var viewerId = ResolveViewerId(host);
         if (string.IsNullOrEmpty(viewerId))
             return Observable.Return(none);
@@ -92,6 +98,13 @@ public static class InstancesAdminLayoutArea
 
     private static IObservable<UiControl?> BuildArea(LayoutAreaHost host)
     {
+        // Defense-in-depth mirror of the menu gate: the area renders nothing useful on an
+        // install that hasn't enabled the Instances feature.
+        if (!IsEnabled(host))
+            return Observable.Return<UiControl?>(Controls.Markdown(
+                "The Instances overview is not enabled on this install. It is available only on the "
+                + "platform's control instance (`Instances:Enabled`)."));
+
         var viewerId = ResolveViewerId(host);
         if (string.IsNullOrEmpty(viewerId))
             return Observable.Return<UiControl?>(AccessDenied());
@@ -275,6 +288,9 @@ public static class InstancesAdminLayoutArea
             .StartWith((UiControl?)Controls.Markdown("*Fill in the fields and click **Generate plan**.*")));
         return form;
     }
+
+    private static bool IsEnabled(LayoutAreaHost host)
+        => (host.Hub.ServiceProvider.GetService<InstancesOptions>() ?? new InstancesOptions()).Enabled;
 
     private static string? ResolveViewerId(LayoutAreaHost host)
     {

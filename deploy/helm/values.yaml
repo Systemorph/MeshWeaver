@@ -17,8 +17,14 @@ selfUpdate:
 # deployments/ingresses ACROSS namespaces needs a cluster-scoped read grant — enable it ONLY on the
 # company/control instance, never on public or customer instances (a tenant pod must not be able to
 # enumerate the whole cluster). Off by default; the company env sets clusterRead: true.
+# clusterRead also drives Instances__Enabled — the SAME flag both grants the RBAC and makes the
+# Settings menu item exist, so on every other instance the tab never appears at all.
 instancesAdmin:
   clusterRead: false
+  # Grafana base URL for the per-instance log deep links (Grafana Explore / Loki) on the
+  # Instances tab (→ Instances__GrafanaBaseUrl). Empty = the tab shows a configure-me hint
+  # instead of links. Only meaningful where clusterRead is true (the company instance).
+  grafanaBaseUrl: ""
 # ---- External Ollama (local self-host) ------------------------------------
 # Front a host-native Ollama with an in-cluster Service so the portal addresses
 # it by name (http://ollama:11434/v1) instead of a host-gateway IP. On macOS the

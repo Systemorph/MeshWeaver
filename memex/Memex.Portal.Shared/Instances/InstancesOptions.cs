@@ -10,6 +10,13 @@ namespace Memex.Portal.Shared.Instances;
 /// </summary>
 public record InstancesOptions
 {
+    /// <summary>Whether the platform-admin Instances tab is available on this install AT ALL.
+    /// Default <c>false</c> — the tab is meant ONLY for the company/control instance
+    /// (memex.systemorph.com), which is also the only install whose service account gets the
+    /// cluster-read RBAC (<c>instancesAdmin.clusterRead</c> in the Helm chart plumbs both). On every
+    /// other instance the menu item never appears. Set via <c>Instances:Enabled</c>.</summary>
+    public bool Enabled { get; init; }
+
     /// <summary>The k8s label whose value marks a portal Deployment (and Ingress). The chart stamps
     /// <c>app.kubernetes.io/component=memex-portal</c> on the portal workloads; the instance query
     /// selects on it so only portals are listed, never migrations or other pods.</summary>

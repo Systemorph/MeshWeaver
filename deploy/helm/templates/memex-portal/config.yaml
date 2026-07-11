@@ -50,6 +50,16 @@ data:
   # app-relative path; empty = none. Per-install brand assets ship at
   # _content/Memex.Portal.Shared/brand/{systemorph,atioz,local}-180.png (or a mesh asset / absolute URL).
   Portal__AppleTouchIcon: "{{ .Values.config.memex_portal.Portal__AppleTouchIcon | default "" }}"
+{{- if (.Values.instancesAdmin).clusterRead }}
+  # ---- Platform-admin Instances overview (see .Values.instancesAdmin) -------
+  # The SAME flag that grants the cluster-read RBAC also enables the Settings tab, so the
+  # Instances menu item exists ONLY on the company/control instance.
+  Instances__Enabled: "true"
+{{- if (.Values.instancesAdmin).grafanaBaseUrl }}
+  # Per-instance Grafana Explore (Loki) log deep links on the Instances tab.
+  Instances__GrafanaBaseUrl: "{{ .Values.instancesAdmin.grafanaBaseUrl }}"
+{{- end }}
+{{- end }}
 {{- if (.Values.portalNext).enabled }}
   # ---- Next.js React frontend (FEATURE-FLAGGED — see .Values.portalNext) -----
   # Non-empty ReactAppUrl is what enables FrontendSelection: it shows the user
