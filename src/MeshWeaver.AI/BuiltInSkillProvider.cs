@@ -63,6 +63,25 @@ public class BuiltInSkillProvider : IStaticNodeProvider
         var skillPrefix = $"{assembly.GetName().Name}.Data.{SkillNodeType.RootNamespace}.";
 
         var nodes = new List<MeshNode>();
+
+        // Prefer the on-disk AI content section (content/ai/Skill) — editable + syncable back to the
+        // repo. Parse is identical to the embedded path; only the byte source moves to disk.
+        var root = AiContentLocator.SectionRoot();
+        var skillDir = root is null ? null : System.IO.Path.Combine(root, SkillNodeType.RootNamespace);
+        if (skillDir is not null && System.IO.Directory.Exists(skillDir))
+        {
+            foreach (var file in System.IO.Directory
+                         .EnumerateFiles(skillDir, "*.md", System.IO.SearchOption.AllDirectories)
+                         .OrderBy(f => f, StringComparer.Ordinal))
+            {
+                var node = ParseSkillNode(System.IO.File.ReadAllText(file),
+                    System.IO.Path.GetFileNameWithoutExtension(file));
+                if (node != null) nodes.Add(node);
+            }
+            return nodes.ToArray();
+        }
+
+        // Fallback: EMBEDDED resources — the offline default never loses its skills.
         foreach (var resourceName in assembly.GetManifestResourceNames()
                      .Where(n => n.StartsWith(skillPrefix, StringComparison.Ordinal)
                                  && n.EndsWith(".md", StringComparison.OrdinalIgnoreCase))

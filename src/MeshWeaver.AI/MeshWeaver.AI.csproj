@@ -3,7 +3,17 @@
     <Nullable>enable</Nullable>
 </PropertyGroup>
     <ItemGroup>
-        <EmbeddedResource Include="Data\**\*.md" />
+        <!-- The AI content SECTION (repo-root content/ai) is the SINGLE source of the built-in Agent
+             and Skill nodes, shipped three ways from the one copy:
+             1) EmbeddedResource with LinkBase="Data" → manifest names MeshWeaver.AI.Data.Agent.*.md /
+                .Skill.*.md (unchanged) — the offline FALLBACK if the on-disk section isn't found, so
+                the default AI experience can never disappear;
+             2) Content copy-to-output ("AiContent" beside the assembly) for a deployed offline build;
+             3) the repo working tree itself — a dev edits it in the mesh and syncs it back here. -->
+        <EmbeddedResource Include="..\..\content\ai\**\*.md" LinkBase="Data" />
+        <Content Include="..\..\content\ai\**\*.md"
+                 Link="AiContent\%(RecursiveDir)%(Filename)%(Extension)"
+                 CopyToOutputDirectory="PreserveNewest" />
     </ItemGroup>
     <ItemGroup>
         <PackageReference Include="Azure.AI.OpenAI" />
