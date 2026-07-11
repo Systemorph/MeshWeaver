@@ -891,19 +891,25 @@ public class AgentChatClient : IAgentChat
         // Pass all messages as separate turns with system prompt prepended.
         // The agent's ChatClient includes FunctionInvokingChatClient for tool calls.
         var turnMessages = new List<ChatMessage>();
-        if (!string.IsNullOrEmpty(agent.Instructions))
-            turnMessages.Add(new ChatMessage(ChatRole.System, agent.Instructions));
 
         // 🚨 Ship the current application context + attachments (the contextPath / attachments the
         // user set) into the prompt — the SAME dynamic block the non-streaming path injects via
         // BuildMessageWithContextAsync. Without this the streaming chat sent NONE of it, so the agent
         // had to Search to rediscover what was already attached (the "context not shipped" flail that
-        // pegs a local model). Injected as a System message so TruncateToContextBudget always keeps
-        // it. (AppendContextAndAttachmentsAsync does NOT fan out over children — see its remarks.)
+        // pegs a local model). Fold it INTO the agent's system message so the turn carries exactly
+        // ONE system message (instructions + context) — matching the non-streaming single combined
+        // prompt and NOT inflating the per-turn message count. Always kept by TruncateToContextBudget
+        // (system messages are never trimmed). (AppendContextAndAttachmentsAsync does NOT fan out
+        // over children — see its remarks.)
         var contextBlock = new StringBuilder();
         var binaryAttachments = await AppendContextAndAttachmentsAsync(contextBlock).ConfigureAwait(false);
+        var systemText = agent.Instructions ?? string.Empty;
         if (contextBlock.Length > 0)
-            turnMessages.Add(new ChatMessage(ChatRole.System, contextBlock.ToString()));
+            systemText = string.IsNullOrEmpty(systemText)
+                ? contextBlock.ToString()
+                : systemText + "\n\n" + contextBlock;
+        if (!string.IsNullOrEmpty(systemText))
+            turnMessages.Add(new ChatMessage(ChatRole.System, systemText));
         turnMessages.AddRange(messages);
         // Binary attachments (images/PDFs) ride on the last user message so the model receives them.
         if (!binaryAttachments.IsEmpty)
