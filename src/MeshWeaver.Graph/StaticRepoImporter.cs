@@ -957,10 +957,12 @@ public static class StaticRepoImporter
                 mainNodePath: partition,
                 title: $"Startup import failed: {partition}",
                 message: string.IsNullOrWhiteSpace(error) ? "Import failed during startup." : error,
-                type: NotificationType.General,
+                // System (not General): the platform/system-event category — the bell renders it
+                // with error styling. No icon override: a bare Fluent name ("ErrorCircle") is not a
+                // URL and rendered as a broken <img>; the type-based default icon is correct.
+                type: NotificationType.System,
                 targetNodePath: activityPath,
-                createdBy: "system-security",
-                icon: "ErrorCircle"))
+                createdBy: "system-security"))
             .Subscribe(
                 _ => logger?.LogInformation(
                     "[StaticRepoImport] raised startup-failure notification for {Partition} → {ActivityPath}",

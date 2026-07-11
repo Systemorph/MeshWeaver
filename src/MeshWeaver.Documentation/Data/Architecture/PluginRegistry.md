@@ -52,11 +52,33 @@ exposed, and the registry's own credential never leaves.
 A package is addressed by its **id** only; the registry resolves what that plugin ships from its
 configured source — the consumer never supplies a folder path.
 
-Both are backed by the registry's configured git [`IPackageSource`](/Doc/Architecture/Plugins) —
-`PluginCatalog:SourceRepoPath` (a URL → the plugins repo via GitSync's client, or a local path). The
-registry is authoritative on the git ref (`PluginCatalog:SourceRef`); a consumer's `ref` is advisory.
-The wire shapes are produced by `PluginRegistryPayloads` and parsed by `RegistryPackageSource`, one
-place each, so producer and consumer cannot drift.
+Both are backed by the registry's configured git [`IPackageSource`](/Doc/Architecture/Plugins)s. A
+registry can serve **several sources** — e.g. the plugins repo *and* an education-content repo —
+via the `PluginCatalog:Sources` list:
+
+```json
+{
+  "PluginCatalog": {
+    "Sources": [
+      { "Name": "Plugins",   "RepoPath": "https://github.com/Systemorph/MeshWeaver.Plugins", "Ref": "main" },
+      { "Name": "Education", "RepoPath": "https://github.com/Systemorph/Education",          "Ref": "main" }
+    ]
+  }
+}
+```
+
+Each entry takes `RepoPath` (a URL → via GitSync's client, or a local path), optional `Subdir`,
+`Ref` (default `HEAD`) and `Format` (`node-repo` default / `package-json`). A source lists only
+folders matching its format — the Education repo's courses (DataModeling, AgenticEngineering, …)
+appear once each course folder gains a `<Course>/index.json` Space root carrying a
+`PluginManifest`, the same node-repo convention `MeshWeaver.Plugins` uses. `GET /api/plugins`
+merges all sources' packages (on an id collision the first configured source wins); `/files`
+resolves an id in the same order. With several sources one failing repo degrades to an empty
+contribution (logged), never a broken catalog. The legacy single-source keys
+(`PluginCatalog:SourceRepoPath`/`SourceSubdir`/`SourceRef`/`SourceFormat`) keep working when no
+`Sources` list is set. The registry is authoritative on each source's git ref; a consumer's `ref`
+is advisory. The wire shapes are produced by `PluginRegistryPayloads` and parsed by
+`RegistryPackageSource`, one place each, so producer and consumer cannot drift.
 
 ## The consumer — a platform-admin tab, not a Space
 
@@ -65,10 +87,12 @@ On every installation the catalog is a **Settings tab** — `PluginCatalogSettin
 **not** a browsable `Plugins` Space: a catalog is a platform-admin feature, and a Space partition
 would (correctly) deny read to everyone else — the very "Access denied on 'Plugins'" a Space produced.
 
-The tab reads `PluginCatalog:RegistryUrl` (e.g. `https://memex.meshweaver.cloud`), lists the
-registry's packages via `RegistryPackageSource` (an `IPackageSource` over HTTP, on the mesh's Http
-I/O pool), and joins them against this instance's install registry — the `Package` nodes under the
-`Plugins` partition — to render **Install / Update / Installed** per module.
+The tab reads `PluginCatalog:RegistryUrl` (e.g. `https://memex.meshweaver.cloud`) — or, to consume
+**several registries**, a `PluginCatalog:Registries` list of `{ Name, Url, Ref }` entries, rendered
+as one titled catalog section each. It lists each registry's packages via `RegistryPackageSource`
+(an `IPackageSource` over HTTP, on the mesh's Http I/O pool), and joins them against this
+instance's install registry — the `Package` nodes under the `Plugins` partition — to render
+**Install / Update / Installed** per module.
 
 ## Installing
 

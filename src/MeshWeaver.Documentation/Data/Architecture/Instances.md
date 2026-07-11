@@ -89,3 +89,23 @@ provisioned with the deploy tooling, not from the running app — the company in
 > Turning the company instance into a real control plane (create / tear down instances **from the
 > UI**, calling the Azure + Helm APIs behind an admin gate) is a possible future feature, not a
 > current capability.
+
+## The admin Instances tab (company instance only)
+
+**Settings ▸ Administration ▸ Instances** lists every portal on the cluster live from the k8s API —
+domain, namespace, running version (image tag), replica health — with per-instance Grafana/Loki log
+deep links and a guided create-instance **plan** generator (commands only; nothing deploys itself).
+
+The tab exists **only on memex.systemorph.com**, doubly gated:
+
+- **`Instances:Enabled`** (config, default `false`) — the Settings menu item is not even created on
+  an install that doesn't set it. In the Helm chart, `instancesAdmin.clusterRead` drives BOTH this
+  flag and the RBAC below; `deploy/aks/values.aks.yaml` (the `memex` env overlay) sets it `true`,
+  customer/public envs inherit the default.
+- **Cluster-read RBAC** (`instancesAdmin.clusterRead`) — reading deployments/ingresses across
+  namespaces needs a cluster-scoped grant, given only to the company instance (a tenant pod must not
+  enumerate the cluster). Without it the tab (where enabled) shows "Cluster query unavailable".
+
+Log links need `Instances:GrafanaBaseUrl` (Helm: `instancesAdmin.grafanaBaseUrl`) — the Grafana
+Explore (Loki) deep link is built per namespace. Empty until the in-cluster Grafana
+(`monitoring` ns, `loki-grafana` service) is exposed on a host.

@@ -571,11 +571,11 @@ public static class MemexConfiguration
                 // admin tab installs from PluginCatalog:RegistryUrl. The options carry the consumer's
                 // registry URL/ref (empty RegistryUrl -> the tab shows a "not configured" note).
                 .AddPluginCatalog()
-                .ConfigureServices(pcs => pcs.AddSingleton(new PluginCatalogOptions
-                {
-                    RegistryUrl = configuration["PluginCatalog:RegistryUrl"] ?? "",
-                    RegistryRef = configuration["PluginCatalog:RegistryRef"] ?? "HEAD",
-                }))
+                // Bind the whole section so the multi-registry list (PluginCatalog:Registries:N:*)
+                // binds alongside the legacy single RegistryUrl/RegistryRef pair.
+                .ConfigureServices(pcs => pcs.AddSingleton(
+                    configuration.GetSection(PluginCatalogOptions.SectionName).Get<PluginCatalogOptions>()
+                    ?? new PluginCatalogOptions()))
                 // Register GitHub-sync content types (GitHubCredential / GitHubSyncConfig)
                 // on the mesh + per-node hubs so their config nodes (de)serialize.
                 .AddGitHubSyncTypes()

@@ -89,6 +89,14 @@ public class InstancesServiceTest
         => Assert.Equal(expected, KubernetesInstanceService.VersionTag(image));
 
     [Fact]
+    public void Enabled_DefaultsFalse_TheTabExistsOnlyWhereConfigured()
+    {
+        // The Instances tab is config-gated to the company/control instance: an install that does
+        // not set Instances:Enabled (all public/customer instances) must never grow the menu item.
+        Assert.False(new InstancesOptions().Enabled);
+    }
+
+    [Fact]
     public void GrafanaLogsUrl_EmptyBase_ReturnsNull()
         => Assert.Null(new InstancesOptions().GrafanaLogsUrl("memex"));
 
