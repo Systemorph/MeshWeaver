@@ -62,7 +62,7 @@ export function createSampleSource(): StaticAreaSource {
   source.emit = (event) => {
     emit(event);
     if (event.kind === "drop")
-      source.applyPatch({ areas: { dropZoneContent: { data: `Dropped: ${event.value ?? ""}` } } });
+      source.applyPatch({ areas: { dropZoneContent: { $type: "Label", data: `Dropped: ${event.value ?? ""}` } } });
   };
   return source;
 }
