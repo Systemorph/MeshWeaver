@@ -245,13 +245,22 @@ public static class PostgreSqlSchemaInitializer
         // depending on a one-time migration: (a) any partition schema missing the
         // mesh_node_mirror_access_objects trigger (provisioned during a bad window) gets it,
         // (b) mirrored rows that were missed or went stale while the function/trigger was wrong
-        // are reconciled into auth.mesh_nodes, (c) the top-level matview is rebuilt so catalog
-        // surfaces see the healed rows. One server-side pass, idempotent, fail-safe (skips when
-        // auth isn't provisioned yet — e.g. a bare test fixture). This is the durable answer to
-        // the 2026-07 "spaces invisible in the catalog" incident: even if the mirror breaks
+        // are reconciled into auth.mesh_nodes. One server-side pass, idempotent, fail-safe (skips
+        // when auth isn't provisioned yet — e.g. a bare test fixture). This is the durable answer
+        // to the 2026-07 "spaces invisible in the catalog" incident: even if the mirror breaks
         // again, the next restart repairs both trigger topology and data.
-        await using (var cmd = dataSource.CreateCommand(GetAuthMirrorSelfHealScript()))
+        //
+        // 🚨 PUBLIC-INIT ONLY + advisory-locked. The heal sweeps ALL partition schemas (trigger
+        // probes + reconcile upserts). Running that from EVERY per-schema data-source init — as
+        // the first cut did — multiplies the sweep by the number of concurrently-initializing
+        // schemas (parallel test hosts!) and takes cross-schema locks while other inits hold
+        // their per-schema advisory locks: intermittent lock contention that surfaced as
+        // NodeHubContentCollectionTest timeouts + a test-process abort on CI shard 4. The boot
+        // path initializes the public schema exactly once, so gating on it keeps the heal a
+        // per-boot singleton; the in-script pg_advisory_xact_lock serializes across silos.
+        if (string.Equals(options.Schema, "public", StringComparison.OrdinalIgnoreCase))
         {
+            await using var cmd = dataSource.CreateCommand(GetAuthMirrorSelfHealScript());
             await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         }
     }
@@ -260,9 +269,12 @@ public static class PostgreSqlSchemaInitializer
     /// One-shot server-side reconciliation of the auth mirror: installs the
     /// <c>mesh_node_mirror_access_objects</c> trigger on every partition schema that lacks it and
     /// upserts every mirrored node type (<c>User/Group/Role/VUser/ApiToken/Space</c>) from every
-    /// partition into <c>auth.mesh_nodes</c>, then rebuilds <c>public.top_level_index</c>.
-    /// No-op when <c>auth.mesh_nodes</c> doesn't exist. Runs at every init (<see cref="InitializeAsync"/>
-    /// step 5) — the mirror self-heals on restart rather than relying on one-time migrations.
+    /// partition into <c>auth.mesh_nodes</c>. No matview rebuild here — the schema script
+    /// (<see cref="InitializeAsync"/> step 3) already rebuilds <c>public.top_level_index</c> on the
+    /// same init, and a second DROP+CREATE under ACCESS EXCLUSIVE just adds lock contention.
+    /// No-op when <c>auth.mesh_nodes</c> doesn't exist. Runs once per boot (public-schema init only,
+    /// serialized across silos by an advisory xact lock) — the mirror self-heals on restart rather
+    /// than relying on one-time migrations.
     /// </summary>
     public static string GetAuthMirrorSelfHealScript() => """
         DO $auth_mirror_heal$
@@ -272,6 +284,10 @@ public static class PostgreSqlSchemaInitializer
             IF to_regclass('"auth".mesh_nodes') IS NULL THEN
                 RETURN;
             END IF;
+
+            -- One heal at a time across the whole mesh (HA silos boot concurrently); the lock
+            -- releases with this transaction.
+            PERFORM pg_advisory_xact_lock(hashtext('auth_mirror_self_heal'));
 
             FOR s IN
                 SELECT t.table_schema
@@ -323,9 +339,9 @@ public static class PostgreSqlSchemaInitializer
                        OR "auth".mesh_nodes.last_modified < EXCLUDED.last_modified
                 $reconcile$, s);
             END LOOP;
-
-            -- (c) Catalog surfaces read the healed rows.
-            PERFORM public.rebuild_top_level_index();
+            -- No matview rebuild here: the schema script (init step 3) rebuilds
+            -- public.top_level_index on the same boot; doubling the DROP+CREATE
+            -- (ACCESS EXCLUSIVE) only adds lock contention.
         END
         $auth_mirror_heal$;
         """;
