@@ -266,15 +266,20 @@ public static class PostgreSqlSchemaInitializer
     }
 
     /// <summary>
-    /// One-shot server-side reconciliation of the auth mirror: installs the
-    /// <c>mesh_node_mirror_access_objects</c> trigger on every partition schema that lacks it and
-    /// upserts every mirrored node type (<c>User/Group/Role/VUser/ApiToken/Space</c>) from every
-    /// partition into <c>auth.mesh_nodes</c>. No matview rebuild here — the schema script
-    /// (<see cref="InitializeAsync"/> step 3) already rebuilds <c>public.top_level_index</c> on the
-    /// same init, and a second DROP+CREATE under ACCESS EXCLUSIVE just adds lock contention.
-    /// No-op when <c>auth.mesh_nodes</c> doesn't exist. Runs once per boot (public-schema init only,
-    /// serialized across silos by an advisory xact lock) — the mirror self-heals on restart rather
-    /// than relying on one-time migrations.
+    /// One-shot server-side reconciliation of the auth mirror AND the permission projection:
+    /// per partition schema it (a) installs the <c>mesh_node_mirror_access_objects</c> trigger
+    /// where missing, (b) upserts every mirrored node type
+    /// (<c>User/Group/Role/VUser/ApiToken/Space</c>) into <c>auth.mesh_nodes</c>, and (c) re-runs
+    /// the schema's <c>rebuild_user_effective_permissions()</c> so <c>_Access</c> grants and
+    /// <c>_Policy</c> rows are projected into <c>public.partition_access</c> — the table the
+    /// cross-partition fan-out filters on. (c) is the durable fix for the 2026-07 incident where
+    /// freshly-provisioned partitions had empty projections: their Spaces were invisible in the
+    /// catalog and their content unfindable in global search despite intact grants. No matview
+    /// rebuild here — the schema script (<see cref="InitializeAsync"/> step 3) already rebuilds
+    /// <c>public.top_level_index</c> on the same init, and a second DROP+CREATE under
+    /// ACCESS EXCLUSIVE just adds lock contention. No-op when <c>auth.mesh_nodes</c> doesn't
+    /// exist. Runs once per boot (public-schema init only, serialized across silos by an advisory
+    /// xact lock) — everything converges on restart rather than relying on one-time migrations.
     /// </summary>
     public static string GetAuthMirrorSelfHealScript() => """
         DO $auth_mirror_heal$
@@ -338,6 +343,19 @@ public static class PostgreSqlSchemaInitializer
                        OR "auth".mesh_nodes.node_type IS DISTINCT FROM EXCLUDED.node_type
                        OR "auth".mesh_nodes.last_modified < EXCLUDED.last_modified
                 $reconcile$, s);
+
+                -- (c) Re-project the partition's _Access grants + _Policy into
+                --     public.partition_access. Partitions provisioned while the projection
+                --     machinery was broken (memex, ~2026-07-06..11) had EMPTY partition_access —
+                --     the cross-partition fan-out's permission filter dropped every one of their
+                --     rows, so their Spaces were invisible in the catalog (and their content
+                --     unfindable in global search) even though grants and content were intact.
+                --     Guarded: very old schemas may predate the rebuild function.
+                BEGIN
+                    EXECUTE format('SELECT %I.rebuild_user_effective_permissions()', s);
+                EXCEPTION WHEN undefined_function THEN
+                    NULL;
+                END;
             END LOOP;
             -- No matview rebuild here: the schema script (init step 3) rebuilds
             -- public.top_level_index on the same boot; doubling the DROP+CREATE
