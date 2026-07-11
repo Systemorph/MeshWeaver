@@ -64,12 +64,17 @@ div.layout > header .links,
     min-width: 200px;
 }
 
-/* Remove nav column from grid when not using left nav - use div.layout for higher specificity */
+/* Remove nav column from grid when not using left nav - use div.layout for higher specificity.
+   The "breadcrumb" row hosts PortalLayoutBase's breadcrumb bar (grid-area: breadcrumb); this
+   nav-less grid overrides the framework grid with !important, so the row must be declared HERE
+   or the bar orphans into an implicit cell (rendered bottom-right). */
 div.layout,
 div.layout[class] {
     grid-template-columns: auto 1fr !important;
+    grid-template-rows: auto auto auto 1fr !important;
     grid-template-areas:
         "icon head"
+        "breadcrumb breadcrumb"
         "messagebar messagebar"
         "main main" !important;
 }
@@ -78,8 +83,10 @@ div.layout[class] {
 div.layout.chat-visible.chat-position-right,
 div.layout[class].chat-visible.chat-position-right {
     grid-template-columns: auto 1fr var(--chat-width, 400px) !important;
+    grid-template-rows: auto auto auto 1fr !important;
     grid-template-areas:
         "icon head head"
+        "breadcrumb breadcrumb breadcrumb"
         "messagebar messagebar chat"
         "main main chat" !important;
 }
@@ -87,9 +94,10 @@ div.layout[class].chat-visible.chat-position-right {
 div.layout.chat-visible.chat-position-bottom,
 div.layout[class].chat-visible.chat-position-bottom {
     grid-template-columns: auto 1fr !important;
-    grid-template-rows: auto auto 1fr var(--chat-height, 400px) !important;
+    grid-template-rows: auto auto auto 1fr var(--chat-height, 400px) !important;
     grid-template-areas:
         "icon head"
+        "breadcrumb breadcrumb"
         "messagebar messagebar"
         "main main"
         "chat chat" !important;
