@@ -70,23 +70,22 @@ public static class SettingsLayoutArea
         bool canEdit,
         IReadOnlyList<SettingsMenuItemDefinition> items)
     {
-        // `settings-splitter` (standard-page-layout.css) gives each pane a definite-height
-        // flex context so the right content pane scrolls internally — mirrors the treatment
-        // PortalLayoutBase applies to its outer `.body-splitter`. Height fills the parent
-        // `.layout-area-container` (flex column) rather than a viewport-minus-magic-number
-        // guess, which was overshooting the real header/messagebar height and clipping the
-        // bottom of the content out of reach.
-        // Do NOT set Height="100%" on the splitter skin. FluentMultiSplitter renders its pane
-        // chrome in shadow DOM, so the global `.settings-splitter` CSS can't reach the inner
-        // host; the only height the component honours is the `Height` parameter fed from this
-        // skin. An inline `height:100%` resolves against an indefinite-height ancestor → it
-        // collapses to content height, the splitter grows past the viewport, and nothing
-        // scrolls. Instead let the splitter take its height from the `flex:1 1 auto; min-height:0`
-        // it already gets via the `.settings-splitter` class inside the flex-column
-        // `.layout-area-container` — a real, bounded height the `.settings-content-pane`
-        // (overflow-y:auto) scrolls within.
+        // The settings page flows at its natural content height and the PAGE scrolls
+        // (.body-content is the scroll container) — NO viewport-pinning, NO inner scroller.
+        // FluentMultiSplitter's own stylesheet pins `.fluent-multi-splitter { height: 100% }`,
+        // which inside the flex-column `.layout-area-container` resolves to exactly the visible
+        // pane height and (with the old pane overflow:hidden) clipped everything below the fold.
+        // The inline style beats that class deterministically:
+        //   height:auto     — content decides the height, never the viewport;
+        //   flex:1 0 auto   — a SHORT page still grows to the bottom (background fills), but
+        //                     shrink:0 stops the fill-area rule (`flex:1 1 auto; min-height:0`
+        //                     on the layout area's child) from shrink-clipping a LONG page back
+        //                     to the container height. Content taller than the viewport simply
+        //                     overflows the container and .body-content scrolls — like every
+        //                     other page.
         var settingsPage = Controls.Splitter
             .WithClass("settings-splitter")
+            .WithStyle("height: auto; flex: 1 0 auto;")
             .WithSkin(s => s.WithOrientation(Orientation.Horizontal).WithWidth("100%"))
             .WithView(
                 BuildMenuPane(host, node, hubAddress, hubPath, items, tabId),
@@ -99,11 +98,11 @@ public static class SettingsLayoutArea
 
         if (!canEdit)
         {
-            // Fill the layout-area-container as a flex column: the banner takes its natural
-            // height and the splitter (flex: 1, min-height: 0) shrinks to fill the rest, so
-            // the inner content pane still scrolls.
+            // A flowing flex column: the banner takes its natural height, the splitter its
+            // content height. No height:100%, no overflow:hidden — the page scrolls as a whole
+            // (flex-shrink:0 for the same fill-area shrink-clipping reason as on the splitter).
             return Controls.Stack.WithWidth("100%")
-                .WithStyle("height: 100%; min-height: 0; display: flex; flex-direction: column; overflow: hidden;")
+                .WithStyle("display: flex; flex-direction: column; flex: 1 0 auto;")
                 .WithView(Controls.Html(
                     "<div style=\"padding: 8px 16px; background: var(--neutral-layer-3); border-bottom: 1px solid var(--neutral-stroke-rest); " +
                     "color: var(--neutral-foreground-hint); font-size: 0.85rem; text-align: center;\">Read-only — you do not have edit permissions</div>"))
@@ -231,17 +230,13 @@ public static class SettingsLayoutArea
         string tabId,
         IReadOnlyList<SettingsMenuItemDefinition> items)
     {
-        // Scroll the content pane internally via the flex-fill pattern defined in
-        // standard-page-layout.css — the same treatment PortalLayoutBase applies to its
-        // .body-splitter. FluentMultiSplitter renders each pane as LIGHT DOM — a plain
+        // No inner scroller: the content pane takes its natural height and the PAGE scrolls
+        // (.body-content). FluentMultiSplitter renders each pane as LIGHT DOM — a plain
         // <div class="fluent-multi-splitter-pane"> (verified against the FluentUI source;
         // it is NOT a web component / shadow root), so the stylesheet selector
-        // `.settings-splitter .fluent-multi-splitter-pane` reaches it: it overrides the
-        // component's default `overflow:hidden` pane into a definite-height flex column, makes the
-        // content wrapper fill it, and `.settings-content-pane` (flex:1 1 auto; min-height:0;
-        // overflow-y:auto) scrolls within. The styling therefore lives in the class — only the
-        // local padding is inline. (A prior inline `height:100%` here overrode the class and is the
-        // hack this removes.)
+        // `.settings-splitter .fluent-multi-splitter-pane` reaches it and un-hides the
+        // component's default `overflow:hidden` (standard-page-layout.css). The
+        // `.settings-content-pane` class carries only padding/background/reading-column.
         var stack = Controls.Stack
             .WithClass("settings-content-pane")
             .WithWidth("100%");
