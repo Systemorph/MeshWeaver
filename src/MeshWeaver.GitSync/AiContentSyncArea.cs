@@ -41,7 +41,7 @@ public static class AiContentSyncArea
         {
             if (!isAdmin)
                 return Observable.Return<UiControl?>(Message("Platform admins only",
-                    "Writing the built-in agents & skills back to the repo is a platform-admin operation.", backHref));
+                    "Writing the built-in agents &amp; skills back to the repo is a platform-admin operation.", backHref));
 
             var root = AiContentLocator.RepoSectionRoot();
             if (root is null)
