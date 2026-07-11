@@ -229,7 +229,7 @@ public static class PartitionSyncAdminLayoutArea
                         Name = node?.Name ?? p.Partition,
                         Type = node?.NodeType ?? "",
                         CreatedBy = node?.CreatedBy ?? "",
-                        Status = IsSynced(node) ? "Synced" : "Not synced",
+                        Status = StatusOf(node),
                         Sources = sources,
                     }));
 
@@ -261,9 +261,20 @@ public static class PartitionSyncAdminLayoutArea
         });
     }
 
-    // Anything other than the whole-subtree exclusion is treated as Synced (null/Include/ThisOnly).
+    // Anything other than the whole-subtree exclusion is treated as Synced (Include/ThisOnly).
     private static bool IsSynced(MeshNode? node)
         => node?.SyncBehavior != SyncBehavior.ExcludeThisAndChildren;
+
+    /// <summary>
+    /// The grid's Status cell. A partition registered by a source but whose ROOT node does not
+    /// exist has never been imported/installed — that is "Not materialized", NOT "Synced" (the
+    /// old two-state status showed "Synced" for a null root, claiming sync for content that was
+    /// never mounted at all).
+    /// </summary>
+    private static string StatusOf(MeshNode? node) =>
+        node is null ? "Not materialized"
+        : IsSynced(node) ? "Synced"
+        : "Not synced";
 
     // ── View composition ───────────────────────────────────────────────────────
 

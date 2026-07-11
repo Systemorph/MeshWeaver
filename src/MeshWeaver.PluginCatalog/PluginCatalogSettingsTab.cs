@@ -12,10 +12,12 @@ namespace MeshWeaver.PluginCatalog;
 
 /// <summary>
 /// The platform-admin "Plugin Catalog" Settings tab — the consumer half of the plugin registry.
-/// Reads the catalog from the configured registry instance (<see cref="PluginCatalogOptions.RegistryUrl"/>)
-/// over HTTP, shows each module's install status against this instance's install registry, and offers
-/// Install / Update. It replaces the old browsable <c>Plugins</c> Space: the catalog is a
-/// platform-admin feature, not a partition anyone can navigate to.
+/// Reads the catalog from the configured registry instance(s)
+/// (<see cref="PluginCatalogOptions.EffectiveRegistries"/> — the <c>PluginCatalog:Registries</c>
+/// list or the legacy single <see cref="PluginCatalogOptions.RegistryUrl"/>) over HTTP, shows each
+/// module's install status against this instance's install registry, and offers Install / Update.
+/// It replaces the old browsable <c>Plugins</c> Space: the catalog is a platform-admin feature, not
+/// a partition anyone can navigate to.
 ///
 /// <para>Gated exactly like <c>UserNodeType</c>'s Global Administration tab — visible only when the
 /// viewer is a global admin (<c>hub.IsGlobalAdmin(userId)</c>) AND on their own settings page — and
@@ -78,18 +80,26 @@ public static class PluginCatalogSettingsTab
             "Browse and install plugin modules from the platform registry. Installing a module imports " +
             "its content and compiles its node types live on this instance — no rebuild.</p>"));
 
-        if (string.IsNullOrWhiteSpace(options.RegistryUrl))
+        var registries = options.EffectiveRegistries;
+        if (registries.Count == 0)
             return stack.WithView(Controls.Html(
                 "<p style=\"font-size:0.85rem;color:var(--neutral-foreground-hint);\">" +
                 "No plugin registry is configured. Set <code>PluginCatalog:RegistryUrl</code> (for " +
-                "example <code>https://memex.meshweaver.cloud</code>) to enable the catalog.</p>"));
+                "example <code>https://memex.meshweaver.cloud</code>) — or a list under " +
+                "<code>PluginCatalog:Registries</code> — to enable the catalog.</p>"));
 
-        var source = new RegistryPackageSource(host.Hub, options.RegistryUrl);
-
-        // Reuse the shared catalog rendering: live package list from the registry joined with this
+        // One catalog section per configured registry (e.g. the platform plugin registry plus an
+        // education registry), each reusing the shared rendering: live package list joined with this
         // instance's install registry into Install / Update / Installed cards.
-        stack = stack.WithView((h, _) => CatalogLayoutAreas.RenderFromSource(
-            h, source, options.RegistryRef, description: null, sourceLabel: options.RegistryUrl));
+        foreach (var registry in registries)
+        {
+            var label = string.IsNullOrWhiteSpace(registry.Name) ? registry.Url : registry.Name;
+            if (registries.Count > 1)
+                stack = stack.WithView(Controls.Title(label, 2));
+            var source = new RegistryPackageSource(host.Hub, registry.Url);
+            stack = stack.WithView((h, _) => CatalogLayoutAreas.RenderFromSource(
+                h, source, registry.Ref, description: null, sourceLabel: registry.Url));
+        }
         return stack;
     }
 }

@@ -35,14 +35,15 @@
                 var isRead = g.UnreadCount == 0;
                 <button class="notification-item @(isRead ? "is-read" : "is-unread")"
                         @onclick="() => OnGroupClick(g)" type="button">
-                    <div class="notification-icon">
-                        @if (!string.IsNullOrEmpty(notif.Icon))
+                    <div class="notification-icon @(IsError(notif) ? "is-error" : "")">
+                        @if (IsIconUrl(notif.Icon))
                         {
                             <img src="@notif.Icon" alt="" />
                         }
                         else
                         {
-                            <FluentIcon Value="@DefaultIconFor(notif.NotificationType)" Color="Color.Accent" />
+                            <FluentIcon Value="@DefaultIconFor(notif.NotificationType)"
+                                        Color="@(IsError(notif) ? Color.Error : Color.Accent)" />
                         }
                     </div>
                     <div class="notification-body">
@@ -55,13 +56,27 @@
                         </div>
                         @if (!string.IsNullOrEmpty(notif.Message))
                         {
-                            <div class="notification-message">@notif.Message</div>
+                            var expanded = expandedGroups.Contains(g.Key);
+                            <div class="notification-message @(expanded ? "is-expanded" : "")">@notif.Message</div>
+                            @if (IsLong(notif.Message))
+                            {
+                                <span class="notification-expand" role="button" tabindex="0"
+                                      aria-expanded="@(expanded ? "true" : "false")"
+                                      @onclick="() => ToggleExpanded(g.Key)" @onclick:stopPropagation="true"
+                                      @onkeydown="e => OnExpandKeyDown(e, g.Key)" @onkeydown:stopPropagation="true">
+                                    @(expanded ? "Show less" : "Show more")
+                                </span>
+                            }
                         }
                         <div class="notification-meta">
-                            <span>@FormatTime(notif.CreatedAt)</span>
+                            <span title="@notif.CreatedAt.LocalDateTime.ToString("yyyy-MM-dd HH:mm:ss")">@FormatTime(notif.CreatedAt)</span>
                             @if (!string.IsNullOrEmpty(notif.CreatedBy))
                             {
                                 <span>· @notif.CreatedBy</span>
+                            }
+                            @if (!string.IsNullOrEmpty(g.Key))
+                            {
+                                <span class="notification-target" title="@g.Key">· @g.Key</span>
                             }
                         </div>
                     </div>
@@ -179,12 +194,35 @@
         -webkit-line-clamp: 2;
         -webkit-box-orient: vertical;
     }
+    .notification-message.is-expanded {
+        display: block;
+        -webkit-line-clamp: unset;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+    }
+    .notification-expand {
+        font-size: 0.75rem;
+        color: var(--accent-foreground-rest);
+        cursor: pointer;
+    }
+    .notification-expand:hover {
+        text-decoration: underline;
+    }
+    .notification-icon.is-error {
+        background: color-mix(in srgb, var(--error, #d32f2f) 12%, transparent);
+    }
     .notification-meta {
         font-size: 0.72rem;
         color: var(--neutral-foreground-hint);
         margin-top: 4px;
         display: flex;
         gap: 4px;
+        min-width: 0;
+    }
+    .notification-target {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
     }
     .notification-unread-dot {
         width: 8px;
@@ -200,6 +238,7 @@
 
     private IReadOnlyList<MeshNode> notifications = Array.Empty<MeshNode>();
     private IDisposable? subscription;
+    private readonly HashSet<string> expandedGroups = new();
 
     protected override void OnInitialized()
     {
@@ -299,6 +338,38 @@
         }
     }
 
+    private void ToggleExpanded(string key)
+    {
+        if (!expandedGroups.Remove(key))
+            expandedGroups.Add(key);
+    }
+
+    /// <summary>A span with role="button" gets no synthesized click on Enter/Space (unlike a real
+    /// button), so keyboard users need an explicit toggle for the Show more/less expander.</summary>
+    private void OnExpandKeyDown(Microsoft.AspNetCore.Components.Web.KeyboardEventArgs e, string key)
+    {
+        if (e.Key is "Enter" or " " or "Spacebar")
+            ToggleExpanded(key);
+    }
+
+    /// <summary>A message long enough that the 2-line clamp hides detail (error notifications carry
+    /// the full compile/import error in the message) — offer the Show more toggle.</summary>
+    private static bool IsLong(string message) => message.Length > 160 || message.Contains('\n');
+
+    /// <summary>Only a URL / app path / data URI is renderable as an <c>&lt;img&gt;</c>. Emitters have
+    /// historically written bare Fluent icon names (e.g. "ErrorCircle") into <see cref="Notification.Icon"/>
+    /// — those must fall back to the type-based icon, not render as a broken image.</summary>
+    private static bool IsIconUrl(string? icon) =>
+        !string.IsNullOrEmpty(icon)
+        && (icon.StartsWith('/') || icon.StartsWith("http", StringComparison.OrdinalIgnoreCase)
+            || icon.StartsWith("data:", StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>System notifications (import failures, compile parks, …) render with error styling.
+    /// The legacy "ErrorCircle" icon name marks pre-System-type error notifications.</summary>
+    private static bool IsError(Notification notif) =>
+        notif.NotificationType == NotificationType.System
+        || string.Equals(notif.Icon, "ErrorCircle", StringComparison.OrdinalIgnoreCase);
+
     private static string FormatTime(DateTimeOffset ts)
     {
         var delta = DateTimeOffset.UtcNow - ts;
@@ -316,7 +387,7 @@
         NotificationType.ApprovalRejected => new Icons.Regular.Size20.ShieldDismiss(),
         NotificationType.AccessGranted => new Icons.Regular.Size20.LockOpen(),
         NotificationType.ChatReady => new Icons.Regular.Size20.Chat(),
-        NotificationType.System => new Icons.Regular.Size20.Warning(),
+        NotificationType.System => new Icons.Regular.Size20.ErrorCircle(),
         _ => new Icons.Regular.Size20.Info()
     };
 
