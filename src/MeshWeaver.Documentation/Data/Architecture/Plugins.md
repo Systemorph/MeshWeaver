@@ -22,15 +22,19 @@ A node repo is exactly the on-disk shape the sample partitions use — a `*.json
 `Source/` (and `Test/`) C# — e.g. the Slide type:
 
 ```text
-Slides.json                       the plugin's top-level Space node (the "package node")
+Slides/index.json                 the plugin's Space root (the "package node") — INSIDE the folder
 Slides/Slide.json                 a NodeType node (Content = NodeTypeDefinition{ configuration })
 Slides/Slide/Source/*.cs          the content type + layout areas — compiled live
 Slides/Slide/Test/*.cs            the type's own tests — compiled together with Source
 ```
 
+The plugin folder is the unit of import, so its partition root lives **inside** it as `index.json`
+(the `NodeFileMapper` mapping GitSync uses) — a sibling `<Plugin>.json` outside the folder would not
+be part of the partition.
+
 | Concept | Where it lives (node-native) |
 |---|---|
-| The "manifest" | the plugin's **top-level Space node** — its Content carries e.g. `minMeshVersion` |
+| The "manifest" | the plugin's **Space root** (`<Plugin>/index.json`) — its Content carries e.g. `minMeshVersion` |
 | The "kind" (content vs code) | the child's **NodeType** — a NodeType-with-`Source/` vs plain content |
 | The "version" | the **node's version**, mesh-tracked, bumped on every change — nobody hand-bumps a field |
 | The "installer" | **GitSync** — `GitHubSyncService.ImportFromGitHub` / `StaticRepoImporter` |
@@ -59,7 +63,7 @@ configured git source (the plugins repo):
 
 | Verb | Returns |
 |---|---|
-| `GET /api/plugins` | `{ packages:[PackageManifest…] }` — the curated modules from the configured source (node-native `<Plugin>.json` Space roots by default) |
+| `GET /api/plugins` | `{ packages:[PackageManifest…] }` — the curated modules from the configured source (node-native `<Plugin>/index.json` Space roots by default) |
 | `POST /api/plugins/files` `{id}` | `{ files:[{relativePath, content}…] }` — the files that plugin (by id) ships |
 
 A consuming instance browses this from its **Plugin Catalog** admin tab (Settings ▸ Administration,
