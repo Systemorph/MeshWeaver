@@ -3,12 +3,17 @@
 @inherits PortalLayoutBase
 
 <style>
-    /* Override grid to remove nav column */
+    /* Override grid to remove nav column. The "breadcrumb" row hosts PortalLayoutBase's
+       breadcrumb bar (grid-area: breadcrumb); this nav-less grid overrides the framework grid
+       with !important, so the row must be declared HERE or the bar orphans into an implicit
+       cell (rendered bottom-right). */
     .layout[class],
     div.layout[class] {
         grid-template-columns: auto 1fr !important;
+        grid-template-rows: auto auto auto 1fr !important;
         grid-template-areas:
             "icon head"
+            "breadcrumb breadcrumb"
             "messagebar messagebar"
             "main main" !important;
     }
