@@ -18,7 +18,7 @@ namespace MeshWeaver.AI;
 ///     shipped by the csproj <c>Content</c> item. Read-only (a container has no repo to sync back to).</item>
 /// </list>
 /// </summary>
-internal static class AiContentLocator
+public static class AiContentLocator
 {
     /// <summary>The section root (<c>content/ai</c> or the copied <c>AiContent</c>), or null → embedded.</summary>
     public static string? SectionRoot() => RepoSectionRoot() ?? OutputSectionRoot();
