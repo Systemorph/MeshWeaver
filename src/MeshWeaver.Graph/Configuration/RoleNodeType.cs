@@ -98,6 +98,7 @@ public static class RoleNodeType
             new("Editor", "Role") { Name = "Editor", NodeType = NodeType, Icon = EditorIcon, Content = Role.Editor },
             new("Viewer", "Role") { Name = "Viewer", NodeType = NodeType, Icon = ViewerIcon, Content = Role.Viewer },
             new("Commenter", "Role") { Name = "Commenter", NodeType = NodeType, Icon = CommenterIcon, Content = Role.Commenter },
+            new("Contributor", "Role") { Name = "Contributor", NodeType = NodeType, Icon = EditorIcon, Content = Role.Contributor },
         ];
 
         public IEnumerable<MeshNode> GetStaticNodes() => Nodes;

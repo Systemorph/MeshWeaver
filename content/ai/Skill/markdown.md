@@ -1,6 +1,6 @@
 ---
 nodeType: Skill
-name: /create-markdown
+name: /markdown
 description: Author a Markdown node (a page) the right way — always an icon, never a title (node.Name is already the H1), live @@ region embeds, and interactive (executable) code cells.
 icon: 📝
 category: Skills

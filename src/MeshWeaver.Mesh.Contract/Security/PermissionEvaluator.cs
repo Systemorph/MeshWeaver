@@ -32,6 +32,7 @@ internal static class PermissionEvaluator
         { "Editor", Role.Editor },
         { "Viewer", Role.Viewer },
         { "Commenter", Role.Commenter },
+        { "Contributor", Role.Contributor },
         { "PlatformAdmin", Role.PlatformAdmin }
     };
 
