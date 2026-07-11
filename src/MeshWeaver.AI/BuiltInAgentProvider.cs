@@ -120,6 +120,29 @@ public class BuiltInAgentProvider : IStaticNodeProvider
         // Data/Skill/*.md are nodeType:Skill nodes served by BuiltInSkillProvider — not agents/docs.
         var skillPrefix = $"{prefix}{SkillNodeType.RootNamespace}.";
 
+        // Prefer the on-disk AI content section (content/ai/Agent) — editable in the mesh and
+        // syncable back to the repo. The parse (frontmatter → node) is identical to the embedded path,
+        // so the node set is unchanged; only the SOURCE of the bytes moves from the DLL to disk.
+        var root = AiContentLocator.SectionRoot();
+        var agentDir = root is null ? null : System.IO.Path.Combine(root, "Agent");
+        if (agentDir is not null && System.IO.Directory.Exists(agentDir))
+        {
+            foreach (var file in System.IO.Directory
+                         .EnumerateFiles(agentDir, "*.md", System.IO.SearchOption.AllDirectories)
+                         .OrderBy(f => f, StringComparer.Ordinal))
+            {
+                var content = System.IO.File.ReadAllText(file);
+                var relativePath = "Agent/" +
+                    System.IO.Path.GetRelativePath(agentDir, file).Replace('\\', '/');
+                var node = ParseEmbeddedNode(content, relativePath);
+                if (node != null)
+                    yield return node;
+            }
+            yield break;
+        }
+
+        // Fallback: EMBEDDED resources — the offline default (MAUI / monolith) never loses its agents
+        // even if the on-disk section isn't shipped/found.
         foreach (var resourceName in assembly.GetManifestResourceNames()
                      .Where(n => n.StartsWith(prefix) && n.EndsWith(".md", StringComparison.OrdinalIgnoreCase)
                                  && !n.StartsWith(skillPrefix, StringComparison.Ordinal))
