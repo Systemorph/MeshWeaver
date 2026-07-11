@@ -18,7 +18,7 @@ public static class PackageSources
     /// Builds a package source for <paramref name="sourceRepoPath"/> (a URL or local path), or
     /// <c>null</c> when the path is empty / a URL source has no <see cref="IGitHubRepoClient"/>.
     /// <paramref name="nodeRepo"/> selects the format for a URL source: <c>true</c> (the default the
-    /// registry uses) reads a node-native repo — <c>&lt;Plugin&gt;.json</c> Space roots, node-per-file
+    /// registry uses) reads a node-native repo — <c>&lt;Plugin&gt;/index.json</c> Space roots, node-per-file
     /// (<see cref="NodeRepoPackageSource"/>); <c>false</c> reads a <c>package.json</c>-manifest repo
     /// (<see cref="GitHubPackageSource"/>). A local path always uses the git-CLI package.json source.
     /// </summary>

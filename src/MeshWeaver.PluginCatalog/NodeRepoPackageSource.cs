@@ -7,11 +7,13 @@ namespace MeshWeaver.PluginCatalog;
 
 /// <summary>
 /// An <see cref="IPackageSource"/> for NODE-NATIVE plugin repos — the shape the
-/// <c>MeshWeaver.Plugins</c> repo ships (node-per-file, "the node is the manifest"). Each top-level
-/// <c>&lt;Plugin&gt;.json</c> is a Space root carrying a <c>PluginManifest</c>, and its sibling
-/// <c>&lt;Plugin&gt;/</c> folder holds the <c>NodeType</c> nodes, their <c>Source/*.cs</c> and docs —
-/// every file already a MeshNode at its CANONICAL path (no per-partition rebase). Reuses GitSync's
-/// fetch so a deployed portal reads the repo over HTTP.
+/// <c>MeshWeaver.Plugins</c> repo ships (node-per-file, "the node is the manifest"). Each
+/// <c>&lt;Plugin&gt;/</c> folder is one plugin — a mesh partition: <c>&lt;Plugin&gt;/index.json</c>
+/// is its Space root carrying a <c>PluginManifest</c> (the partition root lives INSIDE the folder,
+/// the same <c>NodeFileMapper</c> mapping GitSync uses), and the rest of the folder holds the
+/// <c>NodeType</c> nodes, their <c>Source/*.cs</c> and docs — every file already a MeshNode at its
+/// CANONICAL path (no per-partition rebase). Reuses GitSync's fetch so a deployed portal reads the
+/// repo over HTTP.
 ///
 /// <para>A plugin's <see cref="PackageManifest.Version"/> is the repo commit sha, so a new commit
 /// surfaces as an available update; the installer then writes only the nodes that actually changed.</para>
@@ -32,14 +34,19 @@ public sealed class NodeRepoPackageSource(
                 var manifests = new List<PackageManifest>();
                 foreach (var file in snapshot.Files)
                 {
-                    // A plugin root is a TOP-LEVEL `<Plugin>.json` (no '/') whose node is a Space.
-                    if (file.Path.Contains('/', StringComparison.Ordinal)
-                        || !file.Path.EndsWith(".json", StringComparison.OrdinalIgnoreCase))
+                    // A plugin root is `<Plugin>/index.json` — the partition root INSIDE its folder
+                    // (the folder is the unit of import; NodeFileMapper maps root ↔ index.json) —
+                    // whose node is a Space. Checked allocation-free: exactly one '/' and an
+                    // `index.json` tail; only a match slices out the id.
+                    var slash = file.Path.IndexOf('/');
+                    if (slash <= 0
+                        || file.Path.IndexOf('/', slash + 1) >= 0
+                        || !file.Path.AsSpan(slash + 1).Equals("index.json", StringComparison.OrdinalIgnoreCase))
                         continue;
                     var (nodeType, name, description) = Peek(file.Content, file.Path);
                     if (!string.Equals(nodeType, SpaceNodeType, StringComparison.Ordinal))
                         continue;
-                    var id = file.Path[..^".json".Length];
+                    var id = file.Path[..slash];
                     manifests.Add(new PackageManifest
                     {
                         Id = id,
@@ -60,12 +67,10 @@ public sealed class NodeRepoPackageSource(
         fetch(repoUrl, gitRef, null, token)
             .Select(snapshot =>
             {
-                var id = package.Id;
-                var rootFile = id + ".json";
-                var folderPrefix = id + "/";
+                // The whole plugin — root included — lives under `<Plugin>/`.
+                var folderPrefix = package.Id + "/";
                 return (IReadOnlyList<PackageFile>)snapshot.Files
-                    .Where(f => string.Equals(f.Path, rootFile, StringComparison.Ordinal)
-                        || f.Path.StartsWith(folderPrefix, StringComparison.Ordinal))
+                    .Where(f => f.Path.StartsWith(folderPrefix, StringComparison.Ordinal))
                     .Select(f => new PackageFile(f.Path, f.Content))
                     .ToList();
             });
