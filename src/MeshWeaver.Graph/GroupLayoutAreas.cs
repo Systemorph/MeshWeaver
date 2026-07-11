@@ -156,14 +156,24 @@ public static class GroupLayoutAreas
                         })));
             }
 
-            stack = stack.WithView(Controls.Button("Add Member")
-                .WithAppearance(Appearance.Accent)
-                .WithIconStart(FluentIcons.PersonAdd())
-                .WithClickAction(ctx =>
-                {
-                    ShowAddMemberDialog(ctx, hubPath);
-                    return Task.CompletedTask;
-                }));
+            stack = stack.WithView(Controls.Stack
+                .WithOrientation(Orientation.Horizontal)
+                .WithStyle("gap: 8px;")
+                .WithView(Controls.Button("Add Member")
+                    .WithAppearance(Appearance.Accent)
+                    .WithIconStart(FluentIcons.PersonAdd())
+                    .WithClickAction(ctx =>
+                    {
+                        ShowAddMemberDialog(ctx, hubPath);
+                        return Task.CompletedTask;
+                    }))
+                .WithView(Controls.Button("Invite by Email")
+                    .WithIconStart(FluentIcons.Mail())
+                    .WithClickAction(ctx =>
+                    {
+                        ShowBulkInviteDialog(ctx, hubPath);
+                        return Task.CompletedTask;
+                    })));
 
             return (UiControl?)stack;
         });
@@ -263,4 +273,95 @@ public static class GroupLayoutAreas
 
         ctx.Host.UpdateArea(DialogControl.DialogArea, dialog);
     }
+
+    /// <summary>
+    /// The bulk "Invite by Email" dialog: paste a list of emails (newline / comma / semicolon separated),
+    /// pick the role every invitee gets on the group, and invite. Existing accounts become members (with
+    /// the role granted on the group) immediately; unknown emails receive an invitation email and land the
+    /// identical membership + role the moment they register — via <see cref="GroupInviteExtensions.InviteAllToGroup"/>.
+    /// </summary>
+    private static void ShowBulkInviteDialog(UiActionContext ctx, string groupPath)
+    {
+        var formId = $"bulk_invite_{Guid.NewGuid().AsString()}";
+        ctx.Host.UpdateData(formId, new Dictionary<string, object?>
+        {
+            ["emails"] = "",
+            ["role"] = Role.Viewer.Id,
+        });
+        var dataContext = LayoutAreaReference.GetDataPointer(formId);
+
+        var formContent = Controls.Stack.WithStyle("gap: 16px; padding: 16px;")
+            .WithView((new TextAreaControl(new JsonPointerReference("emails"))
+                {
+                    Label = "Email addresses",
+                    Placeholder = "anna@example.com, ben@example.com — one per line or comma-separated",
+                    DataContext = dataContext,
+                }).WithRows(8))
+            .WithView(new SelectControl(new JsonPointerReference("role"), Array.Empty<object>())
+                    .WithOptions(new[] { Role.Admin.Id, Role.Editor.Id, Role.Viewer.Id, Role.Commenter.Id })
+                with { Label = "Role", DataContext = dataContext })
+            .WithView(Controls.Markdown(
+                    "Everyone on the list becomes a member with the selected role on this group. "
+                    + "Existing accounts are added right away; everyone else receives an invitation email "
+                    + "and is added automatically the moment they register.")
+                .WithStyle("font-size: 12px; opacity: .75;"))
+            .WithView(Controls.Stack
+                .WithOrientation(Orientation.Horizontal)
+                .WithStyle("justify-content: flex-end; gap: 8px;")
+                .WithView(Controls.Button("Invite")
+                    .WithAppearance(Appearance.Accent)
+                    .WithIconStart(FluentIcons.Mail())
+                    .WithClickAction(inviteCtx =>
+                    {
+                        inviteCtx.Host.Stream.GetDataStream<Dictionary<string, object?>>(formId)
+                            .Take(1)
+                            .Subscribe(form =>
+                            {
+                                var emailList = form.GetValueOrDefault("emails")?.ToString() ?? "";
+                                var role = form.GetValueOrDefault("role")?.ToString()?.Trim();
+                                if (string.IsNullOrEmpty(role))
+                                    role = Role.Viewer.Id;
+
+                                var (valid, invalid) = GroupInviteExtensions.ParseEmails(emailList);
+                                if (valid.Count == 0)
+                                {
+                                    ShowDialogMessage(inviteCtx, invalid.Count == 0
+                                            ? "Please enter at least one **email address**."
+                                            : "No valid email address found. Not email-shaped: "
+                                              + string.Join(", ", invalid.Select(t => $"`{t}`")),
+                                        "Validation Error");
+                                    return;
+                                }
+
+                                var accessService = inviteCtx.Hub.ServiceProvider.GetRequiredService<AccessService>();
+                                var invitedBy = accessService.Context?.ObjectId;
+                                inviteCtx.Hub.InviteAllToGroup(groupPath, emailList, invitedBy, role)
+                                    .Subscribe(
+                                        result => ShowDialogMessage(inviteCtx, BuildInviteSummary(result, role),
+                                            "Invitations"),
+                                        ex => ShowDialogMessage(inviteCtx, $"Inviting failed: {ex.Message}", "Error"));
+                            });
+                        return Task.CompletedTask;
+                    })));
+
+        var dialog = Controls.Dialog(formContent, "Invite by Email")
+            .WithSize("M")
+            .WithClosable(true);
+
+        ctx.Host.UpdateArea(DialogControl.DialogArea, dialog);
+    }
+
+    private static string BuildInviteSummary(GroupBulkInviteResult result, string role)
+    {
+        var summary = $"**{result.AddedCount}** added now · **{result.InvitedCount}** invited "
+                      + $"(added when they register) · role **{role}**.";
+        if (result.InvalidCount > 0)
+            summary += "\n\nSkipped (not email-shaped): "
+                       + string.Join(", ", result.InvalidEmails.Select(t => $"`{t}`"));
+        return summary;
+    }
+
+    private static void ShowDialogMessage(UiActionContext ctx, string markdown, string title) =>
+        ctx.Host.UpdateArea(DialogControl.DialogArea,
+            Controls.Dialog(Controls.Markdown(markdown), title).WithSize("S").WithClosable(true));
 }

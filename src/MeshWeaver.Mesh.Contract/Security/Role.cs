@@ -86,6 +86,22 @@ public record Role
     };
 
     /// <summary>
+    /// Built-in Contributor role: read, plus CREATE new nodes, comment, and start threads — but NOT
+    /// update or delete existing nodes. The least-privilege "can add, can't modify others'" grant.
+    /// Can be assigned to the <c>Public</c> user to let every authenticated user contribute content
+    /// into a shared space (e.g. the dedicated Feedback space) without being able to edit or delete
+    /// other people's entries.
+    /// </summary>
+    public static Role Contributor => new()
+    {
+        Id = "Contributor",
+        DisplayName = "Contributor",
+        Description = "Can read, create new nodes, comment, and start threads (but not edit or delete existing nodes)",
+        Permissions = Permission.Read | Permission.Create | Permission.Comment | Permission.Thread | Permission.Api,
+        IsInheritable = true
+    };
+
+    /// <summary>
     /// Built-in Platform Administrator role.
     /// Grants access to platform-level settings (auth providers, admin configuration).
     /// Assigned in the Admin namespace via standard AccessAssignment nodes.
