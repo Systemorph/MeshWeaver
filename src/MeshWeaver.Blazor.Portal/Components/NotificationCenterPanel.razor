@@ -60,8 +60,10 @@
                             <div class="notification-message @(expanded ? "is-expanded" : "")">@notif.Message</div>
                             @if (IsLong(notif.Message))
                             {
-                                <span class="notification-expand" role="button"
-                                      @onclick="() => ToggleExpanded(g.Key)" @onclick:stopPropagation="true">
+                                <span class="notification-expand" role="button" tabindex="0"
+                                      aria-expanded="@(expanded ? "true" : "false")"
+                                      @onclick="() => ToggleExpanded(g.Key)" @onclick:stopPropagation="true"
+                                      @onkeydown="e => OnExpandKeyDown(e, g.Key)" @onkeydown:stopPropagation="true">
                                     @(expanded ? "Show less" : "Show more")
                                 </span>
                             }
@@ -340,6 +342,14 @@
     {
         if (!expandedGroups.Remove(key))
             expandedGroups.Add(key);
+    }
+
+    /// <summary>A span with role="button" gets no synthesized click on Enter/Space (unlike a real
+    /// button), so keyboard users need an explicit toggle for the Show more/less expander.</summary>
+    private void OnExpandKeyDown(Microsoft.AspNetCore.Components.Web.KeyboardEventArgs e, string key)
+    {
+        if (e.Key is "Enter" or " " or "Spacebar")
+            ToggleExpanded(key);
     }
 
     /// <summary>A message long enough that the 2-line clamp hides detail (error notifications carry

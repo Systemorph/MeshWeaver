@@ -142,14 +142,16 @@ public static class PluginRegistryEndpoints
         // package ships — never a client-supplied path. The logic is "the id must match a published
         // package", independent of source format; trusting a caller-provided folder would let an
         // anonymous caller read arbitrary repo files. An unknown id is 404. A security property, not a hint.
-        // With several sources, the id resolves in configured order — same precedence as the merged list.
-        var perSource = sources.Select(s => ListFrom(s, sources.Count == 1, logger)
+        // Sources resolve SEQUENTIALLY in configured order (same precedence as the merged list) and
+        // short-circuit on the first hit — later sources are never even listed when an earlier one
+        // has the package (Concat subscribes lazily; FirstOrDefaultAsync unsubscribes on the match).
+        var perSource = sources.Select(s => Observable.Defer(() => ListFrom(s, sources.Count == 1, logger)
             .Select(packages => (Source: s, Package: packages.FirstOrDefault(
-                p => string.Equals(p.Id, body.Id, StringComparison.Ordinal)))));
-        return Observable.CombineLatest(perSource)
-            .SelectMany(hits =>
+                p => string.Equals(p.Id, body.Id, StringComparison.Ordinal))))));
+        return perSource.Concat()
+            .FirstOrDefaultAsync(hit => hit.Package is not null)
+            .SelectMany(hit =>
             {
-                var hit = hits.FirstOrDefault(h => h.Package is not null);
                 if (hit.Package is null)
                 {
                     logger?.LogWarning("Plugin registry: files requested for unknown package '{Id}'", body.Id);
