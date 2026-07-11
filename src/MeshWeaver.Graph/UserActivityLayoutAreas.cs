@@ -1,8 +1,14 @@
+using System;
+using System.Collections.Generic;
 using System.Reactive.Linq;
 using System.Text.Json;
+using System.Threading.Tasks;
+using MeshWeaver.Application.Styles;
+using MeshWeaver.Data;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
+using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Messaging;
@@ -44,6 +50,9 @@ public static class UserActivityLayoutAreas
     /// </summary>
     public const string ChatArea = "Chat";
 
+    /// <summary>Area that clears the owner's <see cref="User.Body"/> override so the default welcome home returns.</summary>
+    public const string ResetHomeArea = "ResetHome";
+
     /// <summary>Link to the doc page that explains the configurable Body-page + <c>@@</c>-region model.</summary>
     internal const string ConfigGuideLink = "/Doc/GUI/ConfigurablePages";
 
@@ -79,7 +88,18 @@ public static class UserActivityLayoutAreas
             // LEGACY {user}/Chat node from an older deployment resolves as invalid-NodeType
             // ("No node found at '{user}/Chat'… remainder='Chat'" — the prod memex report,
             // 2026-07-02). The composer is node-less — serve it directly.
-            .WithView(ChatArea, ComposerAreaView));
+            .WithView(ChatArea, ComposerAreaView)
+            // Override the generic Edit area with the SAFE per-field Body editor. Editing a
+            // partition-root node generically is suppressed in the default node menu (it could
+            // rewrite the whole partition); this edits THIS page only — User.Body — 1:1 with the
+            // Space Body editor. See EditHome / BuildHomeBodyEditor.
+            .WithView(MeshNodeLayoutAreas.EditArea, EditHome)
+            // Clears User.Body → the welcome template returns; reached from the Reset menu item.
+            .WithView(ResetHomeArea, ResetHome))
+            // Re-enable Edit on the user home (the default node menu HIDES generic Edit on a
+            // protected partition root) and add a Reset-to-default item once the owner has
+            // authored a Body override.
+            .AddNodeMenuItems(HomePageMenuItems);
 
     /// <summary>
     /// Renders the user's page. Shows a personal dashboard to the owner,
@@ -227,14 +247,175 @@ public static class UserActivityLayoutAreas
 
         @@("area/Composer")
 
-        @@("area/Pinned")
-
         @@("area/Threads")
 
         @@("area/Catalog")
 
+        @@("area/Pinned")
+
         _This home is yours to shape. [It's fully configurable]({{ConfigGuideLink}}): tell the assistant in the chat above what you'd like to see, or edit this page's **Body** directly._
         """;
+
+    // ── Editable home: Edit (this page's Body) + Reset-to-default ─────────────────────────────────
+
+    /// <summary>
+    /// The User node's <c>Edit</c> area override — the SAFE, per-field editor for the owner's home
+    /// <see cref="User.Body"/> markdown page, mirroring <c>SpaceLayoutAreas.Edit</c>. It replaces the
+    /// generic property/content Edit so "Edit" on a user home edits THIS page, never rewrites the
+    /// partition root. Gated on <see cref="Permission.Update"/> (self-edit → the owner only).
+    /// </summary>
+    public static IObservable<UiControl?> EditHome(LayoutAreaHost host, RenderingContext _)
+    {
+        var hubPath = host.Hub.Address.ToString();
+        var options = host.Hub.JsonSerializerOptions;
+        return host.Workspace.GetMeshNodeStream().CombineLatest(
+            host.Hub.GetEffectivePermissions(hubPath),
+            (node, permissions) => !permissions.HasFlag(Permission.Update)
+                ? (UiControl?)MeshNodeLayoutAreas.BuildAccessDenied(hubPath)
+                : (UiControl?)BuildHomeBodyEditor(node, hubPath, options));
+    }
+
+    /// <summary>
+    /// The home-page body editor: a back link, a "Reset to default" action shown only when the Body is
+    /// set, and the SAME <see cref="MarkdownEditorControl"/> the Markdown node uses — bound to the
+    /// <c>body</c> content field via a node-bound <c>DataContext</c> so each edit is a per-field
+    /// read-modify-write to <see cref="User.Body"/> (never a whole-content replace). An empty Body ⇒
+    /// the <see cref="UserWelcomeMarkdown"/> default renders (see <see cref="BuildOwnerHome"/>).
+    /// </summary>
+    private static UiControl BuildHomeBodyEditor(MeshNode? node, string hubPath, JsonSerializerOptions options)
+    {
+        if (node is null)
+            return Controls.Markdown("*Home page not found.*");
+
+        var userPath = node.Path ?? hubPath;
+        var contentCtx = LayoutAreaReference.GetMeshNodeDataContext(userPath, bindContent: true);
+        var hasBody = !string.IsNullOrWhiteSpace(node.ContentAs<User>(options)?.Body);
+
+        var container = Controls.Stack
+            .WithWidth("100%")
+            .WithStyle("height: calc(100vh - 100px); display: flex; flex-direction: column;");
+
+        var headerRow = Controls.Stack
+            .WithOrientation(Orientation.Horizontal)
+            .WithWidth("100%")
+            .WithVerticalAlignment(VerticalAlignment.Center)
+            .WithHorizontalGap(12)
+            .WithStyle("padding: 8px 0; border-bottom: 1px solid var(--neutral-stroke-rest); flex-shrink: 0;");
+
+        headerRow = headerRow.WithView(Controls.Button("")
+            .WithIconStart(FluentIcons.ArrowLeft())
+            .WithAppearance(Appearance.Stealth)
+            .WithNavigateToHref($"/{userPath}"));
+
+        headerRow = headerRow.WithView(Controls.Html(
+            "<span style=\"flex: 1; font-size: 1.25rem; font-weight: 600;\">Edit your home page</span>"));
+
+        // "Reset to default" — the in-editor twin of the Reset menu item, shown only when the owner has
+        // overridden the home. Clears User.Body → the welcome template returns.
+        if (hasBody)
+            headerRow = headerRow.WithView(Controls.Button("Reset to default")
+                .WithAppearance(Appearance.Stealth)
+                .WithClickAction(ClearBodyAction(userPath)));
+
+        headerRow = headerRow.WithView(Controls.Html(
+            "<span style=\"color: var(--neutral-foreground-hint); font-size: 0.85rem;\">Changes are saved automatically</span>"));
+
+        container = container.WithView(headerRow);
+
+        var editor = new MarkdownEditorControl
+        {
+            Value = new JsonPointerReference("body"),
+            DataContext = contentCtx,
+            Height = "100%",
+            MaxHeight = "none",
+            Placeholder = "Write your home page in markdown… leave it empty to use the default."
+        };
+
+        container = container.WithView(Controls.Stack
+            .WithWidth("100%")
+            .WithStyle("flex: 1; width: 100%; min-height: 0; overflow: hidden; margin-top: 8px;")
+            .WithView(editor));
+
+        return container;
+    }
+
+    /// <summary>
+    /// The <see cref="ResetHomeArea"/> handler — a menu-reachable action area that clears the owner's
+    /// <see cref="User.Body"/> (one-shot read → transform → <see cref="DataChangeRequest"/> on the user
+    /// hub, the pin/unpin write pattern), then renders a confirmation linking back to the (now default)
+    /// home. No-op when the Body is already empty.
+    /// </summary>
+    public static IObservable<UiControl?> ResetHome(LayoutAreaHost host, RenderingContext _)
+    {
+        var hubPath = host.Hub.Address.ToString();
+        var backHref = MeshNodeLayoutAreas.BuildUrl(hubPath, ActivityArea);
+        var userAddress = host.Hub.Address;
+
+        host.Hub.GetMeshNode(hubPath, TimeSpan.FromSeconds(10))
+            .Subscribe(node =>
+            {
+                if (node?.Content is not User user || string.IsNullOrWhiteSpace(user.Body))
+                    return;
+                var newNode = node with { Content = user with { Body = null } };
+                host.Hub.Post(new DataChangeRequest { Updates = [newNode] }, o => o.WithTarget(userAddress));
+            });
+
+        return Observable.Return<UiControl?>(Controls.Markdown(
+            $"### Home reset to default\n\nYour home page now shows the default welcome layout. [Back to your home]({backHref})"));
+    }
+
+    /// <summary>
+    /// A <c>WithClickAction</c> that clears <see cref="User.Body"/> on the user node at
+    /// <paramref name="userPath"/> — one-shot read, null the Body, post a <see cref="DataChangeRequest"/>
+    /// to the owning hub (which echoes to subscribers, so the editor / home re-renders to the default).
+    /// </summary>
+    private static Func<UiActionContext, Task> ClearBodyAction(string userPath) => ctx =>
+    {
+        var userAddress = new Address(userPath);
+        ctx.Host.Hub.GetMeshNode(userPath, TimeSpan.FromSeconds(10))
+            .Subscribe(node =>
+            {
+                if (node?.Content is not User user) return;
+                var newNode = node with { Content = user with { Body = null } };
+                ctx.Host.Hub.Post(new DataChangeRequest { Updates = [newNode] }, o => o.WithTarget(userAddress));
+            });
+        return Task.CompletedTask;
+    };
+
+    /// <summary>
+    /// Node-menu items for the user home: re-adds <b>Edit</b> (the default provider suppresses generic
+    /// Edit on a protected partition root, but our Edit override is the safe Body editor) and, once the
+    /// owner has authored a <see cref="User.Body"/>, a <b>Reset to default</b> item. Both require
+    /// <see cref="Permission.Update"/> (self-edit → owner only), so visitors see neither.
+    /// </summary>
+    private static IObservable<IReadOnlyCollection<NodeMenuItemDefinition>> HomePageMenuItems(
+        LayoutAreaHost host, RenderingContext _)
+    {
+        var hubPath = host.Hub.Address.ToString();
+        var options = host.Hub.JsonSerializerOptions;
+        return host.Workspace.GetMeshNodeStream().CombineLatest(
+            host.Hub.GetEffectivePermissions(hubPath),
+            (node, permissions) =>
+            {
+                var items = new List<NodeMenuItemDefinition>();
+                if (permissions.HasFlag(Permission.Update))
+                {
+                    items.Add(new NodeMenuItemDefinition(
+                        "Edit home page", MeshNodeLayoutAreas.EditArea,
+                        Icon: "✏️", RequiredPermission: Permission.Update, Order: 10,
+                        Href: MeshNodeLayoutAreas.BuildUrl(hubPath, MeshNodeLayoutAreas.EditArea),
+                        Tooltip: "Edit this home page's markdown"));
+
+                    if (!string.IsNullOrWhiteSpace(node.ContentAs<User>(options)?.Body))
+                        items.Add(new NodeMenuItemDefinition(
+                            "Reset home to default", ResetHomeArea,
+                            Icon: "↩️", RequiredPermission: Permission.Update, Order: 11,
+                            Href: MeshNodeLayoutAreas.BuildUrl(hubPath, ResetHomeArea),
+                            Tooltip: "Discard your custom home and use the default layout"));
+                }
+                return (IReadOnlyCollection<NodeMenuItemDefinition>)items;
+            });
+    }
 
     // ── Home region areas ────────────────────────────────────────────────────────────────────────
     // Each is embedded by the home page via @@("area/<Name>"). They are registered on the User hub in
