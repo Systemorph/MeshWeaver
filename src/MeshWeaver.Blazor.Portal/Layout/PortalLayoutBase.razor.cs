@@ -249,6 +249,59 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
         }
     }
 
+    /// <summary>A single breadcrumb crumb: its display <paramref name="Label"/>, the
+    /// <paramref name="Href"/> to that ancestor's default page, and whether it is the
+    /// <paramref name="IsLast"/> (current) segment — rendered as plain bold text, not a link.</summary>
+    protected readonly record struct Crumb(string Label, string Href, bool IsLast);
+
+    /// <summary>
+    /// Breadcrumb trail for the current node — one crumb per segment of the resolved address, each
+    /// linking to that ancestor's default page (<c>/{cumulative}</c>, empty area); the last segment
+    /// (the current node) is flagged <see cref="Crumb.IsLast"/> so the view shows it as bold text.
+    /// Empty at the mesh root, where the bar still renders the lone ⌂ Home affordance. Mirrors the
+    /// React-Native shell's breadcrumb toolbar and the server-side <c>BuildBreadcrumbs</c> trail —
+    /// derived reactively from <see cref="_currentNavContext"/>, which re-renders on every nav change.
+    /// </summary>
+    protected IReadOnlyList<Crumb> Breadcrumbs
+    {
+        get
+        {
+            // Address.Path is the host-independent node path — use it rather than Namespace
+            // (== Address.ToString()), which appends "~{Host}" for hosted addresses and would
+            // split into a bogus trailing crumb.
+            var segments = (_currentNavContext?.Address.Path ?? "")
+                .Split('/', StringSplitOptions.RemoveEmptyEntries);
+            if (segments.Length == 0)
+                return Array.Empty<Crumb>();
+
+            var crumbs = new Crumb[segments.Length];
+            var cumulative = "";
+            for (var i = 0; i < segments.Length; i++)
+            {
+                // Encode each segment for the href (escaping reserved chars like spaces/#/%),
+                // preserving the "/" separators; the Label keeps the raw segment for display.
+                var encoded = Uri.EscapeDataString(segments[i]);
+                cumulative = i == 0 ? encoded : $"{cumulative}/{encoded}";
+                crumbs[i] = new Crumb(segments[i], $"/{cumulative}", i == segments.Length - 1);
+            }
+            return crumbs;
+        }
+    }
+
+    /// <summary>
+    /// The active area, shown as a trailing "· {area}" after the trail when it isn't the node's
+    /// default content page (empty area). Null hides the suffix. Peer of the React-Native shell's
+    /// <c>· {nav.area}</c> hint.
+    /// </summary>
+    protected string? CurrentBreadcrumbArea
+    {
+        get
+        {
+            var area = _currentNavContext?.Area;
+            return string.IsNullOrEmpty(area) ? null : area;
+        }
+    }
+
     private void ToggleNodeMenu()
     {
         isNodeMenuOpen = !isNodeMenuOpen;
