@@ -47,4 +47,18 @@ public class FeedbackStaticRepoSourceTest
         assignment.AccessObject.Should().Be(WellKnownUsers.Public);
         assignment.Roles.Should().ContainSingle(r => r.Role == "Contributor" && !r.Denied);
     }
+
+    [Fact]
+    public void LocksTheAccessSubtree_SoPublicCannotSelfEscalate()
+    {
+        // A BreaksInheritance policy at Feedback/_Access keeps the inheritable Contributor grant from
+        // reaching the access-config subtree — otherwise a user's Create would let them write a
+        // self-granting AccessAssignment.
+        var policy = _source.EnumerateSourceNodes()
+            .Should().ContainSingle(n => n.NodeType == "PartitionAccessPolicy").Which;
+
+        policy.Namespace.Should().Be("Feedback/_Access");
+        policy.Content.Should().BeOfType<PartitionAccessPolicy>()
+            .Which.BreaksInheritance.Should().BeTrue();
+    }
 }

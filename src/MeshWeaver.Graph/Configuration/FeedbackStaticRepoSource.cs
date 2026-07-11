@@ -52,6 +52,21 @@ public sealed class FeedbackStaticRepoSource : IStaticRepoSource
                 Roles = [new RoleAssignment { Role = "Contributor" }],
             },
         },
+
+        // 🔐 Scope the public Contributor grant OUT of the access-config subtree. Contributor is
+        // inheritable, so without this the grant would also give every user Create on
+        // "Feedback/_Access" — and creating an AccessAssignment only needs Create on the parent, so a
+        // user could self-escalate by writing "Feedback/_Access/{me}_Access" granting themselves Admin.
+        // BreaksInheritance discards ancestor roles AT this scope, so nobody reaches "Feedback/_Access"
+        // via the Public grant: users can create feedback ENTRIES ("Feedback/{id}") but not touch the
+        // access config. (System import bypasses permissions, so re-seeding still works.)
+        new MeshNode("_Policy", $"{PartitionName}/_Access")
+        {
+            NodeType = "PartitionAccessPolicy",
+            Name = "Feedback access — locked",
+            State = MeshNodeState.Active,
+            Content = new PartitionAccessPolicy { BreaksInheritance = true },
+        },
     ];
 
     /// <inheritdoc />
