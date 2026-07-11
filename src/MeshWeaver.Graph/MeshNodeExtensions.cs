@@ -406,6 +406,8 @@ public static class MeshNodeExtensions
         typeRegistry.WithType(typeof(TrackedChangeStatus), nameof(TrackedChangeStatus));
         typeRegistry.WithType(typeof(Notification), nameof(Notification));
         typeRegistry.WithType(typeof(NotificationType), nameof(NotificationType));
+        typeRegistry.WithType(typeof(Feedback), nameof(Feedback));
+        typeRegistry.WithType(typeof(FeedbackStatus), nameof(FeedbackStatus));
         typeRegistry.WithType(typeof(ApiToken), nameof(ApiToken));
         typeRegistry.WithType(typeof(MeshDataSourceConfiguration), nameof(MeshDataSourceConfiguration));
         typeRegistry.WithType(typeof(PartitionDefinition), nameof(PartitionDefinition));
