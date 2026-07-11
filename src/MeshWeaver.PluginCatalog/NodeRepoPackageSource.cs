@@ -36,15 +36,17 @@ public sealed class NodeRepoPackageSource(
                 {
                     // A plugin root is `<Plugin>/index.json` — the partition root INSIDE its folder
                     // (the folder is the unit of import; NodeFileMapper maps root ↔ index.json) —
-                    // whose node is a Space.
-                    var segments = file.Path.Split('/');
-                    if (segments.Length != 2
-                        || !string.Equals(segments[1], "index.json", StringComparison.OrdinalIgnoreCase))
+                    // whose node is a Space. Checked allocation-free: exactly one '/' and an
+                    // `index.json` tail; only a match slices out the id.
+                    var slash = file.Path.IndexOf('/');
+                    if (slash <= 0
+                        || file.Path.IndexOf('/', slash + 1) >= 0
+                        || !file.Path.AsSpan(slash + 1).Equals("index.json", StringComparison.OrdinalIgnoreCase))
                         continue;
                     var (nodeType, name, description) = Peek(file.Content, file.Path);
                     if (!string.Equals(nodeType, SpaceNodeType, StringComparison.Ordinal))
                         continue;
-                    var id = segments[0];
+                    var id = file.Path[..slash];
                     manifests.Add(new PackageManifest
                     {
                         Id = id,
