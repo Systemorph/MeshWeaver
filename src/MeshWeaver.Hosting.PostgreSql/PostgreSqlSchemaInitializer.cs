@@ -239,7 +239,96 @@ public static class PostgreSqlSchemaInitializer
         {
             await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         }
+
+        // Step 5: SELF-HEAL the auth mirror. Step 2.5 heals the trigger FUNCTION on every init;
+        // this heals the TRIGGERS and the DATA, so the mirror converges on every boot instead of
+        // depending on a one-time migration: (a) any partition schema missing the
+        // mesh_node_mirror_access_objects trigger (provisioned during a bad window) gets it,
+        // (b) mirrored rows that were missed or went stale while the function/trigger was wrong
+        // are reconciled into auth.mesh_nodes, (c) the top-level matview is rebuilt so catalog
+        // surfaces see the healed rows. One server-side pass, idempotent, fail-safe (skips when
+        // auth isn't provisioned yet — e.g. a bare test fixture). This is the durable answer to
+        // the 2026-07 "spaces invisible in the catalog" incident: even if the mirror breaks
+        // again, the next restart repairs both trigger topology and data.
+        await using (var cmd = dataSource.CreateCommand(GetAuthMirrorSelfHealScript()))
+        {
+            await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+        }
     }
+
+    /// <summary>
+    /// One-shot server-side reconciliation of the auth mirror: installs the
+    /// <c>mesh_node_mirror_access_objects</c> trigger on every partition schema that lacks it and
+    /// upserts every mirrored node type (<c>User/Group/Role/VUser/ApiToken/Space</c>) from every
+    /// partition into <c>auth.mesh_nodes</c>, then rebuilds <c>public.top_level_index</c>.
+    /// No-op when <c>auth.mesh_nodes</c> doesn't exist. Runs at every init (<see cref="InitializeAsync"/>
+    /// step 5) — the mirror self-heals on restart rather than relying on one-time migrations.
+    /// </summary>
+    public static string GetAuthMirrorSelfHealScript() => """
+        DO $auth_mirror_heal$
+        DECLARE
+            s text;
+        BEGIN
+            IF to_regclass('"auth".mesh_nodes') IS NULL THEN
+                RETURN;
+            END IF;
+
+            FOR s IN
+                SELECT t.table_schema
+                FROM information_schema.tables t
+                WHERE t.table_name = 'mesh_nodes'
+                  AND t.table_schema NOT IN
+                      ('information_schema','pg_catalog','pg_toast','public','admin','auth')
+                  AND t.table_schema NOT LIKE '%\_versions'
+            LOOP
+                -- (a) Trigger present on every partition table (auth itself excluded above —
+                --     it is the mirror target, mirroring into itself would loop).
+                IF NOT EXISTS (
+                    SELECT 1 FROM pg_trigger tg
+                    JOIN pg_class c ON c.oid = tg.tgrelid
+                    JOIN pg_namespace n ON n.oid = c.relnamespace
+                    WHERE tg.tgname = 'mesh_node_mirror_access_objects'
+                      AND c.relname = 'mesh_nodes' AND n.nspname = s)
+                THEN
+                    EXECUTE format(
+                        'CREATE TRIGGER mesh_node_mirror_access_objects '
+                        || 'AFTER INSERT OR UPDATE OR DELETE ON %I.mesh_nodes '
+                        || 'FOR EACH ROW EXECUTE FUNCTION public.mirror_access_object_to_auth_schema()', s);
+                END IF;
+
+                -- (b) Reconcile mirrored rows: insert what is missing, refresh what is stale.
+                --     The WHERE guard keeps the pass write-free when everything already matches.
+                EXECUTE format($reconcile$
+                    INSERT INTO "auth".mesh_nodes
+                        (namespace, id, name, node_type, category, icon, display_order,
+                         last_modified, version, state, content, desired_id, main_node)
+                    SELECT namespace, id, name, node_type, category, icon, display_order,
+                           last_modified, version, state, content, desired_id, main_node
+                      FROM %I.mesh_nodes
+                     WHERE node_type IN ('User','Group','Role','VUser','ApiToken','Space')
+                    ON CONFLICT (namespace, id) DO UPDATE SET
+                        name = EXCLUDED.name,
+                        node_type = EXCLUDED.node_type,
+                        category = EXCLUDED.category,
+                        icon = EXCLUDED.icon,
+                        display_order = EXCLUDED.display_order,
+                        last_modified = EXCLUDED.last_modified,
+                        version = EXCLUDED.version,
+                        state = EXCLUDED.state,
+                        content = EXCLUDED.content,
+                        desired_id = EXCLUDED.desired_id,
+                        main_node = EXCLUDED.main_node
+                    WHERE "auth".mesh_nodes.version < EXCLUDED.version
+                       OR "auth".mesh_nodes.node_type IS DISTINCT FROM EXCLUDED.node_type
+                       OR "auth".mesh_nodes.last_modified < EXCLUDED.last_modified
+                $reconcile$, s);
+            END LOOP;
+
+            -- (c) Catalog surfaces read the healed rows.
+            PERFORM public.rebuild_top_level_index();
+        END
+        $auth_mirror_heal$;
+        """;
 
     /// <summary>
     /// Builds the <c>CREATE OR REPLACE FUNCTION public.ensure_partition_schema(partition_name text)</c>
@@ -313,8 +402,8 @@ public static class PostgreSqlSchemaInitializer
     /// <summary>
     /// DDL for <c>public.mirror_access_object_to_auth_schema()</c> — the AFTER
     /// INSERT/UPDATE/DELETE trigger function that mirrors every access-object node
-    /// (<c>User</c>, <c>Group</c>, <c>Role</c>, <c>VUser</c>, <c>ApiToken</c>) from a
-    /// partition's <c>mesh_nodes</c> into the central <c>auth.mesh_nodes</c> lookup mirror.
+    /// (<c>User</c>, <c>Group</c>, <c>Role</c>, <c>VUser</c>, <c>ApiToken</c>, <c>Space</c>)
+    /// from a partition's <c>mesh_nodes</c> into the central <c>auth.mesh_nodes</c> lookup mirror.
     /// The per-partition DDL (<see cref="GetVersionedPartitionDdl"/>) installs the trigger
     /// that calls this function — but only when this function already exists, so it must be
     /// created on the always-run init path (and by the V32 repair for legacy partitions).
@@ -327,6 +416,17 @@ public static class PostgreSqlSchemaInitializer
     /// <para><b>Single-sourced.</b> <see cref="InitializeAsync"/> runs this, and the
     /// <c>V32_RepairAuthMirrorTriggerAndBackfill</c> migration calls it for legacy DBs whose
     /// partitions predate the trigger. Idempotent (<c>CREATE OR REPLACE</c>).</para>
+    ///
+    /// <para>🚨 <b>The node-type list below is THE live list — keep it complete.</b> Because this
+    /// script re-runs on every startup/schema-init (and V32 replays it), it silently OVERWRITES any
+    /// list extension a later migration made to the deployed function. That is exactly how V28's
+    /// <c>'Space'</c> extension was lost in production: V28 patched the function inline, this
+    /// constant re-created it without <c>'Space'</c> on the next restart, and every Space created
+    /// since then never reached <c>auth.mesh_nodes</c> — invisible in the Spaces catalog while its
+    /// partition, grants and content all worked (RolePlay/X/Chess, 2026-07). When a new node type
+    /// must mirror, extend THIS list (both branches) and add a backfill migration
+    /// (<c>V42_ReapplySpaceAuthMirrorAndBackfill</c> is the model); never patch the deployed
+    /// function from a migration alone.</para>
     /// </summary>
     public static string GetAuthMirrorFunctionScript() => """
         CREATE OR REPLACE FUNCTION public.mirror_access_object_to_auth_schema()
@@ -339,14 +439,14 @@ public static class PostgreSqlSchemaInitializer
             END IF;
 
             IF TG_OP = 'DELETE' THEN
-                IF OLD.node_type IN ('User','Group','Role','VUser','ApiToken') THEN
+                IF OLD.node_type IN ('User','Group','Role','VUser','ApiToken','Space') THEN
                     DELETE FROM "auth".mesh_nodes
                      WHERE namespace = OLD.namespace AND id = OLD.id;
                 END IF;
                 RETURN OLD;
             END IF;
 
-            IF NEW.node_type IN ('User','Group','Role','VUser','ApiToken') THEN
+            IF NEW.node_type IN ('User','Group','Role','VUser','ApiToken','Space') THEN
                 INSERT INTO "auth".mesh_nodes
                     (namespace, id, name, node_type, category, icon, display_order,
                      last_modified, version, state, content, desired_id, main_node)

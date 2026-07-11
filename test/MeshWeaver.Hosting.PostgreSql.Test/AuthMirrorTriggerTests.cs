@@ -64,41 +64,12 @@ public class AuthMirrorTriggerTests
         await using var authDs = dsBuilder.Build();
         await PostgreSqlSchemaInitializer.InitializeAsync(authDs, opts);
 
-        await using (var cmd = _fixture.DataSource.CreateCommand("""
-            CREATE OR REPLACE FUNCTION public.mirror_access_object_to_auth_schema()
-            RETURNS TRIGGER AS $$
-            BEGIN
-                IF TG_OP = 'DELETE' THEN
-                    IF OLD.node_type IN ('User','Group','Role','VUser','ApiToken') THEN
-                        DELETE FROM "auth".mesh_nodes
-                         WHERE namespace = OLD.namespace AND id = OLD.id;
-                    END IF;
-                    RETURN OLD;
-                END IF;
-
-                IF NEW.node_type IN ('User','Group','Role','VUser','ApiToken') THEN
-                    INSERT INTO "auth".mesh_nodes
-                        (namespace, id, name, node_type, category, icon, display_order,
-                         last_modified, version, state, content, desired_id, main_node)
-                    VALUES (NEW.namespace, NEW.id, NEW.name, NEW.node_type, NEW.category, NEW.icon, NEW.display_order,
-                            NEW.last_modified, NEW.version, NEW.state, NEW.content, NEW.desired_id, NEW.main_node)
-                    ON CONFLICT (namespace, id) DO UPDATE SET
-                        name = EXCLUDED.name,
-                        node_type = EXCLUDED.node_type,
-                        category = EXCLUDED.category,
-                        icon = EXCLUDED.icon,
-                        display_order = EXCLUDED.display_order,
-                        last_modified = EXCLUDED.last_modified,
-                        version = EXCLUDED.version,
-                        state = EXCLUDED.state,
-                        content = EXCLUDED.content,
-                        desired_id = EXCLUDED.desired_id,
-                        main_node = EXCLUDED.main_node;
-                END IF;
-                RETURN NEW;
-            END;
-            $$ LANGUAGE plpgsql;
-            """))
+        // Single-source the trigger function from the initializer's constant — the same script
+        // every startup runs. An inline copy here is exactly how the V28 'Space' extension was
+        // silently lost in production (three hand-maintained copies drifting apart); the test
+        // must exercise THE deployed function body, not its own fork.
+        await using (var cmd = _fixture.DataSource.CreateCommand(
+            PostgreSqlSchemaInitializer.GetAuthMirrorFunctionScript()))
         {
             await cmd.ExecuteNonQueryAsync();
         }
@@ -214,6 +185,92 @@ public class AuthMirrorTriggerTests
 
         await ExistsInAuthAsync("", "rbuergi").Run()
             .Should().Within(30.Seconds()).Be(true);
+    }
+
+    /// <summary>
+    /// A Space root (partition root: namespace = "", id = space id) must mirror into
+    /// <c>auth.mesh_nodes</c> — that mirror IS the Spaces catalog. Pins the V28 'Space'
+    /// extension against the drift that dropped it in production (spaces created after a
+    /// restart never appeared in the catalog): the initializer's script, which this test
+    /// installs verbatim, must mirror Space on insert AND remove it on delete.
+    /// </summary>
+    [Fact]
+    public async Task SpaceInsert_MirrorsIntoAuthSchema_AndDeleteRemoves()
+    {
+        await _fixture.CleanData().Should().Within(60.Seconds()).Emit();
+        await EnsureMirrorInstalledAsync().Run().Should().Within(60.Seconds()).Emit();
+
+        var space = new MeshNode("Chess", "")
+        {
+            Name = "Chess",
+            NodeType = "Space"
+        };
+        await _fixture.StorageAdapter.Write(space, new()).Should().Within(30.Seconds()).Emit();
+
+        await ExistsInAuthAsync("", "Chess").Run()
+            .Should().Within(30.Seconds()).Be(true);
+        await ReadNameFromAuthAsync("", "Chess").Run()
+            .Should().Within(30.Seconds()).Be("Chess");
+
+        await _fixture.StorageAdapter.Delete("Chess").Should().Within(30.Seconds()).Emit();
+
+        await ExistsInAuthAsync("", "Chess").Run()
+            .Should().Within(30.Seconds()).Be(false);
+    }
+
+    /// <summary>
+    /// The auth mirror SELF-HEALS: <c>GetAuthMirrorSelfHealScript</c> (run by
+    /// <c>InitializeAsync</c> step 5 on every boot) re-installs a dropped partition trigger and
+    /// reconciles rows that were missed while the trigger/function was broken. Pins the durable
+    /// fix for the 2026-07 "spaces invisible in the catalog" incident: damage the mirror both
+    /// ways (drop the trigger, delete a mirrored row, write a row while the trigger is absent),
+    /// heal, and assert everything converged.
+    /// </summary>
+    [Fact]
+    public async Task SelfHeal_ReinstallsTriggerAndReconcilesRows()
+    {
+        await _fixture.CleanData().Should().Within(60.Seconds()).Emit();
+        await EnsureMirrorInstalledAsync().Run().Should().Within(60.Seconds()).Emit();
+
+        // A real partition schema (the heal sweep deliberately skips 'public').
+        await using (var proc = _fixture.DataSource.CreateCommand(
+            "SELECT public.ensure_partition_schema('healtest')"))
+            await proc.ExecuteNonQueryAsync();
+
+        // Baseline: a Space root in the partition mirrors into auth via the trigger.
+        await using (var ins = _fixture.DataSource.CreateCommand(
+            """INSERT INTO "healtest".mesh_nodes (namespace, id, name, node_type, state) VALUES ('', 'HealMe', 'Heal Me', 'Space', 2) ON CONFLICT (namespace, id) DO NOTHING"""))
+            await ins.ExecuteNonQueryAsync();
+        await ExistsInAuthAsync("", "HealMe").Run().Should().Within(30.Seconds()).Be(true);
+
+        // Damage 1: the trigger disappears (bad provisioning window).
+        await using (var drop = _fixture.DataSource.CreateCommand(
+            """DROP TRIGGER IF EXISTS mesh_node_mirror_access_objects ON "healtest".mesh_nodes"""))
+            await drop.ExecuteNonQueryAsync();
+        // Damage 2: an already-mirrored row is lost from auth.
+        await using (var del = _fixture.DataSource.CreateCommand(
+            """DELETE FROM "auth".mesh_nodes WHERE namespace = '' AND id = 'HealMe'"""))
+            await del.ExecuteNonQueryAsync();
+        // Damage 3: a row written while the trigger is absent never mirrors.
+        await using (var ins2 = _fixture.DataSource.CreateCommand(
+            """INSERT INTO "healtest".mesh_nodes (namespace, id, name, node_type, state) VALUES ('', 'HealMe2', 'Heal Me Too', 'Space', 2) ON CONFLICT (namespace, id) DO NOTHING"""))
+            await ins2.ExecuteNonQueryAsync();
+        await ExistsInAuthAsync("", "HealMe2").Run().Should().Within(30.Seconds()).Be(false);
+
+        // Heal — the exact script InitializeAsync runs at every boot.
+        await using (var heal = _fixture.DataSource.CreateCommand(
+            PostgreSqlSchemaInitializer.GetAuthMirrorSelfHealScript()))
+            await heal.ExecuteNonQueryAsync();
+
+        // Both rows reconciled…
+        await ExistsInAuthAsync("", "HealMe").Run().Should().Within(30.Seconds()).Be(true);
+        await ExistsInAuthAsync("", "HealMe2").Run().Should().Within(30.Seconds()).Be(true);
+
+        // …and the trigger is back: a fresh write mirrors again without another heal.
+        await using (var ins3 = _fixture.DataSource.CreateCommand(
+            """INSERT INTO "healtest".mesh_nodes (namespace, id, name, node_type, state) VALUES ('', 'HealMe3', 'Healed Live', 'Space', 2) ON CONFLICT (namespace, id) DO NOTHING"""))
+            await ins3.ExecuteNonQueryAsync();
+        await ExistsInAuthAsync("", "HealMe3").Run().Should().Within(30.Seconds()).Be(true);
     }
 
     [Fact]
