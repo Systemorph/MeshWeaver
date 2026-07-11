@@ -20,11 +20,10 @@ Controls.Draggable(Controls.Html("<div class=\"card\">Design API</div>"), payloa
 // A drop zone: wrap any control, handle the drop server-side.
 Controls.DropTarget(Controls.Html("<h4>Done</h4>"))
     .WithDropAction(context => Console.WriteLine($"dropped {context.Payload}"))
-    .WithAcceptTypes("card")   // optional: only accept matching draggables
 ```
 
 - **`Controls.Draggable(content, payload)`** — `content` is any `UiControl`, rendered inside the draggable wrapper; `payload` is a serializable value delivered to the target on drop.
-- **`Controls.DropTarget(content)`** — `content` is the drop-zone body (any `UiControl`); `.WithDropAction(...)` registers the server-side handler; `.WithAcceptTypes(...)` optionally filters which draggables it accepts.
+- **`Controls.DropTarget(content)`** — `content` is the drop-zone body (any `UiControl`); `.WithDropAction(...)` registers the server-side handler.
 
 The example below renders a draggable card next to a drop zone. Drag the card onto the zone:
 
@@ -104,7 +103,7 @@ A drop is a hub message, not a callback across the wire:
 2. On `drop`, the drop target reads the payload and posts a **`DropEvent`** (carrying the payload and the target's area) to the layout hub — the same mechanism `ButtonControl` uses for `ClickedEvent`.
 3. `LayoutAreaHost` routes the event to the target control and invokes its **`DropAction`** with a `DropContext { Area, Payload, Hub, Host }`.
 
-The `DropAction` is a server-side delegate — it never serializes to the client. Because the payload rides the drag data-transfer, dragging generates **no** network traffic; only the final drop does.
+The `DropAction` is a server-side delegate — it never serializes to the client. In the **React** and **React Native** renderers the payload rides the drag data-transfer, so dragging generates no server traffic — only the drop crosses the wire. The **Blazor Server** renderer instead records the payload on `dragstart` over the circuit (a lightweight round-trip) and posts the `DropEvent` on drop.
 
 ---
 

@@ -33,7 +33,6 @@ describe("drag-and-drop wire model", () => {
     };
     const drop: DropTargetControl = {
       $type: "DropTargetControl",
-      acceptTypes: "card",
       contentArea: { $type: "NamedArea", area: "zone/Content" },
     };
     expect(JSON.parse(JSON.stringify(drag)).$type).toBe("DraggableControl");

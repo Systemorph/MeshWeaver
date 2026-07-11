@@ -29,12 +29,6 @@ public record DropTargetControl
     internal object Content { get; init; }
 
     /// <summary>
-    /// Optional drag type filter surfaced to the client (e.g. a category the target accepts). When set,
-    /// the client only signals a valid drop for matching draggables. <c>null</c> accepts everything.
-    /// </summary>
-    public object? AcceptTypes { get; init; }
-
-    /// <summary>
     /// The sub-area into which <see cref="Content"/> is rendered. Set during rendering to a
     /// per-instance path (<c>{area}/Content</c>) and referenced by the client views.
     /// </summary>
@@ -45,13 +39,8 @@ public record DropTargetControl
 
     /// <summary>Returns a copy with <paramref name="content"/> as the drop-zone body.</summary>
     /// <param name="content">The control to render inside the drop zone.</param>
-    public DropTargetControl WithContent(object content)
+    public DropTargetControl WithContent(UiControl content)
         => this with { Content = content };
-
-    /// <summary>Returns a copy accepting only draggables tagged with <paramref name="types"/>.</summary>
-    /// <param name="types">The drag type(s) this target accepts.</param>
-    public DropTargetControl WithAcceptTypes(object types)
-        => this with { AcceptTypes = types };
 
     /// <summary>Returns a copy with <paramref name="onDrop"/> invoked when a draggable is dropped here.</summary>
     /// <param name="onDrop">An asynchronous handler receiving the dropped payload.</param>

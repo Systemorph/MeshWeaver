@@ -53,15 +53,14 @@ public class DragDropTest(ITestOutputHelper output) : HubTestBase(output)
     }
 
     [HubFact]
-    public void DropTarget_Serializes_WithTypeDiscriminatorAndAcceptTypes()
+    public void DropTarget_Serializes_WithTypeDiscriminator()
     {
         var host = GetHost();
         var serialized = JsonSerializer.Serialize(
-            Controls.DropTarget(Controls.Html("zone")).WithAcceptTypes("card"),
+            Controls.DropTarget(Controls.Html("zone")),
             host.JsonSerializerOptions);
 
         serialized.Should().Contain("\"$type\":\"DropTargetControl\"");
-        serialized.Should().Contain("\"acceptTypes\":\"card\"");
     }
 
     [HubFact]

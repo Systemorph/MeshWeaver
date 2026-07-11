@@ -16,10 +16,9 @@ export interface DraggableControl {
   contentArea?: NamedArea;
 }
 
-/** A generic drop target wrapping a child control (via `contentArea`), optionally filtering types. */
+/** A generic drop target wrapping a child control (via `contentArea`). */
 export interface DropTargetControl {
   $type: "DropTargetControl";
-  acceptTypes?: unknown;
   contentArea?: NamedArea;
 }
 

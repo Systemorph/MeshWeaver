@@ -48,7 +48,7 @@ public record DraggableControl
 
     /// <summary>Returns a copy with <paramref name="content"/> as the draggable body.</summary>
     /// <param name="content">The control to render inside the draggable wrapper.</param>
-    public DraggableControl WithContent(object content)
+    public DraggableControl WithContent(UiControl content)
         => this with { Content = content };
 
     /// <summary>Returns a copy with <paramref name="payload"/> carried to the drop target on drop.</summary>

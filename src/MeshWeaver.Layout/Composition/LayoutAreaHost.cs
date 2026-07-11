@@ -422,17 +422,13 @@ public record LayoutAreaHost : IDisposable
 
     private IMessageDelivery OnDrop(IMessageDelivery<DropEvent> request)
     {
+        // Like OnCloseDialog: the drop handler is a Func<…, Task>, so schedule it via InvokeAsync and
+        // route BOTH sync and async failures through FailRequest — a bare Invoke would leave exceptions
+        // thrown after the first await unobserved.
         if (GetControl(request.Message.Area) is DropTargetControl { DropAction: not null } control)
-            try
-            {
-                control.DropAction.Invoke(
-                    new(request.Message.Area, request.Message.Payload, Hub, this)
-                );
-            }
-            catch (Exception ex)
-            {
-                FailRequest(ex, request);
-            }
+            InvokeAsync(() => control.DropAction.Invoke(
+                new(request.Message.Area, request.Message.Payload, Hub, this)
+            ), ex => FailRequest(ex, request));
         return request.Processed();
     }
 
