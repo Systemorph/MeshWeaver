@@ -1989,32 +1989,35 @@ public class MeshOperations
                         return Observable.Return("Error: content service not configured on the hub.");
 
                     contentService.AddConfiguration(collectionConfig);
-                    var ioPool = hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.FileSystem) ?? IoPool.Unbounded;
-                    return ioPool.Run(async ct =>
-                    {
-                        var collection = await contentService.GetCollectionAsync(qualifiedCollectionName, ct).ConfigureAwait(false);
-                        if (collection == null)
-                            return $"Error: failed to initialize collection '{qualifiedCollectionName}'.";
-
-                        var dir = Path.GetDirectoryName(filePath)?.Replace('\\', '/') ?? "";
-                        var fileName = Path.GetFileName(filePath);
-                        using var ms = new MemoryStream(bytes);
-                        await collection.SaveFileAsync(dir, fileName, ms).ConfigureAwait(false);
-
-                        // Post-upload seam: notify registered observers (e.g. the content-indexing
-                        // pipeline) AFTER the save succeeds. Fire-and-forget — each observer starts its
-                        // own off-band work (an Activity), so the upload response returns immediately
-                        // and indexing never runs inline on this pooled continuation. No-op when no
-                        // observer is registered; ContentCollections itself takes no indexing/AI/pg dep.
-                        hub.RaiseContentUploaded(qualifiedCollectionName, filePath);
-
-                        return JsonSerializer.Serialize(new
+                    // Pure composition — the save leaf runs on the collection's own IIoPool.
+                    return contentService.GetCollection(qualifiedCollectionName)
+                        .SelectMany(collection =>
                         {
-                            status = "Uploaded",
-                            path = $"{resolution.Prefix}/{collectionName}/{filePath}",
-                            bytes = bytes.Length,
-                        }, hub.JsonSerializerOptions);
-                    });
+                            if (collection == null)
+                                return Observable.Return($"Error: failed to initialize collection '{qualifiedCollectionName}'.");
+
+                            var dir = Path.GetDirectoryName(filePath)?.Replace('\\', '/') ?? "";
+                            var fileName = Path.GetFileName(filePath);
+                            var ms = new MemoryStream(bytes);
+                            return collection.SaveFile(dir, fileName, ms)
+                                .Finally(ms.Dispose)
+                                .Select(_ =>
+                                {
+                                    // Post-upload seam: notify registered observers (e.g. the content-indexing
+                                    // pipeline) AFTER the save succeeds. Fire-and-forget — each observer starts its
+                                    // own off-band work (an Activity), so the upload response returns immediately
+                                    // and indexing never runs inline on this continuation. No-op when no
+                                    // observer is registered; ContentCollections itself takes no indexing/AI/pg dep.
+                                    hub.RaiseContentUploaded(qualifiedCollectionName, filePath);
+
+                                    return JsonSerializer.Serialize(new
+                                    {
+                                        status = "Uploaded",
+                                        path = $"{resolution.Prefix}/{collectionName}/{filePath}",
+                                        bytes = bytes.Length,
+                                    }, hub.JsonSerializerOptions);
+                                });
+                        });
                 });
         })
         .Catch((Exception ex) =>
@@ -2095,30 +2098,29 @@ public class MeshOperations
                         return Observable.Return("Error: content service not configured on the hub.");
 
                     contentService.AddConfiguration(collectionConfig);
-                    var ioPool = hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.FileSystem) ?? IoPool.Unbounded;
-                    return ioPool.Run(async ct =>
-                    {
-                        var collection = await contentService.GetCollectionAsync(qualifiedCollectionName, ct).ConfigureAwait(false);
-                        if (collection == null)
-                            return $"Error: failed to initialize collection '{qualifiedCollectionName}'.";
-
-                        var items = new List<object>();
-                        await foreach (var item in collection.GetCollectionItems(dir, ct).ConfigureAwait(false))
-                            items.Add(item switch
-                            {
-                                FolderItem f => (object)new { kind = "folder", name = f.Name, path = f.Path, itemCount = f.ItemCount },
-                                FileItem fi => new { kind = "file", name = fi.Name, path = fi.Path, lastModified = fi.LastModified },
-                                _ => new { kind = "unknown", name = item.Name, path = item.Path },
-                            });
-
-                        return JsonSerializer.Serialize(new
+                    // Pure composition — the listing leaf runs on the collection's own IIoPool.
+                    return contentService.GetCollection(qualifiedCollectionName)
+                        .SelectMany(collection =>
                         {
-                            collection = qualifiedCollectionName,
-                            path = dir,
-                            editable = collectionConfig.IsEditable,
-                            items,
-                        }, hub.JsonSerializerOptions);
-                    });
+                            if (collection == null)
+                                return Observable.Return($"Error: failed to initialize collection '{qualifiedCollectionName}'.");
+
+                            return collection.GetCollectionItems(dir)
+                                .Select(item => item switch
+                                {
+                                    FolderItem f => (object)new { kind = "folder", name = f.Name, path = f.Path, itemCount = f.ItemCount },
+                                    FileItem fi => new { kind = "file", name = fi.Name, path = fi.Path, lastModified = fi.LastModified },
+                                    _ => new { kind = "unknown", name = item.Name, path = item.Path },
+                                })
+                                .ToArray()
+                                .Select(items => JsonSerializer.Serialize(new
+                                {
+                                    collection = qualifiedCollectionName,
+                                    path = dir,
+                                    editable = collectionConfig.IsEditable,
+                                    items,
+                                }, hub.JsonSerializerOptions));
+                        });
                 });
         })
         .Catch((Exception ex) =>
@@ -2585,9 +2587,9 @@ public class MeshOperations
                                 .Select(c => (nc.NodePath, Config: c)))
                             .ToList();
 
-                        // 4. Gather file bytes OFF the hub (async stream reads on the IO pool), then
+                        // 4. Gather file bytes OFF the hub (the collections' own IO pools), then
                         //    5. build the ZIP on the pool (pure CPU/memory) — never on the action block.
-                        return pool.Invoke(ct => GatherContentFilesAsync(targets, ct))
+                        return GatherContentFiles(targets)
                             .SelectMany(files =>
                                 pool.InvokeBlocking(_ => BuildExportZip(root, nodes, files)));
                     });
@@ -2756,65 +2758,53 @@ public class MeshOperations
     }
 
     /// <summary>
-    /// Reads every file from each (node, editable collection) target into memory. Runs on the
-    /// file-system <see cref="IIoPool"/> (async stream reads). Dedupes by resolved physical location so
-    /// an inherited collection reported by multiple descendants is exported once, attributed to the
-    /// first (ancestor) node that reported it.
+    /// Reads every file from each (node, editable collection) target into memory — pure reactive
+    /// composition; every read leaf runs on the owning collection's <see cref="IIoPool"/>. Targets
+    /// are processed strictly sequentially (Concat) so the dedup-by-resolved-physical-location set
+    /// attributes an inherited collection (reported by multiple descendants) to the first
+    /// (ancestor) node that reported it.
     /// </summary>
-    private async Task<List<ExportedFile>> GatherContentFilesAsync(
-        IReadOnlyList<(string NodePath, ContentCollectionConfig Config)> targets, CancellationToken ct)
+    private IObservable<List<ExportedFile>> GatherContentFiles(
+        IReadOnlyList<(string NodePath, ContentCollectionConfig Config)> targets)
     {
-        var result = new List<ExportedFile>();
         var contentService = hub.ServiceProvider.GetService<IContentService>();
         if (contentService is null || targets.Count == 0)
-            return result;
+            return Observable.Return(new List<ExportedFile>());
 
         var seen = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var (nodePath, config) in targets)
-        {
-            var collectionName = config.Name!;
-            var qualified = $"{nodePath}/{collectionName}";
-            // Register the config on this hub's content service (same mechanism as Upload) so the
-            // collection resolves locally against its backing store (FileSystem BasePath, blob, …).
-            contentService.AddConfiguration(config with { Name = qualified, Address = new Address(nodePath) });
-            var collection = await contentService.GetCollectionAsync(qualified, ct).ConfigureAwait(false);
-            if (collection is null)
-                continue;
-
-            await foreach (var file in EnumerateAllFilesAsync(collection, string.Empty, ct).ConfigureAwait(false))
+        return targets
+            .Select(target => Observable.Defer(() =>
             {
-                var rel = file.Path.TrimStart('/');
-                var dedupKey = (config.BasePath ?? qualified) + "|" + rel;
-                if (!seen.Add(dedupKey))
-                    continue;
-
-                var stream = await collection.GetContentAsync(file.Path, ct).ConfigureAwait(false);
-                if (stream is null)
-                    continue;
-                byte[] bytes;
-                await using (stream.ConfigureAwait(false))
-                {
-                    using var ms = new MemoryStream();
-                    await stream.CopyToAsync(ms, ct).ConfigureAwait(false);
-                    bytes = ms.ToArray();
-                }
-                result.Add(new ExportedFile(nodePath, collectionName, rel, bytes));
-            }
-        }
-        return result;
+                var (nodePath, config) = target;
+                var collectionName = config.Name!;
+                var qualified = $"{nodePath}/{collectionName}";
+                // Register the config on this hub's content service (same mechanism as Upload) so the
+                // collection resolves locally against its backing store (FileSystem BasePath, blob, …).
+                contentService.AddConfiguration(config with { Name = qualified, Address = new Address(nodePath) });
+                return contentService.GetCollection(qualified)
+                    .SelectMany(collection => collection is null
+                        ? Observable.Empty<ExportedFile>()
+                        : EnumerateAllFiles(collection, string.Empty)
+                            .Where(file => seen.Add((config.BasePath ?? qualified) + "|" + file.Path.TrimStart('/')))
+                            .Select(file => collection.GetContentBytes(file.Path)
+                                .Where(bytes => bytes is not null)
+                                .Select(bytes => new ExportedFile(
+                                    nodePath, collectionName, file.Path.TrimStart('/'), bytes!)))
+                            .Concat());
+            }))
+            .ToObservable()
+            .Concat()
+            .ToList()
+            .Select(files => files.ToList());
     }
 
     /// <summary>Recursively enumerates every file under <paramref name="dir"/> in a collection
-    /// (files first at each level, then recurse into sub-folders).</summary>
-    private static async IAsyncEnumerable<FileItem> EnumerateAllFilesAsync(
-        ContentCollection collection, string dir, [EnumeratorCancellation] CancellationToken ct)
-    {
-        await foreach (var file in collection.GetFiles(dir, ct).ConfigureAwait(false))
-            yield return file;
-        await foreach (var folder in collection.GetFolders(dir, ct).ConfigureAwait(false))
-            await foreach (var file in EnumerateAllFilesAsync(collection, folder.Path, ct).ConfigureAwait(false))
-                yield return file;
-    }
+    /// (files first at each level, then recurse into sub-folders, strictly sequential).</summary>
+    private static IObservable<FileItem> EnumerateAllFiles(ContentCollection collection, string dir)
+        => collection.GetFiles(dir)
+            .Concat(collection.GetFolders(dir)
+                .Select(folder => EnumerateAllFiles(collection, folder.Path))
+                .Concat());
 
     /// <summary>Builds the export ZIP (manifest.json + files/ tree) from the gathered nodes and file
     /// bytes. Pure CPU/memory — runs on the <see cref="IIoPool"/> blocking scheduler.</summary>

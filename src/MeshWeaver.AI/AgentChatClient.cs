@@ -524,21 +524,22 @@ public class AgentChatClient : IAgentChat
                         {
                             // Load binary from the node's default content collection (the
                             // `content:` UCR prefix addresses the default collection by design).
-                            var effectivePath = nodePath ?? Context?.Path;
-                            var stream = await contentService.GetContentAsync(
-                                ContentCollectionsExtensions.DefaultCollectionName, fileName).ConfigureAwait(false);
-                            if (stream != null)
+                            // The whole read runs inside the collection's IIoPool leaf; this
+                            // agent-round async context awaits the replayed emission only —
+                            // ReplaySubject-backed, so the bridge cannot deadlock.
+                            var bytes = await contentService
+                                .GetCollection(ContentCollectionsExtensions.DefaultCollectionName)
+                                .SelectMany(coll => coll is null
+                                    ? Observable.Return<byte[]?>(null)
+                                    : coll.GetContentBytes(fileName))
+                                .Take(1);
+                            if (bytes != null)
                             {
-                                using (stream)
-                                {
-                                    using var ms = new MemoryStream();
-                                    await stream.CopyToAsync(ms).ConfigureAwait(false);
-                                    var mediaType = ExtensionToMediaType.GetValueOrDefault(ext, "application/octet-stream");
-                                    binaryAttachments = binaryAttachments.Add(
-                                        new DataContent(ms.ToArray(), mediaType) { Name = fileName });
-                                    logger.LogInformation("Loaded binary attachment: {FileName} ({MediaType}, {Size} bytes)",
-                                        fileName, mediaType, ms.Length);
-                                }
+                                var mediaType = ExtensionToMediaType.GetValueOrDefault(ext, "application/octet-stream");
+                                binaryAttachments = binaryAttachments.Add(
+                                    new DataContent(bytes, mediaType) { Name = fileName });
+                                logger.LogInformation("Loaded binary attachment: {FileName} ({MediaType}, {Size} bytes)",
+                                    fileName, mediaType, bytes.Length);
                             }
                             continue;
                         }

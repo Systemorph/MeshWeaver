@@ -1,4 +1,5 @@
-﻿@using Appearance = Microsoft.FluentUI.AspNetCore.Components.Appearance
+﻿@using System.Reactive.Linq
+@using Appearance = Microsoft.FluentUI.AspNetCore.Components.Appearance
 @implements IDialogContentComponent<DeleteModel>
 
 <div class="delete-confirmation">
@@ -22,7 +23,7 @@
 <FluentDialogFooter>
     <FluentButton Appearance="Appearance.Accent"
                   Disabled="@(Content is null || !Content.HasItems)"
-                  OnClick="@DeleteAsync">
+                  OnClick="@Delete">
         Delete
     </FluentButton>
     <FluentButton Appearance="Appearance.Neutral"
@@ -38,13 +39,17 @@
     [CascadingParameter]
     public FluentDialog Dialog { get; set; } = default!;
 
-    private async Task DeleteAsync()
+    private void Delete()
     {
-        if (Content.HasItems)
-        {
-            await Content.DeleteAsync();
-            await Dialog.CloseAsync(Content);
-        }
+        if (!Content.HasItems)
+            return;
+        // Subscribe-only: the deletes run sequentially on the collection's pool. Close on the
+        // terminal emission so Content.Errors is fully populated for the caller (per-item
+        // failures are captured in the model, so onError only fires on infrastructure faults).
+        Content.Delete().Subscribe(
+            _ => { },
+            ex => _ = InvokeAsync(() => Dialog.CloseAsync(Content)),
+            () => _ = InvokeAsync(() => Dialog.CloseAsync(Content)));
     }
 
     private async Task CancelAsync()

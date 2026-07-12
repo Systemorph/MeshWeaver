@@ -67,16 +67,17 @@ public class ContentIndexingPipelineTest(ITestOutputHelper output) : MonolithMes
 
     private static string Sha256Hex(byte[] bytes) => Convert.ToHexStringLower(SHA256.HashData(bytes));
 
-    /// <summary>Saves a file into the collection exactly as the upload handler does (via the collection's SaveFileAsync).</summary>
+    /// <summary>Saves a file into the collection exactly as the upload handler does (via the collection's SaveFile).</summary>
     private async Task SaveFile(string filePath, byte[] bytes)
     {
         var contentService = Mesh.ServiceProvider.GetRequiredService<IContentService>();
-        var collection = await contentService.GetCollectionAsync(Collection, TestContext.Current.CancellationToken);
+        var collection = await contentService.GetCollection(Collection)
+            .FirstAsync().ToTask(TestContext.Current.CancellationToken);
         collection.Should().NotBeNull();
         var dir = Path.GetDirectoryName(filePath)?.Replace('\\', '/') ?? "";
         var fileName = Path.GetFileName(filePath);
         using var ms = new MemoryStream(bytes);
-        await collection!.SaveFileAsync(dir, fileName, ms);
+        await collection!.SaveFile(dir, fileName, ms).ToTask(TestContext.Current.CancellationToken);
     }
 
     /// <summary>Reads the Document node back, polling until the typed content lands (write is debounced/persisted).</summary>

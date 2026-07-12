@@ -1,4 +1,5 @@
 ﻿using System.Collections.Concurrent;
+using System.Reactive.Linq;
 using MeshWeaver.Messaging;
 using MeshWeaver.Reactive;
 using Microsoft.Extensions.DependencyInjection;
@@ -17,8 +18,11 @@ public class ContentService : IContentService
     private readonly IMessageHub hub;
     private readonly AccessService accessService;
     private readonly ConcurrentDictionary<string, ContentCollectionConfig> collectionConfigs;
-    private readonly Dictionary<string, Task<ContentCollection?>> collections = new();
-    private readonly Lock initializeLock = new();
+    // Promise cache: each entry is a ReplaySubject-backed one-shot (ContentCollection.Initialize
+    // via Pool.Run) — the first subscriber triggers creation, every later one replays it.
+    // Values are observables, never resolved single values, so late subscribers and concurrent
+    // first-callers share exactly one initialization.
+    private readonly ConcurrentDictionary<string, IObservable<ContentCollection?>> collections = new();
 
     // Cache for resolved mapped configs
     private readonly ConcurrentDictionary<string, ContentCollectionConfig> resolvedMappedConfigs = new();
@@ -166,32 +170,30 @@ public class ContentService : IContentService
         return resolvedConfig;
     }
 
-    private async Task<ContentCollection?> CreateCollectionAsync(ContentCollectionConfig config, CancellationToken cancellationToken)
+    /// <summary>
+    /// Composes provider creation + collection initialization as a cold observable — no async
+    /// bridging. <see cref="ContentCollection.Initialize"/> is itself the ReplaySubject-backed,
+    /// pool-run promise cache, so the parse runs only when this pipeline is first subscribed.
+    /// </summary>
+    private IObservable<ContentCollection?> CreateCollection(ContentCollectionConfig config)
     {
         var factory = hub.ServiceProvider.GetKeyedService<IStreamProviderFactory>(config.SourceType);
         if (factory is null)
-            throw new ArgumentException($"Unknown source type {config.SourceType}");
+            return Observable.Throw<ContentCollection?>(
+                new ArgumentException($"Unknown source type {config.SourceType}"));
 
-        // Bridge the IObservable<IStreamProvider> into the cached Task<ContentCollection?>
-        // surface via await foreach + early return — this is a one-shot creation, the
-        // Task is the framework's caching boundary (Dictionary<string, Task<...>>).
-        ContentCollection? collection = null;
-        await foreach (var provider in factory.Create(config).ToAsyncEnumerableSequence(cancellationToken))
-        {
-            collection = new ContentCollection(config, provider, hub);
-            await collection.InitializeAsync(cancellationToken);
-            return collection;
-        }
-        return collection;
+        return factory.Create(config)
+            .Take(1)
+            .Select(provider => new ContentCollection(config, provider, hub))
+            .SelectMany(collection => collection.Initialize().Select(_ => (ContentCollection?)collection));
     }
 
-
     /// <inheritdoc />
-    public async Task<ContentCollection?> GetCollectionAsync(string collection, CancellationToken ct)
+    public IObservable<ContentCollection?> GetCollection(string collection)
     {
         // Try local collections first (matches GetCollectionConfig's local-first pattern)
         if (collections.TryGetValue(collection, out var localCollection))
-            return await localCollection;
+            return localCollection;
 
         var config = collectionConfigs.GetValueOrDefault(collection);
         if (config is not null)
@@ -201,45 +203,36 @@ public class ContentService : IContentService
             {
                 config = ResolveMappedConfig(config);
                 if (config == null)
-                    return null;
+                    return Observable.Return<ContentCollection?>(null);
             }
-            return await InitializeCollectionAsync(config, ct);
+            return InitializeCollection(config);
         }
 
         // Delegate to parent if not found locally
         var parent = GetParentContentService();
         if (parent is not null)
-            return await parent.GetCollectionAsync(collection, ct);
+            return parent.GetCollection(collection);
 
-        return null;
+        return Observable.Return<ContentCollection?>(null);
     }
 
-
-    private Task<ContentCollection?> InitializeCollectionAsync(ContentCollectionConfig config, CancellationToken cancellationToken = default)
+    private IObservable<ContentCollection?> InitializeCollection(ContentCollectionConfig config)
     {
-
-        Task<ContentCollection?>? initTask;
-        lock (initializeLock)
-        {
-            if (collections.TryGetValue(config.Name, out var localCollection))
-                return localCollection;
-            collectionConfigs[config.Name] = config;
-            // Check again inside lock
-            if (collections.TryGetValue(config.Name, out var existing))
-                return existing;
-
-            lock (initializeLock)
-            {
-                if (collections.TryGetValue(config.Name, out existing))
-                    return existing;
-
-                // Create a new initialization task
-                initTask = InstantiateCollectionAsync(config, cancellationToken);
-                collections[config.Name] = initTask;
-                return initTask;
-            }
-        }
-
+        collectionConfigs[config.Name] = config;
+        // Per-name single-flight via GetOrAdd; the entry replays creation to every subscriber.
+        // A failed creation logs, evicts its cache entry (so the next access retries with a
+        // fresh pipeline) and resolves null — callers see "collection not found", not a fault
+        // replayed forever.
+        return collections.GetOrAdd(config.Name, name =>
+            CreateCollection(config)
+                .Catch((Exception ex) =>
+                {
+                    logger.LogWarning(ex, "Creating content collection '{Collection}' failed", name);
+                    collections.TryRemove(name, out _);
+                    return Observable.Return<ContentCollection?>(null);
+                })
+                .Replay(1)
+                .AutoConnect(1));
     }
 
     /// <inheritdoc />
@@ -306,42 +299,21 @@ public class ContentService : IContentService
         if (existing != null
             && !string.IsNullOrEmpty(contentCollectionConfig.BasePath)
             && existing.BasePath != contentCollectionConfig.BasePath)
-            this.collections.Remove(name);
-    }
-
-    private Task<ContentCollection?> InstantiateCollectionAsync(ContentCollectionConfig config, CancellationToken cancellationToken)
-    {
-        try
-        {
-            // Use the async factory to create the collection
-            var newCollection = CreateCollectionAsync(config, cancellationToken);
-
-            // Register it
-            collections[config.Name] = newCollection;
-
-            return newCollection;
-        }
-        catch
-        {
-            return Task.FromResult<ContentCollection?>(null);
-        }
-    }
-
-
-
-    /// <inheritdoc />
-    public async Task<Stream?> GetContentAsync(string collection, string path, CancellationToken ct = default)
-    {
-        var coll = await GetCollectionAsync(collection, ct);
-        if (coll == null)
-            throw new ArgumentException($"Collection '{collection}' not found");
-        return await coll.GetContentAsync(path, ct);
+            this.collections.TryRemove(name, out _);
     }
 
     /// <inheritdoc />
-    public IAsyncEnumerable<ContentCollection> GetCollectionsAsync()
-    {
-        return collections.Values.ToAsyncEnumerable().Select(async x => await x).OfType<ContentCollection>();
-    }
+    public IObservable<Stream?> GetContent(string collection, string path)
+        => GetCollection(collection)
+            .SelectMany(coll => coll is null
+                ? Observable.Throw<Stream?>(new ArgumentException($"Collection '{collection}' not found"))
+                : coll.GetContent(path));
+
+    /// <inheritdoc />
+    public IObservable<ContentCollection> GetCollections()
+        => collections.Values.ToArray()
+            .Merge()
+            .Where(c => c is not null)
+            .Select(c => c!);
 
 }

@@ -81,17 +81,15 @@ public static class FutuReDataLoader
             });
 
         // CSV I/O on the bounded FileSystem IoPool — no Observable.FromAsync, no async/await.
-        // Invoke() runs the genuinely-async content fetch on the pool's semaphore-gated
-        // Scheduler.Default: the ThreadPool thread is released during the await, so the
-        // continuation can't re-enter a congested hub action block (the cause of the
-        // intermittent 50s render stall). InvokeBlocking() runs the sync StreamReader read
-        // + CSV parse on the pool's dedicated limited-concurrency scheduler, so the blocking
-        // read can't trigger ThreadPool thread-injection that starves the grain schedulers.
+        // The content fetch runs on the collection's own pool (the whole IContentService surface
+        // is pooled observables). InvokeBlocking() runs the sync StreamReader read + CSV parse on
+        // the pool's dedicated limited-concurrency scheduler, so the blocking read can't trigger
+        // ThreadPool thread-injection that starves the grain schedulers.
         // Both are cold IObservables — reactive end-to-end, no async state machine.
         var ioPool = workspace.Hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.FileSystem)
                      ?? IoPool.Unbounded;
-        var csvRowsObs = ioPool
-            .Invoke(ct => contentService.GetContentAsync("attachments", "datacube.csv", ct))
+        var csvRowsObs = contentService
+            .GetContent("attachments", "datacube.csv")
             .SelectMany(stream => stream is null
                 ? Observable.Return(new List<FutuReDataCube>())
                 : ioPool.InvokeBlocking(_ =>

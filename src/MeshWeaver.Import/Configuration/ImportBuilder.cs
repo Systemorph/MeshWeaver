@@ -2,6 +2,7 @@
 using System.Collections.Immutable;
 using System.ComponentModel.DataAnnotations;
 using System.Linq.Expressions;
+using System.Reactive.Linq;
 using System.Reflection;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
@@ -170,7 +171,11 @@ public record ImportBuilder
         if (contentService == null)
             throw new ImportException("IContentService is not registered. Ensure ContentCollections are configured.");
 
-        var stream = await contentService.GetContentAsync(collectionSource.Collection, collectionSource.Path);
+        // The read leaf runs on the collection's IIoPool; this Task-shaped stream-provider leaf
+        // (the import pipeline's own contract, already off the hub) only awaits the replayed
+        // emission — cannot deadlock.
+        var stream = await contentService.GetContent(collectionSource.Collection, collectionSource.Path)
+            .Take(1);
         if (stream == null)
             throw new ImportException($"Could not find content at collection '{collectionSource.Collection}' path '{collectionSource.Path}'");
 

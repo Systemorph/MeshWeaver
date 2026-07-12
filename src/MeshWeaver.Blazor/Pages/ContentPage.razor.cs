@@ -55,11 +55,8 @@ public partial class ContentPage : ComponentBase, IDisposable
     [Inject] public PortalApplication PortalApplication { get; set; } = null!;
     private IContentService ContentService => PortalApplication.Hub.ServiceProvider.GetRequiredService<IContentService>();
 
-    [Inject] private IoPoolRegistry? IoPoolRegistry { get; set; }
 
     // FileSystem I/O pool — keeps the genuine file/content I/O off the Blazor circuit
-    // thread. Property named Pool (not IoPool) to avoid clashing with the IoPool type.
-    private IIoPool Pool => IoPoolRegistry?.Get(IoPoolNames.FileSystem) ?? global::MeshWeaver.Mesh.Threading.IoPool.Unbounded;
 
     /// <summary>
     /// Parses the <c>FullPath</c> route parameter and initiates content loading by resolving the
@@ -141,9 +138,9 @@ public partial class ContentPage : ComponentBase, IDisposable
             });
         }
 
-        // ContentService.GetCollectionAsync is a content-I/O leaf; run it on the
-        // FileSystem I/O pool so it never executes on the Blazor circuit thread.
-        Pool.Run(ct => ContentService.GetCollectionAsync(ResolvedCollection!, ct))
+        // The collection surface is observable end-to-end — its I/O leaves run on the
+        // collection's own pool, never on the Blazor circuit thread; this just subscribes.
+        ContentService.GetCollection(ResolvedCollection!)
             .Subscribe(collection =>
             {
                 if (collection is null)
@@ -167,7 +164,7 @@ public partial class ContentPage : ComponentBase, IDisposable
                 }
                 else if (ContentType != "text/markdown")
                 {
-                    Pool.Run(ct => collection.GetContentAsync(ResolvedPath!, ct))
+                    collection.GetContent(ResolvedPath!)
                         .Subscribe(content =>
                         {
                             Content = content;

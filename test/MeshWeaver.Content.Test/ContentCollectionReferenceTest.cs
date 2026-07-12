@@ -387,11 +387,11 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
         Output.WriteLine($"Added Systemorph config with qualified name: {systemorphQualifiedConfig.Name}");
 
         // Verify we can get both collections separately
-        var acmeCollection = await MeshWeaver.Mesh.Threading.IoPool.Unbounded.Invoke(ct => contentService.GetCollectionAsync($"{acmeAddress}/attachments", ct)).Should().Emit();
+        var acmeCollection = await contentService.GetCollection($"{acmeAddress}/attachments").Should().Emit();
         acmeCollection.Should().NotBeNull("ACME attachments collection should be retrievable");
         Output.WriteLine($"ACME collection retrieved: {acmeCollection?.Collection}");
 
-        var systemorphCollection = await MeshWeaver.Mesh.Threading.IoPool.Unbounded.Invoke(ct => contentService.GetCollectionAsync($"{systemorphAddress}/attachments", ct)).Should().Emit();
+        var systemorphCollection = await contentService.GetCollection($"{systemorphAddress}/attachments").Should().Emit();
         systemorphCollection.Should().NotBeNull("Systemorph attachments collection should be retrievable");
         Output.WriteLine($"Systemorph collection retrieved: {systemorphCollection?.Collection}");
 

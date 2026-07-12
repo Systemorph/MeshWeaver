@@ -1,4 +1,6 @@
-﻿using MeshWeaver.ContentCollections;
+using System.Reactive;
+using System.Reactive.Linq;
+using MeshWeaver.ContentCollections;
 
 namespace MeshWeaver.Blazor.FileExplorer;
 
@@ -23,33 +25,30 @@ public class DeleteModel(ContentCollection collection, IEnumerable<CollectionIte
         ? $"Are you sure you want to delete '{ItemsToDelete.First().Name}'?"
         : $"Are you sure you want to delete {Count} items?";
 
-    /// <summary>Errors accumulated during <c>DeleteAsync</c>; one entry per item that failed to delete.</summary>
+    /// <summary>Errors accumulated during <c>Delete</c>; one entry per item that failed to delete.</summary>
     public List<string> Errors { get; } = new();
 
     /// <summary>
-    /// Iterates over <c>ItemsToDelete</c> and removes each via the collection's delete API.
-    /// Failures are captured in <c>Errors</c> rather than propagated so partial success is visible.
+    /// Deletes each item in <c>ItemsToDelete</c> sequentially (Concat) through the collection's
+    /// pooled write surface. Failures are captured in <c>Errors</c> rather than propagated so
+    /// partial success is visible. Cold — runs on Subscribe; emits one Unit when finished.
     /// </summary>
-    public async Task DeleteAsync()
+    public IObservable<Unit> Delete()
     {
         Errors.Clear();
-        foreach (var item in ItemsToDelete)
-        {
-            try
-            {
-                if (item is FolderItem folder)
+        return ItemsToDelete.ToObservable()
+            .Select(item => (item switch
                 {
-                    await collection.DeleteFolderAsync(folder.Path);
-                }
-                else if (item is FileItem file)
+                    FolderItem folder => collection.DeleteFolder(folder.Path),
+                    FileItem file => collection.DeleteFile(file.Path),
+                    _ => Observable.Return(Unit.Default),
+                })
+                .Catch((Exception ex) =>
                 {
-                    await collection.DeleteFileAsync(file.Path);
-                }
-            }
-            catch (Exception ex)
-            {
-                Errors.Add($"Failed to delete '{item.Name}': {ex.Message}");
-            }
-        }
+                    Errors.Add($"Failed to delete '{item.Name}': {ex.Message}");
+                    return Observable.Return(Unit.Default);
+                }))
+            .Concat()
+            .LastOrDefaultAsync();
     }
 }
