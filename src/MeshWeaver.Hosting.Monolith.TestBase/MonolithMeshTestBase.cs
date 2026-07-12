@@ -622,6 +622,14 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     private long _instanceInitRssBytes;
     private long _instanceInitRssAnonBytes;
 
+    // The exact IHostedService instances InitializeAsync started, so DisposeAsync can stop
+    // THEM (not a fresh DI resolution) in reverse order BEFORE Mesh.Dispose() — mirroring the
+    // generic host, which stops hosted services before container teardown. Without this stop,
+    // a hosted service with an in-flight mesh request at test end (e.g. an InstanceSyncWorker
+    // drain holding a GetMeshNode callback) races disposal and trips the Quiescing
+    // leaked-callback guard (CI run 29197199611, InstanceSyncPushTest).
+    private readonly List<Microsoft.Extensions.Hosting.IHostedService> _startedHostedServices = new();
+
     // Watchdog: track when the test method actually started so DisposeAsync
     // can fail loudly on silent deadlocks. xUnit v3's [Fact(Timeout=N)] is
     // cooperative cancellation — if a test ignores the ct, the await blocks
@@ -666,6 +674,7 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
                 .GetServices<Microsoft.Extensions.Hosting.IHostedService>())
             {
                 await hosted.StartAsync(TestContext.Current.CancellationToken);
+                _startedHostedServices.Add(hosted);
             }
             TestPhaseTrace(name, "INIT_HOSTED_SERVICES_STARTED", sw.ElapsedMilliseconds);
 
@@ -1113,6 +1122,30 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
 
         try
         {
+            // Stop the hosted services InitializeAsync started — in reverse order, BEFORE
+            // Mesh.Dispose(), exactly like the generic host stops hosted services before
+            // container teardown. A still-running hosted service (change-feed listener,
+            // InstanceSync worker mid-drain, …) can hold an in-flight Observe callback on a
+            // hub; disposing the mesh underneath it leaves that callback pending and the
+            // Quiescing leaked-callback guard below fails the test for a lifecycle race the
+            // production host can never hit. Per-service catch: a failing StopAsync must not
+            // mask the disposal diagnostics that follow.
+            using (var stopCts = new CancellationTokenSource(DisposeTimeout))
+            {
+                for (var i = _startedHostedServices.Count - 1; i >= 0; i--)
+                {
+                    var hosted = _startedHostedServices[i];
+                    try { await hosted.StopAsync(stopCts.Token); }
+                    catch (Exception ex)
+                    {
+                        TestPhaseTrace(testName, "DISPOSE_HOSTED_STOP_ERROR", sw.ElapsedMilliseconds,
+                            $"{hosted.GetType().Name}: {ex.GetType().Name}: {ex.Message}");
+                    }
+                }
+                _startedHostedServices.Clear();
+            }
+            TestPhaseTrace(testName, "DISPOSE_HOSTED_SERVICES_STOPPED", sw.ElapsedMilliseconds);
+
             FileOutput.WriteLine($"[DISPOSE] {testName}: Mesh.Dispose() invoking on {Mesh.Address}");
             // Capture the mesh-scoped teardown services BEFORE disposal — once Dispose()
             // begins, resolving DI races the scope teardown. We drain them after
