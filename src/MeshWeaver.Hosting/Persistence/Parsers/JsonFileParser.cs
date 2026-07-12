@@ -24,16 +24,16 @@ public class JsonFileParser : IFileFormatParser
     public IReadOnlyList<string> SupportedExtensions => [".json"];
 
     /// <inheritdoc />
+    /// <remarks>
+    /// A malformed document THROWS (<see cref="JsonException"/>) rather than returning null:
+    /// <see cref="FileFormatParserRegistry.TryParse"/> catches per-parser failures and surfaces
+    /// them through its <c>onError</c> callback, so an import pipeline can report the dropped
+    /// file on its activity instead of silently losing the node (the old <c>catch → null</c>
+    /// here swallowed the error before the registry ever saw it).
+    /// </remarks>
     public MeshNode? Parse(string filePath, string content, string relativePath)
     {
-        try
-        {
-            return JsonSerializer.Deserialize<MeshNode>(content, _options);
-        }
-        catch
-        {
-            return null;
-        }
+        return JsonSerializer.Deserialize<MeshNode>(content, _options);
     }
 
     /// <inheritdoc />

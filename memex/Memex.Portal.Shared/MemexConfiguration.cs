@@ -184,6 +184,15 @@ public static class MemexConfiguration
         // granted user ("You've been given <role> access to <node>") through NotificationService.Dispatch
         // (honours their per-category bell/email preferences). Covers every grant path in one place.
         services.AddHostedService<MeshWeaver.Graph.AccessGrantNotifier>();
+        // Startup-error reporter: an extra ILoggerProvider buffers every Error/Critical logged during
+        // the startup window (host build → ApplicationStarted); once the host is up, ONE Admin-partition
+        // bell notification summarizes them so platform admins learn about a degraded boot (failed seed
+        // import, hub-initialization failure, DI fault) without reading pod logs. RLS on the Admin
+        // partition scopes the bell to platform admins. Best-effort end to end — it never fails startup.
+        services.AddSingleton<MeshWeaver.Graph.StartupErrorBuffer>();
+        services.AddSingleton<Microsoft.Extensions.Logging.ILoggerProvider,
+            MeshWeaver.Graph.StartupErrorBufferLoggerProvider>();
+        services.AddHostedService<MeshWeaver.Graph.StartupErrorNotifier>();
         // App-level event-log outbox: durably records every change-feed event (Postgres in prod via
         // PostgreSqlEventLogStore, else in-memory) + replays not-yet-processed entries on startup.
         services.AddMeshEventLog();
