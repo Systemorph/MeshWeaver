@@ -160,6 +160,7 @@ public sealed class OctokitGitHubRepoClient(IoPoolRegistry ioPools, ILogger<Octo
         string repositoryUrl, string commitish, string? subdirectory, string accessToken,
         Func<string, bool> pathFilter)
     {
+        ArgumentNullException.ThrowIfNull(pathFilter);
         var (owner, repo) = ParseRepoUrl(repositoryUrl);
         var client = Client(accessToken);
         var prefix = NormalizePrefix(subdirectory);
