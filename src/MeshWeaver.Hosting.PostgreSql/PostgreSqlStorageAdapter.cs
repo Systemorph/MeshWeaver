@@ -979,13 +979,6 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
     }
 
     /// <summary>
-    /// Builds the same SELECT + scope-clause SQL that the single-query
-    /// <see cref="QueryNodesAsync(ParsedQuery, JsonSerializerOptions, string?, string?, string?, IReadOnlyCollection{string}?, CancellationToken)"/>
-    /// path emits, but returns the (sql, parameters) pair instead of executing.
-    /// Shared by the multi-query UNION path so per-query SQL stays
-    /// bug-compatible with the single-query path.
-    /// </summary>
-    /// <summary>
     /// Resolves the table a query targets: path-based satellite routing first (a "Source"/"_Thread"
     /// segment in the path), then a nodeType-based redirect when the path resolves to mesh_nodes but
     /// the nodeType filter maps to a satellite (satellite tables are the source of truth).
@@ -1110,6 +1103,13 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
         return (sql, parameters);
     }
 
+    /// <summary>
+    /// Builds one table branch's SELECT + scope-clause SQL, returning the (sql, parameters) pair
+    /// instead of executing. Shared by the single-query path, the content-satellite union
+    /// (<see cref="BuildUnionAcrossTablesSql"/>) and the multi-query UNION path so per-branch SQL
+    /// stays bug-compatible everywhere. <paramref name="table"/> selects the branch's table;
+    /// null resolves it from the query (<see cref="ResolveQueryTable"/>).
+    /// </summary>
     private (string Sql, Dictionary<string, object> Parameters) BuildSingleQuerySql(
         ParsedQuery query,
         JsonSerializerOptions options,
