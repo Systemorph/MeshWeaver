@@ -62,6 +62,7 @@ const nextConfig = {
       // /wire is the React-FREE wire-folding leaf — the server snapshot module imports it
       // without dragging the renderer (React context/components) into the RSC server graph.
       "@meshweaver/react/wire": path.resolve(here, "../react/src/live/wire.ts"),
+      "@meshweaver/react/styles": path.resolve(here, "../react/src/render/meshStyles.ts"),
       "@meshweaver/react/core": path.resolve(here, "../react/src/core.ts"),
       "@meshweaver/react": path.resolve(here, "../react/src/index.tsx"),
       "@meshweaver/client-web": path.resolve(here, "../grpc-web/src/index.ts"),

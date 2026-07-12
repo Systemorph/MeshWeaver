@@ -1,16 +1,20 @@
 import type { ComponentType } from "react";
 import {
   Add20Regular,
+  Alert20Regular,
   Delete20Regular,
   Edit20Regular,
   Save20Regular,
   Search20Regular,
   Settings20Regular,
   Home20Regular,
+  Image20Regular,
   Person20Regular,
   PersonAdd20Regular,
+  PersonDelete20Regular,
   PersonSearch20Regular,
   People20Regular,
+  PlugConnected20Regular,
   Document20Regular,
   DocumentText20Regular,
   Folder20Regular,
@@ -26,8 +30,10 @@ import {
   ArrowClockwise20Regular,
   ArrowRotateClockwise20Regular,
   ArrowImport20Regular,
+  BrainCircuit20Regular,
   Checkmark20Regular,
   CheckmarkCircle20Regular,
+  CloudAdd20Regular,
   Dismiss20Regular,
   Info20Regular,
   Warning20Regular,
@@ -35,6 +41,7 @@ import {
   MoreHorizontal20Regular,
   Open20Regular,
   Copy20Regular,
+  Server20Regular,
   Star20Regular,
   Heart20Regular,
   Mail20Regular,
@@ -68,23 +75,29 @@ import {
   Beaker20Regular,
 } from "@fluentui/react-icons";
 import type { Json } from "../area/types.js";
+import { iconNameOf } from "./iconValue.js";
 
 // A curated common-icon map (explicit imports → tree-shakeable). The previous `import * as Icons`
 // pulled the ENTIRE Fluent icon set (~16 MB). MeshWeaver layout-area icons are overwhelmingly these
-// common ones; anything else falls back to nothing (IconView) — extend this map as needed. Keys are
+// common ones (the map covers every FluentIcons.* name the server emits — grep `FluentIcons\.` in
+// src/ + memex/ when extending); anything else falls back to nothing (IconView). Keys are
 // normalized (lowercase, alphanumeric-only), so a Fluent id like "ArrowSync" resolves via "arrowsync".
 const ICONS: Record<string, ComponentType<any>> = {
   add: Add20Regular, plus: Add20Regular, new: Add20Regular,
+  alert: Alert20Regular,
   delete: Delete20Regular, trash: Delete20Regular, remove: Delete20Regular,
   edit: Edit20Regular, pencil: Edit20Regular,
   save: Save20Regular,
   search: Search20Regular,
   settings: Settings20Regular, gear: Settings20Regular,
   home: Home20Regular,
+  image: Image20Regular, picture: Image20Regular,
   person: Person20Regular, user: Person20Regular, account: Person20Regular,
   personadd: PersonAdd20Regular,
+  persondelete: PersonDelete20Regular,
   personsearch: PersonSearch20Regular,
   people: People20Regular, group: People20Regular,
+  plugconnected: PlugConnected20Regular, plug: PlugConnected20Regular,
   document: Document20Regular, file: Document20Regular,
   documenttext: DocumentText20Regular,
   folder: Folder20Regular,
@@ -99,13 +112,16 @@ const ICONS: Record<string, ComponentType<any>> = {
   arrowimport: ArrowImport20Regular, import: ArrowImport20Regular,
   arrowdownload: ArrowDownload20Regular, download: ArrowDownload20Regular,
   arrowupload: ArrowUpload20Regular, upload: ArrowUpload20Regular, export: ArrowUpload20Regular,
+  braincircuit: BrainCircuit20Regular,
   checkmark: Checkmark20Regular, check: Checkmark20Regular, done: Checkmark20Regular,
   checkmarkcircle: CheckmarkCircle20Regular,
+  cloudadd: CloudAdd20Regular,
   dismiss: Dismiss20Regular, close: Dismiss20Regular, cancel: Dismiss20Regular,
   info: Info20Regular, information: Info20Regular,
   warning: Warning20Regular, error: ErrorCircle20Regular,
   more: MoreHorizontal20Regular, morehorizontal: MoreHorizontal20Regular,
   open: Open20Regular, copy: Copy20Regular,
+  server: Server20Regular,
   star: Star20Regular, favorite: Star20Regular,
   heart: Heart20Regular, like: Heart20Regular,
   mail: Mail20Regular, email: Mail20Regular,
@@ -133,27 +149,10 @@ const ICONS: Record<string, ComponentType<any>> = {
   beaker: Beaker20Regular,
 };
 
-/**
- * Extract the icon NAME from either a bare string ("Save", "fluent:Add") or the framework's
- * FluentIcon value shape — the serialized `MeshWeaver.Domain.Icon` `{ provider, id, size, variant }`
- * that nav / group / toolbar icon props carry over the wire (bound to `NavLinkControl.Icon`,
- * `NavGroupSkin.Icon`, `IconControl.Data`, etc.). Without this the object stringified to
- * "[object Object]" and every such icon rendered blank.
- */
-function iconName(value: Json): string {
-  if (value == null) return "";
-  if (typeof value === "string") return value;
-  if (typeof value === "object") {
-    const id = value.id ?? value.Id ?? value.name ?? value.Name;
-    return typeof id === "string" ? id : "";
-  }
-  return "";
-}
-
 /** Resolve a MeshWeaver icon (a name like "Save"/"fluent:Add", or a FluentIcon `{provider,id,...}`
  *  object) to a curated Fluent React icon component; `undefined` when unmapped (renders nothing). */
 export function resolveIconByName(value: Json): ComponentType<any> | undefined {
-  const name = iconName(value);
+  const name = iconNameOf(value);
   if (!name) return undefined;
   const key = name
     .replace(/^(fluent-ui:|fluent:)/i, "")

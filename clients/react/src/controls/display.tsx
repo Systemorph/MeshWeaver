@@ -11,7 +11,7 @@ import { useAreaSourceFactory, type EmbeddedAreaHandle } from "../render/embedde
 import { useMeshOps } from "../live/meshOps.js";
 import { controlClass, controlStyle, mergeClass } from "../render/style.js";
 import { str, useClick, useText } from "./common.js";
-import { resolveIconByName } from "./icon.js";
+import { MeshIcon } from "./MeshIcon.js";
 import {
   cellSubmissions,
   parseInteractiveMarkdown,
@@ -69,60 +69,37 @@ function BadgeView({ control }: { control: UiControl }): ReactNode {
   return <Badge appearance="filled" color="brand">{useText(control.data)}</Badge>;
 }
 
-/** True when the value is an inline SVG DOCUMENT (`<svg …>…</svg>`), the shape node Icons and the
- *  IconGenerator produce — as opposed to an icon NAME, a URL, or a data URI. */
-export function isInlineSvg(value: string): boolean {
-  return /^\s*<svg[\s>]/i.test(value);
-}
-
-/**
- * Defense-in-depth for inline-SVG injection: node Icons come from the (trusted) IconGenerator, but
- * an Icon field CAN be user-authored, and SVG supports active content. Strip the obvious vectors —
- * `<script>`/`<foreignObject>` elements, `on*` event handlers, and `javascript:` hrefs — before
- * injecting. (The Blazor side trusts the same field via MarkupString; this is a strictly safer
- * mirror, not a full sanitizer.)
- */
-export function sanitizeInlineSvg(svg: string): string {
-  return svg
-    .replace(/<script[\s\S]*?<\/script\s*>/gi, "")
-    .replace(/<foreignObject[\s\S]*?<\/foreignObject\s*>/gi, "")
-    .replace(/\son\w+\s*=\s*"[^"]*"/gi, "")
-    .replace(/\son\w+\s*=\s*'[^']*'/gi, "")
-    .replace(/\son\w+\s*=\s*[^\s>]+/gi, "")
-    .replace(/((?:xlink:)?href)\s*=\s*(["'])\s*javascript:[^"']*\2/gi, "");
-}
+// Icon-value classification + sanitization live in iconValue.ts (shared with shells and the RN
+// pack); re-exported here because tests and older imports reach them via display.js.
+export { isInlineSvg, sanitizeInlineSvg } from "./iconValue.js";
 
 function IconView({ control }: { control: UiControl }): ReactNode {
-  // The raw value is EITHER an inline-SVG / URL / name string OR a FluentIcon {provider,id,…} object.
+  // The raw value is EITHER an inline-SVG / URL / emoji / name string OR a FluentIcon
+  // {provider,id,…} object — MeshIcon dispatches all of them (the "SVGs are not displayed" bug
+  // was each call site classifying only a subset).
   const raw = useResolve(control.data);
-  const name = str(raw);
   const onClick = useClick(control);
-  const cursor = onClick ? "pointer" : undefined;
-  // Inline SVG markup (node Icons, generated avatars) must render as an SVG element — NOT as
-  // escaped text (the "SVGs are not displayed" bug: `<span>{"<svg …>"}</span>` shows the source).
-  if (isInlineSvg(name))
-    return (
-      <span
-        onClick={onClick}
-        style={{ cursor, display: "inline-flex", width: 20, height: 20 }}
-        className="mw-inline-svg"
-        dangerouslySetInnerHTML={{ __html: sanitizeInlineSvg(name) }}
-      />
-    );
-  const Cmp = resolveIconByName(raw);
-  if (Cmp) return <Cmp onClick={onClick} style={{ cursor }} />;
-  // A FluentIcon object we couldn't map → render nothing (never the "[object Object]" fallback).
-  if (raw != null && typeof raw === "object") return null;
-  // URL or data-URI → image; anything else → text.
-  if (/^https?:|^data:|\.(svg|png|jpg|jpeg|gif|webp)$/i.test(name))
-    return <img src={name} alt="" width={20} height={20} onClick={onClick} />;
-  return <span onClick={onClick}>{name}</span>;
+  return <MeshIcon value={raw} onClick={onClick} />;
 }
 
 function HtmlView({ control }: { control: UiControl }): ReactNode {
   // Injected anchors are not React elements — route their internal hrefs through the host.
   const onLinkClick = useHtmlLinkInterceptor();
-  return <div className={controlClass(control)} style={controlStyle(control)} onClick={onLinkClick} dangerouslySetInnerHTML={{ __html: useText(control.data) }} />;
+  const style = controlStyle(control);
+  const cls = controlClass(control);
+  // Blazor renders HtmlControl markup INLINE (MarkupString — no wrapper element), so the markup's
+  // top-level elements participate directly in the parent flex/grid layout. Mirror that with
+  // `display: contents` unless the control carries its own style/class (which needs a real box):
+  // a wrapper block div squeezed e.g. the node-icon <img> (no intrinsic width) to zero width.
+  const hasOwnBox = cls != null || Object.keys(style).length > 0;
+  return (
+    <div
+      className={mergeClass("mw-html", cls)}
+      style={hasOwnBox ? style : { display: "contents" }}
+      onClick={onLinkClick}
+      dangerouslySetInnerHTML={{ __html: useText(control.data) }}
+    />
+  );
 }
 
 // ---- Markdown (with @@("…") layout-area embeds) ---------------------------------------------------

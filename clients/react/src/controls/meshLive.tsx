@@ -21,13 +21,17 @@ import { useResolve } from "../area/context.js";
 import { useMeshLink } from "../area/navigation.js";
 import { useMeshOps, type MeshOps } from "../live/meshOps.js";
 import { str, useText } from "./common.js";
-import { AddressAreaEmbed, isInlineSvg, sanitizeInlineSvg } from "./display.js";
+import { AddressAreaEmbed } from "./display.js";
+import { iconForRendering } from "./iconValue.js";
+import { InitialBubble, MeshIcon } from "./MeshIcon.js";
 
 interface NodeResult {
   path: string;
   name: string;
   nodeType: string;
   description: string;
+  /** The node's renderable icon (inline SVG / URL / emoji; legacy Fluent names filtered). */
+  icon?: string;
   thumbnail?: string;
 }
 
@@ -38,6 +42,7 @@ function toNodeResult(r: Record<string, unknown>): NodeResult {
     name: str(r.name) || str(r.path).split("/").pop() || str(r.path),
     nodeType: str(r.nodeType),
     description: str(r.description ?? content.description),
+    icon: iconForRendering(str(r.icon ?? content.icon)) ?? undefined,
     thumbnail: str(content.thumbnailUrl ?? content.imageUrl) || undefined,
   };
 }
@@ -101,12 +106,26 @@ function ItemAreaCard({ node, itemArea }: { node: NodeResult; itemArea: string }
   );
 }
 
+/** The node's list/card icon — its Icon field (SVG/URL/emoji), the thumbnail, or the initial
+ *  bubble, exactly the fallback chain Blazor's MeshSearchView applies per row. */
+function NodeResultIcon({ node, size }: { node: NodeResult; size: number }): ReactNode {
+  return (
+    <MeshIcon
+      value={node.icon ?? node.thumbnail ?? null}
+      size={size}
+      style={{ borderRadius: 6 }}
+      fallback={<InitialBubble name={node.name} size={size} style={{ borderRadius: 6 }} />}
+    />
+  );
+}
+
 function ResultCard({ node }: { node: NodeResult }): ReactNode {
   const link = useMeshLink(`/${node.path}`);
   return (
     <Link href={link.href} onClick={link.onClick} style={{ textDecoration: "none" }}>
       <Card style={{ padding: 12, gap: 4, height: "100%" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <NodeResultIcon node={node} size={24} />
           <Text weight="semibold" style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>
             {node.name}
           </Text>
@@ -126,21 +145,48 @@ function ResultCard({ node }: { node: NodeResult }): ReactNode {
   );
 }
 
+// The Blazor search-result row: 40px node icon, name over description, type badge on the right.
 function ResultRow({ node }: { node: NodeResult }): ReactNode {
   const link = useMeshLink(`/${node.path}`);
   return (
-    <div style={{ display: "flex", alignItems: "baseline", gap: 8, padding: "6px 0", borderBottom: "1px solid var(--colorNeutralStroke3)" }}>
-      <Link href={link.href} onClick={link.onClick}>
-        <Text weight="semibold">{node.name}</Text>
-      </Link>
-      {node.nodeType ? (
-        <Badge appearance="outline" size="small">
-          {node.nodeType}
-        </Badge>
-      ) : null}
-      <Text size={200} style={{ color: "var(--colorNeutralForeground3)", flex: 1, minWidth: 0 }}>
-        {node.description}
-      </Text>
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 12,
+        padding: "10px 4px",
+        borderBottom: "1px solid var(--colorNeutralStroke3)",
+      }}
+    >
+      <NodeResultIcon node={node} size={40} />
+      <div style={{ display: "flex", flexDirection: "column", flex: 1, minWidth: 0, gap: 2 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+          <Link href={link.href} onClick={link.onClick} style={{ minWidth: 0 }}>
+            <Text weight="semibold" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {node.name}
+            </Text>
+          </Link>
+          {node.nodeType ? (
+            <Badge appearance="outline" size="small">
+              {node.nodeType}
+            </Badge>
+          ) : null}
+        </div>
+        {node.description ? (
+          <Text
+            size={200}
+            style={{
+              color: "var(--colorNeutralForeground3)",
+              overflow: "hidden",
+              display: "-webkit-box",
+              WebkitLineClamp: 2,
+              WebkitBoxOrient: "vertical",
+            }}
+          >
+            {node.description}
+          </Text>
+        ) : null}
+      </div>
     </div>
   );
 }
@@ -286,17 +332,12 @@ function CollectionRow({ node }: { node: NodeResult }): ReactNode {
   return (
     <Link href={link.href} onClick={link.onClick} style={{ textDecoration: "none" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 8px", borderRadius: 6 }}>
-        {node.thumbnail && isInlineSvg(node.thumbnail) ? (
-          // Inline SVG node Icon — an <Avatar image src> can't take raw markup (it would break and
-          // fall back to initials), so render the SVG directly in an avatar-sized box.
-          <span
-            aria-hidden
-            style={{ display: "inline-flex", width: 28, height: 28, flexShrink: 0, borderRadius: "50%", overflow: "hidden" }}
-            dangerouslySetInnerHTML={{ __html: sanitizeInlineSvg(node.thumbnail) }}
-          />
-        ) : (
-          <Avatar name={node.name} image={node.thumbnail ? { src: node.thumbnail } : undefined} size={28} />
-        )}
+        <MeshIcon
+          value={node.icon ?? node.thumbnail ?? null}
+          size={28}
+          style={{ borderRadius: "50%", overflow: "hidden" }}
+          fallback={<Avatar name={node.name} size={28} />}
+        />
         <div style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
           <Text weight="semibold" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
             {node.name}

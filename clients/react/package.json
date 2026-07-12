@@ -1,7 +1,7 @@
 {
   "name": "@meshweaver/react",
   "version": "0.1.0",
-  "description": "React + Fluent UI renderer for MeshWeaver layout areas — the web/Electron/React-Native-capable counterpart of the MAUI MauiViewPack.",
+  "description": "React + Fluent UI renderer for MeshWeaver layout areas \u2014 the web/Electron/React-Native-capable counterpart of the MAUI MauiViewPack.",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -17,6 +17,10 @@
     "./wire": {
       "types": "./dist/live/wire.d.ts",
       "import": "./dist/live/wire.js"
+    },
+    "./styles": {
+      "types": "./dist/render/meshStyles.d.ts",
+      "import": "./dist/render/meshStyles.js"
     }
   },
   "files": [

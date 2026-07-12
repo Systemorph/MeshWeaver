@@ -16,6 +16,7 @@ export const Switch = host("Switch");
 export const Pressable = host("Pressable");
 export const ScrollView = host("ScrollView");
 export const ActivityIndicator = host("ActivityIndicator");
+export const Image = host("Image");
 export const SafeAreaView = host("SafeAreaView");
 export const StatusBar = host("StatusBar");
 

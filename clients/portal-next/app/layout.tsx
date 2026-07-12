@@ -4,6 +4,8 @@
 
 import type { Metadata } from "next";
 import type { ReactNode } from "react";
+// RSC-safe styles entry (pure strings — no React context in the server graph).
+import { MESH_STYLES_ID, meshStylesText } from "@meshweaver/react/styles";
 import { Providers } from "../src/client/Providers";
 import { PortalShell } from "../src/client/PortalShell";
 
@@ -16,6 +18,12 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="en">
+      <head>
+        {/* The renderer stylesheet (FAST token aliases, markdown typography, nav/grid classes) —
+            inlined server-side so the STREAMED first paint is styled; MeshAreaView's client-side
+            ensureMeshStyles() sees the id and skips re-injecting. */}
+        <style id={MESH_STYLES_ID} dangerouslySetInnerHTML={{ __html: meshStylesText() }} />
+      </head>
       <body style={{ margin: 0, fontFamily: "'Segoe UI', system-ui, sans-serif" }}>
         <Providers>
           <PortalShell>{children}</PortalShell>

@@ -314,6 +314,74 @@ public class MeshGrpcTransportTest(ITestOutputHelper output) : MonolithMeshTestB
         await connect;
     }
 
+    [Fact]
+    public async Task Second_connection_claiming_the_same_address_survives_the_firsts_disconnect()
+    {
+        // The portal web client joins with a STABLE per-tab address, so a reload / React
+        // double-mount / reconnect legitimately opens a SECOND connection for the SAME participant
+        // address while the first is still tearing down. The LATEST claimant must own the address:
+        // the first connection's disconnect must NOT dispose the participant's route + proxy hub
+        // out from under the survivor (the bug that made every late area subscription silently
+        // deliver nothing — "No node found at 'portal/…'" on each pushed frame).
+        var hub = Mesh;
+        var registry = hub.ServiceProvider.GetRequiredService<GrpcConnectionRegistry>();
+        var service = new MeshGrpcService(hub, registry);
+        var participant = new Address(GrpcHostingExtensions.NodeAddressType, Guid.NewGuid().ToString("N"));
+        var connectRequest = new ConnectRequest
+        {
+            Address = JsonSerializer.Serialize(participant, hub.JsonSerializerOptions)
+        };
+
+        // Connection A claims the address…
+        var streamA = new CapturingStreamWriter<ServerFrame>();
+        using var ctsA = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+        var connectA = service.Connect(connectRequest, streamA, new FakeServerCallContext(new Metadata(), ctsA.Token));
+        var ackA = await NextFrame(streamA, "ack A", TimeSpan.FromSeconds(10));
+        Assert.Equal(ServerFrame.KindOneofCase.Ack, ackA.KindCase);
+
+        // …then connection B claims the SAME address (the reload/double-mount twin)…
+        var streamB = new CapturingStreamWriter<ServerFrame>();
+        using var ctsB = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+        var connectB = service.Connect(connectRequest, streamB, new FakeServerCallContext(new Metadata(), ctsB.Token));
+        var ackB = await NextFrame(streamB, "ack B", TimeSpan.FromSeconds(10));
+        Assert.Equal(ServerFrame.KindOneofCase.Ack, ackB.KindCase);
+
+        // …and A goes away. B must remain the owner of the participant address.
+        ctsA.Cancel();
+        await connectA;
+
+        // A request delivered over B still round-trips: the response routes to the participant
+        // address and lands on B's Connect stream (with the old per-connection ownership, A's
+        // disconnect disposed the proxy hub and this response never arrived).
+        var delivery = new MessageDelivery<EchoRequest>(
+            participant, hub.Address, new EchoRequest("survivor"), hub.JsonSerializerOptions);
+        await service.Deliver(
+            new DeliverRequest
+            {
+                ConnectionId = ackB.Ack.ConnectionId,
+                Delivery = JsonSerializer.Serialize<IMessageDelivery>(delivery, hub.JsonSerializerOptions),
+            },
+            new FakeServerCallContext(new Metadata(), ctsB.Token));
+
+        // Bound the TOTAL wait (not per-frame) so the loop can never outlive the suite's method
+        // timeout under slow CI scheduling — each read gets only the remaining budget.
+        string? received = null;
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(15);
+        while (received is null && DateTime.UtcNow < deadline)
+        {
+            ServerFrame f;
+            try { f = await NextFrame(streamB, "response on B", deadline - DateTime.UtcNow); }
+            catch (TimeoutException) { break; }
+            if (f.KindCase == ServerFrame.KindOneofCase.Receive && f.Receive.Contains("survivor"))
+                received = f.Receive;
+        }
+        Assert.NotNull(received);
+        Assert.Contains(delivery.Id, received!); // correlated — B received the response after A's teardown
+
+        ctsB.Cancel();
+        await connectB;
+    }
+
     // Read the next outbound frame, failing fast with a clear locus instead of hanging to the watchdog.
     private static async Task<ServerFrame> NextFrame(CapturingStreamWriter<ServerFrame> writer, string step, TimeSpan timeout)
     {

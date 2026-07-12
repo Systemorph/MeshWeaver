@@ -3,7 +3,8 @@
 // Fluent pack: SAME UiControl tree, native leaves. Drop it into <RegistryProvider pack={rnPack}>.
 
 import { useEffect, useState } from "react";
-import { View, Text, TextInput, Pressable, Switch, ScrollView, ActivityIndicator, StyleSheet, Platform } from "react-native";
+import { View, Text, TextInput, Pressable, Switch, ScrollView, ActivityIndicator, Image, StyleSheet, Platform } from "react-native";
+import { SvgXml } from "react-native-svg";
 import { marked } from "marked";
 import { NativeHtml } from "./nativeHtml";
 import {
@@ -19,6 +20,10 @@ import {
   useMeshOps,
   useResolve,
   useScope,
+  classifyIcon,
+  str,
+  useField,
+  useOptions,
   type ControlComponent,
   type EmbeddedAreaHandle,
   type LeafPack,
@@ -26,48 +31,9 @@ import {
   type SkinComponent,
 } from "@meshweaver/react/core";
 
-const s = (v: unknown): string => (v == null ? "" : String(v));
-
-// ── shared binding helpers (the native twins of clients/react/src/controls/common.ts, which is NOT
-//    exported from @meshweaver/react/core — the binding primitives it builds on ARE). Every editor reads
-//    its value with useResolve and writes back through the /data pointer via emit({kind:"update"}). ──
-interface Field {
-  value: unknown;
-  setValue: (v: unknown) => void;
-  onBlur: () => void;
-  disabled: boolean;
-  label: string;
-  placeholder: string;
-}
-function useField(control: any): Field {
-  const bound = control.data ?? control.isChecked;
-  const value = useResolve(bound);
-  const pointer = useBindingPointer(bound);
-  const disabled = !!useResolve(control.disabled);
-  const label = s(useResolve(control.label));
-  const placeholder = s(useResolve(control.placeholder));
-  const emit = useEmit();
-  const { area } = useScope();
-  return {
-    value,
-    disabled,
-    label,
-    placeholder,
-    setValue: (v) => { if (pointer) emit({ kind: "update", area, pointer, value: v }); },
-    onBlur: () => emit({ kind: "blur", area }),
-  };
-}
-function useOptions(control: any): { value: unknown; text: string }[] {
-  const opts = useResolve(control.options);
-  if (!Array.isArray(opts)) return [];
-  return opts.map((o: any) => {
-    if (o != null && typeof o === "object") {
-      const value = "item" in o ? o.item : "value" in o ? o.value : o.text;
-      return { value, text: s(o.text ?? value) };
-    }
-    return { value: o, text: s(o) };
-  });
-}
+// Binding helpers (useField/useOptions/str) come from the shared core — the RN pack used to carry
+// its own copies before the core exported them.
+const s = str;
 function Labeled({ label, children }: { label?: string; children: React.ReactNode }) {
   return (
     <View style={{ gap: 4 }}>
@@ -557,11 +523,24 @@ const Exception: ControlComponent = ({ control }) => (
 
 const Spacer: ControlComponent = () => <View style={{ flex: 1 }} />;
 
-// Icon — emoji / short glyphs render directly; a Fluent icon NAME (no DOM SVG on native) shows a chip.
+// Icon — the native mapping of the shared classification (classifyIcon): inline SVG via
+// react-native-svg, URLs via <Image>, emoji as text; a Fluent icon NAME (no DOM icon set on
+// native) shows a neutral chip. The DECISION lives in the core; only the leaves are native.
 const Icon: ControlComponent = ({ control }) => {
   const v = useResolve(control.icon ?? control.data);
-  const name = typeof v === "string" ? v : s((v as any)?.id ?? (v as any)?.Id ?? (v as any)?.provider);
-  return <Text style={styles.body}>{name && [...name].length <= 2 ? name : "▨"}</Text>;
+  const classified = classifyIcon(v as never);
+  switch (classified.kind) {
+    case "svg":
+      return <SvgXml xml={classified.text} width={20} height={20} />;
+    case "url":
+      return <Image source={{ uri: classified.text }} style={{ width: 20, height: 20, resizeMode: "contain" }} />;
+    case "emoji":
+      return <Text style={styles.body}>{classified.text}</Text>;
+    case "fluent":
+      return <Text style={styles.body}>▨</Text>;
+    default:
+      return null;
+  }
 };
 
 // ── mesh display controls (native twins of controls/mesh.tsx) ──────────────────────────────────────
@@ -607,7 +586,7 @@ const MeshNodeCard: ControlComponent = ({ control }) => {
   const title = s(useResolve(control.title)) || nodePath;
   const description = s(useResolve(control.description));
   const imageUrl = s(useResolve(control.imageUrl));
-  const isEmoji = !!imageUrl && !imageUrl.includes("/") && !imageUrl.startsWith("data:") && !imageUrl.trimStart().toLowerCase().startsWith("<svg");
+  const isEmoji = classifyIcon(imageUrl as never).kind === "emoji";
   const initial = (title.trim()[0] ?? "?").toUpperCase();
   const clickable = !!control.isClickable || (!control.disableNavigation && !!nodePath);
   const inner = (
