@@ -44,6 +44,10 @@ public class CourseAssetGateTest
     [InlineData("Space/videos/./file.mp4")]         // dot segment
     [InlineData("../Space/file.mp4")]               // traversal in the space slot
     [InlineData("_Entitlements/file.mp4")]          // satellite-shaped space
+    [InlineData("My Space/file.mp4")]               // whitespace in the space slot (query injection)
+    [InlineData("Space nodeType:User/file.mp4")]    // query-injection shape
+    [InlineData("Space/my video.mp4")]              // whitespace in a file segment
+    [InlineData("Space/videos/a\tb.mp4")]           // any whitespace, not just ' '
     public void TryParsePath_RejectsMalformedPaths(string? path)
     {
         CourseAssetGate.TryParsePath(path, out _, out _).Should().BeFalse();

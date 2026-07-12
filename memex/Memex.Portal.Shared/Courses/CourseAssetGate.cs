@@ -28,8 +28,10 @@ public static class CourseAssetGate
     /// Parses the catch-all route value into the Space id (first segment) and the asset's
     /// path relative to the Space's synced content (the remaining segments). Rejects
     /// paths without at least a space + one file segment, empty segments (<c>//</c>),
-    /// dot segments (<c>.</c> / <c>..</c> — path traversal), and a satellite-shaped
-    /// (<c>_</c>-prefixed) space segment.
+    /// dot segments (<c>.</c> / <c>..</c> — path traversal), segments containing
+    /// whitespace (the space segment is interpolated into mesh query strings — embedded
+    /// whitespace would break tokenization / allow query injection), and a
+    /// satellite-shaped (<c>_</c>-prefixed) space segment.
     /// </summary>
     /// <param name="path">The raw <c>{**path}</c> route value (already URL-decoded).</param>
     /// <param name="space">The Space id (first path segment).</param>
@@ -45,7 +47,7 @@ public static class CourseAssetGate
         var segments = path.Trim('/').Split('/');
         if (segments.Length < 2)
             return false;
-        if (segments.Any(s => string.IsNullOrWhiteSpace(s) || s == "." || s == ".."))
+        if (segments.Any(s => s.Length == 0 || s.Any(char.IsWhiteSpace) || s == "." || s == ".."))
             return false;
         if (segments[0].StartsWith('_'))
             return false;
