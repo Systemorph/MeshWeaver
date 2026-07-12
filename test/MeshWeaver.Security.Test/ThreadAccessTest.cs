@@ -35,7 +35,23 @@ public class ThreadAccessTest(ITestOutputHelper output) : MonolithMeshTestBase(o
         // No PublicAdminAccess — use ConfigureMeshBase for real RLS enforcement
         return ConfigureMeshBase(builder)
             .AddThreadMessageType()
-            .AddThreadType();
+            .AddThreadType()
+            // A test-local role granting Create (and Thread) but NOT Update, so
+            // CreateThread_InSharedNamespace_RequiresUpdatePermission genuinely exercises
+            // "has Create, lacks Update → thread create rejected" (thread-create maps to Update in
+            // RlsNodeValidator). Previously relied on the built-in Contributor role for this shape.
+            .AddMeshNodes(new MeshNode("CreateNoUpdate", "Role")
+            {
+                NodeType = "Role",
+                Name = "Create (no update)",
+                Content = new Role
+                {
+                    Id = "CreateNoUpdate",
+                    DisplayName = "Create (no update)",
+                    Permissions = Permission.Read | Permission.Create | Permission.Comment
+                                  | Permission.Thread | Permission.Api,
+                },
+            });
     }
 
     /// <summary>
@@ -198,16 +214,15 @@ public class ThreadAccessTest(ITestOutputHelper output) : MonolithMeshTestBase(o
         var userId = "shared-thread-user";
         var sharedPath = "SharedProject";
 
-        // Grant only Create permission (not Update) — Thread needs Update
-        await meshService.CreateNode(AssignmentNodeFactory.UserRole(userId, "Contributor", sharedPath))
+        // Grant the CreateNoUpdate role — Create (and Thread) but NOT Update. Thread creation maps
+        // to Update (RlsNodeValidator.GetCreatePermission), so this user can create ordinary nodes
+        // but must still be refused a Thread.
+        await meshService.CreateNode(AssignmentNodeFactory.UserRole(userId, "CreateNoUpdate", sharedPath))
             .Should().Emit();
 
-        // Observe the user's current Create/Update on the shared scope via the
-        // one-shot CheckPermission round-trip (same shape as the original
-        // HasPermissionAsync). These are diagnostic — the contract under test is
-        // that a Thread create (which needs Update, not Create) is rejected, so
-        // we don't gate on a specific grant surfacing (the "Contributor" grant
-        // confers no built-in permission, so neither flag is expected here).
+        // The contract under test is that a Thread create (which needs Update, not Create) is
+        // rejected. The role deliberately lacks Update, so hasUpdate is false and the differentiation
+        // below is genuinely exercised (if a fixture ever granted Update, the test skips).
         var hasUpdate = await Mesh.CheckPermission(sharedPath, userId, Permission.Update).Should().Emit();
 
         // If the user already has Update, the Create-vs-Update differentiation
