@@ -21,7 +21,7 @@ namespace MeshWeaver.ContentCollections.Test;
 ///
 /// <para>Here the watcher is NEUTERED (<see cref="NoMonitorProvider"/> never fires
 /// <c>onChanged</c>), so the article can only reach <c>markdownStream</c> via
-/// <see cref="ContentCollection.SaveFileAsync"/>'s proactive ingest. This makes the guarantee
+/// <see cref="ContentCollection.SaveFile"/>'s proactive ingest. This makes the guarantee
 /// deterministic and OS-independent: without the ingest the read never resolves (fails fast at the
 /// 10s timeout instead of flaking); with it the article is readable at once.</para>
 /// </summary>
@@ -31,7 +31,7 @@ public class ContentCollectionWriteIngestTest(ITestOutputHelper output) : HubTes
         => base.ConfigureHost(configuration).AddContentCollections();
 
     [Fact]
-    public async Task SaveFileAsync_ingests_the_article_without_the_watcher()
+    public async Task SaveFile_ingests_the_article_without_the_watcher()
     {
         var ct = TestContext.Current.CancellationToken;
         var dir = Path.Combine(AppContext.BaseDirectory, "Files", "WriteIngest", Guid.NewGuid().ToString("N"));
@@ -47,13 +47,13 @@ public class ContentCollectionWriteIngestTest(ITestOutputHelper output) : HubTes
             },
             new NoMonitorProvider(new FileSystemStreamProvider(dir)),
             GetHost());
-        await collection.InitializeAsync(ct);
+        await collection.Initialize().FirstAsync().ToTask(ct);
 
         // Write into a NESTED, freshly-created subdirectory — the exact shape whose inotify event
         // the Linux runner dropped. With the watcher neutered this can ONLY resolve via the
         // collection's own proactive ingest on write.
         using (var stream = new MemoryStream("# Hello ingest"u8.ToArray()))
-            await collection.SaveFileAsync("/sub", "hello.md", stream);
+            await collection.SaveFile("/sub", "hello.md", stream).ToTask(ct);
 
         // GetMarkdown is the SAME content read the file render uses (ContentLayoutArea.RenderFile).
         // Without the fix this stays null (the watcher never fires) and the wait times out — the

@@ -216,13 +216,13 @@ public class MapContentCollectionTest(ITestOutputHelper output) : MonolithMeshTe
 
         // Act - get the content collection and read the file via mapped name
         var contentService = client.ServiceProvider.GetRequiredService<IContentService>();
-        var collection = await contentService.GetCollectionAsync("content", TestContext.Current.CancellationToken);
+        var collection = await contentService.GetCollection("content").FirstAsync().ToTask(TestContext.Current.CancellationToken);
 
         collection.Should().NotBeNull("Content collection should be resolved");
 
         // Read "logo.svg" via the mapped "content" collection
         // This should resolve to TestStorage:images/logo.svg
-        await using var stream = await collection!.GetContentAsync("logo.svg", TestContext.Current.CancellationToken);
+        await using var stream = await collection!.GetContent("logo.svg").FirstAsync().ToTask(TestContext.Current.CancellationToken);
 
         stream.Should().NotBeNull("Content should be found via mapped path");
 
@@ -257,12 +257,12 @@ public class MapContentCollectionTest(ITestOutputHelper output) : MonolithMeshTe
 
         // Act - read nested file via mapped collection
         var contentService = client.ServiceProvider.GetRequiredService<IContentService>();
-        var collection = await contentService.GetCollectionAsync("content", TestContext.Current.CancellationToken);
+        var collection = await contentService.GetCollection("content").FirstAsync().ToTask(TestContext.Current.CancellationToken);
 
         collection.Should().NotBeNull();
 
         // Access "icons/app.txt" which should resolve to "TestStorage:media/icons/app.txt"
-        await using var stream = await collection!.GetContentAsync("icons/app.txt", TestContext.Current.CancellationToken);
+        await using var stream = await collection!.GetContent("icons/app.txt").FirstAsync().ToTask(TestContext.Current.CancellationToken);
 
         stream.Should().NotBeNull("Nested content should be found via mapped path");
 
@@ -297,12 +297,12 @@ public class MapContentCollectionTest(ITestOutputHelper output) : MonolithMeshTe
         // Act - get the content service and try to resolve "logo.svg" directly
         // This simulates what happens when UCR parses "content:logo.svg" (no slash)
         var contentService = client.ServiceProvider.GetRequiredService<IContentService>();
-        var collection = await contentService.GetCollectionAsync("content", TestContext.Current.CancellationToken);
+        var collection = await contentService.GetCollection("content").FirstAsync().ToTask(TestContext.Current.CancellationToken);
 
         collection.Should().NotBeNull("Content collection should be resolved");
 
         // Read "logo.svg" via the "content" collection
-        await using var stream = await collection!.GetContentAsync("logo.svg", TestContext.Current.CancellationToken);
+        await using var stream = await collection!.GetContent("logo.svg").FirstAsync().ToTask(TestContext.Current.CancellationToken);
 
         stream.Should().NotBeNull("Content should be found when using default collection");
 
@@ -338,12 +338,12 @@ public class MapContentCollectionTest(ITestOutputHelper output) : MonolithMeshTe
 
         // Act - get the "other" collection
         var contentService = client.ServiceProvider.GetRequiredService<IContentService>();
-        var collection = await contentService.GetCollectionAsync("other", TestContext.Current.CancellationToken);
+        var collection = await contentService.GetCollection("other").FirstAsync().ToTask(TestContext.Current.CancellationToken);
 
         collection.Should().NotBeNull("Other collection should be resolved");
 
         // Read "data.json" from the "other" collection
-        await using var stream = await collection!.GetContentAsync("data.json", TestContext.Current.CancellationToken);
+        await using var stream = await collection!.GetContent("data.json").FirstAsync().ToTask(TestContext.Current.CancellationToken);
 
         stream.Should().NotBeNull("Content should be found in 'other' collection");
 

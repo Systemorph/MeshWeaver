@@ -88,8 +88,7 @@ public static class ContentLayoutArea
                                  host.Reference.GetParameterValue("presentation")?.ToLower() == "true";
 
         var articleService = host.Hub.GetContentService();
-        return GetIoPool(host.Hub)
-            .Invoke(ct => articleService.GetCollectionAsync(split[0], ct))
+        return articleService.GetCollection(split[0])
             .SelectMany(collection =>
             {
                 if (collection is null)
@@ -128,17 +127,11 @@ public static class ContentLayoutArea
         if (transformer == null)
             return Observable.Return<UiControl?>(new MarkdownControl($"No converter available for {ext} files"));
 
-        // The file stream + document→markdown transform is ONE pooled async leaf —
-        // async lives only inside the IIoPool bridge, never on the subscribing thread.
-        return ioPool.Invoke<UiControl?>(async ct =>
-            {
-                await using var stream = await collection.GetContentAsync(filePath, ct);
-                if (stream == null)
-                    return new MarkdownControl($"Document not found: {filePath}");
-
-                var markdown = await transformer.TransformToMarkdownAsync(stream, ct);
-                return new MarkdownControl(markdown);
-            })
+        // The file read + document→markdown transform run inside the collection's pooled leaf.
+        return collection.GetContentAsText(filePath, [transformer])
+            .Select(markdown => (UiControl?)(markdown is null
+                ? new MarkdownControl($"Document not found: {filePath}")
+                : new MarkdownControl(markdown)))
             .Catch((Exception ex) => Observable.Return<UiControl?>(
                 new MarkdownControl($"Error converting document {filePath}: {ex.Message}")));
     }
@@ -149,25 +142,23 @@ public static class ContentLayoutArea
         string filePath,
         string extension)
     {
-        // The file stream read + base64 conversion is ONE pooled async leaf.
-        return ioPool.Invoke<UiControl?>(async ct =>
+        // The full file read happens inside the collection's pooled leaf; only the (CPU-cheap)
+        // base64/text conversion runs on the emission.
+        return collection.GetContentBytes(filePath)
+            .Select(bytes =>
             {
-                await using var stream = await collection.GetContentAsync(filePath, ct);
-                if (stream == null)
-                    return new MarkdownControl($"Image not found: {filePath}");
+                if (bytes is null)
+                    return (UiControl?)new MarkdownControl($"Image not found: {filePath}");
 
                 if (extension == ".svg")
                 {
                     // SVG can be embedded as text
-                    using var reader = new StreamReader(stream);
-                    var svgContent = await reader.ReadToEndAsync(ct);
+                    var svgContent = System.Text.Encoding.UTF8.GetString(bytes);
                     return new HtmlControl($"<div class='embedded-svg'>{svgContent}</div>");
                 }
 
                 // For binary images, convert to base64 data URI
-                using var memoryStream = new MemoryStream();
-                await stream.CopyToAsync(memoryStream, ct);
-                var base64 = Convert.ToBase64String(memoryStream.ToArray());
+                var base64 = Convert.ToBase64String(bytes);
                 var mimeType = GetMimeType(extension);
                 var imgHtml = $"<img src='data:{mimeType};base64,{base64}' alt='{Path.GetFileName(filePath)}' style='max-width: 100%;' />";
                 return new HtmlControl(imgHtml);
@@ -307,9 +298,7 @@ public static class ContentLayoutArea
 
         // Get the collection (collectionPart may include @partition)
         var articleService = host.Hub.GetContentService();
-        var ioPool = GetIoPool(host.Hub);
-        return ioPool
-            .Invoke(ct => articleService.GetCollectionAsync(collectionPart, ct))
+        return articleService.GetCollection(collectionPart)
             .SelectMany(collection =>
             {
                 if (collection is null)
