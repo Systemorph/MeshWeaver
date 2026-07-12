@@ -793,70 +793,15 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
         IReadOnlyCollection<string>? excludedNodeTypes,
         [EnumeratorCancellation] CancellationToken ct)
     {
-        // Resolve the target table based on the query path or nodeType and partition definition.
-        // For satellite paths like "User/alice/_Thread", this routes to the "threads" table.
-        // For nodeType-only queries like "nodeType:Thread", resolves via nodeType-to-suffix mapping.
-        // When the path doesn't contain a satellite suffix (e.g., routing fan-out with DefaultPath="User")
-        // but the query has a nodeType filter for a satellite type, prefer the nodeType-based resolution.
-        // NOTE: We query BOTH the satellite table and mesh_nodes (via UNION ALL) because existing data
-        // may be in mesh_nodes from before satellite table routing was enabled on the write path.
-        var effectivePath = query.Path ?? basePath;
-        string rawTable;
-        if (!string.IsNullOrEmpty(effectivePath))
-        {
-            rawTable = _partitionDefinition?.ResolveTable(effectivePath) ?? "mesh_nodes";
-        }
-        else
-        {
-            rawTable = _partitionDefinition?.ResolveTableByNodeType(query.ExtractNodeType()) ?? "mesh_nodes";
-        }
-
-        // When the path resolves to mesh_nodes but nodeType maps to a satellite table,
-        // use the satellite table instead. Satellite tables are the source of truth.
-        var satelliteRedirect = false;
-        if (rawTable == "mesh_nodes" && _partitionDefinition != null)
-        {
-            var satelliteTable = _partitionDefinition.ResolveTableByNodeType(query.ExtractNodeType());
-            if (satelliteTable != null && satelliteTable != "mesh_nodes")
-            {
-                rawTable = satelliteTable;
-                satelliteRedirect = true;
-            }
-        }
-        var tableName = QualifyTable(rawTable);
-        // Resolve satellite table names for source:activity and source:accessed JOINs.
-        // Non-partitioned setups store everything in mesh_nodes (no satellite tables).
-        var activityTable = QualifyTable(_partitionDefinition?.ResolveTableByNodeType("Activity") ?? "mesh_nodes");
-        var userActivityTable = QualifyTable(_partitionDefinition?.ResolveTableByNodeType("UserActivity") ?? "mesh_nodes");
-
-        // Create a fresh generator per call — the generator has mutable state (_paramIndex, _parameters)
-        // and is NOT thread-safe. Concurrent fan-out queries share the same adapter.
-        var generator = new PostgreSqlSqlGenerator { SchemaName = _schemaName };
         var includeContent = SelectorAsksFor(query.Select, "content");
-        var (sql, parameters) = generator.GenerateSelectQuery(query, userId, activityUserId, tableName,
-            activityTable, userActivityTable, excludedNodeTypes, includeContent);
-        if (!string.IsNullOrEmpty(effectivePath) || (query.Paths is { Count: > 1 }))
-        {
-            // Multi-value `path:a|b|c` push-down → `n.path IN (...)`. Routing-layer
-            // "longest-matching-prefix" lookups go through this path. Single-path
-            // queries use the existing scope-clause generator unchanged.
-            var (scopeClause, scopeParams) = query.Paths is { Count: > 1 }
-                ? generator.GenerateScopeClause(query.Paths, query.Scope, useMainNode: satelliteRedirect, qualifiedTable: tableName)
-                : generator.GenerateScopeClause(effectivePath, query.Scope, useMainNode: satelliteRedirect, qualifiedTable: tableName);
-
-            if (!string.IsNullOrEmpty(scopeClause))
-            {
-                foreach (var (k, v) in scopeParams)
-                    parameters[k] = v;
-
-                if (sql.Contains("WHERE"))
-                    sql = sql.Replace("WHERE", $"WHERE {scopeClause} AND");
-                else if (sql.Contains("ORDER BY"))
-                    sql = sql.Replace("ORDER BY", $"WHERE {scopeClause} ORDER BY");
-                else
-                    sql += $" WHERE {scopeClause}";
-            }
-        }
+        // One branch per table this query must cover. A primary-table query means "all content",
+        // so it unions the CONTENT satellite tables (Source/Test → code) — see ResolveQueryTables.
+        var tables = ResolveQueryTables(query, basePath);
+        var (sql, parameters) = tables.Count == 1
+            ? BuildSingleQuerySql(query, options, userId, basePath, activityUserId, excludedNodeTypes,
+                includeContent, tables[0])
+            : BuildUnionAcrossTablesSql(query, options, userId, basePath, activityUserId, excludedNodeTypes,
+                includeContent, tables);
 
         if (_logger?.IsEnabled(Microsoft.Extensions.Logging.LogLevel.Debug) == true)
         {
@@ -962,26 +907,33 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
 
         for (var qi = 0; qi < queries.Count; qi++)
         {
-            var (perSql, perParams) = BuildSingleQuerySql(
-                queries[qi], options, userId, basePath, activityUserId, excludedNodeTypes, includeContent);
-            // Disambiguate param names across the union: rename every @<name> token
-            // referenced in this per-query SQL to @qI_<name>. We use a single regex
-            // pass keyed on the param-name word boundary so we don't mangle adjacent
-            // tokens. A naive sequence of `string.Replace` calls is order-dependent:
-            // with params @p and @p1, replacing @p first inside an already-rewritten
-            // @q0_p1 would mangle it into @q0_q0_p1. Regex.Replace also gates on
-            // `perParams.ContainsKey` so we don't accidentally rewrite @-sigils that
-            // appear inside string literals or JSONB path expressions.
-            var prefix = $"q{qi}_";
-            var renamedSql = System.Text.RegularExpressions.Regex.Replace(
-                perSql,
-                @"@([A-Za-z_]\w*)",
-                m => perParams.ContainsKey("@" + m.Groups[1].Value)
-                    ? "@" + prefix + m.Groups[1].Value
-                    : m.Value);
-            foreach (var (k, v) in perParams)
-                unionedParams["@" + prefix + k.TrimStart('@')] = v;
-            unionedSelects.Add($"({renamedSql})");
+            // Each query expands to its table branches (primary + content satellites — see
+            // ResolveQueryTables), so the multi-query union is as complete as the single-query path.
+            var queryTables = ResolveQueryTables(queries[qi], basePath);
+            for (var ti = 0; ti < queryTables.Count; ti++)
+            {
+                var (perSql, perParams) = BuildSingleQuerySql(
+                    queries[qi], options, userId, basePath, activityUserId, excludedNodeTypes,
+                    includeContent, queryTables[ti]);
+                // Disambiguate param names across the union: rename every @<name> token
+                // referenced in this per-branch SQL to @qItJ_<name>. We use a single regex
+                // pass keyed on the param-name word boundary so we don't mangle adjacent
+                // tokens. A naive sequence of `string.Replace` calls is order-dependent:
+                // with params @p and @p1, replacing @p first inside an already-rewritten
+                // @q0_p1 would mangle it into @q0_q0_p1. Regex.Replace also gates on
+                // `perParams.ContainsKey` so we don't accidentally rewrite @-sigils that
+                // appear inside string literals or JSONB path expressions.
+                var prefix = $"q{qi}t{ti}_";
+                var renamedSql = System.Text.RegularExpressions.Regex.Replace(
+                    perSql,
+                    @"@([A-Za-z_]\w*)",
+                    m => perParams.ContainsKey("@" + m.Groups[1].Value)
+                        ? "@" + prefix + m.Groups[1].Value
+                        : m.Value);
+                foreach (var (k, v) in perParams)
+                    unionedParams["@" + prefix + k.TrimStart('@')] = v;
+                unionedSelects.Add($"({renamedSql})");
+            }
         }
 
         // UNION ALL preserves both branches' rows; DISTINCT ON (namespace, id)
@@ -1027,20 +979,11 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
     }
 
     /// <summary>
-    /// Builds the same SELECT + scope-clause SQL that the single-query
-    /// <see cref="QueryNodesAsync(ParsedQuery, JsonSerializerOptions, string?, string?, string?, IReadOnlyCollection{string}?, CancellationToken)"/>
-    /// path emits, but returns the (sql, parameters) pair instead of executing.
-    /// Shared by the multi-query UNION path so per-query SQL stays
-    /// bug-compatible with the single-query path.
+    /// Resolves the table a query targets: path-based satellite routing first (a "Source"/"_Thread"
+    /// segment in the path), then a nodeType-based redirect when the path resolves to mesh_nodes but
+    /// the nodeType filter maps to a satellite (satellite tables are the source of truth).
     /// </summary>
-    private (string Sql, Dictionary<string, object> Parameters) BuildSingleQuerySql(
-        ParsedQuery query,
-        JsonSerializerOptions options,
-        string? userId,
-        string? basePath,
-        string? activityUserId,
-        IReadOnlyCollection<string>? excludedNodeTypes,
-        bool includeContent = true)
+    private (string RawTable, bool SatelliteRedirect) ResolveQueryTable(ParsedQuery query, string? basePath)
     {
         var effectivePath = query.Path ?? basePath;
         string rawTable;
@@ -1059,6 +1002,126 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
                 satelliteRedirect = true;
             }
         }
+        return (rawTable, satelliteRedirect);
+    }
+
+    /// <summary>
+    /// Every table branch the query must cover. A query that targets the PRIMARY table means "all
+    /// content" — it additionally covers the CONTENT satellite tables (non-underscore segments:
+    /// <c>Source</c>/<c>Test</c> → <c>code</c>), whose rows are primary content stored outside
+    /// mesh_nodes. Without this a partition-rooted <c>scope:descendants</c> query silently omits
+    /// every Code node — observed live as a Space GitSync-exported WITHOUT any of its C# sources.
+    /// Metadata satellites (<c>_Thread</c>, <c>_Activity</c>, …) stay excluded: they are
+    /// governance data reached via their own segment paths or nodeType filters. Activity/accessed
+    /// source queries keep their single JOIN-shaped branch.
+    /// </summary>
+    private IReadOnlyList<(string RawTable, bool SatelliteRedirect)> ResolveQueryTables(
+        ParsedQuery query, string? basePath)
+    {
+        var primary = ResolveQueryTable(query, basePath);
+        if (primary.RawTable != "mesh_nodes" || primary.SatelliteRedirect
+            || query.Source != QuerySource.Default
+            || _partitionDefinition?.TableMappings is not { } mappings)
+            return [primary];
+
+        var contentTables = mappings
+            .Where(kv => kv.Key.Length > 0 && kv.Key[0] != '_'
+                         && !string.Equals(kv.Value, "mesh_nodes", StringComparison.Ordinal))
+            .Select(kv => kv.Value)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        if (contentTables.Length == 0)
+            return [primary];
+
+        var tables = new List<(string, bool)>(1 + contentTables.Length) { primary };
+        tables.AddRange(contentTables.Select(t => (t, false)));
+        return tables;
+    }
+
+    /// <summary>
+    /// UNION ALL of the same query against several tables (the primary + the content satellites),
+    /// deduped by node identity, with the query's presentation ORDER BY / text-rank / LIMIT
+    /// re-applied on the OUTSIDE (each branch's ORDER BY is scoped inside its union arm; the
+    /// DISTINCT ON wrap re-orders by identity — same technique as
+    /// <see cref="PostgreSqlSqlGenerator.GenerateCrossSchemaSelectQuery"/>).
+    /// </summary>
+    private (string Sql, Dictionary<string, object> Parameters) BuildUnionAcrossTablesSql(
+        ParsedQuery query,
+        JsonSerializerOptions options,
+        string? userId,
+        string? basePath,
+        string? activityUserId,
+        IReadOnlyCollection<string>? excludedNodeTypes,
+        bool includeContent,
+        IReadOnlyList<(string RawTable, bool SatelliteRedirect)> tables)
+    {
+        var selects = new List<string>(tables.Count);
+        var parameters = new Dictionary<string, object>(StringComparer.Ordinal);
+        for (var ti = 0; ti < tables.Count; ti++)
+        {
+            var (perSql, perParams) = BuildSingleQuerySql(
+                query, options, userId, basePath, activityUserId, excludedNodeTypes, includeContent, tables[ti]);
+            // Disambiguate param names across branches (same regex approach as the multi-query
+            // union — see QueryNodesUnionInnerAsync for why sequential Replace calls are unsafe).
+            var prefix = $"t{ti}_";
+            var renamed = System.Text.RegularExpressions.Regex.Replace(
+                perSql,
+                @"@([A-Za-z_]\w*)",
+                m => perParams.ContainsKey("@" + m.Groups[1].Value)
+                    ? "@" + prefix + m.Groups[1].Value
+                    : m.Value);
+            foreach (var (k, v) in perParams)
+                parameters["@" + prefix + k.TrimStart('@')] = v;
+            selects.Add($"({renamed})");
+        }
+
+        var sql = $"SELECT DISTINCT ON (namespace, id) * FROM ({string.Join(" UNION ALL ", selects)}) AS unioned "
+                  + "ORDER BY namespace, id, last_modified DESC";
+
+        if (query.OrderBy != null)
+        {
+            var direction = query.OrderBy.Descending ? "DESC" : "ASC";
+            var orderCol = PostgreSqlSqlGenerator.MapOrderByForUnionWrap(query.OrderBy.Property);
+            sql = $"SELECT * FROM ({sql}) combined ORDER BY {orderCol} {direction}";
+        }
+        else if (!string.IsNullOrEmpty(query.TextSearch))
+        {
+            parameters["@u_scoreText"] = query.TextSearch;
+            sql = $"SELECT * FROM ({sql}) combined ORDER BY (CASE " +
+                  "WHEN LOWER(COALESCE(name,'')) = LOWER(@u_scoreText) THEN 1000 " +
+                  "WHEN LOWER(COALESCE(name,'')) LIKE LOWER(@u_scoreText) || '%' THEN 600 " +
+                  "WHEN LOWER(COALESCE(id,'')) LIKE LOWER(@u_scoreText) || '%' THEN 500 " +
+                  "WHEN LOWER(COALESCE(name,'')) LIKE '%' || LOWER(@u_scoreText) || '%' THEN 300 " +
+                  "WHEN LOWER(COALESCE(id,'')) LIKE '%' || LOWER(@u_scoreText) || '%' THEN 200 " +
+                  "WHEN LOWER(COALESCE(description,'')) LIKE '%' || LOWER(@u_scoreText) || '%' THEN 100 " +
+                  "ELSE 0 END) DESC, last_modified DESC NULLS LAST";
+        }
+
+        if (query.Limit.HasValue)
+            sql += $" LIMIT {query.Limit.Value}";
+
+        return (sql, parameters);
+    }
+
+    /// <summary>
+    /// Builds one table branch's SELECT + scope-clause SQL, returning the (sql, parameters) pair
+    /// instead of executing. Shared by the single-query path, the content-satellite union
+    /// (<see cref="BuildUnionAcrossTablesSql"/>) and the multi-query UNION path so per-branch SQL
+    /// stays bug-compatible everywhere. <paramref name="table"/> selects the branch's table;
+    /// null resolves it from the query (<see cref="ResolveQueryTable"/>).
+    /// </summary>
+    private (string Sql, Dictionary<string, object> Parameters) BuildSingleQuerySql(
+        ParsedQuery query,
+        JsonSerializerOptions options,
+        string? userId,
+        string? basePath,
+        string? activityUserId,
+        IReadOnlyCollection<string>? excludedNodeTypes,
+        bool includeContent = true,
+        (string RawTable, bool SatelliteRedirect)? table = null)
+    {
+        var effectivePath = query.Path ?? basePath;
+        var (rawTable, satelliteRedirect) = table ?? ResolveQueryTable(query, basePath);
         var tableName = QualifyTable(rawTable);
         var activityTable = QualifyTable(_partitionDefinition?.ResolveTableByNodeType("Activity") ?? "mesh_nodes");
         var userActivityTable = QualifyTable(_partitionDefinition?.ResolveTableByNodeType("UserActivity") ?? "mesh_nodes");

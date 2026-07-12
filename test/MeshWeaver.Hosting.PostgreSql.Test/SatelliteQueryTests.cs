@@ -404,7 +404,7 @@ public class SatelliteQueryTests : IAsyncLifetime
     // ── Code ─────────────────────────────────────────────────────────────
 
     [Fact(Timeout = 30000)]
-    public async Task NodeType_Code_RequiresPathBasedResolution()
+    public async Task NodeType_Code_ResolvesViaContentSatelliteUnion()
     {
         await Write(new MeshNode("MyClass", "User/alice/project/Source")
         {
@@ -418,8 +418,89 @@ public class SatelliteQueryTests : IAsyncLifetime
         var byPath = await Query("namespace:User/alice/project/Source nodeType:Code");
         byPath.Should().NotBeEmpty("path-based query to Source should find Code nodes");
 
-        // nodeType-only query with DefaultPath falls back to mesh_nodes (Code has no NodeTypeToSuffix entry)
+        // A nodeType-only query resolves to mesh_nodes (Code has no nodeType→table entry), but the
+        // primary-table query now UNIONs the content satellites — the node_type filter matches in
+        // the code table. This was the old "expected limitation": it silently returned empty.
         var byType = await Query("nodeType:Code scope:descendants", defaultPath: "User");
-        // This returns empty because Code isn't in NodeTypeToSuffix — expected limitation
+        byType.Should().Contain(n => n.Id == "MyClass",
+            "a primary-table query unions the content-satellite code table, so nodeType:Code resolves");
+    }
+
+    // ── Content-satellite union (export-all completeness) ────────────────
+
+    [Fact(Timeout = 30000)]
+    public async Task Descendants_FromPartitionRoot_IncludeCodeNodes()
+    {
+        await Write(new MeshNode("readme", "User/alice/project")
+        {
+            Name = "Readme",
+            NodeType = "Markdown",
+            MainNode = "User/alice/project/readme",
+        });
+        await Write(new MeshNode("MyClass", "User/alice/project/Source")
+        {
+            Name = "MyClass.cs",
+            NodeType = "Code",
+            MainNode = "User/alice/project",
+        });
+
+        // The GitSync export enumerates exactly this shape (path:{space} scope:descendants). A
+        // partition-rooted path has no Source segment, so it resolves to mesh_nodes — the union
+        // with the content-satellite code table is what keeps Code nodes in the result. Before
+        // the union, a Space exported WITHOUT any of its C# sources (observed live).
+        var results = await Query("path:User/alice scope:descendants");
+        results.Should().Contain(n => n.NodeType == "Code" && n.Id == "MyClass",
+            "a partition-rooted descendants query must include content-satellite Code rows");
+        results.Should().Contain(n => n.NodeType == "Markdown" && n.Id == "readme",
+            "primary-table rows must still be returned alongside the satellite union");
+    }
+
+    [Fact(Timeout = 30000)]
+    public async Task Descendants_FromPartitionRoot_StillExcludeMetadataSatellites()
+    {
+        await Write(new MeshNode("doc2", "User/bob/project")
+        {
+            Name = "Doc",
+            NodeType = "Markdown",
+            MainNode = "User/bob/project/doc2",
+        });
+        await Write(new MeshNode("t1", "User/bob/project/_Thread")
+        {
+            Name = "Discussion",
+            NodeType = "Thread",
+            MainNode = "User/bob/project",
+        });
+
+        // Metadata satellites (_Thread, _Activity, …) are governance data, not content — the
+        // content-satellite union must NOT pull them into a plain descendants query. They remain
+        // reachable via their own segment paths / nodeType filters.
+        var results = await Query("path:User/bob scope:descendants");
+        results.Should().Contain(n => n.Id == "doc2");
+        results.Should().NotContain(n => n.NodeType == "Thread",
+            "underscore metadata satellites stay out of content descendants queries");
+    }
+
+    [Fact(Timeout = 30000)]
+    public async Task Descendants_UnionAcrossTables_RespectsSortAndLimit()
+    {
+        await Write(new MeshNode("Alpha", "User/carol/project/Source")
+        {
+            Name = "Alpha",
+            NodeType = "Code",
+            MainNode = "User/carol/project",
+        });
+        await Write(new MeshNode("Beta", "User/carol/project")
+        {
+            Name = "Beta",
+            NodeType = "Markdown",
+            MainNode = "User/carol/project/Beta",
+        });
+
+        // The union wrap re-applies the query's presentation ORDER BY / LIMIT on the OUTSIDE
+        // (the DISTINCT ON dedup re-orders by identity internally) — a sorted+limited query must
+        // pick the global winner ACROSS tables, not per-branch arbitrary rows.
+        var results = await Query("path:User/carol scope:descendants sort:name limit:1");
+        results.Should().ContainSingle();
+        results[0].Name.Should().Be("Alpha", "sort:name across the union must rank the code-table row first");
     }
 }
