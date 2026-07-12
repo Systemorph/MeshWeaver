@@ -183,12 +183,21 @@
         gap: 8px;
     }
 
-    /* Search container in header */
+    /* Edu — the course portal entry, left of the search */
+    ::deep .edu-link {
+        white-space: nowrap;
+        font-weight: 600;
+    }
+
+    ::deep .edu-link .edu-hat {
+        margin-right: 4px;
+    }
+
+    /* Search container in header — fills the remaining header width */
     ::deep .search-container {
         flex: 1;
         display: flex;
         justify-content: flex-end;
-        max-width: 600px;
     }
 }
 
