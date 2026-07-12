@@ -181,6 +181,8 @@ public static class InvitationsSettingsTab
                 $"<div style=\"font-size: 0.8rem; color: var(--neutral-foreground-hint);\">" +
                 $"Invited {inv.InvitedAt:yyyy-MM-dd}" +
                 (string.IsNullOrEmpty(inv.InvitedBy) ? "" : $" by {Esc(inv.InvitedBy!)}") +
+                (inv.EmailSentAt is null ? "" : $" · Emailed {inv.EmailSentAt:yyyy-MM-dd}") +
+                (inv.AcceptedAt is null ? "" : $" · Accepted {inv.AcceptedAt:yyyy-MM-dd}") +
                 (string.IsNullOrEmpty(inv.SpacePath) ? "" : $" · Space: {Esc(inv.SpacePath!)}") +
                 (string.IsNullOrEmpty(inv.Note) ? "" : $" · {Esc(inv.Note!)}") +
                 "</div></div>"));
