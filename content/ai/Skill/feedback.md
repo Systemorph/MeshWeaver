@@ -1,7 +1,7 @@
 ---
 nodeType: Skill
 name: /feedback
-description: Capture the user's feedback together with WHERE they are (the current page) and WHO they are (name), and file it into the dedicated Feedback space so the team can review it. Type /feedback followed by the feedback.
+description: Capture the user's feedback with WHERE they are (the current page) and WHO they are (name), and file it PRIVATELY under their own space — only they and platform admins can see it. Type /feedback followed by the feedback.
 icon: 📣
 category: Skills
 order: 13
@@ -9,76 +9,33 @@ autoMount: true
 ---
 
 You are filing a piece of **user feedback**. The user typed `/feedback` followed by what they want to
-say. Your job: capture that text **plus the context that makes it actionable** — *where* they were and
-*who* they are — and create one **`Feedback`** node in the dedicated top-level **`Feedback`** space.
-One node per submission. Do it, then confirm in one sentence — don't interrogate the user.
+say. Capture that text **plus the context that makes it actionable** — *where* they were and *who* they
+are — and create one **`Feedback`** node under the user's OWN space. One node per submission. Do it,
+then confirm in one sentence — don't interrogate the user.
 
 # 1. Capture WHO and WHERE (you already have both — do NOT ask)
 
 Both come from your prompt context, not from the user:
 
 - **WHERE (`location`)** — the **`node.path`** in the **`# Current Application Context`** block: the page
-  the user was on when they gave the feedback (e.g. `ACME/Reports/Q3`). This is the single most useful
-  field — it lets a reviewer jump straight to what the feedback is about. If there is no context node,
-  leave `location` empty.
-- **WHO** — the **`# Current User`** block: use **`User ID`** for `submittedBy` and **`Name`** for
-  `submittedByName`. (The framework also stamps the node's `CreatedBy` with the user automatically; you
-  set the content fields so the identity travels with an export and shows on the review card.)
+  the user was on (e.g. `ACME/Reports/Q3`). The single most useful field — it lets a reviewer jump
+  straight to what the feedback is about. If there is no context node, leave `location` empty.
+- **WHO** — the **`# Current User`** block: **`User ID`** and **`Name`**. The `User ID` is BOTH where the
+  node lives (§2) and the `submittedBy` field; `Name` is `submittedByName`.
 
-# 2. The dedicated Feedback space is platform-provided — just file into it
+# 2. File it under the user's OWN space — `{User ID}/Feedback/{id}`
 
-Feedback lands in ONE shared, top-level space named **`Feedback`**. It is **seeded automatically on
-every instance** (space root + a `Public → Contributor` grant so every user — all platform admins
-included — can read the board and contribute). So in the normal case it already exists and is already
-open for contributions: **skip straight to §3**.
+Feedback is **private to the submitter**. It lives under the user's own partition, so **only they — and
+platform admins, who review everything — can see it**; no other user can. You need **no grant and no
+shared space**: a user owns their own namespace automatically (the self-scope rule), so the create just
+works under the calling user.
 
-**Only if it is genuinely missing** — e.g. a local dev mesh running WITHOUT static-repo sync — recreate
-it yourself with these two nodes (otherwise never touch them):
-
-**(a) the space** — a real `create` (never `update` a bare node into a Space; that skips partition
-provisioning). Load the **`/create-space`** skill for the full recipe; the minimum:
+Create the node with **`namespace = "{User ID}/Feedback"`** (the `User ID` from the `# Current User`
+block — this prefix is what makes it private):
 
 ```json
 {
-  "id": "Feedback", "namespace": "",
-  "nodeType": "Space",
-  "content": {
-    "$type": "Space",
-    "name": "Feedback",
-    "description": "What users tell us — one node per submission, with where they were and who they are.",
-    "icon": "📣",
-    "body": "Feedback filed through the `/feedback` skill lands here — each entry records the page the user was on and who they are, so we can act on it.\n\n## Contents\n\n@@(\"area/Search\")"
-  }
-}
-```
-
-**(b) let every user contribute** — one `AccessAssignment` granting the **`Public`** subject the built-in
-**`Contributor`** role (read + create, but NOT edit/delete others' entries) at the `Feedback` scope.
-Granting `Public` propagates to every authenticated user, so anyone can submit — without being able to
-tamper with someone else's feedback:
-
-```json
-{
-  "id": "Public_Access", "namespace": "Feedback/_Access", "name": "All users — Contributor",
-  "nodeType": "AccessAssignment", "mainNode": "Feedback",
-  "content": {
-    "$type": "AccessAssignment",
-    "accessObject": "Public", "displayName": "All users",
-    "roles": [ { "$type": "RoleAssignment", "role": "Contributor" } ]
-  }
-}
-```
-
-`mainNode` MUST equal the scope (`Feedback`) — an empty `mainNode` is silently ignored (see [/access](/access)).
-
-# 3. File the feedback node
-
-Create one `Feedback` node under the `Feedback` space. Give it a short, human `name` (a few words
-summarising the feedback — this is the review-list title), and fill the content:
-
-```json
-{
-  "id": "{short-slug-or-guid}", "namespace": "Feedback",
+  "id": "{short-slug-or-guid}", "namespace": "{User ID}/Feedback",
   "name": "{a few words summarising the feedback}",
   "nodeType": "Feedback", "icon": "📣",
   "content": {
@@ -93,20 +50,21 @@ summarising the feedback — this is the review-list title), and fill the conten
 }
 ```
 
+- The `namespace` MUST start with the user's own **`User ID`** — that is the entire privacy boundary.
 - Content field names are **camelCase**; `status` serialises by name — start it at **`New`**.
-- Put the WHOLE of what the user said in `text`. Don't summarise it away — the `name` is the summary,
-  `text` is the record.
+- Put the WHOLE of what the user said in `text` — the `name` is the summary, `text` is the record.
 
-# 4. Verify and confirm
+# 3. Verify and confirm
 
-- `get @Feedback/{id}` → the node exists with your `text`, `location`, and `submittedByName`.
-- Reply in ONE sentence: thank them and link the entry — `Filed your feedback → [{name}](@/Feedback/{id}).`
-  Do not dump the JSON back at them.
+- `get @{User ID}/Feedback/{id}` → the node exists with your `text`, `location`, and `submittedByName`.
+- Reply in ONE sentence, thanking them and linking the entry:
+  `Filed your feedback → [{name}](@/{User ID}/Feedback/{id}).` Don't dump the JSON back at them.
 
 # Notes
 
-- **Never** invent a location or a name — read them from the context blocks. If a field genuinely isn't
-  available (no context node), leave it empty rather than guessing.
-- Everyone who can reach the `Feedback` space can read the entries filed there (it's a shared inbox). Don't
-  put anything in `text` the user wouldn't want other space members to see; if they flag something private,
-  tell them this is a shared space.
+- **Never** invent a location or a name — read them from the context blocks; leave a field empty rather
+  than guessing.
+- Feedback is **private**: only the submitter and platform admins can read it. If a user worries their
+  feedback is sensitive, reassure them it is not visible to other users.
+- **You don't route it anywhere.** Platform admins review all submitted feedback in the admin **Feedback**
+  review (their Settings) — filing the node under the user's space is the whole job.

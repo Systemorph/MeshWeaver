@@ -50,13 +50,6 @@ public static class StaticRepoSyncExtensions
             if (serveFromPartition.Overlaps(AiContentSources.ContentPartitions))
                 services.AddBuiltInAiContentSources();
 
-            // The dedicated Feedback space (the /feedback inbox) ALWAYS seeds when static-repo sync is
-            // on: it is a WRITABLE platform space (Additive → user-filed feedback is never pruned), not
-            // a read-only catalog, so it has no in-memory static provider to gate against and needs no
-            // per-partition allow-list. Its Public → Contributor grant lets every user (all platform
-            // admins included) read the board and file feedback.
-            services.AddSingleton<IStaticRepoSource, MeshWeaver.Graph.Configuration.FeedbackStaticRepoSource>();
-
             // Runs after the PG schema-provisioning hosted service (registered earlier by
             // AddPartitionedPostgreSqlPersistence) — hosted services start in registration order.
             // A factory (not AddHostedService<T>) so the deploy-time per-partition mode overrides

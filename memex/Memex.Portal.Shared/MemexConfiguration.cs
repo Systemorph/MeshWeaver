@@ -805,7 +805,10 @@ public static class MemexConfiguration
                         // Git history tab — read-only git browser (commit log + changes + diffs) over the same working tree.
                         .AddGitHistoryTab()
                         // Content Indexing tab — Space nodes, only when the indexing pipeline is active.
-                        .AddContentIndexSettingsTab();
+                        .AddContentIndexSettingsTab()
+                        // Feedback review tab (platform admins only) — all feedback across users, read
+                        // as System (each entry is otherwise private to its submitter's partition).
+                        .AddFeedbackReviewTab();
                 })
                 // Add activity tracking to record user access patterns via ActivityLogBundler
                 .AddActivityTracking()
