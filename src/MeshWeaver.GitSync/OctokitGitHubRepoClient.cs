@@ -143,6 +143,22 @@ public sealed class OctokitGitHubRepoClient(IoPoolRegistry ioPools, ILogger<Octo
     /// <returns>An observable emitting the resolved commit SHA and its files (paths made subdirectory-relative).</returns>
     public IObservable<RepoSnapshot> Fetch(
         string repositoryUrl, string commitish, string? subdirectory, string accessToken)
+        => Fetch(repositoryUrl, commitish, subdirectory, accessToken, _ => true);
+
+    /// <summary>
+    /// Filtered fetch — the tree is filtered BEFORE the per-blob reads, so fetching every package's
+    /// <c>*/index.json</c> from a large repo costs the ref + tree lookups plus one blob read per
+    /// manifest, not one per file in the repo.
+    /// </summary>
+    /// <param name="repositoryUrl">The repository URL (https://github.com/owner/repo).</param>
+    /// <param name="commitish">Branch name or commit SHA to read at.</param>
+    /// <param name="subdirectory">Optional subtree; returned paths are relative to it.</param>
+    /// <param name="accessToken">The token to read with (empty for anonymous/public).</param>
+    /// <param name="pathFilter">Predicate over the subdirectory-relative path; only matches download.</param>
+    /// <returns>The snapshot at the resolved commit containing only the matching files.</returns>
+    public IObservable<RepoSnapshot> Fetch(
+        string repositoryUrl, string commitish, string? subdirectory, string accessToken,
+        Func<string, bool> pathFilter)
     {
         var (owner, repo) = ParseRepoUrl(repositoryUrl);
         var client = Client(accessToken);
@@ -154,6 +170,7 @@ public sealed class OctokitGitHubRepoClient(IoPoolRegistry ioPools, ILogger<Octo
             {
                 var blobs = head.ExistingBlobs
                     .Where(e => prefix.Length == 0 || e.Path.StartsWith(prefix, StringComparison.Ordinal))
+                    .Where(e => pathFilter(prefix.Length == 0 ? e.Path : e.Path[prefix.Length..]))
                     .ToArray();
                 if (blobs.Length == 0)
                     return Observable.Return(new RepoSnapshot(head.CommitSha!, Array.Empty<RepoFile>()));
@@ -167,6 +184,23 @@ public sealed class OctokitGitHubRepoClient(IoPoolRegistry ioPools, ILogger<Octo
                     .ToList()
                     .Select(list => new RepoSnapshot(head.CommitSha!, (IReadOnlyList<RepoFile>)list));
             });
+    }
+
+    /// <summary>
+    /// The commit SHA <paramref name="commitish"/> resolves to — one ref (or commit) lookup, no
+    /// tree, no blobs. The cheap change counter for pollers: compare against the last processed
+    /// SHA and skip the fetch entirely when nothing was merged.
+    /// </summary>
+    /// <param name="repositoryUrl">The repository URL (https://github.com/owner/repo).</param>
+    /// <param name="commitish">Branch name or commit SHA.</param>
+    /// <param name="accessToken">The token to read with (empty for anonymous/public).</param>
+    /// <returns>An observable emitting the resolved commit SHA.</returns>
+    public IObservable<string> GetHeadSha(string repositoryUrl, string commitish, string accessToken)
+    {
+        var (owner, repo) = ParseRepoUrl(repositoryUrl);
+        var client = Client(accessToken);
+        var commitRef = string.IsNullOrWhiteSpace(commitish) ? "main" : commitish.Trim();
+        return ResolveRefSha(client, owner, repo, commitRef);
     }
 
     /// <summary>Creates a branch from an existing ref (branch name or SHA) resolved to its commit.</summary>
