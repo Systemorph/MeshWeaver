@@ -202,7 +202,10 @@ public static class ActivityRunner
         {
             workspace.GetMeshNodeStream(activityPath).Update(node =>
             {
-                if (node.Content is not ActivityLog log) return node;
+                // Tolerant read (ContentAs), not a bare type test: on a cross-hub update the
+                // content can arrive as a degraded JsonElement — `is ActivityLog` would silently
+                // no-op and the progress line would never land (same read as the cancel watch).
+                if (node.ContentAs<ActivityLog>(workspace.Hub.JsonSerializerOptions, logger) is not { } log) return node;
                 return node with { Content = log with { Messages = log.Messages.Add(new LogMessage(message, level)) } };
             }).Subscribe(_ => { }, ex => logger?.LogWarning(ex, "Activity log append failed for {Path}", activityPath));
         }
@@ -220,7 +223,10 @@ public static class ActivityRunner
         {
             return workspace.GetMeshNodeStream(activityPath).Update(node =>
             {
-                if (node.Content is not ActivityLog log) return node;
+                // Tolerant read (ContentAs), not a bare type test: on a cross-hub update the
+                // content can arrive as a degraded JsonElement — `is ActivityLog` would silently
+                // no-op and the activity would hang Running forever (same read as the cancel watch).
+                if (node.ContentAs<ActivityLog>(workspace.Hub.JsonSerializerOptions, logger) is not { } log) return node;
                 var messages = string.IsNullOrEmpty(finalMessage)
                     ? log.Messages
                     : log.Messages.Add(new LogMessage(finalMessage,
@@ -231,7 +237,9 @@ public static class ActivityRunner
                 // Failed / Cancelled always stand (they are more severe in the enum order).
                 // Without this, a command that reports per-item errors but completes without
                 // throwing would end "Succeeded" with errors in its own log.
-                var finished = (log with { Messages = messages }).Finish(log.Version, status);
+                // The hub's current version stamps the finished log — the same
+                // `(int)hub.Version` every other Finish caller records.
+                var finished = (log with { Messages = messages }).Finish((int)workspace.Hub.Version, status);
                 return node with
                 {
                     Content = finished with { RequestedStatus = null }
