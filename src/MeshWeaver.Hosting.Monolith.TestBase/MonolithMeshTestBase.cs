@@ -1135,7 +1135,10 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
                 for (var i = _startedHostedServices.Count - 1; i >= 0; i--)
                 {
                     var hosted = _startedHostedServices[i];
-                    try { await hosted.StopAsync(stopCts.Token); }
+                    // WaitAsync enforces the budget at the await site: a StopAsync that
+                    // ignores its cancellation token would otherwise hang DisposeAsync
+                    // forever, before the DisposeTimeout-guarded diagnostics below.
+                    try { await hosted.StopAsync(stopCts.Token).WaitAsync(stopCts.Token); }
                     catch (Exception ex)
                     {
                         TestPhaseTrace(testName, "DISPOSE_HOSTED_STOP_ERROR", sw.ElapsedMilliseconds,
