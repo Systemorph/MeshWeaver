@@ -3,6 +3,7 @@ using Memex.Portal.Shared.Authentication;
 using Memex.Portal.Shared.Email;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
+using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
@@ -39,9 +40,11 @@ public class InvitationServiceTests(ITestOutputHelper output) : MonolithMeshTest
         Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
     /// <summary>
-    /// CreateInvitation writes a Pending Invitation node to the Admin partition, queryable
-    /// globally by <c>nodeType:Invitation content.email:X</c> — the exact lookup the onboarding
-    /// gate runs.
+    /// CreateInvitation writes a Pending Invitation node to the Admin partition, queryable by
+    /// <c>path:Admin/Invitation scope:children nodeType:Invitation content.email:X</c> — the exact
+    /// lookup the onboarding gate runs. PATH-scoped, because the PG router routes by the path's
+    /// first segment and a path-less query fans out cross-schema, which EXCLUDES the admin schema
+    /// (a path-less lookup passes here on the in-memory monolith but finds nothing on PG).
     /// </summary>
     [Fact(Timeout = 30000)]
     public async Task CreateInvitation_WritesQueryableAdminNode()
@@ -58,10 +61,10 @@ public class InvitationServiceTests(ITestOutputHelper output) : MonolithMeshTest
         InvitationService.TryGetInvitation(created, Mesh.JsonSerializerOptions)!
             .Status.Should().Be(InvitationStatus.Pending);
 
-        // Same shape as the onboarding gate's lookup — routes nodeType:Invitation to Admin.
+        // Same shape as the onboarding gate's lookup — path-scoped to the Admin partition.
         var found = await MeshSvc
             .Query<MeshNode>(MeshQueryRequest.FromQuery(
-                $"nodeType:Invitation content.email:{email} limit:1"))
+                $"path:{InvitationNodeType.Namespace} scope:children nodeType:{InvitationNodeType.NodeType} content.email:{email} limit:1"))
             .Should().Within(10.Seconds())
             .Match(c => c.Items.Count > 0);
         found.Items.Should().ContainSingle("the onboarding gate must find the invitation by email");
@@ -83,7 +86,7 @@ public class InvitationServiceTests(ITestOutputHelper output) : MonolithMeshTest
 
         // Wait for visibility, then the pending invitation is found.
         await MeshSvc.Query<MeshNode>(MeshQueryRequest.FromQuery(
-                $"nodeType:Invitation content.email:{email} limit:1"))
+                $"path:{InvitationNodeType.Namespace} scope:children nodeType:{InvitationNodeType.NodeType} content.email:{email} limit:1"))
             .Should().Within(10.Seconds()).Match(c => c.Items.Count > 0);
 
         var pending = await Service.FindPendingInvitation(workspace, email).Should().Emit();
