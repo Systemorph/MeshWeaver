@@ -496,7 +496,16 @@ public sealed class OctokitGitHubRepoClient(IoPoolRegistry ioPools, ILogger<Octo
             : Http.InvokeObservable(ct => client.Git.Reference.Get(owner, repo, $"heads/{commitish}"))
                 .Select(reference => reference.Object.Sha);
 
-    private sealed record HeadInfo(string? CommitSha, bool RefExists, IReadOnlyList<(string Path, string Sha)> ExistingBlobs);
+    internal sealed record HeadInfo(string? CommitSha, bool RefExists, IReadOnlyList<(string Path, string Sha)> ExistingBlobs);
+
+    /// <summary>
+    /// The missing-branch base policy: a new branch on a NON-empty repo builds on the DEFAULT
+    /// branch head — its <see cref="HeadInfo.CommitSha"/> becomes the commit's parent and its
+    /// <see cref="HeadInfo.ExistingBlobs"/> the preserved tree — while <c>RefExists</c> is forced
+    /// false so the push CREATES the target ref. Without this the commit was parent-less: an
+    /// ORPHAN branch with no common ancestor, impossible to PR/merge into the default branch.
+    /// </summary>
+    internal static HeadInfo AsNewBranchBase(HeadInfo defaultHead) => defaultHead with { RefExists = false };
 
     /// <summary>Ensures the repo exists; creates it private (under the user or the org) when missing.</summary>
     private IObservable<bool> EnsureRepo(IObservableGitHubClient client, string owner, string repo, bool createIfMissing)
@@ -540,13 +549,18 @@ public sealed class OctokitGitHubRepoClient(IoPoolRegistry ioPools, ILogger<Octo
            || ex.StatusCode == System.Net.HttpStatusCode.Conflict;
 
     /// <summary>
-    /// Bootstraps a brand-new EMPTY repo so the Git Data API works. GitHub rejects blob/tree/commit
-    /// creation on a zero-commit repo with 409 "Git Repository is empty." — only the Contents API can
-    /// create the FIRST commit. When the branch has no head AND the repo is genuinely empty, seed a
-    /// throwaway <c>.gitkeep</c> on the branch via the Contents API (which creates the branch + first
-    /// commit), then re-read the head. The caller's mirror then reconstructs the tree from scratch,
-    /// dropping the seed, so the real content lands as the next commit. A non-empty repo that merely
-    /// lacks this branch is left untouched — the normal parent-less-commit + create-ref path handles it.
+    /// Resolves the head the mirror builds on when the target branch is missing. Two cases:
+    /// <list type="bullet">
+    ///   <item>A brand-new EMPTY repo (zero commits) rejects the Git Data API (409 "Git Repository
+    ///     is empty." — only the Contents API can create the FIRST commit), so seed a throwaway
+    ///     <c>.gitkeep</c> on the branch via the Contents API (creates the branch + first commit),
+    ///     then re-read the head. The mirror reconstructs the tree from scratch, dropping the seed.</item>
+    ///   <item>A NON-empty repo that merely lacks this branch bases the new branch on the DEFAULT
+    ///     branch head — a parent-less commit here would create an ORPHAN branch with no common
+    ///     ancestor with the default branch (observed live: an un-PR-able, un-mergeable sync
+    ///     branch). The default head's blobs become the preserved tree, so the new branch is
+    ///     "default branch + the mirrored subtree" — exactly what a review/merge needs.</item>
+    /// </list>
     /// </summary>
     private IObservable<HeadInfo> EnsureInitialCommit(
         IObservableGitHubClient client, string owner, string repo, string branch, string prefix, HeadInfo head)
@@ -557,7 +571,24 @@ public sealed class OctokitGitHubRepoClient(IoPoolRegistry ioPools, ILogger<Octo
                         new CreateFileRequest("Initialize repository (MeshWeaver sync)",
                             "Created by MeshWeaver to initialize this repository.\n", branch)))
                     .SelectMany(_ => ReadHead(client, owner, repo, branch))
-                : Observable.Return(head));
+                : ReadDefaultBranchHead(client, owner, repo, fallback: head));
+
+    /// <summary>
+    /// The DEFAULT branch's head with <c>RefExists=false</c> — the base for creating a new branch
+    /// with real history (the caller still CREATES the target ref; the commit just parents on the
+    /// default head and preserves its tree). Falls back to <paramref name="fallback"/> when the
+    /// default branch cannot be resolved (races with repo initialization).
+    /// </summary>
+    private IObservable<HeadInfo> ReadDefaultBranchHead(
+        IObservableGitHubClient client, string owner, string repo, HeadInfo fallback)
+        => Http.InvokeObservable(ct => client.Repository.Get(owner, repo))
+            .SelectMany(r => string.IsNullOrEmpty(r.DefaultBranch)
+                ? Observable.Return(fallback)
+                : ReadHead(client, owner, repo, r.DefaultBranch))
+            .Select(AsNewBranchBase)
+            .Catch<HeadInfo, ApiException>(ex => IsMissingOrEmptyRepo(ex)
+                ? Observable.Return(fallback)
+                : Observable.Throw<HeadInfo>(ex));
 
     /// <summary>True when the repo has no commits at all (a freshly-created repo): GitHub lists zero
     /// branches for an empty repo, and some endpoints 409 "Git Repository is empty.".</summary>
