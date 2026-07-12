@@ -46,10 +46,13 @@ public interface IGitHubRepoClient
     IObservable<RepoSnapshot> Fetch(
         string repositoryUrl, string commitish, string? subdirectory, string accessToken,
         Func<string, bool> pathFilter)
-        => Fetch(repositoryUrl, commitish, subdirectory, accessToken)
+    {
+        ArgumentNullException.ThrowIfNull(pathFilter);
+        return Fetch(repositoryUrl, commitish, subdirectory, accessToken)
             .Select(snapshot => new RepoSnapshot(
                 snapshot.CommitSha,
                 snapshot.Files.Where(f => pathFilter(f.Path)).ToArray()));
+    }
 
     /// <summary>
     /// The commit SHA a commitish currently resolves to — ONE cheap API call, no tree read, no blob
