@@ -23,7 +23,8 @@ public class FeedbackNodeTypeTest(ITestOutputHelper output) : MonolithMeshTestBa
     [Fact(Timeout = 60000)]
     public async Task FeedbackNode_RoundTrips_Typed()
     {
-        await MeshService.CreateNode(new MeshNode("search-is-slow", "Feedback")
+        // Filed under the submitter's OWN partition — {user}/Feedback/{id} — the private, self-scoped home.
+        await MeshService.CreateNode(new MeshNode("search-is-slow", "rbuergi/Feedback")
         {
             NodeType = FeedbackNodeType.NodeType,
             Name = "Search is slow",
@@ -39,7 +40,7 @@ public class FeedbackNodeTypeTest(ITestOutputHelper output) : MonolithMeshTestBa
             },
         }).Should().Emit();
 
-        var node = await ReadNode("Feedback/search-is-slow")
+        var node = await ReadNode("rbuergi/Feedback/search-is-slow")
             .Where(n => n?.Content is Feedback)
             .FirstAsync().Timeout(TimeSpan.FromSeconds(30));
 
