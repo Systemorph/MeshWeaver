@@ -8,6 +8,7 @@
 @using MeshWeaver.Blazor.Infrastructure
 @using MeshWeaver.Data
 @using MeshWeaver.Graph
+@using MeshWeaver.Graph.Configuration
 @using MeshWeaver.Mesh
 @using MeshWeaver.Mesh.Security
 @using MeshWeaver.Mesh.Services
@@ -196,10 +197,15 @@ else
         var firstUserQuery = needFirstUser
             ? workspace.GetQuery("onboarding:firstUserCheck", "namespace:User limit:1")
             : Observable.Return(Enumerable.Empty<MeshNode>());
+        // PATH-scoped (path:Admin/Invitation scope:children): the PG router routes by the
+        // path's first segment, and a path-less nodeType:Invitation query fans out
+        // cross-schema — which deliberately EXCLUDES the admin schema — so it never finds
+        // invitations (see InvitationNodeType). Same shape as InvitationService /
+        // InvitationEmailSender / InvitationsSettingsTab.
         var inviteQuery = invitationOnly
             ? workspace.GetQuery(
                 $"onboarding:invite:{email}",
-                $"nodeType:Invitation content.email:{email}")
+                $"path:{InvitationNodeType.Namespace} scope:children nodeType:{InvitationNodeType.NodeType} content.email:{email}")
             : Observable.Return(Enumerable.Empty<MeshNode>());
 
         var jsonOptions = workspace.Hub.JsonSerializerOptions;
@@ -333,10 +339,14 @@ else
             $"onboarding:email:{email}",
             $"nodeType:User content.email:{email}");
         // Invitation-only allowlist: a Pending Invitation matching this verified email
-        // unlocks onboarding and is flipped to Accepted on success.
+        // unlocks onboarding and is flipped to Accepted on success. PATH-scoped
+        // (path:Admin/Invitation scope:children) — a path-less nodeType:Invitation query
+        // fans out cross-schema, which EXCLUDES the admin schema, so it finds nothing:
+        // the gate would wrongly block invited users AND MarkAccepted would never fire
+        // (invitations stayed "Pending" forever in the Invitations settings tab).
         var inviteQuery = workspace.GetQuery(
             $"onboarding:invite:{email}",
-            $"nodeType:Invitation content.email:{email}");
+            $"path:{InvitationNodeType.Namespace} scope:children nodeType:{InvitationNodeType.NodeType} content.email:{email}");
         var jsonOptions = workspace.Hub.JsonSerializerOptions;
 
         // Observable.Using holds the System-impersonation scope for the whole
