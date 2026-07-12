@@ -2,7 +2,6 @@ using System.Reactive.Linq;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
 using MeshWeaver.Mesh;
-using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -21,7 +20,6 @@ public class BrandingResolver
     private readonly IMessageHub hub;
     private readonly ExportTemplateResolver templateResolver;
     private readonly ILogger<BrandingResolver> logger;
-    private readonly IIoPool _ioPool;
 
     /// <summary>
     /// Initializes a new instance of the <c>BrandingResolver</c> class.
@@ -29,20 +27,14 @@ public class BrandingResolver
     /// <param name="hub">Message hub used to read brand mesh nodes and resolve services.</param>
     /// <param name="templateResolver">Resolves export template assets (logo, fonts, DOCX template).</param>
     /// <param name="logger">Logger for resolution warnings and diagnostics.</param>
-    /// <param name="ioPoolRegistry">
-    /// Optional I/O pool registry; the file-system pool drives logo and template loads, falling
-    /// back to the unbounded pool when not supplied.
-    /// </param>
     public BrandingResolver(
         IMessageHub hub,
         ExportTemplateResolver templateResolver,
-        ILogger<BrandingResolver> logger,
-        IoPoolRegistry? ioPoolRegistry = null)
+        ILogger<BrandingResolver> logger)
     {
         this.hub = hub;
         this.templateResolver = templateResolver;
         this.logger = logger;
-        _ioPool = ioPoolRegistry?.Get(IoPoolNames.FileSystem) ?? IoPool.Unbounded;
     }
 
     /// <summary>
@@ -88,7 +80,7 @@ public class BrandingResolver
     private IObservable<BrandingOptions> FromCorporateIdentity(CorporateIdentity ci)
     {
         var logoObs = LoadLogo(ci.LogoPath);
-        var templateObs = _ioPool.Run(ct => templateResolver.LoadAsync(ci.TemplatePath, ct));
+        var templateObs = templateResolver.Load(ci.TemplatePath);
 
         return logoObs.Zip(templateObs, (logo, template) => new BrandingOptions
         {
@@ -125,61 +117,45 @@ public class BrandingResolver
         });
     }
 
-    // File-I/O kernel kept as async Task internally — wrapped into IObservable at the
-    // single boundary below. This is the "non-hub I/O" exception per the reactive rules.
-    private IObservable<LogoImage?> LoadLogo(string? path) =>
-        _ioPool.Run(ct => LoadLogoInternalAsync(path, ct));
-
-    private async Task<LogoImage?> LoadLogoInternalAsync(string? path, CancellationToken ct)
+    // Pure reactive composition: the content read runs on the collection's own I/O pool,
+    // and this layer only selects the (CPU-cheap) LogoImage projection on the emission.
+    private IObservable<LogoImage?> LoadLogo(string? path)
     {
         if (string.IsNullOrWhiteSpace(path))
-            return null;
+            return Observable.Return<LogoImage?>(null);
 
-        try
+        // content:... paths and the conventional /static/storage/content/{collection}/{path}
+        // shape both resolve through the content service; anything else is skipped.
+        const string staticPrefix = "/static/storage/content/";
+        var rel = path.StartsWith("content:", StringComparison.OrdinalIgnoreCase)
+            ? path["content:".Length..]
+            : path.StartsWith(staticPrefix, StringComparison.OrdinalIgnoreCase)
+                ? path[staticPrefix.Length..]
+                : null;
+        if (rel is null)
         {
-            // content:... paths go through the content service.
-            if (path.StartsWith("content:", StringComparison.OrdinalIgnoreCase))
-            {
-                var rel = path["content:".Length..];
-                var (collection, subPath) = SplitCollection(rel);
-                var contentSvc = hub.ServiceProvider.GetService<IContentService>();
-                if (contentSvc is null) return null;
-                await using var stream = await contentSvc.GetContentAsync(collection, subPath, ct).ConfigureAwait(false);
-                if (stream is null) return null;
-                using var ms = new MemoryStream();
-                await stream.CopyToAsync(ms, ct).ConfigureAwait(false);
-                return new LogoImage(ms.ToArray(), InferMime(path));
-            }
-
-            // Portal-relative paths like /static/storage/content/Systemorph/logo_t.png
-            // are served by the host; for the export we resolve them via the content service
-            // when they follow the conventional /static/storage/content/{collection}/{path} shape.
-            const string staticPrefix = "/static/storage/content/";
-            if (path.StartsWith(staticPrefix, StringComparison.OrdinalIgnoreCase))
-            {
-                var rel = path[staticPrefix.Length..];
-                var (collection, subPath) = SplitCollection(rel);
-                var contentSvc = hub.ServiceProvider.GetService<IContentService>();
-                if (contentSvc is null) return null;
-                await using var stream = await contentSvc.GetContentAsync(collection, subPath, ct).ConfigureAwait(false);
-                if (stream is null) return null;
-                using var ms = new MemoryStream();
-                await stream.CopyToAsync(ms, ct).ConfigureAwait(false);
-                return new LogoImage(ms.ToArray(), InferMime(path));
-            }
-
             // Unsupported path shape — either an absolute URL or a relative path we can't resolve server-side.
             if (Uri.TryCreate(path, UriKind.Absolute, out _))
                 logger.LogInformation("Logo path '{Path}' is an absolute URL; skipping.", path);
             else
                 logger.LogInformation("Logo path '{Path}' is an unsupported relative path; skipping.", path);
-            return null;
+            return Observable.Return<LogoImage?>(null);
         }
-        catch (Exception ex)
-        {
-            logger.LogWarning(ex, "Failed to load logo '{Path}'; continuing without", path);
-            return null;
-        }
+
+        var (collection, subPath) = SplitCollection(rel);
+        var contentSvc = hub.ServiceProvider.GetService<IContentService>();
+        if (contentSvc is null)
+            return Observable.Return<LogoImage?>(null);
+        return contentSvc.GetCollection(collection)
+            .SelectMany(coll => coll is null
+                ? Observable.Return<byte[]?>(null)
+                : coll.GetContentBytes(subPath))
+            .Select(bytes => bytes is null ? null : new LogoImage(bytes, InferMime(path)))
+            .Catch((Exception ex) =>
+            {
+                logger.LogWarning(ex, "Failed to load logo '{Path}'; continuing without", path);
+                return Observable.Return<LogoImage?>(null);
+            });
     }
 
     private static (string Collection, string Path) SplitCollection(string rel)

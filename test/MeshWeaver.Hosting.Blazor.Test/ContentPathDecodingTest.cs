@@ -1,5 +1,7 @@
 using System.IO;
 using System.Text;
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Fixture;
 using MeshWeaver.Messaging;
@@ -55,7 +57,7 @@ public class ContentPathDecodingTest(ITestOutputHelper output) : HubTestBase(out
         await File.WriteAllBytesAsync(fullPath, pdfBytes, TestContext.Current.CancellationToken);
 
         var contentService = Mesh.ServiceProvider.GetRequiredService<IContentService>();
-        var collection = await contentService.GetCollectionAsync("content", TestContext.Current.CancellationToken);
+        var collection = await contentService.GetCollection("content").FirstAsync().ToTask(TestContext.Current.CancellationToken);
         collection.Should().NotBeNull();
 
         // The path as it reaches the /static/{**path} endpoint: each segment percent-encoded
@@ -63,7 +65,7 @@ public class ContentPathDecodingTest(ITestOutputHelper output) : HubTestBase(out
         var encodedPath = "Reports/Data%20Extraction/%C3%9Cbersicht%202025.pdf";
 
         // Act 1 — the raw encoded path misses (this is the reported bug).
-        await using (var missed = await collection!.GetContentAsync(encodedPath, TestContext.Current.CancellationToken))
+        await using (var missed = await collection!.GetContent(encodedPath).FirstAsync().ToTask(TestContext.Current.CancellationToken))
         {
             missed.Should().BeNull("the percent-encoded path does not match the stored file — this is the #326 defect");
         }
@@ -73,7 +75,7 @@ public class ContentPathDecodingTest(ITestOutputHelper output) : HubTestBase(out
         decodedPath.Should().Be(storedPath);
 
         // ...and the decoded path resolves the file with its bytes intact.
-        await using var stream = await collection.GetContentAsync(decodedPath, TestContext.Current.CancellationToken);
+        await using var stream = await collection.GetContent(decodedPath).FirstAsync().ToTask(TestContext.Current.CancellationToken);
         stream.Should().NotBeNull("the decoded path matches the stored file");
         using var ms = new MemoryStream();
         await stream!.CopyToAsync(ms, TestContext.Current.CancellationToken);

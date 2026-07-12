@@ -1,4 +1,5 @@
-﻿using MeshWeaver.ContentCollections;
+using System.Reactive;
+using MeshWeaver.ContentCollections;
 
 namespace MeshWeaver.Blazor
 {
@@ -18,8 +19,11 @@ namespace MeshWeaver.Blazor
         public bool IsValid()
             => items.All(i => !string.Equals(i.Name, Name, StringComparison.OrdinalIgnoreCase));
 
-        /// <summary>Creates the new folder at the path formed by combining <c>currentPath</c> and <c>Name</c> in the content collection.</summary>
-        public Task CreateAsync()
-            => collection.CreateFolderAsync(Path.Combine(currentPath,Name));
+        /// <summary>
+        /// Creates the new folder at the path formed by combining <c>currentPath</c> and <c>Name</c>
+        /// in the content collection. Cold — the write runs on Subscribe, on the collection's pool.
+        /// </summary>
+        public IObservable<Unit> Create()
+            => collection.CreateFolder(Path.Combine(currentPath, Name));
     }
 }

@@ -1,6 +1,5 @@
 using System.Reactive.Linq;
 using MeshWeaver.Mesh;
-using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -12,10 +11,11 @@ namespace MeshWeaver.ContentCollections;
 /// node's target content collection (e.g. <c>content</c>) — collection to collection, no disk staging.
 /// <para>
 /// The request is posted to the OWNING node's hub, the only hub where the per-node <c>content</c>
-/// collection resolves. The whole copy is sealed inside ONE <see cref="IIoPool"/> operation — async
-/// lives only there (the sanctioned boundary), never on the hub action block, which merely subscribes
-/// and returns. The copy is stream-to-stream so binary assets (svg/png) survive intact; the text
-/// content API (<c>IFileContentProvider.GetFileContent</c>) would corrupt them.
+/// collection resolves. The copy composes on the pooled observable <see cref="ContentCollection"/>
+/// surface — async lives only inside the collections' I/O-pool leaves, never on the hub action
+/// block, which merely subscribes and returns. The copy is stream-to-stream so binary assets
+/// (svg/png) survive intact; the text content API (<c>IFileContentProvider.GetFileContent</c>)
+/// would corrupt them.
 /// </para>
 /// Reuse this for the static-repo content sync; do NOT hand-roll a cross-hub write or add a second
 /// <see cref="ImportContentRequest"/> (the type is wire-registered — a duplicate collides).
@@ -52,10 +52,9 @@ public static class ContentImportExtensions
             return delivery.Processed();
         }
 
-        var pool = hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.FileSystem)
-                   ?? IoPool.Unbounded;
-        // The hub action block only subscribes + returns; the copy runs on the file-system pool.
-        pool.Run(ct => CopyAsync(contentService, request, ct))
+        // The hub action block only subscribes + returns; every I/O leaf runs on the
+        // collections' own pools — this layer is pure reactive composition.
+        Copy(contentService, request)
             .Subscribe(
                 count => hub.Post(ImportContentResponse.Ok(count), o => o.ResponseFor(delivery)),
                 ex => hub.Post(ImportContentResponse.Fail(ex.Message), o => o.ResponseFor(delivery)));
@@ -63,27 +62,30 @@ public static class ContentImportExtensions
         return delivery.Processed();
     }
 
-    private static async Task<int> CopyAsync(
-        IContentService contentService, ImportContentRequest request, CancellationToken ct)
-    {
-        var source = await contentService.GetCollectionAsync(request.SourceCollection!, ct).ConfigureAwait(false)
-            ?? throw new InvalidOperationException($"Source content collection '{request.SourceCollection}' not found");
-        var target = await contentService.GetCollectionAsync(request.CollectionName, ct).ConfigureAwait(false)
-            ?? throw new InvalidOperationException($"Target content collection '{request.CollectionName}' not found");
-
-        var targetDir = (request.TargetPath ?? string.Empty).Trim('/');
-        var count = 0;
-        await foreach (var file in source.GetFiles(request.SourcePath, ct).WithCancellation(ct).ConfigureAwait(false))
-        {
-            var stream = await source.GetContentAsync(file.Path, ct).ConfigureAwait(false);
-            if (stream is null)
-                continue;
-            await using (stream.ConfigureAwait(false))
-                await target.SaveFileAsync(targetDir, file.Name, stream).ConfigureAwait(false);
-            count++;
-        }
-        return count;
-    }
+    private static IObservable<int> Copy(IContentService contentService, ImportContentRequest request)
+        => contentService.GetCollection(request.SourceCollection!)
+            .Select(source => source
+                ?? throw new InvalidOperationException($"Source content collection '{request.SourceCollection}' not found"))
+            .Zip(
+                contentService.GetCollection(request.CollectionName)
+                    .Select(target => target
+                        ?? throw new InvalidOperationException($"Target content collection '{request.CollectionName}' not found")),
+                (source, target) => (source, target))
+            .SelectMany(pair =>
+            {
+                var targetDir = (request.TargetPath ?? string.Empty).Trim('/');
+                // Concat keeps the copies strictly sequential (one file in flight at a time),
+                // matching the previous await-foreach semantics.
+                return pair.source.GetFiles(request.SourcePath)
+                    .Select(file => pair.source.GetContent(file.Path)
+                        .SelectMany(stream => stream is null
+                            ? Observable.Return(0)
+                            : pair.target.SaveFile(targetDir, file.Name, stream)
+                                .Select(_ => 1)
+                                .Finally(stream.Dispose)))
+                    .Concat()
+                    .Sum();
+            });
 }
 
 /// <summary>

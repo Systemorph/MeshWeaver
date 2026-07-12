@@ -1,4 +1,7 @@
-﻿using MeshWeaver.ContentCollections;
+﻿using System.Reactive;
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
+using MeshWeaver.ContentCollections;
 using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.Web;
@@ -11,8 +14,12 @@ namespace MeshWeaver.Blazor.FileExplorer;
 /// <summary>
 /// Blazor component that displays and manages files and folders within a named content collection.
 /// Supports browsing, uploading, downloading, creating folders, and deleting items.
+/// All collection I/O is observable end-to-end: the leaves run on the collection's
+/// <c>IIoPool</c> — never on this circuit's thread — and the component merely subscribes.
+/// A slow SMB/blob store can therefore never block the circuit (the "files disappeared"
+/// SignalR flapping this replaced).
 /// </summary>
-public partial class FileBrowser
+public partial class FileBrowser : IDisposable
 {
     [Inject] private IDialogService DialogService { get; set; } = null!;
     private IContentService ContentService => Hub.ServiceProvider.GetRequiredService<IContentService>();
@@ -46,57 +53,85 @@ public partial class FileBrowser
     [Parameter] public bool IsReadOnly { get; set; }
     private IReadOnlyCollection<CollectionItem> CollectionItems { get; set; } = [];
     FluentInputFile myFileByStream = default!;
+    private IDisposable? loadSubscription;
+
     /// <summary>
-    /// Runs after each parameter update: registers any new collection configuration, loads the collection by name,
-    /// optionally creates <c>CurrentPath</c>, and refreshes the displayed items.
+    /// Runs after each parameter update: registers any new collection configuration, then
+    /// (re)subscribes the load pipeline — resolve the collection, optionally create
+    /// <c>CurrentPath</c>, list the items. Everything I/O runs on the collection's pool; this
+    /// method only wires the subscription and returns.
     /// </summary>
-    protected override async Task OnParametersSetAsync()
+    protected override void OnParametersSet()
     {
-        await base.OnParametersSetAsync();
+        base.OnParametersSet();
 
         // Initialize collection if configuration is provided and collection doesn't exist
         if (CollectionConfiguration is not null)
             ContentService.AddConfiguration(CollectionConfiguration);
 
-        // Try to get the collection
-        Collection = CollectionName is null ? null : await ContentService.GetCollectionAsync(CollectionName);
-
-        if (CreatePath && Collection is not null && CurrentPath is not null)
-            await Collection.CreateFolderAsync(CurrentPath);
-        await RefreshContentAsync();
+        RefreshContent();
     }
-
-
 
     private const string Root = "/";
 
-    private async Task RefreshContentAsync()
+    /// <summary>
+    /// (Re)subscribes the resolve → ensure-folder → list pipeline and pushes the result into the
+    /// rendered state. Replaces any in-flight load (the previous subscription is disposed).
+    /// </summary>
+    private void RefreshContent()
     {
-        CurrentPath ??= "/";
-        if (Collection is null)
+        CurrentPath ??= Root;
+        loadSubscription?.Dispose();
+        if (CollectionName is null)
+        {
+            Collection = null;
+            CollectionItems = [];
+            SelectedItems = [];
             return;
+        }
 
-        var items = new List<CollectionItem>();
-        await foreach (var item in Collection.GetCollectionItems(CurrentPath!))
-            items.Add(item);
-        CollectionItems = items;
-        SelectedItems = [];
+        var name = CollectionName;
+        loadSubscription = ContentService.GetCollection(name)
+            .SelectMany(collection =>
+            {
+                if (collection is null)
+                    return Observable.Return<(ContentCollection? Collection, IList<CollectionItem> Items)>((null, []));
+                var ensureFolder = CreatePath && CurrentPath is not null
+                    ? collection.CreateFolder(CurrentPath)
+                    : Observable.Return(Unit.Default);
+                return ensureFolder
+                    .SelectMany(_ => collection.GetCollectionItems(CurrentPath!).ToList())
+                    .Select(items => ((ContentCollection? Collection, IList<CollectionItem> Items))(collection, items));
+            })
+            .Subscribe(
+                result =>
+                {
+                    Collection = result.Collection;
+                    CollectionItems = [.. result.Items];
+                    SelectedItems = [];
+                    InvokeAsync(StateHasChanged);
+                },
+                ex =>
+                {
+                    ToastService.ShowError($"Error loading collection '{name}': {ex.Message}");
+                    InvokeAsync(StateHasChanged);
+                });
     }
 
-
-
-
-    private async Task CollectionChanged(string collection)
+    private void CollectionChanged(string collection)
     {
         if (collection == CollectionName)
             return;
         CollectionName = collection;
-
-        Collection = CollectionName is null ? null : await ContentService.GetCollectionAsync(CollectionName);
-        await RefreshContentAsync();
-        await InvokeAsync(StateHasChanged);
+        RefreshContent();
     }
 
+    /// <summary>Disposes the in-flight load subscription with the circuit.</summary>
+    public void Dispose()
+    {
+        loadSubscription?.Dispose();
+        loadSubscription = null;
+    }
 
     private ContentCollection? Collection { get; set; }
     private IEnumerable<CollectionItem> SelectedItems { get; set; } = new List<CollectionItem>();
@@ -118,7 +153,7 @@ public partial class FileBrowser
         var dialog = await DialogService.ShowDialogAsync<CreateFolderDialog, CreateFolderModel>(new CreateFolderModel(Collection!, CurrentPath!, CollectionItems), parameters);
         var result = await dialog.Result;
         if (!result.Cancelled)
-            await RefreshContentAsync();
+            RefreshContent();
     }
     private Task NewArticleAsync(MouseEventArgs arg)
     {
@@ -143,7 +178,7 @@ public partial class FileBrowser
         var result = await dialog.Result;
         if (!result.Cancelled)
         {
-            await RefreshContentAsync();
+            RefreshContent();
 
             // Show errors if any occurred
             if (deleteModel.Errors.Any())
@@ -241,34 +276,56 @@ public partial class FileBrowser
     int progressPercent;
     string progressTitle = "";
 
-    private async Task OnFileUploadedAsync(FluentInputFileEventArgs file)
+    private void OnFileUploaded(FluentInputFileEventArgs file)
     {
         progressPercent = file.ProgressPercent;
         progressTitle = file.ProgressTitle;
+        if (Collection is null || file.LocalFile is null)
+            return;
+
+        var fileName = file.Name;
+        var tempPath = file.LocalFile.FullName;
+        // The upload was buffered to a local temp file (InputFileMode.SaveToTemporaryFolder).
+        // The factory overload opens it INSIDE the pool leaf — no I/O on the circuit, no await:
+        // subscribe-only, per the reactive rules.
+        Collection.SaveFile(CurrentPath!, fileName, () => File.OpenRead(tempPath))
+            .Finally(() => TryDeleteTempFile(tempPath))
+            .Subscribe(
+                _ => { },
+                ex => InvokeAsync(() =>
+                {
+                    ToastService.ShowError($"Error uploading {fileName}: {ex.Message}");
+                    StateHasChanged();
+                }),
+                () => InvokeAsync(() =>
+                {
+                    progressPercent = 100;
+
+                    // Post-upload seam: raise the SAME observer the MCP upload path raises
+                    // (MeshOperations.Upload → hub.RaiseContentUploaded) so a GUI upload
+                    // auto-indexes like any other upload. Fire-and-forget by contract — the
+                    // indexing runs as its own Activity and never blocks the upload (#170).
+                    // CurrentPath can carry '\' separators on Windows (the Embed breadcrumb
+                    // builds it via Path.Combine) — normalize so the seam always gets the
+                    // MCP shape (forward-slash, collection-relative, no leading slash).
+                    var folder = (CurrentPath ?? "").Replace('\\', '/').Trim('/');
+                    var relativePath = string.IsNullOrEmpty(folder) ? fileName : $"{folder}/{fileName}";
+                    Hub.RaiseContentUploaded(QualifiedCollectionPath, relativePath);
+
+                    ToastService.ShowSuccess($"File {fileName} successfully uploaded.");
+                    RefreshContent();
+                }));
+    }
+
+    private void TryDeleteTempFile(string tempPath)
+    {
         try
         {
-            if (Collection != null)
-            {
-                await Collection.SaveFileAsync(CurrentPath!, file.Name, file.Stream!);
-                progressPercent = 100;
-
-                // Post-upload seam: raise the SAME observer the MCP upload path raises
-                // (MeshOperations.Upload → hub.RaiseContentUploaded) so a GUI upload
-                // auto-indexes like any other upload. Fire-and-forget by contract — the
-                // indexing runs as its own Activity and never blocks the upload (#170).
-                // CurrentPath can carry '\' separators on Windows (the Embed breadcrumb
-                // builds it via Path.Combine) — normalize so the seam always gets the
-                // MCP shape (forward-slash, collection-relative, no leading slash).
-                var folder = (CurrentPath ?? "").Replace('\\', '/').Trim('/');
-                var relativePath = string.IsNullOrEmpty(folder) ? file.Name : $"{folder}/{file.Name}";
-                Hub.RaiseContentUploaded(QualifiedCollectionPath, relativePath);
-
-                ToastService.ShowSuccess($"File {file.Name} successfully uploaded.");
-            }
+            File.Delete(tempPath);
         }
-        catch (Exception e)
+        catch (IOException)
         {
-            ToastService.ShowError($"Error uploading {file.Name}: {e.Message}");
+            // Best-effort temp-file cleanup; the OS temp folder reclaims leftovers.
         }
     }
 
@@ -291,17 +348,17 @@ public partial class FileBrowser
         }
     }
 
-    private async Task OnCompleted(IEnumerable<FluentInputFileEventArgs> files)
+    private void OnCompleted(IEnumerable<FluentInputFileEventArgs> files)
     {
         progressPercent = 0;
         progressTitle = "";
-        await RefreshContentAsync();
+        RefreshContent();
     }
 
-    private async Task ChangePath(string path)
+    private void ChangePath(string path)
     {
         CurrentPath = path;
-        await RefreshContentAsync();
+        RefreshContent();
     }
 
     private async Task HandleFileClick(FileItem file)
