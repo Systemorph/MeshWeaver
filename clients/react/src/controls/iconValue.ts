@@ -44,18 +44,24 @@ export function isIconUrl(value: string): boolean {
   return /^(https?:|data:|blob:|\/)/i.test(value) || /\.(svg|png|jpg|jpeg|gif|webp|ico)(\?|#|$)/i.test(value);
 }
 
-/** Emoji detection — short strings that are not a path/URL/SVG reference (PortalLayoutBase.IsEmoji). */
+/** An ASCII-letters-only word ("Save", "arrowSync") — an icon NAME, never emoji. */
+function isLettersOnlyName(value: string): boolean {
+  return /^[A-Za-z]+$/.test(value);
+}
+
+/** Emoji detection — short strings that are not a path/URL/SVG reference or a letters-only icon
+ *  name (PortalLayoutBase.IsEmoji / MeshNodeImageHelper.IsEmoji). */
 export function isEmojiIcon(value: string): boolean {
   if (!value || value.length > 8) return false;
   if (isInlineSvg(value) || isIconUrl(value)) return false;
-  // A Fluent-style ASCII identifier ("Save", "arrowSync") is a NAME, not an emoji.
-  return !/^[A-Za-z][A-Za-z0-9]*$/.test(value);
+  return !isLettersOnlyName(value);
 }
 
-/** Legacy Fluent icon names (PascalCase ASCII words like "Document") on NODE icons render as
- *  nothing — the same filter MeshNodeImageHelper.GetIconForRendering applies server-side. */
+/** Legacy Fluent icon names on NODE icons render as nothing. EXACTLY the server's
+ *  MeshNodeImageHelper.IsFluentIconName: ASCII letters only, starting UPPERCASE ("Document",
+ *  "ArrowLeft") — lowercase-start or digit-carrying values are NOT filtered. */
 export function isFluentIconName(value: string): boolean {
-  return /^[A-Za-z][A-Za-z0-9]*$/.test(value);
+  return /^[A-Z][A-Za-z]*$/.test(value);
 }
 
 /** Returns the node-icon value for rendering, or null for legacy Fluent icon names
@@ -93,6 +99,8 @@ export function classifyIcon(value: Json): ClassifiedIcon {
   if (isInlineSvg(s)) return { kind: "svg", text: s };
   if (isIconUrl(s)) return { kind: "url", text: s };
   if (isEmojiIcon(s)) return { kind: "emoji", text: s };
-  if (/^(fluent-ui:|fluent:)/i.test(s) || isFluentIconName(s)) return { kind: "fluent", text: s };
+  // Any letters-only word tries the curated Fluent map (layout-area icon props carry lowercase
+  // names like "save" too — broader than the NODE-icon legacy filter isFluentIconName).
+  if (/^(fluent-ui:|fluent:)/i.test(s) || isLettersOnlyName(s)) return { kind: "fluent", text: s };
   return { kind: "emoji", text: s };
 }

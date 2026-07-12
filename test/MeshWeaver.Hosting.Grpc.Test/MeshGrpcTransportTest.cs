@@ -363,11 +363,14 @@ public class MeshGrpcTransportTest(ITestOutputHelper output) : MonolithMeshTestB
             },
             new FakeServerCallContext(new Metadata(), ctsB.Token));
 
+        // Bound the TOTAL wait (not per-frame) so the loop can never outlive the suite's method
+        // timeout under slow CI scheduling — each read gets only the remaining budget.
         string? received = null;
-        for (var i = 0; i < 20 && received is null; i++)
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(15);
+        while (received is null && DateTime.UtcNow < deadline)
         {
             ServerFrame f;
-            try { f = await NextFrame(streamB, "response on B", TimeSpan.FromSeconds(10)); }
+            try { f = await NextFrame(streamB, "response on B", deadline - DateTime.UtcNow); }
             catch (TimeoutException) { break; }
             if (f.KindCase == ServerFrame.KindOneofCase.Receive && f.Receive.Contains("survivor"))
                 received = f.Receive;

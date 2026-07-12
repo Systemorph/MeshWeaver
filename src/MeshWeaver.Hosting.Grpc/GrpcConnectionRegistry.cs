@@ -89,26 +89,22 @@ public sealed class GrpcConnectionRegistry : IDisposable
         public volatile string Owner = owner;
         public IDisposable? Route;
         public IMessageHub? ParticipantHub;
-
-        public void Dispose()
-        {
-            Route?.Dispose();
-            ParticipantHub?.Dispose();
-        }
     }
 
-    // Claim/release are rare, short and fully synchronous — a plain lock keeps the
-    // create/take-over/dispose transitions atomic (this is NOT an async gate; no hub scheduler is
-    // ever parked on it). Owner READS on the delivery hot path stay lock-free (volatile field).
+    // Claim create/take-over/release transitions are rare, short and fully synchronous — a plain
+    // lock keeps them atomic (this is NOT an async gate; no hub scheduler is ever parked on it).
+    // 🚨 The ROUTE is unregistered INSIDE the lock: RegisterStream's disposable removes by ADDRESS
+    // (MonolithRoutingService: streams.TryRemove(address)), so disposing an old route outside the
+    // lock could race a fresh Connect's re-registration for the same address and unregister the NEW
+    // route — recreating the "late frames route to nowhere" failure this claim model exists to fix.
+    // Only the participant HUB is disposed outside the lock (its disposal posts shutdown messages).
+    // Owner READS on the delivery hot path are lock-free: ConcurrentDictionary lookup + volatile field.
     private readonly object claimSync = new();
-    private readonly Dictionary<string, AddressClaim> addressClaims = new();
+    private readonly ConcurrentDictionary<string, AddressClaim> addressClaims = new();
 
     /// <summary>The connection currently owning <paramref name="addressKey"/> (delivery-time resolution).</summary>
-    private string? OwnerOf(string addressKey)
-    {
-        lock (claimSync)
-            return addressClaims.TryGetValue(addressKey, out var claim) ? claim.Owner : null;
-    }
+    private string? OwnerOf(string addressKey) =>
+        addressClaims.TryGetValue(addressKey, out var claim) ? claim.Owner : null;
 
     /// <summary>Register the per-connection outbound channel (the <c>Open</c> call drains it to the wire).
     /// Always runs first for a connection, before <see cref="Authenticate"/> / <see cref="Connect"/>.</summary>
@@ -239,21 +235,26 @@ public sealed class GrpcConnectionRegistry : IDisposable
             });
     }
 
-    /// <summary>Dispose the address's route + proxy hub IF <paramref name="connectionId"/> still owns
+    /// <summary>Release the address's route + proxy hub IF <paramref name="connectionId"/> still owns
     /// it — a newer connection's claim survives its predecessor's teardown untouched.</summary>
     private void ReleaseClaim(string addressKey, string connectionId)
     {
-        AddressClaim? toDispose = null;
+        IMessageHub? hubToDispose = null;
         lock (claimSync)
         {
             if (addressClaims.TryGetValue(addressKey, out var claim) && claim.Owner == connectionId)
             {
-                addressClaims.Remove(addressKey);
-                toDispose = claim;
+                addressClaims.TryRemove(addressKey, out _);
+                // Route unregistration is a synchronous by-ADDRESS map removal — doing it inside
+                // the lock makes it atomic with the claim transition, so a racing Connect either
+                // re-claims BEFORE (owner changed → no release at all) or re-registers AFTER the
+                // old route is gone (see the claimSync comment).
+                claim.Route?.Dispose();
+                hubToDispose = claim.ParticipantHub;
             }
         }
-        // Dispose OUTSIDE the lock — hub disposal posts shutdown messages and must not hold it.
-        toDispose?.Dispose();
+        // Hub disposal posts shutdown messages — never under the lock.
+        hubToDispose?.Dispose();
     }
 
     /// <summary>
@@ -337,9 +338,11 @@ public sealed class GrpcConnectionRegistry : IDisposable
         {
             claims = addressClaims.Values.ToArray();
             addressClaims.Clear();
+            foreach (var claim in claims)
+                claim.Route?.Dispose();
         }
         foreach (var claim in claims)
-            claim.Dispose();
+            claim.ParticipantHub?.Dispose();
         foreach (var s in connections.Values)
             s.Outbound.TryComplete();
     }

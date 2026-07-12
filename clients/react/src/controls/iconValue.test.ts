@@ -22,8 +22,9 @@ describe("classifyIcon", () => {
     expect(classifyIcon("⚙️").kind).toBe("emoji");
   });
 
-  it("classifies Fluent names — bare, prefixed, and the serialized {provider,id} object", () => {
+  it("classifies Fluent names — bare (any case), prefixed, and the serialized {provider,id} object", () => {
     expect(classifyIcon("Save")).toEqual({ kind: "fluent", text: "Save" });
+    expect(classifyIcon("save").kind).toBe("fluent"); // curated-map keys are lowercase
     expect(classifyIcon("fluent:ArrowSync").kind).toBe("fluent");
     expect(classifyIcon({ provider: "fluent-ui", id: "Document" })).toEqual({ kind: "fluent", text: "Document" });
   });
@@ -38,6 +39,11 @@ describe("classifyIcon", () => {
 describe("node-icon helpers", () => {
   it("iconForRendering filters legacy Fluent names but keeps SVGs/URLs/emoji (GetIconForRendering parity)", () => {
     expect(iconForRendering("Document")).toBeNull();
+    expect(iconForRendering("ArrowLeft")).toBeNull();
+    // EXACT server semantics (MeshNodeImageHelper.IsFluentIconName): only UPPERCASE-start,
+    // letters-only values are legacy names — lowercase-start or digit-carrying values pass through.
+    expect(iconForRendering("save")).toBe("save");
+    expect(iconForRendering("Abc123")).toBe("Abc123");
     expect(iconForRendering("/static/NodeTypeIcons/code.svg")).toBe("/static/NodeTypeIcons/code.svg");
     expect(iconForRendering("🧠")).toBe("🧠");
     expect(iconForRendering(null)).toBeNull();
