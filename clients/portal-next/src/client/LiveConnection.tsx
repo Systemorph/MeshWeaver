@@ -13,7 +13,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { AreaSource, AreaSourceFactory } from "@meshweaver/react/core";
 import { MeshAreaRegistry } from "@meshweaver/react/core";
-import { connectLive, targetKey, type AreaTarget, type LiveMesh } from "./live";
+import { acquireLiveMesh, targetKey, type AreaTarget, type LiveMesh } from "./live";
 
 export type LiveState =
   | { kind: "connecting" }
@@ -78,14 +78,16 @@ export function LiveConnectionProvider({ children }: { children: ReactNode }) {
   const wiredErrors = useRef(new Set<string>());
 
   // Join the mesh once on mount (client only) — the browser mints its own token same-origin.
+  // The connection is the TAB's shared one (acquireLiveMesh): a provider remount / StrictMode
+  // double-mount must reuse it, never open-and-close a second connection for the same per-tab
+  // participant address (closing the first disposed the server-side participant hub out from
+  // under the survivor). The tab owns the connection's lifetime (pagehide closes it), so the
+  // cleanup here only cancels state updates.
   useEffect(() => {
     let cancelled = false;
-    let mesh: LiveMesh | null = null;
-    connectLive().then(
-      (m) => {
-        mesh = m;
-        if (cancelled) m.close();
-        else setState({ kind: "live", mesh: m });
+    acquireLiveMesh().then(
+      (m: LiveMesh) => {
+        if (!cancelled) setState({ kind: "live", mesh: m });
       },
       (error) => {
         if (!cancelled) setState({ kind: "offline", reason: String((error as Error)?.message ?? error) });
@@ -93,7 +95,6 @@ export function LiveConnectionProvider({ children }: { children: ReactNode }) {
     );
     return () => {
       cancelled = true;
-      mesh?.close();
     };
   }, []);
 

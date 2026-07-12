@@ -14,9 +14,10 @@ import {
 import { ChevronDown20Regular, ChevronRight20Regular } from "@fluentui/react-icons";
 import type { Skin, UiControl } from "../area/types.js";
 import { useResolve } from "../area/context.js";
-import { resolveIconByName } from "../controls/icon.js";
+import { MeshIcon } from "../controls/MeshIcon.js";
 import { ControlRenderer, RenderArea, useChildAreas } from "./ControlRenderer.js";
-import { controlClass, controlStyle, cssAlign, cssSize } from "./style.js";
+import { controlClass, controlStyle, cssAlign, cssSize, mergeClass } from "./style.js";
+import { GRID_BREAKPOINTS } from "./meshStyles.js";
 
 export interface SkinProps {
   skin: Skin;
@@ -31,7 +32,9 @@ export function DefaultStackSkin({ skin, control }: SkinProps): ReactNode {
   const style: CSSProperties = {
     display: "flex",
     flexDirection: horizontal ? "row" : "column",
-    gap: (horizontal ? skin.horizontalGap : skin.verticalGap) ?? skin.gap ?? 8,
+    // 10px is FluentStack's default Horizontal/VerticalGap — what Blazor renders when the skin
+    // leaves the gaps unset.
+    gap: (horizontal ? skin.horizontalGap : skin.verticalGap) ?? skin.gap ?? 10,
     flexWrap: skin.wrap ? "wrap" : "nowrap",
     alignItems: cssAlign(horizontal ? skin.verticalAlignment : skin.horizontalAlignment),
     justifyContent: cssAlign(horizontal ? skin.horizontalAlignment : skin.verticalAlignment),
@@ -64,13 +67,33 @@ function Children({ control }: { control: UiControl }): ReactNode {
 function GridSkin({ skin, control }: SkinProps): ReactNode {
   const style: CSSProperties = {
     display: "grid",
-    gap: skin.spacing ?? 8,
+    gap: skin.spacing ?? 12,
     gridTemplateColumns: skin.gridTemplateColumns ?? "repeat(12, minmax(0, 1fr))",
     width: "100%",
   };
   return (
-    <div className={controlClass(control)} style={style}>
+    <div className={mergeClass("mw-grid", controlClass(control))} style={style}>
       <Children control={control} />
+    </div>
+  );
+}
+
+/**
+ * LayoutGridItemSkin — the per-item column spans of a LayoutGrid (Xs/Sm/Md/Lg/Xl/Xxl, columns out
+ * of 12), the FluentGridItem breakpoints Blazor applies. Mobile-first: the value set at the
+ * largest breakpoint at or below the viewport wins (`.mw-gi-{bp}-{n}` classes + media queries in
+ * meshStyles.ts); nothing set ⇒ full row. This used to be a passthrough, which dropped every span
+ * and rendered each grid child into a single 1-of-12 column.
+ */
+function GridItemSkin({ skin, control }: SkinProps): ReactNode {
+  const classes = ["mw-grid-item"];
+  for (const bp of Object.keys(GRID_BREAKPOINTS)) {
+    const span = Number((skin as Record<string, unknown>)[bp]);
+    if (Number.isInteger(span) && span >= 1 && span <= 12) classes.push(`mw-gi-${bp}-${span}`);
+  }
+  return (
+    <div className={mergeClass(classes.join(" "), controlClass(control))} style={{ gap: cssSize(skin.gap), minWidth: 0 }}>
+      <ControlRenderer control={control} />
     </div>
   );
 }
@@ -286,14 +309,14 @@ function SplitterSkin({ skin, control }: SkinProps): ReactNode {
 function NavMenuSkin({ skin, control }: SkinProps): ReactNode {
   return (
     <nav
-      className={controlClass(control)}
+      className={mergeClass("mw-nav-menu", controlClass(control))}
       style={{
         display: "flex",
         flexDirection: "column",
         gap: 2,
         width: cssSize(skin.width) ?? 250,
         padding: 8,
-        borderRight: "1px solid var(--colorNeutralStroke2)",
+        boxSizing: "border-box",
       }}
     >
       <Children control={control} />
@@ -303,15 +326,11 @@ function NavMenuSkin({ skin, control }: SkinProps): ReactNode {
 
 function NavGroupSkin({ skin, control }: SkinProps): ReactNode {
   const [open, setOpen] = useState<boolean>(skin.expanded !== false);
-  const GroupIcon = resolveIconByName(skin.icon);
   return (
     <div className={controlClass(control)}>
-      <div
-        onClick={() => setOpen((o) => !o)}
-        style={{ display: "flex", alignItems: "center", gap: 4, cursor: "pointer", padding: "4px 0" }}
-      >
+      <div className="mw-nav-group-header" onClick={() => setOpen((o) => !o)}>
         {open ? <ChevronDown20Regular /> : <ChevronRight20Regular />}
-        {GroupIcon ? <GroupIcon /> : null}
+        <MeshIcon value={skin.icon} size={20} />
         <Subtitle2>{String(skin.title ?? "")}</Subtitle2>
       </div>
       {open ? (
@@ -325,7 +344,7 @@ function NavGroupSkin({ skin, control }: SkinProps): ReactNode {
 
 function CardSkin({ control }: SkinProps): ReactNode {
   return (
-    <Card className={controlClass(control)} style={{ padding: 12 }}>
+    <Card className={controlClass(control)} style={{ padding: 16, rowGap: 8, ...controlStyle(control) }}>
       <ControlRenderer control={control} />
     </Card>
   );
@@ -388,7 +407,7 @@ export const skinRegistry: Record<string, SkinComponent> = {
   LayoutStack: DefaultStackSkin,
   Layout: PlainLayoutSkin,
   LayoutGrid: GridSkin,
-  LayoutGridItem: passthrough,
+  LayoutGridItem: GridItemSkin,
   Tabs: TabsSkin,
   Tab: passthrough,
   Toolbar: ToolbarSkin,

@@ -59,3 +59,23 @@ export {
 } from "./render/embeddedArea.js";
 export { getPointer, setPointer, mergePatch, resolve, bindingPointer } from "./area/pointer.js";
 export type { AreaSource, AreaTree, UiControl, Skin, NamedArea, MeshEvent, Json } from "./area/types.js";
+// Field/option binding + string coercion — shared by ALL leaf packs (the RN pack used to
+// re-implement these because they weren't exported from the core).
+export { str, useClick, useField, useOptions, useText, type Field } from "./controls/common.js";
+// Icon-value classification (pure logic, no DOM) — the one decision table every pack and shell
+// dispatches icons through; each platform renders the classified kinds with its own leaves.
+export {
+  classifyIcon,
+  iconForRendering,
+  iconNameOf,
+  isEmojiIcon,
+  isFluentIconName,
+  isIconUrl,
+  isInlineSvg,
+  sanitizeInlineSvg,
+  type ClassifiedIcon,
+  type IconKind,
+} from "./controls/iconValue.js";
+// The vendored Blazor github-markdown CSS (pure strings) — web injects it via meshStyles, the RN
+// web shell injects it verbatim.
+export { githubMarkdownCss, githubMarkdownDarkCss, scopeMarkdownCss } from "./theme/githubMarkdown.js";

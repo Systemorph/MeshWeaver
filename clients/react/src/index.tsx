@@ -3,12 +3,14 @@
 // demo source, or the gRPC-backed live source. This is the web/Electron/React-Native-capable analog of
 // the MAUI MauiViewPack — the SAME UiControl tree, a Fluent React leaf pack.
 
+import { useEffect } from "react";
 import { FluentProvider, type Theme } from "@fluentui/react-components";
 import type { AreaSource } from "./area/types.js";
 import { ScopeProvider } from "./area/context.js";
 import { RenderArea } from "./render/ControlRenderer.js";
 import { RegistryProvider } from "./render/registryContext.js";
 import { fluentPack } from "./render/registry.js";
+import { ensureMeshStyles } from "./render/meshStyles.js";
 import { useThemeMode } from "./theme/themeMode.js";
 import { MeshOpsProvider, type MeshOps } from "./live/meshOps.js";
 
@@ -32,6 +34,10 @@ export interface MeshAreaViewProps {
  *  without it the area collapses to content height (the "page height is not 100%" parity bug). */
 export function MeshAreaView({ source, rootArea, theme, themeStorageKey, ops }: MeshAreaViewProps) {
   const { theme: preferredTheme } = useThemeMode({ storageKey: themeStorageKey });
+  // The renderer stylesheet (FAST token aliases, markdown typography, nav + grid classes) —
+  // idempotent per document. SSR shells that stream the first paint (portal-next) additionally
+  // render meshStylesText() into <head> so the server-rendered HTML is styled before hydration.
+  useEffect(() => ensureMeshStyles(), []);
   return (
     <FluentProvider theme={theme ?? preferredTheme} style={{ height: "100%", minHeight: 0 }}>
       <MeshOpsProvider ops={ops ?? null}>
@@ -99,3 +105,19 @@ export {
   type UseThemeModeOptions,
 } from "./theme/themeMode.js";
 export { ThemeToggle, type ThemeToggleProps } from "./theme/ThemeToggle.js";
+export { MeshIcon, InitialBubble, type MeshIconProps } from "./controls/MeshIcon.js";
+export {
+  classifyIcon,
+  iconForRendering,
+  iconNameOf,
+  isEmojiIcon,
+  isFluentIconName,
+  isIconUrl,
+  isInlineSvg,
+  sanitizeInlineSvg,
+  type ClassifiedIcon,
+  type IconKind,
+} from "./controls/iconValue.js";
+export { resolveIconByName } from "./controls/icon.js";
+export { ensureMeshStyles, meshStylesText, GRID_BREAKPOINTS, MESH_STYLES_ID } from "./render/meshStyles.js";
+export { str, useClick, useField, useOptions, useText, type Field } from "./controls/common.js";

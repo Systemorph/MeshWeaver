@@ -77,6 +77,35 @@ function stableClientId(): string {
   }
 }
 
+// ONE live connection per TAB — the connection identity (portal/<stableClientId>) is per-tab, so
+// the connection must be too. Two concurrent connectLive() calls (React StrictMode double-mount,
+// provider remount, HMR) used to open TWO gRPC connections CLAIMING THE SAME participant address;
+// tearing the first down disposed the server-side participant hub out from under the second, after
+// which every late subscription (named areas, @@ embeds, home dashboard regions) silently delivered
+// nothing. The shared promise makes the second mount reuse the first connection; the tab's pagehide
+// closes it.
+let sharedLive: Promise<LiveMesh> | null = null;
+
+/** The tab's shared live-mesh connection (created on first use; reused by every consumer). */
+export function acquireLiveMesh(baseUrl?: string): Promise<LiveMesh> {
+  if (!sharedLive) {
+    sharedLive = connectLive(baseUrl).catch((error) => {
+      sharedLive = null; // a failed connect is not cached — the next mount retries
+      throw error;
+    });
+    if (typeof window !== "undefined")
+      window.addEventListener(
+        "pagehide",
+        () => {
+          void sharedLive?.then((m) => m.close()).catch(() => undefined);
+          sharedLive = null;
+        },
+        { once: true },
+      );
+  }
+  return sharedLive;
+}
+
 /** Mint a short-lived API token off the browser session, then join the mesh over gRPC-web. */
 export async function connectLive(baseUrl: string = window.location.origin): Promise<LiveMesh> {
   const resp = await fetch(`${baseUrl}/api/tokens`, {

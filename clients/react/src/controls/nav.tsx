@@ -1,40 +1,33 @@
 import type { ReactNode } from "react";
-import { Link } from "@fluentui/react-components";
 import type { UiControl } from "../area/types.js";
 import { useResolve } from "../area/context.js";
 import { useMeshLink } from "../area/navigation.js";
 import { useClick, useText } from "./common.js";
-import { resolveIconByName } from "./icon.js";
+import { MeshIcon } from "./MeshIcon.js";
 
+// Styling lives in the shared stylesheet (meshStyles.ts .mw-nav-link rules) so hover/active
+// states match Blazor's FluentNavLink; the component only maps the control to an anchor.
 function NavLink({ control }: { control: UiControl }): ReactNode {
   const title = useText(control.title);
   const link = useMeshLink(useText(control.url) || undefined);
   const emitClick = useClick(control);
   const active = !!useResolve(control.isActive);
-  // Pass the RESOLVED raw value (a name string OR a FluentIcon {provider,id,…} object) — not the
-  // stringified form, which would collapse the object to "[object Object]" and render blank.
-  const Icon = resolveIconByName(useResolve(control.icon));
+  // Pass the RESOLVED raw value (a name string, URL, inline SVG, emoji OR a FluentIcon
+  // {provider,id,…} object) — MeshIcon classifies every shape; nav icons in the mesh are
+  // typically /static/NodeTypeIcons/*.svg URLs or emoji, which the old name-only resolver dropped.
+  const icon = useResolve(control.icon);
   return (
-    <Link
+    <a
       href={link.href}
+      className={active ? "mw-nav-link mw-nav-link-active" : "mw-nav-link"}
       onClick={(e) => {
         emitClick?.();
         link.onClick?.(e);
       }}
-      style={{
-        display: "flex",
-        alignItems: "center",
-        gap: 6,
-        padding: "4px 8px",
-        borderRadius: 4,
-        fontWeight: active ? 600 : 400,
-        background: active ? "var(--colorNeutralBackground1Selected)" : undefined,
-        textDecoration: "none",
-      }}
     >
-      {Icon ? <Icon /> : null}
-      {title}
-    </Link>
+      <MeshIcon value={icon} size={20} />
+      <span className="mw-nav-link-text">{title}</span>
+    </a>
   );
 }
 

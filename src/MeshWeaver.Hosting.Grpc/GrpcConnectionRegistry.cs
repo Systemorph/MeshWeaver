@@ -69,9 +69,46 @@ public sealed class GrpcConnectionRegistry : IDisposable
         AccessContext User,
         ChannelWriter<ServerFrame> Outbound,
         bool Trusted = false,
-        IDisposable? Route = null,
-        IMessageHub? ParticipantHub = null);
+        string? ClaimedAddress = null);
     private readonly ConcurrentDictionary<string, ConnectionState> connections = new();
+
+    /// <summary>
+    /// The mesh-facing registration for one participant ADDRESS — owned by the address, not by a
+    /// connection. A participant address can legitimately be claimed by MORE THAN ONE connection
+    /// over its lifetime (the portal client uses a STABLE per-tab address, so a reload, a React
+    /// double-mount, or a reconnect opens a second connection for the SAME address while the first
+    /// is still tearing down). The LATEST claimant owns the address: pushes resolve the owner at
+    /// delivery time, and a disconnect disposes the route + proxy hub ONLY when the disconnecting
+    /// connection still owns it. Storing these per-connection instead (the previous shape) let the
+    /// FIRST connection's disconnect dispose the hub out from under the survivor — every later
+    /// frame then failed routing ("No node found at 'portal/…'") while the survivor's stream stayed
+    /// open, so nested-area subscriptions silently delivered nothing.
+    /// </summary>
+    private sealed class AddressClaim(string owner)
+    {
+        public volatile string Owner = owner;
+        public IDisposable? Route;
+        public IMessageHub? ParticipantHub;
+
+        public void Dispose()
+        {
+            Route?.Dispose();
+            ParticipantHub?.Dispose();
+        }
+    }
+
+    // Claim/release are rare, short and fully synchronous — a plain lock keeps the
+    // create/take-over/dispose transitions atomic (this is NOT an async gate; no hub scheduler is
+    // ever parked on it). Owner READS on the delivery hot path stay lock-free (volatile field).
+    private readonly object claimSync = new();
+    private readonly Dictionary<string, AddressClaim> addressClaims = new();
+
+    /// <summary>The connection currently owning <paramref name="addressKey"/> (delivery-time resolution).</summary>
+    private string? OwnerOf(string addressKey)
+    {
+        lock (claimSync)
+            return addressClaims.TryGetValue(addressKey, out var claim) ? claim.Owner : null;
+    }
 
     /// <summary>Register the per-connection outbound channel (the <c>Open</c> call drains it to the wire).
     /// Always runs first for a connection, before <see cref="Authenticate"/> / <see cref="Connect"/>.</summary>
@@ -148,38 +185,75 @@ public sealed class GrpcConnectionRegistry : IDisposable
     /// </summary>
     public void Connect(Address address, string connectionId)
     {
-        var route = routingService.RegisterStream(address, (delivery, ct) => PushToClient(connectionId, delivery, ct));
-        var participantHub = hub.GetHostedHub(address, config =>
-            // The proxy hub only FORWARDS — a participant's own protocol types (registered nowhere
-            // on the server) must pass through as RawJson instead of failing deserialization.
-            config.Set(new RawJsonPassThrough())
-                .WithRoutes(routes =>
-                routes.WithHandler((delivery, ct) =>
-                    // Forward messages addressed to the participant FROM elsewhere (responses, stream
-                    // changes). Leave the proxy hub's own self/lifecycle messages (InitializeHubRequest,
-                    // disposal — sender == the participant) for the hub to process normally.
-                    //
-                    // 🚨 SYNCHRONOUS forward — NOT the async PushToClient. HierarchicalRouting folds the
-                    // route chain synchronously (it Subscribes each handler and expects the result inline,
-                    // Observable.Return-shaped). An ioPool.Invoke(async …) emits on a LATER turn, so the
-                    // fold never sees the Forwarded() state: the delivery falls through to local dispatch
-                    // → "No handler found for DataChangedEvent" storms, AND the racing async pushes reorder
-                    // frames (a layout Full snapshot can land after a later Patch → the client wipes fresh
-                    // content). Forwarding on the proxy hub's own single-threaded action block keeps
-                    // delivery order and satisfies the sync-fold contract.
-                    delivery.Sender is not null && delivery.Sender.Equals(address)
-                        ? Observable.Return(delivery)
-                        : ForwardToClientSync(connectionId, delivery))));
+        var addressKey = address.ToString();
+        // Claim the address for THIS connection (latest claimant wins); the route + proxy hub are
+        // created once per address and resolve the owning connection at DELIVERY time, so a newer
+        // connection re-claiming the same per-tab address transparently takes over the pushes.
+        lock (claimSync)
+        {
+            if (addressClaims.TryGetValue(addressKey, out var existing))
+            {
+                existing.Owner = connectionId;
+            }
+            else
+            {
+                var created = new AddressClaim(connectionId);
+                created.Route = routingService.RegisterStream(address,
+                    (delivery, ct) => PushToClient(OwnerOf(addressKey) ?? connectionId, delivery, ct));
+                created.ParticipantHub = hub.GetHostedHub(address, config =>
+                    // The proxy hub only FORWARDS — a participant's own protocol types (registered nowhere
+                    // on the server) must pass through as RawJson instead of failing deserialization.
+                    config.Set(new RawJsonPassThrough())
+                        .WithRoutes(routes =>
+                        routes.WithHandler((delivery, ct) =>
+                            // Forward messages addressed to the participant FROM elsewhere (responses, stream
+                            // changes). Leave the proxy hub's own self/lifecycle messages (InitializeHubRequest,
+                            // disposal — sender == the participant) for the hub to process normally.
+                            //
+                            // 🚨 SYNCHRONOUS forward — NOT the async PushToClient. HierarchicalRouting folds the
+                            // route chain synchronously (it Subscribes each handler and expects the result inline,
+                            // Observable.Return-shaped). An ioPool.Invoke(async …) emits on a LATER turn, so the
+                            // fold never sees the Forwarded() state: the delivery falls through to local dispatch
+                            // → "No handler found for DataChangedEvent" storms, AND the racing async pushes reorder
+                            // frames (a layout Full snapshot can land after a later Patch → the client wipes fresh
+                            // content). Forwarding on the proxy hub's own single-threaded action block keeps
+                            // delivery order and satisfies the sync-fold contract.
+                            delivery.Sender is not null && delivery.Sender.Equals(address)
+                                ? Observable.Return(delivery)
+                                : ForwardToClientSync(OwnerOf(addressKey) ?? connectionId, delivery))));
+                addressClaims[addressKey] = created;
+            }
+        }
+
         connections.AddOrUpdate(connectionId,
             // Begin() always runs first, so the "add" branch is a defensive fallback only.
             _ => new ConnectionState(Anonymous, Channel.CreateUnbounded<ServerFrame>().Writer,
-                Route: route, ParticipantHub: participantHub),
+                ClaimedAddress: addressKey),
             (_, s) =>
             {
-                s.Route?.Dispose();
-                s.ParticipantHub?.Dispose();
-                return s with { Route = route, ParticipantHub = participantHub };
+                // The same connection re-claiming a DIFFERENT address releases its previous claim
+                // (if it still owns it); a re-claim of the same address is a no-op owner refresh.
+                if (s.ClaimedAddress is not null && s.ClaimedAddress != addressKey)
+                    ReleaseClaim(s.ClaimedAddress, connectionId);
+                return s with { ClaimedAddress = addressKey };
             });
+    }
+
+    /// <summary>Dispose the address's route + proxy hub IF <paramref name="connectionId"/> still owns
+    /// it — a newer connection's claim survives its predecessor's teardown untouched.</summary>
+    private void ReleaseClaim(string addressKey, string connectionId)
+    {
+        AddressClaim? toDispose = null;
+        lock (claimSync)
+        {
+            if (addressClaims.TryGetValue(addressKey, out var claim) && claim.Owner == connectionId)
+            {
+                addressClaims.Remove(addressKey);
+                toDispose = claim;
+            }
+        }
+        // Dispose OUTSIDE the lock — hub disposal posts shutdown messages and must not hold it.
+        toDispose?.Dispose();
     }
 
     /// <summary>
@@ -202,13 +276,15 @@ public sealed class GrpcConnectionRegistry : IDisposable
             hub.DeliverMessage(delivery.SetAccessContext(user));
     }
 
-    /// <summary>Forget the connection's identity, complete its outbound channel, and dispose its route.</summary>
+    /// <summary>Forget the connection's identity, complete its outbound channel, and release its
+    /// address claim — which disposes the route + proxy hub only if no NEWER connection has
+    /// re-claimed the address in the meantime (per-tab stable addresses reconnect legitimately).</summary>
     public void Disconnect(string connectionId)
     {
         if (connections.TryRemove(connectionId, out var s))
         {
-            s.Route?.Dispose();
-            s.ParticipantHub?.Dispose();
+            if (s.ClaimedAddress is not null)
+                ReleaseClaim(s.ClaimedAddress, connectionId);
             s.Outbound.TryComplete();
         }
     }
@@ -256,11 +332,15 @@ public sealed class GrpcConnectionRegistry : IDisposable
     /// <inheritdoc />
     public void Dispose()
     {
-        foreach (var s in connections.Values)
+        AddressClaim[] claims;
+        lock (claimSync)
         {
-            s.Route?.Dispose();
-            s.ParticipantHub?.Dispose();
-            s.Outbound.TryComplete();
+            claims = addressClaims.Values.ToArray();
+            addressClaims.Clear();
         }
+        foreach (var claim in claims)
+            claim.Dispose();
+        foreach (var s in connections.Values)
+            s.Outbound.TryComplete();
     }
 }

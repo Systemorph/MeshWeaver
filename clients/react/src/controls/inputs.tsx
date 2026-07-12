@@ -21,7 +21,8 @@ import type { UiControl } from "../area/types.js";
 import { useResolve } from "../area/context.js";
 import { useMeshLink } from "../area/navigation.js";
 import { str, useClick, useField, useOptions, useText } from "./common.js";
-import { resolveIconByName } from "./icon.js";
+import { MeshIcon } from "./MeshIcon.js";
+import { classifyIcon } from "./iconValue.js";
 import { controlStyle } from "../render/style.js";
 
 function field(control: UiControl, node: ReactNode): ReactNode {
@@ -220,10 +221,10 @@ function SearchBoxView({ control }: { control: UiControl }): ReactNode {
 }
 
 function iconOf(value: unknown): JSX.Element | undefined {
-  // Pass the raw value (name string OR FluentIcon {provider,id,…} object) straight to the resolver —
-  // stringifying an object first collapsed it to "[object Object]" and rendered no icon.
-  const Cmp = resolveIconByName(value);
-  return Cmp ? <Cmp /> : undefined;
+  // MeshIcon dispatches every icon shape (name / {provider,id} object / URL / inline SVG / emoji) —
+  // menu items and buttons carry emoji and SVG-URL icons in the mesh, not just Fluent names.
+  if (classifyIcon(value as never).kind === "none") return undefined;
+  return <MeshIcon value={value as never} size={20} />;
 }
 
 export const inputControls = {

@@ -6,7 +6,8 @@ import { useMeshLink } from "../area/navigation.js";
 import { controlClass, mergeClass } from "../render/style.js";
 import { useThemeMode } from "../theme/themeMode.js";
 import { str, useField, useText } from "./common.js";
-import { AddressAreaEmbed, sanitizeInlineSvg } from "./display.js";
+import { AddressAreaEmbed } from "./display.js";
+import { InitialBubble, MeshIcon } from "./MeshIcon.js";
 import { ThreadChatView } from "./threadChat.js";
 import { MeshNodeCollectionView, MeshSearchView } from "./meshLive.js";
 import { documentControls } from "./documentControls.js";
@@ -102,39 +103,21 @@ function MeshNodeCardView({ control }: { control: UiControl }): ReactNode {
     );
   }
 
-  const isInlineSvg = imageUrl.trimStart().toLowerCase().startsWith("<svg");
-  const isEmoji = !!imageUrl && !isInlineSvg && !imageUrl.includes("/") && !imageUrl.startsWith("data:");
   const truncatedTitle = title.length > 64 ? `${title.slice(0, 63).trimEnd()}…` : title;
   const truncatedDescription = description.length > 100 ? `${description.slice(0, 97)}...` : description;
-  const placeholderStyle: React.CSSProperties = {
-    width: 48,
-    height: 48,
-    flexShrink: 0,
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    borderRadius: 6,
-  };
 
   const card = (
     <Card className={mergeClass("mesh-node-card", controlClass(control))} style={{ cursor: link.href ? "pointer" : undefined, width: "100%", padding: 12 }}>
       <div className="mesh-node-card-content" style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 0 }}>
-        {isInlineSvg ? (
-          <div className="mesh-node-card-image" style={placeholderStyle} dangerouslySetInnerHTML={{ __html: sanitizeInlineSvg(imageUrl) }} />
-        ) : isEmoji ? (
-          <div className="mesh-node-card-placeholder" style={{ ...placeholderStyle, fontSize: 32 }}>
-            {imageUrl}
-          </div>
-        ) : imageUrl ? (
-          <img src={imageUrl} alt={title} className="mesh-node-card-image" style={{ ...placeholderStyle, objectFit: "cover" }} />
-        ) : (
-          <div
-            className="mesh-node-card-placeholder"
-            style={{ ...placeholderStyle, background: "var(--colorBrandBackground2)", fontWeight: 600, fontSize: 20 }}
-          >
-            {(title[0] ?? "?").toUpperCase()}
-          </div>
-        )}
+        <MeshIcon
+          value={imageUrl}
+          size={48}
+          className="mesh-node-card-image"
+          style={{ borderRadius: 6, objectFit: "cover" }}
+          fallback={
+            <InitialBubble name={title} size={48} className="mesh-node-card-placeholder" style={{ borderRadius: 6, fontSize: 20 }} />
+          }
+        />
         <div className="mesh-node-card-text" style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
           <Text
             className="mesh-node-card-title"

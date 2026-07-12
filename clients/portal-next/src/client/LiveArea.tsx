@@ -15,8 +15,8 @@
 // embeds, …) hydrate through EmbeddedAreaProvider — each opens its own live source over the same
 // connection, exactly like the Vite SPA.
 
-import { useEffect, useMemo, useSyncExternalStore } from "react";
-import { Button, MessageBar, MessageBarActions, MessageBarBody } from "@fluentui/react-components";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { Button, MessageBar, MessageBarActions, MessageBarBody, Spinner } from "@fluentui/react-components";
 import { EmbeddedAreaProvider, MeshAreaView, StaticAreaSource } from "@meshweaver/react";
 import type { AreaSource, AreaTree } from "@meshweaver/react";
 import { rootAreaOf, targetKey, type AreaTarget } from "./live";
@@ -154,12 +154,44 @@ export function LiveArea({ path, target, initialTree, initialRootArea = "", unau
       {view && embedFactory ? (
         <EmbeddedAreaProvider factory={embedFactory}>{view}</EmbeddedAreaProvider>
       ) : (
-        view ?? (!unauthenticated ? (
-          <div data-mw-connecting style={{ padding: 48, textAlign: "center", opacity: 0.7 }}>
-            Connecting to the mesh…
-          </div>
-        ) : null)
+        view ?? (!unauthenticated ? <ConnectingState path={path} connecting={live.state.kind === "connecting"} /> : null)
       )}
+    </div>
+  );
+}
+
+/**
+ * The no-content pending state — a spinner that ESCALATES after a bounded wait instead of showing
+ * "Connecting to the mesh…" forever (the audit found /settings pending indefinitely with no signal).
+ * Stream faults still surface through the areaErrors MessageBar the moment they arrive; this covers
+ * the silent case: no SSR snapshot AND no live frame.
+ */
+function ConnectingState({ path, connecting }: { path: string; connecting: boolean }) {
+  const [stalled, setStalled] = useState(false);
+  useEffect(() => {
+    const t = setTimeout(() => setStalled(true), 10_000);
+    return () => clearTimeout(t);
+  }, []);
+  if (!stalled)
+    return (
+      <div data-mw-connecting style={{ padding: 48, display: "flex", justifyContent: "center" }}>
+        <Spinner size="small" label={connecting ? "Connecting to the mesh…" : `Loading “${path || "home"}”…`} />
+      </div>
+    );
+  return (
+    <div data-mw-connecting-stalled style={{ padding: 24 }}>
+      <MessageBar intent="warning">
+        <MessageBarBody>
+          {connecting
+            ? "Still connecting to the mesh — the live connection has not come up."
+            : `“${path || "home"}” has not delivered any content — the path may not resolve to a node you can read.`}
+        </MessageBarBody>
+        <MessageBarActions>
+          <Button size="small" onClick={() => window.location.reload()}>
+            Reload
+          </Button>
+        </MessageBarActions>
+      </MessageBar>
     </div>
   );
 }

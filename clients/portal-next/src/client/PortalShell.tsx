@@ -20,6 +20,7 @@ import Link from "next/link";
 import { Button, FluentProvider, Text } from "@fluentui/react-components";
 import { Dismiss24Regular, Navigation24Regular } from "@fluentui/react-icons";
 import { ThemeToggle } from "@meshweaver/react";
+import { Breadcrumbs } from "./Breadcrumbs";
 import { HeaderMenus } from "./HeaderMenus";
 import { MeshNavigationProvider } from "./MeshNavigation";
 import { MeshWeaverLogo } from "./MeshWeaverLogo";
@@ -48,7 +49,7 @@ export function PortalShell({ children }: { children: ReactNode }) {
           <div
             style={{
               display: "grid",
-              gridTemplateRows: "52px 1fr",
+              gridTemplateRows: "52px auto 1fr",
               height: "100vh",
             }}
           >
@@ -118,6 +119,9 @@ export function PortalShell({ children }: { children: ReactNode }) {
                 </>
               )}
             </header>
+
+            {/* Breadcrumb row — the Blazor shell's ⌂ Home › … bar (hidden on mobile). */}
+            {!isMobile ? <Breadcrumbs /> : <div />}
 
             <div style={{ display: "flex", minHeight: 0 }}>
               <main
