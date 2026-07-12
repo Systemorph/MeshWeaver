@@ -1,3 +1,5 @@
+using System.Reactive.Linq;
+
 namespace MeshWeaver.GitSync;
 
 /// <summary>
@@ -32,6 +34,35 @@ public interface IGitHubRepoClient
     /// </summary>
     IObservable<RepoSnapshot> Fetch(
         string repositoryUrl, string commitish, string? subdirectory, string accessToken);
+
+    /// <summary>
+    /// Filtered fetch: like <see cref="Fetch(string, string, string?, string)"/> but downloads ONLY
+    /// the blobs whose subdirectory-relative path satisfies <paramref name="pathFilter"/> — e.g.
+    /// every package's <c>*/index.json</c> manifest without pulling the rest of the repo. The
+    /// default implementation fetches everything and filters afterwards (correct on any
+    /// implementation); <see cref="OctokitGitHubRepoClient"/> overrides it to filter the tree
+    /// BEFORE the per-blob reads, so a manifest scan of a large repo costs a handful of calls.
+    /// </summary>
+    IObservable<RepoSnapshot> Fetch(
+        string repositoryUrl, string commitish, string? subdirectory, string accessToken,
+        Func<string, bool> pathFilter)
+    {
+        ArgumentNullException.ThrowIfNull(pathFilter);
+        return Fetch(repositoryUrl, commitish, subdirectory, accessToken)
+            .Select(snapshot => new RepoSnapshot(
+                snapshot.CommitSha,
+                snapshot.Files.Where(f => pathFilter(f.Path)).ToArray()));
+    }
+
+    /// <summary>
+    /// The commit SHA a commitish currently resolves to — ONE cheap API call, no tree read, no blob
+    /// reads. This is the git-history change counter: poll it and re-fetch only when it moved past
+    /// the SHA you already processed (deletions included — the snapshot at the new SHA is the full
+    /// truth). The default implementation falls back to a full fetch's SHA (correct, not cheap);
+    /// <see cref="OctokitGitHubRepoClient"/> overrides it with the single ref/commit lookup.
+    /// </summary>
+    IObservable<string> GetHeadSha(string repositoryUrl, string commitish, string accessToken)
+        => Fetch(repositoryUrl, commitish, null, accessToken).Select(snapshot => snapshot.CommitSha);
 
     /// <summary>
     /// Creates <see cref="GitHubCreateBranchRequest.NewBranch"/> from
