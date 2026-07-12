@@ -9,17 +9,27 @@ namespace MeshWeaver.Data;
 public abstract record WorkspaceReference
 {
     /// <summary>
-    /// Encodes a value for safe use as a reference segment, escaping <c>.</c> as <c>%9Y</c> in strings.
+    /// Encodes a value for safe use as ONE reference/URL segment, escaping <c>.</c> as <c>%9Y</c>
+    /// and <c>/</c> as <c>%9Z</c> in strings. Escaping the slash keeps a path-shaped id (e.g. a
+    /// source Code node path in a NodeType shell's <c>{node}/Code/{id}</c> href) a SINGLE segment:
+    /// with raw slashes the URL resolver's prefix probe contains segments like <c>Source</c>/<c>Test</c>,
+    /// which the satellite-table mapping routes to the <c>code</c> table for the WHOLE probe — the
+    /// node's ancestors then match nothing and navigation dies with "Page not found"
+    /// (Chess/GambitHunt shell links, 2026-07-12). Same principle as the base64url node-bound
+    /// DataContext (<c>LayoutAreaReference.MeshNodePrefix</c>): ids must not leak path segments.
     /// </summary>
     /// <param name="value">The value to encode.</param>
     /// <returns>The encoded value (strings escaped; other values unchanged).</returns>
-    public static object Encode(object value) => value is string s ? s.Replace(".", "%9Y") : value;
+    public static object Encode(object value) =>
+        value is string s ? s.Replace(".", "%9Y").Replace("/", "%9Z") : value;
     /// <summary>
-    /// Reverses <see cref="Encode"/>, restoring <c>.</c> from <c>%9Y</c> in strings.
+    /// Reverses <see cref="Encode"/>, restoring <c>/</c> from <c>%9Z</c> and <c>.</c> from
+    /// <c>%9Y</c> in strings.
     /// </summary>
     /// <param name="value">The value to decode.</param>
     /// <returns>The decoded value (strings unescaped; other values unchanged).</returns>
-    public static object Decode(object value) => value is string s ? s.Replace("%9Y", ".") : value;
+    public static object Decode(object value) =>
+        value is string s ? s.Replace("%9Z", "/").Replace("%9Y", ".") : value;
 
 }
 
