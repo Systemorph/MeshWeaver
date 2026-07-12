@@ -27,7 +27,6 @@ public sealed class ContentIndexingObserver : IContentUploadObserver
 {
     private readonly IMessageHub hub;
     private readonly ContentIndexingService indexingService;
-    private readonly IIoPool fileSystemPool;
     private readonly ILogger<ContentIndexingObserver> logger;
 
     /// <summary>
@@ -47,8 +46,6 @@ public sealed class ContentIndexingObserver : IContentUploadObserver
         this.logger = logger ?? hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger<ContentIndexingObserver>()
             ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<ContentIndexingObserver>.Instance;
-        this.fileSystemPool = hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.FileSystem)
-            ?? IoPool.Unbounded;
     }
 
     /// <summary>
@@ -128,7 +125,7 @@ public sealed class ContentIndexingObserver : IContentUploadObserver
             hub,
             PartitionOf(collectionPath),
             $"Index {fileName}",
-            ctx => RegisterCollection(collectionPath).SelectMany(contentService => ReadBytes(contentService, collectionPath, filePath, ctx.CancellationToken)
+            ctx => RegisterCollection(collectionPath).SelectMany(contentService => ReadBytes(contentService, collectionPath, filePath)
                 .SelectMany(bytes =>
                 {
                     if (bytes is null)
@@ -219,14 +216,14 @@ public sealed class ContentIndexingObserver : IContentUploadObserver
         Observable.Defer(() =>
         {
             ctx.Log($"Scanning collection '{collectionPath}'.");
-            return RegisterCollection(collectionPath).SelectMany(contentService => EnumerateFiles(contentService, collectionPath, ctx.CancellationToken)
+            return RegisterCollection(collectionPath).SelectMany(contentService => EnumerateFiles(contentService, collectionPath)
                 // Sequentially index each file (Concat): each IndexFile leaf takes its own pool slots;
                 // serialising the walk keeps the activity log ordered and embed concurrency bounded.
                 // Each file emits its failure count (0 = indexed/skipped/no-text, 1 = failed).
                 .Select(filePath => Observable.Defer(() =>
                 {
                     ctx.CancellationToken.ThrowIfCancellationRequested();
-                    return ReadBytes(contentService, collectionPath, filePath, ctx.CancellationToken)
+                    return ReadBytes(contentService, collectionPath, filePath)
                         .SelectMany(bytes =>
                         {
                             if (bytes is null)
@@ -254,63 +251,38 @@ public sealed class ContentIndexingObserver : IContentUploadObserver
         });
 
     /// <summary>
-    /// Reads a file's bytes back from the collection via the FileSystem I/O-pool leaf (never inline on
-    /// the hub thread). Emits null when the file/collection is absent.
+    /// Reads a file's bytes back from the collection. The read leaf runs on the collection's own
+    /// I/O pool (never inline on the hub thread); cancellation propagates by unsubscribing the
+    /// chain (the activity teardown disposes it). Emits null when the file/collection is absent.
     /// </summary>
-    private IObservable<byte[]?> ReadBytes(
-        IContentService contentService, string collectionPath, string filePath, CancellationToken ct) =>
-        fileSystemPool.Invoke<byte[]?>(async token =>
-        {
-            using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, token);
-            var stream = await contentService.GetContentAsync(collectionPath, filePath.TrimStart('/'), linked.Token)
-                .ConfigureAwait(false);
-            if (stream is null)
-                return null;
-            await using (stream)
-            {
-                using var ms = new MemoryStream();
-                await stream.CopyToAsync(ms, linked.Token).ConfigureAwait(false);
-                return ms.ToArray();
-            }
-        });
+    private static IObservable<byte[]?> ReadBytes(
+        IContentService contentService, string collectionPath, string filePath) =>
+        contentService.GetCollection(collectionPath)
+            .SelectMany(collection => collection is null
+                ? Observable.Return<byte[]?>(null)
+                : collection.GetContentBytes(filePath.TrimStart('/')));
 
     /// <summary>
     /// Recursively enumerates every file path (relative to the collection root) in
-    /// <paramref name="collectionPath"/>. Each walk step runs on the FileSystem I/O-pool leaf.
+    /// <paramref name="collectionPath"/>. Each walk step runs on the collection's I/O pool.
     /// </summary>
-    private IObservable<string> EnumerateFiles(
-        IContentService contentService, string collectionPath, CancellationToken ct) =>
-        fileSystemPool.InvokeStream(token => WalkFiles(contentService, collectionPath, ct, token));
+    private static IObservable<string> EnumerateFiles(
+        IContentService contentService, string collectionPath) =>
+        contentService.GetCollection(collectionPath)
+            .SelectMany(collection => collection is null
+                ? Observable.Empty<string>()
+                : WalkDir(collection, "/"));
 
-    private async IAsyncEnumerable<string> WalkFiles(
-        IContentService contentService,
-        string collectionPath,
-        CancellationToken outerCt,
-        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken poolCt)
-    {
-        using var linked = CancellationTokenSource.CreateLinkedTokenSource(outerCt, poolCt);
-        var collection = await contentService.GetCollectionAsync(collectionPath, linked.Token).ConfigureAwait(false);
-        if (collection is null)
-            yield break;
-
-        var pending = new Queue<string>();
-        pending.Enqueue("/");
-        while (pending.Count > 0)
-        {
-            linked.Token.ThrowIfCancellationRequested();
-            var dir = pending.Dequeue();
-
-            await foreach (var folder in collection.GetFolders(dir, linked.Token).ConfigureAwait(false))
-                pending.Enqueue(folder.Path);
-
-            await foreach (var file in collection.GetFiles(dir, linked.Token).ConfigureAwait(false))
-                // Normalise OS directory separators to '/': on Windows the provider yields
-                // backslash paths (e.g. "a\one.txt"), but the whole mesh — chunk keys, Document
-                // node paths (DocumentPaths.For), the upload path — uses forward slashes. Without
-                // this, a re-indexed file keys differently from the same file uploaded.
-                yield return file.Path.TrimStart('/', '\\').Replace('\\', '/');
-        }
-    }
+    private static IObservable<string> WalkDir(ContentCollection collection, string dir) =>
+        collection.GetFiles(dir)
+            // Normalise OS directory separators to '/': on Windows the provider yields
+            // backslash paths (e.g. "a\one.txt"), but the whole mesh — chunk keys, Document
+            // node paths (DocumentPaths.For), the upload path — uses forward slashes. Without
+            // this, a re-indexed file keys differently from the same file uploaded.
+            .Select(file => file.Path.TrimStart('/', '\\').Replace('\\', '/'))
+            .Concat(collection.GetFolders(dir)
+                .Select(folder => WalkDir(collection, folder.Path))
+                .Concat());
 
     /// <summary>
     /// The partition root the activity is rooted at — the node that owns the collection (the collection

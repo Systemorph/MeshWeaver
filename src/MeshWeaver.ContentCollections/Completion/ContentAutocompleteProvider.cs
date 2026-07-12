@@ -12,17 +12,13 @@ namespace MeshWeaver.ContentCollections.Completion;
 /// scores high — e.g., "two" matches "one two three.docx", "thr" matches "three" word.
 /// Priority scale: word-boundary fuzzy matches score in the thousands; proximity boost +1000 for local content.
 /// <para>Fully reactive — the collection load and the recursive file walk compose via
-/// <c>SelectMany</c>/<c>Merge</c>; the genuine I/O leaves (<c>GetCollectionAsync</c>,
-/// <c>GetFiles</c>/<c>GetFolders</c>) bridge through the <see cref="IIoPool"/> (no bare
-/// <c>Observable.FromAsync</c>, no provider-level async-enumerable). Dedup by insert text
-/// across collections is <c>Observable.Distinct</c>.</para>
+/// <c>SelectMany</c>/<c>Merge</c>; the genuine I/O leaves run inside the collection's own
+/// <see cref="IIoPool"/> (the whole <see cref="ContentCollection"/> surface is pooled
+/// observables). Dedup by insert text across collections is <c>Observable.Distinct</c>.</para>
 /// </summary>
-public class ContentAutocompleteProvider(
-    IContentService contentService,
-    IoPoolRegistry? ioPoolRegistry = null) : IAutocompleteProvider
+public class ContentAutocompleteProvider(IContentService contentService) : IAutocompleteProvider
 {
     private static readonly FuzzyScorer Scorer = new();
-    private readonly IIoPool _ioPool = ioPoolRegistry?.Get(IoPoolNames.FileSystem) ?? IoPool.Unbounded;
 
     /// <inheritdoc />
     public string? Prefix => "content";
@@ -32,7 +28,7 @@ public class ContentAutocompleteProvider(
     {
         var searchText = ExtractSearchText(query);
         var items = contentService.GetAllCollectionConfigs().ToObservable()
-            .SelectMany(config => _ioPool.Run(ct => contentService.GetCollectionAsync(config.Name!, ct)))
+            .SelectMany(config => contentService.GetCollection(config.Name!))
             .Where(collection => collection is not null)
             .SelectMany(collection => WalkCollection(collection!, "/", searchText, contextPath))
             // Same file can surface via multiple collections (parent/child hierarchy,
@@ -45,15 +41,15 @@ public class ContentAutocompleteProvider(
         ContentCollection collection, string path, string searchText, string? contextPath)
     {
         // Files at this level + a recursive walk of every folder, merged. Each leaf
-        // enumeration is bridged through the pool and Catch-guarded so a path that
+        // enumeration runs on the collection's pool and is Catch-guarded so a path that
         // fails to enumerate is skipped rather than tearing down the whole stream.
-        var files = _ioPool.InvokeStream(ct => collection.GetFiles(path, ct))
+        var files = collection.GetFiles(path)
             .Select(file => ScoreFile(collection, file, searchText, contextPath))
             .Where(item => item is not null)
             .Select(item => item!)
             .Catch<AutocompleteItem, Exception>(_ => Observable.Empty<AutocompleteItem>());
 
-        var folders = _ioPool.InvokeStream(ct => collection.GetFolders(path, ct))
+        var folders = collection.GetFolders(path)
             .SelectMany(folder => WalkCollection(collection, folder.Path, searchText, contextPath))
             .Catch<AutocompleteItem, Exception>(_ => Observable.Empty<AutocompleteItem>());
 

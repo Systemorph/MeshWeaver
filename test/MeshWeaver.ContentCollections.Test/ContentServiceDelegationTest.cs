@@ -1,6 +1,8 @@
 ﻿using System;
 using System.IO;
 using System.Linq;
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Fixture;
 using MeshWeaver.Messaging;
@@ -51,7 +53,7 @@ public class ContentServiceDelegationTest(ITestOutputHelper output) : HubTestBas
             Output.WriteLine($"    Has ContentService: {cs != null}");
             if (cs != null)
             {
-                var colls = await cs.GetCollectionsAsync().ToArrayAsync(TestContext.Current.CancellationToken);
+                var colls = await cs.GetCollections().ToArray().FirstAsync().ToTask(TestContext.Current.CancellationToken);
                 Output.WriteLine($"    Collections: {string.Join(", ", colls.Select(c => c.Collection))}");
             }
             Output.WriteLine($"    ParentHub: {current.Configuration.ParentHub?.Address}");
@@ -71,34 +73,34 @@ public class ContentServiceDelegationTest(ITestOutputHelper output) : HubTestBas
         Output.WriteLine($"ContentServices are same: {ReferenceEquals(parentContentService, childContentService)}");
 
         // Debug: Check what collections each service has
-        var parentCollections = await parentContentService.GetCollectionsAsync().ToArrayAsync(TestContext.Current.CancellationToken);
-        var childCollections = await childContentService.GetCollectionsAsync().ToArrayAsync(TestContext.Current.CancellationToken);
+        var parentCollections = await parentContentService.GetCollections().ToArray().FirstAsync().ToTask(TestContext.Current.CancellationToken);
+        var childCollections = await childContentService.GetCollections().ToArray().FirstAsync().ToTask(TestContext.Current.CancellationToken);
         Output.WriteLine($"Parent content service has {parentCollections.Length} collections: {string.Join(", ", parentCollections.Select(c => c.Collection))}");
         Output.WriteLine($"Child content service has {childCollections.Length} collections: {string.Join(", ", childCollections.Select(c => c.Collection))}");
 
         // Act & Assert - Parent hub can only reach ParentCollection
-        var parentCollectionFromParent = await parentContentService.GetCollectionAsync("ParentCollection", TestContext.Current.CancellationToken);
+        var parentCollectionFromParent = await parentContentService.GetCollection("ParentCollection").FirstAsync().ToTask(TestContext.Current.CancellationToken);
         Output.WriteLine($"Parent collection from parent: {parentCollectionFromParent?.Collection}");
         parentCollectionFromParent.Should().NotBeNull("parent hub should have ParentCollection");
 
-        var childCollectionFromParent = await parentContentService.GetCollectionAsync("ChildCollection", TestContext.Current.CancellationToken);
+        var childCollectionFromParent = await parentContentService.GetCollection("ChildCollection").FirstAsync().ToTask(TestContext.Current.CancellationToken);
         Output.WriteLine($"Child collection from parent: {childCollectionFromParent?.Collection}");
         childCollectionFromParent.Should().BeNull("parent hub should NOT have ChildCollection");
 
         // Act & Assert - Child hub can reach both collections
         Output.WriteLine($"About to get ParentCollection from child...");
-        var parentCollectionFromChild = await childContentService.GetCollectionAsync("ParentCollection", TestContext.Current.CancellationToken);
+        var parentCollectionFromChild = await childContentService.GetCollection("ParentCollection").FirstAsync().ToTask(TestContext.Current.CancellationToken);
         Output.WriteLine($"Parent collection from child: {parentCollectionFromChild?.Collection}");
         Output.WriteLine($"  Got from child, hash: {parentCollectionFromChild?.GetHashCode()}");
 
         // Also try getting it directly from parent to compare
-        var directFromParent = await parentContentService.GetCollectionAsync("ParentCollection", TestContext.Current.CancellationToken);
+        var directFromParent = await parentContentService.GetCollection("ParentCollection").FirstAsync().ToTask(TestContext.Current.CancellationToken);
         Output.WriteLine($"  Got directly from parent, hash: {directFromParent?.GetHashCode()}");
         Output.WriteLine($"  Are they the same: {ReferenceEquals(parentCollectionFromChild, directFromParent)}");
 
         parentCollectionFromChild.Should().NotBeNull("child hub should have ParentCollection via delegation");
 
-        var childCollectionFromChild = await childContentService.GetCollectionAsync("ChildCollection", TestContext.Current.CancellationToken);
+        var childCollectionFromChild = await childContentService.GetCollection("ChildCollection").FirstAsync().ToTask(TestContext.Current.CancellationToken);
         childCollectionFromChild.Should().NotBeNull("child hub should have its own ChildCollection");
 
         // Debug: Check instance details
@@ -111,7 +113,7 @@ public class ContentServiceDelegationTest(ITestOutputHelper output) : HubTestBas
             "child hub should get a ParentCollection with the same name as parent's");
 
         // Act & Assert - Verify we can actually read content from the collections
-        var parentContent = await parentContentService.GetContentAsync("ParentCollection", "test.txt", TestContext.Current.CancellationToken);
+        var parentContent = await parentContentService.GetContent("ParentCollection", "test.txt").FirstAsync().ToTask(TestContext.Current.CancellationToken);
         parentContent.Should().NotBeNull("parent collection should have test.txt");
         using (var reader = new StreamReader(parentContent!))
         {
@@ -119,7 +121,7 @@ public class ContentServiceDelegationTest(ITestOutputHelper output) : HubTestBas
             content.Should().Contain("Parent collection test file");
         }
 
-        var childContent = await childContentService.GetContentAsync("ChildCollection", "test.txt", TestContext.Current.CancellationToken);
+        var childContent = await childContentService.GetContent("ChildCollection", "test.txt").FirstAsync().ToTask(TestContext.Current.CancellationToken);
         childContent.Should().NotBeNull("child collection should have test.txt");
         using (var reader = new StreamReader(childContent!))
         {
@@ -128,7 +130,7 @@ public class ContentServiceDelegationTest(ITestOutputHelper output) : HubTestBas
         }
 
         // Act & Assert - Child can read parent's files via delegation
-        var parentContentFromChild = await childContentService.GetContentAsync("ParentCollection", "test.txt", TestContext.Current.CancellationToken);
+        var parentContentFromChild = await childContentService.GetContent("ParentCollection", "test.txt").FirstAsync().ToTask(TestContext.Current.CancellationToken);
         parentContentFromChild.Should().NotBeNull("child should be able to read from ParentCollection via delegation");
         using (var reader = new StreamReader(parentContentFromChild!))
         {
