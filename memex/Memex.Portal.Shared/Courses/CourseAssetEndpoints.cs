@@ -127,12 +127,26 @@ public static class CourseAssetEndpoints
                 .ToList());
 
         // The viewer's effective permissions on the Space — wait for the positive (the stream's
-        // first emission can be the premature empty seed), bounded; no positive ⇒ None.
+        // first emission can be the premature empty seed), bounded; no positive ⇒ None. Failures
+        // fail CLOSED but never silently: the timeout is the expected "no positive grant"
+        // outcome (a denied viewer pays the full wait), anything else is an infrastructure
+        // failure that must leave a log signal rather than masquerade as a 401/403.
         var permissions = hub.GetEffectivePermissions(space, viewerId)
             .Where(p => p.HasFlag(Permission.Read) || p.HasFlag(Permission.Update))
             .Take(1)
             .Timeout(GrantWait)
-            .Catch((Exception _) => Observable.Empty<Permission>())
+            .Catch((Exception ex) =>
+            {
+                if (ex is TimeoutException)
+                    logger.LogDebug(
+                        "No positive grant for {Viewer} on {Space} within {Wait} — treating as no access",
+                        viewerId, space, GrantWait);
+                else
+                    logger.LogWarning(ex,
+                        "Permission stream for {Viewer} on {Space} failed — failing closed",
+                        viewerId, space);
+                return Observable.Empty<Permission>();
+            })
             .DefaultIfEmpty(Permission.None);
 
         return Observable
