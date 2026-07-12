@@ -7,7 +7,7 @@ namespace MeshWeaver.PluginCatalog;
 
 /// <summary>
 /// An <see cref="IPackageSource"/> that reads a REMOTE git repo at a commit/branch by reusing
-/// GitSync's fetch (<see cref="IGitHubRepoClient.Fetch"/>) — so a DEPLOYED portal, which has no
+/// GitSync's fetch (<see cref="IGitHubRepoClient.Fetch(string, string, string?, string)"/>) — so a DEPLOYED portal, which has no
 /// source tree in its container, can browse/install from the plugins repo on GitHub. Still git-based
 /// and NuGet-free: it fetches the repo tree at a ref, groups the folders that carry a
 /// <c>package.json</c>, and returns each folder's files.
