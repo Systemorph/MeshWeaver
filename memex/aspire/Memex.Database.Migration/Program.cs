@@ -109,50 +109,8 @@ logger.LogInformation("Postgres ready; target database present.");
 var initResult = await SchemaInitialization.RunAsync(dataSource, options, connectionString, logger);
 
 // ── Phase 2: Versioned data repairs
-var migrations = new IMigration[]
-{
-    new V01_MoveAccessAssignments(),
-    new V02_RebuildTriggerFunctions(),
-    new V03_DropRogueSchemas(),
-    new V04_UpgradeViewerToAdmin(),
-    new V05_EnsureUserSelfAssignments(),
-    new V06_FixSearchAcrossSchemas(),
-    new V07_PerUserPermissionRebuildTrigger(),
-    new V08_FixThreadMessageMainNode(),
-    new V09_RenameSourceTestSegments(),
-    new V10_PerUserPartitions(),
-    new V11_RewriteApiTokenPaths(),
-    // v12 was retired — see V13_RebuildPermissionsForApiBitmask for context.
-    new V13_RebuildPermissionsForApiBitmask(),
-    new V14_AddPartitionPrefixToNamespaces(),
-    new V15_FinalUserSchemaCleanup(),
-    new V16_NormalizeAccessAssignmentShape(),
-    new V17_EnsurePerUserSelfAssignments(),
-    new V18_BackfillUserPartitionRegistry(),
-    new V19_DeleteLegacyReleaseNodes(),
-    new V20_RemoveStrayLegacyUserRows(),
-    // v21 retired -- gap preserved so existing prod db_version counters stay monotonic.
-    new V22_ConsolidateGlobalCatalogsInAdmin(),
-    new V23_PartitionChangesNotify(),
-    new V24_DedupMeshNodeNotifyTrigger(),
-    new V25_MirrorAccessObjectsToUserSchema(),
-    new V26_AddNotificationsSatelliteTable(),
-    new V27_RenameUserSchemaToAuthAndMirrorApiTokens(),
-    new V28_RenameOrganizationToSpace(),
-    new V29_PinDocsForExistingUsers(),
-    new V30_EnsurePartitionSchemaStoredProc(),
-    new V31_UnifyUserMirrorIntoAuthAndRelocateContent(),
-    new V32_RepairAuthMirrorTriggerAndBackfill(),
-    new V33_SeedThreadComposerForExistingUsers(),
-    new V34_TypeOrphanPartitionRootsAsSpace(),
-    new V35_ReconcilePartitionAccessIndex(),
-    new V36_MoveAgentsToPerPartitionAgentNamespace(),
-    new V37_MoveAgentsToAgentNamespaceBySchema(),
-    new V38_DropLegacyProviderSchema(),
-    new V39_AddSyncBehaviorColumn(),
-    new V40_CreateEventLogSchema(),
-    new V41_RetrofitModelCatalogIcons(),
-};
+MigrationRegistry.VerifyComplete();
+var migrations = MigrationRegistry.All;
 
 var ctx = new MigrationContext(dataSource, connectionString, options, logger, initResult.IsFreshDb);
 var runner = new MigrationRunner(migrations);
