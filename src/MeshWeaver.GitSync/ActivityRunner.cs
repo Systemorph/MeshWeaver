@@ -225,9 +225,16 @@ public static class ActivityRunner
                     ? log.Messages
                     : log.Messages.Add(new LogMessage(finalMessage,
                         status == ActivityStatus.Failed ? LogLevel.Error : LogLevel.Information));
+                // Honour what the command reported via ctx.Log: ActivityLog.Finish computes
+                // MAX(status, roll-up from Messages) — an Error line a command appended flips
+                // a would-be Succeeded terminal to Failed, a Warning line to Warning; explicit
+                // Failed / Cancelled always stand (they are more severe in the enum order).
+                // Without this, a command that reports per-item errors but completes without
+                // throwing would end "Succeeded" with errors in its own log.
+                var finished = (log with { Messages = messages }).Finish(log.Version, status);
                 return node with
                 {
-                    Content = log with { Messages = messages, Status = status, End = DateTime.UtcNow, RequestedStatus = null }
+                    Content = finished with { RequestedStatus = null }
                 };
             }).Select(_ => Unit.Default);
         }

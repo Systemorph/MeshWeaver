@@ -38,7 +38,10 @@ public static class GitHubActivityExtensions
             ctx =>
             {
                 ctx.Log("Serializing Space content and committing on the branch HEAD…");
-                return sync.SyncToGitHub(spacePath, userId, sourceId).Select(r =>
+                // ctx.Log as the progress sink: per-node export problems (skipped nodes) land on
+                // the activity log, and ActivityRunner.Finish rolls their level into the terminal
+                // status — instead of surfacing only in the server log.
+                return sync.SyncToGitHub(spacePath, userId, sourceId, ctx.Log).Select(r =>
                 {
                     ctx.Log($"Committed {r.CommitSha[..Math.Min(8, r.CommitSha.Length)]} " +
                             $"({r.FilesWritten} written, {r.FilesDeleted} removed)" +
@@ -59,7 +62,9 @@ public static class GitHubActivityExtensions
             ctx =>
             {
                 ctx.Log("Fetching the branch HEAD from GitHub and importing the deltas…");
-                return pr.UpdateToLatest(spacePath, userId, sourceId).Select(r =>
+                // ctx.Log as the progress sink: files dropped from the import (parse failures)
+                // append an Error line here and flip the terminal status to Failed.
+                return pr.UpdateToLatest(spacePath, userId, sourceId, ctx.Log).Select(r =>
                 {
                     ctx.Log($"Imported {r.Outcome} ({r.Count} node(s)).");
                     return Unit.Default;
@@ -78,7 +83,9 @@ public static class GitHubActivityExtensions
             ctx =>
             {
                 ctx.Log($"Fetching {commitish} from GitHub and importing the deltas…");
-                return sync.ReimportAtCommit(spacePath, commitish, userId, sourceId).Select(r =>
+                // ctx.Log as the progress sink: files dropped from the import (parse failures)
+                // append an Error line here and flip the terminal status to Failed.
+                return sync.ReimportAtCommit(spacePath, commitish, userId, sourceId, ctx.Log).Select(r =>
                 {
                     ctx.Log($"Re-imported {r.Outcome} ({r.Count} node(s)) at {commitish}.");
                     return Unit.Default;
