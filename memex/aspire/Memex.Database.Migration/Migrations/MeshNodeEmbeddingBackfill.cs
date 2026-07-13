@@ -1,3 +1,4 @@
+using MeshWeaver.Hosting.Embeddings;
 using MeshWeaver.Hosting.PostgreSql;
 using Microsoft.Extensions.Logging;
 using Npgsql;

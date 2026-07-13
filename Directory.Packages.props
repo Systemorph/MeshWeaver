@@ -173,6 +173,7 @@
     <PackageVersion Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.1" />
     <PackageVersion Include="Pgvector" Version="0.3.2" />
     <PackageVersion Include="Pgvector.EntityFrameworkCore" Version="0.3.0" />
+    <PackageVersion Include="Snowflake.Data" Version="5.7.0" />
     <PackageVersion Include="QuestPDF" Version="2026.2.4" />
     <PackageVersion Include="OpenAI" Version="2.10.0" />
     <!-- OpenTelemetry.Api pinned to override transitive 1.13.1 / 1.15.2 (CVE-2026-40894 / GHSA-g94r-2vxg-569j) -->
