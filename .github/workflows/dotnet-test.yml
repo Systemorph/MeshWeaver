@@ -114,8 +114,12 @@ jobs:
         find test -mindepth 2 -maxdepth 2 -type d -name bin > .build-paths.txt
         echo "Packaging $(wc -l < .build-paths.txt) test bin trees"
         # One zstd tarball (-T0 = all cores) moves through upload/download-artifact
-        # FAR faster than millions of loose files would.
-        tar -I 'zstd -T0' -cf build-output.tar.zst -T .build-paths.txt
+        # FAR faster than millions of loose files would. --long=27 (128 MiB match
+        # window) dedupes across files: the ~60 self-contained test bins each carry
+        # near-identical copies of the same framework + MeshWeaver DLLs, which a
+        # default window (8 MiB) can't see. The EXTRACT side must pass --long=27
+        # too, or zstd refuses with a window-size error.
+        tar -I 'zstd -T0 --long=27' -cf build-output.tar.zst -T .build-paths.txt
         ls -lh build-output.tar.zst
     - name: "Upload artifact: build output"
       uses: actions/upload-artifact@v6
@@ -169,7 +173,8 @@ jobs:
     - name: Extract build output
       run: |
         set -euo pipefail
-        tar -I zstd -xf build-output.tar.zst
+        # --long=27 matches the pack side (window > 8 MiB default; required to decode).
+        tar -I 'zstd --long=27' -xf build-output.tar.zst
         rm -f build-output.tar.zst
     - name: Run Tests
       env:
@@ -177,6 +182,14 @@ jobs:
         Logging__LogLevel__Default: Warning
         SHARD_INDEX: ${{ matrix.shard }}
         SHARD_TOTAL: 6
+        # Native-crash diagnosability (SIGSEGV/SIGABRT of a test host): the runtime
+        # writes a mini core dump before dying, collected into the shard artifact.
+        # First seen: FutuRe.Test exit=139 on the first native-host run — not
+        # reproducible on macOS-arm64 or linux-arm64 locally, so the dump is the
+        # only window into the runner-only crash.
+        DOTNET_DbgEnableMiniDump: 1
+        DOTNET_DbgMiniDumpType: 2
+        DOTNET_DbgMiniDumpName: /tmp/coredumps/%e-%p.dmp
       run: |
         # Only Cosmos is excluded — needs the Cosmos emulator which is heavy to
         # set up on a runner. Everything else runs (PostgreSql via Testcontainers
@@ -188,6 +201,7 @@ jobs:
         # fails the shard on anything non-zero.
         set +e
         : > test/test-results.log
+        mkdir -p /tmp/coredumps
 
         # ── Shard assignment: measured weights + greedy LPT ──────────────────
         # Weights are wall-clock seconds measured on ubuntu-latest (run
@@ -319,6 +333,12 @@ jobs:
         # find the worst leakers without wading through the full per-event trace.
         if [ -f /tmp/meshweaver-memory-delta.log ]; then
           cp /tmp/meshweaver-memory-delta.log collected-logs/_meshweaver-memory-delta.log
+        fi
+        # Native-crash mini dumps (DOTNET_DbgEnableMiniDump) — present only when a
+        # test host died on a signal; the exit-marker gate reds the shard, this is
+        # the forensic payload.
+        if compgen -G '/tmp/coredumps/*.dmp' > /dev/null; then
+          cp /tmp/coredumps/*.dmp collected-logs/
         fi
     - name: "Upload artifact: shard test results"
       uses: actions/upload-artifact@v6
