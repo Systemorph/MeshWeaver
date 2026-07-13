@@ -266,25 +266,98 @@ public static class PostgreSqlSchemaInitializer
     }
 
     /// <summary>
+    /// Body of the per-partition <c>trg_access_changed()</c> trigger function — the glue between
+    /// a write to the <c>access</c> satellite table and the (re)materialization of
+    /// <c>user_effective_permissions</c>. Single-sourced here because THREE scripts install it:
+    /// <see cref="GetMeshSchemaScript"/>, <see cref="GetVersionedPartitionDdl"/> (and through it
+    /// the <c>public.ensure_partition_schema</c> proc), and the per-boot
+    /// <see cref="GetAuthMirrorSelfHealScript"/>, which CREATE OR REPLACEs stale copies on every
+    /// existing partition.
+    ///
+    /// <para>🚨 <b>Every rebuild call MUST be schema-qualified via <c>TG_TABLE_SCHEMA</c>.</b>
+    /// Inside plpgsql an unqualified <c>PERFORM rebuild_user_permissions_for(…)</c> resolves
+    /// through the CALLING SESSION's <c>search_path</c> — and production writes flow through the
+    /// SHARED base <see cref="NpgsqlDataSource"/> (default <c>search_path</c> = <c>public</c>)
+    /// with schema-qualified statements
+    /// (<see cref="PostgreSqlPartitionStorageProvider.CreateAdapterForTable"/>). The unqualified
+    /// call therefore silently executed PUBLIC's rebuild functions against public's empty
+    /// <c>access</c> table: the partition's <c>user_effective_permissions</c> stayed EMPTY after
+    /// every grant write, so partition-scoped queries failed closed (count 0) for every user
+    /// until the next boot's self-heal re-materialized it — while direct reads kept working.
+    /// Live incident: memex 2026-07-13, freshly recreated partitions
+    /// (AgenticEngineering/DataModeling/RiskTransfer) with intact <c>_Access</c> grants and an
+    /// empty permissions table; an older partition (chess) had rows only because the previous
+    /// boot's self-heal had materialized them. <c>TG_TABLE_SCHEMA</c> — the schema of the
+    /// <c>access</c> table that fired the trigger — IS the partition schema, and makes this body
+    /// schema-agnostic (no sentinel splicing), so every install path ships one identical body.</para>
+    /// </summary>
+    internal const string AccessChangedTriggerFunctionBody = """
+        DECLARE
+            affected_user TEXT;
+        BEGIN
+            IF TG_OP = 'DELETE' THEN
+                affected_user := OLD.content->>'accessObject';
+            ELSE
+                affected_user := NEW.content->>'accessObject';
+            END IF;
+
+            -- Schema-qualified via TG_TABLE_SCHEMA (= the partition schema): an unqualified
+            -- PERFORM resolves through the WRITING SESSION's search_path, which on the shared
+            -- base connection pool is public — silently rebuilding the WRONG schema's
+            -- permissions and leaving this partition's user_effective_permissions empty
+            -- (memex prod incident 2026-07-13).
+            IF affected_user IS NOT NULL THEN
+                EXECUTE format('SELECT %I.rebuild_user_permissions_for($1)', TG_TABLE_SCHEMA)
+                    USING affected_user;
+            ELSE
+                EXECUTE format('SELECT %I.rebuild_user_effective_permissions()', TG_TABLE_SCHEMA);
+            END IF;
+
+            IF TG_OP = 'UPDATE' AND OLD.content->>'accessObject' IS DISTINCT FROM NEW.content->>'accessObject' THEN
+                IF OLD.content->>'accessObject' IS NOT NULL THEN
+                    EXECUTE format('SELECT %I.rebuild_user_permissions_for($1)', TG_TABLE_SCHEMA)
+                        USING OLD.content->>'accessObject';
+                END IF;
+            END IF;
+
+            RETURN NULL;
+        END;
+        """;
+
+    /// <summary>
     /// One-shot server-side reconciliation of the auth mirror AND the permission projection:
     /// per partition schema it (a) installs the <c>mesh_node_mirror_access_objects</c> trigger
-    /// where missing, (b) upserts every mirrored node type
-    /// (<c>User/Group/Role/VUser/ApiToken/Space</c>) into <c>auth.mesh_nodes</c>, and (c) re-runs
-    /// the schema's <c>rebuild_user_effective_permissions()</c> so <c>_Access</c> grants and
-    /// <c>_Policy</c> rows are projected into <c>public.partition_access</c> — the table the
-    /// cross-partition fan-out filters on. (c) is the durable fix for the 2026-07 incident where
-    /// freshly-provisioned partitions had empty projections: their Spaces were invisible in the
-    /// catalog and their content unfindable in global search despite intact grants. No matview
+    /// where missing, (a2) CREATE OR REPLACEs the schema's <c>trg_access_changed()</c> with the
+    /// current <see cref="AccessChangedTriggerFunctionBody"/> (and (a3) re-installs the
+    /// <c>access_changed</c> trigger where missing) so grant writes materialize
+    /// <c>user_effective_permissions</c> into the RIGHT schema — partitions deployed with the
+    /// pre-2026-07-13 body resolved the rebuild through the writing session's
+    /// <c>search_path</c> and silently rebuilt <c>public</c> instead, (b) upserts every mirrored
+    /// node type (<c>User/Group/Role/VUser/ApiToken/Space</c>) into <c>auth.mesh_nodes</c>, and
+    /// (c) re-runs the schema's <c>rebuild_user_effective_permissions()</c> so <c>_Access</c>
+    /// grants and <c>_Policy</c> rows are projected into <c>user_effective_permissions</c> +
+    /// <c>public.partition_access</c> — the tables every partition-scoped query and the
+    /// cross-partition fan-out filter on. (c) is both the durable fix for the 2026-07
+    /// empty-projection incidents AND the data backfill for (a2): partitions whose permission
+    /// tables stayed empty under the broken trigger converge on the next boot. No matview
     /// rebuild here — the schema script (<see cref="InitializeAsync"/> step 3) already rebuilds
     /// <c>public.top_level_index</c> on the same init, and a second DROP+CREATE under
     /// ACCESS EXCLUSIVE just adds lock contention. No-op when <c>auth.mesh_nodes</c> doesn't
     /// exist. Runs once per boot (public-schema init only, serialized across silos by an advisory
     /// xact lock) — everything converges on restart rather than relying on one-time migrations.
     /// </summary>
-    public static string GetAuthMirrorSelfHealScript() => """
+    public static string GetAuthMirrorSelfHealScript() => $$"""
         DO $auth_mirror_heal$
         DECLARE
             s text;
+            -- The CURRENT trg_access_changed body (single-sourced from the C# constant the
+            -- partition DDL also embeds). __mw_schema__ is replace()d per schema below;
+            -- plain replace, NOT format() — the body carries its own %I/%L format specs.
+            access_trg_fn text := $acfix$
+        CREATE OR REPLACE FUNCTION __mw_schema__.trg_access_changed() RETURNS TRIGGER AS $trg_access$
+        {{AccessChangedTriggerFunctionBody}}
+        $trg_access$ LANGUAGE plpgsql
+        $acfix$;
         BEGIN
             IF to_regclass('"auth".mesh_nodes') IS NULL THEN
                 RETURN;
@@ -317,6 +390,39 @@ public static class PostgreSqlSchemaInitializer
                         || 'FOR EACH ROW EXECUTE FUNCTION public.mirror_access_object_to_auth_schema()', s);
                 END IF;
 
+                -- (a2) Heal the access→permissions trigger FUNCTION. Partitions deployed with
+                --     the pre-2026-07-13 body called the rebuild functions UNQUALIFIED, so a
+                --     grant written through the shared base pool (search_path = public)
+                --     silently rebuilt public's permissions and left this partition's
+                --     user_effective_permissions EMPTY — every partition-scoped query failed
+                --     closed for every user (memex 2026-07-13: AgenticEngineering/
+                --     DataModeling/RiskTransfer). CREATE OR REPLACE keeps the function OID, so
+                --     the existing trigger picks the fixed body up immediately. Guarded on the
+                --     access table + rebuild function existing (very old schemas may predate them).
+                IF to_regclass(format('%I.access', s)) IS NOT NULL
+                   AND EXISTS (
+                       SELECT 1 FROM pg_proc p
+                       JOIN pg_namespace pn ON pn.oid = p.pronamespace
+                       WHERE p.proname = 'rebuild_user_permissions_for' AND pn.nspname = s)
+                THEN
+                    EXECUTE replace(access_trg_fn, '__mw_schema__', quote_ident(s));
+
+                    -- (a3) …and the TRIGGER itself, for partitions provisioned in a window
+                    --     where it was missing.
+                    IF NOT EXISTS (
+                        SELECT 1 FROM pg_trigger tg
+                        JOIN pg_class c ON c.oid = tg.tgrelid
+                        JOIN pg_namespace n ON n.oid = c.relnamespace
+                        WHERE tg.tgname = 'access_changed'
+                          AND c.relname = 'access' AND n.nspname = s)
+                    THEN
+                        EXECUTE format(
+                            'CREATE TRIGGER access_changed '
+                            || 'AFTER INSERT OR UPDATE OR DELETE ON %I.access '
+                            || 'FOR EACH ROW EXECUTE FUNCTION %I.trg_access_changed()', s, s);
+                    END IF;
+                END IF;
+
                 -- (b) Reconcile mirrored rows: insert what is missing, refresh what is stale.
                 --     The WHERE guard keeps the pass write-free when everything already matches.
                 EXECUTE format($reconcile$
@@ -345,11 +451,14 @@ public static class PostgreSqlSchemaInitializer
                 $reconcile$, s);
 
                 -- (c) Re-project the partition's _Access grants + _Policy into
-                --     public.partition_access. Partitions provisioned while the projection
-                --     machinery was broken (memex, ~2026-07-06..11) had EMPTY partition_access —
-                --     the cross-partition fan-out's permission filter dropped every one of their
-                --     rows, so their Spaces were invisible in the catalog (and their content
-                --     unfindable in global search) even though grants and content were intact.
+                --     user_effective_permissions + public.partition_access. Partitions
+                --     provisioned while the projection machinery was broken (memex,
+                --     ~2026-07-06..11 partition_access; ~2026-07-13 the (a2) wrong-schema
+                --     trigger) had EMPTY projections — partition-scoped queries and the
+                --     cross-partition fan-out dropped every row, so their Spaces were
+                --     invisible and their content unreadable even though grants and content
+                --     were intact. This is also the DATA BACKFILL for (a2): tables left empty
+                --     by the broken trigger converge here on the next boot.
                 --     Guarded: very old schemas may predate the rebuild function.
                 BEGIN
                     EXECUTE format('SELECT %I.rebuild_user_effective_permissions()', s);
@@ -1224,31 +1333,12 @@ public static class PostgreSqlSchemaInitializer
             $$ LANGUAGE plpgsql;
 
             -- Trigger function: per-row, rebuilds only the affected user's permissions.
-            CREATE OR REPLACE FUNCTION trg_access_changed() RETURNS TRIGGER AS $$
-            DECLARE
-                affected_user TEXT;
-            BEGIN
-                IF TG_OP = 'DELETE' THEN
-                    affected_user := OLD.content->>'accessObject';
-                ELSE
-                    affected_user := NEW.content->>'accessObject';
-                END IF;
-
-                IF affected_user IS NOT NULL THEN
-                    PERFORM rebuild_user_permissions_for(affected_user);
-                ELSE
-                    PERFORM rebuild_user_effective_permissions();
-                END IF;
-
-                IF TG_OP = 'UPDATE' AND OLD.content->>'accessObject' IS DISTINCT FROM NEW.content->>'accessObject' THEN
-                    IF OLD.content->>'accessObject' IS NOT NULL THEN
-                        PERFORM rebuild_user_permissions_for(OLD.content->>'accessObject');
-                    END IF;
-                END IF;
-
-                RETURN NULL;
-            END;
-            $$ LANGUAGE plpgsql;
+            -- Body single-sourced from AccessChangedTriggerFunctionBody: every rebuild call is
+            -- schema-qualified via TG_TABLE_SCHEMA — see the constant's doc for the 2026-07-13
+            -- wrong-schema incident an unqualified PERFORM causes on the shared base pool.
+            CREATE OR REPLACE FUNCTION trg_access_changed() RETURNS TRIGGER AS $trg_access$
+            {{AccessChangedTriggerFunctionBody}}
+            $trg_access$ LANGUAGE plpgsql;
 
             -- Drop old trigger on mesh_nodes if it exists
             DROP TRIGGER IF EXISTS mesh_node_access_changed ON mesh_nodes;
@@ -1909,31 +1999,12 @@ public static class PostgreSqlSchemaInitializer
             $$ LANGUAGE plpgsql;
 
             -- Trigger function: per-row, rebuilds only the affected user's permissions.
-            CREATE OR REPLACE FUNCTION trg_access_changed() RETURNS TRIGGER AS $$
-            DECLARE
-                affected_user TEXT;
-            BEGIN
-                IF TG_OP = 'DELETE' THEN
-                    affected_user := OLD.content->>'accessObject';
-                ELSE
-                    affected_user := NEW.content->>'accessObject';
-                END IF;
-
-                IF affected_user IS NOT NULL THEN
-                    PERFORM rebuild_user_permissions_for(affected_user);
-                ELSE
-                    PERFORM rebuild_user_effective_permissions();
-                END IF;
-
-                IF TG_OP = 'UPDATE' AND OLD.content->>'accessObject' IS DISTINCT FROM NEW.content->>'accessObject' THEN
-                    IF OLD.content->>'accessObject' IS NOT NULL THEN
-                        PERFORM rebuild_user_permissions_for(OLD.content->>'accessObject');
-                    END IF;
-                END IF;
-
-                RETURN NULL;
-            END;
-            $$ LANGUAGE plpgsql;
+            -- Body single-sourced from AccessChangedTriggerFunctionBody: every rebuild call is
+            -- schema-qualified via TG_TABLE_SCHEMA — see the constant's doc for the 2026-07-13
+            -- wrong-schema incident an unqualified PERFORM causes on the shared base pool.
+            CREATE OR REPLACE FUNCTION trg_access_changed() RETURNS TRIGGER AS $trg_access$
+            {{AccessChangedTriggerFunctionBody}}
+            $trg_access$ LANGUAGE plpgsql;
 
             -- Drop old trigger on mesh_nodes if it exists
             DROP TRIGGER IF EXISTS mesh_node_access_changed ON mesh_nodes;
