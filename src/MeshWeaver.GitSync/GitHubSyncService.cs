@@ -92,8 +92,13 @@ public sealed class GitHubSyncService
     /// commit SHA on that source's <see cref="GitHubSyncConfig"/>. Rejected when the
     /// source's <see cref="GitHubSyncConfig.Direction"/> is
     /// <see cref="SyncDirection.ImportOnly"/>. Emits the push result.
+    /// <paramref name="progress"/> (when the caller runs as an activity: <c>ctx.Log</c>)
+    /// receives per-node problems — e.g. a node skipped from the export — so they land on
+    /// the activity log instead of only in the server log.
     /// </summary>
-    public IObservable<GitHubPushResult> SyncToGitHub(string spacePath, string userId, string? sourceId = null)
+    public IObservable<GitHubPushResult> SyncToGitHub(
+        string spacePath, string userId, string? sourceId = null,
+        Action<string, LogLevel>? progress = null)
     {
         return ReadConfig(spacePath, sourceId).Take(1).SelectMany(config =>
         {
@@ -112,7 +117,7 @@ public sealed class GitHubSyncService
             {
                 var token = auth.Token;
                 return SnapshotNodes(spacePath).SelectMany(nodes =>
-                    SerializeAll(nodes, spacePath).SelectMany(files =>
+                    SerializeAll(nodes, spacePath, progress).SelectMany(files =>
                     {
                         // App-identity exports author as the bot (no personal credential involved).
                         var (name, email) = auth.Credential is null
@@ -191,13 +196,14 @@ public sealed class GitHubSyncService
             .ToList();
     }
 
-    private IObservable<IReadOnlyList<RepoFile>> SerializeAll(IReadOnlyList<MeshNode> nodes, string partition)
+    private IObservable<IReadOnlyList<RepoFile>> SerializeAll(
+        IReadOnlyList<MeshNode> nodes, string partition, Action<string, LogLevel>? progress = null)
     {
         if (nodes.Count == 0)
             return Observable.Return((IReadOnlyList<RepoFile>)Array.Empty<RepoFile>());
         var allPaths = nodes.Select(n => n.Path).ToArray();
         return nodes
-            .Select(n => SerializeOne(n, partition, allPaths))
+            .Select(n => SerializeOne(n, partition, allPaths, progress))
             .Merge(8)
             .Where(f => f is not null).Select(f => f!)
             .ToList()
@@ -239,12 +245,19 @@ public sealed class GitHubSyncService
         && e.TryGetProperty(name, out var v) && v.ValueKind == System.Text.Json.JsonValueKind.String
             ? v.GetString() : null;
 
-    private IObservable<RepoFile?> SerializeOne(MeshNode node, string partition, string[] allPaths)
+    private IObservable<RepoFile?> SerializeOne(
+        MeshNode node, string partition, string[] allPaths, Action<string, LogLevel>? progress = null)
     {
         var serializer = parsers.GetSerializerFor(node);
         if (serializer is null)
         {
             logger?.LogWarning("No serializer for node {Path} (type {Type}) — skipping.", node.Path, node.NodeType);
+            // Also surface the skip on the owning activity (a node silently missing from the
+            // export is invisible in the portal otherwise); Warning rolls the terminal status
+            // up to ActivityStatus.Warning via ActivityRunner.Finish.
+            progress?.Invoke(
+                $"No serializer for node '{node.Path}' (type {node.NodeType}) — skipped from export.",
+                LogLevel.Warning);
             return Observable.Return<RepoFile?>(null);
         }
         var ext = serializer.SupportedExtensions.FirstOrDefault() ?? ".json";
@@ -271,10 +284,13 @@ public sealed class GitHubSyncService
     /// <summary>
     /// Creates a new Space (provisioning its partition + granting the user admin) and
     /// imports all nodes from the repo at <paramref name="commitish"/> (branch or SHA).
+    /// <paramref name="progress"/> receives per-file problems (a repo file that failed to
+    /// parse and was therefore dropped) so an owning activity can surface them.
     /// </summary>
     public IObservable<StaticRepoImportResult> ImportFromGitHub(
         string repositoryUrl, string commitish, string newSpaceId, string newSpaceName,
-        string? subdirectory, string userId)
+        string? subdirectory, string userId,
+        Action<string, LogLevel>? progress = null)
     {
         // Capture identity synchronously BEFORE the async credentials.Get hop — the SelectMany
         // continuation runs without the AsyncLocal AccessContext, and the Space create below must run
@@ -300,7 +316,7 @@ public sealed class GitHubSyncService
                 ? meshService.CreateNode(spaceNode)
                 : Observable.Using(() => accessService.SwitchAccessContext(ctx), _ => meshService.CreateNode(spaceNode));
             return createSpace
-                .SelectMany(_ => FetchAndImport(repositoryUrl, commitish, subdirectory, token, newSpaceId))
+                .SelectMany(_ => FetchAndImport(repositoryUrl, commitish, subdirectory, token, newSpaceId, progress))
                 .Select(x => x.Result);
         });
     }
@@ -312,9 +328,13 @@ public sealed class GitHubSyncService
     /// Rejected when the source's <see cref="GitHubSyncConfig.Direction"/> is
     /// <see cref="SyncDirection.ExportOnly"/>. This is the "change the commit and
     /// re-import to that state" operation.
+    /// <paramref name="progress"/> (when the caller runs as an activity: <c>ctx.Log</c>)
+    /// receives per-file problems — a repo file that failed to parse and was therefore
+    /// dropped from the import — so they land on the activity log, not only in Loki.
     /// </summary>
     public IObservable<StaticRepoImportResult> ReimportAtCommit(
-        string spacePath, string commitish, string userId, string? sourceId = null)
+        string spacePath, string commitish, string userId, string? sourceId = null,
+        Action<string, LogLevel>? progress = null)
     {
         return ReadConfig(spacePath, sourceId).Take(1).SelectMany(config =>
         {
@@ -329,7 +349,7 @@ public sealed class GitHubSyncService
             {
                 var token = auth.Token;
                 logger?.LogInformation("Re-importing {Space} at {Ref}", spacePath, commitish);
-                return FetchAndImport(repoUrl, commitish, config.Subdirectory, token, spacePath)
+                return FetchAndImport(repoUrl, commitish, config.Subdirectory, token, spacePath, progress)
                     .SelectMany(x => RecordLastSync(spacePath, x.CommitSha, sourceId).Select(_ => x.Result));
             });
         });
@@ -383,10 +403,11 @@ public sealed class GitHubSyncService
                         "GitHub App identity (GitHub:App:ClientId + GitHub:App:PrivateKey).")));
 
     private IObservable<(StaticRepoImportResult Result, string CommitSha)> FetchAndImport(
-        string repoUrl, string commitish, string? subdirectory, string token, string spaceId)
+        string repoUrl, string commitish, string? subdirectory, string token, string spaceId,
+        Action<string, LogLevel>? progress = null)
     {
         return repoClient.Fetch(repoUrl, commitish, subdirectory, token).SelectMany(snapshot =>
-            ParseSnapshot(snapshot, spaceId).SelectMany(parsed =>
+            ParseSnapshot(snapshot, spaceId, progress).SelectMany(parsed =>
             {
                 var source = new InMemoryStaticRepoSource(spaceId, parsed.Children, parsed.Root);
                 return StaticRepoImporter.ImportSource(hub, source, logger)
@@ -395,12 +416,12 @@ public sealed class GitHubSyncService
     }
 
     private IObservable<(MeshNode? Root, IReadOnlyList<MeshNode> Children)> ParseSnapshot(
-        RepoSnapshot snapshot, string spaceId)
+        RepoSnapshot snapshot, string spaceId, Action<string, LogLevel>? progress = null)
     {
         if (snapshot.Files.Count == 0)
             return Observable.Return(((MeshNode?)null, (IReadOnlyList<MeshNode>)Array.Empty<MeshNode>()));
         return snapshot.Files
-            .Select(f => ParseFile(f, spaceId))
+            .Select(f => ParseFile(f, spaceId, progress))
             .Merge(8)
             .Where(x => x.Node is not null)
             .ToList()
@@ -412,7 +433,8 @@ public sealed class GitHubSyncService
             });
     }
 
-    private IObservable<(MeshNode? Node, bool IsRoot)> ParseFile(RepoFile file, string spaceId)
+    private IObservable<(MeshNode? Node, bool IsRoot)> ParseFile(
+        RepoFile file, string spaceId, Action<string, LogLevel>? progress = null)
     {
         // The top-level README.md is a GitHub display file emitted on export — never a node.
         if (string.Equals(file.Path, "README.md", StringComparison.OrdinalIgnoreCase))
@@ -420,7 +442,16 @@ public sealed class GitHubSyncService
 
         var ext = System.IO.Path.GetExtension(file.Path);
         // file.Content is already an in-memory string — the parse is pure CPU, no pool.
-        var parsed = parsers.TryParse(ext, file.Path, file.Content, file.Path);
+        // A file whose parser(s) all THREW is a malformed node file: the node it should have
+        // become is silently missing after the import. Surface it on the owning activity as an
+        // Error (ActivityRunner.Finish rolls the terminal status up to Failed) in addition to
+        // the server log. Files with no registered parser (.yml, .py, …) stay silent — repos
+        // legitimately carry non-node files.
+        var parsed = parsers.TryParse(ext, file.Path, file.Content, file.Path, (path, ex) =>
+        {
+            logger?.LogWarning(ex, "Failed to parse {Path} — file skipped on import.", path);
+            progress?.Invoke($"Failed to parse '{path}': {ex.Message} — file skipped.", LogLevel.Error);
+        });
         if (parsed is null) return Observable.Return(((MeshNode?)null, false));
         if (NodeFileMapper.IsRootIndex(file.Path))
         {

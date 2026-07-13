@@ -72,20 +72,27 @@ public class FileFormatParserRegistry
     /// <summary>
     /// Attempts to parse content using parsers for the given extension.
     /// Tries each parser in priority order until one succeeds.
-    /// Exceptions from individual parsers are caught and logged, allowing fallback to next parser.
+    /// Exceptions from individual parsers are caught, allowing fallback to the next parser;
+    /// when EVERY parser for the extension failed and at least one threw, the last exception
+    /// is surfaced through <paramref name="onError"/> — so a caller running as an activity can
+    /// report the dropped file instead of silently losing it. A file whose extension simply has
+    /// no registered parser (a non-node file — <c>.yml</c>, <c>.py</c>, …) never reports.
     /// </summary>
     /// <param name="extension">File extension including the dot.</param>
     /// <param name="filePath">Full path to the file.</param>
     /// <param name="content">File content.</param>
     /// <param name="relativePath">Path relative to the data root.</param>
+    /// <param name="onError">Invoked with (<paramref name="relativePath"/>, last exception) when all parsers failed and at least one threw.</param>
     /// <returns>Parsed MeshNode or null if no parser can handle the content.</returns>
     public MeshNode? TryParse(
         string extension,
         string filePath,
         string content,
-        string relativePath)
+        string relativePath,
+        Action<string, Exception>? onError = null)
     {
         var parsers = GetParsers(extension);
+        Exception? lastError = null;
         foreach (var parser in parsers)
         {
             try
@@ -94,11 +101,15 @@ public class FileFormatParserRegistry
                 if (node != null)
                     return node;
             }
-            catch
+            catch (Exception ex)
             {
-                // Parser failed, try next parser in chain
+                // Parser failed, try next parser in chain; remember the failure so an
+                // all-parsers-failed outcome is reportable rather than silent.
+                lastError = ex;
             }
         }
+        if (lastError is not null)
+            onError?.Invoke(relativePath, lastError);
         return null;
     }
 
