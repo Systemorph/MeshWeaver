@@ -147,12 +147,14 @@ public sealed class SnowflakeSearchInfrastructure
         //    uppercases unquoted identifiers, which is exactly what resolves them to the
         //    uppercase catalog objects (INFORMATION_SCHEMA.TABLES / TABLE_SCHEMA / TABLE_NAME);
         //    quoting them lowercase — as every non-catalog identifier in this backend is —
-        //    would MISS the catalog. The VALUES are case-exact: partition schemas/tables are
-        //    created quoted-lowercase, so 'mesh_nodes' and the lowercase schema names match.
+        //    would MISS the catalog. VALUES are compared through LOWER() defensively: this
+        //    backend creates everything quoted-lowercase (so verbatim matching would suffice),
+        //    but an endpoint that normalizes catalog casing differently (emulator) must not
+        //    silently produce an empty index.
         var existing = ImmutableHashSet.CreateBuilder<string>(StringComparer.Ordinal);
         await using (var cmd = connection.CreateCommand())
         {
-            cmd.CommandText = "SELECT table_schema FROM information_schema.tables WHERE table_name = 'mesh_nodes'";
+            cmd.CommandText = "SELECT LOWER(table_schema) FROM information_schema.tables WHERE LOWER(table_name) = 'mesh_nodes'";
             await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
             while (await reader.ReadAsync(ct).ConfigureAwait(false))
                 existing.Add(reader.GetString(0));
@@ -222,10 +224,12 @@ public sealed class SnowflakeSearchInfrastructure
         {
             await using var cmd = connection.CreateCommand();
             // Unquoted catalog identifiers on purpose — see RebuildTopLevelIndexAsync step 2.
+            // LOWER() on both sides (same defensive rationale) so a casing-normalizing
+            // endpoint can't make this probe re-trigger a full rebuild on every call.
             cmd.CommandText =
-                "SELECT 1 FROM information_schema.tables WHERE table_schema = :schema AND table_name = :table";
-            SnowflakeConnectionSource.AddParam(cmd, "schema", _options.Schema, DbType.String);
-            SnowflakeConnectionSource.AddParam(cmd, "table", IndexTable, DbType.String);
+                "SELECT 1 FROM information_schema.tables WHERE LOWER(table_schema) = :schema AND LOWER(table_name) = :table";
+            SnowflakeConnectionSource.AddParam(cmd, "schema", _options.Schema.ToLowerInvariant(), DbType.String);
+            SnowflakeConnectionSource.AddParam(cmd, "table", IndexTable.ToLowerInvariant(), DbType.String);
             exists = await cmd.ExecuteScalarAsync(ct).ConfigureAwait(false) is not (null or DBNull);
         }
 

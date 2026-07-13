@@ -90,7 +90,8 @@ internal static class SnowflakeTestReactiveExtensions
             await using var connection = await source.OpenAsync(ct);
             await using var command = CreateCommand(connection, sql, parameters);
             await using var reader = await command.ExecuteReaderAsync(ct);
-            await reader.ReadAsync(ct);
+            if (!await reader.ReadAsync(ct))
+                throw new InvalidOperationException($"Probe returned no rows: {sql}");
             return project(reader);
         });
 

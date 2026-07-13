@@ -59,14 +59,15 @@ public sealed class SnowflakeConnectionSource(string connectionString) : IDispos
     }
 
     /// <summary>
-    /// Clears the driver's session pool for this connection string so test fixtures /
-    /// mesh disposal don't leak HTTPS sessions.
+    /// Clears the driver's session pool for THIS connection string so test fixtures /
+    /// mesh disposal don't leak HTTPS sessions — scoped per pool so disposing one source
+    /// can't disrupt another endpoint's sessions in the same process.
     /// </summary>
     public void Dispose()
     {
         try
         {
-            SnowflakeDbConnectionPool.ClearAllPools();
+            SnowflakeDbConnectionPool.GetPool(ConnectionString).ClearPool();
         }
         catch (Exception)
         {

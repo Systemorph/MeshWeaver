@@ -115,7 +115,12 @@ public class SnowflakeFixture : IAsyncLifetime
 
         try
         {
-            _container = new ContainerBuilder("localstack/snowflake:latest") // pin a digest/tag when stabilized
+            // Overridable so CI can pin a validated tag/digest for reproducible bisection;
+            // defaults to latest until an emulator baseline has been token-verified (blind-
+            // pinning an unvalidated tag risks a fixture that can never start).
+            var image = Environment.GetEnvironmentVariable("LOCALSTACK_SNOWFLAKE_IMAGE")
+                ?? "localstack/snowflake:latest";
+            _container = new ContainerBuilder(image)
                 .WithEnvironment("LOCALSTACK_AUTH_TOKEN", token)
                 .WithPortBinding(EmulatorPort, assignRandomHostPort: true)
                 .WithWaitStrategy(Wait.ForUnixContainer().UntilHttpRequestIsSucceeded(
