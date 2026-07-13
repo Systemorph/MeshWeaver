@@ -98,7 +98,9 @@ public static class NotificationService
         NotificationType type,
         string? targetNodePath = null,
         string? createdBy = null,
-        string? icon = null)
+        string? icon = null,
+        string? emailCtaLabel = null,
+        string? emailFooterNote = null)
     {
         var meshService = hub.ServiceProvider.GetService<IMeshService>();
         if (meshService is null)
@@ -119,7 +121,7 @@ public static class NotificationService
                         .Select(_ => Unit.Default)
                         .Catch(Observable.Return(Unit.Default)));
                 if (!string.IsNullOrEmpty(recipient) && settings.Email(category))
-                    ops.Add(MaybeSendEmail(hub, recipient!, title, message, targetNodePath)
+                    ops.Add(MaybeSendEmail(hub, recipient!, title, message, targetNodePath, emailCtaLabel, emailFooterNote)
                         .Select(_ => Unit.Default)
                         .Catch(Observable.Return(Unit.Default)));
                 return ops.Count == 0 ? Observable.Return(Unit.Default) : Observable.Merge(ops);
@@ -156,7 +158,8 @@ public static class NotificationService
     /// no email on file or no <see cref="IEmailSender"/> is registered.
     /// </summary>
     private static IObservable<bool> MaybeSendEmail(
-        IMessageHub hub, string recipient, string title, string message, string? targetNodePath)
+        IMessageHub hub, string recipient, string title, string message, string? targetNodePath,
+        string? ctaLabel, string? footerNote)
     {
         return HasRoutingRules(hub, recipient).SelectMany(hasRules =>
         {
@@ -166,7 +169,7 @@ public static class NotificationService
                 .Select(n => n?.ContentAs<User>(hub.JsonSerializerOptions)?.Email)
                 .SelectMany(email => string.IsNullOrWhiteSpace(email)
                     ? Observable.Return(false)
-                    : hub.SendEmail(email!, title, BuildEmailHtml(hub, title, message, targetNodePath)))
+                    : hub.SendEmail(email!, title, BuildEmailHtml(hub, title, message, targetNodePath, ctaLabel, footerNote)))
                 .Catch(Observable.Return(false));
         });
     }
@@ -183,18 +186,24 @@ public static class NotificationService
             .Timeout(LookupTimeout, Observable.Return(false))
             .Catch(Observable.Return(false));
 
-    private static string BuildEmailHtml(IMessageHub hub, string title, string message, string? targetNodePath)
+    private static string BuildEmailHtml(
+        IMessageHub hub, string title, string message, string? targetNodePath,
+        string? ctaLabel, string? footerNote)
     {
         var baseUrl = ResolveBaseUrl(hub);
-        var link = (!string.IsNullOrEmpty(baseUrl) && !string.IsNullOrWhiteSpace(targetNodePath))
-            ? $"<p style=\"margin:16px 0;\"><a href=\"{System.Net.WebUtility.HtmlEncode($"{baseUrl!.TrimEnd('/')}/{targetNodePath!.TrimStart('/')}")}\" " +
-              "style=\"background:#2563eb;color:#fff;padding:10px 18px;border-radius:6px;text-decoration:none;\">Open</a></p>"
-            : "";
-        return $"<div style=\"font-family:sans-serif;font-size:14px;color:#111;\">" +
-               $"<h2 style=\"margin:0 0 12px 0;\">{System.Net.WebUtility.HtmlEncode(title)}</h2>" +
-               (string.IsNullOrEmpty(message) ? "" : $"<p>{System.Net.WebUtility.HtmlEncode(message)}</p>") +
-               link +
-               "</div>";
+        var ctaUrl = (!string.IsNullOrEmpty(baseUrl) && !string.IsNullOrWhiteSpace(targetNodePath))
+            ? $"{baseUrl!.TrimEnd('/')}/{targetNodePath!.TrimStart('/')}"
+            : null;
+        // A first-time recipient (most invitees have never signed in) needs to know the link IS the
+        // way in. Show the sign-in hint whenever there's a link and no caller-supplied footer.
+        var footer = footerNote
+            ?? (ctaUrl is not null ? "New to Memex? Sign in with this email address to open it." : null);
+        return EmailTemplate.Build(
+            heading: title,
+            paragraphs: string.IsNullOrEmpty(message) ? [] : [message],
+            ctaLabel: ctaUrl is null ? null : (string.IsNullOrWhiteSpace(ctaLabel) ? "Open" : ctaLabel),
+            ctaUrl: ctaUrl,
+            footerNote: footer);
     }
 
     private static string? ResolveBaseUrl(IMessageHub hub)
