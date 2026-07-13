@@ -1813,6 +1813,17 @@ public sealed class MessageHub : IMessageHub
                     logger.LogDebug("[DISPOSE-TRACE] {address}: messageService.Dispose() done in {elapsed}ms",
                         Address, shutdownStopwatch.ElapsedMilliseconds);
 
+                    // Dead BEFORE signalling — callers awaiting DisposalCompleted must observe the
+                    // terminal state, never a mid-teardown ShutDown snapshot. The force-teardown
+                    // path already orders it this way; here Dead was only set in the FINALLY, so a
+                    // StopAsync waiter woken by the signal could finish its (fast) IoPool +
+                    // AsyncDisposeQueue drains and read RunLevel == ShutDown — the flaky
+                    // MeshHostBuilderTeardownOrderingTest failure on loaded CI shards. The finally
+                    // keeps its (now redundant on success) assignment for the faulted path.
+                    lock (locker)
+                    {
+                        RunLevel = MessageHubRunLevel.Dead;
+                    }
                     // Signal completion through the reactive source (idempotent CAS — no
                     // InvalidOperationException to guard, unlike TaskCompletionSource).
                     SignalDisposalCompleted();
