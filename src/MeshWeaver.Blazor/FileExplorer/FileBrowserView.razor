@@ -1,6 +1,8 @@
+@using System.Reactive.Linq
 @using MeshWeaver.ContentCollections
 @using MeshWeaver.Messaging
 @using Microsoft.Extensions.DependencyInjection
+@using Microsoft.Extensions.Logging
 @inherits BlazorView<FileBrowserControl,FileBrowserView>
 
 <FileBrowser Address="Stream?.Owner" CollectionName="@Collection" CurrentPath="@Path" CreatePath="@PathCreation" TopLevelPath="@TopLevelPath" CollectionConfiguration="@CollectionConfiguration" IsReadOnly="@IsReadOnly" Embed="@true" UrlBasePath="@UrlBasePath"></FileBrowser>
@@ -33,9 +35,9 @@
         DataBind(ViewModel.CollectionSettings, x => x.CollectionSettings);
     }
 
-    protected override async Task OnParametersSetAsync()
+    protected override void OnParametersSet()
     {
-        await base.OnParametersSetAsync();
+        base.OnParametersSet();
 
         // Reconstruct CollectionConfiguration from string properties if it didn't survive serialization
         if (CollectionConfiguration is null && !string.IsNullOrEmpty(SourceType) && !string.IsNullOrEmpty(Collection))
@@ -61,7 +63,12 @@
         {
             var contentService = Hub.ServiceProvider.GetRequiredService<IContentService>();
             contentService.AddConfiguration(CollectionConfiguration);
-            await contentService.GetCollectionAsync(Collection, CancellationToken.None);
+            // Warm the (ReplaySubject-cached) collection so the embedded browser resolves it
+            // instantly; the initialization leaf runs on the collection's pool. Cold → Subscribe.
+            var name = Collection;
+            AddBinding(contentService.GetCollection(name).Subscribe(
+                _ => { },
+                ex => Logger.LogWarning(ex, "Warming content collection '{Collection}' failed", name)));
         }
     }
 }

@@ -66,12 +66,12 @@
                     <FluentInputFile @ref="@myFileByStream"
                                      AnchorId="MyUploadStream"
                                      DragDropZoneVisible="false"
-                                     Mode="InputFileMode.Stream"
+                                     Mode="InputFileMode.SaveToTemporaryFolder"
                                      Multiple="true"
                                      MaximumFileCount="1000"
                                      MaximumFileSize="@(20 * 1024 * 1024)"
                                      ProgressPercentChanged="@(p => progressPercent = p)"
-                                     OnFileUploaded="@OnFileUploadedAsync"
+                                     OnFileUploaded="@OnFileUploaded"
                                      OnCompleted="@OnCompleted" />
                     if (ShowNewArticle)
                     {

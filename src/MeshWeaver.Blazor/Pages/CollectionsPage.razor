@@ -1,4 +1,5 @@
 ﻿@page "/collections/{**FullPath}"
+@using System.Reactive.Linq
 @using Microsoft.AspNetCore.Components.Authorization
 @using MeshWeaver.Blazor.FileExplorer
 @using MeshWeaver.ContentCollections
@@ -23,9 +24,9 @@
     private string? Collection { get; set; } = "";
     private string? Path { get; set; } = "";
 
-    protected override async Task OnParametersSetAsync()
+    protected override void OnParametersSet()
     {
-        await base.OnParametersSetAsync();
+        base.OnParametersSet();
         if (!string.IsNullOrEmpty(FullPath))
         {
             var split = FullPath!.Split('/');
@@ -34,14 +35,16 @@
         }
         else
         {
-            // Redirect to first available collection if no collection specified
-            var collections = await ContentService.GetCollectionsAsync().ToArrayAsync();
-            var firstCollection = collections.FirstOrDefault();
-            if (firstCollection != null)
+            // Redirect to the first available collection when none is specified.
+            // Subscribe-only: the enumeration replays instantiated (pool-initialized)
+            // collections; navigation is marshalled back onto the circuit.
+            ContentService.GetCollections().ToArray().Take(1).Subscribe(collections =>
             {
-                NavigationManager.NavigateTo($"/collections/{firstCollection.Collection}");
-                return;
-            }
+                var firstCollection = collections.FirstOrDefault();
+                if (firstCollection != null)
+                    _ = InvokeAsync(() =>
+                        NavigationManager.NavigateTo($"/collections/{firstCollection.Collection}"));
+            });
         }
     }
 

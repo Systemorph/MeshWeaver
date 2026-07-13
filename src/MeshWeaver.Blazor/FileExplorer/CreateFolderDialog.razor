@@ -1,10 +1,15 @@
-﻿@using Appearance = Microsoft.FluentUI.AspNetCore.Components.Appearance
+﻿@using System.Reactive.Linq
+@using Appearance = Microsoft.FluentUI.AspNetCore.Components.Appearance
 @implements IDialogContentComponent<CreateFolderModel>
 <FluentTextField @ref="textField" @bind-Value="Content.Name" Placeholder="New Folder"  />
+@if (!string.IsNullOrEmpty(errorMessage))
+{
+    <FluentLabel Color="Color.Error">@errorMessage</FluentLabel>
+}
 <FluentDialogFooter>
     <FluentButton Appearance="Appearance.Accent"
                   Disabled="@(Content is null || !Content.IsValid())"
-                  OnClick="@SaveAsync">
+                  OnClick="@Save">
         Create
     </FluentButton>
     <FluentButton Appearance="Appearance.Neutral"
@@ -28,14 +33,23 @@
     }
 
 
-    private async Task SaveAsync()
+    private void Save()
     {
-        if (Content.IsValid())
-        {
-            await Content.CreateAsync();
-            await Dialog.CloseAsync(Content);
-        }
+        if (!Content.IsValid())
+            return;
+        // Subscribe-only: the create runs on the collection's pool; the dialog closes on the
+        // completion emission, marshalled back onto the circuit via InvokeAsync.
+        Content.Create().Subscribe(
+            _ => { },
+            ex => _ = InvokeAsync(() =>
+            {
+                errorMessage = ex.Message;
+                StateHasChanged();
+            }),
+            () => _ = InvokeAsync(() => Dialog.CloseAsync(Content)));
     }
+
+    private string? errorMessage;
 
     private async Task CancelAsync()
     {

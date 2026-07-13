@@ -128,6 +128,14 @@ public class PostgreSqlSqlGenerator
     }
 
     /// <summary>
+    /// The ORDER BY column expression for an OUTER wrap around a UNION of full-row selects —
+    /// same mapping as a branch-level ORDER BY, with the <c>n.</c> alias stripped (the outer
+    /// select has no alias; mirrors <see cref="GenerateCrossSchemaSelectQuery"/>'s wrap).
+    /// </summary>
+    public static string MapOrderByForUnionWrap(string selector)
+        => MapOrderBySelector(selector).Replace("n.", "");
+
+    /// <summary>
     /// Allow-listed SQL functions usable in <c>sort:func(field)-desc</c>.
     /// Tight allow-list — no arbitrary SQL in the sort selector.
     /// </summary>

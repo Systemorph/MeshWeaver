@@ -30,11 +30,14 @@ public class HubStreamProviderFactory(IMessageHub hub) : IStreamProviderFactory
         var collectionName = config.Settings?.GetValueOrDefault("CollectionName") ?? config.Name;
 
         // Query the remote hub for the collection configuration via GetDataRequest+ContentCollectionReference.
-        var delivery = hub.Post(
-            new GetDataRequest(new ContentCollectionReference([collectionName])),
-            o => o.WithTarget(config.Address))!;
-
-        return hub.Observe(delivery)
+        // 🚨 Canonical observe-BEFORE-post (hub.Observe(request, …) pre-registers the response
+        // callback by message-id, then posts on Subscribe). The previous post-then-Observe(delivery)
+        // shape raced: the Post fired at Create() call time while the callback only registered at
+        // subscription — a fast response landed unobserved and the observable NEVER emitted, which
+        // a promise-cached collection entry then pins forever (silence, not an error).
+        return hub.Observe(
+                new GetDataRequest(new ContentCollectionReference([collectionName])),
+                o => o.WithTarget(config.Address))
             .SelectMany(callbackResponse =>
             {
                 if (callbackResponse.Message is not GetDataResponse responseMsg)

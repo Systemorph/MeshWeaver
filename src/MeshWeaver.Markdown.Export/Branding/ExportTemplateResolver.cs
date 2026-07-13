@@ -1,4 +1,5 @@
 using System.IO.Compression;
+using System.Reactive.Linq;
 using System.Xml.Linq;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Messaging;
@@ -21,23 +22,22 @@ public class ExportTemplateResolver(IMessageHub hub, ILogger<ExportTemplateResol
     /// <summary>
     /// Loads the template bytes and inspects the inner OpenXML package to pull out the
     /// first embedded raster image (used as a logo) and the major font name.
-    /// Returns null when the path does not resolve.
+    /// Emits null when the path does not resolve. The content read runs on the collection's
+    /// I/O pool; the (pure CPU) package inspection runs on its emission — pure composition,
+    /// no async state machine.
     /// </summary>
-    public async Task<ExportTemplate?> LoadAsync(string? templatePath, CancellationToken ct = default)
+    public IObservable<ExportTemplate?> Load(string? templatePath)
     {
         if (string.IsNullOrWhiteSpace(templatePath))
-            return null;
+            return Observable.Return<ExportTemplate?>(null);
 
-        var bytes = await LoadBytesAsync(templatePath, ct).ConfigureAwait(false);
-        if (bytes is null)
-            return null;
-
-        return InspectBytes(bytes, templatePath, logger);
+        return LoadBytes(templatePath!)
+            .Select(bytes => bytes is null ? null : InspectBytes(bytes, templatePath, logger));
     }
 
     /// <summary>
     /// Pure function: given raw .docx bytes, produce the <see cref="ExportTemplate"/>.
-    /// Exposed for unit tests — production code goes through <see cref="LoadAsync"/>.
+    /// Exposed for unit tests — production code goes through <see cref="Load"/>.
     /// </summary>
     public static ExportTemplate InspectBytes(byte[] bytes, string? sourceLabel = null, ILogger? logger = null)
     {
@@ -121,37 +121,33 @@ public class ExportTemplateResolver(IMessageHub hub, ILogger<ExportTemplateResol
         return null;
     }
 
-    private async Task<byte[]?> LoadBytesAsync(string path, CancellationToken ct)
+    private IObservable<byte[]?> LoadBytes(string path)
     {
-        try
+        const string staticPrefix = "/static/storage/content/";
+        var rel = path.StartsWith("content:", StringComparison.OrdinalIgnoreCase)
+            ? path["content:".Length..]
+            : path.StartsWith(staticPrefix, StringComparison.OrdinalIgnoreCase)
+                ? path[staticPrefix.Length..]
+                : null;
+        if (rel is null)
         {
-            if (path.StartsWith("content:", StringComparison.OrdinalIgnoreCase))
-                return await LoadFromContentAsync(path["content:".Length..], ct).ConfigureAwait(false);
-
-            const string staticPrefix = "/static/storage/content/";
-            if (path.StartsWith(staticPrefix, StringComparison.OrdinalIgnoreCase))
-                return await LoadFromContentAsync(path[staticPrefix.Length..], ct).ConfigureAwait(false);
-
             logger.LogInformation("Template path '{Path}' is not a content path; skipping", path);
-            return null;
+            return Observable.Return<byte[]?>(null);
         }
-        catch (Exception ex)
-        {
-            logger.LogWarning(ex, "Failed to load template bytes from '{Path}'; continuing without template", path);
-            return null;
-        }
-    }
 
-    private async Task<byte[]?> LoadFromContentAsync(string rel, CancellationToken ct)
-    {
         var (collection, subPath) = SplitCollection(rel);
         var contentSvc = hub.ServiceProvider.GetService<IContentService>();
-        if (contentSvc is null) return null;
-        await using var stream = await contentSvc.GetContentAsync(collection, subPath, ct).ConfigureAwait(false);
-        if (stream is null) return null;
-        using var ms = new MemoryStream();
-        await stream.CopyToAsync(ms, ct).ConfigureAwait(false);
-        return ms.ToArray();
+        if (contentSvc is null)
+            return Observable.Return<byte[]?>(null);
+        return contentSvc.GetCollection(collection)
+            .SelectMany(coll => coll is null
+                ? Observable.Return<byte[]?>(null)
+                : coll.GetContentBytes(subPath))
+            .Catch((Exception ex) =>
+            {
+                logger.LogWarning(ex, "Failed to load template bytes from '{Path}'; continuing without template", path);
+                return Observable.Return<byte[]?>(null);
+            });
     }
 
     private static (string Collection, string Path) SplitCollection(string rel)

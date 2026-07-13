@@ -243,14 +243,12 @@ public static class BlazorHostingExtensions
                     return Observable.Return(Results.NotFound("Content service not configured"));
 
                 portalContentService.AddConfiguration(collectionConfig);
-                return (mainHub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.FileSystem) ?? IoPool.Unbounded)
-                    .Run(async ct =>
-                    {
-                        var contentCollection = await portalContentService.GetCollectionAsync(qualifiedCollectionName, context.RequestAborted).ConfigureAwait(false);
-                        if (contentCollection == null)
-                            return Results.NotFound($"Content collection '{addressCollectionName}' not found");
-                        return await ServeFile(context, contentCollection, addressFilePath).ConfigureAwait(false);
-                    });
+                // Pure composition — collection resolution and the file read both run on the
+                // collection's own IIoPool; ServeFile only shapes the (already-read) result.
+                return portalContentService.GetCollection(qualifiedCollectionName)
+                    .SelectMany(contentCollection => contentCollection == null
+                        ? Observable.Return(Results.NotFound($"Content collection '{addressCollectionName}' not found"))
+                        : ServeFile(context, contentCollection, addressFilePath));
             });
         });
     }
@@ -276,59 +274,60 @@ public static class BlazorHostingExtensions
             return Results.NotFound("Content service not configured");
         }
 
-        var contentCollection = await contentService.GetCollectionAsync(collectionName, context.RequestAborted);
-        if (contentCollection == null)
-        {
-            return Results.NotFound($"Content collection '{collectionName}' not found");
-        }
-
-        return await ServeFile(context, contentCollection, filePath);
+        // HTTP-boundary await of the composed pipeline — every leaf runs on the collection's pool.
+        return await contentService.GetCollection(collectionName)
+            .SelectMany(contentCollection => contentCollection == null
+                ? Observable.Return(Results.NotFound($"Content collection '{collectionName}' not found"))
+                : ServeFile(context, contentCollection, filePath))
+            .Take(1);
     }
 
     /// <summary>
-    /// Serves a file from a content collection with proper caching headers.
+    /// Serves a file from a content collection with proper caching headers. Composition — every
+    /// read (including the small-file buffering for the ETag hash) runs on the collection's pool;
+    /// this layer only shapes the HTTP result on the emissions.
     /// </summary>
-    private static async Task<IResult> ServeFile(HttpContext context, ContentCollection contentCollection, string filePath)
-    {
-        var stream = await contentCollection.GetContentAsync(filePath, context.RequestAborted);
-        if (stream == null)
-        {
-            return Results.NotFound("File not found");
-        }
+    private static IObservable<IResult> ServeFile(HttpContext context, ContentCollection contentCollection, string filePath)
+        => contentCollection.GetContent(filePath)
+            .SelectMany(stream =>
+            {
+                if (stream == null)
+                    return Observable.Return(Results.NotFound("File not found"));
 
-        var contentType = GetContentType(filePath);
-        var fileName = Path.GetFileName(filePath);
+                var contentType = GetContentType(filePath);
+                var fileName = Path.GetFileName(filePath);
 
-        // Check if download is requested via query parameter
-        var isDownload = context.Request.Query.ContainsKey("download");
-        if (isDownload)
-        {
-            context.Response.Headers.ContentDisposition = $"attachment; filename=\"{fileName}\"";
-        }
+                // Check if download is requested via query parameter
+                var isDownload = context.Request.Query.ContainsKey("download");
+                if (isDownload)
+                    context.Response.Headers.ContentDisposition = $"attachment; filename=\"{fileName}\"";
 
-        // Configure caching headers for small files
-        if (stream.Length < 10_000_000) // Only compute hash for files smaller than 10MB
-        {
-            var cacheDuration = TimeSpan.FromDays(30);
-            context.Response.Headers.CacheControl = $"public, max-age={cacheDuration.TotalSeconds}, immutable";
-            context.Response.Headers.Expires = DateTime.UtcNow.AddDays(30).ToString("R");
+                // Small files: re-read fully buffered through the collection's pooled leaf so the
+                // ETag hash never buffers on this thread.
+                if (stream.CanSeek && stream.Length < 10_000_000) // Only compute hash for files smaller than 10MB
+                {
+                    stream.Dispose();
+                    return contentCollection.GetContentBytes(filePath)
+                        .Select(bytes =>
+                        {
+                            if (bytes is null)
+                                return Results.NotFound("File not found");
+                            var cacheDuration = TimeSpan.FromDays(30);
+                            context.Response.Headers.CacheControl = $"public, max-age={cacheDuration.TotalSeconds}, immutable";
+                            context.Response.Headers.Expires = DateTime.UtcNow.AddDays(30).ToString("R");
+                            var hash = Convert.ToBase64String(System.Security.Cryptography.SHA256.HashData(bytes));
+                            context.Response.Headers.ETag = $"\"{hash}\"";
+                            return Results.File(bytes, contentType, fileName);
+                        });
+                }
 
-            // Add ETag for cache
-            using var ms = new MemoryStream();
-            await stream.CopyToAsync(ms, context.RequestAborted);
-            ms.Position = 0;
-            var hash = Convert.ToBase64String(System.Security.Cryptography.SHA256.HashData(ms.ToArray()));
-            context.Response.Headers.ETag = $"\"{hash}\"";
-            return Results.File(ms.ToArray(), contentType, fileName);
-        }
-
-        // Return the stream directly without loading it all into memory
-        return Results.Stream(
-            stream,
-            contentType,
-            fileName,
-            enableRangeProcessing: true);
-    }
+                // Return the stream directly without loading it all into memory
+                return Observable.Return(Results.Stream(
+                    stream,
+                    contentType,
+                    fileName,
+                    enableRangeProcessing: true));
+            });
 
     /// <summary>
     /// Decodes a collection name from a URL by replacing '~' back to '/'.
