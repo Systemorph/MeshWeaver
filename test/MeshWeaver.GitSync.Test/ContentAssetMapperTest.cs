@@ -18,7 +18,7 @@ public class ContentAssetMapperTest
     [Fact]
     public void RootContentAsset_OwnedByRoot_FileTailAfterContent()
     {
-        var a = ContentAssetMapper.TryClassify("content/videos/module1-intro.mp4", Png);
+        var a = ContentAssetMapper.TryClassify("content/videos/module1-intro.mp4", () => Png);
         Assert.NotNull(a);
         Assert.Equal("", a!.OwnerRelativePath);
         Assert.Equal("videos/module1-intro.mp4", a.FileRelativePath);
@@ -28,7 +28,7 @@ public class ContentAssetMapperTest
     [Fact]
     public void NestedContentAsset_OwnedByNearestNode()
     {
-        var a = ContentAssetMapper.TryClassify("TDD/content/x.png", Png);
+        var a = ContentAssetMapper.TryClassify("TDD/content/x.png", () => Png);
         Assert.NotNull(a);
         Assert.Equal("TDD", a!.OwnerRelativePath);
         Assert.Equal("x.png", a.FileRelativePath);
@@ -38,7 +38,7 @@ public class ContentAssetMapperTest
     public void DeeperContentSegment_IsJustAFolderName()
     {
         // The FIRST "content" segment wins; a second one is a plain folder in the file's path.
-        var a = ContentAssetMapper.TryClassify("A/content/B/content/y.bin", Png);
+        var a = ContentAssetMapper.TryClassify("A/content/B/content/y.bin", () => Png);
         Assert.NotNull(a);
         Assert.Equal("A", a!.OwnerRelativePath);
         Assert.Equal("B/content/y.bin", a.FileRelativePath);
@@ -52,7 +52,10 @@ public class ContentAssetMapperTest
     [InlineData("A/content")]             // ends at content — no file
     [InlineData("README.md")]             // display file
     public void NonAssetPaths_AreNotClassified(string path)
-        => Assert.Null(ContentAssetMapper.TryClassify(path, Png));
+        {
+        Assert.Null(ContentAssetMapper.TryClassify(path, () => Png));
+        Assert.False(ContentAssetMapper.IsContentPath(path));
+    }
 
     [Fact]
     public void ToContentSyncs_SingleWholeCollectionMirror_TargetsSpaceRoot_FullPaths()

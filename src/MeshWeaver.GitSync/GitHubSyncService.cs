@@ -437,8 +437,12 @@ public sealed class GitHubSyncService
         // node), so committed course videos/posters land and stop getting wiped. Everything else flows
         // to node parsing as before.
         var kept = snapshot.Files.Where(f => !ignore.IsIgnored(f.Path)).ToArray();
+        // Cheap path-only precheck first (no byte materialization for the common node file), then
+        // classify only the content paths — f.Bytes is realized ONLY for an actual content asset.
         var classified = kept
-            .Select(f => (File: f, Asset: ContentAssetMapper.TryClassify(f.Path, f.Bytes)))
+            .Select(f => (File: f, Asset: ContentAssetMapper.IsContentPath(f.Path)
+                ? ContentAssetMapper.TryClassify(f.Path, () => f.Bytes)
+                : null))
             .ToArray();
         var contentSyncs = ContentAssetMapper.ToContentSyncs(
             spaceId, classified.Where(c => c.Asset is not null).Select(c => c.Asset!));

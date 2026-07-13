@@ -112,7 +112,7 @@ public record InlineContentFile(string Path, byte[] Content);
 /// <param name="CollectionName">The target content collection (e.g. <c>content</c>).</param>
 /// <param name="TargetPath">The folder within the collection the files are written under (the owning node's path relative to the Space; empty for the Space root).</param>
 /// <param name="Files">The files to write, each with a path relative to <paramref name="TargetPath"/>.</param>
-[RequiresPermission(Permission.Create)]
+[SyncContentFilesPermission]
 public record SyncContentFilesRequest(
     string CollectionName,
     string TargetPath,
@@ -124,6 +124,24 @@ public record SyncContentFilesRequest(
     /// the write is purely additive (upsert only). Default true.
     /// </summary>
     public bool Mirror { get; init; } = true;
+}
+
+/// <summary>
+/// Permission gate for <see cref="SyncContentFilesRequest"/>: always requires
+/// <see cref="Permission.Create"/> (it writes files), and ADDITIONALLY requires
+/// <see cref="Permission.Delete"/> when <see cref="SyncContentFilesRequest.Mirror"/> is set (mirroring
+/// can prune existing files). A caller with only Create cannot trigger a pruning mirror.
+/// </summary>
+public sealed class SyncContentFilesPermissionAttribute() : RequiresPermissionAttribute(Permission.Create)
+{
+    /// <inheritdoc />
+    public override IEnumerable<(string Path, Permission Permission)> GetPermissionChecks(
+        IMessageDelivery delivery, string hubPath)
+    {
+        yield return (hubPath, Permission.Create);
+        if (delivery.Message is SyncContentFilesRequest { Mirror: true })
+            yield return (hubPath, Permission.Delete);
+    }
 }
 
 /// <summary>

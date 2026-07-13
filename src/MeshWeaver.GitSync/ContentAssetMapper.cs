@@ -37,16 +37,34 @@ public static class ContentAssetMapper
     public record ContentAsset(string OwnerRelativePath, string FileRelativePath, byte[] Bytes);
 
     /// <summary>
+    /// Cheap path-only precheck: could <paramref name="repoRelativePath"/> be a content asset at all?
+    /// True iff it has a <c>content</c> path segment that is not the last segment. Lets a caller skip
+    /// materializing a file's bytes for the common case (a node file, never under <c>content/</c>).
+    /// </summary>
+    public static bool IsContentPath(string repoRelativePath)
+        => TrySplit(repoRelativePath, out _, out _);
+
+    /// <summary>
     /// Classifies a subdirectory-relative repo path as a content asset, or returns null when it is NOT
     /// under any node's <c>content/</c> folder (so it flows on to node parsing). A path whose FIRST
     /// segment is <c>content</c> belongs to the Space root; a deeper <c>content</c> segment names the
     /// owning node's folder. A path that is exactly <c>content</c> or ends right at a <c>content</c>
-    /// segment (no file after it) is not an asset.
+    /// segment (no file after it) is not an asset. The <paramref name="bytes"/> factory is invoked
+    /// ONLY when the path actually classifies — so a large repo pays no per-file byte cost for its
+    /// (majority) node files.
     /// </summary>
-    public static ContentAsset? TryClassify(string repoRelativePath, byte[] bytes)
+    public static ContentAsset? TryClassify(string repoRelativePath, Func<byte[]> bytes)
+        => TrySplit(repoRelativePath, out var owner, out var file)
+            ? new ContentAsset(owner, file, bytes())
+            : null;
+
+    /// <summary>Path-only classification: splits a content path into (owner, file) or returns false.</summary>
+    private static bool TrySplit(string repoRelativePath, out string owner, out string file)
     {
+        owner = string.Empty;
+        file = string.Empty;
         if (string.IsNullOrEmpty(repoRelativePath))
-            return null;
+            return false;
         var segments = repoRelativePath.Replace('\\', '/').Trim('/')
             .Split('/', StringSplitOptions.RemoveEmptyEntries);
         // Find the FIRST "content" segment — but never at the very end (no file follows it).
@@ -54,13 +72,14 @@ public static class ContentAssetMapper
         {
             if (!string.Equals(segments[i], ContentSegment, StringComparison.OrdinalIgnoreCase))
                 continue;
-            var owner = string.Join('/', segments.Take(i));
-            var file = string.Join('/', segments.Skip(i + 1));
-            if (file.Length == 0)
-                return null;
-            return new ContentAsset(owner, file, bytes);
+            var f = string.Join('/', segments.Skip(i + 1));
+            if (f.Length == 0)
+                return false;
+            owner = string.Join('/', segments.Take(i));
+            file = f;
+            return true;
         }
-        return null;
+        return false;
     }
 
     /// <summary>

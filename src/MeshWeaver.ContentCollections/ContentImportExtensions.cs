@@ -75,6 +75,18 @@ public static class ContentImportExtensions
             .SelectMany(target =>
             {
                 var baseDir = (request.TargetPath ?? string.Empty).Trim('/');
+                // 🚨 Never let a caller-supplied path escape the collection root. The file-system
+                // provider joins baseDir/path onto its BasePath, so a "../" (or a rooted / segment)
+                // would write/delete OUTSIDE the collection. Reject the whole request up front rather
+                // than sanitize-and-continue — a traversal attempt is a bug or an attack, not a typo.
+                if (!IsSafeCollectionPath(baseDir))
+                    return Observable.Throw<int>(new InvalidOperationException(
+                        $"Unsafe TargetPath '{request.TargetPath}' (empty, rooted, or contains '.'/'..')."));
+                foreach (var f in request.Files)
+                    if (string.IsNullOrWhiteSpace(f.Path) || !IsSafeCollectionPath(f.Path))
+                        return Observable.Throw<int>(new InvalidOperationException(
+                            $"Unsafe content file path '{f.Path}' (empty, rooted, or contains '.'/'..')."));
+
                 // Full collection-relative path of an incoming file (baseDir + its relative Path).
                 string FullPath(string rel)
                 {
@@ -139,6 +151,23 @@ public static class ContentImportExtensions
 
     /// <summary>Collection-relative path form used for compare/delete: forward slashes, no leading slash.</summary>
     private static string NormalizePath(string path) => path.Replace('\\', '/').TrimStart('/');
+
+    /// <summary>
+    /// True when <paramref name="path"/> is a safe collection-relative path: it stays within the
+    /// collection root. An empty path is the root (allowed). Rooted paths (leading <c>/</c> or
+    /// <c>\</c>) and any <c>.</c>/<c>..</c> segment are rejected — those escape the root when joined
+    /// onto the provider's BasePath. A Windows drive/rooted path is likewise rejected.
+    /// </summary>
+    private static bool IsSafeCollectionPath(string path)
+    {
+        if (path.Length == 0)
+            return true;
+        var norm = path.Replace('\\', '/');
+        if (norm.StartsWith('/') || System.IO.Path.IsPathRooted(path))
+            return false;
+        return norm.Split('/', StringSplitOptions.RemoveEmptyEntries)
+            .All(seg => seg is not ("." or ".."));
+    }
 
     private static IMessageDelivery HandleImportContent(
         IMessageHub hub, IMessageDelivery<ImportContentRequest> delivery)

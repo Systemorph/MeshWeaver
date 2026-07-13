@@ -140,6 +140,29 @@ public class GitSyncContentCollectionTest(ITestOutputHelper output) : GitHubSync
         await WaitForContentGone(space, "posters/intro.jpg");
     }
 
+    [Fact(Timeout = 120000)]
+    public async Task SyncContentFiles_RejectsPathTraversal()
+    {
+        await Connect();
+        var repo = "https://github.com/test/course-traversal";
+        await SeedRepo(repo, RootIndex(), new RepoFile("content/ok.bin", string.Empty, VideoBytes));
+        var space = "Course" + Guid.NewGuid().ToString("N")[..8];
+        await Sync.ImportFromGitHub(repo, "main", space, "Course", subdirectory: null, UserId)
+            .Timeout(90.Seconds()).ToTask();
+        await WaitForContent(space, "ok.bin", VideoBytes);
+
+        // A traversal path must be REJECTED (never escape the collection root), not written.
+        var resp = await GetClient().SyncContentFiles(space)
+            .To(ContentCollectionsExtensions.DefaultCollectionName)
+            .Add("../escape.bin", VideoBytes)
+            .Post()
+            .Timeout(30.Seconds()).ToTask();
+        Assert.False(resp.Success);
+        Assert.Contains("Unsafe", resp.Error);
+        // Nothing escaped the space's content dir.
+        Assert.False(File.Exists(Path.Combine(_contentRoot, "escape.bin")));
+    }
+
     private async Task WaitForContent(string spaceId, string relPath, byte[] expected) =>
         await Observable.Interval(100.Milliseconds()).StartWith(0L)
             .Select(_ => ReadContent(spaceId, relPath))
