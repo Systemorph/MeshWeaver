@@ -26,7 +26,7 @@ public class MeshNodeContentEditorTest(ITestOutputHelper output) : GitHubSyncTes
 
         // The six editable properties, by camelCase key — and NOT the [Browsable(false)] last-sync fields.
         Assert.Equal(
-            new[] { "repositoryUrl", "branch", "subdirectory", "direction", "createBranchIfMissing", "createRepoIfMissing" },
+            new[] { "repositoryUrl", "branch", "subdirectory", "direction", "createBranchIfMissing", "createRepoIfMissing", "ignore" },
             keys);
         Assert.DoesNotContain("lastSyncedAt", keys);
         Assert.DoesNotContain("lastSyncCommitSha", keys);
