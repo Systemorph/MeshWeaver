@@ -51,6 +51,7 @@ public static class MigrationRegistry
         new V40_CreateEventLogSchema(),
         new V41_RetrofitModelCatalogIcons(),
         new V42_ReapplySpaceAuthMirrorAndBackfill(),
+        new V43_FixAccessTriggerSchemaResolutionAndBackfill(),
     ];
 
     /// <summary>
