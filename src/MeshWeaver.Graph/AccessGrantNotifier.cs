@@ -73,9 +73,13 @@ public sealed class AccessGrantNotifier(
                 // Resolve the granter's display name so the recipient sees WHO shared it — for most
                 // invitees this email is their first contact with Memex, and "someone gave you access"
                 // with no name is exactly the anonymous, off-putting message we're fixing. A granter
-                // that can't be resolved (or is System) falls back to a name-less phrasing.
-                return AsSystem(() => hub.GetMeshNode(assignmentNode.CreatedBy ?? "", ReadTimeout))
-                    .Catch(Observable.Return<MeshNode?>(null))
+                // that can't be resolved (or is System) falls back to a name-less phrasing. Skip the
+                // lookup entirely when there is no granter id (no empty-path NotFound churn).
+                var granterLookup = string.IsNullOrEmpty(assignmentNode.CreatedBy)
+                    ? Observable.Return<MeshNode?>(null)
+                    : AsSystem(() => hub.GetMeshNode(assignmentNode.CreatedBy!, ReadTimeout))
+                        .Catch(Observable.Return<MeshNode?>(null));
+                return granterLookup
                     .SelectMany(granterNode =>
                     {
                         var granter = ResolveGranterName(granterNode, assignmentNode.CreatedBy, hub.JsonSerializerOptions);
@@ -92,7 +96,11 @@ public sealed class AccessGrantNotifier(
                             targetNodePath: grantedNodePath,
                             createdBy: assignmentNode.CreatedBy,
                             icon: "/static/NodeTypeIcons/shield.svg",
-                            emailCtaLabel: $"Open {name}");
+                            emailCtaLabel: $"Open {name}",
+                            // First-contact hint — this recipient may have never signed in. Passed
+                            // explicitly (not defaulted in NotificationService) so it never leaks onto
+                            // notifications aimed at already-signed-in users.
+                            emailFooterNote: "New to Memex? Sign in with this email address to open it.");
                     });
             });
         });
@@ -145,16 +153,22 @@ public sealed class AccessGrantNotifier(
     {
         if (granterNode is null)
             return null;
-        bool Usable(string? s) => !string.IsNullOrWhiteSpace(s)
-            && !string.Equals(s, granterId, StringComparison.Ordinal);
+        var id = granterId?.Trim();
+        // Trim BEFORE comparing so a stored name that is the ObjectId with incidental whitespace is
+        // still treated as "just the id" (never leak the raw ObjectId to the recipient).
+        string? Usable(string? s)
+        {
+            var t = s?.Trim();
+            return !string.IsNullOrEmpty(t) && !string.Equals(t, id, StringComparison.Ordinal) ? t : null;
+        }
 
-        if (Usable(granterNode.Name))
-            return granterNode.Name!.Trim();
+        if (Usable(granterNode.Name) is { } nodeName)
+            return nodeName;
         var user = granterNode.ContentAs<User>(options);
-        if (Usable(user?.FullName))
-            return user!.FullName!.Trim();
-        if (Usable(user?.Email))
-            return user!.Email!.Trim();
+        if (Usable(user?.FullName) is { } fullName)
+            return fullName;
+        if (Usable(user?.Email) is { } email)
+            return email;
         return null;
     }
 
