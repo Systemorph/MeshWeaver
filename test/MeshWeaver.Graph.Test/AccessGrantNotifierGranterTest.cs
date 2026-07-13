@@ -52,4 +52,12 @@ public class AccessGrantNotifierGranterTest
         var node = Granter("obj-123", name: "obj-123");
         Assert.Null(AccessGrantNotifier.ResolveGranterName(node, "obj-123", Options));
     }
+
+    [Fact]
+    public void NullWhenNameIsTheObjectIdWithIncidentalWhitespace()
+    {
+        // Trimmed comparison — a stored name that is just the id plus whitespace must NOT leak.
+        var node = Granter("obj-123", name: "  obj-123  ");
+        Assert.Null(AccessGrantNotifier.ResolveGranterName(node, "obj-123", Options));
+    }
 }

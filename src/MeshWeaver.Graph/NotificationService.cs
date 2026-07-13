@@ -194,16 +194,16 @@ public static class NotificationService
         var ctaUrl = (!string.IsNullOrEmpty(baseUrl) && !string.IsNullOrWhiteSpace(targetNodePath))
             ? $"{baseUrl!.TrimEnd('/')}/{targetNodePath!.TrimStart('/')}"
             : null;
-        // A first-time recipient (most invitees have never signed in) needs to know the link IS the
-        // way in. Show the sign-in hint whenever there's a link and no caller-supplied footer.
-        var footer = footerNote
-            ?? (ctaUrl is not null ? "New to Memex? Sign in with this email address to open it." : null);
+        // The footer is caller-supplied ONLY — the first-time "New to Memex? Sign in…" hint is a
+        // first-CONTACT concern the caller owns (AccessGrantNotifier passes it). Defaulting it here
+        // for any linked email would misfire on notifications to already-signed-in users (e.g.
+        // ChatReady: "your response is ready" is not a "New to Memex?" moment).
         return EmailTemplate.Build(
             heading: title,
             paragraphs: string.IsNullOrEmpty(message) ? [] : [message],
             ctaLabel: ctaUrl is null ? null : (string.IsNullOrWhiteSpace(ctaLabel) ? "Open" : ctaLabel),
             ctaUrl: ctaUrl,
-            footerNote: footer);
+            footerNote: footerNote);
     }
 
     private static string? ResolveBaseUrl(IMessageHub hub)
