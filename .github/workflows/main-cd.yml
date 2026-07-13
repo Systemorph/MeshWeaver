@@ -14,6 +14,12 @@ name: Continuous Delivery (main)
 # commit SHA). The RELEASED channel — clean 3.0.0 NuGet packages + clean GHCR images — is a
 # SEPARATE path fired by pushing a v*.*.* tag (release-packages.yml + release-images.yml).
 # "Freeze a release" = push a tag; "merge to main" = this workflow.
+#
+# The portal and migration images build in PARALLEL jobs: the migration image is small
+# (~5 min) and used to run sequentially after the portal's ~18-minute multi-arch publish on
+# the same runner — a free ~5 min off every merge-to-deployed cycle. Each job is
+# self-contained (checkout → az login → publish); the duplicated setup (~3 min) runs
+# concurrently so it costs no wall-clock.
 on:
   workflow_run:
     workflows: ["MeshWeaver Build and Test"]
@@ -37,8 +43,11 @@ env:
 
 jobs:
   # ─────────────────────────── BUILD + PUSH IMAGES ───────────────────────────
-  images:
-    name: "Build + push images to ACR"
+  # Two parallel legs, one per image. No `dotnet workload restore` in either:
+  # CI logs prove it installs nothing ("No workloads installed for this feature
+  # band … Successfully updated workload(s): .") and burned ~75 s per run.
+  portal-image:
+    name: "Build + push portal-ai image"
     # Gate: only a SUCCESSFUL test run, from a PUSH (not a PR), on main.
     if: >-
       github.event.workflow_run.conclusion == 'success' &&
@@ -46,8 +55,6 @@ jobs:
       github.event.workflow_run.head_branch == 'main'
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    outputs:
-      tag: ${{ steps.vars.outputs.sha }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -97,8 +104,6 @@ jobs:
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
       - name: ACR login
         run: az acr login --name meshweaver
-      - name: Restore workloads
-        run: dotnet workload restore
       # portal-ai app image — the deployment image (aspnet + node + Claude Code/Copilot CLIs),
       # layered on the base already in ACR. The base (memex-portal-ai-base) changes rarely and is
       # rebuilt by the release path / runbook §1, NOT on every main merge.
@@ -133,6 +138,55 @@ jobs:
           -p:ContainerRepository=memex-portal-ai
           -p:ContainerImageTags='"${{ steps.vars.outputs.version }};${{ steps.vars.outputs.sha }};main"'
           -p:ContainerBaseImage=${{ env.ACR }}/memex-portal-ai-base:latest
+
+  migration-image:
+    name: "Build + push migration image"
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          dotnet: false
+          android: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+      # Same $(Version) computation as the portal leg: both jobs run inside ONE
+      # workflow run, so GITHUB_RUN_NUMBER — and therefore the computed
+      # 3.0.0-ci.<n> tag — is identical across the two legs by construction.
+      - name: Compute image tags (version + short SHA)
+        id: vars
+        run: |
+          set -euo pipefail
+          echo "sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+          VERSION=$(dotnet msbuild memex/aspire/Memex.Database.Migration/Memex.Database.Migration.csproj \
+            -getProperty:Version -p:CIRun=true -nologo | tr -d '[:space:]')
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Computed image version: $VERSION (run #$GITHUB_RUN_NUMBER)"
+      - name: Ensure Azure CLI
+        run: command -v az >/dev/null || curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - name: ACR login
+        run: az acr login --name meshweaver
       # migration — lean image on the standard (already multi-arch) aspnet base; same multi-arch publish.
       # <RuntimeIdentifiers> lives in Memex.Database.Migration.csproj (project-local, same reason as above).
       - name: Build + push migration
@@ -146,8 +200,8 @@ jobs:
           -p:ContainerImageTags='"${{ steps.vars.outputs.version }};${{ steps.vars.outputs.sha }};main"'
 
   # ─────────────────────────────── NO DEPLOY JOB ─────────────────────────────
-  # Deployment is PULL-BASED, not push. CI's job ends at "publish the image to ACR" (the `images`
-  # job above). Each installation — memex / atioz / memex-cloud AND every external install in the
+  # Deployment is PULL-BASED, not push. CI's job ends at "publish the image to ACR" (the image
+  # jobs above). Each installation — memex / atioz / memex-cloud AND every external install in the
   # world that prod knows nothing about — runs the in-portal self-updater
   # (memex/Memex.Portal.Shared/SelfUpdate): it polls ACR with its OWN workload identity, and, per its
   # own Admin/UpdatePolicy (Continuous/Stable/None + the CI-green gate), patches its OWN portal +

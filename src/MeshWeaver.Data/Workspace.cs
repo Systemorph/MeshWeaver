@@ -592,6 +592,22 @@ public class Workspace : IWorkspace
     /// <inheritdoc />
     public void AddDisposable(IDisposable disposable)
     {
+        if (isDisposing)
+        {
+            // Same contract as MessageHub.RegisterForDisposal: a registrant added after
+            // disposal has begun is disposed IMMEDIATELY. The drain loop in DisposeAsync
+            // has already run, so bagging it would leak it — and any Rx Timeout timer it
+            // roots via the global TimerQueue — past the container's lifetime (the
+            // post-teardown ObjectDisposedException straggler class).
+            try { disposable.Dispose(); }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex,
+                    "Workspace {WorkspaceId} error disposing late-registered disposable {DisposableType}",
+                    Id, disposable.GetType().Name);
+            }
+            return;
+        }
         disposables.Add(disposable);
     }
 

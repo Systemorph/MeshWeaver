@@ -992,7 +992,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
             {
                 // Fully synchronous — the update func is a pure in-memory transform
                 // (IO-producing callers pool their IO FIRST and pass only the result,
-                // see ContentCollection.UpdateArticle). No async handler: an awaited
+                // see ContentCollection.IngestContentFile). No async handler: an awaited
                 // update on the hub action block is the deadlock class
                 // AsynchronousCalls.md exists to kill.
                 var update = request.Message.Update;

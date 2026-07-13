@@ -36,7 +36,7 @@ public record TypeDefinition : ITypeDefinition
 
         Key = new(() => keyFunctionBuilder.GetKeyFunction(Type)!);
         
-        Description = Type.GetXmlDocsSummary();
+        Description = XmlDocs.Summary(Type);
     }
 
     /// <summary>
