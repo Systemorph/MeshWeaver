@@ -248,6 +248,16 @@ public static class MessageHubExtensions
         var current = hub;
         while (current != null)
         {
+            // Refuse-and-complete once disposal has begun: deactivation is a rescue for a
+            // LIVE wedged hub, and a disposing hub is already being torn down — the rescue's
+            // goal. Walking further would read Configuration.ParentHub, which RESOLVES from
+            // the hub's ServiceProvider: on a disposed container that throws
+            // ObjectDisposedException — and the callers of this method are error sinks
+            // (watchdog OnError on a bare Rx timer thread), where the throw escapes as a
+            // process-fatal unhandled exception (the Threading.Test/AI.Test CI catastrophic
+            // failures).
+            if (current.IsDisposing)
+                return false;
             var callback = current.Configuration.Get<GrainDeactivateCallback>();
             if (callback != null)
             {

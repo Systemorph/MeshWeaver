@@ -92,6 +92,17 @@ public class MeshOperations
             && IsSettled(ownDef))
             return Observable.Return<string?>(ownDef.CompilationError);
 
+        // Static fast path: the NodeType is a framework-bundled built-in registered via
+        // AddMeshNodes (Markdown, Code, Thread, test AddMeshNodes types, …). There is no
+        // per-NodeType hub, no NodeTypeDefinition and no CompileWatcher, so a compilation
+        // error cannot exist — and the settle-wait below can never be satisfied: it would
+        // only ever burn the full 5 s timeout on EVERY successful Get of a node with a
+        // built-in NodeType (a 5 s latency tax on agent/MCP get in prod, and ~120 s of
+        // pure timeout across the AI.Test suite). Mirrors GetDiagnostics' FindStaticNode
+        // fast path below.
+        if (hub.ServiceProvider.FindStaticNode(nodeTypePath) is not null)
+            return Observable.Return<string?>(null);
+
         // Slow path: subscribe to the NodeType's live stream, wait for a
         // settled CompilationStatus emission, then read the CompilationError.
         return hub.GetWorkspace().GetMeshNodeStream(nodeTypePath)
