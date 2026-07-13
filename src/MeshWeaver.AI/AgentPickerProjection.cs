@@ -414,7 +414,7 @@ public static class AgentPickerProjection
     /// </summary>
     private static string? ValidMasterModel(string? modelPath, ChatClientCredentialResolver? credResolver)
         => !string.IsNullOrEmpty(modelPath)
-           && (credResolver is null || credResolver.Resolve(modelPath) != CredentialResolution.Missing)
+           && (credResolver is null || credResolver.HasUsableCredential(modelPath))
             ? modelPath
             : null;
 

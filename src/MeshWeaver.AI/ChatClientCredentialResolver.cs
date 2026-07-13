@@ -293,8 +293,25 @@ public sealed class ChatClientCredentialResolver : IDisposable
             .Where(x => !string.IsNullOrEmpty(x.Id))
             .OrderBy(x => x.Order)
             .Select(x => x.Id!)
-            .FirstOrDefault(id => Resolve(id) != CredentialResolution.Missing);
+            .FirstOrDefault(HasUsableCredential);
     }
+
+    /// <summary>
+    /// True when <paramref name="modelId"/> resolves to a credential the model factories can ACTUALLY
+    /// use — i.e. a NON-EMPTY ApiKey. This is the honest "is this model usable" predicate, distinct
+    /// from <see cref="Resolve"/><c> != Missing</c>: <see cref="Resolve"/> returns a KEYLESS resolution
+    /// (an endpoint-only provider — e.g. <c>Provider/OpenAICompatible</c> with a gateway URL but no key)
+    /// as non-<see cref="CredentialResolution.Missing"/>, yet every registered factory
+    /// (<c>OpenAIChatClientAgentFactory</c> et al.) throws <c>"ApiKey is missing for model '…'"</c>
+    /// without a key. Selecting such a model as a default/fallback surfaces that raw factory error to
+    /// the user (the <c>z-ai/glm-5.2</c> report). Requiring a key here means default/fallback selection
+    /// only ever lands on a model that will actually run. No working model regresses: a model whose key
+    /// comes from the factory's own config/IOptions fallback (not a provider node) already resolves
+    /// <see cref="CredentialResolution.Missing"/> today and was never eligible as a catalog default.
+    /// </summary>
+    public bool HasUsableCredential(string? modelId)
+        => !string.IsNullOrEmpty(modelId)
+           && !string.IsNullOrEmpty(Resolve(modelId!).ApiKey);
 
     /// <summary>
     /// Resolve the per-user <b>Connect</b> token for a CLI harness — the user's OWN subscription
