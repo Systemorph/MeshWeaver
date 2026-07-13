@@ -416,22 +416,36 @@ public sealed class GitHubSyncService
         return repoClient.Fetch(repoUrl, commitish, subdirectory, token).SelectMany(snapshot =>
             ParseSnapshot(snapshot, spaceId, ignore, progress).SelectMany(parsed =>
             {
-                var source = new InMemoryStaticRepoSource(spaceId, parsed.Children, parsed.Root);
+                var source = new InMemoryStaticRepoSource(
+                    spaceId, parsed.Children, parsed.Root, parsed.ContentSyncs);
                 return StaticRepoImporter.ImportSource(hub, source, logger)
                     .Select(result => (result, snapshot.CommitSha));
             }));
     }
 
-    private IObservable<(MeshNode? Root, IReadOnlyList<MeshNode> Children)> ParseSnapshot(
+    private IObservable<(MeshNode? Root, IReadOnlyList<MeshNode> Children, IReadOnlyList<StaticContentSync> ContentSyncs)> ParseSnapshot(
         RepoSnapshot snapshot, string spaceId, SyncIgnore ignore, Action<string, LogLevel>? progress = null)
     {
         if (snapshot.Files.Count == 0)
-            return Observable.Return(((MeshNode?)null, (IReadOnlyList<MeshNode>)Array.Empty<MeshNode>()));
-        return snapshot.Files
-            // The Space's ignore rules apply on import too — a repo that carries ignored paths
-            // (e.g. Release/ bookkeeping from an older export) must not re-create those nodes.
-            .Where(f => !ignore.IsIgnored(f.Path))
-            .Select(f => ParseFile(f, spaceId, progress))
+            return Observable.Return(((MeshNode?)null, (IReadOnlyList<MeshNode>)Array.Empty<MeshNode>(),
+                (IReadOnlyList<StaticContentSync>)Array.Empty<StaticContentSync>()));
+
+        // Apply the Space's ignore rules on import too — a repo that carries ignored paths (e.g.
+        // Release/ bookkeeping from an older export) must not re-create those nodes NOR re-sync their
+        // content. Then split off the git-committed content-collection assets ({node}/content/**):
+        // their raw bytes are mirrored into the owning node's content collection (never parsed as a
+        // node), so committed course videos/posters land and stop getting wiped. Everything else flows
+        // to node parsing as before.
+        var kept = snapshot.Files.Where(f => !ignore.IsIgnored(f.Path)).ToArray();
+        var classified = kept
+            .Select(f => (File: f, Asset: ContentAssetMapper.TryClassify(f.Path, f.Bytes)))
+            .ToArray();
+        var contentSyncs = ContentAssetMapper.ToContentSyncs(
+            spaceId, classified.Where(c => c.Asset is not null).Select(c => c.Asset!));
+
+        return classified
+            .Where(c => c.Asset is null)
+            .Select(c => ParseFile(c.File, spaceId, progress))
             .Merge(8)
             .Where(x => x.Node is not null)
             .ToList()
@@ -439,7 +453,7 @@ public sealed class GitHubSyncService
             {
                 var root = list.FirstOrDefault(x => x.IsRoot).Node;
                 var children = list.Where(x => !x.IsRoot).Select(x => x.Node!).ToList();
-                return (root, (IReadOnlyList<MeshNode>)children);
+                return (root, (IReadOnlyList<MeshNode>)children, contentSyncs);
             });
     }
 

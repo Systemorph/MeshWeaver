@@ -92,6 +92,8 @@ public static class MeshExtensions
         config.TypeRegistry.WithType(typeof(ImportNodesResponse), nameof(ImportNodesResponse));
         config.TypeRegistry.WithType(typeof(ImportContentRequest), nameof(ImportContentRequest));
         config.TypeRegistry.WithType(typeof(ImportContentResponse), nameof(ImportContentResponse));
+        config.TypeRegistry.WithType(typeof(SyncContentFilesRequest), nameof(SyncContentFilesRequest));
+        config.TypeRegistry.WithType(typeof(InlineContentFile), nameof(InlineContentFile));
         config.TypeRegistry.WithType(typeof(DeleteContentRequest), nameof(DeleteContentRequest));
         config.TypeRegistry.WithType(typeof(DeleteContentResponse), nameof(DeleteContentResponse));
 
