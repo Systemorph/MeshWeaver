@@ -598,6 +598,15 @@ internal static class ThreadExecution
                         .Timeout(WatchdogRescueBudget)
                         .Subscribe(_ => { }, ex =>
                         {
+                            // Disposal already tearing the hub down: this inner rescue chain's
+                            // Timeout timer is NOT owned by the outer watchdog subscription (an
+                            // inner Subscribe created in onNext survives the outer's Dispose), so
+                            // it can fire AFTER hub disposal. There is nothing left to rescue —
+                            // disposal is the escape hatch's own goal — and escalating would
+                            // resolve services from the disposed container and throw INSIDE this
+                            // OnError on a bare timer thread (process-fatal). Refuse-and-complete.
+                            if (disposed || hub.IsDisposing)
+                                return;
                             // Escalate ONLY on the landing-budget timeout — that is the proof the
                             // action block is blocked. Any other error (validation, access,
                             // serialization) fails FAST on a healthy hub: deactivating there would

@@ -1215,7 +1215,13 @@ internal class MeshNodeCompilationService(
         // `#r "nuget:MeshWeaver.BusinessRules.Generator"` — no auto-injection heuristic (that forced
         // generator resolution on the compile path for any node merely mentioning IScope). Explicit
         // #r → resolved here → discovered + run by RunSourceGenerators from the resolved assemblies.
-        var (source, nugetRefs) = NuGetDirectiveParser.Extract(rawSource);
+        var (source, extractedRefs) = NuGetDirectiveParser.Extract(rawSource);
+        // 🚨 Same legacy-#r strip as AssembleCompilationInputs — this path previously lacked it
+        // (see the release-folder compile below for the full story: resolving the legacy
+        // generator #r hard-fails now that the mesh-local feed is gone).
+        var nugetRefList = extractedRefs.ToList();
+        StripBuiltInScopeGeneratorRef(nugetRefList, builtInPresent: BuiltInGeneratorPaths.Count > 0);
+        var nugetRefs = nugetRefList.ToArray();
         IEnumerable<MetadataReference> references = _references;
         IReadOnlyList<string> nugetAssemblyPaths = [];
         if (nugetRefs.Length > 0)
@@ -1556,9 +1562,17 @@ internal class MeshNodeCompilationService(
         var rawSource = _attributeGenerator.GenerateAttributeSource(node, codeConfig, release.HubConfiguration, release.ContentCollections);
 
         // Strip #r "nuget:..." directives — Roslyn compilation (unlike scripting) does not process them.
-        // Scope generator is resolved ONLY via an explicit `#r "nuget:MeshWeaver.BusinessRules.Generator"`
-        // in the node Source (no auto-inject), then discovered by RunSourceGenerators.
-        var (source, nugetRefs) = NuGetDirectiveParser.Extract(rawSource);
+        var (source, extractedRefs) = NuGetDirectiveParser.Extract(rawSource);
+        // 🚨 Same legacy-#r strip as AssembleCompilationInputs: a node Source still carrying
+        // `#r "nuget:MeshWeaver.BusinessRules.Generator"` must NOT reach the NuGet resolver —
+        // the generator ships built-in, and the mesh-local feed it used to resolve from is gone
+        // (#395), so resolving hard-fails ("The local source '…/dist/packages' doesn't exist").
+        // This RELEASE-folder compile path previously lacked the strip: the PensionFund sample
+        // (legacy #r intact) compiled green on CI only because the workflow's pack step happened
+        // to recreate the feed — the strip in the OTHER compile path never covered this one.
+        var nugetRefList = extractedRefs.ToList();
+        StripBuiltInScopeGeneratorRef(nugetRefList, builtInPresent: BuiltInGeneratorPaths.Count > 0);
+        var nugetRefs = nugetRefList.ToArray();
         IEnumerable<MetadataReference> references = _references;
         IReadOnlyList<string> probingDirs = [];
         IReadOnlyList<string> nugetAssemblyPaths = [];

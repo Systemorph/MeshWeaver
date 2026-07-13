@@ -11,7 +11,7 @@ namespace MeshWeaver.ContentCollections.Test;
 /// <see cref="FileSystemStreamProvider.GetStreamWithMetadataAsync"/>) deliberately opens with the
 /// maximally-tolerant <c>FileShare.ReadWrite | FileShare.Delete</c> — content is eventually-consistent
 /// and re-ingested on change, so reads never block and are never blocked. The FileSystemWatcher-driven
-/// <c>ContentCollection.UpdateArticle</c> issues exactly such a read whenever a file changes, so a read
+/// <c>ContentCollection.IngestContentFile</c> issues exactly such a read whenever a file changes, so a read
 /// legitimately overlaps a write.</para>
 ///
 /// <para>The bug: the write opened with <c>FileShare.None</c>. On Unix, .NET emulates <c>FileShare</c>

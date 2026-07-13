@@ -256,7 +256,7 @@ public class ContentCollection : IDisposable
             if (fileName.EndsWith(".md", StringComparison.OrdinalIgnoreCase))
             {
                 var folder = path.Trim('/');
-                UpdateArticle(folder.Length == 0 ? fileName : $"{folder}/{fileName}", caller);
+                IngestContentFile(folder.Length == 0 ? fileName : $"{folder}/{fileName}", caller);
             }
         });
     }
@@ -303,7 +303,7 @@ public class ContentCollection : IDisposable
         var parsedArticles = new Dictionary<object, object>();
         await foreach (var tuple in provider.GetStreamsAsync(MarkdownFilter, ct).WithCancellation(ct).ConfigureAwait(false))
         {
-            var article = await ParseArticleAsync(tuple.Stream, tuple.Path, tuple.LastModified, ct).ConfigureAwait(false);
+            var article = await ParseContentAsync(tuple.Stream, tuple.Path, tuple.LastModified, ct).ConfigureAwait(false);
             if (article is not null)
             {
                 var key = (object)(article.Path.EndsWith(".md", StringComparison.OrdinalIgnoreCase) ? article.Path[..^3] : article.Path);
@@ -328,8 +328,21 @@ public class ContentCollection : IDisposable
     /// Re-established around the stream update so downstream reactors (indexing sinks
     /// subscribed to the markdown stream) see the uploading user, not a bare pool thread.
     /// </param>
-    protected void UpdateArticle(string path, AccessContext? caller = null)
+    protected void IngestContentFile(string path, AccessContext? caller = null)
     {
+        // A FileSystemWatcher callback can land AFTER the owning hub began disposing
+        // (native FSEvents/inotify delivery latency races collection teardown). The very
+        // first touch below — resolving IoPoolRegistry for Pool — then throws
+        // ObjectDisposedException on the watcher's native callback thread, where nothing
+        // can catch it (process-fatal under xunit; a teardown straggler in prod logs).
+        // Close the incoming stream at the source and refuse: the collection dies with
+        // its hub, there is no live stream left to update.
+        if (Hub.IsDisposing)
+        {
+            monitorDisposable?.Dispose();
+            return;
+        }
+
         // The file read + parse is the IO leaf — pooled OFF the hub; only the parsed
         // in-memory article flows into the (synchronous) stream Update. The stream's
         // UpdateStreamRequest handler is await-free by contract.
@@ -338,7 +351,7 @@ public class ContentCollection : IDisposable
                 var tuple = await provider.GetStreamWithMetadataAsync(path, ct).ConfigureAwait(false);
                 if (tuple.Stream is null)
                     return null;
-                return await ParseArticleAsync(tuple.Stream, tuple.Path, tuple.LastModified, ct).ConfigureAwait(false);
+                return await ParseContentAsync(tuple.Stream, tuple.Path, tuple.LastModified, ct).ConfigureAwait(false);
             })
             .Subscribe(
                 article =>
@@ -362,10 +375,10 @@ public class ContentCollection : IDisposable
                 },
                 ex => Hub.ServiceProvider.GetService<ILoggerFactory>()
                     ?.CreateLogger(typeof(ContentCollection))
-                    .LogWarning(ex, "UpdateArticle failed reading {Path} in collection {Collection}", path, Collection));
+                    .LogWarning(ex, "IngestContentFile failed reading {Path} in collection {Collection}", path, Collection));
     }
 
-    private async Task<MarkdownElement?> ParseArticleAsync(Stream? stream, string path, DateTime lastModified, CancellationToken ct)
+    private async Task<MarkdownElement?> ParseContentAsync(Stream? stream, string path, DateTime lastModified, CancellationToken ct)
     {
         if (stream is null)
             return null;
@@ -382,11 +395,11 @@ public class ContentCollection : IDisposable
         );
     }
 
-    /// <summary>Subscribes the collection to backing-store change notifications, routing each to <see cref="UpdateArticle"/>.</summary>
+    /// <summary>Subscribes the collection to backing-store change notifications, routing each to <see cref="IngestContentFile"/>.</summary>
     protected void AttachMonitor()
     {
-        // External (watcher-driven) changes carry no user — UpdateArticle runs context-less.
-        monitorDisposable = provider.AttachMonitor(path => UpdateArticle(path));
+        // External (watcher-driven) changes carry no user — IngestContentFile runs context-less.
+        monitorDisposable = provider.AttachMonitor(path => IngestContentFile(path));
     }
 
     /// <summary>Creates a folder in the backing store. Cold — runs on Subscribe, on <see cref="Pool"/>, under the caller's context snapshot.</summary>

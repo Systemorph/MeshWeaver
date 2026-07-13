@@ -178,15 +178,38 @@ public class CodeCellOutputCaptureTest(ITestOutputHelper output) : MonolithMeshT
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             new Address(activityPath), reference);
 
-        // The Progress root is a Stack whose first child is the messages Html.
+        // The Progress root is a Stack: [0] the status indicator, [1] the message
+        // log — the control-based shape ActivityLayoutAreas.Progress renders since
+        // the hand-rolled messages HTML was replaced by controls (BuildLog /
+        // BuildProgressIndicator). The old assertion demanded an HtmlControl and
+        // burned its full 30 s wait on every run — one of the hidden AI.Test
+        // failures masked by the CI 6-minute kill.
         var rootControl = (StackControl)(await stream.GetControlStream(reference.Area!)
+            .Should().Within(30.Seconds()).Match(c => c is StackControl s && s.Areas.Count >= 2))!;
+
+        // Terminal indicator: a Succeeded activity renders a "✓ Done" status line,
+        // never a spinner (pinned control-shape: ActivityProgressViewTest).
+        var indicatorArea = rootControl.Areas[0].Area!.ToString()!;
+        await stream.GetControlStream(indicatorArea)
+            .Should().Within(30.Seconds()).Match(c => c is LabelControl l
+                && l.Data is not null
+                && l.Data.ToString()!.Contains("Done"));
+
+        // The captured output line renders as one of the log rows' message labels
+        // (BuildLog: one horizontal [level-tag, message] row per LogMessage).
+        var logArea = rootControl.Areas[1].Area!.ToString()!;
+        var logStack = (StackControl)(await stream.GetControlStream(logArea)
             .Should().Within(30.Seconds()).Match(c => c is StackControl s && s.Areas.Count >= 1))!;
-        var messagesArea = rootControl.Areas.First().Area!.ToString()!;
-        await stream.GetControlStream(messagesArea)
-            .Should().Within(30.Seconds()).Match(c => c is HtmlControl h
-                && h.Data is not null
-                && h.Data.ToString()!.Contains(marker)
-                && h.Data.ToString()!.Contains("Done"));
+        await logStack.Areas
+            .Select(row => stream.GetControlStream(row.Area!.ToString()!))
+            .Merge()
+            .Where(c => c is StackControl)
+            .SelectMany(row => ((StackControl)row!).Areas
+                .Select(cell => stream.GetControlStream(cell.Area!.ToString()!))
+                .Merge())
+            .Should().Within(30.Seconds()).Match(c => c is LabelControl l
+                && l.Data is not null
+                && l.Data.ToString()!.Contains(marker));
     }
 
     [Fact(Timeout = 120000)]
