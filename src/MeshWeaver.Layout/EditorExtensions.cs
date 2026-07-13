@@ -569,7 +569,7 @@ public static class EditorExtensions
             {
                 Name = propertyInfo.Name.ToCamelCase(),
                 Description = propertyInfo.GetCustomAttribute<DescriptionAttribute>()?.Description
-                              ?? propertyInfo.GetXmlDocsSummary(),
+                              ?? MeshWeaver.Messaging.Serialization.XmlDocs.Summary(propertyInfo),
                 Label = propertySkinLabel
             };
         var jsonPointerReference = GetJsonPointerReference(propertyInfo);

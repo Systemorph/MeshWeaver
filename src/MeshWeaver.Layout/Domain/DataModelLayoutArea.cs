@@ -247,7 +247,7 @@ public static class DataModelLayoutArea
             .ToDictionary(td => td.Type, td => td);
         var sb = new StringBuilder();
 
-        var typeSummary = type.GetXmlDocsSummary();
+        var typeSummary = MeshWeaver.Messaging.Serialization.XmlDocs.Summary(type);
 
         // Title with right-aligned navigation icons
         var navigationIcons = $"<a href=\"{linkBase}\" title=\"Data Model Overview\" style=\"text-decoration: none; font-size: 2em; line-height: 1;\">⧉</a>";
@@ -270,7 +270,7 @@ public static class DataModelLayoutArea
                 IsInherited = p.DeclaringType != type,
                 Declaring = p.DeclaringType?.Name ?? "Base",
                 TypeName = GetPropertyTypeDisplayName(p),
-                Summary = p.GetXmlDocsSummary()
+                Summary = MeshWeaver.Messaging.Serialization.XmlDocs.Summary(p)
             })
             .OrderByDescending(x => x.IsInherited) // inherited (from base) first; keep original declared order
             .ToList();

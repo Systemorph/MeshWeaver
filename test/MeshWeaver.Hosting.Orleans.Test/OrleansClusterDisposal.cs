@@ -1,11 +1,13 @@
 using System.Collections.Concurrent;
-using System.Runtime.CompilerServices;
+using System.Reactive;
+using System.Reactive.Linq;
+using MeshWeaver.Mesh.Threading;
 using Orleans.TestingHost;
 
 namespace MeshWeaver.Hosting.Orleans.Test;
 
 /// <summary>
-/// Drains Orleans <see cref="TestCluster"/> disposals on a BACKGROUND pool instead of
+/// Drains Orleans <see cref="TestCluster"/> disposals on the <see cref="IIoPool"/> instead of
 /// awaiting them inline at per-class teardown.
 ///
 /// <para><b>Why.</b> Awaiting <c>Cluster.DisposeAsync()</c> on the xUnit teardown thread
@@ -16,85 +18,97 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// test class spins up and tears down its OWN cluster, one wedged teardown stalls the
 /// whole sequential run (<c>maxParallelThreads:1</c>).</para>
 ///
-/// <para><b>Fix.</b> No <c>await</c> on the teardown thread — hand the cluster to a
-/// background task ("io pool") and return immediately, so the next class's cluster starts
-/// right away and disposals drain concurrently. Every disposal is then awaited ONCE, at
-/// the very end (process exit), bounded so a genuinely-wedged silo is abandoned rather
-/// than hanging the wait. (A real mesh <c>IIoPool</c> isn't available at xUnit teardown,
-/// so the background-task pool stands in for it.)</para>
+/// <para><b>Fix.</b> No <c>async</c>/<c>await</c> and no hand-rolled <c>Task.Run</c>/<c>Task.WaitAll</c>
+/// on the teardown thread. Each cluster's ordered stop→dispose is pushed onto
+/// <see cref="IoPool.Unbounded"/> — the sanctioned async boundary — as a COLD
+/// <see cref="IObservable{T}"/>, made hot immediately (so the next class's cluster starts right away
+/// and disposals drain concurrently), and its completion replayed to the final drain. Every disposal
+/// is then awaited ONCE — SYNCHRONOUSLY, via Rx blocking — at the
+/// <see cref="OrleansDisposalDrainFixture">assembly fixture</see>'s teardown (which runs AFTER all
+/// test classes but BEFORE the native in-process runner's foreground-thread check), bounded so a
+/// genuinely-wedged silo is abandoned rather than hanging the wait.</para>
+///
+/// <para>The native xUnit v3 runner force-exits non-zero — <c>"Foreground threads were left running,
+/// forcing process exit"</c> — when a silo's shutdown threads are still draining at the check.
+/// Under vstest that check didn't run, so the leak was invisible; the assembly-fixture drain (not the
+/// old <c>ProcessExit</c> hook, which fires AFTER the check) closes it.</para>
 /// </summary>
 internal static class OrleansClusterDisposal
 {
-    private static readonly ConcurrentBag<Task> Pending = new();
+    // Each cluster's stop→dispose as a hot, replayed observable — its completion is what the final
+    // drain blocks on. Replay-backed so a disposal that finishes before the drain subscribes still
+    // replays its OnCompleted.
+    private static readonly ConcurrentBag<IObservable<Unit>> Pending = new();
 
     /// <summary>
-    /// Hand a cluster's disposal to a background pool thread — NEVER awaited on the
-    /// teardown thread. Null-safe and best-effort (the cluster is on its way down; a
-    /// shutdown-race exception is benign and swallowed).
+    /// Hand a cluster's disposal to the I/O pool — NEVER awaited on the teardown thread. Null-safe
+    /// and best-effort per leg (the cluster is on its way down; a shutdown-race exception is benign).
     ///
-    /// <para><b>Graceful stop BEFORE dispose — the root fix for the Autofac
-    /// disposed-<c>LifetimeScope</c> straggler (task #20).</b> <see cref="TestCluster.DisposeAsync"/>
-    /// disposes the Orleans CLIENT host through the generic <c>IHost.DisposeAsync()</c>, which
-    /// only disposes the service provider and NEVER runs <c>StopAsync()</c>. So the client's
-    /// connection message pump (<c>Orleans.Runtime.Messaging.Connection.ProcessIncoming</c>) keeps
-    /// deserializing in-flight messages while the client's Autofac container is being torn down;
-    /// <c>CodecProvider</c> then lazily resolves a serialization codec from the already-disposed
-    /// <c>LifetimeScope</c> and throws <see cref="ObjectDisposedException"/> ("Instances cannot be
-    /// resolved and nested lifetimes cannot be created from this LifetimeScope … already disposed").
-    /// Unobserved under CI load, that reaches <see cref="AppDomain.UnhandledException"/> — the ONLY
-    /// channel xUnit v3's in-proc console runner hooks — and is reported as an anonymous
-    /// "Catastrophic failure" that reds a 123/123-green shard. (The silos are already graceful:
-    /// <c>InProcessSiloHandle.DisposeAsync</c> runs <c>StopSiloAsync(graceful)</c> first; only the
-    /// client host skips its <c>StopAsync</c>.) The pump is purely Orleans-internal, so the mesh
-    /// drain added in #231 (<c>MeshTeardownHostedService</c>) never covered it — and because the
-    /// client's <c>StopAsync</c> is skipped, that drain never even ran on the client.</para>
-    ///
-    /// <para><b>The residual gap #244 left (task #21): the CLIENT is stopped by a DIFFERENT method.</b>
-    /// <see cref="TestCluster.StopAllSilosAsync"/> stops the SILOS only — it does NOT run the client
-    /// host's <c>StopAsync</c>. So after #244 the client connection pump was still live when
-    /// <c>DisposeAsync</c> disposed the client's Autofac container → the disposed-<c>LifetimeScope</c>
-    /// straggler kept escaping under CI load (it re-flaked shard 3 of #244 and #258). The client's
-    /// graceful stop is <see cref="TestCluster.StopClusterClientAsync"/> — the exact <c>StopAsync</c>
-    /// that <c>TestCluster.DisposeAsync</c> skips. We call it FIRST (client stops initiating), THEN
-    /// stop the silos, THEN dispose — so by dispose time NO connection pump (client or silo) is left
-    /// resolving a codec. Measured by <c>TeardownStragglerCapturer</c>: the disposed-scope throw count
-    /// per Orleans.Test run goes to 0, and stays 0 across the shard sequence (the cross-project mode).</para>
+    /// <para><b>Graceful ordered stop BEFORE dispose.</b> <see cref="TestCluster.DisposeAsync"/>
+    /// disposes the Orleans CLIENT host through the generic <c>IHost.DisposeAsync()</c>, which only
+    /// disposes the service provider and NEVER runs <c>StopAsync()</c>. So the client's connection
+    /// message pump (<c>Orleans.Runtime.Messaging.Connection.ProcessIncoming</c>) keeps deserializing
+    /// in-flight messages while the client's Autofac container is torn down; <c>CodecProvider</c> then
+    /// lazily resolves a codec from the already-disposed <c>LifetimeScope</c> and throws
+    /// <see cref="ObjectDisposedException"/>, which under CI load escapes unobserved and reds a
+    /// 123/123-green shard. The silos are already graceful (<c>InProcessSiloHandle.DisposeAsync</c>
+    /// runs <c>StopSiloAsync</c>); only the client host skips its <c>StopAsync</c>. Its graceful stop
+    /// is <see cref="TestCluster.StopClusterClientAsync"/> — which <c>DisposeAsync</c> skips and
+    /// <see cref="TestCluster.StopAllSilosAsync"/> does NOT cover. We run it FIRST (client stops
+    /// initiating), THEN the silos, THEN dispose — so by dispose time no connection pump is resolving
+    /// a codec. Pinned by <c>TeardownStragglerCapturer</c>: disposed-scope throws per run stay 0.</para>
     /// </summary>
     public static void DisposeInBackground(TestCluster? cluster)
     {
         if (cluster is null)
             return;
-        Pending.Add(Task.Run(async () =>
-        {
-            // Graceful ordered stop BEFORE any Autofac container disposes: CLIENT host first
-            // (StopClusterClientAsync — the StopAsync that TestCluster.DisposeAsync SKIPS, the exact
-            // gap that left the client pump resolving a codec from a disposing scope), THEN every silo,
-            // THEN the dispose. Each step guarded separately so a stop-race can't skip the steps that
-            // follow. All benign here — the cluster is going down; a genuinely surviving straggler is
-            // still NAMED by TeardownStragglerCapturer.
-            try { await cluster.StopClusterClientAsync(); }
-            catch { /* client stop-race on a cluster going down — the silo stop + dispose still run */ }
-            try { await cluster.StopAllSilosAsync(); }
-            catch { /* silo stop-race — DisposeAsync still completes teardown */ }
-            try { await cluster.DisposeAsync(); }
-            catch { /* shutdown-race / zombie silo — benign, the cluster is going down */ }
-        }));
+
+        // Ordered: client stop → silo stop → dispose. Each leg runs on the I/O pool (off the
+        // teardown thread, ConfigureAwait(false) inside the pool); each Catch-swallows its own
+        // stop-race so a failed leg can't skip the ones that follow. SelectMany sequences them.
+        var drain =
+            RunVoid(cluster.StopClusterClientAsync)
+                .SelectMany(_ => RunVoid(cluster.StopAllSilosAsync))
+                .SelectMany(_ => RunVoid(() => cluster.DisposeAsync().AsTask()));
+
+        // Make it hot NOW so the disposal drains concurrently with the next class booting, and
+        // replay its terminal notification to the (later) synchronous drain. Connect starts it.
+        var replayed = drain.Replay(1);
+        replayed.Connect();
+        Pending.Add(replayed);
     }
 
     /// <summary>
-    /// Wait (bounded) for every background disposal. Called once at the very end, so the
-    /// process doesn't exit mid-teardown while still leaving a wedged silo free to abandon.
+    /// Runs one <see cref="Task"/>-returning leaf on <see cref="IoPool.Unbounded"/> and projects it to
+    /// <see cref="Unit"/>, swallowing a benign shutdown-race so a failed leg completes rather than
+    /// faulting the sequence. The pool IS the async boundary — nothing is <c>await</c>ed here.
+    /// </summary>
+    private static IObservable<Unit> RunVoid(Func<Task> leaf) =>
+        IoPool.Unbounded
+            .Run(_ => leaf().ContinueWith(static _ => Unit.Default, TaskScheduler.Default))
+            .Catch(Observable.Return(Unit.Default));
+
+    /// <summary>
+    /// Block (bounded) until every pooled disposal has completed. SYNCHRONOUS — Rx blocking,
+    /// no <c>async</c>/<c>await</c>. Called from the assembly fixture's teardown so the process
+    /// doesn't reach the runner's foreground-thread check while a silo's shutdown threads are
+    /// still draining.
     /// </summary>
     public static void WaitAll(TimeSpan timeout)
     {
-        try { Task.WaitAll(Pending.ToArray(), timeout); }
-        catch { /* best-effort — a wedged silo is abandoned at process exit */ }
+        var all = Pending.ToArray();
+        if (all.Length == 0)
+            return;
+        try
+        {
+            // Merge every replayed completion; block on the merged stream's terminal notification.
+            // DefaultIfEmpty guards a leg that replays only OnCompleted (no OnNext). Timeout abandons
+            // a genuinely-wedged silo instead of hanging the run.
+            Observable.Merge(all).DefaultIfEmpty(Unit.Default).Timeout(timeout).Wait();
+        }
+        catch
+        {
+            /* best-effort — a wedged silo is abandoned; TeardownStragglerCapturer still names it */
+        }
     }
-
-    // The "very end": after all tests + collections, the test host exits → drain the pool.
-    // By now the disposals have had the whole run to complete concurrently, so this is a
-    // short final flush, not a long stall.
-    [ModuleInitializer]
-    public static void Init() =>
-        AppDomain.CurrentDomain.ProcessExit += (_, _) => WaitAll(TimeSpan.FromSeconds(20));
 }
