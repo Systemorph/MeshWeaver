@@ -1834,11 +1834,22 @@ public sealed class MessageHub : IMessageHub
                 {
                     logger.LogError("Error during shutdown of hub {address} after {elapsed}ms (total disposal time: {totalElapsed}ms): {exception}",
                         Address, shutdownStopwatch.ElapsedMilliseconds, disposalStopwatch.ElapsedMilliseconds, e);
+                    // Dead BEFORE signalling on the FAULT path too — TeardownAsync catches
+                    // DisposalCompleted errors and continues, so a faulted-signal waiter reads
+                    // RunLevel exactly like a completed-signal waiter does.
+                    lock (locker)
+                    {
+                        RunLevel = MessageHubRunLevel.Dead;
+                    }
                     SignalDisposalFaulted(e);
                 }
                 finally
                 {
-                    RunLevel = MessageHubRunLevel.Dead;
+                    // Backstop only — both signal paths above already terminalized under the lock.
+                    lock (locker)
+                    {
+                        RunLevel = MessageHubRunLevel.Dead;
+                    }
                     disposalStopwatch.Stop();
                     // Tidy the disposal-phase subscriptions (each has already self-completed:
                     // the watchdog cancelled via TakeUntil when SignalDisposalCompleted fired,
