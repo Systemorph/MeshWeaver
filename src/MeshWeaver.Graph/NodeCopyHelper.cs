@@ -1,5 +1,6 @@
 using System.Reactive.Linq;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
@@ -54,6 +55,17 @@ public static class NodeCopyHelper
         logger ??= hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.Graph.NodeCopyHelper");
 
+        // 🚨 Capture the caller's identity EAGERLY, at invocation (the click action / MCP tool /
+        // handler thread where AsyncLocal is still correct). The per-node CreateNodeRequest posts
+        // below fire from SelectMany continuations on the subtree-query's emission scheduler, where
+        // the AsyncLocal AccessContext is WIPED — so an un-stamped post would carry no identity and
+        // the PostPipeline would fail closed (only the root landing; recursive children erroring
+        // with "AccessContext must never be null … message=CreateNodeRequest" — the cross-partition
+        // copy bug). Stamp the captured context explicitly on every post, exactly as
+        // FanOutDeleteSubtree does for recursive deletes.
+        var accessService = hub.ServiceProvider.GetService<AccessService>();
+        var callerAccessContext = accessService?.Context ?? accessService?.CircuitContext;
+
         // Single Query over the source subtree — emits source + every
         // descendant in one go. Take(1) snapshots the listing for the copy
         // operation; subsequent edits to the source don't follow.
@@ -103,7 +115,8 @@ public static class NodeCopyHelper
                 {
                     return hub
                         .Observe<CreateOrUpdateNodeResponse>(
-                            new CreateOrUpdateNodeRequest(copiedNode))
+                            new CreateOrUpdateNodeRequest(copiedNode),
+                            o => callerAccessContext is null ? o : o.WithAccessContext(callerAccessContext))
                         .FirstAsync()
                         .Select(d => d.Message)
                         .SelectMany(resp =>
@@ -120,7 +133,8 @@ public static class NodeCopyHelper
                         });
                 }
                 return hub
-                    .Observe<CreateNodeResponse>(new CreateNodeRequest(copiedNode))
+                    .Observe<CreateNodeResponse>(new CreateNodeRequest(copiedNode),
+                        o => callerAccessContext is null ? o : o.WithAccessContext(callerAccessContext))
                     .FirstAsync()
                     .Select(d => d.Message)
                     .SelectMany(resp =>
