@@ -1,3 +1,4 @@
+using System.Reactive.Linq;
 using MeshWeaver.GitSync;
 using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
@@ -36,12 +37,34 @@ public static class PackageSources
                 logger?.LogWarning("Catalog source {Src} is a URL but no IGitHubRepoClient is registered.", src);
                 return null;
             }
+            // The registry HOLDS the credential: resolve the GitHub App INSTALLATION token FRESH
+            // before each fetch — the same machine identity GitSync's ResolveAuth uses (its 1h token
+            // is re-minted transparently). Passing token:"" (the old behavior) made
+            // OctokitGitHubRepoClient.Client("") throw ArgumentException on Octokit's empty
+            // Credentials, so any configured URL source 500'd the /api/plugins endpoint. When the App
+            // is unconfigured (or absent) the provider yields an empty token → anonymous access to a
+            // public repo (no throw, thanks to the Client("") anonymous fallback).
+            var tokenProvider = AppInstallationTokenProvider(hub);
             return nodeRepo
-                ? new NodeRepoPackageSource(client.Fetch, src, token: "", logger)
-                : new GitHubPackageSource(client.Fetch, src, token: "", subdir, logger);
+                ? new NodeRepoPackageSource(client.Fetch, src, tokenProvider, logger)
+                : new GitHubPackageSource(client.Fetch, src, tokenProvider, subdir, logger);
         }
         var git = new GitCli(hub.ServiceProvider.GetRequiredService<IoPoolRegistry>());
         return new GitPackageSource(git, src, subdir, logger);
+    }
+
+    /// <summary>
+    /// A token provider that yields the GitHub App INSTALLATION token when the App identity is
+    /// configured (<c>GitHub:App:ClientId</c> + <c>GitHub:App:PrivateKey</c>), else an empty string
+    /// (anonymous access to a public repo). Resolved lazily on each call so a re-minted token is
+    /// always current and an unconfigured/absent service degrades gracefully rather than throwing.
+    /// </summary>
+    private static Func<IObservable<string>> AppInstallationTokenProvider(IMessageHub hub)
+    {
+        var appTokens = hub.ServiceProvider.GetService<GitHubAppTokenService>();
+        return appTokens is { IsConfigured: true }
+            ? appTokens.GetInstallationToken
+            : () => Observable.Return(string.Empty);
     }
 
     private static bool IsUrl(string s) =>
