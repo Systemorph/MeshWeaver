@@ -34,6 +34,12 @@ public static class NodeCopyHelper
     /// <see cref="CreateOrUpdateNodeRequest"/> handler — the helper just
     /// dispatches.</para>
     ///
+    /// <para><b>Routing</b> — every per-node request is targeted at the root mesh
+    /// hub (<c>hub.GetMeshHub()</c>), where the node-operation handlers are
+    /// guaranteed to be registered. <paramref name="hub"/> may therefore be ANY
+    /// hub (an MCP/REST session hub, a per-node UI hub, the mesh hub itself); it
+    /// only supplies the caller identity and the reply address.</para>
+    ///
     /// <para><b>force semantics</b> are encoded in the upsert request: when
     /// the target path already exists, the upsert handler applies the change
     /// via <c>stream.Update</c> (requires Update permission) when
@@ -65,6 +71,25 @@ public static class NodeCopyHelper
         // FanOutDeleteSubtree does for recursive deletes.
         var accessService = hub.ServiceProvider.GetService<AccessService>();
         var callerAccessContext = accessService?.Context ?? accessService?.CircuitContext;
+
+        // 🚨 Target the per-node create/upsert requests at the ROOT mesh hub — the hub where
+        // WithNodeOperationHandlers registers the CreateNodeRequest/CreateOrUpdateNodeRequest
+        // handlers (MeshBuilder.AddMesh). An un-targeted Observe delivers to the CALLING hub,
+        // which only works when that hub happens to register the node-op handlers itself
+        // (per-node UI hubs do, via AddMeshDataSource). The MCP/REST session hub
+        // (portal/mcp-{user}-{session}, SessionHubResolver) registers only AddData — every
+        // per-node post bounced with "No handler found for message type CreateNodeRequest"
+        // (memex 2026-07-13, MCP copy tool). Same routing contract as MeshService.MeshAddress,
+        // whose comment pins the identical 2026-05-23 incident for un-walked child-hub writes.
+        var meshAddress = hub.GetMeshHub().Address;
+
+        // Shared post options for both verbs: route to the mesh hub and stamp the
+        // eagerly-captured caller identity (mirrors MeshService.ConfigurePost).
+        PostOptions ConfigurePost(PostOptions o)
+        {
+            o = o.WithTarget(meshAddress);
+            return callerAccessContext is null ? o : o.WithAccessContext(callerAccessContext);
+        }
 
         // Single Query over the source subtree — emits source + every
         // descendant in one go. Take(1) snapshots the listing for the copy
@@ -116,7 +141,7 @@ public static class NodeCopyHelper
                     return hub
                         .Observe<CreateOrUpdateNodeResponse>(
                             new CreateOrUpdateNodeRequest(copiedNode),
-                            o => callerAccessContext is null ? o : o.WithAccessContext(callerAccessContext))
+                            ConfigurePost)
                         .FirstAsync()
                         .Select(d => d.Message)
                         .SelectMany(resp =>
@@ -134,7 +159,7 @@ public static class NodeCopyHelper
                 }
                 return hub
                     .Observe<CreateNodeResponse>(new CreateNodeRequest(copiedNode),
-                        o => callerAccessContext is null ? o : o.WithAccessContext(callerAccessContext))
+                        ConfigurePost)
                     .FirstAsync()
                     .Select(d => d.Message)
                     .SelectMany(resp =>
