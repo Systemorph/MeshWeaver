@@ -7,10 +7,12 @@ using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Threading.Tasks;
+using MeshWeaver.Data;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace MeshWeaver.PluginCatalog.Test;
