@@ -4,12 +4,14 @@ using System.Linq;
 using System.Reactive;
 using System.Reactive.Linq;
 using System.Threading.Tasks;
+using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
@@ -178,6 +180,46 @@ public class NodeCopyHelperTest(ITestOutputHelper output) : MonolithMeshTestBase
         var target = await GetNode("dest/Doc");
         target.Should().NotBeNull();
         target!.Content.Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task CopyNodeTree_FromMcpShapedSessionHubWithoutNodeOperationHandlers()
+    {
+        // Regression (memex 2026-07-13): the MCP `copy` tool failed with
+        // "No handler found for message type CreateNodeRequest" while `create` worked.
+        // MeshOperations.Copy runs NodeCopyHelper.CopyNodeTree on the MCP SESSION hub
+        // (portal/mcp-{user}-{session}, SessionHubResolver), which registers only
+        // AddData() — no WithNodeOperationHandlers — and the helper posted its per-node
+        // CreateNodeRequests WITHOUT a target, i.e. to that calling hub, where they
+        // bounced with DeliveryFailure. The helper must route them to the root mesh hub
+        // (the MeshService.MeshAddress contract), so the calling hub needs no node-op
+        // handlers of its own. This hosted hub mirrors SessionHubResolver's config.
+        await CreateNode("org/Acme", "Acme Corp", "Markdown");
+        await CreateNode("org/Acme/Team1", "Team One", "Markdown");
+
+        var routingService = RoutingService;
+        var sessionHub = Mesh.GetHostedHub(
+            AddressExtensions.CreatePortalAddress("mcp-test-session"),
+            c => c
+                .AddData()
+                .WithInitialization(h => h.RegisterForDisposal(routingService.RegisterStream(h))),
+            HostedHubCreation.Always);
+        sessionHub.Should().NotBeNull();
+
+        // force=false → per-node CreateNodeRequest fan-out.
+        var copied = await NodeCopyHelper
+            .CopyNodeTree(MeshService, MeshService, sessionHub!, "org/Acme", "workspace", force: false)
+            .Should().Within(30.Seconds()).Emit();
+        copied.Should().Be(2);
+        (await GetNode("workspace/Acme"))!.Name.Should().Be("Acme Corp");
+        (await GetNode("workspace/Acme/Team1"))!.Name.Should().Be("Team One");
+
+        // force=true → per-node CreateOrUpdateNodeRequest fan-out (the helper's second
+        // verb; must route to the mesh hub for the same reason).
+        var upserted = await NodeCopyHelper
+            .CopyNodeTree(MeshService, MeshService, sessionHub!, "org/Acme", "workspace", force: true)
+            .Should().Within(30.Seconds()).Emit();
+        upserted.Should().Be(2);
     }
 
     [Fact]
