@@ -39,19 +39,9 @@ Pick a `<tag>` that pins the change (e.g. `bugfix-2026-06-05`). CI also builds i
 
 Every `IScope<,>` node (e.g. the PensionFund balance sheet) needs the BusinessRules scope **source generator**. That generator now **ships with the platform**: its DLL is copied into `MeshWeaver.Graph`'s runtime output (the `ShipScopeGenerator` target), flows into the published image, and `MeshNodeCompilationService` always feeds it to the compile. So a new `IScope<,>` node compiles with **no `#r` directive and no NuGet round-trip** — just declare the interface. The `IScope<,>` surface itself (`MeshWeaver.BusinessRules`) is a loaded framework assembly, so it's already in the compile references too.
 
-**Transition:** legacy nodes that still carry `#r "nuget:MeshWeaver.BusinessRules.Generator"` keep working — the compile filters that `#r`'d copy out (the built-in generator supersedes it, so it never runs twice). During the transition the `BakeMeshLocalFeed` target (in `Memex.Portal.Distributed.csproj`) still bakes the mesh-local feed so those `#r` directives *resolve*; it will be removed once no node source carries the `#r`.
+**Legacy `#r` directives:** nodes that still carry `#r "nuget:MeshWeaver.BusinessRules.Generator"` keep working — the compile filters that `#r`'d copy out of the NuGet resolve set (the built-in generator supersedes it, so it never runs twice, and no feed round-trip happens). Pinned by `BuiltInScopeGeneratorTest`.
 
-**So the `dotnet publish -t:PublishContainer` command above is self-contained — there is no separate pack step.** Notes:
-
-- `dist/packages` is git-ignored; the target (re)packs it on every Release publish, so the image always carries packages matching the built code.
-- Node Source pins **no** version (`#r "nuget:MeshWeaver.BusinessRules.Generator"`), so it resolves whatever single version the baked feed carries — the version lives in one place (`PlatformVersion`).
-- If a deployed scope node ever fails with a NuGet-resolve error, the image was built **without** this target (a `-c Debug` publish, or a `dist/packages` exclusion) — rebuild `-c Release`.
-- The same curated set is packed for the test suite by `.github/workflows/dotnet-test.yml` ("Pack mesh-local #r packages"), kept in sync with this target.
-- **`NETSDK1047` on `MeshWeaver.BusinessRules` during the publish** (`Assets file … doesn't have a target for 'net10.0/linux-x64'`): because `BusinessRules` is **decoupled** from the portal's project graph (pulled in only via `#r "nuget:"`), the publish's implicit restore doesn't cover it, so a stale local `obj` can lack the `-r linux-x64` RID target the `BakeMeshLocalFeed` pack needs. Restore it for the RID once, then re-publish:
-  ```bash
-  dotnet restore src/MeshWeaver.BusinessRules/MeshWeaver.BusinessRules.csproj -r linux-x64
-  ```
-  CI is immune (it restores from a clean checkout); this only bites incremental local builds.
+**So the `dotnet publish -t:PublishContainer` command above is self-contained — there is no pack step and no mesh-local feed.** The former `BakeMeshLocalFeed` target and the CI "Pack mesh-local #r packages" step were both removed once the generator shipped in-process: nothing resolves `MeshWeaver.*` from `dist/packages` anymore (the `mesh-local` source in `nuget.config` remains only as a packageSourceMapping guard so a typo'd `#r "nuget:MeshWeaver.X"` can never pull a same-named package from a different publisher on nuget.org).
 
 ## 2. Roll out (NS = `memex`)
 

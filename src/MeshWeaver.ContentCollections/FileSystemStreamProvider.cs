@@ -69,7 +69,7 @@ public class FileSystemStreamProvider(string basePath) : IStreamProvider
             // tolerant share (GetStreamAsync/GetStreamWithMetadataAsync open FileShare.ReadWrite|Delete).
             // FileShare.None takes an EXCLUSIVE advisory lock on Unix (.NET emulates FileShare via
             // flock: None → LOCK_EX), which the OS refuses while a reader holds the file — and the
-            // FileSystemWatcher-driven UpdateArticle read legitimately overlaps a write. That
+            // FileSystemWatcher-driven IngestContentFile read legitimately overlaps a write. That
             // exclusive-vs-shared clash is the "file is being used by another process" IOException
             // this method threw under CI load. Content files are eventually-consistent and re-ingested
             // on change, so a write must never demand exclusivity against the readers that already
@@ -262,7 +262,7 @@ public class FileSystemStreamProvider(string basePath) : IStreamProvider
         // A brand-new file often surfaces ONLY as Created (not Changed) — notably an external
         // writer (git sync, another process) creating a .md file, and on Linux a create+write into
         // a newly-created subdirectory. Handle Created as well as Changed so those files ingest
-        // instead of staying invisible until the collection re-initializes. UpdateArticle is
+        // instead of staying invisible until the collection re-initializes. IngestContentFile is
         // idempotent, so a file that raises both Created and Changed is merged once per event
         // harmlessly. (In-process writes no longer depend on this at all — see
         // ContentCollection.SaveFileAsync's proactive ingest.)
