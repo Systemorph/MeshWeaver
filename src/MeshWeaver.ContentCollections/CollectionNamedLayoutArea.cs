@@ -52,9 +52,9 @@ public static class CollectionNamedLayoutArea
         var path = ContentCollectionsExtensions.DecodeCollectionPath(idString.Split('?')[0].Trim('/'));
 
         var contentService = host.Hub.GetContentService();
-        var ioPool = ContentLayoutArea.GetIoPool(host.Hub);
-        return ioPool
-            .Invoke(ct => contentService.GetCollectionAsync(collectionName, ct))
+        // No pool wrapping here — the collection surface is observable end-to-end and pools its
+        // own provider leaves; this layer is pure composition.
+        return contentService.GetCollection(collectionName)
             .SelectMany(collection =>
             {
                 if (collection is null)
@@ -69,15 +69,10 @@ public static class CollectionNamedLayoutArea
                 // an extension heuristic.
                 var lastSlash = path.LastIndexOf('/');
                 var parent = lastSlash < 0 ? "/" : $"/{path[..lastSlash]}";
-                return ioPool
-                    .Invoke<CollectionItem?>(async ct =>
-                    {
-                        await foreach (var item in collection.GetCollectionItems(parent, ct).ConfigureAwait(false))
-                            // Item paths can carry '\' separators on Windows (FileSystem provider).
-                            if (string.Equals(item.Path.Replace('\\', '/').Trim('/'), path, StringComparison.OrdinalIgnoreCase))
-                                return item;
-                        return null;
-                    })
+                return collection.GetCollectionItems(parent)
+                    // Item paths can carry '\' separators on Windows (FileSystem provider).
+                    .Where(item => string.Equals(item.Path.Replace('\\', '/').Trim('/'), path, StringComparison.OrdinalIgnoreCase))
+                    .FirstOrDefaultAsync()
                     .SelectMany(item => item switch
                     {
                         FolderItem => Observable.Return<UiControl?>(

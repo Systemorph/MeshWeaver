@@ -85,7 +85,9 @@ app.MapGet("/static/{**path}", async (HttpContext ctx, string path) =>
     var filePath = string.Join('/', path[(slash + 1)..].Split('/').Select(Uri.UnescapeDataString));
     var content = app.Services.GetRequiredService<IMessageHub>().ServiceProvider.GetService<IContentService>();
     if (content is null) return Results.NotFound();
-    var stream = await content.GetContentAsync(collection, filePath, ctx.RequestAborted);
+    // HTTP-boundary await: the read leaf runs on the collection's IIoPool; the endpoint awaits
+    // the replayed single emission only.
+    var stream = await content.GetContent(collection, filePath).Take(1);
     if (stream is null) return Results.NotFound();
     var contentType = filePath.EndsWith(".svg", StringComparison.OrdinalIgnoreCase) ? "image/svg+xml"
         : filePath.EndsWith(".png", StringComparison.OrdinalIgnoreCase) ? "image/png"
