@@ -79,17 +79,6 @@ public class AgentChatClient : IAgentChat
     private string? lastAgentCreationError;
 
     /// <summary>
-    /// Set by <see cref="ApplyStaleModelFallback"/> when the chat-selected model no longer resolves
-    /// (deleted from the catalog / provider unconfigured — the case that used to 404 the whole
-    /// thread) and we transparently swap to the default model. Surfaced ONCE as a note prepended to
-    /// the next response so the model swap is VISIBLE to the user ("model X unavailable — using
-    /// default Y") instead of silently changing which model answered — then cleared. A genuinely
-    /// unrecoverable model failure (no working default) is surfaced separately by
-    /// <see cref="lastAgentCreationError"/> and the <c>ThreadExecution</c> error cell.
-    /// </summary>
-    private string? staleModelNotice;
-
-    /// <summary>
     /// Formats the no-agent failure into an APPROPRIATE chat output — never a crash.
     /// The common cause is "no model configured" (every agent skipped via the unconfigured
     /// catch-all factory); surface that with a clear, actionable hint plus the raw detail.
@@ -739,14 +728,6 @@ public class AgentChatClient : IAgentChat
 
         currentAgentName = agent.Name;
 
-        // Surface a transparent stale-model fallback (selected model 404'd → default stepped in)
-        // ONCE, so the swap is visible instead of silently changing which model answered.
-        if (staleModelNotice is { } modelNotice)
-        {
-            staleModelNotice = null;
-            yield return new ChatMessage(ChatRole.Assistant, modelNotice) { AuthorName = currentAgentName ?? "Assistant" };
-        }
-
         // Get or create thread for this agent
         var thread = await GetOrCreateThreadAsync(agent).ConfigureAwait(false);
 
@@ -877,14 +858,6 @@ public class AgentChatClient : IAgentChat
         }
 
         currentAgentName = agent.Name;
-
-        // Surface a transparent stale-model fallback ONCE (see GetResponseAsync) so the user sees
-        // the model swap rather than it changing silently underneath them.
-        if (staleModelNotice is { } modelNotice)
-        {
-            staleModelNotice = null;
-            yield return new ChatResponseUpdate(ChatRole.Assistant, modelNotice + "\n\n");
-        }
 
         // Get or create thread for this agent
         var thread = await GetOrCreateThreadAsync(agent).ConfigureAwait(false);
@@ -1920,40 +1893,32 @@ public class AgentChatClient : IAgentChat
         var resolver = hub.ServiceProvider.GetService<ChatClientCredentialResolver>();
         if (resolver is null)
             return;
-        // The selected model already resolves → nothing to heal. (A non-empty, resolvable selection.)
-        if (!string.IsNullOrEmpty(currentModelName)
-            && resolver.Resolve(currentModelName!) != CredentialResolution.Missing)
+        // The selected model is actually USABLE (resolves to a real key) → nothing to heal. Note this
+        // is HasUsableCredential, not `Resolve != Missing`: a keyless/endpoint-only resolution (a
+        // provider node with a gateway URL but no ApiKey — e.g. z-ai/glm-5.2 on Provider/OpenAICompatible)
+        // is non-Missing yet every factory throws "ApiKey is missing" for it. Treating keyless as
+        // usable is exactly what let that raw error reach the user.
+        if (resolver.HasUsableCredential(currentModelName))
             return;
-        // Either NO model is selected, or the selected one no longer resolves (deleted/refactored out of
-        // the catalog, or its provider is unconfigured). Seed the DEFAULT available model (lowest-Order
-        // resolvable) so the round runs on a working model instead of dead-ending on the first factory
-        // (OpenAI) with "(none selected)". When nothing resolves, `fallback` is empty → currentModelName
-        // stays as-is → the round surfaces the clear "No AI model available" message (FormatNoAgentError).
+        // Either NO model is selected, or the selected one isn't usable (deleted/refactored out of the
+        // catalog, or its provider carries no key). Seed the DEFAULT available model (lowest-Order model
+        // with a usable key) so the round runs on a working model instead of dead-ending on the first
+        // factory (OpenAI) with "(none selected)". When nothing usable exists, `fallback` is empty →
+        // currentModelName stays as-is → the round surfaces the clear "No AI model available" message.
         var fallback = resolver.ResolveDefaultModelId();
         if (string.IsNullOrEmpty(fallback)
             || string.Equals(fallback, currentModelName, StringComparison.OrdinalIgnoreCase))
             return;
         var stale = currentModelName;
         currentModelName = fallback;
-        // Only NOTIFY the user when we swapped AWAY from a model they had explicitly pinned. Seeding a
-        // default for an empty selection is silent — there was no user choice to override.
-        if (!string.IsNullOrEmpty(stale))
-        {
-            logger.LogWarning(
-                "[AgentChatClient] Selected model '{Stale}' does not resolve to a live model; "
-                + "falling back to default model '{Default}'.", stale, fallback);
-            // Surface the swap (GetResponseAsync / GetStreamingResponseAsync emit it once). Without this
-            // the model silently changes under the user — they think their pinned model answered when it
-            // actually 404'd and the default stepped in.
-            staleModelNotice =
-                $"*The selected model `{stale}` is unavailable — it may have been removed from the catalog "
-                + $"or its provider is no longer configured. Using the default model `{fallback}` for this response.*";
-        }
-        else
-        {
-            logger.LogDebug(
-                "[AgentChatClient] No model was selected; seeding default model '{Default}'.", fallback);
-        }
+        // 🔇 SILENT correction (user directive 2026-07-13: "the user does not get such messages —
+        // silently correct this and take the first valid model"). We LOG the swap for operators but do
+        // NOT emit a user-facing notice: an unusable pinned model is a config/catalog problem the user
+        // can't act on mid-thread, and surfacing it read as noise. The round just runs on the default.
+        logger.LogWarning(
+            "[AgentChatClient] Selected model '{Stale}' is not usable (no resolvable key); "
+            + "silently falling back to default model '{Default}'.",
+            string.IsNullOrEmpty(stale) ? "(none selected)" : stale, fallback);
     }
 
     /// <summary>

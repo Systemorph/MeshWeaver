@@ -214,6 +214,99 @@ public class ChatClientCredentialResolverTest : AITestBase
     }
 
     /// <summary>
+    /// A KEYLESS model — a provider node with an Endpoint but NO ApiKey (the <c>z-ai/glm-5.2</c> on
+    /// <c>Provider/OpenAICompatible</c> shape) — must NEVER be picked as the default/fallback, even at
+    /// the LOWEST Order. It <see cref="ChatClientCredentialResolver.Resolve"/>s to a non-Missing
+    /// (endpoint-only) resolution, so the old <c>Resolve != Missing</c> predicate chose it — and then
+    /// every factory threw <c>"ApiKey is missing for model '…'"</c> straight at the user. The default
+    /// selection now gates on <see cref="ChatClientCredentialResolver.HasUsableCredential"/> (a real
+    /// key), so it skips the keyless model and lands on the keyed one that will actually run.
+    /// </summary>
+    [Fact]
+    public async Task ResolveDefaultModelId_SkipsKeylessModel_EvenAtLowestOrder()
+    {
+        var root = ModelProviderNodeType.RootNamespace;
+        var suffix = Guid.NewGuid().ToString("N")[..8];
+
+        // KEYLESS provider — endpoint only, no ApiKey (the gateway-without-key shape).
+        var keylessProviderPath = $"{root}/KeylessProv{suffix}";
+        await MeshService.CreateNode(new MeshNode($"KeylessProv{suffix}", root)
+        {
+            NodeType = ModelProviderNodeType.NodeType,
+            Name = "Keyless Provider",
+            State = MeshNodeState.Active,
+            Content = new ModelProviderConfiguration
+            {
+                Provider = $"KeylessProv{suffix}",
+                Endpoint = "https://gateway.example/v1", // endpoint present, ApiKey absent
+            }
+        }).Should().Within(15.Seconds()).Emit();
+
+        // The keyless model sits at the LOWEST Order — the old predicate would have picked it.
+        var keylessModelId = $"keyless-model-{suffix}";
+        await MeshService.CreateNode(new MeshNode(keylessModelId, keylessProviderPath)
+        {
+            NodeType = LanguageModelNodeType.NodeType,
+            Name = keylessModelId,
+            Order = -5000,
+            State = MeshNodeState.Active,
+            Content = new ModelDefinition
+            {
+                Id = keylessModelId,
+                Provider = $"KeylessProv{suffix}",
+                ProviderRef = keylessProviderPath,
+            }
+        }).Should().Within(15.Seconds()).Emit();
+
+        // A KEYED model at a higher Order — the one that should actually be chosen.
+        var keyedProviderPath = $"{root}/KeyedProv{suffix}";
+        await MeshService.CreateNode(new MeshNode($"KeyedProv{suffix}", root)
+        {
+            NodeType = ModelProviderNodeType.NodeType,
+            Name = "Keyed Provider",
+            State = MeshNodeState.Active,
+            Content = new ModelProviderConfiguration
+            {
+                Provider = $"KeyedProv{suffix}",
+                ApiKey = "sk-keyed-key",
+                Endpoint = "https://keyed.example/v1",
+            }
+        }).Should().Within(15.Seconds()).Emit();
+
+        var keyedModelId = $"keyed-model-{suffix}";
+        await MeshService.CreateNode(new MeshNode(keyedModelId, keyedProviderPath)
+        {
+            NodeType = LanguageModelNodeType.NodeType,
+            Name = keyedModelId,
+            Order = 100,
+            State = MeshNodeState.Active,
+            Content = new ModelDefinition
+            {
+                Id = keyedModelId,
+                Provider = $"KeyedProv{suffix}",
+                ProviderRef = keyedProviderPath,
+            }
+        }).Should().Within(15.Seconds()).Emit();
+
+        var resolver = Mesh.ServiceProvider.GetRequiredService<ChatClientCredentialResolver>();
+        resolver.EnsureSubscription();
+
+        // The default is the KEYED model — the keyless (lower-Order) one is skipped despite winning Order.
+        var defaultId = await Observable.Interval(TimeSpan.FromMilliseconds(50))
+            .Select(_ => resolver.ResolveDefaultModelId())
+            .Should().Within(10.Seconds()).Match(id => id == keyedModelId);
+        defaultId.Should().Be(keyedModelId,
+            "the keyless lowest-Order model is not usable — the default must skip it for the keyed one");
+
+        // The bug shape: the keyless model DOES resolve (endpoint-only, non-Missing) — which is exactly
+        // why the old `Resolve != Missing` predicate wrongly chose it — but it is NOT usable.
+        resolver.Resolve(keylessModelId).Should().NotBe(CredentialResolution.Missing);
+        resolver.HasUsableCredential(keylessModelId).Should().BeFalse(
+            "an endpoint-only provider carries no key, so no factory can create it");
+        resolver.HasUsableCredential(keyedModelId).Should().BeTrue();
+    }
+
+    /// <summary>
     /// The composer persists the model as the full LanguageModel node PATH
     /// (<c>Provider/{provider}/{modelId}</c> — <c>AgentPickerProjection.ToModelInfo</c>'s
     /// Path-carrying contract). The resolver must resolve that form exactly like the bare id:
