@@ -501,4 +501,87 @@ public class ChatClientCredentialResolverTest : AITestBase
         provider.Should().Be("Anthropic");
         resolver.GetProviderForModel("does-not-exist").Should().BeNull();
     }
+
+    /// <summary>
+    /// The regression the maintainer hit: a composer/thread whose MASTER selection pins a model that no
+    /// longer exists in the catalog (the stuck "glm-5.2") must resolve to the order-resolved DEFAULT —
+    /// WITHOUT throwing "model does not exist" / tearing the composer down. <c>ObserveDefaultComposer</c>
+    /// sanitises an unusable master model (<c>ValidMasterModel</c> → the resolver reports no usable
+    /// credential → falls back to the lowest-Order resolvable model), so the composer initialises on a
+    /// working model instead of surfacing the gone one.
+    /// </summary>
+    [Fact]
+    public async Task ObserveDefaultComposer_StaleMasterModel_ResolvesToDefault_WithoutThrowing()
+    {
+        var root = ModelProviderNodeType.RootNamespace; // "Provider"
+        var suffix = Guid.NewGuid().ToString("N")[..8];
+
+        // A working provider + a lowest-Order resolvable model — the catalog default the composer should
+        // fall back to when the pinned model is gone.
+        var providerPath = $"{root}/DefProv{suffix}";
+        await MeshService.CreateNode(new MeshNode($"DefProv{suffix}", root)
+        {
+            NodeType = ModelProviderNodeType.NodeType,
+            Name = "Default Provider",
+            State = MeshNodeState.Active,
+            Content = new ModelProviderConfiguration
+            {
+                Provider = $"DefProv{suffix}",
+                ApiKey = "sk-default-key",
+                Endpoint = "https://default.example/v1",
+            }
+        }).Should().Within(15.Seconds()).Emit();
+
+        var defaultModelId = $"default-model-{suffix}";
+        var defaultModelPath = $"{providerPath}/{defaultModelId}";
+        await MeshService.CreateNode(new MeshNode(defaultModelId, providerPath)
+        {
+            NodeType = LanguageModelNodeType.NodeType,
+            Name = defaultModelId,
+            Order = -1, // the "make this the default" convention
+            State = MeshNodeState.Active,
+            Content = new ModelDefinition
+            {
+                Id = defaultModelId,
+                Provider = $"DefProv{suffix}",
+                ProviderRef = providerPath,
+                Order = -1,
+            }
+        }).Should().Within(15.Seconds()).Emit();
+
+        // Seed the user's MASTER composer pinned to a GONE model (never created in the catalog) — the
+        // exact stuck-selection the maintainer reported.
+        var user = Mesh.ServiceProvider.GetRequiredService<AccessService>().Context?.ObjectId
+                   ?? MonolithMeshTestBase.TestPartition;
+        var masterPath = ThreadComposerNodeType.PathFor(user);
+        var goneModel = $"gone-model-{suffix}";
+        await MeshService.CreateNode(MeshNode.FromPath(masterPath) with
+        {
+            Name = "Chat Input",
+            NodeType = ThreadComposerNodeType.NodeType,
+            MainNode = masterPath,
+            State = MeshNodeState.Active,
+            Content = new ThreadComposer { ModelName = goneModel },
+        }).Should().Within(15.Seconds()).Emit();
+
+        var resolver = Mesh.ServiceProvider.GetRequiredService<ChatClientCredentialResolver>();
+        resolver.EnsureSubscription();
+        // Warm the resolver so the default model is visible before we assert the composer sanitisation.
+        await Observable.Interval(TimeSpan.FromMilliseconds(50))
+            .Select(_ => resolver.ResolveDefaultModelId())
+            .Should().Within(15.Seconds()).Match(id => id == defaultModelId);
+
+        // The composer must NOT surface the gone model, and must NOT throw — it resolves to the default.
+        var composer = await AgentPickerProjection
+            .ObserveDefaultComposer(Mesh, userPath: user)
+            .Where(c => !string.IsNullOrEmpty(c.ModelName))
+            .Take(1)
+            .Timeout(15.Seconds())
+            .ToTask();
+
+        composer.ModelName.Should().NotBe(goneModel,
+            "a pinned model that no longer resolves must be sanitised away, not shown/used as-is");
+        composer.ModelName.Should().Be(defaultModelPath,
+            "the composer falls back to the lowest-Order resolvable model (persisted as its node PATH)");
+    }
 }
