@@ -658,10 +658,17 @@ public static class StaticRepoImporter
                     return pruned.SelectMany(prunedCount =>
                         // Sync content-collection files (the assets behind @@content/<file> embeds)
                         // collection→collection into each owning node — AFTER the node upsert.
-                        SyncContentImports(hub, source, logger).SelectMany(contentCount =>
+                        SyncContentImports(hub, source, logger).SelectMany(embedCount =>
+                        // Mirror inline (byte-carrying) content into each owning node's content
+                        // collection — the git-committed {Space}/content/** binaries a GitSync import
+                        // supplies. Binary-safe + mirroring (writes what the repo has, prunes what it
+                        // dropped) so committed course videos/posters land and stop getting wiped.
+                        SyncInlineContent(hub, source, logger).SelectMany(inlineCount =>
+                        {
+                        var contentCount = embedCount + inlineCount;
                         // Persist the per-node manifest LAST (after upserts + prune) so the NEXT import's
                         // diff sees exactly what's now in the partition. One write; survives prune (_Activity).
-                        WriteManifest(hub, source.Partition, nodes, hub.JsonSerializerOptions, logger).Select(_ =>
+                        return WriteManifest(hub, source.Partition, nodes, hub.JsonSerializerOptions, logger).Select(_ =>
                         {
                             // 🚨 Terminal status reflects per-file outcomes: ANY failed upsert →
                             // Warning (the ⚠ lines above pinpoint which files), all-clear →
@@ -687,6 +694,7 @@ public static class StaticRepoImporter
                                 source.Partition, count.Imported, failed, prunedCount, contentCount, fingerprint);
                             return new StaticRepoImportResult(source.Partition, fingerprint,
                                 failed > 0 ? "ImportedWithErrors" : "Imported", count.Imported);
+                        });
                         })));
                 });
             })
@@ -865,6 +873,39 @@ public static class StaticRepoImporter
                     logger?.LogWarning(ex,
                         "[StaticRepoImport] {Partition}: content import for {Node} failed (continuing).",
                         source.Partition, import.NodePath);
+                    return Observable.Return(0);
+                }))
+            .ToObservable()
+            .Merge(BatchSize)
+            .Sum();
+    }
+
+    /// <summary>
+    /// Mirrors the source's inline content syncs (<see cref="IStaticRepoSource.EnumerateInlineContentSyncs"/>)
+    /// — the byte-carrying content-collection files a GitSync import supplies (the git-committed
+    /// <c>{Space}/content/**</c> binaries). Each group is posted as a <see cref="SyncContentFilesRequest"/>
+    /// (via <see cref="ContentImportExtensions.SyncContentFiles"/>) under System to the owning node's hub,
+    /// which writes the bytes and — mirroring — prunes files the group no longer carries. Per-group failures
+    /// log and continue. Returns the total files written.
+    /// </summary>
+    private static IObservable<int> SyncInlineContent(IMessageHub hub, IStaticRepoSource source, ILogger? logger)
+    {
+        var syncs = source.EnumerateInlineContentSyncs();
+        if (syncs.Count == 0)
+            return Observable.Return(0);
+
+        return syncs
+            .Select(sync => AsSystem(hub, () => hub.SyncContentFiles(sync.NodePath)
+                    .To(sync.TargetCollection, sync.TargetPath)
+                    .Add(sync.Files)
+                    .Mirror(true)
+                    .Post())
+                .Select(r => r.Success ? r.FilesImported : 0)
+                .Catch<int, Exception>(ex =>
+                {
+                    logger?.LogWarning(ex,
+                        "[StaticRepoImport] {Partition}: inline content sync for {Node} failed (continuing).",
+                        source.Partition, sync.NodePath);
                     return Observable.Return(0);
                 }))
             .ToObservable()
