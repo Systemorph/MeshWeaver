@@ -1,3 +1,4 @@
+using MeshWeaver.Hosting.Embeddings;
 using System.Collections.Concurrent;
 using System.Collections.Immutable;
 using System.Reactive;

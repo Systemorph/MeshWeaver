@@ -1,3 +1,4 @@
+using MeshWeaver.Hosting.Embeddings;
 using System.Reactive.Linq;
 using MeshWeaver.Hosting.PostgreSql;
 using MeshWeaver.Mesh.Threading;

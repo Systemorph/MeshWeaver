@@ -49,6 +49,21 @@ public static class IoPoolNames
     /// Cap from <see cref="IoPoolOptions.PostgresRead"/>. See <see cref="IoPoolOptions.MaxConcurrencyFor"/>.
     /// </summary>
     public const string PostgresReadAdapterPrefix = "pg-read:";
+
+    /// <summary>
+    /// Prefix for per-Snowflake-storage-adapter pools (<c>sf:{adapterName}</c>). Capped at ONE
+    /// in-flight op so writes/provisioning serialize through a single logical connection —
+    /// the same gate-IS-the-connection contract as <see cref="PostgresAdapterPrefix"/>.
+    /// </summary>
+    public const string SnowflakeAdapterPrefix = "sf:";
+
+    /// <summary>
+    /// Prefix for the per-Snowflake-storage-adapter <b>read</b> pool (<c>sf-read:{adapterName}</c>).
+    /// Bounds read fan-out below Snowflake's session pool the same way
+    /// <see cref="PostgresReadAdapterPrefix"/> does for Npgsql.
+    /// Cap from <see cref="IoPoolOptions.SnowflakeRead"/>.
+    /// </summary>
+    public const string SnowflakeReadAdapterPrefix = "sf-read:";
 }
 
 /// <summary>
@@ -103,6 +118,13 @@ public sealed record IoPoolOptions
     /// </summary>
     public int PostgresRead { get; init; } = 16;
 
+    /// <summary>
+    /// Concurrent READS per Snowflake storage adapter (the <c>sf-read:{adapter}</c> pool).
+    /// Same rationale as <see cref="PostgresRead"/>: bound the synced-query read fan-out
+    /// below the driver's session pool so reads can't starve writes.
+    /// </summary>
+    public int SnowflakeRead { get; init; } = 16;
+
     /// <summary>Fallback cap for any pool name not listed above.</summary>
     public int Default { get; init; } = Environment.ProcessorCount;
 
@@ -115,6 +137,11 @@ public sealed record IoPoolOptions
         // Per-PG-adapter WRITE pools (pg:{adapter}) hold exactly one connection — the gate
         // IS the single Npgsql connection, never a parallel bound on top of it.
         name.StartsWith(IoPoolNames.PostgresAdapterPrefix, StringComparison.Ordinal) ? 1 :
+        // Same prefix-shadowing order for Snowflake: "sf-read:" also starts with "sf".
+        name.StartsWith(IoPoolNames.SnowflakeReadAdapterPrefix, StringComparison.Ordinal) ? SnowflakeRead :
+        // Per-Snowflake-adapter WRITE pools (sf:{adapter}): the gate IS the single
+        // logical write connection, mirroring pg:{adapter}.
+        name.StartsWith(IoPoolNames.SnowflakeAdapterPrefix, StringComparison.Ordinal) ? 1 :
         name switch
         {
             IoPoolNames.FileSystem => FileSystem,

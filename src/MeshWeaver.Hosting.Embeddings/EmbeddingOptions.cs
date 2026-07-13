@@ -1,6 +1,6 @@
 using System.Collections.Frozen;
 
-namespace MeshWeaver.Hosting.PostgreSql;
+namespace MeshWeaver.Hosting.Embeddings;
 
 /// <summary>
 /// Configuration options for the embedding provider. Bind from the "Embedding" config section.

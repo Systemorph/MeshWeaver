@@ -1,4 +1,5 @@
 ﻿using System;
+using MeshWeaver.Hosting.Embeddings;
 using System.Text.Json;
 using System.Threading.Tasks;
 using MeshWeaver.Hosting.PostgreSql;

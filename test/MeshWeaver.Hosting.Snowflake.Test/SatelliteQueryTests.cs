@@ -1,0 +1,464 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text.Json;
+using System.Threading.Tasks;
+using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Activity;
+using MeshWeaver.Mesh.Services;
+using Xunit;
+using MeshWeaver.Fixture;
+
+namespace MeshWeaver.Hosting.Snowflake.Test;
+
+/// <summary>
+/// Tests that the Snowflake query layer can find satellite nodes in their dedicated tables
+/// when querying by nodeType. This validates the dashboard queries used by
+/// UserActivityLayoutAreas.cs: nodeType:Thread, source:activity, etc.
+/// 1:1 port of the PG twin against <see cref="SnowflakeStorageAdapter.QueryNodesAsync(ParsedQuery, JsonSerializerOptions, string?, string?, string?, IReadOnlyCollection{string}?, System.Threading.CancellationToken)"/>.
+/// </summary>
+[Collection("Snowflake")]
+public class SatelliteQueryTests : IAsyncLifetime
+{
+    private const string SchemaName = "user_sat_query_test";
+
+    private readonly SnowflakeFixture _fixture;
+    private readonly JsonSerializerOptions _options = new();
+    private SnowflakeConnectionSource _schemaDs = null!;
+    private SnowflakeStorageAdapter _adapter = null!;
+
+    private static readonly PartitionDefinition UserPartition = new()
+    {
+        Namespace = "User",
+        DataSource = "default",
+        Schema = SchemaName,
+        TableMappings = PartitionDefinition.DefaultSegmentTableMappings(), NodeTypeTableMappings = PartitionDefinition.DefaultNodeTypeTableMappings(),
+    };
+
+    public SatelliteQueryTests(SnowflakeFixture fixture) => _fixture = fixture;
+
+    public async ValueTask InitializeAsync()
+    {
+        // Green-skip the whole class when no endpoint is up (xunit v3 honors the dynamic-skip
+        // exception from lifetime methods); each test method carries the same first-line guard
+        // per the fixture contract.
+        _fixture.SkipUnlessAvailable();
+
+        var (ds, adapter) = await _fixture.CreateSchemaAdapterAsync(
+            SchemaName, UserPartition, TestContext.Current.CancellationToken);
+        _schemaDs = ds;
+        _adapter = adapter;
+    }
+
+    public ValueTask DisposeAsync()
+    {
+        _schemaDs?.Dispose();
+        return ValueTask.CompletedTask;
+    }
+
+    private Task Write(MeshNode node)
+        => _adapter.Write(node, _options).Should().Within(30.Seconds()).Emit();
+
+    private Task<List<MeshNode>> Query(string queryString, string? defaultPath = null)
+    {
+        // Use adapter.QueryNodesAsync directly (no access control) to test table resolution
+        var parser = new QueryParser();
+        var parsedQuery = parser.Parse(queryString);
+
+        var effectivePath = parsedQuery.Path;
+        var effectiveScope = parsedQuery.Scope;
+        if (string.IsNullOrEmpty(effectivePath))
+        {
+            if (!string.IsNullOrEmpty(defaultPath))
+                effectivePath = defaultPath;
+            if (parsedQuery.Scope == QueryScope.Exact)
+                effectiveScope = QueryScope.Children;
+        }
+        parsedQuery = parsedQuery with { Path = effectivePath, Scope = effectiveScope };
+
+        return _adapter.QueryNodesAsync(parsedQuery, _options,
+                userId: null, ct: TestContext.Current.CancellationToken)
+            .Collect(TestContext.Current.CancellationToken)
+            .Should().Within(30.Seconds()).Emit();
+    }
+
+    /// <summary>Direct SQL query for debugging — bypasses the MeshQuery layer.
+    /// Unlike the PG twin (which relied on the per-schema search_path), identifiers are
+    /// schema-qualified + quoted lowercase — Snowflake uppercases unquoted names.</summary>
+    private Task<List<MeshNode>> RawQuery(string tableName, string? nodeType = null)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var sql = "SELECT \"id\", \"namespace\", \"name\", \"node_type\" " +
+                  $"FROM {SnowflakeIdentifiers.Qualify(SchemaName, tableName)}";
+        if (nodeType != null)
+            sql += $" WHERE \"node_type\" = '{nodeType}'";
+        return _schemaDs.Rows(sql, System.Array.Empty<(string, object)>(),
+                reader => new MeshNode(reader.GetString(0), reader.GetString(1))
+                {
+                    Name = reader.IsDBNull(2) ? null : reader.GetString(2),
+                    NodeType = reader.IsDBNull(3) ? null : reader.GetString(3),
+                }, ct)
+            .Should().Within(30.Seconds()).Emit();
+    }
+
+    // ── Diagnostic ───────────────────────────────────────────────────────
+
+    [Fact(Timeout = 30000)]
+    public void Diagnostic_ResolveTableByNodeType_WorksCorrectly()
+    {
+        _fixture.SkipUnlessAvailable();
+
+        // Verify the table resolution logic
+        UserPartition.ResolveTableByNodeType("Thread").Should().Be("threads");
+        UserPartition.ResolveTableByNodeType("ThreadMessage").Should().Be("threads");
+        UserPartition.ResolveTableByNodeType("Activity").Should().Be("activities");
+        UserPartition.ResolveTableByNodeType("UserActivity").Should().Be("user_activities");
+        UserPartition.ResolveTableByNodeType("Comment").Should().Be("annotations");
+        UserPartition.ResolveTableByNodeType("AccessAssignment").Should().Be("access");
+        // Code maps to Source which maps to "code", but NodeTypeToSuffix
+        // doesn't have "Code" entry — it uses path-based resolution instead
+        UserPartition.ResolveTable("User/alice/Source/MyClass").Should().Be("code");
+
+        // Verify parser extracts nodeType correctly
+        var parser = new QueryParser();
+        var parsed = parser.Parse("nodeType:Thread sort:LastModified-desc");
+        parsed.ExtractNodeType().Should().Be("Thread");
+
+        // Verify scope defaults for no-path query
+        parsed.Scope.Should().Be(QueryScope.Exact, "no scope specified, defaults to Exact");
+    }
+
+    // ── Thread ───────────────────────────────────────────────────────────
+
+    [Fact(Timeout = 30000)]
+    public async Task NodeType_Thread_FindsInThreadsTable()
+    {
+        _fixture.SkipUnlessAvailable();
+        var ct = TestContext.Current.CancellationToken;
+
+        // Seed a thread in the threads table
+        await Write(new MeshNode("hello-world", "User/alice/_Thread")
+        {
+            Name = "Hello World Thread",
+            NodeType = "Thread",
+            MainNode = "User/alice/_Thread",
+        });
+
+        // Verify data was written to the threads table
+        await _schemaDs.ScalarLong(
+            $"SELECT COUNT(*) FROM {SnowflakeIdentifiers.Qualify(SchemaName, "threads")} WHERE \"id\" = 'hello-world'", ct)
+            .Should().Within(30.Seconds()).Be(1L, "thread should exist in threads table");
+
+        // Query by nodeType only (no path) — must resolve to threads table
+        var results = await Query("nodeType:Thread sort:LastModified-desc");
+
+        // Raw SQL verification: data IS in threads table
+        var rawThreads = await RawQuery("threads", "Thread");
+        rawThreads.Should().NotBeEmpty("raw SQL confirms threads exist in threads table");
+
+        // Raw SQL: data is NOT in mesh_nodes
+        var rawMeshNodes = await RawQuery("mesh_nodes", "Thread");
+
+        // The Snowflake query layer must find the data in threads table
+        results.Should().NotBeEmpty(
+            $"nodeType:Thread should find threads. Raw threads table has {rawThreads.Count} rows, " +
+            $"mesh_nodes has {rawMeshNodes.Count} Thread rows, query returned {results.Count}");
+    }
+
+    [Fact(Timeout = 30000)]
+    public async Task NodeType_Thread_WithDefaultPath_FindsInThreadsTable()
+    {
+        _fixture.SkipUnlessAvailable();
+
+        await Write(new MeshNode("help-me", "User/bob/_Thread")
+        {
+            Name = "Help Me Thread",
+            NodeType = "Thread",
+            MainNode = "User/bob/_Thread",
+        });
+
+        // Simulate routing fan-out: DefaultPath = "User", scope:descendants
+        var results = await Query(
+            "nodeType:Thread sort:LastModified-desc scope:descendants",
+            defaultPath: "User");
+
+        results.Should().NotBeEmpty("routing fan-out with DefaultPath=User should find threads");
+        results.Should().Contain(n => n.Name == "Help Me Thread");
+    }
+
+    [Fact(Timeout = 30000)]
+    public async Task Namespace_Thread_FindsThreads()
+    {
+        _fixture.SkipUnlessAvailable();
+
+        await Write(new MeshNode("ns-thread", "User/carol/_Thread")
+        {
+            Name = "Namespace Thread",
+            NodeType = "Thread",
+            MainNode = "User/carol/_Thread",
+        });
+
+        // Direct namespace query
+        var results = await Query("namespace:User/carol/_Thread nodeType:Thread");
+        results.Should().NotBeEmpty("namespace query to _Thread should find threads");
+        results.Should().Contain(n => n.Name == "Namespace Thread");
+    }
+
+    // ── ThreadMessage ────────────────────────────────────────────────────
+
+    [Fact(Timeout = 30000)]
+    public async Task NodeType_ThreadMessage_FindsInThreadsTable()
+    {
+        _fixture.SkipUnlessAvailable();
+
+        await Write(new MeshNode("msg-1", "User/alice/_Thread/hello-world")
+        {
+            Name = "User message",
+            NodeType = "ThreadMessage",
+            MainNode = "User/alice/_Thread/hello-world",
+        });
+
+        var results = await Query("nodeType:ThreadMessage scope:descendants", defaultPath: "User");
+        results.Should().NotBeEmpty("nodeType:ThreadMessage should find messages in threads table");
+    }
+
+    // ── Activity ─────────────────────────────────────────────────────────
+
+    [Fact(Timeout = 30000)]
+    public async Task NodeType_Activity_FindsInActivitiesTable()
+    {
+        _fixture.SkipUnlessAvailable();
+
+        // Seed main node + activity satellite
+        await Write(new MeshNode("doc1", "User/alice")
+        {
+            Name = "Alice Doc",
+            NodeType = "Markdown",
+        });
+
+        await Write(new MeshNode("log1", "User/alice/doc1/_Activity")
+        {
+            Name = "Activity Log",
+            NodeType = "Activity",
+            MainNode = "User/alice/doc1",
+        });
+
+        var results = await Query("nodeType:Activity scope:descendants", defaultPath: "User");
+        results.Should().NotBeEmpty("nodeType:Activity should find records in activities table");
+        results.Should().Contain(n => n.NodeType == "Activity");
+    }
+
+    [Fact(Timeout = 30000)]
+    public async Task SourceActivity_FindsMainNodesWithActivitySatellites()
+    {
+        _fixture.SkipUnlessAvailable();
+
+        // Main node
+        await Write(new MeshNode("project1", "User/alice")
+        {
+            Name = "Alice Project",
+            NodeType = "Markdown",
+        });
+
+        // Activity satellite
+        await Write(new MeshNode("act1", "User/alice/project1/_Activity")
+        {
+            Name = "Project Activity",
+            NodeType = "Activity",
+            MainNode = "User/alice/project1",
+        });
+
+        // Dashboard query: source:activity
+        var results = await Query(
+            "source:activity scope:descendants sort:LastModified-desc",
+            defaultPath: "User");
+
+        // source:activity returns MAIN nodes that have activity children
+        var mainResults = results.Where(n => n.NodeType != "Activity").ToList();
+        mainResults.Should().NotBeEmpty(
+            "source:activity should return main nodes with activity satellites");
+    }
+
+    // ── Path resolution over satellite tables (atioz NotFound-storm wedge) ──
+
+    /// <summary>
+    /// Reproduces the atioz wedge: a SubscribeRequest to a satellite path
+    /// <c>{owner}/_Activity/{id}</c> went through <see cref="MeshWeaver.Hosting.PathResolutionService"/>,
+    /// which issues the multi-prefix resolution query
+    /// <c>path:"{deepest}"|...|"{root}"</c>. Before satellite-aware routing,
+    /// that lookup only scanned <c>mesh_nodes</c>, so the deepest match was the
+    /// partition root with a non-empty remainder <c>_Activity/{id}</c> →
+    /// RoutingGrain NACKed NotFound → the progress reader re-subscribed →
+    /// continuous [ROUTE] NotFound storm → action-block saturation → wedge.
+    ///
+    /// The resolution query MUST find the <c>_Activity</c> row in the
+    /// <c>activities</c> satellite table so the deepest match is the full
+    /// satellite path (remainder == null, routes to the owning hub).
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task PathResolutionQuery_ActivitySatellite_ResolvesToFullPath()
+    {
+        _fixture.SkipUnlessAvailable();
+
+        // Seed the partition root in mesh_nodes + a compile-activity satellite
+        // in the activities table — the exact shape behind Doc/.../_Activity/compile-*.
+        await Write(new MeshNode("alice", "User")
+        {
+            Name = "Alice",
+            NodeType = "User",
+        });
+        await Write(new MeshNode("compile-xyz", "User/alice/_Activity")
+        {
+            Name = "Compile",
+            NodeType = "Activity",
+            MainNode = "User/alice",
+        });
+
+        // Build the resolution query EXACTLY as PathResolutionService.ResolveOnce does:
+        // every prefix of the requested path, quoted, deepest-first, joined by '|'.
+        const string requested = "User/alice/_Activity/compile-xyz";
+        var segments = requested.Split('/');
+        var pathList = string.Join("|", System.Linq.Enumerable
+            .Range(1, segments.Length)
+            .Select(depth => "\"" + string.Join("/", segments.Take(depth)) + "\"")
+            .Reverse());
+
+        var results = await Query($"path:{pathList}");
+
+        // The deepest match must be the full satellite path — proving the
+        // resolution query reached the activities table. If only the root
+        // resolved, PathResolutionService would emit Prefix=User/alice with a
+        // non-empty remainder → the NotFound storm.
+        var deepest = results
+            .OrderByDescending(n => (n.Path ?? "").Length)
+            .FirstOrDefault();
+        deepest.Should().NotBeNull("the satellite path must resolve");
+        deepest!.Path.Should().Be(requested,
+            "the multi-prefix resolution query must find the _Activity row in the activities table, "
+            + "not stop at the partition root with a dangling _Activity/{id} remainder");
+    }
+
+    // ── UserActivity ─────────────────────────────────────────────────────
+
+    [Fact(Timeout = 30000)]
+    public async Task NodeType_UserActivity_FindsInUserActivitiesTable()
+    {
+        _fixture.SkipUnlessAvailable();
+
+        await Write(new MeshNode("User_alice_doc1", "User/alice/_UserActivity")
+        {
+            Name = "Doc1 access",
+            NodeType = "UserActivity",
+            MainNode = "User/alice",
+            Content = new UserActivityRecord
+            {
+                Id = "User_alice_doc1",
+                NodePath = "User/alice/doc1",
+                UserId = "alice",
+                ActivityType = ActivityType.Read,
+                FirstAccessedAt = DateTimeOffset.UtcNow.AddHours(-1),
+                LastAccessedAt = DateTimeOffset.UtcNow,
+                AccessCount = 5,
+            }
+        });
+
+        var results = await Query("nodeType:UserActivity scope:descendants", defaultPath: "User");
+        results.Should().NotBeEmpty("nodeType:UserActivity should find records in user_activities table");
+    }
+
+    // ── AccessAssignment ─────────────────────────────────────────────────
+
+    [Fact(Timeout = 30000)]
+    public async Task NodeType_AccessAssignment_FindsInAccessTable()
+    {
+        _fixture.SkipUnlessAvailable();
+
+        await Write(new MeshNode("aa1", "User/alice/_Access")
+        {
+            Name = "Admin role",
+            NodeType = "AccessAssignment",
+            MainNode = "User/alice",
+        });
+
+        var results = await Query("nodeType:AccessAssignment scope:descendants", defaultPath: "User");
+        results.Should().NotBeEmpty("nodeType:AccessAssignment should find records in access table");
+    }
+
+    // ── Comment ──────────────────────────────────────────────────────────
+
+    [Fact(Timeout = 30000)]
+    public async Task NodeType_Comment_FindsInAnnotationsTable()
+    {
+        _fixture.SkipUnlessAvailable();
+
+        await Write(new MeshNode("cmt1", "User/alice/doc1/_Comment")
+        {
+            Name = "Great doc!",
+            NodeType = "Comment",
+            MainNode = "User/alice/doc1",
+        });
+
+        var results = await Query("nodeType:Comment scope:descendants", defaultPath: "User");
+        results.Should().NotBeEmpty("nodeType:Comment should find records in annotations table");
+    }
+
+    // ── TrackedChange ────────────────────────────────────────────────────
+
+    [Fact(Timeout = 30000)]
+    public async Task NodeType_TrackedChange_FindsInAnnotationsTable()
+    {
+        _fixture.SkipUnlessAvailable();
+
+        await Write(new MeshNode("tc1", "User/alice/doc1/_Tracking")
+        {
+            Name = "Section updated",
+            NodeType = "TrackedChange",
+            MainNode = "User/alice/doc1",
+        });
+
+        var results = await Query("nodeType:TrackedChange scope:descendants", defaultPath: "User");
+        results.Should().NotBeEmpty("nodeType:TrackedChange should find records in annotations table");
+    }
+
+    // ── Approval ─────────────────────────────────────────────────────────
+
+    [Fact(Timeout = 30000)]
+    public async Task NodeType_Approval_FindsInAnnotationsTable()
+    {
+        _fixture.SkipUnlessAvailable();
+
+        await Write(new MeshNode("apr1", "User/alice/doc1/_Approval")
+        {
+            Name = "Approved by Bob",
+            NodeType = "Approval",
+            MainNode = "User/alice/doc1",
+        });
+
+        var results = await Query("nodeType:Approval scope:descendants", defaultPath: "User");
+        results.Should().NotBeEmpty("nodeType:Approval should find records in annotations table");
+    }
+
+    // ── Code ─────────────────────────────────────────────────────────────
+
+    [Fact(Timeout = 30000)]
+    public async Task NodeType_Code_RequiresPathBasedResolution()
+    {
+        _fixture.SkipUnlessAvailable();
+
+        await Write(new MeshNode("MyClass", "User/alice/project/Source")
+        {
+            Name = "MyClass.cs",
+            NodeType = "Code",
+            MainNode = "User/alice/project",
+        });
+
+        // Code uses Source/Test path-based resolution (no NodeTypeToSuffix entry).
+        // Path-based query works:
+        var byPath = await Query("namespace:User/alice/project/Source nodeType:Code");
+        byPath.Should().NotBeEmpty("path-based query to Source should find Code nodes");
+
+        // nodeType-only query with DefaultPath falls back to mesh_nodes (Code has no NodeTypeToSuffix entry)
+        var byType = await Query("nodeType:Code scope:descendants", defaultPath: "User");
+        // This returns empty because Code isn't in NodeTypeToSuffix — expected limitation
+    }
+}

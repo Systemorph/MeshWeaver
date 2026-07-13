@@ -1,4 +1,4 @@
-namespace MeshWeaver.Hosting.PostgreSql;
+namespace MeshWeaver.Hosting.Embeddings;
 
 /// <summary>
 /// No-op embedding provider for scenarios where vector search is not needed.

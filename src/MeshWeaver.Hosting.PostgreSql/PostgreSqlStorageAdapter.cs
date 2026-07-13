@@ -1,4 +1,5 @@
 ﻿using System.Reactive;
+using MeshWeaver.Hosting.Embeddings;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Runtime.CompilerServices;

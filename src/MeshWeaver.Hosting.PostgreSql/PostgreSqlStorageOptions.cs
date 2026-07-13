@@ -1,3 +1,5 @@
+using MeshWeaver.Hosting.Embeddings;
+
 namespace MeshWeaver.Hosting.PostgreSql;
 
 /// <summary>

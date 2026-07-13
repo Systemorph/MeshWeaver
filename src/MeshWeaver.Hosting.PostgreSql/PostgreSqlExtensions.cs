@@ -1,3 +1,4 @@
+using MeshWeaver.Hosting.Embeddings;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Hosting.Persistence.Query;
 using MeshWeaver.Mesh;
@@ -78,25 +79,8 @@ public static class PostgreSqlExtensions
     public static IServiceCollection AddEmbeddings(
         this IServiceCollection services, EmbeddingOptions options)
     {
-        if (string.IsNullOrEmpty(options.Endpoint))
-            return services;
-
-        IEmbeddingProvider? provider = options.Provider?.Trim().ToLowerInvariant() switch
-        {
-            "ollama" or "openaicompatible" => new OllamaEmbeddingProvider(
-                options.Endpoint, options.Model, options.Dimensions, options.ApiKey,
-                TimeSpan.FromSeconds(options.TimeoutSeconds)),
-            // Azure Foundry (default) needs a key; without one there is nothing to register.
-            _ => string.IsNullOrEmpty(options.ApiKey)
-                ? null
-                : new AzureFoundryEmbeddingProvider(options.Endpoint, options.ApiKey,
-                    options.Model, options.Dimensions),
-        };
-        if (provider is null)
-            return services;
-
-        services.AddSingleton(provider);
-        services.Configure<PostgreSqlStorageOptions>(o => o.VectorDimensions = options.Dimensions);
+        if (services.TryAddEmbeddingProvider(options))
+            services.Configure<PostgreSqlStorageOptions>(o => o.VectorDimensions = options.Dimensions);
         return services;
     }
 
