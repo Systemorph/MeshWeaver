@@ -226,7 +226,10 @@ public class StartWithSynchronizationTest(ITestOutputHelper output) : HubTestBas
         // actual transition rather than a wall-clock window.
         var controlsReceived = await stream
             .GetControlStream(reference.Area!)
-            .Do(c => Output.WriteLine($"Received: {c?.GetType().Name}: {GetControlContent(c)}"))
+            // FileOutput (guarded), not the raw xunit Output: a straggling emission after
+            // the 5s window has reported the test would throw "There is no currently
+            // active test" on an Rx thread and red the shard as a catastrophic failure.
+            .Do(c => FileOutput.WriteLine($"Received: {c?.GetType().Name}: {GetControlContent(c)}"))
             .TakeUntil(c => c is HtmlControl)
             .ToArray()
             .Should().Within(5.Seconds()).Emit();
