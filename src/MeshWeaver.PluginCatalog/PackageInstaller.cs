@@ -79,9 +79,10 @@ public static class PackageInstaller
 
         var options = hub.JsonSerializerOptions;
         var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
-        return nodes
-            .Select(n => UpsertIfChanged(hub, persistence, n, options))
-            .ToObservable().Merge(batchSize).ToList()
+        return EnsurePartitionsProvisioned(hub, partition, InstalledPartition)
+            .SelectMany(_ => nodes
+                .Select(n => UpsertIfChanged(hub, persistence, n, options))
+                .ToObservable().Merge(batchSize).ToList())
             .SelectMany(writes =>
             {
                 var result = new InstallResult(nodes.Length, writes.Count(w => w));
@@ -90,6 +91,31 @@ public static class PackageInstaller
                     manifest.Id, manifest.Version, result.Written, result.Unchanged, partition, installedFromRef);
                 return WriteInstalledRecord(hub, manifest, installedFromRef, nodes.Length).Select(_ => result);
             });
+    }
+
+    /// <summary>
+    /// Eagerly provisions the given partitions' backing stores (e.g. the Postgres schema + tables)
+    /// via the standard <see cref="IPartitionStorageProvider.EnsurePartitionProvisioned"/> — the same
+    /// mechanism the static-repo importer and the Space-create path use. On a FRESH mesh nothing has
+    /// ever written to the <see cref="InstalledPartition"/> records partition (it is not an
+    /// OwnsPartition type, and the storage router no longer lazily creates schemas), so the very
+    /// first catalog install would otherwise fault with Postgres <c>42P01</c> (relation does not
+    /// exist). Idempotent, promise-cached in the providers; providers that need no per-partition
+    /// provisioning no-op. Emits exactly once.
+    /// </summary>
+    private static IObservable<System.Reactive.Unit> EnsurePartitionsProvisioned(
+        IMessageHub hub, params string?[] partitions)
+    {
+        var providers = hub.ServiceProvider.GetServices<IPartitionStorageProvider>().ToArray();
+        var leaves = partitions
+            .Where(p => !string.IsNullOrWhiteSpace(p))
+            .Select(p => p!)
+            .Distinct(StringComparer.Ordinal)
+            .SelectMany(p => providers.Select(pr => pr.EnsurePartitionProvisioned(p)))
+            .ToArray();
+        return leaves.Length == 0
+            ? Observable.Return(System.Reactive.Unit.Default)
+            : Observable.Merge(leaves).ToList().Select(_ => System.Reactive.Unit.Default);
     }
 
     private static IObservable<MeshNode> WriteInstalledRecord(
@@ -157,7 +183,8 @@ public static class PackageInstaller
 
         // NodeType first (so its Source nodes attach under a present type), then the Source nodes;
         // each is skipped when unchanged.
-        return UpsertIfChanged(hub, persistence, nodeTypeNode, options)
+        return EnsurePartitionsProvisioned(hub, partition, InstalledPartition)
+            .SelectMany(_ => UpsertIfChanged(hub, persistence, nodeTypeNode, options))
             .SelectMany(typeWritten => sourceNodes
                 .Select(n => UpsertIfChanged(hub, persistence, n, options))
                 .ToObservable().Merge(batchSize).ToList()
@@ -263,9 +290,13 @@ public static class PackageInstaller
         static int Order(MeshNode n) =>
             n.Content is NodeTypeDefinition ? 2 : (n.Path.Contains('/', StringComparison.Ordinal) ? 1 : 0);
 
-        return nodes.OrderBy(Order)
-            .Select(n => UpsertIfChanged(hub, persistence, n, options))
-            .ToObservable().Concat().ToList() // sequential to respect the ordering above
+        // Only the install-record partition needs eager provisioning here: the repo's own content
+        // partitions are provisioned by the Space-root create (OwnsPartitionProvisioningValidator),
+        // which lands first in the ordering below.
+        return EnsurePartitionsProvisioned(hub, InstalledPartition)
+            .SelectMany(_ => nodes.OrderBy(Order)
+                .Select(n => UpsertIfChanged(hub, persistence, n, options))
+                .ToObservable().Concat().ToList()) // sequential to respect the ordering above
             .SelectMany(writes =>
             {
                 var result = new InstallResult(nodes.Length, writes.Count(w => w));
