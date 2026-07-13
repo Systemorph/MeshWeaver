@@ -268,7 +268,7 @@ public static class SpaceLayoutAreas
         var isVerified = space?.IsVerified ?? false;
 
         var container = Controls.Stack
-            .WithStyle("flex-shrink: 0; padding: 24px 0 16px 0; width: 100%;");
+            .WithStyle("flex-shrink: 0; padding: 20px 0 8px 0; width: 100%;");
 
         var headerRow = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
@@ -405,9 +405,11 @@ public static class SpaceLayoutAreas
     /// </summary>
     internal static UiControl BuildBodyContent(Space? space, MeshNode? node, string spacePath)
     {
-        // Generous bottom padding so the in-body catalog @@-embed has vertical breathing
-        // room below it (the catalog is no longer a fixed LayoutArea — see BuildSpaceView).
-        var bodyStyle = $"{ContentInset} padding-top: 24px; padding-bottom: 48px;";
+        // Bottom padding gives the in-body catalog @@-embed breathing room below it (the catalog is
+        // no longer a fixed LayoutArea — see BuildSpaceView). Top padding is deliberately small: the
+        // header already contributes its own padding + divider above, so a large top pad here stacked
+        // into an airy ~56px gap between the description and the first body element.
+        var bodyStyle = $"{ContentInset} padding-top: 12px; padding-bottom: 48px;";
 
         // The header already shows node.Name as the H1 — strip a leading duplicate title from the body
         // (a course/markdown page whose content opens with `# {name}` would show the title twice).
