@@ -2,6 +2,7 @@
 using Azure.Storage.Blobs;
 using Memex.Portal.ServiceDefaults;
 using Memex.Portal.Shared;
+using MeshWeaver.Hosting.Embeddings;
 using Microsoft.AspNetCore.DataProtection;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Orleans;

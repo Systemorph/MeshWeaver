@@ -1,5 +1,6 @@
 using Memex.Database.Migration.Migrations;
 using Memex.Portal.ServiceDefaults;
+using MeshWeaver.Hosting.Embeddings;
 using MeshWeaver.Hosting.PostgreSql;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
