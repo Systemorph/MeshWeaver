@@ -176,7 +176,7 @@ public static class EditLayoutArea
         stack = stack.WithView(header);
 
         // Description if available
-        var description = typeDefinition.Type.GetXmlDocsSummary();
+        var description = MeshWeaver.Messaging.Serialization.XmlDocs.Summary(typeDefinition.Type);
         if (!string.IsNullOrWhiteSpace(description))
             stack = stack.WithView(Controls.Html($"<p style=\"color: var(--neutral-foreground-hint); margin-bottom: 1rem;\">{description}</p>"));
 
