@@ -33,8 +33,14 @@ public sealed class OctokitGitHubRepoClient(IoPoolRegistry ioPools, ILogger<Octo
 
     private IIoPool Http => ioPools.Get(IoPoolNames.Http);
 
+    // An empty token means ANONYMOUS access (a public repo, e.g. the plugin registry serving a
+    // public plugins repo with no App identity configured). Octokit's `new Credentials("")` THROWS
+    // ArgumentException "String cannot be empty (Parameter 'token')", so never hand it an empty
+    // string — build a credential-less client instead (unauthenticated, lower rate limit but valid).
     private static IObservableGitHubClient Client(string token) =>
-        new ObservableGitHubClient(new GitHubClient(Product) { Credentials = new Credentials(token) });
+        new ObservableGitHubClient(string.IsNullOrEmpty(token)
+            ? new GitHubClient(Product)
+            : new GitHubClient(Product) { Credentials = new Credentials(token) });
 
     /// <summary>Parses <c>https://github.com/owner/repo(.git)</c> into (owner, repo).</summary>
     public static (string Owner, string Repo) ParseRepoUrl(string url)
