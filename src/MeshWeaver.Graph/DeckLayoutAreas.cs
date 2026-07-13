@@ -5,7 +5,9 @@ using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Graph;
 
@@ -276,11 +278,51 @@ public static class DeckLayoutAreas
             .Select(node => ResolveSlidePaths(host, deckPath, node))
             .DistinctUntilChanged(paths => string.Join("\n", paths))
             .Select(paths => paths.Count == 0
-                ? Observable.Return((IReadOnlyList<(string, MeshNode?)>)ImmutableList<(string, MeshNode?)>.Empty)
+                // No explicit manifest → DEFAULT query: every Slide node under the deck, ordered by
+                // Order. A deck whose slides are simply its children needs no hardcoded array (the
+                // reported "deck has no slides yet" despite child slides existing).
+                ? ObserveDefaultSubtreeSlides(host, deckPath)
                 : Observable.CombineLatest(paths.Select(ObserveSlide(host)))
                     .Select(items => (IReadOnlyList<(string, MeshNode?)>)items.ToImmutableList()))
             .Switch()
             .StartWith((IReadOnlyList<(string, MeshNode?)>)ImmutableList<(string, MeshNode?)>.Empty);
+
+    /// <summary>
+    /// The deck's DEFAULT slide set when it carries no explicit <see cref="DeckContent.Slides"/>
+    /// manifest: the live result of <c>nodeType:Slide scope:subtree</c> under the deck path, ordered
+    /// by <see cref="MeshNode.Order"/> (null last), ties by path. This is what lets a deck be just "a
+    /// folder of slides" — presentation order falls out of the nodes' own Order, no hardcoded array.
+    /// </summary>
+    private static IObservable<IReadOnlyList<(string Path, MeshNode? Node)>> ObserveDefaultSubtreeSlides(
+        LayoutAreaHost host, string deckPath)
+    {
+        var meshService = host.Hub.ServiceProvider.GetService<IMeshService>();
+        if (meshService is null)
+            return Observable.Return<IReadOnlyList<(string, MeshNode?)>>(
+                ImmutableList<(string, MeshNode?)>.Empty);
+
+        return meshService
+            .Query<MeshNode>(MeshQueryRequest.FromQuery(
+                $"path:{deckPath} nodeType:{SlideNodeType.NodeType} scope:subtree"))
+            .Scan(ImmutableDictionary<string, MeshNode>.Empty, (map, change) =>
+            {
+                if (change.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset)
+                    return change.Items.ToImmutableDictionary(n => n.Path);
+                foreach (var item in change.Items)
+                    map = change.ChangeType switch
+                    {
+                        QueryChangeType.Added or QueryChangeType.Updated => map.SetItem(item.Path, item),
+                        QueryChangeType.Removed => map.Remove(item.Path),
+                        _ => map
+                    };
+                return map;
+            })
+            .Select(map => (IReadOnlyList<(string, MeshNode?)>)map.Values
+                .OrderBy(n => n.Order ?? int.MaxValue)
+                .ThenBy(n => n.Path, StringComparer.Ordinal)
+                .Select(n => (n.Path, (MeshNode?)n))
+                .ToImmutableList());
+    }
 
     /// <summary>One resolved slide stream: its path paired with the live node (null until it loads / if missing).</summary>
     private static Func<string, IObservable<(string Path, MeshNode? Node)>> ObserveSlide(LayoutAreaHost host)
