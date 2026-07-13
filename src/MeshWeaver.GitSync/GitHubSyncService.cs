@@ -116,7 +116,7 @@ public sealed class GitHubSyncService
             return ResolveAuth(userId).SelectMany(auth =>
             {
                 var token = auth.Token;
-                return SnapshotNodes(spacePath).SelectMany(nodes =>
+                return SnapshotNodes(spacePath, SyncIgnore.For(config)).SelectMany(nodes =>
                     SerializeAll(nodes, spacePath, progress).SelectMany(files =>
                     {
                         // App-identity exports author as the bot (no personal credential involved).
@@ -150,7 +150,7 @@ public sealed class GitHubSyncService
     }
 
     /// <summary>Root + descendants of the Space, filtered to exportable content nodes.</summary>
-    private IObservable<IReadOnlyList<MeshNode>> SnapshotNodes(string spacePath)
+    private IObservable<IReadOnlyList<MeshNode>> SnapshotNodes(string spacePath, SyncIgnore ignore)
     {
         var root = hub.GetWorkspace().GetMeshNodeStream(spacePath)
             .Where(n => n is not null).Take(1).Timeout(TimeSpan.FromSeconds(30));
@@ -168,16 +168,18 @@ public sealed class GitHubSyncService
             var all = new List<MeshNode>();
             if (r is not null) all.Add(r);
             all.AddRange(desc);
-            return Filter(all, spacePath);
+            return Filter(all, spacePath, ignore);
         });
     }
 
     /// <summary>
     /// Keeps content nodes only: drops satellite/governance subtrees (a <c>_</c>-prefixed
     /// segment after the partition root — <c>_GitSync</c>, <c>_Access</c>, <c>_Activity</c>,
-    /// threads, notifications, …) and honours <see cref="SyncBehavior"/>.
+    /// threads, notifications, …), honours <see cref="SyncBehavior"/>, and applies the Space's
+    /// gitignore-style <paramref name="ignore"/> rules (<see cref="GitHubSyncConfig.Ignore"/> /
+    /// <see cref="SyncIgnore.Default"/>) to the path relative to the partition root.
     /// </summary>
-    private static IReadOnlyList<MeshNode> Filter(List<MeshNode> all, string partition)
+    internal static IReadOnlyList<MeshNode> Filter(List<MeshNode> all, string partition, SyncIgnore ignore)
     {
         var excludedRoots = all
             .Where(n => n.SyncBehavior == SyncBehavior.ExcludeThisAndChildren)
@@ -185,12 +187,15 @@ public sealed class GitHubSyncService
             .ToArray();
         bool underExcluded(string p) =>
             excludedRoots.Any(r => p.StartsWith(r + "/", StringComparison.Ordinal));
+        string relative(string p) =>
+            p.StartsWith(partition + "/", StringComparison.Ordinal) ? p[(partition.Length + 1)..] : "";
 
         return all
             .Where(n => !string.IsNullOrEmpty(n.Path)
                         && !n.Segments.Skip(1).Any(s => s.StartsWith('_'))
                         && n.SyncBehavior == SyncBehavior.Include
-                        && !underExcluded(n.Path))
+                        && !underExcluded(n.Path)
+                        && !ignore.IsIgnored(relative(n.Path)))
             .GroupBy(n => n.Path, StringComparer.Ordinal)
             .Select(g => g.First())
             .ToList();
@@ -316,7 +321,8 @@ public sealed class GitHubSyncService
                 ? meshService.CreateNode(spaceNode)
                 : Observable.Using(() => accessService.SwitchAccessContext(ctx), _ => meshService.CreateNode(spaceNode));
             return createSpace
-                .SelectMany(_ => FetchAndImport(repositoryUrl, commitish, subdirectory, token, newSpaceId, progress))
+                .SelectMany(_ => FetchAndImport(repositoryUrl, commitish, subdirectory, token, newSpaceId,
+                    SyncIgnore.For(null), progress))
                 .Select(x => x.Result);
         });
     }
@@ -349,7 +355,8 @@ public sealed class GitHubSyncService
             {
                 var token = auth.Token;
                 logger?.LogInformation("Re-importing {Space} at {Ref}", spacePath, commitish);
-                return FetchAndImport(repoUrl, commitish, config.Subdirectory, token, spacePath, progress)
+                return FetchAndImport(repoUrl, commitish, config.Subdirectory, token, spacePath,
+                        SyncIgnore.For(config), progress)
                     .SelectMany(x => RecordLastSync(spacePath, x.CommitSha, sourceId).Select(_ => x.Result));
             });
         });
@@ -404,10 +411,10 @@ public sealed class GitHubSyncService
 
     private IObservable<(StaticRepoImportResult Result, string CommitSha)> FetchAndImport(
         string repoUrl, string commitish, string? subdirectory, string token, string spaceId,
-        Action<string, LogLevel>? progress = null)
+        SyncIgnore ignore, Action<string, LogLevel>? progress = null)
     {
         return repoClient.Fetch(repoUrl, commitish, subdirectory, token).SelectMany(snapshot =>
-            ParseSnapshot(snapshot, spaceId, progress).SelectMany(parsed =>
+            ParseSnapshot(snapshot, spaceId, ignore, progress).SelectMany(parsed =>
             {
                 var source = new InMemoryStaticRepoSource(spaceId, parsed.Children, parsed.Root);
                 return StaticRepoImporter.ImportSource(hub, source, logger)
@@ -416,11 +423,14 @@ public sealed class GitHubSyncService
     }
 
     private IObservable<(MeshNode? Root, IReadOnlyList<MeshNode> Children)> ParseSnapshot(
-        RepoSnapshot snapshot, string spaceId, Action<string, LogLevel>? progress = null)
+        RepoSnapshot snapshot, string spaceId, SyncIgnore ignore, Action<string, LogLevel>? progress = null)
     {
         if (snapshot.Files.Count == 0)
             return Observable.Return(((MeshNode?)null, (IReadOnlyList<MeshNode>)Array.Empty<MeshNode>()));
         return snapshot.Files
+            // The Space's ignore rules apply on import too — a repo that carries ignored paths
+            // (e.g. Release/ bookkeeping from an older export) must not re-create those nodes.
+            .Where(f => !ignore.IsIgnored(f.Path))
             .Select(f => ParseFile(f, spaceId, progress))
             .Merge(8)
             .Where(x => x.Node is not null)
