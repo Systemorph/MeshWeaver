@@ -50,6 +50,16 @@ public record GitHubSyncConfig
     [Description("Create the repository (private) if it doesn't exist")]
     public bool CreateRepoIfMissing { get; init; } = true;
 
+    /// <summary>
+    /// Gitignore-style patterns for paths (relative to the Space root) that do NOT sync — neither
+    /// exported to the repo nor imported from it. Unset → <see cref="SyncIgnore.Default"/>
+    /// (<c>Release/</c>: the compile pipeline's release-request bookkeeping, one node per
+    /// recompile, forever). Set to an empty list to sync everything; <c>!pattern</c> re-includes
+    /// (last match wins); <c>*</c>/<c>**</c>/<c>?</c> globs as in <c>.gitignore</c>.
+    /// </summary>
+    [Description("Ignore patterns (gitignore-style, relative to the Space root; unset = default: Release/)")]
+    public string[]? Ignore { get; init; }
+
     /// <summary>When the last successful export completed. Set by the sync operation; not user-editable.</summary>
     [Browsable(false)]
     public DateTimeOffset? LastSyncedAt { get; init; }
