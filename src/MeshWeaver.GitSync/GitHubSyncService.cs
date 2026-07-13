@@ -256,14 +256,18 @@ public sealed class GitHubSyncService
         var serializer = parsers.GetSerializerFor(node);
         if (serializer is null)
         {
-            logger?.LogWarning("No serializer for node {Path} (type {Type}) — skipping.", node.Path, node.NodeType);
-            // Also surface the skip on the owning activity (a node silently missing from the
-            // export is invisible in the portal otherwise); Warning rolls the terminal status
-            // up to ActivityStatus.Warning via ActivityRunner.Finish.
-            progress?.Invoke(
-                $"No serializer for node '{node.Path}' (type {node.NodeType}) — skipped from export.",
-                LogLevel.Warning);
-            return Observable.Return<RepoFile?>(null);
+            // Every node MUST round-trip to the mirror. The registry always includes the universal
+            // JSON serializer (JsonFileParser.CanSerialize => true — any content type, the exact
+            // inverse of the JSON import), so this is unreachable in practice. If a future change
+            // ever left the registry without that fallback, FAIL LOUD rather than silently dropping
+            // the node: a dropped node is pruned by the next import — silent data loss, the very
+            // failure mode this guard exists to make impossible.
+            var message =
+                $"No serializer for node '{node.Path}' (type {node.NodeType}). Export must serialize " +
+                "every node; the universal JSON fallback is missing from the parser registry.";
+            logger?.LogError(message);
+            progress?.Invoke(message, LogLevel.Error);
+            throw new InvalidOperationException(message);
         }
         var ext = serializer.SupportedExtensions.FirstOrDefault() ?? ".json";
         var repoPath = NodeFileMapper.ToRepoPath(node.Path, partition, ext, NodeFileMapper.HasChildren(node.Path, allPaths));
