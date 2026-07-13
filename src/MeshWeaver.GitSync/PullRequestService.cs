@@ -102,8 +102,12 @@ public sealed class PullRequestService
     /// "Update to latest" — re-imports the Space at its configured branch HEAD (delegating
     /// to <see cref="GitHubSyncService.ReimportAtCommit"/>, which fetches + mirrors). This is
     /// the checkout operation: the working Space is brought to the latest repo state.
+    /// <paramref name="progress"/> (when the caller runs as an activity: <c>ctx.Log</c>)
+    /// receives per-file import problems so they land on the activity log.
     /// </summary>
-    public IObservable<StaticRepoImportResult> UpdateToLatest(string spacePath, string userId, string? sourceId = null)
+    public IObservable<StaticRepoImportResult> UpdateToLatest(
+        string spacePath, string userId, string? sourceId = null,
+        Action<string, LogLevel>? progress = null)
     {
         return sync.ReadConfig(spacePath, sourceId).Take(1).SelectMany(config =>
         {
@@ -112,7 +116,7 @@ public sealed class PullRequestService
                     "No GitHub repository configured for this Space."));
             var branch = string.IsNullOrWhiteSpace(config.Branch) ? "main" : config.Branch;
             logger?.LogInformation("Updating {Space} to latest on {Branch}", spacePath, branch);
-            return sync.ReimportAtCommit(spacePath, branch, userId, sourceId);
+            return sync.ReimportAtCommit(spacePath, branch, userId, sourceId, progress);
         });
     }
 
