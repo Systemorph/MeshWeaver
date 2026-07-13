@@ -547,6 +547,18 @@ public class EditPersistenceTest(ITestOutputHelper output) : HubTestBase(output)
 
         Output.WriteLine("Edit mode activated");
 
+        // The entity reaches /data through an asynchronous host-side subscription
+        // (workspace stream → host.UpdateData) that syncs to the client independently of
+        // the control tree, so the TextField can render before the entity exists in the
+        // client's state. UpdatePointer applies a JSON patch against the client's CURRENT
+        // state; a patch targeting /data/"persistable_entity"/count before the entity has
+        // synced fails with "Target path could not be reached" and is dropped with a
+        // warning (by design — fabricating the missing parent would write back a partial
+        // entity). Wait for the entity to be present before patching it.
+        await layoutStream
+            .GetDataStream<PersistableEntity>(new JsonPointerReference("/data/\"persistable_entity\""))
+            .Should().Within(5.Seconds()).Match(x => x is not null);
+
         // While in edit mode, trigger a data update (simulating workspace stream emit)
         Output.WriteLine("Triggering data update while in edit mode...");
         layoutStream.UpdatePointer(42, "/data/\"persistable_entity\"", new JsonPointerReference("count"));
