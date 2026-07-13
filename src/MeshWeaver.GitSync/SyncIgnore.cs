@@ -27,8 +27,9 @@ namespace MeshWeaver.GitSync;
 public sealed class SyncIgnore
 {
     /// <summary>The default rule set when a config sets none: compile release-request records
-    /// (<c>Release/</c> folders at any depth) don't sync.</summary>
-    public static readonly string[] Default = ["Release/"];
+    /// (<c>Release/</c> folders at any depth) don't sync. Immutable — a shared constant, never
+    /// written at runtime (the allowed kind of static).</summary>
+    public static readonly IReadOnlyList<string> Default = ["Release/"];
 
     private readonly List<(Regex Pattern, bool Negated)> _rules;
 
