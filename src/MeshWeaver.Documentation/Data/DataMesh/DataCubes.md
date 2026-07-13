@@ -9,7 +9,7 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 
 A **data cube** is the simplest useful analytics shape: facts keyed by a handful of **dimensions**, carrying one or more **measures**. In MeshWeaver the whole cube is mesh content — the dimension *types* are NodeType nodes, the dimension *members* are mesh nodes, the facts are mesh nodes, and even the *formulas* are data on dimension nodes.
 
-This page builds a complete one: the balance sheet of **Helvetia Vorsorge**, a fictional Swiss pension fund — **Position × Year × Currency → Amount**, with computed positions like *Total Assets* and the *Funding Ratio* modelled **out of** the atomic positions and evaluated by business-rules scopes. The working node set ships in `samples/Graph/Data/PensionFund/`; every number below is pinned by `PensionFundExampleTest` in `test/MeshWeaver.Documentation.Test`.
+This page builds a complete one: the balance sheet of **Helvetia Vorsorge**, a fictional Swiss pension fund — **Position × Year × Currency → Amount**, with computed positions like *Total Assets* and the *Funding Ratio* modelled **out of** the atomic positions and evaluated by business-rules scopes. The working node set ships in `samples/Graph/Data/PensionFund/` — including the scopes themselves as node-native Code nodes (`BalanceSheet/Source/BalanceSheetScopes.cs`). Business rules / scopes ship as a plugin, which carries the scope engine and its tests that pin every number below.
 
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 300" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;" font-family="sans-serif">
   <defs>
@@ -345,7 +345,7 @@ assets2025
 
 ## 9. The numbers — pinned by tests
 
-Every figure this page shows is asserted in `PensionFundExampleTest` (`test/MeshWeaver.Documentation.Test`) — evaluated through the **real generated scopes**, the same engine the sample's Code nodes compile against:
+Every figure this page shows is asserted by the business-rules plugin's tests — evaluated through the **real generated scopes**, the same node-native engine the sample's Code nodes compile against:
 
 | Figure | 2024 | 2025 |
 |---|---:|---:|
