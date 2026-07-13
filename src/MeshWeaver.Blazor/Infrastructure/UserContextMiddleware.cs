@@ -50,8 +50,15 @@ public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMidd
         // Try OAuth first (browser sessions), then Bearer token (MCP / API clients).
         // The bearer-token bridge to Task happens once at the ASP.NET middleware boundary —
         // production surface is IObservable end-to-end (see ExtractFromBearerToken).
+        // FirstOrDefaultAsync, NOT FirstAsync: the bearer stream COMPLETES WITHOUT EMITTING when the
+        // ValidateTokenRequest can't reach the ApiToken/{hashPrefix} hub (its Orleans grain
+        // deactivated on idle → "invalid activation, rejecting now"). FirstAsync would then throw
+        // "Sequence contains no elements" — an UNCAUGHT exception that rejects a VALID token
+        // (chronic MCP/API "rejected on reconnect"). Empty ⇒ null ⇒ the request resolves anonymous
+        // (fail-closed), never a 500.
         var userContext = ExtractUserContext(context.User)
-                          ?? await ExtractFromBearerToken(context.Request, hub).FirstAsync().ToTask(context.RequestAborted);
+                          ?? await ExtractFromBearerToken(context.Request, hub)
+                              .FirstOrDefaultAsync().ToTask(context.RequestAborted);
 
         if (userContext is not null)
         {
