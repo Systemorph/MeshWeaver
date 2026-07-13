@@ -165,8 +165,8 @@ config:
     Graph__Storage__BasePath: "/data/graph"
     Mcp__BaseUrl: "http://memex-portal-service:8080"
     # Public https host of THIS instance — builds the "Open" links in outbound email
-    # (invitations / access-granted). Empty = links omitted. An env overlay sets it,
-    # e.g. Portal__BaseUrl: "https://memex.meshweaver.cloud".
+    # (invitations / access-granted). Leave empty to DERIVE it from ingress.host
+    # (https://{ingress.host}); set only to override with a vanity domain.
     Portal__BaseUrl: ""
     # AI model catalog — empty by default. An overlay sets endpoints + model
     # lists (+ keys in secrets above) to seed the system catalog on deploy.
