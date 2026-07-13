@@ -114,6 +114,22 @@ internal class MonolithRoutingService(
         return hubFactory.ResolveHubConfiguration(node)
             .Select(enriched =>
             {
+                // Re-check at EMISSION time. The IsDisposing guard at method entry only
+                // covers subscribe time — ResolveHubConfiguration can emit seconds later
+                // (NodeType probe timeout / overlay fallback / TaskPool-scheduled
+                // subscribe), by which point the mesh may have fully disposed and the
+                // root scope been torn down. Building a hub then resolves from a disposed
+                // container (the CI ObjectDisposedException teardown stragglers).
+                // Refuse-and-complete: null flows to PostNotFound, which logs the
+                // shutting-down reason and NACKs only while the mesh can still deliver.
+                if (Mesh.IsDisposing)
+                {
+                    logger.LogWarning(
+                        "[ROUTE-CREATE] Mesh began disposing while resolving hub configuration for {Address} — refusing post-dispose hub creation",
+                        address);
+                    return (IMessageHub?)null;
+                }
+
                 logger.LogDebug("[ROUTE-CREATE] ResolveHubConfiguration returned for {Address}: HubConfig={HasHubConfig}",
                     address, enriched.HubConfiguration is not null);
 

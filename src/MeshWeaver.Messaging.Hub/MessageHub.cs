@@ -1370,6 +1370,13 @@ public sealed class MessageHub : IMessageHub
 
         }
 
+        // Close hosted-hub CREATION immediately — not only when the DisposeHostedHubs
+        // phase disposes the collection. A hub created in the Quiescing window races
+        // DisposeHubsReactive's snapshot and leaks as a zombie whose timers later
+        // detonate on the disposed container (post-dispose ObjectDisposedException
+        // stragglers). Existing hubs still resolve for the drain.
+        hostedHubs.CloseCreation();
+
         // Log all hosted hubs that will be disposed
         var hostedHubAddresses = hostedHubs.Hubs.Select(h => h.Address.ToString()).ToArray();
         if (hostedHubAddresses.Length > 0)
