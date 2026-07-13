@@ -1,11 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
-  <PropertyGroup>
-    <ProjectGuid>{4b9bf119-0981-4f65-95fe-f6a031496da9}</ProjectGuid>
-  </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Npgsql" />
-    <PackageReference Include="Pgvector" />
+    <PackageReference Include="Snowflake.Data" />
   </ItemGroup>
 
   <ItemGroup>
@@ -14,7 +10,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <InternalsVisibleTo Include="MeshWeaver.Hosting.PostgreSql.Test" />
+    <InternalsVisibleTo Include="MeshWeaver.Hosting.Snowflake.Test" />
   </ItemGroup>
 
 </Project>

@@ -12,15 +12,16 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
 
-namespace MeshWeaver.Hosting.PostgreSql;
+namespace MeshWeaver.Hosting.Snowflake;
 
 /// <summary>
-/// PostgreSQL native implementation of IMeshQueryProvider.
-/// Translates parsed queries directly into PostgreSQL SQL via PostgreSqlStorageAdapter.
+/// Snowflake native implementation of IMeshQueryProvider — the member-for-member port of
+/// <c>PostgreSqlMeshQuery</c>. Translates parsed queries directly into Snowflake SQL via
+/// <see cref="SnowflakeStorageAdapter"/>.
 /// </summary>
-public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
+public class SnowflakeMeshQuery : IMeshQueryProvider, IVectorSearchProvider
 {
-    private readonly PostgreSqlStorageAdapter _adapter;
+    private readonly SnowflakeStorageAdapter _adapter;
     private readonly AccessService? _accessService;
     private readonly MeshConfiguration? _meshConfiguration;
     private readonly QueryParser _parser = new();
@@ -29,15 +30,15 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
     /// <summary>Default debounce interval applied to live-query change notifications before re-running the query.</summary>
     public static readonly TimeSpan DefaultDebounceInterval = TimeSpan.FromMilliseconds(100);
 
-    // Namespaces handled by other (static) partitions — Postgres excludes
-    // them from its Matches() predicate so a `namespace:Agent` query never
-    // round-trips to SQL to look for built-in agents. Populated from the
+    // Namespaces handled by other (static) partitions — the Snowflake backend
+    // excludes them from its Matches() predicate so a `namespace:Agent` query
+    // never round-trips to SQL to look for built-in agents. Populated from the
     // partition registry at DI registration time.
     private readonly HashSet<string> _excludedNamespaces;
 
     // Optional vector-search pipeline: when present AND a query has bare-text
     // tokens (parsed.TextSearch is non-empty), QueryAsync routes through
-    // adapter.VectorSearchAsync instead of GenerateTextSearchClause's ILIKE
+    // adapter.VectorSearchAsync instead of the generator's ILIKE text-search
     // fallback. Same column the writer populates via GenerateEmbeddingAsync —
     // closed loop. When null, ILIKE substring stays in effect.
     private readonly IEmbeddingProvider? _embeddingProvider;
@@ -57,14 +58,14 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
     // and break the cold-observable / RequireSubscribe contract the live-query
     // re-run relies on.) We use the shared storage-read pool (FileSystem cap =
     // ProcessorCount, matching the pedestrian StorageAdapterMeshQueryProvider)
-    // — NOT the cap-1 pg:{adapter} write pool, which would serialize every
-    // read; the adapter's own per-adapter READ pool (pg-read:{adapter}) bounds
-    // the live connections below the connection-pool size.
+    // — NOT the cap-1 sf:{adapter} write pool, which would serialize every
+    // read; the adapter's own per-adapter READ pool (sf-read:{adapter}) bounds
+    // the live sessions below the driver's session-pool size.
     // See Doc/Architecture/ControlledIoPooling.md + AsynchronousCalls.md.
     private readonly IIoPool _ioPool;
 
     /// <summary>
-    /// Initializes the PostgreSQL native query provider.
+    /// Initializes the Snowflake native query provider.
     /// </summary>
     /// <param name="adapter">The storage adapter that translates parsed queries into SQL.</param>
     /// <param name="accessService">Optional access service used to scope results to the calling user.</param>
@@ -72,8 +73,8 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
     /// <param name="excludedNamespaces">Namespaces owned by other (static) partitions; queries scoped only to these short-circuit out of SQL.</param>
     /// <param name="embeddingProvider">Optional embedding provider that routes bare-text queries through vector search; falls back to ILIKE when absent.</param>
     /// <param name="ioPoolRegistry">Optional I/O pool registry; the provider runs every async query leaf on the shared storage-read pool.</param>
-    public PostgreSqlMeshQuery(
-        PostgreSqlStorageAdapter adapter,
+    public SnowflakeMeshQuery(
+        SnowflakeStorageAdapter adapter,
         AccessService? accessService = null,
         MeshConfiguration? meshConfiguration = null,
         IEnumerable<string>? excludedNamespaces = null,
@@ -100,7 +101,7 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
 
     /// <summary>
     /// True when every namespace the request targets is owned by a static
-    /// partition (Agent, Model, Role, …) — Postgres has nothing to contribute,
+    /// partition (Agent, Model, Role, …) — Snowflake has nothing to contribute,
     /// so QueryAsync should yield break instead of issuing SQL. Unscoped
     /// requests (no namespace anywhere) return false: we still need to fan out
     /// to the writable mesh.
@@ -140,7 +141,7 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
     /// <summary>
     /// Exposes the underlying adapter for cross-schema queries.
     /// </summary>
-    public PostgreSqlStorageAdapter Adapter => _adapter;
+    public SnowflakeStorageAdapter Adapter => _adapter;
 
     /// <summary>
     /// Gets the effective user ID from the request or from the current access context.
@@ -162,7 +163,7 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
 
     /// <inheritdoc/>
     /// <remarks>
-    /// Reactive vector search — the embedding round-trip plus the HNSW SQL pump
+    /// Reactive vector search — the embedding round-trip plus the cosine-similarity SQL pump
     /// run INSIDE the IIoPool (one snapshot emission), never on the subscriber's
     /// scheduler. Replaces the former <c>SearchAsync</c> async-enumerable surface.
     /// </remarks>
@@ -223,15 +224,15 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
         // by Matches() ("let each provider own the 'is this mine?' decision in
         // one place" — MeshQuery.SelectMatchingProviders). So when a query
         // targets only excluded (static-owned) namespaces, we'd otherwise
-        // round-trip to Postgres for guaranteed-empty SELECTs.
+        // round-trip to Snowflake for guaranteed-empty SELECTs.
         if (_excludedNamespaces.Count > 0 && OnlyTargetsExcludedNamespaces(request))
             yield break;
 
-        // Multi-query union: push UNION down to PostgreSQL via the adapter so
+        // Multi-query union: push UNION down to Snowflake via the adapter so
         // the database does the dedup-by-path in a single round-trip. The
         // first query's sort/limit/skip apply to the unioned result set;
         // additional queries contribute membership only. See
-        // PostgreSqlStorageAdapter.QueryNodesAsync(IReadOnlyList&lt;ParsedQuery&gt;,...).
+        // SnowflakeStorageAdapter.QueryNodesAsync(IReadOnlyList&lt;ParsedQuery&gt;,...).
         if (request.Queries is { Count: > 1 })
         {
             await foreach (var item in QueryNodesUnionAsync(request, options, ct).ConfigureAwait(false))
@@ -247,8 +248,8 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
         parsedQuery = StripTypeFilter(parsedQuery);
 
         // Vector-search intercept: when the query has bare-text tokens AND we
-        // have an embedding provider, route the snapshot through HNSW cosine
-        // similarity instead of the GenerateTextSearchClause ILIKE fallback.
+        // have an embedding provider, route the snapshot through VECTOR cosine
+        // similarity instead of the generator's ILIKE text-search fallback.
         // Same `embedding` column the writer populates at WriteAsync time —
         // semantic search reads what semantic writes stored.
         //
@@ -445,8 +446,8 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
         };
 
     /// <summary>
-    /// Native reactive autocomplete. The PG execute-query (<c>_adapter.QueryNodesAsync</c> — the
-    /// <c>await foreach</c> over the npgsql reader) is the I/O leaf: it runs inside
+    /// Native reactive autocomplete. The Snowflake execute-query (<c>_adapter.QueryNodesAsync</c> — the
+    /// <c>await foreach</c> over the Snowflake reader) is the I/O leaf: it runs inside
     /// <see cref="IIoPool.Invoke{T}"/> so the calling hub's action block is never blocked and no
     /// scheduler is captured. No <c>Task.Run</c> bridge (that was the deadlock), no
     /// async-enumerable on the public surface. Emits one snapshot then completes.
@@ -463,8 +464,9 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
         var providerName = ((IMeshQueryProvider)this).Name;
         var normalizedPrefix = (prefix ?? "").ToLowerInvariant();
 
-        // Use ILIKE-based filter instead of plainto_tsquery for substring prefix matching.
-        // plainto_tsquery requires full words; ILIKE matches partial prefixes (e.g., "mar" matches "Markdown").
+        // Use an ILIKE-based filter for substring prefix matching (same shape as PG, which
+        // chose ILIKE over plainto_tsquery). Full-word search would miss partial prefixes;
+        // ILIKE matches them (e.g., "mar" matches "Markdown").
         QueryNode? filter = null;
         if (!string.IsNullOrEmpty(normalizedPrefix))
         {
@@ -546,7 +548,7 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
         var acUserId = _accessService?.Context?.ObjectId;
         var effectiveSelectUserId = string.IsNullOrEmpty(acUserId) ? WellKnownUsers.Anonymous : acUserId;
 
-        // PG execute-query leaf run INSIDE the IIoPool — never a bare
+        // Snowflake execute-query leaf run INSIDE the IIoPool — never a bare
         // Observable.FromAsync (deadlocks under a blocking subscriber). Invoke
         // (cold) preserves the original FromAsync's work-on-Subscribe semantics.
         return _ioPool.Invoke<T?>(async cancel =>
@@ -567,7 +569,7 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
         // Self-filter: when the request only targets static-owned namespaces,
         // emit an empty Initial and exit — the static-node provider contributes
         // the real rows. Without this short-circuit we'd set up a change-notifier
-        // subscription and an initial SQL probe for queries Postgres has nothing
+        // subscription and an initial SQL probe for queries Snowflake has nothing
         // to say about. The empty Initial is required because
         // MergeProviderObservables in MeshQuery gates the merged Initial on
         // every provider emitting it; returning Observable.Empty would hang
@@ -629,18 +631,19 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
                 => _ioPool.Invoke(ct => CollectQueryResultsAsync<T>(request, options, ct));
 
             // Race-fix (mirrors StorageAdapterMeshQueryProvider): subscribe to
-            // changeNotifier BEFORE running the initial query so that any
-            // pg_notify-driven NotifyChange fired during the initial query's
-            // I/O window is captured in a backlog. Without this, events fired
-            // between RunQuery's persistence read and the live-subscription
-            // setup are dropped — DataChangeNotifier is a plain Subject<> with
-            // no buffering. Symptom: synced query consumers (e.g.
-            // EffectivePermissionPostgresTest.RuntimeCreateNode_AccessAssignment_PgBacked_GrantsPermission)
+            // the adapter's Changes feed BEFORE running the initial query so that
+            // any change notification fired during the initial query's I/O window
+            // (the in-process post-write echo or a change-feed-poller event —
+            // Snowflake's substitute for pg_notify) is captured in a backlog.
+            // Without this, events fired between RunQuery's persistence read and
+            // the live-subscription setup are dropped — the Changes feed is a
+            // plain Subject<> with no buffering. Symptom: synced query consumers
+            // (e.g. the PG twin's RuntimeCreateNode_AccessAssignment flake)
             // never see writes that complete during the first Initial query.
             //
             // Approach: accumulate early notifications under a lock until the
             // initial query completes. Inside the initialResults callback:
-            //   1) Set up the LIVE Buffer(100ms) pipeline first (captures live events).
+            //   1) Set up the LIVE pipeline first (captures live events).
             //   2) Snapshot+clear the backlog under lock; set initialDone=true.
             //   3) Dispose the early subscription (live carries everything now).
             //   4) Emit Initial.
@@ -835,8 +838,8 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
     /// (100, scaled by length), name-substring bonus (50), path-substring
     /// bonus (30), <see cref="PathProximity.ComputeBoost"/> (max 40, decays
     /// with namespace distance from the requesting hub) — so cross-provider
-    /// sort in <c>MeshQuery.ClipMergedInitial</c> ranks a PG name-prefix hit
-    /// above a <c>StaticNodeQueryProvider</c> filter-only hit on the same
+    /// sort in <c>MeshQuery.ClipMergedInitial</c> ranks a Snowflake name-prefix
+    /// hit above a <c>StaticNodeQueryProvider</c> filter-only hit on the same
     /// query.
     ///
     /// <para>Returns <see langword="null"/> when there's no useful signal

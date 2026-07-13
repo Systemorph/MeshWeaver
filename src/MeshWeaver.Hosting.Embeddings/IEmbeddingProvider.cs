@@ -1,4 +1,4 @@
-namespace MeshWeaver.Hosting.PostgreSql;
+namespace MeshWeaver.Hosting.Embeddings;
 
 /// <summary>
 /// Pluggable provider for generating text embeddings.

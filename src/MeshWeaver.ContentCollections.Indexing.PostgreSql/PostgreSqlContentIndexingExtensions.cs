@@ -1,4 +1,5 @@
 using MeshWeaver.ContentCollections.Indexing;
+using MeshWeaver.Hosting.Embeddings;
 using MeshWeaver.Hosting.PostgreSql;
 using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;

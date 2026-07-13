@@ -7,6 +7,7 @@ using Memex.Portal.Shared.Instances;
 using Memex.Portal.Shared.SelfUpdate;
 using Memex.Portal.Shared.Settings;
 using Memex.Portal.Shared.Social;
+using MeshWeaver.Hosting.Embeddings;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using MeshWeaver.AI;
 using MeshWeaver.AI.AzureFoundry;

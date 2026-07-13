@@ -1,7 +1,7 @@
 using Azure;
 using Azure.AI.Inference;
 
-namespace MeshWeaver.Hosting.PostgreSql;
+namespace MeshWeaver.Hosting.Embeddings;
 
 /// <summary>
 /// Embedding provider using Cohere embed-v4 via Azure AI Foundry.

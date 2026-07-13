@@ -2,7 +2,7 @@ using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json.Serialization;
 
-namespace MeshWeaver.Hosting.PostgreSql;
+namespace MeshWeaver.Hosting.Embeddings;
 
 /// <summary>
 /// Embedding provider backed by an OpenAI-compatible <c>/v1/embeddings</c> endpoint —

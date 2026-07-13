@@ -92,7 +92,9 @@
     <Project Path="src/MeshWeaver.Hosting.AzureStorage/MeshWeaver.Hosting.AzureStorage.csproj" />
     <Project Path="src/MeshWeaver.Hosting.Cosmos/MeshWeaver.Hosting.Cosmos.csproj" />
     <Project Path="src/MeshWeaver.Hosting.Grpc/MeshWeaver.Hosting.Grpc.csproj" />
+    <Project Path="src/MeshWeaver.Hosting.Embeddings/MeshWeaver.Hosting.Embeddings.csproj" />
     <Project Path="src/MeshWeaver.Hosting.PostgreSql/MeshWeaver.Hosting.PostgreSql.csproj" />
+    <Project Path="src/MeshWeaver.Hosting.Snowflake/MeshWeaver.Hosting.Snowflake.csproj" />
     <Project Path="src/MeshWeaver.Hosting.Sqlite/MeshWeaver.Hosting.Sqlite.csproj" />
     <Project Path="src/MeshWeaver.Hosting.SignalR/MeshWeaver.Hosting.SignalR.csproj" />
     <Project Path="src/MeshWeaver.Hosting/MeshWeaver.Hosting.csproj" />
@@ -168,6 +170,7 @@
     <Project Path="test/MeshWeaver.Hosting.Cosmos.Test/MeshWeaver.Hosting.Cosmos.Test.csproj" />
     <Project Path="test/MeshWeaver.Hosting.PostgreSql.Test/MeshWeaver.Hosting.PostgreSql.Test.csproj" />
     <Project Path="test/MeshWeaver.PluginImage.Test/MeshWeaver.PluginImage.Test.csproj" />
+    <Project Path="test/MeshWeaver.Hosting.Snowflake.Test/MeshWeaver.Hosting.Snowflake.Test.csproj" />
     <Project Path="test/MeshWeaver.Hosting.Sqlite.Test/MeshWeaver.Hosting.Sqlite.Test.csproj" />
     <Project Path="test/MeshWeaver.Connection.SignalR.Test/MeshWeaver.Connection.SignalR.Test.csproj" />
     <Project Path="test/MeshWeaver.Auth.Test/MeshWeaver.Auth.Test.csproj" />

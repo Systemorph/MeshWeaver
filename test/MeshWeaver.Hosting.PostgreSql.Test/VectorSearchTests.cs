@@ -1,3 +1,4 @@
+using MeshWeaver.Hosting.Embeddings;
 using System;
 using System.Linq;
 using System.Text.Json;
