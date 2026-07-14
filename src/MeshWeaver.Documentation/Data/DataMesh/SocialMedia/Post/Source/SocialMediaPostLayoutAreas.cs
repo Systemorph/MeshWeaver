@@ -4,10 +4,25 @@
 // </meshweaver>
 
 using System.Collections.Immutable;
+using System.Reactive.Linq;
 using System.Text.Json;
 using System.Web;
+using MeshWeaver.Data;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh.Services;
+using Microsoft.Extensions.DependencyInjection;
+
+/// <summary>
+/// Workspace projection of a sibling Post node: the display order plus the raw
+/// <see cref="MeshNode"/> the List view formats. Keyed by <see cref="Path"/> so
+/// the virtual collection stays deduplicated as the query result set evolves.
+/// </summary>
+public record PostNode
+{
+    [Key]
+    public string Path { get; init; } = string.Empty;
+    public MeshNode Node { get; init; } = null!;
+}
 
 public static class SocialMediaPostLayoutAreas
 {
@@ -62,14 +77,34 @@ public static class SocialMediaPostLayoutAreas
         return p.ValueKind == JsonValueKind.String && DateTimeOffset.TryParse(p.GetString(), out var dt) ? dt : null;
     }
 
+    /// <summary>
+    /// Virtual-source loader: the <c>namespace:Doc/DataMesh/SocialMedia/Post</c>
+    /// mesh query, folded to a path-keyed snapshot and projected to
+    /// <see cref="PostNode"/>. Registered in <c>Post.json</c>'s configuration
+    /// via <c>WithVirtualDataSource</c> so the framework subscribes it ONCE at
+    /// hub initialization on a managed scheduler — never from inside a view
+    /// render (a query subscription in a layout-area render runs on the grain's
+    /// activation thread and deadlocks the hub — see AsynchronousCalls). The
+    /// List view then composes only the hub's OWN workspace stream.
+    /// </summary>
+    public static IObservable<IEnumerable<PostNode>> LoadPosts(IWorkspace workspace)
+        => workspace.Hub.ServiceProvider.GetRequiredService<IMeshService>()
+            .Query<MeshNode>(MeshQueryRequest.FromQuery("namespace:Doc/DataMesh/SocialMedia/Post"))
+            .Scan(ImmutableDictionary<string, MeshNode>.Empty.WithComparers(StringComparer.OrdinalIgnoreCase), ApplyChanges)
+            .Select(dict => dict.Values
+                .Select(n => new PostNode { Path = n.Path, Node = n })
+                .ToImmutableList()
+                .AsEnumerable());
+
     public static IObservable<UiControl?> List(LayoutAreaHost host, RenderingContext _)
     {
-        var meshService = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
-        var postsStream = meshService
-            .Query<MeshNode>(MeshQueryRequest.FromQuery("namespace:Doc/DataMesh/SocialMedia/Post"))
-            .Scan(ImmutableDictionary<string, MeshNode>.Empty.WithComparers(StringComparer.OrdinalIgnoreCase), ApplyChanges);
+        var postsStream = host.Workspace.GetStream<PostNode>()
+            ?? Observable.Return<PostNode[]?>(null);
 
-        return postsStream.Select(dict => (UiControl?)BuildList(dict.Values.ToImmutableList()));
+        return postsStream.Select(posts => (UiControl?)BuildList(
+            (posts ?? Enumerable.Empty<PostNode>())
+                .Select(p => p.Node)
+                .ToImmutableList()));
     }
 
     private static UiControl BuildList(ImmutableList<MeshNode> posts)

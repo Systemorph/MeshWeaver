@@ -13,6 +13,6 @@
     "namespace": "Doc/DataMesh/SocialMedia",
     "displayName": "Social Media Post",
     "description": "A social media post (scheduled, published, with engagement stats)",
-    "configuration": "config => config.WithContentType<SocialMediaPost>().AddData(data => data.AddSource(source => source.WithType<Platform>(t => t.WithInitialData(Platform.All)))).AddDefaultLayoutAreas().AddLayout(layout => layout.AddSocialMediaPostLayoutAreas().WithDefaultArea(\"List\"))"
+    "configuration": "config => config.WithContentType<SocialMediaPost>().AddData(data => data.AddSource(source => source.WithType<Platform>(t => t.WithInitialData(Platform.All))).WithVirtualDataSource(\"SocialMediaPosts\", vs => vs.WithVirtualType<PostNode>(workspace => SocialMediaPostLayoutAreas.LoadPosts(workspace)))).AddDefaultLayoutAreas().AddLayout(layout => layout.AddSocialMediaPostLayoutAreas().WithDefaultArea(\"List\"))"
   }
 }
