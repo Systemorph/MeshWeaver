@@ -364,7 +364,16 @@ public sealed class GitHubSyncService
                     spacePath, commitish, config.TwoWay, force);
                 return FetchAndImport(repoUrl, commitish, config.Subdirectory, token, spacePath,
                         SyncIgnore.For(config), progress, policy)
-                    .SelectMany(x => RecordLastSync(spacePath, x.CommitSha, sourceId).Select(_ => x.Result));
+                    // 🚨 Only advance the last-sync baseline when the mesh is now IN SYNC with the repo.
+                    // A two-way import that PRESERVED server-newer nodes leaves the mesh AHEAD of the repo
+                    // (those edits aren't committed back yet); advancing LastSyncedAt would move the
+                    // baseline past them, so the NEXT update would no longer see them as "newer on the
+                    // server" and would overwrite them — losing the very edits two-way just protected.
+                    // Leave the baseline until a commit carries them back (which advances it). A clean
+                    // import (nothing preserved — always the case git-first) records normally.
+                    .SelectMany(x => x.Result.Preserved > 0
+                        ? Observable.Return(x.Result)
+                        : RecordLastSync(spacePath, x.CommitSha, sourceId).Select(_ => x.Result));
             });
         });
     }

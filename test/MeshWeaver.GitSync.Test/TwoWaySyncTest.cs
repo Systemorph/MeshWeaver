@@ -44,6 +44,12 @@ public class TwoWaySyncTest(ITestOutputHelper output) : GitHubSyncTestBase(outpu
         Assert.NotNull(await WaitForNode($"{a}/ServerOnly"));
         Assert.NotNull(await WaitForNode($"{a}/Welcome"));
 
+        // A SECOND two-way update MUST still keep it: preserving a node must not advance the sync
+        // baseline (LastSyncedAt) past it, or the next update would stop seeing it as newer-on-server
+        // and overwrite it — losing the edit one cycle later. Regression guard for that baseline bug.
+        await Sync.ReimportAtCommit(a, "main", UserId).Timeout(90.Seconds()).ToTask();
+        Assert.NotNull(await WaitForNode($"{a}/ServerOnly"));
+
         // FORCE update: ignore two-way — the repo state wins and the server addition is discarded.
         await Sync.ReimportAtCommit(a, "main", UserId, force: true).Timeout(90.Seconds()).ToTask();
         Assert.True(await IsAbsent($"{a}/ServerOnly"));

@@ -14,8 +14,11 @@ using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Graph;
 
-/// <summary>Outcome of a <see cref="StaticRepoImporter.Import"/> run.</summary>
-public sealed record StaticRepoImportResult(string Partition, string Fingerprint, string Outcome, int Count = 0);
+/// <summary>Outcome of a <see cref="StaticRepoImporter.Import"/> run. <paramref name="Preserved"/> is
+/// the number of live nodes a two-way import kept because they were newer on the server (see
+/// <see cref="ImportConflictPolicy"/>) — non-zero means the mesh is now AHEAD of the repo, so the
+/// caller must NOT advance its last-sync baseline until those edits are committed back.</summary>
+public sealed record StaticRepoImportResult(string Partition, string Fingerprint, string Outcome, int Count = 0, int Preserved = 0);
 
 /// <summary>
 /// Conflict policy for an import that reconciles against a LIVE partition — the GitHub
@@ -760,7 +763,7 @@ public static class StaticRepoImporter
                                 "[StaticRepoImport] {Partition}: imported {Count}, failed {Failed}, pruned {Pruned}, content {Content} at {Fingerprint}.",
                                 source.Partition, count.Imported, failed, prunedCount, contentCount, fingerprint);
                             return new StaticRepoImportResult(source.Partition, fingerprint,
-                                failed > 0 ? "ImportedWithErrors" : "Imported", count.Imported);
+                                failed > 0 ? "ImportedWithErrors" : "Imported", count.Imported, count.Preserved);
                         });
                         })));
                 });
