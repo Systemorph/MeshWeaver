@@ -104,10 +104,12 @@ public sealed class PullRequestService
     /// the checkout operation: the working Space is brought to the latest repo state.
     /// <paramref name="progress"/> (when the caller runs as an activity: <c>ctx.Log</c>)
     /// receives per-file import problems so they land on the activity log.
+    /// <paramref name="force"/> ignores the source's two-way setting and overwrites local
+    /// edits from the repo (deliberate discard).
     /// </summary>
     public IObservable<StaticRepoImportResult> UpdateToLatest(
         string spacePath, string userId, string? sourceId = null,
-        Action<string, LogLevel>? progress = null)
+        Action<string, LogLevel>? progress = null, bool force = false)
     {
         return sync.ReadConfig(spacePath, sourceId).Take(1).SelectMany(config =>
         {
@@ -115,8 +117,8 @@ public sealed class PullRequestService
                 return Observable.Throw<StaticRepoImportResult>(new InvalidOperationException(
                     "No GitHub repository configured for this Space."));
             var branch = string.IsNullOrWhiteSpace(config.Branch) ? "main" : config.Branch;
-            logger?.LogInformation("Updating {Space} to latest on {Branch}", spacePath, branch);
-            return sync.ReimportAtCommit(spacePath, branch, userId, sourceId, progress);
+            logger?.LogInformation("Updating {Space} to latest on {Branch} (force={Force})", spacePath, branch, force);
+            return sync.ReimportAtCommit(spacePath, branch, userId, sourceId, progress, force);
         });
     }
 
