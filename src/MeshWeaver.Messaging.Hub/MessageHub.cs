@@ -801,6 +801,28 @@ public sealed class MessageHub : IMessageHub
 
         if (delivery.State == MessageDeliveryState.Submitted)
         {
+            // 🚨 The root mesh hub is routing INFRASTRUCTURE, not a message endpoint — nothing
+            // should ever address it directly (its `mesh/{id}` is a transient per-process id, not
+            // an addressable node). If something did and no handler matched, LOG loudly so the
+            // abusing sender is visible, but return Ignored: answering a DeliveryFailure/NACK back
+            // to the sender is a WEDGE (the sender treats it as a fault → retries → storm — the
+            // exact 60s-timeout mesh-wide outage class). Legit lifecycle/routing is already handled
+            // upstream (never reaches Submitted); never react to a DeliveryFailure (ping-pong).
+            if (Address.Type == AddressExtensions.MeshType && delivery.Message is not DeliveryFailure)
+            {
+                logger.LogError(
+                    "Message {MessageType} (ID: {MessageId}) was addressed to the root mesh hub {Address} " +
+                    "(sender={Sender}) but the mesh hub is routing infrastructure, not an endpoint. Dropping — " +
+                    "no failure is returned (that would wedge the sender). This must not happen; investigate the sender.",
+                    delivery.Message.GetType().Name, delivery.Id, Address, delivery.Sender);
+                // Processed, NOT Ignored: an Ignored on-target delivery is exactly what MessageService
+                // turns into a DeliveryFailure{Ignored} back to the sender (the wedge). Processed means
+                // "handled, no failure" — nothing is echoed back; a requesting sender simply times out
+                // (correct: it should never have addressed the mesh hub). The [Error] log above is how
+                // the abusing sender is found.
+                return delivery.Processed();
+            }
+
             // Fallback-hub contract (UnhandledMessageNack policy): this hub stands in
             // for a node whose NodeType couldn't produce a real configuration. Anything
             // its (default/overlay) config didn't handle — including RawJson deliveries

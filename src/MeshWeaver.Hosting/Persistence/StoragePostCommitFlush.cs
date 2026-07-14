@@ -5,6 +5,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Hosting.Persistence;
 
@@ -24,6 +25,21 @@ internal sealed class StoragePostCommitFlush(IMessageHub hub) : IPostCommitFlush
     {
         if (committed is not MeshNode node)
             return Observable.Return(true);
+
+        // 🚨 The root mesh hub's own node is transient infrastructure, NOT an addressable mesh node
+        // — its `mesh/{id}` id is a fresh guid every process, so persisting it just orphans a row on
+        // each restart ("puke standing"). The mesh hub is routable (registered with the routing
+        // service like portal/), but must never hit storage — same as portals, which route yet
+        // persist nothing. Log an error (so a future writer that commits it is visible in the logs)
+        // and skip: the ack still resolves true, so the read-after-write contract is unaffected.
+        if (hub.Address.Type == AddressExtensions.MeshType)
+        {
+            hub.ServiceProvider.GetService<ILogger<StoragePostCommitFlush>>()?.LogError(
+                "Refused to persist the root mesh hub's own node {Path}: a mesh/{{id}} address is transient " +
+                "infrastructure, not an addressable node, and must never be committed. Investigate the writer.",
+                node.Path);
+            return Observable.Return(true);
+        }
 
         var storage = hub.ServiceProvider.GetService<IStorageAdapter>();
         if (storage is null)
