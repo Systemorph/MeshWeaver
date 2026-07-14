@@ -616,9 +616,22 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
             // 5 min cap (the atioz `_Activity` / missing-node NotFound resubscribe storm
             // that saturated the action block and tripped the liveness probe). A real
             // resolution is a non-null node; nothing else clears the breaker.
+            //
+            // 🚨 Record ONLY a genuine missing-node failure — never a TRANSIENT owner miss.
+            // A per-node grain that Orleans idle-collected answers the next read's
+            // SubscribeRequest with a transient reactivation reject ("Forwarding failed …
+            // to invalid activation. Rejecting now.") or a 60 s request timeout. Poisoning
+            // the negative cache with THAT made the storm-breaker replay the raw Orleans
+            // reject to every reader for the backoff window AND refuse to re-probe the grain
+            // that already reactivated — so navigating to a just-idle page crashed until a
+            // manual reload outlasted the window. The node exists; it is momentarily
+            // unreachable. Forward the error to THIS subscriber (its caller / the area's
+            // transient classifier retries) but leave the cache clean so the very next read
+            // re-probes the fresh activation. Symmetric with the write path (see the
+            // [UpdateQueue] FAILED branch), which already guards RecordNegative the same way.
             var bookkeeping = inner.AsObservable().Subscribe(
                 node => { if (node is not null) _negative.TryRemove(p, out _); },
-                ex => RecordNegative(p, ex));
+                ex => { if (IsMissingNodeFailure(ex)) RecordNegative(p, ex); });
             var disposal = new System.Reactive.Disposables.CompositeDisposable(hydrationSub, bookkeeping);
             // Store the disposal on the Entry so the mesh hub's pre-Quiescing
             // disposal hook (registered in the ctor) can cancel it — and so the
@@ -805,13 +818,70 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
 
     /// <summary>
     /// True when an owner failure means the node/hub does not exist (NotFound / activation
-    /// failed) — the only failure class the storm-breaker suppresses on the WRITE path. RLS
-    /// denials and transient routing errors are excluded so an existing-but-busy node is never
-    /// falsely blocked from writes.
+    /// failed) — the only failure class the storm-breaker suppresses. RLS denials and
+    /// <see cref="IsTransientOwnerFailure">transient routing errors</see> are excluded so an
+    /// existing-but-busy (or a just-idle-collected, mid-reactivation) node is never falsely
+    /// blocked from reads OR writes.
+    ///
+    /// <para>🚨 Transient takes PRECEDENCE. A grain that idle-collected and is mid-
+    /// <c>DeactivateOnIdle</c> answers the next delivery with an Orleans forwarding-reject
+    /// ("Forwarding failed … to invalid activation. Rejecting now.") or, if reactivation is
+    /// slow, the 60&#160;s hub-request timeout ("… target hub was not found"). Without the
+    /// transient guard first, that transient miss would be POISONED into the negative cache:
+    /// the storm-breaker would then replay the raw Orleans reject to every reader for the whole
+    /// backoff window and refuse to re-probe the grain that already reactivated — the exact
+    /// "navigating to an idle page intermittently crashes; a manual reload fixes it" bug (the
+    /// reload just outlasts the 2&#160;s window and the re-probe lands on the fresh activation).
+    /// The <c>&amp;&amp; !IsTransientOwnerFailure</c> guard also protects the "activation failed"
+    /// substring below — a transient activation miss must never be read as a permanent absence.
+    /// The node exists; it is transiently unreachable — never suppress it.</para>
     /// </summary>
-    private static bool IsMissingNodeFailure(Exception error) =>
-        error.Message.Contains("No node found", StringComparison.OrdinalIgnoreCase)
-        || error.Message.Contains("activation failed", StringComparison.OrdinalIgnoreCase);
+    internal static bool IsMissingNodeFailure(Exception error) =>
+        !IsTransientOwnerFailure(error)
+        && (error.Message.Contains("No node found", StringComparison.OrdinalIgnoreCase)
+            || error.Message.Contains("activation failed", StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>
+    /// True when an owner failure is TRANSIENT — the node exists but is momentarily
+    /// unreachable, so a later read/write is likely to succeed and the storm-breaker must
+    /// NEVER record it as a negative (missing-node) entry. Chiefly the Orleans grain-
+    /// reactivation window: a per-node grain that Orleans idle-collected answers the next
+    /// delivery with an <c>OrleansMessageRejectionException</c> ("… to invalid activation.
+    /// Rejecting now.", surfaced through routing as a <c>DeliveryFailure{ErrorType.Failed}</c>
+    /// whose message carries "Forwarding failed" / "invalid activation" / "Rejecting now"),
+    /// or — when reactivation outruns the request budget — a <see cref="TimeoutException"/>
+    /// ("No response received in hub …" / "target hub was not found" / "undeliverable").
+    /// Each self-heals: the grain reactivates and the very next probe lands on the fresh
+    /// instance, so the error is forwarded to the current subscriber (whose caller retries)
+    /// but the cache stays clean. Mirrors <c>RoutingGrain.IsTransientFailure</c> and
+    /// <c>AreaErrorClassifier.IsTransientHubFailure</c> so all three layers agree on which
+    /// failures are worth a retry rather than a suppress.
+    /// </summary>
+    internal static bool IsTransientOwnerFailure(Exception? error)
+    {
+        for (var e = error; e != null; e = e.InnerException)
+        {
+            if (e is TimeoutException) return true;
+            // OrleansMessageRejectionException lives in Orleans.Core, which this project does
+            // not (and must not) reference — match by type name so the classifier stays free
+            // of the Orleans dependency while still catching the raw grain-reject that reaches
+            // the cache from the silo-side routing grain.
+            if (e.GetType().Name == "OrleansMessageRejectionException") return true;
+            var msg = e.Message ?? string.Empty;
+            // The routing grain surfaces the exhausted-forward reject as a DeliveryFailure whose
+            // message is "Delivery to '{path}' failed: Forwarding failed: tried to forward … to
+            // invalid activation. Rejecting now." — a TRANSIENT reactivation miss, not a real
+            // missing node. The 60 s hub-request timeout banner adds the "… hub was not found" /
+            // "undeliverable" / "No response received in hub" forms.
+            if (msg.Contains("invalid activation", StringComparison.OrdinalIgnoreCase)) return true;
+            if (msg.Contains("Rejecting now", StringComparison.OrdinalIgnoreCase)) return true;
+            if (msg.Contains("Forwarding failed", StringComparison.OrdinalIgnoreCase)) return true;
+            if (msg.Contains("target hub was not found", StringComparison.OrdinalIgnoreCase)) return true;
+            if (msg.Contains("No response received in hub", StringComparison.OrdinalIgnoreCase)) return true;
+            if (msg.Contains("undeliverable", StringComparison.OrdinalIgnoreCase)) return true;
+        }
+        return false;
+    }
 
     /// <summary>
     /// Returns a per-user access-gated view of the cached shared stream. The
