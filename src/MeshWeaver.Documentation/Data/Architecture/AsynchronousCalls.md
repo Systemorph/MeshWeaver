@@ -545,7 +545,7 @@ This is also how you **wait for work to finish** — subscribe until a field in 
 
 Even when a query is the right idea (listings, filters, existence checks), **do not `await` the `IAsyncEnumerable<T>`** version — use `IMeshService.Query<T>`. It returns `IObservable<QueryResultChange<T>>` with an initial full set and then incremental deltas, composing with `Select` / `Where` / `Subscribe` like every other mesh observable.
 
-> **Even `Query` is wrong inside a layout area for displaying values.** Declare a binding and let the Blazor view subscribe. See [Data Binding](/Doc/GUI/DataBinding). Backend rendering code should be fully synchronous and side-effect-free.
+> **`IMeshService.Query` inside a layout-area render is now SAFE — the framework subscribes every render off the owning hub's action block.** It was once the canonical query-in-render deadlock (see [Query-in-render is safe](#-query-in-render-is-safe--the-framework-subscribes-every-render-off-the-hub-turn) below and [OrleansTaskScheduler](/Doc/Architecture/OrleansTaskScheduler)); the render pipeline now hops the subscribe onto `TaskPoolScheduler.Default`, so a generator that composes `IMeshService.Query(...).Select(...)` no longer wedges the grain. For *displaying* a single node's values a binding is still cleaner — declare it and let the Blazor view subscribe (see [Data Binding](/Doc/GUI/DataBinding)) — but query-in-render is no longer a trap.
 
 **`QueryAsync` breaks the update flow.** It is a one-shot snapshot — the view freezes. If a row is added, removed, or mutated, the list doesn't change. `Query` emits the initial set plus a delta for every subsequent change, so the downstream chain stays live.
 
@@ -576,6 +576,59 @@ meshService.Query<MeshNode>(MeshQueryRequest.FromQuery("nodeType:Post"))
 - **HTTP endpoints that render once and close** — e.g. a CSV download.
 
 Rule of thumb: **if any downstream code re-renders or re-computes when data changes, you need `Query`.** `QueryAsync` is only safe when the caller serialises the snapshot and walks away.
+
+---
+
+## 🚨 Query-in-render is SAFE — the framework subscribes every render OFF the hub turn
+
+> **This is the fix for the deadlock that took down multiple production meshes.** A layout area may
+> now do `IMeshService.Query(...)` (or any mesh round-trip — `hub.Observe`, `GetRemoteStream`, a
+> workspace query) *directly in its render*, and it will render instead of wedging the hub. The
+> safety is in the **portal/framework binary**, not in node source — so **already-deployed nodes
+> whose cached assemblies won't recompile become safe automatically.**
+
+### The trap it closes
+
+A layout area's view generator returns an `IObservable<UiControl?>`. The framework's render pipeline
+(`LayoutAreaHost.BuildInitialization`) **subscribes** to it. Before the fix that subscribe ran on the
+layout-area's own synchronisation-stream hub **action block** — a single-threaded actor
+(`MaxDegreeOfParallelism = 1`), and for a node hosted as an Orleans grain, grain-affined (the ROOT
+GRAIN HUB runs on the grain scheduler; see [OrleansTaskScheduler](/Doc/Architecture/OrleansTaskScheduler)).
+So the generator body — and the subscribe to whatever observable it returned — ran **on the hub
+turn**. A generator that did `IMeshService.Query(...)` opened that subscription while the turn was
+held; the query must route through Orleans and come back to **this** hub, but the turn could not
+advance to process the response → **the hub DEADLOCKED**. On startup prerender many grains blocked at
+once → thread-pool starvation → the whole silo wedged (even `/healthz`). Confirmed offenders:
+`Doc/DataMesh/SocialMedia/Post` (List area) and `Doc/DataMesh/PythonPandasNode/PandasExplorer` — each
+queried in-render.
+
+### The fix — one reactive seam, `SubscribeOn(TaskPoolScheduler.Default)`
+
+`LayoutAreaHost` now hops the render subscription (top-level AND every nested container / dialog /
+editor sub-area) onto the thread pool with `.SubscribeOn(System.Reactive.Concurrency.TaskPoolScheduler.Default)`
+— the framework's **own designated reactive off-hub move**, the same one `MeshQuery.Query` and
+`IMeshNodeStreamCache.GetQuery` already make (see
+[OrleansTaskScheduler → "SubscribeOn inside a grain-hosted service"](/Doc/Architecture/OrleansTaskScheduler)).
+The generator, and every observable it subscribes in-render, now runs **OFF the hub turn** — which is
+immediately free to route and answer the round-trip. **100% reactive: a pure Rx scheduler operator,
+no `async` / `await` / `Task`.**
+
+**Why it can't reintroduce ordering bugs.** The render *output* never touches the hub directly —
+`PushRenderResult` / `UpdateArea` call `Stream.Update(...)`, which posts an `UpdateStreamRequest` to
+the hub's action block (`hub.Post` is the actor inbox: safe from any thread, re-serialised in order).
+So an emission arriving on a pool thread is re-marshalled onto the owning hub's single-threaded turn
+exactly as before — the offload moves only the **subscribe-time** work off the hub, never the state
+writes. Data-before-control ordering (the queued `UpdateData` → control sequence) is preserved.
+
+### What this does NOT license
+
+Rendering code should still be **reactive and side-effect-free**: compose with `.Select` / `.Where` /
+`.SelectMany`, return the `IObservable<UiControl?>`, never bridge a hub round-trip back to a blocking
+`Task` (`.Result` / `.Wait()` / `.ToTask()` + wait). The framework subscribes you off the hub turn;
+it does not make a **blocking** subscribe safe — a generator that *blocks its subscribing thread* on a
+round-trip still burns a pool thread (and under enough concurrency, the pool). Stay reactive. The rule
+that changed is narrow and important: **a normal reactive `IMeshService.Query` composed into the
+render no longer deadlocks the hub.**
 
 ---
 
