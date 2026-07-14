@@ -337,10 +337,12 @@ public sealed class GitHubSyncService
     /// <paramref name="progress"/> (when the caller runs as an activity: <c>ctx.Log</c>)
     /// receives per-file problems — a repo file that failed to parse and was therefore
     /// dropped from the import — so they land on the activity log, not only in Loki.
+    /// <paramref name="force"/> ignores the source's two-way setting and overwrites/prunes
+    /// from the repo regardless (the deliberate-discard escape hatch).
     /// </summary>
     public IObservable<StaticRepoImportResult> ReimportAtCommit(
         string spacePath, string commitish, string userId, string? sourceId = null,
-        Action<string, LogLevel>? progress = null)
+        Action<string, LogLevel>? progress = null, bool force = false)
     {
         return ReadConfig(spacePath, sourceId).Take(1).SelectMany(config =>
         {
@@ -351,12 +353,17 @@ public sealed class GitHubSyncService
                 return Observable.Throw<StaticRepoImportResult>(new InvalidOperationException(
                     $"This sync source is export-only (mesh → repo): importing from {repoUrl} is not allowed. " +
                     "Change the source's Sync direction to Bidirectional or Import-only to re-import."));
+            // Two-way (config.TwoWay): don't overwrite/prune nodes changed on the server since the last
+            // recorded sync (config.LastSyncedAt) — they are carried back on the next commit. `force`
+            // overrides. Git-first when TwoWay is off (unchanged legacy behavior).
+            var policy = new ImportConflictPolicy(config.TwoWay, config.LastSyncedAt, force);
             return ResolveAuth(userId).SelectMany(auth =>
             {
                 var token = auth.Token;
-                logger?.LogInformation("Re-importing {Space} at {Ref}", spacePath, commitish);
+                logger?.LogInformation("Re-importing {Space} at {Ref} (twoWay={TwoWay}, force={Force})",
+                    spacePath, commitish, config.TwoWay, force);
                 return FetchAndImport(repoUrl, commitish, config.Subdirectory, token, spacePath,
-                        SyncIgnore.For(config), progress)
+                        SyncIgnore.For(config), progress, policy)
                     .SelectMany(x => RecordLastSync(spacePath, x.CommitSha, sourceId).Select(_ => x.Result));
             });
         });
@@ -411,14 +418,14 @@ public sealed class GitHubSyncService
 
     private IObservable<(StaticRepoImportResult Result, string CommitSha)> FetchAndImport(
         string repoUrl, string commitish, string? subdirectory, string token, string spaceId,
-        SyncIgnore ignore, Action<string, LogLevel>? progress = null)
+        SyncIgnore ignore, Action<string, LogLevel>? progress = null, ImportConflictPolicy? policy = null)
     {
         return repoClient.Fetch(repoUrl, commitish, subdirectory, token).SelectMany(snapshot =>
             ParseSnapshot(snapshot, spaceId, ignore, progress).SelectMany(parsed =>
             {
                 var source = new InMemoryStaticRepoSource(
                     spaceId, parsed.Children, parsed.Root, parsed.ContentSyncs);
-                return StaticRepoImporter.ImportSource(hub, source, logger)
+                return StaticRepoImporter.ImportSource(hub, source, logger, policy)
                     .Select(result => (result, snapshot.CommitSha));
             }));
     }
@@ -636,7 +643,8 @@ public sealed class GitHubSyncService
     public IObservable<MeshNode> SaveConfig(
         string spacePath, string? repositoryUrl, string branch, string? subdirectory,
         bool createBranchIfMissing, bool createRepoIfMissing,
-        SyncDirection direction = SyncDirection.Bidirectional, string? sourceId = null)
+        SyncDirection direction = SyncDirection.Bidirectional, string? sourceId = null,
+        bool twoWay = false)
         => UpdateConfig(spacePath, c => c with
         {
             RepositoryUrl = string.IsNullOrWhiteSpace(repositoryUrl) ? null : repositoryUrl.Trim(),
@@ -645,6 +653,7 @@ public sealed class GitHubSyncService
             CreateBranchIfMissing = createBranchIfMissing,
             CreateRepoIfMissing = createRepoIfMissing,
             Direction = direction,
+            TwoWay = twoWay,
         }, sourceId);
 
     /// <summary>Read-modify-write a config field (current value from the synced query; null when absent).</summary>
