@@ -435,11 +435,14 @@ Operations (`op`):
   • update           — pull the branch HEAD from GitHub and import the deltas back into the Space.
   • check            — ask GitHub (live) for the branch HEAD and whether the Space is up to date.
 
-Runs under YOUR identity (needs Editor/Update on the Space for commit) and requires the Space's GitHub sync config (`{space}/_GitSync`) to already exist — configure it once in the Space's GitHub settings tab. Each op runs as an Activity: this returns the activity path immediately (it does NOT wait for the push to finish). Observe progress + result with `get` on that path — the activity log carries the commit sha and files written, and its Status goes Succeeded/Failed. `sourceId` selects a specific sync source (blank = the primary).")]
+Runs under YOUR identity (needs Editor/Update on the Space for commit) and requires the Space's GitHub sync config (`{space}/_GitSync`) to already exist — configure it once in the Space's GitHub settings tab. Each op runs as an Activity: this returns the activity path immediately (it does NOT wait for the push to finish). Observe progress + result with `get` on that path — the activity log carries the commit sha and files written, and its Status goes Succeeded/Failed. `sourceId` selects a specific sync source (blank = the primary).
+
+When the sync source has two-way enabled, `update` never overwrites a node changed on the server since the last sync (it is kept and carried back on the next `commit`); pass `force: true` to overwrite local changes from the repo regardless. `force` only affects `update`.")]
     public Task<string> GitHubSync(
         [Description("The Space path/id to sync (e.g. 'ACME'). GitHub sync acts on the containing top-level Space.")] string space,
         [Description("Operation: 'commit' (default, Space → GitHub), 'update' (GitHub → Space), or 'check' (compare, read-only).")] string op = "commit",
-        [Description("The sync source id to act on (blank = the Space's primary GitHub source).")] string? sourceId = null)
+        [Description("The sync source id to act on (blank = the Space's primary GitHub source).")] string? sourceId = null,
+        [Description("Force 'update' to overwrite nodes changed on the server since the last sync (ignore two-way). Only affects 'update'. Default: false.")] bool force = false)
     {
         space = space?.Trim().Trim('/') ?? "";
         if (space.Length == 0)
@@ -507,7 +510,7 @@ Runs under YOUR identity (needs Editor/Update on the Space for commit) and requi
             IObservable<string> action = operation switch
             {
                 "commit" => rootHub.CommitToGitHub(spacePath, userId, OnCreated, normalizedSource),
-                "update" => rootHub.UpdateToLatestFromGitHub(spacePath, userId, OnCreated, normalizedSource),
+                "update" => rootHub.UpdateToLatestFromGitHub(spacePath, userId, OnCreated, normalizedSource, force),
                 _ => rootHub.CheckBranchStateOnGitHub(spacePath, userId, OnCreated, normalizedSource),
             };
             opRun.Disposable = action
