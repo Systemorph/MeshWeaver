@@ -217,6 +217,14 @@ internal sealed class NodeAssemblyLoadContext : AssemblyLoadContext, IDisposable
     private volatile bool _disposed;
     private ImmutableArray<string> _probingDirs = ImmutableArray<string>.Empty;
 
+    // Opt-in diagnostic (env MESHWEAVER_ALC_UNLOAD_GC_PROBE=1) — OFF by default, so zero cost in
+    // prod and normal CI. When on, Dispose drives a synchronous full GC right after Unload so a
+    // use-after-unload dangling NATIVE pointer into this now-collectible assembly faults HERE
+    // (pinning the culprit node in the log + a corruption-time dump) instead of as a delayed
+    // background-GC SIGSEGV. Immutable config constant read once at type init — never written.
+    private static readonly bool UnloadGcProbe =
+        Environment.GetEnvironmentVariable("MESHWEAVER_ALC_UNLOAD_GC_PROBE") == "1";
+
     public void SetProbingDirectories(System.Collections.Generic.IReadOnlyList<string> dirs)
     {
         _probingDirs = dirs.ToImmutableArray();
@@ -411,6 +419,19 @@ internal sealed class NodeAssemblyLoadContext : AssemblyLoadContext, IDisposable
 
         // Initiate unload outside the lock - the context will be collected when all references are released
         Unload();
+
+        // Diagnostic probe (opt-in, off by default): drive the collection synchronously so a
+        // use-after-unload dangling native pointer trips at THIS unload — naming the culprit node
+        // and yielding a corruption-time dump — instead of a delayed background-GC SIGSEGV. Used
+        // by the alc-unload-probe workflow to pin the reflection/serialization cache that retains
+        // an accessor into a collectible node assembly (the exit=139 teardown crash).
+        if (UnloadGcProbe)
+        {
+            _logger?.LogWarning("ALC_UNLOAD_PROBE forcing GC after unloading {ContextName}", Name);
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            GC.Collect();
+        }
     }
 }
 
