@@ -2,6 +2,7 @@
 using System.Collections.Immutable;
 using System.Reflection;
 using System.Runtime.Loader;
+using MeshWeaver.ServiceProvider;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -242,6 +243,15 @@ internal sealed class NodeAssemblyLoadContext : AssemblyLoadContext, IDisposable
         _nodeName = nodeName;
         _dllPath = dllPath;
         _logger = logger;
+
+        // Purge Autofac's process-static reflection cache of this context's assemblies the instant
+        // it starts unloading — while the metadata the predicate walks is still valid. A cached
+        // ConstructorInfo/Assembly key otherwise (1) roots this collectible context so it can never
+        // be collected, and (2) makes a later, unrelated concurrent GetOrAdd bucket-probe compare
+        // against the freed key → AccessViolationException/SIGSEGV under concurrent hub construction.
+        // Autofac does this automatically for BeginLoadContextLifetimeScope; we manage the context
+        // by hand, so we mirror it. Static handler ⇒ no self-reference that would defeat collection.
+        Unloading += ReflectionCacheEviction.EvictFor;
     }
 
     /// <summary>
