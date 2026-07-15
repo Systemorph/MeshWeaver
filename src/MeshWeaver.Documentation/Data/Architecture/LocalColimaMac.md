@@ -346,10 +346,15 @@ OpenAICompatible__ApiKey    = ollama
 Start Ollama on the host, bound to all interfaces so the VM's host-gateway can reach it, and alias the model to the id the config expects:
 
 ```bash
-OLLAMA_HOST=0.0.0.0:11434 ollama serve            # bind to 0.0.0.0 so the cluster can reach it
+OLLAMA_CONTEXT_LENGTH=16384 OLLAMA_HOST=0.0.0.0:11434 ollama serve   # 0.0.0.0 so the cluster can reach it; 16k ctx (see below)
 ollama pull qwen3.6                                # the Ollama-library model
 ollama cp qwen3.6 qwen3.6-code                     # alias to the id used by OpenAICompatible__Models__0
 ```
+
+> **🚨 Set `OLLAMA_CONTEXT_LENGTH`.** Ollama loads every model at a default context of **4096 tokens** regardless of the model's real maximum. The agent system prompt alone is now larger than that, so a fresh thread fails with
+> `request (…tokens) exceeds the available context size (4096 tokens) … exceed_context_size_error` and the model "can't run." Ollama's OpenAI-compatible `/v1` endpoint does **not** accept a per-request `num_ctx`, so the **host** is the only lever: start `ollama serve` with `OLLAMA_CONTEXT_LENGTH=16384` (or higher — bounded by the model's trained max and your VRAM). On the Ollama macOS **app**, set it once with `launchctl setenv OLLAMA_CONTEXT_LENGTH 16384` and restart the app. Per-model alternative: a Modelfile with `PARAMETER num_ctx 16384` + `ollama create`.
+>
+> **Pick a tool-capable model.** The agent round sends tool/function definitions. A pure roleplay/completion GGUF (e.g. `hf.co/TheBloke/Mythalion-13B-GGUF:Q4_K_M`) returns HTTP 400 *"does not support tools"*. The portal now probes Ollama's `/api/show` capabilities and stamps `SupportsTools=false` on such a model (so the round sends it a plain, tool-free chat request instead of erroring) — but for agent use, prefer a model whose `capabilities` include `tools` (qwen3.6 does).
 
 > k3s v1.35 logs a deprecation warning for `Endpoints` (in favor of `EndpointSlice`), but the mirroring controller auto-creates the slice, so routing works.
 
@@ -408,6 +413,8 @@ The result: every device trusts the cert out of the box (no mkcert CA install), 
 | A route 404s for ~1 second right after a Helm upgrade or ingress patch | ingress-nginx **reload lag** — the controller is reloading its config. Retry; it clears within a second. |
 | OAuth redirect URI mismatch | The redirect URI the portal built must exactly match one registered on the app (§9). Check you're hitting the host/port whose `/signin-microsoft` is registered. |
 | Ollama unreachable from the portal | Ollama must be started with `OLLAMA_HOST=0.0.0.0:11434` (not the default loopback bind), and `ollama.external.host` must be Colima's host-gateway IP (`192.168.5.2`). |
+| Local model errors `exceed_context_size_error` / `exceeds the available context size (4096 tokens)` | Ollama loads at a 4096-token default context, smaller than the agent prompt. Restart `ollama serve` with `OLLAMA_CONTEXT_LENGTH=16384` (macOS app: `launchctl setenv OLLAMA_CONTEXT_LENGTH 16384` + restart). The `/v1` endpoint can't set `num_ctx` per request — it's a host setting. See §10. |
+| Local model errors HTTP 400 `does not support tools` | The selected model is a completion-only/roleplay GGUF. The portal auto-stamps `SupportsTools=false` (round then omits tools), but for agent work pick a model whose Ollama `capabilities` include `tools` (e.g. qwen3.6). See §10. |
 
 **Verify end-to-end** that TLS + routing + the app are all working:
 

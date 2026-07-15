@@ -149,4 +149,22 @@ public class OpenAICompatibleModelSyncTest
         var def = Assert.IsType<ModelDefinition>(node.Content);
         Assert.Equal(supportsTools, def.SupportsTools);
     }
+
+    // ── ShouldBackfill (tool-capability backfill write-decision) ─────────────
+
+    [Theory]
+    // probe conclusive AND differs → write.
+    [InlineData(null, false, true)]   // statically-seeded null → known tool-less: stamp it (the Mythalion fix)
+    [InlineData(null, true, true)]    // null → known tool-capable: stamp it
+    [InlineData(true, false, true)]   // a stale "supported" corrected to tool-less
+    [InlineData(false, true, true)]   // a stale "tool-less" corrected to supported
+    // probe indeterminate → never write (assume supported, historical behaviour).
+    [InlineData(null, null, false)]
+    [InlineData(true, null, false)]
+    [InlineData(false, null, false)]
+    // already correct → no churn (an unchanged reboot must not bump the node version).
+    [InlineData(false, false, false)]
+    [InlineData(true, true, false)]
+    public void ShouldBackfill_WritesOnlyWhenTheProbeIsConclusiveAndDiffers(bool? current, bool? probed, bool expected)
+        => Assert.Equal(expected, OpenAICompatibleModelSync.ShouldBackfill(current, probed));
 }
