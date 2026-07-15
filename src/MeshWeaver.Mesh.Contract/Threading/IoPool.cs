@@ -15,7 +15,16 @@ public sealed class IoPool : IIoPool, IDisposable
 {
     private readonly SemaphoreSlim _gate;
     private readonly TaskFactory _blockingFactory;
+    private readonly int _maxConcurrency;
+    // Pool-wide cancellation, linked into every leaf's token. Drain()/Dispose() cancel it so all
+    // in-flight leaves unwind promptly — the join then knows they will release their gate permits.
+    private readonly CancellationTokenSource _poolCts = new();
     private int _inFlight;
+    private volatile bool _disposed;
+
+    // Teardown safety net for the drain join: cancellation makes in-flight leaves release in ms,
+    // so this is effectively never hit — it only bounds a hang if a leaf ignores its token.
+    private static readonly TimeSpan DrainTimeout = TimeSpan.FromSeconds(30);
 
     /// <summary>
     /// Creates a pool whose async gate and sync-blocking scheduler are both capped at
@@ -27,6 +36,7 @@ public sealed class IoPool : IIoPool, IDisposable
     {
         if (maxConcurrency < 1)
             throw new ArgumentOutOfRangeException(nameof(maxConcurrency));
+        _maxConcurrency = maxConcurrency;
         _gate = new SemaphoreSlim(maxConcurrency, maxConcurrency);
         _blockingFactory = new TaskFactory(
             CancellationToken.None,
@@ -50,8 +60,13 @@ public sealed class IoPool : IIoPool, IDisposable
         // never runs on the calling hub/grain scheduler. (FromAsync's own
         // scheduler arg only affects notification delivery, not where the
         // function is invoked — hence the SubscribeOn, matching MeshQuery.)
-        => Observable.FromAsync(async ct =>
+        => Observable.FromAsync(async subscriberCt =>
         {
+            // Link the subscriber's token with the pool-wide token so Drain()/Dispose()
+            // cancels this leaf too — the teardown join relies on every running leaf
+            // unwinding and releasing its gate permit once the pool is cancelled.
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(subscriberCt, _poolCts.Token);
+            var ct = linked.Token;
             // WaitAsync(ct) makes acquisition itself cancellable — a dispose
             // before the slot is granted throws here, before the increment, so
             // no slot is ever leaked. The ThreadPool thread is released during
@@ -76,8 +91,10 @@ public sealed class IoPool : IIoPool, IDisposable
     /// <param name="source">The cancellable async sequence to enumerate once the gate grants a slot.</param>
     /// <returns>A cold observable that, on subscribe, enumerates the source and emits each element.</returns>
     public IObservable<T> InvokeStream<T>(Func<CancellationToken, IAsyncEnumerable<T>> source)
-        => Observable.Create<T>(async (observer, ct) =>
+        => Observable.Create<T>(async (observer, subscriberCt) =>
         {
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(subscriberCt, _poolCts.Token);
+            var ct = linked.Token;
             await _gate.WaitAsync(ct).ConfigureAwait(false);
             Interlocked.Increment(ref _inFlight);
             try
@@ -103,7 +120,8 @@ public sealed class IoPool : IIoPool, IDisposable
     public IObservable<T> InvokeBlocking<T>(Func<CancellationToken, T> work)
         => Observable.Create<T>(observer =>
         {
-            var cts = new CancellationTokenSource();
+            // Linked to the pool token so Drain()/Dispose() cancels blocking work too.
+            var cts = CancellationTokenSource.CreateLinkedTokenSource(_poolCts.Token);
             _blockingFactory.StartNew(() =>
                 {
                     // _inFlight increments only once the scheduler grants a slot —
@@ -144,8 +162,48 @@ public sealed class IoPool : IIoPool, IDisposable
             });
         });
 
-    /// <summary>Disposes the underlying concurrency gate; called when the owning mesh is torn down.</summary>
-    public void Dispose() => _gate.Dispose();
+    /// <summary>
+    /// Cancels every in-flight leaf and JOINS — blocks until they have all unwound — WITHOUT
+    /// disposing the pool. Called before a collectible node <c>AssemblyLoadContext</c> is unloaded
+    /// so no pool thread is still executing (or about to dereference) that ALC's compiled types
+    /// when it is torn down (the teardown use-after-unload SIGSEGV). TERMINAL — it cancels the
+    /// pool token, so any leaf issued after Drain is cancelled immediately; idempotent (a second
+    /// call is a safe no-op join). This is a teardown operation; the pool is not reused afterwards.
+    /// </summary>
+    /// <remarks>
+    /// The join uses the gate we already own — no poll, no sleep, no extra signal. A running leaf
+    /// holds one permit until its <c>finally</c> releases it; once <see cref="_poolCts"/> is
+    /// cancelled every waiting leaf's <c>WaitAsync</c> throws, so no NEW leaf can take a permit.
+    /// Re-acquiring all <see cref="_maxConcurrency"/> permits therefore blocks precisely until the
+    /// last running leaf has released, then we release them back so the pool stays usable/idempotent.
+    /// </remarks>
+    public void Drain()
+    {
+        if (_disposed) return; // gate + cts already gone; nothing in flight to join
+        _poolCts.Cancel();
+        var acquired = 0;
+        for (var i = 0; i < _maxConcurrency; i++)
+        {
+            if (_gate.Wait(DrainTimeout)) acquired++;
+            else break; // safety net: a leaf ignored its token — don't hang teardown forever
+        }
+        if (acquired > 0)
+            _gate.Release(acquired);
+    }
+
+    /// <summary>
+    /// Drains in-flight work (see <see cref="Drain"/>) then disposes the gate and cancellation
+    /// source. Synchronous by design: when it returns, no pool thread is running, so the caller may
+    /// safely unload the node ALCs whose types that work referenced. Called when the mesh is torn down.
+    /// </summary>
+    public void Dispose()
+    {
+        if (_disposed) return;
+        _disposed = true;
+        Drain();
+        _poolCts.Dispose();
+        _gate.Dispose();
+    }
 
     /// <summary>
     /// A stateless, unbounded fallback pool used when no mesh-scoped pool is
