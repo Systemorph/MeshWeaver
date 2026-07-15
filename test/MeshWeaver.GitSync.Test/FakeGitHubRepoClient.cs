@@ -69,7 +69,7 @@ public sealed class FakeGitHubRepoClient : IGitHubRepoClient
             var prefix = Norm(request.Subdirectory);
             var existing = _head.TryGetValue(key, out var cur) ? cur : new List<RepoFile>();
 
-            var newUnder = request.Files.Select(f => new RepoFile(prefix + f.Path, f.Content)).ToList();
+            var newUnder = request.Files.Select(f => f with { Path = prefix + f.Path }).ToList();
             var exportPaths = newUnder.Select(f => f.Path).ToHashSet(StringComparer.Ordinal);
             var outside = existing
                 .Where(f => prefix.Length != 0 && !f.Path.StartsWith(prefix, StringComparison.Ordinal))
@@ -117,7 +117,7 @@ public sealed class FakeGitHubRepoClient : IGitHubRepoClient
             var prefix = Norm(subdirectory);
             var files = tree
                 .Where(f => prefix.Length == 0 || f.Path.StartsWith(prefix, StringComparison.Ordinal))
-                .Select(f => new RepoFile(prefix.Length == 0 ? f.Path : f.Path[prefix.Length..], f.Content))
+                .Select(f => f with { Path = prefix.Length == 0 ? f.Path : f.Path[prefix.Length..] })
                 .ToList();
             return Observable.Return(new RepoSnapshot(sha, files));
         }

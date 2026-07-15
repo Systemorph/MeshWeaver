@@ -25,6 +25,23 @@ instancesAdmin:
   # Instances tab (→ Instances__GrafanaBaseUrl). Empty = the tab shows a configure-me hint
   # instead of links. Only meaningful where clusterRead is true (the company instance).
   grafanaBaseUrl: ""
+# ---- KEDA autoscaling (portal) --------------------------------------------
+# HA deployments autoscale the portal via a KEDA ScaledObject (templates/
+# memex-portal/scaledobject.yaml) instead of a fixed replica count. Off by
+# default (single-replica installs); the AKS overlay enables it. Scale-UP is
+# fast, scale-DOWN is deliberately slow — a Blazor Server circuit is stateful
+# (killing a pod drops its users' sessions) and every silo add/remove churns
+# the Orleans cluster, so we shed load gently. Requires the KEDA operator
+# (AKS managed add-on: `az aks update --enable-keda`) + metrics-server, and
+# AdoNet Orleans clustering (Localhost cannot span the replicas KEDA adds).
+keda:
+  enabled: false
+  minReplicas: 2          # HA floor (also the Orleans cluster seed)
+  maxReplicas: 8
+  cpuTarget: 70           # % CPU utilization — scale up past this
+  memoryTarget: 80        # % memory utilization
+  cooldownPeriod: 300     # seconds idle before scaling toward min
+  scaleDownStabilizationSeconds: 600   # 10 min of calm before removing a pod
 # ---- External Ollama (local self-host) ------------------------------------
 # Front a host-native Ollama with an in-cluster Service so the portal addresses
 # it by name (http://ollama:11434/v1) instead of a host-gateway IP. On macOS the
@@ -165,8 +182,8 @@ config:
     Graph__Storage__BasePath: "/data/graph"
     Mcp__BaseUrl: "http://memex-portal-service:8080"
     # Public https host of THIS instance — builds the "Open" links in outbound email
-    # (invitations / access-granted). Empty = links omitted. An env overlay sets it,
-    # e.g. Portal__BaseUrl: "https://memex.meshweaver.cloud".
+    # (invitations / access-granted). Leave empty to DERIVE it from ingress.host
+    # (https://{ingress.host}); set only to override with a vanity domain.
     Portal__BaseUrl: ""
     # AI model catalog — empty by default. An overlay sets endpoints + model
     # lists (+ keys in secrets above) to seed the system catalog on deploy.

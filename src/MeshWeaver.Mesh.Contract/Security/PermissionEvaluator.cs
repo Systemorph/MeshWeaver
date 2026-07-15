@@ -58,6 +58,13 @@ internal static class PermissionEvaluator
     private const string RoleNodeType = "Role";
     private const string RoleQueryId = "$security-roles";
 
+    // Group access is resolved GLOBALLY — a group defined in one partition can be granted in
+    // another (cross-partition licensing), so we read EVERY GroupMembership node (as System, like
+    // the other $security-* queries) and expand the viewer's transitive group set in-memory. This
+    // mirrors the Postgres rebuild, which reads memberships from the global auth mirror.
+    private const string GroupMembershipNodeType = "GroupMembership";
+    private const string MembershipQueryId = "$security-memberships";
+
     #region Public surface
 
     public static IObservable<bool> HasPermission(IMessageHub hub, string nodePath, Permission permission)
@@ -135,12 +142,19 @@ internal static class PermissionEvaluator
         var staticOnlyDeniedScopeRoles = ComputeStaticOnlyDeniedScopeRoles(staticNodes, userId, hub.JsonSerializerOptions);
         var fast = ComputeRoleState(staticOnlyScopeRoles, nodePath, userId, capturedContext, capturedCircuitContext, staticPolicies, staticOnlyDeniedScopeRoles);
 
-        var enriched = ObserveEffectiveAssignments(hub, cache, nodePath, staticNodes)
-            .CombineLatest(
+        var enriched = Observable.CombineLatest(
+                ObserveEffectiveAssignments(hub, cache, nodePath, staticNodes),
                 ObserveScopePolicies(hub, cache, nodePath, staticPolicies),
-                (nodes, policies) =>
+                ObserveAllMembershipNodes(hub),
+                (nodes, policies, memberships) =>
                 {
-                    var (granted, denied) = ComputeScopeRoles(userId, nodes, staticNodes, hub.JsonSerializerOptions);
+                    // Match grants to the viewer OR any group they belong to (transitively). A group
+                    // grant's subject is the group path, and memberships live UNDER the group node —
+                    // off the target's scope walk, and possibly in another partition — so the group
+                    // set is resolved globally here, then folded into the subjects ComputeScopeRoles
+                    // matches on. Consistent with the Postgres rebuild's global group expansion.
+                    var subjects = ResolveUserGroups(userId, memberships, hub.JsonSerializerOptions).Add(userId);
+                    var (granted, denied) = ComputeScopeRoles(subjects, nodes, staticNodes, hub.JsonSerializerOptions);
                     return (Granted: granted, Denied: denied, RuntimePolicies: policies);
                 })
             .Select(snap => ComputeRoleState(snap.Granted, nodePath, userId, capturedContext, capturedCircuitContext, staticPolicies, snap.Denied, snap.RuntimePolicies));
@@ -473,7 +487,7 @@ internal static class PermissionEvaluator
 
     private static (ImmutableDictionary<string, ImmutableHashSet<string>> Granted,
                     ImmutableDictionary<string, ImmutableHashSet<string>> Denied) ComputeScopeRoles(
-        string userId,
+        IReadOnlySet<string> subjects,
         IEnumerable<MeshNode> allNodes,
         IReadOnlyList<MeshNode> staticAssignments,
         JsonSerializerOptions options)
@@ -493,7 +507,7 @@ internal static class PermissionEvaluator
                 return;
 
             var assignment = DeserializeAssignment(node, options);
-            if (assignment == null || assignment.AccessObject != userId)
+            if (assignment == null || !subjects.Contains(assignment.AccessObject))
                 return;
 
             foreach (var ra in assignment.Roles)
@@ -615,6 +629,18 @@ internal static class PermissionEvaluator
             .Select(arr => arr.ToArray());
     }
 
+    /// <summary>
+    /// Every <c>GroupMembership</c> node in the mesh, cached process-wide and read as System (like
+    /// the other <c>$security-*</c> queries), so group access resolves GLOBALLY — a group and its
+    /// members can live in a different partition than the grant (cross-partition licensing).
+    /// </summary>
+    private static IObservable<IEnumerable<MeshNode>> ObserveAllMembershipNodes(IMessageHub hub)
+    {
+        var cache = hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
+        return cache.GetQuery(MembershipQueryId, hub.JsonSerializerOptions,
+            $"nodeType:{GroupMembershipNodeType} scope:subtree");
+    }
+
     #endregion
 
     #region Helpers
@@ -627,6 +653,66 @@ internal static class PermissionEvaluator
         if (string.IsNullOrEmpty(userId) || context?.IsVirtual == true)
             userId = WellKnownUsers.Anonymous;
         return userId;
+    }
+
+    /// <summary>
+    /// The transitive set of groups <paramref name="userId"/> belongs to, expanded from all
+    /// <c>GroupMembership</c> nodes. A membership's <c>Member</c> may itself be a group, so nested
+    /// groups are followed (BFS). Never includes <paramref name="userId"/> itself.
+    /// </summary>
+    private static ImmutableHashSet<string> ResolveUserGroups(
+        string userId, IEnumerable<MeshNode> memberships, JsonSerializerOptions options)
+    {
+        // member -> the groups it is DIRECTLY a member of.
+        var edges = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+        foreach (var node in memberships)
+        {
+            if (node.NodeType != GroupMembershipNodeType)
+                continue;
+            var m = DeserializeMembership(node, options);
+            if (m is null || string.IsNullOrEmpty(m.Member) || m.Groups is null)
+                continue;
+            foreach (var entry in m.Groups)
+            {
+                if (string.IsNullOrEmpty(entry.Group))
+                    continue;
+                if (!edges.TryGetValue(m.Member, out var list))
+                    edges[m.Member] = list = new List<string>();
+                list.Add(entry.Group);
+            }
+        }
+
+        var result = ImmutableHashSet<string>.Empty;
+        if (edges.Count == 0)
+            return result;
+        var visited = new HashSet<string>(StringComparer.Ordinal) { userId };
+        var queue = new Queue<string>();
+        queue.Enqueue(userId);
+        while (queue.Count > 0)
+        {
+            var current = queue.Dequeue();
+            if (!edges.TryGetValue(current, out var groups))
+                continue;
+            foreach (var g in groups)
+                if (visited.Add(g))   // a group may itself be a member of another group (nesting)
+                {
+                    result = result.Add(g);
+                    queue.Enqueue(g);
+                }
+        }
+        return result;
+    }
+
+    private static GroupMembership? DeserializeMembership(MeshNode node, JsonSerializerOptions options)
+    {
+        if (node.Content is GroupMembership gm)
+            return gm;
+        if (node.Content is JsonElement je)
+        {
+            try { return JsonSerializer.Deserialize<GroupMembership>(je.GetRawText(), options); }
+            catch { return null; }
+        }
+        return null;
     }
 
     private static IEnumerable<MeshNode> UnionByPath(

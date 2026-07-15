@@ -41,10 +41,18 @@ data:
   # ---- Public base URL — the instance's own https host --------------------
   # Used to build ABSOLUTE links in outbound email (access-granted notifications,
   # invitations) — without it the "Open {space}" button is omitted and the email
-  # ships linkless (the #1 complaint: a first-contact invite with no way in). Set
-  # to the instance's public URL, e.g. https://memex.meshweaver.cloud. Read by
-  # NotificationService/InvitationEmailSender via Portal:BaseUrl.
-  Portal__BaseUrl: "{{ .Values.config.memex_portal.Portal__BaseUrl | default "" }}"
+  # ships linkless (the #1 complaint: a first-contact invite with no way in). Read
+  # by NotificationService/InvitationEmailSender via Portal:BaseUrl.
+  # DERIVED by default from the ingress host (https://{ingress.host}) — the SAME
+  # host OAuth redirect_uri is built from — so every instance with a public host
+  # gets correct email links with NO per-env config. An explicit
+  # config.memex_portal.Portal__BaseUrl overrides (e.g. a vanity domain that
+  # differs from the ingress host).
+{{- $portalBaseUrl := .Values.config.memex_portal.Portal__BaseUrl }}
+{{- if and (not $portalBaseUrl) (.Values.ingress).enabled (.Values.ingress).host }}
+{{-   $portalBaseUrl = printf "https://%s" .Values.ingress.host }}
+{{- end }}
+  Portal__BaseUrl: "{{ $portalBaseUrl | default "" }}"
   # ---- Instance identity (tab title + favicon badge) — optional -------------
   # When InstanceName is set, the browser tab title becomes that name and the
   # favicon becomes a distinct colored badge (instance initial), so Local / Test /

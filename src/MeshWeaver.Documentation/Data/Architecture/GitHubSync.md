@@ -150,8 +150,28 @@ Import reuses the platform's content-addressed import pipeline (fingerprint gate
 activity lock + canonical upsert + prune) — see
 [StaticRepoImport.md](/Doc/Architecture/StaticRepoImport).
 
+### Two-way — never overwrite changes made on the server
+
+By default import is **git-first**: an update overwrites (and prunes) the live node from the
+repo. That silently loses edits made on the server *between* syncs. Turn on **Two-way** (a
+checkbox on the sync source) to change the conflict rule to **newest-writer-wins per node**:
+
+- A node whose live `LastModified` is newer than the last recorded sync (`LastSyncedAt`) was
+  changed on the server since you last synced. An **Update to latest** **keeps** that node —
+  it is neither overwritten nor pruned — so your local change is carried back to GitHub on the
+  next **Commit** ("newer on the server wins → GitHub"). A node the server hasn't touched since
+  the last sync is still updated from the repo as usual.
+- Two-way only takes effect once a first sync has recorded `LastSyncedAt`; the initial import is
+  git-first (there is nothing local to protect yet).
+
+**Force update** is the escape hatch: it ignores two-way and overwrites/prunes from the repo
+regardless — use it to deliberately discard local changes back to the repository state. Via MCP:
+`git_hub_sync(space, op:"update", force:true)`.
+
 > **Take-over edits survive.** A node you've edited and marked to exclude from sync is
 > not overwritten or pruned by a re-import — that's how you "claim" content locally.
+> Two-way generalizes this to *every* server-side edit (no explicit claim needed) as long as it
+> post-dates the last sync.
 
 ---
 

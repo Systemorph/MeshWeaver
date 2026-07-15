@@ -1164,15 +1164,18 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
             await WaitWithProgressAsync(testName, sw, cts.Token);
             // DisposalCompleted only drains the action blocks + message round-trips.
             // Offloaded I/O (IIoPool) runs on the ThreadPool independently and is NOT
-            // covered — wait for it here, BEFORE base.DisposeAsync tears down the
-            // service scope, so no continuation resolves a disposed Autofac scope
-            // (the unobserved "catastrophic ObjectDisposedException" class).
+            // covered — CANCEL + JOIN it here, BEFORE base.DisposeAsync tears down the
+            // service scope, so no continuation resolves a disposed Autofac scope AND no
+            // ThreadPool leaf dereferences a collectible node ALC's freed metadata after
+            // unload (the teardown use-after-unload SIGSEGV). A live change-feed leaf never
+            // completes on its own, so a WAIT-only drain would time out and let the scope
+            // dispose under it; DrainAll() cancels the leaf so it stops, then joins.
             if (ioPools is not null)
             {
-                await ioPools.WhenDrained(DisposeTimeout).FirstAsync().ToTask();
+                ioPools.DrainAll();
                 if (ioPools.TotalInFlight > 0)
                     FileOutput.WriteLine(
-                        $"[DISPOSE] {testName}: I/O pools still report {ioPools.TotalInFlight} in-flight after drain wait");
+                        $"[DISPOSE] {testName}: I/O pools still report {ioPools.TotalInFlight} in-flight after drain");
             }
             // After all the sync stuff is disposed (and everyone has enqueued their async
             // cleanup), quiesce the async dispose queue before the scope closes below.

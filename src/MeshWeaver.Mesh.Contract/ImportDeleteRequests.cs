@@ -93,6 +93,57 @@ public record ImportContentResponse
     public static ImportContentResponse Fail(string error) => new() { Error = error };
 }
 
+/// <summary>One content-collection file carried INLINE (its bytes, not a source-collection reference).</summary>
+/// <param name="Path">The file's path RELATIVE to <see cref="SyncContentFilesRequest.TargetPath"/> within the collection (e.g. <c>videos/intro.mp4</c>).</param>
+/// <param name="Content">The file's raw bytes.</param>
+public record InlineContentFile(string Path, byte[] Content);
+
+/// <summary>
+/// Writes a set of files (carried INLINE as raw bytes) into a content collection folder and, when
+/// <see cref="Mirror"/> is set, PRUNES any file already under that folder that is not in
+/// <see cref="Files"/> — so the folder ends up mirroring exactly the supplied set (add / update /
+/// delete). Handled on the hub where the target collection resolves (the Space root for the
+/// per-Space <c>content</c> collection). This is the request GitSync uses to sync git-committed
+/// <c>{Space}/content/**</c> binaries (course videos/posters) into the mesh content collection:
+/// the bytes travel with the request (binary-safe — never round-tripped through a text/JSON string),
+/// and the mirror keeps the collection matching the repo without wiping files the repo still carries.
+/// Re-posting the same set is idempotent (same bytes overwrite; nothing to prune).
+/// </summary>
+/// <param name="CollectionName">The target content collection (e.g. <c>content</c>).</param>
+/// <param name="TargetPath">The folder within the collection the files are written under (the owning node's path relative to the Space; empty for the Space root).</param>
+/// <param name="Files">The files to write, each with a path relative to <paramref name="TargetPath"/>.</param>
+[SyncContentFilesPermission]
+public record SyncContentFilesRequest(
+    string CollectionName,
+    string TargetPath,
+    IReadOnlyList<InlineContentFile> Files) : IRequest<ImportContentResponse>
+{
+    /// <summary>
+    /// When true, delete every file already directly-or-recursively under <see cref="TargetPath"/>
+    /// that is NOT present in <see cref="Files"/> (mirror the folder to the supplied set). When false,
+    /// the write is purely additive (upsert only). Default true.
+    /// </summary>
+    public bool Mirror { get; init; } = true;
+}
+
+/// <summary>
+/// Permission gate for <see cref="SyncContentFilesRequest"/>: always requires
+/// <see cref="Permission.Create"/> (it writes files), and ADDITIONALLY requires
+/// <see cref="Permission.Delete"/> when <see cref="SyncContentFilesRequest.Mirror"/> is set (mirroring
+/// can prune existing files). A caller with only Create cannot trigger a pruning mirror.
+/// </summary>
+public sealed class SyncContentFilesPermissionAttribute() : RequiresPermissionAttribute(Permission.Create)
+{
+    /// <inheritdoc />
+    public override IEnumerable<(string Path, Permission Permission)> GetPermissionChecks(
+        IMessageDelivery delivery, string hubPath)
+    {
+        yield return (hubPath, Permission.Create);
+        if (delivery.Message is SyncContentFilesRequest { Mirror: true })
+            yield return (hubPath, Permission.Delete);
+    }
+}
+
 /// <summary>
 /// Request to delete content from a content collection folder.
 /// </summary>
