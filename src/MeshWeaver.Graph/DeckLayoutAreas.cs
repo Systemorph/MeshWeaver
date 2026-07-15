@@ -267,11 +267,12 @@ public static class DeckLayoutAreas
                     .Where(r => !string.IsNullOrWhiteSpace(r))
                     .Select(r => ResolveSlidePath(deckPath, r))
                     .ToImmutableList();
-                // Empty manifest → a live query (custom, or the deck's own subtree by default).
+                // Empty manifest → a live query: the deck's custom Query, else the DEFAULT subtree of
+                // Slide nodes (a deck can be just "a folder of slides"; only Slide nodes count).
                 var query = paths.Count > 0
                     ? null
                     : string.IsNullOrWhiteSpace(deck?.Query)
-                        ? $"path:{deckPath} scope:descendants"
+                        ? $"path:{deckPath} nodeType:{SlideNodeType.NodeType} scope:subtree"
                         : deck!.Query!.Trim();
                 return (Paths: paths, Query: query);
             })
@@ -289,7 +290,7 @@ public static class DeckLayoutAreas
     /// <summary>
     /// A live (synced) query for a deck's slides when it has no explicit manifest: runs
     /// <paramref name="query"/> (a custom <see cref="DeckContent.Query"/> or the default
-    /// <c>path:{deck} scope:descendants</c>), accumulates the reactive change stream, drops the deck
+    /// <c>path:{deck} nodeType:Slide scope:subtree</c>), accumulates the reactive change stream, drops the deck
     /// root itself and any <c>_</c>-prefixed governance node, and orders the result by
     /// <see cref="MeshNode.Order"/> (nulls last, then by path). So a deck whose slides are its
     /// children needs no manifest, and re-ordering is just editing each slide's <c>Order</c>.

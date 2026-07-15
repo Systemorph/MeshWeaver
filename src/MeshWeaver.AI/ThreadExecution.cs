@@ -598,6 +598,15 @@ internal static class ThreadExecution
                         .Timeout(WatchdogRescueBudget)
                         .Subscribe(_ => { }, ex =>
                         {
+                            // Disposal already tearing the hub down: this inner rescue chain's
+                            // Timeout timer is NOT owned by the outer watchdog subscription (an
+                            // inner Subscribe created in onNext survives the outer's Dispose), so
+                            // it can fire AFTER hub disposal. There is nothing left to rescue —
+                            // disposal is the escape hatch's own goal — and escalating would
+                            // resolve services from the disposed container and throw INSIDE this
+                            // OnError on a bare timer thread (process-fatal). Refuse-and-complete.
+                            if (disposed || hub.IsDisposing)
+                                return;
                             // Escalate ONLY on the landing-budget timeout — that is the proof the
                             // action block is blocked. Any other error (validation, access,
                             // serialization) fails FAST on a healthy hub: deactivating there would
@@ -944,7 +953,8 @@ internal static class ThreadExecution
             ThreadMessageStatus? status = null,
             string? summary = null,
             string? harness = null,
-            int? cacheReadTokens = null, int? cacheWriteTokens = null)
+            int? cacheReadTokens = null, int? cacheWriteTokens = null,
+            bool stampActivity = true)
         {
             // Cell already latched dead (no initial state ever arrived) — skip the write entirely.
             // Never construct/subscribe a doomed cache.Update; that is the storm. Empty completes
@@ -1115,8 +1125,17 @@ internal static class ThreadExecution
             // since the heartbeat scanner runs every 5 s and the timeout is
             // 30 s. Single source of "is this sub-thread still alive?" the
             // parent's heartbeat scanner reads via cache.GetStream(threadPath).
+            //
+            // 🚨 stampActivity=false for the framework's own "Generating response..."
+            // placeholder: it is NOT agent progress. Stamping it would set
+            // LastActivityAt at round start, so a sub-agent still in first-token
+            // latency looks "active then stalled" to the parent heartbeat and gets
+            // cancelled by the inter-activity timeout before it ever emits (the
+            // "sub-thread never started" symptom). Leaving LastActivityAt null until
+            // the FIRST real token is what lets DelegationHandlers tell first-token
+            // latency (the generous first-activity budget) apart from a genuine stall.
             var now = DateTime.UtcNow;
-            if (now - lastActivityStamped > heartbeatStampInterval)
+            if (stampActivity && now - lastActivityStamped > heartbeatStampInterval)
             {
                 lastActivityStamped = now;
                 parentHub.GetWorkspace().GetMeshNodeStream(threadPath).Update(node =>
@@ -1685,6 +1704,32 @@ internal static class ThreadExecution
                     .Take(1)
                     .Subscribe(_ =>
                     {
+                        // #321 ack — stamp "stopping…" the INSTANT the cancel is observed, from THIS
+                        // hub-stream gate, via stream.Update on the own node, BEFORE tripping the CTS.
+                        // Ordering is the whole fix: because the ack Update is enqueued here — before
+                        // executionCts.Cancel() propagates to the streaming-loop catch that writes the
+                        // terminal Cancelled — the owning hub's serialized write queue applies the ack
+                        // strictly BEFORE the terminal clear. The ack and the teardown were previously two
+                        // racing writers in two different contexts (InstallCancellationWatcher on the
+                        // stream-emission thread vs the catch on the AI I/O pool), so under load the
+                        // terminal could win and the guard (`IsExecuting && RequestedStatus==Cancelled`)
+                        // would drop the ack — the CancellationAckTest timeout flake. One ordered writer
+                        // removes the race. Guarded to still-executing so it can never clobber a terminal.
+                        parentHub.GetWorkspace().GetMeshNodeStream().Update(
+                            curr => curr?.Content is MeshThread ackThread
+                                    && ackThread.Status.IsExecuting()
+                                    && ackThread.RequestedStatus == ThreadExecutionStatus.Cancelled
+                                ? curr with { Content = ackThread with { ExecutionStatus = CancellationRequestedStatus } }
+                                : curr!)
+                            .Subscribe(
+                                updated => execLogger?.LogDebug(
+                                    "[ThreadExec] Cancellation ack {Result} for {ThreadPath}",
+                                    (updated?.Content as MeshThread)?.ExecutionStatus == CancellationRequestedStatus
+                                        ? "stamped" : "skipped (already terminal)",
+                                    threadPath),
+                                ex => execLogger?.LogDebug(ex,
+                                    "[ThreadExec] Cancellation ack stamp failed for {ThreadPath}", threadPath));
+
                         try { executionCts.Cancel(); }
                         catch (ObjectDisposedException) { /* round already finished */ }
                     });
@@ -1699,10 +1744,13 @@ internal static class ThreadExecution
                 capturedResponseText = responseText;
                 segment.ResponseText = responseText;
 
-                // Push progress: generating
+                // Push progress: generating. stampActivity:false — this framework
+                // placeholder is NOT agent progress, so it must not set LastActivityAt
+                // (else first-token latency reads as a stall to the parent heartbeat).
                 PushToResponseMessage("Generating response...", ImmutableList<ToolCallEntry>.Empty,
                     ImmutableList<NodeChangeEntry>.Empty, request.AgentName, request.ModelName,
-                    status: ThreadMessageStatus.Streaming, harness: request.Harness);
+                    status: ThreadMessageStatus.Streaming, harness: request.Harness,
+                    stampActivity: false);
 
                 // 🚦 The streaming round is an async I/O leaf and MUST run on the bounded AI
                 // I/O pool — NEVER Task.Run, NEVER inline on the hub turn. The pool offloads onto
@@ -2854,23 +2902,15 @@ internal static class ThreadExecution
                 {
                     var thread = x.Thread!;
 
-                    // #321: acknowledge the Stop IMMEDIATELY. The round's own CTS self-cancel
-                    // (ExecuteMessageAsync) tears the round down only after the in-flight tool
-                    // call finishes or hits its timeout (~30s); during that window the status
-                    // line would otherwise stay frozen on the previous tool-call stamp with no
-                    // sign the Stop was received. Stamp the thread's ExecutionStatus now, guarded
-                    // to the still-executing + still-cancel-requested state so it never clobbers a
-                    // terminal write, and leaving RequestedStatus in place for the round's
-                    // terminal handler. The reasoning heartbeat is suppressed while
-                    // RequestedStatus == Cancelled, so this ack persists until the round settles.
-                    hub.GetWorkspace().GetMeshNodeStream().Update(
-                        curr => curr?.Content is MeshThread ackThread
-                                && ackThread.Status.IsExecuting()
-                                && ackThread.RequestedStatus == ThreadExecutionStatus.Cancelled
-                            ? curr with { Content = ackThread with { ExecutionStatus = CancellationRequestedStatus } }
-                            : curr!)
-                        .Subscribe(_ => { }, ex => logger?.LogDebug(ex,
-                            "[ThreadExec] Cancellation ack stamp failed for {ThreadPath}", threadPath));
+                    // #321 ack — the "stopping…" stamp lives in ExecuteMessageAsync's per-round
+                    // self-cancel gate (which fires executionCts.Cancel()), NOT here. That is the
+                    // ONE ordered writer: it enqueues the ack Update before it trips the CTS, so the
+                    // owning hub's serialized queue applies the ack before the streaming-loop catch's
+                    // terminal Cancelled. Stamping it here too would re-introduce the two-context race
+                    // (this watcher runs on the stream-emission thread; the terminal write on the AI
+                    // I/O pool) that dropped the ack under load — the CancellationAckTest flake. This
+                    // watcher now only (a) propagates the cancel to sub-threads and (b) covers the
+                    // pure claim-window case via the No-CTS fallback below.
 
                     // Propagate to every active delegation sub-thread via the
                     // canonical IMeshNodeStreamCache. The sub-thread is a

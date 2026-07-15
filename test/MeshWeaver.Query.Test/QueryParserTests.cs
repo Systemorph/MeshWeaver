@@ -184,6 +184,29 @@ public class QueryParserTests
         result.Paths.Should().BeNull();
     }
 
+    [Fact]
+    public void Parse_BracketList_PopulatesOrderedPaths()
+    {
+        // The [a, b, c] surface is an EXPLICIT, ORDERED list of node paths — the
+        // "alternatively specify the exact slides" form for a Deck's manifest. It
+        // populates the SAME Paths list as path:a|b|c (so backends push it down as
+        // WHERE path IN (...)), but the ORDER is preserved in Paths for order-sensitive
+        // consumers (a deck presents its slides in the listed order).
+        var result = _parser.Parse("[foo/bar/baz, foo/bar, foo]");
+
+        result.Paths.Should().Equal("foo/bar/baz", "foo/bar", "foo");
+        result.Path.Should().Be("foo/bar/baz");
+    }
+
+    [Fact]
+    public void Parse_BracketList_SingleEntry()
+    {
+        var result = _parser.Parse("[only/one]");
+
+        result.Paths.Should().Equal("only/one");
+        result.Path.Should().Be("only/one");
+    }
+
     // ─── SQL-function selectors in sort: ───
     // `sort:length(path)-desc` — function-call syntax in the sort selector lets
     // backends emit `ORDER BY length(n.path) DESC` without hardcoding sort

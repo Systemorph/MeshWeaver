@@ -83,42 +83,38 @@ public class TrainingSimResponderTest(ITestOutputHelper output) : MonolithMeshTe
             .Which.Markdown!.ToString().Should().Contain("Just an explanation");
     }
 
-    [Fact(Timeout = 90_000)]
-    public async Task Live_Responder_Submits_Thread_With_TrainingSim_Agent()
+    /// <summary>
+    /// Model-less environment: the LIVE responder must DEGRADE GRACEFULLY — emit the calm
+    /// "configure a language model" notice and NOT submit a thread. This replaced the pre-guard
+    /// behavior (submit unconditionally, assert the thread node) when
+    /// <c>TrainingSimResponder.IsAnyModelConfigured</c> was introduced: with the credential
+    /// resolver registered and no model resolvable, <see cref="TrainingSimResponder.Live"/>
+    /// returns the notice BEFORE <c>hub.StartThread</c>. The old assertion (thread lands under
+    /// the owner) was therefore impossible and burned its full 60 s wait on every run — one of
+    /// the hidden AI.Test failures masked by the CI 6-minute kill. The submit-with-model leg is
+    /// e2e-stack territory (needs a real model).
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public async Task Live_Responder_WithoutModel_EmitsCalmNotice()
     {
         var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         access.SetCircuitContext(TestUsers.Admin);
 
         var client = GetClient();
-        // Owner partition live (onboarded) — same precondition ThreadCreatableFromHomeTest pins.
         await client.Observe(new PingRequest(), o => o.WithTarget(new Address(OwnerId)))
             .Should().Within(30.Seconds()).Emit();
 
         var prompt = $"training-live-{Guid.NewGuid():N}";
         var responder = TrainingSimResponder.Live(client, OwnerId);
 
-        // Subscribe = submit. No model is configured here, so the REPLY may
-        // never complete — the assertion below is on the canonical submission
-        // side effect, not the round.
-        using var subscription = responder(prompt).Subscribe(_ => { }, _ => { });
+        var response = await responder(prompt)
+            .Should().Within(30.Seconds()).Emit();
 
-        // The thread node lands under {owner}/_Thread with the TrainingSim
-        // agent selected on its composer and our prompt as the queued/first
-        // user message.
-        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-        var thread = await meshService
-            .Query<MeshNode>(MeshQueryRequest.FromQuery(
-                $"path:{OwnerId}/_Thread scope:children nodeType:{ThreadNodeType.NodeType}"))
-            .SelectMany(change => change.Items)
-            .Select(node => node.ContentAs<MeshThread>(Mesh.JsonSerializerOptions))
-            .Should().Within(60.Seconds()).Match(t => t is not null
-                && t.Composer != null
-                && t.Composer.AgentName == TrainingSimResponder.AgentName
-                && (t.PendingUserMessages.Values.Any(m => m.Text == prompt)
-                    || t.UserMessageIds.Count > 0));
-
-        thread!.Composer!.AgentName.Should().Be(TrainingSimResponder.AgentName,
-            "the LIVE adapter selects the dedicated training agent on the composer");
+        response!.Code.Should().BeEmpty("the notice keeps the code pane empty");
+        var markdown = response.Output.Should().BeOfType<MarkdownControl>()
+            .Subject.Markdown!.ToString()!;
+        markdown.Should().Contain("configure a language model",
+            "a model-less environment must show the calm notice, not a raw factory error");
     }
 }
 

@@ -32,7 +32,8 @@ namespace MeshWeaver.Persistence.Test;
 /// those package references at runtime; that path is covered by
 /// <c>ScriptExecutionInUserHomeTest.NuGetDirective_*</c>).</para>
 /// </summary>
-public class DocumentationCodeBlockCompilationTest
+public class DocumentationCodeBlockCompilationTest(KernelScriptOptionsFixture fixture)
+    : IClassFixture<KernelScriptOptionsFixture>
 {
     public static IEnumerable<object[]> DocResources()
     {
@@ -67,7 +68,7 @@ public class DocumentationCodeBlockCompilationTest
             .Where(block => !block.SubmitCode!.Code.Contains("#r \"nuget:", StringComparison.OrdinalIgnoreCase))
             .ToList();
 
-        var options = CreateKernelEquivalentScriptOptions();
+        var options = fixture.Options;
         var failures = submissions
             .Select(block => (block, errors: Compile(block.SubmitCode!.Code, options)))
             .Where(x => x.errors.Count > 0)
@@ -86,7 +87,14 @@ public class DocumentationCodeBlockCompilationTest
         // globalsType MUST match the kernel (KernelExecutor.RunAsync passes typeof(MeshScriptGlobals))
         // so that Log / Mesh / Ct / Inputs resolve as bare identifiers in cells.
         var script = CSharpScript.Create(code, options, globalsType: typeof(MeshScriptGlobals));
-        return script.Compile()
+        // Diagnostics WITHOUT creating an executor: Script.Compile() also EMITS the script and
+        // LOADS it into a fresh InteractiveAssemblyLoader AssemblyLoadContext that is never
+        // unloaded — one leaked ALC per compiled block (alc 1→121 in the CI trace), which drove
+        // the testhost past the 6 GiB memory-watchdog FailFast (SIGABRT / exit 134). The error
+        // set is identical: Compile() itself reports GetCompilation().GetDiagnostics(); the
+        // executor is pure side effect for this compile-only guard.
+        return script.GetCompilation()
+            .GetDiagnostics()
             .Where(d => d.Severity == DiagnosticSeverity.Error)
             .ToList();
     }
@@ -107,6 +115,20 @@ public class DocumentationCodeBlockCompilationTest
         using var reader = new StreamReader(stream);
         return reader.ReadToEnd();
     }
+
+}
+
+/// <summary>
+/// ONE compile environment shared across all ~210 doc-page theory cases. Rebuilding the full
+/// trusted-platform-assembly MetadataReference set per case retained ~3.3 GiB of NATIVE
+/// metadata in a single run (invisible to the GC, freed only by finalizers) — the leak that
+/// tripped the CI memory watchdog's FailFast. xunit disposes the fixture with the class, so
+/// the references are released before the kernel-based tests (DocExecutableBlocksTest,
+/// CourseCellExecutionTest) run under the same process budget.
+/// </summary>
+public sealed class KernelScriptOptionsFixture
+{
+    public ScriptOptions Options { get; } = CreateKernelEquivalentScriptOptions();
 
     private static ScriptOptions CreateKernelEquivalentScriptOptions()
     {

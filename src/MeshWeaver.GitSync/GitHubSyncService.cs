@@ -337,10 +337,12 @@ public sealed class GitHubSyncService
     /// <paramref name="progress"/> (when the caller runs as an activity: <c>ctx.Log</c>)
     /// receives per-file problems — a repo file that failed to parse and was therefore
     /// dropped from the import — so they land on the activity log, not only in Loki.
+    /// <paramref name="force"/> ignores the source's two-way setting and overwrites/prunes
+    /// from the repo regardless (the deliberate-discard escape hatch).
     /// </summary>
     public IObservable<StaticRepoImportResult> ReimportAtCommit(
         string spacePath, string commitish, string userId, string? sourceId = null,
-        Action<string, LogLevel>? progress = null)
+        Action<string, LogLevel>? progress = null, bool force = false)
     {
         return ReadConfig(spacePath, sourceId).Take(1).SelectMany(config =>
         {
@@ -351,13 +353,27 @@ public sealed class GitHubSyncService
                 return Observable.Throw<StaticRepoImportResult>(new InvalidOperationException(
                     $"This sync source is export-only (mesh → repo): importing from {repoUrl} is not allowed. " +
                     "Change the source's Sync direction to Bidirectional or Import-only to re-import."));
+            // Two-way (config.TwoWay): don't overwrite/prune nodes changed on the server since the last
+            // recorded sync (config.LastSyncedAt) — they are carried back on the next commit. `force`
+            // overrides. Git-first when TwoWay is off (unchanged legacy behavior).
+            var policy = new ImportConflictPolicy(config.TwoWay, config.LastSyncedAt, force);
             return ResolveAuth(userId).SelectMany(auth =>
             {
                 var token = auth.Token;
-                logger?.LogInformation("Re-importing {Space} at {Ref}", spacePath, commitish);
+                logger?.LogInformation("Re-importing {Space} at {Ref} (twoWay={TwoWay}, force={Force})",
+                    spacePath, commitish, config.TwoWay, force);
                 return FetchAndImport(repoUrl, commitish, config.Subdirectory, token, spacePath,
-                        SyncIgnore.For(config), progress)
-                    .SelectMany(x => RecordLastSync(spacePath, x.CommitSha, sourceId).Select(_ => x.Result));
+                        SyncIgnore.For(config), progress, policy)
+                    // 🚨 Only advance the last-sync baseline when the mesh is now IN SYNC with the repo.
+                    // A two-way import that PRESERVED server-newer nodes leaves the mesh AHEAD of the repo
+                    // (those edits aren't committed back yet); advancing LastSyncedAt would move the
+                    // baseline past them, so the NEXT update would no longer see them as "newer on the
+                    // server" and would overwrite them — losing the very edits two-way just protected.
+                    // Leave the baseline until a commit carries them back (which advances it). A clean
+                    // import (nothing preserved — always the case git-first) records normally.
+                    .SelectMany(x => x.Result.Preserved > 0
+                        ? Observable.Return(x.Result)
+                        : RecordLastSync(spacePath, x.CommitSha, sourceId).Select(_ => x.Result));
             });
         });
     }
@@ -411,27 +427,45 @@ public sealed class GitHubSyncService
 
     private IObservable<(StaticRepoImportResult Result, string CommitSha)> FetchAndImport(
         string repoUrl, string commitish, string? subdirectory, string token, string spaceId,
-        SyncIgnore ignore, Action<string, LogLevel>? progress = null)
+        SyncIgnore ignore, Action<string, LogLevel>? progress = null, ImportConflictPolicy? policy = null)
     {
         return repoClient.Fetch(repoUrl, commitish, subdirectory, token).SelectMany(snapshot =>
             ParseSnapshot(snapshot, spaceId, ignore, progress).SelectMany(parsed =>
             {
-                var source = new InMemoryStaticRepoSource(spaceId, parsed.Children, parsed.Root);
-                return StaticRepoImporter.ImportSource(hub, source, logger)
+                var source = new InMemoryStaticRepoSource(
+                    spaceId, parsed.Children, parsed.Root, parsed.ContentSyncs);
+                return StaticRepoImporter.ImportSource(hub, source, logger, policy)
                     .Select(result => (result, snapshot.CommitSha));
             }));
     }
 
-    private IObservable<(MeshNode? Root, IReadOnlyList<MeshNode> Children)> ParseSnapshot(
+    private IObservable<(MeshNode? Root, IReadOnlyList<MeshNode> Children, IReadOnlyList<StaticContentSync> ContentSyncs)> ParseSnapshot(
         RepoSnapshot snapshot, string spaceId, SyncIgnore ignore, Action<string, LogLevel>? progress = null)
     {
         if (snapshot.Files.Count == 0)
-            return Observable.Return(((MeshNode?)null, (IReadOnlyList<MeshNode>)Array.Empty<MeshNode>()));
-        return snapshot.Files
-            // The Space's ignore rules apply on import too — a repo that carries ignored paths
-            // (e.g. Release/ bookkeeping from an older export) must not re-create those nodes.
-            .Where(f => !ignore.IsIgnored(f.Path))
-            .Select(f => ParseFile(f, spaceId, progress))
+            return Observable.Return(((MeshNode?)null, (IReadOnlyList<MeshNode>)Array.Empty<MeshNode>(),
+                (IReadOnlyList<StaticContentSync>)Array.Empty<StaticContentSync>()));
+
+        // Apply the Space's ignore rules on import too — a repo that carries ignored paths (e.g.
+        // Release/ bookkeeping from an older export) must not re-create those nodes NOR re-sync their
+        // content. Then split off the git-committed content-collection assets ({node}/content/**):
+        // their raw bytes are mirrored into the owning node's content collection (never parsed as a
+        // node), so committed course videos/posters land and stop getting wiped. Everything else flows
+        // to node parsing as before.
+        var kept = snapshot.Files.Where(f => !ignore.IsIgnored(f.Path)).ToArray();
+        // Cheap path-only precheck first (no byte materialization for the common node file), then
+        // classify only the content paths — f.Bytes is realized ONLY for an actual content asset.
+        var classified = kept
+            .Select(f => (File: f, Asset: ContentAssetMapper.IsContentPath(f.Path)
+                ? ContentAssetMapper.TryClassify(f.Path, () => f.Bytes)
+                : null))
+            .ToArray();
+        var contentSyncs = ContentAssetMapper.ToContentSyncs(
+            spaceId, classified.Where(c => c.Asset is not null).Select(c => c.Asset!));
+
+        return classified
+            .Where(c => c.Asset is null)
+            .Select(c => ParseFile(c.File, spaceId, progress))
             .Merge(8)
             .Where(x => x.Node is not null)
             .ToList()
@@ -439,7 +473,7 @@ public sealed class GitHubSyncService
             {
                 var root = list.FirstOrDefault(x => x.IsRoot).Node;
                 var children = list.Where(x => !x.IsRoot).Select(x => x.Node!).ToList();
-                return (root, (IReadOnlyList<MeshNode>)children);
+                return (root, (IReadOnlyList<MeshNode>)children, contentSyncs);
             });
     }
 
@@ -618,7 +652,8 @@ public sealed class GitHubSyncService
     public IObservable<MeshNode> SaveConfig(
         string spacePath, string? repositoryUrl, string branch, string? subdirectory,
         bool createBranchIfMissing, bool createRepoIfMissing,
-        SyncDirection direction = SyncDirection.Bidirectional, string? sourceId = null)
+        SyncDirection direction = SyncDirection.Bidirectional, string? sourceId = null,
+        bool twoWay = false)
         => UpdateConfig(spacePath, c => c with
         {
             RepositoryUrl = string.IsNullOrWhiteSpace(repositoryUrl) ? null : repositoryUrl.Trim(),
@@ -627,6 +662,7 @@ public sealed class GitHubSyncService
             CreateBranchIfMissing = createBranchIfMissing,
             CreateRepoIfMissing = createRepoIfMissing,
             Direction = direction,
+            TwoWay = twoWay,
         }, sourceId);
 
     /// <summary>Read-modify-write a config field (current value from the synced query; null when absent).</summary>

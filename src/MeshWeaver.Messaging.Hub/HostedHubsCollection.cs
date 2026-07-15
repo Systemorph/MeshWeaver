@@ -148,8 +148,21 @@ public class HostedHubsCollection(IServiceProvider serviceProvider, Address addr
     }
 
     private readonly object locker = new();
-    private bool IsDisposing => disposalStarted;
+    private bool IsDisposing => disposalStarted || creationClosed;
     private volatile bool disposalStarted;
+    private volatile bool creationClosed;
+
+    /// <summary>
+    /// One-way switch flipped by the OWNING hub the moment its disposal begins
+    /// (<c>MessageHub.Dispose</c>). The collection's own <see cref="Dispose"/> only runs
+    /// in the DisposeHostedHubs phase — potentially seconds later — leaving a window in
+    /// which routed messages could still create NEW hubs that race
+    /// <see cref="DisposeHubsReactive"/>'s snapshot and leak as never-disposed zombies
+    /// whose timers later detonate on the disposed container (the post-teardown
+    /// ObjectDisposedException straggler class). Existing hubs remain resolvable for the
+    /// drain; only CREATION is refused (logged, observable).
+    /// </summary>
+    public void CloseCreation() => creationClosed = true;
 
     // Reactive completion source of truth — completed exactly once (CAS-guarded) when every
     // hosted hub has finished disposing (or the 10 s cap elapses). ReplaySubject(1) so a late

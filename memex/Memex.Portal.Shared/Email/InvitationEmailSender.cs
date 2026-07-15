@@ -214,31 +214,20 @@ public sealed class InvitationEmailSender(
     }
 
     private static string BuildGenericHtml(string? baseUrl)
-    {
-        var link = string.IsNullOrEmpty(baseUrl)
-            ? ""
-            : $"<p style=\"margin:16px 0;\"><a href=\"{System.Net.WebUtility.HtmlEncode(baseUrl)}\" " +
-              "style=\"background:#2563eb;color:#fff;padding:10px 18px;border-radius:6px;text-decoration:none;\">"
-              + "Open Memex</a></p>"
-              + $"<p style=\"color:#888;font-size:12px;\">{System.Net.WebUtility.HtmlEncode(baseUrl)}</p>";
-        return "<p>You've been invited to Memex.</p>"
-               + "<p>Sign in with this email address to get started.</p>"
-               + link;
-    }
+        => MeshWeaver.Graph.EmailTemplate.Build(
+            heading: "You've been invited to Memex",
+            paragraphs: ["You've been invited to Memex — a shared workspace for your team's content and agents."],
+            ctaLabel: string.IsNullOrEmpty(baseUrl) ? null : "Open Memex",
+            ctaUrl: string.IsNullOrEmpty(baseUrl) ? null : baseUrl,
+            footerNote: "Sign in with this email address to get started.");
 
     private static string BuildSpaceHtml(string spaceName, string? spaceUrl)
-    {
-        var name = System.Net.WebUtility.HtmlEncode(spaceName);
-        var link = string.IsNullOrEmpty(spaceUrl)
-            ? ""
-            : $"<p style=\"margin:16px 0;\"><a href=\"{System.Net.WebUtility.HtmlEncode(spaceUrl)}\" " +
-              "style=\"background:#2563eb;color:#fff;padding:10px 18px;border-radius:6px;text-decoration:none;\">"
-              + $"Open {name}</a></p>"
-              + $"<p style=\"color:#888;font-size:12px;\">{System.Net.WebUtility.HtmlEncode(spaceUrl)}</p>";
-        return $"<p>You've been invited to <strong>{name}</strong>.</p>"
-               + "<p>Sign in with this email address to get started.</p>"
-               + link;
-    }
+        => MeshWeaver.Graph.EmailTemplate.Build(
+            heading: $"You've been invited to {spaceName}",
+            paragraphs: [$"You've been invited to \"{spaceName}\" on Memex."],
+            ctaLabel: string.IsNullOrEmpty(spaceUrl) ? null : $"Open {spaceName}",
+            ctaUrl: string.IsNullOrEmpty(spaceUrl) ? null : spaceUrl,
+            footerNote: "Sign in with this email address to get started.");
 
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 

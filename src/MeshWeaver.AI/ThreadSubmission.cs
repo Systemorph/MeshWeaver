@@ -984,6 +984,24 @@ internal static class ThreadSubmissionServer
                     // duplicate and must not re-enter ExecuteMessageAsync.
                     if (!didCommitThisEmission) return;
 
+                    // Refuse-and-complete at the LAUNCH edge. This OnNext is a reactive
+                    // continuation that can arrive after the thread hub began disposing
+                    // (teardown racing an in-flight round — UpdateEmitsDuringRoundTest ends
+                    // mid-round by design). Launching then arms the round's 60 s
+                    // WhenInitialized timeout on the global TimerQueue with the mesh gone;
+                    // when it fires, the fault sink's cell write resolves from the disposed
+                    // container and the ObjectDisposedException escapes INSIDE OnError on a
+                    // timer thread — process-fatal (the xunit "Catastrophic failure" that
+                    // reds a green Threading.Test run). Nothing to run against — refuse.
+                    if (hub.IsDisposing)
+                    {
+                        logger?.LogWarning(
+                            "[ThreadSubmission] Thread hub {ThreadPath} is disposing — not launching round {ResponseMsgId}",
+                            threadPath, responseMsgId);
+                        onFailure?.Invoke();
+                        return;
+                    }
+
                     ThreadExecution.UpdateResponseCell(
                         hub, responsePath, threadPath, responseMsgId, mainEntity,
                         msg => msg with { Text = "Allocating agent...", Status = ThreadMessageStatus.Streaming },
@@ -997,12 +1015,26 @@ internal static class ThreadSubmissionServer
                         config => config,
                         HostedHubCreation.Always);
 
+                    // GetHostedHub refuses creation once the owning hub's disposal has
+                    // begun (HostedHubsCollection.CloseCreation) — the same
+                    // refuse-and-complete edge one hop later. Never launch on a null hub:
+                    // the old null-forgiving executionHub! turned the refusal into the
+                    // exact fault the ex-sink then fails to write.
+                    if (executionHub is null)
+                    {
+                        logger?.LogWarning(
+                            "[ThreadSubmission] _Exec hub creation refused (hub disposing) for {ThreadPath} — not launching round {ResponseMsgId}",
+                            threadPath, responseMsgId);
+                        onFailure?.Invoke();
+                        return;
+                    }
+
                     // 🚨 ExecuteMessageAsync now returns a COLD IObservable<Unit> — the round runs
                     // ONLY on Subscribe, completes when the terminal Status write lands, and faults
                     // via OnError. Subscribe here (no fire-and-forget) and own the subscription on
                     // the thread-hub workspace (the round's natural lifetime owner, matching the
                     // disposal the method used to register internally).
-                    var execSub = ThreadExecution.ExecuteMessageAsync(executionHub!,
+                    var execSub = ThreadExecution.ExecuteMessageAsync(executionHub,
                         new ThreadExecution.RoundParams(
                             ThreadPath: threadPath,
                             ResponseMessageId: responseMsgId,
@@ -1022,6 +1054,16 @@ internal static class ThreadSubmissionServer
                                 logger?.LogWarning(ex,
                                     "[ThreadSubmission] Agent round faulted for {ResponseMsgId} on {ThreadPath}",
                                     responseMsgId, threadPath);
+                                // Hub already tearing down: the terminal write below resolves
+                                // services from a container that is disposed (or about to be) —
+                                // the ObjectDisposedException would escape INSIDE this OnError on
+                                // a timer/pool thread, which is process-fatal (the Threading.Test
+                                // CI catastrophic failure). Nothing is lost by refusing: on a
+                                // real grain deactivation the stuck Executing state is recovered
+                                // by ResumeInterruptedRound on the next activation; in a test
+                                // teardown the mesh is gone entirely.
+                                if (hub.IsDisposing)
+                                    return;
                                 // 🚨 An escaped fault means the round's OWN terminal handling did
                                 // NOT run (or its terminal write failed — the gate faults on that
                                 // too). Without a terminal write here the node stays Executing

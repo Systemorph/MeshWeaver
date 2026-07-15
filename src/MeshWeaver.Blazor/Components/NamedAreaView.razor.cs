@@ -1,9 +1,14 @@
-﻿using MeshWeaver.Data;
+﻿using System;
+using System.Linq;
+using System.Reactive.Linq;
+using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Components;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Blazor.Components;
@@ -277,6 +282,56 @@ public partial class NamedAreaView
                             AreaToBeRendered, error.Message);
                     else
                         Logger.LogError(error, "Error in control stream for area {Area}", AreaToBeRendered);
+
+                    // "No access ⇒ course poster": a not-yet-enrolled visitor denied a page UNDER a course
+                    // ({course}/Anything) is redirected to that course's PUBLIC Overview "poster" (ad page)
+                    // instead of a dead-end "Access denied" card — so the funnel never terminates on an error.
+                    // Guards: only the page's TOP-LEVEL area redirects (an embedded gated area must never hijack
+                    // the whole page), and only when the course ROOT is actually readable by THIS viewer (its
+                    // public poster renders) — a fully-private partition, or any other denied node, falls through
+                    // to the honest error card below (which is ALSO why this can't loop: a gated root is never
+                    // readable). The probe is best-effort: its OnError path shows the original error, never a swallow.
+                    if (Top
+                        && AreaErrorClassifier.TryGetCoursePosterPath(error) is { } posterPath
+                        && Hub.ServiceProvider.GetService<IMeshService>() is { } meshService)
+                    {
+                        var courseRoot = posterPath[..posterPath.LastIndexOf('/')];
+
+                        void ShowError() => InvokeAsync(() =>
+                        {
+                            if (IsViewDisposed) return;
+                            try
+                            {
+                                RootControl = new MarkdownControl($"**Error loading area:** {error.Message}");
+                                RequestStateChange();
+                            }
+                            catch (ObjectDisposedException) { /* renderer gone */ }
+                        });
+
+                        meshService.Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{courseRoot}"))
+                            .Select(change => change.Items.Any(n => string.Equals(n.Path, courseRoot, StringComparison.Ordinal)))
+                            .Take(1)
+                            .Timeout(TimeSpan.FromSeconds(5))
+                            .Subscribe(
+                                posterVisible =>
+                                {
+                                    if (IsViewDisposed) return;
+                                    if (!posterVisible) { ShowError(); return; }
+                                    InvokeAsync(() =>
+                                    {
+                                        if (IsViewDisposed) return;
+                                        try
+                                        {
+                                            RootControl = new RedirectControl($"/{posterPath}");
+                                            RequestStateChange();
+                                        }
+                                        catch (ObjectDisposedException) { /* renderer gone */ }
+                                    });
+                                },
+                                _ => { if (!IsViewDisposed) ShowError(); }); // probe failed → honest error
+                        return;
+                    }
+
                     try
                     {
                         InvokeAsync(() =>

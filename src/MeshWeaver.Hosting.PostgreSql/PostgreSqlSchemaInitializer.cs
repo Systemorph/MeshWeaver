@@ -293,33 +293,119 @@ public static class PostgreSqlSchemaInitializer
     /// </summary>
     internal const string AccessChangedTriggerFunctionBody = """
         DECLARE
-            affected_user TEXT;
+            new_subject TEXT;
+            old_subject TEXT;
+            subject_is_group BOOLEAN;
         BEGIN
-            IF TG_OP = 'DELETE' THEN
-                affected_user := OLD.content->>'accessObject';
-            ELSE
-                affected_user := NEW.content->>'accessObject';
+            IF TG_OP <> 'INSERT' THEN
+                old_subject := OLD.content->>'accessObject';
+            END IF;
+            IF TG_OP <> 'DELETE' THEN
+                new_subject := NEW.content->>'accessObject';
             END IF;
 
-            -- Schema-qualified via TG_TABLE_SCHEMA (= the partition schema): an unqualified
-            -- PERFORM resolves through the WRITING SESSION's search_path, which on the shared
-            -- base connection pool is public — silently rebuilding the WRONG schema's
-            -- permissions and leaving this partition's user_effective_permissions empty
-            -- (memex prod incident 2026-07-13).
-            IF affected_user IS NOT NULL THEN
-                EXECUTE format('SELECT %I.rebuild_user_permissions_for($1)', TG_TABLE_SCHEMA)
-                    USING affected_user;
-            ELSE
+            -- A grant whose subject is a GROUP applies to every (leaf) MEMBER of that group.
+            -- rebuild_user_permissions_for(subject) does NOT compute that — it would rebuild the
+            -- group id as if it were a user — so a group grant written before OR after its members
+            -- exist would leave them stale. Detect a group subject and fall back to a full rebuild,
+            -- so a licensed group materializes its members regardless of add-vs-grant order.
+            -- (Membership CHANGES are the mirror case, handled by the auth-mirror
+            -- zzz_group_recompute_* triggers — see GroupChangedTriggerFunctionBody.)
+            --
+            -- Every call is schema-qualified via TG_TABLE_SCHEMA (= the partition schema whose
+            -- `access` table fired the trigger): an unqualified PERFORM resolves through the WRITING
+            -- SESSION's search_path, which on the shared base connection pool is public — silently
+            -- rebuilding the WRONG schema's permissions and leaving this partition's
+            -- user_effective_permissions empty (memex prod incident 2026-07-13).
+            -- Groups mirror to the GLOBAL auth schema, so a grant to a group DEFINED IN ANOTHER
+            -- PARTITION is still detected here (cross-partition licensing) — read auth, not the
+            -- local schema. Default false so an (impossible) missing auth schema falls back to the
+            -- per-user path rather than erroring the originating grant write.
+            subject_is_group := false;
+            IF to_regclass('"auth".mesh_nodes') IS NOT NULL THEN
+                EXECUTE
+                    'SELECT EXISTS (SELECT 1 FROM "auth".mesh_nodes WHERE node_type = ''Group'''
+                    || ' AND CASE WHEN namespace = '''' THEN id ELSE namespace || ''/'' || id END'
+                    || ' IN ($1, $2))'
+                    INTO subject_is_group USING new_subject, old_subject;
+            END IF;
+
+            IF subject_is_group OR (new_subject IS NULL AND old_subject IS NULL) THEN
                 EXECUTE format('SELECT %I.rebuild_user_effective_permissions()', TG_TABLE_SCHEMA);
-            END IF;
-
-            IF TG_OP = 'UPDATE' AND OLD.content->>'accessObject' IS DISTINCT FROM NEW.content->>'accessObject' THEN
-                IF OLD.content->>'accessObject' IS NOT NULL THEN
+            ELSE
+                IF new_subject IS NOT NULL THEN
                     EXECUTE format('SELECT %I.rebuild_user_permissions_for($1)', TG_TABLE_SCHEMA)
-                        USING OLD.content->>'accessObject';
+                        USING new_subject;
+                END IF;
+                IF old_subject IS NOT NULL AND old_subject IS DISTINCT FROM new_subject THEN
+                    EXECUTE format('SELECT %I.rebuild_user_permissions_for($1)', TG_TABLE_SCHEMA)
+                        USING old_subject;
                 END IF;
             END IF;
 
+            RETURN NULL;
+        END;
+        """;
+
+    /// <summary>
+    /// Body of the <c>trg_group_changed()</c> trigger function — recomputes
+    /// <c>user_effective_permissions</c> whenever a <c>Group</c> or <c>GroupMembership</c> node
+    /// changes. Group memberships feed the group-expansion INSIDE the rebuild, but — unlike an
+    /// <c>AccessAssignment</c> — they live in <c>mesh_nodes</c>, not the <c>access</c> satellite
+    /// that <see cref="AccessChangedTriggerFunctionBody"/> watches. So without this trigger,
+    /// adding or removing a member (or renaming/deleting a group) left every affected member's
+    /// permissions STALE until an unrelated grant write or the next boot's self-heal
+    /// re-materialized them: a group licensed on a course granted its new members nothing until
+    /// something else touched the projection. Installed ONCE, on the global auth mirror — the two
+    /// <c>zzz_group_recompute_*</c> triggers on <c>auth.mesh_nodes</c> that <see cref="GetAuthMirrorSelfHealScript"/>
+    /// creates (this body becomes <c>public.trg_group_changed()</c>).
+    ///
+    /// <para><b>Cross-partition fan-out.</b> Group access is resolved GLOBALLY: memberships mirror
+    /// into <c>auth.mesh_nodes</c> and every schema's rebuild reads them from there, so a group can
+    /// be defined in one partition and licensed on a course in another. A membership change in ANY
+    /// partition therefore mirrors into <c>auth</c> and can change effective permissions in ANY
+    /// schema that grants the affected group(s) — so this body loops the partition schemas and
+    /// full-rebuilds every one that has at least one GROUP grant (a superset of the truly-affected
+    /// schemas: correct, and bounded to the partitions that actually license a group). A full
+    /// rebuild per schema (not per-user) is the right call — a membership can list several groups,
+    /// its member can itself be a group (nested groups expand recursively to leaf users), and a group
+    /// can be renamed/deleted, so the affected end-users are not knowable from the single changed
+    /// row. Group changes are infrequent admin operations, and the triggers' <c>WHEN</c> clause keeps
+    /// this off every non-group write.</para>
+    ///
+    /// <para><b>Why on auth, not per partition.</b> The membership converges in <c>auth</c> (the
+    /// global mirror), so ONE trigger there covers every partition — no per-partition copies to
+    /// double-fire, and the changed row is already in <c>auth</c> when the trigger fires (the mirror
+    /// wrote it), so no firing-order hack is needed. Every rebuild call is schema-qualified
+    /// (<c>%I</c>) so it materializes the right schema.</para>
+    /// </summary>
+    internal const string GroupChangedTriggerFunctionBody = """
+        DECLARE
+            sch text;
+            has_group_grant boolean;
+        BEGIN
+            -- A Group/GroupMembership changed. Because group access is resolved GLOBALLY (auth-
+            -- mirrored memberships; each schema's rebuild reads them), the affected users may live
+            -- in — and be granted in — ANY partition. Rebuild every schema that grants a group.
+            FOR sch IN
+                SELECT n.nspname
+                FROM pg_namespace n
+                WHERE n.nspname NOT IN ('information_schema','pg_catalog','pg_toast','auth')
+                  AND n.nspname NOT LIKE 'pg\_%'
+                  AND n.nspname NOT LIKE '%\_versions'
+                  AND to_regclass(format('%I.access', n.nspname)) IS NOT NULL
+                  AND to_regclass(format('%I.user_effective_permissions', n.nspname)) IS NOT NULL
+            LOOP
+                -- Skip schemas with no group grant — nothing there depends on group membership.
+                EXECUTE format(
+                    'SELECT EXISTS (SELECT 1 FROM %I.access a'
+                    || ' JOIN "auth".mesh_nodes g ON g.node_type = ''Group'''
+                    || ' AND g.namespace || ''/'' || g.id = a.content->>''accessObject'')', sch)
+                    INTO has_group_grant;
+                IF has_group_grant THEN
+                    EXECUTE format('SELECT %I.rebuild_user_effective_permissions()', sch);
+                END IF;
+            END LOOP;
             RETURN NULL;
         END;
         """;
@@ -332,8 +418,13 @@ public static class PostgreSqlSchemaInitializer
     /// <c>access_changed</c> trigger where missing) so grant writes materialize
     /// <c>user_effective_permissions</c> into the RIGHT schema — partitions deployed with the
     /// pre-2026-07-13 body resolved the rebuild through the writing session's
-    /// <c>search_path</c> and silently rebuilt <c>public</c> instead, (b) upserts every mirrored
-    /// node type (<c>User/Group/Role/VUser/ApiToken/Space</c>) into <c>auth.mesh_nodes</c>, and
+    /// <c>search_path</c> and silently rebuilt <c>public</c> instead; it also installs (once, before
+    /// the per-schema loop) the global <c>public.trg_group_changed()</c> + the two
+    /// <c>zzz_group_recompute_*</c> triggers on <c>auth.mesh_nodes</c>
+    /// (<see cref="GroupChangedTriggerFunctionBody"/>) so a Group/GroupMembership change — which
+    /// mirrors into <c>auth</c> — recomputes every schema that grants the affected group
+    /// (cross-partition group licensing), (b) upserts every mirrored
+    /// node type (<c>User/Group/Role/VUser/ApiToken/Space/GroupMembership</c>) into <c>auth.mesh_nodes</c>, and
     /// (c) re-runs the schema's <c>rebuild_user_effective_permissions()</c> so <c>_Access</c>
     /// grants and <c>_Policy</c> rows are projected into <c>user_effective_permissions</c> +
     /// <c>public.partition_access</c> — the tables every partition-scoped query and the
@@ -362,6 +453,26 @@ public static class PostgreSqlSchemaInitializer
             IF to_regclass('"auth".mesh_nodes') IS NULL THEN
                 RETURN;
             END IF;
+
+            -- Cross-partition group recompute lives HERE, on the global auth mirror — the single
+            -- convergence point for memberships. A Group/GroupMembership change in ANY partition
+            -- mirrors into auth.mesh_nodes; this trigger then recomputes every schema that grants
+            -- the affected group(s) (trg_group_changed fans out over the partition schemas). One
+            -- trigger, not one per partition: no double-fire, and the row is already in auth when
+            -- it fires (the mirror wrote it), so no firing-order hack is needed. Idempotent.
+            CREATE OR REPLACE FUNCTION public.trg_group_changed() RETURNS TRIGGER AS $trg_group$
+        {{GroupChangedTriggerFunctionBody}}
+            $trg_group$ LANGUAGE plpgsql;
+            DROP TRIGGER IF EXISTS zzz_group_recompute_ins ON "auth".mesh_nodes;
+            CREATE TRIGGER zzz_group_recompute_ins
+                AFTER INSERT OR UPDATE ON "auth".mesh_nodes
+                FOR EACH ROW WHEN (NEW.node_type IN ('GroupMembership','Group'))
+                EXECUTE FUNCTION public.trg_group_changed();
+            DROP TRIGGER IF EXISTS zzz_group_recompute_del ON "auth".mesh_nodes;
+            CREATE TRIGGER zzz_group_recompute_del
+                AFTER DELETE ON "auth".mesh_nodes
+                FOR EACH ROW WHEN (OLD.node_type IN ('GroupMembership','Group'))
+                EXECUTE FUNCTION public.trg_group_changed();
 
             -- One heal at a time across the whole mesh (HA silos boot concurrently); the lock
             -- releases with this transaction.
@@ -432,7 +543,7 @@ public static class PostgreSqlSchemaInitializer
                     SELECT namespace, id, name, node_type, category, icon, display_order,
                            last_modified, version, state, content, desired_id, main_node
                       FROM %I.mesh_nodes
-                     WHERE node_type IN ('User','Group','Role','VUser','ApiToken','Space')
+                     WHERE node_type IN ('User','Group','Role','VUser','ApiToken','Space','GroupMembership')
                     ON CONFLICT (namespace, id) DO UPDATE SET
                         name = EXCLUDED.name,
                         node_type = EXCLUDED.node_type,
@@ -582,14 +693,14 @@ public static class PostgreSqlSchemaInitializer
             END IF;
 
             IF TG_OP = 'DELETE' THEN
-                IF OLD.node_type IN ('User','Group','Role','VUser','ApiToken','Space') THEN
+                IF OLD.node_type IN ('User','Group','Role','VUser','ApiToken','Space','GroupMembership') THEN
                     DELETE FROM "auth".mesh_nodes
                      WHERE namespace = OLD.namespace AND id = OLD.id;
                 END IF;
                 RETURN OLD;
             END IF;
 
-            IF NEW.node_type IN ('User','Group','Role','VUser','ApiToken','Space') THEN
+            IF NEW.node_type IN ('User','Group','Role','VUser','ApiToken','Space','GroupMembership') THEN
                 INSERT INTO "auth".mesh_nodes
                     (namespace, id, name, node_type, category, icon, display_order,
                      last_modified, version, state, content, desired_id, main_node)
@@ -1038,13 +1149,13 @@ public static class PostgreSqlSchemaInitializer
                 INSERT INTO user_effective_permissions_shadow (user_id, node_path_prefix, permission, is_allow)
                 WITH RECURSIVE all_members AS (
                     SELECT group_entry->>'group' AS group_path, gm.content->>'member' AS member_id
-                    FROM mesh_nodes gm
+                    FROM "auth".mesh_nodes gm
                     CROSS JOIN LATERAL jsonb_array_elements(gm.content->'groups') AS group_entry
                     WHERE gm.node_type = 'GroupMembership'
                     UNION
                     SELECT am.group_path, gm.content->>'member'
                     FROM all_members am
-                    JOIN mesh_nodes gm ON gm.node_type = 'GroupMembership'
+                    JOIN "auth".mesh_nodes gm ON gm.node_type = 'GroupMembership'
                     WHERE EXISTS (
                         SELECT 1 FROM jsonb_array_elements(gm.content->'groups') g
                         WHERE g->>'group' = am.member_id
@@ -1053,7 +1164,7 @@ public static class PostgreSqlSchemaInitializer
                 leaf_members AS (
                     SELECT group_path, member_id FROM all_members
                     WHERE NOT EXISTS (
-                        SELECT 1 FROM mesh_nodes gm2
+                        SELECT 1 FROM "auth".mesh_nodes gm2
                         CROSS JOIN LATERAL jsonb_array_elements(gm2.content->'groups') AS g2
                         WHERE gm2.node_type = 'GroupMembership'
                           AND g2->>'group' = all_members.member_id
@@ -1253,13 +1364,13 @@ public static class PostgreSqlSchemaInitializer
                 INSERT INTO user_effective_permissions (user_id, node_path_prefix, permission, is_allow)
                 WITH RECURSIVE all_members AS (
                     SELECT group_entry->>'group' AS group_path, gm.content->>'member' AS member_id
-                    FROM mesh_nodes gm
+                    FROM "auth".mesh_nodes gm
                     CROSS JOIN LATERAL jsonb_array_elements(gm.content->'groups') AS group_entry
                     WHERE gm.node_type = 'GroupMembership'
                     UNION
                     SELECT am.group_path, gm.content->>'member'
                     FROM all_members am
-                    JOIN mesh_nodes gm ON gm.node_type = 'GroupMembership'
+                    JOIN "auth".mesh_nodes gm ON gm.node_type = 'GroupMembership'
                     WHERE EXISTS (SELECT 1 FROM jsonb_array_elements(gm.content->'groups') g WHERE g->>'group' = am.member_id)
                 ),
                 user_groups AS (
@@ -1348,6 +1459,11 @@ public static class PostgreSqlSchemaInitializer
             CREATE TRIGGER access_changed
                 AFTER INSERT OR UPDATE OR DELETE ON access
                 FOR EACH ROW EXECUTE FUNCTION trg_access_changed();
+
+            -- Group/GroupMembership recompute is NOT installed per-partition: it is driven from the
+            -- global auth mirror (see GetAuthMirrorSelfHealScript / trg_group_changed) so a group
+            -- defined in one partition can be licensed on a course in another. A per-partition copy
+            -- would double-fire (the change mirrors to auth) and couldn't see cross-partition members.
 
             -- Simple access_control and group_members tables used by convenience methods
             CREATE TABLE IF NOT EXISTS access_control (
@@ -1701,13 +1817,13 @@ public static class PostgreSqlSchemaInitializer
                 INSERT INTO user_effective_permissions_shadow (user_id, node_path_prefix, permission, is_allow)
                 WITH RECURSIVE all_members AS (
                     SELECT group_entry->>'group' AS group_path, gm.content->>'member' AS member_id
-                    FROM mesh_nodes gm
+                    FROM "auth".mesh_nodes gm
                     CROSS JOIN LATERAL jsonb_array_elements(gm.content->'groups') AS group_entry
                     WHERE gm.node_type = 'GroupMembership'
                     UNION
                     SELECT am.group_path, gm.content->>'member'
                     FROM all_members am
-                    JOIN mesh_nodes gm ON gm.node_type = 'GroupMembership'
+                    JOIN "auth".mesh_nodes gm ON gm.node_type = 'GroupMembership'
                     WHERE EXISTS (
                         SELECT 1 FROM jsonb_array_elements(gm.content->'groups') g
                         WHERE g->>'group' = am.member_id
@@ -1716,7 +1832,7 @@ public static class PostgreSqlSchemaInitializer
                 leaf_members AS (
                     SELECT group_path, member_id FROM all_members
                     WHERE NOT EXISTS (
-                        SELECT 1 FROM mesh_nodes gm2
+                        SELECT 1 FROM "auth".mesh_nodes gm2
                         CROSS JOIN LATERAL jsonb_array_elements(gm2.content->'groups') AS g2
                         WHERE gm2.node_type = 'GroupMembership'
                           AND g2->>'group' = all_members.member_id
@@ -1919,13 +2035,13 @@ public static class PostgreSqlSchemaInitializer
                 INSERT INTO user_effective_permissions (user_id, node_path_prefix, permission, is_allow)
                 WITH RECURSIVE all_members AS (
                     SELECT group_entry->>'group' AS group_path, gm.content->>'member' AS member_id
-                    FROM mesh_nodes gm
+                    FROM "auth".mesh_nodes gm
                     CROSS JOIN LATERAL jsonb_array_elements(gm.content->'groups') AS group_entry
                     WHERE gm.node_type = 'GroupMembership'
                     UNION
                     SELECT am.group_path, gm.content->>'member'
                     FROM all_members am
-                    JOIN mesh_nodes gm ON gm.node_type = 'GroupMembership'
+                    JOIN "auth".mesh_nodes gm ON gm.node_type = 'GroupMembership'
                     WHERE EXISTS (SELECT 1 FROM jsonb_array_elements(gm.content->'groups') g WHERE g->>'group' = am.member_id)
                 ),
                 user_groups AS (
@@ -2014,6 +2130,11 @@ public static class PostgreSqlSchemaInitializer
             CREATE TRIGGER access_changed
                 AFTER INSERT OR UPDATE OR DELETE ON access
                 FOR EACH ROW EXECUTE FUNCTION trg_access_changed();
+
+            -- Group/GroupMembership recompute is NOT installed per-partition: it is driven from the
+            -- global auth mirror (see GetAuthMirrorSelfHealScript / trg_group_changed) so a group
+            -- defined in one partition can be licensed on a course in another. A per-partition copy
+            -- would double-fire (the change mirrors to auth) and couldn't see cross-partition members.
 
             -- Simple access_control and group_members tables used by convenience methods
             CREATE TABLE IF NOT EXISTS access_control (
