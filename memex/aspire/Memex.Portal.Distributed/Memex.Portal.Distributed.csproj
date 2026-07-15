@@ -28,12 +28,10 @@
   </ItemGroup>
 
   <!-- Ship nuget.config into the image so the runtime `#r "nuget:..."` resolver can
-       resolve third-party packages a Code node references. BusinessRules /
-       BusinessRules.Generator no longer need a baked mesh-local feed: the scope generator
-       ships WITH the platform (its DLL is copied into MeshWeaver.Graph's output — see
-       BuiltInScopeGeneratorTest) and MeshWeaver.BusinessRules is in the app's TPA
-       (deps.json), so an IScope<,> node compiles with neither an `#r "nuget:…"` directive
-       nor a baked feed. -->
+       resolve third-party packages a Code node references. Business rules / scopes are NOT
+       part of the platform — they ship as a PLUGIN (MeshWeaver.Plugins/BusinessRules) that
+       carries the scope generator source and injects it into node/script/markdown compilation.
+       The platform (and the Doc partition) starts with zero business-rules dependency. -->
   <ItemGroup>
     <Content Include="..\..\..\nuget.config" Link="nuget.config" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
