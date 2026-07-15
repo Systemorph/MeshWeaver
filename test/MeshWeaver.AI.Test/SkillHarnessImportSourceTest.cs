@@ -42,7 +42,7 @@ public class SkillHarnessImportSourceTest(ITestOutputHelper output) : MonolithMe
         ((MeshWeaver.Mesh.Security.PartitionAccessPolicy)policy!.Content!).PublicRead.Should().BeTrue();
 
         var skills = nodes.Where(n => n.NodeType == SkillNodeType.NodeType).ToList();
-        skills.Select(n => n.Id).OrderBy(x => x).Should().Equal("access", "agent", "clear", "code", "create-group", "feedback", "harness", "layout-area", "markdown", "maui", "model", "navigate", "provider-keys", "pull-request", "slide", "space");
+        skills.Select(n => n.Id).OrderBy(x => x).Should().Equal("access", "agent", "clear", "code", "create-group", "feedback", "harness", "layout-area", "markdown", "maui", "model", "navigate", "presentation", "provider-keys", "pull-request", "slide", "space");
         skills.Should().AllSatisfy(n =>
         {
             n.Namespace.Should().Be(SkillNodeType.RootNamespace);
