@@ -1704,6 +1704,32 @@ internal static class ThreadExecution
                     .Take(1)
                     .Subscribe(_ =>
                     {
+                        // #321 ack — stamp "stopping…" the INSTANT the cancel is observed, from THIS
+                        // hub-stream gate, via stream.Update on the own node, BEFORE tripping the CTS.
+                        // Ordering is the whole fix: because the ack Update is enqueued here — before
+                        // executionCts.Cancel() propagates to the streaming-loop catch that writes the
+                        // terminal Cancelled — the owning hub's serialized write queue applies the ack
+                        // strictly BEFORE the terminal clear. The ack and the teardown were previously two
+                        // racing writers in two different contexts (InstallCancellationWatcher on the
+                        // stream-emission thread vs the catch on the AI I/O pool), so under load the
+                        // terminal could win and the guard (`IsExecuting && RequestedStatus==Cancelled`)
+                        // would drop the ack — the CancellationAckTest timeout flake. One ordered writer
+                        // removes the race. Guarded to still-executing so it can never clobber a terminal.
+                        parentHub.GetWorkspace().GetMeshNodeStream().Update(
+                            curr => curr?.Content is MeshThread ackThread
+                                    && ackThread.Status.IsExecuting()
+                                    && ackThread.RequestedStatus == ThreadExecutionStatus.Cancelled
+                                ? curr with { Content = ackThread with { ExecutionStatus = CancellationRequestedStatus } }
+                                : curr!)
+                            .Subscribe(
+                                updated => execLogger?.LogDebug(
+                                    "[ThreadExec] Cancellation ack {Result} for {ThreadPath}",
+                                    (updated?.Content as MeshThread)?.ExecutionStatus == CancellationRequestedStatus
+                                        ? "stamped" : "skipped (already terminal)",
+                                    threadPath),
+                                ex => execLogger?.LogDebug(ex,
+                                    "[ThreadExec] Cancellation ack stamp failed for {ThreadPath}", threadPath));
+
                         try { executionCts.Cancel(); }
                         catch (ObjectDisposedException) { /* round already finished */ }
                     });
@@ -2876,23 +2902,15 @@ internal static class ThreadExecution
                 {
                     var thread = x.Thread!;
 
-                    // #321: acknowledge the Stop IMMEDIATELY. The round's own CTS self-cancel
-                    // (ExecuteMessageAsync) tears the round down only after the in-flight tool
-                    // call finishes or hits its timeout (~30s); during that window the status
-                    // line would otherwise stay frozen on the previous tool-call stamp with no
-                    // sign the Stop was received. Stamp the thread's ExecutionStatus now, guarded
-                    // to the still-executing + still-cancel-requested state so it never clobbers a
-                    // terminal write, and leaving RequestedStatus in place for the round's
-                    // terminal handler. The reasoning heartbeat is suppressed while
-                    // RequestedStatus == Cancelled, so this ack persists until the round settles.
-                    hub.GetWorkspace().GetMeshNodeStream().Update(
-                        curr => curr?.Content is MeshThread ackThread
-                                && ackThread.Status.IsExecuting()
-                                && ackThread.RequestedStatus == ThreadExecutionStatus.Cancelled
-                            ? curr with { Content = ackThread with { ExecutionStatus = CancellationRequestedStatus } }
-                            : curr!)
-                        .Subscribe(_ => { }, ex => logger?.LogDebug(ex,
-                            "[ThreadExec] Cancellation ack stamp failed for {ThreadPath}", threadPath));
+                    // #321 ack — the "stopping…" stamp lives in ExecuteMessageAsync's per-round
+                    // self-cancel gate (which fires executionCts.Cancel()), NOT here. That is the
+                    // ONE ordered writer: it enqueues the ack Update before it trips the CTS, so the
+                    // owning hub's serialized queue applies the ack before the streaming-loop catch's
+                    // terminal Cancelled. Stamping it here too would re-introduce the two-context race
+                    // (this watcher runs on the stream-emission thread; the terminal write on the AI
+                    // I/O pool) that dropped the ack under load — the CancellationAckTest flake. This
+                    // watcher now only (a) propagates the cancel to sub-threads and (b) covers the
+                    // pure claim-window case via the No-CTS fallback below.
 
                     // Propagate to every active delegation sub-thread via the
                     // canonical IMeshNodeStreamCache. The sub-thread is a
