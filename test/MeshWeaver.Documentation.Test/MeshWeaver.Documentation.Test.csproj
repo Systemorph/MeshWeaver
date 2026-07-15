@@ -5,7 +5,6 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\MeshWeaver.AI\MeshWeaver.AI.csproj" />
-    <ProjectReference Include="..\..\src\MeshWeaver.BusinessRules\MeshWeaver.BusinessRules.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Documentation\MeshWeaver.Documentation.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Monolith.TestBase\MeshWeaver.Hosting.Monolith.TestBase.csproj" />
   </ItemGroup>
