@@ -6,9 +6,13 @@ This file provides guidance to AI agents working with this repository.
 
 **NEVER commit or push automatically.** Always wait for the user to explicitly ask.
 
-### 🚨 Work in a dedicated git worktree — NEVER the shared primary checkout
+### 🚨🚨🚨 ABSOLUTE: NEVER work on the primary checkout — it stays on `main`, untouched. EVERYONE creates a worktree.
 
-**Every agent session works in its OWN `git worktree`, not the primary checkout (`/Users/roland/code/MeshWeaver`).** Many Claude/agent sessions run against this repo at once; the primary checkout's working tree + index are shared, so editing, committing, or `reset`ing there clobbers other sessions' uncommitted WIP (a `reset --hard` there once wiped live work across every concurrent session). Create an isolated worktree on a fresh branch and do ALL edits, commits, builds, and pushes there:
+**The primary checkout (`/Users/roland/code/MeshWeaver`) is a READ-ONLY reference, not a workspace. It must stay parked on `main` and untouched — never edit, build, commit, `checkout`, `switch`, `reset`, or `stash` there, and never leave it on a feature branch.** It is the shared base that every session's worktree is cut from; the moment you mutate it (working tree, index, or HEAD) you can clobber every concurrent session's uncommitted WIP (a `reset --hard` there once wiped live work across every session).
+
+**EVERY agent session — no exceptions — works in its OWN `git worktree` on a fresh branch, and does ALL edits, builds, commits, and pushes there.** If you find yourself about to touch a file under `/Users/roland/code/MeshWeaver` directly, STOP and create a worktree first. Many Claude/agent sessions run against this repo at once; the worktree is what keeps them isolated.
+
+Create an isolated worktree on a fresh branch and do ALL work there:
 
 ```bash
 # base on origin/main for a fresh change, or on the feature branch you're extending
@@ -19,6 +23,7 @@ git worktree remove /Users/roland/code/MW-my-change   # once merged/abandoned
 ```
 
 - `git worktree list` shows every active worktree (and which branch each holds — a branch can be checked out in only one).
+- **Keep the primary parked on `main` and clean.** If you find it on a feature branch or with a dirty tree, capture any work you care about (`git diff > patch`) and restore it — `git switch main` — before continuing in a worktree. It is the cut-point for every other session; a dirty/feature-branch primary breaks the "cut a fresh worktree off `origin/main`" flow.
 - **Never `git stash`** — the stash stack is repo-global and collides across worktrees; use `git diff > patch` + `git apply` instead.
 - Parallel PR-building sub-agents must pass `isolation: "worktree"` as a tool PARAM (a prompt-only "work in a worktree" does nothing).
 
