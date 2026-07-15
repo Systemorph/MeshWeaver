@@ -79,6 +79,20 @@ public interface IIoPool
     IObservable<T> InvokeObservable<T>(Func<CancellationToken, IObservable<T>> source)
         => Invoke(ct => source(ct).ToTask(ct));
 
+    /// <summary>
+    /// Runs the SUBSCRIBE of a long-lived reactive leaf — a <c>MeshQuery</c> change-feed subscription —
+    /// through the pool. The subscribe action opens the providers and emits the initial snapshot, which
+    /// can route → create a per-node hub (Autofac <c>BeginLifetimeScope</c>); that bounded, dangerous
+    /// window holds one pool slot and counts as in-flight, so teardown's <c>Drain()</c> gate-join WAITS
+    /// for it before the owning service scope is disposed — no <c>BeginLifetimeScope</c> races the scope
+    /// teardown, which is the endemic teardown-SIGSEGV. The resulting subscription lives on and is
+    /// disposed when the pool drains. Unlike <see cref="InvokeObservable{T}"/> (one-shot — awaits
+    /// completion, emits the last value) this fits a NEVER-COMPLETING change feed. It is the tracked,
+    /// drainable replacement for a bare <c>.SubscribeOn(TaskPoolScheduler.Default)</c>, which the drain
+    /// cannot reach.
+    /// </summary>
+    IObservable<T> SubscribeThroughPool<T>(IObservable<T> source);
+
     /// <summary>Operations currently in flight through this pool. Diagnostics / tests only.</summary>
     int CurrentInFlight { get; }
 }
