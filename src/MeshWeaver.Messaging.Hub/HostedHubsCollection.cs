@@ -205,41 +205,57 @@ public class HostedHubsCollection(IServiceProvider serviceProvider, Address addr
     private void DisposeHubsReactive()
     {
         var totalStopwatch = Stopwatch.StartNew();
-        var hubs = messageHubs.Values.ToArray();
-        logger.LogDebug("Starting disposal of {count} hosted hubs: [{hubAddresses}]",
-            hubs.Length, string.Join(", ", hubs.Select(h => h.Address.ToString())));
 
-        var childCompletions = hubs.Select(h =>
-        {
-            var address = h.Address;
-            try
+        // 🚨 FIRST wait for any IN-FLIGHT hub CONSTRUCTION to finish, THEN snapshot + dispose.
+        // A construction runs serviceProvider.CreateMessageHub → SetupModules → Autofac
+        // BeginLifetimeScope, which recursively builds a SynchronizationStream + sub-hubs and can
+        // take seconds. If the owning Autofac scope is disposed (by the host, after TeardownAsync's
+        // drain which awaits our DisposalCompleted) WHILE such a construction is still running, the
+        // activator derefs freed metadata → NATIVE SIGSEGV (the endemic Monolith exit=139: a MeshQuery
+        // straggler on the threadpool routes → CreateHub during teardown). CloseCreation() already
+        // blocks NEW constructions at dispose-start, so `creations` is a BOUNDED set that only drains;
+        // awaiting it here means our DisposalCompleted (and hence the whole teardown drain) does not
+        // complete until no BeginLifetimeScope is in flight, so the scope is never torn down under one.
+        var all = AwaitInFlightCreations()
+            .SelectMany(_ =>
             {
-                h.Dispose();
-            }
-            catch (Exception ex)
-            {
-                logger.LogError(ex, "Error during disposal of hub {address}", address);
-            }
-            return h.DisposalCompleted
-                .Take(1)
-                .Catch<Unit, Exception>(ex =>
+                // Snapshot AFTER the drain so a hub a just-finished construction produced is included.
+                var hubs = messageHubs.Values.ToArray();
+                logger.LogDebug("Starting disposal of {count} hosted hubs: [{hubAddresses}]",
+                    hubs.Length, string.Join(", ", hubs.Select(h => h.Address.ToString())));
+
+                var childCompletions = hubs.Select(h =>
                 {
-                    logger.LogError(ex, "Hub {address} disposal faulted", address);
-                    return Observable.Return(Unit.Default);
-                });
-        }).ToArray();
+                    var address = h.Address;
+                    try
+                    {
+                        h.Dispose();
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.LogError(ex, "Error during disposal of hub {address}", address);
+                    }
+                    return h.DisposalCompleted
+                        .Take(1)
+                        .Catch<Unit, Exception>(ex =>
+                        {
+                            logger.LogError(ex, "Hub {address} disposal faulted", address);
+                            return Observable.Return(Unit.Default);
+                        });
+                }).ToArray();
 
-        IObservable<Unit> all = childCompletions.Length == 0
-            ? Observable.Return(Unit.Default)
-            : Observable.CombineLatest(childCompletions).Select(_ => Unit.Default).Take(1);
+                return childCompletions.Length == 0
+                    ? Observable.Return(Unit.Default)
+                    : Observable.CombineLatest(childCompletions).Select(_ => Unit.Default).Take(1);
+            });
 
         disposalSubscription = all
             .Timeout(TimeSpan.FromSeconds(5))
             .Subscribe(
                 _ =>
                 {
-                    logger.LogDebug("All {count} hosted hubs disposed successfully in {elapsed}ms",
-                        hubs.Length, totalStopwatch.ElapsedMilliseconds);
+                    logger.LogDebug("All hosted hubs disposed successfully in {elapsed}ms",
+                        totalStopwatch.ElapsedMilliseconds);
                     SignalDone();
                 },
                 ex =>
@@ -252,6 +268,34 @@ public class HostedHubsCollection(IServiceProvider serviceProvider, Address addr
                     // Complete anyway — a wedged child must not block the owning hub's ShutDown.
                     SignalDone();
                 });
+    }
+
+    /// <summary>
+    /// Waits for every IN-FLIGHT hub construction (the <see cref="creations"/> Lazy-per-address
+    /// dictionary) to finish, so no Autofac <c>BeginLifetimeScope</c> is still running when the
+    /// owning service scope is disposed. Precondition: <see cref="CloseCreation"/> has run (it does,
+    /// synchronously at <c>MessageHub.Dispose</c> start) so the set is BOUNDED — the inner
+    /// <c>IsDisposing</c> guard in <see cref="GetHub"/> rejects any new construction, so entries only
+    /// drain. Each in-flight <see cref="Lazy{T}"/> is observed to completion off the disposal thread
+    /// (its value blocks until the construction returns — a hub or, for a just-rejected entry, null);
+    /// a construction fault is swallowed because the point is that it FINISHED, not its result. Two
+    /// passes converge the tiny window where an entry is added right as the first snapshot is taken.
+    /// </summary>
+    private IObservable<Unit> AwaitInFlightCreations()
+    {
+        var inflight = creations.Values.ToArray();
+        if (inflight.Length == 0)
+            return Observable.Return(Unit.Default);
+        return inflight
+            .Select(lazy => Observable.Start(() =>
+            {
+                try { _ = lazy.Value; } catch { /* construction failed/refused — it FINISHED, that's the point */ }
+            }, System.Reactive.Concurrency.TaskPoolScheduler.Default))
+            .Merge()
+            .ToList()
+            // Re-check once: an entry added just as we snapshotted (a straggler between GetHub's
+            // outer guard and CloseCreation) resolves to null fast; awaiting it keeps the invariant.
+            .SelectMany(_ => creations.IsEmpty ? Observable.Return(Unit.Default) : AwaitInFlightCreations());
     }
 
     private void SignalDone()
