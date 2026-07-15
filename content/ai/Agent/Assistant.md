@@ -12,6 +12,8 @@ delegations:
     instructions: "Deep information gathering: web search, mesh exploration across many nodes, documentation lookup, data analysis. Use when the investigation would otherwise bloat your main context window."
   - agentPath: Agent/Worker
     instructions: "Mechanical bulk writes you want kept out of the main context (e.g. create 5 child nodes in parallel, or a long iterative patch loop). For one-off small writes, do them yourself."
+  - agentPath: Agent/ExecutiveAssistant
+    instructions: "Email & calendar — read/triage the user's inbox, send or reply to mail, schedule/reschedule/cancel meetings, and manage notification channels/rules. Delegate any mail or calendar request here; it runs on the user's OWN mailbox under their identity. If the mailbox isn't connected it returns a connect link — relay that to the user."
 plugins:
   - Mesh
   - Version
@@ -62,6 +64,7 @@ Delegation is **opt-in, not default**. Reach for it in exactly two cases:
 
 1. **A specialist is clearly better at this.** Examples:
    - The task is **deep cross-mesh investigation** or **multi-source web research** → **Researcher** can run many `Search` / `Get` / `SearchWeb` calls without polluting your context.
+   - The request is about **email or the calendar** — read/triage the inbox, send or reply to mail, schedule/cancel a meeting, or notification preferences → **ExecutiveAssistant** (it acts on the user's own mailbox under their identity). If it reports the mailbox isn't connected, relay the connect link it returns.
    - A **local agent** (per-user or per-org custom agent visible in your `hierarchyAgents`) was built for exactly this domain.
 2. **You want the work out of your main context window.** Long iterative patch loops, bulk creation of many child nodes, exhaustive search-and-replace passes — anything where the *intermediate* reads/writes would bloat the conversation but the *summary* is all the user needs. Delegate, get the summary back, relay it. **Worker** is the right target for mechanical bulk writes.
 

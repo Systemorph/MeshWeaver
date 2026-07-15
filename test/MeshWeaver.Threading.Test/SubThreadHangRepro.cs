@@ -73,6 +73,17 @@ public class SubThreadHangRepro(ITestOutputHelper output) : MonolithMeshTestBase
             .ConfigureServices(services =>
             {
                 services.AddSingleton<IChatClientFactory, HangingSubAgentFactory>();
+                // The hung sub-agent never emits a delta → it stays in the "never active"
+                // heartbeat window. Under the production first-activity budget (60 s) it would
+                // only cancel at 60 s — past this test's settle window AND the 60 s method
+                // timeout. Register small heartbeat windows so the genuine hang is still
+                // detected fast (here via the first-activity budget, since it never streams).
+                services.AddSingleton(new MeshWeaver.AI.Delegation.DelegationHeartbeatOptions
+                {
+                    HeartbeatTimeout = TimeSpan.FromSeconds(2),
+                    ColdStartGrace = TimeSpan.FromSeconds(2),
+                    FirstActivityBudget = TimeSpan.FromSeconds(8),
+                });
                 return services;
             })
             .AddAI()
