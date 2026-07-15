@@ -274,6 +274,32 @@ internal static class PermissionEvaluator
             .Select(policies => policies.TryGetValue(ns, out var policy) ? policy : null);
     }
 
+    /// <summary>
+    /// The effective <see cref="PartitionAccessPolicy.RedirectOnDenied"/> for <paramref name="targetNamespace"/>:
+    /// the nearest scope — self, then each ancestor up to root — that sets one, normalized (no leading '/'),
+    /// or <c>null</c> if none. Reuses the exact scope-policy chain the permission evaluation reads, so a
+    /// policy set once at a partition root applies to every node beneath it.
+    /// </summary>
+    public static IObservable<string?> GetRedirectOnDenied(IMessageHub hub, string targetNamespace)
+    {
+        var ns = targetNamespace ?? "";
+        var cache = hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
+        var staticPolicies = CollectStaticPolicies(hub);
+        return ObserveScopePolicies(hub, cache, ns, staticPolicies)
+            .Select(policies =>
+            {
+                // Nearest scope (self first) with a RedirectOnDenied wins; walk to root.
+                for (var s = ns; ; s = GetParentScope(s))
+                {
+                    if (policies.TryGetValue(s, out var p) && !string.IsNullOrWhiteSpace(p.RedirectOnDenied))
+                        return p.RedirectOnDenied!.TrimStart('/');
+                    if (string.IsNullOrEmpty(s)) break;
+                }
+                return (string?)null;
+            })
+            .DistinctUntilChanged();
+    }
+
     #endregion
 
     #region Static node collection
