@@ -25,8 +25,9 @@ namespace MeshWeaver.Mesh;
 ///   <see cref="IMessageHub.DisposalCompleted"/> fires), and</item>
 /// <item>I/O offloaded onto the ThreadPool through <see cref="IIoPool"/> — which
 ///   runs independently of the action block and is NOT tracked by
-///   <see cref="IMessageHub.DisposalCompleted"/>. <see cref="IoPoolRegistry.WhenDrained"/>
-///   is the wait for that.</item>
+///   <see cref="IMessageHub.DisposalCompleted"/>. <see cref="IoPoolRegistry.DrainAll"/>
+///   cancels + joins that I/O — a live change-feed leaf never completes on its own, so a
+///   wait-without-cancel would time out and let the scope dispose under it.</item>
 /// </list>
 /// </summary>
 public static class MeshTeardownExtensions
@@ -66,8 +67,8 @@ public static class MeshTeardownExtensions
     /// <item>await <see cref="IMessageHub.DisposalCompleted"/> — the synchronous/reactive
     ///   disposal: action blocks + message round-trips. Resources enqueue their async
     ///   cleanup onto the <see cref="AsyncDisposeQueue"/> during this phase.</item>
-    /// <item>drain the offloaded ThreadPool I/O the action block doesn't cover
-    ///   (<see cref="IoPoolRegistry.WhenDrained"/>).</item>
+    /// <item>cancel + join the offloaded ThreadPool I/O the action block doesn't cover
+    ///   (<see cref="IoPoolRegistry.DrainAll"/>).</item>
     /// <item>after all the sync stuff is disposed, give the
     ///   <see cref="AsyncDisposeQueue"/> a bounded quiesce budget to finish
     ///   (<see cref="AsyncDisposeQueue.DrainAsync"/>), then the caller closes the scope.</item>
@@ -83,9 +84,13 @@ public static class MeshTeardownExtensions
             .ToTask()
             .WaitAsync(timeout);
 
-        // (2) Offloaded ThreadPool I/O — the half DisposalCompleted does not cover.
-        if (ioPools is not null)
-            await ioPools.WhenDrained(timeout).FirstAsync().ToTask();
+        // (2) Offloaded ThreadPool I/O — the half DisposalCompleted does not cover. CANCEL + JOIN
+        //     synchronously: a live change-feed leaf never completes on its own, so the old
+        //     WhenDrained() (WAIT-only, polled) would time out and let the scope dispose while the
+        //     leaf still runs → its ThreadPool thread dereferences a collectible node ALC's freed
+        //     metadata after unload → native use-after-unload SIGSEGV. DrainAll() cancels every leaf
+        //     so it stops, then joins — no ToTask, no wait-without-cancel.
+        ioPools?.DrainAll();
 
         // (3) After all the sync stuff is disposed (and everyone has enqueued their
         //     async cleanup), quiesce the async dispose queue before the scope closes.
