@@ -53,7 +53,16 @@ A **Deck** (`NodeType = "Deck"`) is a node whose `Content` is a `DeckContent` re
 
 - **`Title`** — optional display title for the welcome stage (falls back to the node name).
 - **`Description`** — optional markdown intro shown on the deck's welcome stage.
-- **`Slides`** — the **ordered list of child references**. **This IS the deck's order.** Each entry is a child id (relative — `"intro"`) or a full path.
+- **`Slides`** — an explicit **ordered list of references**. **This IS the deck's order**, kept exactly as declared (never re-sorted). Each entry is a child id (relative — `"intro"`) or a full path to a slide **anywhere** in the mesh, so the same slide can appear in many decks in different orders.
+- **`Query`** — an optional GitHub-style node query that selects the deck's slides **dynamically**, as a live (synced) set — used only when `Slides` is empty.
+
+**How a deck picks its slides — precedence:**
+
+1. **`Slides` manifest** (non-empty) → exactly those references, **in the order declared**. Use this for a curated deck, or one that draws from a shared pool that lives elsewhere.
+2. **`Query`** (when there is no manifest) → the live query result, ordered by each slide's **`MeshNode.Order`** (nulls last, ties by path).
+3. **Neither** → the deck defaults to its **own subtree** (`path:{deck} scope:descendants`), ordered by `MeshNode.Order`. So a deck whose slides are simply its children needs **no manifest at all** — reorder by editing each slide's `Order`.
+
+(Query/subtree results skip the deck node itself and any `_`-prefixed governance node.)
 
 The Deck's views are automatic:
 

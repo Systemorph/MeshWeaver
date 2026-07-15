@@ -89,4 +89,15 @@ public record DeckContent
     /// Present walk all follow this order. Default empty.
     /// </summary>
     public ImmutableList<string> Slides { get; init; } = ImmutableList<string>.Empty;
+
+    /// <summary>
+    /// Optional GitHub-style mesh-node query selecting the deck's slides DYNAMICALLY, as a live
+    /// (synced) set — used only when <see cref="Slides"/> is empty. The matched nodes are ordered
+    /// by <see cref="MeshNode.Order"/> (nulls last, ties by path). When BOTH this and
+    /// <see cref="Slides"/> are empty the deck defaults to <b>its own subtree</b>
+    /// (<c>path:{deck} scope:descendants</c>), so a deck with slides as children just works with no
+    /// manifest. An explicit <see cref="Slides"/> manifest always wins and is kept in its declared
+    /// order (never re-sorted). Default null.
+    /// </summary>
+    public string? Query { get; init; }
 }

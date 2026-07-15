@@ -265,6 +265,67 @@ public class DeckLayoutAreaTest(ITestOutputHelper output) : MonolithMeshTestBase
     }
 
     /// <summary>
+    /// DEFAULT selection: a Deck with an EMPTY manifest presents its own subtree as a LIVE query,
+    /// ordered by <see cref="MeshNode.Order"/> (nulls last, ties by path). Children created out of
+    /// order with Order 1/2/3 walk intro → mid → end — so a deck whose slides are its children just
+    /// works with no manifest to maintain.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task EmptyManifest_DefaultsToSubtree_OrderedByNodeOrder()
+    {
+        var space = await CreateSpaceNode();
+        var deck = $"{space}/auto";
+        await CreateDeckNode(deck, "Auto Deck", ImmutableList<string>.Empty);   // no manifest
+        // Children created OUT of order; MeshNode.Order (1,2,3) must rule the walk.
+        await CreateSlide($"{deck}/end", "End", 3, "# End\n\nthe-end-body");
+        await CreateSlide($"{deck}/intro", "Intro", 1, "# Intro\n\nthe-intro-body");
+        await CreateSlide($"{deck}/mid", "Mid", 2, "# Mid\n\nthe-mid-body");
+
+        var workspace = GetClient(c => c.AddData()).GetWorkspace();
+
+        await AssertDeckPresentSlide(workspace, deck, index: 0,
+            expectBody: "the-intro-body", expectCounter: "Slide 1 / 3",
+            expectPrev: null, expectNext: $"/{deck}/Present?i=1");
+        await AssertDeckPresentSlide(workspace, deck, index: 2,
+            expectBody: "the-end-body", expectCounter: "Slide 3 / 3",
+            expectPrev: $"/{deck}/Present?i=1", expectNext: null);
+
+        await NodeFactory.DeleteNode(space).Should().Emit();
+    }
+
+    /// <summary>
+    /// A Deck with a custom <see cref="DeckContent.Query"/> (and no manifest) selects its slides
+    /// LIVE from that query, ordered by <see cref="MeshNode.Order"/> — here two slides that live
+    /// under the space (NOT under the deck), matched by a nodeType query.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task CustomQuery_SelectsMatchingSlides_OrderedByNodeOrder()
+    {
+        var space = await CreateSpaceNode();
+        await CreateSlide($"{space}/s1", "One", 1, "# One\n\nbody-one");
+        await CreateSlide($"{space}/s2", "Two", 2, "# Two\n\nbody-two");
+
+        var deck = $"{space}/qdeck";
+        await NodeFactory.CreateNode(MeshNode.FromPath(deck) with
+        {
+            Name = "Query Deck",
+            NodeType = DeckNodeType.NodeType,
+            Content = new DeckContent { Title = "Q", Query = $"namespace:{space} nodeType:Slide" }
+        }).Should().Emit();
+
+        var workspace = GetClient(c => c.AddData()).GetWorkspace();
+
+        await AssertDeckPresentSlide(workspace, deck, index: 0,
+            expectBody: "body-one", expectCounter: "Slide 1 / 2",
+            expectPrev: null, expectNext: $"/{deck}/Present?i=1");
+        await AssertDeckPresentSlide(workspace, deck, index: 1,
+            expectBody: "body-two", expectCounter: "Slide 2 / 2",
+            expectPrev: $"/{deck}/Present?i=0", expectNext: null);
+
+        await NodeFactory.DeleteNode(space).Should().Emit();
+    }
+
+    /// <summary>
     /// Renders a deck's Present area at a given <c>?i</c> and asserts the shown slide body, the
     /// counter, and the keyboard driver's prev/next hrefs — all sourced from the DECK's manifest.
     /// </summary>
