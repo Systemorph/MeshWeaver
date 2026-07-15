@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.ComponentModel;
 using System.Reactive.Linq;
+using MeshWeaver.Data;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
@@ -250,22 +251,6 @@ public static class DeckLayoutAreas
     }
 
     /// <summary>
-    /// The deck's ordered, resolved slide paths — read off the deck node's
-    /// <see cref="DeckContent.Slides"/> manifest (blanks dropped, each mapped via
-    /// <see cref="ResolveSlidePath"/>).
-    /// </summary>
-    private static ImmutableList<string> ResolveSlidePaths(
-        LayoutAreaHost host, string deckPath, MeshNode? deckNode)
-    {
-        var refs = deckNode.ContentAs<DeckContent>(host.Hub.JsonSerializerOptions)?.Slides
-                   ?? ImmutableList<string>.Empty;
-        return refs
-            .Where(r => !string.IsNullOrWhiteSpace(r))
-            .Select(r => ResolveSlidePath(deckPath, r))
-            .ToImmutableList();
-    }
-
-    /// <summary>
     /// Live observable of the deck's referenced slides, in manifest order, each resolved by PATH
     /// via <c>workspace.GetMeshNodeStream(path)</c> (the slides may live ANYWHERE — presentation
     /// is decoupled from the slide nodes). Re-subscribes the per-slide streams only when the
@@ -275,35 +260,50 @@ public static class DeckLayoutAreas
     internal static IObservable<IReadOnlyList<(string Path, MeshNode? Node)>> ObserveSlideNodes(
         LayoutAreaHost host, string deckPath)
         => host.Workspace.GetMeshNodeStream()
-            .Select(node => ResolveSlidePaths(host, deckPath, node))
-            .DistinctUntilChanged(paths => string.Join("\n", paths))
-            .Select(paths => paths.Count == 0
-                // No explicit manifest → DEFAULT query: every Slide node under the deck, ordered by
-                // Order. A deck whose slides are simply its children needs no hardcoded array (the
-                // reported "deck has no slides yet" despite child slides existing).
-                ? ObserveDefaultSubtreeSlides(host, deckPath)
-                : Observable.CombineLatest(paths.Select(ObserveSlide(host)))
-                    .Select(items => (IReadOnlyList<(string, MeshNode?)>)items.ToImmutableList()))
+            .Select(node =>
+            {
+                var deck = node.ContentAs<DeckContent>(host.Hub.JsonSerializerOptions);
+                var paths = (deck?.Slides ?? ImmutableList<string>.Empty)
+                    .Where(r => !string.IsNullOrWhiteSpace(r))
+                    .Select(r => ResolveSlidePath(deckPath, r))
+                    .ToImmutableList();
+                // Empty manifest → a live query: the deck's custom Query, else the DEFAULT subtree of
+                // Slide nodes (a deck can be just "a folder of slides"; only Slide nodes count).
+                var query = paths.Count > 0
+                    ? null
+                    : string.IsNullOrWhiteSpace(deck?.Query)
+                        ? $"path:{deckPath} nodeType:{SlideNodeType.NodeType} scope:subtree"
+                        : deck!.Query!.Trim();
+                return (Paths: paths, Query: query);
+            })
+            // Re-resolve only when the selection actually changes (the ordered manifest, or the query).
+            .DistinctUntilChanged(x => string.Join("\n", x.Paths) + "" + (x.Query ?? ""))
+            .Select(x => x.Paths.Count > 0
+                // Explicit manifest: exactly these paths, in the order declared — never re-sorted.
+                ? Observable.CombineLatest(x.Paths.Select(ObserveSlide(host)))
+                    .Select(items => (IReadOnlyList<(string, MeshNode?)>)items.ToImmutableList())
+                // Query/subtree: the live match, ordered by MeshNode.Order (nulls last, ties by path).
+                : ObserveQuerySlides(host, x.Query!, deckPath))
             .Switch()
             .StartWith((IReadOnlyList<(string, MeshNode?)>)ImmutableList<(string, MeshNode?)>.Empty);
 
     /// <summary>
-    /// The deck's DEFAULT slide set when it carries no explicit <see cref="DeckContent.Slides"/>
-    /// manifest: the live result of <c>nodeType:Slide scope:subtree</c> under the deck path, ordered
-    /// by <see cref="MeshNode.Order"/> (null last), ties by path. This is what lets a deck be just "a
-    /// folder of slides" — presentation order falls out of the nodes' own Order, no hardcoded array.
+    /// A live (synced) query for a deck's slides when it has no explicit manifest: runs
+    /// <paramref name="query"/> (a custom <see cref="DeckContent.Query"/> or the default
+    /// <c>path:{deck} nodeType:Slide scope:subtree</c>), accumulates the reactive change stream, drops the deck
+    /// root itself and any <c>_</c>-prefixed governance node, and orders the result by
+    /// <see cref="MeshNode.Order"/> (nulls last, then by path). So a deck whose slides are its
+    /// children needs no manifest, and re-ordering is just editing each slide's <c>Order</c>.
     /// </summary>
-    private static IObservable<IReadOnlyList<(string Path, MeshNode? Node)>> ObserveDefaultSubtreeSlides(
-        LayoutAreaHost host, string deckPath)
+    private static IObservable<IReadOnlyList<(string Path, MeshNode? Node)>> ObserveQuerySlides(
+        LayoutAreaHost host, string query, string deckPath)
     {
         var meshService = host.Hub.ServiceProvider.GetService<IMeshService>();
         if (meshService is null)
-            return Observable.Return<IReadOnlyList<(string, MeshNode?)>>(
-                ImmutableList<(string, MeshNode?)>.Empty);
+            return Observable.Return((IReadOnlyList<(string, MeshNode?)>)ImmutableList<(string, MeshNode?)>.Empty);
 
         return meshService
-            .Query<MeshNode>(MeshQueryRequest.FromQuery(
-                $"path:{deckPath} nodeType:{SlideNodeType.NodeType} scope:subtree"))
+            .Query<MeshNode>(MeshQueryRequest.FromQuery(query))
             .Scan(ImmutableDictionary<string, MeshNode>.Empty, (map, change) =>
             {
                 if (change.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset)
@@ -318,10 +318,13 @@ public static class DeckLayoutAreas
                 return map;
             })
             .Select(map => (IReadOnlyList<(string, MeshNode?)>)map.Values
+                .Where(n => !string.Equals(n.Path, deckPath, StringComparison.Ordinal)
+                            && !n.Segments.Skip(1).Any(s => s.StartsWith('_')))
                 .OrderBy(n => n.Order ?? int.MaxValue)
                 .ThenBy(n => n.Path, StringComparer.Ordinal)
                 .Select(n => (n.Path, (MeshNode?)n))
-                .ToImmutableList());
+                .ToImmutableList())
+            .StartWith((IReadOnlyList<(string, MeshNode?)>)ImmutableList<(string, MeshNode?)>.Empty);
     }
 
     /// <summary>One resolved slide stream: its path paired with the live node (null until it loads / if missing).</summary>
