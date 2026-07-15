@@ -162,6 +162,56 @@ public sealed class IoPool : IIoPool, IDisposable
             });
         });
 
+    /// <inheritdoc />
+    public IObservable<T> SubscribeThroughPool<T>(IObservable<T> source) =>
+        Observable.Create<T>(observer =>
+        {
+            // The long-lived subscription the setup leaf produces; disposed on unsubscribe OR pool drain.
+            var inner = new SingleAssignmentDisposable();
+
+            // Run the SUBSCRIBE — providers opening + the initial-snapshot emission that routes →
+            // CreateHub (Autofac BeginLifetimeScope) — as a TRACKED, GATED, pool-cancellable leaf,
+            // exactly like Invoke. So while that bounded, dangerous window runs it holds a gate permit
+            // and counts in _inFlight; Drain() cancels _poolCts then RE-ACQUIRES every permit, so it
+            // BLOCKS until this subscribe has released — i.e. the owning Autofac scope is never disposed
+            // while a BeginLifetimeScope is running (the endemic teardown SIGSEGV).
+            var setup = Observable.FromAsync(async subscriberCt =>
+                {
+                    using var linked = CancellationTokenSource.CreateLinkedTokenSource(subscriberCt, _poolCts.Token);
+                    var ct = linked.Token;
+                    await _gate.WaitAsync(ct).ConfigureAwait(false);
+                    Interlocked.Increment(ref _inFlight);
+                    try
+                    {
+                        // Draining before we even subscribed → do not open providers / create hubs.
+                        ct.ThrowIfCancellationRequested();
+                        inner.Disposable = source.Subscribe(observer);
+                    }
+                    finally
+                    {
+                        Interlocked.Decrement(ref _inFlight);
+                        _gate.Release();
+                    }
+                    return System.Reactive.Unit.Default;
+                })
+                .SubscribeOn(TaskPoolScheduler.Default)
+                .Subscribe(
+                    _ => { },
+                    ex =>
+                    {
+                        // A drain/unsubscribe cancellation is expected teardown — swallow it; surface real faults.
+                        if (ex is not OperationCanceledException)
+                            observer.OnError(ex);
+                    });
+
+            // If the pool drains AFTER the subscribe completed, tear the live subscription down too.
+            IDisposable drainReg;
+            try { drainReg = _poolCts.Token.Register(inner.Dispose); }
+            catch (ObjectDisposedException) { drainReg = Disposable.Empty; }
+
+            return new CompositeDisposable(setup, inner, drainReg);
+        });
+
     /// <summary>
     /// Cancels every in-flight leaf and JOINS — blocks until they have all unwound — WITHOUT
     /// disposing the pool. Called before a collectible node <c>AssemblyLoadContext</c> is unloaded
@@ -232,5 +282,9 @@ public sealed class IoPool : IIoPool, IDisposable
 
         public IObservable<T> InvokeBlocking<T>(Func<CancellationToken, T> work)
             => Observable.FromAsync(ct => Task.Run(() => work(ct), ct)).SubscribeOn(TaskPoolScheduler.Default);
+
+        // No pool → no drain to coordinate with; the historical bare-threadpool behaviour.
+        public IObservable<T> SubscribeThroughPool<T>(IObservable<T> source)
+            => source.SubscribeOn(TaskPoolScheduler.Default);
     }
 }
