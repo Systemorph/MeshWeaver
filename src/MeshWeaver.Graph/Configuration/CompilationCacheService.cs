@@ -427,7 +427,11 @@ internal sealed class NodeAssemblyLoadContext : AssemblyLoadContext, IDisposable
         // an accessor into a collectible node assembly (the exit=139 teardown crash).
         if (UnloadGcProbe)
         {
-            _logger?.LogWarning("ALC_UNLOAD_PROBE forcing GC after unloading {ContextName}", Name);
+            // Write to Console DIRECTLY, not via _logger: this runs INSIDE ServiceProvider.Dispose()
+            // where the ILogger (XUnitFileLogger.GetMinLogLevel) resolves from the already-disposed
+            // container and throws ObjectDisposedException BEFORE writing — so the probe never named
+            // the culprit. Console is the only sink alive during teardown.
+            Console.Error.WriteLine($"ALC_UNLOAD_PROBE forcing GC after unloading {Name}");
             GC.Collect();
             GC.WaitForPendingFinalizers();
             GC.Collect();
