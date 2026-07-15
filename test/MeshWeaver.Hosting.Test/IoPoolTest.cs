@@ -31,7 +31,7 @@ public class IoPoolTest
     // that is in-flight holds a slot, and Drain() BLOCKS until it releases — i.e. the scope can never
     // be torn down while a BeginLifetimeScope is running.
     [Fact]
-    public void SubscribeThroughPool_holds_a_slot_and_Drain_joins_the_in_flight_subscribe()
+    public async Task SubscribeThroughPool_holds_a_slot_and_Drain_joins_the_in_flight_subscribe()
     {
         using var pool = new IoPool(4);
         var subscribeEntered = new ManualResetEventSlim();
@@ -56,12 +56,14 @@ public class IoPoolTest
 
         // Drain() must JOIN: block until the in-flight subscribe releases its slot.
         var drainDone = Task.Run(() => pool.Drain());
-        Assert.False(SpinWait.SpinUntil(() => drainDone.IsCompleted, TimeSpan.FromMilliseconds(200)),
-            "Drain MUST block while the subscribe holds a slot (the owning scope must not dispose yet)");
+        // Confirm Drain does NOT complete while the subscribe still holds a slot (the owning scope must
+        // not dispose yet) — a "wait to confirm nothing happened" negative check.
+        var winner = await Task.WhenAny(drainDone, Task.Delay(TimeSpan.FromMilliseconds(200)));
+        Assert.NotSame(drainDone, winner);
 
         releaseSubscribe.Set();
 
-        Assert.True(drainDone.Wait(Timeout5), "Drain should complete once the subscribe releases");
+        await drainDone.WaitAsync(Timeout5);
         Assert.True(subscribeFinished, "Drain must have JOINED the in-flight subscribe before returning");
         Assert.Equal(0, pool.CurrentInFlight);
     }
