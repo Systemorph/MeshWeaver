@@ -90,4 +90,39 @@ public class MultiLanguageCodeExecutionTest(ITestOutputHelper output) : Monolith
                 && l.Status == ActivityStatus.Succeeded
                 && l.Messages.Any(m => m.Message.Contains("multi-lang-csharp-ran")));
     }
+
+    // ── no worker connected: the run must FAIL fast, never hang on "Running…" ──
+
+    [Fact(Timeout = 120000)]
+    public async Task PythonCodeNode_WithNoWorkerConnected_FailsTheActivity_NeverHangs()
+    {
+        // No py/python-kernel worker is registered in this test mesh. Running a python Code node
+        // must drive its ActivityLog to a TERMINAL Failed status (with a reason) rather than parking
+        // on Running forever — the "nothing hangs" contract of Doc/Architecture/PythonCodeNodes.
+        // Before the fix the dispatch fire-and-forgot the SubmitCodeRequest; with no worker the run
+        // stayed Running indefinitely (the reported bug).
+        var id = $"python-noworker-{Guid.NewGuid():N}";
+        var mesh = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        await mesh.CreateNode(new MeshNode(id, Partition)
+        {
+            Name = "python cell (no worker)", NodeType = "Code",
+            Content = new CodeConfiguration
+            {
+                Language = "python", IsExecutable = true,
+                Code = "print('should-not-run-without-a-worker')\n1 + 1"
+            }
+        }).Should().Within(30.Seconds()).Emit();
+
+        var exec = (await Mesh.Observe(new ExecuteScriptRequest(), o => o.WithTarget(new Address($"{Partition}/{id}")))
+            .Should().Within(60.Seconds()).Emit()).Message;
+        // The run STARTS (the ActivityLog is created); the no-worker failure surfaces on that log,
+        // exactly like an in-process C# script error does.
+        exec.Success.Should().BeTrue(exec.Error ?? "the run should start");
+
+        await Mesh.GetWorkspace().GetMeshNodeStream(exec.ActivityLog!)
+            .Select(n => n?.Content as ActivityLog)
+            .Should().Within(60.Seconds()).Match(l => l is not null
+                && l.Status == ActivityStatus.Failed
+                && l.HasErrors());
+    }
 }
