@@ -16,19 +16,55 @@ namespace MeshWeaver.PluginCatalog;
 /// so it needs no test double for that large interface — production passes <c>client.Fetch</c>, tests
 /// pass a stub. A public repo reads anonymously (empty token); a private one needs a token.</para>
 /// </summary>
-public sealed class GitHubPackageSource(
-    Func<string, string, string?, string, IObservable<RepoSnapshot>> fetch,
-    string repoUrl,
-    string token = "",
-    string subdir = "",
-    ILogger? logger = null) : IPackageSource
+public sealed class GitHubPackageSource : IPackageSource
 {
     private const string ManifestFile = "package.json";
     private static readonly JsonSerializerOptions ManifestJson = new(JsonSerializerDefaults.Web);
 
+    private readonly Func<string, string, string?, string, IObservable<RepoSnapshot>> fetch;
+    private readonly string repoUrl;
+    private readonly Func<IObservable<string>> tokenProvider;
+    private readonly string subdir;
+    private readonly ILogger? logger;
+
+    /// <summary>
+    /// Creates a package.json-repo source that resolves its access token FRESH before each fetch via
+    /// <paramref name="tokenProvider"/> — so the registry hands in
+    /// <see cref="GitHubAppTokenService.GetInstallationToken"/> (re-minted transparently, never
+    /// captured stale). The provider may emit an empty string for anonymous (public-repo) access.
+    /// </summary>
+    public GitHubPackageSource(
+        Func<string, string, string?, string, IObservable<RepoSnapshot>> fetch,
+        string repoUrl,
+        Func<IObservable<string>> tokenProvider,
+        string subdir = "",
+        ILogger? logger = null)
+    {
+        this.fetch = fetch;
+        this.repoUrl = repoUrl;
+        this.tokenProvider = tokenProvider;
+        this.subdir = subdir;
+        this.logger = logger;
+    }
+
+    /// <summary>
+    /// Creates a package.json-repo source with a FIXED token (default empty = anonymous). Convenience
+    /// for tests and public repos; the registry uses the token-provider overload so the App
+    /// installation token stays fresh.
+    /// </summary>
+    public GitHubPackageSource(
+        Func<string, string, string?, string, IObservable<RepoSnapshot>> fetch,
+        string repoUrl,
+        string token = "",
+        string subdir = "",
+        ILogger? logger = null)
+        : this(fetch, repoUrl, () => Observable.Return(token), subdir, logger)
+    {
+    }
+
     /// <inheritdoc />
     public IObservable<IReadOnlyList<PackageManifest>> ListPackages(string gitRef) =>
-        fetch(repoUrl, gitRef, NullIfEmpty(subdir), token)
+        tokenProvider().SelectMany(token => fetch(repoUrl, gitRef, NullIfEmpty(subdir), token))
             .Select(snapshot =>
             {
                 var manifests = new List<PackageManifest>();
@@ -56,7 +92,8 @@ public sealed class GitHubPackageSource(
 
     /// <inheritdoc />
     public IObservable<IReadOnlyList<PackageFile>> FetchPackageFiles(PackageManifest package, string gitRef) =>
-        fetch(repoUrl, gitRef, NullIfEmpty(package.SourceFolder ?? package.Id), token)
+        tokenProvider().SelectMany(token =>
+                fetch(repoUrl, gitRef, NullIfEmpty(package.SourceFolder ?? package.Id), token))
             .Select(snapshot => (IReadOnlyList<PackageFile>)snapshot.Files
                 .Select(f => new PackageFile(f.Path, f.Content)).ToList());
 

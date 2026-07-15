@@ -424,39 +424,55 @@ public class InlineEditingPersistenceTest(ITestOutputHelper output) : HubTestBas
 
     private void SetupAutoSave(LayoutAreaHost host, string dataId, PersistedContent originalItem)
     {
+        // ⚠️ Everything in this method runs on the HOST hub (view-definition path), re-invoked
+        // on every workspace emission — and the test service provider outlives the [Fact]
+        // (see TestBase.DisposeAsync), so these callbacks CAN fire after the test has been
+        // reported. All writes therefore go through FileOutput (which guards the underlying
+        // xUnit helper): a raw Output.WriteLine here after test completion throws xunit v3's
+        // InvalidOperationException("There is no currently active test") on an Rx thread,
+        // which escalates to an unhandled "[xUnit.net] Catastrophic failure" for the shard.
         var initialJson = JsonSerializer.Serialize(originalItem, host.Hub.JsonSerializerOptions);
-        Output.WriteLine($"SetupAutoSave: Initial JSON = {initialJson}");
+        FileOutput.WriteLine($"SetupAutoSave: Initial JSON = {initialJson}");
 
-        host.RegisterForDisposal(dataId,
+        // ReplaceDisposable, not RegisterForDisposal: the view definition re-runs per workspace
+        // emission, and RegisterForDisposal only ADDS — each re-render would stack another
+        // debounced watcher, multiplying DataChangeRequests and leaking live subscriptions.
+        host.ReplaceDisposable($"{dataId}.autosave",
             host.Stream.GetDataStream<PersistedContent>(dataId)
-                .Do(content => Output.WriteLine($"Data stream emitted: {content?.Title ?? "null"}"))
+                .Do(content => FileOutput.WriteLine($"Data stream emitted: {content?.Title ?? "null"}"))
                 .Debounce(TimeSpan.FromMilliseconds(100)) // Short debounce for testing
                 .Subscribe(updatedContent =>
                 {
                     if (updatedContent == null)
                     {
-                        Output.WriteLine("Auto-save: null content, skipping");
+                        FileOutput.WriteLine("Auto-save: null content, skipping");
                         return;
                     }
 
                     var currentJson = JsonSerializer.Serialize(updatedContent, host.Hub.JsonSerializerOptions);
-                    Output.WriteLine($"Auto-save: Comparing current={currentJson} vs initial={initialJson}");
+                    FileOutput.WriteLine($"Auto-save: Comparing current={currentJson} vs initial={initialJson}");
 
                     if (currentJson == initialJson)
                     {
-                        Output.WriteLine("Auto-save: No change detected, skipping");
+                        FileOutput.WriteLine("Auto-save: No change detected, skipping");
                         return;
                     }
 
-                    Output.WriteLine($"Auto-save: Change detected! Sending DataChangeRequest for {updatedContent.Title}");
+                    FileOutput.WriteLine($"Auto-save: Change detected! Sending DataChangeRequest for {updatedContent.Title}");
 
                     // Update initial to prevent re-sending
                     initialJson = currentJson;
 
-                    // Issue DataChangeRequest to persist the change (reactive, non-blocking)
-                    host.Hub.Observe<DataChangeResponse>(new DataChangeRequest().WithUpdates(updatedContent), o => o.WithTarget(host.Hub.Address))
-                        .Subscribe(response =>
-                            Output.WriteLine($"Auto-save: DataChangeResponse status = {response.Message.Status}"));
+                    // Issue DataChangeRequest to persist the change (reactive, non-blocking).
+                    // Observe emits exactly one response or OnError (delivery failure/timeout):
+                    // bound its lifetime to the host and handle OnError explicitly — an
+                    // unhandled Rx OnError after the test ends is the same catastrophic
+                    // unhandled-exception channel as the output-helper throw above.
+                    host.RegisterForDisposal(dataId,
+                        host.Hub.Observe<DataChangeResponse>(new DataChangeRequest().WithUpdates(updatedContent), o => o.WithTarget(host.Hub.Address))
+                            .Subscribe(
+                                response => FileOutput.WriteLine($"Auto-save: DataChangeResponse status = {response.Message.Status}"),
+                                ex => FileOutput.WriteLine($"Auto-save: DataChangeRequest failed: {ex.Message}")));
                 }));
     }
 
@@ -663,34 +679,44 @@ public class ObjectTypeAutoSaveTest(ITestOutputHelper output) : HubTestBase(outp
 
     private void SetupAutoSaveWithObjectType(LayoutAreaHost host, string dataId, TestItem originalItem)
     {
+        // ⚠️ This runs on the HOST hub (view-definition path), re-invoked per workspace emission,
+        // and the test service provider outlives the [Fact] — so these callbacks fire after the
+        // test has been reported. Writes go through FileOutput (guarded): a raw Output.WriteLine
+        // from the debounce timer after test completion throws xunit v3's
+        // InvalidOperationException("There is no currently active test") on an Rx thread, which
+        // surfaces as the shard's anonymous "[xUnit.net] Catastrophic failure". (Named by a
+        // first-chance probe: TestOutputHelper.QueueTestOutput ← this Subscribe ← Debounce timer.)
         var initialJson = JsonSerializer.Serialize(originalItem, host.Hub.JsonSerializerOptions);
-        Output.WriteLine($"SetupAutoSave (object): Initial JSON = {initialJson}");
+        FileOutput.WriteLine($"SetupAutoSave (object): Initial JSON = {initialJson}");
 
-        // Use GetDataStream<object> - same as MeshNodeLayoutAreas.cs
-        host.RegisterForDisposal(dataId,
+        // Use GetDataStream<object> - same as MeshNodeLayoutAreas.cs.
+        // ReplaceDisposable, not RegisterForDisposal: the view definition re-runs per workspace
+        // emission, and RegisterForDisposal only ADDS — each re-render would stack another
+        // debounced watcher, multiplying DataChangeRequests and leaking live subscriptions.
+        host.ReplaceDisposable($"{dataId}.autosave",
             host.Stream.GetDataStream<object>(dataId)
-                .Do(content => Output.WriteLine($"Object stream emitted: {content?.GetType().Name ?? "null"}"))
+                .Do(content => FileOutput.WriteLine($"Object stream emitted: {content?.GetType().Name ?? "null"}"))
                 .Debounce(TimeSpan.FromMilliseconds(100))
                 .Subscribe(updatedContent =>
                 {
-                    Output.WriteLine($"Auto-save (object) received: {updatedContent?.GetType().Name ?? "null"}");
+                    FileOutput.WriteLine($"Auto-save (object) received: {updatedContent?.GetType().Name ?? "null"}");
 
                     if (updatedContent == null)
                     {
-                        Output.WriteLine("Auto-save (object): null content, skipping");
+                        FileOutput.WriteLine("Auto-save (object): null content, skipping");
                         return;
                     }
 
                     var currentJson = JsonSerializer.Serialize(updatedContent, host.Hub.JsonSerializerOptions);
-                    Output.WriteLine($"Auto-save (object): Comparing current={currentJson} vs initial={initialJson}");
+                    FileOutput.WriteLine($"Auto-save (object): Comparing current={currentJson} vs initial={initialJson}");
 
                     if (currentJson == initialJson)
                     {
-                        Output.WriteLine("Auto-save (object): No change detected, skipping");
+                        FileOutput.WriteLine("Auto-save (object): No change detected, skipping");
                         return;
                     }
 
-                    Output.WriteLine($"Auto-save (object): Change detected! Sending DataChangeRequest");
+                    FileOutput.WriteLine($"Auto-save (object): Change detected! Sending DataChangeRequest");
                     initialJson = currentJson;
 
                     // Mark that auto-save was triggered
@@ -714,9 +740,15 @@ public class ObjectTypeAutoSaveTest(ITestOutputHelper output) : HubTestBase(outp
                     if (typedContent != null)
                     {
                         // Reactive, non-blocking — fire the persist request and log the response.
-                        host.Hub.Observe<DataChangeResponse>(new DataChangeRequest().WithUpdates(typedContent), o => o.WithTarget(host.Hub.Address))
-                            .Subscribe(response =>
-                                Output.WriteLine($"Auto-save (object): DataChangeResponse status = {response.Message.Status}"));
+                        // Bound to the host's lifetime and with an explicit OnError handler:
+                        // Observe emits exactly once or errors (delivery failure/timeout), and an
+                        // unhandled Rx OnError after the test ends is the same catastrophic
+                        // unhandled-exception channel as the output-helper throw above.
+                        host.RegisterForDisposal(dataId,
+                            host.Hub.Observe<DataChangeResponse>(new DataChangeRequest().WithUpdates(typedContent), o => o.WithTarget(host.Hub.Address))
+                                .Subscribe(
+                                    response => FileOutput.WriteLine($"Auto-save (object): DataChangeResponse status = {response.Message.Status}"),
+                                    ex => FileOutput.WriteLine($"Auto-save (object): DataChangeRequest failed: {ex.Message}")));
                     }
                 }));
     }

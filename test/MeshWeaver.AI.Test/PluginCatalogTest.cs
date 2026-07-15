@@ -28,6 +28,18 @@ public class PluginCatalogTest : MonolithMeshTestBase
 {
     public PluginCatalogTest(ITestOutputHelper output) : base(output) { }
 
+    static PluginCatalogTest()
+    {
+        // The class OWNS this on-disk fixture dir, and file persistence survives the
+        // process: a rerun against the same bin (local rerun after a fix; CI bins are
+        // always freshly extracted) collided with the previous run's nodes ("Node
+        // already exists: WidgetKit/Widget"). Clean ONCE per process, before the shared
+        // mesh initializes (a per-instance clean would wipe the live store mid-class —
+        // ShareMeshAcrossTests keeps one mesh across this class's tests).
+        if (Directory.Exists(TestDataPath))
+            Directory.Delete(TestDataPath, recursive: true);
+    }
+
     protected override bool ShareMeshAcrossTests => true;
 
     private static readonly string TestDataPath = Path.Combine(AppContext.BaseDirectory, "TestData-plugincatalog");

@@ -303,7 +303,7 @@ When the user says **"create"** (a page, note, doc, list, plan, space, world, ch
 
 - **Default to `nodeType: "Markdown"`.** If you're unsure which node type fits, create a **Markdown** node — it's the general-purpose document/content node and is almost always the right answer for prose, notes, plans, and pages.
 - **For specialized nodes, load the matching skill first**, then follow it — do not guess the shape:
-  - a **Space** / company / team / project / topic workspace → load **`/create-space`**
+  - a **Space** / company / team / project / topic workspace → load **`/space`**
   - an **Agent** → **`/agent`** · a **Code** node → **`/code`** · a **model / data type** → **`/model`** · a **layout area** → **`/layout-area`** · a **slide deck** → **`/slide`**
   - Discover the rest with `Search('nodeType:Skill')` and read the one that matches before creating.
 - Every node still needs a real `name`, an inline `<svg` `icon`, and (for Markdown) a `content` body — see the schema and rules below.
@@ -362,7 +362,9 @@ Create('{"id": "NewPage", "namespace": "MyOrg", "name": "New Page", "nodeType": 
 
 ## Update
 
-Updates one or more existing nodes in the mesh. The entire MeshNode is replaced, not merged.
+Replaces one or more existing nodes in the mesh **wholesale** — the entire MeshNode is overwritten, not merged. Any field you omit is wiped.
+
+> **Prefer `Patch` (or `EditContent`) for almost every change.** `Update` is only for the case where you already hold a **complete node** and want to write it verbatim — importing/restoring whole nodes, or replaying an exported node array. For anything less than a full-node replacement (setting an icon, renaming, editing content, changing a few fields), use `Patch`: it merges, needs no `Get` first, and can't silently drop fields.
 
 ### Parameter
 
@@ -406,8 +408,8 @@ Patch('@MyOrg/MyPage', '{"content": {"text": "Updated markdown content"}}')
 ### When to use Patch vs Update vs EditContent
 
 - **EditContent**: Any change *inside* a long text — Markdown body or source code. Cheapest and safest.
-- **Patch**: Simple field changes (icon, name, category, short content). No Get needed.
-- **Update**: Complex changes to multiple fields, or when you need full control. Always Get first.
+- **Patch** (default for everything else): Any field change — icon, name, category, content, even several fields at once. Merges, so unspecified fields are preserved. No Get needed.
+- **Update**: *Only* when you are importing/restoring a **complete node** (or an array of them) verbatim — e.g. replaying exported nodes. It overwrites the whole node, so anything you omit is lost; always Get first. Not for ordinary edits — reach for Patch.
 
 ## EditContent
 

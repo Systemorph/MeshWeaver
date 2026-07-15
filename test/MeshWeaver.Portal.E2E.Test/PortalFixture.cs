@@ -31,6 +31,9 @@ public sealed class PortalFixture : IAsyncLifetime
     /// <summary>The base URL of the portal under test, or null when E2E is not enabled.</summary>
     public string? BaseUrl { get; private set; }
 
+    /// <summary>The engine the browser was launched with (chromium/webkit/firefox), for diagnostics.</summary>
+    public string BrowserName { get; private set; } = "chromium";
+
     /// <summary>
     /// The partition the DevLogin user can WRITE to — their own home (the onboarded id is the
     /// lower-cased user). Tests seed writable docs here instead of read-only static partitions (Doc).
@@ -83,20 +86,36 @@ public sealed class PortalFixture : IAsyncLifetime
 
         // E2E_HEADED=1 shows the browser (with a slow-mo so you can watch); default is headless.
         var headed = Environment.GetEnvironmentVariable("E2E_HEADED") == "1";
+        // E2E_BROWSER selects the engine: chromium (default), webkit (Safari's engine — the ONLY way
+        // to reproduce Safari-specific focus/blur bugs headlessly), or firefox. Existing tests are
+        // unaffected: absent the var, it's Chromium exactly as before.
+        // Normalize to the engine we will ACTUALLY launch: an unrecognized value falls back to Chromium,
+        // so BrowserName must report "chromium" too (not the bogus input) — otherwise skip/diagnostic
+        // messages and per-engine test logs would name an engine that never ran.
+        var requested = (Environment.GetEnvironmentVariable("E2E_BROWSER") ?? "chromium").ToLowerInvariant();
+        var browserName = requested is "webkit" or "firefox" ? requested : "chromium";
         try
         {
             _playwright = await Playwright.CreateAsync();
-            _browser = await _playwright.Chromium.LaunchAsync(new BrowserTypeLaunchOptions
+            var browserType = browserName switch
+            {
+                "webkit" => _playwright.Webkit,
+                "firefox" => _playwright.Firefox,
+                _ => _playwright.Chromium
+            };
+            _browser = await browserType.LaunchAsync(new BrowserTypeLaunchOptions
             {
                 Headless = !headed,
                 SlowMo = headed ? 300 : 0
             });
+            BrowserName = browserName;
         }
         catch (Exception ex)
         {
-            // Browser not installed → playwright.ps1 install chromium. Skip rather than fail.
-            SkipReason = $"Chromium could not launch ({ex.Message}). Run: pwsh " +
-                         "test/MeshWeaver.Portal.E2E.Test/bin/Debug/net10.0/playwright.ps1 install chromium";
+            // Browser not installed → install it via the bundled driver. Skip rather than fail.
+            SkipReason = $"{browserName} could not launch ({ex.Message}). Install it: " +
+                         "bin/Debug/net10.0/.playwright/node/*/node " +
+                         "bin/Debug/net10.0/.playwright/package/cli.js install " + browserName;
             return;
         }
 

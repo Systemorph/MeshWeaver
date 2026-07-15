@@ -162,18 +162,29 @@ public class HubTestBase : TestBase
             var hostedHubsValue = hostedHubsProperty?.GetValue(Mesh)?.ToString() ?? "unknown";
             Logger.LogInformation("[{DisposalId}] Mesh has {HubCount} hosted hubs", disposalId, hostedHubsValue);
 
-            if (Mesh.IsDisposing)
+            if (!Mesh.IsDisposing)
             {
-                Logger.LogInformation("[{DisposalId}] Mesh is disposing, waiting for completion", disposalId);
-                // Bridge the reactive completion to a Task once, at this test-teardown edge.
-                // Catch folds a disposal fault into completion (teardown waits for "done", not why).
-                await Mesh.DisposalCompleted
-                    .Catch<Unit, Exception>(_ => Observable.Return(Unit.Default))
-                    .FirstOrDefaultAsync()
-                    .ToTask()
-                    .WaitAsync(timeout.Token);
-                Logger.LogInformation("[{DisposalId}] Mesh disposal completed", disposalId);
+                // The fixture owns the mesh, so the fixture must tear it down. This initiation
+                // was lost in aad01631a ("proper await in TestFixture"); since then every
+                // HubTestBase test leaked its live mesh (hubs, layout hosts, subscriptions)
+                // past the test. A leaked debounced auto-save subscription then wrote to the
+                // finished test's raw ITestOutputHelper → xUnit "There is no currently active
+                // test." → anonymous catastrophic failure → all-green trx but exit 1
+                // (Layout.Test red on every CI run, masked by the trx-only gate).
+                Logger.LogInformation("[{DisposalId}] Initiating mesh disposal", disposalId);
+                Mesh.Dispose();
             }
+
+            Logger.LogInformation("[{DisposalId}] Mesh is disposing, waiting for completion", disposalId);
+            // Bridge the reactive completion to a Task once, at this test-teardown edge.
+            // Catch folds a disposal fault into completion (teardown waits for "done", not why).
+            // DisposalCompleted replays to late subscribers, so this is race-free.
+            await Mesh.DisposalCompleted
+                .Catch<Unit, Exception>(_ => Observable.Return(Unit.Default))
+                .FirstOrDefaultAsync()
+                .ToTask()
+                .WaitAsync(timeout.Token);
+            Logger.LogInformation("[{DisposalId}] Mesh disposal completed", disposalId);
         }
         catch (OperationCanceledException)
         {

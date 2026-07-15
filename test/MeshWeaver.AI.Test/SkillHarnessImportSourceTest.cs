@@ -42,7 +42,7 @@ public class SkillHarnessImportSourceTest(ITestOutputHelper output) : MonolithMe
         ((MeshWeaver.Mesh.Security.PartitionAccessPolicy)policy!.Content!).PublicRead.Should().BeTrue();
 
         var skills = nodes.Where(n => n.NodeType == SkillNodeType.NodeType).ToList();
-        skills.Select(n => n.Id).OrderBy(x => x).Should().Equal("access", "agent", "clear", "code", "create-group", "create-space", "feedback", "harness", "layout-area", "markdown", "maui", "model", "navigate", "provider-keys", "pull-request", "slide");
+        skills.Select(n => n.Id).OrderBy(x => x).Should().Equal("access", "agent", "clear", "code", "create-group", "feedback", "harness", "layout-area", "markdown", "maui", "model", "navigate", "presentation", "provider-keys", "pull-request", "slide", "space");
         skills.Should().AllSatisfy(n =>
         {
             n.Namespace.Should().Be(SkillNodeType.RootNamespace);
@@ -52,7 +52,7 @@ public class SkillHarnessImportSourceTest(ITestOutputHelper output) : MonolithMe
         });
         // Ordering lives in the QUERY (data), not the GUI picker: `sort:order` makes the picker's
         // default-to-first land on the catalog head. This applies ONLY to PICK skills that carry a
-        // query (agent / model / harness) — command/prompt skills (code, create-space) have no pick
+        // query (agent / model / harness) — command/prompt skills (code, space) have no pick
         // Action and are exempt.
         skills.Select(n => (SkillDefinition)n.Content!)
             .Where(d => d.Action?.Query is not null)
