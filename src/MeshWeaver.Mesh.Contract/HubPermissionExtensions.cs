@@ -134,6 +134,19 @@ public static class HubPermissionExtensions
         return PermissionEvaluator.GetPolicy(hub, targetNamespace);
     }
 
+    /// <summary>
+    /// The mesh path to REDIRECT a viewer to when they lack access to <paramref name="targetNamespace"/>
+    /// — the nearest scope's <see cref="PartitionAccessPolicy.RedirectOnDenied"/> (normalized, no leading
+    /// '/'), or <c>null</c> if none is configured. The GUI reads this on a real access-denied to send the
+    /// viewer to a public page ("if no access, redirect here") instead of a dead-end error.
+    /// </summary>
+    public static IObservable<string?> GetRedirectOnDenied(
+        this IMessageHub hub, string targetNamespace)
+    {
+        ArgumentNullException.ThrowIfNull(hub);
+        return PermissionEvaluator.GetRedirectOnDenied(hub, targetNamespace);
+    }
+
     private static EffectivePermissionsDelegate ResolveEvaluator(IMessageHub hub) =>
         hub.Configuration.Get<EffectivePermissionsDelegate>()
         ?? MessageHubPermissionExtensions.DefaultEvaluator;

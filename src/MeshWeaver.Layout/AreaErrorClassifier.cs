@@ -199,38 +199,23 @@ public static class AreaErrorClassifier
         return null;
     }
 
-    /// <summary>The Overview area — a course's public "poster" (ad) page — that a denied course
-    /// lesson redirects to. Literal (not <c>MeshNodeLayoutAreas.OverviewArea</c>) to keep this
-    /// classifier free of a Graph dependency; pinned to that constant by a unit test.</summary>
-    public const string CoursePosterArea = "Overview";
-
     /// <summary>
-    /// The course POSTER page to send a not-yet-enrolled visitor to when they are denied a page
-    /// <em>under</em> a course — the rule <c>{course}/Anything ⇒ {course}/Overview</c>, where the
-    /// course's public Overview is its poster/ad page. Courses are top-level partitions, so the course
-    /// root is the denied path's FIRST segment; any lesson beneath it therefore resolves to the SAME
-    /// poster. Returns <c>null</c> when:
-    /// <list type="bullet">
-    ///   <item>the error is not access-denied;</item>
-    ///   <item>the denied path is the course ROOT itself (a single segment) — that IS the poster
-    ///   location, so there is nothing to redirect TO; and</item>
-    ///   <item>the denied path already IS the poster (or sits under it) — so a redirect can never
-    ///   loop, even for a non-course partition whose own root is gated.</item>
-    /// </list>
-    /// Pure — unit-tested.
+    /// Whether redirecting a viewer who was denied <paramref name="deniedPath"/> to the configured
+    /// <paramref name="redirectPath"/> ("if no access ⇒ redirect here") is SAFE — i.e. cannot loop.
+    /// True only when a target is set AND the denied node is neither the target itself nor a node under
+    /// it: redirecting the target (or its subtree) back to the target would bounce forever, so those
+    /// fall through to the honest access-denied instead. A leading '/' on the target is ignored. Pure —
+    /// unit-tested. (The redirect TARGET itself comes from the node's PartitionAccessPolicy via
+    /// <c>hub.GetRedirectOnDenied(path)</c>, not from this classifier.)
     /// </summary>
-    public static string? TryGetCoursePosterPath(Exception? ex)
+    public static bool IsSafeRedirect(string? deniedPath, string? redirectPath)
     {
-        var denied = TryGetAccessDeniedPath(ex);
-        if (string.IsNullOrEmpty(denied)) return null;
-        var slash = denied.IndexOf('/');
-        if (slash <= 0) return null; // course root itself → it IS the poster; nothing to redirect to
-        var root = denied[..slash];
-        var remainder = denied[(slash + 1)..];
-        if (string.Equals(remainder, CoursePosterArea, StringComparison.Ordinal)
-            || remainder.StartsWith(CoursePosterArea + "/", StringComparison.Ordinal))
-            return null; // already at / under the poster → no loop
-        return $"{root}/{CoursePosterArea}";
+        if (string.IsNullOrEmpty(deniedPath) || string.IsNullOrWhiteSpace(redirectPath))
+            return false;
+        var target = redirectPath.Trim().TrimStart('/');
+        if (target.Length == 0) return false;
+        return !string.Equals(deniedPath, target, StringComparison.Ordinal)
+            && !deniedPath.StartsWith(target + "/", StringComparison.Ordinal);
     }
 
     /// <summary>

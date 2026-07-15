@@ -283,20 +283,17 @@ public partial class NamedAreaView
                     else
                         Logger.LogError(error, "Error in control stream for area {Area}", AreaToBeRendered);
 
-                    // "No access ⇒ course poster": a not-yet-enrolled visitor denied a page UNDER a course
-                    // ({course}/Anything) is redirected to that course's PUBLIC Overview "poster" (ad page)
-                    // instead of a dead-end "Access denied" card — so the funnel never terminates on an error.
-                    // Guards: only the page's TOP-LEVEL area redirects (an embedded gated area must never hijack
-                    // the whole page), and only when the course ROOT is actually readable by THIS viewer (its
-                    // public poster renders) — a fully-private partition, or any other denied node, falls through
-                    // to the honest error card below (which is ALSO why this can't loop: a gated root is never
-                    // readable). The probe is best-effort: its OnError path shows the original error, never a swallow.
+                    // "No access ⇒ redirect": when the denied node's access policy configures a
+                    // RedirectOnDenied page (PartitionAccessPolicy — e.g. a public course cover / sign-up),
+                    // send the viewer THERE instead of a dead-end "Access denied" card. Guards: only the
+                    // page's TOP-LEVEL area redirects (an embedded gated area must never hijack the whole
+                    // page); the target comes from the node's OWN policy (reliable, not a guess); and
+                    // IsSafeRedirect blocks redirecting the target itself (or a node under it), so it can
+                    // never loop. The lookup is best-effort + bounded: on error/timeout it shows the honest
+                    // error, never a swallow. When no RedirectOnDenied is set, it falls through to the error.
                     if (Top
-                        && AreaErrorClassifier.TryGetCoursePosterPath(error) is { } posterPath
-                        && Hub.ServiceProvider.GetService<IMeshService>() is { } meshService)
+                        && AreaErrorClassifier.TryGetAccessDeniedPath(error) is { } deniedPath)
                     {
-                        var courseRoot = posterPath[..posterPath.LastIndexOf('/')];
-
                         void ShowError() => InvokeAsync(() =>
                         {
                             if (IsViewDisposed) return;
@@ -308,27 +305,30 @@ public partial class NamedAreaView
                             catch (ObjectDisposedException) { /* renderer gone */ }
                         });
 
-                        meshService.Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{courseRoot}"))
-                            .Select(change => change.Items.Any(n => string.Equals(n.Path, courseRoot, StringComparison.Ordinal)))
+                        Hub.GetRedirectOnDenied(deniedPath)
                             .Take(1)
                             .Timeout(TimeSpan.FromSeconds(5))
                             .Subscribe(
-                                posterVisible =>
+                                redirectPath =>
                                 {
                                     if (IsViewDisposed) return;
-                                    if (!posterVisible) { ShowError(); return; }
+                                    if (!AreaErrorClassifier.IsSafeRedirect(deniedPath, redirectPath))
+                                    {
+                                        ShowError();
+                                        return;
+                                    }
                                     InvokeAsync(() =>
                                     {
                                         if (IsViewDisposed) return;
                                         try
                                         {
-                                            RootControl = new RedirectControl($"/{posterPath}");
+                                            RootControl = new RedirectControl($"/{redirectPath!.TrimStart('/')}");
                                             RequestStateChange();
                                         }
                                         catch (ObjectDisposedException) { /* renderer gone */ }
                                     });
                                 },
-                                _ => { if (!IsViewDisposed) ShowError(); }); // probe failed → honest error
+                                _ => { if (!IsViewDisposed) ShowError(); }); // lookup failed → honest error
                         return;
                     }
 
