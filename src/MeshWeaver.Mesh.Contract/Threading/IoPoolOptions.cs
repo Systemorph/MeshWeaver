@@ -25,6 +25,15 @@ public static class IoPoolNames
     /// </summary>
     public const string Ai = "Ai";
 
+    /// <summary>
+    /// MeshQuery change-feed subscribe leaves (<see cref="IIoPool.SubscribeThroughPool{T}"/>). Exists
+    /// so the query SUBSCRIBE — which opens providers + emits the initial snapshot and can route →
+    /// create a per-node hub — is TRACKED and DRAINABLE at teardown (the endemic teardown SIGSEGV was a
+    /// query straggler creating a hub on the disposing Autofac scope). Generous cap: it's a drain hook,
+    /// not a throttle (the slot is held only for the bounded subscribe window).
+    /// </summary>
+    public const string Query = "Query";
+
     /// <summary>CPU-bound compilation (Roslyn compile/script). Wave 3.</summary>
     public const string Compile = "Compile";
 
@@ -102,6 +111,13 @@ public sealed record IoPoolOptions
     /// </summary>
     public int Ai { get; init; } = 256;
 
+    /// <summary>
+    /// Concurrent MeshQuery change-feed subscribes (the <c>Query</c> pool). A drain hook, not a
+    /// throttle — the slot is held only for the bounded subscribe window — so the cap is generous
+    /// (256) to never bottleneck query fan-out.
+    /// </summary>
+    public int Query { get; init; } = 256;
+
     /// <summary>Concurrent compilations. CPU-bound; defaults to the processor count.</summary>
     public int Compile { get; init; } = Environment.ProcessorCount;
 
@@ -148,6 +164,7 @@ public sealed record IoPoolOptions
             IoPoolNames.Blob => Blob,
             IoPoolNames.Http => Http,
             IoPoolNames.Ai => Ai,
+            IoPoolNames.Query => Query,
             IoPoolNames.Compile => Compile,
             IoPoolNames.Process => Process,
             _ => Default,

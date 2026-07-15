@@ -33,6 +33,16 @@ public class MeshQuery : IMeshQueryCore
     private readonly IReadOnlyList<IMeshQueryProvider> providers;
     private readonly IMessageHub hub;
 
+    // The tracked, DRAINABLE pool the query SUBSCRIBE runs through (replaces a bare
+    // .SubscribeOn(TaskPoolScheduler.Default) the teardown drain couldn't reach). Running the
+    // subscribe here means teardown's IoPoolRegistry.DrainAll() cancel+joins it, so a query
+    // straggler can't create a per-node hub on the disposing Autofac scope (the teardown SIGSEGV).
+    private MeshWeaver.Mesh.Threading.IIoPool? _queryPool;
+    private MeshWeaver.Mesh.Threading.IIoPool QueryPool => _queryPool ??=
+        hub?.ServiceProvider?.GetService<MeshWeaver.Mesh.Threading.IoPoolRegistry>()
+            ?.Get(MeshWeaver.Mesh.Threading.IoPoolNames.Query)
+        ?? MeshWeaver.Mesh.Threading.IoPool.Unbounded;
+
     /// <summary>
     /// Creates the top-level query fan-out, deduplicating the registered
     /// providers by <see cref="IMeshQueryProvider.Name"/> so duplicate
@@ -112,13 +122,13 @@ public class MeshQuery : IMeshQueryCore
     public IObservable<QueryResultChange<T>> Query<T>(MeshQueryRequest request)
     {
         var matched = SelectMatchingProviders(NamespacesForRequest(request));
-        return MergeProviderObservables(
+        // Run the subscribe on the DRAINABLE Query pool (not a bare TaskPoolScheduler): keeps the
+        // calling hub's action block free while providers open their change feeds, AND makes the
+        // subscribe tracked so teardown's DrainAll cancel+joins it before the scope is disposed.
+        return QueryPool.SubscribeThroughPool(
+            MergeProviderObservables(
                 matched.Select(p => (p.Query<T>(request, Options), p.Name)).ToList(),
-                request)
-            // Push the upstream subscription onto the thread pool so the
-            // calling hub's action block isn't blocked while providers open
-            // their connections / start their change feeds.
-            .SubscribeOn(System.Reactive.Concurrency.TaskPoolScheduler.Default);
+                request));
     }
 
     /// <summary>
@@ -143,12 +153,11 @@ public class MeshQuery : IMeshQueryCore
         // C return. Same progressive shape as Autocomplete; the brief leading
         // all-empty frame is the cost of not waiting for the whole fan-out.
         var streams = matched.Select(p => p.Query(request, Options).StartWith(empty)).ToList();
-        return Observable.CombineLatest(streams)
-            .Select(snapshots => MergeSnapshots(snapshots))
-            // Provider Query() opens connection-pool / change-feed
-            // subscriptions on Subscribe — keep that off the calling hub's
-            // action block.
-            .SubscribeOn(System.Reactive.Concurrency.TaskPoolScheduler.Default);
+        // Subscribe on the DRAINABLE Query pool (see Query<T>): off the calling hub's action block
+        // AND tracked, so teardown's DrainAll cancel+joins the subscribe before the scope disposes.
+        return QueryPool.SubscribeThroughPool(
+            Observable.CombineLatest(streams)
+                .Select(snapshots => MergeSnapshots(snapshots)));
     }
 
     /// <summary>
@@ -326,7 +335,10 @@ public class MeshQuery : IMeshQueryCore
         var coreRequest = isSystem && !string.Equals(request.UserId, WellKnownUsers.System, StringComparison.Ordinal)
             ? request with { UserId = WellKnownUsers.System }
             : request;
-        return MergeProviderObservables(
+        // Subscribe on the DRAINABLE Query pool (see Query<T>): tracked so teardown DrainAll
+        // cancel+joins the subscribe before the scope disposes.
+        return QueryPool.SubscribeThroughPool(
+            MergeProviderObservables(
                 matched.Select(p => (isSystem
                     ? (p is IMeshQueryCore core
                         ? core.Query<T>(coreRequest, options)
@@ -334,8 +346,7 @@ public class MeshQuery : IMeshQueryCore
                     // Real user: ALWAYS hit the secured provider surface
                     // (validators apply per-result RLS for request.UserId).
                     : p.Query<T>(request, options), p.Name)).ToList(),
-                request)
-            .SubscribeOn(System.Reactive.Concurrency.TaskPoolScheduler.Default);
+                request));
     }
 
     /// <summary>
