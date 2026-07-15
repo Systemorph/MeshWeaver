@@ -20,22 +20,14 @@ namespace MeshWeaver.AI.Delegation;
 /// </summary>
 internal static class DelegationHandlers
 {
-    /// <summary>Default heartbeat timeout when MeshThread.HeartbeatTimeout is null.
-    /// 10 s — well above any streaming chat client's normal delta cadence, low
-    /// enough that hung delegations are detected promptly. Tests requiring
-    /// even tighter detection override via <c>MeshThread.HeartbeatTimeout</c>.</summary>
-    public static readonly TimeSpan DefaultHeartbeatTimeout = TimeSpan.FromSeconds(10);
-
-    /// <summary>Cold-start grace from <c>ExecutionStartedAt</c>. Sub-threads
-    /// often spend the first ~5 s on agent allocation + first-token latency
-    /// without writing <c>LastActivityAt</c>; 15 s covers that without
-    /// allowing real hangs to pin the user too long.</summary>
-    public static readonly TimeSpan ColdStartGrace = TimeSpan.FromSeconds(15);
-
     /// <summary>Periodic interval for the heartbeat scanner. 1 s keeps
     /// hang-detection responsive — total worst-case latency is
     /// <c>HeartbeatInterval + HeartbeatTimeout</c>.</summary>
     public static readonly TimeSpan HeartbeatInterval = TimeSpan.FromSeconds(1);
+
+    /// <summary>Fallback thresholds when no <see cref="DelegationHeartbeatOptions"/>
+    /// is registered (production default). Immutable — a shared read-only constant.</summary>
+    public static readonly DelegationHeartbeatOptions DefaultHeartbeatOptions = new();
 
     /// <summary>
     /// On the PARENT thread hub. Periodic scanner (every 1 s). Reads the
@@ -44,6 +36,20 @@ internal static class DelegationHandlers
     /// currently waiting on?"), reads each sub-thread's MeshNode via the
     /// process-wide cache, and applies the heartbeat predicate. On match,
     /// posts <see cref="CancelDelegationSubThread"/> back to this hub.
+    ///
+    /// <para><b>Two windows, not one.</b> A sub-thread that has produced NO activity
+    /// yet (<c>LastActivityAt == null</c>) is in FIRST-TOKEN LATENCY — agent
+    /// allocation + model time-to-first-token + first tool round-trip — which is NOT
+    /// a stalled stream. A reasoning model, a cold provider endpoint, or a slow first
+    /// tool legitimately takes far longer than the inter-activity timeout to emit its
+    /// first delta; judging that window by the short timeout cancelled a live-but-slow
+    /// sub-agent before it ever started (the "sub-thread never started" symptom this
+    /// method used to cause). Such a sub-thread is judged by
+    /// <see cref="DelegationHeartbeatOptions.FirstActivityBudget"/> instead. Only once
+    /// the sub-agent HAS stamped an activity does the inter-activity
+    /// <see cref="DelegationHeartbeatOptions.HeartbeatTimeout"/> apply. A genuinely
+    /// hung agent that never emits is still caught (after the first-activity budget),
+    /// and the parent's 10-min <c>delegate_to_agent</c> timeout is the ultimate backstop.</para>
     /// </summary>
     internal static IMessageDelivery HandleHeartbeatTick(
         IMessageHub hub, IMessageDelivery<HeartbeatTick> delivery)
@@ -55,6 +61,8 @@ internal static class DelegationHandlers
         var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.AI.Delegation");
         var nodeCache = hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
+        var opts = hub.ServiceProvider.GetService<DelegationHeartbeatOptions>()
+                   ?? DefaultHeartbeatOptions;
         var now = DateTime.UtcNow;
 
         foreach (var subPath in chat.ActiveDelegationPaths)
@@ -70,18 +78,31 @@ internal static class DelegationHandlers
                     {
                         if (node?.Content is not MeshThread t || !t.IsExecuting)
                             return;
-                        var timeout = t.HeartbeatTimeout ?? DefaultHeartbeatTimeout;
                         var startedAt = t.ExecutionStartedAt ?? now;
-                        if (now - startedAt <= ColdStartGrace) return;
-                        var lastActivity = t.LastActivityAt ?? startedAt;
-                        if (now - lastActivity <= timeout) return;
+
+                        string reason;
+                        if (t.LastActivityAt is not { } lastActivity)
+                        {
+                            // Never active yet → still in first-token latency. Judge by the
+                            // (generous) first-activity budget, NOT the inter-activity timeout.
+                            var firstBudget = t.FirstActivityBudget ?? opts.FirstActivityBudget;
+                            if (now - startedAt <= firstBudget) return;
+                            reason = $"no first activity within {(int)firstBudget.TotalSeconds}s of start";
+                        }
+                        else
+                        {
+                            // Was active, now silent → a genuinely stalled stream. Apply the
+                            // inter-activity timeout, keeping the post-start settle grace.
+                            if (now - startedAt <= opts.ColdStartGrace) return;
+                            var timeout = t.HeartbeatTimeout ?? opts.HeartbeatTimeout;
+                            if (now - lastActivity <= timeout) return;
+                            reason = $"no activity for {(int)(now - lastActivity).TotalSeconds}s";
+                        }
 
                         logger?.LogWarning(
-                            "[DelegationHandlers] heartbeat stale sub={Path} sinceActivity={Since}s timeout={Timeout}s — cancelling",
-                            subPath,
-                            (int)(now - lastActivity).TotalSeconds, (int)timeout.TotalSeconds);
-                        hub.Post(new CancelDelegationSubThread(subPath,
-                            $"Heartbeat: no activity for {(int)(now - lastActivity).TotalSeconds}s"));
+                            "[DelegationHandlers] heartbeat stale sub={Path} — cancelling ({Reason})",
+                            subPath, reason);
+                        hub.Post(new CancelDelegationSubThread(subPath, $"Heartbeat: {reason}"));
                     },
                     _ => { /* swallow; next tick retries */ });
         }

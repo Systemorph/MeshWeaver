@@ -2,8 +2,26 @@ using System.Collections.Immutable;
 
 namespace MeshWeaver.GitSync;
 
-/// <summary>A single file in a repo tree — repo-relative <paramref name="Path"/> + UTF-8 text <paramref name="Content"/>.</summary>
-public record RepoFile(string Path, string Content);
+/// <summary>
+/// A single file in a repo tree — repo-relative <paramref name="Path"/> plus its bytes. A TEXT file
+/// carries its UTF-8 text in <paramref name="Content"/> (and <see cref="Binary"/> is null). A BINARY
+/// file (a course video/poster committed under <c>{node}/content/**</c>, a font, any non-UTF-8 blob)
+/// carries its raw bytes in <see cref="Binary"/> — <paramref name="Content"/> is then empty, because
+/// round-tripping arbitrary bytes through a UTF-8 string corrupts them (the bug that repeatedly nuked
+/// the course videos: the fetch decoded a base64 <c>.mp4</c> blob as UTF-8 and mangled it). Use
+/// <see cref="Bytes"/> to read the raw content regardless of kind.
+/// </summary>
+/// <param name="Path">The repo-relative file path.</param>
+/// <param name="Content">The file's UTF-8 text (empty for a binary file — read <see cref="Bytes"/>).</param>
+/// <param name="Binary">The file's raw bytes when it is NOT valid UTF-8 text; null for a text file.</param>
+public record RepoFile(string Path, string Content, byte[]? Binary = null)
+{
+    /// <summary>True when this file holds raw (non-text) bytes that must never pass through the text API.</summary>
+    public bool IsBinary => Binary is not null;
+
+    /// <summary>The file's raw bytes: <see cref="Binary"/> for a binary file, else the UTF-8 encoding of <see cref="Content"/>.</summary>
+    public byte[] Bytes => Binary ?? System.Text.Encoding.UTF8.GetBytes(Content);
+}
 
 /// <summary>
 /// A request to mirror a set of files into a GitHub repository as a single commit.

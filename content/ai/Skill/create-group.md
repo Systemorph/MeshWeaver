@@ -148,5 +148,5 @@ rather than reporting a phantom send. Check the deployment's `Email__Enabled`.
 # Related
 
 - [/access](/access) — the AccessAssignment shape, roles, and the `mainNode` rule this builds on
-- [/create-space](/create-space) — create the space the group serves
+- [/space](/space) — create the space the group serves
 - [Granting Access via AccessAssignments](/Doc/Architecture/GrantingAccess) · [Access Control Architecture](/Doc/Architecture/AccessControl)

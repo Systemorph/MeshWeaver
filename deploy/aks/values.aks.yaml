@@ -246,8 +246,25 @@ resources:
 # spread. portal-ha-patch.yaml sets the same count — keep the two in sync (or
 # `kubectl scale deployment memex-portal-deployment --replicas=2`).
 replicas:
-  portal: 2        # Blazor Server: 2 replicas (zone-spread is ScheduleAnyway)
+  portal: 2        # Blazor Server: initial count; KEDA (below) owns it once installed
   postgres: 1      # self-managed pg StatefulSet stays single-writer
+
+# --- KEDA autoscaling (portal) ---------------------------------------------
+# Event-driven autoscaling for the portal. Requires the KEDA operator — enable
+# the AKS managed add-on once per cluster:
+#   az aks update -g memex-aks-rg -n memexaks-cluster --enable-keda
+# metrics-server is already present. Once the ScaledObject exists, its HPA owns
+# the replica count, so the fixed `replicas.portal` above and any env
+# portal-patch.json replica override become moot. min=2 keeps HA + seeds the
+# Orleans cluster; it scales toward 4 under a class-sized load and up to 8 at
+# peak. Scale-down is deliberately slow (stateful Blazor circuits + Orleans
+# membership churn) — see the ScaledObject template.
+keda:
+  enabled: true
+  minReplicas: 2        # baseline floor (HA + Orleans cluster seed); bursts to max under load
+  maxReplicas: 8
+  cpuTarget: 70
+  memoryTarget: 80
 
 # --- Persistence (Azure Files CSI for ReadWriteMany) ------------------------
 # Blazor Server portal replicas share every /data + /mnt/* path, so those PVCs

@@ -288,25 +288,43 @@ public record Thread
     /// Wall clock of the most recent "the agent is still making progress"
     /// signal — streaming text deltas, tool-call activity, status changes.
     /// Written atomically with those events in the OWNING thread hub's
-    /// action block (no extra writes, no race). Read by the parent thread
-    /// hub's heartbeat watcher: if <c>IsExecuting=true</c> AND
-    /// <c>(now - LastActivityAt) &gt; HeartbeatTimeout</c> (with a 60 s
-    /// cold-start grace measured from <see cref="ExecutionStartedAt"/>),
-    /// the watcher sets <see cref="RequestedStatus"/> = <c>Cancelled</c> on this
-    /// sub-thread — the same primitive the GUI Stop button uses. Replaces
-    /// the hard 5-minute watchdog in <c>ExecuteDelegationAsync</c>.
+    /// action block (no extra writes, no race). <b>Null until the sub-agent
+    /// emits its first activity</b> — that null is the signal the parent's
+    /// heartbeat watcher uses to tell first-token latency apart from a stall
+    /// (see <see cref="MeshWeaver.AI.Delegation.DelegationHeartbeatOptions"/>).
+    /// Read by the parent thread hub's heartbeat watcher: once
+    /// <c>LastActivityAt</c> is non-null, <c>IsExecuting=true</c> AND
+    /// <c>(now - LastActivityAt) &gt; <see cref="HeartbeatTimeout"/></c> (past the
+    /// settle grace) sets <see cref="RequestedStatus"/> = <c>Cancelled</c> on this
+    /// sub-thread — the same primitive the GUI Stop button uses. Replaces the hard
+    /// 5-minute watchdog in <c>ExecuteDelegationAsync</c>.
     /// </summary>
     public DateTime? LastActivityAt { get; init; }
 
     /// <summary>
-    /// Per-thread override of the framework-default heartbeat timeout
-    /// (30 s). Set by an agent that legitimately makes slow progress
-    /// (e.g. non-streaming chat client with long single-shot completions).
-    /// Null → use default. The 60 s cold-start grace is applied
-    /// regardless, so the value can be aggressive without false-positives
-    /// on cold start.
+    /// Per-thread override of the INTER-ACTIVITY heartbeat timeout — the maximum gap
+    /// between <see cref="LastActivityAt"/> stamps once the sub-agent is streaming,
+    /// before a silent (stalled) stream is cancelled. Set by an agent that legitimately
+    /// makes slow BETWEEN-token progress (e.g. a non-streaming chat client with long
+    /// single-shot completions). Null → framework default
+    /// (<see cref="MeshWeaver.AI.Delegation.DelegationHeartbeatOptions.HeartbeatTimeout"/>).
+    /// This does NOT govern time-to-first-token — see <see cref="FirstActivityBudget"/>.
     /// </summary>
     public TimeSpan? HeartbeatTimeout { get; init; }
+
+    /// <summary>
+    /// Per-thread override of the FIRST-ACTIVITY budget — how long this sub-thread may
+    /// spend in first-token latency (agent allocation + model time-to-first-token +
+    /// first tool round-trip) before its first <see cref="LastActivityAt"/> stamp
+    /// without being treated as hung by the parent's heartbeat watcher. Distinct from
+    /// <see cref="HeartbeatTimeout"/> (which measures the gap between stamps once
+    /// streaming): time-to-first-token is legitimately much longer than the inter-token
+    /// gap, so it gets its own, larger budget. Null → framework default
+    /// (<see cref="MeshWeaver.AI.Delegation.DelegationHeartbeatOptions.FirstActivityBudget"/>).
+    /// Set by an agent whose first token is legitimately very slow (large reasoning
+    /// model, cold endpoint).
+    /// </summary>
+    public TimeSpan? FirstActivityBudget { get; init; }
 
     /// <summary>
     /// Control-plane request for a status transition the owning thread hub

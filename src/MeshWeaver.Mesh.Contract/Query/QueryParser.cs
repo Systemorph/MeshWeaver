@@ -22,6 +22,16 @@ public partial class QueryParser
         if (string.IsNullOrWhiteSpace(query))
             return ParsedQuery.Empty;
 
+        // Explicit ORDERED path list: `[a, b, c]`. The "alternatively, specify the exact nodes
+        // in order" surface (a Deck's explicit slide manifest, vs. the default
+        // `nodeType:Slide scope:subtree`). It populates the SAME Paths list as `path:a|b|c` — so
+        // backends push it down as `WHERE path IN (...)` — but ORDER-PRESERVING, so an
+        // order-sensitive consumer (deck slide sequence) can present in the listed order. Entries
+        // are trimmed; blanks dropped. A bare bracket list is a WHOLE-query form (not composed
+        // with other qualifiers).
+        if (TryParseBracketPathList(query, out var listPaths))
+            return ParsedQuery.Empty with { Paths = listPaths, Path = listPaths[0] };
+
         var tokens = Tokenize(query);
         var (filterTokens, textSearch, path, scope, orderBy, limit, source, select, context, isMain, paths) = ExtractReservedQualifiers(tokens);
 
@@ -34,6 +44,29 @@ public partial class QueryParser
         }
 
         return new ParsedQuery(filter, textSearch, path, scope, orderBy, limit, source, select, context, isMain, paths);
+    }
+
+    /// <summary>
+    /// Recognizes a whole-query explicit path list <c>[a, b, c]</c> and returns its ordered,
+    /// trimmed, non-blank entries. Returns <c>false</c> (and null) when the query is not a
+    /// bracket list or contains no entries.
+    /// </summary>
+    private static bool TryParseBracketPathList(string query, out IReadOnlyList<string> paths)
+    {
+        paths = System.Array.Empty<string>();
+        var trimmed = query.Trim();
+        if (trimmed.Length < 2 || trimmed[0] != '[' || trimmed[^1] != ']')
+            return false;
+        var inner = trimmed[1..^1];
+        var entries = inner
+            .Split(',')
+            .Select(s => s.Trim())
+            .Where(s => s.Length > 0)
+            .ToArray();
+        if (entries.Length == 0)
+            return false;
+        paths = entries;
+        return true;
     }
 
     /// <summary>
