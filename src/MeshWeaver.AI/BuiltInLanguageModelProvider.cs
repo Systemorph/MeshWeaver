@@ -165,6 +165,14 @@ public class BuiltInLanguageModelProvider : IStaticNodeProvider
                 if (string.IsNullOrWhiteSpace(modelId)) continue;
                 if (!seen.Add(modelId)) continue;
 
+                // Effective Order: a per-model override (ModelOrdering) wins over the source's uniform
+                // Order, so a single model within a provider can be pinned as the platform default
+                // (DeepSeek-V4-Flash → -1) without re-ordering the whole provider. Stamped onto BOTH the
+                // ModelDefinition.Order (which ToModelInfo/the picker read) AND the emitted MeshNode.Order
+                // (which ChatClientCredentialResolver.ResolveDefaultModelId reads) so the picker default
+                // and the execution-time stale-model fallback agree on the same lowest-Order model.
+                var effectiveOrder = ModelOrdering.For(modelId, source.Order);
+
                 var def = new ModelDefinition
                 {
                     Id = modelId,
@@ -178,7 +186,7 @@ public class BuiltInLanguageModelProvider : IStaticNodeProvider
                     // this pointer; context-partition ModelProvider nodes override via their
                     // own ProviderRef on child LanguageModel nodes.
                     ProviderRef = $"{ModelProviderNodeType.RootNamespace}/{source.ProviderName}",
-                    Order = source.Order,
+                    Order = effectiveOrder,
                     // Seed the published default price (USD per 1M tokens) for known
                     // model ids so the token-cost summaries show a real cost out of
                     // the box; users can override per model in the Models settings.
@@ -198,6 +206,10 @@ public class BuiltInLanguageModelProvider : IStaticNodeProvider
                     NodeType = LanguageModelNodeType.NodeType,
                     Name = modelId,
                     Category = "Models",
+                    // Stamp the effective Order on the NODE too — ResolveDefaultModelId ranks by
+                    // MeshNode.Order, so leaving it null made every catalog model rank 0 and the
+                    // execution-time default was arbitrary (diverging from the picker's def.Order default).
+                    Order = effectiveOrder,
                     // Brand logo inferred from the model id (then provider) so a model reads
                     // as its maker; the generic sparkle SVG when unknown. Fall back to the
                     // self-contained SVG URL (not the legacy "Sparkle" Fluent name, which

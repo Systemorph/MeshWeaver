@@ -289,7 +289,17 @@ public sealed class ChatClientCredentialResolver : IDisposable
         var snapshot = ReadSnapshot();
         return snapshot
             .Where(n => string.Equals(n.NodeType, LanguageModelNodeType.NodeType, StringComparison.OrdinalIgnoreCase))
-            .Select(n => (Order: n.Order ?? 0, Id: ExtractContent<ModelDefinition>(n.Content)?.Id))
+            .Select(n =>
+            {
+                var def = ExtractContent<ModelDefinition>(n.Content);
+                // Rank by MeshNode.Order, falling back to the ModelDefinition's Order when the node
+                // carries none — mirrors the picker (ToModelInfo reads def.Order), so a per-model
+                // default (DeepSeek-V4-Flash → -1) is honoured whether the Order lives on the node
+                // or only on its content. Without the def fallback a BYO model that set only
+                // ModelDefinition.Order ranked 0 here while ranking correctly in the picker.
+                var order = n.Order ?? (def?.Order ?? 0);
+                return (Order: order, Id: def?.Id);
+            })
             .Where(x => !string.IsNullOrEmpty(x.Id))
             .OrderBy(x => x.Order)
             .Select(x => x.Id!)

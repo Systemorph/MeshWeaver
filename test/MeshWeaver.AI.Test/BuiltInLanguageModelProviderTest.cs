@@ -121,6 +121,55 @@ public class BuiltInLanguageModelProviderTest
     }
 
     [Fact]
+    public void DeepSeekFlash_IsPinnedToOrderMinus1_OnBothTheNodeAndTheDefinition_SoItIsThePlatformDefault()
+    {
+        // The maintainer's directive: the platform default must be DeepSeek's fast/cheap flash model.
+        // The default is resolved purely by ORDER (lowest wins), so DeepSeek-V4-Flash must carry
+        // Order -1 — BELOW its AzureFoundry source's uniform Order (2 in production) and below every
+        // other catalog model. It must land on BOTH the MeshNode.Order (which
+        // ChatClientCredentialResolver.ResolveDefaultModelId ranks by) AND the ModelDefinition.Order
+        // (which AgentPickerProjection.ToModelInfo / the picker rank by), or the picker default and
+        // the execution-time stale-model fallback disagree.
+        var provider = Build(new Dictionary<string, string?>
+        {
+            ["AzureFoundry:Models:0"] = "DeepSeek-V4-Pro",
+            ["AzureFoundry:Models:1"] = "DeepSeek-V4-Flash",
+            ["AzureFoundry:Endpoint"] = "https://foundry.example/v1",
+            ["AzureFoundry:ApiKey"] = "sk-secret",
+        }, new LanguageModelCatalogSource("AzureFoundry", "AzureFoundry", Order: 2));
+
+        var models = ModelsOf(provider);
+
+        var flash = models.Single(n => n.Name == "DeepSeek-V4-Flash");
+        flash.Order.Should().Be(-1, "DeepSeek-V4-Flash is the pinned platform default (Order -1)");
+        ((ModelDefinition)flash.Content!).Order.Should().Be(-1,
+            "the def.Order must match the node.Order so the picker and the resolver agree on the default");
+
+        // A sibling model in the SAME source keeps the source's Order — the pin is per-model, not
+        // per-provider (setting the whole provider to -1 would make an arbitrary model within it the
+        // default).
+        var pro = models.Single(n => n.Name == "DeepSeek-V4-Pro");
+        pro.Order.Should().Be(2, "a non-pinned model keeps its catalog source's Order");
+
+        // And DeepSeek-V4-Flash is the LOWEST-Order model → the one ResolveDefaultModelId would pick.
+        models.OrderBy(n => n.Order ?? 0).First().Name.Should().Be("DeepSeek-V4-Flash");
+    }
+
+    [Fact]
+    public void ModelOrdering_For_ReturnsMinus1ForDeepSeekFlash_AndTheFallbackOtherwise()
+    {
+        // The per-model Order lever: DeepSeek-V4-Flash → -1; everything else → the source's Order.
+        ModelOrdering.For("DeepSeek-V4-Flash", fallback: 2).Should().Be(-1);
+        // Case-insensitive + tolerant of a leading provider/path prefix (mirrors ModelPricing.Default).
+        ModelOrdering.For("deepseek-v4-flash", fallback: 2).Should().Be(-1);
+        ModelOrdering.For("Provider/AzureFoundry/DeepSeek-V4-Flash", fallback: 2).Should().Be(-1);
+        // A model not in the table keeps its source's Order.
+        ModelOrdering.For("DeepSeek-V4-Pro", fallback: 2).Should().Be(2);
+        ModelOrdering.For("claude-opus-4-8", fallback: 1).Should().Be(1);
+        ModelOrdering.For(null, fallback: 7).Should().Be(7);
+    }
+
+    [Fact]
     public void ToModelInfo_CarriesNodePath_SoSelectionPersistsTheNodeIdentity()
     {
         var node = new MeshNode("claude-sonnet-4", "Provider/Azure")

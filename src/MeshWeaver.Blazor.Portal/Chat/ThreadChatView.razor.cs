@@ -748,7 +748,14 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                 // conversational default. The latter migrates composers a pre-sort:order picker
                 // stamped with the first (utility) agent — the "ThreadNamer pre-selected" symptom.
                 AgentName = NeedsAgentDefault(c.AgentName) ? defaults.AgentName : c.AgentName,
-                ModelName = string.IsNullOrEmpty(c.ModelName) ? defaults.ModelName : c.ModelName,
+                // Default (or RE-default) the model: empty, OR a persisted selection that no longer
+                // resolves (its provider/catalog entry was removed — the stuck "glm-5.2" case) → the
+                // order-resolved default. Coalesce-only left a stale non-empty model bound forever, so
+                // the composer showed a gone model and Send shipped it to execution where the provider
+                // 404'd "model does not exist". Re-defaulting only when `defaults.ModelName` is itself
+                // non-empty (the catalog is loaded and HAS a resolvable default) means a transient cold
+                // snapshot can never wipe a good selection.
+                ModelName = NeedsModelDefault(c.ModelName, defaults.ModelName) ? defaults.ModelName : c.ModelName,
             };
             return filled == c ? node : node with { Content = filled };
         }).Subscribe(
@@ -757,6 +764,27 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                 "[ThreadChat:{InstanceId}] composer default-fill failed for {Path}", _instanceId, path));
 
         OpenComposerProjection(path);
+    }
+
+    /// <summary>
+    /// True when the composer's <c>ModelName</c> should be replaced with the order-resolved default:
+    /// it's empty, OR it no longer resolves to a usable model (its provider/catalog entry was removed —
+    /// the "stuck on a deleted glm-5.2" case) AND a resolvable default IS available to replace it with.
+    /// A stale non-empty selection was previously kept forever (coalesce-only), so the composer showed a
+    /// gone model and submit shipped it to execution where the provider 404'd. Guarded so a transient
+    /// cold catalog (no default yet, or no resolver) NEVER wipes a good selection — we only re-default
+    /// when <paramref name="resolvableDefault"/> is non-empty (the catalog is loaded and has a working
+    /// default) and the resolver actively reports the current value as unusable.
+    /// </summary>
+    private bool NeedsModelDefault(string? modelName, string? resolvableDefault)
+    {
+        if (string.IsNullOrEmpty(modelName)) return true;
+        if (string.IsNullOrEmpty(resolvableDefault)) return false; // no default to fall back to → keep as-is
+        var resolver = Hub.ServiceProvider.GetService<MeshWeaver.AI.ChatClientCredentialResolver>();
+        if (resolver is null) return false; // can't judge resolvability → trust the stored value
+        // The stored model still resolves to a usable credential → keep it. Only a genuinely gone /
+        // unconfigured model (no usable credential) is re-defaulted.
+        return !resolver.HasUsableCredential(modelName);
     }
 
     /// <summary>
