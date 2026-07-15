@@ -112,13 +112,15 @@ public class MeshQuery : IMeshQueryCore
     public IObservable<QueryResultChange<T>> Query<T>(MeshQueryRequest request)
     {
         var matched = SelectMatchingProviders(NamespacesForRequest(request));
+        // 100% reactive — NO scheduler offload here. Each provider defers its external I/O to its
+        // own IIoPool (StorageAdapter) or is pure in-memory (StaticNode), so Subscribe never blocks
+        // the calling hub's action block. A bare SubscribeOn(TaskPoolScheduler.Default) would push
+        // the whole merge pipeline onto UNOWNED thread-pool threads whose in-flight work outlives
+        // mesh disposal and dereferences a collectible node-ALC's freed metadata after unload → the
+        // native use-after-unload SIGSEGV. The only async boundary is the provider's owned IIoPool.
         return MergeProviderObservables(
-                matched.Select(p => (p.Query<T>(request, Options), p.Name)).ToList(),
-                request)
-            // Push the upstream subscription onto the thread pool so the
-            // calling hub's action block isn't blocked while providers open
-            // their connections / start their change feeds.
-            .SubscribeOn(System.Reactive.Concurrency.TaskPoolScheduler.Default);
+            matched.Select(p => (p.Query<T>(request, Options), p.Name)).ToList(),
+            request);
     }
 
     /// <summary>
@@ -143,12 +145,10 @@ public class MeshQuery : IMeshQueryCore
         // C return. Same progressive shape as Autocomplete; the brief leading
         // all-empty frame is the cost of not waiting for the whole fan-out.
         var streams = matched.Select(p => p.Query(request, Options).StartWith(empty)).ToList();
+        // 100% reactive — no scheduler offload (see Query<T> above): the provider's own IIoPool is
+        // the sole async boundary, so no unowned thread-pool straggler can race a node-ALC unload.
         return Observable.CombineLatest(streams)
-            .Select(snapshots => MergeSnapshots(snapshots))
-            // Provider Query() opens connection-pool / change-feed
-            // subscriptions on Subscribe — keep that off the calling hub's
-            // action block.
-            .SubscribeOn(System.Reactive.Concurrency.TaskPoolScheduler.Default);
+            .Select(snapshots => MergeSnapshots(snapshots));
     }
 
     /// <summary>
@@ -334,8 +334,7 @@ public class MeshQuery : IMeshQueryCore
                     // Real user: ALWAYS hit the secured provider surface
                     // (validators apply per-result RLS for request.UserId).
                     : p.Query<T>(request, options), p.Name)).ToList(),
-                request)
-            .SubscribeOn(System.Reactive.Concurrency.TaskPoolScheduler.Default);
+                request);
     }
 
     /// <summary>
