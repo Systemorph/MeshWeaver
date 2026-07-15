@@ -778,7 +778,7 @@ public static class ThreadLayoutAreas
                 : path;
 
         var container = Controls.Stack.WithStyle("gap:6px; width:100%;");
-        container = container.WithView(Controls.Text($"{headerLabel} ({updates.Count})")
+        container = container.WithView(Controls.Label($"{headerLabel} ({updates.Count})")
             .WithStyle("font-size:0.8rem; font-weight:600; color:var(--neutral-foreground-hint);"));
 
         var rows = Controls.Stack.WithStyle("gap:4px; width:100%;");
@@ -800,16 +800,16 @@ public static class ThreadLayoutAreas
             if (entry.VersionBefore is { } vb)
                 row = row.WithView(Controls.Badge($"v{vb}").WithStyle("font-family:monospace; font-size:0.72rem;"));
             else if (op.Equals("Created", StringComparison.OrdinalIgnoreCase))
-                row = row.WithView(Controls.Text("new")
+                row = row.WithView(Controls.Label("new")
                     .WithStyle("font-size:0.72rem; font-style:italic; color:var(--neutral-foreground-hint);"));
 
-            row = row.WithView(Controls.Text("→").WithStyle("color:var(--neutral-foreground-hint);"));
+            row = row.WithView(Controls.Label("→").WithStyle("color:var(--neutral-foreground-hint);"));
 
             if (entry.VersionAfter is { } va)
                 row = row.WithView(Controls.Badge($"v{va}")
                     .WithStyle("font-family:monospace; font-size:0.72rem; font-weight:600;"));
             else if (op.Equals("Deleted", StringComparison.OrdinalIgnoreCase))
-                row = row.WithView(Controls.Text("deleted")
+                row = row.WithView(Controls.Label("deleted")
                     .WithStyle("font-size:0.72rem; font-style:italic; color:var(--neutral-foreground-hint);"));
 
             if (entry.VersionBefore.HasValue && entry.VersionAfter.HasValue)
