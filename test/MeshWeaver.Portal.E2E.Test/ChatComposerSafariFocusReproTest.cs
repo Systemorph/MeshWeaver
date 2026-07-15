@@ -202,7 +202,7 @@ public class ChatComposerSafariFocusReproTest(PortalFixture fixture, ITestOutput
             }
 
             // clear the composer for the next cycle so markers don't accumulate.
-            await page.Keyboard.PressAsync("Meta+A");
+            await page.Keyboard.PressAsync("ControlOrMeta+A");
             await page.Keyboard.PressAsync("Delete");
         }
 

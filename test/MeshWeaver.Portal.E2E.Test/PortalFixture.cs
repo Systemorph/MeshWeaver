@@ -89,7 +89,11 @@ public sealed class PortalFixture : IAsyncLifetime
         // E2E_BROWSER selects the engine: chromium (default), webkit (Safari's engine — the ONLY way
         // to reproduce Safari-specific focus/blur bugs headlessly), or firefox. Existing tests are
         // unaffected: absent the var, it's Chromium exactly as before.
-        var browserName = (Environment.GetEnvironmentVariable("E2E_BROWSER") ?? "chromium").ToLowerInvariant();
+        // Normalize to the engine we will ACTUALLY launch: an unrecognized value falls back to Chromium,
+        // so BrowserName must report "chromium" too (not the bogus input) — otherwise skip/diagnostic
+        // messages and per-engine test logs would name an engine that never ran.
+        var requested = (Environment.GetEnvironmentVariable("E2E_BROWSER") ?? "chromium").ToLowerInvariant();
+        var browserName = requested is "webkit" or "firefox" ? requested : "chromium";
         try
         {
             _playwright = await Playwright.CreateAsync();
