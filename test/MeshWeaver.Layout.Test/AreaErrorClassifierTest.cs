@@ -1,5 +1,4 @@
 using System;
-using MeshWeaver.Graph;
 using MeshWeaver.Messaging;
 using Xunit;
 
@@ -219,28 +218,25 @@ public class AreaErrorClassifierTest
     public void TryGetAccessDeniedPath_NullForNull()
         => AreaErrorClassifier.TryGetAccessDeniedPath(null).Should().BeNull();
 
-    [Theory]
-    // A LESSON under the course denied → the course's Overview poster ({course}/Anything ⇒ {course}/Overview).
-    [InlineData("Access denied: user 'u' lacks Read permission on 'AgenticEngineering/Module1'", "AgenticEngineering/Overview")]
-    // A DEEP lesson resolves to the SAME poster (first segment is the course root).
-    [InlineData("Access denied: user 'u' lacks Read permission on 'AgenticEngineering/Module1/Learn'", "AgenticEngineering/Overview")]
-    public void TryGetCoursePosterPath_ResolvesTheCoursePoster(string message, string expected)
-        => AreaErrorClassifier.TryGetCoursePosterPath(Failure(message, ErrorType.Unauthorized)).Should().Be(expected);
+    // ── IsSafeRedirect: the loop-guard for the "no access ⇒ redirect here" feature. The redirect
+    //    TARGET comes from the node's PartitionAccessPolicy (hub.GetRedirectOnDenied); this only decides
+    //    whether sending the denied node THERE can loop. ──
 
     [Theory]
-    // The course ROOT itself being denied → no redirect (the root IS the poster location; no loop).
-    [InlineData("Access denied: user 'u' lacks Read permission on 'AgenticEngineering'")]
-    // The poster ITSELF being denied → no self-redirect …
-    [InlineData("Access denied: user 'u' lacks Read permission on 'AgenticEngineering/Overview'")]
-    // … nor a node under the poster.
-    [InlineData("Access denied: user 'u' lacks Read permission on 'AgenticEngineering/Overview/Section'")]
-    // … and a non-access-denied error yields no poster.
-    [InlineData("No node found at 'x/y'.")]
-    public void TryGetCoursePosterPath_NullWhenNoSafeRedirect(string message)
-        => AreaErrorClassifier.TryGetCoursePosterPath(Failure(message, ErrorType.Unauthorized)).Should().BeNull();
-
-    [Fact]
-    public void CoursePosterArea_MatchesTheOverviewAreaConstant()
-        // The literal is kept in sync with the framework's Overview area name.
-        => AreaErrorClassifier.CoursePosterArea.Should().Be(MeshNodeLayoutAreas.OverviewArea);
+    // A gated node redirects to a DIFFERENT public page → safe.
+    [InlineData("AgenticEngineering/Introduction", "AgenticEngineering/Cover", true)]
+    // A leading '/' on the target is ignored.
+    [InlineData("AgenticEngineering/Introduction", "/AgenticEngineering/Cover", true)]
+    // The redirect TARGET itself being denied → would loop → NOT safe.
+    [InlineData("AgenticEngineering/Cover", "AgenticEngineering/Cover", false)]
+    // A node UNDER the target being denied → would loop → NOT safe.
+    [InlineData("AgenticEngineering/Cover/Sub", "AgenticEngineering/Cover", false)]
+    // No target configured → nothing to redirect to.
+    [InlineData("AgenticEngineering/Introduction", null, false)]
+    [InlineData("AgenticEngineering/Introduction", "", false)]
+    [InlineData("AgenticEngineering/Introduction", "   ", false)]
+    // No denied path → nothing to redirect.
+    [InlineData(null, "AgenticEngineering/Cover", false)]
+    public void IsSafeRedirect_LoopGuard(string? deniedPath, string? redirectPath, bool expected)
+        => AreaErrorClassifier.IsSafeRedirect(deniedPath, redirectPath).Should().Be(expected);
 }
