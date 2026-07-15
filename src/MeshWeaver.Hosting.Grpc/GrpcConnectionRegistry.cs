@@ -27,7 +27,7 @@ namespace MeshWeaver.Hosting.Grpc;
 /// (<see cref="IMessageDelivery.SetAccessContext"/>) — the client's claimed context is never trusted.
 /// No token ⇒ <see cref="WellKnownUsers.Anonymous"/> (writes cleanly RLS-denied, never fail-closed).</para>
 /// </summary>
-public sealed class GrpcConnectionRegistry : IDisposable
+public sealed class GrpcConnectionRegistry : IDisposable, IParticipantPresence
 {
     private readonly IMessageHub hub;
     private readonly IRoutingService routingService;
@@ -105,6 +105,14 @@ public sealed class GrpcConnectionRegistry : IDisposable
     /// <summary>The connection currently owning <paramref name="addressKey"/> (delivery-time resolution).</summary>
     private string? OwnerOf(string addressKey) =>
         addressClaims.TryGetValue(addressKey, out var claim) ? claim.Owner : null;
+
+    /// <inheritdoc />
+    /// <remarks>An address is "connected" while some connection holds its claim — i.e. between a
+    /// participant's <see cref="Connect"/> and the disconnect that releases it. Lock-free read: a
+    /// <see cref="ConcurrentDictionary{TKey,TValue}"/> membership check on the delivery-agnostic
+    /// claim map.</remarks>
+    public bool IsConnected(Address address) =>
+        address is not null && addressClaims.ContainsKey(address.ToString());
 
     /// <summary>Register the per-connection outbound channel (the <c>Open</c> call drains it to the wire).
     /// Always runs first for a connection, before <see cref="Authenticate"/> / <see cref="Connect"/>.</summary>

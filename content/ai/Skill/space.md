@@ -1,6 +1,6 @@
 ---
 nodeType: Skill
-name: /create-space
+name: /space
 description: Create a Space (the generic top-level container) end-to-end — proper create, a warm body, a logo, the live @@ regions that make a page useful, and the contents catalog at the bottom.
 icon: Sparkle
 category: Skills

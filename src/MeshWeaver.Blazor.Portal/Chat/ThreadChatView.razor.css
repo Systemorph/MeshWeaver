@@ -1400,6 +1400,16 @@ button.thread-chat-status-item {
     background: color-mix(in srgb, var(--accent-fill-rest) 14%, transparent);
 }
 
+/* Live elapsed timer on a RUNNING delegation chip — pulses in step with the
+   state icon so the bubble reads as actively working, not a static link. */
+.thread-msg-tool-delegation-elapsed {
+    font-size: 0.7rem;
+    color: var(--accent-fill-rest);
+    flex: 0 0 auto;
+    font-variant-numeric: tabular-nums;
+    animation: thread-msg-delegation-pulse-anim 1.4s ease-in-out infinite;
+}
+
 @@keyframes thread-msg-delegation-pulse-anim {
     0%, 100% { opacity: 0.4; }
     50%      { opacity: 1;   }
