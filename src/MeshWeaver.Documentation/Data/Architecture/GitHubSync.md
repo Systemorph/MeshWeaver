@@ -173,6 +173,46 @@ regardless — use it to deliberately discard local changes back to the reposito
 > Two-way generalizes this to *every* server-side edit (no explicit claim needed) as long as it
 > post-dates the last sync.
 
+### Git is the source of truth — author in the repo, never only-live
+
+A sync **reconciles**: *Update to latest* and *Re-import* mirror the branch into the Space
+with **add / update / prune** — so **a node that exists live but is NOT in the repo is
+PRUNED.** That is the model's whole point (the repo is authoritative and reproducible),
+but it has one sharp edge worth stating plainly:
+
+> ⚠️ **Content created or edited *only live* — never committed — is deleted by the next
+> reconcile.** A restart, a scheduled restore, or someone clicking *Update to latest*
+> re-imports the repo baseline and prunes everything not in it. This is the single most
+> common way live work is lost. **Author in the repo.**
+
+The safe loop for anything you want to keep — the **git-first** discipline:
+
+1. **Edit in the repo** — or, if you edited live, **Sync now** (`op: commit`) *immediately*
+   to capture it in the repo; never let live-only state accumulate.
+2. **Commit / open a PR**, review, **merge**.
+3. **Update to latest** (`op: update`) — pull the merged state back into the Space.
+4. **Recycle** any node whose **type or configuration changed**. Importing new content
+   into a node that is already *running* does not swap its live views: a node that flipped
+   `Markdown → Deck`, or whose `NodeType` source recompiled, keeps its old hub until you
+   recycle it (`{node}/Recycle`, or post a `DisposeRequest`). Freshly *created* nodes get
+   the right views immediately; only a **type/config change on an existing node** needs the
+   recycle. A node whose content merely changed (same type) re-renders reactively — no
+   recycle needed.
+
+### Export never silently drops a node
+
+The export is the exact inverse of the import: **every node serializes** — through a
+per-type serializer (`*.md` / `*.cs`) or the **universal JSON fallback** (any content
+type → `*.json`, keyed on its `$type`, the inverse of the JSON import). If a node could
+ever fail to serialize, the export **fails loudly** rather than skipping it — a node
+dropped from the mirror would be pruned by the next import, i.e. **silent data loss**.
+Symmetrically, a repo file whose content is missing its `$type` is **tolerated on import**
+(the value is re-typed against the target at the read site), so a hand-edited file is not
+lost either. The only things left out of an export are the **governance satellites**
+(`_Access`, `_Activity`, `_GitSync`, … — see §8) and paths matched by the Space's
+**gitignore-style ignore rules** (`SyncIgnore`). Nothing else is excluded, and nothing is
+excluded *silently*.
+
 ---
 
 ## 5. Operations — branch, commit, checkout, pull request
