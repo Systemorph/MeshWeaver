@@ -2202,7 +2202,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
 
                 pendingPicker = picker;
                 pickerNodes = nodes;
-                _pickerHighlight = FirstSelectablePickerIndex(); // skip a leading group title
+                _pickerHighlight = CurrentSelectionPickerIndex(picker); // pre-select the active value
                 _focusPickerOnRender = true; // move focus off Monaco onto the widget so ↑/↓ reach it
                 lastCommandStatus = null;
                 StateHasChanged();
@@ -2303,6 +2303,32 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             if (!IsPickerHeaderNode(pickerNodes[i]))
                 return i;
         return -1;
+    }
+
+    /// <summary>
+    /// Index of the picker row matching the composer's CURRENT selection for this picker's field, so
+    /// the popup opens with the active harness/agent/model highlighted instead of always item 0. Falls
+    /// back to the first selectable row when nothing is selected yet or the current value isn't listed.
+    /// </summary>
+    private int CurrentSelectionPickerIndex(NodePickerRequest picker)
+    {
+        var current = picker.ComposerField switch
+        {
+            "harness" => boundHarness,
+            "agentName" => boundAgentPath,
+            "modelName" => boundModelPath,
+            _ => null,
+        };
+        // The stored value may be a full node PATH (picked) or a bare id (default/legacy), so compare
+        // on the normalized id (last segment) — the same normalization HarnessNodeType.ResolveHarness uses.
+        var currentId = MeshWeaver.AI.SelectionId.IdOf(current);
+        if (!string.IsNullOrEmpty(currentId))
+            for (var i = 0; i < pickerNodes.Count; i++)
+                if (!IsPickerHeaderNode(pickerNodes[i])
+                    && string.Equals(MeshWeaver.AI.SelectionId.IdOf(pickerNodes[i].Path), currentId,
+                        StringComparison.OrdinalIgnoreCase))
+                    return i;
+        return FirstSelectablePickerIndex();
     }
 
     /// <summary>
@@ -2412,14 +2438,25 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     }
 
     /// <summary>
-    /// Esc on the input cancels the in-flight round (Claude.ai pattern).
-    /// The typed text is preserved in MessageText so the user can re-send
-    /// after the cancel completes — or just hit Send to queue it as the
-    /// next round (PendingUserMessages on the thread).
+    /// Esc on the input. An OPEN picker popup takes priority — Esc dismisses it. The popup's own
+    /// <see cref="OnPickerKeyDown"/> handles Escape only while the widget holds focus; once the user
+    /// clicks back into Monaco the keystroke lands HERE instead, so the popup must be closable from
+    /// the input too. Otherwise Esc cancels the in-flight round (Claude.ai pattern): the typed text
+    /// is preserved in MessageText so the user can re-send after the cancel completes — or just hit
+    /// Send to queue it as the next round (PendingUserMessages on the thread).
     /// </summary>
     private void OnInputKeyDown(Microsoft.AspNetCore.Components.Web.KeyboardEventArgs e)
     {
-        if (e.Key == "Escape" && ThreadViewModel?.IsExecuting == true && !isCancelling)
+        if (e.Key != "Escape")
+            return;
+
+        if (pendingPicker is not null)
+        {
+            DismissWidget();
+            return;
+        }
+
+        if (ThreadViewModel?.IsExecuting == true && !isCancelling)
         {
             CancelExecution();
         }
