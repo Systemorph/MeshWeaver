@@ -66,6 +66,20 @@ public sealed class IoPoolRegistry : IDisposable
             .Timeout(timeout)
             .Catch<Unit, Exception>(_ => Observable.Return(Unit.Default));
 
+    /// <summary>
+    /// Synchronously drains every created pool: cancels all in-flight leaves and JOINS (blocks until
+    /// they have unwound) — see <see cref="IoPool.Drain"/>. Unlike <see cref="WhenDrained"/> (which
+    /// only WAITS, so a live change-feed subscription never reaches zero and it times out), this
+    /// CANCELS the work so it actually stops. Call it between the hub's <c>DisposalCompleted</c>
+    /// and service-scope disposal so no pooled I/O thread is still executing a collectible node ALC's
+    /// compiled types when that scope disposes and unloads them (the teardown use-after-unload SIGSEGV).
+    /// </summary>
+    public void DrainAll()
+    {
+        foreach (var pool in _pools.Values)
+            pool.Drain();
+    }
+
     /// <summary>Disposes every created pool and clears the registry; called when the mesh is torn down.</summary>
     public void Dispose()
     {

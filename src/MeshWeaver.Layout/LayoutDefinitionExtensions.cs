@@ -221,7 +221,7 @@ public static class LayoutDefinitionExtensions
         if (delgate is not null)
         {
             var method = delgate.Method;
-            var doc = method.GetXmlDocsSummary();
+            var doc = MeshWeaver.Messaging.Serialization.XmlDocs.Summary(method);
             ret = ret.WithDescription(doc);
 
             // Check class-level DisplayAttribute for GroupName and fallback Order

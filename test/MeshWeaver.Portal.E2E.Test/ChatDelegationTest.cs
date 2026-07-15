@@ -56,7 +56,7 @@ public class ChatDelegationTest(PortalFixture fixture)
         "the worker returns its result, relay that result to the user in one short sentence.";
 
     [Fact(Timeout = 360_000)]
-    public async Task Coordinator_DelegatesToWorker_SubThreadSpawns_AndResultFlowsBack()
+    public async Task Coordinator_DelegatesToWorker_SubThreadSpawns_ResultFlowsBack_AndRendersWhenOpened()
     {
         Assert.SkipUnless(fixture.Available, fixture.SkipReason);
 
@@ -180,6 +180,26 @@ public class ChatDelegationTest(PortalFixture fixture)
         resultBack.Should().BeTrue(
             "the delegated worker's result must flow back into the parent thread — the delegation tool call " +
             "must resolve into its completed form (details.thread-msg-delegation-entry / .thread-msg-tool-result)");
+
+        // ── 3) OPEN the spawned sub-thread directly — the "I clicked into the sub-thread" flow the user
+        // reported ("it didn't look like starting"). Navigating to the sub-thread's own URL must render
+        // ITS conversation (the user's delegated request + the worker's assistant answer) — not an empty /
+        // idle view. A broken sub-thread ThreadChatView binding would surface here as no assistant bubble.
+        var subPage = await context.NewPageAsync();
+        await subPage.SetViewportSizeAsync(1400, 1000);
+        await subPage.GotoAsync($"{fixture.BaseUrl}/{subThreadPath}",
+            new PageGotoOptions { WaitUntil = WaitUntilState.NetworkIdle, Timeout = 90_000 });
+        subPage.Url.Should().NotContain("/login");
+
+        await subPage.Locator(".thread-msg-bubble.thread-msg-user").First
+            .WaitForAsync(new LocatorWaitForOptions { State = WaitForSelectorState.Visible, Timeout = 60_000 });
+        var subRendered = await PollAsync(
+            async () => await subPage.Locator(".thread-msg-bubble.thread-msg-assistant").CountAsync() > 0,
+            TimeSpan.FromSeconds(90));
+        await subPage.ScreenshotAsync(new PageScreenshotOptions { Path = "/tmp/chat-subthread-open.png", FullPage = true });
+        subRendered.Should().BeTrue(
+            "opening the spawned sub-thread must render its OWN conversation (the worker's assistant bubble) " +
+            "— the 'clicked into the sub-thread, it didn't look like starting' symptom would show as an empty view");
     }
 
     // ── helpers (mirroring ClaudeCodeHarnessExecutesTest) ────────────────────────────────────────────────

@@ -33,8 +33,14 @@ public sealed class OctokitGitHubRepoClient(IoPoolRegistry ioPools, ILogger<Octo
 
     private IIoPool Http => ioPools.Get(IoPoolNames.Http);
 
+    // An empty token means ANONYMOUS access (a public repo, e.g. the plugin registry serving a
+    // public plugins repo with no App identity configured). Octokit's `new Credentials("")` THROWS
+    // ArgumentException "String cannot be empty (Parameter 'token')", so never hand it an empty
+    // string — build a credential-less client instead (unauthenticated, lower rate limit but valid).
     private static IObservableGitHubClient Client(string token) =>
-        new ObservableGitHubClient(new GitHubClient(Product) { Credentials = new Credentials(token) });
+        new ObservableGitHubClient(string.IsNullOrEmpty(token)
+            ? new GitHubClient(Product)
+            : new GitHubClient(Product) { Credentials = new Credentials(token) });
 
     /// <summary>Parses <c>https://github.com/owner/repo(.git)</c> into (owner, repo).</summary>
     public static (string Owner, string Repo) ParseRepoUrl(string url)
@@ -178,9 +184,9 @@ public sealed class OctokitGitHubRepoClient(IoPoolRegistry ioPools, ILogger<Octo
 
                 return blobs
                     .Select(e => Http.InvokeObservable(ct => client.Git.Blob.Get(owner, repo, e.Sha))
-                        .Select(blob => new RepoFile(
+                        .Select(blob => ToRepoFile(
                             prefix.Length == 0 ? e.Path : e.Path[prefix.Length..],
-                            DecodeBlob(blob))))
+                            blob)))
                     .Merge(8)
                     .ToList()
                     .Select(list => new RepoSnapshot(head.CommitSha!, (IReadOnlyList<RepoFile>)list));
@@ -647,10 +653,45 @@ public sealed class OctokitGitHubRepoClient(IoPoolRegistry ioPools, ILogger<Octo
             ? Http.InvokeObservable(ct => client.Git.Reference.Update(owner, repo, $"heads/{branch}", new ReferenceUpdate(commitSha)))
             : Http.InvokeObservable(ct => client.Git.Reference.Create(owner, repo, new NewReference($"refs/heads/{branch}", commitSha)));
 
-    private static string DecodeBlob(Blob blob) =>
-        string.Equals(blob.Encoding.StringValue, "base64", StringComparison.OrdinalIgnoreCase)
-            ? Encoding.UTF8.GetString(Convert.FromBase64String(blob.Content))
-            : blob.Content;
+    /// <summary>
+    /// Builds a <see cref="RepoFile"/> from a fetched blob, PRESERVING BINARY BYTES. A base64 blob is
+    /// decoded to raw bytes; if those bytes are valid UTF-8 the file is a text <see cref="RepoFile"/>
+    /// (so node/markdown parsing is unchanged), otherwise the raw bytes are carried in
+    /// <see cref="RepoFile.Binary"/>. This is the fix for the corruption that repeatedly nuked the
+    /// course videos: the old <c>DecodeBlob</c> UTF-8-decoded a base64 <c>.mp4</c>/<c>.png</c> blob
+    /// into a string, mangling every non-UTF-8 byte. A non-base64 (already-utf8) blob stays text.
+    /// </summary>
+    private static RepoFile ToRepoFile(string path, Blob blob)
+    {
+        if (!string.Equals(blob.Encoding.StringValue, "base64", StringComparison.OrdinalIgnoreCase))
+            return new RepoFile(path, blob.Content);
+        var bytes = Convert.FromBase64String(blob.Content);
+        return TryDecodeUtf8(bytes, out var text)
+            ? new RepoFile(path, text)
+            : new RepoFile(path, string.Empty, bytes);
+    }
+
+    /// <summary>
+    /// True + the decoded text when <paramref name="bytes"/> is valid UTF-8; false for binary content.
+    /// Uses a strict (throw-on-invalid) UTF-8 decoder so an arbitrary byte stream (a video, a font) is
+    /// classified binary rather than silently lossily decoded.
+    /// </summary>
+    private static bool TryDecodeUtf8(byte[] bytes, out string text)
+    {
+        try
+        {
+            text = StrictUtf8.GetString(bytes);
+            return true;
+        }
+        catch (DecoderFallbackException)
+        {
+            text = string.Empty;
+            return false;
+        }
+    }
+
+    private static readonly Encoding StrictUtf8 =
+        new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
 
     private static string NormalizePrefix(string? subdirectory)
     {

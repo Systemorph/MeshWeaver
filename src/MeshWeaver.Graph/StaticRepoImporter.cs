@@ -14,8 +14,36 @@ using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Graph;
 
-/// <summary>Outcome of a <see cref="StaticRepoImporter.Import"/> run.</summary>
-public sealed record StaticRepoImportResult(string Partition, string Fingerprint, string Outcome, int Count = 0);
+/// <summary>Outcome of a <see cref="StaticRepoImporter.Import"/> run. <paramref name="Preserved"/> is
+/// the number of live nodes a two-way import kept because they were newer on the server (see
+/// <see cref="ImportConflictPolicy"/>) — non-zero means the mesh is now AHEAD of the repo, so the
+/// caller must NOT advance its last-sync baseline until those edits are committed back.</summary>
+public sealed record StaticRepoImportResult(string Partition, string Fingerprint, string Outcome, int Count = 0, int Preserved = 0);
+
+/// <summary>
+/// Conflict policy for an import that reconciles against a LIVE partition — the GitHub
+/// "Update to latest" path. Git-first by default (<see cref="GitFirst"/>): the repo overwrites the
+/// live node and prunes extras. Two-way (<see cref="PreserveServerNewer"/>) instead PRESERVES a node
+/// that was changed on the server since the last sync, so a local edit made between syncs is carried
+/// back to the repo on the next commit rather than silently overwritten — "newer on the server wins".
+/// A <see cref="Force"/> import ignores the policy and overwrites regardless (the deliberate-discard
+/// escape hatch). Boot / built-in static-repo imports pass no policy → <see cref="GitFirst"/>.
+/// </summary>
+public sealed record ImportConflictPolicy(bool PreserveServerNewer, DateTimeOffset? Since, bool Force = false)
+{
+    /// <summary>The git-first default: the repo is authoritative; local edits are overwritten/pruned.</summary>
+    public static readonly ImportConflictPolicy GitFirst = new(false, null, false);
+
+    /// <summary>
+    /// True when <paramref name="target"/> is a live node changed on the SERVER since the last sync
+    /// (<see cref="Since"/>) and must therefore be PRESERVED (not overwritten, not pruned) — unless
+    /// this is a <see cref="Force"/> import. Requires a recorded <see cref="Since"/>: with no sync
+    /// baseline there is nothing to protect, so a first import stays git-first. Pure — unit-testable.
+    /// </summary>
+    public bool PreservesServerCopyOf(MeshNode? target) =>
+        PreserveServerNewer && !Force && Since is { } since
+        && target is not null && target.LastModified > since;
+}
 
 /// <summary>
 /// Materializes an <see cref="IStaticRepoSource"/> into its partition through the canonical
@@ -275,12 +303,13 @@ public static class StaticRepoImporter
     /// this for the content. Reactive — Subscribe to run.
     /// </summary>
     public static IObservable<StaticRepoImportResult> ImportSource(
-        IMessageHub meshHub, IStaticRepoSource source, ILogger? logger = null)
+        IMessageHub meshHub, IStaticRepoSource source, ILogger? logger = null,
+        ImportConflictPolicy? policy = null)
     {
         logger ??= meshHub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.Graph.StaticRepoImporter");
         var importHub = CreateImportHub(meshHub, logger);
-        return Import(importHub, source, logger);
+        return Import(importHub, source, logger, policy: policy);
     }
 
     /// <summary>
@@ -345,7 +374,7 @@ public static class StaticRepoImporter
     /// <returns>An observable that emits the import outcome for the partition.</returns>
     public static IObservable<StaticRepoImportResult> Import(
         IMessageHub hub, IStaticRepoSource source, ILogger? logger = null,
-        PartitionSyncMode? syncModeOverride = null)
+        PartitionSyncMode? syncModeOverride = null, ImportConflictPolicy? policy = null)
     {
         logger ??= hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.Graph.StaticRepoImporter");
@@ -435,7 +464,7 @@ public static class StaticRepoImporter
                         }
                     };
                     return Upsert(hub, activityNode)
-                        .SelectMany(_ => Run(hub, source, nodes, root, activityPath, fingerprint, syncMode, logger))
+                        .SelectMany(_ => Run(hub, source, nodes, root, activityPath, fingerprint, syncMode, logger, policy))
                         .Catch<StaticRepoImportResult, Exception>(ex =>
                         {
                             logger?.LogWarning(ex,
@@ -450,9 +479,26 @@ public static class StaticRepoImporter
                         });
                 }
 
-                // No Succeeded marker → import.
-                if (existing?.Content is not ActivityLog { Status: ActivityStatus.Succeeded })
+                // No Succeeded marker → import. 🚨 Read the marker through the TOLERANT ContentAs, NEVER
+                // a raw `existing.Content is ActivityLog {…}` pattern: a node read back from storage/query
+                // carries its Content as a JsonElement, not the typed record, so the pattern-match fails
+                // on a genuine Succeeded marker and re-imports every single time. ContentAs recovers the
+                // degraded JsonElement (typed → as-is, JsonElement → deserialized, else null + logged).
+                var existingLog = existing?.ContentAs<ActivityLog>(hub.JsonSerializerOptions, logger);
+                if (existingLog is not { Status: ActivityStatus.Succeeded })
                     return Reimport();
+
+                // A FORCED import must re-apply even when the content fingerprint is unchanged: its
+                // purpose is to overwrite/prune local edits back to the (possibly identical) repo
+                // state, which the content-skip short-circuit below would otherwise bypass — leaving
+                // the very local changes the caller asked to discard. Force always re-runs.
+                if (policy?.Force == true)
+                {
+                    logger?.LogInformation(
+                        "[StaticRepoImport] {Partition}: forced re-import at unchanged fingerprint {Fingerprint}.",
+                        source.Partition, fingerprint);
+                    return Reimport();
+                }
 
                 // 🚨 SELF-HEAL CONTENT, not just governance. A Succeeded marker means "imported once" —
                 // but the content NODES can be dropped after the fact (a cross-partition prune, a manual
@@ -483,7 +529,8 @@ public static class StaticRepoImporter
 
     private static IObservable<StaticRepoImportResult> Run(
         IMessageHub hub, IStaticRepoSource source, IReadOnlyList<MeshNode> nodes,
-        MeshNode root, string activityPath, string fingerprint, PartitionSyncMode syncMode, ILogger? logger)
+        MeshNode root, string activityPath, string fingerprint, PartitionSyncMode syncMode, ILogger? logger,
+        ImportConflictPolicy? policy = null)
     {
         var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
         NodeTypeCompilationActivity.AppendLog(
@@ -578,7 +625,7 @@ public static class StaticRepoImporter
                         {
                             logger?.LogDebug(
                                 "[StaticRepoImport] {Partition}: skip claimed {Path}", source.Partition, path);
-                            return Observable.Return((Imported: 0, Failed: 0));
+                            return Observable.Return((Imported: 0, Failed: 0, Preserved: 0));
                         }
 
                         // Incremental skip: unchanged since the last import (same source token) AND the
@@ -592,7 +639,22 @@ public static class StaticRepoImporter
                         {
                             logger?.LogDebug(
                                 "[StaticRepoImport] {Partition}: unchanged, skipping {Path}", source.Partition, path);
-                            return Observable.Return((Imported: 0, Failed: 0));
+                            return Observable.Return((Imported: 0, Failed: 0, Preserved: 0));
+                        }
+
+                        // Two-way conflict resolution: a node changed on the SERVER since the last sync
+                        // is NOT overwritten by the repo — it is preserved here and carried back to
+                        // GitHub on the next commit ("newer on the server wins → GitHub"). Only reached
+                        // once the repo's copy actually differs (past the incremental-skip above), i.e. a
+                        // real conflict. A forced import ignores this and overwrites (deliberate discard).
+                        if (policy?.PreservesServerCopyOf(target) == true)
+                        {
+                            logger?.LogInformation(
+                                "[StaticRepoImport] {Partition}: two-way — preserving server-newer {Path} (not overwritten).",
+                                source.Partition, path);
+                            NodeTypeCompilationActivity.AppendLog(hub, activityPath,
+                                $"↩ Kept local change to {path} (newer on the server — commit to sync it back).", logger!);
+                            return Observable.Return((Imported: 0, Failed: 0, Preserved: 1));
                         }
 
                         var materialized = Materialize(sourceNode);
@@ -611,8 +673,8 @@ public static class StaticRepoImporter
                         // Failed and continue. The Failed tally drives the terminal Warning status
                         // below — the activity never reports a green Succeeded while hiding failures.
                         return Upsert(hub, materialized)
-                            .Select(_ => (Imported: 1, Failed: 0))
-                            .Catch<(int Imported, int Failed), Exception>(ex =>
+                            .Select(_ => (Imported: 1, Failed: 0, Preserved: 0))
+                            .Catch<(int Imported, int Failed, int Preserved), Exception>(ex =>
                             {
                                 logger?.LogWarning(ex,
                                     "[StaticRepoImport] {Partition}: upsert of {Path} failed (continuing).",
@@ -620,13 +682,13 @@ public static class StaticRepoImporter
                                 NodeTypeCompilationActivity.AppendLog(hub, activityPath,
                                     $"⚠ Failed to import {path}: {ex.Message}", logger!,
                                     Microsoft.Extensions.Logging.LogLevel.Warning);
-                                return Observable.Return((Imported: 0, Failed: 1));
+                                return Observable.Return((Imported: 0, Failed: 1, Preserved: 0));
                             });
                     })
                     .ToObservable()
                     .Merge(BatchSize)
-                    .Aggregate((Imported: 0, Failed: 0),
-                        (acc, x) => (acc.Imported + x.Imported, acc.Failed + x.Failed));
+                    .Aggregate((Imported: 0, Failed: 0, Preserved: 0),
+                        (acc, x) => (acc.Imported + x.Imported, acc.Failed + x.Failed, acc.Preserved + x.Preserved));
 
                 return upserted.SelectMany(count =>
                 {
@@ -638,6 +700,12 @@ public static class StaticRepoImporter
                     // keys) so user-added nodes survive; UpsertOnly prunes nothing. See ComputePrunableNodes.
                     var toPrune = ComputePrunableNodes(
                         existing.Values, nodes.Select(n => n.Path), manifest.Keys, excludedRoots, syncMode);
+
+                    // Two-way: never prune a node CREATED/changed on the server since the last sync. It
+                    // isn't in the repo yet, but it's a local addition to be committed back — not a stale
+                    // extra to remove. A forced import prunes it (the repo state wins).
+                    if (policy is { PreserveServerNewer: true, Force: false, Since: { } pruneSince })
+                        toPrune = toPrune.Where(n => n.LastModified <= pruneSince).ToArray();
 
                     var pruned = toPrune.Count == 0
                         ? Observable.Return(0)
@@ -658,10 +726,17 @@ public static class StaticRepoImporter
                     return pruned.SelectMany(prunedCount =>
                         // Sync content-collection files (the assets behind @@content/<file> embeds)
                         // collection→collection into each owning node — AFTER the node upsert.
-                        SyncContentImports(hub, source, logger).SelectMany(contentCount =>
+                        SyncContentImports(hub, source, logger).SelectMany(embedCount =>
+                        // Mirror inline (byte-carrying) content into each owning node's content
+                        // collection — the git-committed {Space}/content/** binaries a GitSync import
+                        // supplies. Binary-safe + mirroring (writes what the repo has, prunes what it
+                        // dropped) so committed course videos/posters land and stop getting wiped.
+                        SyncInlineContent(hub, source, logger).SelectMany(inlineCount =>
+                        {
+                        var contentCount = embedCount + inlineCount;
                         // Persist the per-node manifest LAST (after upserts + prune) so the NEXT import's
                         // diff sees exactly what's now in the partition. One write; survives prune (_Activity).
-                        WriteManifest(hub, source.Partition, nodes, hub.JsonSerializerOptions, logger).Select(_ =>
+                        return WriteManifest(hub, source.Partition, nodes, hub.JsonSerializerOptions, logger).Select(_ =>
                         {
                             // 🚨 Terminal status reflects per-file outcomes: ANY failed upsert →
                             // Warning (the ⚠ lines above pinpoint which files), all-clear →
@@ -670,9 +745,11 @@ public static class StaticRepoImporter
                             // full diagnostic log (no torn "Succeeded but the ⚠ lines didn't land yet").
                             var failed = count.Failed;
                             var status = failed > 0 ? ActivityStatus.Warning : ActivityStatus.Succeeded;
+                            // Two-way preserved local edits (kept, not overwritten) noted only when any.
+                            var preservedNote = count.Preserved > 0 ? $", kept {count.Preserved} local edit(s)" : "";
                             var summary = failed > 0
-                                ? $"Imported {count.Imported} node(s), {failed} FAILED (see ⚠ above), pruned {prunedCount}, synced {contentCount} content file(s)."
-                                : $"Imported {count.Imported} node(s), pruned {prunedCount}, synced {contentCount} content file(s).";
+                                ? $"Imported {count.Imported} node(s), {failed} FAILED (see ⚠ above){preservedNote}, pruned {prunedCount}, synced {contentCount} content file(s)."
+                                : $"Imported {count.Imported} node(s){preservedNote}, pruned {prunedCount}, synced {contentCount} content file(s).";
                             NodeTypeCompilationActivity.Complete(hub, activityPath, status,
                                 new[]
                                 {
@@ -686,7 +763,8 @@ public static class StaticRepoImporter
                                 "[StaticRepoImport] {Partition}: imported {Count}, failed {Failed}, pruned {Pruned}, content {Content} at {Fingerprint}.",
                                 source.Partition, count.Imported, failed, prunedCount, contentCount, fingerprint);
                             return new StaticRepoImportResult(source.Partition, fingerprint,
-                                failed > 0 ? "ImportedWithErrors" : "Imported", count.Imported);
+                                failed > 0 ? "ImportedWithErrors" : "Imported", count.Imported, count.Preserved);
+                        });
                         })));
                 });
             })
@@ -865,6 +943,39 @@ public static class StaticRepoImporter
                     logger?.LogWarning(ex,
                         "[StaticRepoImport] {Partition}: content import for {Node} failed (continuing).",
                         source.Partition, import.NodePath);
+                    return Observable.Return(0);
+                }))
+            .ToObservable()
+            .Merge(BatchSize)
+            .Sum();
+    }
+
+    /// <summary>
+    /// Mirrors the source's inline content syncs (<see cref="IStaticRepoSource.EnumerateInlineContentSyncs"/>)
+    /// — the byte-carrying content-collection files a GitSync import supplies (the git-committed
+    /// <c>{Space}/content/**</c> binaries). Each group is posted as a <see cref="SyncContentFilesRequest"/>
+    /// (via <see cref="ContentImportExtensions.SyncContentFiles"/>) under System to the owning node's hub,
+    /// which writes the bytes and — mirroring — prunes files the group no longer carries. Per-group failures
+    /// log and continue. Returns the total files written.
+    /// </summary>
+    private static IObservable<int> SyncInlineContent(IMessageHub hub, IStaticRepoSource source, ILogger? logger)
+    {
+        var syncs = source.EnumerateInlineContentSyncs();
+        if (syncs.Count == 0)
+            return Observable.Return(0);
+
+        return syncs
+            .Select(sync => AsSystem(hub, () => hub.SyncContentFiles(sync.NodePath)
+                    .To(sync.TargetCollection, sync.TargetPath)
+                    .Add(sync.Files)
+                    .Mirror(true)
+                    .Post())
+                .Select(r => r.Success ? r.FilesImported : 0)
+                .Catch<int, Exception>(ex =>
+                {
+                    logger?.LogWarning(ex,
+                        "[StaticRepoImport] {Partition}: inline content sync for {Node} failed (continuing).",
+                        source.Partition, sync.NodePath);
                     return Observable.Return(0);
                 }))
             .ToObservable()

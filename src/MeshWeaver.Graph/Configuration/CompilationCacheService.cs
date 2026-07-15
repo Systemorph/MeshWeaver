@@ -2,6 +2,7 @@
 using System.Collections.Immutable;
 using System.Reflection;
 using System.Runtime.Loader;
+using MeshWeaver.ServiceProvider;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -216,6 +217,14 @@ internal sealed class NodeAssemblyLoadContext : AssemblyLoadContext, IDisposable
     private volatile bool _disposed;
     private ImmutableArray<string> _probingDirs = ImmutableArray<string>.Empty;
 
+    // Opt-in diagnostic (env MESHWEAVER_ALC_UNLOAD_GC_PROBE=1) — OFF by default, so zero cost in
+    // prod and normal CI. When on, Dispose drives a synchronous full GC right after Unload so a
+    // use-after-unload dangling NATIVE pointer into this now-collectible assembly faults HERE
+    // (pinning the culprit node in the log + a corruption-time dump) instead of as a delayed
+    // background-GC SIGSEGV. Immutable config constant read once at type init — never written.
+    private static readonly bool UnloadGcProbe =
+        Environment.GetEnvironmentVariable("MESHWEAVER_ALC_UNLOAD_GC_PROBE") == "1";
+
     public void SetProbingDirectories(System.Collections.Generic.IReadOnlyList<string> dirs)
     {
         _probingDirs = dirs.ToImmutableArray();
@@ -242,6 +251,15 @@ internal sealed class NodeAssemblyLoadContext : AssemblyLoadContext, IDisposable
         _nodeName = nodeName;
         _dllPath = dllPath;
         _logger = logger;
+
+        // Purge Autofac's process-static reflection cache of this context's assemblies the instant
+        // it starts unloading — while the metadata the predicate walks is still valid. A cached
+        // ConstructorInfo/Assembly key otherwise (1) roots this collectible context so it can never
+        // be collected, and (2) makes a later, unrelated concurrent GetOrAdd bucket-probe compare
+        // against the freed key → AccessViolationException/SIGSEGV under concurrent hub construction.
+        // Autofac does this automatically for BeginLoadContextLifetimeScope; we manage the context
+        // by hand, so we mirror it. Static handler ⇒ no self-reference that would defeat collection.
+        Unloading += ReflectionCacheEviction.EvictFor;
     }
 
     /// <summary>
@@ -401,6 +419,23 @@ internal sealed class NodeAssemblyLoadContext : AssemblyLoadContext, IDisposable
 
         // Initiate unload outside the lock - the context will be collected when all references are released
         Unload();
+
+        // Diagnostic probe (opt-in, off by default): drive the collection synchronously so a
+        // use-after-unload dangling native pointer trips at THIS unload — naming the culprit node
+        // and yielding a corruption-time dump — instead of a delayed background-GC SIGSEGV. Used
+        // by the alc-unload-probe workflow to pin the reflection/serialization cache that retains
+        // an accessor into a collectible node assembly (the exit=139 teardown crash).
+        if (UnloadGcProbe)
+        {
+            // Write to Console DIRECTLY, not via _logger: this runs INSIDE ServiceProvider.Dispose()
+            // where the ILogger (XUnitFileLogger.GetMinLogLevel) resolves from the already-disposed
+            // container and throws ObjectDisposedException BEFORE writing — so the probe never named
+            // the culprit. Console is the only sink alive during teardown.
+            Console.Error.WriteLine($"ALC_UNLOAD_PROBE forcing GC after unloading {Name}");
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            GC.Collect();
+        }
     }
 }
 

@@ -70,16 +70,38 @@ public sealed class AccessGrantNotifier(
             return AsSystem(() => hub.GetMeshNode(grantedNodePath, ReadTimeout)).SelectMany(grantedNode =>
             {
                 var name = string.IsNullOrWhiteSpace(grantedNode?.Name) ? grantedNodePath : grantedNode!.Name;
-                return NotificationService.Dispatch(
-                    hub,
-                    recipient: recipient,
-                    mainNodePath: recipient,
-                    title: $"You've been given access to {name}",
-                    message: $"You now have {roleText} access to \"{name}\".",
-                    type: NotificationType.AccessGranted,
-                    targetNodePath: grantedNodePath,
-                    createdBy: assignmentNode.CreatedBy,
-                    icon: "/static/NodeTypeIcons/shield.svg");
+                // Resolve the granter's display name so the recipient sees WHO shared it — for most
+                // invitees this email is their first contact with Memex, and "someone gave you access"
+                // with no name is exactly the anonymous, off-putting message we're fixing. A granter
+                // that can't be resolved (or is System) falls back to a name-less phrasing. Skip the
+                // lookup entirely when there is no granter id (no empty-path NotFound churn).
+                var granterLookup = string.IsNullOrEmpty(assignmentNode.CreatedBy)
+                    ? Observable.Return<MeshNode?>(null)
+                    : AsSystem(() => hub.GetMeshNode(assignmentNode.CreatedBy!, ReadTimeout))
+                        .Catch(Observable.Return<MeshNode?>(null));
+                return granterLookup
+                    .SelectMany(granterNode =>
+                    {
+                        var granter = ResolveGranterName(granterNode, assignmentNode.CreatedBy, hub.JsonSerializerOptions);
+                        var message = granter is null
+                            ? $"You now have {roleText} access to \"{name}\"."
+                            : $"{granter} gave you {roleText} access to \"{name}\".";
+                        return NotificationService.Dispatch(
+                            hub,
+                            recipient: recipient,
+                            mainNodePath: recipient,
+                            title: $"You've been given access to {name}",
+                            message: message,
+                            type: NotificationType.AccessGranted,
+                            targetNodePath: grantedNodePath,
+                            createdBy: assignmentNode.CreatedBy,
+                            icon: "/static/NodeTypeIcons/shield.svg",
+                            emailCtaLabel: $"Open {name}",
+                            // First-contact hint — this recipient may have never signed in. Passed
+                            // explicitly (not defaulted in NotificationService) so it never leaks onto
+                            // notifications aimed at already-signed-in users.
+                            emailFooterNote: "New to Memex? Sign in with this email address to open it.");
+                    });
             });
         });
     }
@@ -118,6 +140,36 @@ public sealed class AccessGrantNotifier(
         grantedNodePath = assignmentNode.MainNode;
         roleText = string.Join(", ", grantedRoles);
         return true;
+    }
+
+    /// <summary>
+    /// A human display name for the granter, or <c>null</c> when none can be shown (so the message
+    /// omits the "granted by" clause rather than printing a raw ObjectId). Prefers the granter node's
+    /// display <c>Name</c>, then the <see cref="User"/>'s <c>FullName</c>/<c>Email</c>; anything that
+    /// merely echoes the <paramref name="granterId"/> ObjectId is treated as "no name".
+    /// </summary>
+    internal static string? ResolveGranterName(
+        MeshNode? granterNode, string? granterId, System.Text.Json.JsonSerializerOptions options)
+    {
+        if (granterNode is null)
+            return null;
+        var id = granterId?.Trim();
+        // Trim BEFORE comparing so a stored name that is the ObjectId with incidental whitespace is
+        // still treated as "just the id" (never leak the raw ObjectId to the recipient).
+        string? Usable(string? s)
+        {
+            var t = s?.Trim();
+            return !string.IsNullOrEmpty(t) && !string.Equals(t, id, StringComparison.Ordinal) ? t : null;
+        }
+
+        if (Usable(granterNode.Name) is { } nodeName)
+            return nodeName;
+        var user = granterNode.ContentAs<User>(options);
+        if (Usable(user?.FullName) is { } fullName)
+            return fullName;
+        if (Usable(user?.Email) is { } email)
+            return email;
+        return null;
     }
 
     private IObservable<T> AsSystem<T>(Func<IObservable<T>> factory)

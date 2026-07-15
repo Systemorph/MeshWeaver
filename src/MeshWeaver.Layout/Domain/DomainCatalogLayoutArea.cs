@@ -34,7 +34,7 @@ public static class DomainCatalogLayoutArea
         var ret = Controls.Stack
             .WithView(Controls.Html(titleWithNav));
         
-        var description = typeDefinition.Type.GetXmlDocsSummary();
+        var description = MeshWeaver.Messaging.Serialization.XmlDocs.Summary(typeDefinition.Type);
         if (!string.IsNullOrWhiteSpace(description))
             ret = ret.WithView(Controls.Html($"<p>{description}</p>"));
         

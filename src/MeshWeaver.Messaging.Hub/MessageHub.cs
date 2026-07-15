@@ -1370,6 +1370,13 @@ public sealed class MessageHub : IMessageHub
 
         }
 
+        // Close hosted-hub CREATION immediately — not only when the DisposeHostedHubs
+        // phase disposes the collection. A hub created in the Quiescing window races
+        // DisposeHubsReactive's snapshot and leaks as a zombie whose timers later
+        // detonate on the disposed container (post-dispose ObjectDisposedException
+        // stragglers). Existing hubs still resolve for the drain.
+        hostedHubs.CloseCreation();
+
         // Log all hosted hubs that will be disposed
         var hostedHubAddresses = hostedHubs.Hubs.Select(h => h.Address.ToString()).ToArray();
         if (hostedHubAddresses.Length > 0)
@@ -1813,6 +1820,17 @@ public sealed class MessageHub : IMessageHub
                     logger.LogDebug("[DISPOSE-TRACE] {address}: messageService.Dispose() done in {elapsed}ms",
                         Address, shutdownStopwatch.ElapsedMilliseconds);
 
+                    // Dead BEFORE signalling — callers awaiting DisposalCompleted must observe the
+                    // terminal state, never a mid-teardown ShutDown snapshot. The force-teardown
+                    // path already orders it this way; here Dead was only set in the FINALLY, so a
+                    // StopAsync waiter woken by the signal could finish its (fast) IoPool +
+                    // AsyncDisposeQueue drains and read RunLevel == ShutDown — the flaky
+                    // MeshHostBuilderTeardownOrderingTest failure on loaded CI shards. The finally
+                    // keeps its (now redundant on success) assignment for the faulted path.
+                    lock (locker)
+                    {
+                        RunLevel = MessageHubRunLevel.Dead;
+                    }
                     // Signal completion through the reactive source (idempotent CAS — no
                     // InvalidOperationException to guard, unlike TaskCompletionSource).
                     SignalDisposalCompleted();
@@ -1823,11 +1841,22 @@ public sealed class MessageHub : IMessageHub
                 {
                     logger.LogError("Error during shutdown of hub {address} after {elapsed}ms (total disposal time: {totalElapsed}ms): {exception}",
                         Address, shutdownStopwatch.ElapsedMilliseconds, disposalStopwatch.ElapsedMilliseconds, e);
+                    // Dead BEFORE signalling on the FAULT path too — TeardownAsync catches
+                    // DisposalCompleted errors and continues, so a faulted-signal waiter reads
+                    // RunLevel exactly like a completed-signal waiter does.
+                    lock (locker)
+                    {
+                        RunLevel = MessageHubRunLevel.Dead;
+                    }
                     SignalDisposalFaulted(e);
                 }
                 finally
                 {
-                    RunLevel = MessageHubRunLevel.Dead;
+                    // Backstop only — both signal paths above already terminalized under the lock.
+                    lock (locker)
+                    {
+                        RunLevel = MessageHubRunLevel.Dead;
+                    }
                     disposalStopwatch.Stop();
                     // Tidy the disposal-phase subscriptions (each has already self-completed:
                     // the watchdog cancelled via TakeUntil when SignalDisposalCompleted fired,

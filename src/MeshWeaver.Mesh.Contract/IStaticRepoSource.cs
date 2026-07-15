@@ -73,7 +73,35 @@ public interface IStaticRepoSource
     /// collection→collection, stream-to-stream. Default empty.
     /// </summary>
     IReadOnlyList<StaticContentImport> EnumerateContentImports() => [];
+
+    /// <summary>
+    /// Optional content-collection <b>files carried inline</b> (their raw bytes travel with the source,
+    /// not via an embedded source collection) that must be MIRRORED into a node's content collection.
+    /// This is how a GitSync import syncs the git-committed <c>{Space}/content/**</c> binaries (course
+    /// videos/posters) into the mesh: the fetch captures each blob's bytes, and after the node upsert
+    /// the importer posts a <see cref="SyncContentFilesRequest"/> per group (under System) to the owning
+    /// node's hub, which writes the bytes AND — mirroring — deletes files under the folder the group no
+    /// longer carries. Binary-safe (bytes never round-trip through a text/JSON string) and idempotent.
+    /// Default empty. Independent of <see cref="EnumerateContentImports"/> (collection→collection copies).
+    /// </summary>
+    IReadOnlyList<StaticContentSync> EnumerateInlineContentSyncs() => [];
 }
+
+/// <summary>
+/// A content-collection MIRROR shipped inline by an <see cref="IStaticRepoSource"/>: write
+/// <paramref name="Files"/> into <paramref name="TargetCollection"/>/<paramref name="TargetPath"/> on
+/// the node at <paramref name="NodePath"/>, pruning any file the folder still has that the set no longer
+/// carries. The bytes travel with the source (binary-safe). Maps onto <see cref="SyncContentFilesRequest"/>.
+/// </summary>
+/// <param name="NodePath">The full path of the node whose hub owns the target collection (the Space root for the per-Space <c>content</c> collection).</param>
+/// <param name="Files">The files to mirror, each path relative to <paramref name="TargetPath"/>.</param>
+/// <param name="TargetCollection">The target content collection (default <c>content</c>).</param>
+/// <param name="TargetPath">The folder within the collection to mirror the files under (empty for the collection root).</param>
+public record StaticContentSync(
+    string NodePath,
+    IReadOnlyList<InlineContentFile> Files,
+    string TargetCollection = "content",
+    string TargetPath = "");
 
 /// <summary>
 /// A content-collection import shipped by an <see cref="IStaticRepoSource"/>: copy the

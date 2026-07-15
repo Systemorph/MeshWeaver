@@ -1,0 +1,49 @@
+{{- if .Values.keda.enabled }}
+# KEDA autoscaler for the Blazor Server portal. Requires the KEDA operator
+# (AKS managed add-on) + metrics-server, and AdoNet Orleans clustering so the
+# replicas KEDA adds actually form ONE mesh (Localhost would split-brain).
+#
+# Scale-UP is fast (shed incoming load quickly); scale-DOWN is deliberately
+# slow — a Blazor circuit is stateful (draining a pod drops its users) and
+# every silo add/remove triggers an Orleans membership rebalance, so we only
+# remove a pod after a long calm window, one at a time.
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: "memex-portal-scaler"
+  labels:
+    app.kubernetes.io/name: "{{ .Chart.Name }}"
+    app.kubernetes.io/component: "memex-portal"
+    app.kubernetes.io/instance: "{{ .Release.Name }}"
+spec:
+  scaleTargetRef:
+    name: "memex-portal-deployment"
+  minReplicaCount: {{ .Values.keda.minReplicas | default 2 }}
+  maxReplicaCount: {{ .Values.keda.maxReplicas | default 8 }}
+  cooldownPeriod: {{ .Values.keda.cooldownPeriod | default 300 }}
+  advanced:
+    horizontalPodAutoscalerConfig:
+      behavior:
+        scaleUp:
+          stabilizationWindowSeconds: 30
+          policies:
+            - type: Pods
+              value: 2
+              periodSeconds: 60
+        scaleDown:
+          stabilizationWindowSeconds: {{ .Values.keda.scaleDownStabilizationSeconds | default 600 }}
+          policies:
+            - type: Pods
+              value: 1
+              periodSeconds: 300
+  triggers:
+    - type: cpu
+      metricType: Utilization
+      metadata:
+        value: "{{ .Values.keda.cpuTarget | default 70 }}"
+    - type: memory
+      metricType: Utilization
+      metadata:
+        value: "{{ .Values.keda.memoryTarget | default 80 }}"
+{{- end }}

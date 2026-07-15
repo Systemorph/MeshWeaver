@@ -433,5 +433,16 @@ VALUES
         AND Status = @Status AND @Status IS NOT NULL
         AND ProxyPort > 0;
 ');
+
+INSERT INTO OrleansQuery(QueryKey, QueryText)
+VALUES
+(
+    'CleanupDefunctSiloEntriesKey','
+    DELETE FROM OrleansMembershipTable
+    WHERE DeploymentId = @DeploymentId
+        AND @DeploymentId IS NOT NULL
+        AND IAmAliveTime < @IAmAliveTime
+        AND Status != 3;
+');
 ";
 }

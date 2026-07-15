@@ -22,6 +22,52 @@ public class IoPoolTest
     private static readonly TimeSpan Timeout5 = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan Timeout10 = TimeSpan.FromSeconds(10);
 
+    // 🚨 PIN for the endemic teardown SIGSEGV (Hosting.Monolith.Test exit=139). Root cause: a
+    // MeshQuery straggler whose SUBSCRIBE (initial emission → route → CreateHub → Autofac
+    // BeginLifetimeScope) ran on an UNTRACKED TaskPoolScheduler.Default, so teardown's drain never
+    // waited for it and the Autofac scope was disposed mid-construction → native use-after-free.
+    // The fix routes the subscribe through IIoPool.SubscribeThroughPool, so it's TRACKED and Drain()
+    // JOINS it. This test pins that guarantee DETERMINISTICALLY (no flaky ~50% CI repro): a subscribe
+    // that is in-flight holds a slot, and Drain() BLOCKS until it releases — i.e. the scope can never
+    // be torn down while a BeginLifetimeScope is running.
+    [Fact]
+    public async Task SubscribeThroughPool_holds_a_slot_and_Drain_joins_the_in_flight_subscribe()
+    {
+        using var pool = new IoPool(4);
+        var subscribeEntered = new ManualResetEventSlim();
+        var releaseSubscribe = new ManualResetEventSlim();
+        var subscribeFinished = false;
+
+        // A source whose SUBSCRIBE blocks — stands in for the initial-emission → CreateHub window.
+        var source = Observable.Create<int>(obs =>
+        {
+            subscribeEntered.Set();
+            releaseSubscribe.Wait(Timeout5);
+            subscribeFinished = true;
+            obs.OnNext(1);
+            return System.Reactive.Disposables.Disposable.Empty;
+        });
+
+        using var sub = pool.SubscribeThroughPool(source).Subscribe(_ => { });
+
+        Assert.True(subscribeEntered.Wait(Timeout5), "the subscribe must run on the pool");
+        Assert.True(SpinWait.SpinUntil(() => pool.CurrentInFlight == 1, Timeout5),
+            "the subscribe must hold a pool slot (tracked) for its duration — else the drain can't see it");
+
+        // Drain() must JOIN: block until the in-flight subscribe releases its slot.
+        var drainDone = Task.Run(() => pool.Drain());
+        // Confirm Drain does NOT complete while the subscribe still holds a slot (the owning scope must
+        // not dispose yet) — a "wait to confirm nothing happened" negative check.
+        var winner = await Task.WhenAny(drainDone, Task.Delay(TimeSpan.FromMilliseconds(200)));
+        Assert.NotSame(drainDone, winner);
+
+        releaseSubscribe.Set();
+
+        await drainDone.WaitAsync(Timeout5);
+        Assert.True(subscribeFinished, "Drain must have JOINED the in-flight subscribe before returning");
+        Assert.Equal(0, pool.CurrentInFlight);
+    }
+
     [Fact]
     public async Task Invoke_caps_in_flight_at_the_pool_bound()
     {
@@ -149,6 +195,46 @@ public class IoPoolTest
 
         SpinWait.SpinUntil(() => pool.CurrentInFlight == 0, Timeout5)
             .Should().BeTrue("disposing the subscription must release the held slot");
+    }
+
+    // The teardown-SIGSEGV fix: Drain must CANCEL every in-flight leaf (a live change-feed
+    // subscription never completes on its own, so a WAIT-only drain — the old WhenDrained —
+    // would time out and let the caller unload the node ALCs while the leaf still runs on a
+    // ThreadPool thread → native use-after-unload) AND JOIN synchronously, so the instant
+    // Drain returns no pool thread is executing any ALC-compiled code.
+    [Fact]
+    public async Task Drain_cancels_in_flight_leaves_and_joins_synchronously()
+    {
+        using var pool = new IoPool(2);
+        using var entered = new ManualResetEventSlim(false);
+        var cancelled = false;
+
+        pool.Invoke(async ct =>
+        {
+            entered.Set();
+            try { await Task.Delay(System.Threading.Timeout.Infinite, ct); } // never completes on its own
+            catch (OperationCanceledException) { cancelled = true; throw; }
+            return 0;
+        }).Subscribe(_ => { }, _ => { });
+
+        entered.Wait(Timeout5, TestContext.Current.CancellationToken).Should().BeTrue();
+        pool.CurrentInFlight.Should().Be(1);
+
+        pool.Drain(); // cancel the leaf + JOIN — returns only once it has unwound
+
+        pool.CurrentInFlight.Should().Be(0,
+            "Drain joins synchronously — no spin: when it returns every in-flight leaf has unwound");
+        cancelled.Should().BeTrue("Drain cancels in-flight leaves so a never-completing one actually stops");
+
+        // Drain is TERMINAL (it cancels the pool token) — new work issued after Drain is
+        // cancelled immediately; there is no in-flight leaf left to reference an unloading ALC.
+        Func<Task> afterDrain = () =>
+            pool.Invoke(_ => Task.FromResult(7)).ToTask(TestContext.Current.CancellationToken);
+        await afterDrain.Should().ThrowAsync<OperationCanceledException>();
+
+        // Idempotent: a second Drain is a safe no-op join.
+        pool.Drain();
+        pool.CurrentInFlight.Should().Be(0);
     }
 
     [Fact]

@@ -1572,7 +1572,7 @@ public static class MeshNodeLayoutAreas
                     node["title"] = type.Name;
 
                     // Add description for the main type
-                    var typeDescription = type.GetXmlDocsSummary();
+                    var typeDescription = MeshWeaver.Messaging.Serialization.XmlDocs.Summary(type);
                     if (!string.IsNullOrEmpty(typeDescription))
                     {
                         node["description"] = typeDescription;
@@ -1588,7 +1588,7 @@ public static class MeshNodeLayoutAreas
                     var actualPropertyInfo = declaringType.GetProperty(propertyName.ToPascalCase()!);
                     if (actualPropertyInfo != null)
                     {
-                        var propertyDescription = actualPropertyInfo.GetXmlDocsSummary();
+                        var propertyDescription = MeshWeaver.Messaging.Serialization.XmlDocs.Summary(actualPropertyInfo);
                         if (!string.IsNullOrEmpty(propertyDescription))
                         {
                             jsonObj["description"] = propertyDescription;

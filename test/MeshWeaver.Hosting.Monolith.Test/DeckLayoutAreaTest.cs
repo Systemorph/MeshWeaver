@@ -202,6 +202,37 @@ public class DeckLayoutAreaTest(ITestOutputHelper output) : MonolithMeshTestBase
     }
 
     /// <summary>
+    /// A deck with NO explicit manifest (empty <see cref="DeckContent.Slides"/>) must fall back to the
+    /// DEFAULT query <c>nodeType:Slide scope:subtree</c> — every Slide node under the deck, ordered by
+    /// <see cref="MeshNode.Order"/>. Without this, a deck whose slides live as children but that carries
+    /// no hardcoded array renders "no slides yet" even though its slides exist (the reported bug). Here
+    /// two child slides (Order 1, 2) must present in Order despite no manifest.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task DeckPresent_NoManifest_DefaultsToSubtreeSlideQuery_InOrder()
+    {
+        var space = await CreateSpaceNode();
+        var deck = $"{space}/auto";
+        await CreateDeckNode(deck, "Auto Deck", ImmutableList<string>.Empty); // NO manifest
+
+        // Two slides live as children of the deck; created out of order, Order rules.
+        await CreateSlide($"{deck}/second", "Second", 2, "# Second\n\nthe-second-body");
+        await CreateSlide($"{deck}/first", "First", 1, "# First\n\nthe-first-body");
+
+        var workspace = GetClient(c => c.AddData()).GetWorkspace();
+
+        // i=0 → lowest-Order subtree slide = First; next drives to the second.
+        await AssertDeckPresentSlide(workspace, deck, index: 0,
+            expectBody: "the-first-body", expectCounter: "Slide 1 / 2",
+            expectPrev: null, expectNext: $"/{deck}/Present?i=1");
+        await AssertDeckPresentSlide(workspace, deck, index: 1,
+            expectBody: "the-second-body", expectCounter: "Slide 2 / 2",
+            expectPrev: $"/{deck}/Present?i=0", expectNext: null);
+
+        await NodeFactory.DeleteNode(space).Should().Emit();
+    }
+
+    /// <summary>
     /// The SAME slide path, referenced by TWO decks in OPPOSITE orders, presents in each deck's own
     /// order — proving presentation order lives on the deck, not the slide. Deck1 = [X, Y] shows X
     /// first; Deck2 = [Y, X] shows Y first — from the identical two slide nodes.

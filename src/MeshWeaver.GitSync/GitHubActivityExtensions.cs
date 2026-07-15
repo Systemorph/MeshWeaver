@@ -55,16 +55,19 @@ public static class GitHubActivityExtensions
     /// <paramref name="sourceId"/> selects the sync source (null = the primary).</summary>
     public static IObservable<string> UpdateToLatestFromGitHub(
         this IMessageHub hub, string spacePath, string userId, Action<string>? onActivityCreated = null,
-        string? sourceId = null)
+        string? sourceId = null, bool force = false)
     {
         var pr = hub.ServiceProvider.GetRequiredService<PullRequestService>();
-        return hub.RunActivity(spacePath, ActivityCategory.Import, $"Update {spacePath} to latest",
+        return hub.RunActivity(spacePath, ActivityCategory.Import,
+            force ? $"Force-update {spacePath} to latest" : $"Update {spacePath} to latest",
             ctx =>
             {
-                ctx.Log("Fetching the branch HEAD from GitHub and importing the deltas…");
+                ctx.Log(force
+                    ? "Fetching the branch HEAD from GitHub and overwriting local changes (force)…"
+                    : "Fetching the branch HEAD from GitHub and importing the deltas…");
                 // ctx.Log as the progress sink: files dropped from the import (parse failures)
                 // append an Error line here and flip the terminal status to Failed.
-                return pr.UpdateToLatest(spacePath, userId, sourceId, ctx.Log).Select(r =>
+                return pr.UpdateToLatest(spacePath, userId, sourceId, ctx.Log, force).Select(r =>
                 {
                     ctx.Log($"Imported {r.Outcome} ({r.Count} node(s)).");
                     return Unit.Default;
@@ -76,7 +79,7 @@ public static class GitHubActivityExtensions
     /// <paramref name="sourceId"/> selects the sync source (null = the primary).</summary>
     public static IObservable<string> ReimportFromGitHub(
         this IMessageHub hub, string spacePath, string commitish, string userId,
-        Action<string>? onActivityCreated = null, string? sourceId = null)
+        Action<string>? onActivityCreated = null, string? sourceId = null, bool force = false)
     {
         var sync = hub.ServiceProvider.GetRequiredService<GitHubSyncService>();
         return hub.RunActivity(spacePath, ActivityCategory.Import, $"Re-import {spacePath} at {commitish}",
@@ -85,7 +88,7 @@ public static class GitHubActivityExtensions
                 ctx.Log($"Fetching {commitish} from GitHub and importing the deltas…");
                 // ctx.Log as the progress sink: files dropped from the import (parse failures)
                 // append an Error line here and flip the terminal status to Failed.
-                return sync.ReimportAtCommit(spacePath, commitish, userId, sourceId, ctx.Log).Select(r =>
+                return sync.ReimportAtCommit(spacePath, commitish, userId, sourceId, ctx.Log, force).Select(r =>
                 {
                     ctx.Log($"Re-imported {r.Outcome} ({r.Count} node(s)) at {commitish}.");
                     return Unit.Default;
