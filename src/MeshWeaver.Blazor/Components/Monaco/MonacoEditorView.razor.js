@@ -920,6 +920,45 @@ export function pushDiagnostics(editorId, items) {
     monaco.editor.setModelMarkers(model, DIAGNOSTICS_MARKER_OWNER, markers);
 }
 
+// Authoritatively give the editor keyboard focus. `editorInstance.focus()` alone is NOT enough on
+// Safari: Monaco keeps drawing its caret from an INTERNAL focus tracker, and when the real
+// <textarea.inputarea> silently loses DOM focus during a Blazor re-render (the message-stream storm),
+// that tracker can stay "focused" — so a later focus() short-circuits and never re-focuses the DOM
+// textarea. The result is the reported "blinking caret, but typing does nothing until I reload":
+// keystrokes go to whatever element actually holds DOM focus, not the editor. Forcing the real
+// inputarea to take focus restores keyboard input without a reload. Idempotent when already focused.
+export function focusEditor(editorId) {
+    const editorInstance = editorState.get(editorId)?.editorInstance;
+    if (!editorInstance) return false;
+    try {
+        editorInstance.focus();
+        const ta = editorInstance.getDomNode()?.querySelector('textarea.inputarea');
+        if (ta && document.activeElement !== ta) ta.focus();
+        return true;
+    } catch {
+        // editor mid-teardown — harmless
+        return false;
+    }
+}
+
+// Reconcile an external / data-bound value into the editor WITHOUT ever clobbering an in-progress
+// edit. The focus check is done HERE, atomically with setValue, so it is the GROUND TRUTH at the
+// moment of the write — unlike the C# `editorHasFocus` flag, which is updated through async JS→.NET
+// focus events that can lag or be dropped under a re-render storm (Safari). A stale-false flag on the
+// C# side would let SetValue wipe the user's live keystrokes and reset the cursor; re-checking
+// hasTextFocus() right before the write closes that race. Returns true iff it actually wrote.
+export function reconcileValue(editorId, value) {
+    const editorInstance = editorState.get(editorId)?.editorInstance;
+    if (!editorInstance) return false;                    // not ready — retry on a later render
+    if (editorInstance.hasTextFocus()) return false;      // user owns the buffer — never clobber
+    const next = value ?? '';
+    if (editorInstance.getValue() !== next) editorInstance.setValue(next);
+    // Unfocused → the editor now holds `next` (set just now, or already equal). Report reconciled so
+    // the caller advances lastSetValue; false is reserved for "refused because focused", so a stale
+    // lastSetValue only persists while the user owns the buffer and clears on the next unfocused render.
+    return true;
+}
+
 // Set cursor position to end of content
 export function setCursorToEnd(editorId) {
     const editorInstance = editorState.get(editorId)?.editorInstance;

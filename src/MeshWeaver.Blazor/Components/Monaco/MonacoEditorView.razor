@@ -601,11 +601,19 @@
 
     public async Task FocusAsync()
     {
-        if (editor != null && isInitialized)
+        if (isInitialized)
         {
             try
             {
-               await editor.Focus();
+                // Authoritative focus via JS: editor.Focus() alone can be a no-op on Safari when
+                // Monaco's internal focus tracker is stale-true after the real <textarea.inputarea>
+                // lost DOM focus during a re-render storm — so clicking back into the composer left
+                // the caret blinking but keystrokes dead until a reload. focusEditor force-focuses the
+                // real inputarea. Falls back to editor.Focus() if the JS module isn't ready.
+                if (jsModule != null)
+                    await jsModule.InvokeVoidAsync("focusEditor", EditorId);
+                else if (editor != null)
+                    await editor.Focus();
             }
             catch (Exception ex)
             {
@@ -824,15 +832,22 @@
             // owns the buffer (actively typing, or simply focused). Reconciling mid-edit wiped the
             // in-progress keystrokes and reset the cursor (the "typing / backspace / arrows do
             // nothing" report). Legitimate programmatic pushes use SetValueAsync, not this path.
-            // See the userIsTyping / editorHasFocus fields.
+            // The C# userIsTyping / editorHasFocus flags are a fast-path pre-filter, but they are
+            // updated through ASYNC JS→.NET events that can lag or be dropped under a re-render storm
+            // (Safari) — a stale-false editorHasFocus here would wipe live keystrokes. So the actual
+            // write goes through reconcileValue, which re-checks Monaco's hasTextFocus() ATOMICALLY
+            // with setValue in JS (the ground truth at write-time) and refuses to touch a focused
+            // editor. It returns true only if it actually wrote, so we advance lastSetValue only then
+            // (a refusal leaves lastSetValue stale so the next unfocused render retries).
             var currentValue = Value ?? "";
             if (currentValue != lastSetValue && !userIsTyping && !editorHasFocus)
             {
                 Logger.LogDebug("Value changed externally from '{OldValue}' to '{NewValue}'",
                     lastSetValue?.Substring(0, Math.Min(50, lastSetValue?.Length ?? 0)),
                     currentValue.Substring(0, Math.Min(50, currentValue.Length)));
-                lastSetValue = currentValue;
-                await editor.SetValue(currentValue);
+                var didSet = await jsModule.InvokeAsync<bool>("reconcileValue", EditorId, currentValue);
+                if (didSet)
+                    lastSetValue = currentValue;
             }
             // Re-arm: the keystroke-triggered render has passed, so a later genuine external change
             // can reconcile again (while unfocused). editorHasFocus stays authoritative until blur.
