@@ -361,6 +361,16 @@ else
                                             <img src="@icon" alt="" class="thread-msg-tool-delegation-icon" />
                                             <span class="thread-msg-tool-delegation-title">@title</span>
                                             <span class="thread-msg-tool-delegation-agent">@callSummary</span>
+                                            @* Live elapsed while the sub-thread runs — makes "it's running"
+                                               unmistakable in the bubble itself (not only the runtime panel).
+                                               Driven by the 1s ticker; StartedAt is the sub-thread's
+                                               ExecutionStartedAt, so it appears the moment the round is executing
+                                               and updates each second until the delegation settles. *@
+                                            @if (isPending && delHeader is { IsExecuting: true, StartedAt: { } delStarted })
+                                            {
+                                                <span class="thread-msg-tool-delegation-elapsed"
+                                                      title="Running — elapsed since the sub-thread started">@FormatElapsed(delStarted)</span>
+                                            }
                                         </a>
                                     }
                                     else
@@ -582,8 +592,8 @@ else
                                 <div class="thread-runtime-subthread-title">
                                     <span class="thread-runtime-subthread-title-text">@subTitle</span>
                                     @* Elapsed-time chip for the sub-thread — null StartedAt
-                                       means the sub-thread is in StartingExecution and
-                                       hasn't flipped LastActivityAt yet; chip auto-hides. *@
+                                       means the sub-thread is still in StartingExecution and
+                                       hasn't stamped ExecutionStartedAt yet; chip auto-hides. *@
                                     @if (header.StartedAt is { } subStarted)
                                     {
                                         <span class="thread-runtime-subthread-elapsed" title="Elapsed since sub-thread started">@FormatElapsed(subStarted)</span>
