@@ -171,6 +171,69 @@ public static class AreaErrorClassifier
            && (failure.Message ?? string.Empty).StartsWith("No node found", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
+    /// The node PATH an access-denied failure names — extracted so the GUI can degrade gracefully
+    /// (e.g. redirect a not-yet-enrolled visitor to a course's public paywall) instead of showing a
+    /// raw "Access denied" card. Both access-denied banners put the path in the segment right after
+    /// <c>permission on '</c>:
+    /// <list type="bullet">
+    ///   <item>"Access denied: user 'u' lacks Read permission on 'AgenticEngineering'"</item>
+    ///   <item>"User 'u' lacks Read permission on 'AgenticEngineering/Module1'"</item>
+    /// </list>
+    /// Returns <c>null</c> when the error carries no such quoted path. A routing NotFound
+    /// ("No node found at '…'") is deliberately NOT matched — it uses a different banner. Pure —
+    /// unit-tested without a renderer or a mesh.
+    /// </summary>
+    public static string? TryGetAccessDeniedPath(Exception? ex)
+    {
+        const string marker = "permission on '";
+        for (var e = ex; e != null; e = e.InnerException)
+        {
+            var msg = e.Message ?? string.Empty;
+            var open = msg.LastIndexOf(marker, StringComparison.OrdinalIgnoreCase);
+            if (open < 0) continue;
+            var start = open + marker.Length;
+            var end = msg.IndexOf('\'', start);
+            if (end > start)
+                return msg[start..end];
+        }
+        return null;
+    }
+
+    /// <summary>The Overview area — a course's public "poster" (ad) page — that a denied course
+    /// lesson redirects to. Literal (not <c>MeshNodeLayoutAreas.OverviewArea</c>) to keep this
+    /// classifier free of a Graph dependency; pinned to that constant by a unit test.</summary>
+    public const string CoursePosterArea = "Overview";
+
+    /// <summary>
+    /// The course POSTER page to send a not-yet-enrolled visitor to when they are denied a page
+    /// <em>under</em> a course — the rule <c>{course}/Anything ⇒ {course}/Overview</c>, where the
+    /// course's public Overview is its poster/ad page. Courses are top-level partitions, so the course
+    /// root is the denied path's FIRST segment; any lesson beneath it therefore resolves to the SAME
+    /// poster. Returns <c>null</c> when:
+    /// <list type="bullet">
+    ///   <item>the error is not access-denied;</item>
+    ///   <item>the denied path is the course ROOT itself (a single segment) — that IS the poster
+    ///   location, so there is nothing to redirect TO; and</item>
+    ///   <item>the denied path already IS the poster (or sits under it) — so a redirect can never
+    ///   loop, even for a non-course partition whose own root is gated.</item>
+    /// </list>
+    /// Pure — unit-tested.
+    /// </summary>
+    public static string? TryGetCoursePosterPath(Exception? ex)
+    {
+        var denied = TryGetAccessDeniedPath(ex);
+        if (string.IsNullOrEmpty(denied)) return null;
+        var slash = denied.IndexOf('/');
+        if (slash <= 0) return null; // course root itself → it IS the poster; nothing to redirect to
+        var root = denied[..slash];
+        var remainder = denied[(slash + 1)..];
+        if (string.Equals(remainder, CoursePosterArea, StringComparison.Ordinal)
+            || remainder.StartsWith(CoursePosterArea + "/", StringComparison.Ordinal))
+            return null; // already at / under the poster → no loop
+        return $"{root}/{CoursePosterArea}";
+    }
+
+    /// <summary>
     /// The single predicate the area subscription hands to
     /// <see cref="AreaStreamRetry.RetryAreaWithBackoff{T}"/>: retry ONLY a transient hub
     /// miss — never a teardown <see cref="ObjectDisposedException"/> (benign), never a

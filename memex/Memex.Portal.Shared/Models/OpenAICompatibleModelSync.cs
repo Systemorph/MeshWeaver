@@ -76,6 +76,7 @@ public sealed class OpenAICompatibleModelSync : IHostedService, IDisposable
     private IDisposable? startupSub;
     private IDisposable? catalogSub;
     private IDisposable? timerSub;
+    private IDisposable? backfillSub;
 
     public OpenAICompatibleModelSync(
         IMessageHub hub,
@@ -96,20 +97,30 @@ public sealed class OpenAICompatibleModelSync : IHostedService, IDisposable
     /// <inheritdoc />
     public Task StartAsync(CancellationToken cancellationToken)
     {
-        var discover = configuration.GetValue("OpenAICompatible:DiscoverModels", false);
         var endpoint = configuration["OpenAICompatible:Endpoint"];
-        if (!discover || string.IsNullOrWhiteSpace(endpoint))
-            return Task.CompletedTask; // inert unless explicitly enabled AND an endpoint is set
+        if (string.IsNullOrWhiteSpace(endpoint))
+            return Task.CompletedTask; // no endpoint → nothing to probe or discover
 
+        // Full add/remove discovery is opt-in (DiscoverModels=true). But even with discovery OFF we run
+        // a one-shot tool-capability BACKFILL for the statically-configured models: the boot seeder
+        // (BuiltInLanguageModelProvider) can't probe /api/show synchronously, so it stamps the model
+        // nodes with SupportsTools=null (assume supported) → the round would send tools to a tool-less
+        // local model (Mythalion → HTTP 400). The backfill probes each configured model and stamps its
+        // KNOWN capability. So an endpoint alone is enough to activate this service.
+        var discover = configuration.GetValue("OpenAICompatible:DiscoverModels", false);
         var apiKey = configuration["OpenAICompatible:ApiKey"] ?? string.Empty;
         var embeddingModel = configuration["Embedding:Model"];
+        // The statically-configured model ids (OpenAICompatible:Models[]) — what the boot seeder laid
+        // down. Empty when discovery owns the child set (discover=true).
+        var configuredModels = configuration.GetSection("OpenAICompatible:Models").Get<string[]>()
+            ?? Array.Empty<string>();
         var initialDelay = TimeSpan.FromSeconds(
             Math.Max(0, configuration.GetValue("OpenAICompatible:DiscoverInitialDelaySeconds", 20)));
         var period = TimeSpan.FromSeconds(
             Math.Max(15, configuration.GetValue("OpenAICompatible:DiscoverIntervalSeconds", 120)));
 
-        // 🚨 Defer EVERY mesh-cache touch (the catalog query AND the reconcile) until initialDelay past
-        // startup, off any hub thread. StartAsync runs during host startup, when the Orleans stream
+        // 🚨 Defer EVERY mesh-cache touch (the catalog query AND the reconcile/backfill) until initialDelay
+        // past startup, off any hub thread. StartAsync runs during host startup, when the Orleans stream
         // provider may not be ready; touching the workspace/cache then constructs the process cache hub
         // too early and NREs. The one-shot timer here does nothing but schedule BeginDiscovery later, so
         // this hosted service is inert during the fragile startup window. Wrapped so it can never wedge.
@@ -118,24 +129,39 @@ public sealed class OpenAICompatibleModelSync : IHostedService, IDisposable
             {
                 try
                 {
-                    BeginDiscovery(endpoint!, apiKey, embeddingModel, period);
+                    BeginDiscovery(endpoint!, apiKey, embeddingModel, period, discover, configuredModels);
                 }
                 catch (Exception ex)
                 {
-                    logger?.LogError(ex, "[OpenAICompatibleModelSync] failed to start discovery — disabled for this run");
+                    logger?.LogError(ex, "[OpenAICompatibleModelSync] failed to start — disabled for this run");
                 }
             });
 
-        logger?.LogInformation(
-            "[OpenAICompatibleModelSync] Ollama/OpenAI-compatible model discovery enabled (endpoint {Endpoint}, first run in {Delay}s, every {Period}s)",
-            endpoint, initialDelay.TotalSeconds, period.TotalSeconds);
+        if (discover)
+            logger?.LogInformation(
+                "[OpenAICompatibleModelSync] Ollama/OpenAI-compatible model discovery enabled (endpoint {Endpoint}, first run in {Delay}s, every {Period}s)",
+                endpoint, initialDelay.TotalSeconds, period.TotalSeconds);
+        else
+            logger?.LogInformation(
+                "[OpenAICompatibleModelSync] Ollama/OpenAI-compatible tool-capability backfill enabled (endpoint {Endpoint}, runs once in {Delay}s; discovery off)",
+                endpoint, initialDelay.TotalSeconds);
         return Task.CompletedTask;
     }
 
     // Runs once, initialDelay past startup (Orleans is up by now), off any hub thread. Sets up the live
     // catalog snapshot AND the periodic reconcile. This is the FIRST point the mesh cache is touched.
-    private void BeginDiscovery(string endpoint, string apiKey, string? embeddingModel, TimeSpan period)
+    private void BeginDiscovery(
+        string endpoint, string apiKey, string? embeddingModel, TimeSpan period,
+        bool discover, IReadOnlyList<string> configuredModels)
     {
+        if (!discover)
+        {
+            // Discovery OFF: statically-configured models. Run a one-shot tool-capability backfill only
+            // — NO live catalog snapshot, NO add/remove. Probe each configured model, stamp SupportsTools.
+            BackfillToolSupport(endpoint, configuredModels, embeddingModel);
+            return;
+        }
+
         // (a) Live snapshot of the current OpenAICompatible LanguageModel child ids (system read — the
         //     Provider partition needs an identity). Constant query id: one registry entry, no leak.
         catalogSub = AsSystem(() => hub.GetWorkspace()
@@ -167,6 +193,60 @@ public sealed class OpenAICompatibleModelSync : IHostedService, IDisposable
             .Concat()
             .Subscribe(_ => { },
                 ex => logger?.LogError(ex, "[OpenAICompatibleModelSync] discovery loop terminated"));
+    }
+
+    // One-shot capability backfill for STATICALLY-configured OpenAICompatible models (discovery off).
+    // The boot seeder can't probe /api/show, so it stamps SupportsTools=null (assume supported). Here,
+    // well past startup, probe each configured chat model and stamp its KNOWN tool capability via a
+    // NARROW stream.Update (only SupportsTools — never clobbers the seed's pricing/icon/order). No
+    // add/remove: that is discovery's job (discover=true), not this.
+    private void BackfillToolSupport(string endpoint, IReadOnlyList<string> configuredModels, string? embeddingModel)
+    {
+        var chatModels = configuredModels
+            .Where(id => !string.IsNullOrWhiteSpace(id) && !IsEmbedding(id, embeddingModel))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        if (chatModels.Length == 0)
+            return;
+
+        backfillSub = chatModels.ToObservable()
+            .Select(modelId => Observable.Defer(() => BackfillOne(endpoint, modelId))
+                .Catch<Unit, Exception>(ex =>
+                {
+                    logger?.LogWarning(ex,
+                        "[OpenAICompatibleModelSync] tool-capability backfill for {Id} failed", modelId);
+                    return Observable.Return(Unit.Default);
+                }))
+            .Concat() // one at a time — small list, no write storm
+            .Subscribe(_ => { },
+                ex => logger?.LogWarning(ex, "[OpenAICompatibleModelSync] tool-capability backfill terminated"));
+    }
+
+    // Probe ONE statically-seeded model and stamp SupportsTools only if it actually changes.
+    private IObservable<Unit> BackfillOne(string endpoint, string modelId)
+    {
+        var path = $"{ProviderPath}/{modelId}";
+        // Authoritative live read of the seeded node (waits for the boot seed to land; NOT the lagged
+        // synced query). System read — the Provider partition needs an identity.
+        return AsSystem(() => hub.GetWorkspace().GetMeshNodeStream(path)
+                .Where(n => n?.Content is ModelDefinition)
+                .Take(1)
+                .Timeout(TimeSpan.FromSeconds(30)))
+            .SelectMany(node => lister.SupportsTools(endpoint, modelId)
+                .Catch<bool?, Exception>(_ => Observable.Return<bool?>(null))
+                .SelectMany(probed =>
+                {
+                    var def = (ModelDefinition)node.Content!;
+                    if (!ShouldBackfill(def.SupportsTools, probed))
+                        return Observable.Return(Unit.Default); // indeterminate or already correct → no write
+                    logger?.LogInformation(
+                        "[OpenAICompatibleModelSync] backfilling SupportsTools={Val} for {Id}", probed, modelId);
+                    return AsSystem(() => hub.GetWorkspace().GetMeshNodeStream(path)
+                            .Update(cur => cur.Content is ModelDefinition d
+                                ? cur with { Content = d with { SupportsTools = probed } }
+                                : cur))
+                        .Select(_ => Unit.Default);
+                }));
     }
 
     // Fetch → decide (pure ComputeDelta: drop embeddings, diff, empty-guard) → apply. Exposed internally
@@ -236,6 +316,14 @@ public sealed class OpenAICompatibleModelSync : IHostedService, IDisposable
                 // small, but a generic OpenAI-compatible endpoint could return hundreds).
                 return Observable.Concat(ops).LastOrDefaultAsync().Select(_ => Unit.Default);
             });
+
+    /// <summary>
+    /// Pure write-decision for the tool-capability backfill: stamp <c>SupportsTools</c> only when the
+    /// probe is CONCLUSIVE (non-null) AND differs from what is already on the node. An indeterminate
+    /// (<c>null</c>) probe or an already-correct value writes nothing — so an unchanged reboot never
+    /// churns the node (or bumps its version). Split out so it is deterministically testable.
+    /// </summary>
+    internal static bool ShouldBackfill(bool? current, bool? probed) => probed is not null && current != probed;
 
     /// <summary>The reconcile decision, split out as a pure function so it is deterministically testable.</summary>
     internal readonly record struct CatalogDelta(
@@ -330,5 +418,6 @@ public sealed class OpenAICompatibleModelSync : IHostedService, IDisposable
         startupSub?.Dispose();
         catalogSub?.Dispose();
         timerSub?.Dispose();
+        backfillSub?.Dispose();
     }
 }

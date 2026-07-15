@@ -28,6 +28,10 @@ namespace MeshWeaver.Mesh.Threading;
 public sealed class AsyncDisposeQueue
 {
     private readonly ActionBlock<Func<CancellationToken, Task>> _block;
+    // Cancels in-flight cleanup when the quiesce budget is exceeded, so a slow cleanup UNWINDS
+    // (and is then joined) instead of being abandoned mid-flight to run past teardown — where it
+    // would touch a collectible node ALC's compiled types AFTER the ALC unloads (use-after-unload).
+    private readonly CancellationTokenSource _cts = new();
     private long _drained;
 
     /// <summary>
@@ -42,7 +46,7 @@ public sealed class AsyncDisposeQueue
         _block = new ActionBlock<Func<CancellationToken, Task>>(
             async work =>
             {
-                try { await work(CancellationToken.None).ConfigureAwait(false); }
+                try { await work(_cts.Token).ConfigureAwait(false); }
                 catch { /* teardown best-effort — one bad cleanup must not strand the rest */ }
                 finally { Interlocked.Increment(ref _drained); }
             },
@@ -75,21 +79,31 @@ public sealed class AsyncDisposeQueue
 
     private async Task RunOrphanAsync(Func<CancellationToken, Task> work)
     {
-        try { await work(CancellationToken.None).ConfigureAwait(false); }
+        try { await work(_cts.Token).ConfigureAwait(false); }
         catch { /* best-effort */ }
         finally { Interlocked.Increment(ref _drained); }
     }
 
     /// <summary>
     /// Terminal drain: stop accepting new items and await every posted item, bounded by
-    /// <paramref name="quiesce"/>. Idempotent. A timeout means a cleanup is genuinely
-    /// wedged (a separate bug to surface from a stuck resource) — teardown proceeds
-    /// rather than hanging.
+    /// <paramref name="quiesce"/>. Idempotent. If the budget is exceeded, CANCEL the in-flight
+    /// cleanup (so it unwinds) then JOIN — no cleanup must still be running (and touching a
+    /// collectible node ALC's types) when the caller proceeds to unload those ALCs (the teardown
+    /// use-after-unload SIGSEGV). Only a cleanup that ignores its token can still wedge, and that
+    /// is a separate bug in that resource; teardown proceeds rather than hanging.
     /// </summary>
     public async Task DrainAsync(TimeSpan quiesce)
     {
         _block.Complete();
+        try
+        {
+            await _block.Completion.WaitAsync(quiesce).ConfigureAwait(false);
+            return; // clean quiesce within budget
+        }
+        catch (TimeoutException) { /* budget exceeded — cancel + join below */ }
+
+        _cts.Cancel();
         try { await _block.Completion.WaitAsync(quiesce).ConfigureAwait(false); }
-        catch (TimeoutException) { /* wedged cleanup — don't hang teardown */ }
+        catch (TimeoutException) { /* a cleanup that ignores cancellation is genuinely wedged */ }
     }
 }
