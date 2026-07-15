@@ -22,6 +22,50 @@ public class IoPoolTest
     private static readonly TimeSpan Timeout5 = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan Timeout10 = TimeSpan.FromSeconds(10);
 
+    // 🚨 PIN for the endemic teardown SIGSEGV (Hosting.Monolith.Test exit=139). Root cause: a
+    // MeshQuery straggler whose SUBSCRIBE (initial emission → route → CreateHub → Autofac
+    // BeginLifetimeScope) ran on an UNTRACKED TaskPoolScheduler.Default, so teardown's drain never
+    // waited for it and the Autofac scope was disposed mid-construction → native use-after-free.
+    // The fix routes the subscribe through IIoPool.SubscribeThroughPool, so it's TRACKED and Drain()
+    // JOINS it. This test pins that guarantee DETERMINISTICALLY (no flaky ~50% CI repro): a subscribe
+    // that is in-flight holds a slot, and Drain() BLOCKS until it releases — i.e. the scope can never
+    // be torn down while a BeginLifetimeScope is running.
+    [Fact]
+    public void SubscribeThroughPool_holds_a_slot_and_Drain_joins_the_in_flight_subscribe()
+    {
+        using var pool = new IoPool(4);
+        var subscribeEntered = new ManualResetEventSlim();
+        var releaseSubscribe = new ManualResetEventSlim();
+        var subscribeFinished = false;
+
+        // A source whose SUBSCRIBE blocks — stands in for the initial-emission → CreateHub window.
+        var source = Observable.Create<int>(obs =>
+        {
+            subscribeEntered.Set();
+            releaseSubscribe.Wait(Timeout5);
+            subscribeFinished = true;
+            obs.OnNext(1);
+            return System.Reactive.Disposables.Disposable.Empty;
+        });
+
+        using var sub = pool.SubscribeThroughPool(source).Subscribe(_ => { });
+
+        Assert.True(subscribeEntered.Wait(Timeout5), "the subscribe must run on the pool");
+        Assert.True(SpinWait.SpinUntil(() => pool.CurrentInFlight == 1, Timeout5),
+            "the subscribe must hold a pool slot (tracked) for its duration — else the drain can't see it");
+
+        // Drain() must JOIN: block until the in-flight subscribe releases its slot.
+        var drainDone = Task.Run(() => pool.Drain());
+        Assert.False(SpinWait.SpinUntil(() => drainDone.IsCompleted, TimeSpan.FromMilliseconds(200)),
+            "Drain MUST block while the subscribe holds a slot (the owning scope must not dispose yet)");
+
+        releaseSubscribe.Set();
+
+        Assert.True(drainDone.Wait(Timeout5), "Drain should complete once the subscribe releases");
+        Assert.True(subscribeFinished, "Drain must have JOINED the in-flight subscribe before returning");
+        Assert.Equal(0, pool.CurrentInFlight);
+    }
+
     [Fact]
     public async Task Invoke_caps_in_flight_at_the_pool_bound()
     {
