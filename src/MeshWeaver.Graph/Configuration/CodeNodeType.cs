@@ -85,6 +85,17 @@ public static class CodeNodeType
         };
 
     /// <summary>
+    /// True when <paramref name="language"/> runs on a foreign-language worker (a connected gate)
+    /// rather than in-process on the Activity hub's Roslyn kernel — i.e. when
+    /// <see cref="ResolveKernelAddress"/> routes to a stable <c>py/*</c> or <c>node/*</c> address.
+    /// The in-process C# path always writes a terminal status (its kernel calls
+    /// <c>ActivityLogLogger.Complete</c>); a foreign run reaches a terminal status ONLY if a worker
+    /// is connected, so the dispatch must reconcile the ActivityLog when one is not.
+    /// </summary>
+    private static bool IsForeignLanguage(string? language) =>
+        language?.ToLowerInvariant() is "python" or "javascript" or "typescript";
+
+    /// <summary>
     /// Runs the Code node's own script. Reads the local workspace for the node's
     /// <see cref="CodeConfiguration"/>, validates <c>IsExecutable</c>, dispatches
     /// <see cref="SubmitCodeRequest"/> to the <see cref="ResolveKernelAddress">language kernel</see>,
@@ -204,15 +215,54 @@ public static class CodeNodeType
                             // C# runs in-process on the Activity hub's Roslyn kernel; a foreign language
                             // routes to the worker that owns its runtime (see ResolveKernelAddress).
                             var submitTarget = ResolveKernelAddress(code.Language, activityPath);
-                            hub.Post(
-                                new SubmitCodeRequest(code.Code ?? string.Empty)
+                            var submit = new SubmitCodeRequest(code.Code ?? string.Empty)
+                            {
+                                Id = submissionId,
+                                ActivityLogPath = activityPath,
+                                Language = string.IsNullOrWhiteSpace(code.Language) ? "csharp" : code.Language,
+                                Inputs = request.Message.Inputs
+                            };
+
+                            if (IsForeignLanguage(code.Language))
+                            {
+                                // Foreign-language run: the script executes on a connected worker
+                                // (py/python-kernel, node/node-kernel), which patches the ActivityLog
+                                // to a terminal status when done. But submitTarget is a STREAM-ROUTED
+                                // address: on the distributed portal a post to it with NO subscriber is
+                                // silently absorbed by the Orleans memory stream (no DeliveryFailure),
+                                // so with no worker connected the run would stay Running forever — the
+                                // opposite of the "nothing hangs" promise in
+                                // Doc/Architecture/PythonCodeNodes. Fail fast on a presence miss, and
+                                // Observe the response so a monolith NotFound / a mid-flight disconnect
+                                // still reconciles the ActivityLog instead of parking.
+                                var presence = hub.ServiceProvider.GetService<IParticipantPresence>();
+                                if (presence is not null && !presence.IsConnected(submitTarget))
                                 {
-                                    Id = submissionId,
-                                    ActivityLogPath = activityPath,
-                                    Language = string.IsNullOrWhiteSpace(code.Language) ? "csharp" : code.Language,
-                                    Inputs = request.Message.Inputs
-                                },
-                                o => o.WithTarget(submitTarget));
+                                    FailActivity(hub, activityPath,
+                                        $"No {submit.Language} worker connected at '{submitTarget}'. The " +
+                                        "language gate is not running in this deployment — see " +
+                                        "Doc/Architecture/PythonCodeNodes.");
+                                }
+                                else
+                                {
+                                    hub.Observe<SubmitCodeResponse>(submit, o => o.WithTarget(submitTarget))
+                                        .Take(1)
+                                        .Subscribe(
+                                            // Success or a handled script error: the worker has already
+                                            // patched the ActivityLog to its terminal status — nothing to do.
+                                            _ => { },
+                                            // The delivery faulted (target unreachable / disconnected)
+                                            // before any terminal write — reconcile so the run ends.
+                                            ex => FailActivity(hub, activityPath,
+                                                $"{submit.Language} run failed: {ex.Message}"));
+                                }
+                            }
+                            else
+                            {
+                                // C# in-process: the Activity hub's Roslyn kernel always calls
+                                // ActivityLogLogger.Complete, so the ActivityLog can never hang here.
+                                hub.Post(submit, o => o.WithTarget(submitTarget));
+                            }
 
                             // Stamp Last{ExecutedAt,ExecutedBy,ActivityPath} onto
                             // the Code MeshNode so the Content area can show
@@ -274,5 +324,26 @@ public static class CodeNodeType
                         });
             });
         return request.Processed();
+    }
+
+    /// <summary>
+    /// Reconcile a foreign-language run's ActivityLog to a terminal <see cref="ActivityStatus.Failed"/>
+    /// when the worker never wrote one — no worker was connected, or the submission delivery faulted.
+    /// Writes through the external-node stream handle (routes to the ActivityLog's owning hub and
+    /// carries the caller's AccessContext across the Subscribe boundary); <see cref="ActivityLog.Fail"/>
+    /// appends the error and stamps <c>End</c>, so the Output pane leaves "Running…" with the reason.
+    /// </summary>
+    private static void FailActivity(IMessageHub hub, string activityPath, string error)
+    {
+        var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
+            ?.CreateLogger("MeshWeaver.Graph.CodeNodeType");
+        hub.GetWorkspace().GetMeshNodeStream(activityPath).Update(curr =>
+            curr.Content is ActivityLog log
+                ? curr with { Content = log.Fail(error) }
+                : curr)
+            .Subscribe(
+                _ => { },
+                ex => logger?.LogWarning(ex,
+                    "CodeNodeType: failed to reconcile ActivityLog {Activity} to Failed", activityPath));
     }
 }
