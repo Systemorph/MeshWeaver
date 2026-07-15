@@ -24,9 +24,10 @@ public class MeshNodeContentEditorTest(ITestOutputHelper output) : GitHubSyncTes
         var fields = MeshNodeEditorField.FromType(typeof(GitHubSyncConfig));
         var keys = fields.Select(f => f.Key).ToArray();
 
-        // The six editable properties, by camelCase key — and NOT the [Browsable(false)] last-sync fields.
+        // The editable properties, by camelCase key — and NOT the [Browsable(false)] last-sync fields.
+        // `twoWay` sits right after `direction` (its declaration order in GitHubSyncConfig).
         Assert.Equal(
-            new[] { "repositoryUrl", "branch", "subdirectory", "direction", "createBranchIfMissing", "createRepoIfMissing", "ignore" },
+            new[] { "repositoryUrl", "branch", "subdirectory", "direction", "twoWay", "createBranchIfMissing", "createRepoIfMissing", "ignore" },
             keys);
         Assert.DoesNotContain("lastSyncedAt", keys);
         Assert.DoesNotContain("lastSyncCommitSha", keys);

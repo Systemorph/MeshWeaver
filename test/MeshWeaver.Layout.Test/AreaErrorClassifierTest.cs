@@ -1,4 +1,5 @@
 using System;
+using MeshWeaver.Graph;
 using MeshWeaver.Messaging;
 using Xunit;
 
@@ -189,4 +190,57 @@ public class AreaErrorClassifierTest
     [Fact]
     public void IsRoutingNotFoundFailure_FalseForNull()
         => AreaErrorClassifier.IsRoutingNotFoundFailure(null).Should().BeFalse();
+
+    // ── TryGetAccessDeniedPath / TryGetPaywallPath: the "no access ⇒ paywall page" fallback. A
+    //    not-yet-enrolled visitor who hits a gated course is redirected to its PUBLIC paywall instead
+    //    of a raw "Access denied" card — so the discovery funnel never dead-ends on an error. ──
+
+    [Theory]
+    [InlineData("Access denied: user 'roland.buergi' lacks Read permission on 'AgenticEngineering'", "AgenticEngineering")]
+    [InlineData("Access denied: user 'u' lacks Read permission on 'AgenticEngineering/Module1'", "AgenticEngineering/Module1")]
+    [InlineData("User 'u' lacks Read permission on 'DataModeling'", "DataModeling")]
+    public void TryGetAccessDeniedPath_ExtractsThePath(string message, string expected)
+    {
+        AreaErrorClassifier.TryGetAccessDeniedPath(Failure(message, ErrorType.Unauthorized))
+            .Should().Be(expected);
+        // Works on a plain UnauthorizedAccessException too (same banner, no DeliveryFailure wrapper).
+        AreaErrorClassifier.TryGetAccessDeniedPath(new UnauthorizedAccessException(message))
+            .Should().Be(expected);
+    }
+
+    [Theory]
+    [InlineData("No node found at 'x/y'.")]                       // routing NotFound — different banner
+    [InlineData("Validation failed for field 'name'")]            // no "permission on '"
+    [InlineData("boom")]
+    public void TryGetAccessDeniedPath_NullWhenNoQuotedPath(string message)
+        => AreaErrorClassifier.TryGetAccessDeniedPath(Failure(message, ErrorType.Failed)).Should().BeNull();
+
+    [Fact]
+    public void TryGetAccessDeniedPath_NullForNull()
+        => AreaErrorClassifier.TryGetAccessDeniedPath(null).Should().BeNull();
+
+    [Theory]
+    // A LESSON under the course denied → the course's Overview poster ({course}/Anything ⇒ {course}/Overview).
+    [InlineData("Access denied: user 'u' lacks Read permission on 'AgenticEngineering/Module1'", "AgenticEngineering/Overview")]
+    // A DEEP lesson resolves to the SAME poster (first segment is the course root).
+    [InlineData("Access denied: user 'u' lacks Read permission on 'AgenticEngineering/Module1/Learn'", "AgenticEngineering/Overview")]
+    public void TryGetCoursePosterPath_ResolvesTheCoursePoster(string message, string expected)
+        => AreaErrorClassifier.TryGetCoursePosterPath(Failure(message, ErrorType.Unauthorized)).Should().Be(expected);
+
+    [Theory]
+    // The course ROOT itself being denied → no redirect (the root IS the poster location; no loop).
+    [InlineData("Access denied: user 'u' lacks Read permission on 'AgenticEngineering'")]
+    // The poster ITSELF being denied → no self-redirect …
+    [InlineData("Access denied: user 'u' lacks Read permission on 'AgenticEngineering/Overview'")]
+    // … nor a node under the poster.
+    [InlineData("Access denied: user 'u' lacks Read permission on 'AgenticEngineering/Overview/Section'")]
+    // … and a non-access-denied error yields no poster.
+    [InlineData("No node found at 'x/y'.")]
+    public void TryGetCoursePosterPath_NullWhenNoSafeRedirect(string message)
+        => AreaErrorClassifier.TryGetCoursePosterPath(Failure(message, ErrorType.Unauthorized)).Should().BeNull();
+
+    [Fact]
+    public void CoursePosterArea_MatchesTheOverviewAreaConstant()
+        // The literal is kept in sync with the framework's Overview area name.
+        => AreaErrorClassifier.CoursePosterArea.Should().Be(MeshNodeLayoutAreas.OverviewArea);
 }
