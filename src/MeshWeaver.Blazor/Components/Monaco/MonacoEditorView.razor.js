@@ -946,7 +946,9 @@ export function focusEditor(editorId) {
 // moment of the write — unlike the C# `editorHasFocus` flag, which is updated through async JS→.NET
 // focus events that can lag or be dropped under a re-render storm (Safari). A stale-false flag on the
 // C# side would let SetValue wipe the user's live keystrokes and reset the cursor; re-checking
-// hasTextFocus() right before the write closes that race. Returns true iff it actually wrote.
+// hasTextFocus() right before the write closes that race. Returns true when the editor is reconciled
+// (it now holds `value` — whether written just now or already equal), false only when it REFUSED
+// because the editor is focused (or isn't ready) — so the caller advances lastSetValue only on true.
 export function reconcileValue(editorId, value) {
     const editorInstance = editorState.get(editorId)?.editorInstance;
     if (!editorInstance) return false;                    // not ready — retry on a later render
