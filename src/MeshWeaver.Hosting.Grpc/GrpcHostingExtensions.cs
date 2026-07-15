@@ -1,4 +1,5 @@
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Services;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
@@ -41,6 +42,10 @@ public static class GrpcHostingExtensions
     {
         services.AddGrpc();
         services.AddSingleton<GrpcConnectionRegistry>();
+        // Expose the registry's live address claims as a presence check so foreign-language Code
+        // runs can fail fast when no worker is connected (a post to a stream-routed address with no
+        // subscriber is silently absorbed — no DeliveryFailure — so the run would otherwise hang).
+        services.AddSingleton<IParticipantPresence>(sp => sp.GetRequiredService<GrpcConnectionRegistry>());
         // Grpc:TrustedPort — the loopback endpoint co-deployed gates authenticate on (GrpcOptions).
         services.AddOptions<GrpcOptions>().BindConfiguration(GrpcOptions.SectionName);
         return services;

@@ -42,6 +42,22 @@ public record GitHubSyncConfig
     [Description("Sync direction")]
     public SyncDirection Direction { get; init; } = SyncDirection.Bidirectional;
 
+    /// <summary>
+    /// Two-way conflict resolution on <b>import</b> ("Update to latest"). When true, an update
+    /// NEVER overwrites (or prunes) a node that was changed on the server SINCE THE LAST SYNC —
+    /// the server copy is preserved and carried back to GitHub on the next commit ("newer on the
+    /// server wins → GitHub"). When false (the default) import is git-first: the repo overwrites
+    /// the live node, which silently loses local edits made between syncs. A <b>forced</b> update
+    /// (<c>force: true</c>) overrides this and overwrites regardless — the escape hatch for
+    /// deliberately discarding local changes back to the repo state.
+    ///
+    /// <para>"Since the last sync" is measured against <see cref="LastSyncedAt"/>: a node whose
+    /// <c>MeshNode.LastModified</c> is newer than the last recorded sync counts as a local
+    /// edit. Only takes effect once a first sync has recorded that timestamp.</para>
+    /// </summary>
+    [Description("Two-way (don't overwrite nodes changed on the server since the last sync — commit them back instead)")]
+    public bool TwoWay { get; init; }
+
     /// <summary>Create <see cref="Branch"/> if it does not exist yet. Default true.</summary>
     [Description("Create the branch if it doesn't exist")]
     public bool CreateBranchIfMissing { get; init; } = true;

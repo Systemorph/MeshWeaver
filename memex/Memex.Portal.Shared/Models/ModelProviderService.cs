@@ -45,7 +45,7 @@ namespace Memex.Portal.Shared.Models;
 /// the live <see cref="LanguageModelCatalogOptions.Sources"/>; callers
 /// can override.</para>
 /// </summary>
-public class ModelProviderService(IMeshService meshService, IMessageHub hub, ILogger<ModelProviderService> logger)
+public class ModelProviderService(IMeshService meshService, IMessageHub hub, ILogger<ModelProviderService> logger, ProviderModelLister? lister = null)
 {
     // Per-owner cached snapshot — feeds the Models settings UI without
     // hitting the synced query on every render. Wrapped around the live
@@ -176,6 +176,14 @@ public class ModelProviderService(IMeshService meshService, IMessageHub hub, ILo
         // identity on each model create's subscribe so CreateNode's own at-call capture picks it up.
         var accessService = hub.ServiceProvider.GetService<AccessService>();
         var ctx = accessService?.Context ?? accessService?.CircuitContext;
+        // Only OpenAI-compatible (Ollama/local) endpoints expose a capability probe (/api/show). For
+        // those, probe each model's tool-calling support BEFORE creating its node so the agent round
+        // never sends tool definitions to a model that can't handle them (a roleplay model like
+        // Mythalion returns HTTP 400 "does not support tools"). Remote providers (OpenAI, Anthropic)
+        // are left unprobed — the probe would 404 and only add a spurious external call.
+        var probeTools = lister is not null
+            && string.Equals(provider, "OpenAICompatible", StringComparison.OrdinalIgnoreCase)
+            && !string.IsNullOrWhiteSpace(endpoint);
         return meshService.CreateNode(providerNode)
             .SelectMany(createdProvider =>
             {
@@ -183,35 +191,45 @@ public class ModelProviderService(IMeshService meshService, IMessageHub hub, ILo
                     .Where(m => !string.IsNullOrWhiteSpace(m))
                     .Select(modelId =>
                     {
-                        var modelDef = new ModelDefinition
+                        // null = unknown → assume supported (historical behaviour); false = KNOWN
+                        // tool-less → the round omits all tools. Indeterminate probe → null.
+                        var supportsToolsProbe = probeTools
+                            ? lister!.SupportsTools(endpoint, modelId)
+                                .Timeout(TimeSpan.FromSeconds(8)) // a hung endpoint must not stall provider creation
+                                .Catch<bool?, Exception>(_ => Observable.Return<bool?>(null))
+                            : Observable.Return<bool?>(null);
+                        return supportsToolsProbe.SelectMany(supportsTools =>
                         {
-                            Id = modelId,
-                            DisplayName = modelId,
-                            Provider = provider,
-                            Endpoint = null, // resolver follows ProviderRef
-                            ApiKeySecretRef = null,
-                            ProviderRef = createdProvider.Path,
-                            Order = source?.Order ?? 0
-                        };
-                        var modelNode = new MeshNode(modelId, providerPath)
-                        {
-                            NodeType = LanguageModelNodeType.NodeType,
-                            Name = modelId,
-                            Category = "Models",
-                            State = MeshNodeState.Active,
-                            MainNode = isPlatform ? $"{providerPath}/{modelId}" : ownerPath,
-                            SyncBehavior = syncBehavior,
-                            Content = modelDef,
-                        };
-                        var createModel = accessService is null || ctx is null
-                            ? meshService.CreateNode(modelNode)
-                            : Observable.Using(() => accessService.SwitchAccessContext(ctx), _ => meshService.CreateNode(modelNode));
-                        return createModel
-                            .Catch<MeshNode, Exception>(ex =>
+                            var modelDef = new ModelDefinition
                             {
-                                logger.LogWarning(ex, "Failed to create LanguageModel {ModelId} under {Path}", modelId, providerPath);
-                                return Observable.Return<MeshNode>(null!);
-                            });
+                                Id = modelId,
+                                DisplayName = modelId,
+                                Provider = provider,
+                                Endpoint = null, // resolver follows ProviderRef
+                                ApiKeySecretRef = null,
+                                ProviderRef = createdProvider.Path,
+                                Order = source?.Order ?? 0,
+                                SupportsTools = supportsTools,
+                            };
+                            var modelNode = new MeshNode(modelId, providerPath)
+                            {
+                                NodeType = LanguageModelNodeType.NodeType,
+                                Name = modelId,
+                                Category = "Models",
+                                State = MeshNodeState.Active,
+                                MainNode = isPlatform ? $"{providerPath}/{modelId}" : ownerPath,
+                                SyncBehavior = syncBehavior,
+                                Content = modelDef,
+                            };
+                            return accessService is null || ctx is null
+                                ? meshService.CreateNode(modelNode)
+                                : Observable.Using(() => accessService.SwitchAccessContext(ctx), _ => meshService.CreateNode(modelNode));
+                        })
+                        .Catch<MeshNode, Exception>(ex =>
+                        {
+                            logger.LogWarning(ex, "Failed to create LanguageModel {ModelId} under {Path}", modelId, providerPath);
+                            return Observable.Return<MeshNode>(null!);
+                        });
                     })
                     .ToArray();
 

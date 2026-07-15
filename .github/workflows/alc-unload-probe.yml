@@ -1,0 +1,152 @@
+# Manually-triggered ROOT-CAUSE probe for the teardown SIGSEGV (exit=139) in the
+# ALC-heavy native test hosts (Hosting.Monolith.Test / FutuRe.Test). The crash is a
+# native use-after-unload: a process-wide reflection/serialization cache retains an
+# accessor/handle into a collectible node AssemblyLoadContext; when a node-hub disposes
+# it unloads that ALC (MeshDataSource.RegisterForDisposal → UnloadNodeContexts), and a
+# LATER background GC dereferences the freed metadata → SIGSEGV. The post-crash mini-dump
+# is a delayed-detection snapshot (the ALC is already gone → nothing to gcroot), so it
+# can't name the offending cache.
+#
+# This workflow flips MESHWEAVER_ALC_UNLOAD_GC_PROBE=1, which makes NodeAssemblyLoadContext
+# drive a SYNCHRONOUS full GC immediately after each Unload. A dangling native pointer then
+# faults AT that unload — on the Dispose thread, right after a
+# "ALC_UNLOAD_PROBE forcing GC after unloading <node>" log line — so the culprit node (and a
+# corruption-time dump with a managed Dispose→GC.Collect stack) is captured instead of the
+# opaque delayed crash. GCStress would be the classic tool but needs a checked runtime the
+# hosted runner doesn't have; forcing the collection at the unload point is the retail-runtime
+# equivalent for this specific use-after-unload.
+#
+# Run from the Actions tab (workflow_dispatch). Re-dispatch with project=MeshWeaver.FutuRe.Test
+# to probe the other crasher.
+name: ALC unload probe (manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      project:
+        description: "Test project NAME whose native host to loop under the probe"
+        type: string
+        default: "MeshWeaver.Hosting.Monolith.Test"
+      iterations:
+        description: "Max loop iterations (stops on the first native crash)"
+        type: string
+        default: "10"
+
+permissions:
+  contents: read
+
+env:
+  NUGET_PACKAGES: ${{ github.workspace }}/.nuget/packages
+
+jobs:
+  probe:
+    name: "Loop native host under ALC-unload GC probe"
+    # ubuntu-latest == the 2-vCPU hosted runner the crash reproduces on.
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      PROBE_PROJECT: ${{ inputs.project || 'MeshWeaver.Hosting.Monolith.Test' }}
+      PROBE_ITERS: ${{ inputs.iterations || '10' }}
+      DOTNET_ENVIRONMENT: Development
+      Logging__LogLevel__Default: Warning
+      # THE PROBE: force a synchronous GC after each collectible node-ALC Unload so a
+      # use-after-unload dangling native pointer faults at the unload (naming the node).
+      MESHWEAVER_ALC_UNLOAD_GC_PROBE: "1"
+      # Native-crash mini dump, same as dotnet-test.yml — the corruption-time forensic payload.
+      DOTNET_DbgEnableMiniDump: 1
+      DOTNET_DbgMiniDumpType: 2
+      DOTNET_DbgMiniDumpName: /tmp/coredumps/%e-%p.dmp
+    steps:
+      - uses: actions/checkout@v6
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          dotnet: false
+          android: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+      - name: Restore workloads
+        run: dotnet workload restore
+      - name: Restore dependencies
+        run: dotnet restore
+      # Build Release exactly as the real CI build job, so the looped native host is the
+      # identical binary that crashes in CI.
+      - name: Build
+        run: dotnet build --no-restore -c Release -p:CIRun=true -warnaserror
+      # The mesh-local #r feed dynamic-compilation tests resolve at runtime (version-less
+      # `#r "nuget:MeshWeaver.X"`) — packed exactly as dotnet-test.yml / flake-repro.yml do.
+      - name: Pack mesh-local #r packages
+        run: |
+          set -euo pipefail
+          dotnet pack src/MeshWeaver.BusinessRules/MeshWeaver.BusinessRules.csproj \
+            -c Release --no-build --no-restore -o dist/packages --nologo
+          dotnet pack src/MeshWeaver.BusinessRules.Generator/MeshWeaver.BusinessRules.Generator.csproj \
+            -c Release --no-build --no-restore -o dist/packages --nologo
+      - name: Loop the native host under the probe until it crashes
+        run: |
+          set -uo pipefail
+          mkdir -p /tmp/coredumps probe-logs
+          name="$PROBE_PROJECT"
+          dir="test/$name/bin/Release/net10.0"
+          if [ ! -f "$dir/$name.dll" ]; then
+            echo "::error::no native xUnit v3 host at $dir/$name.dll"; exit 1
+          fi
+          echo "Looping $name native host up to $PROBE_ITERS× under MESHWEAVER_ALC_UNLOAD_GC_PROBE=1 (nproc=$(nproc))."
+          crashed=0
+          for i in $(seq 1 "$PROBE_ITERS"); do
+            echo "::group::iteration $i / $PROBE_ITERS"
+            mkdir -p "$dir/TestResults"
+            # CWD = bin dir so appsettings/xunit.runner.json/TestData resolve as in CI.
+            # tee the host's stdout+stderr so the "ALC_UNLOAD_PROBE forcing GC after unloading
+            # <node>" line right before a crash is captured even if the ILogger sink isn't console.
+            ( cd "$dir" && timeout --signal=TERM --kill-after=30s 15m \
+                dotnet "$name.dll" -trx "TestResults/$name-$i.trx" ) \
+                2>&1 | tee "probe-logs/run-$i.log"
+            rc=${PIPESTATUS[0]}
+            echo "iteration $i exit=$rc"
+            echo "::endgroup::"
+            # Signal-induced death (SIGSEGV 139 / SIGABRT 134 / SIGILL 132 / SIGFPE 136) is the
+            # crash we hunt; rc==1 is ordinary test failures, 0 is clean — keep looping those.
+            if [ "$rc" = "139" ] || [ "$rc" = "134" ] || [ "$rc" = "132" ] || [ "$rc" = "136" ]; then
+              echo "::error::NATIVE CRASH on iteration $i (exit $rc). Culprit ALC unload (last probe lines):"
+              grep 'ALC_UNLOAD_PROBE' "probe-logs/run-$i.log" | tail -5 || echo "(no probe line in stdout — see collected test-logs + dump)"
+              crashed=1
+              break
+            fi
+          done
+          if [ "$crashed" = "0" ]; then
+            echo "No native crash in $PROBE_ITERS iterations (the flake did not surface this run)."
+          fi
+          # Red the run on repro so it's obvious in the Actions list; diagnostics upload via always().
+          exit "$crashed"
+      - name: Collect diagnostics
+        if: always()
+        run: |
+          mkdir -p probe-diagnostics
+          cp -r probe-logs probe-diagnostics/ 2>/dev/null || true
+          # Corruption-time mini dump(s).
+          cp /tmp/coredumps/*.dmp probe-diagnostics/ 2>/dev/null || true
+          # MonolithMeshTestBase phase/dispose/memory traces (which test class was tearing down).
+          for f in meshweaver-test-trace meshweaver-dispose-trace meshweaver-memory-delta; do
+            [ -f "/tmp/$f.log" ] && cp "/tmp/$f.log" "probe-diagnostics/_$f.log" || true
+          done
+          # ILogger sink (the ALC_UNLOAD_PROBE warnings land here if routed to the file helper).
+          find . -path '*/bin/*/test-logs/*.log' -exec cp {} probe-diagnostics/ \; 2>/dev/null || true
+          echo "=== last ALC_UNLOAD_PROBE lines (culprit node whose unload tripped the crash) ==="
+          grep -h 'ALC_UNLOAD_PROBE' probe-logs/*.log probe-diagnostics/*.log 2>/dev/null | tail -12 || true
+          ls -lh probe-diagnostics/ || true
+      - name: Upload probe diagnostics
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: alc-unload-probe-diagnostics
+          path: probe-diagnostics/
+          retention-days: 15
+          compression-level: 9
