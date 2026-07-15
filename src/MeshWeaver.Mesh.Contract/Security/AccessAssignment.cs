@@ -90,6 +90,16 @@ public record PartitionAccessPolicy
     public bool BreaksInheritance { get; init; }
 
     /// <summary>
+    /// Optional mesh path to REDIRECT a viewer to when they lack Read on a node at this scope (or
+    /// below) — "if no access, send them here" — instead of showing an access-denied card. Typically a
+    /// PUBLIC page (a course cover, a sign-up / paywall). <c>null</c> or empty = show the normal
+    /// access-denied. Inherited: the nearest ancestor scope that sets it wins. The redirect fires only
+    /// on a REAL denial (never a guess), and never redirects the target itself (or a node under it), so
+    /// it cannot loop — see <c>HubPermissionExtensions.GetRedirectOnDenied</c>. Leading '/' is optional.
+    /// </summary>
+    public string? RedirectOnDenied { get; init; }
+
+    /// <summary>
     /// Computes the permission cap mask from individual switches.
     /// Permissions set to false are removed; null (inherit) and true are kept.
     /// </summary>
