@@ -199,11 +199,10 @@ public class NavigationServiceTest
     [Fact]
     public async Task AnonymousVisitor_PublicNode_RedirectsToLogin()
     {
-        // The fix: even a PublicRead page must NOT be shown to a logged-out visitor.
-        // PathResolutionService resolves under a System bypass, so the public node still
-        // reaches the gate — which now redirects to /login regardless of the node's
-        // public-read grant, instead of rendering its content to an anonymous browser.
-        // (Previously this resolved Ready, the reported bug.)
+        // A PublicRead page (the Public subject = baseline for AUTHENTICATED users) is still
+        // NOT shown to a logged-out visitor: only an explicit ANONYMOUS grant opens the gate,
+        // and this harness registers no EffectivePermissionsDelegate, so the fail-closed gate
+        // settles on /login. (Previously this resolved Ready, the reported bug.)
         MakeVisitorAnonymous();
 
         var service = CreateService();
@@ -213,6 +212,79 @@ public class NavigationServiceTest
 
         service.Initialize();
         _navigationManager.SimulateLocationChanged("http://localhost/Public/Welcome/Overview");
+
+        await WaitForRedirect("/login?returnUrl=");
+        _navigationManager.Uri.Should().Contain("/login?returnUrl=");
+    }
+
+    /// <summary>
+    /// Creates the service with an injected anonymous-gate decision (the internal ctor seam), so
+    /// the three wiring outcomes — allow / paywall redirect / login — are each driven explicitly.
+    /// The decision LOGIC itself is integration-tested against the real PermissionEvaluator in
+    /// MeshWeaver.Security.Test.AnonymousGateTests.
+    /// </summary>
+    private NavigationService CreateServiceWithGate(
+        Func<string, IObservable<AnonymousGateDecision>> gate) =>
+        new(_navigationManager, _pathResolver, _hub, _circuitContextAccessor,
+            [10, 20], null, gate);
+
+    [Fact]
+    public async Task AnonymousVisitor_GateAllows_LoadsThePage()
+    {
+        // An explicit Anonymous grant (public cover / paywall page): the gate decides Allow and
+        // the page loads for the logged-out visitor — no /login bounce.
+        MakeVisitorAnonymous();
+        var service = CreateServiceWithGate(_ =>
+            System.Reactive.Linq.Observable.Return(new AnonymousGateDecision { Allow = true }));
+        _pathResolver.ResolveNavigationPath(Arg.Any<string>())
+            .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(
+                new AddressResolution("PublicCourse", "Overview")));
+
+        service.Initialize();
+        _navigationManager.SimulateLocationChanged("http://localhost/PublicCourse/Overview");
+
+        var ctx = await service.NavigationContext.Should().Within(WaitTimeout)
+            .Match(c => c?.Namespace == "PublicCourse");
+        ctx.Should().NotBeNull();
+        _navigationManager.Uri.Should().NotContain("/login");
+    }
+
+    [Fact]
+    public async Task AnonymousVisitor_GateRedirects_NavigatesToThePaywall()
+    {
+        // A denied content page under a partition with RedirectOnDenied: the visitor lands on the
+        // configured paywall page instead of /login.
+        MakeVisitorAnonymous();
+        var service = CreateServiceWithGate(_ =>
+            System.Reactive.Linq.Observable.Return(
+                new AnonymousGateDecision { RedirectTo = "PublicCourse/Subscribe" }));
+        _pathResolver.ResolveNavigationPath(Arg.Any<string>())
+            .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(
+                new AddressResolution("PublicCourse/Lesson1", "Overview")));
+
+        service.Initialize();
+        _navigationManager.SimulateLocationChanged("http://localhost/PublicCourse/Lesson1/Overview");
+
+        await WaitForRedirect("/PublicCourse/Subscribe");
+        _navigationManager.Uri.Should().Contain("/PublicCourse/Subscribe");
+        _navigationManager.Uri.Should().NotContain("/login");
+    }
+
+    [Fact]
+    public async Task AnonymousVisitor_GateErrors_FailsClosedToLogin()
+    {
+        // A failing decision (evaluator error / timeout) must fail CLOSED — the logged-out
+        // visitor is bounced to /login, never through to content.
+        MakeVisitorAnonymous();
+        var service = CreateServiceWithGate(_ =>
+            System.Reactive.Linq.Observable.Throw<AnonymousGateDecision>(
+                new InvalidOperationException("permission probe failed")));
+        _pathResolver.ResolveNavigationPath(Arg.Any<string>())
+            .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(
+                new AddressResolution("Private/Space", "Overview")));
+
+        service.Initialize();
+        _navigationManager.SimulateLocationChanged("http://localhost/Private/Space/Overview");
 
         await WaitForRedirect("/login?returnUrl=");
         _navigationManager.Uri.Should().Contain("/login?returnUrl=");

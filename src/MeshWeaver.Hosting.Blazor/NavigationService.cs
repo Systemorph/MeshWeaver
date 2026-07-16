@@ -87,6 +87,11 @@ internal class NavigationService : INavigationService
     // is not enough. Null when the app doesn't register one — behavior then unchanged.
     private readonly PageRouteRegistry? _pageRoutes;
 
+    // The anonymous gate's decision for a resolved path — AnonymousGate.DecideAnonymousAccess
+    // in production; injectable via the internal ctor so the wiring tests drive all three
+    // outcomes (allow / paywall redirect / login) without mocking the permission stack.
+    private readonly Func<string, IObservable<AnonymousGateDecision>> _anonymousGate;
+
     public NavigationService(
         NavigationManager navigationManager,
         IPathResolver pathResolver,
@@ -99,7 +104,7 @@ internal class NavigationService : INavigationService
 
     /// <summary>
     /// Test-only overload that accepts a custom retry schedule so the
-    /// retry-exhaustion path runs fast.
+    /// retry-exhaustion path runs fast, plus an injectable anonymous-gate decision.
     /// </summary>
     internal NavigationService(
         NavigationManager navigationManager,
@@ -107,8 +112,10 @@ internal class NavigationService : INavigationService
         IMessageHub hub,
         ICircuitContextAccessor circuitContextAccessor,
         int[] retryDelays,
-        PageRouteRegistry? pageRoutes = null)
+        PageRouteRegistry? pageRoutes = null,
+        Func<string, IObservable<AnonymousGateDecision>>? anonymousGate = null)
     {
+        _anonymousGate = anonymousGate ?? (path => AnonymousGate.DecideAnonymousAccess(hub, path));
         _pageRoutes = pageRoutes;
         _navigationManager = navigationManager;
         _pathResolver = pathResolver;
@@ -528,12 +535,18 @@ internal class NavigationService : INavigationService
     {
         var (area, id) = ParseRemainder(resolution.Remainder);
 
-        // Anonymous hard-gate: a logged-OUT visitor never sees application content —
-        // not even a PublicRead node. PathResolutionService resolves under a System
-        // bypass, so EVERY existing mesh page (public or private) reaches here. We
-        // redirect the visitor DIRECTLY to /login (forceLoad), carrying the current
-        // absolute URL as returnUrl so sign-in bounces them straight back to the page
-        // they tried to open.
+        // Anonymous gate: a logged-OUT visitor sees application content ONLY when the resolved
+        // node carries an explicit positive Anonymous grant (a public cover / catalog / landing).
+        // Everything else goes to the partition's configured paywall (PartitionAccessPolicy.
+        // RedirectOnDenied — "if no access, redirect here") when one is set, and to /login
+        // otherwise. PathResolutionService resolves under a System bypass, so EVERY existing mesh
+        // page (public or private) reaches here — the gate is the anonymous enforcement point.
+        //
+        // The decision itself lives in AnonymousGate.DecideAnonymousAccess (Mesh.Contract) so it
+        // is integration-tested against the REAL PermissionEvaluator; it is FAIL-CLOSED: no
+        // EffectivePermissionsDelegate registered (RLS not installed), probe error, or timeout
+        // all settle on /login — the default evaluator's Permission.All can never open content
+        // to an anonymous browser. Injectable via the internal ctor for the wiring tests.
         //
         // We navigate here instead of emitting AccessDenied and leaving ApplicationPage's
         // <AuthorizeView><NotAuthorized><RedirectToLogin> to do it: that render-chain
@@ -541,24 +554,56 @@ internal class NavigationService : INavigationService
         // navigation is unconditional, drops any half-built interactive circuit on the
         // gated page, and 302s during prerender. The /login?returnUrl=… target is a page
         // route (single segment + query) that ProcessLocationChange short-circuits, so
-        // this cannot loop.
+        // this cannot loop; the paywall redirect is loop-guarded by AnonymousGate.IsSafeRedirect
+        // and the paywall page itself passes the gate via its own Anonymous grant.
         //
-        // The portal requires authentication for ALL mesh content; "public access" governs
-        // what an AUTHENTICATED user without an explicit grant may read — NOT what an
-        // anonymous browser may see. userId is the EXPLICIT Anonymous well-known value
-        // (ResolveCurrentUserId normalises logged-out + virtual visitors to it, captured
-        // synchronously on the inbound-activity thread), so this never misreads an
-        // authenticated visitor. AUTHENTICATED visitors are never gated here — their
-        // identity is trusted and the content stream enforces RLS, so gating them would
-        // re-introduce the 2026-05-21 identity-loss false-denial.
+        // userId is the EXPLICIT Anonymous well-known value (ResolveCurrentUserId normalises
+        // logged-out + virtual visitors to it, captured synchronously on the inbound-activity
+        // thread), so this never misreads an authenticated visitor. AUTHENTICATED visitors are
+        // never gated here — their identity is trusted and the content stream enforces RLS, so
+        // gating them would re-introduce the 2026-05-21 identity-loss false-denial.
         if (string.Equals(userId, WellKnownUsers.Anonymous, StringComparison.OrdinalIgnoreCase))
         {
-            // The anonymous hard-gate is firing → a forceLoad:true redirect to /login is a FULL page
-            // reload (the "send → page reloads / GUI vanishes" symptom). Log WHY: dump the three identity
-            // sources at the decision point so a MIS-fire on an actually-authenticated user (the
-            // 2026-05-21 identity-loss regression, where a deferred Rx continuation reads a cleared
-            // ambient context) is visible in the logs instead of silent. Warning-level so it surfaces
-            // under the default MeshWeaver=Warning cap with no config change.
+            _anonymousGate(resolution.Prefix)
+                .Take(1)
+                .Timeout(TimeSpan.FromSeconds(10))
+                .Catch<AnonymousGateDecision, Exception>(_ =>
+                    Observable.Return(AnonymousGateDecision.Login))
+                .Subscribe(decision =>
+                {
+                    if (decision.Allow)
+                    {
+                        LoadResolved();
+                        return;
+                    }
+                    if (decision.RedirectTo is { } paywall)
+                    {
+                        _logger?.LogInformation(
+                            "Anonymous-gate: '{Prefix}' not anonymous-readable — redirecting to configured paywall '/{Paywall}'.",
+                            resolution.Prefix, paywall);
+                        IsResolving = false;
+                        Context = null;
+                        CurrentNamespace = null;
+                        _navigationContext.OnNext(null);
+                        _navigationManager.NavigateTo($"/{paywall}");
+                        return;
+                    }
+                    RedirectToLogin();
+                });
+            return;
+        }
+
+        LoadResolved();
+        return;
+
+        void RedirectToLogin()
+        {
+            // The anonymous gate is bouncing to sign-in → a forceLoad:true redirect to /login is a
+            // FULL page reload (the "send → page reloads / GUI vanishes" symptom). Log WHY: dump the
+            // three identity sources at the decision point so a MIS-fire on an actually-authenticated
+            // user (the 2026-05-21 identity-loss regression, where a deferred Rx continuation reads a
+            // cleared ambient context) is visible in the logs instead of silent. Warning-level so it
+            // surfaces under the default MeshWeaver=Warning cap with no config change.
             var accessService = _hub.ServiceProvider.GetService<AccessService>();
             _logger?.LogWarning(
                 "Anonymous-gate: redirecting {Uri} → /login (forceLoad full reload), resolved path '{Prefix}'. "
@@ -573,9 +618,10 @@ internal class NavigationService : INavigationService
             _navigationContext.OnNext(null);
             var returnUrl = Uri.EscapeDataString(_navigationManager.Uri);
             _navigationManager.NavigateTo($"/login?returnUrl={returnUrl}", forceLoad: true);
-            return;
         }
 
+        void LoadResolved()
+        {
         _status.OnNext(NavigationStatus.Redirecting(resolution.Prefix, area));
         _status.OnNext(NavigationStatus.Loading(resolution.Prefix));
 
@@ -674,6 +720,7 @@ internal class NavigationService : INavigationService
             _navigationContext.OnNext(null);
             _status.OnNext(NavigationStatus.NotFound(route));
         });
+        }
     }
 
     /// <summary>
@@ -815,6 +862,14 @@ internal class NavigationService : INavigationService
         // post-"no implicit schema creation" it would 42P01 on every system-context navigation.
         // System actions are infrastructure, not user activity.
         if (string.Equals(userId, WellKnownUsers.System, StringComparison.OrdinalIgnoreCase))
+            return;
+
+        // Anonymous visitors aren't user activity either: since the anonymous gate admits
+        // logged-out visitors to explicitly Anonymous-granted pages (public covers/catalogs),
+        // tracking would write to `Anonymous/_UserActivity/…` — a partition that is never
+        // provisioned, the same 42P01 class as the System skip above. "Recently viewed" is a
+        // signed-in feature.
+        if (string.Equals(userId, WellKnownUsers.Anonymous, StringComparison.OrdinalIgnoreCase))
             return;
 
         // Skip system/internal paths
