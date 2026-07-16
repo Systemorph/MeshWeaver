@@ -1,8 +1,11 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
+using System.Linq;
 using System.Reactive.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
 using MeshWeaver.Graph.Configuration;
@@ -436,11 +439,99 @@ public static class UserActivityLayoutAreas
         return Observable.Return<UiControl?>(BuildOpenThreads(nodePath, OwnerIdOf(nodePath)));
     }
 
-    /// <summary>The catalog region — the declarative TabsControl + MeshSearches.</summary>
+    /// <summary>The catalog region — the declarative TabsControl + MeshSearches. Extension tabs
+    /// come from the mesh (<see cref="HomeTabNodeType"/> nodes) — see <see cref="ObserveHomeTabs"/>.</summary>
     internal static IObservable<UiControl?> CatalogAreaView(LayoutAreaHost host, RenderingContext _)
     {
         var nodePath = host.Hub.Address.ToString();
-        return Observable.Return<UiControl?>(BuildCatalog(nodePath, OwnerIdOf(nodePath)));
+        return ObserveHomeTabs(host)
+            .Select(tabs => (UiControl?)BuildCatalog(nodePath, OwnerIdOf(nodePath), tabs));
+    }
+
+    /// <summary>
+    /// NodeType of a home-catalog EXTENSION TAB: the home's tab list is DATA, not code. Any
+    /// partition (a plugin's synced content, an admin's config) can publish a node of this type
+    /// and it appears as a tab on every user's home — the framework knows nothing about the
+    /// domain the tab surfaces (courses, feeds, …). The node's <c>Name</c> is the tab label,
+    /// <c>Order</c> sorts among extension tabs, and its content carries the MeshSearch mapping
+    /// (all optional): <c>nodeType</c>, <c>query</c>, <c>placeholder</c> (a non-empty one shows
+    /// the search box), and <c>createHref</c> (the tab's "+" target — e.g. a catalog page).
+    /// Visibility follows node readability: a viewer who cannot read the tab node gets no tab.
+    /// </summary>
+    public const string HomeTabNodeType = "HomeTab";
+
+    /// <summary>
+    /// The live extension-tab list: every readable <see cref="HomeTabNodeType"/> node on the mesh,
+    /// ordered. Starts empty so the home paints instantly and the tabs land reactively.
+    /// </summary>
+    private static IObservable<IReadOnlyList<MeshNode>> ObserveHomeTabs(LayoutAreaHost host)
+    {
+        var mesh = host.Hub.ServiceProvider.GetService<IMeshService>();
+        if (mesh is null)
+            return Observable.Return<IReadOnlyList<MeshNode>>([]);
+        return mesh
+            .Query<MeshNode>(MeshQueryRequest.FromQuery($"nodeType:{HomeTabNodeType} is:main"))
+            .Scan(ImmutableDictionary<string, MeshNode>.Empty,
+                (map, change) =>
+                {
+                    if (change.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset)
+                        return change.Items.ToImmutableDictionary(n => n.Path);
+                    foreach (var item in change.Items)
+                        map = change.ChangeType switch
+                        {
+                            QueryChangeType.Added or QueryChangeType.Updated => map.SetItem(item.Path, item),
+                            QueryChangeType.Removed => map.Remove(item.Path),
+                            _ => map
+                        };
+                    return map;
+                })
+            .Select(map => (IReadOnlyList<MeshNode>)map.Values
+                .OrderBy(n => n.Order ?? int.MaxValue)
+                .ThenBy(n => n.Name ?? n.Id, StringComparer.OrdinalIgnoreCase)
+                .ToList())
+            .StartWith((IReadOnlyList<MeshNode>)[]);
+    }
+
+    /// <summary>A string field off a HomeTab node's content JSON (foreign-typed — read untyped).</summary>
+    private static string? HomeTabField(MeshNode node, string camelCaseField) =>
+        node.Content is JsonElement je && je.ValueKind == JsonValueKind.Object
+        && je.TryGetProperty(camelCaseField, out var prop) && prop.ValueKind == JsonValueKind.String
+            ? prop.GetString()
+            : null;
+
+    /// <summary>
+    /// One <see cref="HomeTabNodeType"/> node → its tab: the node's Name is the label; the content
+    /// maps to a <see cref="MeshSearchControl"/> with the catalog's standard look-and-feel —
+    /// <c>nodeType</c>/<c>query</c> compose the hidden query, a non-empty <c>placeholder</c> shows
+    /// the search box, <c>createHref</c> wires the tab's "+".
+    /// </summary>
+    internal static (string Label, MeshSearchControl Search) MapHomeTab(MeshNode tab)
+    {
+        var nodeType = HomeTabField(tab, "nodeType");
+        var query = HomeTabField(tab, "query") ?? "is:main sort:LastModified-desc";
+        var placeholder = HomeTabField(tab, "placeholder");
+        var createHref = HomeTabField(tab, "createHref");
+        var hiddenQuery = string.Join(" ", new[]
+        {
+            string.IsNullOrWhiteSpace(nodeType) ? null : $"nodeType:{nodeType}",
+            query.Trim(),
+        }.Where(part => !string.IsNullOrWhiteSpace(part)));
+        var search = Controls.MeshSearch
+            .WithHiddenQuery(hiddenQuery)
+            .WithShowSearchBox(!string.IsNullOrWhiteSpace(placeholder))
+            .WithShowEmptyMessage(true)
+            .WithRenderMode(MeshSearchRenderMode.Flat)
+            .WithCollapsibleSections(false)
+            .WithSectionCounts(false)
+            .WithMaxColumns(4)
+            .WithItemLimit(50)
+            .WithMaxRows(3)
+            .WithReactiveMode(true);
+        if (!string.IsNullOrWhiteSpace(placeholder))
+            search = search.WithPlaceholder(placeholder!);
+        if (!string.IsNullOrWhiteSpace(createHref))
+            search = search.WithCreateHref(createHref!);
+        return (tab.Name ?? tab.Id, search);
     }
 
     /// <summary>
@@ -495,9 +586,14 @@ public static class UserActivityLayoutAreas
     /// label + scoped query (and create/empty-state) from what used to be the per-tab
     /// <c>Build*</c> helpers — now folded into the declarative builder. The TabsControl owns tab
     /// switching, so there is no host-data tab-state and no CSS-flex toggling.
+    /// <para>Extension tabs (<paramref name="extensionTabs"/>, the readable
+    /// <see cref="HomeTabNodeType"/> nodes) render right after Spaces — the tab list is data,
+    /// so a plugin adds a tab by shipping a node, never by editing this file.</para>
     /// </summary>
-    internal static UiControl BuildCatalog(string nodePath, string nodeOwnerId)
-        => Controls.Tabs
+    internal static UiControl BuildCatalog(
+        string nodePath, string nodeOwnerId, IReadOnlyList<MeshNode>? extensionTabs = null)
+    {
+        var tabs = Controls.Tabs
             // 100% width so the tabs + their search grids fill the home page instead of shrinking to
             // content width (the TabsControl had no Width skin before — FluentTabs defaulted to fit).
             .WithSkin(s => s.WithWidth("100%"))
@@ -515,7 +611,17 @@ public static class UserActivityLayoutAreas
                     .WithRenderMode(MeshSearchRenderMode.Flat)
                     .WithCollapsibleSections(false).WithSectionCounts(false)
                     .WithMaxColumns(4).WithItemLimit(50).WithMaxRows(3).WithReactiveMode(true)
-                    .WithCreateHref("/create?type=Space"))
+                    .WithCreateHref("/create?type=Space"));
+
+        // The data-driven tabs — same look-and-feel defaults as Spaces; the node's content
+        // supplies only the mapping (nodeType/query/placeholder/createHref).
+        foreach (var tab in extensionTabs ?? [])
+        {
+            var (label, search) = MapHomeTab(tab);
+            tabs = tabs.WithView(search, label);
+        }
+
+        return tabs
             // My Items — the owner's own partition (rbuergi.* post-v10), grouped by type.
             .WithMeshSearch(TabMyItems,
                 @namespace: nodeOwnerId,
@@ -541,6 +647,7 @@ public static class UserActivityLayoutAreas
                     .WithShowSearchBox(false).WithRenderMode(MeshSearchRenderMode.Flat)
                     .WithCollapsibleSections(false).WithSectionCounts(false)
                     .WithMaxColumns(2).WithItemLimit(50).WithMaxRows(4).WithReactiveMode(true));
+    }
 
     /// <summary>
     /// Public profile shown to visitors — UserProfileControl (rendered by Blazor)
