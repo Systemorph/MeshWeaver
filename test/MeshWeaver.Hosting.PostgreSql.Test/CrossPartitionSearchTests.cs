@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -434,6 +436,136 @@ public class CrossPartitionSearchTests
         results.Select(n => n.Id).Should().Contain("FutuRe");
         results.Select(n => n.Id).Should().Contain("Contoso");
     }
+
+    // ── Partitioned provider: per-query partition routing ──────────────────
+    //
+    // Regression tests for the multi-partition multi-query bundle. Pre-fix,
+    // PostgreSqlPartitionedMeshQuery.Query<T> parsed ONLY the first query and
+    // routed the WHOLE MeshQueryRequest.Queries bundle to that one schema —
+    // every other partition's queries silently matched zero rows. Probed live
+    // on memex 2026-07-16: a NodeType compile in partition `Reinsurance` with a
+    // `shared=@BusinessRules/Scope/Source` source executed the BusinessRules
+    // queries but matched ZERO Code nodes, while the identical single query via
+    // global search returned all of them.
+
+    /// <summary>
+    /// ONE request bundling two queries owned by two DIFFERENT partitions —
+    /// the compile-source shape (`namespace:Own/...` + `shared=@Other/...`) —
+    /// must return rows from BOTH partitions.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task PartitionedQuery_MultiQueryAcrossPartitions_ReturnsRowsFromEachOwningPartition()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await SetupMultiOrgEnvironment(ct);
+
+        using var provider = CreatePartitionProvider();
+        var query = new PostgreSqlPartitionedMeshQuery(
+            new PostgreSqlCrossSchemaQueryProvider(_fixture.DataSource),
+            partitionProvider: provider);
+
+        var request = MeshQueryRequest.FromQueries(new[]
+        {
+            "namespace:ACME nodeType:Markdown scope:subtree",
+            "namespace:FutuRe nodeType:Markdown scope:subtree",
+        }, WellKnownUsers.System);
+
+        var initial = await query.Query<MeshNode>(request, _options)
+            .Where(c => c.ChangeType == QueryChangeType.Initial)
+            .FirstAsync()
+            .Timeout(TimeSpan.FromSeconds(30))
+            .ToTask(ct);
+
+        var paths = initial.Items.Select(n => n.Path).ToList();
+        paths.Should().Contain("ACME/Report",
+            "the first query is owned by the acme schema");
+        paths.Should().Contain("FutuRe/Report",
+            "the second query must be routed to ITS owning partition (future schema) — " +
+            "not bundled into the first query's schema where it matches nothing");
+    }
+
+    /// <summary>
+    /// Single-target fast path guard: a multi-query bundle whose queries ALL
+    /// resolve to the SAME partition must keep today's behaviour — one delegate
+    /// call, server-side UNION, dedup by path.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task PartitionedQuery_MultiQuerySamePartition_UnionsAndDedupes()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await SetupMultiOrgEnvironment(ct);
+
+        using var provider = CreatePartitionProvider();
+        var query = new PostgreSqlPartitionedMeshQuery(
+            new PostgreSqlCrossSchemaQueryProvider(_fixture.DataSource),
+            partitionProvider: provider);
+
+        // The CodeQueryResolver `shared=` expansion shape: `path:X` + `namespace:X scope:subtree`
+        // — both branches match the ACME root node; it must appear exactly once.
+        var request = MeshQueryRequest.FromQueries(new[]
+        {
+            "path:ACME nodeType:Markdown",
+            "namespace:ACME scope:subtree nodeType:Markdown",
+        }, WellKnownUsers.System);
+
+        var initial = await query.Query<MeshNode>(request, _options)
+            .Where(c => c.ChangeType == QueryChangeType.Initial)
+            .FirstAsync()
+            .Timeout(TimeSpan.FromSeconds(30))
+            .ToTask(ct);
+
+        var paths = initial.Items.Select(n => n.Path).ToList();
+        paths.Should().Contain("ACME");
+        paths.Should().Contain("ACME/Report");
+        paths.Count(p => p == "ACME").Should().Be(1, "the union dedupes by path");
+        paths.Should().NotContain(p => p.StartsWith("FutuRe/") || p == "FutuRe",
+            "both queries are scoped to ACME");
+    }
+
+    /// <summary>
+    /// Mixed bundle: a partition-pinned query plus an unpinned (fan-out) query.
+    /// The pinned query is served by its partition's delegate, the unpinned one
+    /// by the cross-schema fan-out, and the merged Initial carries both slices.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task PartitionedQuery_MixedPinnedAndFanOutQueries_MergesBothSlices()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (_, partitions) = await SetupMultiOrgEnvironment(ct);
+        await PopulateSearchableSchemas(
+            partitions.Keys.Select(k => k.ToLowerInvariant()), ct);
+
+        using var provider = CreatePartitionProvider();
+        var query = new PostgreSqlPartitionedMeshQuery(
+            new PostgreSqlCrossSchemaQueryProvider(_fixture.DataSource),
+            partitionProvider: provider);
+
+        var request = MeshQueryRequest.FromQueries(new[]
+        {
+            "namespace:ACME nodeType:Markdown scope:subtree", // pinned → acme delegate
+            "nodeType:Thread",                                 // unpinned satellite → cross-schema fan-out
+        }, WellKnownUsers.System);
+
+        var initial = await query.Query<MeshNode>(request, _options)
+            .Where(c => c.ChangeType == QueryChangeType.Initial)
+            .FirstAsync()
+            .Timeout(TimeSpan.FromSeconds(30))
+            .ToTask(ct);
+
+        var paths = initial.Items.Select(n => n.Path).ToList();
+        paths.Should().Contain("ACME/Report", "the pinned query contributes its partition's rows");
+        paths.Should().Contain("ACME/_Thread/discuss-q1-1234",
+            "the fan-out query contributes threads from every partition");
+        paths.Should().Contain("FutuRe/_Thread/discuss-q1-1234",
+            "the fan-out query must not be pinned to the first query's schema");
+    }
+
+    private PostgreSqlPartitionStorageProvider CreatePartitionProvider()
+        => new(
+            _fixture.DataSource,
+            _fixture.ConnectionString,
+            new PostgreSqlStorageOptions { ConnectionString = _fixture.ConnectionString },
+            partitions: null);
 
     // â”€â”€ Helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 

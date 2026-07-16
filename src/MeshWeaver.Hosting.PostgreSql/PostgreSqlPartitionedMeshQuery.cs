@@ -52,6 +52,15 @@ namespace MeshWeaver.Hosting.PostgreSql;
 /// <para>The Initial emission is a one-shot snapshot. Live deltas across
 /// partitions are out of scope; a cross-partition feed (Activity, Latest
 /// Threads, Recently Viewed) is an explicit re-query, not a live cursor.</para>
+///
+/// <para><b>Multi-query requests route PER QUERY.</b> A
+/// <see cref="MeshQueryRequest.Queries"/> bundle can mix queries owned by
+/// different partitions (a NodeType compile's source queries with a
+/// <c>shared=@OtherPartition/...</c> entry are the canonical case). Each
+/// query is parsed and routed to ITS owning partition's per-schema delegate;
+/// queries with no concrete first-segment partition go to the cross-schema
+/// fan-out; the per-group streams are merged into the provider's single
+/// Initial-then-changes contract (see <c>MergePartitionStreams</c>).</para>
 /// </summary>
 public sealed class PostgreSqlPartitionedMeshQuery : IMeshQueryProvider
 {
@@ -160,20 +169,87 @@ public sealed class PostgreSqlPartitionedMeshQuery : IMeshQueryProvider
     public bool Matches(IReadOnlyList<string> queryNamespaces) => true;
 
     /// <inheritdoc/>
+    /// <remarks>
+    /// Routes EACH query in <see cref="MeshQueryRequest.EffectiveQueries"/> to the
+    /// partition that owns it. Routing on the FIRST query only (the pre-2026-07 shape)
+    /// pinned a multi-partition bundle — e.g. a NodeType compile's source queries mixing
+    /// <c>namespace:Own/Source</c> with <c>shared=</c> queries against another partition —
+    /// to the first query's schema, so every other partition's queries silently matched
+    /// zero rows.
+    /// </remarks>
     public IObservable<QueryResultChange<T>> Query<T>(
         MeshQueryRequest request, JsonSerializerOptions options)
     {
-        var parsed = ParseFirst(request);
+        var effective = request.EffectiveQueries;
+        var routes = new (string Query, ParsedQuery Parsed, PostgreSqlMeshQuery? Scoped)[effective.Count];
+        for (var i = 0; i < effective.Count; i++)
+        {
+            var query = effective[i];
+            var parsed = string.IsNullOrEmpty(query) ? ParsedQuery.Empty : _parser.Parse(query);
+            routes[i] = (query, parsed, GetScopedDelegate(parsed));
+        }
 
-        // SCOPED → delegate to the per-schema PostgreSqlMeshQuery (live deltas + satellite
-        // serving over the cached adapter). This is the scoped serving that retires the
-        // pedestrian for Postgres; only unscoped / wildcard / activity-join queries fan out.
-        if (GetScopedDelegate(parsed) is { } scoped)
-            return scoped.Query<T>(request, options);
+        // SINGLE-TARGET fast path — every query is served by the SAME per-schema
+        // PostgreSqlMeshQuery (always the case for a single-query request): hand
+        // the ORIGINAL request to that delegate (live deltas + satellite serving
+        // over the cached adapter; the delegate pushes the multi-query UNION down
+        // to Postgres). This is the scoped serving that retires the pedestrian
+        // for Postgres.
+        var firstScoped = routes[0].Scoped;
+        if (firstScoped is not null && routes.All(r => ReferenceEquals(r.Scoped, firstScoped)))
+            return firstScoped.Query<T>(request, options);
 
-        _logger?.LogDebug(
-            "[FanOut] Query decision: NeedsFanOut={NeedsFanOut} Path='{Path}' Source={Source} Query='{Q}'",
-            NeedsFanOut(parsed), parsed.Path ?? "(null)", parsed.Source, request.Query);
+        // ALL-FAN-OUT fast path — no query pins to a concrete partition: the whole
+        // request is served by the cross-schema fan-out.
+        if (routes.All(r => r.Scoped is null))
+            return FanOutQuery<T>(request, routes.Select(r => r.Parsed).ToArray(), options);
+
+        // MULTI-PARTITION: group the queries by their owning per-schema delegate and
+        // run each group as a sub-request against its own partition. Identity /
+        // paging fields (UserId, Context, Skip, Limit, …) flow through unchanged —
+        // only the query membership is regrouped. Unpinned queries go to the shared
+        // cross-schema fan-out. The group streams are merged under the provider
+        // contract MergeProviderObservables (MeshQuery) enforces one level up:
+        // exactly ONE Initial, then live deltas.
+        var groups = new List<(PostgreSqlMeshQuery Scoped, List<string> Queries)>();
+        var unpinned = new List<ParsedQuery>();
+        foreach (var (query, parsed, scoped) in routes)
+        {
+            if (scoped is null)
+            {
+                unpinned.Add(parsed);
+                continue;
+            }
+            var idx = groups.FindIndex(g => ReferenceEquals(g.Scoped, scoped));
+            if (idx < 0) groups.Add((scoped, [query]));
+            else groups[idx].Queries.Add(query);
+        }
+
+        var sources = new List<IObservable<QueryResultChange<T>>>(groups.Count + 1);
+        foreach (var (scoped, queries) in groups)
+            sources.Add(scoped.Query<T>(request with { Queries = queries, Query = queries[0] }, options));
+        if (unpinned.Count > 0)
+            sources.Add(FanOutQuery<T>(request, unpinned, options));
+
+        return MergePartitionStreams(sources, routes[0].Parsed);
+    }
+
+    /// <summary>
+    /// The cross-schema fan-out for the queries of a request that do NOT pin to a
+    /// concrete partition. One-shot: emits a single Initial snapshot (the union of
+    /// every fan-out query's rows, deduped by path) and completes — live deltas
+    /// across partitions are out of scope (see the class doc).
+    /// </summary>
+    private IObservable<QueryResultChange<T>> FanOutQuery<T>(
+        MeshQueryRequest request, IReadOnlyList<ParsedQuery> parsedQueries, JsonSerializerOptions options)
+    {
+        if (_logger?.IsEnabled(LogLevel.Debug) == true)
+        {
+            foreach (var parsed in parsedQueries)
+                _logger.LogDebug(
+                    "[FanOut] Query decision: NeedsFanOut={NeedsFanOut} Path='{Path}' Source={Source} Query='{Q}'",
+                    NeedsFanOut(parsed), parsed.Path ?? "(null)", parsed.Source, request.Query);
+        }
 
         // MergeProviderObservables in MeshQuery gates the merged Initial on
         // every provider emitting Initial. If we return Observable.Empty when
@@ -193,22 +269,162 @@ public sealed class PostgreSqlPartitionedMeshQuery : IMeshQueryProvider
         return _ioPool.Invoke(async ct =>
         {
             var items = new List<T>();
-            if (NeedsFanOut(parsed))
+            // Path-dedupe across the fan-out queries of one request — two branches
+            // (e.g. `path:X` + `namespace:X scope:subtree`) can match the same row.
+            var seenPaths = parsedQueries.Count > 1
+                ? new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+                : null;
+            foreach (var parsed in parsedQueries)
             {
+                if (!NeedsFanOut(parsed))
+                    continue;
                 await foreach (var node in EnumerateFanOutAsync(parsed, options, request, ct).ConfigureAwait(false))
                 {
-                    if (node is T typed)
-                        items.Add(typed);
+                    if (node is not T typed)
+                        continue;
+                    if (seenPaths is not null
+                        && !string.IsNullOrEmpty(node.Path)
+                        && !seenPaths.Add(node.Path))
+                        continue;
+                    items.Add(typed);
                 }
             }
             return new QueryResultChange<T>
             {
                 ChangeType = QueryChangeType.Initial,
                 Version = Interlocked.Increment(ref _version),
-                Query = parsed,
+                Query = parsedQueries[0],
                 Items = items,
                 Timestamp = DateTimeOffset.UtcNow,
             };
+        });
+    }
+
+    /// <summary>
+    /// Merges the per-partition group streams of a multi-partition request into the
+    /// single Initial-then-changes contract this provider owes the aggregator —
+    /// mirroring <c>MeshQuery.MergeProviderObservables</c> one level down: ONE
+    /// combined Initial (items path-deduped across groups, scores preserved) is
+    /// emitted only after EVERY group has contributed its Initial; subsequent live
+    /// deltas from the per-schema delegates flow through unchanged. A group that
+    /// COMPLETES without an Initial (contract violation) is counted as an empty
+    /// Initial — the same completion guard the aggregator applies — so one silent
+    /// group can never starve the merge.
+    /// </summary>
+    /// <param name="sources">One stream per partition group (plus at most one fan-out stream).</param>
+    /// <param name="firstParsed">The FIRST query's parse — stamped on the merged
+    /// Initial because a multi-query union takes sort/limit/skip from the first
+    /// query (<see cref="MeshQueryRequest.Queries"/> contract); the aggregator's
+    /// <c>ClipMergedInitial</c> reads it from <see cref="QueryResultChange{T}.Query"/>.</param>
+    private IObservable<QueryResultChange<T>> MergePartitionStreams<T>(
+        IReadOnlyList<IObservable<QueryResultChange<T>>> sources,
+        ParsedQuery firstParsed)
+    {
+        if (sources.Count == 1)
+            return sources[0];
+
+        return Observable.Create<QueryResultChange<T>>(observer =>
+        {
+            var gate = new object();
+            var groupItems = new List<(T Item, double Score)>[sources.Count];
+            for (var i = 0; i < groupItems.Length; i++)
+                groupItems[i] = new List<(T, double)>();
+            var initialPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var initialSeen = new bool[sources.Count];
+            var initialCount = 0;
+
+            // Emits the merged Initial once every group reported in. Must be called under `gate`.
+            void EmitMergedInitialIfComplete()
+            {
+                if (initialCount != sources.Count)
+                    return;
+                var items = new List<T>();
+                var scores = new List<double>();
+                foreach (var hits in groupItems)
+                {
+                    foreach (var (item, score) in hits)
+                    {
+                        items.Add(item);
+                        scores.Add(score);
+                    }
+                }
+                observer.OnNext(new QueryResultChange<T>
+                {
+                    ChangeType = QueryChangeType.Initial,
+                    Items = items,
+                    Scores = scores,
+                    Query = firstParsed,
+                    Version = Interlocked.Increment(ref _version),
+                    Timestamp = DateTimeOffset.UtcNow,
+                });
+            }
+
+            var subscriptions = new System.Reactive.Disposables.CompositeDisposable();
+            for (var i = 0; i < sources.Count; i++)
+            {
+                var idx = i;
+                subscriptions.Add(sources[idx].Subscribe(
+                    change =>
+                    {
+                        if (change.ChangeType == QueryChangeType.Initial)
+                        {
+                            lock (gate)
+                            {
+                                var changeScores = change.Scores;
+                                for (var j = 0; j < change.Items.Count; j++)
+                                {
+                                    var item = change.Items[j];
+                                    // Dedupe by path across groups — a fan-out branch
+                                    // spans every schema and can re-match a row a
+                                    // pinned group already contributed.
+                                    if (item is MeshNode node
+                                        && !string.IsNullOrEmpty(node.Path)
+                                        && !initialPaths.Add(node.Path))
+                                        continue;
+                                    var score = changeScores is not null && j < changeScores.Count
+                                        ? changeScores[j]
+                                        : 0.0;
+                                    groupItems[idx].Add((item, score));
+                                }
+                                if (!initialSeen[idx])
+                                {
+                                    initialSeen[idx] = true;
+                                    initialCount++;
+                                }
+                                EmitMergedInitialIfComplete();
+                            }
+                        }
+                        else
+                        {
+                            // Live delta from a per-schema delegate. Partitions are
+                            // disjoint, so no cross-group dedup is needed; the
+                            // aggregator's live filter handles cross-PROVIDER overlap.
+                            lock (gate)
+                            {
+                                observer.OnNext(change);
+                            }
+                        }
+                    },
+                    ex => observer.OnError(ex),
+                    () =>
+                    {
+                        lock (gate)
+                        {
+                            if (initialSeen[idx])
+                                return;
+                            _logger?.LogWarning(
+                                "Partition group {Index} of a multi-partition query completed WITHOUT "
+                                + "emitting an Initial — contract violation; counting as empty so the "
+                                + "merged query can proceed. Every Query<T> observable must emit exactly "
+                                + "one Initial.",
+                                idx);
+                            initialSeen[idx] = true;
+                            initialCount++;
+                            EmitMergedInitialIfComplete();
+                        }
+                    }));
+            }
+            return subscriptions;
         });
     }
 
@@ -253,12 +469,6 @@ public sealed class PostgreSqlPartitionedMeshQuery : IMeshQueryProvider
     public IObservable<T?> Select<T>(string path, string property, JsonSerializerOptions options)
         => GetDelegateForPath(path)?.Select<T>(path, property, options)
             ?? Observable.Return<T?>(default);
-
-    private ParsedQuery ParseFirst(MeshQueryRequest request)
-    {
-        var first = request.EffectiveQueries.FirstOrDefault();
-        return string.IsNullOrEmpty(first) ? ParsedQuery.Empty : _parser.Parse(first);
-    }
 
     /// <summary>
     /// True when the query is genuinely unscoped (no partition-narrowing
