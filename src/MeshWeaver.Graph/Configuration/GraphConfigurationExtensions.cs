@@ -11,6 +11,7 @@ using MeshWeaver.Messaging;
 using MeshWeaver.NuGet;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Graph.Configuration;
 
@@ -223,6 +224,14 @@ public static class GraphConfigurationExtensions
                     // user-visible notification. Instance maps only — no static state. See
                     // NodeTypeCompileParkRegistry + InstallCompileWatcher's parked short-circuit.
                     services.AddSingleton<NodeTypeCompileParkRegistry>();
+                    // 🅿️ Deleting a NodeType clears its parked compile failure — the registry is
+                    // keyed by PATH and outlives the node, so without this a delete+recreate at
+                    // the same path started parked and never compiled (only a restart healed).
+                    services.AddSingleton<INodePostDeletionHandler>(sp =>
+                        new NodeTypeUnparkPostDeletionHandler(
+                            sp.GetRequiredService<NodeTypeCompileParkRegistry>(),
+                            sp.GetService<ILoggerFactory>()
+                                ?.CreateLogger<NodeTypeUnparkPostDeletionHandler>()));
                     // Stage-1 LSP language services over a NodeType's live CSharpCompilation
                     // — hover, completion, diagnostics, speculative pre-flight checks. Consumed
                     // by the Lsp* MCP tools + the agents' Lsp plugin (the /code skill's pre-flight). SpeculativeCompilation
