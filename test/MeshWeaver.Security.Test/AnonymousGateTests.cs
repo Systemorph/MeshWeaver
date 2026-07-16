@@ -10,17 +10,18 @@ using Xunit;
 namespace MeshWeaver.Security.Test;
 
 /// <summary>
-/// Pins <see cref="AnonymousGate.DecideAnonymousAccess"/> against the REAL
+/// Pins <see cref="AnonymousGate.AllowAnonymous"/> against the REAL
 /// <see cref="PermissionEvaluator"/> (no mocks) — the decision the Blazor navigation gate maps to
-/// load / paywall-navigate / login for a logged-OUT visitor:
+/// load / login for a logged-OUT visitor:
 /// <list type="bullet">
-/// <item>an explicit Anonymous Viewer grant ⇒ <c>Allow</c> (the public course cover / paywall page),</item>
-/// <item>denied + <see cref="PartitionAccessPolicy.RedirectOnDenied"/> ⇒ redirect to the paywall,</item>
-/// <item>denied + no policy ⇒ login,</item>
-/// <item>a self-referential redirect target ⇒ login (loop-guard), never a redirect loop.</item>
+/// <item>an explicit Anonymous Viewer grant ⇒ allowed (the public course cover / catalog),</item>
+/// <item>EVERYTHING else ⇒ /login — even when the partition configures a
+///   <see cref="PartitionAccessPolicy.RedirectOnDenied"/> paywall: sign-in is always the first
+///   step, and the paywall applies to the then-authenticated visitor via the area-level
+///   access-denied redirect (<c>NamedAreaView</c>).</item>
 /// </list>
-/// The Blazor-side wiring of the three outcomes is unit-tested in
-/// <c>NavigationServiceTest</c> (Hosting.Blazor.Test) via the injectable gate seam.
+/// The Blazor-side wiring of the outcomes is unit-tested in <c>NavigationServiceTest</c>
+/// (Hosting.Blazor.Test) via the injectable gate seam.
 /// </summary>
 public class AnonymousGateTests(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
@@ -32,7 +33,8 @@ public class AnonymousGateTests(ITestOutputHelper output) : MonolithMeshTestBase
                 AssignmentNodeFactory.UserRole(
                     WellKnownUsers.Anonymous, "Viewer", "GatedCourse",
                     accessObject: WellKnownUsers.Anonymous),
-                // The paywall config: denied pages under GatedCourse redirect to the Subscribe page.
+                // A paywall policy exists — it must NOT change the anonymous decision (login
+                // first; the paywall is the authenticated visitor's redirect).
                 new MeshNode("_Policy", "GatedCourse")
                 {
                     NodeType = SecurityCollections.PartitionAccessPolicyNodeType,
@@ -42,42 +44,33 @@ public class AnonymousGateTests(ITestOutputHelper output) : MonolithMeshTestBase
                 // grant for the Anonymous subject (deny is per-subject).
                 AssignmentNodeFactory.UserRole(
                     WellKnownUsers.Anonymous, "Viewer", "GatedCourse/Lesson1",
-                    denied: true, accessObject: WellKnownUsers.Anonymous),
-                // A partition whose RedirectOnDenied points at ITSELF — the loop-guard case.
-                new MeshNode("_Policy", "LoopCourse")
-                {
-                    NodeType = SecurityCollections.PartitionAccessPolicyNodeType,
-                    Content = new PartitionAccessPolicy { RedirectOnDenied = "LoopCourse" }
-                });
+                    denied: true, accessObject: WellKnownUsers.Anonymous));
 
     // Security tests need granular permissions — skip the PublicAdmin seed.
     protected override Task SetupAccessRightsAsync() => Task.CompletedTask;
 
     [Fact(Timeout = 20000)]
     public async Task AnonymousGrantedNode_IsAllowed()
-        => await AnonymousGate.DecideAnonymousAccess(Mesh, "GatedCourse")
-            .Should().Match(d => d.Allow && d.RedirectTo == null);
+        => await AnonymousGate.AllowAnonymous(Mesh, "GatedCourse")
+            .Should().Match(allowed => allowed);
 
     [Fact(Timeout = 20000)]
-    public async Task DeniedNode_WithConfiguredPaywall_RedirectsThere()
-        => await AnonymousGate.DecideAnonymousAccess(Mesh, "GatedCourse/Lesson1")
-            .Should().Match(d => !d.Allow && d.RedirectTo == "GatedCourse/Subscribe");
+    public async Task DeniedNode_GoesToLogin_EvenWithAPaywallConfigured()
+        // The RedirectOnDenied paywall exists at this scope — the ANONYMOUS visitor still goes to
+        // /login first; only the signed-in-but-denied visitor is redirected to the paywall.
+        => await AnonymousGate.AllowAnonymous(Mesh, "GatedCourse/Lesson1")
+            .Should().Match(allowed => !allowed);
 
     [Fact(Timeout = 20000)]
-    public async Task DeniedNode_WithoutPolicy_FallsBackToLogin()
-        => await AnonymousGate.DecideAnonymousAccess(Mesh, "PrivateSpace/Node")
-            .Should().Match(d => !d.Allow && d.RedirectTo == null);
-
-    [Fact(Timeout = 20000)]
-    public async Task SelfReferentialRedirect_IsLoopGuarded_ToLogin()
-        => await AnonymousGate.DecideAnonymousAccess(Mesh, "LoopCourse")
-            .Should().Match(d => !d.Allow && d.RedirectTo == null);
+    public async Task UngrantedNode_GoesToLogin()
+        => await AnonymousGate.AllowAnonymous(Mesh, "PrivateSpace/Node")
+            .Should().Match(allowed => !allowed);
 
     [Fact(Timeout = 20000)]
     public async Task DeepDescendant_InheritsTheRootAnonymousGrant()
         // A deep page under GatedCourse WITHOUT its own deny inherits the root's Anonymous
         // Viewer grant (grants flow downward) — pin the inheritance so the per-child deny in
-        // DeniedNode_WithConfiguredPaywall_RedirectsThere is provably the thing doing the gating.
-        => await AnonymousGate.DecideAnonymousAccess(Mesh, "GatedCourse/Deep/Page")
-            .Should().Match(d => d.Allow);
+        // DeniedNode_GoesToLogin_EvenWithAPaywallConfigured is provably the thing doing the gating.
+        => await AnonymousGate.AllowAnonymous(Mesh, "GatedCourse/Deep/Page")
+            .Should().Match(allowed => allowed);
 }
