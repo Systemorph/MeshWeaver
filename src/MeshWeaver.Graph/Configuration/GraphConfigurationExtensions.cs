@@ -60,6 +60,7 @@ public static class GraphConfigurationExtensions
                 .AddGraphSubscriptionType()
                 .AddActivityType()
                 .AddUserActivityType()
+                .AddHomeTabType()
                 .AddKernel()
                 .AddApiTokenType()
                 .AddMeshDataSourceType()
