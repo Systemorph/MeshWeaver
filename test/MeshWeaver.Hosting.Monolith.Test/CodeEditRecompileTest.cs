@@ -2,9 +2,11 @@
 using System.Collections.Generic;
 using System.IO;
 using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using MeshWeaver.AI;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
@@ -544,6 +546,160 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
                 && d.CompilationStatus == CompilationStatus.Ok
                 && !string.IsNullOrEmpty(d.LatestReleasePath)
                 && !d.IsDirty);
+    }
+
+    /// <summary>
+    /// The DIRECT-retry twin of
+    /// <see cref="FailedCompile_PreservesErrorLogAndDoesNotCreateRelease"/>: after a failed
+    /// compile (which PARKS the type in the <c>NodeTypeCompileParkRegistry</c> — deterministic
+    /// source errors park on the first failure), fixing the source and retrying via the MCP
+    /// <c>compile</c> tool (<see cref="MeshOperations.Compile"/>) must run a REAL fresh
+    /// compile, settle at Ok with a release, and un-park. The tool routes the trigger through
+    /// the release-request seam (RequestedReleaseAt + Force — the single un-park trigger);
+    /// before the fix it flipped CompilationStatus=Pending directly, which the compile
+    /// watcher's parked short-circuit swallowed — the type wedged at Pending and the tool's
+    /// settle-wait returned the PREVIOUS run's replayed terminal snapshot (2026-07-16 memex
+    /// Reinsurance/Layer + BusinessRules/Scope incident).
+    /// </summary>
+    [Fact(Timeout = 180000)]
+    public async Task FailedCompile_DirectCompileToolRetry_RunsFreshCompileAndCreatesRelease()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var workspace = Mesh.GetWorkspace();
+        var typePath = $"{TestPartition}/ToolRetryType";
+        var sourcePath = $"{TestPartition}/ToolRetryType/Source/code";
+        var parkRegistry = Mesh.ServiceProvider.GetRequiredService<NodeTypeCompileParkRegistry>();
+
+        await NodeFactory.CreateNode(new MeshNode("ToolRetryType", TestPartition)
+        {
+            Name = "Tool Retry Type",
+            NodeType = MeshNode.NodeTypePath,
+            Content = new NodeTypeDefinition
+            {
+                Description = "Direct compile-tool retry regression.",
+                Configuration = "config => config.AddDefaultLayoutAreas().AddLayout(layout => layout.WithView(\"Overview\", CodeEditLayoutAreas.Overview))",
+            }
+        }).Should().Within(30.Seconds()).Emit();
+
+        // Plant a deliberately uncompilable source so the first compile fails and parks.
+        await NodeFactory.CreateNode(new MeshNode("code", $"{TestPartition}/ToolRetryType/Source")
+        {
+            Name = "Code",
+            NodeType = "Code",
+            Content = new CodeConfiguration { Code = "this is not valid C#;", Language = "csharp" }
+        }).Should().Within(30.Seconds()).Emit();
+
+        await TriggerRecompile(typePath, DateTimeOffset.UtcNow);
+        // Gate on LastReleaseRequestHandledAt: the first-build kickoff's failed compile can
+        // park + settle Error BEFORE the explicit trigger is processed, and the trigger's
+        // release watcher then transiently UN-parks (deliberate retry). Waiting for the
+        // handled stamp + Error means we observe the TRIGGERED run's terminal state — by
+        // then RunCompile has parked (OnCompileFailed precedes the terminal status write).
+        var failed = await Mesh.GetWorkspace().GetMeshNodeStream(typePath)
+            .Should().Within(TimeSpan.FromSeconds(40))
+            .Match(n => n?.Content is NodeTypeDefinition d
+                && d.CompilationStatus == CompilationStatus.Error
+                && d.LastReleaseRequestHandledAt is not null);
+        var failedActivityPath = ((NodeTypeDefinition)failed.Content!).LastCompilationActivityPath;
+        parkRegistry.IsParked(typePath).Should().BeTrue(
+            "a deterministic compile error must park the type");
+
+        // Fix the source; the sources watcher flips IsDirty — parked state intact.
+        await workspace.GetMeshNodeStream(sourcePath).Update(curr =>
+            curr with { Content = new CodeConfiguration { Code = CodeV1, Language = "csharp" } })
+            .Should().Within(30.Seconds()).Emit();
+        await WaitForIsDirty(typePath, expected: true);
+        parkRegistry.IsParked(typePath).Should().BeTrue(
+            "editing the source alone must not un-park — only a deliberate retry does");
+
+        // Retry via the REAL tool surface.
+        var resultJson = await new MeshOperations(Mesh).Compile(typePath)
+            .FirstAsync().Timeout(150.Seconds()).ToTask(ct);
+        Output.WriteLine($"Compile tool returned: {resultJson}");
+
+        using (var result = JsonDocument.Parse(resultJson))
+        {
+            result.RootElement.GetProperty("status").GetString().Should().Be("Ok",
+                "the deliberate retry with fixed source must run a real compile and succeed");
+            result.RootElement.GetProperty("activityPath").GetString().Should().NotBe(failedActivityPath,
+                "the reported result must belong to THIS retry's compile run, not the failed run's snapshot");
+        }
+
+        parkRegistry.IsParked(typePath).Should().BeFalse(
+            "the deliberate retry must have un-parked the type");
+        await Mesh.GetWorkspace().GetMeshNodeStream(typePath)
+            .Should().Within(TimeSpan.FromSeconds(30))
+            .Match(n => n?.Content is NodeTypeDefinition d
+                && d.CompilationStatus == CompilationStatus.Ok
+                && !string.IsNullOrEmpty(d.LatestReleasePath)
+                && !d.IsDirty);
+    }
+
+    /// <summary>
+    /// Stale-success barrier: calling the MCP <c>compile</c> tool on a type that is ALREADY
+    /// settled at Ok with UNCHANGED sources must report a NEW compile run — never fabricate
+    /// "Compile SUCCEEDED" from the previous run's replayed terminal snapshot (the stream
+    /// replays the current node on subscribe, so before the fix the settle-wait accepted the
+    /// pre-trigger Ok and returned the previous run's activity path instantly). By design the
+    /// tool stamps RequestedReleaseForce — the same as the UI Compile button — so unchanged
+    /// sources do NOT skip: a genuinely fresh Roslyn run executes, and the returned
+    /// activityPath / the node's LastCompileStartedAt must move past the pre-trigger values.
+    /// </summary>
+    [Fact(Timeout = 180000)]
+    public async Task CompileTool_UnchangedSources_ForcesFreshRun_NeverReturnsPreviousRunsSnapshot()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var typePath = $"{TestPartition}/StaleBarrierType";
+
+        await NodeFactory.CreateNode(new MeshNode("StaleBarrierType", TestPartition)
+        {
+            Name = "Stale Barrier Type",
+            NodeType = MeshNode.NodeTypePath,
+            Content = new NodeTypeDefinition
+            {
+                Description = "Stale-success settle-wait regression.",
+                Configuration = "config => config.AddDefaultLayoutAreas().AddLayout(layout => layout.WithView(\"Overview\", CodeEditLayoutAreas.Overview))",
+            }
+        }).Should().Within(30.Seconds()).Emit();
+        await NodeFactory.CreateNode(new MeshNode("code", $"{TestPartition}/StaleBarrierType/Source")
+        {
+            Name = "Code",
+            NodeType = "Code",
+            Content = new CodeConfiguration { Code = CodeV1, Language = "csharp" }
+        }).Should().Within(30.Seconds()).Emit();
+
+        // First compile settles Ok; capture ITS run identity (activity path + start stamp).
+        await WaitForLatestRelease(typePath, knownRelease: null);
+        var before = await Mesh.GetWorkspace().GetMeshNodeStream(typePath)
+            .Should().Within(TimeSpan.FromSeconds(15))
+            .Match(n => n?.Content is NodeTypeDefinition d
+                && d.CompilationStatus == CompilationStatus.Ok
+                && !string.IsNullOrEmpty(d.LastCompilationActivityPath)
+                && d.LastCompileStartedAt is not null);
+        var beforeDef = (NodeTypeDefinition)before.Content!;
+        var beforeActivityPath = beforeDef.LastCompilationActivityPath!;
+        var beforeStartedAt = beforeDef.LastCompileStartedAt!.Value;
+
+        // Compile with UNCHANGED sources.
+        var resultJson = await new MeshOperations(Mesh).Compile(typePath)
+            .FirstAsync().Timeout(150.Seconds()).ToTask(ct);
+        Output.WriteLine($"Compile tool returned: {resultJson}");
+
+        using (var result = JsonDocument.Parse(resultJson))
+        {
+            result.RootElement.GetProperty("status").GetString().Should().Be("Ok");
+            result.RootElement.GetProperty("activityPath").GetString().Should().NotBe(beforeActivityPath,
+                "the result must correspond to a NEW compile run — never the previous run's replayed snapshot");
+        }
+
+        // The node itself must prove a fresh run happened: the start stamp advanced.
+        var after = await Mesh.GetWorkspace().GetMeshNodeStream(typePath)
+            .Should().Within(TimeSpan.FromSeconds(15))
+            .Match(n => n?.Content is NodeTypeDefinition d
+                && d.CompilationStatus == CompilationStatus.Ok
+                && d.LastCompileStartedAt > beforeStartedAt);
+        ((NodeTypeDefinition)after.Content!).LastCompilationActivityPath
+            .Should().NotBe(beforeActivityPath, "the fresh run stamps its own activity path");
     }
 
     /// <summary>
