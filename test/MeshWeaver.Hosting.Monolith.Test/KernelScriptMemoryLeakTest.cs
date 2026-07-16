@@ -144,6 +144,11 @@ public class KernelScriptMemoryLeakTest(ITestOutputHelper output) : MonolithMesh
         var pinned = false;
         try
         {
+            // 🚨 Pin the DAC for process lifetime BEFORE ClrMD loads it: DataTarget.Dispose
+            // otherwise dlcloses libmscordaccore.so while its PAL's process-global pthread-key
+            // destructor still points into it → any later thread exit SIGSEGVs the host
+            // (the endemic exit=139). See ClrMdDacPin / ClrMdDacUnloadCrashTest.
+            ClrMdDacPin.EnsurePinned();
             using var dt = DataTarget.CreateSnapshotAndAttach(Environment.ProcessId);
             if (dt.ClrVersions.Length == 0) return (false, "[clrmd] no CLR runtime found in snapshot");
             using var runtime = dt.ClrVersions[0].CreateRuntime();
