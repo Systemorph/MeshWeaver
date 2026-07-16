@@ -45,6 +45,10 @@ public class ClrMdDacUnloadCrashTest
             "ClrMD snapshot attach (createdump) + glibc __nptl_deallocate_tsd are the Linux CI " +
             "crash path; /proc/self/maps is the Linux view of the mapping invariant.");
 
+        // THE FIX under test: take the process-lifetime reference BEFORE ClrMD's first
+        // DAC load, so its Dispose-time dlclose can never unmap the module.
+        ClrMdDacPin.EnsurePinned();
+
         Exception? failure = null;
         var thread = new Thread(() =>
         {
