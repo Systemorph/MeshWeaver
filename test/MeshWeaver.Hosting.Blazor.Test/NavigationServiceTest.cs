@@ -219,23 +219,23 @@ public class NavigationServiceTest
 
     /// <summary>
     /// Creates the service with an injected anonymous-gate decision (the internal ctor seam), so
-    /// the three wiring outcomes — allow / paywall redirect / login — are each driven explicitly.
-    /// The decision LOGIC itself is integration-tested against the real PermissionEvaluator in
+    /// both wiring outcomes — allow / login — are each driven explicitly. The decision LOGIC
+    /// itself is integration-tested against the real PermissionEvaluator in
     /// MeshWeaver.Security.Test.AnonymousGateTests.
     /// </summary>
     private NavigationService CreateServiceWithGate(
-        Func<string, IObservable<AnonymousGateDecision>> gate) =>
+        Func<string, IObservable<bool>> gate) =>
         new(_navigationManager, _pathResolver, _hub, _circuitContextAccessor,
             [10, 20], null, gate);
 
     [Fact]
     public async Task AnonymousVisitor_GateAllows_LoadsThePage()
     {
-        // An explicit Anonymous grant (public cover / paywall page): the gate decides Allow and
-        // the page loads for the logged-out visitor — no /login bounce.
+        // An explicit Anonymous grant (public cover / catalog): the gate allows and the page
+        // loads for the logged-out visitor — no /login bounce.
         MakeVisitorAnonymous();
         var service = CreateServiceWithGate(_ =>
-            System.Reactive.Linq.Observable.Return(new AnonymousGateDecision { Allow = true }));
+            System.Reactive.Linq.Observable.Return(true));
         _pathResolver.ResolveNavigationPath(Arg.Any<string>())
             .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(
                 new AddressResolution("PublicCourse", "Overview")));
@@ -250,14 +250,14 @@ public class NavigationServiceTest
     }
 
     [Fact]
-    public async Task AnonymousVisitor_GateRedirects_NavigatesToThePaywall()
+    public async Task AnonymousVisitor_GateDenies_RedirectsToLogin()
     {
-        // A denied content page under a partition with RedirectOnDenied: the visitor lands on the
-        // configured paywall page instead of /login.
+        // A denied page — regardless of any configured paywall — sends the logged-out visitor to
+        // /login first (returnUrl bounces them back after sign-in; the paywall then applies to
+        // the AUTHENTICATED visitor via the area-level access-denied redirect).
         MakeVisitorAnonymous();
         var service = CreateServiceWithGate(_ =>
-            System.Reactive.Linq.Observable.Return(
-                new AnonymousGateDecision { RedirectTo = "PublicCourse/Subscribe" }));
+            System.Reactive.Linq.Observable.Return(false));
         _pathResolver.ResolveNavigationPath(Arg.Any<string>())
             .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(
                 new AddressResolution("PublicCourse/Lesson1", "Overview")));
@@ -265,9 +265,9 @@ public class NavigationServiceTest
         service.Initialize();
         _navigationManager.SimulateLocationChanged("http://localhost/PublicCourse/Lesson1/Overview");
 
-        await WaitForRedirect("/PublicCourse/Subscribe");
-        _navigationManager.Uri.Should().Contain("/PublicCourse/Subscribe");
-        _navigationManager.Uri.Should().NotContain("/login");
+        await WaitForRedirect("/login?returnUrl=");
+        _navigationManager.Uri.Should().Contain("/login?returnUrl=");
+        _navigationManager.Uri.Should().Contain(Uri.EscapeDataString("PublicCourse/Lesson1"));
     }
 
     [Fact]
@@ -277,7 +277,7 @@ public class NavigationServiceTest
         // visitor is bounced to /login, never through to content.
         MakeVisitorAnonymous();
         var service = CreateServiceWithGate(_ =>
-            System.Reactive.Linq.Observable.Throw<AnonymousGateDecision>(
+            System.Reactive.Linq.Observable.Throw<bool>(
                 new InvalidOperationException("permission probe failed")));
         _pathResolver.ResolveNavigationPath(Arg.Any<string>())
             .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(
