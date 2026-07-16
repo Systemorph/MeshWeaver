@@ -2978,19 +2978,26 @@ public class MeshOperations
     {
         try
         {
-            // Trigger a fresh compile by flipping CompilationStatus = Pending on
-            // the NodeType MeshNode. The per-NodeType hub's CompileWatcher (see
-            // NodeTypeCompilationHelpers.InstallCompileWatcher) picks up the
-            // Pending flip and runs Roslyn — the MeshNode IS the cache, so we
+            // Trigger a fresh compile through the RELEASE-REQUEST seam — stamp
+            // RequestedReleaseAt (+ Force) on the NodeType MeshNode, exactly what the
+            // UI Compile button writes. The per-NodeType hub's
+            // InstallReleaseRequestWatcher UN-PARKS the type in the
+            // NodeTypeCompileParkRegistry (a deliberate retry is the single un-park
+            // trigger) and promotes the request to CompilationStatus = Pending; the
+            // CompileWatcher then runs Roslyn — the MeshNode IS the cache, so we
             // don't need a side cache to invalidate.
+            // 🚨 Never flip CompilationStatus = Pending directly: a direct flip
+            // bypasses the un-park seam, so a parked (terminally failed) type swallows
+            // the trigger in the compile watcher's parked short-circuit and wedges at
+            // Pending (2026-07-16 memex Reinsurance/Layer + BusinessRules/Scope).
             hub.GetWorkspace().GetMeshNodeStream(resolvedPath).Update(curr =>
-                    curr.Content is Graph.Configuration.NodeTypeDefinition def
-                        ? curr with { Content = def with { CompilationStatus = CompilationStatus.Pending } }
+                    IsNodeTypeNode(curr)
+                        ? WithReleaseRequest(curr, DateTimeOffset.UtcNow)
                         : curr)
                 .Subscribe(
                     _ => { },
                     ex => logger.LogWarning(ex,
-                        "Recycle: failed to flip CompilationStatus=Pending for {Path}", resolvedPath));
+                        "Recycle: failed to stamp release request for {Path}", resolvedPath));
 
             var changeFeed = hub.ServiceProvider.GetService<IMeshChangeFeed>();
             if (changeFeed != null)
@@ -3144,17 +3151,25 @@ public class MeshOperations
     }
 
     /// <summary>
-    /// Triggers a compile for a NodeType by flipping its
-    /// <see cref="NodeTypeDefinition.CompilationStatus"/> to
-    /// <see cref="CompilationStatus.Pending"/> via the canonical remote-stream
-    /// write path: <see cref="MeshNodeStreamExtensions.UpdateMeshNode"/> opens a
-    /// <c>GetRemoteStream&lt;MeshNode, MeshNodeReference&gt;</c> against the
-    /// owning per-node hub and pushes a <see cref="ChangeItem{T}"/> patch through
-    /// the synchronization protocol. The CompileWatcher (installed by
-    /// <c>AddMeshDataSource</c>) observes the Pending state on its own MeshNode
-    /// stream and runs Roslyn, then writes back <see cref="CompilationStatus.Ok"/>
-    /// or <see cref="CompilationStatus.Error"/> plus
+    /// Triggers a compile for a NodeType by stamping a RELEASE REQUEST
+    /// (<see cref="NodeTypeDefinition.RequestedReleaseAt"/> +
+    /// <see cref="NodeTypeDefinition.RequestedReleaseForce"/>) on its MeshNode via the
+    /// canonical remote-stream write path: <see cref="MeshNodeStreamExtensions"/>'
+    /// <c>GetMeshNodeStream(path).Update(...)</c> pushes a patch through the
+    /// synchronization protocol to the owning per-node hub. That is the SAME seam the
+    /// UI Compile button uses: the hub's <c>InstallReleaseRequestWatcher</c> observes
+    /// the timestamp move, UN-PARKS the type in the <c>NodeTypeCompileParkRegistry</c>
+    /// (a deliberate retry is the single un-park trigger) and promotes the request to
+    /// <see cref="CompilationStatus.Pending"/>; the CompileWatcher then runs Roslyn and
+    /// writes back <see cref="CompilationStatus.Ok"/> or
+    /// <see cref="CompilationStatus.Error"/> plus
     /// <see cref="NodeTypeDefinition.LastCompilationActivityPath"/>.
+    ///
+    /// <para>🚨 Never flip <c>CompilationStatus = Pending</c> directly from here: a
+    /// direct flip bypasses the un-park seam, so a parked (terminally failed) type
+    /// swallows the trigger in the compile watcher's parked short-circuit and wedges
+    /// at Pending forever (2026-07-16 memex Reinsurance/Layer + BusinessRules/Scope —
+    /// healed only by a pod restart).</para>
     ///
     /// <para>Why a dedicated tool over <see cref="Patch"/>: Patch requires both
     /// Read (to merge the existing node) and Update permission on the target node.
@@ -3194,88 +3209,112 @@ public class MeshOperations
                     hub.JsonSerializerOptions));
             }
 
-            // Subscribe to the NodeType's stream BEFORE flipping Pending so we
-            // don't miss the watcher's status transitions. The stream emits the
+            // Subscribe to the NodeType's stream BEFORE triggering so we don't
+            // miss the watcher's status transitions. The stream emits the
             // current node first (whatever status it's in); we wait for a
             // settled Ok/Error after the trigger.
             var stream = workspace.GetMeshNodeStream(resolvedPath);
 
-            try
-            {
-                // Impersonate System for the Pending flip. Triggering a recompile is an
-                // INFRASTRUCTURE operation that fills the assembly cache — it must succeed
-                // even when the caller has no Update right on the target partition (the
-                // read-only Doc partition is the canonical case). Under the caller's identity
-                // this flip was denied → "UpdateMeshNode failed" → the compile never ran and
-                // the cache stayed empty (atioz on-demand-compile failure on Doc). The
-                // RunCompile watcher + Release-node creation already run as System; this entry
-                // flip was the straggler still on the caller's identity.
-                var accessService = hub.ServiceProvider.GetService<AccessService>();
-                using (accessService?.ImpersonateAsSystem())
-                    workspace.GetMeshNodeStream(resolvedPath).Update(node => node with
-                    {
-                        Content = WithPendingCompilationStatus(node.Content)
-                    }).Subscribe(
-                        _ => { },
-                        ex => logger.LogWarning(ex,
-                            "Compile: UpdateMeshNode failed for {Path}", resolvedPath));
-            }
-            catch (Exception ex)
-            {
-                logger.LogWarning(ex, "Compile trigger failed for {Path}", resolvedPath);
-                return Observable.Return(JsonSerializer.Serialize(
-                    new { status = "Error", path = resolvedPath, message = ex.Message },
-                    hub.JsonSerializerOptions));
-            }
-
-            // Wait for the watcher to write back Ok or Error (60s budget — Roslyn
-            // first compile of a moderate node is 5-15s; bigger trees can take
-            // longer; some hubs may take ~5s to emit a settled state after the
-            // initial Pending). Then return a structured result with the error
-            // body inline if Error — agents/humans get the diagnostic without a
-            // second polling round-trip.
+            // 🚨 Capture the PRE-TRIGGER snapshot FIRST. The settle-wait below only
+            // accepts a terminal Ok/Error emission produced by THIS trigger's compile
+            // run: the stream replays the current node on subscribe, so without this
+            // barrier the PREVIOUS run's terminal snapshot (still Ok/Error) could be
+            // returned as this run's result — complete with the previous run's
+            // activity path (a fabricated "Compile SUCCEEDED" for a compile that
+            // never ran).
             return stream
-                .Where(n =>
-                {
-                    var status = ReadCompilationStatusFromNode(n);
-                    return status == CompilationStatus.Ok || status == CompilationStatus.Error;
-                })
                 .Take(1)
-                .Timeout(TimeSpan.FromSeconds(60))
-                .Select(n =>
+                .Timeout(TimeSpan.FromSeconds(30))
+                .Catch<MeshNode?, Exception>(preEx =>
                 {
-                    var status = ReadCompilationStatusFromNode(n);
-                    var error = ReadCompilationError(n);
-                    var activityPath = ReadActivityPath(n);
-                    return JsonSerializer.Serialize(
-                        new
-                        {
-                            status = status?.ToString() ?? "Unknown",
-                            path = resolvedPath,
-                            error,
-                            activityPath,
-                            message = status == CompilationStatus.Ok
-                                ? "Compile SUCCEEDED."
-                                : "Compile FAILED — see `error` for Roslyn diagnostics. "
-                                  + "Full source-discovery + matched-Code-paths trace lives at "
-                                  + (activityPath ?? "(no activity log written)") + "."
-                        },
-                        hub.JsonSerializerOptions);
+                    logger.LogWarning(preEx,
+                        "Compile: could not read the pre-trigger snapshot for {Path} — proceeding without a stale-result barrier",
+                        resolvedPath);
+                    return Observable.Return<MeshNode?>(null);
                 })
-                .Catch((Exception ex) =>
+                .SelectMany(before =>
                 {
-                    logger.LogWarning(ex,
-                        "Compile: timeout / observer error waiting for {Path} to settle", resolvedPath);
-                    return Observable.Return(JsonSerializer.Serialize(
-                        new
+                    try
+                    {
+                        // Impersonate System for the trigger write. Triggering a recompile is an
+                        // INFRASTRUCTURE operation that fills the assembly cache — it must succeed
+                        // even when the caller has no Update right on the target partition (the
+                        // read-only Doc partition is the canonical case). Under the caller's identity
+                        // this write was denied → "UpdateMeshNode failed" → the compile never ran and
+                        // the cache stayed empty (atioz on-demand-compile failure on Doc). The
+                        // RunCompile watcher + Release-node creation already run as System; this entry
+                        // write was the straggler still on the caller's identity.
+                        var accessService = hub.ServiceProvider.GetService<AccessService>();
+                        using (accessService?.ImpersonateAsSystem())
+                            stream.Update(node => WithReleaseRequest(node, DateTimeOffset.UtcNow))
+                                .Subscribe(
+                                    _ => { },
+                                    ex => logger.LogWarning(ex,
+                                        "Compile: UpdateMeshNode failed for {Path}", resolvedPath));
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.LogWarning(ex, "Compile trigger failed for {Path}", resolvedPath);
+                        return Observable.Return(JsonSerializer.Serialize(
+                            new { status = "Error", path = resolvedPath, message = ex.Message },
+                            hub.JsonSerializerOptions));
+                    }
+
+                    // Wait for the watcher to write back Ok or Error (60s budget — Roslyn
+                    // first compile of a moderate node is 5-15s; bigger trees can take
+                    // longer; some hubs may take ~5s to emit a settled state after the
+                    // initial Pending). Only a terminal state from a NEW compile run is
+                    // accepted (IsNewCompileRun): every run stamps LastCompileStartedAt —
+                    // and, when the activity create lands, a fresh
+                    // LastCompilationActivityPath — at its Pending→Compiling transition,
+                    // so the pre-trigger snapshot's replayed terminal state can never be
+                    // reported as this run's result. Then return a structured result with
+                    // the error body inline if Error — agents/humans get the diagnostic
+                    // without a second polling round-trip.
+                    return stream
+                        .Where(n =>
                         {
-                            status = "Pending",
-                            path = resolvedPath,
-                            message = "Compile triggered but did not settle within the deadline. "
-                                + "Poll `get " + resolvedPath + "` for `compilationStatus` and "
-                                + "`lastCompilationActivityPath`. Underlying error: " + ex.Message
-                        },
-                        hub.JsonSerializerOptions));
+                            var status = ReadCompilationStatusFromNode(n);
+                            return (status == CompilationStatus.Ok || status == CompilationStatus.Error)
+                                && IsNewCompileRun(n, before);
+                        })
+                        .Take(1)
+                        .Timeout(TimeSpan.FromSeconds(60))
+                        .Select(n =>
+                        {
+                            var status = ReadCompilationStatusFromNode(n);
+                            var error = ReadCompilationError(n);
+                            var activityPath = ReadActivityPath(n);
+                            return JsonSerializer.Serialize(
+                                new
+                                {
+                                    status = status?.ToString() ?? "Unknown",
+                                    path = resolvedPath,
+                                    error,
+                                    activityPath,
+                                    message = status == CompilationStatus.Ok
+                                        ? "Compile SUCCEEDED."
+                                        : "Compile FAILED — see `error` for Roslyn diagnostics. "
+                                          + "Full source-discovery + matched-Code-paths trace lives at "
+                                          + (activityPath ?? "(no activity log written)") + "."
+                                },
+                                hub.JsonSerializerOptions);
+                        })
+                        .Catch((Exception ex) =>
+                        {
+                            logger.LogWarning(ex,
+                                "Compile: timeout / observer error waiting for {Path} to settle", resolvedPath);
+                            return Observable.Return(JsonSerializer.Serialize(
+                                new
+                                {
+                                    status = "Pending",
+                                    path = resolvedPath,
+                                    message = "Compile triggered but no NEW compile run settled within the deadline. "
+                                        + "Poll `get " + resolvedPath + "` for `compilationStatus` and "
+                                        + "`lastCompilationActivityPath`. Underlying error: " + ex.Message
+                                },
+                                hub.JsonSerializerOptions));
+                        });
                 });
         });
     }
@@ -3310,40 +3349,114 @@ public class MeshOperations
         return null;
     }
 
-    /// <summary>
-    /// Returns a new <c>Content</c> object with <c>compilationStatus</c> set to
-    /// <c>Pending</c>. Handles both strongly-typed
-    /// <see cref="Graph.Configuration.NodeTypeDefinition"/> (own hub registered
-    /// the type) and <see cref="JsonElement"/> (remote hub passed it through
-    /// untyped). Other content shapes are returned unchanged with a warning —
-    /// this method is only meaningful on a NodeType node.
-    /// </summary>
-    private object? WithPendingCompilationStatus(object? content)
+    private static DateTimeOffset? ReadCompileStartedAt(MeshNode? node)
     {
-        switch (content)
+        if (node?.Content is Graph.Configuration.NodeTypeDefinition def)
+            return def.LastCompileStartedAt;
+        if (node?.Content is JsonElement json && json.TryGetProperty("lastCompileStartedAt", out var p)
+            && p.ValueKind == JsonValueKind.String && p.TryGetDateTimeOffset(out var parsed))
+            return parsed;
+        return null;
+    }
+
+    /// <summary>
+    /// True when the settled <paramref name="node"/> carries the terminal state of a
+    /// compile run STARTED AFTER the pre-trigger snapshot <paramref name="before"/> —
+    /// the barrier that keeps <see cref="Compile"/> from reporting the PREVIOUS run's
+    /// replayed Ok/Error (with the previous run's activity path) as this trigger's
+    /// result. Every compile run stamps <c>LastCompileStartedAt</c> — and, when the
+    /// activity create lands, a fresh <c>LastCompilationActivityPath</c> — at its
+    /// Pending→Compiling transition, so a new run always advances at least one of the
+    /// two. With no baseline (the pre-trigger read failed), the first settled emission
+    /// is accepted — there is no reference point to discriminate against.
+    /// </summary>
+    private static bool IsNewCompileRun(MeshNode? node, MeshNode? before)
+    {
+        if (before is null)
+            return true;
+        var activity = ReadActivityPath(node);
+        if (activity is not null
+            && !string.Equals(activity, ReadActivityPath(before), StringComparison.Ordinal))
+            return true;
+        var beforeStartedAt = ReadCompileStartedAt(before);
+        return ReadCompileStartedAt(node) is { } startedAt
+            && (beforeStartedAt is null || startedAt > beforeStartedAt.Value);
+    }
+
+    /// <summary>
+    /// True when the node is a NodeType definition node — either strongly typed
+    /// (<see cref="Graph.Configuration.NodeTypeDefinition"/> content) or a degraded
+    /// untyped mirror recognised by <see cref="MeshNode.NodeType"/>.
+    /// </summary>
+    private static bool IsNodeTypeNode(MeshNode node) =>
+        node.Content is Graph.Configuration.NodeTypeDefinition
+        || string.Equals(node.NodeType, MeshNode.NodeTypePath, StringComparison.Ordinal);
+
+    /// <summary>
+    /// Returns the node with a fresh RELEASE REQUEST stamped on its content:
+    /// <see cref="NodeTypeDefinition.RequestedReleaseAt"/> = <paramref name="triggerAt"/>
+    /// and <see cref="NodeTypeDefinition.RequestedReleaseForce"/> = <c>true</c> — the
+    /// exact trigger the UI Compile button writes. The per-NodeType hub's
+    /// <c>InstallReleaseRequestWatcher</c> observes the timestamp move, un-parks the
+    /// type and promotes the request to <see cref="CompilationStatus.Pending"/>.
+    /// Handles both strongly-typed <see cref="Graph.Configuration.NodeTypeDefinition"/>
+    /// (own hub registered the type) and <see cref="JsonElement"/> / <c>null</c>
+    /// (remote hub passed it through untyped). Other content shapes are returned
+    /// unchanged with a warning — the stamp is only meaningful on a NodeType node.
+    /// </summary>
+    private MeshNode WithReleaseRequest(MeshNode node, DateTimeOffset triggerAt)
+    {
+        switch (node.Content)
         {
             case Graph.Configuration.NodeTypeDefinition def:
-                return def with { CompilationStatus = CompilationStatus.Pending };
+                return node with
+                {
+                    Content = def with
+                    {
+                        RequestedReleaseAt = triggerAt,
+                        RequestedReleaseForce = true
+                    }
+                };
 
             case JsonElement json:
             {
-                var node = JsonNode.Parse(json.GetRawText()) as JsonObject ?? new JsonObject();
-                node["compilationStatus"] = "Pending";
-                return JsonSerializer.SerializeToElement(node, hub.JsonSerializerOptions);
+                var obj = JsonNode.Parse(json.GetRawText()) as JsonObject ?? new JsonObject();
+                StampReleaseRequest(obj, triggerAt);
+                return node with
+                {
+                    Content = JsonSerializer.SerializeToElement(obj, hub.JsonSerializerOptions)
+                };
             }
 
             case null:
             {
-                var node = new JsonObject { ["compilationStatus"] = "Pending" };
-                return JsonSerializer.SerializeToElement(node, hub.JsonSerializerOptions);
+                var obj = new JsonObject();
+                StampReleaseRequest(obj, triggerAt);
+                return node with
+                {
+                    Content = JsonSerializer.SerializeToElement(obj, hub.JsonSerializerOptions)
+                };
             }
 
             default:
                 logger.LogWarning(
-                    "Compile: unexpected content type {Type} on NodeType node — wrapping",
-                    content.GetType().Name);
-                return content;
+                    "Compile: unexpected content type {Type} on NodeType node — release request not stamped",
+                    node.Content.GetType().Name);
+                return node;
         }
+    }
+
+    private void StampReleaseRequest(JsonObject obj, DateTimeOffset triggerAt)
+    {
+        var naming = hub.JsonSerializerOptions.PropertyNamingPolicy;
+        var atKey = naming?.ConvertName(
+                nameof(Graph.Configuration.NodeTypeDefinition.RequestedReleaseAt))
+            ?? nameof(Graph.Configuration.NodeTypeDefinition.RequestedReleaseAt);
+        var forceKey = naming?.ConvertName(
+                nameof(Graph.Configuration.NodeTypeDefinition.RequestedReleaseForce))
+            ?? nameof(Graph.Configuration.NodeTypeDefinition.RequestedReleaseForce);
+        obj[atKey] = JsonSerializer.SerializeToNode(triggerAt, hub.JsonSerializerOptions);
+        obj[forceKey] = true;
     }
 
     /// <summary>
