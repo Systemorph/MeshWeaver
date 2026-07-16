@@ -193,15 +193,52 @@ internal static class NodeTypeCompilationHelpers
                     // terminal failed state, so we do NOT re-run Roslyn — that is the
                     // containment that turns a broken type from a portal-wide recompile storm
                     // (every Pending flip = a fresh Roslyn pass on the action block) into a
-                    // single, bounded, visible failure. The only thing that flips a parked
-                    // (Error) type back to Pending is a DELIBERATE release request, and
-                    // InstallReleaseRequestWatcher un-parks before it does — so this guard never
-                    // blocks a legitimate retry, only a stray re-trigger.
+                    // single, bounded, visible failure. Every DELIBERATE retry (a release
+                    // request — the UI Compile button, the MCP compile/recycle tools) goes
+                    // through InstallReleaseRequestWatcher, which un-parks BEFORE promoting to
+                    // Pending — so this guard never blocks a legitimate retry, only a stray
+                    // re-trigger (a persisted-Compiling recovery kickoff, a legacy direct flip).
                     if (parkRegistry?.IsParked(hubPath) == true)
                     {
                         logger?.LogDebug(
                             "Compile watcher: {HubPath} is PARKED (terminal compile failure) — " +
                             "skipping recompile, serving cached error", hubPath);
+                        // 🅿️ Wedge-close: the Pending flip we refuse to dispatch was already
+                        // WRITTEN to the node. Without a settle write-back the type would sit
+                        // at Pending forever — every settle-waiter (get_diagnostics' / the
+                        // compile tool's Where(Ok|Error), WaitForLatestRelease) hangs to its
+                        // timeout and the stray trigger never reaches a sink. Re-settle
+                        // Pending → Error with the CACHED parked error so the trigger is
+                        // answered (bounded, no Roslyn) while the park stays in place. Same
+                        // fire-and-forget UpdateOwn shape as the kickoffs below; System scope
+                        // because re-settling framework state is infrastructure, not a user
+                        // write.
+                        var parkedError = parkRegistry.GetParkedError(hubPath);
+                        using (accessService?.ImpersonateAsSystem())
+                            workspace.GetMeshNodeStream().Update(curr =>
+                            {
+                                var parkedDef = curr.ContentAs<NodeTypeDefinition>(
+                                    hub.JsonSerializerOptions, logger);
+                                if (parkedDef is null) return curr;
+                                // Only re-settle the stray Pending — never clobber a state a
+                                // genuine (un-parked) compile has already moved past it.
+                                if (parkedDef.CompilationStatus != CompilationStatus.Pending)
+                                    return curr;
+                                return curr with
+                                {
+                                    Content = parkedDef with
+                                    {
+                                        CompilationStatus = CompilationStatus.Error,
+                                        CompilationError = parkedError
+                                            ?? parkedDef.CompilationError
+                                            ?? "Compilation is parked after a terminal failure; request a release (Compile) to retry."
+                                    }
+                                };
+                            }).Subscribe(
+                                _ => { },
+                                ex => logger?.LogWarning(ex,
+                                    "Compile watcher: failed to re-settle parked {HubPath} from Pending to Error",
+                                    hubPath));
                         return;
                     }
 
