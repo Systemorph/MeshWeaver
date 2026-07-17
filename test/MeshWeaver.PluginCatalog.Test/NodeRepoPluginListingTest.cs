@@ -31,6 +31,9 @@ public class NodeRepoPluginListingTest
         // A free-to-browse plugin root without a price — listed, Price null.
         new("Chess/index.json",
             """{"$type":"MeshNode","id":"Chess","path":"Chess","name":"Chess","nodeType":"Store/Plugin","category":"Games","content":{"$type":"PluginContent"}}"""),
+        // The Store package's own root (the /Store catalog page) — listed too.
+        new("Store/index.json",
+            """{"$type":"MeshNode","id":"Store","path":"Store","name":"Store","nodeType":"Store/Catalog","content":{"$type":"StoreContent"}}"""),
         // A deep index.json is NOT a package root.
         new("Widget/Sub/index.json",
             """{"$type":"MeshNode","id":"Sub","path":"Widget/Sub","nodeType":"Store/Plugin"}"""),
@@ -51,7 +54,7 @@ public class NodeRepoPluginListingTest
     {
         var packages = await Source().ListPackages("HEAD").FirstAsync().ToTask();
 
-        packages.Select(p => p.Id).Should().Equal("AgenticEngineering", "Chess", "Widget");
+        packages.Select(p => p.Id).Should().Equal("AgenticEngineering", "Chess", "Store", "Widget");
 
         var course = packages.Single(p => p.Id == "AgenticEngineering");
         course.Name.Should().Be("Agentic Engineering");

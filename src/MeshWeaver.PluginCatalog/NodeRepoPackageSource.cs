@@ -23,11 +23,12 @@ public sealed class NodeRepoPackageSource : IPackageSource
 {
     /// <summary>
     /// The root node types that make a top-level folder an installable package: the classic
-    /// <c>Space</c> root and the Store's <c>Store/Plugin</c> root (plugins + courses retyped for
-    /// the storefront). Both accepted during the transition — a repo may carry a mix.
+    /// <c>Space</c> root, the Store's <c>Store/Plugin</c> root (plugins + courses retyped for the
+    /// storefront), and the Store package's own <c>Store/Catalog</c> root. All accepted during the
+    /// transition — a repo may carry a mix.
     /// </summary>
     private static readonly ImmutableHashSet<string> RootNodeTypes =
-        ImmutableHashSet.Create(StringComparer.Ordinal, "Space", "Store/Plugin");
+        ImmutableHashSet.Create(StringComparer.Ordinal, "Space", "Store/Plugin", "Store/Catalog");
 
     private readonly Func<string, string, string?, string, IObservable<RepoSnapshot>> fetch;
     private readonly string repoUrl;
