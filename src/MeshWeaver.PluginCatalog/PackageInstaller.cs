@@ -256,10 +256,12 @@ public static class PackageInstaller
             return false;
         // A NodeType node's stored content is ENRICHED by the live compile (CompilationStatus, release
         // stamps, …), so a whole-content compare would ALWAYS look "changed" on re-install and pointlessly
-        // rewrite + recompile it. Compare only the authored field the installer writes — the
-        // Configuration lambda (the source .cs are separate Code nodes, diffed on their own).
+        // rewrite + recompile it. Compare only the authored fields the installer writes — the
+        // Configuration lambda AND the Sources list (a source-list change alters what compiles, so it
+        // must re-install + recompile; the source .cs are separate Code nodes, diffed on their own).
         if (current.Content is NodeTypeDefinition curDef && incoming.Content is NodeTypeDefinition inDef)
-            return string.Equals(curDef.Configuration, inDef.Configuration, StringComparison.Ordinal);
+            return string.Equals(curDef.Configuration, inDef.Configuration, StringComparison.Ordinal)
+                && (curDef.Sources ?? []).SequenceEqual(inDef.Sources ?? [], StringComparer.Ordinal);
         // Otherwise compare the full content, applying the incoming over current so an omitted field
         // does not read as a change.
         return ContentSignature(incoming.Content ?? current.Content, options)
@@ -427,16 +429,16 @@ public static class PackageInstaller
         };
     }
 
-    // Each write is System-impersonated INDIVIDUALLY (Defer scopes the impersonation to the
-    // post) — an ambient whole-pipeline impersonation does not survive the pipeline's scheduler
-    // hops. The admin-gated install is the authorization (see Install).
+    // Each write is System-impersonated INDIVIDUALLY — an ambient whole-pipeline impersonation
+    // does not survive the pipeline's scheduler hops. Observable.Using, NOT Defer+using: the
+    // post happens when hub.Observe's stream is SUBSCRIBED, so the impersonation must still be
+    // alive then (Defer+using disposes it before the post — the exact trap the Edu redeemer
+    // documented). The admin-gated install is the authorization (see Install).
     private static IObservable<int> Upsert(IMessageHub hub, MeshNode node) =>
-        Observable.Defer(() =>
-            {
-                var accessService = hub.ServiceProvider.GetService<AccessService>();
-                using (accessService?.ImpersonateAsSystem())
-                    return hub.Observe<CreateOrUpdateNodeResponse>(new CreateOrUpdateNodeRequest(node));
-            })
+        Observable.Using(
+                () => hub.ServiceProvider.GetService<AccessService>()?.ImpersonateAsSystem()
+                      ?? System.Reactive.Disposables.Disposable.Empty,
+                _ => hub.Observe<CreateOrUpdateNodeResponse>(new CreateOrUpdateNodeRequest(node)))
             .FirstAsync().Select(d => d.Message)
             .SelectMany(resp => resp.Success
                 ? Observable.Return(1)
