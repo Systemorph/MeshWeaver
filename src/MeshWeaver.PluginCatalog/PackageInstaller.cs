@@ -50,6 +50,26 @@ public static class PackageInstaller
         ILogger? logger = null,
         int batchSize = DefaultBatchSize)
     {
+        // The whole install runs under the SYSTEM identity — the same footing as a GitSync
+        // import. Installing a curated package is a platform action (the catalog tab gates it to
+        // global admins; that gate IS the authorization): it writes partition ROOTS whose node
+        // types are dynamic (e.g. Store/Plugin — invisible to the static-only
+        // PartitionWriteGuard check) and type/infrastructure nodes no user principal may create.
+        // Observable.Using scopes the impersonation to this one subscription.
+        var accessService = hub.ServiceProvider.GetService<AccessService>();
+        return Observable.Using(
+            () => accessService?.ImpersonateAsSystem() ?? System.Reactive.Disposables.Disposable.Empty,
+            _ => InstallCore(hub, manifest, files, installedFromRef, logger, batchSize));
+    }
+
+    private static IObservable<InstallResult> InstallCore(
+        IMessageHub hub,
+        PackageManifest manifest,
+        IReadOnlyList<PackageFile> files,
+        string installedFromRef,
+        ILogger? logger,
+        int batchSize)
+    {
         logger ??= hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.PluginCatalog.PackageInstaller");
 
