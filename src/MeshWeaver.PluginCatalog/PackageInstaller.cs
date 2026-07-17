@@ -151,7 +151,12 @@ public static class PackageInstaller
                 InstalledNodeCount = count,
             },
         };
-        return hub.Observe<CreateOrUpdateNodeResponse>(new CreateOrUpdateNodeRequest(record))
+        // System-impersonated like every installer write (Using — see Upsert): this runs after
+        // barrier scheduler hops, where no ambient context survives.
+        return Observable.Using(
+                () => hub.ServiceProvider.GetService<AccessService>()?.ImpersonateAsSystem()
+                      ?? System.Reactive.Disposables.Disposable.Empty,
+                _ => hub.Observe<CreateOrUpdateNodeResponse>(new CreateOrUpdateNodeRequest(record)))
             .FirstAsync().Select(d => d.Message)
             .SelectMany(resp => resp.Success
                 ? Observable.Return(resp.Node!)
@@ -218,9 +223,15 @@ public static class PackageInstaller
                 // Only recompile when something actually changed — an unchanged re-install must not
                 // kick a redundant Roslyn build.
                 if (written > 0)
-                    hub.RequestNodeTypeRelease(nodeTypePath,
-                        onError: msg => logger?.LogWarning(
-                            "Release request for {Path} failed: {Msg}", nodeTypePath, msg));
+                {
+                    // System-impersonated: the release flip is a stream write posted from a
+                    // continuation with no ambient context (see Upsert).
+                    var accessService = hub.ServiceProvider.GetService<AccessService>();
+                    using (accessService?.ImpersonateAsSystem())
+                        hub.RequestNodeTypeRelease(nodeTypePath,
+                            onError: msg => logger?.LogWarning(
+                                "Release request for {Path} failed: {Msg}", nodeTypePath, msg));
+                }
                 return WriteInstalledRecord(hub, manifest, installedFromRef, all.Length).Select(_ => result);
             });
     }
@@ -395,9 +406,15 @@ public static class PackageInstaller
                     manifest.Id, result.Written, result.Unchanged, nodes.Length, installedFromRef);
                 // Recompile only the NodeTypes, and only when something changed.
                 if (result.Written > 0)
-                    foreach (var path in nodeTypePaths)
-                        hub.RequestNodeTypeRelease(path,
-                            onError: msg => logger?.LogWarning("Release request for {Path} failed: {Msg}", path, msg));
+                {
+                    // System-impersonated: the release flips are stream writes posted from a
+                    // continuation with no ambient context (see Upsert).
+                    var accessService = hub.ServiceProvider.GetService<AccessService>();
+                    using (accessService?.ImpersonateAsSystem())
+                        foreach (var path in nodeTypePaths)
+                            hub.RequestNodeTypeRelease(path,
+                                onError: msg => logger?.LogWarning("Release request for {Path} failed: {Msg}", path, msg));
+                }
                 return WriteInstalledRecord(hub, manifest, installedFromRef, nodes.Length).Select(_ => result);
             });
     }
