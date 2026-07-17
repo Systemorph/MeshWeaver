@@ -8,6 +8,12 @@
         <FluentSearch Placeholder="Search..." @bind-Value="searchQuery"
             @onkeydown="HandleSearchKeyDown" Style="width: 100%;" />
     </div>
+    <FluentDivider />
+    @* Store — anonymous-visible: the storefront is the public sales surface. *@
+    <FluentMenuItem OnClick="@HandleStoreClick">
+        <FluentIcon Value="@(new Icons.Regular.Size20.BuildingShop())" Slot="start" />
+        Store
+    </FluentMenuItem>
     <AuthorizeView>
         <Authorized>
             <FluentDivider />
@@ -41,6 +47,12 @@
             await OnSearch.InvokeAsync(searchQuery);
             await OnClose.InvokeAsync();
         }
+    }
+
+    private async Task HandleStoreClick()
+    {
+        NavigationManager.NavigateTo("/Store");
+        await OnClose.InvokeAsync();
     }
 
     private async Task HandleCreateClick()
