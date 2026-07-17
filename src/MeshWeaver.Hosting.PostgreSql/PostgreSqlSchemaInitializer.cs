@@ -1102,6 +1102,8 @@ public static class PostgreSqlSchemaInitializer
 
                 -- Direct entries from AccessAssignment nodes (access satellite table)
                 INSERT INTO user_effective_permissions_shadow (user_id, node_path_prefix, permission, is_allow)
+                SELECT user_id, node_path_prefix, permission, bool_and(is_allow) AS is_allow
+                FROM (
                 SELECT
                     aa.content->>'accessObject' AS user_id,
                     COALESCE(aa.main_node, aa.namespace) AS node_path_prefix,
@@ -1142,11 +1144,15 @@ public static class PostgreSqlSchemaInitializer
                 ) perm
                 WHERE aa.content->>'accessObject' IS NOT NULL
                   AND aa.content->'roles' IS NOT NULL
+                ) AS dedup(user_id, node_path_prefix, permission, is_allow)
+                GROUP BY user_id, node_path_prefix, permission
                 ON CONFLICT (user_id, node_path_prefix, permission) DO UPDATE
                     SET is_allow = CASE WHEN EXCLUDED.is_allow = false THEN false ELSE user_effective_permissions_shadow.is_allow END;
 
                 -- Group expansion: read GroupMembership MeshNodes
                 INSERT INTO user_effective_permissions_shadow (user_id, node_path_prefix, permission, is_allow)
+                SELECT user_id, node_path_prefix, permission, bool_and(is_allow) AS is_allow
+                FROM (
                 WITH RECURSIVE all_members AS (
                     SELECT group_entry->>'group' AS group_path, gm.content->>'member' AS member_id
                     FROM "auth".mesh_nodes gm
@@ -1207,18 +1213,26 @@ public static class PostgreSqlSchemaInitializer
                     ) AS permission
                 ) perm
                 WHERE aa.content->'roles' IS NOT NULL
+                ) AS dedup(user_id, node_path_prefix, permission, is_allow)
+                GROUP BY user_id, node_path_prefix, permission
                 ON CONFLICT (user_id, node_path_prefix, permission) DO UPDATE
                     SET is_allow = CASE WHEN EXCLUDED.is_allow = false THEN false ELSE user_effective_permissions_shadow.is_allow END;
 
                 -- Direct entries from access_control table (convenience methods)
                 INSERT INTO user_effective_permissions_shadow (user_id, node_path_prefix, permission, is_allow)
+                SELECT user_id, node_path_prefix, permission, bool_and(is_allow) AS is_allow
+                FROM (
                 SELECT subject, node_path, permission, is_allow
                 FROM access_control
+                ) AS dedup(user_id, node_path_prefix, permission, is_allow)
+                GROUP BY user_id, node_path_prefix, permission
                 ON CONFLICT (user_id, node_path_prefix, permission) DO UPDATE
                     SET is_allow = CASE WHEN EXCLUDED.is_allow = false THEN false ELSE user_effective_permissions_shadow.is_allow END;
 
                 -- Group expansion from group_members + access_control
                 INSERT INTO user_effective_permissions_shadow (user_id, node_path_prefix, permission, is_allow)
+                SELECT user_id, node_path_prefix, permission, bool_and(is_allow) AS is_allow
+                FROM (
                 WITH RECURSIVE all_members AS (
                     SELECT group_name, member_id FROM group_members
                     UNION
@@ -1233,6 +1247,8 @@ public static class PostgreSqlSchemaInitializer
                 SELECT lm.member_id, ac.node_path, ac.permission, ac.is_allow
                 FROM access_control ac
                 JOIN leaf_members lm ON lm.group_name = ac.subject
+                ) AS dedup(user_id, node_path_prefix, permission, is_allow)
+                GROUP BY user_id, node_path_prefix, permission
                 ON CONFLICT (user_id, node_path_prefix, permission) DO UPDATE
                     SET is_allow = CASE WHEN EXCLUDED.is_allow = false THEN false ELSE user_effective_permissions_shadow.is_allow END;
 
@@ -1278,7 +1294,11 @@ public static class PostgreSqlSchemaInitializer
                     NULL;
                 END;
             END;
-            $$ LANGUAGE plpgsql;
+            -- jit off: the dedup aggregate's cost estimate (inflated by jsonb SRF default row
+            -- estimates) exceeds jit_above_cost, and LLVM then spends ~450ms compiling the
+            -- unnest expressions PER STATEMENT — in a trigger path that runs on every
+            -- _Access write and once per schema in the boot self-heal sweep.
+            $$ LANGUAGE plpgsql SET jit = off;
 
             -- Access satellite table (must exist before trigger creation)
             CREATE TABLE IF NOT EXISTS access (
@@ -1323,6 +1343,8 @@ public static class PostgreSqlSchemaInitializer
 
                 -- Direct entries from AccessAssignment nodes for this user
                 INSERT INTO user_effective_permissions (user_id, node_path_prefix, permission, is_allow)
+                SELECT user_id, node_path_prefix, permission, bool_and(is_allow) AS is_allow
+                FROM (
                 SELECT
                     p_user_id,
                     COALESCE(aa.main_node, aa.namespace),
@@ -1357,11 +1379,15 @@ public static class PostgreSqlSchemaInitializer
                 ) perm
                 WHERE aa.content->>'accessObject' = p_user_id
                   AND aa.content->'roles' IS NOT NULL
+                ) AS dedup(user_id, node_path_prefix, permission, is_allow)
+                GROUP BY user_id, node_path_prefix, permission
                 ON CONFLICT (user_id, node_path_prefix, permission) DO UPDATE
                     SET is_allow = CASE WHEN EXCLUDED.is_allow = false THEN false ELSE user_effective_permissions.is_allow END;
 
                 -- Group expansion for this user
                 INSERT INTO user_effective_permissions (user_id, node_path_prefix, permission, is_allow)
+                SELECT user_id, node_path_prefix, permission, bool_and(is_allow) AS is_allow
+                FROM (
                 WITH RECURSIVE all_members AS (
                     SELECT group_entry->>'group' AS group_path, gm.content->>'member' AS member_id
                     FROM "auth".mesh_nodes gm
@@ -1407,12 +1433,18 @@ public static class PostgreSqlSchemaInitializer
                     ) AS permission
                 ) perm
                 WHERE aa.content->'roles' IS NOT NULL
+                ) AS dedup(user_id, node_path_prefix, permission, is_allow)
+                GROUP BY user_id, node_path_prefix, permission
                 ON CONFLICT (user_id, node_path_prefix, permission) DO UPDATE
                     SET is_allow = CASE WHEN EXCLUDED.is_allow = false THEN false ELSE user_effective_permissions.is_allow END;
 
                 -- access_control entries for this user
                 INSERT INTO user_effective_permissions (user_id, node_path_prefix, permission, is_allow)
+                SELECT user_id, node_path_prefix, permission, bool_and(is_allow) AS is_allow
+                FROM (
                 SELECT subject, node_path, permission, is_allow FROM access_control WHERE subject = p_user_id
+                ) AS dedup(user_id, node_path_prefix, permission, is_allow)
+                GROUP BY user_id, node_path_prefix, permission
                 ON CONFLICT (user_id, node_path_prefix, permission) DO UPDATE
                     SET is_allow = CASE WHEN EXCLUDED.is_allow = false THEN false ELSE user_effective_permissions.is_allow END;
 
@@ -1441,7 +1473,11 @@ public static class PostgreSqlSchemaInitializer
                 EXCEPTION WHEN undefined_table THEN NULL;
                 END;
             END;
-            $$ LANGUAGE plpgsql;
+            -- jit off: the dedup aggregate's cost estimate (inflated by jsonb SRF default row
+            -- estimates) exceeds jit_above_cost, and LLVM then spends ~450ms compiling the
+            -- unnest expressions PER STATEMENT — in a trigger path that runs on every
+            -- _Access write and once per schema in the boot self-heal sweep.
+            $$ LANGUAGE plpgsql SET jit = off;
 
             -- Trigger function: per-row, rebuilds only the affected user's permissions.
             -- Body single-sourced from AccessChangedTriggerFunctionBody: every rebuild call is
@@ -1768,6 +1804,8 @@ public static class PostgreSqlSchemaInitializer
                 -- Direct entries from AccessAssignment nodes (access satellite table)
                 -- Unnest the roles[] array to get each role assignment
                 INSERT INTO user_effective_permissions_shadow (user_id, node_path_prefix, permission, is_allow)
+                SELECT user_id, node_path_prefix, permission, bool_and(is_allow) AS is_allow
+                FROM (
                 SELECT
                     aa.content->>'accessObject' AS user_id,
                     COALESCE(aa.main_node, aa.namespace) AS node_path_prefix,
@@ -1809,12 +1847,16 @@ public static class PostgreSqlSchemaInitializer
                 ) perm
                 WHERE aa.content->>'accessObject' IS NOT NULL
                   AND aa.content->'roles' IS NOT NULL
+                ) AS dedup(user_id, node_path_prefix, permission, is_allow)
+                GROUP BY user_id, node_path_prefix, permission
                 ON CONFLICT (user_id, node_path_prefix, permission) DO UPDATE
                     SET is_allow = CASE WHEN EXCLUDED.is_allow = false THEN false ELSE user_effective_permissions_shadow.is_allow END;
 
                 -- Group expansion: read GroupMembership MeshNodes
                 -- New model: content has "member" + "groups" array of {"group":"..."}
                 INSERT INTO user_effective_permissions_shadow (user_id, node_path_prefix, permission, is_allow)
+                SELECT user_id, node_path_prefix, permission, bool_and(is_allow) AS is_allow
+                FROM (
                 WITH RECURSIVE all_members AS (
                     SELECT group_entry->>'group' AS group_path, gm.content->>'member' AS member_id
                     FROM "auth".mesh_nodes gm
@@ -1875,18 +1917,26 @@ public static class PostgreSqlSchemaInitializer
                     ) AS permission
                 ) perm
                 WHERE aa.content->'roles' IS NOT NULL
+                ) AS dedup(user_id, node_path_prefix, permission, is_allow)
+                GROUP BY user_id, node_path_prefix, permission
                 ON CONFLICT (user_id, node_path_prefix, permission) DO UPDATE
                     SET is_allow = CASE WHEN EXCLUDED.is_allow = false THEN false ELSE user_effective_permissions_shadow.is_allow END;
 
                 -- Direct entries from access_control table (convenience methods)
                 INSERT INTO user_effective_permissions_shadow (user_id, node_path_prefix, permission, is_allow)
+                SELECT user_id, node_path_prefix, permission, bool_and(is_allow) AS is_allow
+                FROM (
                 SELECT subject, node_path, permission, is_allow
                 FROM access_control
+                ) AS dedup(user_id, node_path_prefix, permission, is_allow)
+                GROUP BY user_id, node_path_prefix, permission
                 ON CONFLICT (user_id, node_path_prefix, permission) DO UPDATE
                     SET is_allow = CASE WHEN EXCLUDED.is_allow = false THEN false ELSE user_effective_permissions_shadow.is_allow END;
 
                 -- Group expansion from group_members + access_control
                 INSERT INTO user_effective_permissions_shadow (user_id, node_path_prefix, permission, is_allow)
+                SELECT user_id, node_path_prefix, permission, bool_and(is_allow) AS is_allow
+                FROM (
                 WITH RECURSIVE all_members AS (
                     SELECT group_name, member_id FROM group_members
                     UNION
@@ -1901,6 +1951,8 @@ public static class PostgreSqlSchemaInitializer
                 SELECT lm.member_id, ac.node_path, ac.permission, ac.is_allow
                 FROM access_control ac
                 JOIN leaf_members lm ON lm.group_name = ac.subject
+                ) AS dedup(user_id, node_path_prefix, permission, is_allow)
+                GROUP BY user_id, node_path_prefix, permission
                 ON CONFLICT (user_id, node_path_prefix, permission) DO UPDATE
                     SET is_allow = CASE WHEN EXCLUDED.is_allow = false THEN false ELSE user_effective_permissions_shadow.is_allow END;
 
@@ -1949,7 +2001,11 @@ public static class PostgreSqlSchemaInitializer
                     NULL;
                 END;
             END;
-            $$ LANGUAGE plpgsql;
+            -- jit off: the dedup aggregate's cost estimate (inflated by jsonb SRF default row
+            -- estimates) exceeds jit_above_cost, and LLVM then spends ~450ms compiling the
+            -- unnest expressions PER STATEMENT — in a trigger path that runs on every
+            -- _Access write and once per schema in the boot self-heal sweep.
+            $$ LANGUAGE plpgsql SET jit = off;
 
             -- Access satellite table (must exist before trigger creation)
             CREATE TABLE IF NOT EXISTS access (
@@ -1994,6 +2050,8 @@ public static class PostgreSqlSchemaInitializer
 
                 -- Direct entries from AccessAssignment nodes for this user
                 INSERT INTO user_effective_permissions (user_id, node_path_prefix, permission, is_allow)
+                SELECT user_id, node_path_prefix, permission, bool_and(is_allow) AS is_allow
+                FROM (
                 SELECT
                     p_user_id,
                     COALESCE(aa.main_node, aa.namespace),
@@ -2028,11 +2086,15 @@ public static class PostgreSqlSchemaInitializer
                 ) perm
                 WHERE aa.content->>'accessObject' = p_user_id
                   AND aa.content->'roles' IS NOT NULL
+                ) AS dedup(user_id, node_path_prefix, permission, is_allow)
+                GROUP BY user_id, node_path_prefix, permission
                 ON CONFLICT (user_id, node_path_prefix, permission) DO UPDATE
                     SET is_allow = CASE WHEN EXCLUDED.is_allow = false THEN false ELSE user_effective_permissions.is_allow END;
 
                 -- Group expansion for this user
                 INSERT INTO user_effective_permissions (user_id, node_path_prefix, permission, is_allow)
+                SELECT user_id, node_path_prefix, permission, bool_and(is_allow) AS is_allow
+                FROM (
                 WITH RECURSIVE all_members AS (
                     SELECT group_entry->>'group' AS group_path, gm.content->>'member' AS member_id
                     FROM "auth".mesh_nodes gm
@@ -2078,12 +2140,18 @@ public static class PostgreSqlSchemaInitializer
                     ) AS permission
                 ) perm
                 WHERE aa.content->'roles' IS NOT NULL
+                ) AS dedup(user_id, node_path_prefix, permission, is_allow)
+                GROUP BY user_id, node_path_prefix, permission
                 ON CONFLICT (user_id, node_path_prefix, permission) DO UPDATE
                     SET is_allow = CASE WHEN EXCLUDED.is_allow = false THEN false ELSE user_effective_permissions.is_allow END;
 
                 -- access_control entries for this user
                 INSERT INTO user_effective_permissions (user_id, node_path_prefix, permission, is_allow)
+                SELECT user_id, node_path_prefix, permission, bool_and(is_allow) AS is_allow
+                FROM (
                 SELECT subject, node_path, permission, is_allow FROM access_control WHERE subject = p_user_id
+                ) AS dedup(user_id, node_path_prefix, permission, is_allow)
+                GROUP BY user_id, node_path_prefix, permission
                 ON CONFLICT (user_id, node_path_prefix, permission) DO UPDATE
                     SET is_allow = CASE WHEN EXCLUDED.is_allow = false THEN false ELSE user_effective_permissions.is_allow END;
 
@@ -2112,7 +2180,11 @@ public static class PostgreSqlSchemaInitializer
                 EXCEPTION WHEN undefined_table THEN NULL;
                 END;
             END;
-            $$ LANGUAGE plpgsql;
+            -- jit off: the dedup aggregate's cost estimate (inflated by jsonb SRF default row
+            -- estimates) exceeds jit_above_cost, and LLVM then spends ~450ms compiling the
+            -- unnest expressions PER STATEMENT — in a trigger path that runs on every
+            -- _Access write and once per schema in the boot self-heal sweep.
+            $$ LANGUAGE plpgsql SET jit = off;
 
             -- Trigger function: per-row, rebuilds only the affected user's permissions.
             -- Body single-sourced from AccessChangedTriggerFunctionBody: every rebuild call is
