@@ -183,14 +183,11 @@
         gap: 8px;
     }
 
-    /* Edu — the course portal entry, left of the search */
-    ::deep .edu-link {
+    /* Store — the storefront entry, right after the logo (modest padding, no spacer) */
+    ::deep .store-link {
         white-space: nowrap;
         font-weight: 600;
-    }
-
-    ::deep .edu-link .edu-hat {
-        margin-right: 4px;
+        margin-left: 12px;
     }
 
     /* Search container in header — fills the remaining header width */

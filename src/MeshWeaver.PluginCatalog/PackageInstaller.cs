@@ -50,6 +50,24 @@ public static class PackageInstaller
         ILogger? logger = null,
         int batchSize = DefaultBatchSize)
     {
+        // Installing a curated package is a platform action (the catalog tab gates it to global
+        // admins; that gate IS the authorization) — the same footing as a GitSync import: it
+        // writes partition ROOTS whose node types are dynamic (e.g. Store/Plugin — invisible to
+        // the static-only PartitionWriteGuard check) and type/infrastructure nodes no user
+        // principal may create. The SYSTEM impersonation is scoped around EACH write (inside
+        // Upsert), never around the whole pipeline: the pipeline hops schedulers (visibility
+        // barriers on a timer), and an ambient impersonation does not survive those hops.
+        return InstallCore(hub, manifest, files, installedFromRef, logger, batchSize);
+    }
+
+    private static IObservable<InstallResult> InstallCore(
+        IMessageHub hub,
+        PackageManifest manifest,
+        IReadOnlyList<PackageFile> files,
+        string installedFromRef,
+        ILogger? logger,
+        int batchSize)
+    {
         logger ??= hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.PluginCatalog.PackageInstaller");
 
@@ -133,7 +151,12 @@ public static class PackageInstaller
                 InstalledNodeCount = count,
             },
         };
-        return hub.Observe<CreateOrUpdateNodeResponse>(new CreateOrUpdateNodeRequest(record))
+        // System-impersonated like every installer write (Using — see Upsert): this runs after
+        // barrier scheduler hops, where no ambient context survives.
+        return Observable.Using(
+                () => hub.ServiceProvider.GetService<AccessService>()?.ImpersonateAsSystem()
+                      ?? System.Reactive.Disposables.Disposable.Empty,
+                _ => hub.Observe<CreateOrUpdateNodeResponse>(new CreateOrUpdateNodeRequest(record)))
             .FirstAsync().Select(d => d.Message)
             .SelectMany(resp => resp.Success
                 ? Observable.Return(resp.Node!)
@@ -200,9 +223,15 @@ public static class PackageInstaller
                 // Only recompile when something actually changed — an unchanged re-install must not
                 // kick a redundant Roslyn build.
                 if (written > 0)
-                    hub.RequestNodeTypeRelease(nodeTypePath,
-                        onError: msg => logger?.LogWarning(
-                            "Release request for {Path} failed: {Msg}", nodeTypePath, msg));
+                {
+                    // System-impersonated: the release flip is a stream write posted from a
+                    // continuation with no ambient context (see Upsert).
+                    var accessService = hub.ServiceProvider.GetService<AccessService>();
+                    using (accessService?.ImpersonateAsSystem())
+                        hub.RequestNodeTypeRelease(nodeTypePath,
+                            onError: msg => logger?.LogWarning(
+                                "Release request for {Path} failed: {Msg}", nodeTypePath, msg));
+                }
                 return WriteInstalledRecord(hub, manifest, installedFromRef, all.Length).Select(_ => result);
             });
     }
@@ -238,10 +267,12 @@ public static class PackageInstaller
             return false;
         // A NodeType node's stored content is ENRICHED by the live compile (CompilationStatus, release
         // stamps, …), so a whole-content compare would ALWAYS look "changed" on re-install and pointlessly
-        // rewrite + recompile it. Compare only the authored field the installer writes — the
-        // Configuration lambda (the source .cs are separate Code nodes, diffed on their own).
+        // rewrite + recompile it. Compare only the authored fields the installer writes — the
+        // Configuration lambda AND the Sources list (a source-list change alters what compiles, so it
+        // must re-install + recompile; the source .cs are separate Code nodes, diffed on their own).
         if (current.Content is NodeTypeDefinition curDef && incoming.Content is NodeTypeDefinition inDef)
-            return string.Equals(curDef.Configuration, inDef.Configuration, StringComparison.Ordinal);
+            return string.Equals(curDef.Configuration, inDef.Configuration, StringComparison.Ordinal)
+                && (curDef.Sources ?? []).SequenceEqual(inDef.Sources ?? [], StringComparer.Ordinal);
         // Otherwise compare the full content, applying the incoming over current so an omitted field
         // does not read as a change.
         return ContentSignature(incoming.Content ?? current.Content, options)
@@ -285,18 +316,88 @@ public static class PackageInstaller
         var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
         var nodeTypePaths = nodes.Where(n => n.Content is NodeTypeDefinition).Select(n => n.Path).ToArray();
 
-        // Order so the Space root and a NodeType's Source land BEFORE the NodeType itself — creating
-        // the NodeType triggers the live compile, which reads its Source children.
-        static int Order(MeshNode n) =>
-            n.Content is NodeTypeDefinition ? 2 : (n.Path.Contains('/', StringComparison.Ordinal) ? 1 : 0);
+        // Ordering solves two chicken-and-eggs at once:
+        // (1) a NodeType's Source must land BEFORE the NodeType itself — creating the NodeType
+        //     triggers the live compile, which reads its Source children;
+        // (2) every NodeType must land BEFORE any instance that REFERENCES it — including the
+        //     package ROOT when its type ships in the same package (the Store: the root is
+        //     nodeType Store/Catalog, defined by a child node). The not-registered probe only
+        //     needs the type NODE to exist, not its compile.
+        // Underscore satellites (_Access, _Policy, …) land LAST — a satellite must anchor under
+        // an already-existing owner.
+        int Order(MeshNode n)
+        {
+            if (n.Path.Split('/').Any(seg => seg.StartsWith('_')))
+                return 4;                                        // satellites after their owners
+            if (n.Content is NodeTypeDefinition)
+                return 1;                                        // the types (after their Source)
+            if (nodeTypePaths.Any(t => n.Path.StartsWith(t + "/", StringComparison.Ordinal)))
+                return 0;                                        // a type's Source/Test/docs
+            if (!n.Path.Contains('/', StringComparison.Ordinal))
+                return 2;                                        // the root (its type now exists)
+            return 3;                                            // plain content
+        }
 
-        // Only the install-record partition needs eager provisioning here: the repo's own content
-        // partitions are provisioned by the Space-root create (OwnsPartitionProvisioningValidator),
-        // which lands first in the ordering below.
-        return EnsurePartitionsProvisioned(hub, InstalledPartition)
-            .SelectMany(_ => nodes.OrderBy(Order)
-                .Select(n => UpsertIfChanged(hub, persistence, n, options))
-                .ToObservable().Concat().ToList()) // sequential to respect the ordering above
+        // Three stages with VISIBILITY BARRIERS between them, solving two races at once:
+        //
+        // (1) THE ROOT lands first — as a Space PLACEHOLDER when its real type is dynamic and
+        //     ships in this very package (the Store: the root is nodeType Store/Catalog, defined
+        //     by a child). The Space create runs the standard partition path (provisioning +
+        //     Admin/Partition definition) and, once persistence-visible, preempts the implicit
+        //     partition bootstrap: without it, the first CHILD create triggers the heal, whose
+        //     generic Space root races OUR typed root through the debounced per-node-hub
+        //     persists — last persist wins (observed: the heal's Space replacing the typed root).
+        // (2) THE TYPES land before any instance referencing them: the create path's
+        //     type-existence check reads PERSISTENCE (MeshExtensions, step 3), and a
+        //     freshly-created type node persists through the DEBOUNCED pipeline — an instance
+        //     written right behind its in-package type races that debounce and is refused as
+        //     "not registered". The barrier polls until every type node is persistence-visible.
+        //
+        // Then the FINAL root (retyping the placeholder), the plain content, and LAST the
+        // underscore satellites (a satellite must anchor under an existing owner).
+        var root = nodes.FirstOrDefault(n => !n.Path.Contains('/', StringComparison.Ordinal));
+        var rootTypeIsStatic = root is null
+            || string.IsNullOrEmpty(root.NodeType)
+            || hub.ServiceProvider.FindStaticNode(root.NodeType!) is not null;
+        var placeholderRoot = root is not null && !rootTypeIsStatic
+            ? root with { NodeType = "Space", Content = null }
+            : null;
+        var stage0 = root is null ? Array.Empty<MeshNode>() : new[] { placeholderRoot ?? root };
+        var stage1 = nodes.Where(n => Order(n) <= 1).OrderBy(Order).ToArray();
+        var stage2 = nodes
+            .Where(n => Order(n) >= 2)
+            .Where(n => placeholderRoot is not null || !ReferenceEquals(n, root))
+            .OrderBy(Order).ToArray();
+
+        IObservable<System.Reactive.Unit> Visible(params string[] paths) =>
+            persistence is null || paths.Length == 0
+                ? Observable.Return(System.Reactive.Unit.Default)
+                : paths.Select(path => Observable
+                        .Interval(TimeSpan.FromMilliseconds(100)).StartWith(0L)
+                        .SelectMany(_ => persistence.Exists(path))
+                        .Where(exists => exists)
+                        .FirstAsync()
+                        .Timeout(TimeSpan.FromSeconds(30)))
+                    .ToObservable().Concat().LastAsync().Select(_ => System.Reactive.Unit.Default);
+
+        IObservable<IList<bool>> WriteAll(IReadOnlyList<MeshNode> batch) =>
+            batch.Count == 0
+                ? Observable.Return((IList<bool>)new List<bool>())
+                : batch.Select(n => UpsertIfChanged(hub, persistence, n, options))
+                    .ToObservable().Concat().ToList(); // sequential to respect the ordering
+
+        // Eager provisioning must also cover the package's OWN partition: with a dynamic root
+        // type the placeholder covers it, but belt-and-braces keeps the fresh-mesh pin honest.
+        return EnsurePartitionsProvisioned(hub, manifest.TargetPartition ?? manifest.Id, InstalledPartition)
+            .SelectMany(_ => WriteAll(stage0))
+            .SelectMany(rootWrites => Visible(root is null ? [] : [root.Path])
+                .SelectMany(_ => WriteAll(stage1))
+                .SelectMany(typeWrites => Visible(nodeTypePaths)
+                    .SelectMany(_ => WriteAll(stage2))
+                    // A placeholder's write is bookkeeping, not content — its FINAL retype in
+                    // stage 2 is the root's one counted write (keeps Written ≤ node count).
+                    .Select(rest => (IList<bool>)(placeholderRoot is null ? rootWrites : [])
+                        .Concat(typeWrites).Concat(rest).ToList())))
             .SelectMany(writes =>
             {
                 var result = new InstallResult(nodes.Length, writes.Count(w => w));
@@ -305,9 +406,15 @@ public static class PackageInstaller
                     manifest.Id, result.Written, result.Unchanged, nodes.Length, installedFromRef);
                 // Recompile only the NodeTypes, and only when something changed.
                 if (result.Written > 0)
-                    foreach (var path in nodeTypePaths)
-                        hub.RequestNodeTypeRelease(path,
-                            onError: msg => logger?.LogWarning("Release request for {Path} failed: {Msg}", path, msg));
+                {
+                    // System-impersonated: the release flips are stream writes posted from a
+                    // continuation with no ambient context (see Upsert).
+                    var accessService = hub.ServiceProvider.GetService<AccessService>();
+                    using (accessService?.ImpersonateAsSystem())
+                        foreach (var path in nodeTypePaths)
+                            hub.RequestNodeTypeRelease(path,
+                                onError: msg => logger?.LogWarning("Release request for {Path} failed: {Msg}", path, msg));
+                }
                 return WriteInstalledRecord(hub, manifest, installedFromRef, nodes.Length).Select(_ => result);
             });
     }
@@ -331,13 +438,24 @@ public static class PackageInstaller
         {
             Id = id,
             Namespace = ns,
-            MainNode = string.IsNullOrEmpty(ns) ? id : $"{ns}/{id}",
+            // Preserve an AUTHORED mainNode: an _Access grant's mainNode IS its scope (the
+            // permission evaluator silently ignores a grant whose mainNode is wrong), so
+            // clobbering it with the path default breaks every access file a package ships.
+            MainNode = parsed.MainNode ?? (string.IsNullOrEmpty(ns) ? id : $"{ns}/{id}"),
             State = MeshNodeState.Active,
         };
     }
 
+    // Each write is System-impersonated INDIVIDUALLY — an ambient whole-pipeline impersonation
+    // does not survive the pipeline's scheduler hops. Observable.Using, NOT Defer+using: the
+    // post happens when hub.Observe's stream is SUBSCRIBED, so the impersonation must still be
+    // alive then (Defer+using disposes it before the post — the exact trap the Edu redeemer
+    // documented). The admin-gated install is the authorization (see Install).
     private static IObservable<int> Upsert(IMessageHub hub, MeshNode node) =>
-        hub.Observe<CreateOrUpdateNodeResponse>(new CreateOrUpdateNodeRequest(node))
+        Observable.Using(
+                () => hub.ServiceProvider.GetService<AccessService>()?.ImpersonateAsSystem()
+                      ?? System.Reactive.Disposables.Disposable.Empty,
+                _ => hub.Observe<CreateOrUpdateNodeResponse>(new CreateOrUpdateNodeRequest(node)))
             .FirstAsync().Select(d => d.Message)
             .SelectMany(resp => resp.Success
                 ? Observable.Return(1)
