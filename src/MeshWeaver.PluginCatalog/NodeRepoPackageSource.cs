@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.GitSync;
@@ -9,7 +10,7 @@ namespace MeshWeaver.PluginCatalog;
 /// An <see cref="IPackageSource"/> for NODE-NATIVE plugin repos — the shape the
 /// <c>MeshWeaver.Plugins</c> repo ships (node-per-file, "the node is the manifest"). Each
 /// <c>&lt;Plugin&gt;/</c> folder is one plugin — a mesh partition: <c>&lt;Plugin&gt;/index.json</c>
-/// is its Space root carrying a <c>PluginManifest</c> (the partition root lives INSIDE the folder,
+/// is its root (a <c>Space</c> or a <c>Store/Plugin</c>) (the partition root lives INSIDE the folder,
 /// the same <c>NodeFileMapper</c> mapping GitSync uses), and the rest of the folder holds the
 /// <c>NodeType</c> nodes, their <c>Source/*.cs</c> and docs — every file already a MeshNode at its
 /// CANONICAL path (no per-partition rebase). Reuses GitSync's fetch so a deployed portal reads the
@@ -20,7 +21,13 @@ namespace MeshWeaver.PluginCatalog;
 /// </summary>
 public sealed class NodeRepoPackageSource : IPackageSource
 {
-    private const string SpaceNodeType = "Space";
+    /// <summary>
+    /// The root node types that make a top-level folder an installable package: the classic
+    /// <c>Space</c> root and the Store's <c>Store/Plugin</c> root (plugins + courses retyped for
+    /// the storefront). Both accepted during the transition — a repo may carry a mix.
+    /// </summary>
+    private static readonly ImmutableHashSet<string> RootNodeTypes =
+        ImmutableHashSet.Create(StringComparer.Ordinal, "Space", "Store/Plugin");
 
     private readonly Func<string, string, string?, string, IObservable<RepoSnapshot>> fetch;
     private readonly string repoUrl;
@@ -70,26 +77,32 @@ public sealed class NodeRepoPackageSource : IPackageSource
                 {
                     // A plugin root is `<Plugin>/index.json` — the partition root INSIDE its folder
                     // (the folder is the unit of import; NodeFileMapper maps root ↔ index.json) —
-                    // whose node is a Space. Checked allocation-free: exactly one '/' and an
-                    // `index.json` tail; only a match slices out the id.
+                    // whose node is one of the accepted root types (Space / Store/Plugin). Checked
+                    // allocation-free: exactly one '/' and an `index.json` tail; only a match
+                    // slices out the id.
                     var slash = file.Path.IndexOf('/');
                     if (slash <= 0
                         || file.Path.IndexOf('/', slash + 1) >= 0
                         || !file.Path.AsSpan(slash + 1).Equals("index.json", StringComparison.OrdinalIgnoreCase))
                         continue;
-                    var (nodeType, name, description) = Peek(file.Content, file.Path);
-                    if (!string.Equals(nodeType, SpaceNodeType, StringComparison.Ordinal))
+                    var peeked = Peek(file.Content, file.Path);
+                    if (peeked.NodeType is null || !RootNodeTypes.Contains(peeked.NodeType))
                         continue;
                     var id = file.Path[..slash];
                     manifests.Add(new PackageManifest
                     {
                         Id = id,
-                        Name = name ?? id,
-                        Description = description,
+                        Name = peeked.Name ?? id,
+                        Description = peeked.Description,
                         Kind = PackageKind.NodeRepo,
                         TargetPartition = id,
                         SourceFolder = id,
                         Version = snapshot.CommitSha,
+                        Category = peeked.Category,
+                        Icon = peeked.Icon,
+                        Price = peeked.Price,
+                        Currency = peeked.Currency,
+                        Poster = peeked.Poster,
                     });
                 }
                 return (IReadOnlyList<PackageManifest>)manifests
@@ -109,24 +122,45 @@ public sealed class NodeRepoPackageSource : IPackageSource
                     .ToList();
             });
 
-    // Reads the node's type/name/description straight from the JSON — no MeshNode deserialization, so
-    // the source needs no hub serializer options and unregistered content types (PluginManifest) don't
-    // matter for listing.
-    private (string? NodeType, string? Name, string? Description) Peek(string json, string path)
+    private readonly record struct PeekedRoot(
+        string? NodeType, string? Name, string? Description,
+        string? Category, string? Icon, decimal? Price, string? Currency, string? Poster);
+
+    // Reads the node's type/name/description — plus the storefront card fields (category/icon on
+    // the node, price/currency/poster inside the content) — straight from the JSON: no MeshNode
+    // deserialization, so the source needs no hub serializer options and unregistered content
+    // types (PluginManifest / PluginContent) don't matter for listing.
+    private PeekedRoot Peek(string json, string path)
     {
         try
         {
             using var doc = JsonDocument.Parse(json);
             var r = doc.RootElement;
-            return (
+            decimal? price = null;
+            string? currency = null;
+            string? poster = null;
+            if (r.TryGetProperty("content", out var content) && content.ValueKind == JsonValueKind.Object)
+            {
+                if (content.TryGetProperty("price", out var p) && p.ValueKind == JsonValueKind.Number
+                    && p.TryGetDecimal(out var parsed))
+                    price = parsed;
+                if (content.TryGetProperty("currency", out var c) && c.ValueKind == JsonValueKind.String)
+                    currency = c.GetString();
+                if (content.TryGetProperty("poster", out var po) && po.ValueKind == JsonValueKind.String)
+                    poster = po.GetString();
+            }
+            return new PeekedRoot(
                 r.TryGetProperty("nodeType", out var nt) ? nt.GetString() : null,
                 r.TryGetProperty("name", out var n) ? n.GetString() : null,
-                r.TryGetProperty("description", out var d) ? d.GetString() : null);
+                r.TryGetProperty("description", out var d) ? d.GetString() : null,
+                r.TryGetProperty("category", out var cat) ? cat.GetString() : null,
+                r.TryGetProperty("icon", out var ic) ? ic.GetString() : null,
+                price, currency, poster);
         }
         catch (JsonException ex)
         {
             logger?.LogWarning(ex, "Node-repo catalog: {Path} is not valid JSON; skipped.", path);
-            return (null, null, null);
+            return default;
         }
     }
 }
