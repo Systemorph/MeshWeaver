@@ -34,4 +34,19 @@ public static class HubEmailExtensions
             ? Observable.Return(false)
             : sender.SendEmail(toAddress, subject, htmlBody);
     }
+
+    /// <summary>
+    /// Sends an HTML email with file <paramref name="attachments"/> via the registered
+    /// <see cref="IEmailSender"/> (e.g. a deck/document exported to PDF via the node ⇒ file pipeline).
+    /// Cold observable — subscribe to drive. Emits <c>false</c> if no sender is registered.
+    /// </summary>
+    public static IObservable<bool> SendEmail(
+        this IMessageHub hub, string toAddress, string subject, string htmlBody,
+        IReadOnlyCollection<EmailAttachment> attachments)
+    {
+        var sender = hub.ServiceProvider.GetService(typeof(IEmailSender)) as IEmailSender;
+        return sender is null
+            ? Observable.Return(false)
+            : sender.SendEmail(toAddress, subject, htmlBody, attachments);
+    }
 }

@@ -65,6 +65,12 @@ public class MarkdownExportMenuProvider : INodeMenuProvider
                         RequiredPermission: Permission.Read,
                         Order: 28,
                         Href: MeshNodeLayoutAreas.BuildUrl(hubPath, ExportDocumentLayoutArea.DocxArea)),
+                    new NodeMenuItemDefinition(
+                        Label: SendDocumentLayoutArea.SendLabel,
+                        Area: SendDocumentLayoutArea.SendArea,
+                        RequiredPermission: Permission.Read,
+                        Order: 29,
+                        Href: MeshNodeLayoutAreas.BuildUrl(hubPath, SendDocumentLayoutArea.SendArea)),
                 ];
             });
     }
