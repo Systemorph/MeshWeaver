@@ -52,6 +52,7 @@ public static class MigrationRegistry
         new V41_RetrofitModelCatalogIcons(),
         new V42_ReapplySpaceAuthMirrorAndBackfill(),
         new V43_FixAccessTriggerSchemaResolutionAndBackfill(),
+        new V44_FixMeshNodeHistoryTriggerPerSchema(),
     ];
 
     /// <summary>

@@ -1,5 +1,6 @@
 using System.Reactive.Linq;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
@@ -244,11 +245,63 @@ public static class SpaceLayoutAreas
         if (IsSystemorph(spacePath))
             shell = shell.WithView(BuildSystemorphHighlights(spacePath));
 
-        // No hardcoded navigation/catalog section. The space body (BuildBodyContent above) owns the
-        // catalog: the standard WelcomeMarkdown template embeds it INLINE via @@("area/Search"), and
-        // an author can move/tune/remove it in the editable Body like any other content. A fixed
-        // BuildNavigation section here double-rendered the catalog for any body that embedded it.
+        // Default content catalog, pinned as a bottom section — BUT only when the body does not
+        // already embed one. The standard WelcomeMarkdown template embeds the catalog INLINE via
+        // @@("area/Search"), and an author can move/tune/remove it in the editable Body; for those
+        // bodies this section is SKIPPED so the catalog never double-renders (the reason the old
+        // unconditional BuildNavigation was removed in e03f20fac). A body that predates the embed,
+        // was authored without it, or is markdown-backed (Doc/Skill roots) carries no catalog — those
+        // would otherwise show NOTHING (issue #502, Case 1), so we append the default catalog for them.
+        if (!BodyEmbedsCatalog(EffectiveBodySource(space, node)))
+            shell = shell.WithView(BuildNavigation(spacePath));
+
         return shell;
+    }
+
+    // Matches a reference to the space's Search catalog — either an @@("area:Search")/@@("area/Search")/
+    // @@Search markdown embed (any quoting/parenthesising, incl. a ?query suffix), OR its already-rendered
+    // layout-area div in pre-rendered HTML (data-area='Search', or a data-raw-path ending in
+    // area/Search|area:Search). Used to decide whether the body ALREADY shows a catalog, so the default
+    // bottom catalog is appended only when it doesn't (no double-render). Case-insensitive on the area name.
+    private static readonly Regex CatalogEmbedRegex = new(
+        "@@\\s*\\(?\\s*[\"']?[^\"'()\\r\\n]*?[Ss]earch"
+        + "|(?:data-area=[\"']|area[:/])[Ss]earch",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    /// <summary>
+    /// The body string <see cref="BuildBodyContent"/> will actually render, using the SAME priority:
+    /// pre-rendered HTML → the Space's Body → the default welcome markdown. Used to detect whether that
+    /// body already embeds the Search catalog so the default bottom catalog isn't double-rendered.
+    /// </summary>
+    internal static string EffectiveBodySource(Space? space, MeshNode? node)
+        => !string.IsNullOrWhiteSpace(node?.PreRenderedHtml) ? node!.PreRenderedHtml!
+            : !string.IsNullOrWhiteSpace(space?.Body) ? space!.Body!
+            : SpaceNodeType.WelcomeMarkdown;
+
+    internal static bool BodyEmbedsCatalog(string body)
+        => !string.IsNullOrEmpty(body) && CatalogEmbedRegex.IsMatch(body);
+
+    /// <summary>
+    /// The space's content catalog — the node's <see cref="MeshNodeLayoutAreas.SearchArea"/> — rendered
+    /// as a fixed "Contents" section at the BOTTOM of the page (the standard "browse what's in this
+    /// space" navigation), embedded via <see cref="LayoutAreaControl"/> the same way
+    /// <see cref="BuildEventCalendar"/> embeds a child area. Appended by <see cref="BuildSpaceView"/>
+    /// only when the body does not already carry its own catalog embed, so it never double-renders.
+    /// </summary>
+    private static UiControl BuildNavigation(string spacePath)
+    {
+        var heading = Controls.Markdown("## Contents")
+            .WithStyle($"{ContentInset} padding-top: 24px;");
+
+        var catalog = new LayoutAreaControl(spacePath, new LayoutAreaReference(MeshNodeLayoutAreas.SearchArea))
+            .WithShowProgress(false)
+            .WithStyle($"{ContentInset} display: block; padding-bottom: 48px; width: 100%;");
+
+        return Controls.Stack
+            .WithWidth("100%")
+            .WithStyle("width: 100%;")
+            .WithView(heading)
+            .WithView(catalog);
     }
 
     /// <summary>
@@ -405,8 +458,9 @@ public static class SpaceLayoutAreas
     /// </summary>
     internal static UiControl BuildBodyContent(Space? space, MeshNode? node, string spacePath)
     {
-        // Bottom padding gives the in-body catalog @@-embed breathing room below it (the catalog is
-        // no longer a fixed LayoutArea — see BuildSpaceView). Top padding is deliberately small: the
+        // Bottom padding gives the in-body catalog @@-embed breathing room below it (an author-embedded
+        // catalog lives here; the default bottom catalog is appended by BuildSpaceView only when the body
+        // has none). Top padding is deliberately small: the
         // header already contributes its own padding + divider above, so a large top pad here stacked
         // into an airy ~56px gap between the description and the first body element.
         var bodyStyle = $"{ContentInset} padding-top: 12px; padding-bottom: 48px;";

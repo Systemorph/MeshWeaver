@@ -117,12 +117,21 @@ public static class ContentImportExtensions
                     .Select(f => FullPath(f.Path))
                     .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
+                // 🚨 issue #435: when the caller declares which paths the SOURCE owns (a GitSync mirror
+                // passes the previous import's file set), prune ONLY those. A file not in that set is a
+                // user upload the source never tracked and MUST be preserved — never silently wiped by a
+                // boot re-import. A null set keeps the legacy full-mirror (prune every file not in Files).
+                var sourceOwned = request.SourceOwnedPaths is { } owned
+                    ? owned.Select(NormalizePath).ToHashSet(StringComparer.OrdinalIgnoreCase)
+                    : null;
+
                 // Prune AFTER writing: enumerate the folder's current files, delete those not kept.
                 // EnumerateAllFiles yields collection-relative paths; a delete of an absent file is
                 // tolerated (best-effort) so a concurrent external delete never fails the mirror.
                 return writes.SelectMany(written =>
                     EnumerateAllFiles(target, baseDir)
-                        .Where(path => !keep.Contains(path))
+                        .Where(path => !keep.Contains(path)
+                                       && (sourceOwned is null || sourceOwned.Contains(path)))
                         .Select(path => target.DeleteFile(path)
                             .Select(_ => 0)
                             .Catch<int, Exception>(_ => Observable.Return(0)))
@@ -300,6 +309,7 @@ public sealed class SyncContentFilesBuilder
     private string _targetCollection = ContentCollectionsExtensions.DefaultCollectionName;
     private string _targetPath = "";
     private bool _mirror = true;
+    private IReadOnlyList<string>? _sourceOwnedPaths;
     private readonly List<InlineContentFile> _files = new();
 
     internal SyncContentFilesBuilder(IMessageHub hub, string nodePath)
@@ -337,12 +347,25 @@ public sealed class SyncContentFilesBuilder
         return this;
     }
 
+    /// <summary>
+    /// Restricts a mirror's pruning to the files the SOURCE previously owned (issue #435): only a file
+    /// whose collection-relative path is in <paramref name="sourceOwnedPaths"/> may be pruned, so a user
+    /// upload the source never tracked is PRESERVED. <c>null</c> (the default) keeps the full-mirror
+    /// semantics. Paths are collection-relative (<c>{TargetPath}/{file}</c> form).
+    /// </summary>
+    public SyncContentFilesBuilder SourceOwned(IReadOnlyList<string>? sourceOwnedPaths)
+    {
+        _sourceOwnedPaths = sourceOwnedPaths;
+        return this;
+    }
+
     /// <summary>Post the sync to the target node's hub. Cold — subscribe to run.</summary>
     public IObservable<ImportContentResponse> Post()
     {
         var request = new SyncContentFilesRequest(_targetCollection, _targetPath, _files.ToArray())
         {
             Mirror = _mirror,
+            SourceOwnedPaths = _sourceOwnedPaths,
         };
         var address = new Address(_nodePath);
         return Observable.Defer(() => _hub
