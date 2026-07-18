@@ -30,7 +30,9 @@ The `page` + `bbox` columns are **source provenance** — see [Source provenance
 There are two different jobs, and they want different granularities:
 
 - **Retrieval / context** — *find* the relevant passage and feed it to the model. Chunks are perfect: a 1000-char window is a model-sized unit of context, and similarity ranks the most relevant windows first. Use `search_chunks` + `get_chunk`.
-- **Extraction** — pull a *whole* structure (a table, a full section, a complete document) where chunk boundaries would cut a row in half. Read the whole document, not chunks. Use `Get` on the file's `Document` node (or the raw `content/` file).
+- **Extraction** — pull a *whole* structure (a table, a full section, a complete document) where chunk boundaries would cut a row in half. Read the whole document, not chunks. **Get the file path, not the `Document` node** — see the note below.
+
+> **🚨 Full text lives at the file path, not the `Document` node.** A search hit is the `Document` node at `{collectionPath}/_Documents/{slug}`, and `Get` on **that** returns only the node's metadata + the AI `Summary` (~a few hundred chars) — never the text. The complete extracted text is served by `Get` on the **file path** `{collectionPath}/{filePath}`, through the registered content transformers (#396). Derive the file path from the hit's own `collectionPath` + `filePath` fields (`search_chunks` returns both; the `Document` node carries them too) — do **not** reconstruct it by editing the node path, because `{slug}` is a lossy encoding of `filePath` (directory separators and non-ASCII collapse to `-`). Getting the `Document` node, seeing only a summary, and concluding "the full text is unavailable" is the failure that sends an agent stepping through every chunk — exactly the chunk-boundary corruption this section warns against.
 
 The chunk tools are deliberately **not** a substitute for a full-document read. If you need every row of a table, a windowed chunk is the wrong tool — it may start or end mid-table.
 
@@ -124,6 +126,6 @@ A typical agent loop:
 1. `search_chunks("accrued benefit obligation", scope: "ACME/Reports")` → a ranked list of chunk hits.
 2. Pick the top hit's `(collectionPath, filePath, chunkIndex)`.
 3. `get_chunk(...)` to read the full window, then follow `nextIndex` / `prevIndex` to read the surrounding context.
-4. If the goal is to extract a whole table rather than gather context, switch to `Get` on the hit's `documentPath` for the complete document.
+4. If the goal is to extract a whole table rather than gather context, `Get` the **file path** `{collectionPath}/{filePath}` (built from the hit's own fields) for the complete text — **not** the hit's `documentPath` (the `Document` node), which returns only metadata + summary (see the note under "Retrieval vs. extraction").
 
 Related: [CQRS — Queries vs. Content Access](../CqrsAndContentAccess) for read semantics, [Vector Search](../VectorSearch) for the node-level semantic path.

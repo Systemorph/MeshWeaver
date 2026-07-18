@@ -29,6 +29,7 @@ public class MarkdownExportMenuTest(ITestOutputHelper output) : MonolithMeshTest
     protected override bool ShareMeshAcrossTests => true;
 
     private const string MarkdownNodePath = "TestOrg/TestMarkdown";
+    private const string DeckNodePath = "TestOrg/TestDeck";
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => base.ConfigureMesh(builder)
@@ -38,6 +39,12 @@ public class MarkdownExportMenuTest(ITestOutputHelper output) : MonolithMeshTest
                 {
                     Name = "Test Markdown",
                     NodeType = MarkdownNodeType.NodeType
+                },
+                new MeshNode("TestDeck", "TestOrg")
+                {
+                    Name = "Test Deck",
+                    NodeType = DeckNodeType.NodeType,
+                    Content = new DeckContent { Title = "Test Deck" }
                 }
             )
             .AddMarkdownExport()
@@ -96,5 +103,29 @@ public class MarkdownExportMenuTest(ITestOutputHelper output) : MonolithMeshTest
         var docxItem = items.First(i => i.Label == MarkdownExportMenuProvider.DocxLabel);
         docxItem.Area.Should().Be(ExportDocumentLayoutArea.DocxArea,
             "DOCX item must navigate to the DOCX export layout area");
+    }
+
+    [Fact(Timeout = 30000)]
+    public async Task DeckNode_NodeMenu_ContainsPdfExportItem_NotDocx()
+    {
+        var client = GetClient();
+        var nodeAddress = new Address(DeckNodePath);
+
+        var items = await FetchNodeMenuItems(client, nodeAddress);
+
+        Output.WriteLine($"Node menu items for Deck node: {items.Count}");
+        foreach (var item in items)
+            Output.WriteLine($"  {item.Label} (Area={item.Area}, Order={item.Order})");
+
+        items.Select(i => i.Label).Should().Contain(MarkdownExportMenuProvider.PdfLabel,
+            "DeckExportMenuProvider should contribute 'Export to PDF' for nodes with NodeType=Deck");
+        // A deck carries no markdown body of its own, so DOCX export (which renders the node's own
+        // content) is deliberately NOT offered.
+        items.Select(i => i.Label).Should().NotContain(MarkdownExportMenuProvider.DocxLabel,
+            "a Deck exposes PDF export only — DOCX would render the deck's (empty) own body");
+
+        var pdfItem = items.First(i => i.Label == MarkdownExportMenuProvider.PdfLabel);
+        pdfItem.Area.Should().Be(ExportDocumentLayoutArea.PdfArea,
+            "PDF item must navigate to the PDF export layout area");
     }
 }
