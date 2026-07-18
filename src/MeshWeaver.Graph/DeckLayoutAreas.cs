@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.ComponentModel;
 using System.Reactive.Linq;
+using System.Text.Json;
 using MeshWeaver.Data;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Layout;
@@ -233,7 +234,7 @@ public static class DeckLayoutAreas
     /// compatibility) or an ABSOLUTE path to a slide anywhere in the mesh (any reference
     /// containing a <c>/</c> is treated as an absolute path and returned as-is).
     /// </summary>
-    internal static string ResolveSlidePath(string deckPath, string slideRef)
+    public static string ResolveSlidePath(string deckPath, string slideRef)
     {
         var trimmed = slideRef.Trim().TrimStart('/');
         if (trimmed.Length == 0)
@@ -241,6 +242,37 @@ public static class DeckLayoutAreas
         // A reference that names a path (contains '/') points at a slide ANYWHERE — presentation
         // is decoupled from the deck's children. A bare id is a child under the deck.
         return trimmed.Contains('/') ? trimmed : $"{deckPath}/{trimmed}";
+    }
+
+    /// <summary>
+    /// Resolves a deck node's slide SELECTION — the pure (IO-free) core shared by the live
+    /// Overview/Present binding (<see cref="ObserveSlideNodes"/>) and by the PDF export template,
+    /// so a deck's order is defined in exactly ONE place. Returns either the explicit ordered
+    /// manifest (<see cref="DeckContent.Slides"/>) resolved to full paths — in which case
+    /// <c>Query</c> is <c>null</c> — or, when the manifest is empty, the live query to run
+    /// (<see cref="DeckContent.Query"/>, else the default subtree of Slide nodes under the deck)
+    /// with <c>Paths</c> empty.
+    /// </summary>
+    /// <param name="deckNode">The deck node whose <see cref="DeckContent"/> declares the selection.</param>
+    /// <param name="deckPath">The deck's mesh path, used to resolve bare-id references and the default query.</param>
+    /// <param name="options">JSON options used to read <see cref="DeckContent"/> off the node.</param>
+    /// <returns>The ordered explicit slide paths, or the query to run when the manifest is empty.</returns>
+    public static (ImmutableList<string> Paths, string? Query) ResolveDeckSelection(
+        MeshNode? deckNode, string deckPath, JsonSerializerOptions options)
+    {
+        var deck = deckNode.ContentAs<DeckContent>(options);
+        var paths = (deck?.Slides ?? ImmutableList<string>.Empty)
+            .Where(r => !string.IsNullOrWhiteSpace(r))
+            .Select(r => ResolveSlidePath(deckPath, r))
+            .ToImmutableList();
+        // Empty manifest → a live query: the deck's custom Query, else the DEFAULT subtree of
+        // Slide nodes (a deck can be just "a folder of slides"; only Slide nodes count).
+        var query = paths.Count > 0
+            ? null
+            : string.IsNullOrWhiteSpace(deck?.Query)
+                ? $"path:{deckPath} nodeType:{SlideNodeType.NodeType} scope:subtree"
+                : deck!.Query!.Trim();
+        return (paths, query);
     }
 
     private static string LastSegment(string reference)
@@ -260,22 +292,7 @@ public static class DeckLayoutAreas
     internal static IObservable<IReadOnlyList<(string Path, MeshNode? Node)>> ObserveSlideNodes(
         LayoutAreaHost host, string deckPath)
         => host.Workspace.GetMeshNodeStream()
-            .Select(node =>
-            {
-                var deck = node.ContentAs<DeckContent>(host.Hub.JsonSerializerOptions);
-                var paths = (deck?.Slides ?? ImmutableList<string>.Empty)
-                    .Where(r => !string.IsNullOrWhiteSpace(r))
-                    .Select(r => ResolveSlidePath(deckPath, r))
-                    .ToImmutableList();
-                // Empty manifest → a live query: the deck's custom Query, else the DEFAULT subtree of
-                // Slide nodes (a deck can be just "a folder of slides"; only Slide nodes count).
-                var query = paths.Count > 0
-                    ? null
-                    : string.IsNullOrWhiteSpace(deck?.Query)
-                        ? $"path:{deckPath} nodeType:{SlideNodeType.NodeType} scope:subtree"
-                        : deck!.Query!.Trim();
-                return (Paths: paths, Query: query);
-            })
+            .Select(node => ResolveDeckSelection(node, deckPath, host.Hub.JsonSerializerOptions))
             // Re-resolve only when the selection actually changes (the ordered manifest, or the query).
             .DistinctUntilChanged(x => string.Join("\n", x.Paths) + "" + (x.Query ?? ""))
             .Select(x => x.Paths.Count > 0
