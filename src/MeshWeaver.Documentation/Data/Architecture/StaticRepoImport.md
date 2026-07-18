@@ -105,25 +105,27 @@ The importer must be **idempotent over existing rows** (re-imports, eventually-c
 
 ## Scope: mesh nodes AND content-collection files
 
-The import materializes both **mesh nodes** (a node's `Content` + prerendered HTML, via the node upsert above) and the node's **content-collection files** — the assets a node references through the `content` collection, e.g. an `@@content/logo.svg` image embed or an `@@content/sample.md` include on a doc page.
+The import materializes both **mesh nodes** (a node's `Content` + prerendered HTML, via the node upsert above) and, for sources that need it, the node's **content-collection files** — the assets a node references through the `content` collection, e.g. an `@@content/logo.svg` image embed on a Space page.
 
-Those files live in a **per-node content collection**, not the node row: `ConfigureDefaultNodeHub` gives every node hub its own `content` collection rooted at `{Storage:BasePath}/content/{nodePath}`, read via `IFileContentProvider.GetFileContent("content", "<file>")` **on that node's hub**. Syncing a file is therefore a per-node-hub operation dispatched to the owning node's hub, distinct from the node upsert.
+Those files live in a **per-node content collection**, not the node row — and *where* that collection is mapped is a **host decision**, not something every node hub gets automatically. The memex portal (`MemexConfiguration.ConfigureDefaultNodeHub`) maps a **writable** `content` collection only on **Space/partition roots** (`nodePath` with no `/`), rooted at `{Storage:BasePath}/content/{nodePath}`; a read-only embedded source like **`Doc`** instead maps each node's **own embedded `Content/<subpath>` subfolder** as its read-only `content` collection (`AddDocumentation.ConfigureDefaultNodeHub`), so a doc page's `@@content/<file>` embed is served straight from the shipped assembly — no copy needed. Files are read via `IFileContentProvider.GetFileContent("content", "<file>")` **on that node's hub**.
 
 ### How content files are synced (collection → collection)
 
-1. A source ships its assets in an **embedded content collection** and declares the imports by overriding `IStaticRepoSource.EnumerateContentImports()` → `StaticContentImport(NodePath, SourceCollection, SourcePath, TargetCollection="content", TargetPath="")`. E.g. `DocumentationStaticRepoSource` ships `logo.svg` + `sample.md` under `Content/DataMesh/UnifiedPath/` (the embedded `DocContent` collection) and imports that folder into the `Doc/DataMesh/UnifiedPath` node's `content` collection.
+This copy path is for a source whose target nodes have a **writable** per-node `content` collection (e.g. a GitSync Space whose assets ship in a FileSystem source). **The built-in `Doc` partition does NOT use it** — a child doc node like `Doc/DataMesh/UnifiedPath` has no writable `content` collection (the portal maps writable `content` only on Space roots), so the copy had nowhere to land. Instead, `AddDocumentation` maps each Doc node's own embedded `Content/<subpath>` subfolder as its read-only `content` collection, and `@@content/<file>` resolves directly from the shipped assembly. Verified by `DocContentEmbedRenderTest`.
+
+1. A source that needs the copy declares its imports by overriding `IStaticRepoSource.EnumerateContentImports()` → `StaticContentImport(NodePath, SourceCollection, SourcePath, TargetCollection="content", TargetPath="")`, shipping the assets in a source content collection readable on the owning node's hub.
 2. After the node upsert the importer's `SyncContentImports` posts the **canonical `ImportContentRequest`** per entry, under `ImpersonateAsSystem`, via the fluent API in `MeshWeaver.ContentCollections`:
 
    ```csharp
    hub.ImportContent(nodePath)
-      .From("DocContent", "DataMesh/UnifiedPath")  // embedded source collection + folder
-      .To("content")                               // target collection on the node
-      .Post()                                       // → ImportContentRequest to the OWNING node's hub
+      .From("<sourceCollection>", "<sourceFolder>")  // source collection + folder
+      .To("content")                                 // WRITABLE target collection on the node
+      .Post()                                        // → ImportContentRequest to the OWNING node's hub
    ```
 
-   The handler (registered by `AddContentCollectionsInfrastructure`, so every content-enabled node hub has it) resolves both collections via `IContentService` and copies each direct-child file of the source folder **stream-to-stream** so binary assets (svg/png) survive — `GetFiles`/`GetContentAsync` on the source, `SaveFileAsync` on the target — with the **whole copy sealed in one `IIoPool` operation** (the hub action block only subscribes + returns; async never runs on the hub). The file is then served through `/static/{address}/content/<file>`. **No hand-rolled cross-hub `IFileContentProvider` write, no async on a hub path, and no second `ImportContentRequest`** (the type is wire-registered — a duplicate collides). The embedded source collection (`DocContent`) is exposed on node hubs too (`AddDocumentation`'s `ConfigureDefaultNodeHub`) so the node-hub handler can read it.
+   The handler (registered by `AddContentCollectionsInfrastructure`, so every content-enabled node hub has it) resolves both collections via `IContentService` and copies each direct-child file of the source folder **stream-to-stream** so binary assets (svg/png) survive — `GetFiles`/`GetContentAsync` on the source, `SaveFileAsync` on the target — with the **whole copy sealed in one `IIoPool` operation** (the hub action block only subscribes + returns; async never runs on the hub). The file is then served through `/static/{address}/content/<file>`. **No hand-rolled cross-hub `IFileContentProvider` write, no async on a hub path, and no second `ImportContentRequest`** (the type is wire-registered — a duplicate collides). The source collection must be exposed on the node hub (via `ConfigureDefaultNodeHub`) so the node-hub handler can read it.
 
-This is why a synced doc page's `@@content/<file>` embeds render on a fresh deployment (e.g. a FileSystem source at `/mnt/content`): the importer copies the assets into the runtime `content` collection on boot, alongside the nodes. Tests: `ContentImportSyncTest` (monolith, filesystem + embedded sources) and `OrleansContentImportSyncTest` (the distributed cross-grain path — the shape that must not deadlock).
+This is how a source with a writable target collection gets its `@@content/<file>` assets to land on a fresh deployment (e.g. a FileSystem source at `/mnt/content`): the importer copies them into the runtime `content` collection on boot, alongside the nodes. Tests: `ContentImportSyncTest` (monolith, filesystem + embedded sources) and `OrleansContentImportSyncTest` (the distributed cross-grain path — the shape that must not deadlock).
 
 ## The two primitives
 

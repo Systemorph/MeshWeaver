@@ -68,6 +68,23 @@ public record PackageManifest
     /// <summary>Ids of other packages this one depends on. Advisory for now.</summary>
     public ImmutableList<string> Requires { get; init; } = [];
 
+    // ── storefront metadata (read off the root node when listing; all optional) ──
+
+    /// <summary>The store's browse-by-category key (the root node's <c>category</c>).</summary>
+    public string? Category { get; init; }
+
+    /// <summary>The root node's icon — an inline <c>&lt;svg&gt;</c>, an emoji, or an image URL.</summary>
+    public string? Icon { get; init; }
+
+    /// <summary>The purchase price (the root content's <c>price</c>). Null = not purchasable.</summary>
+    public decimal? Price { get; init; }
+
+    /// <summary>ISO currency code of <see cref="Price"/>.</summary>
+    public string? Currency { get; init; }
+
+    /// <summary>The store-card picture URL (the root content's <c>poster</c>).</summary>
+    public string? Poster { get; init; }
+
     // ── install-record metadata (null on catalog entries; set when written to the registry) ──
 
     /// <summary>The git ref (commit/branch) this package was installed from. Null until installed.</summary>

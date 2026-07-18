@@ -80,15 +80,9 @@ jobs:
       # identical binary that crashes in CI.
       - name: Build
         run: dotnet build --no-restore -c Release -p:CIRun=true -warnaserror
-      # The mesh-local #r feed dynamic-compilation tests resolve at runtime (version-less
-      # `#r "nuget:MeshWeaver.X"`) — packed exactly as dotnet-test.yml / flake-repro.yml do.
-      - name: Pack mesh-local #r packages
-        run: |
-          set -euo pipefail
-          dotnet pack src/MeshWeaver.BusinessRules/MeshWeaver.BusinessRules.csproj \
-            -c Release --no-build --no-restore -o dist/packages --nologo
-          dotnet pack src/MeshWeaver.BusinessRules.Generator/MeshWeaver.BusinessRules.Generator.csproj \
-            -c Release --no-build --no-restore -o dist/packages --nologo
+      # No mesh-local `#r` pack step: BusinessRules left the platform (f7a8c086c — ships
+      # as a plugin now), same removal dotnet-test.yml already made. Version-less
+      # `#r "nuget:MeshWeaver.BusinessRules*"` directives are filtered out at runtime.
       - name: Loop the native host under the probe until it crashes
         run: |
           set -uo pipefail
