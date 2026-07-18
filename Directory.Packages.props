@@ -4,7 +4,6 @@
     <NoWarn>$(NoWarn);NU1608</NoWarn>
   </PropertyGroup>
   <ItemGroup>
-    <!-- AngleSharp pinned to override the transitive 1.4.0 (mXSS via the annotation-xml integration point, GHSA-pgww-w46g-26qg — fixed in 1.5.0). It is a pure deep transitive (MeshWeaver.Markdown / MeshWeaver.Hosting → EPS.Extensions.YamlMarkdown → Html2Markdown → AngleSharp), so this bare pin is INERT without the direct <PackageReference Include="AngleSharp"/> those two projects carry — CentralPackageTransitivePinning is off. Verify with `dotnet nuget why`. -->
     <PackageVersion Include="AngleSharp" Version="1.5.2" />
     <PackageVersion Include="Appium.WebDriver" Version="8.3.0" />
     <PackageVersion Include="AspectCore.Extensions.Reflection" Version="2.4.0" />

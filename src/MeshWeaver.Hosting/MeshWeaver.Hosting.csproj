@@ -4,9 +4,6 @@
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="EPS.Extensions.YamlMarkdown" />
-    <!-- Direct ref forces the security-pinned AngleSharp 1.5.0 (see Directory.Packages.props) into the
-         Html2Markdown transitive chain that EPS.Extensions.YamlMarkdown pulls. -->
-    <PackageReference Include="AngleSharp" />
     <PackageReference Include="Markdig" />
     <PackageReference Include="Microsoft.Extensions.Caching.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.Caching.Memory" />
