@@ -123,12 +123,17 @@
        - System.Security.Cryptography.Xml: CVE in 10.0.0 chain
        - OpenTelemetry.Api: GHSA-g94r-2vxg-569j (1.13.1 vulnerable)
        - Microsoft.AspNetCore.DataProtection: GHSA-9mv3-2cwr-p262 (10.0.0 vulnerable)
+       - AngleSharp: GHSA-pgww-w46g-26qg (1.4.0 vulnerable — transitive via bUnit); pinned 1.5.2.
+         The Directory.Packages.props pin was inert without a direct ref (no transitive pinning),
+         so AngleSharp resolved to the vulnerable 1.4.0 and tripped NU1902 as an error under
+         -warnaserror (WarningsNotAsErrors does not exempt NuGet audit advisories from the gate).
        Conditioned on net10.0 because netstandard2.0 projects (e.g. BusinessRules.Generator)
        opt out of CPM and don't need these packages. -->
   <ItemGroup Condition="'$(TargetFramework)' == 'net10.0'">
     <PackageReference Include="System.Security.Cryptography.Xml" />
     <PackageReference Include="OpenTelemetry.Api" />
     <PackageReference Include="Microsoft.AspNetCore.DataProtection" />
+    <PackageReference Include="AngleSharp" />
   </ItemGroup>
   <!-- Bake the git commit SHA into every assembly as AssemblyMetadata("CommitHash") so the About
        page can show EXACTLY which build is running and link to the GitHub commit. This is kept
