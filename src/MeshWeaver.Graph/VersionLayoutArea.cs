@@ -38,6 +38,7 @@ public static class VersionLayoutArea
     {
         var hubPath = host.Hub.Address.ToString();
         var versionQuery = host.Hub.ServiceProvider.GetService<IVersionQuery>();
+        var access = host.Hub.ServiceProvider.GetService<AccessService>();
 
         if (versionQuery == null)
         {
@@ -73,7 +74,7 @@ public static class VersionLayoutArea
 
             foreach (var version in versions)
             {
-                var timeStr = version.LastModified.LocalDateTime.ToString("g");
+                var timeStr = access.ToDisplayTime(version.LastModified).ToString("g");
                 var changedBy = version.ChangedBy ?? "—";
                 var name = version.Name ?? "";
 
