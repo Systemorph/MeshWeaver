@@ -294,21 +294,47 @@ public class MarkdownViewLogicTest
         html.Should().Contain("data-area='Search'");
     }
 
+    // ---------- ASCII-smiley conversion disabled (issue #402) ----------
+    // Markdig's smiley parser turned any colon adjacent to a trigger char into an emoji, which
+    // corrupts ordinary colon-dense markdown (agent output especially). Smileys are now OFF; only
+    // unambiguous :shortcode: emoji convert.
+
     [Fact]
-    public void Render_OrdinarySmiley_StillConverts()
+    public void Render_ColonBeforeBold_KeepsColonAndBold_NoKissEmoji()
     {
-        // The fix keeps ASCII smileys — it only drops the pipe-bearing ones (:| , :-|).
+        // `:**Batch 4**` used to become 😗 + a broken `*Batch 4**` (the `:*` smiley ate the colon
+        // and one `*`). Now the colon stays and the bold renders intact.
+        var html = MarkdownViewLogic.Render("(13 Knoten):**Batch 4**", null, null).Html;
+        html.Should().NotContain("😗", "the :* ASCII smiley must not fire");
+        html.Should().Contain("(13 Knoten):", "the colon must survive");
+        html.Should().Contain("<strong>Batch 4</strong>", "the bold must render — its * was not eaten");
+    }
+
+    [Fact]
+    public void Render_ColonBeforeCapitalD_KeepsLiteralText_NoGrinEmoji()
+    {
+        // `:Die` used to match the `:D` smiley → 😄 leaving a bare `ie`. Now it stays literal.
+        var html = MarkdownViewLogic.Render("(13 Knoten):Die Knoten", null, null).Html;
+        html.Should().NotContain("😄", "the :D ASCII smiley must not fire");
+        html.Should().Contain(":Die Knoten", "the text must survive verbatim");
+    }
+
+    [Fact]
+    public void Render_OrdinarySmiley_NoLongerConverts()
+    {
+        // Trade-off of disabling smileys: a typed `:)` stays literal (use :smile: for an emoji).
         var html = MarkdownViewLogic.Render("nice :)", null, null).Html;
-        html.Should().NotContain(":)", "ordinary ASCII smileys must still convert to an emoji");
+        html.Should().Contain(":)", "ASCII smileys are disabled — `:)` stays literal");
+        html.Should().NotContain("🙂", "no auto-conversion of ASCII smileys");
     }
 
     [Fact]
     public void Render_PipeBearingSmiley_StaysLiteral()
     {
-        // `:|` is intentionally NOT converted — that conversion (→ 😐) is what corrupted
-        // table alignment delimiters. In plain text it simply stays literal.
+        // `:|` → 😐 corrupted table alignment delimiters (the 2026-06-13 bug); subsumed now that
+        // all smileys are off. In plain text it simply stays literal.
         var html = MarkdownViewLogic.Render("meh :| ok", null, null).Html;
-        html.Should().NotContain("😐", ":| must not become the neutral-face emoji anymore");
+        html.Should().NotContain("😐", ":| must not become the neutral-face emoji");
         html.Should().Contain(":|", "the pipe-bearing smiley is left as literal text");
     }
 

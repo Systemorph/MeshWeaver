@@ -59,9 +59,12 @@ public class DocumentBuilder
         {
             if (!first)
             {
-                elements.Add(new ChapterBreakElement(chapterTitle));
+                // Page break FIRST, then the chapter title — so each chapter (and each deck
+                // slide) starts on a fresh page with its heading at the top, never orphaned
+                // at the foot of the previous chapter's last page.
                 if (options.PageBreakBetweenChildren)
                     elements.Add(new PageBreakElement());
+                elements.Add(new ChapterBreakElement(chapterTitle));
             }
             first = false;
 
