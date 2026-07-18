@@ -472,6 +472,51 @@ public static class MemexConfiguration
         services.AddSpeechTranscription(builder.Configuration);
     }
 
+    /// <summary>
+    /// Fails fast on the content-storage configuration that GUARANTEES silent data loss (issue #435):
+    /// a DEPLOYED (non-development) <c>FileSystem</c> content store whose <c>BasePath</c> is empty or
+    /// relative. Such a path resolves against the container's ephemeral working directory (<c>/app</c>),
+    /// so every uploaded collection file is written to disk that vanishes on the next pod restart or
+    /// grain teardown — reads succeed for minutes, then the files are gone, with no signal to the user.
+    /// We cannot verify from code that an <em>absolute</em> path is a durable mount, but we CAN reject
+    /// the empty/relative footgun outright. A local <c>Development</c> run keeps the relative-to-working-
+    /// tree convenience (the Monolith's <c>Storage:BasePath = "../../samples/Graph"</c>).
+    /// <para>Pure decision (no I/O) so it is unit-testable without spinning a mesh.</para>
+    /// </summary>
+    /// <param name="contentStorageConfig">The parsed <c>Storage</c> section, or <c>null</c> when unconfigured.</param>
+    /// <param name="isDevelopment"><c>true</c> for a local Development run (relative BasePath allowed).</param>
+    /// <exception cref="InvalidOperationException">
+    /// Thrown when a non-development FileSystem content store has an empty or relative <c>BasePath</c>.
+    /// </exception>
+    public static void ValidateContentStorageDurability(
+        ContentCollectionConfig? contentStorageConfig, bool isDevelopment)
+    {
+        // Development resolves a relative BasePath against a stable working tree — that's the intended
+        // local convenience, not the ephemeral-container footgun. Nothing configured → nothing to guard.
+        if (isDevelopment || contentStorageConfig is null)
+            return;
+        // Only the FileSystem store roots files on a local path. AzureBlob/other stores don't use
+        // BasePath as a filesystem root (it's a blob prefix), so the durability concern doesn't apply.
+        if (!string.Equals(contentStorageConfig.SourceType, "FileSystem", StringComparison.OrdinalIgnoreCase))
+            return;
+
+        var basePath = contentStorageConfig.BasePath;
+        var isEmpty = string.IsNullOrWhiteSpace(basePath);
+        // An absolute path is the operator's chosen mount; code can't verify it's durable, so allow it.
+        if (!isEmpty && Path.IsPathRooted(basePath))
+            return;
+
+        throw new InvalidOperationException(
+            "Content storage misconfiguration (issue #435): Storage:SourceType is 'FileSystem' but "
+            + (isEmpty ? "Storage:BasePath is empty." : $"Storage:BasePath ('{basePath}') is relative.")
+            + " A FileSystem content store with an empty or relative BasePath resolves against the "
+            + "container's ephemeral working directory, so uploaded collection files are written to "
+            + "storage that is SILENTLY LOST on the next pod restart or grain teardown. Set "
+            + "Storage:BasePath to an ABSOLUTE path backed by a durable volume (e.g. '/mnt/content' on "
+            + "a PersistentVolumeClaim), or use Storage:SourceType 'AzureBlob'. Refusing to start so the "
+            + "misconfiguration surfaces now rather than after users have uploaded and lost files.");
+    }
+
     extension<TBuilder>(TBuilder builder) where TBuilder : MeshBuilder
     {
         /// <summary>
@@ -514,6 +559,11 @@ public static class MemexConfiguration
 
             // Read content collection storage config from appsettings
             var contentStorageConfig = configuration.GetSection("Storage").Get<ContentCollectionConfig>();
+            // 🚨 Fail fast on the guaranteed-silent-data-loss footgun (issue #435) BEFORE the
+            // relative→absolute resolution below would MASK it: a deployed FileSystem content store
+            // with an empty/relative BasePath resolves against the ephemeral container CWD (/app),
+            // so uploaded collection files vanish on the next pod restart / grain teardown.
+            ValidateContentStorageDurability(contentStorageConfig, isDevelopment);
             if (contentStorageConfig != null)
             {
                 // Resolve relative path to absolute
