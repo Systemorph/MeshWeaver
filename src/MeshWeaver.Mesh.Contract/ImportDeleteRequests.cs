@@ -124,6 +124,19 @@ public record SyncContentFilesRequest(
     /// the write is purely additive (upsert only). Default true.
     /// </summary>
     public bool Mirror { get; init; } = true;
+
+    /// <summary>
+    /// When set (and <see cref="Mirror"/> is true), restricts pruning to the files the SOURCE
+    /// previously owned: a file under <see cref="TargetPath"/> that is no longer in <see cref="Files"/>
+    /// is pruned ONLY if its collection-relative path is in this set. A file NOT in this set is a
+    /// user upload the source never tracked and is PRESERVED (issue #435 — a GitSync re-import must not
+    /// wipe files a user uploaded into a source-managed space). <c>null</c> keeps the legacy full-mirror
+    /// semantics (prune every file not in <see cref="Files"/>).
+    /// <para>Paths are collection-relative — the same <c>{TargetPath}/{file}</c> form the mirror
+    /// compares against (forward slashes, no leading slash), matching <see cref="Files"/> joined onto
+    /// <see cref="TargetPath"/>.</para>
+    /// </summary>
+    public IReadOnlyList<string>? SourceOwnedPaths { get; init; }
 }
 
 /// <summary>
