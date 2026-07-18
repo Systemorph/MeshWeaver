@@ -990,6 +990,14 @@ public static class PostgreSqlSchemaInitializer
                 icon            TEXT,
                 display_order   INTEGER,
                 last_modified   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                -- Authorship: the immutable creator + the last modifier (identity + time).
+                -- Stamped by the create/update handlers onto MeshNode.CreatedBy /
+                -- LastModifiedBy / CreatedDate; the adapter persists them here so a node
+                -- round-trips its author across restarts (previously dropped on write, so
+                -- every PG-backed node read back with null authorship).
+                last_modified_by TEXT,
+                created_date    TIMESTAMPTZ,
+                created_by      TEXT,
                 version         BIGINT      NOT NULL DEFAULT 0,
                 state           SMALLINT    NOT NULL DEFAULT 0,
                 -- node-level static-repo sync claim (0=Include, 1=ExcludeThisOnly,
@@ -1314,6 +1322,14 @@ public static class PostgreSqlSchemaInitializer
                 icon            TEXT,
                 display_order   INTEGER,
                 last_modified   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                -- Authorship: the immutable creator + the last modifier (identity + time).
+                -- Stamped by the create/update handlers onto MeshNode.CreatedBy /
+                -- LastModifiedBy / CreatedDate; the adapter persists them here so a node
+                -- round-trips its author across restarts (previously dropped on write, so
+                -- every PG-backed node read back with null authorship).
+                last_modified_by TEXT,
+                created_date    TIMESTAMPTZ,
+                created_by      TEXT,
                 version         BIGINT      NOT NULL DEFAULT 0,
                 state           SMALLINT    NOT NULL DEFAULT 0,
                 -- node-level static-repo sync claim (0=Include, 1=ExcludeThisOnly,
@@ -1610,13 +1626,13 @@ public static class PostgreSqlSchemaInitializer
                     EXECUTE format(
                         'INSERT INTO %I.mesh_node_history (
                             namespace, id, name, node_type, description, category, icon,
-                            display_order, last_modified, version, state, content, desired_id, main_node
-                        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)',
+                            display_order, last_modified, version, state, content, desired_id, main_node, changed_by
+                        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)',
                         '{{versionsSchema}}'
                     ) USING
                         NEW.namespace, NEW.id, NEW.name, NEW.node_type, NEW.description,
                         NEW.category, NEW.icon, NEW.display_order, NEW.last_modified,
-                        NEW.version, NEW.state, NEW.content, NEW.desired_id, NEW.main_node;
+                        NEW.version, NEW.state, NEW.content, NEW.desired_id, NEW.main_node, NEW.last_modified_by;
                 EXCEPTION WHEN unique_violation THEN
                     -- Already exists, skip
                 END;
@@ -1691,6 +1707,14 @@ public static class PostgreSqlSchemaInitializer
                 icon            TEXT,
                 display_order   INTEGER,
                 last_modified   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                -- Authorship: the immutable creator + the last modifier (identity + time).
+                -- Stamped by the create/update handlers onto MeshNode.CreatedBy /
+                -- LastModifiedBy / CreatedDate; the adapter persists them here so a node
+                -- round-trips its author across restarts (previously dropped on write, so
+                -- every PG-backed node read back with null authorship).
+                last_modified_by TEXT,
+                created_date    TIMESTAMPTZ,
+                created_by      TEXT,
                 version         BIGINT      NOT NULL DEFAULT 0,
                 state           SMALLINT    NOT NULL DEFAULT 0,
                 -- node-level static-repo sync claim (0=Include, 1=ExcludeThisOnly,
@@ -2021,6 +2045,14 @@ public static class PostgreSqlSchemaInitializer
                 icon            TEXT,
                 display_order   INTEGER,
                 last_modified   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                -- Authorship: the immutable creator + the last modifier (identity + time).
+                -- Stamped by the create/update handlers onto MeshNode.CreatedBy /
+                -- LastModifiedBy / CreatedDate; the adapter persists them here so a node
+                -- round-trips its author across restarts (previously dropped on write, so
+                -- every PG-backed node read back with null authorship).
+                last_modified_by TEXT,
+                created_date    TIMESTAMPTZ,
+                created_by      TEXT,
                 version         BIGINT      NOT NULL DEFAULT 0,
                 state           SMALLINT    NOT NULL DEFAULT 0,
                 -- node-level static-repo sync claim (0=Include, 1=ExcludeThisOnly,
@@ -2347,14 +2379,14 @@ public static class PostgreSqlSchemaInitializer
                 EXECUTE format(
                     'INSERT INTO %I.mesh_node_history (
                         namespace, id, name, node_type, description, category, icon,
-                        display_order, last_modified, version, state, content, desired_id, main_node
-                    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+                        display_order, last_modified, version, state, content, desired_id, main_node, changed_by
+                    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
                     ON CONFLICT (namespace, id, version) DO NOTHING',
                     TG_TABLE_SCHEMA
                 ) USING
                     NEW.namespace, NEW.id, NEW.name, NEW.node_type, NEW.description,
                     NEW.category, NEW.icon, NEW.display_order, NEW.last_modified,
-                    NEW.version, NEW.state, NEW.content, NEW.desired_id, NEW.main_node;
+                    NEW.version, NEW.state, NEW.content, NEW.desired_id, NEW.main_node, NEW.last_modified_by;
                 RETURN NEW;
             END;
             $$ LANGUAGE plpgsql;
@@ -2395,6 +2427,14 @@ public static class PostgreSqlSchemaInitializer
                 icon            TEXT,
                 display_order   INTEGER,
                 last_modified   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                -- Authorship: the immutable creator + the last modifier (identity + time).
+                -- Stamped by the create/update handlers onto MeshNode.CreatedBy /
+                -- LastModifiedBy / CreatedDate; the adapter persists them here so a node
+                -- round-trips its author across restarts (previously dropped on write, so
+                -- every PG-backed node read back with null authorship).
+                last_modified_by TEXT,
+                created_date    TIMESTAMPTZ,
+                created_by      TEXT,
                 version         BIGINT      NOT NULL DEFAULT 0,
                 state           SMALLINT    NOT NULL DEFAULT 0,
                 -- node-level static-repo sync claim (0=Include, 1=ExcludeThisOnly,
