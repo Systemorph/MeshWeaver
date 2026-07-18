@@ -792,11 +792,30 @@ public class SnowflakeSqlGenerator
 
         var nodeAccess = BuildNodeAccessPredicate(uepTable, marker, userList);
 
-        if (!string.IsNullOrEmpty(publicReadClause))
+        // 🔒 #471/#385 RC3 — mirror of PostgreSqlSqlGenerator.BuildPerSchemaAccessClause. The
+        // invariant is partition_access AND (public_read OR node): public_read skips the node-level
+        // check but NEVER the partition gate, so a partition's public-read content does not leak
+        // into another tenant's unscoped fan-out. The lone EXCEPTION is the global public identity
+        // directory ('auth' mirror) — excluded from the tenant fan-out and reached only by pinned
+        // identity routes — whose public-read identity nodes must stay resolvable to all
+        // authenticated users regardless of partition_access (display-name resolution / invites /
+        // subject picker / login). See the PG generator for the full rationale.
+        if (string.Equals(schema, PublicDirectorySchema, StringComparison.OrdinalIgnoreCase)
+            && !string.IsNullOrEmpty(publicReadClause))
             return $"({publicReadClause} OR ({partitionAccessExists} AND ({nodeAccess})))";
+
+        if (!string.IsNullOrEmpty(publicReadClause))
+            return $"({partitionAccessExists} AND ({publicReadClause} OR ({nodeAccess})))";
 
         return $"({partitionAccessExists} AND ({nodeAccess}))";
     }
+
+    /// <summary>
+    /// The global public identity directory schema (cross-tenant User/Group/Role/VUser/ApiToken
+    /// mirror). Kept in lock-step with the PostgreSQL generator and
+    /// <c>PostgreSqlCrossSchemaQueryProvider.ExcludedSchemas</c>.
+    /// </summary>
+    private const string PublicDirectorySchema = "auth";
 
     /// <summary>
     /// The node-level permission predicate: the user owns the node, OR the longest matching
