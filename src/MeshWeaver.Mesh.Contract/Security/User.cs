@@ -12,8 +12,17 @@ public record User : AccessObject
     /// <summary>Email address (from OAuth, set during onboarding).</summary>
     public string? Email { get; init; }
 
-    /// <summary>Short biography.</summary>
+    /// <summary>Short biography. Rendered read-only as markdown on the public profile; edited via a
+    /// node-bound markdown editor (see <c>UserActivityLayoutAreas.EditProfile</c>).</summary>
     public string? Bio { get; init; }
+
+    /// <summary>
+    /// Public profile links as a markdown block — one link per line, e.g.
+    /// <c>[GitHub](https://github.com/you)</c>. Rendered read-only via <c>Controls.Markdown</c> (so the
+    /// framework renders the anchors — no hand-rolled HTML) and edited via a node-bound markdown editor.
+    /// This is opt-in public content: only what the owner writes here is shown to visitors.
+    /// </summary>
+    public string? Links { get; init; }
 
     /// <summary>Profile role (e.g. Developer, Manager, Designer).</summary>
     public string? Role { get; init; }

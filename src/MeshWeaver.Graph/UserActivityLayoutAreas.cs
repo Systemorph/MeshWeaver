@@ -56,6 +56,18 @@ public static class UserActivityLayoutAreas
     /// <summary>Area that clears the owner's <see cref="User.Body"/> override so the default welcome home returns.</summary>
     public const string ResetHomeArea = "ResetHome";
 
+    /// <summary>
+    /// Area name for the public profile page (<c>/{user}/Profile</c>) — the polished, read-only
+    /// showcase every visitor sees, and the owner's preview + entry point to the editor.
+    /// </summary>
+    public const string ProfileArea = "Profile";
+
+    /// <summary>
+    /// Area name for the owner-only profile editor (bio, links, showcase) — node-bound editors that
+    /// auto-persist to the User node. Access-gated on <see cref="Permission.Update"/> (self-edit only).
+    /// </summary>
+    public const string EditProfileArea = "EditProfile";
+
     /// <summary>Link to the doc page that explains the configurable Body-page + <c>@@</c>-region model.</summary>
     internal const string ConfigGuideLink = "/Doc/GUI/ConfigurablePages";
 
@@ -98,7 +110,10 @@ public static class UserActivityLayoutAreas
             // Space Body editor. See EditHome / BuildHomeBodyEditor.
             .WithView(MeshNodeLayoutAreas.EditArea, EditHome)
             // Clears User.Body → the welcome template returns; reached from the Reset menu item.
-            .WithView(ResetHomeArea, ResetHome))
+            .WithView(ResetHomeArea, ResetHome)
+            // The polished public profile (read-only showcase) and its owner-only, node-bound editor.
+            .WithView(ProfileArea, ProfileAreaView)
+            .WithView(EditProfileArea, EditProfile))
             // Re-enable Edit on the user home (the default node menu HIDES generic Edit on a
             // protected partition root) and add a Reset-to-default item once the owner has
             // authored a Body override.
@@ -127,6 +142,10 @@ public static class UserActivityLayoutAreas
         var accessService = host.Hub.ServiceProvider.GetService<AccessService>();
         var capturedAccessContext = accessService?.Context ?? accessService?.CircuitContext;
         var isOwner = IsViewerOwner(capturedAccessContext, nodeOwnerId);
+        var options = host.Hub.JsonSerializerOptions;
+        // The visitor profile reveals email ONLY to a global admin (the owner never lands here — they
+        // get the dashboard). Fail-closed: hidden until admin status resolves.
+        var isAdminStream = ViewerIsAdmin(host.Hub, capturedAccessContext?.ObjectId);
 
         var areaLogger = host.Hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.Graph.UserActivityLayoutAreas");
@@ -149,15 +168,15 @@ public static class UserActivityLayoutAreas
         // ensure-create a {owner}/Chat node before rendering. Nothing to gate on: bind straight to the
         // owner-node sync stream.
         return syncStream!
-            .Select(change =>
+            .CombineLatest(isAdminStream, (change, isAdmin) =>
             {
                 var ownerNode = change.Value;
                 var ownerName = ownerNode?.Name ?? nodeOwnerId;
 
                 if (isOwner)
-                    return (UiControl?)BuildOwnerHome(nodePath, ownerName, ownerNode, host.Hub.JsonSerializerOptions);
-                else
-                    return (UiControl?)BuildVisitorProfile(nodePath, ownerName, ownerNode);
+                    return (UiControl?)BuildOwnerHome(nodePath, ownerName, ownerNode, options);
+                return (UiControl?)BuildProfile(nodePath, nodeOwnerId, ownerName, ownerNode,
+                    isOwner: false, canSeeEmail: isAdmin, options);
             })
             // The area must NEVER spin forever, but it must ALSO never tear itself down
             // while idle. Two distinct failure modes, ONE narrow guard:
@@ -189,7 +208,7 @@ public static class UserActivityLayoutAreas
     /// True when the viewer's <see cref="AccessContext"/> represents the same
     /// principal as the per-user partition key <paramref name="nodeOwnerId"/>
     /// — the rule that gates <see cref="BuildOwnerHome"/> vs
-    /// <see cref="BuildVisitorProfile"/>. Accepts either:
+    /// <see cref="BuildProfile"/>. Accepts either:
     /// <list type="bullet">
     ///   <item><see cref="AccessContext.ObjectId"/> equal to the partition key
     ///     — the canonical match when <c>CircuitAccessHandler</c> seeds
@@ -403,6 +422,16 @@ public static class UserActivityLayoutAreas
                 var items = new List<NodeMenuItemDefinition>();
                 if (permissions.HasFlag(Permission.Update))
                 {
+                    items.Add(new NodeMenuItemDefinition(
+                        "View public profile", ProfileArea,
+                        Icon: "👤", RequiredPermission: Permission.Update, Order: 5,
+                        Href: MeshNodeLayoutAreas.BuildUrl(hubPath, ProfileArea),
+                        Tooltip: "Preview your public profile as visitors see it"));
+                    items.Add(new NodeMenuItemDefinition(
+                        "Edit profile", EditProfileArea,
+                        Icon: "🪪", RequiredPermission: Permission.Update, Order: 6,
+                        Href: MeshNodeLayoutAreas.BuildUrl(hubPath, EditProfileArea),
+                        Tooltip: "Edit your bio, links, and showcase"));
                     items.Add(new NodeMenuItemDefinition(
                         "Edit home page", MeshNodeLayoutAreas.EditArea,
                         Icon: "✏️", RequiredPermission: Permission.Update, Order: 10,
@@ -649,55 +678,224 @@ public static class UserActivityLayoutAreas
                     .WithMaxColumns(2).WithItemLimit(50).WithMaxRows(4).WithReactiveMode(true));
     }
 
-    /// <summary>
-    /// Public profile shown to visitors — UserProfileControl (rendered by Blazor)
-    /// with child nodes and recent activity below.
-    /// </summary>
-    private static UiControl BuildVisitorProfile(string nodePath, string ownerName, MeshNode? ownerNode)
-    {
-        // Compute owner partition path (post-v10 each user has their own
-        // partition; legacy /User/{userid}/... maps to {userid}/... content)
-        var nodeOwnerId = nodePath.StartsWith("User/") ? nodePath[5..] : nodePath;
+    // ── Public profile + owner-editable showcase ───────────────────────────────────────────────────
 
-        // Extract User content fields (bio, email) if available
-        string? email = null;
-        string? bio = null;
-        if (ownerNode?.Content is User userContent)
+    /// <summary>
+    /// The public profile area (<see cref="ProfileArea"/>, <c>/{user}/Profile</c>) — the polished,
+    /// read-only showcase every viewer sees, and the owner's preview + entry point to the editor.
+    /// Reacts to the owner node so edits appear live; email is revealed only to the owner or a global
+    /// admin (fail-closed: hidden until admin status resolves).
+    /// </summary>
+    public static IObservable<UiControl?> ProfileAreaView(LayoutAreaHost host, RenderingContext _)
+    {
+        var nodePath = host.Hub.Address.ToString();
+        var nodeOwnerId = OwnerIdOf(nodePath);
+        var options = host.Hub.JsonSerializerOptions;
+
+        var accessService = host.Hub.ServiceProvider.GetService<AccessService>();
+        var captured = accessService?.Context ?? accessService?.CircuitContext;
+        var isOwner = IsViewerOwner(captured, nodeOwnerId);
+        var isAdminStream = ViewerIsAdmin(host.Hub, captured?.ObjectId);
+        var areaLogger = host.Hub.ServiceProvider.GetService<ILoggerFactory>()
+            ?.CreateLogger("MeshWeaver.Graph.UserActivityLayoutAreas");
+
+        var syncStream = host.Workspace.GetStream(new MeshNodeReference());
+        return syncStream!
+            .CombineLatest(isAdminStream, (change, isAdmin) =>
+            {
+                var ownerNode = change.Value;
+                var ownerName = ownerNode?.Name ?? nodeOwnerId;
+                return (UiControl?)BuildProfile(nodePath, nodeOwnerId, ownerName, ownerNode,
+                    isOwner, canSeeEmail: isOwner || isAdmin, options);
+            })
+            // Same narrow guard as Activity: arm the timeout for the FIRST emission only (surface an
+            // unreachable owner hub) and disarm it thereafter (an idle data-bound view must not tear
+            // itself down between edits). A first-snapshot timeout / read denial throws, never swallows.
+            .Timeout(Observable.Timer(TimeSpan.FromSeconds(30)), _ => Observable.Never<long>())
+            .Catch<UiControl?, Exception>(ex =>
+            {
+                areaLogger?.LogWarning(ex,
+                    "[UserActivity.Profile] profile unavailable for {NodePath}", nodePath);
+                return Observable.Throw<UiControl?>(
+                    new InvalidOperationException($"Profile unavailable for '{nodePath}'.", ex));
+            });
+    }
+
+    /// <summary>
+    /// The owner-only profile editor (<see cref="EditProfileArea"/>) — node-bound markdown editors for
+    /// the bio and links plus inline showcase curation, gated on <see cref="Permission.Update"/>
+    /// (self-edit → the owner only; visitors get access-denied). Mirrors <see cref="EditHome"/>.
+    /// </summary>
+    public static IObservable<UiControl?> EditProfile(LayoutAreaHost host, RenderingContext _)
+    {
+        var hubPath = host.Hub.Address.ToString();
+        var options = host.Hub.JsonSerializerOptions;
+        return host.Workspace.GetMeshNodeStream().CombineLatest(
+            host.Hub.GetEffectivePermissions(hubPath),
+            (node, permissions) => !permissions.HasFlag(Permission.Update)
+                ? (UiControl?)MeshNodeLayoutAreas.BuildAccessDenied(hubPath)
+                : (UiControl?)BuildProfileEditor(node, hubPath, options));
+    }
+
+    /// <summary>
+    /// The profile editor body: a back link, node-bound <see cref="MarkdownEditorControl"/>s for the
+    /// bio and links (each edit is a per-field read-modify-write straight to the User node — the same
+    /// node-bound DataContext pattern as <see cref="BuildHomeBodyEditor"/>: ONE source of truth, no
+    /// <c>/data</c> replica, no save subscription), and the showcase rendered with the inline unpin
+    /// overlay so the owner curates pins in place. Built from layout-area controls only.
+    /// </summary>
+    internal static UiControl BuildProfileEditor(MeshNode? node, string hubPath, JsonSerializerOptions options)
+    {
+        if (node is null)
+            return Controls.Markdown("*Profile not found.*");
+
+        var userPath = node.Path ?? hubPath;
+        var ownerId = OwnerIdOf(userPath);
+        var contentCtx = LayoutAreaReference.GetMeshNodeDataContext(userPath, bindContent: true);
+        var pins = node.ContentAs<User>(options)?.PinnedPaths;
+
+        var container = Controls.Stack
+            .WithWidth("100%")
+            .WithStyle("gap: 20px; width: 100%; padding: 0 4px 24px;");
+
+        // Header: back to the profile + auto-save hint (Label controls, never raw HTML).
+        container = container.WithView(Controls.Stack
+            .WithOrientation(Orientation.Horizontal)
+            .WithVerticalAlignment(VerticalAlignment.Center)
+            .WithHorizontalGap(12)
+            .WithStyle("padding: 8px 0; border-bottom: 1px solid var(--neutral-stroke-rest);")
+            .WithView(Controls.Button("")
+                .WithIconStart(FluentIcons.ArrowLeft())
+                .WithAppearance(Appearance.Stealth)
+                .WithNavigateToHref($"/{userPath}/{ProfileArea}"))
+            .WithView(Controls.H3("Edit your profile").WithStyle("margin: 0; flex: 1;"))
+            .WithView(Controls.Label("Changes are saved automatically")
+                .WithStyle("color: var(--neutral-foreground-hint); font-size: 0.85rem;")));
+
+        // Bio — node-bound markdown editor (JsonPointer "bio" against the User content context).
+        container = container.WithView(BuildProfileSection("Bio", new MarkdownEditorControl
         {
-            email = userContent.Email;
-            bio = userContent.Bio;
-        }
-        else if (ownerNode?.Content is JsonElement je && je.ValueKind == JsonValueKind.Object)
+            Value = new JsonPointerReference("bio"),
+            DataContext = contentCtx,
+            Height = "160px",
+            MaxHeight = "none",
+            Placeholder = "A sentence or two about what you do…"
+        }));
+
+        // Links — node-bound markdown editor (one markdown link per line).
+        container = container.WithView(BuildProfileSection("Links", new MarkdownEditorControl
         {
-            if (je.TryGetProperty("Email", out var emailProp) || je.TryGetProperty("email", out emailProp))
-                email = emailProp.GetString();
-            if (je.TryGetProperty("Bio", out var bioProp) || je.TryGetProperty("bio", out bioProp))
-                bio = bioProp.GetString();
-        }
+            Value = new JsonPointerReference("links"),
+            DataContext = contentCtx,
+            Height = "140px",
+            MaxHeight = "none",
+            Placeholder = "One link per line, e.g. [GitHub](https://github.com/you)"
+        }));
+
+        // Showcase — pinned cards with the inline unpin overlay; a note on how to add more.
+        container = container.WithView(BuildProfileSection("Showcase",
+            Controls.Stack
+                .WithStyle("gap: 8px; width: 100%;")
+                .WithView(Controls.Markdown(
+                    "Pin any space, doc, agent, or example from its menu to feature it here — " +
+                    "hover a card to unpin it."))
+                .WithView(BuildShowcase(ownerId, pins, ownerView: true))));
+
+        return container;
+    }
+
+    /// <summary>Reactive global-admin check for the viewer; false for an unauthenticated viewer, and
+    /// <c>StartWith(false)</c> so the profile renders immediately (email hidden) and reveals only once
+    /// admin status resolves — fail-closed on the PII gate.</summary>
+    private static IObservable<bool> ViewerIsAdmin(IMessageHub hub, string? viewerId)
+        => string.IsNullOrEmpty(viewerId)
+            ? Observable.Return(false)
+            : hub.IsGlobalAdmin(viewerId).StartWith(false).DistinctUntilChanged();
+
+    /// <summary>
+    /// The polished public profile — cover/avatar + display name, an opt-in bio and links block, and a
+    /// curated "Showcase" of the owner's pinned content with a recent-public-content fallback. Rendered
+    /// read-only for everyone via layout-area controls (no hand-rolled HTML); the owner reaches the
+    /// node-bound editors via <see cref="EditProfileArea"/>. Email is shown ONLY when
+    /// <paramref name="canSeeEmail"/> (owner or global admin) — visitors never see it (#471 PII). An
+    /// empty profile (no bio, links, or pins) renders the getting-started card instead of empty sections.
+    /// Kept <c>internal</c> so the owner/visitor + empty/populated behaviour is unit-testable.
+    /// </summary>
+    internal static UiControl BuildProfile(
+        string nodePath, string ownerId, string ownerName, MeshNode? ownerNode,
+        bool isOwner, bool canSeeEmail, JsonSerializerOptions options)
+    {
+        // ContentAs (not `as User`): the owner-node stream alternates typed↔JsonElement↔null frames.
+        var user = ownerNode.ContentAs<User>(options);
+        var bio = user?.Bio;
+        var links = user?.Links;
+        var pins = user?.PinnedPaths;
+        var email = canSeeEmail ? user?.Email : null;
+        var isEmpty = string.IsNullOrWhiteSpace(bio)
+                      && string.IsNullOrWhiteSpace(links)
+                      && (pins is null || pins.Count == 0);
 
         var profile = Controls.Stack
             .WithWidth("100%")
             .WithStyle("display: flex; flex-direction: column; height: 100%; min-height: 0; overflow: hidden;");
 
-        // User profile card (rendered by Blazor UserProfilePageView)
+        // Header card (avatar + name; email only for owner/admin). Bio renders as its own markdown
+        // section below, so it is NOT passed to the header — no duplication.
         profile = profile.WithView(new UserProfileControl()
             .WithNodePath(nodePath)
             .WithDisplayName(ownerName)
             .WithIcon(ownerNode?.Icon)
             .WithEmail(email)
-            .WithBio(bio));
+            .WithBio(null));
 
-        // Scrollable content area
         var content = Controls.Stack
-            .WithStyle("padding: 0 24px; flex: 1; min-height: 0; overflow-y: auto; " + ThinScrollbar);
+            .WithStyle("padding: 0 24px 24px; flex: 1; min-height: 0; overflow-y: auto; " + ThinScrollbar);
 
-        // Recent activity by this user. Per-user content lives at the user's
-        // own partition path (post-v10: nodeOwnerId = "rbuergi"), not under
-        // the User-prefixed dashboard path. Both Items and Activity queries
-        // scope to nodeOwnerId so the legacy User/ path doesn't leak.
-        content = content.WithView(Controls.MeshSearch
+        // Owner-only inline entry to the node-bound editors.
+        if (isOwner)
+            content = content.WithView(Controls.Stack
+                .WithOrientation(Orientation.Horizontal)
+                .WithHorizontalGap(8)
+                .WithStyle("padding: 8px 0;")
+                .WithView(Controls.Button("Edit profile")
+                    .WithIconStart(FluentIcons.Edit())
+                    .WithAppearance(Appearance.Lightweight)
+                    .WithNavigateToHref($"/{nodePath}/{EditProfileArea}")));
+
+        if (isEmpty)
+        {
+            content = content.WithView(BuildGettingStarted(nodePath, ownerId, ownerName, isOwner));
+        }
+        else
+        {
+            if (!string.IsNullOrWhiteSpace(bio))
+                content = content.WithView(BuildProfileSection("About", Controls.Markdown(bio!)));
+            if (!string.IsNullOrWhiteSpace(links))
+                content = content.WithView(BuildProfileSection("Links", Controls.Markdown(links!)));
+            content = content.WithView(BuildProfileSection("Showcase",
+                BuildShowcase(ownerId, pins, ownerView: false)));
+
+            // Recent activity + items — visibility-filtered to the viewer (only public nodes for visitors).
+            content = content.WithView(BuildRecentActivity(ownerId));
+            content = content.WithView(BuildProfileItems(ownerId));
+        }
+
+        profile = profile.WithView(content);
+        return profile;
+    }
+
+    /// <summary>A titled profile section — an <c>H3</c> heading (Label control, not HTML) over its body.</summary>
+    private static UiControl BuildProfileSection(string title, UiControl body) =>
+        Controls.Stack
+            .WithStyle("gap: 8px; width: 100%; padding-top: 16px;")
+            .WithView(Controls.H3(title).WithStyle("margin: 0; font-size: 1.15rem;"))
+            .WithView(body);
+
+    /// <summary>Recent activity by the owner — visibility-filtered so a visitor sees only public nodes.</summary>
+    private static UiControl BuildRecentActivity(string ownerId) =>
+        Controls.MeshSearch
             .WithTitle("Recent Activity")
-            .WithHiddenQuery($"source:activity namespace:{nodeOwnerId} scope:subtree is:main sort:LastModified-desc")
+            .WithHiddenQuery($"source:activity namespace:{ownerId} scope:subtree is:main sort:LastModified-desc")
             .WithShowSearchBox(false)
             .WithShowEmptyMessage(true)
             .WithRenderMode(MeshSearchRenderMode.Flat)
@@ -706,12 +904,13 @@ public static class UserActivityLayoutAreas
             .WithMaxColumns(4)
             .WithItemLimit(50)
             .WithMaxRows(2)
-            .WithReactiveMode(true));
+            .WithReactiveMode(true);
 
-        // Visible child nodes — security service automatically filters to viewer-visible nodes
-        content = content.WithView(Controls.MeshSearch
+    /// <summary>The owner's visible child nodes — the security service filters to viewer-visible nodes.</summary>
+    private static UiControl BuildProfileItems(string ownerId) =>
+        Controls.MeshSearch
             .WithTitle("Items")
-            .WithHiddenQuery($"namespace:{nodeOwnerId} is:main context:search scope:descendants sort:LastModified-desc")
+            .WithHiddenQuery($"namespace:{ownerId} is:main context:search scope:descendants sort:LastModified-desc")
             .WithShowEmptyMessage(true)
             .WithRenderMode(MeshSearchRenderMode.Grouped)
             .WithSectionCounts(true)
@@ -719,10 +918,103 @@ public static class UserActivityLayoutAreas
             .WithMaxRows(3)
             .WithMaxColumns(4)
             .WithCollapsibleSections(true)
-            .WithReactiveMode(true));
+            .WithReactiveMode(true);
 
-        profile = profile.WithView(content);
-        return profile;
+    /// <summary>
+    /// The Showcase band: the owner's curated pins (<see cref="User.PinnedPaths"/>) rendered as cards,
+    /// or — when nothing is pinned — a fallback of the owner's recent public content so the section is
+    /// never empty. Visibility is enforced by the search itself (a visitor only ever sees pins they may
+    /// read). In the owner's editor (<paramref name="ownerView"/>) each pinned card carries the inline
+    /// unpin overlay (<see cref="PinLayoutArea.PinnedThumbnailArea"/>) so the owner can curate in place.
+    /// </summary>
+    internal static UiControl BuildShowcase(string ownerId, IReadOnlyList<string>? pins, bool ownerView)
+    {
+        if (pins is { Count: > 0 })
+        {
+            var pathsClause = string.Join(" OR ", pins);
+            var search = Controls.MeshSearch
+                .WithHiddenQuery($"path:({pathsClause}) sort:LastModified-desc")
+                .WithShowSearchBox(false)
+                .WithShowEmptyMessage(false)
+                .WithRenderMode(MeshSearchRenderMode.Flat)
+                .WithCollapsibleSections(false)
+                .WithSectionCounts(false)
+                .WithMaxColumns(4)
+                .WithGridSpacing(20)
+                .WithItemLimit(24)
+                .WithMaxRows(2)
+                .WithReactiveMode(true);
+            if (ownerView)
+                search = search.WithItemArea(PinLayoutArea.PinnedThumbnailArea);
+            return search;
+        }
+
+        // Fallback — the owner's recent public content (visibility-filtered), so the band is never bare.
+        return Controls.MeshSearch
+            .WithHiddenQuery($"namespace:{ownerId} is:main context:search scope:descendants sort:LastModified-desc")
+            .WithShowSearchBox(false)
+            .WithShowEmptyMessage(true)
+            .WithRenderMode(MeshSearchRenderMode.Flat)
+            .WithCollapsibleSections(false)
+            .WithSectionCounts(false)
+            .WithMaxColumns(4)
+            .WithItemLimit(12)
+            .WithMaxRows(2)
+            .WithReactiveMode(true);
+    }
+
+    /// <summary>Stable control id for the getting-started card — asserted by tests, stable across renders.</summary>
+    internal const string GettingStartedId = "profile-getting-started";
+
+    /// <summary>
+    /// The friendly getting-started card shown on an EMPTY profile (no bio, links, or pins) — a
+    /// persistent, self-documenting starter that renders automatically for EVERY user until they fill
+    /// their profile in. There is nothing to seed: the behaviour is inherent in the render path, so it
+    /// shows for all users, always, not as a one-time step. For the owner it explains how to add a bio,
+    /// links, and pin content, links straight to the editor, and previews their recent work as
+    /// inspiration; for a visitor it is a gentle "nothing here yet" plus the owner's recent public work.
+    /// Built entirely from layout-area controls (Stack / Markdown / Button / MeshSearch) — no HTML.
+    /// </summary>
+    internal static UiControl BuildGettingStarted(string nodePath, string ownerId, string ownerName, bool isOwner)
+    {
+        var card = Controls.Stack
+            .WithId(GettingStartedId)
+            .WithWidth("100%")
+            .WithStyle("gap: 16px; width: 100%; padding: 24px; margin-top: 8px; " +
+                       "border: 1px solid var(--neutral-stroke-rest); border-radius: 8px; " +
+                       "background: var(--neutral-fill-rest);");
+
+        var intro = isOwner
+            ? $$"""
+                ### 👋 Welcome, {{ownerName}} — let's set up your profile
+
+                Your profile is how others discover your work. Make it yours:
+
+                - **Bio** — a sentence or two about what you do.
+                - **Links** — your GitHub, site, or socials (one markdown link per line).
+                - **Showcase** — **pin** your best spaces, docs, agents, or examples to feature them here.
+
+                Use **Edit profile** to add your bio and links. Pin any node from its menu to add it to your Showcase.
+                """
+            : $"### {ownerName}\n\n{ownerName} hasn't set up their profile yet. Explore their recent public work below.";
+
+        card = card.WithView(Controls.Markdown(intro));
+
+        if (isOwner)
+            card = card.WithView(Controls.Stack
+                .WithOrientation(Orientation.Horizontal)
+                .WithHorizontalGap(8)
+                .WithView(Controls.Button("Edit profile")
+                    .WithIconStart(FluentIcons.Edit())
+                    .WithAppearance(Appearance.Accent)
+                    .WithNavigateToHref($"/{nodePath}/{EditProfileArea}")));
+
+        // Recent public content — doubles as "showcase examples" so the card is never bare.
+        card = card.WithView(BuildProfileSection(
+            isOwner ? "Your recent work" : "Recent public work",
+            BuildShowcase(ownerId, null, ownerView: false)));
+
+        return card;
     }
 
 

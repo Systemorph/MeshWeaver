@@ -169,6 +169,56 @@ public class UserActivityAreaTest(ITestOutputHelper output) : MonolithMeshTestBa
     }
 
     /// <summary>
+    /// The public profile area (<c>/{user}/Profile</c>) resolves end-to-end — the polished, read-only
+    /// showcase every visitor sees. Proves <see cref="UserActivityLayoutAreas.ProfileArea"/> is wired
+    /// into the User hub's layout by AddUserActivityLayoutAreas.
+    /// </summary>
+    [Fact(Timeout = 20000)]
+    public async Task ProfileArea_CanBeResolved_ForUserRoland()
+    {
+        var client = GetClient();
+        var rolandAddress = new Address("User/TestUser");
+
+        await client.Observe(new PingRequest(), o => o.WithTarget(rolandAddress)).Should().Within(15.Seconds()).Emit();
+
+        var workspace = client.GetWorkspace();
+        var reference = new LayoutAreaReference(UserActivityLayoutAreas.ProfileArea);
+
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
+            rolandAddress, reference);
+
+        var value = await stream.Should().Within(TimeSpan.FromSeconds(15)).Emit();
+
+        value.Should().NotBe(default(JsonElement),
+            "the public Profile area should render for User/TestUser");
+    }
+
+    /// <summary>
+    /// The owner-only profile editor area (<c>/{user}/EditProfile</c>) resolves end-to-end — either the
+    /// node-bound bio/links/showcase editor (owner) or an access-denied card (visitor). Either way it
+    /// renders, proving <see cref="UserActivityLayoutAreas.EditProfileArea"/> is registered.
+    /// </summary>
+    [Fact(Timeout = 20000)]
+    public async Task EditProfileArea_CanBeResolved_ForUserRoland()
+    {
+        var client = GetClient();
+        var rolandAddress = new Address("User/TestUser");
+
+        await client.Observe(new PingRequest(), o => o.WithTarget(rolandAddress)).Should().Within(15.Seconds()).Emit();
+
+        var workspace = client.GetWorkspace();
+        var reference = new LayoutAreaReference(UserActivityLayoutAreas.EditProfileArea);
+
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
+            rolandAddress, reference);
+
+        var value = await stream.Should().Within(TimeSpan.FromSeconds(15)).Emit();
+
+        value.Should().NotBe(default(JsonElement),
+            "the EditProfile area should render (editor or access-denied) for User/TestUser");
+    }
+
+    /// <summary>
     /// Simulates the production onboarding flow: creates a User node at runtime
     /// (not pre-registered via AddMeshNodes), then verifies the Activity area resolves.
     /// This tests the path: persistence Ã¢â€ â€™ MeshCatalog.ResolvePathAsync Ã¢â€ â€™ routing Ã¢â€ â€™ hub creation.
