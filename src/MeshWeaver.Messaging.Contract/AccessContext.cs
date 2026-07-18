@@ -31,6 +31,16 @@ public record AccessContext
     public bool IsVirtual { get; init; }
 
     /// <summary>
+    /// The principal's preferred display time zone as a named IANA zone id (e.g.
+    /// <c>Europe/Zurich</c>, <c>America/New_York</c>), resolved from the user's profile
+    /// when the context is built. Rides on the identity so every render path — Blazor
+    /// circuit AND server-side hub layout areas that have no browser — can convert stored
+    /// UTC timestamps to the viewer's local time via <c>AccessService.ToDisplayTime</c>.
+    /// Null/empty → display in UTC. Never a fixed offset (DST would then be wrong).
+    /// </summary>
+    public string? TimeZoneId { get; init; }
+
+    /// <summary>
     /// When set, indicates that this context is impersonated by another identity
     /// (e.g., a portal hub acting on behalf of a virtual user).
     /// The impersonator's identity is used for authorization when the

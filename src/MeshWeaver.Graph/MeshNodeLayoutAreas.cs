@@ -497,6 +497,8 @@ public static class MeshNodeLayoutAreas
             .WithOrientation(Orientation.Horizontal)
             .WithStyle("align-items: center; gap: 24px; flex-wrap: wrap; font-size: 0.85rem; color: var(--neutral-foreground-hint);");
 
+        var access = host.Hub.ServiceProvider.GetService<AccessService>();
+
         if (node != null && !string.IsNullOrEmpty(node.NodeType) && node.NodeType != MeshNode.NodeTypePath)
         {
             var typeHref = BuildUrl(node.NodeType, NodeTypeLayoutAreas.ConfigurationArea);
@@ -510,14 +512,14 @@ public static class MeshNodeLayoutAreas
 
         if (node != null && node.CreatedDate != default)
         {
-            var created = node.CreatedDate.ToLocalTime().ToString("yyyy-MM-dd HH:mm");
+            var created = access.ToDisplayTime(node.CreatedDate).ToString("yyyy-MM-dd HH:mm");
             var createdBy = string.IsNullOrEmpty(node.CreatedBy) ? "" : $" by {System.Web.HttpUtility.HtmlEncode(node.CreatedBy)}";
             row = row.WithView(Controls.Html($"<span><span style=\"color: var(--neutral-foreground-rest);\">Created:</span> {created}{createdBy}</span>"));
         }
 
         if (node != null && node.LastModified != default)
         {
-            var modified = node.LastModified.ToLocalTime().ToString("yyyy-MM-dd HH:mm");
+            var modified = access.ToDisplayTime(node.LastModified).ToString("yyyy-MM-dd HH:mm");
             var modifiedBy = string.IsNullOrEmpty(node.LastModifiedBy) ? "" : $" by {System.Web.HttpUtility.HtmlEncode(node.LastModifiedBy)}";
             row = row.WithView(Controls.Html($"<span><span style=\"color: var(--neutral-foreground-rest);\">Updated:</span> {modified}{modifiedBy}</span>"));
         }

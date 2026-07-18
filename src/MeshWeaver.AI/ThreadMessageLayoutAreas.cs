@@ -291,6 +291,7 @@ public static class ThreadMessageLayoutAreas
                 var stream = h.Workspace.GetStream(new MeshNodeReference());
                 if (stream is null) return Observable.Return<UiControl?>(null);
 
+                var access = h.Hub.ServiceProvider.GetService<AccessService>();
                 return stream
                     .Select(change => change.Value.ContentAs<ThreadMessage>(h.Hub.JsonSerializerOptions))
                     .Where(m => m is not null)
@@ -302,7 +303,7 @@ public static class ThreadMessageLayoutAreas
                         Out: m.OutputTokens,
                         Total: m.TotalTokens))
                     .DistinctUntilChanged()
-                    .Select(meta => BuildAssistantMetaRow(meta.Started, meta.Completed, meta.Harness,
+                    .Select(meta => BuildAssistantMetaRow(access, meta.Started, meta.Completed, meta.Harness,
                         meta.In, meta.Out, meta.Total));
             });
         }
@@ -359,13 +360,13 @@ public static class ThreadMessageLayoutAreas
     /// Returns null when there's nothing to show (e.g. response still streaming).
     /// </summary>
     private static UiControl? BuildAssistantMetaRow(
-        DateTime started, DateTime? completed, string? harness,
+        AccessService? access, DateTime started, DateTime? completed, string? harness,
         int? input, int? output, int? total)
     {
         var parts = new List<string>();
         if (!string.IsNullOrEmpty(harness))
             parts.Add(System.Web.HttpUtility.HtmlEncode(harness));
-        parts.Add(started.ToLocalTime().ToString("HH:mm:ss"));
+        parts.Add(access.ToDisplayTime(started).ToString("HH:mm:ss"));
         if (completed.HasValue)
         {
             parts.Add(FormatDurationHms(completed.Value - started));

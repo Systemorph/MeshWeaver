@@ -10,6 +10,7 @@
 @inject IMeshNodeStreamCache StreamCache
 @inject NavigationManager NavigationManager
 @inject IMessageHub Hub
+@inject AccessService Access
 
 <div class="notification-panel">
     <FluentStack VerticalAlignment="VerticalAlignment.Center" Style="margin-bottom: 8px;">
@@ -69,7 +70,7 @@
                             }
                         }
                         <div class="notification-meta">
-                            <span title="@notif.CreatedAt.LocalDateTime.ToString("yyyy-MM-dd HH:mm:ss")">@FormatTime(notif.CreatedAt)</span>
+                            <span title="@Access.ToDisplayTime(notif.CreatedAt).ToString("yyyy-MM-dd HH:mm:ss")">@FormatTime(notif.CreatedAt)</span>
                             @if (!string.IsNullOrEmpty(notif.CreatedBy))
                             {
                                 <span>· @notif.CreatedBy</span>
@@ -370,14 +371,14 @@
         notif.NotificationType == NotificationType.System
         || string.Equals(notif.Icon, "ErrorCircle", StringComparison.OrdinalIgnoreCase);
 
-    private static string FormatTime(DateTimeOffset ts)
+    private string FormatTime(DateTimeOffset ts)
     {
         var delta = DateTimeOffset.UtcNow - ts;
         if (delta.TotalSeconds < 60) return "just now";
         if (delta.TotalMinutes < 60) return $"{(int)delta.TotalMinutes}m ago";
         if (delta.TotalHours < 24) return $"{(int)delta.TotalHours}h ago";
         if (delta.TotalDays < 7) return $"{(int)delta.TotalDays}d ago";
-        return ts.LocalDateTime.ToString("MMM d, HH:mm");
+        return Access.ToDisplayTime(ts).ToString("MMM d, HH:mm");
     }
 
     private static Icon DefaultIconFor(NotificationType type) => type switch
