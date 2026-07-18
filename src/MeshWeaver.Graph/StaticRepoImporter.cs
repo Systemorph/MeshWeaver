@@ -580,8 +580,15 @@ public static class StaticRepoImporter
             // before the eventually-consistent read-model catches up, or the next import silently
             // re-enables sync on the freshly-decoupled partition. CQRS: never decide on a single node's
             // content from the query. EnsureRoot already ensured the root exists, so this resolves promptly.
-            .SelectMany(existingItems => ReadClaimedRoots(hub, partitions)
-                .Select(claimedRoots => (existingItems, claimedRoots)))
+            .SelectMany(existingItems => Observable.Zip(
+                    ReadClaimedRoots(hub, partitions),
+                    // Authoritative content-manifest read (owner round-trip, NOT the lagged `existing`
+                    // query snapshot): the manifest a just-completed prior import wrote can be invisible
+                    // to the eventually-consistent query, which would leave prune with an empty owned set
+                    // and silently NOT prune a genuinely-removed source file. Same freshness guard as
+                    // ReadClaimedRoots; absent (first import) resolves promptly to an empty set (#435).
+                    ReadContentManifest(hub, source.Partition),
+                    (claimedRoots, previousContentPaths) => (existingItems, claimedRoots, previousContentPaths)))
             .SelectMany(snapshot =>
             {
                 var existing = snapshot.existingItems
@@ -597,6 +604,12 @@ public static class StaticRepoImporter
                 // changed → full import (safe). This is what makes a one-node edit re-import one node.
                 var manifest = ParseManifest(
                     existing.GetValueOrDefault(ManifestPath(source.Partition)), hub.JsonSerializerOptions);
+
+                // The content-collection file paths the source owned at the LAST import (read
+                // authoritatively above from {partition}/_Activity/content-manifest). The inline content
+                // mirror prunes ONLY these, so a user upload the source never tracked survives a boot
+                // re-import (issue #435). Empty on first import / any parse failure → prune nothing.
+                var previousContentPaths = snapshot.previousContentPaths;
 
                 // Subtrees claimed wholesale — nothing at or under these paths is synced. A claimed
                 // partition ROOT (authoritative read above) decouples its WHOLE subtree; a child claimed
@@ -729,9 +742,10 @@ public static class StaticRepoImporter
                         SyncContentImports(hub, source, logger).SelectMany(embedCount =>
                         // Mirror inline (byte-carrying) content into each owning node's content
                         // collection — the git-committed {Space}/content/** binaries a GitSync import
-                        // supplies. Binary-safe + mirroring (writes what the repo has, prunes what it
-                        // dropped) so committed course videos/posters land and stop getting wiped.
-                        SyncInlineContent(hub, source, logger).SelectMany(inlineCount =>
+                        // supplies. Binary-safe + mirroring (writes what the repo has, prunes what the
+                        // SOURCE dropped) so committed course videos/posters land and stop getting wiped,
+                        // while user uploads the source never tracked are preserved (issue #435).
+                        SyncInlineContent(hub, source, previousContentPaths, logger).SelectMany(inlineCount =>
                         {
                         var contentCount = embedCount + inlineCount;
                         // Persist the per-node manifest LAST (after upserts + prune) so the NEXT import's
@@ -955,20 +969,41 @@ public static class StaticRepoImporter
     /// — the byte-carrying content-collection files a GitSync import supplies (the git-committed
     /// <c>{Space}/content/**</c> binaries). Each group is posted as a <see cref="SyncContentFilesRequest"/>
     /// (via <see cref="ContentImportExtensions.SyncContentFiles"/>) under System to the owning node's hub,
-    /// which writes the bytes and — mirroring — prunes files the group no longer carries. Per-group failures
-    /// log and continue. Returns the total files written.
+    /// which writes the bytes and — mirroring — prunes files the SOURCE no longer carries.
+    /// <para>🚨 issue #435: the mirror prunes ONLY files the source PREVIOUSLY owned
+    /// (<paramref name="previouslyOwnedContentPaths"/> = the prior content manifest), so a user upload the
+    /// source never tracked survives a boot re-import — the content-file analogue of the per-node
+    /// <c>Additive</c>/<c>SyncBehavior</c> prune protection. After the mirror, the CURRENT source-owned
+    /// paths are persisted as the content manifest so the next import knows what it owns.</para>
+    /// Per-group failures log and continue. Returns the total files written.
     /// </summary>
-    private static IObservable<int> SyncInlineContent(IMessageHub hub, IStaticRepoSource source, ILogger? logger)
+    private static IObservable<int> SyncInlineContent(
+        IMessageHub hub, IStaticRepoSource source,
+        IReadOnlyList<string> previouslyOwnedContentPaths, ILogger? logger)
     {
         var syncs = source.EnumerateInlineContentSyncs();
         if (syncs.Count == 0)
+            // No content this import → don't touch the collection (never an empty mirror that would wipe
+            // user uploads) and leave the prior content manifest intact (conservative — a removed-to-zero
+            // source set is not pruned, matching ContentAssetMapper's zero-asset behavior).
             return Observable.Return(0);
+
+        // The full collection-relative paths this source owns THIS import. Persisted as the content
+        // manifest below so the NEXT import can tell a genuinely-removed source file (prune) from a user
+        // upload the source never tracked (preserve). Same {TargetPath}/{file} form the mirror compares.
+        var currentOwned = syncs
+            .SelectMany(s => s.Files.Select(f => CombineContentPath(s.TargetPath, f.Path)))
+            .Where(p => p.Length > 0)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
 
         return syncs
             .Select(sync => AsSystem(hub, () => hub.SyncContentFiles(sync.NodePath)
                     .To(sync.TargetCollection, sync.TargetPath)
                     .Add(sync.Files)
                     .Mirror(true)
+                    // Prune only files the source PREVIOUSLY owned — preserves user uploads (#435).
+                    .SourceOwned(previouslyOwnedContentPaths)
                     .Post())
                 .Select(r => r.Success ? r.FilesImported : 0)
                 .Catch<int, Exception>(ex =>
@@ -980,7 +1015,25 @@ public static class StaticRepoImporter
                 }))
             .ToObservable()
             .Merge(BatchSize)
-            .Sum();
+            .Sum()
+            // Persist the current source-owned content set LAST (after the mirror) so the next import's
+            // prune preserves user uploads. Best-effort: a failed write only makes the next import prune
+            // nothing (conservative), never wrong.
+            .SelectMany(written => WriteContentManifest(hub, source.Partition, currentOwned, logger)
+                .Select(_ => written));
+    }
+
+    /// <summary>
+    /// Joins a content sync's <paramref name="targetPath"/> (the collection sub-folder) with a file's
+    /// <paramref name="filePath"/> (relative to it) into the collection-relative path the mirror compares
+    /// against — forward slashes, no leading slash. Mirrors <c>SyncFiles.FullPath</c> in the handler so the
+    /// persisted manifest lines up exactly with what the mirror enumerates and keeps.
+    /// </summary>
+    private static string CombineContentPath(string? targetPath, string? filePath)
+    {
+        var baseDir = (targetPath ?? string.Empty).Replace('\\', '/').Trim('/');
+        var rel = (filePath ?? string.Empty).Replace('\\', '/').TrimStart('/');
+        return baseDir.Length == 0 ? rel : $"{baseDir}/{rel}";
     }
 
     /// <summary>Top-level partition segment of a path (the part before the first '/').</summary>
@@ -1087,6 +1140,82 @@ public static class StaticRepoImporter
 
     /// <summary>Path of a partition's per-node import manifest (an <c>_Activity</c> node; survives prune).</summary>
     private static string ManifestPath(string partition) => $"{partition}/_Activity/{ManifestId}";
+
+    private const string ContentManifestId = "content-manifest";
+
+    /// <summary>
+    /// Path of a partition's content-file manifest — an <c>_Activity</c> node (survives prune, exempt
+    /// from governance pruning) whose <see cref="ActivityLog.ReturnValue"/> holds the collection-relative
+    /// paths the source owned at the last import. Read on the next import to prune only genuinely-removed
+    /// source files, preserving user uploads (issue #435).
+    /// </summary>
+    private static string ContentManifestPath(string partition) => $"{partition}/_Activity/{ContentManifestId}";
+
+    /// <summary>
+    /// Reads a partition's content manifest AUTHORITATIVELY (the owner round-trip via
+    /// <see cref="MeshNodeStreamExtensions.GetMeshNode"/>, NOT the eventually-consistent query snapshot
+    /// which can miss the manifest a just-completed import wrote — the same freshness guard as
+    /// <see cref="ReadClaimedRoots"/>). Absent (first import) or any read failure resolves promptly to an
+    /// empty set, so the next mirror prunes nothing rather than wrongly (issue #435).
+    /// </summary>
+    private static IObservable<IReadOnlyList<string>> ReadContentManifest(IMessageHub hub, string partition)
+        => hub.GetMeshNode(ContentManifestPath(partition), TimeSpan.FromSeconds(10))
+            .Catch((Exception _) => Observable.Return<MeshNode?>(null))
+            .Take(1)
+            .Select(node => ParseContentManifest(node, hub.JsonSerializerOptions));
+
+    /// <summary>
+    /// Parses the list of source-owned content-collection paths a prior import stored in the content
+    /// manifest node's <see cref="ActivityLog.ReturnValue"/>. Empty on absence / any parse failure → the
+    /// next import's mirror prunes nothing (conservative — never wipes a user upload), never wrong.
+    /// </summary>
+    private static IReadOnlyList<string> ParseContentManifest(MeshNode? manifestNode, JsonSerializerOptions opts)
+    {
+        if (manifestNode is null) return Array.Empty<string>();
+        try
+        {
+            var log = manifestNode.ContentAs<ActivityLog>(opts);
+            if (log?.ReturnValue is not { } rv) return Array.Empty<string>();
+            var list = rv.Deserialize<List<string>>(opts);
+            return list is null ? Array.Empty<string>() : list;
+        }
+        catch
+        {
+            return Array.Empty<string>();
+        }
+    }
+
+    /// <summary>
+    /// Writes the partition's content-file manifest — an <c>_Activity</c> node whose
+    /// <see cref="ActivityLog.ReturnValue"/> is the list of collection-relative paths the CURRENT source
+    /// owns. Read back on the next import so the mirror prunes only genuinely-removed source files and
+    /// preserves user uploads (issue #435). Best-effort: a failed write only makes the next import's
+    /// mirror prune nothing, never a user upload.
+    /// </summary>
+    private static IObservable<int> WriteContentManifest(
+        IMessageHub hub, string partition, IReadOnlyList<string> ownedPaths, ILogger? logger)
+    {
+        var node = new MeshNode(ContentManifestId, $"{partition}/_Activity")
+        {
+            Name = $"Content manifest ({partition})",
+            NodeType = ActivityNodeType.NodeType,
+            MainNode = partition,
+            State = MeshNodeState.Active,
+            Content = new ActivityLog(ActivityCategory.Import)
+            {
+                Status = ActivityStatus.Succeeded,
+                ReturnValue = JsonSerializer.SerializeToElement(ownedPaths, hub.JsonSerializerOptions),
+            },
+        };
+
+        return Upsert(hub, node)
+            .Catch<int, Exception>(ex =>
+            {
+                logger?.LogWarning(ex,
+                    "[StaticRepoImport] {Partition}: content manifest write failed (next import's mirror prunes nothing).", partition);
+                return Observable.Return(0);
+            });
+    }
 
     /// <summary>
     /// Parses the <c>{path → source-token}</c> map a prior import stored in the manifest node's
