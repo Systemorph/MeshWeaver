@@ -53,6 +53,7 @@ public static class MigrationRegistry
         new V42_ReapplySpaceAuthMirrorAndBackfill(),
         new V43_FixAccessTriggerSchemaResolutionAndBackfill(),
         new V44_FixMeshNodeHistoryTriggerPerSchema(),
+        new V45_AddNodeAuthorshipColumns(),
     ];
 
     /// <summary>
