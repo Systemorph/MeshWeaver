@@ -1,4 +1,5 @@
 ﻿using MeshWeaver.Layout;
+using System.Collections.Immutable;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using MeshWeaver.Layout.Composition;
@@ -6,6 +7,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using MeshWeaver.Utils;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Graph.Configuration;
@@ -106,8 +108,62 @@ public static class UserNodeType
             .AddUserActivityLayoutAreas()
             .AddGlobalAdminSettingsTab()
             .AddPartitionSyncSettingsTab()
+            .AddUserPreferencesSettingsTab()
             .AddLayout(layout => layout.WithDefaultArea(UserActivityLayoutAreas.ActivityArea))
     };
+
+    private const string PreferencesTab = "Preferences";
+
+    /// <summary>
+    /// Adds a "Preferences" tab to the User node's Settings page — the manual override for the
+    /// per-viewer display time zone. Requires <see cref="Permission.Update"/> (self-edit → the
+    /// owner, plus admins), so a visitor never sees it. The picker is data-bound DIRECTLY to the
+    /// user node via <see cref="MeshNodeContentEditorControl"/>; setting it writes a non-empty
+    /// <see cref="User.TimeZoneId"/>, which the browser auto-detect then never overwrites
+    /// (write-once, see <see cref="TimeZonePreference"/>).
+    /// </summary>
+    private static MessageHubConfiguration AddUserPreferencesSettingsTab(this MessageHubConfiguration config)
+        => config.AddSettingsMenuItems(new SettingsMenuItemDefinition(
+            Id: PreferencesTab,
+            Label: "Preferences",
+            ContentBuilder: BuildPreferencesTab,
+            Icon: Application.Styles.FluentIcons.Clock(),
+            Order: 50,
+            RequiredPermission: Permission.Update,
+            Keywords: ["preferences", "time zone", "timezone", "clock", "display", "locale",
+                "region", "utc", "dst"]));
+
+    private static UiControl BuildPreferencesTab(LayoutAreaHost host, StackControl stack, MeshNode? node)
+    {
+        stack = stack.WithView(Controls.H2("Preferences").WithStyle("margin: 0 0 8px 0;"));
+        if (node is null)
+            return stack.WithView(Controls.Html("<p><em>User not found.</em></p>"));
+
+        stack = stack.WithView(Controls.Markdown(
+            "Your **display time zone** controls how timestamps are shown to you across the portal — "
+            + "stored times stay in UTC; only the display converts. It is detected from your browser "
+            + "on first sign-in; pick a named IANA zone here to override a wrong guess (DST is applied "
+            + "automatically). Leave it blank to see times in UTC.")
+            .WithStyle("color: var(--neutral-foreground-hint); margin-bottom: 8px;"));
+
+        // Data-bound editor: reads/writes User.TimeZoneId straight on the node stream
+        // (IMeshNodeStreamCache) — no /data replica, no save loop. The tab is only shown to a
+        // user with Update on this node, so editing is always permitted here.
+        var editor = new MeshNodeContentEditorControl(node.Path)
+        {
+            CanEdit = true,
+            Fields = ImmutableList.Create(
+                new MeshNodeEditorField(
+                    nameof(User.TimeZoneId).ToCamelCase()!,
+                    "Display time zone (IANA)",
+                    MeshNodeEditorFieldKind.Enum)
+                {
+                    Options = TimeZonePreference.SystemZoneIds()
+                })
+        };
+        stack = stack.WithView(editor);
+        return stack;
+    }
 
     /// <summary>
     /// Grants public read access ONLY on the User node itself (path == "{userId}"),
