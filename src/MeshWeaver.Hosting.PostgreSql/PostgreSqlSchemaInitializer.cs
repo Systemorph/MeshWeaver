@@ -2264,32 +2264,39 @@ public static class PostgreSqlSchemaInitializer
             CREATE INDEX IF NOT EXISTS idx_mnh_path ON mesh_node_history (path);
             CREATE INDEX IF NOT EXISTS idx_mnh_path_version ON mesh_node_history (path, version DESC);
 
-            -- Trigger to copy all rows to history on every insert/update
+            -- Trigger to copy all rows to history on every insert/update. The INSERT is
+            -- schema-qualified via TG_TABLE_SCHEMA so the snapshot lands in the SAME schema
+            -- as the mesh_nodes row that fired it — correct no matter what search_path the
+            -- writing session has (writes may arrive through the base data source, whose
+            -- search_path is `public`, not the partition schema). An unqualified
+            -- `INSERT INTO mesh_node_history` would silently land in public (or 42P01).
             CREATE OR REPLACE FUNCTION trg_mesh_node_to_history() RETURNS TRIGGER AS $$
             BEGIN
-                INSERT INTO mesh_node_history (
-                    namespace, id, name, node_type, description, category, icon,
-                    display_order, last_modified, version, state, content, desired_id, main_node
-                )
-                VALUES (
+                EXECUTE format(
+                    'INSERT INTO %I.mesh_node_history (
+                        namespace, id, name, node_type, description, category, icon,
+                        display_order, last_modified, version, state, content, desired_id, main_node
+                    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+                    ON CONFLICT (namespace, id, version) DO NOTHING',
+                    TG_TABLE_SCHEMA
+                ) USING
                     NEW.namespace, NEW.id, NEW.name, NEW.node_type, NEW.description,
                     NEW.category, NEW.icon, NEW.display_order, NEW.last_modified,
-                    NEW.version, NEW.state, NEW.content, NEW.desired_id, NEW.main_node
-                )
-                ON CONFLICT (namespace, id, version) DO NOTHING;
+                    NEW.version, NEW.state, NEW.content, NEW.desired_id, NEW.main_node;
                 RETURN NEW;
             END;
             $$ LANGUAGE plpgsql;
 
-            DO $$
-            BEGIN
-                IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'mesh_node_copy_to_history') THEN
-                    CREATE TRIGGER mesh_node_copy_to_history
-                        AFTER INSERT OR UPDATE ON mesh_nodes
-                        FOR EACH ROW EXECUTE FUNCTION trg_mesh_node_to_history();
-                END IF;
-            END;
-            $$;
+            -- CREATE OR REPLACE TRIGGER (PG14+) installs the trigger on THIS schema's
+            -- mesh_nodes. The prior `DO $$ IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE
+            -- tgname='mesh_node_copy_to_history') $$` guard was GLOBALLY scoped — trigger
+            -- names are unique per table, not per database — so once `public` had the
+            -- trigger every subsequently-provisioned partition skipped it and recorded NO
+            -- history at all. That is the "Version History shows nothing" root cause; the
+            -- reader (PostgreSqlPartitionedVersionQuery) had no rows to return.
+            CREATE OR REPLACE TRIGGER mesh_node_copy_to_history
+                AFTER INSERT OR UPDATE ON mesh_nodes
+                FOR EACH ROW EXECUTE FUNCTION trg_mesh_node_to_history();
             """;
     }
 

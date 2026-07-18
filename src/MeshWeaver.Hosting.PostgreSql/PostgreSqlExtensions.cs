@@ -159,6 +159,10 @@ public static class PostgreSqlExtensions
         services.AddSingleton<IMeshQueryProvider>(sp => sp.GetRequiredService<PostgreSqlMeshQuery>());
         services.AddSingleton<IVectorSearchProvider>(sp => sp.GetRequiredService<PostgreSqlMeshQuery>());
 
+        // Version history over this schema's mesh_node_history. BEFORE AddPersistence so its
+        // NoOpVersionQuery TryAdd (in AddCoreAndWrapperServices) no-ops.
+        services.AddSingleton<IVersionQuery>(_ => new PostgreSqlVersionQuery(dataSource, opts.Schema));
+
         services.AddPersistence(storageAdapter);
 
         // Register access control and activity store
@@ -200,6 +204,10 @@ public static class PostgreSqlExtensions
                 ioPoolRegistry: sp.GetService<IoPoolRegistry>()));
         services.AddSingleton<IMeshQueryProvider>(sp => sp.GetRequiredService<PostgreSqlMeshQuery>());
         services.AddSingleton<IVectorSearchProvider>(sp => sp.GetRequiredService<PostgreSqlMeshQuery>());
+
+        // Version history over this schema's mesh_node_history — see the same registration
+        // in AddPostgreSqlPersistence for why it precedes AddPersistence.
+        services.AddSingleton<IVersionQuery>(_ => new PostgreSqlVersionQuery(dataSource, opts.Schema));
 
         // Register core persistence services (IStorageAdapter, IStorageService, etc.)
         services.AddPersistence(storageAdapter);
@@ -366,6 +374,14 @@ public static class PostgreSqlExtensions
         {
             DeferToNativeProvider = true
         });
+
+        // Version history: read the per-partition mesh_node_history the schema trigger
+        // already populates. Registered BEFORE AddPartitionedCoreAndWrapperServices so its
+        // NoOpVersionQuery TryAdd no-ops. Without this the portal "Versions" panel reads
+        // through NoOpVersionQuery and shows "No version history available" for every node.
+        services.AddSingleton<IVersionQuery>(sp =>
+            new PostgreSqlPartitionedVersionQuery(sp.GetRequiredService<PostgreSqlPartitionStorageProvider>()));
+
         services.AddPartitionedCoreAndWrapperServices();
 
         return services;
@@ -455,6 +471,12 @@ public static class PostgreSqlExtensions
         {
             DeferToNativeProvider = true
         });
+
+        // Version history reader over each partition's schema-qualified mesh_node_history —
+        // see the connection-string overload above for why this precedes the core call.
+        services.AddSingleton<IVersionQuery>(sp =>
+            new PostgreSqlPartitionedVersionQuery(sp.GetRequiredService<PostgreSqlPartitionStorageProvider>()));
+
         services.AddPartitionedCoreAndWrapperServices();
 
         return services;

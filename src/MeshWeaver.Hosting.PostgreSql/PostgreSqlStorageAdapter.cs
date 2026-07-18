@@ -51,6 +51,14 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
     /// <summary>The underlying Npgsql data source (connection pool) this adapter reads and writes through.</summary>
     public NpgsqlDataSource DataSource => _dataSource;
 
+    /// <summary>
+    /// The Postgres schema this adapter is scoped to (from its <see cref="PartitionDefinition"/>),
+    /// or null for the unscoped/public single-schema adapter. Lets
+    /// <see cref="PostgreSqlPartitionedVersionQuery"/> read the partition's schema-qualified
+    /// <c>mesh_node_history</c> through the same schema the router reads <c>mesh_nodes</c> from.
+    /// </summary>
+    internal string? SchemaName => _schemaName;
+
     /// <inheritdoc />
     /// <remarks>
     /// Surfaces the PG <c>LISTEN/NOTIFY</c> change feed — a
