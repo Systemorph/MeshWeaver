@@ -1743,8 +1743,32 @@ public static class DataExtensions
     }
 
     /// <summary>
+    /// The default content-collection name. A file uploaded/indexed without an explicit collection
+    /// lands here keyed by its FULL (possibly nested) relative path — e.g. "reports/2024/summary.pdf".
+    /// This name coincides with the "content" UCR prefix, so after the prefix is stripped a nested
+    /// reference's remainder is the relative key, NOT "{collection}/{file}".
+    /// </summary>
+    private const string DefaultContentCollectionName = "content";
+
+    /// <summary>
     /// Reactive observable for a content path — resolves to a file read or a folder listing.
     /// </summary>
+    /// <remarks>
+    /// The remainder for a multi-segment path <c>A/B[/C…]</c> is ambiguous:
+    /// <list type="bullet">
+    /// <item>a NESTED key <c>A/B/C…</c> inside the default <see cref="DefaultContentCollectionName"/>
+    /// collection — how uploads/indexing actually store files (issue #474:
+    /// <c>content/reports/2024/summary.pdf</c>), or</item>
+    /// <item>a named collection <c>A</c> (optionally <c>A@partition</c>) with relative key <c>B/C…</c> —
+    /// the <c>content/{collection}/{file}</c> form.</item>
+    /// </list>
+    /// The default-collection key is resolved FIRST (the whole remainder), then the named-collection
+    /// interpretation as a fallback. The old code only ever tried the named-collection split, so any
+    /// nested read in the default collection failed with "Content collection '{firstSegment}' not
+    /// found" while the flat single-segment case worked. When BOTH miss, the default-collection error
+    /// surfaces — the same "not found in collection 'content'" a flat path yields, rather than the
+    /// misleading "collection '{firstSegment}' not found".
+    /// </remarks>
     private static IObservable<GetDataResponse> HandleContentPath(
         IMessageHub hub,
         string? remainingPath,
@@ -1753,50 +1777,63 @@ public static class DataExtensions
         remainingPath = remainingPath?.TrimEnd('/');
 
         if (string.IsNullOrEmpty(remainingPath))
-            return ListCollectionItems(hub, "content", "/");
+            return ListCollectionItems(hub, DefaultContentCollectionName, "/");
 
         var slashIndex = remainingPath.IndexOf('/');
 
+        // Single segment: a file in the default "content" collection, or the name of a collection to list.
         if (slashIndex < 0)
         {
-            var collectionForFallback = remainingPath;
-            return GetFileContent(hub, "content", collectionForFallback, numberOfRows)
-                .SelectMany(fileResult =>
-                {
-                    if (fileResult.Error == null)
-                        return Observable.Return(fileResult);
-                    return ListCollectionItems(hub, collectionForFallback, "/")
-                        .Select(listResult => listResult.Error == null ? listResult : fileResult);
-                });
+            var single = remainingPath;
+            return GetFileContent(hub, DefaultContentCollectionName, single, numberOfRows)
+                .SelectMany(fileResult => fileResult.Error == null
+                    ? Observable.Return(fileResult)
+                    : ListCollectionItems(hub, single, "/")
+                        .Select(listResult => listResult.Error == null ? listResult : fileResult));
         }
 
+        var (namedCollection, namedFile) = SplitContentCollectionSegment(remainingPath, slashIndex);
+
+        // Default collection with the WHOLE remainder as the nested key first; named collection second.
+        return ReadFileOrListFolder(hub, DefaultContentCollectionName, remainingPath, numberOfRows)
+            .SelectMany(defaultResult => defaultResult.Error == null
+                ? Observable.Return(defaultResult)
+                : ReadFileOrListFolder(hub, namedCollection, namedFile, numberOfRows)
+                    .Select(namedResult => namedResult.Error == null ? namedResult : defaultResult));
+    }
+
+    /// <summary>
+    /// Reads <paramref name="filePath"/> as a file in <paramref name="collectionName"/>; on a miss,
+    /// tries listing it as a folder. Returns the file-read error when neither resolves.
+    /// </summary>
+    private static IObservable<GetDataResponse> ReadFileOrListFolder(
+        IMessageHub hub,
+        string collectionName,
+        string filePath,
+        int? numberOfRows)
+        => GetFileContent(hub, collectionName, filePath, numberOfRows)
+            .SelectMany(fileResult => fileResult.Error == null
+                ? Observable.Return(fileResult)
+                : ListCollectionItems(hub, collectionName, "/" + filePath)
+                    .Select(folderResult => folderResult.Error == null ? folderResult : fileResult));
+
+    /// <summary>
+    /// Splits the first segment of a content remainder into (collectionName, relativeFilePath),
+    /// preserving a <c>collection@partition</c> qualifier on the collection segment.
+    /// </summary>
+    private static (string CollectionName, string FilePath) SplitContentCollectionSegment(
+        string remainingPath,
+        int slashIndex)
+    {
         var collectionPart = remainingPath[..slashIndex];
         var filePath = remainingPath[(slashIndex + 1)..];
 
         var atIndex = collectionPart.IndexOf('@');
-        string collectionName;
-        if (atIndex > 0)
-        {
-            var collection = collectionPart[..atIndex];
-            var partition = collectionPart[(atIndex + 1)..];
-            collectionName = $"{collection}@{partition}";
-        }
-        else
-        {
-            collectionName = collectionPart;
-        }
+        var collectionName = atIndex > 0
+            ? $"{collectionPart[..atIndex]}@{collectionPart[(atIndex + 1)..]}"
+            : collectionPart;
 
-        if (string.IsNullOrEmpty(filePath))
-            return ListCollectionItems(hub, collectionName, "/");
-
-        return GetFileContent(hub, collectionName, filePath, numberOfRows)
-            .SelectMany(fileResult =>
-            {
-                if (fileResult.Error == null)
-                    return Observable.Return(fileResult);
-                return ListCollectionItems(hub, collectionName, "/" + filePath)
-                    .Select(folderResult => folderResult.Error == null ? folderResult : fileResult);
-            });
+        return (collectionName, filePath);
     }
 
     /// <summary>
