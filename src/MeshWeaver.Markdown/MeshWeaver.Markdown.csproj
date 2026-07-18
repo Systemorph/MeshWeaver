@@ -7,6 +7,10 @@
   <ItemGroup>
     <PackageReference Include="Markdig" />
     <PackageReference Include="EPS.Extensions.YamlMarkdown" />
+    <!-- Direct ref forces the security-pinned AngleSharp 1.5.0 (see Directory.Packages.props) into the
+         Html2Markdown transitive chain that EPS.Extensions.YamlMarkdown pulls: a CPM version pin does not
+         reach a pure transitive without a direct reference. -->
+    <PackageReference Include="AngleSharp" />
   </ItemGroup>
 
   <ItemGroup>
