@@ -580,8 +580,31 @@ YAML
   ok "migration complete"
 }
 
+# Delegation/tool E2E tests need a model that RELIABLY emits tool calls — the tiny qwen-small
+# (qwen2.5:0.5b) does not, and roleplay models (Mythalion) 400 on tools. Echoes the first
+# tool-capable candidate actually present in `ollama list`, or nothing (→ those tests Skip).
+# Override the candidate list with E2E_TOOL_MODEL_NAME. Called by BOTH e2e_deploy (to key it as
+# an explicit provider model) and the test launcher (to point the test at it) — so it must be
+# recomputed per invocation (up/test are separate runs).
+E2E_TOOL_MODEL_CANDIDATES="${E2E_TOOL_MODEL_NAME:-qwen3-coder:30b qwen3.6-code:latest}"
+detect_e2e_tool_model() {
+  local m
+  for m in $E2E_TOOL_MODEL_CANDIDATES; do
+    if ollama list 2>/dev/null | awk '{print $1}' | grep -qx "$m"; then echo "$m"; return 0; fi
+  done
+  return 0
+}
+
 e2e_deploy() {
   step "Deploying e2e portal ($E2E_APP) — DevLogin ON, DB=$E2E_DB, reusing memex config/Ollama/PG/ingress"
+  # A tool-capable model, keyed as an EXPLICIT provider model (like qwen-small) so it resolves a
+  # usable credential — DISCOVERED models don't on a fresh partition (the user lacks Read on the
+  # shared Provider node, so IsAllowedSharedAccess gates their key). Empty when none is pulled.
+  local tool_model tool_model_env=""
+  tool_model="$(detect_e2e_tool_model)"
+  [ -n "$tool_model" ] \
+    && tool_model_env="- { name: OpenAICompatible__Models__1, value: \"$tool_model\" }" \
+    && info "keying tool-capable model '$tool_model' for delegation E2E (OpenAICompatible__Models__1)"
   kubectl -n "$NAMESPACE" apply -f - <<YAML
 apiVersion: apps/v1
 kind: Deployment
@@ -622,6 +645,8 @@ spec:
             # a real round on any host/CI without the 23GB GPU qwen3.6. Overrides the inherited
             # OpenAICompatible__Models__0; the Playwright tests select it via E2E_MODEL.
             - { name: OpenAICompatible__Models__0, value: "qwen-small" }
+            # Optional Models__1: a tool-capable model for delegation tests (empty line when none pulled).
+            $tool_model_env
           readinessProbe:
             httpGet: { path: /healthz, port: 8080 }
             initialDelaySeconds: 10
@@ -815,8 +840,12 @@ cmd_e2e() {
       done
       step "Running Playwright filter '$filter' against https://$E2E_HOST:$E2E_PORT"
       export E2E_USER                                  # already resolved (readonly) — mark for the child
+      # Point delegation/tool tests at the keyed tool-capable model (if one is pulled). Empty →
+      # ChatDelegationTest Skips (qwen-small can't tool-call). Must match the model keyed in e2e_deploy.
+      local e2e_tool_model; e2e_tool_model="$(detect_e2e_tool_model)"
       E2E_BASE_URL="https://$E2E_HOST:$E2E_PORT" \
       E2E_MODEL="${E2E_MODEL:-Provider/OpenAICompatible/qwen-small}" \
+      E2E_TOOL_MODEL="${E2E_TOOL_MODEL:-${e2e_tool_model:+Provider/OpenAICompatible/$e2e_tool_model}}" \
         dotnet test "$repo/test/MeshWeaver.Portal.E2E.Test/MeshWeaver.Portal.E2E.Test.csproj" \
           --filter "FullyQualifiedName~$filter"
       ;;

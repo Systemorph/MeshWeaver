@@ -140,6 +140,68 @@ public class GitSyncContentCollectionTest(ITestOutputHelper output) : GitHubSync
         await WaitForContentGone(space, "posters/intro.jpg");
     }
 
+    // Bytes for a file the USER uploads — never tracked by the source repo. Distinct from the source
+    // binaries so the assertion proves the exact file survives, not just "something is there".
+    private static readonly byte[] UserUploadBytes =
+        [0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB];
+
+    /// <summary>
+    /// Issue #435 regression pin: a GitSync re-import must PRESERVE files a user uploaded into a
+    /// source-managed space's content collection (files the repo never tracked), while still pruning a
+    /// file the SOURCE genuinely removed. The old unconditional <c>Mirror(true)</c> wiped every file not
+    /// in the current repo set — including user uploads — the moment a boot re-import ran. This drives the
+    /// full import path and asserts that in ONE re-import: the removed source poster is pruned, the
+    /// still-carried source video survives, and the user-uploaded binary is preserved.
+    /// </summary>
+    [Fact(Timeout = 120000)]
+    public async Task Import_PreservesUserUpload_WhilePruningRemovedSourceFile()
+    {
+        await Connect();
+        var repo = "https://github.com/test/course-user-uploads";
+
+        // Commit 1: root + two SOURCE content binaries (a video and a poster).
+        var c1 = await SeedRepo(repo,
+            RootIndex(),
+            new RepoFile("content/videos/intro.bin", string.Empty, VideoBytes),
+            new RepoFile("content/posters/p.jpg", string.Empty, PosterBytes));
+
+        var space = "Course" + Guid.NewGuid().ToString("N")[..8];
+        await Sync.ImportFromGitHub(repo, "main", space, "Course", subdirectory: null, UserId)
+            .Timeout(90.Seconds()).ToTask();
+        await Sync.SaveConfig(space, repo, "main", subdirectory: null, createBranchIfMissing: true, createRepoIfMissing: true)
+            .Timeout(30.Seconds()).ToTask();
+
+        await WaitForContent(space, "videos/intro.bin", VideoBytes);
+        await WaitForContent(space, "posters/p.jpg", PosterBytes);
+
+        // The user uploads a file the repo NEVER tracked (additive write — no mirror), directly into the
+        // Space's content collection, exactly as the portal Files view does. It is not in any source
+        // manifest, so a naive full-mirror re-import would wipe it.
+        var upload = await GetClient().SyncContentFiles(space)
+            .To(ContentCollectionsExtensions.DefaultCollectionName, "")
+            .Add("videos/user-upload.bin", UserUploadBytes)
+            .Mirror(false)
+            .Post()
+            .Timeout(30.Seconds()).ToTask();
+        Assert.True(upload.Success, upload.Error);
+        await WaitForContent(space, "videos/user-upload.bin", UserUploadBytes);
+
+        // Commit 2 REMOVES the poster (a genuine source deletion) and keeps the video.
+        var c2 = await SeedRepo(repo,
+            RootIndex(),
+            new RepoFile("content/videos/intro.bin", string.Empty, VideoBytes));
+        Assert.NotEqual(c1, c2);
+
+        await Sync.ReimportAtCommit(space, c2, UserId).Timeout(90.Seconds()).ToTask();
+
+        // The genuinely-removed source poster is pruned (mirror still prunes what the SOURCE dropped)…
+        await WaitForContentGone(space, "posters/p.jpg");
+        // …the still-carried source video survives…
+        Assert.Equal(VideoBytes, ReadContent(space, "videos/intro.bin"));
+        // …and CRUCIALLY the user upload the repo never tracked is PRESERVED (issue #435).
+        Assert.Equal(UserUploadBytes, ReadContent(space, "videos/user-upload.bin"));
+    }
+
     [Fact(Timeout = 120000)]
     public async Task SyncContentFiles_RejectsPathTraversal()
     {

@@ -271,6 +271,11 @@ public class LayoutAreaMarkdownParser : BlockParser
     /// matched as the address by the resolver, so the verb branch only fires when the verb is a
     /// reference verb, not a path segment. A trailing query string (<c>?…</c>) is carried into the
     /// id, matching how areas read query params.</para>
+    /// <para>Both the SLASH keyword form (<c>area/Search</c>) and the COLON keyword form
+    /// (<c>area:Search</c>) are accepted — the parse-time <see cref="CreateBlockFromToken"/> honours
+    /// both, so this runtime mirror must too. A colon-form remainder is normalised to the slash form
+    /// before dispatch; without that a shipped <c>@@("area:Search")</c> embed mounted to a
+    /// non-existent area named literally <c>"area:Search"</c> and rendered blank (issue #502).</para>
     /// </summary>
     public static (string? Area, string? Id) ParseAreaAndId(string? remainder)
     {
@@ -289,6 +294,25 @@ public class LayoutAreaMarkdownParser : BlockParser
         var segments = remainder.Split('/', StringSplitOptions.RemoveEmptyEntries);
         if (segments.Length == 0)
             return (null, querySuffix);
+
+        // 🐛→✅ Normalise a leading COLON-keyword segment ("area:Search", "data:Type") into the
+        // equivalent SLASH form ("area/Search", "data/Type"). The markdown parse-time resolver
+        // (LayoutAreaMarkdownParser.ParsePath / CreateBlockFromToken) accepts BOTH `keyword:value`
+        // and `keyword/value`; this runtime mirror (used by PathBasedLayoutArea's @@-embed mount
+        // re-resolution AND NavigationService) previously only split on '/', so a colon-form
+        // remainder fell through to the "bare area name" default and produced an area named
+        // literally "area:Search" — a non-existent area that mounts to nothing (issue #502). The
+        // Space WelcomeMarkdown template shipped exactly `@@("area:Search")`, so its catalog
+        // rendered blank. Splitting the first colon here makes the two resolvers agree.
+        var firstColon = segments[0].IndexOf(':');
+        if (firstColon > 0)
+        {
+            var key = segments[0][..firstColon];
+            var value = segments[0][(firstColon + 1)..];
+            segments = (string.IsNullOrEmpty(value)
+                ? new[] { key }.Concat(segments.Skip(1))
+                : new[] { key, value }.Concat(segments.Skip(1))).ToArray();
+        }
 
         string? Rest(int from) => segments.Length > from ? string.Join("/", segments.Skip(from)) : null;
 

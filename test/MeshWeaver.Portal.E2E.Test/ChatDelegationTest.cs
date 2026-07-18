@@ -60,6 +60,16 @@ public class ChatDelegationTest(PortalFixture fixture)
     {
         Assert.SkipUnless(fixture.Available, fixture.SkipReason);
 
+        // Delegation needs a model that reliably emits tool calls. The default e2e model
+        // (qwen-small / qwen2.5:0.5b) cannot, and roleplay models 400 on tools — so without a
+        // tool-capable model this test can only Skip (never false-pass). memex-local sets
+        // E2E_TOOL_MODEL to a keyed tool-capable model when one is pulled (see e2e_deploy /
+        // detect_e2e_tool_model); absent it, skip with a clear, actionable reason.
+        var toolModel = Environment.GetEnvironmentVariable("E2E_TOOL_MODEL");
+        Assert.SkipWhen(string.IsNullOrWhiteSpace(toolModel),
+            "E2E_TOOL_MODEL is not set — no tool-capable model is pulled/keyed on the e2e portal " +
+            "(qwen-small cannot tool-call). Pull one (e.g. `ollama pull qwen3-coder:30b`) and re-run.");
+
         await using var context = await fixture.NewAuthenticatedContextAsync();
         var token = await fixture.MintTokenAsync(context);
 
@@ -92,15 +102,18 @@ public class ChatDelegationTest(PortalFixture fixture)
         await fixture.PatchNodeAsync(context, token, coordinatorPath,
             $"{{\"content\":{{\"instructions\":\"{CoordinatorInstructions}\"}}}}");
 
-        // ── Seed the composer: MeshWeaver harness + the coordinator agent selected ───────────────────────
+        // ── Seed the composer: MeshWeaver harness + the coordinator agent + the tool-capable model ───────
+        // modelName MUST be the tool-capable model — otherwise the round runs on the default (qwen-small),
+        // which can't emit delegate_to_agent, and the test skips. The patch re-forces it in case a prior
+        // run left a different model on the shared composer node.
         var composerPath = $"{fixture.UserId}/_Thread/ThreadComposer";
         await SeedAsync(context, token, $$"""
             { "id": "ThreadComposer", "namespace": "{{fixture.UserId}}/_Thread", "name": "Chat Input",
               "nodeType": "ThreadComposer", "mainNode": "{{fixture.UserId}}",
-              "content": { "$type": "ThreadComposer", "harness": "MeshWeaver", "agentName": "{{coordinatorPath}}" } }
+              "content": { "$type": "ThreadComposer", "harness": "MeshWeaver", "agentName": "{{coordinatorPath}}", "modelName": "{{toolModel}}" } }
             """);
         await fixture.PatchNodeAsync(context, token, composerPath,
-            $"{{\"content\":{{\"harness\":\"MeshWeaver\",\"agentName\":\"{coordinatorPath}\"}}}}");
+            $"{{\"content\":{{\"harness\":\"MeshWeaver\",\"agentName\":\"{coordinatorPath}\",\"modelName\":\"{toolModel}\"}}}}");
 
         var page = await context.NewPageAsync();
         await page.SetViewportSizeAsync(1400, 1000);

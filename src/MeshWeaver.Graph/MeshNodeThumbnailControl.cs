@@ -35,6 +35,22 @@ public record MeshNodeThumbnailControl(
     }
 
     /// <summary>
+    /// Whether a fault raised while streaming this thumbnail's SUBJECT node should be SURFACED as an
+    /// error (a genuine infrastructure fault → a single toast + log) rather than treated as a benign,
+    /// expected fallback.
+    ///
+    /// <para>An access-denied read is DENIED BY DESIGN here (issue #434): an <c>AccessAssignment</c> row's
+    /// subject frequently lives in a partition the viewer is not a member of — two users can share access
+    /// to a node without being able to read each other's user partitions. The row already carries the
+    /// subject id + roles, so the card renders its seeded initials-avatar fallback; the denial is a normal
+    /// state, NOT "Something went wrong". Delegates to <see cref="AreaErrorClassifier.IsExpectedUserActionFailure"/>
+    /// (true for <see cref="UnauthorizedAccessException"/> / access-denied delivery failures), so only a
+    /// genuine infra fault surfaces. Pure — unit-tested without a renderer or a circuit.</para>
+    /// </summary>
+    public static bool ShouldSurfaceStreamError(Exception? ex)
+        => !AreaErrorClassifier.IsExpectedUserActionFailure(ex);
+
+    /// <summary>
     /// Gets the image URL for a node. Public so other builders can reuse.
     /// Priority: content.avatar > content.logo > content.icon > MarkdownContent.Thumbnail > node.Icon > NodeType default.
     /// Handles both typed objects and JsonElement/Dictionary content.

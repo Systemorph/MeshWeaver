@@ -143,9 +143,10 @@ public static class UserActivityLayoutAreas
         var capturedAccessContext = accessService?.Context ?? accessService?.CircuitContext;
         var isOwner = IsViewerOwner(capturedAccessContext, nodeOwnerId);
         var options = host.Hub.JsonSerializerOptions;
-        // The visitor profile reveals email ONLY to a global admin (the owner never lands here — they
-        // get the dashboard). Fail-closed: hidden until admin status resolves.
-        var isAdminStream = ViewerIsAdmin(host.Hub, capturedAccessContext?.ObjectId);
+        // Email is PII on the world-readable User node (#471): the visitor profile reveals it ONLY to
+        // the subject or a global admin. The owner never lands here (they get the dashboard); every
+        // other viewer starts REDACTED and the email is revealed only once global-admin is confirmed.
+        var canSeeEmail = CanSeeEmailStream(host.Hub, capturedAccessContext, isOwner);
 
         var areaLogger = host.Hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.Graph.UserActivityLayoutAreas");
@@ -168,15 +169,16 @@ public static class UserActivityLayoutAreas
         // ensure-create a {owner}/Chat node before rendering. Nothing to gate on: bind straight to the
         // owner-node sync stream.
         return syncStream!
-            .CombineLatest(isAdminStream, (change, isAdmin) =>
+            .CombineLatest(canSeeEmail, (change, showEmail) => (change, showEmail))
+            .Select(t =>
             {
-                var ownerNode = change.Value;
+                var ownerNode = t.change.Value;
                 var ownerName = ownerNode?.Name ?? nodeOwnerId;
 
                 if (isOwner)
                     return (UiControl?)BuildOwnerHome(nodePath, ownerName, ownerNode, options);
                 return (UiControl?)BuildProfile(nodePath, nodeOwnerId, ownerName, ownerNode,
-                    isOwner: false, canSeeEmail: isAdmin, options);
+                    isOwner: false, canSeeEmail: t.showEmail, options);
             })
             // The area must NEVER spin forever, but it must ALSO never tear itself down
             // while idle. Two distinct failure modes, ONE narrow guard:
@@ -695,18 +697,19 @@ public static class UserActivityLayoutAreas
         var accessService = host.Hub.ServiceProvider.GetService<AccessService>();
         var captured = accessService?.Context ?? accessService?.CircuitContext;
         var isOwner = IsViewerOwner(captured, nodeOwnerId);
-        var isAdminStream = ViewerIsAdmin(host.Hub, captured?.ObjectId);
+        // Email PII gate (#471): owner or global admin only — fail-closed until admin is confirmed.
+        var canSeeEmail = CanSeeEmailStream(host.Hub, captured, isOwner);
         var areaLogger = host.Hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.Graph.UserActivityLayoutAreas");
 
         var syncStream = host.Workspace.GetStream(new MeshNodeReference());
         return syncStream!
-            .CombineLatest(isAdminStream, (change, isAdmin) =>
+            .CombineLatest(canSeeEmail, (change, showEmail) =>
             {
                 var ownerNode = change.Value;
                 var ownerName = ownerNode?.Name ?? nodeOwnerId;
                 return (UiControl?)BuildProfile(nodePath, nodeOwnerId, ownerName, ownerNode,
-                    isOwner, canSeeEmail: isOwner || isAdmin, options);
+                    isOwner, canSeeEmail: showEmail, options);
             })
             // Same narrow guard as Activity: arm the timeout for the FIRST emission only (surface an
             // unreachable owner hub) and disarm it thereafter (an idle data-bound view must not tear
@@ -804,13 +807,20 @@ public static class UserActivityLayoutAreas
         return container;
     }
 
-    /// <summary>Reactive global-admin check for the viewer; false for an unauthenticated viewer, and
-    /// <c>StartWith(false)</c> so the profile renders immediately (email hidden) and reveals only once
-    /// admin status resolves — fail-closed on the PII gate.</summary>
-    private static IObservable<bool> ViewerIsAdmin(IMessageHub hub, string? viewerId)
-        => string.IsNullOrEmpty(viewerId)
-            ? Observable.Return(false)
+    /// <summary>
+    /// The reactive "may this viewer see the profile's email?" gate (#471 PII). True for the subject
+    /// (<paramref name="isOwner"/>); for anyone else it is a global-admin check on the live
+    /// AccessAssignment stream. Anonymous / virtual / non-owner viewers start REDACTED (secure default);
+    /// <c>StartWith(false)</c> renders the profile immediately with the email hidden and reveals it only
+    /// once admin status is confirmed, and <c>DistinctUntilChanged</c> drops the duplicate initial false.
+    /// </summary>
+    private static IObservable<bool> CanSeeEmailStream(IMessageHub hub, AccessContext? viewer, bool isOwner)
+    {
+        var viewerId = viewer?.ObjectId;
+        return isOwner || string.IsNullOrEmpty(viewerId) || viewer?.IsVirtual == true
+            ? Observable.Return(isOwner)
             : hub.IsGlobalAdmin(viewerId).StartWith(false).DistinctUntilChanged();
+    }
 
     /// <summary>
     /// The polished public profile — cover/avatar + display name, an opt-in bio and links block, and a
