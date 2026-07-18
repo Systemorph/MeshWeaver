@@ -1180,6 +1180,13 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             if (!submissionHandler.TryBeginSubmit(userMessageText))
                 return;
 
+            // 🛟 #380 failsafe: TryBeginSubmit latched State = Submitting. If ANY step below throws
+            // before the trailing ForceRelease, this scope's Dispose (run during stack unwind, before
+            // the catch) forces the handler back to Idle so the composer never wedges at a dead
+            // "Sending…" spinner. On the happy path the ForceRelease at the end runs first, so the
+            // scope-exit Dispose is a no-op — queueing semantics are unchanged.
+            using var submitGuard = submissionHandler.BeginSubmitScope();
+
             // EXISTING thread: clear the editor immediately — the message echoes into the
             // message list via PendingUserMessages right away, so the text is never "gone".
             // NEW thread (no threadPath yet): keep the text in the editor until the thread
@@ -1366,6 +1373,13 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         catch (Exception ex)
         {
             Logger.LogError(ex, "[ThreadChat:{InstanceId}] SubmitMessageCore failed", _instanceId);
+            // #380: the submitGuard scope has already forced the submission handler back to Idle
+            // during unwind. Clear the co-latched allocation flag (which otherwise blocks the next
+            // submit at the top of this method) and re-render so the disabled "Sending…" spinner is
+            // replaced by the live Send button — the composer recovers WITHOUT a page refresh.
+            showSubmissionProgress = false;
+            if (!_isDisposed)
+                StateHasChanged();
         }
     }
 

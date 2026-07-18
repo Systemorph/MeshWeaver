@@ -140,6 +140,37 @@ public class ChatSubmissionHandler : IDisposable
     }
 
     /// <summary>
+    /// Opens a failsafe scope for a submission that has just begun (i.e. immediately after
+    /// <see cref="TryBeginSubmit"/> returned <c>true</c> and latched <see cref="State"/> to
+    /// <see cref="SubmissionState.Submitting"/>). Disposing the scope — on normal <b>or</b>
+    /// exceptional block exit — forces the handler back to <see cref="SubmissionState.Idle"/>
+    /// if it is still in flight, so a throw anywhere between <c>TryBeginSubmit</c> and the
+    /// caller's trailing <see cref="ForceRelease"/> can never latch the input at "Sending…"
+    /// (GitHub issue #380: the composer becomes a dead spinner where the user cannot type a new
+    /// message until a full page refresh rebuilds the handler). On the happy path the caller has
+    /// already released before the scope exits, so <see cref="IDisposable.Dispose"/> is an
+    /// idempotent no-op and the queueing semantics are unchanged. Intended usage:
+    /// <c>using var _ = handler.BeginSubmitScope();</c> around the submit body.
+    /// </summary>
+    public IDisposable BeginSubmitScope() => new SubmitScope(this);
+
+    private sealed class SubmitScope(ChatSubmissionHandler handler) : IDisposable
+    {
+        private bool _released;
+
+        public void Dispose()
+        {
+            if (_released)
+                return;
+            _released = true;
+            // Only act when the submission is still in flight: on the happy path the caller has
+            // already transitioned to Idle, so this is a no-op that preserves existing behavior.
+            if (handler.State != SubmissionState.Idle)
+                handler.ForceRelease();
+        }
+    }
+
+    /// <summary>
     /// Marks the handler as disposed so that subsequent <c>TryBeginSubmit</c> calls
     /// return <c>false</c> without side effects.
     /// </summary>
