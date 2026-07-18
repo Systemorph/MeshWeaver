@@ -60,12 +60,24 @@ public static class AccessControlLayoutArea
         }
 
         if (nodeStream is null)
-            return isAdminStream.Select(isAdmin => (UiControl?)BuildPage(host, node: null, nodePath, isAdmin));
+            return isAdminStream.DistinctUntilChanged()
+                .Select(isAdmin => (UiControl?)BuildPage(host, nodeName: null, nodePath, isAdmin));
 
-        return nodeStream.CombineLatest(isAdminStream, (change, isAdmin)
-                => (UiControl?)BuildPage(host, change?.Value, nodePath, isAdmin))
-            .Catch<UiControl?, Exception>(_ => isAdminStream.Select(isAdmin =>
-                (UiControl?)BuildPage(host, node: null, nodePath, isAdmin)));
+        // The page's ONLY dependency on the node is its display name (the section header); its only
+        // dependency on the permission probe is the admin bool. Project each input down to exactly
+        // that and DistinctUntilChanged, so an unrelated node version bump or a repeated identical
+        // isAdmin emission does NOT recompose the whole tab. A recompose re-instantiates the
+        // per-row AccessAssignment thumbnails, which re-subscribes every subject stream — the #434
+        // flicker + repeated-toast loop. This keeps the binding LIVE (no .Take(1)); it only
+        // suppresses no-op re-renders on unrelated upstream emissions.
+        var nodeNameStream = nodeStream
+            .Select(change => change?.Value?.Name)
+            .DistinctUntilChanged();
+
+        return nodeNameStream.CombineLatest(isAdminStream.DistinctUntilChanged(), (nodeName, isAdmin)
+                => (UiControl?)BuildPage(host, nodeName, nodePath, isAdmin))
+            .Catch<UiControl?, Exception>(_ => isAdminStream.DistinctUntilChanged().Select(isAdmin =>
+                (UiControl?)BuildPage(host, nodeName: null, nodePath, isAdmin)));
     }
 
     internal static AccessAssignment? DeserializeAssignment(MeshNode node)
@@ -77,11 +89,11 @@ public static class AccessControlLayoutArea
         return null;
     }
 
-    private static UiControl BuildPage(LayoutAreaHost host, MeshNode? node, string nodePath, bool isAdmin)
+    private static UiControl BuildPage(LayoutAreaHost host, string? nodeName, string nodePath, bool isAdmin)
     {
         var stack = Controls.Stack.WithStyle("padding: 24px; gap: 20px; width: 100%;");
 
-        var currentName = node?.Name ?? nodePath.Split('/').LastOrDefault() ?? nodePath;
+        var currentName = nodeName ?? nodePath.Split('/').LastOrDefault() ?? nodePath;
         if (string.IsNullOrEmpty(currentName)) currentName = "Root";
 
         stack = stack.WithView(Controls.H2($"Access Control — {currentName}"));
