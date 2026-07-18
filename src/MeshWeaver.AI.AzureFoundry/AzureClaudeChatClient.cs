@@ -6,6 +6,8 @@ using System.Text.Json.Serialization;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 
+[assembly: InternalsVisibleTo("MeshWeaver.AI.Test")]
+
 namespace MeshWeaver.AI.AzureFoundry;
 
 /// <summary>
@@ -109,35 +111,8 @@ public class AzureClaudeChatClient : IChatClient
     {
         var request = BuildRequest(messages, options, stream: true);
 
-        // Retry on transient failures (500, 502, 503, 429)
-        HttpResponseMessage? response = null;
-        for (var attempt = 0; attempt < 3; attempt++)
-        {
-            var httpRequest = CreateHttpRequest(request);
-            response = await httpClient.SendAsync(
-                httpRequest,
-                HttpCompletionOption.ResponseHeadersRead,
-                cancellationToken);
-
-            if (response.IsSuccessStatusCode)
-                break;
-
-            var status = (int)response.StatusCode;
-            var errorBody = await response.Content.ReadAsStringAsync(cancellationToken);
-            logger?.LogWarning("Azure AI API {Status} on attempt {Attempt}: {Body}",
-                status, attempt + 1, errorBody?.Length > 500 ? errorBody[..500] : errorBody);
-
-            if (status is 500 or 502 or 503 or 429 && attempt < 2)
-            {
-                var delay = status == 429 ? 5000 : 1000 * (attempt + 1);
-                response.Dispose();
-                await Task.Delay(delay, cancellationToken);
-                continue;
-            }
-            response.EnsureSuccessStatusCode(); // throws
-        }
-
-        response!.EnsureSuccessStatusCode();
+        using var response = await SendWithRetryAsync(
+            request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
 
         using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
         using var reader = new StreamReader(stream);
@@ -514,21 +489,87 @@ public class AzureClaudeChatClient : IChatClient
 
     private async Task<ClaudeResponse> SendRequestAsync(ClaudeRequest request, CancellationToken cancellationToken)
     {
-        using var httpRequest = CreateHttpRequest(request);
-        using var response = await httpClient.SendAsync(httpRequest, cancellationToken);
+        // Non-streaming shares the same transient-failure retry as streaming. Previously this did a single
+        // send with no retry, so a lone 429 killed the round outright (issue #494).
+        using var response = await SendWithRetryAsync(
+            request, HttpCompletionOption.ResponseContentRead, cancellationToken);
 
         var responseBody = await response.Content.ReadAsStringAsync(cancellationToken);
-
-        if (!response.IsSuccessStatusCode)
-        {
-            logger?.LogError("Azure Claude API error: {StatusCode} - {Body}", response.StatusCode, responseBody);
-            throw new HttpRequestException($"Azure Claude API error: {response.StatusCode} - {responseBody}");
-        }
-
         logger?.LogDebug("Received response from Azure Claude: {Json}", responseBody);
 
         return JsonSerializer.Deserialize<ClaudeResponse>(responseBody, JsonOptions)
             ?? throw new InvalidOperationException("Failed to deserialize Claude response");
+    }
+
+    private const int MaxAttempts = 3;
+
+    /// <summary>
+    /// Sends the request with a shared transient-failure retry (500/502/503/429), used by BOTH the
+    /// streaming and non-streaming paths. On success returns the (undisposed) response for the caller to
+    /// read; after <see cref="MaxAttempts"/> attempts, or on a non-retryable status, throws via
+    /// <c>EnsureSuccessStatusCode</c>. Backoff is computed by <see cref="ComputeRetryDelay"/> — the
+    /// server's <c>Retry-After</c> is authoritative; absent it, exponential backoff capped at 30s.
+    /// </summary>
+    private async Task<HttpResponseMessage> SendWithRetryAsync(
+        ClaudeRequest request, HttpCompletionOption completionOption, CancellationToken cancellationToken)
+    {
+        for (var attempt = 0; ; attempt++)
+        {
+            // A fresh HttpRequestMessage per attempt — a request message can only be sent once.
+            var httpRequest = CreateHttpRequest(request);
+            var response = await httpClient.SendAsync(httpRequest, completionOption, cancellationToken);
+
+            if (response.IsSuccessStatusCode)
+                return response;
+
+            var status = (int)response.StatusCode;
+            var errorBody = await response.Content.ReadAsStringAsync(cancellationToken);
+            logger?.LogWarning("Azure AI API {Status} on attempt {Attempt}: {Body}",
+                status, attempt + 1, errorBody.Length > 500 ? errorBody[..500] : errorBody);
+
+            var retryable = status is 500 or 502 or 503 or 429;
+            if (retryable && attempt < MaxAttempts - 1)
+            {
+                var delay = ComputeRetryDelay(response, attempt, DateTimeOffset.UtcNow);
+                response.Dispose();
+                if (delay > TimeSpan.Zero)
+                    await Task.Delay(delay, cancellationToken);
+                continue;
+            }
+
+            // Non-retryable, or the last attempt failed → surface the error (throws).
+            try
+            {
+                response.EnsureSuccessStatusCode();
+            }
+            finally
+            {
+                response.Dispose();
+            }
+        }
+    }
+
+    /// <summary>
+    /// The backoff before the next retry attempt. The server's <c>Retry-After</c> header is authoritative
+    /// — honored as delta-seconds OR an HTTP-date resolved against <paramref name="utcNow"/>. A present but
+    /// non-positive value (e.g. <c>Retry-After: 0</c> or a past date) means "retry now"
+    /// (<see cref="TimeSpan.Zero"/>). With no usable header, falls back to exponential backoff
+    /// (1s × 2^<paramref name="attempt"/>) capped at 30s. Pure + internal so it is deterministically testable.
+    /// </summary>
+    internal static TimeSpan ComputeRetryDelay(HttpResponseMessage response, int attempt, DateTimeOffset utcNow)
+    {
+        var retryAfter = response.Headers.RetryAfter;
+        if (retryAfter is not null)
+        {
+            TimeSpan? fromHeader = retryAfter.Delta
+                ?? (retryAfter.Date is { } date ? date - utcNow : null);
+            if (fromHeader is { } value)
+                return value > TimeSpan.Zero ? value : TimeSpan.Zero;
+        }
+
+        // No usable Retry-After → exponential backoff (1s, 2s, 4s, …), capped at 30s.
+        var seconds = Math.Min(30d, Math.Pow(2, attempt));
+        return TimeSpan.FromSeconds(seconds);
     }
 
     private static ChatResponse ConvertToResponse(ClaudeResponse response)
