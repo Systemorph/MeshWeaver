@@ -48,6 +48,23 @@ public class SatelliteAccessRule(string nodeType, IMessageHub hub) : INodeTypeAc
         if (string.IsNullOrEmpty(userId))
             userId = WellKnownUsers.Anonymous;
 
+        // A comment's AUTHOR may always delete their OWN comment — even with only Comment permission on
+        // the document. Without this, Comment Delete falls through to the MainNode-delegated
+        // Permission.Update below, so a commenter (no Update on the doc) sees the ✕ Delete button but the
+        // delete is denied and silently swallowed — the "no delete works" half of issue #391. Match by
+        // display Name, the SAME author identity the comment UI uses (Comment.Author is set from
+        // AccessContext.Name). Non-authors still need Update (editors/admins), so the effective rule is
+        // "author and admins can delete".
+        if (context.Operation == NodeOperation.Delete
+            && nodeType == "Comment"
+            && !string.IsNullOrEmpty(context.AccessContext?.Name))
+        {
+            var comment = context.Node.ContentAs<Comment>(hub.JsonSerializerOptions);
+            if (comment is not null
+                && string.Equals(comment.Author, context.AccessContext!.Name, StringComparison.OrdinalIgnoreCase))
+                return Observable.Return(true);
+        }
+
         var mainNodePath = context.Node.MainNode;
         // Degenerate case: no MainNode (or self-referencing). The rule has no
         // opinion — fall back to the same path-based check the validator would

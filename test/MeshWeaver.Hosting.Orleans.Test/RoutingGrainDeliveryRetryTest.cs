@@ -134,6 +134,66 @@ public class RoutingGrainDeliveryRetryTest
     }
 
     [Fact]
+    public void DeliverToGrainWithRetry_ExhaustedRetries_SurfacesRecordedActivationError_NotRawRejection()
+    {
+        // Issue #464, Defect 3: a grain stuck in a PERSISTENT activation-fault loop rejects every
+        // delivery with the raw Orleans rejection ("DeactivateOnIdle was called … Rejecting now"),
+        // which hides the actual cause. The grain records the real activation error into the
+        // GrainActivationFailureRegistry on each faulted activation; the retry helper must fall back
+        // to THAT recorded cause when transient retries are exhausted, so the sender's Observe fires
+        // OnError with an actionable message instead of Orleans internals.
+        const string realCause = "Compilation failed for 'UWDeepfield/UwAttention': CS1501 no overload for 'GetFiles' takes 2 arguments";
+        var nacks = new List<(string Message, ErrorType Type)>();
+        using var done = new ManualResetEventSlim(false);
+
+        RoutingGrain.DeliverToGrainWithRetry(
+            // Every attempt lands in a deactivation window — the persistent-fault loop.
+            grainCall: () => Task.FromException<IMessageDelivery>(InvalidActivation()),
+            grainKey: "UWDeepfield/UwAttention",
+            addressPath: "UWDeepfield/UwAttention",
+            deliveryId: "t5",
+            postFailureToSender: (m, t) => { nacks.Add((m, t)); done.Set(); },
+            logger: NullLogger.Instance,
+            maxRetries: 2,
+            backoff: NoBackoff,
+            scheduler: Scheduler.Immediate,
+            // The registry says this grain key faulted with the real compilation error.
+            resolveActivationError: gk =>
+                gk == "UWDeepfield/UwAttention" ? realCause : null);
+
+        Assert.True(done.Wait(TimeSpan.FromSeconds(5)));
+        var nack = Assert.Single(nacks);
+        Assert.Equal(ErrorType.Failed, nack.Type);
+        // The NACK must carry the REAL cause the grain recorded — not the raw rejection text.
+        Assert.Contains(realCause, nack.Message);
+    }
+
+    [Fact]
+    public void DeliverToGrainWithRetry_NoRecordedActivationError_FallsBackToRawException()
+    {
+        // When nothing was recorded for the grain key (the registry has no entry, or no registry is
+        // wired at all), behaviour is unchanged: the NACK carries the underlying exception message.
+        var nacks = new List<(string Message, ErrorType Type)>();
+        using var done = new ManualResetEventSlim(false);
+
+        RoutingGrain.DeliverToGrainWithRetry(
+            grainCall: () => Task.FromException<IMessageDelivery>(new InvalidOperationException("node type not registered")),
+            grainKey: "X",
+            addressPath: "X",
+            deliveryId: "t6",
+            postFailureToSender: (m, t) => { nacks.Add((m, t)); done.Set(); },
+            logger: NullLogger.Instance,
+            backoff: NoBackoff,
+            scheduler: Scheduler.Immediate,
+            resolveActivationError: _ => null);
+
+        Assert.True(done.Wait(TimeSpan.FromSeconds(5)));
+        var nack = Assert.Single(nacks);
+        Assert.Equal(ErrorType.Failed, nack.Type);
+        Assert.Contains("node type not registered", nack.Message);
+    }
+
+    [Fact]
     public void IsTransientFailure_ClassifiesOrleansRejectionAndTimeoutAsTransient_OthersNot()
     {
         Assert.True(RoutingGrain.IsTransientFailure(InvalidActivation()));
