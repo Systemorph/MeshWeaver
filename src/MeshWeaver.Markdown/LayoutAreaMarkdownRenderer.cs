@@ -27,15 +27,21 @@ public class LayoutAreaMarkdownRenderer : HtmlObjectRenderer<LayoutAreaComponent
 
         if (obj.IsInline)
         {
+            // An @@ embed hides the embedded node's own header + comments by default (see
+            // MarkdownOverviewLayoutArea): the embedding page already frames it and the node title
+            // duplicated the markdown heading. We pass this as a ?hideHeader=true reference
+            // parameter on the raw path; non-markdown areas ignore the unknown parameter, and an
+            // author can opt back in with @@node?hideHeader=false.
+            var rawPath = WithHideHeader(obj.RawPath);
             if (isPreParsed)
             {
                 // Pre-parsed reference - include raw path for Graph resolution + address/area/id
-                renderer.WriteLine(GetLayoutAreaDiv(obj.RawPath, obj.Address, obj.Area, obj.Id));
+                renderer.WriteLine(GetLayoutAreaDiv(rawPath, obj.Address, obj.Area, obj.Id));
             }
             else
             {
                 // Raw path reference - use RawPath for resolution at render time
-                renderer.WriteLine(GetLayoutAreaDiv(obj.RawPath));
+                renderer.WriteLine(GetLayoutAreaDiv(rawPath));
             }
         }
         else
@@ -52,6 +58,19 @@ public class LayoutAreaMarkdownRenderer : HtmlObjectRenderer<LayoutAreaComponent
             }
         }
         renderer.EnsureLine();
+    }
+
+    /// <summary>
+    /// Appends the default <c>hideHeader=true</c> reference parameter that inline (@@) embeds use,
+    /// unless the author already specified a <c>hideHeader</c> value (preserved as-is). Any
+    /// existing query string is kept.
+    /// </summary>
+    private static string WithHideHeader(string? rawPath)
+    {
+        var path = rawPath ?? string.Empty;
+        if (path.Contains("hideHeader", System.StringComparison.OrdinalIgnoreCase))
+            return path;
+        return path.Contains('?') ? $"{path}&hideHeader=true" : $"{path}?hideHeader=true";
     }
 
     /// <summary>CSS class for an embedded layout-area div.</summary>
