@@ -491,6 +491,71 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
             "the handler must respond with an error rather than letting AwaitResponse time out");
     }
 
+    /// <summary>
+    /// Regression for #474: a NESTED file in the DEFAULT "content" collection
+    /// (<c>content/subfolder/nested.txt</c>) must read like the flat case does. The "content" UCR
+    /// prefix coincides with the default collection name, so after the prefix is stripped the
+    /// remainder ("subfolder/nested.txt") is the file's relative key — NOT "{collection}/{file}".
+    /// The old resolver consumed the first sub-folder segment as a collection name and failed with
+    /// "Content collection 'subfolder' not found", while the exact same file indexed/listed fine.
+    /// This is distinct from #326/#364 (a pure-ASCII, space-free path — no percent-encoding involved).
+    /// </summary>
+    [Fact]
+    public async Task GetDataRequest_ContentSlashFormat_NestedFileInDefaultCollection_Responds()
+    {
+        var testDir = Path.Combine(Path.GetTempPath(), "MeshWeaverTest_NestedDefault_" + Guid.NewGuid().ToString("N"));
+        var subDir = Path.Combine(testDir, "subfolder");
+        Directory.CreateDirectory(subDir);
+        File.WriteAllText(Path.Combine(subDir, "nested.txt"), "nested default-collection content");
+
+        try
+        {
+            var host = GetHostWithFileProvider(testDir, defaultCollection: true);
+            var client = GetClient();
+
+            // Slash format, default "content" collection, NESTED key — pure ASCII, no encoding.
+            var response = await client.Observe(new GetDataRequest(new UnifiedReference("content/subfolder/nested.txt")), o => o.WithTarget(CreateHostAddress())).Should().Emit();
+
+            response.Message.Error.Should().BeNull(
+                "a nested key in the default 'content' collection must resolve, not be mis-split into a collection name (#474)");
+            (response.Message.Data as string).Should().Contain("nested default-collection content");
+        }
+        finally
+        {
+            if (Directory.Exists(testDir)) Directory.Delete(testDir, true);
+        }
+    }
+
+    /// <summary>
+    /// The companion negative for #474: a MISSING nested file in the default "content" collection must
+    /// fail as a plain file-not-found WITHIN "content" (exactly as a flat miss does), never as
+    /// "Content collection '{firstSegment}' not found" — the old resolver's mis-split error template.
+    /// </summary>
+    [Fact]
+    public async Task GetDataRequest_ContentSlashFormat_MissingNestedFile_FailsWithinDefaultCollection()
+    {
+        var testDir = Path.Combine(Path.GetTempPath(), "MeshWeaverTest_NestedMissing_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(testDir);
+
+        try
+        {
+            var host = GetHostWithFileProvider(testDir, defaultCollection: true);
+            var client = GetClient();
+
+            var response = await client.Observe(new GetDataRequest(new UnifiedReference("content/subfolder/nope.pdf")), o => o.WithTarget(CreateHostAddress())).Should().Emit();
+
+            response.Message.Error.Should().NotBeNullOrEmpty();
+            response.Message.Error.Should().NotContain("collection 'subfolder'",
+                "a nested miss must not consume the first sub-folder segment as a collection name (#474)");
+            response.Message.Error.Should().Contain("content",
+                "the miss is a plain file-not-found within the 'content' collection, like the flat case");
+        }
+        finally
+        {
+            if (Directory.Exists(testDir)) Directory.Delete(testDir, true);
+        }
+    }
+
     private IMessageHub GetHostWithFileProvider(string testDir, bool defaultCollection)
     {
         // For default-collection scenarios we register the collection as "content"; for named-collection
