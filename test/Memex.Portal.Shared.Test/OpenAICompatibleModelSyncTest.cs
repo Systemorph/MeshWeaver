@@ -4,6 +4,7 @@ using System.Linq;
 using Memex.Portal.Shared.Models;
 using MeshWeaver.AI;
 using MeshWeaver.Mesh;
+using Microsoft.Extensions.Configuration;
 using Xunit;
 
 namespace Memex.Portal.Shared.Test;
@@ -105,6 +106,48 @@ public class OpenAICompatibleModelSyncTest
         Assert.Equal(2, delta.ToAdd.Count); // "a:latest"/"A:latest" collapse to one
         Assert.Contains("b:latest", delta.ToAdd);
     }
+
+    // ── GetBool / GetInt (issue #352: empty-string config must not crash startup) ──
+
+    private static IConfiguration Config(params (string Key, string? Value)[] pairs) =>
+        new ConfigurationBuilder()
+            .AddInMemoryCollection(pairs.Select(p => new KeyValuePair<string, string?>(p.Key, p.Value)))
+            .Build();
+
+    [Fact]
+    public void GetBool_EmptyString_ReturnsDefault_DoesNotThrow()
+    {
+        // The Helm ConfigMap renders an unset allow-listed key as "" (issue #352). The framework's
+        // GetValue<bool> THROWS on that empty string, killing host startup. GetBool must treat it as absent.
+        var config = Config(("OpenAICompatible:DiscoverModels", ""));
+
+        Assert.False(OpenAICompatibleModelSync.GetBool(config, "OpenAICompatible:DiscoverModels", false));
+
+        // Pin the regression: the previous code path (GetValue<bool> on the same empty string) DID throw.
+        Assert.Throws<InvalidOperationException>(
+            () => config.GetValue("OpenAICompatible:DiscoverModels", false));
+    }
+
+    [Theory]
+    [InlineData(null, false, false)]     // absent key → default
+    [InlineData("", true, true)]         // empty (ConfigMap unset) → default
+    [InlineData("   ", false, false)]    // whitespace → default
+    [InlineData("true", false, true)]    // explicit true
+    [InlineData("false", true, false)]   // explicit false
+    [InlineData("TRUE", false, true)]    // case-insensitive
+    [InlineData("garbage", false, false)] // unparseable → default (inert unless explicitly enabled)
+    public void GetBool_HonoursDefaultUnlessExplicitlyParseable(string? value, bool defaultValue, bool expected)
+        => Assert.Equal(expected, OpenAICompatibleModelSync.GetBool(
+            Config(("OpenAICompatible:DiscoverModels", value)), "OpenAICompatible:DiscoverModels", defaultValue));
+
+    [Theory]
+    [InlineData(null, 20, 20)]           // absent → default
+    [InlineData("", 120, 120)]           // empty (ConfigMap unset) → default, not a crash
+    [InlineData("45", 20, 45)]           // explicit
+    [InlineData("notanint", 20, 20)]     // unparseable → default
+    public void GetInt_EmptyOrUnparseable_ReturnsDefault(string? value, int defaultValue, int expected)
+        => Assert.Equal(expected, OpenAICompatibleModelSync.GetInt(
+            Config(("OpenAICompatible:DiscoverIntervalSeconds", value)), "OpenAICompatible:DiscoverIntervalSeconds", defaultValue));
 
     // ── IsEmbedding ──────────────────────────────────────────────────────────
 

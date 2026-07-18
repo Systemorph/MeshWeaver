@@ -1,7 +1,5 @@
 using System.Collections.Concurrent;
-using System.Linq;
 using Markdig;
-using Markdig.Extensions.Emoji;
 
 namespace MeshWeaver.Markdown;
 
@@ -11,19 +9,6 @@ namespace MeshWeaver.Markdown;
 /// </summary>
 public static class MarkdownExtensions
 {
-    // Emoji + smiley mapping that keeps EVERY emoji :shortcode: and EVERY ASCII smiley
-    // EXCEPT the ones whose trigger contains '|' (`:|` and `:-|` → 😐). Those corrupt a
-    // pipe table's right/center alignment delimiter — `|---:|` becomes `|---😐`, so Markdig
-    // no longer recognises the table and renders the rows as a literal `<p>` (the
-    // 2026-06-13 "balance-sheet table shows as one inline line" bug — the 😐 in the
-    // separator was the tell). Dropping only the pipe-bearing smileys keeps `:)` → 🙂 etc.
-    // working while letting right-aligned tables render. Immutable, built once.
-    private static readonly EmojiMapping TableSafeEmojiMapping = new(
-        EmojiMapping.GetDefaultEmojiShortcodeToUnicode(),
-        EmojiMapping.GetDefaultSmileyToEmojiShortcode()
-            .Where(kv => !kv.Key.Contains('|'))
-            .ToDictionary(kv => kv.Key, kv => kv.Value));
-
     // Building a MarkdownPipeline costs ~350µs (block/inline parser registration, sort by
     // priority, etc). For small docs that's ~60% of the entire render time. Markdig is
     // explicit that pipelines are designed to be cached and reused — the parsing path
@@ -69,9 +54,14 @@ public static class MarkdownExtensions
             .UseMathematics()
             .UseAdvancedExtensions()
             .UseGenericAttributes()
-            // Custom mapping: all emoji + all smileys EXCEPT the pipe-bearing ones that
-            // break table alignment delimiters (see TableSafeEmojiMapping above).
-            .UseEmojiAndSmiley(TableSafeEmojiMapping)
+            // Emoji :shortcodes: ONLY — ASCII smileys are disabled. The smiley parser turns any
+            // colon adjacent to a trigger char (`:*`, `:D`, `:P`, `:|`, …) into an emoji, which
+            // corrupts ordinary colon-dense markdown: `:**Batch**` → 😗 + broken bold, `:Die` → 😄,
+            // and `|---:|` → 😐 broke right-aligned pipe tables (the 2026-06-13 table bug). Agent
+            // output is especially colon-heavy (`Label:` + bold/capitalized words), so these false
+            // positives are common. Disabling smileys removes the whole class in one line; real
+            // emoji still work via unambiguous `:shortcode:` (`:smile:`, `:warning:`). Issue #402.
+            .UseEmojiAndSmiley(enableSmileys: false)
             .UseYamlFrontMatter()
             .Use(new ImgPathMarkdownExtension(path => ToStaticHref(path, collection)))
             .Use(new LinkUrlCleanupExtension(currentNodePath))
