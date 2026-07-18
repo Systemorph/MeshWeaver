@@ -393,8 +393,73 @@ internal static class NodeTypeCompilationHelpers
                         "Compile recovery: re-trigger Update failed for {HubPath}", hubPath));
             });
 
+        // 🚨 Framework-stale kickoff (issue #464, Defect 1) — PROACTIVE, level-triggered.
+        //
+        // The platform self-update case: a MeshWeaver redeploy changes FrameworkVersion (the
+        // Graph MVID), so every NodeType whose cached assembly was built against the PREVIOUS
+        // build is now ABI-stale — its bytes reference framework members that may have changed
+        // signature, and will throw MissingMethodException the moment they run on the new
+        // binaries. Such a type is still persisted as CompilationStatus=Ok with the OLD
+        // CompiledFrameworkVersion, so NOTHING re-drives it: firstBuildKickoff needs null,
+        // recoveryKickoff needs Compiling, InstallReleaseRequestWatcher needs a fresh
+        // RequestedReleaseAt. The framework-stale self-heal in NodeTypeEnrichmentHelpers only
+        // fires when an INSTANCE of the type is activated — a NodeType with no live instances
+        // stays stale (and `compile`/CreateRelease up-to-date checks could report it clean)
+        // until an operator manually rebuilds it.
+        //
+        // This subscription is the OWNER-side, proactive analogue: when the NodeType's own
+        // hub observes a SETTLED (Ok/Error) state whose cached assembly is framework-stale, it
+        // flips CompilationStatus=Pending so the compile watcher rebuilds it against the current
+        // framework — no instance activation, no user click, no MissingMethodException timebomb.
+        //
+        // Bounded & storm-safe, mirroring firstBuildKickoff/recoveryKickoff:
+        //   • Take(1) — one-shot per hub lifetime; a successful rebuild stamps the CURRENT
+        //     FrameworkVersion so the type is no longer stale and never re-matches.
+        //   • Skips PARKED types — a broken type that terminally failed stays parked (serving
+        //     its cached error); only a deliberate retry (Compile/Recycle/UI button, which
+        //     un-parks) rebuilds it. So a framework-stale type whose sources ALSO don't compile
+        //     against the new framework parks after one attempt instead of storming.
+        //   • Skips static-only types (nothing to Roslyn-compile).
+        //   • ImpersonateAsSystem — a framework-internal self-heal, exactly like the other
+        //     kickoffs (no inbound AccessContext → no "lacks Create" loop).
+        var frameworkStaleKickoffSub = ownStream
+            .Where(node => node?.Content is NodeTypeDefinition def
+                && def.CompilationStatus is CompilationStatus.Ok or CompilationStatus.Error
+                && HasStaleFrameworkBuild(def)
+                && !IsStaticOnlyNodeType(node, def)
+                && parkRegistry?.IsParked(hubPath) != true)
+            .Take(1)
+            .Subscribe(node =>
+            {
+                logger?.LogInformation(
+                    "Framework-stale kickoff: NodeType {HubPath} assembly was compiled against framework {Compiled} but the live framework is {Live} — flipping CompilationStatus=Pending to rebuild",
+                    hubPath,
+                    node.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions)?.CompiledFrameworkVersion ?? "(null)",
+                    FrameworkVersion);
+                var staleAccess = hub.ServiceProvider.GetService<AccessService>();
+                using var systemScope = staleAccess?.ImpersonateAsSystem();
+                workspace.GetMeshNodeStream().Update(curr =>
+                {
+                    if (curr?.Content is not NodeTypeDefinition def) return curr!;
+                    // Don't clobber an in-flight compile (a concurrent enrichment self-heal or
+                    // release request may already have flipped Pending/Compiling).
+                    if (def.CompilationStatus is CompilationStatus.Pending
+                                              or CompilationStatus.Compiling)
+                        return curr;
+                    // Re-check staleness inside the lambda — a genuine rebuild may have refreshed
+                    // CompiledFrameworkVersion between the outer Where and this write.
+                    if (!HasStaleFrameworkBuild(def)) return curr;
+                    return curr with
+                    {
+                        Content = def with { CompilationStatus = CompilationStatus.Pending }
+                    };
+                }).Subscribe(_ => { },
+                    ex => logger?.LogWarning(ex,
+                        "Framework-stale kickoff: Update failed for {HubPath}", hubPath));
+            });
+
         return new CompositeDisposable(
-            watcherSub, firstBuildKickoffSub, recoveryKickoffSub);
+            watcherSub, firstBuildKickoffSub, recoveryKickoffSub, frameworkStaleKickoffSub);
     }
 
     /// <summary>
@@ -859,6 +924,25 @@ internal static class NodeTypeCompilationHelpers
         !string.IsNullOrEmpty(def.LatestAssemblyCollection)
         && !string.IsNullOrEmpty(def.LatestAssemblyPath)
         && string.Equals(def.CompiledFrameworkVersion, FrameworkVersion, StringComparison.Ordinal);
+
+    /// <summary>
+    /// True when this NodeType has a cached compiled assembly (the durable
+    /// <see cref="NodeTypeDefinition.LatestAssemblyCollection"/> /
+    /// <see cref="NodeTypeDefinition.LatestAssemblyPath"/> pair is populated) that was built
+    /// against a DIFFERENT MeshWeaver framework than the live one — i.e. the ONLY reason
+    /// <see cref="HasUsableBuild"/> is false is the framework-version mismatch, not a missing
+    /// assembly. This is the "platform self-update left a stale assembly behind" shape
+    /// (issue #464, Defect 1): the bytes exist but are ABI-incompatible with the current
+    /// process, so they must be rebuilt — a source-clean, never-touched NodeType included.
+    ///
+    /// <para>Distinct from <see cref="HasUsableBuild"/>: a NodeType that was never compiled
+    /// (no assembly fields) is NOT "stale" — it is handled by the first-build kickoff.</para>
+    /// </summary>
+    internal static bool HasStaleFrameworkBuild(NodeTypeDefinition def) =>
+        !string.IsNullOrEmpty(def.LatestAssemblyCollection)
+        && !string.IsNullOrEmpty(def.LatestAssemblyPath)
+        && !string.IsNullOrEmpty(def.CompiledFrameworkVersion)
+        && !string.Equals(def.CompiledFrameworkVersion, FrameworkVersion, StringComparison.Ordinal);
 
     /// <summary>
     /// Compile-and-write-back loop for one NodeType. Runs Roslyn via
