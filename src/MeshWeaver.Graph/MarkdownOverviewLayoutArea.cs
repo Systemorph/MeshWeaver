@@ -41,10 +41,20 @@ public static class MarkdownOverviewLayoutArea
         var rawContent = GetMarkdownContent(node);
 
         // Markdown pages render full width (max-width: 100%), not the centered 1200px reading column.
+        // When this Overview is rendered as an @@ embed, the inline reference carries
+        // ?hideHeader=true (set by LayoutAreaMarkdownRenderer). We then suppress the node's own
+        // header (title/icon/menu) and the comments section: the embedding page already frames the
+        // content, and repeating the node title duplicated the markdown's own heading. A top-level
+        // page render carries no such parameter, so it is unaffected. Authors can force the header
+        // back on with @@node?hideHeader=false.
+        var hideHeader = host.Reference.HasParameter("hideHeader")
+            && !string.Equals(host.Reference.GetParameterValue("hideHeader"), "false", System.StringComparison.OrdinalIgnoreCase);
+
         var container = Controls.Stack.WithWidth("100%").WithStyle(MeshNodeLayoutAreas.GetContainerStyle(host, maxWidthOverride: "100%"));
 
-        // Standard header with title/icon
-        container = container.WithView(MeshNodeLayoutAreas.BuildHeader(host, node, false));
+        // Standard header with title/icon (skipped for @@ embeds)
+        if (!hideHeader)
+            container = container.WithView(MeshNodeLayoutAreas.BuildHeader(host, node, false));
 
         // Read-only markdown content — the CollaborativeMarkdownControl is added as
         // a DIRECT child of `container` so agents and tests can locate it without
@@ -60,7 +70,7 @@ public static class MarkdownOverviewLayoutArea
             container = container.WithView(Controls.LayoutArea(host.Hub.Address, "Approvals").WithShowProgress(false));
 
         // Standard inline comments section (if comments enabled)
-        if (host.Hub.Configuration.HasComments())
+        if (!hideHeader && host.Hub.Configuration.HasComments())
         {
             container = container.WithView(CommentsView.BuildInlineCommentsSection(host));
         }
