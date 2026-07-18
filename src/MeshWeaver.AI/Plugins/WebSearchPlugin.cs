@@ -15,18 +15,32 @@ using Microsoft.Extensions.Options;
 namespace MeshWeaver.AI.Plugins;
 
 /// <summary>
-/// Configuration for the WebSearch plugin.
+/// Configuration for the WebSearch plugin. Bound from the <c>WebSearch</c> section.
 /// </summary>
 public class WebSearchConfiguration
 {
     /// <summary>
-    /// Bing Search API subscription key.
-    /// If not set, SearchWeb will return an error prompting configuration.
+    /// Which web-search backend to use (<c>WebSearch:Provider</c>). Defaults to
+    /// <see cref="WebSearchProviderType.None"/>, which auto-detects from whatever credentials are
+    /// present (Google first, then the retired Bing path). When no backend is configured the
+    /// <c>SearchWeb</c> tool is not advertised at all.
+    /// </summary>
+    public WebSearchProviderType Provider { get; set; } = WebSearchProviderType.None;
+
+    /// <summary>
+    /// Google Programmable Search (Custom Search JSON API) settings (<c>WebSearch:Google:*</c>).
+    /// The deployment supplies <c>ApiKey</c> and <c>Cx</c>.
+    /// </summary>
+    public GoogleWebSearchConfiguration Google { get; set; } = new();
+
+    /// <summary>
+    /// Bing Search API subscription key. RETIRED (Bing Search was shut down 2025-08-11) — present
+    /// only for back-compat; prefer <see cref="Google"/>.
     /// </summary>
     public string? BingApiKey { get; set; }
 
     /// <summary>
-    /// Bing Search API endpoint.
+    /// Bing Search API endpoint (retired).
     /// </summary>
     public string Endpoint { get; set; } = "https://api.bing.microsoft.com/v7.0/search";
 
@@ -47,15 +61,25 @@ public class WebSearchPlugin : IAgentPlugin
     private readonly ILogger<WebSearchPlugin> logger;
     private readonly IIoPool ioPool;
 
+    /// <summary>
+    /// The selected search backend, or <c>null</c>/unconfigured when no provider is set up.
+    /// When this is not configured the <c>SearchWeb</c> tool is not advertised.
+    /// </summary>
+    private readonly IWebSearchProvider? searchProvider;
+
     /// <summary>The plugin's stable identifier, <c>WebSearch</c>.</summary>
     public string Name => "WebSearch";
 
+    /// <summary>True when a search backend is configured and <c>SearchWeb</c> should be advertised.</summary>
+    private bool SearchConfigured => searchProvider is { IsConfigured: true };
+
     /// <summary>
     /// Creates the plugin, resolving the named <c>Http</c> I/O pool through which every
-    /// HTTP leaf is bridged (falls back to <c>IoPool.Unbounded</c> when no registry is supplied).
+    /// HTTP leaf is bridged (falls back to <c>IoPool.Unbounded</c> when no registry is supplied),
+    /// and selecting the web-search backend from configuration.
     /// </summary>
     /// <param name="httpClient">HTTP client used for search and page-fetch requests.</param>
-    /// <param name="options">Web-search configuration (Bing key, endpoint, fetch limit).</param>
+    /// <param name="options">Web-search configuration (provider selection, keys, fetch limit).</param>
     /// <param name="logger">Logger for diagnostics.</param>
     /// <param name="ioPoolRegistry">Optional registry supplying the bounded HTTP I/O pool.</param>
     public WebSearchPlugin(
@@ -68,19 +92,38 @@ public class WebSearchPlugin : IAgentPlugin
         this.config = options.Value;
         this.logger = logger;
         ioPool = ioPoolRegistry?.Get(IoPoolNames.Http) ?? IoPool.Unbounded;
+        searchProvider = ResolveProvider();
+    }
+
+    /// <summary>
+    /// Selects the search backend from config. An explicit <c>WebSearch:Provider</c> forces that
+    /// backend; the default (<see cref="WebSearchProviderType.None"/>) auto-detects — Google when
+    /// its key + cx are present, else the retired Bing path when a legacy key is present, else none.
+    /// </summary>
+    private IWebSearchProvider? ResolveProvider()
+    {
+        var google = new GoogleWebSearchProvider(config.Google, httpClient, ioPool, logger);
+        var bing = new BingWebSearchProvider(config.BingApiKey, config.Endpoint, httpClient, ioPool, logger);
+
+        return config.Provider switch
+        {
+            WebSearchProviderType.Google => google,
+            WebSearchProviderType.Bing => bing,
+            _ => google.IsConfigured ? google : bing.IsConfigured ? bing : null,
+        };
     }
 
     // The AIFunction surface requires Task<string> — these are the sanctioned one-line
     // boundary adapters; the bodies are reactive with the HTTP leaf bridged through the
     // IIoPool (AsynchronousCalls.md, ControlledIoPooling.md).
     /// <summary>
-    /// MCP/agent tool: searches the web via Bing and returns matching results
+    /// MCP/agent tool: searches the web via the configured provider and returns matching results
     /// (title, URL and snippet) as JSON.
     /// </summary>
     /// <param name="query">Search query string.</param>
     /// <param name="count">Number of results to return (default 5, clamped to 1..20).</param>
     /// <returns>A task resolving to the JSON result list, or a message when search is not configured or fails.</returns>
-    [Description("Searches the web using Bing and returns relevant results with titles, URLs, and snippets. Use this to find current information, documentation, or any topic on the internet.")]
+    [Description("Searches the web and returns relevant results with titles, URLs, and snippets. Use this to find current information, documentation, or any topic on the internet.")]
     public Task<string> SearchWeb(
         [Description("Search query string")] string query,
         [Description("Number of results to return (default 5, max 20)")] int count = 5)
@@ -101,45 +144,23 @@ public class WebSearchPlugin : IAgentPlugin
     {
         logger.LogInformation("SearchWeb called with query={Query}, count={Count}", query, count);
 
-        if (string.IsNullOrWhiteSpace(config.BingApiKey))
-            return Observable.Return("Web search is not configured. A Bing Search API key is required.");
+        if (searchProvider is not { IsConfigured: true } provider)
+            return Observable.Return("Web search is not configured.");
 
         var clamped = Math.Clamp(count, 1, 20);
 
-        // The HTTP round-trip is ONE pooled async leaf — async lives only inside
-        // the IIoPool bridge, never on the subscribing thread.
-        return ioPool.Invoke(async ct =>
-            {
-                using var request = new HttpRequestMessage(HttpMethod.Get,
-                    $"{config.Endpoint}?q={Uri.EscapeDataString(query)}&count={clamped}&textFormat=Plain");
-                request.Headers.Add("Ocp-Apim-Subscription-Key", config.BingApiKey);
-
-                using var response = await httpClient.SendAsync(request, ct);
-                response.EnsureSuccessStatusCode();
-
-                var json = await response.Content.ReadAsStringAsync(ct);
-                using var doc = JsonDocument.Parse(json);
-
-                var results = ImmutableList<object>.Empty;
-                if (doc.RootElement.TryGetProperty("webPages", out var webPages) &&
-                    webPages.TryGetProperty("value", out var pages))
+        // The provider bridges its single HTTP round-trip through the IIoPool — async lives only
+        // inside that bridge, never on the subscribing thread. Map the neutral results to the
+        // stable JSON shape agents already consume: [{ title, url, snippet }].
+        return provider.Search(query, clamped)
+            .Select(results => results.Count == 0
+                ? "No results found."
+                : JsonSerializer.Serialize(results.Select(r => new
                 {
-                    foreach (var page in pages.EnumerateArray())
-                    {
-                        results = results.Add(new
-                        {
-                            title = page.GetProperty("name").GetString(),
-                            url = page.GetProperty("url").GetString(),
-                            snippet = page.GetProperty("snippet").GetString()
-                        });
-                    }
-                }
-
-                if (results.Count == 0)
-                    return "No results found.";
-
-                return JsonSerializer.Serialize(results);
-            })
+                    title = r.Title,
+                    url = r.Url,
+                    snippet = r.Snippet
+                })))
             .Catch((HttpRequestException ex) =>
             {
                 logger.LogError(ex, "Web search failed for query={Query}", query);
@@ -338,15 +359,21 @@ public class WebSearchPlugin : IAgentPlugin
     private sealed record FeedItem(string? Title, string? Link, string? Description, string? PubDate);
 
     /// <summary>
-    /// Builds the <c>AITool</c> set this plugin exposes to agents — SearchWeb and FetchWebPage.
+    /// Builds the <c>AITool</c> set this plugin exposes to agents. <c>FetchWebPage</c> is always
+    /// available; <c>SearchWeb</c> is advertised ONLY when a search provider is configured — a
+    /// deployment never advertises a search tool it cannot fulfil.
     /// </summary>
     /// <returns>The web-search tools.</returns>
     public IEnumerable<AITool> CreateTools()
     {
-        return
-        [
-            AIFunctionFactory.Create(SearchWeb),
-            AIFunctionFactory.Create(FetchWebPage)
-        ];
+        var tools = ImmutableList<AITool>.Empty;
+
+        if (SearchConfigured)
+            tools = tools.Add(AIFunctionFactory.Create(SearchWeb));
+        else
+            logger.LogInformation("WebSearch: no search provider configured — SearchWeb tool not advertised.");
+
+        tools = tools.Add(AIFunctionFactory.Create(FetchWebPage));
+        return tools;
     }
 }
