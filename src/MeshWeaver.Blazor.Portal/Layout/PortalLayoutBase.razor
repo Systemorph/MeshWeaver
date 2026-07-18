@@ -21,12 +21,14 @@
             <FluentAnchor Appearance="Appearance.Stealth" Href="/" Class="logo">
                 MESHWEAVER
             </FluentAnchor>
-            <FluentSpacer />
             <div class="links">
-                @* Edu — the course portal. Sits LEFT of the search; the search fills the rest. *@
-                <FluentAnchor Appearance="Appearance.Stealth" Href="/Courses" Class="edu-link"
-                              title="Edu — the course catalog" aria-label="Edu — the course catalog">
-                    <span class="edu-hat" aria-hidden="true">🎓</span> Edu
+                @* Store — the app store (plugins + courses). Sits right after the logo with
+                   modest padding — no spacer pushing the menu away from the logo; the search
+                   fills the rest. Anonymous-visible: the storefront is the public sales surface. *@
+                <FluentAnchor Appearance="Appearance.Stealth" Href="/Store" Class="store-link"
+                              title="Store — browse plugins and courses" aria-label="Store — browse plugins and courses">
+                    <FluentIcon Value="@(new Icons.Regular.Size20.BuildingShop())" Slot="start" />
+                    Store
                 </FluentAnchor>
                 <div class="search-container">
                     <SearchBar />

@@ -608,6 +608,9 @@ public static class MemexConfiguration
                 // a new Space, etc.). Empty / missing section = no-op.
                 .AddMeshNodes(Authentication.GlobalAdminSeed.Build(configuration))
                 .AddSpaceType()
+                // Generic webhook inbox: the WebhookEvent node type behind
+                // POST /api/hooks/{target} (allowlisted via WebhookInbox:Targets).
+                .AddWebhookInbox()
                 // Interactive courses: Course/Module/Exercise/ExerciseAttempt
                 // node types + the stream-update validation control plane.
                 .AddCourses()
@@ -1038,6 +1041,11 @@ public static class MemexConfiguration
         // distribution point; consumers pull the catalog + packages without their own git credentials
         // (only curated packages, addressed by plugin id, are exposed; the registry's credential stays here).
         app.MapPluginRegistry();
+
+        // Generic webhook inbox — POST /api/hooks/{target} stores the raw delivery as a
+        // WebhookEvent node at {target}/_Inbox/{id} for allowlisted targets (WebhookInbox:Targets).
+        // The consuming plugin verifies signatures itself; no integration-specific code here.
+        app.MapWebhookInbox();
 
         // Centralized speech-to-text — POST /api/speech/transcribe (multipart audio → text),
         // behind the same Bearer policy; forwards to the Whisper container via ISpeechTranscriber.

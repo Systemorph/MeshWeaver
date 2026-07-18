@@ -74,16 +74,38 @@ public static class DocumentationExtensions
                 typeof(DocumentationExtensions).Assembly,
                 "Content"));
 
-        // Also expose DocContent on every node hub: the static-repo content import handler runs on
-        // the OWNING node's hub and reads DocContent as the SOURCE collection when copying assets
-        // (e.g. the Unified Path page's @@content/logo.svg + sample.md) into the node's runtime
-        // "content" collection. Without this the node hub can't resolve DocContent. See
-        // StaticRepoImport.md + DocumentationStaticRepoSource.EnumerateContentImports.
-        builder.ConfigureDefaultNodeHub(config => config
-            .AddEmbeddedResourceContentCollection(
-                "DocContent",
-                typeof(DocumentationExtensions).Assembly,
-                "Content"));
+        // Give every Doc-partition CHILD node hub a node-scoped, READ-ONLY "content" collection backed
+        // DIRECTLY by the shipped embedded assets under Content/<node-subpath>/. This is what makes a
+        // @@content/<file> embed on a doc page resolve — the Architecture diagrams
+        // (@@content/platform-overview.svg …), the Unified Path page's @@content/logo.svg + sample.md,
+        // and any future page asset.
+        //
+        // Why the DIRECT embedded collection and not the old import copy: the portal maps a WRITABLE
+        // "content" collection ONLY on partition ROOTS (content lives once per Space; children inherit
+        // via ExposeInChildren — MemexConfiguration gates on !nodePath.Contains('/')). A CHILD doc node
+        // like Doc/DataMesh/UnifiedPath therefore never had a "content" collection at all, so the
+        // import's collection→collection copy had nowhere to land and every @@content/ embed on a doc
+        // page rendered "Area/Collection not found". Mapping the node's own Content/ subfolder as its
+        // read-only "content" here fixes them uniformly — no import copy, no writable storage, works
+        // offline. AddContentCollections() (idempotent) also guarantees the $Content layout area +
+        // content service are on the hub regardless of how the node is served (DB-synced or embedded).
+        builder.ConfigureDefaultNodeHub(config =>
+        {
+            var prefix = DocumentationNodeProvider.RootNamespace + "/"; // "Doc/"
+            var address = config.Address.ToString();
+            if (!address.StartsWith(prefix, StringComparison.Ordinal))
+                return config;
+            // Node sub-path within the partition → embedded-resource prefix segment (dots, not slashes):
+            // Doc/DataMesh/UnifiedPath → "Content.DataMesh.UnifiedPath", i.e. the node's own Content/
+            // subfolder. Nodes without a Content/ subfolder just get an empty collection (never queried).
+            var subPath = address[prefix.Length..].Replace('/', '.');
+            return config
+                .AddContentCollections()
+                .AddEmbeddedResourceContentCollection(
+                    ContentCollectionsExtensions.DefaultCollectionName,
+                    typeof(DocumentationExtensions).Assembly,
+                    $"Content.{subPath}");
+        });
 
         // Doc namespace caps: read-only docs (no Create/Update/Delete) but
         // discussion + commenting allowed. Previously lived on the legacy

@@ -33,20 +33,12 @@ public sealed class DocumentationStaticRepoSource(IServiceProvider serviceProvid
         DocumentationNodeProvider.LoadIndexableNodes(
             serviceProvider.GetRequiredService<IMessageHub>().JsonSerializerOptions);
 
-    /// <inheritdoc />
-    // The Unified Path page embeds @@content/logo.svg + @@content/sample.md. Those assets ship in
-    // the embedded DocContent collection (Content/DataMesh/UnifiedPath/*); after the node upsert the
-    // import copies that folder's direct-child files into the node's runtime "content" collection so
-    // the embeds render on a fresh deploy.
-    public IReadOnlyList<StaticContentImport> EnumerateContentImports() =>
-    [
-        new StaticContentImport(
-            NodePath: $"{Partition}/DataMesh/UnifiedPath",
-            SourceCollection: "DocContent",
-            SourcePath: "DataMesh/UnifiedPath",
-            TargetCollection: MeshWeaver.ContentCollections.ContentCollectionsExtensions.DefaultCollectionName,
-            TargetPath: ""),
-    ];
+    // NOTE: no EnumerateContentImports override. The @@content/<file> embeds on doc pages (the
+    // Architecture diagrams, the Unified Path page's logo.svg + sample.md) are served directly from
+    // the shipped embedded assets: DocumentationExtensions maps each Doc node's own Content/ subfolder
+    // as its read-only "content" collection. The old import copy targeted a per-CHILD-node writable
+    // "content" collection that the portal never provisions (content lives once per Space root), so it
+    // could never land — see DocumentationExtensions.AddDocumentation.
 
     /// <inheritdoc />
     // The /Doc landing page — a proper Space root with a curated welcome inviting the reader to

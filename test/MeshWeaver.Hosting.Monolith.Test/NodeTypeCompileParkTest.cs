@@ -2,8 +2,10 @@ using System;
 using System.Linq;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using MeshWeaver.AI;
 using MeshWeaver.Data;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
@@ -117,6 +119,194 @@ public class NodeTypeCompileParkTest(ITestOutputHelper output) : MonolithMeshTes
         await client.Observe<PingResponse>(new PingRequest(), o => o.WithTarget(new Address(healthyPath)))
             .Should().Within(30.Seconds()).Emit();
         Output.WriteLine("Healthy node answered Ping — the mesh is not wedged.");
+    }
+
+    private const string BrokenConfiguration = "config => this is not valid C# at all ((await (";
+    private const string ValidConfiguration = "config => config.AddDefaultLayoutAreas()";
+
+    /// <summary>
+    /// 🅿️ RETRY through the REAL tool surface un-parks. A parked type whose source has been
+    /// FIXED must recompile to Ok when retried via the MCP <c>compile</c> tool
+    /// (<see cref="MeshOperations.Compile"/>). The tool routes the trigger through the
+    /// RELEASE-REQUEST seam (RequestedReleaseAt + Force) — the single un-park trigger — never
+    /// a direct CompilationStatus=Pending flip, which the compile watcher's parked
+    /// short-circuit would swallow. Regression for the 2026-07-16 memex incident
+    /// (Reinsurance/Layer + BusinessRules/Scope wedged at Pending after one failed compile;
+    /// compile/recycle/delete+recreate all failed to heal — only a pod restart did).
+    /// </summary>
+    [Fact(Timeout = 180_000)]
+    public async Task ParkedNodeType_CompileToolRetry_AfterFix_SettlesOkAndUnparks()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var workspace = Mesh.GetWorkspace();
+        var parkRegistry = Mesh.ServiceProvider.GetRequiredService<NodeTypeCompileParkRegistry>();
+        const string typePath = $"{Partition}/CompileRetry";
+
+        await CreateBrokenTypeAndAwaitParkAsync("CompileRetry");
+
+        // FIX the source of the failure (the Configuration lambda). Editing alone must NOT
+        // un-park — only a deliberate retry does.
+        await workspace.GetMeshNodeStream(typePath).Update(curr =>
+        {
+            if (curr?.Content is not NodeTypeDefinition def) return curr!;
+            return curr with { Content = def with { Configuration = ValidConfiguration } };
+        }).Should().Within(30.Seconds()).Emit();
+        parkRegistry.IsParked(typePath).Should().BeTrue(
+            "editing the source alone must not un-park — only a deliberate retry does");
+
+        // RETRY via the REAL tool surface — the exact call that wedged on memex.
+        var resultJson = await new MeshOperations(Mesh).Compile(typePath)
+            .FirstAsync().Timeout(150.Seconds()).ToTask(ct);
+        Output.WriteLine($"Compile tool returned: {resultJson}");
+
+        using (var result = JsonDocument.Parse(resultJson))
+            result.RootElement.GetProperty("status").GetString().Should().Be("Ok",
+                "a deliberate compile retry of a parked type with fixed source must run a REAL compile and succeed");
+
+        parkRegistry.IsParked(typePath).Should().BeFalse(
+            "the deliberate retry must have un-parked the type");
+        await workspace.GetMeshNodeStream(typePath)
+            .Should().Within(30.Seconds())
+            .Match(n => n?.Content is NodeTypeDefinition d
+                && d.CompilationStatus == CompilationStatus.Ok);
+    }
+
+    /// <summary>
+    /// 🅿️ The recycle-path twin of the compile-tool retry: <see cref="MeshOperations.Recycle"/>
+    /// on a parked type with fixed source stamps the release request (surviving the hub bounce
+    /// on the node itself), so the reactivated hub's release watcher un-parks and drives a
+    /// fresh compile to Ok. Before the fix, recycle flipped CompilationStatus=Pending directly
+    /// — the park lives in the mesh-scoped registry, not the hub, so the bounced hub's watcher
+    /// swallowed the flip and the type stayed wedged at Pending.
+    /// </summary>
+    [Fact(Timeout = 180_000)]
+    public async Task ParkedNodeType_RecycleRetry_AfterFix_SettlesOkAndUnparks()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var workspace = Mesh.GetWorkspace();
+        var parkRegistry = Mesh.ServiceProvider.GetRequiredService<NodeTypeCompileParkRegistry>();
+        const string typePath = $"{Partition}/RecycleRetry";
+
+        await CreateBrokenTypeAndAwaitParkAsync("RecycleRetry");
+
+        await workspace.GetMeshNodeStream(typePath).Update(curr =>
+        {
+            if (curr?.Content is not NodeTypeDefinition def) return curr!;
+            return curr with { Content = def with { Configuration = ValidConfiguration } };
+        }).Should().Within(30.Seconds()).Emit();
+
+        var recycleJson = await new MeshOperations(Mesh).Recycle(typePath)
+            .FirstAsync().Timeout(60.Seconds()).ToTask(ct);
+        Output.WriteLine($"Recycle tool returned: {recycleJson}");
+        using (var result = JsonDocument.Parse(recycleJson))
+            result.RootElement.GetProperty("status").GetString().Should().Be("Recycled");
+
+        await workspace.GetMeshNodeStream(typePath)
+            .Should().Within(90.Seconds())
+            .Match(n => n?.Content is NodeTypeDefinition d
+                && d.CompilationStatus == CompilationStatus.Ok);
+        parkRegistry.IsParked(typePath).Should().BeFalse(
+            "the recycle's release request must have un-parked the type");
+    }
+
+    /// <summary>
+    /// 🅿️ Wedge-close for the parked short-circuit: a STRAY direct CompilationStatus=Pending
+    /// flip on a parked type (NOT a release request — no un-park) must NOT leave the type
+    /// stuck at Pending forever. The compile watcher declines to dispatch Roslyn (containment
+    /// holds — no recompile) but re-settles the status to Error with the CACHED parked error,
+    /// so every settle-waiter (get_diagnostics, the compile tool, WaitForLatestRelease) gets
+    /// an answer instead of hanging to its timeout.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task ParkedNodeType_StrayPendingFlip_ResettlesToError_AndStaysParked()
+    {
+        var workspace = Mesh.GetWorkspace();
+        var parkRegistry = Mesh.ServiceProvider.GetRequiredService<NodeTypeCompileParkRegistry>();
+        const string typePath = $"{Partition}/StrayFlip";
+
+        await CreateBrokenTypeAndAwaitParkAsync("StrayFlip");
+        var attemptsBefore = parkRegistry.GetCompileAttemptCount(typePath);
+
+        // A stray direct Pending flip. The Description marker is written in the SAME update so
+        // the assertion below can distinguish the POST-flip re-settled Error from the replayed
+        // PRE-flip Error frames (which carry the same status + error text but not the marker).
+        const string marker = "stray-flip-discriminator";
+        await workspace.GetMeshNodeStream(typePath).Update(curr =>
+        {
+            if (curr?.Content is not NodeTypeDefinition def) return curr!;
+            return curr with
+            {
+                Content = def with
+                {
+                    CompilationStatus = CompilationStatus.Pending,
+                    Description = marker
+                }
+            };
+        }).Should().Within(30.Seconds()).Emit();
+
+        // The stray trigger must be ANSWERED: re-settled to Error (with the cached parked
+        // error), never left hanging at Pending.
+        await workspace.GetMeshNodeStream(typePath)
+            .Should().Within(30.Seconds())
+            .Match(n => n?.Content is NodeTypeDefinition d
+                && d.Description == marker
+                && d.CompilationStatus == CompilationStatus.Error
+                && !string.IsNullOrEmpty(d.CompilationError));
+
+        parkRegistry.IsParked(typePath).Should().BeTrue(
+            "a stray Pending flip is not a deliberate retry — the park must hold");
+        parkRegistry.GetCompileAttemptCount(typePath).Should().Be(attemptsBefore,
+            "the parked short-circuit must answer the stray trigger WITHOUT re-running Roslyn");
+    }
+
+    /// <summary>
+    /// 🅿️ Deleting a NodeType clears its parked compile failure: the park registry is keyed
+    /// by PATH in a mesh-scoped singleton that outlives the node, so without the delete-time
+    /// un-park a delete+recreate at the same path started PARKED — the fresh type's first
+    /// compile trigger fell into the parked short-circuit and the recreated type never
+    /// compiled (part of the 2026-07-16 memex incident: delete+recreate did not heal).
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task DeletedNodeType_ClearsParkedFailure()
+    {
+        var parkRegistry = Mesh.ServiceProvider.GetRequiredService<NodeTypeCompileParkRegistry>();
+        const string typePath = $"{Partition}/DeletePark";
+
+        await CreateBrokenTypeAndAwaitParkAsync("DeletePark");
+
+        await NodeFactory.DeleteNode(typePath).Should().Within(30.Seconds()).Emit();
+
+        parkRegistry.IsParked(typePath).Should().BeFalse(
+            "deleting a NodeType must clear its parked compile failure so a recreate at the same path starts clean");
+    }
+
+    /// <summary>
+    /// Creates a NodeType with a deliberately non-compiling Configuration at
+    /// <c>{Partition}/{id}</c>, waits for the first-build compile to settle at Error and
+    /// asserts the type is parked (deterministic source errors park on the FIRST failure).
+    /// </summary>
+    private async Task CreateBrokenTypeAndAwaitParkAsync(string id)
+    {
+        var typePath = $"{Partition}/{id}";
+        await NodeFactory.CreateNode(new MeshNode(id, Partition)
+        {
+            Name = id,
+            NodeType = MeshNode.NodeTypePath,
+            Content = new NodeTypeDefinition
+            {
+                Description = "Deliberately non-compiling NodeType (park retry tests).",
+                Configuration = BrokenConfiguration
+            }
+        }).Should().Emit();
+
+        await Mesh.GetWorkspace().GetMeshNodeStream(typePath)
+            .Should().Within(90.Seconds())
+            .Match(n => n.Content is NodeTypeDefinition d
+                && d.CompilationStatus == CompilationStatus.Error);
+        Mesh.ServiceProvider.GetRequiredService<NodeTypeCompileParkRegistry>()
+            .IsParked(typePath).Should().BeTrue(
+                "a deterministic compile error must park the type");
+        Output.WriteLine($"{typePath} settled at Error and is parked.");
     }
 
     /// <summary>
