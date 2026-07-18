@@ -107,7 +107,7 @@ public sealed class OpenAICompatibleModelSync : IHostedService, IDisposable
         // nodes with SupportsTools=null (assume supported) → the round would send tools to a tool-less
         // local model (Mythalion → HTTP 400). The backfill probes each configured model and stamps its
         // KNOWN capability. So an endpoint alone is enough to activate this service.
-        var discover = configuration.GetValue("OpenAICompatible:DiscoverModels", false);
+        var discover = GetBool(configuration, "OpenAICompatible:DiscoverModels", false);
         var apiKey = configuration["OpenAICompatible:ApiKey"] ?? string.Empty;
         var embeddingModel = configuration["Embedding:Model"];
         // The statically-configured model ids (OpenAICompatible:Models[]) — what the boot seeder laid
@@ -115,9 +115,9 @@ public sealed class OpenAICompatibleModelSync : IHostedService, IDisposable
         var configuredModels = configuration.GetSection("OpenAICompatible:Models").Get<string[]>()
             ?? Array.Empty<string>();
         var initialDelay = TimeSpan.FromSeconds(
-            Math.Max(0, configuration.GetValue("OpenAICompatible:DiscoverInitialDelaySeconds", 20)));
+            Math.Max(0, GetInt(configuration, "OpenAICompatible:DiscoverInitialDelaySeconds", 20)));
         var period = TimeSpan.FromSeconds(
-            Math.Max(15, configuration.GetValue("OpenAICompatible:DiscoverIntervalSeconds", 120)));
+            Math.Max(15, GetInt(configuration, "OpenAICompatible:DiscoverIntervalSeconds", 120)));
 
         // 🚨 Defer EVERY mesh-cache touch (the catalog query AND the reconcile/backfill) until initialDelay
         // past startup, off any hub thread. StartAsync runs during host startup, when the Orleans stream
@@ -399,6 +399,26 @@ public sealed class OpenAICompatibleModelSync : IHostedService, IDisposable
     {
         var idx = id.IndexOf(':');
         return idx < 0 ? id : id[..idx];
+    }
+
+    // 🚨 Typed config reads must treat an EMPTY/whitespace value as ABSENT, not as a present-but-unparseable
+    // value. The Helm ConfigMap renders every allow-listed key even when unset, emitting an empty string
+    // (`OpenAICompatible__DiscoverModels: ""`). The framework's GetValue<bool>/<int> THROWS on "" before its
+    // own default applies, which kills host startup (issue #352). Reading the raw string and TryParse-ing it
+    // honours the "inert unless explicitly set" contract regardless of how the deployment surface renders an
+    // unset key — and protects every future non-string key from re-arming the same trap.
+    internal static bool GetBool(IConfiguration configuration, string key, bool defaultValue)
+    {
+        var raw = configuration[key];
+        return string.IsNullOrWhiteSpace(raw) ? defaultValue
+            : bool.TryParse(raw, out var v) ? v : defaultValue;
+    }
+
+    internal static int GetInt(IConfiguration configuration, string key, int defaultValue)
+    {
+        var raw = configuration[key];
+        return string.IsNullOrWhiteSpace(raw) ? defaultValue
+            : int.TryParse(raw, out var v) ? v : defaultValue;
     }
 
     // Construct AND subscribe under the system identity (no ambient AccessContext in a hosted service).
