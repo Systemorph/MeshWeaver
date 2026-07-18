@@ -28,14 +28,26 @@ public class LayoutAreaPathParseTest
     [InlineData("area/Search", "Search", null)]
     [InlineData("area/Dashboard/id1", "Dashboard", "id1")]
     [InlineData("area", null, null)]                       // bare verb → default area
+    // 🐛→✅ issue #502: the COLON keyword form must resolve IDENTICALLY to the slash form. The Space
+    // WelcomeMarkdown template shipped `@@("area:Search")`; the mount re-resolution (PathBasedLayoutArea)
+    // ran the resolver remainder "area:Search" through here — and the pre-fix code, which split only on
+    // '/', took the WHOLE "area:Search" as the area name → a non-existent area that renders BLANK (the
+    // "Contents catalog no longer renders" regression). The colon form now normalises to the slash form.
+    [InlineData("area:Search", "Search", null)]
+    [InlineData("area:Dashboard/id1", "Dashboard", "id1")]
     // 🐛→✅ data/schema/model map to the canonical framework $-areas.
     [InlineData("data/Organization", "$Data", "Organization")]
     [InlineData("data/Type/id1", "$Data", "Type/id1")]
     [InlineData("schema/MyType", "$Schema", "MyType")]
     [InlineData("model", "$Model", null)]
+    // The colon keyword form maps to the same $-areas as the slash form.
+    [InlineData("data:Organization", "$Data", "Organization")]
+    [InlineData("data:Type/id1", "$Data", "Type/id1")]
+    [InlineData("schema:MyType", "$Schema", "MyType")]
     // "content" is NOT a hardcoded area — content collections are configured and resolved by
     // name downstream, so the first segment is kept as written (not translated to "$Content").
     [InlineData("content/logo.svg", "content", "logo.svg")]
+    [InlineData("content:logo.svg", "content", "logo.svg")]
     public void ParseAreaAndId_MapsKeywordsAndBareNames(string? remainder, string? expectedArea, string? expectedId)
     {
         var (area, id) = LayoutAreaMarkdownParser.ParseAreaAndId(remainder);
@@ -49,6 +61,9 @@ public class LayoutAreaPathParseTest
     [InlineData("area/Search?q=laptop", "Search", "?q=laptop")]
     [InlineData("area/Catalog/id1?groupBy=ns", "Catalog", "id1?groupBy=ns")]
     [InlineData("data/Type?x=1", "$Data", "Type?x=1")]
+    // The colon keyword form carries the query string identically — this is the tuned catalog embed
+    // `@@("area:Search?groupBy=…")` the Space template documents.
+    [InlineData("area:Search?groupBy=type", "Search", "?groupBy=type")]
     public void ParseAreaAndId_CarriesQueryStringIntoId(string remainder, string expectedArea, string expectedId)
     {
         var (area, id) = LayoutAreaMarkdownParser.ParseAreaAndId(remainder);

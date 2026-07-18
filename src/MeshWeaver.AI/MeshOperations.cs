@@ -17,6 +17,7 @@ using MeshWeaver.Layout;
 using MeshWeaver.Domain;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
+using MeshWeaver.Graph.Security;
 using MeshWeaver.Mesh;
 using MeshWeaver.Kernel;
 using MeshWeaver.Mesh.Security;
@@ -282,6 +283,12 @@ public class MeshOperations
     /// </summary>
     private IObservable<string> ReadNodeOrUnified(string resolvedPath)
     {
+        // Capture the caller identity synchronously: the AccessContext AsyncLocal is cleared
+        // across .Subscribe hops, so read it now (Get runs under the caller's context) and thread
+        // it into the reactive chain for the User-PII read projection below.
+        var accessService = hub.ServiceProvider.GetService<AccessService>();
+        var caller = accessService?.Context ?? accessService?.CircuitContext;
+
         // Single-node content read via GetDataRequest + MeshNodeReference + RegisterCallback.
         // See Doc/Architecture/CqrsAndContentAccess.md — queries are for sets only.
         return TryResolveUnifiedPath(resolvedPath)
@@ -305,12 +312,16 @@ public class MeshOperations
                         return unifiedError is not null
                             ? Observable.Return(unifiedError)
                             : GetWithBrokenNodeTypeFallback(resolvedPath);
-                    return LookupCompilationError(node)
-                        .Select(compileError => compileError != null
-                            ? JsonSerializer.Serialize(
-                                new { node, compilationError = compileError },
-                                hub.JsonSerializerOptions)
-                            : JsonSerializer.Serialize(node, hub.JsonSerializerOptions));
+                    // Redact PII (email) on a User node for a reader who is neither the subject
+                    // nor a global admin — the User node is world-readable, so its content reaches
+                    // every authenticated caller (issue #471). Non-User nodes pass through unchanged.
+                    return UserPiiRedaction.RedactEmailForReader(hub, node, caller)
+                        .SelectMany(readable => LookupCompilationError(readable)
+                            .Select(compileError => compileError != null
+                                ? JsonSerializer.Serialize(
+                                    new { node = readable, compilationError = compileError },
+                                    hub.JsonSerializerOptions)
+                                : JsonSerializer.Serialize(readable, hub.JsonSerializerOptions)));
                 });
             })
             .Catch((Exception ex) =>

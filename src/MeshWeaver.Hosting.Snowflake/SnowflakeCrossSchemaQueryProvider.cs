@@ -59,7 +59,7 @@ public class SnowflakeCrossSchemaQueryProvider : ICrossSchemaQueryProvider
     private int _syncInFlight;
 
     /// <summary>
-    /// Minimum interval between actual <see cref="SyncSearchableSchemasAsync"/>
+    /// Minimum interval between actual <see cref="SyncSearchableSchemasAsync(bool, CancellationToken)"/>
     /// runs. Calls within the window are no-ops. Internal setter for tests
     /// to force re-sync without waiting.
     /// </summary>
@@ -129,18 +129,26 @@ public class SnowflakeCrossSchemaQueryProvider : ICrossSchemaQueryProvider
     /// <see cref="Interlocked"/> single-flight gate (no semaphore — see the field
     /// comment for the incident this prevents).
     /// </summary>
-    public async Task SyncSearchableSchemasAsync(CancellationToken ct = default)
+    public Task SyncSearchableSchemasAsync(CancellationToken ct = default)
+        => SyncSearchableSchemasAsync(force: false, ct);
+
+    /// <inheritdoc />
+    public async Task SyncSearchableSchemasAsync(bool force, CancellationToken ct = default)
     {
         // Fast path: another sync ran within SyncTtl — skip. New partitions
         // created in that window are invisible until the next sync, which is
-        // an acceptable trade for not melting the connection pool.
+        // an acceptable trade for not melting the connection pool. force=true
+        // (the one-time boot self-heal) bypasses the TTL so a schema this boot's
+        // import just provisioned is registered immediately, not up to SyncTtl later.
         var lastTicks = Interlocked.Read(ref _lastSyncTicks);
-        if (lastTicks != 0 && DateTime.UtcNow.Ticks - lastTicks < SyncTtl.Ticks)
+        if (!force && lastTicks != 0 && DateTime.UtcNow.Ticks - lastTicks < SyncTtl.Ticks)
             return;
 
         // Single-flight: only one sync runs at a time. Concurrent callers
         // (every cross-schema fan-out calls this) return immediately rather
-        // than queuing on the central-schema connection.
+        // than queuing on the central-schema connection. Honoured even under
+        // force — force bypasses the TIME throttle, never the DELETE+INSERT
+        // mutual-exclusion; a concurrent sync already rebuilds the registry.
         if (Interlocked.CompareExchange(ref _syncInFlight, 1, 0) != 0)
             return;
 
@@ -149,7 +157,7 @@ public class SnowflakeCrossSchemaQueryProvider : ICrossSchemaQueryProvider
             // Re-check under the flight gate: another caller may have just
             // finished while we were CAS-ing.
             lastTicks = Interlocked.Read(ref _lastSyncTicks);
-            if (lastTicks != 0 && DateTime.UtcNow.Ticks - lastTicks < SyncTtl.Ticks)
+            if (!force && lastTicks != 0 && DateTime.UtcNow.Ticks - lastTicks < SyncTtl.Ticks)
                 return;
 
             await using var connection = await _source.OpenAsync(ct).ConfigureAwait(false);
@@ -286,7 +294,7 @@ public class SnowflakeCrossSchemaQueryProvider : ICrossSchemaQueryProvider
     /// of <paramref name="schemas"/> containing <paramref name="tableName"/>. PG binds the
     /// schema list as <c>= ANY($2)</c>; this dialect has no array binds, so the list expands
     /// to an IN-list of individual <c>:sN</c> markers. information_schema identifiers are
-    /// deliberately UNQUOTED (see <see cref="SyncSearchableSchemasAsync"/> for why).
+    /// deliberately UNQUOTED (see <see cref="SyncSearchableSchemasAsync(bool, CancellationToken)"/> for why).
     /// </summary>
     private async Task<IReadOnlyList<string>> FilterSchemasContainingTableAsync(
         IReadOnlyList<string> schemas, string tableName, CancellationToken ct)

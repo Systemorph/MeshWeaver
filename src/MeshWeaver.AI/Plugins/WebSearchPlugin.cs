@@ -4,6 +4,8 @@ using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Text;
 using System.Text.Json;
+using System.Xml;
+using System.Xml.Linq;
 using HtmlAgilityPack;
 using MeshWeaver.Mesh.Threading;
 using Microsoft.Extensions.AI;
@@ -177,7 +179,8 @@ public class WebSearchPlugin : IAgentPlugin
             {
                 using var request = new HttpRequestMessage(HttpMethod.Get, url);
                 request.Headers.Add("User-Agent", "MeshWeaver/1.0");
-                request.Headers.Add("Accept", "text/html,application/xhtml+xml,text/plain");
+                request.Headers.Add("Accept",
+                    "text/html,application/xhtml+xml,application/rss+xml,application/atom+xml,application/xml,text/plain");
 
                 using var response = await httpClient.SendAsync(request, ct);
                 response.EnsureSuccessStatusCode();
@@ -185,8 +188,15 @@ public class WebSearchPlugin : IAgentPlugin
                 var contentType = response.Content.Headers.ContentType?.MediaType ?? "";
                 var content = await response.Content.ReadAsStringAsync(ct);
 
-                // Extract text from HTML
-                if (contentType.Contains("html", StringComparison.OrdinalIgnoreCase) ||
+                // An RSS/Atom feed must be parsed as a feed BEFORE the HTML branch: running it
+                // through ExtractTextFromHtml strips all element structure, collapsing every
+                // item's title/link/description into one blob and losing the title↔link pairing
+                // (issue #485). Only genuine HTML falls through to the HTML text-extractor.
+                if (IsFeedContent(contentType, content))
+                {
+                    content = ExtractFeedItems(content);
+                }
+                else if (contentType.Contains("html", StringComparison.OrdinalIgnoreCase) ||
                     content.TrimStart().StartsWith("<", StringComparison.Ordinal))
                 {
                     content = ExtractTextFromHtml(content);
@@ -244,6 +254,109 @@ public class WebSearchPlugin : IAgentPlugin
         if (isBlock && sb.Length > 0 && sb[^1] != '\n')
             sb.AppendLine();
     }
+
+    /// <summary>
+    /// Decides whether fetched content is an RSS/Atom/XML feed that must be parsed as a feed
+    /// rather than run through the HTML text-extractor. Recognizes feeds by media type
+    /// (<c>application/rss+xml</c>, <c>application/atom+xml</c>, <c>application/xml</c>,
+    /// <c>text/xml</c>) or, when the content-type is generic/absent, by an XML/feed body prefix.
+    /// XHTML (media type ends in <c>+xml</c> but is HTML) is deliberately excluded.
+    /// </summary>
+    private static bool IsFeedContent(string contentType, string content)
+    {
+        // XHTML is HTML, not a feed, even though its media type ends in "+xml".
+        if (contentType.Contains("html", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        if (contentType.Contains("rss", StringComparison.OrdinalIgnoreCase) ||
+            contentType.Contains("atom", StringComparison.OrdinalIgnoreCase) ||
+            contentType.Contains("xml", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        // Content-type is generic (text/plain, octet-stream) or missing — sniff the body prefix.
+        var trimmed = content.AsSpan().TrimStart();
+        return trimmed.StartsWith("<?xml") || trimmed.StartsWith("<rss") ||
+               trimmed.StartsWith("<feed") || trimmed.StartsWith("<rdf:RDF");
+    }
+
+    /// <summary>
+    /// Parses an RSS 2.0 / RSS 1.0 (RDF) / Atom feed into a compact JSON list of items so each
+    /// item's <c>title</c>, <c>link</c>, <c>description</c> and <c>pubDate</c> survive as a unit
+    /// (the HTML text-extractor would flatten them into a single blob and lose the title↔link
+    /// pairing — issue #485). Falls back to the raw XML when the document is not well-formed
+    /// or is valid XML but not a recognizable feed (e.g. a sitemap), which still preserves more
+    /// structure than the HTML text-extractor would.
+    /// </summary>
+    internal static string ExtractFeedItems(string xml)
+    {
+        XDocument doc;
+        try
+        {
+            doc = XDocument.Parse(xml);
+        }
+        catch (XmlException)
+        {
+            // Detected as XML by content-type but not well-formed — return the raw content
+            // rather than destroying it through the HTML text-extractor.
+            return xml;
+        }
+
+        var root = doc.Root;
+        if (root is null)
+            return xml;
+
+        var items = ImmutableList<FeedItem>.Empty;
+
+        // RSS 2.0 (<rss><channel><item>) and RSS 1.0/RDF (<item> under root) — RSS is
+        // typically namespace-less, so match by local name to be namespace-robust.
+        foreach (var item in root.Descendants().Where(e => e.Name.LocalName == "item"))
+            items = items.Add(ReadRssItem(item));
+
+        // Atom (<feed><entry>).
+        foreach (var entry in root.Descendants().Where(e => e.Name.LocalName == "entry"))
+            items = items.Add(ReadAtomEntry(entry));
+
+        if (items.Count == 0)
+            // Valid XML but no feed items — hand back the raw XML so structure is preserved.
+            return xml;
+
+        return JsonSerializer.Serialize(items,
+            new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
+    }
+
+    private static FeedItem ReadRssItem(XElement item) => new(
+        Title: GetChildText(item, "title"),
+        Link: GetChildText(item, "link"),
+        Description: GetChildText(item, "description"),
+        PubDate: GetChildText(item, "pubDate"));
+
+    private static FeedItem ReadAtomEntry(XElement entry)
+    {
+        // Atom <link> is an element carrying the URL in its href attribute; there can be
+        // several (alternate/self/enclosure). Prefer rel="alternate", then a rel-less link,
+        // then whatever link is present.
+        var links = entry.Elements().Where(e => e.Name.LocalName == "link").ToImmutableList();
+        var link = links.FirstOrDefault(l => (string?)l.Attribute("rel") == "alternate")
+                   ?? links.FirstOrDefault(l => l.Attribute("rel") is null)
+                   ?? links.FirstOrDefault();
+        var href = link?.Attribute("href")?.Value?.Trim();
+
+        return new FeedItem(
+            Title: GetChildText(entry, "title"),
+            Link: string.IsNullOrEmpty(href) ? null : href,
+            Description: GetChildText(entry, "summary") ?? GetChildText(entry, "content"),
+            PubDate: GetChildText(entry, "updated") ?? GetChildText(entry, "published"));
+    }
+
+    private static string? GetChildText(XElement parent, string localName)
+    {
+        var element = parent.Elements().FirstOrDefault(e => e.Name.LocalName == localName);
+        var value = element?.Value.Trim();
+        return string.IsNullOrEmpty(value) ? null : value;
+    }
+
+    /// <summary>A single parsed feed item; serialized to camelCase JSON for the agent.</summary>
+    private sealed record FeedItem(string? Title, string? Link, string? Description, string? PubDate);
 
     /// <summary>
     /// Builds the <c>AITool</c> set this plugin exposes to agents. <c>FetchWebPage</c> is always

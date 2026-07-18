@@ -1,0 +1,74 @@
+@using System.Text.Json
+@using MeshWeaver.Mesh
+@using MeshWeaver.Mesh.Security
+@using MeshWeaver.Messaging
+@using Microsoft.Extensions.Logging
+@using Microsoft.JSInterop
+@implements IDisposable
+@inject IMessageHub Hub
+@inject AccessService AccessService
+@inject IJSRuntime JSRuntime
+@inject ILogger<TimeZoneDetector> Logger
+
+@* Renders nothing — a one-shot, invisible circuit-init hook that populates the signed-in
+   user's display time zone from the browser exactly once (write-once). Mounted inside the
+   portal shell's authenticated region so it only runs for a real signed-in user. *@
+
+@code {
+    // Guards the one-shot: the browser read + write-once runs on the FIRST render only, never
+    // on a hot render path.
+    private bool _attempted;
+    private IDisposable? _writeSubscription;
+
+    /// <summary>
+    /// On first render, reads the browser's IANA zone via
+    /// <c>Intl.DateTimeFormat().resolvedOptions().timeZone</c> and — if the signed-in user's
+    /// <see cref="User.TimeZoneId"/> is still empty — writes it once to their profile. The
+    /// write-once guard (<see cref="TimeZonePreference"/>) never overwrites an existing value,
+    /// so a manual override or an earlier session's value is preserved.
+    /// </summary>
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender || _attempted)
+            return;
+        _attempted = true;
+
+        // The resolved per-circuit identity (partition key == user node path, post-v10 root).
+        // CircuitContext falls back to the persistent per-circuit value, so it survives the JS
+        // await below even though the AsyncLocal doesn't flow across the interop hop.
+        var ctx = AccessService.CircuitContext;
+        var userPath = ctx?.ObjectId;
+        if (ctx is null || ctx.IsVirtual || string.IsNullOrEmpty(userPath)
+            || AccessService.LooksLikeHubPrincipal(userPath))
+            return;
+
+        string? detected;
+        try
+        {
+            // Browser capability read — the sanctioned DOM-side async carve-out. One-shot;
+            // eval is already used by the portal shell (window.dispatchEvent) so it is CSP-allowed.
+            detected = await JSRuntime.InvokeAsync<string?>(
+                "eval", "Intl.DateTimeFormat().resolvedOptions().timeZone");
+        }
+        catch (Exception ex) when (ex is OperationCanceledException or JSDisconnectedException)
+        {
+            return; // Circuit went away mid-detection — nothing to do.
+        }
+
+        if (string.IsNullOrWhiteSpace(detected))
+            return;
+
+        // Reactive write-once against the live node stream (never await; carries the caller's
+        // identity). Errors (e.g. the node not yet readable) are logged at Debug — this is a
+        // best-effort default, not a hard requirement of the page render.
+        _writeSubscription = TimeZonePreference
+            .PopulateOnce(Hub, userPath, detected, Hub.JsonSerializerOptions)
+            .Subscribe(
+                _ => Logger.LogInformation(
+                    "Auto-populated display time zone {Zone} for {UserPath}", detected, userPath),
+                ex => Logger.LogDebug(
+                    ex, "Time-zone auto-detect skipped for {UserPath}", userPath));
+    }
+
+    public void Dispose() => _writeSubscription?.Dispose();
+}
