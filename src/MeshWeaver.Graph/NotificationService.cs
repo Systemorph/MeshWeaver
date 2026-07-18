@@ -79,7 +79,7 @@ public static class NotificationService
     /// <list type="bullet">
     ///   <item><b>In-app</b> → creates the bell <see cref="Notification"/> satellite (as
     ///     <see cref="CreateNotification"/> does).</item>
-    ///   <item><b>Email</b> → sends via <see cref="HubEmailExtensions.SendEmail"/> to the recipient's
+    ///   <item><b>Email</b> → sends via <see cref="HubEmailExtensions.SendEmail(MeshWeaver.Messaging.IMessageHub,string,string,string)"/> to the recipient's
     ///     <see cref="Mesh.Security.User.Email"/>, UNLESS the recipient authored AI routing rules
     ///     (<see cref="NotificationRule"/>) — then the advanced <c>NotificationTriageService</c> owns
     ///     escalation and we skip the deterministic email to avoid double-sending.</item>
