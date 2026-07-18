@@ -59,6 +59,17 @@ export {
 } from "./render/embeddedArea.js";
 export { getPointer, setPointer, mergePatch, resolve, bindingPointer } from "./area/pointer.js";
 export type { AreaSource, AreaTree, UiControl, Skin, NamedArea, MeshEvent, Json } from "./area/types.js";
+// Area-error classification — the TS twin of the server AreaErrorClassifier. Shells use these to make
+// the SAME access-denied / redirect / node-gone decisions the Blazor NamedAreaView makes.
+export {
+  classifyAreaError,
+  getAccessDeniedPath,
+  isAccessDenied,
+  isNodeGone,
+  isSafeRedirect,
+  type AreaErrorInfo,
+  type AreaErrorKind,
+} from "./area/accessError.js";
 // Field/option binding + string coercion — shared by ALL leaf packs (the RN pack used to
 // re-implement these because they weren't exported from the core).
 export { str, useClick, useField, useOptions, useText, type Field } from "./controls/common.js";

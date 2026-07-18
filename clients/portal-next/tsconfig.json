@@ -17,6 +17,7 @@
     "baseUrl": ".",
     "paths": {
       "@meshweaver/react/wire": ["../react/src/live/wire.ts"],
+      "@meshweaver/react/accessError": ["../react/src/area/accessError.ts"],
       "@meshweaver/react/styles": ["../react/src/render/meshStyles.ts"],
       "@meshweaver/react/core": ["../react/src/core.ts"],
       "@meshweaver/react": ["../react/src/index.tsx"],

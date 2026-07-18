@@ -64,8 +64,9 @@ describe("server-side rendering", () => {
       Promise.resolve(new Response(JSON.stringify(wireFrame), { status: 200 })),
     ) as unknown as typeof fetch;
     try {
-      const tree = await fetchRenderedArea("https://portal.example", "mw_abc", "ACME/Pricing");
-      expect(tree).not.toBeNull();
+      const rendered = await fetchRenderedArea("https://portal.example", "mw_abc", "ACME/Pricing");
+      expect(rendered.kind).toBe("ok");
+      const tree = rendered.kind === "ok" ? rendered.tree : null;
 
       // Seed StaticAreaSource straight from the fetched frame — NO translation — and SSR it
       // through the real registry, rooted at the same "" key the live subscription uses.

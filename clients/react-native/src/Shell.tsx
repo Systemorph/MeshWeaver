@@ -16,6 +16,7 @@
 import { useEffect, useState, useSyncExternalStore, type ReactNode } from "react";
 import { View, Text, TextInput, Pressable, ScrollView, StyleSheet, useWindowDimensions } from "react-native";
 import { RenderArea, type AreaSource, type AreaTree } from "@meshweaver/react/core";
+import { areaErrorMessage } from "./areaError";
 import { type NavTarget } from "./nav";
 import { CLIENT_MENUS, ClientScreen, type ClientDestination } from "./screens";
 import { loadInstances, currentInstance, setCurrentInstance, instanceIdentity, type InstanceIdentity } from "./connection";
@@ -45,6 +46,13 @@ interface MenuItem {
 
 function useTree(source: AreaSource): AreaTree {
   return useSyncExternalStore(source.subscribe, source.getState, source.getState);
+}
+
+/** The live source's error string, reactively (set when the area subscription faults / ends before a
+ *  snapshot). Lets the shell surface a denied/gone area instead of a silent blank pane. */
+function useAreaError(source: AreaSource): string | null {
+  const read = () => source.error ?? null;
+  return useSyncExternalStore(source.subscribe, read, read);
 }
 
 function menuItems(tree: AreaTree, key: string): MenuItem[] {
@@ -334,6 +342,11 @@ function NavRow({ label, active, onPress }: { label: string; active: boolean; on
 // ── main content ────────────────────────────────────────────────────────────────
 function ContentPane({ source, nav, onNavigate }: { source: AreaSource; nav: NavTarget; onNavigate: (t: NavTarget) => void }): ReactNode {
   const styles = useSheet();
+  const tree = useTree(source);
+  const error = useAreaError(source);
+  // The requested area faulted (access denied / node gone / transient) AND delivered no content:
+  // show a classified notice instead of the silent blank column RenderArea would otherwise render.
+  const showError = error != null && tree.areas?.[nav.area] == null;
   const onClickCapture = (e: any) => {
     const anchor = e?.target?.closest?.("a");
     if (!anchor) return;
@@ -347,9 +360,24 @@ function ContentPane({ source, nav, onNavigate }: { source: AreaSource; nav: Nav
     <View style={styles.content}>
       <ScrollView style={styles.contentScroll} contentContainerStyle={styles.contentInner}>
         <View style={styles.contentColumn} {...({ onClick: onClickCapture } as any)}>
-          <RenderArea areaKey={nav.area} />
+          {showError ? <AreaErrorNotice message={error!} /> : <RenderArea areaKey={nav.area} />}
         </View>
       </ScrollView>
+    </View>
+  );
+}
+
+/** A friendly, classified notice for an area-subscription fault — the RN twin of the Blazor
+ *  NamedAreaView placeholder: a denial / gone node gets a human message, never the raw
+ *  framework diagnostic (a mobile client has no login/redirect flow, so it just informs). */
+function AreaErrorNotice({ message }: { message: string }): ReactNode {
+  const text = areaErrorMessage(message);
+  return (
+    <View
+      accessibilityRole="alert"
+      style={{ padding: 16, marginVertical: 16, borderRadius: 8, backgroundColor: "rgba(127,127,127,0.12)" }}
+    >
+      <Text style={{ fontSize: 15, lineHeight: 22 }}>{text}</Text>
     </View>
   );
 }
