@@ -4,6 +4,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Blazor.Components;
 
@@ -61,7 +62,22 @@ public partial class MeshNodeThumbnailView
                 if (!string.IsNullOrEmpty(img)) ImageUrl = img;
                 InvokeAsync(StateHasChanged);
             },
-            ex => SurfaceError(ex, $"Loading thumbnail for {NodePath}")));
+            ex =>
+            {
+                // #434: a subject the viewer cannot read (a peer's user partition — DENIED BY
+                // DESIGN) is a benign, expected state, NOT an error. Keep the seeded title /
+                // description and render the initials-avatar fallback; log at Debug and do NOT
+                // raise an error toast. Only a genuine infrastructure fault surfaces (once) via
+                // SurfaceError — the classifier draws the line.
+                if (!MeshNodeThumbnailControl.ShouldSurfaceStreamError(ex))
+                {
+                    Logger.LogDebug(ex,
+                        "Thumbnail subject {NodePath} is not readable by the viewer (access-denied) — rendering fallback card",
+                        NodePath);
+                    return;
+                }
+                SurfaceError(ex, $"Loading thumbnail for {NodePath}");
+            }));
     }
 
     private void Navigate()

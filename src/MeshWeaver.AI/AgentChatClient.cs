@@ -859,6 +859,24 @@ public class AgentChatClient : IAgentChat
 
         currentAgentName = agent.Name;
 
+        // 🪙 Stamp the resolved model id onto EVERY outgoing update. currentModelName is the
+        // model that ACTUALLY runs this round — resolved by ApplyStaleModelFallback during agent
+        // creation (for a delegation sub-thread, whose RoundParams.ModelName is null, that resolves
+        // to the DEFAULT model). ThreadExecution reads update.ModelId into `actualModel` and records
+        // token usage under `actualModel ?? request.ModelName`. The MeshWeaver path never set ModelId
+        // before, so a sub-thread (null request.ModelName) fell to the "(unknown)" key → priced at $0
+        // and invisible in per-model roll-ups (#369). A top-level thread survived only because its
+        // request.ModelName is non-null; stamping the resolved id here fixes the sub-thread AND keeps
+        // top-level rounds keyed by the same resolved id (ModelPricing.Default last-segments a path,
+        // so both the bare id and a picker path still price). Prefer an id the inner provider already
+        // reported (e.g. a CLI harness resolving "sonnet" → a concrete id); otherwise stamp ours.
+        ChatResponseUpdate Emit(ChatResponseUpdate update)
+        {
+            if (string.IsNullOrEmpty(update.ModelId) && !string.IsNullOrEmpty(currentModelName))
+                update.ModelId = currentModelName;
+            return update;
+        }
+
         // Get or create thread for this agent
         var thread = await GetOrCreateThreadAsync(agent).ConfigureAwait(false);
 
@@ -991,10 +1009,10 @@ public class AgentChatClient : IAgentChat
                             currentAgentName, functionCall.Name);
 
                         // Yield the function call content so the UI can display it properly
-                        yield return new ChatResponseUpdate(ChatRole.Assistant, [content])
+                        yield return Emit(new ChatResponseUpdate(ChatRole.Assistant, [content])
                         {
                             AuthorName = currentAgentName ?? "Assistant"
-                        };
+                        });
                     }
                     else if (content is FunctionResultContent functionResult)
                     {
@@ -1007,19 +1025,19 @@ public class AgentChatClient : IAgentChat
                             currentAgentName, functionResult.CallId);
 
                         // Yield the result so ThreadExecution can track completed tool calls
-                        yield return new ChatResponseUpdate(ChatRole.Assistant, [content])
+                        yield return Emit(new ChatResponseUpdate(ChatRole.Assistant, [content])
                         {
                             AuthorName = currentAgentName ?? "Assistant"
-                        };
+                        });
                     }
                     else if (content is UsageContent)
                     {
                         // Forward token-usage content so ThreadExecution can record
                         // InputTokens / OutputTokens / TotalTokens on the response cell.
-                        yield return new ChatResponseUpdate(ChatRole.Assistant, [content])
+                        yield return Emit(new ChatResponseUpdate(ChatRole.Assistant, [content])
                         {
                             AuthorName = currentAgentName ?? "Assistant"
-                        };
+                        });
                     }
                 }
             }
@@ -1027,10 +1045,10 @@ public class AgentChatClient : IAgentChat
             // Convert from agent updates to chat response updates - only yield if there's text
             if (!string.IsNullOrEmpty(update.Text))
             {
-                yield return new ChatResponseUpdate(ChatRole.Assistant, update.Text)
+                yield return Emit(new ChatResponseUpdate(ChatRole.Assistant, update.Text)
                 {
                     AuthorName = currentAgentName ?? "Assistant"
-                };
+                });
             }
         }
 
@@ -1041,10 +1059,10 @@ public class AgentChatClient : IAgentChat
         while (!queuedLayoutAreaContent.IsEmpty)
         {
             queuedLayoutAreaContent = queuedLayoutAreaContent.Dequeue(out var layoutAreaContent);
-            yield return new ChatResponseUpdate(ChatRole.Assistant, [layoutAreaContent])
+            yield return Emit(new ChatResponseUpdate(ChatRole.Assistant, [layoutAreaContent])
             {
                 AuthorName = currentAgentName ?? "Assistant"
-            };
+            });
         }
 
         // Handle handoff: target agent takes over the shared thread (streaming)
@@ -1054,19 +1072,19 @@ public class AgentChatClient : IAgentChat
             pendingHandoff = null;
 
             // Emit handoff content for UI
-            yield return new ChatResponseUpdate(ChatRole.Assistant, [
+            yield return Emit(new ChatResponseUpdate(ChatRole.Assistant, [
                 new ChatHandoffContent(handoff.SourceAgentName, handoff.TargetAgentName, handoff.Message)
             ])
             {
                 AuthorName = handoff.SourceAgentName
-            };
+            });
 
             // Resolve target agent
             var targetId = handoff.TargetAgentName.Split('/').Last();
             if (!agents.TryGetValue(targetId, out var targetAgent))
             {
                 logger.LogWarning("Handoff target agent '{TargetAgent}' not found", handoff.TargetAgentName);
-                yield return new ChatResponseUpdate(ChatRole.Assistant, $"Handoff failed: agent '{handoff.TargetAgentName}' not found.");
+                yield return Emit(new ChatResponseUpdate(ChatRole.Assistant, $"Handoff failed: agent '{handoff.TargetAgentName}' not found."));
                 break;
             }
 
@@ -1088,10 +1106,10 @@ public class AgentChatClient : IAgentChat
                         {
                             logger.LogInformation("Agent {AgentName} calling tool: {FunctionName}",
                                 currentAgentName, functionCall.Name);
-                            yield return new ChatResponseUpdate(ChatRole.Assistant, [content])
+                            yield return Emit(new ChatResponseUpdate(ChatRole.Assistant, [content])
                             {
                                 AuthorName = currentAgentName ?? "Assistant"
-                            };
+                            });
                         }
                         else if (content is FunctionResultContent functionResult)
                         {
@@ -1102,27 +1120,27 @@ public class AgentChatClient : IAgentChat
                             // call with no result. Forward results too.
                             logger.LogInformation("Agent {AgentName} received result from tool: {CallId}",
                                 currentAgentName, functionResult.CallId);
-                            yield return new ChatResponseUpdate(ChatRole.Assistant, [content])
+                            yield return Emit(new ChatResponseUpdate(ChatRole.Assistant, [content])
                             {
                                 AuthorName = currentAgentName ?? "Assistant"
-                            };
+                            });
                         }
                         else if (content is UsageContent)
                         {
-                            yield return new ChatResponseUpdate(ChatRole.Assistant, [content])
+                            yield return Emit(new ChatResponseUpdate(ChatRole.Assistant, [content])
                             {
                                 AuthorName = currentAgentName ?? "Assistant"
-                            };
+                            });
                         }
                     }
                 }
 
                 if (!string.IsNullOrEmpty(update.Text))
                 {
-                    yield return new ChatResponseUpdate(ChatRole.Assistant, update.Text)
+                    yield return Emit(new ChatResponseUpdate(ChatRole.Assistant, update.Text)
                     {
                         AuthorName = currentAgentName ?? "Assistant"
-                    };
+                    });
                 }
             }
 
@@ -1132,10 +1150,10 @@ public class AgentChatClient : IAgentChat
             while (!queuedLayoutAreaContent.IsEmpty)
             {
                 queuedLayoutAreaContent = queuedLayoutAreaContent.Dequeue(out var lac);
-                yield return new ChatResponseUpdate(ChatRole.Assistant, [lac])
+                yield return Emit(new ChatResponseUpdate(ChatRole.Assistant, [lac])
                 {
                     AuthorName = currentAgentName ?? "Assistant"
-                };
+                });
             }
             // Loop continues if target agent also requested a handoff (chained handoffs)
         }
