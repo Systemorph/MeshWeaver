@@ -12,10 +12,14 @@ namespace Memex.Portal.Shared.Email;
 public sealed class NoOpEmailSender(ILogger<NoOpEmailSender>? logger = null) : IEmailSender
 {
     public IObservable<bool> SendEmail(string toAddress, string subject, string htmlBody)
+        => SendEmail(toAddress, subject, htmlBody, []);
+
+    public IObservable<bool> SendEmail(
+        string toAddress, string subject, string htmlBody, IReadOnlyCollection<EmailAttachment> attachments)
     {
         logger?.LogInformation(
-            "Email disabled (Email:Enabled=false) — skipping send to {To} (subject: {Subject})",
-            toAddress, subject);
+            "Email disabled (Email:Enabled=false) — skipping send to {To} (subject: {Subject}, attachments: {Attachments})",
+            toAddress, subject, attachments.Count);
         return Observable.Return(true);
     }
 }
