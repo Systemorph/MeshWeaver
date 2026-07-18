@@ -152,6 +152,16 @@ data:
   Anthropic__Order: "{{ .Values.config.memex_portal.Anthropic__Order | default "0" }}"
   AzureAIS__Endpoint: "{{ .Values.config.memex_portal.AzureAIS__Endpoint | default "" }}"
   AzureAIS__Order: "{{ .Values.config.memex_portal.AzureAIS__Order | default "0" }}"
+  # ---- Agent web search (WebSearchPlugin) — optional --------------------------
+  # SearchWeb is advertised to agents ONLY when a provider is configured; with these empty the
+  # tool is not offered at all (agents fall back to FetchWebPage on explicit URLs). The
+  # deployment supplies the Google Programmable Search credentials (API key + Search-Engine id /
+  # cx) — get them from the Google Cloud console + programmablesearchengine.google.com. Provider
+  # defaults to auto-detect ("" → Google when key+cx are set); set "Google" to force. Bing
+  # (WebSearch:Provider=Bing) is retired (API shut down 2025-08-11) and kept only for back-compat.
+  WebSearch__Provider: "{{ .Values.config.memex_portal.WebSearch__Provider | default "" }}"
+  WebSearch__Google__ApiKey: "{{ .Values.config.memex_portal.WebSearch__Google__ApiKey | default "" }}"
+  WebSearch__Google__Cx: "{{ .Values.config.memex_portal.WebSearch__Google__Cx | default "" }}"
   # ---- Observability (OTLP collector) — optional ----------------------------
   OTEL_EXPORTER_OTLP_ENDPOINT: "{{ .Values.config.memex_portal.OTEL_EXPORTER_OTLP_ENDPOINT | default "" }}"
   OTEL_EXPORTER_OTLP_PROTOCOL: "{{ .Values.config.memex_portal.OTEL_EXPORTER_OTLP_PROTOCOL | default "" }}"
