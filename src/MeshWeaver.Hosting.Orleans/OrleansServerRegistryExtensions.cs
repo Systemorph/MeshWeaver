@@ -122,12 +122,16 @@ public static class OrleansServerRegistryExtensions
         // of the actual cause (a compilation failure). See issue #464, Defect 3.
         services.TryAddSingleton<GrainActivationFailureRegistry>();
 
-        // Register Orleans-distributed change feed (wraps local feed + Orleans streams)
+        // Register Orleans-distributed change feed (wraps local feed + Orleans streams).
+        // 🚨 The factory captures the ROOT IServiceProvider (sp), never IMessageHub — the feed is
+        // constructed from Workspace..ctor mid-hub-build, and resolving IMessageHub there re-enters
+        // BuildHub → new Workspace → IMeshChangeFeed → factory → … and stack-overflows. See
+        // OrleansMeshChangeFeed's ctor doc. The cluster client / IoPool are resolved lazily from sp.
         services.TryAddSingleton<InProcessMeshChangeFeed>();
         services.TryAddSingleton<IMeshChangeFeed>(sp =>
             new OrleansMeshChangeFeed(
                 sp.GetRequiredService<InProcessMeshChangeFeed>(),
-                sp.GetRequiredService<IMessageHub>(),
+                sp,
                 sp.GetService<ILoggerFactory>()?.CreateLogger<OrleansMeshChangeFeed>()));
 
         services.AddMeshCatalog();
