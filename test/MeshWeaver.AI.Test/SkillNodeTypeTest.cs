@@ -29,7 +29,7 @@ public class SkillNodeTypeTest
 
         var skills = nodes.Where(n => n.NodeType == SkillNodeType.NodeType).ToList();
         skills.Should().OnlyContain(n => n.Namespace == SkillNodeType.RootNamespace);
-        skills.Select(n => n.Id).OrderBy(x => x).Should().Equal("access", "agent", "clear", "code", "create-group", "feedback", "harness", "layout-area", "markdown", "maui", "model", "navigate", "presentation", "provider-keys", "pull-request", "slide", "space");
+        skills.Select(n => n.Id).OrderBy(x => x).Should().Equal("access", "agent", "clear", "code", "feedback", "group", "harness", "layout-area", "markdown", "maui", "model", "navigate", "presentation", "provider-keys", "pull-request", "slide", "space");
 
         var def = (SkillDefinition)skills.Single(n => n.Id == "model").Content!;
         def.Action!.Kind.Should().Be(SkillActionKind.Pick);

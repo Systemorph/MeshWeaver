@@ -4,7 +4,8 @@
     <NoWarn>$(NoWarn);NU1608</NoWarn>
   </PropertyGroup>
   <ItemGroup>
-    <PackageVersion Include="AngleSharp" Version="1.4.0" />
+    <!-- AngleSharp pinned to override transitive 1.4.0 (mXSS via the annotation-xml integration point, GHSA-pgww-w46g-26qg — fixed in 1.5.0). Pulled transitively: MeshWeaver.Markdown → EPS.Extensions.YamlMarkdown → Html2Markdown → AngleSharp. -->
+    <PackageVersion Include="AngleSharp" Version="1.5.0" />
     <PackageVersion Include="Appium.WebDriver" Version="8.3.0" />
     <PackageVersion Include="AspectCore.Extensions.Reflection" Version="2.4.0" />
     <!-- Open-source (MIT) MAUI UI libraries for the native view pack's rich controls (Phase 4+):
