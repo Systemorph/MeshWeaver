@@ -277,6 +277,14 @@
     <FluentToastProvider MaxToastCount="10" />
     <FluentKeyCodeProvider />
 
+    @* One-shot, invisible: auto-populate the signed-in user's display time zone from the
+       browser on first sign-in (write-once — never overwrites an existing/overridden value). *@
+    <AuthorizeView>
+        <Authorized>
+            <TimeZoneDetector />
+        </Authorized>
+    </AuthorizeView>
+
     @* Main content area — splitter always rendered to preserve side panel component state.
        When closed, inline styles collapse the second pane to zero. *@
     <FluentMultiSplitter Orientation="@(SidePanelPositionValue == SidePanelPosition.Bottom ? Orientation.Vertical : Orientation.Horizontal)"
