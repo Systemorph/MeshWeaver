@@ -218,6 +218,9 @@ The node's `path` is derived as `{namespace}/{id}`, or simply `{id}` for root-le
 
 - **`name` must be a clear, descriptive title** — not just the first few words of the content body.
 - **`icon` should be an inline SVG** — a small, clean 24×24 image that visually represents the node's purpose. Use simple shapes and colours that match the content theme.
+- **🚨 `content` field names must match the registered type EXACTLY — unknown fields are silently dropped.** Deserialization ignores members it doesn't recognise (no error), so a mistyped or invented field name produces a node that reports created successfully but renders **without values** in every typed view — far harder to notice than a failure. Where the content is polymorphic, include the `$type` discriminator the schema shows. Two habits prevent it:
+  - **Copy a real node as a form template.** Before creating instances of a type you have not written before, `Get` one existing node of that type and mirror its `content` structure — exact field names, reference-field shapes, and any `$type` — rather than guessing from the schema alone.
+  - **Read back after a batch.** After creating a batch, `Get` one node per type and confirm the `$type`, the reference fields, and the value fields actually persisted. (Do **not** verify through `Search` immediately — the index is eventually consistent and can return zero right after a write; `Get` the exact path instead.)
 
 ### Discovering the content schema
 
