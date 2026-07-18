@@ -173,6 +173,13 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
             ? "sync_behavior"
             : "0 AS sync_behavior";
 
+    // Authorship columns exist only on mesh_nodes; satellite selects emit typed NULLs so
+    // ReadMeshNode finds the columns by name either way (like SyncBehaviorCol).
+    private static string AuthorCols(string qualifiedTable) =>
+        qualifiedTable.Contains("mesh_nodes", StringComparison.OrdinalIgnoreCase)
+            ? "created_by, last_modified_by, created_date"
+            : "NULL::text AS created_by, NULL::text AS last_modified_by, NULL::timestamptz AS created_date";
+
     private static string NormalizePath(string? path) =>
         path?.Trim('/') ?? "";
 
@@ -220,7 +227,7 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
         {
             await using var cmd = _dataSource.CreateCommand(
                 $"SELECT id, namespace, name, description, node_type, category, icon, display_order, " +
-                $"last_modified, version, state, content, desired_id, main_node, {SyncBehaviorCol(table)} " +
+                $"last_modified, version, state, content, desired_id, main_node, {SyncBehaviorCol(table)}, {AuthorCols(table)} " +
                 $"FROM {table} WHERE namespace = $1 AND id = $2");
             cmd.Parameters.AddWithValue(ns);
             cmd.Parameters.AddWithValue(id);
@@ -299,7 +306,7 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
                 Enumerable.Range(2, ids.Length).Select(i => $"${i}"));
             await using var cmd = _dataSource.CreateCommand(
                 $"SELECT id, namespace, name, description, node_type, category, icon, display_order, " +
-                $"last_modified, version, state, content, desired_id, main_node, {SyncBehaviorCol(table)} " +
+                $"last_modified, version, state, content, desired_id, main_node, {SyncBehaviorCol(table)}, {AuthorCols(table)} " +
                 $"FROM {table} WHERE namespace = $1 AND id IN ({placeholders})");
             cmd.Parameters.AddWithValue(ns);
             foreach (var id in ids)
@@ -353,11 +360,17 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
         var syncInsertCol = writeSync ? ", sync_behavior" : "";
         var syncInsertVal = writeSync ? ", $16" : "";
         var syncUpdate = writeSync ? ",\n                sync_behavior = EXCLUDED.sync_behavior" : "";
+        // Authorship columns live only on mesh_nodes (like sync_behavior). created_by /
+        // created_date are IMMUTABLE — set once at INSERT, never in the ON CONFLICT SET —
+        // so an update preserves the original creator; only last_modified_by is refreshed.
+        var authorInsertCol = writeSync ? ", created_by, last_modified_by, created_date" : "";
+        var authorInsertVal = writeSync ? ", $17, $18, $19" : "";
+        var authorUpdate = writeSync ? ",\n                last_modified_by = EXCLUDED.last_modified_by" : "";
         await using var cmd = _dataSource.CreateCommand(
             $"""
             INSERT INTO {table} (namespace, id, name, description, node_type, category, icon, display_order,
-                                    last_modified, version, state, content, desired_id, embedding, main_node{syncInsertCol})
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13, $14, $15{syncInsertVal})
+                                    last_modified, version, state, content, desired_id, embedding, main_node{syncInsertCol}{authorInsertCol})
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13, $14, $15{syncInsertVal}{authorInsertVal})
             ON CONFLICT (namespace, id) DO UPDATE SET
                 name = EXCLUDED.name,
                 description = EXCLUDED.description,
@@ -371,7 +384,7 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
                 content = EXCLUDED.content,
                 desired_id = EXCLUDED.desired_id,
                 embedding = EXCLUDED.embedding,
-                main_node = EXCLUDED.main_node{syncUpdate}
+                main_node = EXCLUDED.main_node{syncUpdate}{authorUpdate}
             """);
 
         cmd.Parameters.AddWithValue(ns);
@@ -395,9 +408,14 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
 
         cmd.Parameters.AddWithValue(node.MainNode);
 
-        // $16 — only bound when the target is mesh_nodes (see writeSync above).
+        // $16–$19 — only bound when the target is mesh_nodes (see writeSync above).
         if (writeSync)
+        {
             cmd.Parameters.AddWithValue((short)node.SyncBehavior);
+            cmd.Parameters.AddWithValue((object?)node.CreatedBy ?? DBNull.Value);
+            cmd.Parameters.AddWithValue((object?)node.LastModifiedBy ?? DBNull.Value);
+            cmd.Parameters.AddWithValue(node.CreatedDate == default ? DBNull.Value : node.CreatedDate);
+        }
 
         await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
     }
@@ -508,7 +526,7 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
         var table = ResolveTable(normalizedPath);
         await using var cmd = _dataSource.CreateCommand(
             $"SELECT id, namespace, name, description, node_type, category, icon, display_order, " +
-            $"last_modified, version, state, content, desired_id, main_node, {SyncBehaviorCol(table)} " +
+            $"last_modified, version, state, content, desired_id, main_node, {SyncBehaviorCol(table)}, {AuthorCols(table)} " +
             $"FROM {table} WHERE $1 = path OR $1 LIKE path || '/%' " +
             $"ORDER BY LENGTH(path) DESC LIMIT 1");
         cmd.Parameters.AddWithValue(normalizedPath);
@@ -568,7 +586,7 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
                 : $"\"{_schemaName}\".\"{t}\"";
             unionBranches.Add(
                 $"SELECT id, namespace, name, description, node_type, category, icon, display_order, " +
-                $"last_modified, version, state, content, desired_id, main_node, {SyncBehaviorCol(qualified)} " +
+                $"last_modified, version, state, content, desired_id, main_node, {SyncBehaviorCol(qualified)}, {AuthorCols(qualified)} " +
                 $"FROM {qualified} " +
                 $"WHERE $1 = path OR $1 LIKE path || '/%'");
         }
@@ -1330,6 +1348,9 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
             Icon = reader.IsDBNull(reader.GetOrdinal("icon")) ? null : reader.GetString(reader.GetOrdinal("icon")),
             Order = reader.IsDBNull(reader.GetOrdinal("display_order")) ? null : reader.GetInt32(reader.GetOrdinal("display_order")),
             LastModified = new DateTimeOffset(reader.GetDateTime(reader.GetOrdinal("last_modified")), TimeSpan.Zero),
+            CreatedBy = PgMeshNodeReader.ReadNullableString(reader, "created_by"),
+            LastModifiedBy = PgMeshNodeReader.ReadNullableString(reader, "last_modified_by"),
+            CreatedDate = PgMeshNodeReader.ReadNullableTimestamp(reader, "created_date") ?? default,
             Version = reader.GetInt64(reader.GetOrdinal("version")),
             State = (MeshNodeState)reader.GetInt16(reader.GetOrdinal("state")),
             SyncBehavior = PgMeshNodeReader.ReadSyncBehavior(reader),

@@ -28,4 +28,36 @@ internal static class PgMeshNodeReader
         }
         return SyncBehavior.Include;
     }
+
+    /// <summary>
+    /// Reads a nullable text column by name, or null when the column is absent from the
+    /// result set. Defensive (scan field names, not <c>GetOrdinal</c>) so SELECTs predating
+    /// the authorship columns keep working — used for <c>created_by</c> / <c>last_modified_by</c>.
+    /// </summary>
+    internal static string? ReadNullableString(NpgsqlDataReader reader, string column)
+    {
+        for (var i = 0; i < reader.FieldCount; i++)
+        {
+            if (!string.Equals(reader.GetName(i), column, StringComparison.Ordinal))
+                continue;
+            return reader.IsDBNull(i) ? null : reader.GetString(i);
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Reads a nullable timestamptz column by name as a UTC <see cref="DateTimeOffset"/>, or
+    /// null when absent/NULL. Used for <c>created_date</c>; mirrors how the adapter reads
+    /// <c>last_modified</c> (<c>new DateTimeOffset(GetDateTime(), TimeSpan.Zero)</c>).
+    /// </summary>
+    internal static DateTimeOffset? ReadNullableTimestamp(NpgsqlDataReader reader, string column)
+    {
+        for (var i = 0; i < reader.FieldCount; i++)
+        {
+            if (!string.Equals(reader.GetName(i), column, StringComparison.Ordinal))
+                continue;
+            return reader.IsDBNull(i) ? null : new DateTimeOffset(reader.GetDateTime(i), TimeSpan.Zero);
+        }
+        return null;
+    }
 }
