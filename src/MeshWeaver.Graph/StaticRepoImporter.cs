@@ -8,6 +8,7 @@ using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -88,7 +89,8 @@ public static class StaticRepoImporter
     /// </summary>
     public static IObservable<StaticRepoImportResult> ImportAll(
         IMessageHub hub, ILogger? logger = null,
-        IReadOnlyDictionary<string, PartitionSyncMode>? syncModeOverrides = null)
+        IReadOnlyDictionary<string, PartitionSyncMode>? syncModeOverrides = null,
+        IReadOnlySet<string>? indexedCatalogAssertions = null)
     {
         logger ??= hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.Graph.StaticRepoImporter");
@@ -153,7 +155,108 @@ public static class StaticRepoImporter
                         {
                             logger?.LogWarning(ex, "[StaticRepoImport] source-owned partition reconcile failed.");
                             return Observable.Return(new StaticRepoImportResult("_SourceOwnedCatalogs", string.Empty, "Failed"));
-                        }))));
+                        })))
+                // 🚨 #354 boot self-heal/assert: after every source has imported, verify each SERVED
+                // catalog partition the caller flagged (indexedCatalogAssertions ∩ this run's sources)
+                // is registered in the cross-schema search index (public.searchable_schemas) — force ONE
+                // re-sync so a schema just provisioned is indexed, and surface a startup-failure
+                // notification for any served catalog still absent (materialized but unindexed → index
+                // queries return empty forever). No-op on in-memory backends / when nothing is flagged.
+                .Concat(Observable.Defer(() =>
+                    AssertCatalogPartitionsIndexed(
+                        importHub, indexedCatalogAssertions, currentSourcePartitions, logger))));
+    }
+
+    /// <summary>
+    /// Boot-time self-heal/assert that each SERVED AI-catalog partition is registered in the
+    /// cross-schema search index (#354). The served set is <paramref name="candidateCatalogs"/> (the
+    /// caller's built-in AI catalog partitions) intersected with the partitions actually backed by a
+    /// registered <see cref="IStaticRepoSource"/> this run (<paramref name="currentSourcePartitions"/>)
+    /// — a catalog served in-memory (no source registered) is left ALONE, never forced into the DB.
+    ///
+    /// <para>For the served set: FORCE one <see cref="ICrossSchemaQueryProvider.SyncSearchableSchemasAsync(bool,System.Threading.CancellationToken)"/>
+    /// rebuild — bypassing the query-hot-path throttle, because this is a one-time boot action, never a
+    /// per-query rebuild — so a schema THIS boot's import provisioned is indexed immediately; then read
+    /// <see cref="ICrossSchemaQueryProvider.GetSearchableSchemasAsync"/> back. A served catalog still
+    /// ABSENT (its PG schema was never provisioned — the "materialized but unindexed" residual, where
+    /// index queries return 0 forever while exact-path <c>get</c> still works) is surfaced LOUDLY via
+    /// <see cref="NotifyStartupFailure"/>, so an already-broken instance is visible and self-repairs on
+    /// the next boot (which re-runs the import and re-forces this sync).</para>
+    ///
+    /// <para>No-op on in-memory backends (no <see cref="ICrossSchemaQueryProvider"/> is registered —
+    /// those serve catalogs directly and have no searchable-schemas registry) and when nothing is
+    /// flagged. The PG round-trips run on the <see cref="IIoPool"/>, off the subscribing thread;
+    /// reactive end-to-end — no <c>FromAsync</c>, no <c>await</c>.</para>
+    /// </summary>
+    private static IObservable<StaticRepoImportResult> AssertCatalogPartitionsIndexed(
+        IMessageHub hub, IReadOnlySet<string>? candidateCatalogs,
+        IReadOnlyCollection<string> currentSourcePartitions, ILogger? logger)
+    {
+        if (candidateCatalogs is not { Count: > 0 })
+            return Observable.Empty<StaticRepoImportResult>();
+
+        // Only the catalogs SERVED FROM THE DB this run (a registered source owns them). A catalog
+        // legitimately served in-memory (no source) is never forced into a PG schema.
+        var served = currentSourcePartitions
+            .Where(candidateCatalogs.Contains)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        if (served.Length == 0)
+            return Observable.Empty<StaticRepoImportResult>();
+
+        // The cross-schema search index exists only on partitioned SQL backends (Postgres/Snowflake).
+        // In-memory serves catalogs directly — nothing to index, nothing to assert.
+        var crossSchema = hub.ServiceProvider.GetService<ICrossSchemaQueryProvider>();
+        if (crossSchema is null)
+            return Observable.Empty<StaticRepoImportResult>();
+
+        var pool = hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.Query)
+                   ?? IoPool.Unbounded;
+
+        // Force ONE registry rebuild (bypass the throttle — boot self-heal, not the query hot path),
+        // then read the registry back to assert. Both are PG round-trips → bridged through the IoPool.
+        return pool.Invoke(ct => crossSchema.SyncSearchableSchemasAsync(force: true, ct))
+            .SelectMany(_ => pool.Invoke(ct => crossSchema.GetSearchableSchemasAsync(ct)))
+            .SelectMany(searchable =>
+            {
+                // searchable_schemas holds the LOWERCASED schema name; the catalog partition is the
+                // verbatim first segment — OrdinalIgnoreCase covers the case fold.
+                var indexed = new HashSet<string>(searchable, StringComparer.OrdinalIgnoreCase);
+                var missing = served.Where(p => !indexed.Contains(p)).ToArray();
+
+                foreach (var partition in missing)
+                {
+                    logger?.LogWarning(
+                        "[StaticRepoImport] served AI catalog partition '{Partition}' is NOT registered in "
+                        + "searchable_schemas after import — its index queries (search / children listing / "
+                        + "catalog areas) return EMPTY while exact-path reads still work (#354). Surfacing a "
+                        + "startup-failure notification; the next boot re-imports and re-forces the index sync.",
+                        partition);
+                    // The activity/notification target is the catalog partition root itself (click → the
+                    // empty catalog). Best-effort under System via the existing startup-failure path; if the
+                    // partition schema is genuinely absent the notification write logs and continues.
+                    NotifyStartupFailure(
+                        hub, partition, partition,
+                        $"AI catalog partition '{partition}' is served from the database but is not provisioned "
+                        + "into a searchable schema, so its catalog renders empty. The next restart re-imports "
+                        + "and re-indexes it.",
+                        logger);
+                }
+
+                if (missing.Length == 0)
+                    logger?.LogInformation(
+                        "[StaticRepoImport] catalog-index assert: all {Count} served AI catalog partition(s) "
+                        + "are registered in searchable_schemas.", served.Length);
+
+                return Observable.Return(new StaticRepoImportResult(
+                    "_CatalogIndexAssert", string.Empty,
+                    missing.Length > 0 ? "Unindexed" : "Indexed", missing.Length));
+            })
+            .Catch<StaticRepoImportResult, Exception>(ex =>
+            {
+                logger?.LogWarning(ex, "[StaticRepoImport] catalog-index assert failed (continuing).");
+                return Observable.Return(new StaticRepoImportResult("_CatalogIndexAssert", string.Empty, "Failed"));
+            });
     }
 
     /// <summary>Namespace under the Admin partition where one marker node per source-owned catalog
