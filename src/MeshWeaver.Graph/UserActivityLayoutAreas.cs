@@ -144,20 +144,31 @@ public static class UserActivityLayoutAreas
 
         var syncStream = host.Workspace.GetStream(new MeshNodeReference());
 
+        // Email is PII on the world-readable User node (issue #471): the visitor profile shows it
+        // ONLY to the subject or a global admin. The owner already sees their own home; every other
+        // viewer starts REDACTED (secure default) and the email is revealed only once global-admin
+        // is confirmed. IsGlobalAdmin rides the live AccessAssignment stream, so StartWith(false)
+        // renders immediately and DistinctUntilChanged drops the duplicate initial false.
+        var viewerId = capturedAccessContext?.ObjectId;
+        var canSeeEmail = isOwner || string.IsNullOrEmpty(viewerId) || capturedAccessContext?.IsVirtual == true
+            ? Observable.Return(isOwner)
+            : host.Hub.IsGlobalAdmin(viewerId).StartWith(false).DistinctUntilChanged();
+
         // The composer region (@@("area/Composer")) renders its ThreadChatControl INLINE — a pure
         // layout area with no backing node (see ComposerAreaView) — so the dashboard no longer has to
         // ensure-create a {owner}/Chat node before rendering. Nothing to gate on: bind straight to the
         // owner-node sync stream.
         return syncStream!
-            .Select(change =>
+            .CombineLatest(canSeeEmail, (change, showEmail) => (change, showEmail))
+            .Select(t =>
             {
-                var ownerNode = change.Value;
+                var ownerNode = t.change.Value;
                 var ownerName = ownerNode?.Name ?? nodeOwnerId;
 
                 if (isOwner)
                     return (UiControl?)BuildOwnerHome(nodePath, ownerName, ownerNode, host.Hub.JsonSerializerOptions);
                 else
-                    return (UiControl?)BuildVisitorProfile(nodePath, ownerName, ownerNode);
+                    return (UiControl?)BuildVisitorProfile(nodePath, ownerName, ownerNode, t.showEmail);
             })
             // The area must NEVER spin forever, but it must ALSO never tear itself down
             // while idle. Two distinct failure modes, ONE narrow guard:
@@ -651,9 +662,11 @@ public static class UserActivityLayoutAreas
 
     /// <summary>
     /// Public profile shown to visitors — UserProfileControl (rendered by Blazor)
-    /// with child nodes and recent activity below.
+    /// with child nodes and recent activity below. <paramref name="showEmail"/> gates the PII email
+    /// field: it is populated ONLY for the subject or a global admin (issue #471); every other
+    /// viewer sees the profile without the email.
     /// </summary>
-    private static UiControl BuildVisitorProfile(string nodePath, string ownerName, MeshNode? ownerNode)
+    private static UiControl BuildVisitorProfile(string nodePath, string ownerName, MeshNode? ownerNode, bool showEmail)
     {
         // Compute owner partition path (post-v10 each user has their own
         // partition; legacy /User/{userid}/... maps to {userid}/... content)
@@ -674,6 +687,10 @@ public static class UserActivityLayoutAreas
             if (je.TryGetProperty("Bio", out var bioProp) || je.TryGetProperty("bio", out bioProp))
                 bio = bioProp.GetString();
         }
+
+        // Redact the email unless the viewer is the subject or a global admin (issue #471).
+        if (!showEmail)
+            email = null;
 
         var profile = Controls.Stack
             .WithWidth("100%")
