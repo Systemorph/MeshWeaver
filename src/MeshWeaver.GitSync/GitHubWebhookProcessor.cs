@@ -234,9 +234,7 @@ public sealed class GitHubWebhookProcessor
     private IObservable<IReadOnlyList<PushTarget>> MatchingSyncTargets(string repoUrl, PushEvent push)
     {
         var target = ParseSafe(repoUrl);
-        return meshService
-            .Query<MeshNode>(MeshQueryRequest.FromQuery($"nodeType:{GitHubSyncService.ConfigNodeType}"))
-            .Take(1)
+        return QueryConfigNodesAsSystem()
             .Select(c => (IReadOnlyList<PushTarget>)c.Items
                 .Where(n => RepoMatches(n, target))
                 .Where(n => ConfigMatchesPush(
@@ -264,13 +262,28 @@ public sealed class GitHubWebhookProcessor
 
     // ── helpers ──────────────────────────────────────────────────────────────
 
+    /// <summary>
+    /// The full <c>GitHubSyncConfig</c> node set, queried under the SYSTEM identity. The webhook
+    /// HTTP request is anonymous — its authorization is the verified HMAC signature — and
+    /// <c>_GitSync</c> satellites are not anonymous-readable, so an ambient-identity query
+    /// silently matches nothing on an access-gated portal (the DevLogin test fallback masked
+    /// exactly this). Same identity model as the write path below.
+    /// </summary>
+    private IObservable<QueryResultChange<MeshNode>> QueryConfigNodesAsSystem()
+    {
+        var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
+        return Observable.Using(
+            () => accessService.ImpersonateAsSystem(),
+            _ => meshService
+                .Query<MeshNode>(MeshQueryRequest.FromQuery($"nodeType:{GitHubSyncService.ConfigNodeType}"))
+                .Take(1));
+    }
+
     /// <summary>The distinct Space paths whose GitHub sync config targets <paramref name="repoUrl"/>.</summary>
     private IObservable<IReadOnlyList<string>> MatchingSpaces(string repoUrl)
     {
         var target = ParseSafe(repoUrl);
-        return meshService
-            .Query<MeshNode>(MeshQueryRequest.FromQuery($"nodeType:{GitHubSyncService.ConfigNodeType}"))
-            .Take(1)
+        return QueryConfigNodesAsSystem()
             .Select(c => (IReadOnlyList<string>)c.Items
                 .Where(n => RepoMatches(n, target))
                 .Select(n => n.Path.Split('/', 2)[0])

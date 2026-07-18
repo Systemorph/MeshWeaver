@@ -1,5 +1,11 @@
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
+using MeshWeaver.Hosting.Monolith.TestBase;
+using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
+using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -209,21 +215,37 @@ public class GitHubWebhookProcessorTest(ITestOutputHelper output) : GitHubSyncTe
         await CreateSpace(b, "Push Target Space");
         await Sync.SaveConfig(b, repo, "main", null, true, true).Timeout(30.Seconds()).ToTask();
 
-        // A push on a DIFFERENT branch matches nothing.
-        var otherBranch = JsonDocument.Parse("""
-        { "ref": "refs/heads/develop", "size": 1,
-          "repository": { "full_name": "test/push-auto" },
-          "commits": [ { "added": ["Welcome.md"], "modified": [], "removed": [] } ] }
-        """).RootElement;
-        Assert.Equal(0, await Webhooks.Process("push", otherBranch).Timeout(60.Seconds()).ToTask());
+        // 🚨 The webhook HTTP request is ANONYMOUS (its authorization is the HMAC signature).
+        // Drop every ambient identity — the DevLogin persistent circuit fallback masked the
+        // prod defect where the config-node query ran as anonymous and matched NOTHING on an
+        // access-gated portal. The processor must impersonate System for its own lookups.
+        var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        accessService.ClearPersistentCircuitContext();
+        accessService.SetCircuitContext(null);
+        accessService.SetContext(null);
+        int triggered;
+        try
+        {
+            // A push on a DIFFERENT branch matches nothing.
+            var otherBranch = JsonDocument.Parse("""
+            { "ref": "refs/heads/develop", "size": 1,
+              "repository": { "full_name": "test/push-auto" },
+              "commits": [ { "added": ["Welcome.md"], "modified": [], "removed": [] } ] }
+            """).RootElement;
+            Assert.Equal(0, await Webhooks.Process("push", otherBranch).Timeout(60.Seconds()).ToTask());
 
-        // The main-branch push triggers the headless update for BOTH sync sources.
-        var payload = JsonDocument.Parse("""
-        { "ref": "refs/heads/main", "size": 1,
-          "repository": { "full_name": "test/push-auto" },
-          "commits": [ { "added": [], "modified": ["Welcome.md"], "removed": [] } ] }
-        """).RootElement;
-        var triggered = await Webhooks.Process("push", payload).Timeout(60.Seconds()).ToTask();
+            // The main-branch push triggers the headless update for BOTH sync sources.
+            var payload = JsonDocument.Parse("""
+            { "ref": "refs/heads/main", "size": 1,
+              "repository": { "full_name": "test/push-auto" },
+              "commits": [ { "added": [], "modified": ["Welcome.md"], "removed": [] } ] }
+            """).RootElement;
+            triggered = await Webhooks.Process("push", payload).Timeout(60.Seconds()).ToTask();
+        }
+        finally
+        {
+            accessService.SetCircuitContext(new AccessContext { ObjectId = UserId, Name = TestUsers.Admin.Name });
+        }
         Assert.Equal(2, triggered);
 
         // The import runs as a background activity — observe the node landing in Space B.
