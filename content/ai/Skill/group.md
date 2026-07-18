@@ -1,6 +1,6 @@
 ---
 nodeType: Skill
-name: /create-group
+name: /group
 description: Create an access-control Group and put people in it — the group node, granting the group access to a space (one AccessAssignment whose subject is the group), adding members who already exist, and inviting members who don't yet (an email invite that lands group membership the moment they sign in, via the durable AddToGroup event subscription). Covers placement (one partition), the exact node shapes, and verification.
 icon: People
 category: Skills
