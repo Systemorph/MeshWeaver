@@ -18,6 +18,14 @@
          where cancellation matters. NOT a code-quality suppression: xUnit1031 (blocking task ops →
          deadlock risk) is deliberately NOT here and is fixed at the source instead. -->
     <NoWarn>$(NoWarn);CS1591;CS1573;CS1712;xUnit1051</NoWarn>
+    <!-- NuGet transitive-dependency ADVISORY warnings (NU1901-NU1904) must not fail the test build
+         under -warnaserror. The ROOT Directory.Build.props already carries exactly this policy for src/,
+         but this test-tree props does NOT import the root (see the doc-completeness note above), so a
+         newly-published advisory on a transitive package (e.g. AngleSharp GHSA-pgww-w46g-26qg → NU1902)
+         turned green test builds RED for every test project at once while src/ stayed a warning. Mirror
+         the central src policy here so the test tree tracks it uniformly. Vulnerability handling
+         (bump/replace) is a deliberate dependency decision, not a per-build -warnaserror gate. -->
+    <WarningsNotAsErrors>NU1901;NU1902;NU1903;NU1904;$(WarningsNotAsErrors)</WarningsNotAsErrors>
     <!-- Required so the global <Using> items below (incl. MeshWeaver.Reactive.Assertions)
          are actually emitted. With ImplicitUsings disabled, <Using> is silently ignored,
          and Should()/Seconds() fail to resolve across every test file. -->
