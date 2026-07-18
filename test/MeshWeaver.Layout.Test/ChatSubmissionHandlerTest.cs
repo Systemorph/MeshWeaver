@@ -276,4 +276,68 @@ public class ChatSubmissionHandlerTest
         Assert.False(handler.TryBeginSubmit("Hello"));
         Assert.Equal(0, handler.SubmissionCount);
     }
+
+    /// <summary>
+    /// Regression for GitHub issue #380 ("the agent chat still requires refresh from time to time"):
+    /// ThreadChatView.SubmitMessageCore latches State = Submitting via TryBeginSubmit and only clears
+    /// it with the trailing ForceRelease on the happy path. Before the fix, any throw between those
+    /// two points left State latched at Submitting forever — IsInputEnabled stayed false, so the Send
+    /// button rendered as a dead "Sending…" spinner and every later TryBeginSubmit early-returned;
+    /// only a page refresh (a fresh handler) recovered. The BeginSubmitScope failsafe now guarantees
+    /// the release: disposing the scope while a submission is still in flight (exactly what the
+    /// compiler-generated `using` finally does during stack unwind) forces the handler back to Idle.
+    /// </summary>
+    [Fact]
+    public void SubmitScope_BodyThrowsAfterTryBeginSubmit_ReleasesToIdle()
+    {
+        var handler = new ChatSubmissionHandler();
+        var rethrown = false;
+
+        try
+        {
+            Assert.True(handler.TryBeginSubmit("Hello"));
+            Assert.Equal(SubmissionState.Submitting, handler.State);
+            Assert.False(handler.IsInputEnabled);
+
+            using (handler.BeginSubmitScope())
+            {
+                // Simulate a throw somewhere in the submit pipeline (ns computation, StartThread,
+                // JSON serialization, …) BEFORE the trailing ForceRelease would run.
+                throw new InvalidOperationException("simulated submit-pipeline failure");
+            }
+        }
+        catch (InvalidOperationException)
+        {
+            rethrown = true;
+        }
+
+        Assert.True(rethrown, "the failsafe scope must not swallow the exception — the caller still logs/surfaces it");
+        Assert.Equal(SubmissionState.Idle, handler.State);
+        Assert.True(handler.IsInputEnabled);
+
+        // And the composer is usable again immediately — no refresh needed.
+        Assert.True(handler.TryBeginSubmit("Another message"));
+    }
+
+    /// <summary>
+    /// Happy path: the caller releases (ForceRelease for Claude-Code-style queueing) BEFORE the
+    /// scope exits, so disposing the scope is a no-op and leaves the queueing state untouched.
+    /// </summary>
+    [Fact]
+    public void SubmitScope_ReleasedInsideScope_DisposeIsNoOp()
+    {
+        var handler = new ChatSubmissionHandler();
+
+        Assert.True(handler.TryBeginSubmit("Hello"));
+        using (handler.BeginSubmitScope())
+        {
+            // The submit body posts the message and force-releases so the input stays enabled
+            // for queueing while the round is processed server-side.
+            handler.ForceRelease();
+            Assert.Equal(SubmissionState.Idle, handler.State);
+        }
+
+        Assert.Equal(SubmissionState.Idle, handler.State);
+        Assert.True(handler.IsInputEnabled);
+    }
 }
