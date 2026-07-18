@@ -1,3 +1,5 @@
+using System.Collections.Generic;
+using System.Linq;
 using System.Reactive.Linq;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
@@ -26,30 +28,68 @@ public static class MarkdownOverviewLayoutArea
         var hubPath = host.Hub.Address.ToString();
         var permissionsStream = host.Hub.GetEffectivePermissions(hubPath);
 
+        // When rendered as an @@ embed, the inline reference carries ?hideHeader=true
+        // (set by LayoutAreaMarkdownRenderer) — suppress the header, comments and side menu.
+        var hideHeader = host.Reference.HasParameter("hideHeader")
+            && !string.Equals(host.Reference.GetParameterValue("hideHeader"), "false", System.StringComparison.OrdinalIgnoreCase);
+
         return host.Workspace.GetMeshNodeStream()
-            .CombineLatest(permissionsStream, (node, perms) =>
+            .CombineLatest(permissionsStream, host.ObserveChildren("is:main"), (node, perms, children) =>
             {
                 var canComment = perms.HasFlag(Permission.Comment) || perms.HasFlag(Permission.Update);
                 var canEdit = perms.HasFlag(Permission.Update);
-                return (UiControl?)BuildOverview(host, node, canComment, canEdit);
+                var content = (UiControl)BuildOverview(host, node, canComment, canEdit, hideHeader);
+
+                // A markdown node with sub-nodes gets a collapsible side menu of them. Skipped for
+                // @@ embeds and when there are none; internal satellites (_Access, _Thread, …) excluded.
+                if (hideHeader)
+                    return (UiControl?)content;
+                var subNodes = children
+                    .Where(c => !LastSegment(c.Path).StartsWith('_'))
+                    .OrderBy(c => c.Name ?? c.Id, System.StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+                return (UiControl?)(subNodes.Count == 0 ? content : BuildWithSubNodeNav(node, subNodes, content));
             });
     }
 
-    private static UiControl BuildOverview(LayoutAreaHost host, MeshNode? node, bool canComment, bool canEdit)
+    private static string LastSegment(string path)
+    {
+        var i = path.LastIndexOf('/');
+        return i < 0 ? path : path[(i + 1)..];
+    }
+
+    /// <summary>
+    /// Wraps the page content with a collapsible left-hand NavMenu listing the node's sub-nodes,
+    /// giving every markdown node with children a navigable side menu of them.
+    /// </summary>
+    private static UiControl BuildWithSubNodeNav(MeshNode? node, IReadOnlyList<MeshNode> subNodes, UiControl content)
+    {
+        var group = new NavGroupControl(node?.Name ?? "Contents").WithSkin(s => s.WithExpanded(true));
+        foreach (var child in subNodes)
+        {
+            var href = $"/{child.Path}";
+            var icon = MeshNodeImageHelper.ResolveNodeIcon(child);
+            group = icon is null
+                ? group.WithView(new NavLinkControl(child.Name ?? child.Id, null, href))
+                : group.WithView(new NavLinkControl(child.Name ?? child.Id, icon, href));
+        }
+
+        var nav = Controls.NavMenu.WithSkin(s => s.WithWidth(240).WithCollapsible(true)).WithNavGroup(group);
+
+        return Controls.Stack
+            .WithOrientation(Orientation.Horizontal)
+            .WithWidth("100%")
+            .WithStyle("gap: 24px; align-items: flex-start;")
+            .WithView(nav)
+            .WithView(Controls.Stack.WithStyle("flex: 1; min-width: 0;").WithView(content));
+    }
+
+    private static UiControl BuildOverview(LayoutAreaHost host, MeshNode? node, bool canComment, bool canEdit, bool hideHeader)
     {
         var nodePath = node?.Path ?? host.Hub.Address.ToString();
         var rawContent = GetMarkdownContent(node);
 
         // Markdown pages render full width (max-width: 100%), not the centered 1200px reading column.
-        // When this Overview is rendered as an @@ embed, the inline reference carries
-        // ?hideHeader=true (set by LayoutAreaMarkdownRenderer). We then suppress the node's own
-        // header (title/icon/menu) and the comments section: the embedding page already frames the
-        // content, and repeating the node title duplicated the markdown's own heading. A top-level
-        // page render carries no such parameter, so it is unaffected. Authors can force the header
-        // back on with @@node?hideHeader=false.
-        var hideHeader = host.Reference.HasParameter("hideHeader")
-            && !string.Equals(host.Reference.GetParameterValue("hideHeader"), "false", System.StringComparison.OrdinalIgnoreCase);
-
         var container = Controls.Stack.WithWidth("100%").WithStyle(MeshNodeLayoutAreas.GetContainerStyle(host, maxWidthOverride: "100%"));
 
         // Standard header with title/icon (skipped for @@ embeds)
