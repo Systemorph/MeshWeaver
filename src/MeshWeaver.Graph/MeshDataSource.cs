@@ -1042,7 +1042,18 @@ public static class MeshDataSourceExtensions
                 // build never happens). IsDirty is the documented
                 // edit→dirty→recompile→clean signal and AwaitCompilationSettled
                 // already handed us the live def, so this needs no re-query.
-                if (!force && !def.IsDirty && !string.IsNullOrEmpty(def.LatestReleasePath))
+                // 🚨 Framework-version gate (issue #464, Defect 1): "up to date" must ALSO mean
+                // "compiled against the CURRENT framework". After a platform self-update the cached
+                // assembly's CompiledFrameworkVersion no longer matches the live FrameworkVersion —
+                // the bytes are ABI-stale and would MissingMethodException at runtime. Without this
+                // guard a source-clean, framework-stale type reports AlreadyUpToDate and never
+                // rebuilds. Treat a framework mismatch as needing a rebuild (never AlreadyUpToDate).
+                var frameworkCurrent = string.Equals(
+                    def.CompiledFrameworkVersion,
+                    NodeTypeCompilationHelpers.FrameworkVersion,
+                    StringComparison.Ordinal);
+                if (!force && !def.IsDirty && frameworkCurrent
+                    && !string.IsNullOrEmpty(def.LatestReleasePath))
                 {
                     hub.Post(new CreateReleaseResponse(true, AlreadyUpToDate: true),
                         o => o.ResponseFor(request));
@@ -1140,6 +1151,13 @@ public static class MeshDataSourceExtensions
     internal static bool IsSourcesUpToDate(NodeTypeDefinition? def, IReadOnlyList<MeshNode> currentSources)
     {
         if (def is null || def.CompiledSources is null || string.IsNullOrEmpty(def.LatestReleasePath))
+            return false;
+        // 🚨 Framework-version gate (issue #464, Defect 1): a cached assembly built against a
+        // PREVIOUS framework is not "up to date" even if every source is unchanged — its bytes are
+        // ABI-stale after a platform self-update. Report it as needing a rebuild so the UI's
+        // Create-Release affordance signals "actionable" rather than "nothing changed".
+        if (!string.Equals(def.CompiledFrameworkVersion,
+                NodeTypeCompilationHelpers.FrameworkVersion, StringComparison.Ordinal))
             return false;
         var compiled = def.CompiledSources;
         var currentPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
