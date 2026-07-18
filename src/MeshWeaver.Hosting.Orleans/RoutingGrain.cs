@@ -6,6 +6,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using MeshWeaver.Reflection;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Orleans.Concurrency;
 using Orleans.Streams;
@@ -37,8 +38,16 @@ internal static class RoutingGrainTrace
 internal class RoutingGrain(
     IPathResolver pathResolver,
     MeshConfiguration meshConfig,
+    IMessageHub meshHub,
     ILogger<RoutingGrain> logger) : Grain, IRoutingGrain
 {
+    // Mesh-scoped registry (issue #464, Defect 3). Resolved via meshHub.ServiceProvider so this
+    // reads the SAME instance MessageHubGrain writes to. When a persistent activation-fault loop
+    // exhausts DeliverToGrainWithRetry's transient retries, we surface the recorded activation
+    // error (e.g. the compilation failure) instead of the raw Orleans "Rejecting now" text.
+    private readonly GrainActivationFailureRegistry? activationFailures =
+        meshHub.ServiceProvider.GetService<GrainActivationFailureRegistry>();
+
     public Task<IMessageDelivery> RouteMessage(IMessageDelivery delivery)
     {
         var address = GetHostAddress(delivery.Target!);
@@ -186,7 +195,10 @@ internal class RoutingGrain(
                 // node wedged on "Subscribing to {path}…" until a portal restart (atioz 2026-06-24).
                 DeliverToGrainWithRetry(
                     () => grainFactory.GetGrain<IMessageHubGrain>(grainKey).DeliverMessage(delivery),
-                    grainKey, addressPath, delivery.Id, PostFailureToSender, logger);
+                    grainKey, addressPath, delivery.Id, PostFailureToSender, logger,
+                    resolveActivationError: activationFailures is null
+                        ? null
+                        : activationFailures.TryGet);
             },
             ex =>
             {
@@ -238,7 +250,8 @@ internal class RoutingGrain(
         ILogger logger,
         int maxRetries = 6,
         Func<int, TimeSpan>? backoff = null,
-        IScheduler? scheduler = null)
+        IScheduler? scheduler = null,
+        Func<string, string?>? resolveActivationError = null)
     {
         return DeliverToGrainObservable(grainCall, grainKey, deliveryId, logger, maxRetries, backoff, scheduler)
             .Subscribe(
@@ -260,10 +273,19 @@ internal class RoutingGrain(
                 ex =>
                 {
                     RoutingGrainTrace.Write($"RoutingGrain.RouteMessage GRAIN_CALL_FAULT id={deliveryId} grainKey={grainKey} ex={ex.Message}");
+                    // 🚨 Defect 3 (issue #464): exhausted transient retries against a grain stuck in a
+                    // persistent activation-fault loop throw the RAW Orleans rejection
+                    // ("DeactivateOnIdle was called … Rejecting now") — Orleans internals that HIDE the
+                    // real cause. The grain recorded the true activation error (a compilation failure,
+                    // a missing config) into the failure registry on each faulted activation; prefer
+                    // THAT so the sender's Observe fires OnError with an actionable, deterministic
+                    // message and the GUI resubscribe loop stops spinning on Orleans noise.
+                    var activationError = resolveActivationError?.Invoke(grainKey);
+                    var detail = string.IsNullOrEmpty(activationError) ? ex.Message : activationError;
                     logger.LogWarning(ex,
-                        "[ROUTE] Grain {GrainKey} delivery failed after transient retries (or a non-transient fault) → NACK sender",
-                        grainKey);
-                    postFailureToSender($"Delivery to '{addressPath}' failed: {ex.Message}", ErrorType.Failed);
+                        "[ROUTE] Grain {GrainKey} delivery failed after transient retries (or a non-transient fault) → NACK sender: {Detail}",
+                        grainKey, detail);
+                    postFailureToSender($"Delivery to '{addressPath}' failed: {detail}", ErrorType.Failed);
                 });
     }
 
