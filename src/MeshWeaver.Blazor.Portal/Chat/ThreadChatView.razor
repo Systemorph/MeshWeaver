@@ -7,6 +7,7 @@
 @using MeshWeaver.Messaging
 @using FluentAppearance = Microsoft.FluentUI.AspNetCore.Components.Appearance
 @inject NavigationManager NavigationManager
+@inject AccessService Access
 
 <div class="thread-chat-container @(ViewModel.HideEmptyState ? "compact-mode" : "") @(HasNoMessages ? "no-messages" : "")" style="@Style" data-instance="@_instanceId">
 @if (viewMode == ChatViewMode.ResumeThreads)
@@ -39,7 +40,7 @@
                          @key="@thread.Path"
                          @onclick="@(() => OnSelectThread(thread))">
                         <div class="resume-thread-name">@(thread.Name ?? thread.Id)</div>
-                        <div class="resume-thread-date">@thread.LastModified.LocalDateTime.ToString("MMM d, HH:mm")</div>
+                        <div class="resume-thread-date">@Access.ToDisplayTime(thread.LastModified).ToString("MMM d, HH:mm")</div>
                     </div>
                 }
             }

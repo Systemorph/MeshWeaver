@@ -12,6 +12,8 @@
         <PackageReference Include="Azure.Storage.Blobs" />
         <PackageReference Include="Namotion.Reflection" />
         <PackageReference Include="NSubstitute" />
+        <!-- Re-reads exported PDF bytes to assert content faithfulness (DeckExportScriptRelayTest). -->
+        <PackageReference Include="UglyToad.PdfPig" />
     </ItemGroup>
     <ItemGroup>
         <Content Include="Markdown\**">

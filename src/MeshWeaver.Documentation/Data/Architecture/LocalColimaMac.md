@@ -358,6 +358,28 @@ ollama cp qwen3.6 qwen3.6-code                     # alias to the id used by Ope
 
 > k3s v1.35 logs a deprecation warning for `Endpoints` (in favor of `EndpointSlice`), but the mirroring controller auto-creates the slice, so routing works.
 
+### 10.1 Content indexing / embeddings (semantic search + agent document discovery)
+
+§10 wires the local **chat** model. Content **indexing** — the pipeline behind vector/semantic search, RAG, and agent document discovery — is a *separate* provider (`Embedding__*`) and stays **inert** until you set it. Leave it unset and uploads are stored and readable by path but produce **no `_Documents` index node**: `nodeType:Document` returns 0 everywhere and the Doc space isn't searchable, so an agent that finds its input via search correctly refuses to proceed. This reads like an agent/plugin bug but is missing **portal** config (the path is `ContentIndexingObserver` → `ContentIndexingService.IndexFile` → `EmbeddingOptions`; empty `Embedding__*` = full-text ILIKE search only).
+
+Reuse the same host Ollama already serving chat — just pull an embedding model:
+
+```bash
+ollama pull bge-m3                                 # 1024-dim embeddings; no API key for Ollama
+```
+
+Add to the local overlay `~/.memex-local/values.local.yaml` under `config: → memex_portal:` (these keys are in the chart's ConfigMap template, so the overlay is their persistent home — no `kubectl set env` needed):
+
+```yaml
+    Embedding__Provider: "Ollama"                  # → OllamaEmbeddingProvider ( /v1/embeddings )
+    Embedding__Endpoint: "http://ollama:11434/v1"  # same in-cluster name as the chat provider (§10)
+    Embedding__Model: "bge-m3"                      # no API key needed for Ollama
+```
+
+Then `memex-local up` to apply, and **re-upload** your documents — indexing fires on the *upload* event, so files stored before embeddings were enabled are not retro-indexed.
+
+> **Dimensions are fixed per portal.** The pgvector column + HNSW index are sized to the model (`bge-m3` = 1024, `embed-v-4-0` = 1536; a model not in the built-in lookup defaults to 1536). Changing `Embedding__Model` to a different-dimension model re-migrates the column + HNSW index on the next startup — expected, but not free on a large store.
+
 ---
 
 ## 11. Observability
@@ -415,6 +437,7 @@ The result: every device trusts the cert out of the box (no mkcert CA install), 
 | Ollama unreachable from the portal | Ollama must be started with `OLLAMA_HOST=0.0.0.0:11434` (not the default loopback bind), and `ollama.external.host` must be Colima's host-gateway IP (`192.168.5.2`). |
 | Local model errors `exceed_context_size_error` / `exceeds the available context size (4096 tokens)` | Ollama loads at a 4096-token default context, smaller than the agent prompt. Restart `ollama serve` with `OLLAMA_CONTEXT_LENGTH=16384` (macOS app: `launchctl setenv OLLAMA_CONTEXT_LENGTH 16384` + restart). The `/v1` endpoint can't set `num_ctx` per request — it's a host setting. See §10. |
 | Local model errors HTTP 400 `does not support tools` | The selected model is a completion-only/roleplay GGUF. The portal auto-stamps `SupportsTools=false` (round then omits tools), but for agent work pick a model whose Ollama `capabilities` include `tools` (e.g. qwen3.6). See §10. |
+| Uploaded documents aren't searchable / `nodeType:Document` returns 0 / an agent can't find its input | Content **indexing** needs an embedding provider, which is separate from the chat model and off by default. Set `Embedding__Provider`/`Embedding__Endpoint`/`Embedding__Model` (§10.1) and **re-upload** — indexing fires on the upload event, so pre-existing files aren't retro-indexed. |
 
 **Verify end-to-end** that TLS + routing + the app are all working:
 

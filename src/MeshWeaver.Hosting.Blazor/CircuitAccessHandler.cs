@@ -240,10 +240,18 @@ public class CircuitAccessHandler : CircuitHandler
                 var meshUser = TryLoadMeshUser(email);
                 if (meshUser != null)
                 {
+                    // Resolve the viewer's display time zone from their profile ONCE here,
+                    // where the context is built. It then rides on the AccessContext to every
+                    // render path — the Blazor circuit AND server-side hub layout areas — so
+                    // stored-UTC timestamps display in the viewer's local time via
+                    // AccessService.ToDisplayTime. Unset (never signed in on a browser yet) →
+                    // stays null → renders UTC.
+                    var timeZoneId = meshUser.ContentAs<User>(_hub.JsonSerializerOptions)?.TimeZoneId;
                     context = context with
                     {
                         ObjectId = meshUser.Id,
-                        Name = meshUser.Name ?? meshUser.Id
+                        Name = meshUser.Name ?? meshUser.Id,
+                        TimeZoneId = string.IsNullOrWhiteSpace(timeZoneId) ? context.TimeZoneId : timeZoneId
                     };
                 }
             }
