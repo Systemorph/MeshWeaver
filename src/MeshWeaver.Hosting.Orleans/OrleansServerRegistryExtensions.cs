@@ -115,6 +115,13 @@ public static class OrleansServerRegistryExtensions
         services.AddPartitionedInMemoryPersistence();
         services.TryAddSingleton<IRoutingService, OrleansRoutingService>();
 
+        // Mesh-scoped registry of the last per-grain activation failure. MessageHubGrain
+        // records the real activation error here (the same one it feeds to _hubReadyRaw.OnError);
+        // RoutingGrain falls back to it when a persistent activation-fault loop would otherwise
+        // NACK the raw Orleans rejection ("DeactivateOnIdle was called … Rejecting now") instead
+        // of the actual cause (a compilation failure). See issue #464, Defect 3.
+        services.TryAddSingleton<GrainActivationFailureRegistry>();
+
         // Register Orleans-distributed change feed (wraps local feed + Orleans streams)
         services.TryAddSingleton<InProcessMeshChangeFeed>();
         services.TryAddSingleton<IMeshChangeFeed>(sp =>

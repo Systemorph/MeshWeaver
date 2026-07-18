@@ -123,6 +123,7 @@ Slash skills work too: `/agent <name>`, `/model <name>`, `/harness <name>`.
 | Topic | What you'll learn |
 |-------|------------------|
 | [Agentic AI](/Doc/AI/AgenticAI) | Philosophy, delegation vs handoff, human-agent collaboration patterns |
+| [Designing agents](/Doc/AI/AgentDesign) | Cost model, round semantics, the two-phase extract-then-write protocol, hard vs. soft enforcement |
 | [MeshPlugin Tools](/Doc/AI/Tools/MeshPlugin) | Full tool reference with call shapes and path syntax |
 | [Execute Script](/Doc/AI/ExecuteScript) | How agents run C# scripts inside the mesh kernel |
 | [MCP Authentication](/Doc/AI/McpAuthentication) | OAuth flow for external MCP clients connecting to MeshWeaver |

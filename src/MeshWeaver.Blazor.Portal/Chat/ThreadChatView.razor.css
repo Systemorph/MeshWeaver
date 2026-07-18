@@ -37,6 +37,17 @@
     display: flex;
     flex-direction: column;
 }
+/* New-chat composer fills the tall slot instead of sitting as a thin ~80px bar (issue #458).
+   The MonacoEditorView AutoGrow container carries an INLINE `height:80px; min-height:80px`
+   that is load-bearing for the with-messages case (#178 auto-grow) and the #199 hit-target
+   fix — so it wins over the `.no-messages` fill intent above. Override it to fill ONLY here,
+   scoped to `.no-messages`, keeping the inline `max-height` cap + Monaco's internal scroll.
+   `::deep` reaches the child component's root; `!important` beats the inline height (and the
+   JS grow-writes, which we don't want in the fill state anyway). The with-messages composer
+   has no `.no-messages` class, so its #178 auto-grow is completely untouched. */
+.thread-chat-container.no-messages .input-container ::deep .monaco-editor-container {
+    height: 100% !important;
+}
 
 .thread-chat-messages {
     flex: 1;
