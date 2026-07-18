@@ -23,7 +23,7 @@ namespace MeshWeaver.Hosting.Orleans;
 public class OrleansMeshChangeFeed : IMeshChangeFeed, IDisposable
 {
     private readonly InProcessMeshChangeFeed _local;
-    private readonly IMessageHub _hub;
+    private readonly IServiceProvider _serviceProvider;
     private readonly ILogger<OrleansMeshChangeFeed>? _logger;
     private readonly Subject<MeshChangeEvent> _broadcastQueue = new();
     private readonly IDisposable _broadcastSubscription;
@@ -34,18 +34,26 @@ public class OrleansMeshChangeFeed : IMeshChangeFeed, IDisposable
     /// Orleans memory stream in arrival order.
     /// </summary>
     /// <param name="localFeed">The in-process change feed serving local subscribers and providing local publish/subscribe.</param>
-    /// <param name="hub">The mesh hub used to resolve the I/O pool and the Orleans cluster client.</param>
+    /// <param name="serviceProvider">
+    /// The mesh service provider used to LAZILY resolve the I/O pool (at construction) and the
+    /// Orleans cluster client (at broadcast time). 🚨 Captured as <see cref="IServiceProvider"/>,
+    /// NOT <see cref="IMessageHub"/>: this feed is constructed from
+    /// <c>Workspace..ctor → TrySubscribeToChangeFeed(hub.ServiceProvider)</c> mid-hub-build, so a
+    /// factory that resolved <c>IMessageHub</c> here re-entered <c>BuildHub → new Workspace →
+    /// IMeshChangeFeed → …</c> and stack-overflowed. Holding the provider and resolving the pieces
+    /// on demand breaks that cycle (the cluster client is only touched once the host is fully up).
+    /// </param>
     /// <param name="logger">Optional logger for broadcast diagnostics and failures.</param>
     public OrleansMeshChangeFeed(
         InProcessMeshChangeFeed localFeed,
-        IMessageHub hub,
+        IServiceProvider serviceProvider,
         ILogger<OrleansMeshChangeFeed>? logger = null)
     {
         _local = localFeed;
-        _hub = hub;
+        _serviceProvider = serviceProvider;
         _logger = logger;
 
-        var ioPool = hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get("orleans-broadcast")
+        var ioPool = serviceProvider.GetService<IoPoolRegistry>()?.Get("orleans-broadcast")
                      ?? IoPool.Unbounded;
         // Per-event Catch: one failed broadcast is logged and skipped — it must not
         // tear down the queue (matches the old per-event try/catch). A fault of the
@@ -84,7 +92,7 @@ public class OrleansMeshChangeFeed : IMeshChangeFeed, IDisposable
 
     private async Task<Unit> BroadcastAsync(MeshChangeEvent change, CancellationToken ct)
     {
-        var client = _hub.ServiceProvider.GetService<IClusterClient>();
+        var client = _serviceProvider.GetService<IClusterClient>();
         if (client == null)
         {
             _logger?.LogDebug("OrleansMeshChangeFeed: no IClusterClient — broadcast skipped for {Path} {Kind}",
