@@ -32,7 +32,7 @@ public class PostgreSqlCrossSchemaQueryProvider : ICrossSchemaQueryProvider
     private int _syncInFlight;
 
     /// <summary>
-    /// Minimum interval between actual <see cref="SyncSearchableSchemasAsync"/>
+    /// Minimum interval between actual <see cref="SyncSearchableSchemasAsync(bool, CancellationToken)"/>
     /// runs. Calls within the window are no-ops. Internal setter for tests
     /// to force re-sync without waiting.
     /// </summary>
@@ -93,18 +93,26 @@ public class PostgreSqlCrossSchemaQueryProvider : ICrossSchemaQueryProvider
     /// class is self-contained — no <c>PostgreSqlPartitionedStoreFactory</c>
     /// dependency.
     /// </summary>
-    public async Task SyncSearchableSchemasAsync(CancellationToken ct = default)
+    public Task SyncSearchableSchemasAsync(CancellationToken ct = default)
+        => SyncSearchableSchemasAsync(force: false, ct);
+
+    /// <inheritdoc />
+    public async Task SyncSearchableSchemasAsync(bool force, CancellationToken ct = default)
     {
         // Fast path: another sync ran within SyncTtl — skip. New partitions
         // created in that window are invisible until the next sync, which is
-        // an acceptable trade for not melting the connection pool.
+        // an acceptable trade for not melting the connection pool. force=true
+        // (the one-time boot self-heal) bypasses the TTL so a schema this boot's
+        // import just provisioned is registered immediately, not up to SyncTtl later.
         var lastTicks = Interlocked.Read(ref _lastSyncTicks);
-        if (lastTicks != 0 && DateTime.UtcNow.Ticks - lastTicks < SyncTtl.Ticks)
+        if (!force && lastTicks != 0 && DateTime.UtcNow.Ticks - lastTicks < SyncTtl.Ticks)
             return;
 
         // Single-flight: only one sync runs at a time. Concurrent callers
         // (every cross-schema fan-out calls this) return immediately rather
-        // than queuing on the public-schema connection.
+        // than queuing on the public-schema connection. Honoured even under
+        // force — force bypasses the TIME throttle, never the DELETE+INSERT
+        // mutual-exclusion; a concurrent sync already rebuilds the registry.
         if (Interlocked.CompareExchange(ref _syncInFlight, 1, 0) != 0)
             return;
 
@@ -113,7 +121,7 @@ public class PostgreSqlCrossSchemaQueryProvider : ICrossSchemaQueryProvider
             // Re-check under the flight gate: another caller may have just
             // finished while we were CAS-ing.
             lastTicks = Interlocked.Read(ref _lastSyncTicks);
-            if (lastTicks != 0 && DateTime.UtcNow.Ticks - lastTicks < SyncTtl.Ticks)
+            if (!force && lastTicks != 0 && DateTime.UtcNow.Ticks - lastTicks < SyncTtl.Ticks)
                 return;
 
             var schemas = new List<string>();

@@ -94,7 +94,12 @@ internal sealed class StaticRepoImportHostedService(
         // SubscribeOn moves the entire subscription cleanly off the startup thread. StartAsync
         // returns immediately (Task.CompletedTask) — no async/await, no blocking. See
         // Doc/Architecture/AsynchronousCalls.md.
-        _subscription = StaticRepoImporter.ImportAll(hub, logger, syncModeOverrides)
+        // Pass the built-in AI catalog partitions as the #354 boot-index assertion set: after the
+        // import, ImportAll verifies each SERVED catalog (Agent/Provider/Harness/Skill that a source
+        // actually backs this run) is registered in the cross-schema search index, force-re-syncing it
+        // and surfacing a startup-failure notification for any that materialized but stayed unindexed.
+        _subscription = StaticRepoImporter
+            .ImportAll(hub, logger, syncModeOverrides, AiContentSources.ContentPartitions)
             .SubscribeOn(System.Reactive.Concurrency.TaskPoolScheduler.Default)
             .Subscribe(
                 r => logger?.LogInformation(

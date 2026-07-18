@@ -21,9 +21,19 @@ public interface ICrossSchemaQueryProvider
     /// <see cref="GetSearchableSchemasAsync"/> returns the up-to-date list.
     /// Cheap (one SELECT + a batched INSERT) so fan-out callers can run it
     /// per-query to pick up partitions created mid-session without waiting
-    /// for a pg_notify cycle.
+    /// for a pg_notify cycle. Throttled: a call within the implementation's
+    /// TTL window is a no-op (the query hot path calls this per fan-out).
     /// </summary>
     Task SyncSearchableSchemasAsync(CancellationToken ct = default);
+
+    /// <summary>
+    /// Rebuilds the searchable-schemas registry, bypassing the throttle window when
+    /// <paramref name="force"/> is <c>true</c> (single-flight is still honoured). Used by the
+    /// ONE-TIME boot self-heal that asserts a served catalog partition's schema is registered
+    /// right after import (see <c>StaticRepoImporter</c> · #354) — NEVER on the query hot path,
+    /// where <paramref name="force"/> stays <c>false</c> and the throttle protects the pool.
+    /// </summary>
+    Task SyncSearchableSchemasAsync(bool force, CancellationToken ct = default);
 
     /// <summary>
     /// Subset of <see cref="GetSearchableSchemasAsync"/> filtered to schemas
