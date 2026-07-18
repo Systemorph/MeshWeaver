@@ -22,9 +22,11 @@ namespace Memex.Portal.Shared.Social;
 ///
 /// <para>Register ONE webhook per repo in GitHub → Settings → Webhooks, pointing at
 /// <c>https://{host}/webhooks/github</c>, content-type <c>application/json</c>, with the same
-/// secret, subscribed to the <c>Issues</c> + <c>Issue comments</c> events. The <c>async</c> here
-/// is the sanctioned HTTP-boundary bridge (mirrors <see cref="GitHubConnectEndpoints"/>); the
-/// processing itself is reactive.</para>
+/// secret, subscribed to the <c>Issues</c> + <c>Issue comments</c> + <c>Pushes</c> events —
+/// a push triggers the headless "Update to latest" for every Space sync source matching the
+/// pushed repo/branch/subdirectory, so GitSync'd Spaces stay current without polling. The
+/// <c>async</c> here is the sanctioned HTTP-boundary bridge (mirrors
+/// <see cref="GitHubConnectEndpoints"/>); the processing itself is reactive.</para>
 /// </summary>
 public static class GitHubWebhookEndpoints
 {

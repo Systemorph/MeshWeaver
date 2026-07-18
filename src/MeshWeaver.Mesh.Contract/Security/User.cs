@@ -18,6 +18,16 @@ public record User : AccessObject
     /// <summary>Profile role (e.g. Developer, Manager, Designer).</summary>
     public string? Role { get; init; }
 
+    /// <summary>
+    /// The user's preferred display time zone as a named IANA zone id (e.g.
+    /// <c>Europe/Zurich</c>, <c>America/New_York</c>). Timestamp STORAGE stays UTC —
+    /// this drives the per-viewer DISPLAY conversion only (see
+    /// <c>AccessService.ToDisplayTime</c>). Named zones (never fixed offsets) so DST is
+    /// applied automatically and per-region. Empty/null → the viewer sees UTC. Populated
+    /// once from the browser on first sign-in and overridable in user settings.
+    /// </summary>
+    public string? TimeZoneId { get; init; }
+
     /// <summary>Ordered list of node paths the user has pinned to their dashboard.</summary>
     public IReadOnlyList<string> PinnedPaths { get; init; } = [];
 
