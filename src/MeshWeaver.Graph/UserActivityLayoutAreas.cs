@@ -77,6 +77,7 @@ public static class UserActivityLayoutAreas
     // the declaration order there is the tab order. Open threads are NOT a tab here — they have their
     // own region above the catalog (see ThreadsAreaView); the catalog is the broader "browse" surface.
     private const string TabSpaces = "Spaces";
+    private const string TabSharedWithMe = "Shared with me";
     private const string TabMyItems = "My Items";
     private const string TabLastRead = "Last Read";
     private const string TabLastEdited = "Last Edited";
@@ -475,9 +476,69 @@ public static class UserActivityLayoutAreas
     internal static IObservable<UiControl?> CatalogAreaView(LayoutAreaHost host, RenderingContext _)
     {
         var nodePath = host.Hub.Address.ToString();
+        var ownerId = OwnerIdOf(nodePath);
+        // Combine the data-driven extension tabs with the caller's cross-partition grants
+        // (#385 "Shared with me"). Both start empty so the home paints instantly.
         return ObserveHomeTabs(host)
-            .Select(tabs => (UiControl?)BuildCatalog(nodePath, OwnerIdOf(nodePath), tabs));
+            .CombineLatest(ObserveSharedTargets(host, ownerId),
+                (tabs, shared) => (UiControl?)BuildCatalog(nodePath, ownerId, tabs, shared));
     }
+
+    /// <summary>
+    /// The cross-partition scopes the owner has been granted access to — an invited module living in
+    /// ANOTHER partition, reachable by URL but otherwise invisible in nav (the #385 symptom). Sourced
+    /// from the owner's <c>AccessAssignment</c> satellites (<c>content.accessObject == ownerId</c>),
+    /// fanned out cross-partition and access-filtered, each resolved to its governed target scope
+    /// (<see cref="MeshNode.MainNode"/>). Starts empty so the home paints instantly; grants land
+    /// reactively. No security surface changes — it only READS the caller's own readable grants.
+    /// </summary>
+    private static IObservable<IReadOnlyList<string>> ObserveSharedTargets(LayoutAreaHost host, string ownerId)
+    {
+        var mesh = host.Hub.ServiceProvider.GetService<IMeshService>();
+        if (mesh is null || string.IsNullOrEmpty(ownerId))
+            return Observable.Return<IReadOnlyList<string>>([]);
+        return mesh
+            .Query<MeshNode>(MeshQueryRequest.FromQuery(
+                $"nodeType:AccessAssignment content.accessObject:{ownerId}"))
+            .Scan(ImmutableDictionary<string, MeshNode>.Empty,
+                (map, change) =>
+                {
+                    if (change.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset)
+                        return change.Items.ToImmutableDictionary(n => n.Path);
+                    foreach (var item in change.Items)
+                        map = change.ChangeType switch
+                        {
+                            QueryChangeType.Added or QueryChangeType.Updated => map.SetItem(item.Path, item),
+                            QueryChangeType.Removed => map.Remove(item.Path),
+                            _ => map
+                        };
+                    return map;
+                })
+            .Select(map => SharedTargetPaths(map.Values, ownerId))
+            .StartWith((IReadOnlyList<string>)[]);
+    }
+
+    /// <summary>
+    /// Pure projection: the distinct CROSS-PARTITION target scopes from a set of the owner's
+    /// <c>AccessAssignment</c> nodes — each assignment's <see cref="MeshNode.MainNode"/> (the governed
+    /// scope; falling back to the scope derived from the node path), keeping only targets that live
+    /// OUTSIDE the owner's own partition and are non-empty.
+    /// </summary>
+    internal static IReadOnlyList<string> SharedTargetPaths(IEnumerable<MeshNode> assignments, string ownerId)
+        => assignments
+            // Normalise via ScopeOfAssignment: MainNode may hold the governed scope directly OR the
+            // satellite path (MeshNode.MainNode defaults to the node's own path). ScopeOfAssignment
+            // strips a trailing …/_Access/… segment and returns a plain scope unchanged; fall back to
+            // the node path when MainNode is unset.
+            .Select(a => AccessSubjectQueries.ScopeOfAssignment(
+                string.IsNullOrEmpty(a.MainNode) ? a.Path : a.MainNode)?.Trim('/'))
+            .Where(scope => !string.IsNullOrEmpty(scope))
+            .Select(scope => scope!)
+            .Where(scope => !string.Equals(
+                AccessSubjectQueries.Partition(scope), ownerId, StringComparison.OrdinalIgnoreCase))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(s => s, StringComparer.OrdinalIgnoreCase)
+            .ToList();
 
     /// <summary>
     /// NodeType of a home-catalog EXTENSION TAB: the home's tab list is DATA, not code. Any
@@ -622,7 +683,8 @@ public static class UserActivityLayoutAreas
     /// so a plugin adds a tab by shipping a node, never by editing this file.</para>
     /// </summary>
     internal static UiControl BuildCatalog(
-        string nodePath, string nodeOwnerId, IReadOnlyList<MeshNode>? extensionTabs = null)
+        string nodePath, string nodeOwnerId, IReadOnlyList<MeshNode>? extensionTabs = null,
+        IReadOnlyList<string>? sharedTargets = null)
     {
         var tabs = Controls.Tabs
             // 100% width so the tabs + their search grids fill the home page instead of shrinking to
@@ -643,6 +705,22 @@ public static class UserActivityLayoutAreas
                     .WithCollapsibleSections(false).WithSectionCounts(false)
                     .WithMaxColumns(4).WithItemLimit(50).WithMaxRows(3).WithReactiveMode(true)
                     .WithCreateHref("/create?type=Space"));
+
+        // Shared with me (#385) — cross-partition modules the caller was invited into. Rendered
+        // right after Spaces so an invited module in another partition is discoverable in nav; the
+        // target scopes come from the caller's OWN readable AccessAssignments (no security change).
+        // The `path:a|b|c` alternation resolves each target node, access-filtered by the mesh.
+        if (sharedTargets is { Count: > 0 })
+        {
+            var pathList = string.Join("|", sharedTargets);
+            tabs = tabs.WithMeshSearch(TabSharedWithMe,
+                query: $"path:{pathList} is:main sort:LastModified-desc",
+                configure: s => s
+                    .WithShowSearchBox(false).WithShowEmptyMessage(true)
+                    .WithRenderMode(MeshSearchRenderMode.Flat)
+                    .WithCollapsibleSections(false).WithSectionCounts(false)
+                    .WithMaxColumns(4).WithItemLimit(50).WithMaxRows(3).WithReactiveMode(true));
+        }
 
         // The data-driven tabs — same look-and-feel defaults as Spaces; the node's content
         // supplies only the mapping (nodeType/query/placeholder/createHref).

@@ -694,11 +694,43 @@ public class PostgreSqlSqlGenerator
                 LIMIT 1) = true
             """;
 
-        if (!string.IsNullOrEmpty(publicReadClause))
+        // 🔒 #471/#385 RC3 — the documented invariant (AccessControl.md, search_across_schemas,
+        // and the schema-qualified GenerateAccessControlClause) is
+        //   partition_access AND (public_read OR node)
+        // — public_read SKIPS the node-level check but NEVER the partition gate, so a partition's
+        // public-read content (Markdown, Threads, …) does not leak into another tenant's unscoped
+        // fan-out feed. BuildPerSchemaAccessClause was the lone outlier that OR'd public_read
+        // OUTSIDE the partition gate, so cross-partition public-read rows leaked into the
+        // "Last Edited" (source:activity) feed → the "listed but access-denied on open" symptom.
+        //
+        // EXCEPTION — the 'auth' mirror is the GLOBAL public identity directory (User/Group/Role/
+        // VUser replicated across every tenant). It is deliberately EXCLUDED from the tenant fan-out
+        // (PostgreSqlCrossSchemaQueryProvider.ExcludedSchemas) and reached ONLY by the pinned
+        // identity routes (e.g. nodeType:User → auth). Its public-read identity nodes MUST stay
+        // resolvable to every authenticated user regardless of partition_access — display-name
+        // resolution, invites, @-mentions, the subject picker and login all depend on it, and NO
+        // user holds a partition_access row for 'auth'. Non-public node types in auth (e.g.
+        // ApiToken) still fall through to the node-level check, so this exemption exposes only the
+        // public identity directory it is meant to. Because auth is never part of the feed fan-out,
+        // this cannot reopen the cross-partition leak.
+        if (string.Equals(schema, PublicDirectorySchema, StringComparison.OrdinalIgnoreCase)
+            && !string.IsNullOrEmpty(publicReadClause))
             return $"({publicReadClause} OR ({partitionAccessExists} AND ({nodeAccess})))";
+
+        if (!string.IsNullOrEmpty(publicReadClause))
+            return $"({partitionAccessExists} AND ({publicReadClause} OR ({nodeAccess})))";
 
         return $"({partitionAccessExists} AND ({nodeAccess}))";
     }
+
+    /// <summary>
+    /// The global public identity directory schema — the cross-tenant mirror of User/Group/Role/
+    /// VUser/ApiToken nodes. It is excluded from the tenant fan-out and reached only by pinned
+    /// identity routes; its public-read identity nodes stay resolvable to all authenticated users
+    /// regardless of partition_access (see <see cref="BuildPerSchemaAccessClause"/>). Kept in
+    /// lock-step with <c>PostgreSqlCrossSchemaQueryProvider.ExcludedSchemas</c>.
+    /// </summary>
+    private const string PublicDirectorySchema = "auth";
 
     /// <summary>
     /// SQL that replicates <c>DocumentPaths.Slug</c> (MeshWeaver.ContentCollections.Indexing) for a
