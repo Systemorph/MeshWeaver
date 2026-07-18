@@ -71,13 +71,35 @@ public static class CommentLayoutAreas
         var parentPath = hubPath.Contains('/') ? hubPath[..hubPath.LastIndexOf('/')] : hubPath;
         var permissionsStream = host.Hub.GetEffectivePermissions(parentPath);
 
+        // Replies are the direct-CHILD Comment nodes of THIS comment ({hubPath}/{replyId}). Discover
+        // them reactively with the SAME synced-query pattern the page-level comment list uses
+        // (CommentsView.Comments) — write path (CreateNode a child) and read path (query children)
+        // therefore agree on ONE canonical namespace. The old renderer read comment.Replies, a
+        // denormalized list nothing on the write path maintained (the ↩ form never appended to it and
+        // the sample data left it empty), so every reply was invisible (issue #473). Ordered oldest-first
+        // for natural conversation order.
+        var repliesDataId = $"commentReplies_{hubPath.Replace("/", "_")}";
+        host.UpdateData(repliesDataId, Array.Empty<LayoutAreaControl>());
+        host.Workspace.GetQuery(
+                $"replies:{hubPath}",
+                $"namespace:{hubPath} nodeType:{CommentNodeType.NodeType}")
+            .Subscribe(snapshot =>
+            {
+                var replyControls = snapshot
+                    .Where(n => n.Content is Comment)
+                    .OrderBy(n => n.ContentAs<Comment>(host.Hub.JsonSerializerOptions)!.CreatedAt)
+                    .Select(n => Controls.LayoutArea(n.Path, OverviewArea))
+                    .ToArray();
+                host.UpdateData(repliesDataId, replyControls);
+            });
+
         return host.Workspace.GetMeshNodeStream()
             .CombineLatest(permissionsStream, (node, perms) =>
             {
                 var canComment = perms.HasFlag(Permission.Comment) || perms.HasFlag(Permission.Update);
                 var canDelete = perms.HasFlag(Permission.Delete);
                 return (UiControl?)BuildOverview(host, node, hubPath, editStateId, initialized,
-                    currentUser, canComment, canDelete);
+                    currentUser, canComment, canDelete, repliesDataId);
             });
     }
 
@@ -104,7 +126,7 @@ public static class CommentLayoutAreas
 
     internal static UiControl BuildOverview(LayoutAreaHost host, MeshNode? node, string hubPath,
         string editStateId, bool[] initialized, string currentUser,
-        bool canComment = true, bool canDelete = true)
+        bool canComment = true, bool canDelete = true, string? repliesDataId = null)
     {
         // ContentAs (deserialize), not `as Comment`: this view is data-bound via CombineLatest on
         // GetMeshNodeStream, whose frames alternate typed↔JsonElement; `as` → null on JsonElement
@@ -219,8 +241,12 @@ public static class CommentLayoutAreas
             });
         }
 
-        // Replies section — data-bound from comment.Replies (same pattern as Thread.Messages)
-        if (comment.Replies.Count > 0)
+        // Replies section — data-bound from the live child-Comment query set up in Overview
+        // (repliesDataId). Each entry is a LayoutArea pointing at a reply's own path
+        // ({hubPath}/{replyId}), so a reply created through EITHER write path (the ↩ form or the
+        // CreateCommentRequest handler) renders here for every reader — the fix for issue #473. The
+        // section appears/disappears reactively with the query (no static comment.Replies gate).
+        if (repliesDataId != null)
         {
             var expandedStateId = $"replies_expanded_{hubPath.Replace("/", "_")}";
             var visibleCountStateId = $"replies_visible_{hubPath.Replace("/", "_")}";
@@ -234,12 +260,16 @@ public static class CommentLayoutAreas
                     initialized[1] = true;
                 }
 
-                return h.Stream.GetDataStream<bool>(expandedStateId)
+                return h.Stream.GetDataStream<LayoutAreaControl[]>(repliesDataId)
                     .CombineLatest(
+                        h.Stream.GetDataStream<bool>(expandedStateId),
                         h.Stream.GetDataStream<int>(visibleCountStateId),
-                        (expanded, visibleCount) =>
+                        (replyControls, expanded, visibleCount) =>
                         {
-                            var totalCount = comment.Replies.Count;
+                            var totalCount = replyControls?.Length ?? 0;
+                            if (totalCount == 0)
+                                return (UiControl)Controls.Stack;
+
                             var section = Controls.Stack.WithWidth("100%").WithStyle("margin-top: 8px;");
 
                             var headerText = expanded
@@ -259,10 +289,9 @@ public static class CommentLayoutAreas
                             var shown = Math.Min(visibleCount, totalCount);
                             for (var i = 0; i < shown; i++)
                             {
-                                var replyPath = $"{hubPath}/{comment.Replies[i]}";
                                 section = section.WithView(Controls.Stack
                                     .WithStyle("margin-left: 0; padding-left: 8px; border-left: 2px solid var(--neutral-stroke-rest); margin-top: 4px;")
-                                    .WithView(Controls.LayoutArea(replyPath, OverviewArea)));
+                                    .WithView(replyControls![i]));
                             }
 
                             if (shown < totalCount)
@@ -373,8 +402,10 @@ public static class CommentLayoutAreas
     {
         var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
         var replyTextDataId = $"replyText_{replyPath.Replace("/", "_")}";
+        var replyErrorDataId = $"replyError_{replyPath.Replace("/", "_")}";
 
         host.UpdateData(replyTextDataId, new Dictionary<string, object?> { ["text"] = "" });
+        host.UpdateData(replyErrorDataId, "");
 
         var stack = Controls.Stack
             .WithStyle("margin-top: 4px; padding: 4px; padding-left: 6px; border-left: 2px solid var(--accent-fill-rest);");
@@ -389,6 +420,15 @@ public static class CommentLayoutAreas
             DataContext = LayoutAreaReference.GetDataPointer(replyTextDataId)
         };
         stack = stack.WithView(editor);
+
+        // User-visible error surface: a failed reply write (e.g. Access denied) must NOT be a
+        // server-only log line while the form closes as if it succeeded (issue #473, defect 3).
+        // The Create click writes the message here on failure and clears it on retry.
+        stack = stack.WithView((h, _) => h.Stream.GetDataStream<string>(replyErrorDataId)
+            .Select(err => string.IsNullOrEmpty(err)
+                ? (UiControl)Controls.Stack
+                : Controls.Html(
+                    $"<div style=\"color: var(--error-color, #f87171); font-size: 0.8rem; margin-top: 4px;\">{System.Web.HttpUtility.HtmlEncode(err)}</div>")));
 
         // Button row: Cancel and Create
         stack = stack.WithView(Controls.Stack
@@ -423,6 +463,10 @@ public static class CommentLayoutAreas
                                 Name = $"Reply to {comment.Author}",
                                 NodeType = CommentNodeType.NodeType,
                                 State = MeshNodeState.Active,
+                                // MainNode = the document, so SatelliteAccessRule delegates the reply's
+                                // permissions to the doc (Comment to create, author/Update to delete) —
+                                // exactly like a top-level comment.
+                                MainNode = comment.PrimaryNodePath ?? "",
                                 Content = new Comment
                                 {
                                     Id = replyId,
@@ -432,12 +476,17 @@ public static class CommentLayoutAreas
                                     Text = text
                                 }
                             };
+                            host.UpdateData(replyErrorDataId, "");
                             nodeFactory.CreateNode(replyNode).Subscribe(
                                 _ => host.UpdateData(replyPathStateId, ""),
                                 // Keep the draft form OPEN on failure (don't clear the state) so the user's
-                                // reply isn't silently lost, and log so the failure is diagnosable.
-                                ex => host.Hub.ServiceProvider.GetService<ILogger<LayoutAreaHost>>()
-                                    ?.LogWarning(ex, "Failed to create reply at {Path}", replyPath));
+                                // reply isn't silently lost; surface the error in the form AND log it.
+                                ex =>
+                                {
+                                    host.UpdateData(replyErrorDataId, $"Reply not posted: {ex.Message}");
+                                    host.Hub.ServiceProvider.GetService<ILogger<LayoutAreaHost>>()
+                                        ?.LogWarning(ex, "Failed to create reply at {Path}", replyPath);
+                                });
                         });
                     return Task.CompletedTask;
                 })));
@@ -516,9 +565,12 @@ public static class CommentLayoutAreas
             .WithClickAction(_ =>
             {
                 var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
+                // Never swallow the delete fault: a denied/failed delete must be diagnosable, not a
+                // silent no-op (issue #391). The comment stays visible on failure; the log is the sink.
                 nodeFactory.DeleteNode(hubPath).Subscribe(
                     __ => { },
-                    _ => { });
+                    ex => host.Hub.ServiceProvider.GetService<ILogger<LayoutAreaHost>>()
+                        ?.LogWarning(ex, "Failed to delete comment at {Path}", hubPath));
                 return Task.CompletedTask;
             });
     }

@@ -32,6 +32,15 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
     private readonly IMeshNodeStreamCache streamCache =
         meshHub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
 
+    // Mesh-scoped registry (issue #464, Defect 3): records the REAL activation error for this
+    // grain key so RoutingGrain can surface it instead of the raw Orleans rejection when the
+    // grain is stuck in a persistent activation-fault loop. Resolved via meshHub.ServiceProvider
+    // (same container as streamCache) so RoutingGrain reads the SAME instance. GetService (not
+    // GetRequiredService) so a mesh that skips AddOrleansMeshServices degrades to today's
+    // behaviour (raw rejection) rather than failing activation.
+    private readonly GrainActivationFailureRegistry? activationFailures =
+        meshHub.ServiceProvider.GetService<GrainActivationFailureRegistry>();
+
     /// <summary>
     /// Hub-ready signal — a <see cref="ReplaySubject{T}"/>(buffer=1) wrapped in
     /// <see cref="Observable.Synchronize{TSource}(IObservable{TSource})"/> so observer
@@ -282,6 +291,9 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
                 ex =>
                 {
                     logger.LogError(ex, "[ACTIVATE] Grain {StreamId}: activation faulted for {Path}", streamId, addressPath);
+                    // Defect 3: stash the REAL cause so a caller whose delivery only ever sees the
+                    // raw Orleans rejection (grain mid-deactivation) still gets the actionable error.
+                    activationFailures?.Record(streamId, ex.Message);
                     _hubReadyRaw.OnError(ex);
                     // Retry-on-next-access: without this the grain stays a parked
                     // corpse answering Failed until idle collection; deactivating
@@ -293,8 +305,10 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
                     if (_hub is not null) return;
                     logger.LogWarning("[ACTIVATE] Grain {StreamId}: source completed with no usable node for {Path}",
                         streamId, addressPath);
-                    _hubReadyRaw.OnError(new InvalidOperationException(
-                        $"No MeshNode resolvable for address '{addressPath}'. Either the node does not exist or no query provider claims its partition."));
+                    var noNodeError =
+                        $"No MeshNode resolvable for address '{addressPath}'. Either the node does not exist or no query provider claims its partition.";
+                    activationFailures?.Record(streamId, noNodeError);
+                    _hubReadyRaw.OnError(new InvalidOperationException(noNodeError));
                     TryDeactivateOnIdle();
                 });
 
@@ -341,12 +355,22 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
                     $"No hub configuration resolved for {node.Path} (NodeType: {node.NodeType ?? "(null)"}). " +
                     "The node type could not produce a hub configuration; check its registration and compilation state.";
                 logger.LogWarning("[ACTIVATE] Grain {StreamId}: {Reason} — activating NACK fallback hub", streamId, reason);
+                // Defect 3: a NACK-fallback hub means activation could not produce a usable config
+                // (the broken-NodeType case). Record the reason so a delivery that only sees the raw
+                // Orleans rejection (this hub DeactivateOnIdle's below) still gets the real cause.
+                activationFailures?.Record(streamId, reason);
                 node = node with
                 {
                     HubConfiguration = c => c.Set(
                         new UnhandledMessageNack(reason, ErrorType.NotFound, node.NodeType))
                 };
                 TryDeactivateOnIdle();
+            }
+            else
+            {
+                // Genuine, usable configuration resolved — this grain can serve. Clear any stale
+                // activation error so a later transient rejection doesn't surface an outdated cause.
+                activationFailures?.Clear(streamId);
             }
             var hub = meshHub.GetHostedHub(address, config =>
             {
@@ -383,6 +407,7 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
         catch (Exception ex)
         {
             logger.LogError(ex, "Grain {StreamId}: CompleteActivation failed", streamId);
+            activationFailures?.Record(streamId, ex.Message);
             _hubReadyRaw.OnError(ex);
             // Same retry-on-next-access semantics as the activation-fault path:
             // a grain whose hub construction threw must not linger as a corpse.

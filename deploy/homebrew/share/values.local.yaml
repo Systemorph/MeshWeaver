@@ -66,6 +66,9 @@ config:
     # ---- Local LLM via host-native Ollama (LocalColimaMac.md §10) ------------
     OpenAICompatible__Endpoint: "http://ollama:11434/v1"
     OpenAICompatible__Models__0: "qwen3.6-code"
+    # Auto-discover the endpoint's model list instead of the static Models[] above.
+    # Read as a Boolean — must be "true"/"false", never left empty (issue #352).
+    OpenAICompatible__DiscoverModels: "false"
 
     # ---- Full logging (verbose) — see header note. Declared here for
     # visibility; ALSO applied by `memex-local up` via `kubectl set env`

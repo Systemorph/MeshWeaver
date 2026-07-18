@@ -122,7 +122,10 @@ data:
   # static Models[] above — a pulled model then shows up in the picker without a config edit.
   # When "true", leave Models[] empty (discovery owns this provider's child set). The embedding
   # model (Embedding__Model) is excluded from the chat catalog. Empty/false = static behaviour.
-  OpenAICompatible__DiscoverModels: "{{ .Values.config.memex_portal.OpenAICompatible__DiscoverModels | default "" }}"
+  # NOTE: this key is read as a Boolean (GetValue<bool>), so its default must be a PARSEABLE value —
+  # `default "false"`, never `default ""`. The `default ""` pattern above is only safe for keys
+  # consumed as strings; an empty string fails Boolean.Parse and crashes host startup (issue #352).
+  OpenAICompatible__DiscoverModels: "{{ .Values.config.memex_portal.OpenAICompatible__DiscoverModels | default "false" }}"
   # Tier → concrete model id (agents that declare ModelTier resolve through these).
   ModelTier__Heavy: "{{ .Values.config.memex_portal.ModelTier__Heavy }}"
   ModelTier__Standard: "{{ .Values.config.memex_portal.ModelTier__Standard }}"

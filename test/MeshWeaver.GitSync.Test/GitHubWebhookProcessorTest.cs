@@ -123,4 +123,112 @@ public class GitHubWebhookProcessorTest(ITestOutputHelper output) : GitHubSyncTe
         var updated = await Webhooks.Process("issues", payload).Timeout(60.Seconds()).ToTask();
         Assert.Equal(0, updated);
     }
+
+    // ── push → auto-update ───────────────────────────────────────────────────
+
+    [Fact]
+    public void TryParsePush_BranchFilesAndTruncation()
+    {
+        // A branch push with two commits: the changed set is the union of added/modified/removed.
+        var push = ParsePush("""
+        {
+          "ref": "refs/heads/main", "size": 2,
+          "commits": [
+            { "added": ["Store/index.json"], "modified": [], "removed": [] },
+            { "added": [], "modified": ["Store/Plugin.json"], "removed": ["Old.md"] }
+          ]
+        }
+        """);
+        Assert.NotNull(push);
+        Assert.Equal("main", push!.Branch);
+        Assert.NotNull(push.ChangedPaths);
+        Assert.Equal(
+            new[] { "Old.md", "Store/Plugin.json", "Store/index.json" },
+            push.ChangedPaths!.OrderBy(p => p, StringComparer.Ordinal));
+
+        // GitHub caps the commits array at 20 — when size exceeds it, the change set is UNKNOWN.
+        Assert.Null(ParsePush("""
+        { "ref": "refs/heads/main", "size": 25,
+          "commits": [ { "added": ["A.md"], "modified": [], "removed": [] } ] }
+        """)!.ChangedPaths);
+
+        // Tag pushes and branch deletions carry nothing to import.
+        Assert.Null(ParsePush("""{ "ref": "refs/tags/v1.0", "commits": [] }"""));
+        Assert.Null(ParsePush("""{ "ref": "refs/heads/main", "deleted": true, "commits": [] }"""));
+
+        static GitHubWebhookProcessor.PushEvent? ParsePush(string json)
+            => GitHubWebhookProcessor.TryParsePush(JsonDocument.Parse(json).RootElement, out var p) ? p : null;
+    }
+
+    [Fact]
+    public void ConfigMatchesPush_BranchDirectionAndSubdirectory()
+    {
+        var main = new GitHubWebhookProcessor.PushEvent("main", ["Store/index.json", "README.md"]);
+        var cfg = new GitHubSyncConfig { RepositoryUrl = "https://github.com/o/r", Branch = "main" };
+
+        // Branch must match; export-only sources never import.
+        Assert.True(GitHubWebhookProcessor.ConfigMatchesPush(cfg, main));
+        Assert.False(GitHubWebhookProcessor.ConfigMatchesPush(cfg with { Branch = "develop" }, main));
+        Assert.False(GitHubWebhookProcessor.ConfigMatchesPush(
+            cfg with { Direction = SyncDirection.ExportOnly }, main));
+        Assert.False(GitHubWebhookProcessor.ConfigMatchesPush(null, main));
+
+        // A subdirectory-scoped source updates only when the push touched its subdirectory.
+        Assert.True(GitHubWebhookProcessor.ConfigMatchesPush(cfg with { Subdirectory = "Store" }, main));
+        Assert.False(GitHubWebhookProcessor.ConfigMatchesPush(cfg with { Subdirectory = "Chess" }, main));
+        // Prefix must be segment-aligned: "Store" must not match "StoreFront/…".
+        Assert.False(GitHubWebhookProcessor.ConfigMatchesPush(
+            cfg with { Subdirectory = "Store" },
+            new GitHubWebhookProcessor.PushEvent("main", ["StoreFront/index.json"])));
+
+        // UNKNOWN change set (truncated push) → every candidate syncs rather than missing one.
+        var unknown = new GitHubWebhookProcessor.PushEvent("main", null);
+        Assert.True(GitHubWebhookProcessor.ConfigMatchesPush(cfg with { Subdirectory = "Chess" }, unknown));
+
+        // An empty change set (no-op push) syncs nothing.
+        var empty = new GitHubWebhookProcessor.PushEvent("main", []);
+        Assert.False(GitHubWebhookProcessor.ConfigMatchesPush(cfg, empty));
+        Assert.False(GitHubWebhookProcessor.ConfigMatchesPush(cfg with { Subdirectory = "Store" }, empty));
+    }
+
+    [Fact(Timeout = 120000)]
+    public async Task Process_PushEvent_TriggersUpdateToLatestOnMatchingSpaces()
+    {
+        await Connect();
+        var repo = "https://github.com/test/push-auto";
+
+        // Space A authors content and commits it — the fake repo now holds the canonical files.
+        var a = "GhPa" + Guid.NewGuid().ToString("N")[..8];
+        await CreateSpace(a, "Push Source Space");
+        await CreateMarkdown($"{a}/Welcome", "Welcome", "# Welcome\n\nPushed content.");
+        await Sync.SaveConfig(a, repo, "main", null, true, true).Timeout(30.Seconds()).ToTask();
+        await Sync.SyncToGitHub(a, UserId).Timeout(60.Seconds()).ToTask();
+
+        // Space B syncs the SAME repo but has never imported — the push must update it headlessly.
+        var b = "GhPb" + Guid.NewGuid().ToString("N")[..8];
+        await CreateSpace(b, "Push Target Space");
+        await Sync.SaveConfig(b, repo, "main", null, true, true).Timeout(30.Seconds()).ToTask();
+
+        // A push on a DIFFERENT branch matches nothing.
+        var otherBranch = JsonDocument.Parse("""
+        { "ref": "refs/heads/develop", "size": 1,
+          "repository": { "full_name": "test/push-auto" },
+          "commits": [ { "added": ["Welcome.md"], "modified": [], "removed": [] } ] }
+        """).RootElement;
+        Assert.Equal(0, await Webhooks.Process("push", otherBranch).Timeout(60.Seconds()).ToTask());
+
+        // The main-branch push triggers the headless update for BOTH sync sources.
+        var payload = JsonDocument.Parse("""
+        { "ref": "refs/heads/main", "size": 1,
+          "repository": { "full_name": "test/push-auto" },
+          "commits": [ { "added": [], "modified": ["Welcome.md"], "removed": [] } ] }
+        """).RootElement;
+        var triggered = await Webhooks.Process("push", payload).Timeout(60.Seconds()).ToTask();
+        Assert.Equal(2, triggered);
+
+        // The import runs as a background activity — observe the node landing in Space B.
+        var imported = await WaitForNode($"{b}/Welcome");
+        Assert.Equal("Markdown", imported.NodeType);
+        Assert.Contains("Pushed content.", MarkdownBody(imported));
+    }
 }

@@ -7,6 +7,7 @@ using System.Text.Json;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
@@ -22,6 +23,16 @@ namespace MeshWeaver.GitSync;
 /// that repository, merging in the new comment on a comment event and preserving comments already
 /// synced. The write runs under the system identity (an infrastructure mirror update, the same
 /// identity model as the instance-sync pull and <c>StaticRepoImporter</c>).
+///
+/// <para><c>push</c> events keep GitSync'd Spaces CURRENT without polling: every Space whose
+/// sync config targets the pushed repository + branch — and, when the config scopes a
+/// subdirectory, whose subdirectory the push actually touched — gets the same headless
+/// "Update to latest" the GUI button and the MCP <c>git_hub_sync</c> tool run
+/// (<see cref="GitHubActivityExtensions.UpdateToLatestFromGitHub"/>, <c>force: false</c> so
+/// two-way conflict resolution still protects server-side edits). The mesh writes run under
+/// the system identity; the GitHub pull authenticates as the sync config's CREATOR (their
+/// connected credential, or the GitHub App when they have none). Register the repo webhook
+/// with the <c>Pushes</c> event next to <c>Issues</c>/<c>Issue comments</c>.</para>
 ///
 /// <para>Pull-request events are intentionally ignored: PR state is read LIVE (delegated) and
 /// never materialized, so there is no node to refresh. Reactive end-to-end — no
@@ -70,6 +81,8 @@ public sealed class GitHubWebhookProcessor
     /// </summary>
     public IObservable<int> Process(string eventType, JsonElement payload)
     {
+        if (string.Equals(eventType, "push", StringComparison.OrdinalIgnoreCase))
+            return ProcessPush(payload);
         var isIssues = string.Equals(eventType, "issues", StringComparison.OrdinalIgnoreCase);
         var isComment = string.Equals(eventType, "issue_comment", StringComparison.OrdinalIgnoreCase);
         if (!isIssues && !isComment)
@@ -102,6 +115,151 @@ public sealed class GitHubWebhookProcessor
                 .ToList()
                 .Select(list => list.Count);
         });
+    }
+
+    // ── push → auto-update ───────────────────────────────────────────────────
+
+    /// <summary>
+    /// One parsed <c>push</c> event: the branch and the union of file paths the push touched.
+    /// <see cref="ChangedPaths"/> is <see langword="null"/> when the change set is UNKNOWN
+    /// (GitHub caps the <c>commits</c> array at 20 — a larger push must sync every candidate
+    /// rather than silently skipping a subdirectory it can't see).
+    /// </summary>
+    internal sealed record PushEvent(string Branch, IReadOnlyList<string>? ChangedPaths);
+
+    /// <summary>A Space sync source to update: the Space path, the source id (null = primary),
+    /// and the user whose GitHub credential authenticates the pull — the sync config's CREATOR
+    /// (the human who set the sync up; the activity-owner model), falling back to the system
+    /// identity, which <see cref="GitHubSyncService"/> resolves to the GitHub App.</summary>
+    internal sealed record PushTarget(string SpacePath, string? SourceId, string UserId);
+
+    /// <summary>
+    /// Parses a <c>push</c> payload. False for non-branch refs (tag pushes) and branch
+    /// deletions — there is nothing to import from either.
+    /// </summary>
+    internal static bool TryParsePush(JsonElement payload, out PushEvent push)
+    {
+        push = null!;
+        const string headsPrefix = "refs/heads/";
+        var @ref = GetString(payload, "ref");
+        if (@ref is null || !@ref.StartsWith(headsPrefix, StringComparison.Ordinal))
+            return false;
+        if (payload.TryGetProperty("deleted", out var del) && del.ValueKind == JsonValueKind.True)
+            return false;
+
+        IReadOnlyList<string>? changed = null;
+        if (payload.TryGetProperty("commits", out var commits) && commits.ValueKind == JsonValueKind.Array)
+        {
+            var set = new HashSet<string>(StringComparer.Ordinal);
+            var commitCount = 0;
+            foreach (var commit in commits.EnumerateArray())
+            {
+                commitCount++;
+                set.UnionWith(GetArray(commit, "added", Self));
+                set.UnionWith(GetArray(commit, "modified", Self));
+                set.UnionWith(GetArray(commit, "removed", Self));
+            }
+            // payload.size = commits in the push; the commits array is capped at 20.
+            var size = GetInt(payload, "size");
+            changed = size > commitCount ? null : set.ToList();
+        }
+        push = new PushEvent(@ref[headsPrefix.Length..], changed);
+        return true;
+
+        static string? Self(JsonElement el)
+            => el.ValueKind == JsonValueKind.String ? el.GetString() : null;
+    }
+
+    /// <summary>
+    /// Whether one sync source should update for <paramref name="push"/>: the branch must match,
+    /// the source must be allowed to import, and — when the source scopes a subdirectory and the
+    /// push's change set is known — the push must have touched that subdirectory.
+    /// </summary>
+    internal static bool ConfigMatchesPush(GitHubSyncConfig? cfg, PushEvent push)
+    {
+        if (cfg is null || cfg.Direction == SyncDirection.ExportOnly)
+            return false;
+        if (!string.Equals(cfg.Branch, push.Branch, StringComparison.OrdinalIgnoreCase))
+            return false;
+        if (push.ChangedPaths is null)
+            return true;
+        var sub = cfg.Subdirectory?.Trim('/') ?? "";
+        if (sub.Length == 0)
+            return push.ChangedPaths.Count > 0;
+        return push.ChangedPaths.Any(p =>
+            p.Equals(sub, StringComparison.OrdinalIgnoreCase)
+            || p.StartsWith(sub + "/", StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>
+    /// A verified <c>push</c> → the same headless "Update to latest" for every matching sync
+    /// source. TRIGGERS the updates (each runs as its own activity, fire-and-forget with error
+    /// logging) and emits the number triggered — it does NOT await the imports, so the webhook
+    /// response returns within GitHub's delivery timeout.
+    /// </summary>
+    private IObservable<int> ProcessPush(JsonElement payload)
+    {
+        if (!TryParsePush(payload, out var push) || !TryGetRepoUrl(payload, out var repoUrl))
+            return Observable.Return(0);
+
+        return MatchingSyncTargets(repoUrl, push).Select(targets =>
+        {
+            if (targets.Count == 0)
+            {
+                logger?.LogInformation(
+                    "GitHub push webhook for {Repo}@{Branch} matched no synced Space.", repoUrl, push.Branch);
+                return 0;
+            }
+            logger?.LogInformation(
+                "GitHub push webhook ({Repo}@{Branch}) → updating {Count} sync source(s) to latest.",
+                repoUrl, push.Branch, targets.Count);
+            var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
+            foreach (var t in targets)
+                Observable.Using(
+                        () => accessService.ImpersonateAsSystem(),
+                        _ => hub.UpdateToLatestFromGitHub(
+                            t.SpacePath, t.UserId, sourceId: t.SourceId))
+                    .Subscribe(
+                        activity => logger?.LogInformation(
+                            "Push-triggered update of {Space} completed ({Activity}).", t.SpacePath, activity),
+                        exception => logger?.LogWarning(exception,
+                            "Push-triggered update of {Space} (source {Source}) failed.",
+                            t.SpacePath, t.SourceId ?? "(primary)"));
+            return targets.Count;
+        });
+    }
+
+    /// <summary>The distinct sync sources whose config targets <paramref name="repoUrl"/> AND
+    /// matches the push's branch + touched paths.</summary>
+    private IObservable<IReadOnlyList<PushTarget>> MatchingSyncTargets(string repoUrl, PushEvent push)
+    {
+        var target = ParseSafe(repoUrl);
+        return meshService
+            .Query<MeshNode>(MeshQueryRequest.FromQuery($"nodeType:{GitHubSyncService.ConfigNodeType}"))
+            .Take(1)
+            .Select(c => (IReadOnlyList<PushTarget>)c.Items
+                .Where(n => RepoMatches(n, target))
+                .Where(n => ConfigMatchesPush(
+                    n.ContentAs<GitHubSyncConfig>(hub.JsonSerializerOptions, logger), push))
+                .Select(ToPushTarget)
+                .Where(t => t is not null)
+                .Select(t => t!)
+                .DistinctBy(t => (t.SpacePath, t.SourceId))
+                .ToList());
+    }
+
+    /// <summary>Maps a config node path (<c>{space}/_GitSync</c> or <c>{space}/_GitSync/{sourceId}</c>)
+    /// to the Space + source id it configures.</summary>
+    private static PushTarget? ToPushTarget(MeshNode configNode)
+    {
+        var parts = configNode.Path.Split('/');
+        var idx = Array.IndexOf(parts, GitHubSyncService.ConfigId);
+        if (idx <= 0)
+            return null;
+        var space = string.Join('/', parts[..idx]);
+        var sourceId = idx == parts.Length - 1 ? null : string.Join('/', parts[(idx + 1)..]);
+        var userId = configNode.CreatedBy is { Length: > 0 } creator ? creator : WellKnownUsers.System;
+        return new PushTarget(space, sourceId, userId);
     }
 
     // ── helpers ──────────────────────────────────────────────────────────────
