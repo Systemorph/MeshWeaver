@@ -118,6 +118,9 @@ public static class MarkdownExportExtensions
             {
                 services.TryAddEnumerable(
                     ServiceDescriptor.Scoped<INodeMenuProvider, MarkdownExportMenuProvider>());
+                // Deck nodes get a PDF export item (one page per slide) — self-gated on NodeType=Deck.
+                services.TryAddEnumerable(
+                    ServiceDescriptor.Scoped<INodeMenuProvider, DeckExportMenuProvider>());
                 return services;
             })
             .AddLayout(layout => layout

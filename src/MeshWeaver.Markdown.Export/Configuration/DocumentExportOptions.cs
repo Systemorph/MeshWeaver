@@ -46,6 +46,13 @@ public record DocumentExportOptions
     /// <summary>Max descendant depth when <see cref="IncludeChildren"/> is true (0 = unlimited).</summary>
     public int MaxDepth { get; init; }
 
+    /// <summary>
+    /// Render pages in landscape (wide) orientation instead of portrait. Off by default
+    /// (markdown documents stay portrait A4); the Deck → PDF export turns this on so
+    /// 16:9 slides fill the page.
+    /// </summary>
+    public bool Landscape { get; init; }
+
     /// <summary>Optional override for footer text; falls back to the brand's footer.</summary>
     public string? FooterOverride { get; init; }
 

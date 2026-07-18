@@ -106,8 +106,14 @@ public static class CommentsExtensions
                 .Catch<MeshNode, Exception>(_ => Observable.Return((MeshNode)null!))
                 .SelectMany(node =>
                 {
-                    var isReply = node?.Content is Comment;
+                    var parentComment = node?.Content as Comment;
+                    var isReply = parentComment is not null;
                     var version = node?.Version ?? 0;
+
+                    // A reply's primary document is the parent comment's document (its PrimaryNodePath),
+                    // never the parent comment path — replies delegate permissions to the doc, like a
+                    // top-level comment.
+                    var primaryNodePath = isReply ? (parentComment!.PrimaryNodePath ?? nodePath) : nodePath;
 
                     // Capture the selection as a (Start, Length) range in the document's clean text.
                     var start = -1;
@@ -125,7 +131,7 @@ public static class CommentsExtensions
                     var comment = new Comment
                     {
                         Id = markerId,
-                        PrimaryNodePath = nodePath,
+                        PrimaryNodePath = primaryNodePath,
                         MarkerId = anchored ? markerId : null,
                         HighlightedText = anchored ? selectedText : null,
                         Author = author,
@@ -137,29 +143,31 @@ public static class CommentsExtensions
                         Length = anchored ? length : 0,
                         AnchorText = anchored ? anchorText : null
                     };
-                    var commentNode = new MeshNode(markerId, $"{nodePath}/{CommentPartition}")
+
+                    // ONE canonical namespace for the created node, agreeing with the ↩ reply form and
+                    // the renderer's child query:
+                    //   • reply  → {parentCommentPath}/{id}      (direct child of the parent comment)
+                    //   • text/page comment → {doc}/_Comment/{id} (child of the doc's _Comment partition)
+                    // The old handler wrote a reply into {parentCommentPath}/_Comment/{id} and linked it
+                    // via the parent's Replies list — a THIRD namespace the renderer never read from, so
+                    // request-path replies were invisible too (issue #473).
+                    var commentNamespace = isReply ? nodePath : $"{nodePath}/{CommentPartition}";
+                    var mainNode = isReply ? primaryNodePath : nodePath;
+                    var commentNode = new MeshNode(markerId, commentNamespace)
                     {
-                        Name = $"Comment by {author}",
+                        Name = isReply ? $"Reply to {parentComment!.Author}" : $"Comment by {author}",
                         NodeType = CommentNodeType.NodeType,
-                        MainNode = nodePath,
+                        MainNode = mainNode,
                         Content = comment
                     };
 
                     logger?.LogInformation(
-                        "[CreateComment] Anchoring {Id} on {Path}: anchored={Anchored} pos={Start}+{Length} v={Version}",
-                        markerId, nodePath, anchored, start, length, version);
+                        "[CreateComment] Anchoring {Id} on {Path}: anchored={Anchored} pos={Start}+{Length} v={Version} isReply={IsReply}",
+                        markerId, nodePath, anchored, start, length, version, isReply);
 
-                    var create = meshService.CreateNode(commentNode);
-
-                    // Reply: append the reply id to the parent Comment's Replies list. (Page/text
-                    // comments on a Markdown node leave the document untouched — no parent write.)
-                    if (isReply)
-                        return create.SelectMany(_ => workspace.GetMeshNodeStream().Update(n =>
-                            n.Content is Comment parent
-                                ? n with { Content = parent with { Replies = parent.Replies.Add(markerId) } }
-                                : n));
-
-                    return create;
+                    // The reply is discovered by the parent comment's child-Comment query at render time
+                    // (CommentLayoutAreas.Overview) — no Replies-list denormalization to keep in sync.
+                    return meshService.CreateNode(commentNode);
                 })
                 .Subscribe(
                     _ => hub.Post(

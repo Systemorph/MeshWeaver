@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.Globalization;
 using MeshWeaver.Markdown.Export.Branding;
+using MeshWeaver.Markdown.Export.Configuration;
 using MeshWeaver.Markdown.Export.Model;
 using QuestPDF.Fluent;
 using QuestPDF.Helpers;
@@ -31,9 +32,16 @@ public class PdfDocumentRenderer
         }).GeneratePdf();
     }
 
+    /// <summary>
+    /// Applies the page size honouring the document's orientation option — A4 portrait by
+    /// default, A4 landscape when <see cref="DocumentExportOptions.Landscape"/> is set (decks).
+    /// </summary>
+    private static void ApplyPageSize(PageDescriptor page, Document document)
+        => page.Size(document.Options.Landscape ? PageSizes.A4.Landscape() : PageSizes.A4);
+
     private static void ComposeCover(PageDescriptor page, Document document)
     {
-        page.Size(PageSizes.A4);
+        ApplyPageSize(page, document);
         page.Margin(2, Unit.Centimetre);
         page.DefaultTextStyle(x => x.FontFamily(document.Branding.FontFamily));
 
@@ -72,7 +80,7 @@ public class PdfDocumentRenderer
 
     private static void ComposeToc(PageDescriptor page, Document document)
     {
-        page.Size(PageSizes.A4);
+        ApplyPageSize(page, document);
         page.Margin(2, Unit.Centimetre);
         page.DefaultTextStyle(x => x.FontFamily(document.Branding.FontFamily));
         ApplyHeader(page, document);
@@ -105,7 +113,7 @@ public class PdfDocumentRenderer
 
     private static void ComposeBody(PageDescriptor page, Document document)
     {
-        page.Size(PageSizes.A4);
+        ApplyPageSize(page, document);
         page.Margin(2, Unit.Centimetre);
         page.DefaultTextStyle(x => x.FontFamily(document.Branding.FontFamily).FontSize(11));
         ApplyHeader(page, document);
