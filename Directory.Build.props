@@ -52,6 +52,22 @@
          a deployed binary syncs from. -->
     <PlatformVersion Condition="'$(PlatformVersion)' == ''">3.0.0</PlatformVersion>
   </PropertyGroup>
+  <!-- Multi-arch container publish race fix (main-cd / release-images / edge-images pass
+       -p:ContainerRuntimeIdentifiers="linux-x64;linux-arm64"). The SDK builds the two RID legs of the
+       publish CONCURRENTLY. A reference assembly is RID-INVARIANT, so its intermediate path has NO rid
+       segment (obj/<cfg>/<tfm>/ref/<Asm>.dll) — both legs' CopyRefAssembly target write that SAME file
+       and intermittently collide → "error MSB3883: … MeshWeaver.Graph.dll … being used by another
+       process" (the intermittent portal-ai image-build failure). Ref assemblies exist only to skip
+       downstream recompilation on INCREMENTAL rebuilds; a from-clean CI container publish gains
+       nothing from them, so turning them off for the multi-arch publish removes the one shared,
+       contended output — killing the race at its source while keeping both RID legs parallel (no
+       serialization, no retry). ContainerRuntimeIdentifiers is a global property, so this condition is
+       seen by every project in the publish graph — including the referenced libraries that actually
+       race. It is empty in normal dev / the Build-and-Test CI, so ref assemblies (and fast incremental
+       builds) are UNAFFECTED there. -->
+  <PropertyGroup Condition="'$(ContainerRuntimeIdentifiers)' != ''">
+    <ProduceReferenceAssembly>false</ProduceReferenceAssembly>
+  </PropertyGroup>
   <!-- Two version channels — CONTINUOUS (CI) vs RELEASED (CD):
        • RELEASED  (-p:PublicRelease=true, the CD/release pipeline): clean $(PlatformVersion).
          This is what NuGet packages AND the Docker image carry, e.g. 3.0.0-rc1. Tag the repo
