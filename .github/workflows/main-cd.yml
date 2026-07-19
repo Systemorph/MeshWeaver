@@ -199,6 +199,71 @@ jobs:
           -p:ContainerRepository=memex-migration
           -p:ContainerImageTags='"${{ steps.vars.outputs.version }};${{ steps.vars.outputs.sha }};main"'
 
+  # The MeshWeaver.Plugins PR gate image: `mw-plugin-test` (tools/MeshWeaver.PluginTester)
+  # imports a node-repo checkout into a fresh in-process mesh, asserts every NodeType compiles,
+  # renders, and its `Tests` layout area executes green. The plugins repo's ci.yml `test-repos`
+  # job runs INSIDE this image (repo variable MW_TEST_IMAGE), so every main build must refresh
+  # it — `latest` is the stable tag that variable pins.
+  plugin-test-image:
+    name: "Build + push mw-plugin-test image"
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          dotnet: false
+          android: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+      # Same $(Version) computation as the other legs — GITHUB_RUN_NUMBER is shared across the
+      # run, so the 3.0.0-ci.<n> tag matches the portal/migration images by construction.
+      - name: Compute image tags (version + short SHA)
+        id: vars
+        run: |
+          set -euo pipefail
+          echo "sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+          VERSION=$(dotnet msbuild tools/MeshWeaver.PluginTester/MeshWeaver.PluginTester.csproj \
+            -getProperty:Version -p:CIRun=true -nologo | tr -d '[:space:]')
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Computed image version: $VERSION (run #$GITHUB_RUN_NUMBER)"
+      - name: Ensure Azure CLI
+        run: command -v az >/dev/null || curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - name: ACR login
+        run: az acr login --name meshweaver
+      # Lean console image on the standard multi-arch base; <RuntimeIdentifiers> lives in the
+      # csproj (project-local — a global -p:RuntimeIdentifiers breaks referenced libs, see above).
+      # `latest` rides along so the plugins repo can pin MW_TEST_IMAGE=…/mw-plugin-test:latest.
+      - name: Build + push mw-plugin-test
+        run: >
+          dotnet publish tools/MeshWeaver.PluginTester/MeshWeaver.PluginTester.csproj
+          -c Release --no-self-contained -t:PublishContainer -p:PublishProfile=
+          -p:ContainerRuntimeIdentifiers='"linux-x64;linux-arm64"'
+          -p:CIRun=true
+          -p:ContainerRegistry=${{ env.ACR }}
+          -p:ContainerRepository=mw-plugin-test
+          -p:ContainerImageTags='"${{ steps.vars.outputs.version }};${{ steps.vars.outputs.sha }};main;latest"'
+
   # ─────────────────────────────── NO DEPLOY JOB ─────────────────────────────
   # Deployment is PULL-BASED, not push. CI's job ends at "publish the image to ACR" (the image
   # jobs above). Each installation — memex / atioz / memex-cloud AND every external install in the

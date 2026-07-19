@@ -240,6 +240,7 @@ jobs:
           [MeshWeaver.Courses.Test]=20
           [MeshWeaver.Layout.Test]=20
           [MeshWeaver.PluginCatalog.Test]=20
+          [MeshWeaver.PluginTester.Test]=60
           [MeshWeaver.Markdown.Test]=20
           [MeshWeaver.PathResolution.Test]=15
           [MeshWeaver.PensionFund.Test]=15
