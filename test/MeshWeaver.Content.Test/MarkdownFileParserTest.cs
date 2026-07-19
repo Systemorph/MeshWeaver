@@ -527,6 +527,65 @@ public class MarkdownFileParserTest
     }
 
     [Fact(Timeout = 20000)]
+    public void Parse_NamespacedSlideNode_BuildsSlideContent_AndRoundTrips()
+    {
+        // Arrange - a plugin-namespaced slide file exactly as the education repo ships
+        // it (NodeType Slides/Slide). Matching only the bare "Slide" constant degraded
+        // these to MarkdownContent, and the next mesh→repo export dropped their
+        // Notes/Background frontmatter from git.
+        var raw = """
+            ---
+            NodeType: Slides/Slide
+            Name: After a while
+            Order: 4
+            Notes: Pause here. This is the payoff of the daily pages.
+            Background: linear-gradient(135deg,#0b1d3a,#0655bf)
+            ---
+
+            # After a while
+            """;
+
+        // Act
+        var parsed = _parser.Parse("/root/deck/S04.md", raw, "deck/S04.md");
+        var serialized = _parser.Serialize(parsed!);
+
+        // Assert - the namespaced type keeps its typed SlideContent ...
+        parsed!.NodeType.Should().Be("Slides/Slide");
+        var slide = parsed.Content.Should().BeOfType<SlideContent>().Subject;
+        slide.Notes.Should().Be("Pause here. This is the payoff of the daily pages.");
+        slide.Background.Should().Be("linear-gradient(135deg,#0b1d3a,#0655bf)");
+
+        // ... and the export re-emits the frontmatter instead of destroying it
+        serialized.Should().Contain("NodeType: Slides/Slide");
+        serialized.Should().Contain("Notes: Pause here. This is the payoff of the daily pages.");
+        serialized.Should().Contain("Background: linear-gradient(135deg,#0b1d3a,#0655bf)");
+    }
+
+    [Fact(Timeout = 20000)]
+    public void Serialize_NamespacedSlideNode_WithJsonElementContent_EmitsNotesAndBackground()
+    {
+        // Arrange - untyped wire form of a namespaced slide (hub without typed registry)
+        var json = """
+            {"$type":"SlideContent","content":"# Body","notes":"A note.","background":"#0b1d3a"}
+            """;
+        var node = new MeshNode("S05", "deck")
+        {
+            NodeType = "Slides/Slide",
+            Name = "S05",
+            Content = System.Text.Json.JsonDocument.Parse(json).RootElement
+        };
+
+        // Act
+        var serialized = _parser.Serialize(node);
+
+        // Assert
+        serialized.Should().Contain("NodeType: Slides/Slide");
+        serialized.Should().Contain("Notes: A note.");
+        serialized.Should().Contain("Background:").And.Contain("#0b1d3a");
+        serialized.Should().Contain("# Body");
+    }
+
+    [Fact(Timeout = 20000)]
     public void RoundTrip_OrderedMarkdownNode_PreservesOrder()
     {
         // Arrange - Order applies to ANY node type (lesson/module ordering)

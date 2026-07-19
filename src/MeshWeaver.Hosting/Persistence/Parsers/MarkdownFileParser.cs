@@ -189,7 +189,7 @@ public partial class MarkdownFileParser : IFileFormatParser
         // + stage background) so a git reimport no longer downgrades Slide →
         // MarkdownContent — the slide views read SlideContent, and a MarkdownContent
         // payload would render an empty stage.
-        object nodeContent = nodeType == SlideNodeType.NodeType
+        object nodeContent = IsSlideNodeType(nodeType)
             ? new SlideContent
             {
                 Content = markdownContent,
@@ -222,6 +222,17 @@ public partial class MarkdownFileParser : IFileFormatParser
         return node;
     }
 
+    /// <summary>
+    /// A slide file may carry the built-in <c>Slide</c> node type or a plugin-namespaced
+    /// variant (e.g. <c>Slides/Slide</c> from the Slides store plugin). Both must build
+    /// SlideContent and round-trip Notes/Background: matching only the bare constant let
+    /// a namespaced slide degrade to MarkdownContent on import, and the next mesh→repo
+    /// export then dropped its Notes/Background frontmatter entirely.
+    /// </summary>
+    private static bool IsSlideNodeType(string? nodeType) =>
+        nodeType == SlideNodeType.NodeType
+        || nodeType?.EndsWith("/" + SlideNodeType.NodeType, StringComparison.Ordinal) == true;
+
     /// <inheritdoc />
     public string Serialize(MeshNode node)
     {
@@ -237,7 +248,7 @@ public partial class MarkdownFileParser : IFileFormatParser
         var (slideNotes, slideBackground) = node.Content switch
         {
             SlideContent slide => (NullIfEmpty(slide.Notes), NullIfEmpty(slide.Background)),
-            System.Text.Json.JsonElement je when node.NodeType == SlideNodeType.NodeType =>
+            System.Text.Json.JsonElement je when IsSlideNodeType(node.NodeType) =>
                 (ExtractStringProperty(je, "notes"), ExtractStringProperty(je, "background")),
             _ => (null, null)
         };
