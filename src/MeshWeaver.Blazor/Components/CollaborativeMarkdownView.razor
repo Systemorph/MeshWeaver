@@ -134,8 +134,8 @@
         </div>
     }
 
-    @* Bottom page comment section *@
-    @if (!string.IsNullOrEmpty(BoundNodePath))
+    @* Bottom page comment section — suppressed for @@ embeds (HideAnnotations) *@
+    @if (!BoundHideAnnotations && !string.IsNullOrEmpty(BoundNodePath))
     {
         <div class="page-comment-section">
             @if (_showPageCommentInput)

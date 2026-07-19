@@ -33,6 +33,14 @@ public record CollaborativeMarkdownControl()
     /// </summary>
     public bool CanEdit { get; init; }
 
+    /// <summary>
+    /// Suppresses ALL collaboration UI: comment highlights/sidebar, tracked-change review,
+    /// the selection-comment affordance, and the page-comment footer. Set for @@ embeds, whose
+    /// collaboration surface belongs to the embedded node's own page, not the embedding one.
+    /// Default-false so only the non-default (true) value ever needs to serialize.
+    /// </summary>
+    public bool HideAnnotations { get; init; }
+
     /// <summary>Returns a copy with <paramref name="value"/> as the annotated markdown content.</summary>
     /// <param name="value">The markdown string (with annotation markers) to render.</param>
     /// <returns>A new <see cref="CollaborativeMarkdownControl"/> with the updated value.</returns>
@@ -53,4 +61,8 @@ public record CollaborativeMarkdownControl()
     /// <param name="canEdit">True to enable accept/reject tracked-change controls.</param>
     /// <returns>A new <see cref="CollaborativeMarkdownControl"/> with the updated can-edit flag.</returns>
     public CollaborativeMarkdownControl WithCanEdit(bool canEdit) => this with { CanEdit = canEdit };
+    /// <summary>Returns a copy with <paramref name="hideAnnotations"/> controlling whether collaboration UI is suppressed.</summary>
+    /// <param name="hideAnnotations">True to render the markdown without any comment/tracked-change UI (used for @@ embeds).</param>
+    /// <returns>A new <see cref="CollaborativeMarkdownControl"/> with the updated hide-annotations flag.</returns>
+    public CollaborativeMarkdownControl WithHideAnnotations(bool hideAnnotations) => this with { HideAnnotations = hideAnnotations };
 }
