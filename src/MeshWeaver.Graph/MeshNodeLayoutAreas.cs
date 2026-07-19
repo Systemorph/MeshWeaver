@@ -207,13 +207,28 @@ public static class MeshNodeLayoutAreas
         var hubPath = host.Hub.Address.ToString();
         // CombineLatest with permission stream — pure observable composition, no await.
         return host.Workspace.GetMeshNodeStream().CombineLatest(
-            host.Hub.GetEffectivePermissions(hubPath),
-            (node, permissions) =>
+                host.Hub.GetEffectivePermissions(hubPath),
+                (node, permissions) => (Node: node, Permissions: permissions))
+            .SelectMany(t =>
             {
-                if (!permissions.HasFlag(Permission.Read))
-                    return (UiControl?)BuildAccessDenied(hubPath);
-                var canEdit = permissions.HasFlag(Permission.Update);
-                return (UiControl?)host.BuildDetailsContent(node, null, canEdit);
+                if (t.Permissions.HasFlag(Permission.Read))
+                    return Observable.Return((UiControl?)host.BuildDetailsContent(
+                        t.Node, null, t.Permissions.HasFlag(Permission.Update)));
+                // Read denied: the partition's declared funnel page (RedirectOnDenied — e.g.
+                // a product's glossy marketing brochure) takes the viewer there instead of a
+                // dead-end Request-Access wall. Rendering the denial INSIDE the area used to
+                // pre-empt the area-level redirect entirely, so the policy never applied on
+                // full-page Overviews. Fail-safe: no/looping/erroring policy → the denial page.
+                return host.Hub.GetRedirectOnDenied(hubPath)
+                    .Take(1)
+                    .Catch<string?, Exception>(_ => Observable.Return<string?>(null))
+                    .Select(redirect => redirect is { Length: > 0 }
+                        && !string.Equals(redirect, hubPath, StringComparison.OrdinalIgnoreCase)
+                        ? (UiControl?)Controls.Stack
+                            .WithView(Controls.Redirect("/" + redirect.TrimStart('/')), "Redirect")
+                            .WithView(Controls.Markdown(
+                                $"[Continue here →](/{redirect.TrimStart('/')})"))
+                        : BuildAccessDenied(hubPath));
             });
     }
 

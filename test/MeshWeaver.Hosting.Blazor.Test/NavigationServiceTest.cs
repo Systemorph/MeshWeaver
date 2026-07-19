@@ -228,6 +228,77 @@ public class NavigationServiceTest
         new(_navigationManager, _pathResolver, _hub, _circuitContextAccessor,
             [10, 20], null, gate);
 
+    /// <summary>Same as <see cref="CreateServiceWithGate"/> plus an injected RedirectOnDenied
+    /// lookup — drives the anonymous marketing-funnel wiring explicitly.</summary>
+    private NavigationService CreateServiceWithGateAndRedirect(
+        Func<string, IObservable<bool>> gate,
+        Func<string, IObservable<string?>> redirect) =>
+        new(_navigationManager, _pathResolver, _hub, _circuitContextAccessor,
+            [10, 20], null, gate, redirect);
+
+    [Fact]
+    public async Task AnonymousVisitor_GateDenies_WithPublicFunnel_RedirectsToMarketingPage()
+    {
+        // A denied page whose partition declares RedirectOnDenied pointing at an
+        // ANONYMOUS-READABLE page (the product's glossy marketing brochure): the logged-out
+        // visitor lands THERE, not on a dead login wall.
+        MakeVisitorAnonymous();
+        var service = CreateServiceWithGateAndRedirect(
+            path => System.Reactive.Linq.Observable.Return(
+                path == "UWDeepfield/Overview"),          // root denied, brochure public
+            _ => System.Reactive.Linq.Observable.Return<string?>("UWDeepfield/Overview"));
+        _pathResolver.ResolveNavigationPath(Arg.Any<string>())
+            .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(
+                new AddressResolution("UWDeepfield", null)));
+
+        service.Initialize();
+        _navigationManager.SimulateLocationChanged("http://localhost/UWDeepfield");
+
+        await WaitForRedirect("/UWDeepfield/Overview");
+        _navigationManager.Uri.Should().Contain("/UWDeepfield/Overview");
+        _navigationManager.Uri.Should().NotContain("/login");
+    }
+
+    [Fact]
+    public async Task AnonymousVisitor_GateDenies_FunnelTargetAlsoDenied_FailsClosedToLogin()
+    {
+        // FAIL-CLOSED: a RedirectOnDenied pointing at a page that is itself NOT
+        // anonymous-readable must never be followed — /login as before.
+        MakeVisitorAnonymous();
+        var service = CreateServiceWithGateAndRedirect(
+            _ => System.Reactive.Linq.Observable.Return(false),   // everything denied
+            _ => System.Reactive.Linq.Observable.Return<string?>("Private/Paywall"));
+        _pathResolver.ResolveNavigationPath(Arg.Any<string>())
+            .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(
+                new AddressResolution("Private/Space", "Overview")));
+
+        service.Initialize();
+        _navigationManager.SimulateLocationChanged("http://localhost/Private/Space/Overview");
+
+        await WaitForRedirect("/login?returnUrl=");
+        _navigationManager.Uri.Should().Contain("/login?returnUrl=");
+    }
+
+    [Fact]
+    public async Task AnonymousVisitor_GateDenies_SelfPointingFunnel_FailsClosedToLogin()
+    {
+        // FAIL-CLOSED: a policy pointing at the denied path itself must not loop the
+        // resolver — /login.
+        MakeVisitorAnonymous();
+        var service = CreateServiceWithGateAndRedirect(
+            _ => System.Reactive.Linq.Observable.Return(false),
+            _ => System.Reactive.Linq.Observable.Return<string?>("Private/Space"));
+        _pathResolver.ResolveNavigationPath(Arg.Any<string>())
+            .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(
+                new AddressResolution("Private/Space", "Overview")));
+
+        service.Initialize();
+        _navigationManager.SimulateLocationChanged("http://localhost/Private/Space/Overview");
+
+        await WaitForRedirect("/login?returnUrl=");
+        _navigationManager.Uri.Should().Contain("/login?returnUrl=");
+    }
+
     [Fact]
     public async Task AnonymousVisitor_GateAllows_LoadsThePage()
     {
@@ -252,9 +323,9 @@ public class NavigationServiceTest
     [Fact]
     public async Task AnonymousVisitor_GateDenies_RedirectsToLogin()
     {
-        // A denied page — regardless of any configured paywall — sends the logged-out visitor to
-        // /login first (returnUrl bounces them back after sign-in; the paywall then applies to
-        // the AUTHENTICATED visitor via the area-level access-denied redirect).
+        // A denied page with NO public funnel declared (the mocked hub yields no
+        // RedirectOnDenied) sends the logged-out visitor to /login (returnUrl bounces them
+        // back after sign-in).
         MakeVisitorAnonymous();
         var service = CreateServiceWithGate(_ =>
             System.Reactive.Linq.Observable.Return(false));
