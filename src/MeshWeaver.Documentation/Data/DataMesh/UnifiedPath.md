@@ -7,6 +7,8 @@ Icon: /static/DocContent/DataMesh/UnifiedPath/icon.svg
 
 Unified Path gives you a single, consistent way to **reference** or **embed** anything in your MeshWeaver application — images, markdown files, layout areas, data schemas, and more — using a compact `@` notation that works in markdown, autocomplete, and agent tool calls.
 
+> **The bigger picture:** this page is the *syntax*. For *why* one addressing scheme is the backbone of the whole platform — how it lets an agent go from a plain-English ask to a precise, typed, permission-checked action — see [Addressability of Objects](/Doc/DataMesh/Addressability).
+
 <svg viewBox="0 0 760 260" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;">
   <defs>
     <marker id="arr" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
