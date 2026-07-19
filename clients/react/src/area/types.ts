@@ -49,4 +49,9 @@ export interface AreaSource {
   getState(): AreaTree;
   subscribe(listener: () => void): () => void;
   emit(event: MeshEvent): void;
+  /** The raw error string when the subscription faulted / ended before a snapshot (access denied,
+   *  node gone, transient miss), or null/undefined while healthy. Set by GrpcAreaSource and notified
+   *  to subscribers; shells classify it via `classifyAreaError` (area/accessError). Optional so the
+   *  in-memory StaticAreaSource — which never faults — need not declare it. */
+  readonly error?: string | null;
 }

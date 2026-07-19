@@ -16,12 +16,22 @@
 // connection, exactly like the Vite SPA.
 
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { useRouter } from "next/navigation";
 import { Button, MessageBar, MessageBarActions, MessageBarBody, Spinner } from "@fluentui/react-components";
-import { EmbeddedAreaProvider, MeshAreaView, StaticAreaSource } from "@meshweaver/react";
+import { classifyAreaError, EmbeddedAreaProvider, MeshAreaView, StaticAreaSource } from "@meshweaver/react";
 import type { AreaSource, AreaTree } from "@meshweaver/react";
-import { rootAreaOf, targetKey, type AreaTarget } from "./live";
+import { deniedRedirectTarget, rootAreaOf, targetKey, type AreaTarget } from "./live";
 import { useLiveConnection, usePublishNavigation } from "./LiveConnection";
 import { useHydratedTheme } from "./useHydratedTheme";
+
+/** Redirect an unauthenticated visitor to the portal's unified /login, preserving where they were so
+ *  sign-in returns them here (the Blazor NavigationService appends the same returnUrl). /login is a
+ *  root-origin portal page (not a basePath route), so a full-page window.location navigation is right. */
+function goToLogin(): void {
+  if (typeof window === "undefined") return;
+  const returnUrl = encodeURIComponent(window.location.href);
+  window.location.href = `/login?returnUrl=${returnUrl}`;
+}
 
 export interface LiveAreaProps {
   /** The URL mesh path as routed (or the user's home partition for the default route). */
@@ -35,6 +45,10 @@ export interface LiveAreaProps {
   initialRootArea?: string;
   /** True when the server-side token mint failed (no authenticated session was forwarded). */
   unauthenticated?: boolean;
+  /** True when the server-side render detected an RLS access denial (the authenticated visitor lacks
+   *  Read). Combined with a safely-configured `target.redirectOnDenied`, the client redirects to the
+   *  node's public cover / paywall — the same "no access ⇒ redirect here" the Blazor NamedAreaView does. */
+  initialDenied?: boolean;
 }
 
 /** True once a source has folded its first Full frame (an empty tree is the pre-frame state). */
@@ -45,8 +59,9 @@ function hasContent(source: AreaSource): boolean {
 
 const noSubscription = () => () => {};
 
-export function LiveArea({ path, target, initialTree, initialRootArea = "", unauthenticated }: LiveAreaProps) {
+export function LiveArea({ path, target, initialTree, initialRootArea = "", unauthenticated, initialDenied }: LiveAreaProps) {
   const { theme } = useHydratedTheme();
+  const router = useRouter();
   const live = useLiveConnection();
   const publishNavigation = usePublishNavigation();
 
@@ -77,6 +92,26 @@ export function LiveArea({ path, target, initialTree, initialRootArea = "", unau
   const streamError = live.areaErrors[targetKey(target)];
   const offline = live.state.kind === "offline";
 
+  // Classify a live-subscription fault so the shell makes the SAME decisions the Blazor NamedAreaView
+  // makes: an access denial can redirect to a paywall; a routing NotFound gets a graceful placeholder
+  // (never the raw "No node found at 'u/_Activity/…'" diagnostic); anything else shows verbatim.
+  const errorInfo = streamError ? classifyAreaError(streamError) : null;
+
+  // "No access ⇒ redirect here": a denied visitor — detected on the server render (initialDenied) or
+  // by a live access-denied fault mid-session — is sent to the node's public cover / paywall when its
+  // policy safely configures one (deniedRedirectTarget's loop-guard refuses a target that would bounce
+  // back). Without a safe target it falls through to the honest denied affordance below. The paywall
+  // is an in-app mesh route → navigate via the basePath-aware app router.
+  const redirectTarget = deniedRedirectTarget({
+    initialDenied,
+    streamError,
+    address: target.address,
+    redirectOnDenied: target.redirectOnDenied,
+  });
+  useEffect(() => {
+    if (redirectTarget) router.replace(redirectTarget);
+  }, [redirectTarget, router]);
+
   // ONE hub: the embed factory comes from the session's single MeshAreaRegistry (LiveConnection),
   // the SAME registry getAreaSource uses — a page area and any `@@` embed of it share one stream.
   // (Previously each LiveArea built its own factory over the connection: a second registry, a second
@@ -93,7 +128,7 @@ export function LiveArea({ path, target, initialTree, initialRootArea = "", unau
   // with a sign-in affordance rather than yanked away from an anonymous reader.
   const needsLogin = !!unauthenticated && !active;
   useEffect(() => {
-    if (needsLogin && typeof window !== "undefined") window.location.href = "/login";
+    if (needsLogin) goToLogin();
   }, [needsLogin]);
 
   const view = active ? (
@@ -125,7 +160,7 @@ export function LiveArea({ path, target, initialTree, initialRootArea = "", unau
               </MessageBarBody>
               {authFailed && (
                 <MessageBarActions>
-                  <Button size="small" appearance="primary" onClick={() => (window.location.href = "/login")}>
+                  <Button size="small" appearance="primary" onClick={goToLogin}>
                     Sign in
                   </Button>
                 </MessageBarActions>
@@ -134,10 +169,16 @@ export function LiveArea({ path, target, initialTree, initialRootArea = "", unau
           </div>
         );
       })()}
-      {streamError && (
-        <div data-mw-area-error style={{ marginBottom: 16 }}>
-          <MessageBar intent="error">
-            <MessageBarBody>Live area “{path}” failed: {streamError}</MessageBarBody>
+      {streamError && !redirectTarget && (
+        <div data-mw-area-error data-mw-error-kind={errorInfo?.kind ?? "other"} style={{ marginBottom: 16 }}>
+          <MessageBar intent={errorInfo?.kind === "access-denied" ? "warning" : errorInfo?.kind === "not-found" ? "info" : "error"}>
+            <MessageBarBody>
+              {errorInfo?.kind === "access-denied"
+                ? `You don’t have access to “${path}”.`
+                : errorInfo?.kind === "not-found"
+                  ? `“${path}” is no longer available.`
+                  : `Live area “${path}” failed: ${streamError}`}
+            </MessageBarBody>
           </MessageBar>
         </div>
       )}

@@ -18,6 +18,8 @@ import {
   fetchRenderedArea,
   mintToken,
   resolvePortalOrigin,
+  type AreaTarget,
+  type RenderedAreaResult,
 } from "../../src/server/snapshot";
 import { LiveArea } from "../../src/client/LiveArea";
 
@@ -35,29 +37,37 @@ export async function AreaSnapshot({ path }: { path: string }) {
   // area is the generic overview, not the dashboard). Explicit paths resolve into (node address,
   // area remainder); that resolution and the rendered snapshot fetch in parallel — render-area
   // does its own resolution internally, so neither depends on the other.
-  const [target, rendered] = !mint || !resolvedPath
-    ? [{ address: resolvedPath, area: "", id: "" }, null]
-    : !path
-      ? await Promise.all([
-          Promise.resolve({ address: resolvedPath, area: "Activity", id: "" }),
-          fetchRenderedArea(origin, mint.rawToken, resolvedPath, "Activity"),
-        ])
-      : await Promise.all([
-          fetchAreaTarget(origin, mint.rawToken, resolvedPath),
-          fetchRenderedArea(origin, mint.rawToken, resolvedPath),
-        ]);
+  const none: RenderedAreaResult = { kind: "none" };
+  const [target, rendered]: [AreaTarget, RenderedAreaResult] =
+    !mint || !resolvedPath
+      ? [{ address: resolvedPath, area: "", id: "", redirectOnDenied: null }, none]
+      : !path
+        ? await Promise.all([
+            Promise.resolve<AreaTarget>({ address: resolvedPath, area: "Activity", id: "", redirectOnDenied: null }),
+            fetchRenderedArea(origin, mint.rawToken, resolvedPath, "Activity"),
+          ])
+        : await Promise.all([
+            fetchAreaTarget(origin, mint.rawToken, resolvedPath),
+            fetchRenderedArea(origin, mint.rawToken, resolvedPath),
+          ]);
+
+  const tree = rendered.kind === "ok" ? rendered.tree : null;
   const snapshot =
-    !rendered && mint && resolvedPath ? await fetchNodeSnapshot(origin, mint.rawToken, resolvedPath) : null;
+    !tree && mint && resolvedPath ? await fetchNodeSnapshot(origin, mint.rawToken, resolvedPath) : null;
 
   return (
     <LiveArea
       path={resolvedPath}
       target={target}
-      initialTree={rendered ?? (snapshot ? buildInitialTree(snapshot) : null)}
+      initialTree={tree ?? (snapshot ? buildInitialTree(snapshot) : null)}
       // A rendered frame roots at the requested area (an explicit-area URL roots at its name;
       // the default-area subscribe at ""); the synthesized preview tree always roots at "".
-      initialRootArea={rendered ? target.area : ""}
+      initialRootArea={tree ? target.area : ""}
       unauthenticated={!mint}
+      // Server-detected RLS denial (authenticated visitor lacks Read) → the client redirects to the
+      // node's public cover / paywall when the policy safely configures one — the same "no access ⇒
+      // redirect here" the Blazor NamedAreaView does. The loop-guard + navigation live in LiveArea.
+      initialDenied={rendered.kind === "denied"}
     />
   );
 }

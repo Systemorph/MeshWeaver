@@ -33,6 +33,8 @@ import * as React from "react";
 // client-context modules OUT of this file's RSC server graph (next build rejects createContext
 // in server components).
 import { normalizeEntityStore } from "@meshweaver/react/wire";
+// React-FREE classifier (own subpath, like /wire) — safe in this RSC server module.
+import { isAccessDenied } from "@meshweaver/react/accessError";
 import type { AreaTree, Json, UiControl } from "@meshweaver/react/core";
 
 // React.cache exists in Next's vendored server runtime (per-request memoization). Stable react
@@ -139,6 +141,16 @@ export async function fetchNodeSnapshot(
   }
 }
 
+/** Outcome of a server-side rendered-area fetch:
+ *  - `ok`     — a hydratable {areas,data} tree (seeds StaticAreaSource);
+ *  - `denied` — an RLS access denial (the caller may redirect to the node's public cover / paywall);
+ *  - `none`   — nothing seedable: older portal without the verb, render timeout, not-found, or an
+ *               unparseable body (degrade to the node-snapshot preview). */
+export type RenderedAreaResult =
+  | { kind: "ok"; tree: AreaTree }
+  | { kind: "denied" }
+  | { kind: "none" };
+
 /**
  * Fetch the node's rendered DEFAULT layout area over REST (`POST /api/mesh/render-area`) — the
  * PRIMARY SSR seed. The response is the first fully-materialised Full frame of the same
@@ -146,9 +158,10 @@ export async function fetchNodeSnapshot(
  * ships it; normalizeEntityStore folds the wire keys the same way GrpcAreaSource folds a live
  * Full frame, so the resulting tree seeds StaticAreaSource with wire fidelity.
  *
- * Returns null on ANY miss — a 404 (older portal without the verb), a 504 (portal-side render
- * timeout), the "Error: …"/"Not found: …" sentinel (e.g. an RLS denial), or an unparseable body —
- * so the caller degrades to the node-snapshot preview exactly as before.
+ * An RLS denial arrives as the HTTP-200 sentinel `"Error: Access denied…"`; this distinguishes it
+ * (`denied`) from a plain miss (`none`) so the caller can send a not-yet-enrolled visitor to the
+ * node's public cover — the same "no access ⇒ redirect here" the Blazor NamedAreaView does — instead
+ * of a dead-end shell preview.
  */
 export async function fetchRenderedArea(
   origin: string,
@@ -156,7 +169,7 @@ export async function fetchRenderedArea(
   path: string,
   area?: string,
   id?: string,
-): Promise<AreaTree | null> {
+): Promise<RenderedAreaResult> {
   try {
     const resp = await fetch(`${origin}/api/mesh/render-area`, {
       method: "POST",
@@ -164,22 +177,24 @@ export async function fetchRenderedArea(
       headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
       body: JSON.stringify({ path, ...(area ? { area } : {}), ...(id ? { id } : {}) }),
     });
-    if (!resp.ok) return null; // 404 = older portal, 504 = render timeout — degrade to preview
+    if (!resp.ok) return { kind: "none" }; // 404 = older portal, 504 = render timeout — degrade to preview
     const text = await resp.text();
-    if (text.startsWith("Error:") || text.startsWith("Not found:")) return null;
+    if (text.startsWith("Error:") || text.startsWith("Not found:")) {
+      return isAccessDenied(text) ? { kind: "denied" } : { kind: "none" };
+    }
     let parsed: Json;
     try {
       parsed = JSON.parse(text);
     } catch {
-      return null;
+      return { kind: "none" };
     }
-    if (parsed == null || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+    if (parsed == null || typeof parsed !== "object" || Array.isArray(parsed)) return { kind: "none" };
     const tree = normalizeEntityStore(parsed);
     // A hydratable frame must carry rendered areas; anything else is not seedable.
-    if (tree.areas == null || Object.keys(tree.areas).length === 0) return null;
-    return tree;
+    if (tree.areas == null || Object.keys(tree.areas).length === 0) return { kind: "none" };
+    return { kind: "ok", tree };
   } catch {
-    return null;
+    return { kind: "none" };
   }
 }
 
@@ -190,6 +205,11 @@ export interface AreaTarget {
   address: string;
   area: string;
   id: string;
+  /** The node's configured "if no access ⇒ redirect here" target (public cover / paywall), or null.
+   *  Populated from the resolve response's `redirectOnDenied` (the REST twin of
+   *  hub.GetRedirectOnDenied); the shell redirects a denied viewer there instead of a dead-end error,
+   *  gated by isSafeRedirect. */
+  redirectOnDenied?: string | null;
 }
 
 /** Split a resolution remainder into (area, id) — first segment is the area, the rest the id
@@ -210,7 +230,7 @@ export function splitRemainder(remainder: string | null | undefined): { area: st
  * verb is missing (older portal) or resolution fails, matching the pre-resolution behavior.
  */
 export async function fetchAreaTarget(origin: string, token: string, path: string): Promise<AreaTarget> {
-  const fallback: AreaTarget = { address: path, area: "", id: "" };
+  const fallback: AreaTarget = { address: path, area: "", id: "", redirectOnDenied: null };
   if (!path) return fallback;
   try {
     const resp = await fetch(`${origin}/api/mesh/resolve`, {
@@ -231,7 +251,9 @@ export async function fetchAreaTarget(origin: string, token: string, path: strin
     const prefix = asString(pick(parsed, "prefix"));
     if (!prefix) return fallback;
     const { area, id } = splitRemainder(asString(pick(parsed, "remainder")));
-    return { address: prefix, area, id };
+    // The node's configured paywall/cover redirect (nearest-ancestor policy), or null when none.
+    const redirectOnDenied = asString(pick(parsed, "redirectOnDenied")) ?? null;
+    return { address: prefix, area, id, redirectOnDenied };
   } catch {
     return fallback;
   }

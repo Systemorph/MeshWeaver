@@ -91,6 +91,15 @@ export {
 export { getPointer, setPointer, mergePatch, resolve } from "./area/pointer.js";
 export type { AreaSource, AreaTree, UiControl, Skin, NamedArea, MeshEvent, Json } from "./area/types.js";
 export {
+  classifyAreaError,
+  getAccessDeniedPath,
+  isAccessDenied,
+  isNodeGone,
+  isSafeRedirect,
+  type AreaErrorInfo,
+  type AreaErrorKind,
+} from "./area/accessError.js";
+export {
   useThemeMode,
   readStoredThemeMode,
   writeStoredThemeMode,
