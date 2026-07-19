@@ -504,7 +504,53 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
     /// </para>
     /// </summary>
     private long OwnerVersion()
-        => Owner.Equals(Host.Address) ? Hub.Version : (Current?.Version ?? 0L);
+        => Owner.Equals(Host.Address) ? OwnerVersionFloor(Hub.Version) : (Current?.Version ?? 0L);
+
+    /// <summary>
+    /// Per-activation content-version baseline this stream floors its ORIGINATED frame versions at
+    /// (issue #325 symptom-2). 0 until captured; frozen once a positive baseline is read.
+    /// </summary>
+    private long _ownerVersionBaseline;
+
+    /// <summary>
+    /// Floors <paramref name="rawVersion"/> — the owning hub's per-message
+    /// <see cref="IMessageHub.Version"/>, which RESETS to 0 on every (re)activation — at this
+    /// stream's per-activation content baseline (the persisted <c>node.Version</c> LOADED AT
+    /// ACTIVATION for a MeshNode data-source stream). Returns <paramref name="rawVersion"/>
+    /// UNCHANGED for streams without a baseline selector (layout-area / ephemeral / non-MeshNode
+    /// data sources), so the layout-Full path is untouched — the reason the naive frame-version
+    /// floor was reverted before.
+    /// <para>
+    /// 🚨 The baseline is a STABLE per-activation value, NOT the per-frame content version. A
+    /// partial cross-hub patch carries content version 0; flooring at THAT flapped the frame
+    /// version (7→0→11) and dropped legitimate mid-stream frames (ExportDocumentScriptRelayTest).
+    /// We instead capture it ONCE — from the first content whose selector yields a positive
+    /// version — and FREEZE it. That avoids the flap while keeping the frame version from
+    /// regressing below the mirror's last-seen version after an owner idle-recycle: because the
+    /// persisted node.Version is minted forward-only (<c>MeshNode.NextVersion</c>) and the owning
+    /// per-node hub processes at least as many messages as the data-source sync hub, the frozen
+    /// baseline dominates every frame version the mirror observed before the recycle. The
+    /// post-recycle resubscribe Full is then ACCEPTED by the receive-side monotonicity guard
+    /// (<see cref="UpdateStream"/>) instead of dropped — the multi-replica residual of #325.
+    /// See <c>Doc/Architecture/MeshNodeVersioning.md</c>.
+    /// </para>
+    /// </summary>
+    private long OwnerVersionFloor(long rawVersion)
+    {
+        var selector = Configuration.OwnerVersionBaselineSelector;
+        if (selector is null)
+            return rawVersion;
+        if (_ownerVersionBaseline == 0 && Current is { } cur && cur.Value is { } value)
+        {
+            var baseline = selector(value);
+            if (baseline > 0)
+                _ownerVersionBaseline = baseline;
+        }
+        return Math.Max(rawVersion, _ownerVersionBaseline);
+    }
+
+    /// <inheritdoc />
+    public long StampVersion => OwnerVersionFloor(Hub.Version);
 
     private ChangeItem<TStream> BuildChangeItem(TStream? current, TStream updated)
     {
@@ -1467,6 +1513,21 @@ public record StreamConfiguration<TStream>(ISynchronizationStream<TStream> Strea
     /// <inheritdoc cref="RunsAsInfrastructure"/>
     public StreamConfiguration<TStream> AsInfrastructure(bool value = true)
         => this with { RunsAsInfrastructure = value };
+
+    /// <summary>
+    /// Selector that extracts this stream's per-activation content-version baseline (issue #325
+    /// symptom-2) from the stream's value — e.g. the persisted <c>node.Version</c> for a MeshNode
+    /// data-source stream. When set, the stream floors every ORIGINATED frame version
+    /// (<see cref="SynchronizationStream{TStream}.StampVersion"/>) at this baseline, captured once
+    /// at activation and frozen, so a post-recycle resubscribe Full is not dropped by the
+    /// receive-side monotonicity guard. Layout-area / ephemeral streams leave it unset (baseline
+    /// 0 = no floor), keeping the layout-Full path untouched.
+    /// </summary>
+    internal Func<TStream?, long>? OwnerVersionBaselineSelector { get; init; }
+
+    /// <inheritdoc cref="OwnerVersionBaselineSelector"/>
+    public StreamConfiguration<TStream> WithOwnerVersionBaseline(Func<TStream?, long> selector)
+        => this with { OwnerVersionBaselineSelector = selector };
 
     internal Func<ISynchronizationStream<TStream>, CancellationToken, Task<TStream>>? Initialization { get; init; }
 

@@ -1439,6 +1439,45 @@ public record MeshDataSource : GenericUnpartitionedDataSource<MeshDataSource>
 
 
     /// <summary>
+    /// 🚨 #325 symptom-2: floor this data source's ORIGINATED frame versions at the OWN node's
+    /// persisted <c>Version</c> loaded at activation. The data-source sync hub's clock resets to 0
+    /// on every (re)activation, so after an owner grain idle-recycles its post-recycle write frame
+    /// carries a LOW version that a still-alive mirror on another silo — holding the higher
+    /// pre-recycle version — DROPS under the receive-side monotonicity guard (the multi-replica
+    /// residual of #325). Supplying <see cref="MaxMeshNodeVersion"/> as the per-activation baseline
+    /// keeps the frame version from regressing below what the mirror already saw, so the
+    /// post-recycle resubscribe Full is accepted. Only MeshNode data-source streams get this
+    /// baseline; layout-area / ephemeral / non-MeshNode streams have none, so their frame version
+    /// stays <c>Hub.Version</c> and the layout-Full path is untouched. See
+    /// <c>Doc/Architecture/MeshNodeVersioning.md</c>.
+    /// </summary>
+    protected override ISynchronizationStream<EntityStore> SetupDataSourceStream(
+        StreamIdentity identity,
+        Func<StreamConfiguration<EntityStore>, StreamConfiguration<EntityStore>> config)
+        => base.SetupDataSourceStream(identity,
+            c => config(c).WithOwnerVersionBaseline(MaxMeshNodeVersion));
+
+    /// <summary>
+    /// Per-activation frame-version baseline (#325 symptom-2): the highest persisted
+    /// <see cref="MeshNode.Version"/> among the MeshNodes in the data source's store. Captured ONCE
+    /// and frozen by the stream (never re-read per frame), so a partial patch — whose content
+    /// version reads 0 — can never flap the baseline. Monotonic across activations because
+    /// node.Version is minted forward-only (<see cref="MeshNode.NextVersion"/>). Returns 0 for a
+    /// store with no MeshNodes (no floor).
+    /// </summary>
+    private static long MaxMeshNodeVersion(EntityStore? store)
+    {
+        if (store is null
+            || !store.Collections.TryGetValue(nameof(MeshNode), out var collection))
+            return 0;
+        long max = 0;
+        foreach (var instance in collection.Instances.Values)
+            if (instance is MeshNode node && node.Version > max)
+                max = node.Version;
+        return max;
+    }
+
+    /// <summary>
     /// Registers a content type for UI integration (editor generation, etc.).
     /// Content is accessed via MeshNode.Content - there's no separate TypeSource.
     /// </summary>
