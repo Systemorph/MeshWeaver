@@ -9,6 +9,7 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using MeshWeaver.Utils;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Graph.Configuration;
 
@@ -44,6 +45,19 @@ public static class UserNodeType
                 new UserAccessRule(sp.GetRequiredService<IMessageHub>()));
             services.AddSingleton<INodePostCreationHandler>(sp =>
                 new UserScopeGrantHandler(sp.GetRequiredService<IMeshService>()));
+            // Deleting a User home removes the ENTIRE per-user partition — the deletion-side
+            // mirror of the eager User-partition provisioning (OwnsPartitionProvisioningValidator,
+            // OwnsPartition=true below). After the recursive node delete, drop the backing store
+            // (Postgres schema incl. every satellite table) on every partition storage provider,
+            // so no schema/satellite rows are orphaned. Mirrors AddSpaceType's Space teardown;
+            // without it a System off-boarding delete left the whole partition behind
+            // (2026-07-19 memex-cloud incident). Interactive callers are blocked upstream by
+            // PartitionRootDeletionGuard — only System reaches this teardown.
+            services.AddSingleton<INodePostDeletionHandler>(sp =>
+                new PartitionDropPostDeletionHandler(
+                    sp.GetRequiredService<IMessageHub>(),
+                    NodeType,
+                    sp.GetService<ILoggerFactory>()?.CreateLogger<PartitionDropPostDeletionHandler>()));
             return services;
         });
         builder.ConfigureNodeTypeAccess(a => a.WithPublicRead(NodeType));

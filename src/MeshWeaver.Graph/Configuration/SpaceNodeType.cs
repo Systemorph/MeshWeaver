@@ -201,6 +201,7 @@ public static class SpaceNodeType
             services.AddSingleton<INodePostDeletionHandler>(sp =>
                 new PartitionDropPostDeletionHandler(
                     sp.GetRequiredService<IMessageHub>(),
+                    NodeType,
                     sp.GetService<ILoggerFactory>()?.CreateLogger<PartitionDropPostDeletionHandler>()));
             return services;
         });
