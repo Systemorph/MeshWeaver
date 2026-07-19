@@ -1,0 +1,120 @@
+@using System.Text.Json
+@using MeshWeaver.Messaging
+@using Microsoft.AspNetCore.Http
+@using Microsoft.Extensions.Configuration
+@namespace Memex.Portal.Shared.Seo
+@inject IMessageHub Hub
+@inject IConfiguration Configuration
+
+@*
+    Crawler-facing head for the INITIAL server response. The interactive circuit overwrites the
+    tab title later (ApplicationPage's PageTitle); what matters here is what a crawler — which
+    rarely holds a Blazor Server websocket long enough to hydrate — reads: a per-page title,
+    description, canonical URL, Open Graph card, and (for store plugins) Course/Product JSON-LD.
+    Only ANONYMOUS-readable nodes get rich metadata (SeoResolver gates through AnonymousGate),
+    so nothing about private content leaks into logged-out markup. Authenticated requests skip
+    the mesh round-trip entirely — their head is app chrome, not SEO surface.
+*@
+
+<title>@_title</title>
+@if (_data is not null)
+{
+    <meta name="description" content="@_description" />
+    <link rel="canonical" href="@_canonical" />
+    <meta property="og:site_name" content="@SiteName" />
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="@_data.Node.Name" />
+    @if (_description is not null)
+    {
+        <meta property="og:description" content="@_description" />
+    }
+    <meta property="og:url" content="@_canonical" />
+    @if (_image is not null)
+    {
+        <meta property="og:image" content="@_image" />
+        <meta name="twitter:card" content="summary_large_image" />
+    }
+    @if (_jsonLd is not null)
+    {
+        <script type="application/ld+json">@((MarkupString)_jsonLd)</script>
+    }
+}
+
+@code {
+    [CascadingParameter] public HttpContext? HttpContext { get; set; }
+
+    private SeoPageData? _data;
+    private string _title = "";
+    private string? _description;
+    private string? _canonical;
+    private string? _image;
+    private string? _jsonLd;
+
+    private string SiteName =>
+        Configuration["Portal:SiteName"] ?? Configuration["Portal:InstanceName"] ?? "Memex";
+
+    protected override async Task OnInitializedAsync()
+    {
+        _title = Configuration["Portal:InstanceName"] ?? "Memex Portal";
+        var path = HttpContext?.Request.Path.Value;
+        if (HttpContext is null
+            || HttpContext.User.Identity?.IsAuthenticated == true
+            || !SeoResolver.IsCandidatePath(path))
+            return;
+
+        _data = await SeoResolver.ResolveAsync(Hub, path!);
+        if (_data is null)
+            return;
+        // Stash for SeoNoScriptBody (rendered later in <body>) — resolve ONCE per request.
+        HttpContext.Items[SeoResolver.HttpContextItem] = _data;
+
+        var node = _data.Node;
+        _title = $"{node.Name ?? node.Id} · {SiteName}";
+        _description = Truncate(_data.Description, 300);
+        var baseUrl = $"{HttpContext.Request.Scheme}://{HttpContext.Request.Host}";
+        _canonical = $"{baseUrl}/{node.Path}";
+        _image = _data.Image is { } img && img.StartsWith('/') ? baseUrl + img : _data.Image;
+        _jsonLd = BuildJsonLd(node, _description, _image, _canonical);
+    }
+
+    private static string? Truncate(string? text, int max) =>
+        text is null ? null : text.Length <= max ? text : text[..max].TrimEnd() + "…";
+
+    // Course JSON-LD for education store plugins with a real price, Product for other priced
+    // plugins; nothing for free/coupon-only or non-store pages. Serialized with STJ so every
+    // value is properly escaped before landing in the script tag.
+    private static string? BuildJsonLd(
+        MeshWeaver.Mesh.MeshNode node, string? description, string? image, string? url)
+    {
+        if (node.NodeType != "Store/Plugin")
+            return null;
+        var price = SeoResolver.ContentDecimal(node, "price");
+        var isCourse = string.Equals(node.Category, "Education", StringComparison.OrdinalIgnoreCase);
+        var payload = new Dictionary<string, object?>
+        {
+            ["@context"] = "https://schema.org",
+            ["@type"] = isCourse ? "Course" : "Product",
+            ["name"] = node.Name ?? node.Id,
+            ["description"] = description,
+            ["url"] = url,
+        };
+        if (image is not null)
+            payload["image"] = image;
+        if (isCourse)
+            payload["provider"] = new Dictionary<string, object?>
+            {
+                ["@type"] = "Organization",
+                ["name"] = "Systemorph",
+            };
+        if (price is > 0m)
+            payload["offers"] = new Dictionary<string, object?>
+            {
+                ["@type"] = "Offer",
+                ["price"] = price.Value.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture),
+                ["priceCurrency"] = SeoResolver.ContentString(node, "currency") ?? "CHF",
+                ["url"] = url,
+            };
+        return JsonSerializer.Serialize(
+            payload.Where(kv => kv.Value is not null).ToDictionary(kv => kv.Key, kv => kv.Value));
+    }
+}
