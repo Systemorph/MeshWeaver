@@ -30,6 +30,14 @@ else
     [Parameter]
     public string? Path { get; set; }
 
+    /// <summary>
+    /// Whether the embedded node renders its own header/comments/side menu. Inline (@@) embeds pass
+    /// <c>false</c> (the default hide) unless the author wrote <c>?showHeader=true</c>; carried to the
+    /// server as a <c>showHeader</c> reference parameter.
+    /// </summary>
+    [Parameter]
+    public bool ShowHeader { get; set; } = true;
+
     private string ShortName => Path?.Contains('/') == true ? Path[(Path.LastIndexOf('/') + 1)..] : Path ?? "";
 
     private bool IsLoading { get; set; } = true;
@@ -70,9 +78,14 @@ else
                 if (resolution != null)
                 {
                     var (area, id) = ParseRemainder(resolution.Remainder);
+                    // @@ embeds carry showHeader=false as a reference parameter (on the Id query
+                    // string — LayoutAreaReference parses params from Id) so MarkdownOverviewLayoutArea
+                    // suppresses the embedded node's header/comments/side menu. Resolution already ran
+                    // on the CLEAN path, so this never affects which node/area is resolved.
+                    object? refId = ShowHeader ? id : AppendParameter(id, "showHeader", "false");
                     ResolvedViewModel = new LayoutAreaControl(
                         (Messaging.Address)resolution.Prefix,
-                        new Data.LayoutAreaReference(area) { Id = id }
+                        new Data.LayoutAreaReference(area) { Id = refId }
                     )
                     {
                         ShowProgress = true,
@@ -98,6 +111,15 @@ else
     // NavigationService so embeds and /node/area/Name navigation never drift.
     private static (string? Area, string? Id) ParseRemainder(string? remainder)
         => MeshWeaver.Markdown.LayoutAreaMarkdownParser.ParseAreaAndId(remainder);
+
+    // Appends a query parameter to a reference Id. LayoutAreaReference parses its parameters from
+    // the Id's query string, so id may be null/empty for a bare node embed → "?name=value".
+    private static string AppendParameter(object? id, string name, string value)
+    {
+        var s = id?.ToString() ?? string.Empty;
+        var sep = s.Contains('?') ? "&" : "?";
+        return $"{s}{sep}{name}={value}";
+    }
 }
 
 
