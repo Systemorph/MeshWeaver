@@ -66,6 +66,13 @@ public sealed class SpaceAdminInvariantValidator(IMessageHub hub, ILogger<SpaceA
             return Observable.Return(NodeValidationResult.Valid());
         var partition = path[..idx];
 
+        // System-managed mirror partitions (User, Auth) have no user administrator and reject
+        // interactive writes; the "keep at least one admin" invariant does not apply to them. This
+        // also lets an errant `Auth/_Access` admin grant (from a pre-fix partition bootstrap) be
+        // removed instead of being pinned forever as "the last admin of Auth".
+        if (WellKnownPartitions.IsMirror(partition))
+            return Observable.Return(NodeValidationResult.Valid());
+
         // The whole partition is going away: when this delete is part of a cascade rooted at
         // the partition (or an ancestor of it), the space itself is being removed — keeping
         // "at least one admin" is moot, and blocking here would make deleting a Space

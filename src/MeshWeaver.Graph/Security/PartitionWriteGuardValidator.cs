@@ -79,8 +79,10 @@ public sealed class PartitionWriteGuardValidator : INodeValidator, IOwnerEnforce
     /// constant lookup (never mutated at runtime) — case-insensitive so <c>user</c>,
     /// <c>User</c>, <c>auth</c>, <c>Auth</c> all match.
     /// </summary>
-    private static readonly ImmutableHashSet<string> ReservedMirrorPartitions =
-        ImmutableHashSet.Create(StringComparer.OrdinalIgnoreCase, "User", "Auth");
+    // Canonical set lives in Mesh.Contract (WellKnownPartitions.Mirror) so the write guard, the
+    // self-healing partition bootstrap, and the last-admin invariant all enforce the SAME notion of
+    // "system-managed mirror" — they must never drift.
+    private static readonly ImmutableHashSet<string> ReservedMirrorPartitions = WellKnownPartitions.Mirror;
 
     /// <summary>
     /// Initializes a new instance of the partition write-guard validator.
