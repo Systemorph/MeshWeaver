@@ -80,7 +80,7 @@ public partial class DataGridView
 
         // Store previous value to detect programmatic changes
         var previousItemsPerPage = itemsPerPage;
-        DataBind(ViewModel.ItemsPerPage, x => x.itemsPerPage, defaultValue: 10);
+        DataBind(ViewModel.ItemsPerPage, x => x.itemsPerPage, defaultValue: 50);
 
         // If ItemsPerPage changed programmatically (not by user), reset the flag
         if (previousItemsPerPage != itemsPerPage && userChangedPageSize)
