@@ -1,7 +1,7 @@
 ---
 nodeType: Skill
 name: /activity
-description: Run any external, side-effecting operation — send an email, call Stripe, patch a deployment, fulfill a webhook — as a MeshWeaver Activity with a durable log. The uniform contract for side-effects: reactive (no async on hub threads), I/O through IIoPool, progress and outcome persisted at {partition}/_Activity/{id}, cancellable. Covers when to use it, the RunActivity recipe, the node-native (Code-node) form, and the anti-patterns (bare HttpClient on a hub thread, a bespoke control-plane node reinventing the log).
+description: Run any external, side-effecting operation — send an email, call Stripe, patch a deployment, fulfill a webhook — as a MeshWeaver Activity with a durable log. The uniform contract for side-effects — reactive (no async on hub threads), I/O through IIoPool, progress and outcome persisted under the partition's _Activity satellite, cancellable. Covers when to use it, the RunActivity recipe, the node-native Code-node form, and the anti-patterns (bare HttpClient on a hub thread, a bespoke control-plane node reinventing the log).
 icon: History
 category: Skills
 order: 12

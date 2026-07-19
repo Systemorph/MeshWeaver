@@ -55,4 +55,26 @@ public class SkillMarkdownRoundTripTest
             Assert.Equal(od.Action?.Provider, rd.Action?.Provider);
         }
     }
+
+    /// <summary>
+    /// A skill file with malformed YAML front-matter (here: an unquoted <c>:</c> inside a value)
+    /// must be <b>skipped</b> — <see cref="SkillMarkdown.Parse"/> returns null and never throws.
+    /// Built-in skills load during mesh startup, so an uncaught YAML exception here would crash the
+    /// whole host (this is exactly what took down every full-mesh Orleans integration test once).
+    /// </summary>
+    [Fact]
+    public void Parse_MalformedFrontMatter_ReturnsNull_AndDoesNotThrow()
+    {
+        const string malformed =
+            "---\n" +
+            "nodeType: Skill\n" +
+            "name: /broken\n" +
+            "description: has an unquoted colon: right here which is invalid YAML\n" +
+            "---\n\n" +
+            "Body.\n";
+
+        var node = SkillMarkdown.Parse(malformed, "broken");   // must not throw
+
+        Assert.Null(node);
+    }
 }
