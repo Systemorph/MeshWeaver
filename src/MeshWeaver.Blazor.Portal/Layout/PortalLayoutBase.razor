@@ -17,6 +17,26 @@
 
     @if (ViewportInformation.IsDesktop)
     {
+        @* Anonymous mode is a MARKETING surface: no menu bar chrome — just the logo, the
+           public Store entry, and Login. Everything else (search, node/mesh/AI menus, theme,
+           notifications, side panel) is authenticated-only. *@
+        <AuthorizeView>
+        <NotAuthorized>
+        <FluentHeader>
+            <FluentAnchor Appearance="Appearance.Stealth" Href="/" Class="logo">
+                MESHWEAVER
+            </FluentAnchor>
+            <div class="links">
+                <FluentAnchor Appearance="Appearance.Stealth" Href="/Store" Class="store-link"
+                              title="Store — browse plugins and courses" aria-label="Store — browse plugins and courses">
+                    <FluentIcon Value="@(new Icons.Regular.Size20.BuildingShop())" Slot="start" />
+                    Store
+                </FluentAnchor>
+            </div>
+            <UserProfile />
+        </FluentHeader>
+        </NotAuthorized>
+        <Authorized Context="authState">
         <FluentHeader>
             <FluentAnchor Appearance="Appearance.Stealth" Href="/" Class="logo">
                 MESHWEAVER
@@ -224,6 +244,8 @@
         </FluentHeader>
 
         @DesktopNavMenu
+        </Authorized>
+        </AuthorizeView>
     }
     else
     {
@@ -231,13 +253,21 @@
             <FluentSpacer />
 
             <UserProfile />
-            <FluentButton
-                IconEnd="@(IsNavMenuOpen ? new Icons.Regular.Size24.Dismiss() : new Icons.Regular.Size24.Navigation())"
-                Title="Menu" Appearance="Appearance.Stealth" BackgroundColor="transparent"
-                OnClick="@ToggleNavMenu" Class="navigation-button" />
+            <AuthorizeView>
+                <Authorized>
+                    <FluentButton
+                        IconEnd="@(IsNavMenuOpen ? new Icons.Regular.Size24.Dismiss() : new Icons.Regular.Size24.Navigation())"
+                        Title="Menu" Appearance="Appearance.Stealth" BackgroundColor="transparent"
+                        OnClick="@ToggleNavMenu" Class="navigation-button" />
+                </Authorized>
+            </AuthorizeView>
         </FluentHeader>
 
-        @MobileNavMenu
+        <AuthorizeView>
+            <Authorized>
+                @MobileNavMenu
+            </Authorized>
+        </AuthorizeView>
     }
 
     @* Chrome-level breadcrumb trail — rendered on EVERY page, desktop AND mobile (present mode

@@ -464,6 +464,13 @@ public static class MeshNodeVisibility
     public const string SearchContext = "search";
 
     /// <summary>
+    /// The page-header context: a node excluded from it renders WITHOUT the standard
+    /// icon/title/meta header block — its content starts immediately (marketing covers,
+    /// landing pages). Shipped via markdown frontmatter <c>ExcludeFromContext: [header]</c>.
+    /// </summary>
+    public const string HeaderContext = "header";
+
+    /// <summary>
     /// True when <paramref name="path"/> has any segment starting with <c>'_'</c> — a
     /// hidden/system ("dotfile") path. Empty/null is not hidden.
     /// </summary>

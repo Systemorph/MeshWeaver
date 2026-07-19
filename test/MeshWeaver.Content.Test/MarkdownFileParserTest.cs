@@ -68,6 +68,38 @@ public class MarkdownFileParserTest
     }
 
     [Fact(Timeout = 20000)]
+    public void Parse_ExcludeFromContext_RoundTrips()
+    {
+        // A marketing/landing page ships chrome-less: `ExcludeFromContext: [header]`
+        // maps 1:1 onto MeshNode.ExcludeFromContext (the ONE visibility mechanism —
+        // no parallel HideHeader flag) and must survive the serialize round-trip.
+        var content = """
+            ---
+            Name: Landing
+            ExcludeFromContext:
+              - header
+            ---
+
+            Full-bleed hero starts here.
+            """;
+
+        var node = _parser.Parse("/test/landing.md", content, "test/landing.md");
+
+        node.Should().NotBeNull();
+        node!.ExcludeFromContext.Should().BeEquivalentTo(new[] { "header" }, System.Text.Json.JsonSerializerOptions.Default);
+        node.IsExcludedFromContext(MeshNodeVisibility.HeaderContext).Should().BeTrue();
+
+        var serialized = _parser.Serialize(node);
+        serialized.Should().Contain("ExcludeFromContext:");
+        serialized.Should().Contain("header");
+
+        // And a node without the opt-out never emits the key.
+        var plain = _parser.Parse("/test/plain.md", "Just text.", "test/plain.md");
+        plain!.ExcludeFromContext.Should().BeNull();
+        _parser.Serialize(plain).Should().NotContain("ExcludeFromContext");
+    }
+
+    [Fact(Timeout = 20000)]
     public void Parse_WithMinimalYaml_UsesDefaults()
     {
         // Arrange
