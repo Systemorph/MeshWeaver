@@ -129,6 +129,10 @@ config:
     AzureFoundry__Models__0: "DeepSeek-V4-Pro"
     AzureFoundry__Models__1: "DeepSeek-V3-0324"
     AzureFoundry__Models__2: "DeepSeek-V4-Flash"
+    # MoonshotAI Kimi — newest general Kimi on the s-meshweaver Foundry account
+    # (no K3 in the catalog as of 2026-07; K2.7-Code exists for code-heavy use).
+    # Deployment cap 20K TPM = the account's full Kimi-K2.6 quota.
+    AzureFoundry__Models__3: "Kimi-K2.6"
     # Tier → model (h/m/l + utility). Open-weight DeepSeek ladder, all deployed on
     # s-meshweaver. Claude works very well but costs more — it's NOT wired via Helm
     # here; add it node-based later and pin per-agent via PreferredModel when worth it.
