@@ -8,7 +8,6 @@ using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
-using MeshWeaver.Messaging;
 using Xunit;
 
 namespace MeshWeaver.AI.Test;
