@@ -59,17 +59,6 @@ public interface ISynchronizationStream : IDisposable
     IMessageHub Hub { get; }
     /// <summary>The hub that hosts the underlying data source backing this stream.</summary>
     IMessageHub Host { get; }
-
-    /// <summary>
-    /// The version an ORIGINATED frame should carry (issue #325 symptom-2): the owning hub's
-    /// per-message clock (<see cref="Hub"/>'s <see cref="IMessageHub.Version"/>) FLOORED at the
-    /// stream's per-activation content baseline. Equals <c>Hub.Version</c> for streams without a
-    /// baseline (layout-area / ephemeral / non-MeshNode data sources), so the layout-Full path is
-    /// untouched; for a MeshNode data-source stream it is floored at the persisted node.Version
-    /// loaded at activation so a post-recycle frame doesn't regress below the mirror's last-seen
-    /// version. Used everywhere the owner stamps a frame it originates (e.g. <c>ApplyChanges</c>).
-    /// </summary>
-    long StampVersion => Hub.Version;
     /// <summary>Reads a per-stream value previously stashed under <paramref name="key"/>.</summary>
     /// <typeparam name="T">Expected value type.</typeparam>
     /// <param name="key">Key the value was stored under.</param>

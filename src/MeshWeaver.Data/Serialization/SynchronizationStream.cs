@@ -504,53 +504,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
     /// </para>
     /// </summary>
     private long OwnerVersion()
-        => Owner.Equals(Host.Address) ? OwnerVersionFloor(Hub.Version) : (Current?.Version ?? 0L);
-
-    /// <summary>
-    /// Per-activation content-version baseline this stream floors its ORIGINATED frame versions at
-    /// (issue #325 symptom-2). 0 until captured; frozen once a positive baseline is read.
-    /// </summary>
-    private long _ownerVersionBaseline;
-
-    /// <summary>
-    /// Floors <paramref name="rawVersion"/> — the owning hub's per-message
-    /// <see cref="IMessageHub.Version"/>, which RESETS to 0 on every (re)activation — at this
-    /// stream's per-activation content baseline (the persisted <c>node.Version</c> LOADED AT
-    /// ACTIVATION for a MeshNode data-source stream). Returns <paramref name="rawVersion"/>
-    /// UNCHANGED for streams without a baseline selector (layout-area / ephemeral / non-MeshNode
-    /// data sources), so the layout-Full path is untouched — the reason the naive frame-version
-    /// floor was reverted before.
-    /// <para>
-    /// 🚨 The baseline is a STABLE per-activation value, NOT the per-frame content version. A
-    /// partial cross-hub patch carries content version 0; flooring at THAT flapped the frame
-    /// version (7→0→11) and dropped legitimate mid-stream frames (ExportDocumentScriptRelayTest).
-    /// We instead capture it ONCE — from the first content whose selector yields a positive
-    /// version — and FREEZE it. That avoids the flap while keeping the frame version from
-    /// regressing below the mirror's last-seen version after an owner idle-recycle: because the
-    /// persisted node.Version is minted forward-only (<c>MeshNode.NextVersion</c>) and the owning
-    /// per-node hub processes at least as many messages as the data-source sync hub, the frozen
-    /// baseline dominates every frame version the mirror observed before the recycle. The
-    /// post-recycle resubscribe Full is then ACCEPTED by the receive-side monotonicity guard
-    /// (<see cref="UpdateStream"/>) instead of dropped — the multi-replica residual of #325.
-    /// See <c>Doc/Architecture/MeshNodeVersioning.md</c>.
-    /// </para>
-    /// </summary>
-    private long OwnerVersionFloor(long rawVersion)
-    {
-        var selector = Configuration.OwnerVersionBaselineSelector;
-        if (selector is null)
-            return rawVersion;
-        if (_ownerVersionBaseline == 0 && Current is { } cur && cur.Value is { } value)
-        {
-            var baseline = selector(value);
-            if (baseline > 0)
-                _ownerVersionBaseline = baseline;
-        }
-        return Math.Max(rawVersion, _ownerVersionBaseline);
-    }
-
-    /// <inheritdoc />
-    public long StampVersion => OwnerVersionFloor(Hub.Version);
+        => Owner.Equals(Host.Address) ? Hub.Version : (Current?.Version ?? 0L);
 
     private ChangeItem<TStream> BuildChangeItem(TStream? current, TStream updated)
     {
@@ -1193,6 +1147,21 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
             return;
         }
 
+        // 🚨🚨 #325 symptom-2 (multi-replica): CONSUME the resubscribe-accept latch on the FIRST
+        // Full after a version-gated resubscribe. A mirror that resubscribes did so because it
+        // DETECTED it is behind the owner (the change-feed announced a HIGHER node version than the
+        // mirror holds — CreateExternalClient's version-gated Resubscribe). The owner's response is a
+        // FRESH authoritative snapshot; but after the owner grain idle-recycled its per-activation
+        // Hub.Version RESET to ~0, so that fresh Full carries a FRAME version BELOW the mirror's
+        // cached (pre-recycle) one and the monotonicity guard below would DROP it — the orphaned-
+        // mirror residual of #325. The latch says "I asked for this fresh Full; accept it and adopt
+        // the owner's re-based clock" — the resubscribe-Current-reset the guard was missing. Only a
+        // FULL consumes it (a stray reordered patch must still be dropped), and it is set ONLY when
+        // the mirror is genuinely behind (receivedVersion < announcedVersion), so it can never
+        // clobber a newer optimistic write with a stale snapshot (that case keeps the gate CLOSED).
+        var acceptRebasedFull = delivery.Message.ChangeType == ChangeType.Full
+            && Interlocked.Exchange(ref _acceptResubscribeFull, 0) == 1;
+
         // 🚨 Monotonicity guard — applies to PATCHES *and* FULLS. Version is ALWAYS the OWNER
         // hub's Version (BuildChangeItem/BuildFullChangeItem: the owner stamps its monotonic
         // Hub.Version — ++ per message, MessageHub.HandleMessageAsync — while a subscriber only
@@ -1205,14 +1174,19 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         // A reject→ROLLBACK Full is NOT stale: the owner re-asserts its CURRENT state, stamped with
         // its current (higher-or-equal) Version, so it passes the guard and still lands. Because the
         // subscriber never bumps ahead of the owner, a legitimate Full can never carry a version
-        // BELOW Current — only a genuinely older snapshot can, and that is exactly what we drop.
-        if (Current is not null && delivery.Message.Version < Current.Version)
+        // BELOW Current — only a genuinely older snapshot can, and that is exactly what we drop —
+        // EXCEPT the rebased-resubscribe Full latched above (a recycled owner's fresh snapshot).
+        if (Current is not null && delivery.Message.Version < Current.Version && !acceptRebasedFull)
         {
             logger.LogDebug(
                 "[SYNC_STREAM] Dropping stale {ChangeType} for {StreamId}: incoming v{In} < current v{Cur}",
                 delivery.Message.ChangeType, StreamId, delivery.Message.Version, Current.Version);
             return;
         }
+        if (acceptRebasedFull && Current is not null && delivery.Message.Version < Current.Version)
+            logger.LogDebug(
+                "[SYNC_STREAM] Accepting rebased resubscribe Full for {StreamId}: incoming v{In} < current v{Cur} (recycled owner re-snapshot)",
+                StreamId, delivery.Message.Version, Current.Version);
 
         var currentJson = Get<JsonElement?>();
         if (delivery.Message.ChangeType == ChangeType.Full)
@@ -1337,6 +1311,26 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
     // real requests (the TodoDataChangeWorkflow UpdateNodeRequest leak). One
     // resubscribe per gap; cleared when a Full re-establishes Current.
     private bool _resyncInFlight;
+
+    /// <summary>
+    /// Latch (0/1) set by <see cref="ExpectResubscribeFull"/> when a version-gated resubscribe is
+    /// issued for a mirror that has DETECTED it is behind a (recycled) owner. The next
+    /// <see cref="ChangeType.Full"/> received by <see cref="UpdateStream"/> consumes it and is
+    /// accepted even if its FRAME version regressed below <see cref="Current"/> (a reactivated
+    /// owner's <c>Hub.Version</c> resets to ~0) — the resubscribe-Current-reset for #325 symptom-2.
+    /// </summary>
+    private int _acceptResubscribeFull;
+
+    /// <summary>
+    /// Arms the mirror to ACCEPT the next authoritative <see cref="ChangeType.Full"/> even if its
+    /// frame version has regressed below <see cref="Current"/>. Called by the sync-stream client's
+    /// version-gated resubscribe (<c>JsonSynchronizationStream.CreateExternalClient</c>) the instant
+    /// it decides the mirror is stale (the change feed announced a higher node version than the
+    /// mirror holds) and posts a fresh <c>SubscribeRequest</c>. The owner's re-snapshot then lands
+    /// instead of being dropped by the monotonicity guard, so a mirror orphaned by an idle-recycled
+    /// owner converges (issue #325 symptom-2). Idempotent; consumed by the first Full.
+    /// </summary>
+    internal void ExpectResubscribeFull() => Interlocked.Exchange(ref _acceptResubscribeFull, 1);
 
     private void RequestFreshSnapshot()
     {
@@ -1513,21 +1507,6 @@ public record StreamConfiguration<TStream>(ISynchronizationStream<TStream> Strea
     /// <inheritdoc cref="RunsAsInfrastructure"/>
     public StreamConfiguration<TStream> AsInfrastructure(bool value = true)
         => this with { RunsAsInfrastructure = value };
-
-    /// <summary>
-    /// Selector that extracts this stream's per-activation content-version baseline (issue #325
-    /// symptom-2) from the stream's value — e.g. the persisted <c>node.Version</c> for a MeshNode
-    /// data-source stream. When set, the stream floors every ORIGINATED frame version
-    /// (<see cref="SynchronizationStream{TStream}.StampVersion"/>) at this baseline, captured once
-    /// at activation and frozen, so a post-recycle resubscribe Full is not dropped by the
-    /// receive-side monotonicity guard. Layout-area / ephemeral streams leave it unset (baseline
-    /// 0 = no floor), keeping the layout-Full path untouched.
-    /// </summary>
-    internal Func<TStream?, long>? OwnerVersionBaselineSelector { get; init; }
-
-    /// <inheritdoc cref="OwnerVersionBaselineSelector"/>
-    public StreamConfiguration<TStream> WithOwnerVersionBaseline(Func<TStream?, long> selector)
-        => this with { OwnerVersionBaselineSelector = selector };
 
     internal Func<ISynchronizationStream<TStream>, CancellationToken, Task<TStream>>? Initialization { get; init; }
 
