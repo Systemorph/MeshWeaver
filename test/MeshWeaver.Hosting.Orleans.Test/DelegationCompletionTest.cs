@@ -44,7 +44,10 @@ public class DelegationCompletionTest(ITestOutputHelper output) : OrleansSharedT
     /// the agent eventually writes terminal text into the response cell. All
     /// observed via the response cell's MeshNode stream.
     /// </summary>
-    [Fact(Timeout = 60000)]
+    // The fact timeout must EXCEED the sum of the reactive step windows inside
+    // (45+45+45+20+10s here) — a smaller outer cap kills a legitimately
+    // progressing test on a loaded CI runner and reads as a flake.
+    [Fact(Timeout = 180000)]
     public async Task SubmitMessage_ResponseCellGetsTerminalText()
     {
         var client = GetClient();
@@ -135,7 +138,7 @@ public class DelegationCompletionTest(ITestOutputHelper output) : OrleansSharedT
     /// the parent can read the child's Summary — the same primitive the
     /// reactive DelegationTool subscription uses to resolve the TCS.
     /// </summary>
-    [Fact(Timeout = 60000)]
+    [Fact(Timeout = 180000)]
     public async Task DelegationOfDelegation_SummaryPropagatesUp()
     {
         var client = GetClient();
@@ -207,7 +210,7 @@ public class DelegationCompletionTest(ITestOutputHelper output) : OrleansSharedT
     /// <c>Thread.Summary</c> + <c>ThreadMessage.Summary</c>, AND strips the
     /// marker from the user-visible <c>ThreadMessage.Text</c>.
     /// </summary>
-    [Fact(Timeout = 60000)]
+    [Fact(Timeout = 180000)]
     public async Task SummaryBlock_ParsedFromAgentResponse_AndStrippedFromText()
     {
         const string expectedSummary = "Greeting acknowledged.";
