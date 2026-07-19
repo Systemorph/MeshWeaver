@@ -55,6 +55,7 @@ public static class MigrationRegistry
         new V44_FixMeshNodeHistoryTriggerPerSchema(),
         new V45_AddNodeAuthorshipColumns(),
         new V46_AddExcludeFromContextColumn(),
+        new V47_SerializeUepRebuildAdvisoryLock(),
     ];
 
     /// <summary>
