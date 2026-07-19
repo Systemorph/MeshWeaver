@@ -328,6 +328,11 @@ public static class MeshNodeLayoutAreas
     /// </summary>
     internal static UiControl BuildHeader(LayoutAreaHost host, MeshNode? node, bool canEdit = true)
     {
+        // Chrome-less pages: a node excluded from the "header" context ships without the
+        // icon/title/meta block — the content (a marketing hero, a landing page) starts
+        // immediately. One mechanism, reused from MeshNodeVisibility — no parallel flag.
+        if (node?.IsExcludedFromContext(MeshNodeVisibility.HeaderContext) == true)
+            return Controls.Stack;
         var hubPath = host.Hub.Address.ToString();
         var nodePath = node?.Path ?? hubPath;
         var title = node?.Name ?? node?.Id ?? hubPath;

@@ -27,15 +27,22 @@ public class LayoutAreaMarkdownRenderer : HtmlObjectRenderer<LayoutAreaComponent
 
         if (obj.IsInline)
         {
+            // An @@ embed hides the embedded node's own header, comments + side menu by default
+            // (see MarkdownOverviewLayoutArea): the embedding page already frames it and the node
+            // title duplicates the markdown heading. The flag rides as a SEPARATE data-show-header
+            // attribute — NOT on the raw path — so data-raw-path stays a clean node path for
+            // IMeshCatalog.ResolvePathAsync; the client re-attaches it as a ?showHeader reference
+            // parameter. An author opts the header back in with @@node?showHeader=true.
+            var (rawPath, showHeader) = ParseShowHeader(obj.RawPath);
             if (isPreParsed)
             {
                 // Pre-parsed reference - include raw path for Graph resolution + address/area/id
-                renderer.WriteLine(GetLayoutAreaDiv(obj.RawPath, obj.Address, obj.Area, obj.Id));
+                renderer.WriteLine(GetLayoutAreaDiv(rawPath, obj.Address, obj.Area, obj.Id, showHeader));
             }
             else
             {
                 // Raw path reference - use RawPath for resolution at render time
-                renderer.WriteLine(GetLayoutAreaDiv(obj.RawPath));
+                renderer.WriteLine(GetLayoutAreaDiv(rawPath, showHeader));
             }
         }
         else
@@ -52,6 +59,38 @@ public class LayoutAreaMarkdownRenderer : HtmlObjectRenderer<LayoutAreaComponent
             }
         }
         renderer.EnsureLine();
+    }
+
+    /// <summary>
+    /// Splits an inline (@@) embed's raw path into the clean node path and the effective
+    /// <c>showHeader</c> flag. Inline embeds hide the node header by DEFAULT
+    /// (<c>showHeader=false</c>); an author opts the header back in with
+    /// <c>@@node?showHeader=true</c> (or a bare <c>?showHeader</c>). The query is stripped from the
+    /// returned path so it never pollutes node resolution (data-raw-path must stay a clean node
+    /// path for <c>IMeshCatalog.ResolvePathAsync</c>).
+    /// </summary>
+    internal static (string Path, bool ShowHeader) ParseShowHeader(string? rawPath)
+    {
+        var raw = rawPath ?? string.Empty;
+        var q = raw.IndexOf('?');
+        if (q < 0)
+            return (raw, false);
+
+        var basePath = raw[..q];
+        var showHeader = false;
+        // Strip ONLY showHeader; every other query param (e.g. a catalog embed's ?groupBy=…) stays on
+        // the path so it still flows into the resolved area id.
+        var kept = new List<string>();
+        foreach (var part in raw[(q + 1)..].Split('&', System.StringSplitOptions.RemoveEmptyEntries))
+        {
+            var kv = part.Split('=', 2);
+            if (string.Equals(kv[0], "showHeader", System.StringComparison.OrdinalIgnoreCase))
+                showHeader = kv.Length < 2 || !string.Equals(kv[1], "false", System.StringComparison.OrdinalIgnoreCase);
+            else
+                kept.Add(part);
+        }
+        var path = kept.Count == 0 ? basePath : $"{basePath}?{string.Join('&', kept)}";
+        return (path, showHeader);
     }
 
     /// <summary>CSS class for an embedded layout-area div.</summary>
@@ -73,11 +112,19 @@ public class LayoutAreaMarkdownRenderer : HtmlObjectRenderer<LayoutAreaComponent
     public const string AreaId = "area-id";
 
     /// <summary>
+    /// Data-attribute suffix (<c>data-show-header</c>): <c>"false"</c> when an inline (@@) embed
+    /// should suppress the embedded node's header/comments/side menu (the default), <c>"true"</c>
+    /// when the author opted the header back in. Kept OFF the raw path so resolution stays clean;
+    /// the client re-attaches it as a <c>showHeader</c> reference parameter.
+    /// </summary>
+    public const string ShowHeader = "show-header";
+
+    /// <summary>
     /// Creates a layout area div using raw path for UCR (@@ syntax).
     /// Address resolution happens at render time via IMeshCatalog.
     /// </summary>
-    internal static string GetLayoutAreaDiv(string rawPath)
-        => $"<div class='{LayoutArea}' data-{RawPath}='{HttpUtility.HtmlAttributeEncode(rawPath)}'></div>";
+    internal static string GetLayoutAreaDiv(string rawPath, bool showHeader = true)
+        => $"<div class='{LayoutArea}' data-{RawPath}='{HttpUtility.HtmlAttributeEncode(rawPath)}' data-{ShowHeader}='{(showHeader ? "true" : "false")}'></div>";
 
     /// <summary>
     /// Creates a layout area div with pre-resolved address/area/id.
@@ -91,8 +138,8 @@ public class LayoutAreaMarkdownRenderer : HtmlObjectRenderer<LayoutAreaComponent
     /// The raw path enables Graph resolution via IMeshCatalog.ResolvePathAsync(),
     /// while the pre-parsed attributes serve as fallback.
     /// </summary>
-    internal static string GetLayoutAreaDiv(string rawPath, object address, string? area, object? id)
-        => $"<div class='{LayoutArea}' data-{RawPath}='{HttpUtility.HtmlAttributeEncode(rawPath)}' data-{Address}='{HttpUtility.HtmlAttributeEncode(address?.ToString() ?? string.Empty)}' data-{Area}='{HttpUtility.HtmlAttributeEncode(area ?? string.Empty)}' data-{AreaId}='{HttpUtility.HtmlAttributeEncode(id?.ToString() ?? string.Empty)}'></div>";
+    internal static string GetLayoutAreaDiv(string rawPath, object address, string? area, object? id, bool showHeader = true)
+        => $"<div class='{LayoutArea}' data-{RawPath}='{HttpUtility.HtmlAttributeEncode(rawPath)}' data-{Address}='{HttpUtility.HtmlAttributeEncode(address?.ToString() ?? string.Empty)}' data-{Area}='{HttpUtility.HtmlAttributeEncode(area ?? string.Empty)}' data-{AreaId}='{HttpUtility.HtmlAttributeEncode(id?.ToString() ?? string.Empty)}' data-{ShowHeader}='{(showHeader ? "true" : "false")}'></div>";
 
     /// <summary>
     /// Creates a UCR hyperlink using raw path for runtime resolution via IMeshCatalog.
