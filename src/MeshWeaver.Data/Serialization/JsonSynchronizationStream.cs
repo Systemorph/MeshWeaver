@@ -388,6 +388,14 @@ public static class JsonSynchronizationStream
                     "Stream {StreamId}: owner {Owner} {Reason} — resubscribing for fresh snapshot.",
                     reduced.StreamId, owner, reason);
 
+                // 🚨 #325 symptom-2: this resubscribe fired because the mirror is DEMONSTRABLY behind
+                // (the version gate below only lets it through when receivedVersion < announcedVersion).
+                // Arm the mirror to ACCEPT the owner's fresh re-snapshot even if the (idle-recycled)
+                // owner's reset Hub.Version stamps it with a frame version BELOW what the mirror cached
+                // — otherwise the monotonicity guard drops it and the mirror stays orphaned. Armed
+                // BEFORE the SubscribeRequest so the response Full (which can arrive fast) finds it set.
+                reduced.ExpectResubscribeFull();
+
                 // Resubscribe is INFRASTRUCTURE (cache refresh after owner restart).
                 // The triggering event lands on the workspace's emission scheduler
                 // where AsyncLocal AccessContext is whatever was set when the
