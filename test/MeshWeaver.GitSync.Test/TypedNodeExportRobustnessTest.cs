@@ -101,4 +101,54 @@ public class TypedNodeExportRobustnessTest(ITestOutputHelper output) : GitHubSyn
         Assert.NotNull(deck);
         Assert.Equal(new[] { "Slides/S01", "Slides/S02" }, deck!.Slides);
     }
+
+    /// <summary>
+    /// A C# <c>Code</c> node under a <c>Source/</c> segment — the shape of every node-native plugin
+    /// (e.g. <c>Store/Plugin</c> + <c>Store/Plugin/Source/PluginContent.cs</c>) — must be exported
+    /// as its <c>.cs</c> file, and round-trip back typed on import. End-to-end guard for the
+    /// serialize/filter/mapper chain (the C# serializer emits <c>.cs</c>, <see cref="M:Filter"/>
+    /// keeps a non-<c>_</c> <c>Source</c> segment, and <c>NodeFileMapper</c> maps it to
+    /// <c>Source/…​.cs</c>). Pins the failure mode where a lossy commit silently dropped a Space's
+    /// entire C# source (observed live as a Store GitSync-export that wiped 3306 lines of plugin
+    /// source). NOTE: the in-memory store returns Code nodes from a <c>scope:descendants</c> query
+    /// directly, so this guards serialization — the PG <c>ResolveQueryTables</c> code-table union is
+    /// guarded separately by <c>SatelliteQueryTests.Descendants_FromPartitionRoot_IncludeCodeNodes</c>.
+    /// </summary>
+    [Fact(Timeout = 120000)]
+    public async Task CodeSourceUnderSourceSegment_ExportsAsCsAndRoundTrips()
+    {
+        await Connect();
+        var a = "GhSrc" + Guid.NewGuid().ToString("N")[..8];
+        await CreateSpace(a, "Plugin Space");
+        // The Source/ folder + the C# node it holds (mirrors a NodeType's Source collection).
+        await CreateMarkdown($"{a}/Source", "Source", "# source");
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{a}/Source/PluginContent") with
+        {
+            NodeType = "Code",
+            Name = "PluginContent.cs",
+            State = MeshNodeState.Active,
+            Content = new CodeConfiguration
+            {
+                Code = "public sealed record PluginContent(string? ContactEmail);",
+                Language = "csharp",
+            },
+        }).Timeout(60.Seconds()).ToTask();
+
+        var repo = "https://github.com/test/plugin-src";
+        await Sync.SaveConfig(a, repo, "main", null, true, true).Timeout(30.Seconds()).ToTask();
+        await Sync.SyncToGitHub(a, UserId).Timeout(60.Seconds()).ToTask();
+
+        // The Code node must land as Source/PluginContent.cs with its verbatim C# body — never dropped.
+        var cs = Fake.Tree(repo).FirstOrDefault(f => f.Path == "Source/PluginContent.cs");
+        Assert.NotNull(cs);
+        Assert.Contains("ContactEmail", cs!.Content);
+
+        // Import into a fresh Space — the C# source round-trips as a typed Code node.
+        var b = "GhSrd" + Guid.NewGuid().ToString("N")[..8];
+        await Sync.ImportFromGitHub(repo, "main", b, "Plugin B", null, UserId).Timeout(90.Seconds()).ToTask();
+
+        var codeNode = await WaitForNode($"{b}/Source/PluginContent");
+        Assert.Equal("Code", codeNode.NodeType);
+        Assert.Contains("ContactEmail", codeNode.ContentAs<CodeConfiguration>(Mesh.JsonSerializerOptions)!.Code);
+    }
 }
