@@ -270,7 +270,12 @@ public class SyncedQueryCrossSiloTest(ITestOutputHelper output)
     /// invariant that lets every silo's <c>NodeTypeService._hubConfigurations</c>
     /// cache populate without per-silo recompilation.</para>
     /// </summary>
-    [Fact(Timeout = 60000)]
+    // 180s envelope (not 60s): this test runs a LIVE Roslyn compile + cross-silo sync whose inner
+    // .Within(...) waits already budget up to ~150s (15+15+60+60). The outer envelope must be ≥ that
+    // sum, or a HEALTHY-but-slow run is killed by the envelope before its own waits could fire. Under
+    // CI's parallel-shard CPU contention the compile alone (~15-20s uncontended) starves well past 60s
+    // — reproduced locally as a ~1-in-6 timeout under load. This is a starved compile, not a race.
+    [Fact(Timeout = 180000)]
     public async Task DynamicCompile_OnSiloA_ResultIsObservableOnSiloB_ViaSync()
     {
 
