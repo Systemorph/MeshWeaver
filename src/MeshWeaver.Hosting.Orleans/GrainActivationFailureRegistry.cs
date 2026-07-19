@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using MeshWeaver.Mesh.Services;
 
 namespace MeshWeaver.Hosting.Orleans;
 
@@ -30,12 +31,34 @@ namespace MeshWeaver.Hosting.Orleans;
 /// shared across the silo's grains, with an instance map only — NO static state
 /// (<c>NoStaticState.md</c>). A process restart clears it, which is correct: a redeployed /
 /// recompiled fix re-activates cleanly and the stale error is gone.</para>
+///
+/// <para><b>Invalidation.</b> The registry also subscribes to the
+/// <see cref="IMeshChangeFeed"/> invalidation broadcast (the same signal a recycle —
+/// <c>MeshOperations.RecycleCore</c> — and every post-commit write publish, relayed
+/// cross-silo by <c>PathCacheInvalidatorGrain</c>): a change event for a path clears any
+/// stored activation error for that grain key. A recycled / just-written node must get a
+/// completely fresh activation attempt — without this, <see cref="RoutingGrain"/>'s
+/// NACK fallback served the STALE pre-recycle error text (e.g. a compile failure that was
+/// already fixed) to every sender until the grain happened to activate cleanly once.</para>
 /// </summary>
-public sealed class GrainActivationFailureRegistry
+public sealed class GrainActivationFailureRegistry : IDisposable
 {
     // grainKey (node address path) → last activation error message. Instance, never static.
     private readonly ConcurrentDictionary<string, string> _lastError =
         new(StringComparer.Ordinal);
+
+    private readonly IDisposable? _changeFeedSubscription;
+
+    /// <summary>
+    /// Creates the registry, optionally attached to the mesh change feed so
+    /// invalidation broadcasts (recycle / post-commit writes) clear stale errors.
+    /// </summary>
+    /// <param name="changeFeed">The mesh change feed to observe; when null (minimal
+    /// fixtures) the registry still works, it just never auto-clears on broadcasts.</param>
+    public GrainActivationFailureRegistry(IMeshChangeFeed? changeFeed = null)
+    {
+        _changeFeedSubscription = changeFeed?.Subscribe(evt => Clear(evt.Path));
+    }
 
     /// <summary>Record the real activation error for <paramref name="grainKey"/>.</summary>
     public void Record(string grainKey, string error)
@@ -59,4 +82,7 @@ public sealed class GrainActivationFailureRegistry
         => !string.IsNullOrEmpty(grainKey) && _lastError.TryGetValue(grainKey, out var e)
             ? e
             : null;
+
+    /// <inheritdoc />
+    public void Dispose() => _changeFeedSubscription?.Dispose();
 }
