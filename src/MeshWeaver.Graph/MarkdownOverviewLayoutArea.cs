@@ -99,8 +99,9 @@ public static class MarkdownOverviewLayoutArea
 
         // Read-only markdown content — the CollaborativeMarkdownControl is added as
         // a DIRECT child of `container` so agents and tests can locate it without
-        // walking through an intermediate Stack wrapper.
-        container = container.WithView(BuildMarkdownReadView(host, nodePath, rawContent, canComment, canEdit));
+        // walking through an intermediate Stack wrapper. An @@ embed (hideHeader) renders the
+        // body WITHOUT collaboration UI — commenting happens on the embedded node's own page.
+        container = container.WithView(BuildMarkdownReadView(host, nodePath, rawContent, canComment, canEdit, hideAnnotations: hideHeader));
 
         // No hardcoded children section: a node page is a markdown space — children (or any other
         // content) are injected INLINE with the @@(query) operator, never auto-listed (that doubled
@@ -127,7 +128,7 @@ public static class MarkdownOverviewLayoutArea
     /// without skipping a wrapper layer.
     /// </summary>
     private static UiControl BuildMarkdownReadView(
-        LayoutAreaHost host, string nodePath, string rawContent, bool canComment, bool canEdit)
+        LayoutAreaHost host, string nodePath, string rawContent, bool canComment, bool canEdit, bool hideAnnotations)
     {
         if (!string.IsNullOrWhiteSpace(rawContent))
         {
@@ -136,7 +137,8 @@ public static class MarkdownOverviewLayoutArea
                 .WithNodePath(nodePath)
                 .WithHubAddress(host.Hub.Address.ToString())
                 .WithCanComment(canComment)
-                .WithCanEdit(canEdit);
+                .WithCanEdit(canEdit)
+                .WithHideAnnotations(hideAnnotations);
         }
         return Controls.Html("<p style=\"color: var(--neutral-foreground-hint); font-style: italic;\">No content yet. Use the menu to start editing.</p>");
     }

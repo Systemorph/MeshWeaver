@@ -43,6 +43,7 @@ public partial class CollaborativeMarkdownView
     private string? BoundHubAddress;
     private bool BoundCanComment;
     private bool BoundCanEdit;
+    private bool BoundHideAnnotations;
 
     // The document node's current hub version — stamped onto new comments and used to decide
     // whether a comment's stored offsets are still valid or it must be re-anchored at render time.
@@ -179,8 +180,10 @@ public partial class CollaborativeMarkdownView
 
         BoundNodePath = ViewModel.NodePath;
         BoundHubAddress = ViewModel.HubAddress;
-        BoundCanComment = ViewModel.CanComment;
-        BoundCanEdit = ViewModel.CanEdit;
+        BoundHideAnnotations = ViewModel.HideAnnotations;
+        // Hidden annotations imply no commenting/reviewing — the flags never contradict each other.
+        BoundCanComment = ViewModel.CanComment && !BoundHideAnnotations;
+        BoundCanEdit = ViewModel.CanEdit && !BoundHideAnnotations;
 
         // Resolve current user for comment metadata
         var accessService = Hub.ServiceProvider.GetService<AccessService>();
@@ -227,9 +230,27 @@ public partial class CollaborativeMarkdownView
             DataBind(ViewModel.Value, x => x.RawContent, defaultValue: "");
         }
 
-        // Subscribe to comment nodes to track resolved/active status for filtering
-        SubscribeToCommentStatuses();
-        SubscribeToChanges();
+        // Subscribe to comment nodes to track resolved/active status for filtering.
+        // Skipped entirely when annotations are hidden (@@ embeds): no comment/change data is
+        // loaded, so no highlights, sidebar, or toolbar can ever render. A REBIND may flip the
+        // flag on a live instance, so also drop any caches a previous annotated bind populated —
+        // ProcessContent decorates from these, and stale entries would resurrect the comment UI.
+        if (BoundHideAnnotations)
+        {
+            commentNodes = new();
+            commentPaths = new();
+            changeNodes = new();
+            _resolvedComments = Array.Empty<Comment>();
+            _resolvedChanges = Array.Empty<TrackedChange>();
+            activeAnnotationId = null;
+            _showCommentInput = false;
+            _showPageCommentInput = false;
+        }
+        else
+        {
+            SubscribeToCommentStatuses();
+            SubscribeToChanges();
+        }
 
         ProcessContent();
     }
@@ -357,9 +378,10 @@ public partial class CollaborativeMarkdownView
             await jsModule.InvokeVoidAsync("positionCards");
         }
 
-        // Enable comment-from-selection — always initialize so the floating button appears.
+        // Enable comment-from-selection so the floating button appears — except when annotations
+        // are hidden (@@ embeds): selecting text in an embedded section must not offer commenting.
         // Permissions are checked server-side when actually creating the comment.
-        if (jsModule != null && !commentSelectionInitialized)
+        if (jsModule != null && !commentSelectionInitialized && !BoundHideAnnotations)
         {
             commentSelectionInitialized = true;
             dotNetRef = DotNetObjectReference.Create(this);
