@@ -211,6 +211,9 @@ public partial class MarkdownFileParser : IFileFormatParser
             Icon = ResolveIcon(frontMatter?.Icon ?? frontMatter?.Thumbnail, ns),
             State = ParseState(frontMatter?.State),
             Order = frontMatter?.Order,
+            ExcludeFromContext = frontMatter?.ExcludeFromContext is { Count: > 0 } excluded
+                ? excluded
+                : null,
             LastModified = lastModified,
             Content = nodeContent,
             PreRenderedHtml = markdownDocument.PrerenderedHtml
@@ -255,7 +258,10 @@ public partial class MarkdownFileParser : IFileFormatParser
             Abstract = mdContent?.Abstract ?? node.Description,
             Order = node.Order,
             Notes = slideNotes,
-            Background = slideBackground
+            Background = slideBackground,
+            ExcludeFromContext = node.ExcludeFromContext is { Count: > 0 } excluded
+                ? excluded.ToList()
+                : null
         };
 
         // Only write YAML block if there's meaningful content
@@ -270,7 +276,8 @@ public partial class MarkdownFileParser : IFileFormatParser
                             frontMatter.Abstract != null ||
                             frontMatter.Order != null ||
                             frontMatter.Notes != null ||
-                            frontMatter.Background != null;
+                            frontMatter.Background != null ||
+                            frontMatter.ExcludeFromContext?.Count > 0;
 
         if (hasYamlContent)
         {
@@ -513,6 +520,12 @@ public partial class MarkdownFileParser : IFileFormatParser
         public int? Order { get; set; }
         public string? Notes { get; set; }
         public string? Background { get; set; }
+
+        // Context opt-outs, 1:1 with MeshNode.ExcludeFromContext — e.g.
+        // `ExcludeFromContext: [header]` ships a chrome-less marketing page (no
+        // icon/title/meta header). Declared after the earlier keys for byte-stable
+        // serialization of files that don't carry it.
+        public List<string>? ExcludeFromContext { get; set; }
 
         // Legacy aliases. YamlDotNet doesn't follow C# property hierarchy, so we
         // expose them as plain settable properties and fold them in below
