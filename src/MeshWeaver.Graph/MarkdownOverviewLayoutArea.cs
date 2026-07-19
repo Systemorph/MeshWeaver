@@ -28,10 +28,11 @@ public static class MarkdownOverviewLayoutArea
         var hubPath = host.Hub.Address.ToString();
         var permissionsStream = host.Hub.GetEffectivePermissions(hubPath);
 
-        // When rendered as an @@ embed, the inline reference carries ?hideHeader=true
-        // (set by LayoutAreaMarkdownRenderer) — suppress the header, comments and side menu.
-        var hideHeader = host.Reference.HasParameter("hideHeader")
-            && !string.Equals(host.Reference.GetParameterValue("hideHeader"), "false", System.StringComparison.OrdinalIgnoreCase);
+        // A full-page render shows the node header; an @@ embed carries ?showHeader=false
+        // (re-attached client-side from the data-show-header the renderer emits) — suppress the
+        // header, comments and side menu. Hidden only when showHeader is explicitly "false".
+        var hideHeader = host.Reference.HasParameter("showHeader")
+            && string.Equals(host.Reference.GetParameterValue("showHeader"), "false", System.StringComparison.OrdinalIgnoreCase);
 
         return host.Workspace.GetMeshNodeStream()
             .CombineLatest(permissionsStream, host.ObserveChildren("is:main"), (node, perms, children) =>
