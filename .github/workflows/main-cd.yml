@@ -139,6 +139,23 @@ jobs:
           -p:ContainerImageTags='"${{ steps.vars.outputs.version }};${{ steps.vars.outputs.sha }};main"'
           -p:ContainerBaseImage=${{ env.ACR }}/memex-portal-ai-base:latest
 
+      # Guard: a partial multi-arch push (e.g. the arm64 leg silently failing when its base layer is
+      # missing) publishes a single-arch image WITHOUT the multi-arch manifest tag that the pull-based
+      # self-updater references — the plain tag then 404s (ImagePullBackOff) and the deployment never
+      # rolls. Fail the build rather than ship a version whose referenced tag isn't a complete manifest
+      # list. (2026-07 memex-cloud outage: migration ci.1184 pushed only -linux-x64, so V46
+      # exclude_from_context never applied and path resolution 42703'd mesh-wide.)
+      - name: Verify multi-arch manifest (portal-ai)
+        run: |
+          set -euo pipefail
+          ref="${{ env.ACR }}/memex-portal-ai:${{ steps.vars.outputs.version }}"
+          raw=$(docker buildx imagetools inspect "$ref" --raw)
+          for arch in amd64 arm64; do
+            echo "$raw" | grep -qE "\"architecture\"[[:space:]]*:[[:space:]]*\"$arch\"" \
+              || { echo "::error::$ref is not a complete multi-arch manifest — missing linux/$arch. Refusing to publish a partial version."; echo "$raw"; exit 1; }
+          done
+          echo "OK: $ref is a multi-arch manifest (amd64 + arm64)."
+
   migration-image:
     name: "Build + push migration image"
     if: >-
@@ -198,6 +215,23 @@ jobs:
           -p:ContainerRegistry=${{ env.ACR }}
           -p:ContainerRepository=memex-migration
           -p:ContainerImageTags='"${{ steps.vars.outputs.version }};${{ steps.vars.outputs.sha }};main"'
+
+      # Guard: a partial multi-arch push (e.g. the arm64 leg silently failing when its base layer is
+      # missing) publishes a single-arch image WITHOUT the multi-arch manifest tag that the pull-based
+      # self-updater references — the plain tag then 404s (ImagePullBackOff) and the deployment never
+      # rolls. Fail the build rather than ship a version whose referenced tag isn't a complete manifest
+      # list. (2026-07 memex-cloud outage: migration ci.1184 pushed only -linux-x64, so V46
+      # exclude_from_context never applied and path resolution 42703'd mesh-wide.)
+      - name: Verify multi-arch manifest (migration)
+        run: |
+          set -euo pipefail
+          ref="${{ env.ACR }}/memex-migration:${{ steps.vars.outputs.version }}"
+          raw=$(docker buildx imagetools inspect "$ref" --raw)
+          for arch in amd64 arm64; do
+            echo "$raw" | grep -qE "\"architecture\"[[:space:]]*:[[:space:]]*\"$arch\"" \
+              || { echo "::error::$ref is not a complete multi-arch manifest — missing linux/$arch. Refusing to publish a partial version."; echo "$raw"; exit 1; }
+          done
+          echo "OK: $ref is a multi-arch manifest (amd64 + arm64)."
 
   # ─────────────────────────────── NO DEPLOY JOB ─────────────────────────────
   # Deployment is PULL-BASED, not push. CI's job ends at "publish the image to ACR" (the image
