@@ -10,7 +10,7 @@
 // This file is client-only by construction (window.location default); the server-side counterpart
 // (src/server/snapshot.ts) is REST-only and never opens a stream.
 
-import { GrpcAreaSource, type AreaSource } from "@meshweaver/react/core";
+import { classifyAreaError, GrpcAreaSource, isSafeRedirect, type AreaSource } from "@meshweaver/react/core";
 import type {
   ContentListing,
   MarkdownCellSubmission,
@@ -327,6 +327,10 @@ export interface AreaTarget {
   address: string;
   area: string;
   id: string;
+  /** The node's configured "if no access ⇒ redirect here" target (public cover / paywall), or null.
+   *  Carried through from the server resolve (snapshot.ts AreaTarget); LiveArea redirects a denied
+   *  viewer there (gated by isSafeRedirect). Not part of the subscription key. */
+  redirectOnDenied?: string | null;
 }
 
 /**
@@ -356,6 +360,26 @@ export function rootAreaOf(target: AreaTarget): string {
 /** Cache key for one target's live source — one stream per (address, area, id). */
 export function targetKey(target: AreaTarget): string {
   return `${target.address}\u0000${target.area}\u0000${target.id}`;
+}
+
+/**
+ * The public cover / paywall to redirect a DENIED viewer to, or null. "Denied" means the server
+ * render flagged an RLS denial (`initialDenied`) OR the live subscription faulted with an
+ * access-denied error. The target is the node's configured `redirectOnDenied` (from the resolve
+ * response), gated by `isSafeRedirect` so it can never loop (redirecting the target or a node beneath
+ * it back to itself is refused). Returns a leading-'/' in-app mesh route ready for router.replace, or
+ * null to fall through to the honest denied/error affordance. Pure — the TS twin of the Blazor
+ * NamedAreaView redirect decision, unit-tested without a renderer.
+ */
+export function deniedRedirectTarget(args: {
+  initialDenied?: boolean;
+  streamError?: string | null;
+  address: string;
+  redirectOnDenied?: string | null;
+}): string | null {
+  const denied = !!args.initialDenied || classifyAreaError(args.streamError)?.kind === "access-denied";
+  if (!denied || !isSafeRedirect(args.address, args.redirectOnDenied)) return null;
+  return "/" + (args.redirectOnDenied ?? "").replace(/^\/+/, "");
 }
 
 /** Root area key of a default-area subscription (matches the SSR preview tree's root, so live
