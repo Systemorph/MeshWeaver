@@ -87,7 +87,13 @@ public static class WorkspaceExtensions
 
     /// <summary>
     /// Wraps a new store snapshot plus its entity updates into a patch-type
-    /// <see cref="ChangeItem{T}"/> stamped with the stream's id and current hub version.
+    /// <see cref="ChangeItem{T}"/> stamped with the stream's id and originated-frame version
+    /// (<see cref="ISynchronizationStream.StampVersion"/> — the hub clock floored at the stream's
+    /// per-activation content baseline; issue #325 symptom-2). Flooring here matters because the
+    /// data-source stream's write frame is the version the post-recycle resubscribe Full carries,
+    /// and the receive-side monotonicity guard drops it when it regresses below the mirror's
+    /// last-seen version. Non-MeshNode / layout streams have no baseline, so StampVersion is just
+    /// Hub.Version — behaviour unchanged.
     /// </summary>
     /// <param name="stream">The stream the change is attributed to (provides id and version).</param>
     /// <param name="storeAndUpdates">The new store together with the list of entity updates that produced it.</param>
@@ -99,7 +105,7 @@ public static class WorkspaceExtensions
             storeAndUpdates.ChangedBy ?? stream!.StreamId,
             stream!.StreamId,
             ChangeType.Patch,
-            stream!.Hub.Version,
+            stream!.StampVersion,
             storeAndUpdates.Updates.ToArray()
             );
 
