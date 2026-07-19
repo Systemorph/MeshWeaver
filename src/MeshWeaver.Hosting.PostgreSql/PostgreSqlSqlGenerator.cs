@@ -693,14 +693,22 @@ public class PostgreSqlSqlGenerator
 
         var partitionAccessExists = $"EXISTS (SELECT 1 FROM public.partition_access pa WHERE pa.user_id IN ({userList}) AND pa.partition = '{schema}')";
 
+        // Per-SUBJECT closest-scope, then OR across subjects (AccessControl.md; mirrors the
+        // AccessControlPipeline evaluator): DISTINCT ON (user_id) keeps each subject's
+        // longest-prefix row, bool_or ORs the per-subject resolutions. A single global
+        // longest-prefix fold across subjects let a DEEPER Public deny override a user's
+        // ROOT allow — entitled viewers' queries returned only the public surface
+        // (memex-cloud 2026-07-19: store gating darkened children for Public; paying users'
+        // course listings came back empty). Empty set → NULL → '= true' fails closed.
         var nodeAccess = $"""
             n.main_node = {paramName}
-            OR (SELECT uep.is_allow FROM {uepTable} uep
+            OR (SELECT bool_or(closest.is_allow) FROM (
+                SELECT DISTINCT ON (uep.user_id) uep.is_allow
+                FROM {uepTable} uep
                 WHERE uep.user_id IN ({userList}) AND uep.permission = 'Read'
                   AND n.main_node LIKE uep.node_path_prefix || '%'
-                ORDER BY LENGTH(uep.node_path_prefix) DESC,
-                         CASE WHEN uep.user_id = {paramName} THEN 0 ELSE 1 END
-                LIMIT 1) = true
+                ORDER BY uep.user_id, LENGTH(uep.node_path_prefix) DESC
+                ) closest) = true
             """;
 
         // 🔒 #471/#385 RC3 — the documented invariant (AccessControl.md, search_across_schemas,
@@ -1241,17 +1249,25 @@ public class PostgreSqlSqlGenerator
         // A node is visible if the user has partition access (when schema-qualified) AND:
         //   (a) public-read node type (no further permission check), OR
         //   (b) owns the node OR has Read permission
+        //
+        // The Read fold is per-SUBJECT closest-scope, then OR across subjects
+        // (AccessControl.md; mirrors the AccessControlPipeline evaluator): DISTINCT ON
+        // (user_id) keeps each subject's longest-prefix row, bool_or ORs the per-subject
+        // resolutions. A single global longest-prefix fold across subjects let a DEEPER
+        // Public deny override a user's ROOT allow — entitled viewers' queries returned only
+        // the public surface (memex-cloud 2026-07-19). Empty set → NULL → '= true' fails closed.
         var nodeAccessClause = $"""
                 n.main_node = {paramName}
                 OR
-                (SELECT uep.is_allow
-                 FROM {uepTable} uep
-                 WHERE uep.user_id IN ({userList})
-                   AND uep.permission = 'Read'
-                   AND n.main_node LIKE uep.node_path_prefix || '%'
-                 ORDER BY LENGTH(uep.node_path_prefix) DESC,
-                          CASE WHEN uep.user_id = {paramName} THEN 0 ELSE 1 END
-                 LIMIT 1) = true
+                (SELECT bool_or(closest.is_allow)
+                 FROM (
+                     SELECT DISTINCT ON (uep.user_id) uep.is_allow
+                     FROM {uepTable} uep
+                     WHERE uep.user_id IN ({userList})
+                       AND uep.permission = 'Read'
+                       AND n.main_node LIKE uep.node_path_prefix || '%'
+                     ORDER BY uep.user_id, LENGTH(uep.node_path_prefix) DESC
+                 ) closest) = true
             """;
 
         if (hasPartitionCheck)

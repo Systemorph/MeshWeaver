@@ -73,6 +73,14 @@ public static class PostgreSqlSchemaInitializer
                     -- for every authenticated user → empty search / empty catalog. Such
                     -- schemas are PUBLIC content (no per-user filter); access-controlled
                     -- partitions still get the full partition_access + node check.
+                    -- Read fold: per-SUBJECT closest-scope, then OR across subjects
+                    -- (AccessControl.md; mirrors the AccessControlPipeline evaluator).
+                    -- DISTINCT ON (user_id) keeps each subject's longest-prefix row; bool_or
+                    -- ORs the per-subject resolutions. The previous single global
+                    -- longest-prefix fold across subjects let a DEEPER Public deny override
+                    -- a user's ROOT allow (memex-cloud 2026-07-19: store gating darkened
+                    -- children for Public; entitled users' searches lost their content).
+                    -- Empty set -> NULL -> '= true' fails closed.
                     IF user_list IS NOT NULL
                        AND to_regclass(format('%I.user_effective_permissions', schema_rec.schema_name)) IS NOT NULL THEN
                         union_sql := union_sql || format(
@@ -80,10 +88,13 @@ public static class PostgreSqlSchemaInitializer
                             || 'EXISTS (SELECT 1 FROM public.partition_access pa WHERE pa.user_id IN (%s) AND pa.partition = %L)'
                             || ' AND ('
                             || 'EXISTS (SELECT 1 FROM %I.node_type_permissions ntp WHERE ntp.node_type = n.node_type AND ntp.public_read = true)'
-                            || ' OR (SELECT uep.is_allow FROM %I.user_effective_permissions uep'
+                            || ' OR (SELECT bool_or(closest.is_allow) FROM ('
+                            || '  SELECT DISTINCT ON (uep.user_id) uep.is_allow'
+                            || '  FROM %I.user_effective_permissions uep'
                             || '  WHERE uep.user_id IN (%s) AND uep.permission = ''Read'''
                             || '  AND n.main_node LIKE uep.node_path_prefix || ''%%'''
-                            || '  ORDER BY LENGTH(uep.node_path_prefix) DESC LIMIT 1) = true'
+                            || '  ORDER BY uep.user_id, LENGTH(uep.node_path_prefix) DESC'
+                            || '  ) closest) = true'
                             || '))',
                             user_list, schema_rec.schema_name,
                             schema_rec.schema_name,
