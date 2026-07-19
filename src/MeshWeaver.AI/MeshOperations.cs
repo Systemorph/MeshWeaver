@@ -1274,13 +1274,25 @@ public class MeshOperations
         return pathResolver.ResolveNavigationPath(resolvedPath)
             .Take(1)
             .Timeout(TimeSpan.FromSeconds(10))
-            .Select(resolution => resolution is null
-                ? $"Not found: {resolvedPath}"
-                : new JsonObject
-                {
-                    ["prefix"] = resolution.Prefix,
-                    ["remainder"] = resolution.Remainder,
-                }.ToJsonString())
+            .SelectMany(resolution => resolution is null
+                ? Observable.Return($"Not found: {resolvedPath}")
+                // Also surface the node's configured "if no access ⇒ redirect here" target
+                // (PartitionAccessPolicy.RedirectOnDenied — nearest ancestor wins) so a remote shell can
+                // do the SAME access-denied redirect the Blazor NamedAreaView does: a not-yet-enrolled
+                // visitor who hits a gated course lands on its public paywall / {course}/Overview instead
+                // of a dead-end "Access denied" card. Best-effort + bounded — on error/timeout the field
+                // is null and the shell falls through to the honest error. The loop-guard (IsSafeRedirect)
+                // and the navigation itself live client-side, exactly as they do in NamedAreaView.
+                : hub.GetRedirectOnDenied(resolution.Prefix)
+                    .Take(1)
+                    .Timeout(TimeSpan.FromSeconds(5))
+                    .Catch((Exception _) => Observable.Return<string?>(null))
+                    .Select(redirect => new JsonObject
+                    {
+                        ["prefix"] = resolution.Prefix,
+                        ["remainder"] = resolution.Remainder,
+                        ["redirectOnDenied"] = redirect,
+                    }.ToJsonString()))
             .Catch((Exception ex) =>
             {
                 logger.LogWarning(ex, "Resolve failed for {Path}", resolvedPath);

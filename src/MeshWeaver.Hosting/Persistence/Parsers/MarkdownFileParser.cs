@@ -189,7 +189,7 @@ public partial class MarkdownFileParser : IFileFormatParser
         // + stage background) so a git reimport no longer downgrades Slide →
         // MarkdownContent — the slide views read SlideContent, and a MarkdownContent
         // payload would render an empty stage.
-        object nodeContent = nodeType == SlideNodeType.NodeType
+        object nodeContent = IsSlideNodeType(nodeType)
             ? new SlideContent
             {
                 Content = markdownContent,
@@ -211,6 +211,9 @@ public partial class MarkdownFileParser : IFileFormatParser
             Icon = ResolveIcon(frontMatter?.Icon ?? frontMatter?.Thumbnail, ns),
             State = ParseState(frontMatter?.State),
             Order = frontMatter?.Order,
+            ExcludeFromContext = frontMatter?.ExcludeFromContext is { Count: > 0 } excluded
+                ? excluded
+                : null,
             LastModified = lastModified,
             Content = nodeContent,
             PreRenderedHtml = markdownDocument.PrerenderedHtml
@@ -218,6 +221,17 @@ public partial class MarkdownFileParser : IFileFormatParser
 
         return node;
     }
+
+    /// <summary>
+    /// A slide file may carry the built-in <c>Slide</c> node type or a plugin-namespaced
+    /// variant (e.g. <c>Slides/Slide</c> from the Slides store plugin). Both must build
+    /// SlideContent and round-trip Notes/Background: matching only the bare constant let
+    /// a namespaced slide degrade to MarkdownContent on import, and the next mesh→repo
+    /// export then dropped its Notes/Background frontmatter entirely.
+    /// </summary>
+    private static bool IsSlideNodeType(string? nodeType) =>
+        nodeType == SlideNodeType.NodeType
+        || nodeType?.EndsWith("/" + SlideNodeType.NodeType, StringComparison.Ordinal) == true;
 
     /// <inheritdoc />
     public string Serialize(MeshNode node)
@@ -234,7 +248,7 @@ public partial class MarkdownFileParser : IFileFormatParser
         var (slideNotes, slideBackground) = node.Content switch
         {
             SlideContent slide => (NullIfEmpty(slide.Notes), NullIfEmpty(slide.Background)),
-            System.Text.Json.JsonElement je when node.NodeType == SlideNodeType.NodeType =>
+            System.Text.Json.JsonElement je when IsSlideNodeType(node.NodeType) =>
                 (ExtractStringProperty(je, "notes"), ExtractStringProperty(je, "background")),
             _ => (null, null)
         };
@@ -255,7 +269,10 @@ public partial class MarkdownFileParser : IFileFormatParser
             Abstract = mdContent?.Abstract ?? node.Description,
             Order = node.Order,
             Notes = slideNotes,
-            Background = slideBackground
+            Background = slideBackground,
+            ExcludeFromContext = node.ExcludeFromContext is { Count: > 0 } excluded
+                ? excluded.ToList()
+                : null
         };
 
         // Only write YAML block if there's meaningful content
@@ -270,7 +287,8 @@ public partial class MarkdownFileParser : IFileFormatParser
                             frontMatter.Abstract != null ||
                             frontMatter.Order != null ||
                             frontMatter.Notes != null ||
-                            frontMatter.Background != null;
+                            frontMatter.Background != null ||
+                            frontMatter.ExcludeFromContext?.Count > 0;
 
         if (hasYamlContent)
         {
@@ -513,6 +531,12 @@ public partial class MarkdownFileParser : IFileFormatParser
         public int? Order { get; set; }
         public string? Notes { get; set; }
         public string? Background { get; set; }
+
+        // Context opt-outs, 1:1 with MeshNode.ExcludeFromContext — e.g.
+        // `ExcludeFromContext: [header]` ships a chrome-less marketing page (no
+        // icon/title/meta header). Declared after the earlier keys for byte-stable
+        // serialization of files that don't carry it.
+        public List<string>? ExcludeFromContext { get; set; }
 
         // Legacy aliases. YamlDotNet doesn't follow C# property hierarchy, so we
         // expose them as plain settable properties and fold them in below

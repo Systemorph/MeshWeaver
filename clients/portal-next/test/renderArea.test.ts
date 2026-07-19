@@ -1,7 +1,8 @@
 // The PRIMARY SSR seed: POST /api/mesh/render-area returns the first Full {areas,data} frame
 // EXACTLY as the gRPC wire delivers it ($type discriminators, JSON-encoded InstanceCollection
 // keys); fetchRenderedArea folds it with the SAME normalize the live GrpcAreaSource applies, and
-// degrades to null on every miss so the caller falls back to the node-snapshot preview.
+// returns a discriminated result: `ok` (hydratable tree), `denied` (RLS access denial ⇒ the shell
+// may redirect to the node's public cover), or `none` (any other miss ⇒ node-snapshot preview).
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { fetchRenderedArea } from "../src/server/snapshot";
 
@@ -45,7 +46,7 @@ describe("fetchRenderedArea", () => {
   it("POSTs /api/mesh/render-area with the Bearer token and folds the wire frame", async () => {
     const spy = mockFetch(() => new Response(JSON.stringify(wireFrame), { status: 200 }));
 
-    const tree = await fetchRenderedArea("https://portal.example", "mw_abc", "ACME/Pricing");
+    const result = await fetchRenderedArea("https://portal.example", "mw_abc", "ACME/Pricing");
 
     const [url, init] = spy.mock.calls[0] as [string, RequestInit];
     expect(url).toBe("https://portal.example/api/mesh/render-area");
@@ -55,7 +56,8 @@ describe("fetchRenderedArea", () => {
 
     // Instance keys decoded to PLAIN names (the shape StaticAreaSource / the renderer consume);
     // the $type collection marker is dropped, control $types stay wire-faithful.
-    expect(tree).not.toBeNull();
+    expect(result.kind).toBe("ok");
+    const tree = result.kind === "ok" ? result.tree : null;
     expect(Object.keys(tree!.areas!)).toEqual(["", "Overview", "Overview/1", "Overview/2"]);
     expect(tree!.areas![""]).toMatchObject({ $type: "NamedAreaControl", area: "Overview" });
     expect(tree!.areas!["Overview/2"]).toMatchObject({ $type: "MarkdownControl" });
@@ -63,39 +65,49 @@ describe("fetchRenderedArea", () => {
     expect(tree).not.toHaveProperty("$type");
   });
 
-  it("returns null on 404 — an older portal without the render-area verb (preview fallback)", async () => {
+  it("is `none` on 404 — an older portal without the render-area verb (preview fallback)", async () => {
     mockFetch(() => new Response("Not Found", { status: 404 }));
-    expect(await fetchRenderedArea("https://p", "t", "A/B")).toBeNull();
+    expect((await fetchRenderedArea("https://p", "t", "A/B")).kind).toBe("none");
   });
 
-  it("returns null on the 504 render-timeout JSON error", async () => {
+  it("is `none` on the 504 render-timeout JSON error", async () => {
     mockFetch(
       () =>
         new Response(JSON.stringify({ error: "Timed out after 30s waiting for the first full frame" }), {
           status: 504,
         }),
     );
-    expect(await fetchRenderedArea("https://p", "t", "A/B")).toBeNull();
+    expect((await fetchRenderedArea("https://p", "t", "A/B")).kind).toBe("none");
   });
 
-  it("returns null on the MeshOperations sentinel strings (RLS denial / unknown path)", async () => {
+  it("is `denied` on the RLS access-denied sentinel (so the shell can redirect to the paywall)", async () => {
     mockFetch(() => new Response("Error: Access denied", { status: 200 }));
-    expect(await fetchRenderedArea("https://p", "t", "Secret/Node")).toBeNull();
+    expect((await fetchRenderedArea("https://p", "t", "Secret/Node")).kind).toBe("denied");
 
+    mockFetch(
+      () => new Response("Error: user 'u' lacks Read permission on 'Course/Lesson'", { status: 200 }),
+    );
+    expect((await fetchRenderedArea("https://p", "t", "Course/Lesson")).kind).toBe("denied");
+  });
+
+  it("is `none` on a non-denial sentinel (unknown path / other error)", async () => {
     mockFetch(() => new Response("Not found: No/Such/Node", { status: 200 }));
-    expect(await fetchRenderedArea("https://p", "t", "No/Such/Node")).toBeNull();
+    expect((await fetchRenderedArea("https://p", "t", "No/Such/Node")).kind).toBe("none");
+
+    mockFetch(() => new Response("Error: something else broke", { status: 200 }));
+    expect((await fetchRenderedArea("https://p", "t", "A/B")).kind).toBe("none");
   });
 
-  it("returns null when the frame carries no areas (not hydratable)", async () => {
+  it("is `none` when the frame carries no areas (not hydratable)", async () => {
     mockFetch(() => new Response(JSON.stringify({ $type: "MeshWeaver.Data.EntityStore", data: {} }), { status: 200 }));
-    expect(await fetchRenderedArea("https://p", "t", "A/B")).toBeNull();
+    expect((await fetchRenderedArea("https://p", "t", "A/B")).kind).toBe("none");
   });
 
-  it("returns null on an unparseable body or network error", async () => {
+  it("is `none` on an unparseable body or network error", async () => {
     mockFetch(() => new Response("<html>proxy error</html>", { status: 200 }));
-    expect(await fetchRenderedArea("https://p", "t", "A/B")).toBeNull();
+    expect((await fetchRenderedArea("https://p", "t", "A/B")).kind).toBe("none");
 
     globalThis.fetch = vi.fn(() => Promise.reject(new Error("ECONNREFUSED"))) as unknown as typeof fetch;
-    expect(await fetchRenderedArea("https://p", "t", "A/B")).toBeNull();
+    expect((await fetchRenderedArea("https://p", "t", "A/B")).kind).toBe("none");
   });
 });

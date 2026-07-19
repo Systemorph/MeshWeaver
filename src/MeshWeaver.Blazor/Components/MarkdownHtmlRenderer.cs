@@ -133,7 +133,12 @@ public class MarkdownHtmlRenderer
                     var rawPath = node.GetAttributeValue($"data-{LayoutAreaMarkdownRenderer.RawPath}", "");
                     if (!string.IsNullOrEmpty(rawPath))
                     {
-                        RenderLayoutAreaFromPath(builder, rawPath);
+                        // @@ embeds hide the node header by default; the renderer emits
+                        // data-show-header='false' unless the author opted in with ?showHeader=true.
+                        var showHeader = !string.Equals(
+                            node.GetAttributeValue($"data-{LayoutAreaMarkdownRenderer.ShowHeader}", "true"),
+                            "false", System.StringComparison.OrdinalIgnoreCase);
+                        RenderLayoutAreaFromPath(builder, rawPath, showHeader);
                     }
                     else
                     {
@@ -303,7 +308,7 @@ public class MarkdownHtmlRenderer
                currentAddress.StartsWith(basePath + "/", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static void RenderLayoutAreaFromPath(RenderTreeBuilder builder, string? rawPath)
+    private static void RenderLayoutAreaFromPath(RenderTreeBuilder builder, string? rawPath, bool showHeader = true)
     {
         if (string.IsNullOrEmpty(rawPath))
             return;
@@ -313,6 +318,7 @@ public class MarkdownHtmlRenderer
 
         builder.OpenComponent<PathBasedLayoutArea>(3);
         builder.AddAttribute(4, nameof(PathBasedLayoutArea.Path), rawPath);
+        builder.AddAttribute(5, nameof(PathBasedLayoutArea.ShowHeader), showHeader);
         builder.CloseComponent();
 
         builder.CloseElement();

@@ -267,6 +267,7 @@ MeshWeaver provides a complete set of building blocks for Data Mesh, each docume
 |---|---|
 | [Node Types](NodeTypes) | Design, compile, NuGet-reference, and test node types end to end |
 | [Addressable Paths](UnifiedPath) | Every product gets a permanent, unique address in the mesh |
+| [Addressability of Objects](Addressability) | Why one addressable namespace lets an agent go from a plain-English ask to a precise, typed action |
 | [Query Language](QuerySyntax) | GitHub-style search syntax to discover and filter across products |
 | [CRUD Operations](CRUD) | Type-safe create, read, update, and delete for any product |
 | [Node Operations](NodeOperations) | Export, import, copy, and move node subtrees |
@@ -285,7 +286,7 @@ MeshWeaver provides a complete set of building blocks for Data Mesh, each docume
 Follow this sequence to go from raw data to a governed, combinable data product:
 
 1. **Model** — Define your types and schema: [Data Modeling](DataModeling) + [Node Type Configuration](NodeTypeConfiguration)
-2. **Address** — Give every product a permanent home: [Unified Path](UnifiedPath)
+2. **Address** — Give every product a permanent home and reach every facet by path: [Unified Path](UnifiedPath) + [Addressability of Objects](Addressability)
 3. **Operate** — Wire up reads, writes, and sync: [CRUD](CRUD) + [Data Configuration](DataConfiguration)
 4. **Govern** — Attach ownership, access, and audit trails: [Satellite Entities](SatelliteEntities)
 5. **Consume** — Surface live data in docs and dashboards: [Interactive Markdown](InteractiveMarkdown)

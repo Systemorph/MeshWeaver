@@ -220,6 +220,15 @@ public class PostgreSqlSqlGenerator
             ? "n.sync_behavior"
             : "0::smallint AS sync_behavior";
 
+    // exclude_from_context lives only on mesh_nodes (like sync_behavior). Omitting it here
+    // strips the instance-level context opt-outs ("header"/"search"/"create") from every
+    // QUERY-served node — and the MeshNodeStreamCache hydrates cold nodes through this path,
+    // so the header gate saw null even though the adapter's direct Read mapped the column.
+    private static string ExcludeFromContextColumn(string tableName) =>
+        tableName.Contains("mesh_nodes", StringComparison.OrdinalIgnoreCase)
+            ? "n.exclude_from_context"
+            : "NULL::text[] AS exclude_from_context";
+
     /// <summary>
     /// Builds a complete <c>SELECT</c> statement (columns, optional activity/user-activity joins,
     /// scope, order, and limit) for a parsed query, with bound parameters.
@@ -263,7 +272,7 @@ public class PostgreSqlSqlGenerator
 
         var sql = new StringBuilder("SELECT n.id, n.namespace, n.name, n.node_type, n.description, " +
             $"n.category, n.icon, n.display_order, n.last_modified, n.version, n.state, {contentColumn}, " +
-            $"n.desired_id, n.main_node, {syncBehaviorColumn} FROM {tableName} n");
+            $"n.desired_id, n.main_node, {syncBehaviorColumn}, {ExcludeFromContextColumn(tableName)} FROM {tableName} n");
 
         if (isAccessedQuery)
         {
