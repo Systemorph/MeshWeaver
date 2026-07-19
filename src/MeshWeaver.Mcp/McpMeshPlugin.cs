@@ -1016,6 +1016,54 @@ Examples:
         };
     }
 
+    // ─────────────────────────── Version history ───────────────────────────
+    // Delegates to the shared VersionPlugin on the SESSION hub so reads and the
+    // restore write run with the caller's identity/permissions — the same actor
+    // every other MCP tool routes through. VersionPlugin wraps IVersionQuery,
+    // whose reader was restored in the version-history fix (V44/V45).
+
+    /// <summary>Lists all versions of a node, newest first.</summary>
+    /// <param name="path">Path to the node.</param>
+    /// <returns>JSON of the versions, or a message when none exist.</returns>
+    [McpServerTool(Title = "List a node's versions", ReadOnly = true, Idempotent = true, OpenWorld = false)]
+    [Description("Lists all available versions of a node, newest first \u2014 version number, date, who changed it, name and node type. Call this first to pick a version for GetVersion / RestoreVersion.")]
+    public Task<string> GetVersions(
+        [Description("Path to the node (e.g., 'OrgA/my-doc')")] string path)
+        => new VersionPlugin(sessionHub).GetVersions(path);
+
+    /// <summary>Retrieves the full node content at a specific version number.</summary>
+    /// <param name="path">Path to the node.</param>
+    /// <param name="version">Version number to retrieve.</param>
+    /// <returns>The serialized node JSON at that version, or a message when not found.</returns>
+    [McpServerTool(Title = "Get a node at a specific version", ReadOnly = true, Idempotent = true, OpenWorld = false)]
+    [Description("Retrieves the full node content (metadata + Content) at a specific version number \u2014 the way to read back an earlier or since-changed state. List versions first with GetVersions.")]
+    public Task<string> GetVersion(
+        [Description("Path to the node")] string path,
+        [Description("Version number to retrieve")] long version)
+        => new VersionPlugin(sessionHub).GetVersion(path, version);
+
+    /// <summary>Restores a node to a specific version (written back as a new latest version).</summary>
+    /// <param name="path">Path to the node.</param>
+    /// <param name="version">Version number to restore to.</param>
+    /// <returns>A status message with the restored and new version numbers.</returns>
+    [McpServerTool(Title = "Restore a node to a version", Destructive = true, Idempotent = false, OpenWorld = false)]
+    [Description("Restores a node to a specific version number; the historical state is written back as a NEW latest version (history is preserved, nothing is lost).")]
+    public Task<string> RestoreVersion(
+        [Description("Path to the node")] string path,
+        [Description("Version number to restore to")] long version)
+        => new VersionPlugin(sessionHub).RestoreVersion(path, version);
+
+    /// <summary>Restores a node to its state at a point in time.</summary>
+    /// <param name="path">Path to the node.</param>
+    /// <param name="timestamp">ISO 8601 timestamp to restore to.</param>
+    /// <returns>A status message, or an error when the timestamp is invalid or no matching version exists.</returns>
+    [McpServerTool(Title = "Restore a node to a point in time", Destructive = true, Idempotent = false, OpenWorld = false)]
+    [Description("Restores a node to its state at a point in time \u2014 finds the latest version at or before the given ISO 8601 timestamp and writes it back as the new latest version.")]
+    public Task<string> RestoreFromPointInTime(
+        [Description("Path to the node")] string path,
+        [Description("ISO 8601 timestamp to restore to (e.g., '2026-03-25T14:30:00Z')")] string timestamp)
+        => new VersionPlugin(sessionHub).RestoreFromPointInTime(path, timestamp);
+
     private static CallToolResult ErrorResult(string message) => new()
     {
         IsError = true,
