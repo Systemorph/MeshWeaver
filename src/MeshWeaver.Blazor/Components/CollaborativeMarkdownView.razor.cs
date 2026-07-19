@@ -232,8 +232,21 @@ public partial class CollaborativeMarkdownView
 
         // Subscribe to comment nodes to track resolved/active status for filtering.
         // Skipped entirely when annotations are hidden (@@ embeds): no comment/change data is
-        // loaded, so no highlights, sidebar, or toolbar can ever render.
-        if (!BoundHideAnnotations)
+        // loaded, so no highlights, sidebar, or toolbar can ever render. A REBIND may flip the
+        // flag on a live instance, so also drop any caches a previous annotated bind populated —
+        // ProcessContent decorates from these, and stale entries would resurrect the comment UI.
+        if (BoundHideAnnotations)
+        {
+            commentNodes = new();
+            commentPaths = new();
+            changeNodes = new();
+            _resolvedComments = Array.Empty<Comment>();
+            _resolvedChanges = Array.Empty<TrackedChange>();
+            activeAnnotationId = null;
+            _showCommentInput = false;
+            _showPageCommentInput = false;
+        }
+        else
         {
             SubscribeToCommentStatuses();
             SubscribeToChanges();
