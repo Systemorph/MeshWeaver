@@ -431,6 +431,7 @@ public class PostgreSqlCrossSchemaQueryProvider : ICrossSchemaQueryProvider
             Version = reader.GetInt64(reader.GetOrdinal("version")),
             State = (MeshNodeState)reader.GetInt16(reader.GetOrdinal("state")),
             SyncBehavior = PgMeshNodeReader.ReadSyncBehavior(reader),
+            ExcludeFromContext = PgMeshNodeReader.ReadStringArray(reader, "exclude_from_context"),
             Content = content,
             DesiredId = reader.IsDBNull(reader.GetOrdinal("desired_id")) ? null : reader.GetString(reader.GetOrdinal("desired_id")),
             MainNode = reader.IsDBNull(reader.GetOrdinal("main_node"))

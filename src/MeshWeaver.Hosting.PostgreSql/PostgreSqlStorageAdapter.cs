@@ -180,6 +180,14 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
             ? "created_by, last_modified_by, created_date"
             : "NULL::text AS created_by, NULL::text AS last_modified_by, NULL::timestamptz AS created_date";
 
+    // ExcludeFromContext lives only on mesh_nodes (like authorship): the instance-level
+    // context opt-outs ("header", "search", "create") are a main-node concern; satellite
+    // selects emit a typed NULL so ReadMeshNode finds the column by name either way.
+    private static string ExcludeCol(string qualifiedTable) =>
+        qualifiedTable.Contains("mesh_nodes", StringComparison.OrdinalIgnoreCase)
+            ? "exclude_from_context"
+            : "NULL::text[] AS exclude_from_context";
+
     private static string NormalizePath(string? path) =>
         path?.Trim('/') ?? "";
 
@@ -227,7 +235,7 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
         {
             await using var cmd = _dataSource.CreateCommand(
                 $"SELECT id, namespace, name, description, node_type, category, icon, display_order, " +
-                $"last_modified, version, state, content, desired_id, main_node, {SyncBehaviorCol(table)}, {AuthorCols(table)} " +
+                $"last_modified, version, state, content, desired_id, main_node, {SyncBehaviorCol(table)}, {AuthorCols(table)}, {ExcludeCol(table)} " +
                 $"FROM {table} WHERE namespace = $1 AND id = $2");
             cmd.Parameters.AddWithValue(ns);
             cmd.Parameters.AddWithValue(id);
@@ -306,7 +314,7 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
                 Enumerable.Range(2, ids.Length).Select(i => $"${i}"));
             await using var cmd = _dataSource.CreateCommand(
                 $"SELECT id, namespace, name, description, node_type, category, icon, display_order, " +
-                $"last_modified, version, state, content, desired_id, main_node, {SyncBehaviorCol(table)}, {AuthorCols(table)} " +
+                $"last_modified, version, state, content, desired_id, main_node, {SyncBehaviorCol(table)}, {AuthorCols(table)}, {ExcludeCol(table)} " +
                 $"FROM {table} WHERE namespace = $1 AND id IN ({placeholders})");
             cmd.Parameters.AddWithValue(ns);
             foreach (var id in ids)
@@ -366,11 +374,15 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
         var authorInsertCol = writeSync ? ", created_by, last_modified_by, created_date" : "";
         var authorInsertVal = writeSync ? ", $17, $18, $19" : "";
         var authorUpdate = writeSync ? ",\n                last_modified_by = EXCLUDED.last_modified_by" : "";
+        // exclude_from_context lives only on mesh_nodes (like sync_behavior/authorship).
+        var excludeInsertCol = writeSync ? ", exclude_from_context" : "";
+        var excludeInsertVal = writeSync ? ", $20" : "";
+        var excludeUpdate = writeSync ? ",\n                exclude_from_context = EXCLUDED.exclude_from_context" : "";
         await using var cmd = _dataSource.CreateCommand(
             $"""
             INSERT INTO {table} (namespace, id, name, description, node_type, category, icon, display_order,
-                                    last_modified, version, state, content, desired_id, embedding, main_node{syncInsertCol}{authorInsertCol})
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13, $14, $15{syncInsertVal}{authorInsertVal})
+                                    last_modified, version, state, content, desired_id, embedding, main_node{syncInsertCol}{authorInsertCol}{excludeInsertCol})
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13, $14, $15{syncInsertVal}{authorInsertVal}{excludeInsertVal})
             ON CONFLICT (namespace, id) DO UPDATE SET
                 name = EXCLUDED.name,
                 description = EXCLUDED.description,
@@ -384,7 +396,7 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
                 content = EXCLUDED.content,
                 desired_id = EXCLUDED.desired_id,
                 embedding = EXCLUDED.embedding,
-                main_node = EXCLUDED.main_node{syncUpdate}{authorUpdate}
+                main_node = EXCLUDED.main_node{syncUpdate}{authorUpdate}{excludeUpdate}
             """);
 
         cmd.Parameters.AddWithValue(ns);
@@ -408,13 +420,16 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
 
         cmd.Parameters.AddWithValue(node.MainNode);
 
-        // $16–$19 — only bound when the target is mesh_nodes (see writeSync above).
+        // $16–$20 — only bound when the target is mesh_nodes (see writeSync above).
         if (writeSync)
         {
             cmd.Parameters.AddWithValue((short)node.SyncBehavior);
             cmd.Parameters.AddWithValue((object?)node.CreatedBy ?? DBNull.Value);
             cmd.Parameters.AddWithValue((object?)node.LastModifiedBy ?? DBNull.Value);
             cmd.Parameters.AddWithValue(node.CreatedDate == default ? DBNull.Value : node.CreatedDate);
+            cmd.Parameters.AddWithValue(node.ExcludeFromContext is { Count: > 0 } efc
+                ? efc.ToArray()
+                : (object)DBNull.Value);
         }
 
         await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
@@ -526,7 +541,7 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
         var table = ResolveTable(normalizedPath);
         await using var cmd = _dataSource.CreateCommand(
             $"SELECT id, namespace, name, description, node_type, category, icon, display_order, " +
-            $"last_modified, version, state, content, desired_id, main_node, {SyncBehaviorCol(table)}, {AuthorCols(table)} " +
+            $"last_modified, version, state, content, desired_id, main_node, {SyncBehaviorCol(table)}, {AuthorCols(table)}, {ExcludeCol(table)} " +
             $"FROM {table} WHERE $1 = path OR $1 LIKE path || '/%' " +
             $"ORDER BY LENGTH(path) DESC LIMIT 1");
         cmd.Parameters.AddWithValue(normalizedPath);
@@ -586,7 +601,7 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
                 : $"\"{_schemaName}\".\"{t}\"";
             unionBranches.Add(
                 $"SELECT id, namespace, name, description, node_type, category, icon, display_order, " +
-                $"last_modified, version, state, content, desired_id, main_node, {SyncBehaviorCol(qualified)}, {AuthorCols(qualified)} " +
+                $"last_modified, version, state, content, desired_id, main_node, {SyncBehaviorCol(qualified)}, {AuthorCols(qualified)}, {ExcludeCol(qualified)} " +
                 $"FROM {qualified} " +
                 $"WHERE $1 = path OR $1 LIKE path || '/%'");
         }
@@ -1354,6 +1369,7 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
             Version = reader.GetInt64(reader.GetOrdinal("version")),
             State = (MeshNodeState)reader.GetInt16(reader.GetOrdinal("state")),
             SyncBehavior = PgMeshNodeReader.ReadSyncBehavior(reader),
+            ExcludeFromContext = PgMeshNodeReader.ReadStringArray(reader, "exclude_from_context"),
             Content = content,
             // Mirror the prerendered HTML onto the top-level field, like the FileSystem/Caching
             // adapters do (CachingStorageAdapter.MergeIndexMarkdownAsync). Consumers that render
