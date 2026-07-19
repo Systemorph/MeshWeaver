@@ -1956,6 +1956,23 @@ public static class MeshExtensions
                     {
                         if (d.Message is CreateNodeResponse cr && cr.Success && cr.Node is not null)
                             PostOk(cr.Node, isCreate: true, $"Created node at '{node.Path}'");
+                        // Upsert semantics must be RACE-FREE: the read-then-branch above is a
+                        // TOCTOU — the node can materialise between the persistence read (null)
+                        // and the inner create's own existence check (e.g. an earlier write of
+                        // the same path flushing through the DEBOUNCED per-node persist, the
+                        // partition bootstrap's root heal, or any concurrent creator). A verb
+                        // named create-OR-update must never fail "already exists" — losing the
+                        // create race simply means the node exists NOW, so fall through to the
+                        // update path (same treat-as-success rule EnsurePartitionBootstrap
+                        // documents for its own root-create race).
+                        else if ((d.Message as CreateNodeResponse)?.RejectionReason
+                                 == NodeCreationRejectionReason.NodeAlreadyExists)
+                        {
+                            logger.LogDebug(
+                                "[CreateOrUpdate] lost the create race for {Path}; applying as update",
+                                node.Path);
+                            ApplyUpdateViaStream(node);
+                        }
                         else
                             PostFail(
                                 (d.Message as CreateNodeResponse)?.Error ?? "Inner CreateNode returned no response",

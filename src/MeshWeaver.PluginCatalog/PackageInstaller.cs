@@ -325,17 +325,30 @@ public static class PackageInstaller
         //     needs the type NODE to exist, not its compile.
         // Underscore satellites (_Access, _Policy, …) land LAST — a satellite must anchor under
         // an already-existing owner.
+        //
+        // 🚨 Bucket 0 is EXACTLY the types' compile inputs — the Source/ and Test/ subtrees.
+        // It must NOT swallow every descendant of a type path: a typed INSTANCE nested under
+        // its leaf-shaped type (ClaimsDeepfield/Cedent/NSV under type ClaimsDeepfield/Cedent)
+        // would then write BEFORE the type node and be refused "NodeType … is not registered"
+        // on a fresh mesh. The same bucket previously also matched via the package ROOT when
+        // the root node carries NodeTypeDefinition CONTENT on a Space root (UWDeepfield) —
+        // its path prefixes the whole package, pulling every instance ahead of the types.
+        // The root is therefore classified FIRST (stage-0 territory), and only Source/Test
+        // children order ahead of their type; other descendants (instances, docs, Release
+        // satellites) land in stage 2, after the types' visibility barrier.
         int Order(MeshNode n)
         {
             if (n.Path.Split('/').Any(seg => seg.StartsWith('_')))
                 return 4;                                        // satellites after their owners
+            if (!n.Path.Contains('/', StringComparison.Ordinal))
+                return 2;                                        // the root (written in stage 0/2)
             if (n.Content is NodeTypeDefinition)
                 return 1;                                        // the types (after their Source)
-            if (nodeTypePaths.Any(t => n.Path.StartsWith(t + "/", StringComparison.Ordinal)))
-                return 0;                                        // a type's Source/Test/docs
-            if (!n.Path.Contains('/', StringComparison.Ordinal))
-                return 2;                                        // the root (its type now exists)
-            return 3;                                            // plain content
+            if (nodeTypePaths.Any(t =>
+                    n.Path.StartsWith(t + "/Source/", StringComparison.Ordinal)
+                    || n.Path.StartsWith(t + "/Test/", StringComparison.Ordinal)))
+                return 0;                                        // a type's compile inputs
+            return 3;                                            // plain content + typed instances
         }
 
         // Three stages with VISIBILITY BARRIERS between them, solving two races at once:
