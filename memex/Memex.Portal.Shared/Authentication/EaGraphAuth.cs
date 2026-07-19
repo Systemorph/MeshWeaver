@@ -115,8 +115,25 @@ public sealed class EaGraphAuth(
         return null;
     }
 
-    private static string PathFor(string userObjectId) =>
+    // The single canonical PATH of a user's EA-credential node — the ONE place read and write must
+    // agree. LoadAsync subscribes here; NewCredentialNode below builds a node whose Path resolves to
+    // exactly this. A mismatch here silently reports "mailbox not connected" (the token is stored but
+    // never found on load) — see the regression test.
+    internal static string PathFor(string userObjectId) =>
         $"Auth/{EaCredentialNodeType.UserSegment}/{userObjectId}";
+
+    // Builds the credential node AT PathFor(userObjectId): Id = userObjectId, Namespace =
+    // Auth/_EaCredential ⇒ Path = Auth/_EaCredential/{user}, and NodeType set so the node's hub
+    // activates with the EaCredential data source (WithContentType&lt;EaCredential&gt;). StoreAsync
+    // fills in Content. The previous form — `new MeshNode(NodeType, PathFor(...))` — misused the
+    // MeshNode(Id, Namespace) ctor: it created Auth/_EaCredential/{user}/EaCredential (Id="EaCredential",
+    // NodeType unset), one level deeper than LoadAsync reads, so the stored token was never loaded.
+    internal static MeshNode NewCredentialNode(string userObjectId) =>
+        new(userObjectId, $"Auth/{EaCredentialNodeType.UserSegment}")
+        {
+            NodeType = EaCredentialNodeType.NodeType,
+            Name = "EA Credential",
+        };
 
     private async Task StoreAsync(string userObjectId, string refreshToken, CancellationToken ct)
     {
@@ -133,7 +150,7 @@ public sealed class EaGraphAuth(
             Scopes = Scopes,
             AcquiredAt = DateTimeOffset.UtcNow
         };
-        var node = (existing ?? new MeshNode(EaCredentialNodeType.NodeType, PathFor(userObjectId)) { Name = "EA Credential" })
+        var node = (existing ?? NewCredentialNode(userObjectId))
             with { Content = content };
 
         using (access.ImpersonateAsSystem())

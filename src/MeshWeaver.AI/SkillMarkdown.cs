@@ -41,7 +41,19 @@ public static class SkillMarkdown
         var yamlBlock = document.Descendants<YamlFrontMatterBlock>().FirstOrDefault();
         if (yamlBlock == null) return null;
 
-        var fm = YamlIn.Deserialize<SkillFrontMatter>(yamlBlock.Lines.ToString());
+        SkillFrontMatter? fm;
+        try
+        {
+            fm = YamlIn.Deserialize<SkillFrontMatter>(yamlBlock.Lines.ToString());
+        }
+        catch (YamlDotNet.Core.YamlException)
+        {
+            // Malformed front-matter (e.g. an unquoted ':' inside a description) must never take down
+            // skill loading. Built-in skills load during mesh startup, so an uncaught throw here
+            // crashes the whole host (every full-mesh test dies). Skip the bad file instead — the
+            // provider already treats null as "skip this skill".
+            return null;
+        }
         if (fm == null) return null;
 
         var body = content[(yamlBlock.Span.End + 1)..].TrimStart('\r', '\n').Trim();
