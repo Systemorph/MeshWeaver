@@ -52,6 +52,43 @@ public class OverviewHeaderRenderTest(ITestOutputHelper output) : MonolithMeshTe
     }
 
     /// <summary>
+    /// A node excluded from the "header" context renders its Overview WITHOUT the
+    /// icon/title/meta header block — the chrome-less marketing-page contract
+    /// (shipped via frontmatter <c>ExcludeFromContext: [header]</c>). The rendered
+    /// store must not carry the title H1 or the "Type:" meta row, while the page
+    /// itself still renders.
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task Overview_OmitsHeader_ForHeaderExcludedNode()
+    {
+        var nodePath = $"{TestPartition}/chromeless-smoke";
+        await NodeFactory.CreateNode(
+            new MeshNode("chromeless-smoke", TestPartition)
+            {
+                Name = "ChromelessSmokeTitle",
+                NodeType = "Markdown",
+                ExcludeFromContext = [MeshNodeVisibility.HeaderContext],
+            }).Should().Emit();
+
+        var client = GetClient(c => c.AddData(data => data));
+        var address = new Address(nodePath);
+        await client.Observe(new PingRequest(), o => o.WithTarget(address)).Should().Emit();
+
+        var workspace = client.GetWorkspace();
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
+            address, new LayoutAreaReference(MeshNodeLayoutAreas.OverviewArea));
+
+        var value = await stream.Should().Within(20.Seconds()).Emit();
+        value.Value.ValueKind.Should().NotBe(JsonValueKind.Undefined,
+            "the chrome-less Overview must still render its content");
+        var rendered = value.Value.GetRawText();
+        rendered.Should().NotContain("ChromelessSmokeTitle",
+            "the header title must not render for a header-excluded node");
+        rendered.Should().NotContain("Type:",
+            "the header meta row must not render for a header-excluded node");
+    }
+
+    /// <summary>
     /// The Delete area renders a confirmation page with the progress banner wired to a
     /// local data stream. Before this test existed, a missing <c>using</c> directive on
     /// <c>Address</c> / <c>IMessageDelivery</c> could silently break the page.

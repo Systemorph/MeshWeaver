@@ -907,49 +907,51 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         var stack = control.Should().BeOfType<StackControl>().Subject;
         Output.WriteLine($"Stack has {stack.Areas?.Count} areas");
 
-        // Iterate through child areas to find the MarkdownControl
-        var foundMarkdown = false;
-        foreach (var area in stack.Areas ?? [])
+        // Find the markdown body control ANYWHERE in the Overview control tree. A node WITH sub-nodes
+        // renders the collapsible side-menu wrapper (MarkdownOverviewLayoutArea.BuildWithSubNodeNav),
+        // which nests the body inside a content column — so it may be a direct child (no sub-nodes) or
+        // a grandchild (side menu present). The Overview body is a CollaborativeMarkdownControl (value
+        // in `Value`); legacy areas may still produce MarkdownControl (`Markdown`). Accept either.
+        async Task<string?> FindMarkdown(UiControl? c)
         {
-            var childKey = area.Area?.ToString();
-            if (string.IsNullOrEmpty(childKey)) continue;
-
-            var childControl = await stream.GetControlStream(childKey)
-                .Should().Within(10.Seconds())
-                .Match(x => x is not null);
-
-            Output.WriteLine($"  Area '{childKey}': {childControl?.GetType().Name}");
-
-            // The Overview area renders CollaborativeMarkdownControl (which holds the
-            // markdown in `Value`); legacy areas may still produce MarkdownControl
-            // (which holds it in `Markdown`). Accept either.
-            var markdown = childControl switch
+            switch (c)
             {
-                MarkdownControl mc => mc.Markdown?.ToString(),
-                CollaborativeMarkdownControl cmc => cmc.Value?.ToString(),
-                _ => null
-            };
-
-            if (!string.IsNullOrEmpty(markdown))
-            {
-                foundMarkdown = true;
-                Output.WriteLine($"  Markdown length: {markdown.Length}");
-                Output.WriteLine($"  Contains @@: {markdown.Contains("@@")}");
-                Output.WriteLine($"  First 500 chars: {markdown[..Math.Min(500, markdown.Length)]}");
-
-                markdown.Should().Contain("@@(", "Report markdown should contain @@() layout area references");
-
-                // Process through Markdig to verify HTML output
-                var pipeline = MeshWeaver.Markdown.MarkdownExtensions.CreateMarkdownPipeline(null);
-                var html = Markdig.Markdown.ToHtml(markdown, pipeline);
-                Output.WriteLine($"  HTML contains layout-area: {html.Contains("layout-area")}");
-                Output.WriteLine($"  HTML snippet: {html[..Math.Min(500, html.Length)]}");
-
-                html.Should().Contain("layout-area", "Markdig should convert @@() to layout-area divs");
+                case MarkdownControl mc:
+                    return mc.Markdown?.ToString();
+                case CollaborativeMarkdownControl cmc:
+                    return cmc.Value?.ToString();
+                case StackControl sc:
+                    foreach (var area in sc.Areas ?? [])
+                    {
+                        var childKey = area.Area?.ToString();
+                        if (string.IsNullOrEmpty(childKey)) continue;
+                        var childControl = await stream.GetControlStream(childKey)
+                            .Should().Within(10.Seconds())
+                            .Match(x => x is not null);
+                        Output.WriteLine($"  Area '{childKey}': {childControl?.GetType().Name}");
+                        var found = await FindMarkdown(childControl);
+                        if (!string.IsNullOrEmpty(found)) return found;
+                    }
+                    return null;
+                default:
+                    return null;
             }
         }
 
-        foundMarkdown.Should().BeTrue("Overview stack should contain a markdown body control (MarkdownControl or CollaborativeMarkdownControl)");
+        var markdown = await FindMarkdown(stack);
+
+        markdown.Should().NotBeNullOrEmpty(
+            "Overview should contain a markdown body control (MarkdownControl or CollaborativeMarkdownControl), " +
+            "possibly nested under the sub-node side menu");
+        Output.WriteLine($"  Markdown length: {markdown!.Length}");
+        Output.WriteLine($"  First 500 chars: {markdown[..Math.Min(500, markdown.Length)]}");
+
+        markdown.Should().Contain("@@(", "Report markdown should contain @@() layout area references");
+
+        // Process through Markdig to verify HTML output
+        var pipeline = MeshWeaver.Markdown.MarkdownExtensions.CreateMarkdownPipeline(null);
+        var html = Markdig.Markdown.ToHtml(markdown, pipeline);
+        html.Should().Contain("layout-area", "Markdig should convert @@() to layout-area divs");
     }
 
     /// <summary>
