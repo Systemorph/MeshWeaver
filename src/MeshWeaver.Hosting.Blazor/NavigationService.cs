@@ -91,6 +91,7 @@ internal class NavigationService : INavigationService
     // production; injectable via the internal ctor so the wiring tests drive both outcomes
     // (allow / login) without mocking the permission stack.
     private readonly Func<string, IObservable<bool>> _anonymousGate;
+    private readonly Func<string, IObservable<string?>> _redirectOnDenied;
 
     public NavigationService(
         NavigationManager navigationManager,
@@ -113,9 +114,11 @@ internal class NavigationService : INavigationService
         ICircuitContextAccessor circuitContextAccessor,
         int[] retryDelays,
         PageRouteRegistry? pageRoutes = null,
-        Func<string, IObservable<bool>>? anonymousGate = null)
+        Func<string, IObservable<bool>>? anonymousGate = null,
+        Func<string, IObservable<string?>>? redirectOnDenied = null)
     {
         _anonymousGate = anonymousGate ?? (path => AnonymousGate.AllowAnonymous(hub, path));
+        _redirectOnDenied = redirectOnDenied ?? (path => hub.GetRedirectOnDenied(path));
         _pageRoutes = pageRoutes;
         _navigationManager = navigationManager;
         _pathResolver = pathResolver;
@@ -537,11 +540,15 @@ internal class NavigationService : INavigationService
 
         // Anonymous gate: a logged-OUT visitor sees application content ONLY when the resolved
         // node carries an explicit positive Anonymous grant (a public course cover / catalog /
-        // landing). EVERYTHING else goes to /login first — sign-in is always the first step; the
-        // paywall (PartitionAccessPolicy.RedirectOnDenied) applies to the then-AUTHENTICATED
-        // visitor via the area-level access-denied redirect in NamedAreaView. PathResolutionService
-        // resolves under a System bypass, so EVERY existing mesh page (public or private) reaches
-        // here — the gate is the anonymous enforcement point.
+        // landing). Everything else lands on the partition's declared MARKETING page when one
+        // exists — PartitionAccessPolicy.RedirectOnDenied, honored for anonymous visitors ONLY
+        // when that target is itself anonymous-readable (a denied /UWDeepfield goes to the
+        // glossy /UWDeepfield/Overview brochure, not a dead login wall) — and /login otherwise:
+        // sign-in stays the first step wherever no public funnel page is declared. The
+        // authenticated-visitor paywall keeps using the area-level access-denied redirect in
+        // NamedAreaView. PathResolutionService resolves under a System bypass, so EVERY existing
+        // mesh page (public or private) reaches here — the gate is the anonymous enforcement
+        // point.
         //
         // The decision itself lives in AnonymousGate.AllowAnonymous (Mesh.Contract) so it is
         // integration-tested against the REAL PermissionEvaluator; it is FAIL-CLOSED: no
@@ -566,12 +573,30 @@ internal class NavigationService : INavigationService
         {
             _anonymousGate(resolution.Prefix)
                 .Take(1)
+                // Denied → the partition's declared redirect, but ONLY when that target is
+                // ITSELF anonymous-readable (fail-closed: a policy pointing at gated content
+                // must not leak it) and is a DIFFERENT path (a self-pointing policy would
+                // loop the resolver forever). Any error/timeout settles on (false, null) → /login.
+                .SelectMany(allowed => allowed
+                    ? Observable.Return((Allowed: true, Redirect: (string?)null))
+                    : _redirectOnDenied(resolution.Prefix)
+                        .Take(1)
+                        .SelectMany(target =>
+                            string.IsNullOrWhiteSpace(target)
+                            || string.Equals(target, resolution.Prefix, StringComparison.OrdinalIgnoreCase)
+                                ? Observable.Return((Allowed: false, Redirect: (string?)null))
+                                : _anonymousGate(target!)
+                                    .Take(1)
+                                    .Select(ok => (Allowed: false, Redirect: ok ? target : null))))
                 .Timeout(TimeSpan.FromSeconds(10))
-                .Catch<bool, Exception>(_ => Observable.Return(false))
-                .Subscribe(allowed =>
+                .Catch<(bool Allowed, string? Redirect), Exception>(
+                    _ => Observable.Return((false, (string?)null)))
+                .Subscribe(result =>
                 {
-                    if (allowed)
+                    if (result.Allowed)
                         LoadResolved();
+                    else if (result.Redirect is { } marketing)
+                        RedirectToMarketing(marketing);
                     else
                         RedirectToLogin();
                 });
@@ -580,6 +605,18 @@ internal class NavigationService : INavigationService
 
         LoadResolved();
         return;
+
+        void RedirectToMarketing(string marketing)
+        {
+            // The denied path has a PUBLIC funnel page (verified anonymous-readable above):
+            // in-circuit navigation — the target is a normal mesh page and re-enters this
+            // resolver, where its own positive Anonymous grant lets it load.
+            _logger?.LogInformation(
+                "Anonymous-gate: '{Prefix}' denied → marketing page '{Marketing}' (RedirectOnDenied).",
+                resolution.Prefix, marketing);
+            IsResolving = false;
+            _navigationManager.NavigateTo("/" + marketing.TrimStart('/'));
+        }
 
         void RedirectToLogin()
         {
