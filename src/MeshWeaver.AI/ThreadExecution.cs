@@ -381,8 +381,13 @@ internal static class ThreadExecution
     ///   commit edge is the re-dispatch ping-pong.</item>
     /// <item><b>Executing</b> without a response cell → nothing to resume; reset
     ///   to <c>Idle</c> so the submission watcher can claim pending input.</item>
-    /// <item><b>StartingExecution</b> → no write; the <c>_Exec</c> round watcher
-    ///   fires on its own first emission.</item>
+    /// <item><b>StartingExecution</b> without a response cell (no
+    ///   <c>ActiveMessageId</c>) → an ORPHANED CLAIM (#539): the previous hub
+    ///   incarnation wrote the claim but died before the <c>_Exec</c> commit, so
+    ///   nothing re-drives it. CAS-guarded roll back to <c>Idle</c> so the
+    ///   submission watcher re-claims the queued input as a fresh, live
+    ///   transition the <c>_Exec</c> round watcher reliably observes. (WITH a
+    ///   cell the commit already ran — no write.)</item>
     /// <item><b>Idle</b> / <b>Cancelled</b> (+ pending) → no write; the
     ///   submission watcher claims.</item>
     /// <item><b>Done</b> → terminal; leave it.</item>
@@ -500,10 +505,68 @@ internal static class ThreadExecution
                                     "[ThreadExec] Init reset: stream.Update failed for {ThreadPath}", threadPath));
                             break;
 
+                        case ThreadExecutionStatus.StartingExecution
+                            when string.IsNullOrEmpty(thread.ActiveMessageId):
+                            // 🚨 ORPHANED-CLAIM RECOVERY (#539). The submission watcher wrote the
+                            // CLAIM (Idle → StartingExecution) but the _Exec round watcher's COMMIT
+                            // (StartingExecution → Executing, which allocates the response cell and
+                            // stamps ActiveMessageId in ONE write) never landed: the previous hub
+                            // incarnation died between claim and commit (a NodeType release recycled
+                            // the hub, a redeploy, a grain migration), OR the _Exec watcher missed
+                            // the REPLAYED claim on cold activation. Nothing re-drives the commit —
+                            // the "first emission" the old no-op relied on already happened for a
+                            // dead incarnation — so the thread parks at StartingExecution forever:
+                            // ThreadStateTransitions treats it as in-flight, so resubmission is
+                            // refused AND the submission watcher (Idle/Cancelled only) won't re-claim.
+                            // The cancel path already covers this window (the No-CTS claim-window
+                            // fallback in InstallCancellationWatcher); normal resumption did not.
+                            //
+                            // Activation is PROOF that no round is actually in flight (executions die
+                            // with their hub). An orphaned claim has NO cell (ActiveMessageId is
+                            // stamped only by the commit), so roll it back to Idle — a LEGAL edge
+                            // (ThreadStateTransitions: "StartingExecution → Idle, rollback: claim
+                            // found nothing"), the same idempotent shape as the Executing-without-cell
+                            // reset above. The submission watcher then re-claims the still-queued
+                            // PendingUserMessages as a fresh, LIVE Idle → StartingExecution
+                            // transition, which the freshly-subscribed _Exec round watcher reliably
+                            // observes (a cold-load replay it may have missed now arrives as a live
+                            // emission), so the round runs.
+                            //
+                            // 🚨 CAS-guarded: roll back ONLY while STILL StartingExecution with no
+                            // cell. If the _Exec commit has since flipped StartingExecution →
+                            // Executing (cell allocated, ActiveMessageId set) the guard fails and this
+                            // is a no-op — we NEVER write Executing → StartingExecution (that inverse
+                            // of the commit edge is the re-dispatch ping-pong). This recovery applies
+                            // ONLY to an orphaned claim on a freshly activated hub, before any commit.
+                            logger?.LogWarning(
+                                "[ThreadExec] Init: recovered orphaned StartingExecution claim on {ThreadPath} " +
+                                "after hub reactivation (no cell allocated — the _Exec commit was lost) — " +
+                                "re-queuing: rolling back to Idle so the submission watcher re-claims the round.",
+                                threadPath);
+                            workspace.GetMeshNodeStream().Update(n =>
+                                n.Content is MeshThread t
+                                    && t.Status == ThreadExecutionStatus.StartingExecution
+                                    && string.IsNullOrEmpty(t.ActiveMessageId)
+                                    ? n with
+                                    {
+                                        LastModified = DateTime.UtcNow,
+                                        Content = t with
+                                        {
+                                            Status = ThreadExecutionStatus.Idle,
+                                            ExecutionStatus = null,
+                                            ExecutionStartedAt = null,
+                                        }
+                                    }
+                                    : n)
+                                .Subscribe(_ => { }, ex => logger?.LogWarning(ex,
+                                    "[ThreadExec] Init orphan-claim rollback: stream.Update failed for {ThreadPath}", threadPath));
+                            break;
+
                         default:
-                            // StartingExecution / Idle / Cancelled / Done — no
-                            // write; the relevant watcher (or terminal state)
-                            // already covers it.
+                            // StartingExecution (with a cell — the commit already
+                            // ran, the round is effectively Executing) / Idle /
+                            // Cancelled / Done — no write; the relevant watcher (or
+                            // terminal state) already covers it.
                             break;
                     }
                 },
