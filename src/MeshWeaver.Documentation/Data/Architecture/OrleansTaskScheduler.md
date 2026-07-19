@@ -182,6 +182,68 @@ The `SubscribeOn` at the cache layer does not widen this risk — upstream chang
 
 > This `SubscribeOn` offload is the **query-construction** half of keeping the grain free. Its leaf-execution counterpart is the [Controlled I/O Pooling](/Doc/Architecture/ControlledIoPooling) primitive (`IIoPool`), which applies the same `SubscribeOn(TaskPoolScheduler.Default)` move plus a concurrency bound so actual file / blob / HTTP leaf work both runs off the grain *and* cannot fan out unboundedly.
 
+## 🚨 The layout-area render pipeline subscribes OFF the hub turn — query-in-render is safe
+
+**This is the third — and highest-leverage — place the framework makes the same `SubscribeOn` move**,
+and it closes the deadlock class that took down multiple production meshes.
+
+A layout area's view generator returns an `IObservable<UiControl?>`. The framework's render pipeline
+(`LayoutAreaHost.BuildInitialization`, and every nested container / dialog / editor sub-area render)
+**subscribes** to it to drive content to the client. That subscribe runs on the layout-area's own
+synchronisation-stream hub **action block** — a single-threaded actor. When the layout area belongs to
+a node hosted as an Orleans grain, its owning workspace hub is the **root grain hub on the grain
+scheduler** (the table above). So, before the fix, the generator body — and the subscribe to whatever
+observable it returned — ran **on the grain turn**.
+
+That is the query-in-render trap:
+
+1. A view generator does, in-render, `IMeshService.Query(...)` (or `hub.Observe`, `GetRemoteStream`, a
+   workspace query — any mesh round-trip).
+2. The render pipeline subscribes it **on the grain turn**.
+3. The query must route through Orleans and come back to **this grain** to resolve. But the grain turn
+   is held inside the subscribe → the response can never be processed → **the hub deadlocks.**
+4. On startup prerender, many such grains block at once → thread-pool starvation → the whole silo
+   wedges (even `/healthz`). Confirmed offenders: `Doc/DataMesh/SocialMedia/Post` (List area) and
+   `Doc/DataMesh/PythonPandasNode/PandasExplorer`.
+
+**The fix — one reactive seam.** `LayoutAreaHost` wraps the render subscription with
+`.SubscribeOn(System.Reactive.Concurrency.TaskPoolScheduler.Default)` — the identical move made at
+`MeshQuery.Query` and `IMeshNodeStreamCache.GetQuery` (the section just above). The generator, and
+every observable it subscribes in-render, now runs **off the grain turn**, which is immediately free
+to route + answer the round-trip. A pure Rx scheduler operator — **no `async` / `await` / `Task`.**
+
+```csharp
+// LayoutAreaHost.BuildInitialization — the top-level render subscription:
+var renderSubscription = BuildRenderObservable(context, baseStore)
+    .SubscribeOn(TaskPoolScheduler.Default)   // ← subscribe OFF the owning (grain) hub's turn
+    .Subscribe(PushRenderResult, FailRendering);
+
+// The same hop guards every nested container/dialog/editor sub-area render in LayoutAreaHost.RenderArea,
+// because those subscribes are reached from UpdateArea, which runs ON the hub turn (Stream.Update →
+// UpdateStreamRequest). A nested area that queries in-render must be off-hub too.
+```
+
+**Why it can't reintroduce ordering bugs.** The render *output* (`PushRenderResult` / `UpdateArea`)
+never touches the hub directly — it calls `Stream.Update(...)`, which posts an `UpdateStreamRequest`
+to the hub's action block (`hub.Post` is the actor inbox: safe from any thread, re-serialised in
+order). So emissions arriving on a pool thread are re-marshalled onto the owning hub's single-threaded
+turn exactly as before — the offload moves only the **subscribe-time** work off the hub, never the
+state writes. Data-before-control ordering is preserved (regression-guarded by the full
+`MeshWeaver.Layout.Test` suite, incl. `EditorTest` / `ContainerControlAreaNestingTest`).
+
+**Why this is the robust fix and not "author around it."** The safety lives in the portal/framework
+binary, so **existing deployed nodes — whose cached assemblies never recompile — become safe with no
+code change.** The prior guidance ("move mesh queries into virtual data sources, never
+`IMeshService.Query` in a view") was a per-node *workaround*; this is the framework making the whole
+class safe at one seam. Regression-pinned by `QueryInRenderDeadlockTest` (a layout area doing an
+in-render mesh round-trip on a hub-turn-blocking subscribe: **hangs without the offload, renders with
+it**).
+
+> **Reactive, not blocking, still required.** The offload subscribes you off the hub turn; it does not
+> make a *blocking* subscribe free. A generator that bridges a round-trip back to a blocking `Task`
+> (`.Result` / `.Wait()` / `.ToTask()` + wait) still burns a pool thread. Compose reactively and
+> return the `IObservable<UiControl?>` — see [Asynchronous Calls](/Doc/Architecture/AsynchronousCalls).
+
 ## Offloading a CPU leaf off the action block — `Task.Run`, identity, and why the gated pool can wedge
 
 A long *synchronous* leaf (Roslyn `Emit`, a big reflection/type-load) that runs

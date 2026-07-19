@@ -1,6 +1,7 @@
 ﻿using System.Collections;
 using System.Collections.Concurrent;
 using System.Collections.Immutable;
+using System.Reactive.Concurrency;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
@@ -239,7 +240,40 @@ public record LayoutAreaHost : IDisposable
             // renderers (the typed-content readers) run only on a SUCCESS status;
             // error/cancelled status and missing configuration short-circuit to a
             // visible emergency frame (see BuildRenderObservable).
+            //
+            // 🚨 SUBSCRIBE OFF THE OWNING HUB'S ACTION BLOCK. This init pipeline runs
+            // on the hub that owns this layout area's stream. For a node hosted as an
+            // Orleans grain that hub IS the ROOT GRAIN HUB — its action block runs on
+            // the GRAIN SCHEDULER (a single-threaded, grain-affined TaskScheduler; see
+            // Doc/Architecture/OrleansTaskScheduler). Subscribing the render pipeline on
+            // that thread means the view generator body — and every observable it
+            // returns — is SUBSCRIBED on the grain turn. A generator that does
+            // `IMeshService.Query(...)` (or any hub round-trip: `hub.Observe`,
+            // `GetRemoteStream`, a workspace query) then opens that subscription while
+            // the grain turn is held; the query must route through Orleans and come back
+            // to THIS grain, but the turn can't advance to process the response → the hub
+            // DEADLOCKS. On startup prerender many such grains block at once → thread-pool
+            // starvation → the silo wedges (took down multiple production meshes; the
+            // confirmed offenders — Doc/DataMesh/SocialMedia/Post List,
+            // Doc/DataMesh/PythonPandasNode/PandasExplorer — all query in-render).
+            //
+            // .SubscribeOn(TaskPoolScheduler.Default) hops the SUBSCRIBE onto the thread
+            // pool, so the generator runs and its query subscribes OFF the grain turn,
+            // which is immediately free to route + return the query. This is the SAME
+            // designated reactive move the framework already makes at MeshQuery.Query and
+            // IMeshNodeStreamCache.GetQuery (OrleansTaskScheduler → "SubscribeOn inside a
+            // grain-hosted service") — a pure Rx scheduler hop, no async/await/Task.
+            //
+            // Ordering is preserved: the render output (PushRenderResult) never touches
+            // the hub directly — it calls Stream.Update, which posts an UpdateStreamRequest
+            // to the hub's ACTION BLOCK (hub.Post is the actor inbox, safe from any thread
+            // and re-serialised in order). So emissions arriving on a pool thread are
+            // re-marshalled onto the owning hub's single-threaded turn exactly as before —
+            // the offload moves only the SUBSCRIBE-time work off the grain, never the state
+            // writes. This makes EVERY layout area query-in-render-safe at one seam, with
+            // no change to (and no recompile of) any deployed node's source.
             var renderSubscription = BuildRenderObservable(context, baseStore)
+                .SubscribeOn(TaskPoolScheduler.Default)
                 .Subscribe(PushRenderResult, FailRendering);
 
             // Tear down: dispose the render + milestone subscriptions and clear the
@@ -943,6 +977,16 @@ public record LayoutAreaHost : IDisposable
         var ret = DisposeExistingAreas(store, context);
         RegisterForDisposal(context.Parent?.Area ?? context.Area,
             generator.Invoke(this, context, ret.Store)
+                // 🚨 NEVER ON THE MAIN HUB. This nested-area subscribe is reached both from the
+                // (already off-hub) top-level render AND from UpdateArea, which runs on the owning
+                // hub's ACTION BLOCK (Stream.Update → UpdateStreamRequest). Subscribing the nested
+                // generator there would run its body — and any IMeshService.Query / hub round-trip it
+                // does in-render — on the hub turn → the same query-in-render deadlock as the
+                // top-level path. Hop the subscribe onto the thread pool (see the class-level fix in
+                // BuildInitialization + Doc/Architecture/OrleansTaskScheduler). The UpdateArea
+                // callback re-enters via Stream.Update → hub.Post (the actor inbox, safe from any
+                // thread, re-serialised in order), so ordering is preserved.
+                .SubscribeOn(TaskPoolScheduler.Default)
                 .Subscribe(c => UpdateArea(context, c), ex => FailRendering(ex, context.Area))
         );
         return ret;
@@ -957,6 +1001,10 @@ public record LayoutAreaHost : IDisposable
         RegisterForDisposal(context.Parent?.Area ?? context.Area,
             FromViewBuilder(ct => asyncGenerator.Invoke(this, context, store, ct))
                 .Switch()
+                // 🚨 NEVER ON THE MAIN HUB — see the ViewStream<T> overload above. Subscribe the
+                // nested generator off the owning hub's action block so its in-render mesh work never
+                // wedges the hub turn (UpdateArea re-marshals emissions back via hub.Post).
+                .SubscribeOn(TaskPoolScheduler.Default)
                 .Subscribe(c => UpdateArea(context, c), ex => FailRendering(ex, context.Area)));
         return ret;
     }
@@ -1085,6 +1133,9 @@ public record LayoutAreaHost : IDisposable
         // (no await in hub-reachable code) and feed UpdateArea once it resolves.
         RegisterForDisposal(context.Parent?.Area ?? context.Area,
             FromViewBuilder(ct => generator.Invoke(this, context, ct))
+                // 🚨 NEVER ON THE MAIN HUB — subscribe off the owning hub's action block (this path is
+                // reachable via UpdateArea on the hub turn). See the ViewStream<T> overload above.
+                .SubscribeOn(TaskPoolScheduler.Default)
                 .Subscribe(view => UpdateArea(context, view!), ex => FailRendering(ex, context.Area)));
         return ret;
     }
@@ -1100,6 +1151,8 @@ public record LayoutAreaHost : IDisposable
             generator
                 .Select(vd => FromViewBuilder(ct => vd.Invoke(this, context, ct)))
                 .Switch()
+                // 🚨 NEVER ON THE MAIN HUB — subscribe off the owning hub's action block. See above.
+                .SubscribeOn(TaskPoolScheduler.Default)
                 .Subscribe(view => UpdateArea(context, view!), ex => FailRendering(ex, context.Area)));
 
         return DisposeExistingAreas(store, context);
@@ -1131,6 +1184,11 @@ public record LayoutAreaHost : IDisposable
             context.Area,
             generator
                 .DistinctUntilChanged()
+                // 🚨 NEVER ON THE MAIN HUB — subscribe off the owning hub's action block. This
+                // container/dialog sub-area path is reached from UpdateArea on the hub turn, so a
+                // nested generator that queries in-render would otherwise wedge it. See the
+                // ViewStream<T> overload above and Doc/Architecture/OrleansTaskScheduler.
+                .SubscribeOn(TaskPoolScheduler.Default)
                 .Subscribe(
                     view => UpdateArea(context, view),
                     ex => FailRendering(ex, context.Area))
