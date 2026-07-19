@@ -973,6 +973,10 @@ public static class PostgreSqlSchemaInitializer
     {
         var dim = options.VectorDimensions;
         var schemaName = options.Schema ?? "public";
+        // Quoted SQL literal for the schema self-reference — feeds the single-sourced
+        // rebuild_user_effective_permissions() body (same contract as
+        // GetVersionedPartitionDdl's schemaRef parameter).
+        var schemaRef = $"'{schemaName}'";
         return $$"""
             CREATE EXTENSION IF NOT EXISTS vector;
 
@@ -1103,213 +1107,7 @@ public static class PostgreSqlSchemaInitializer
             -- Shadow table for atomic rebuild
             CREATE TABLE IF NOT EXISTS user_effective_permissions_shadow (LIKE user_effective_permissions INCLUDING ALL);
 
-            -- Rebuild function: reads AccessAssignment from access satellite table, GroupMembership from mesh_nodes
-            -- AccessAssignment content: {"accessObject":"...","roles":[{"role":"...","denied":true},...]}
-            CREATE OR REPLACE FUNCTION rebuild_user_effective_permissions() RETURNS void AS $$
-            BEGIN
-                -- Set search_path so unqualified table names resolve to this schema
-                EXECUTE format('SET LOCAL search_path TO %I, public', '{{schemaName}}');
-                TRUNCATE user_effective_permissions_shadow;
-
-                -- Direct entries from AccessAssignment nodes (access satellite table)
-                INSERT INTO user_effective_permissions_shadow (user_id, node_path_prefix, permission, is_allow)
-                SELECT user_id, node_path_prefix, permission, bool_and(is_allow) AS is_allow
-                FROM (
-                SELECT
-                    aa.content->>'accessObject' AS user_id,
-                    COALESCE(aa.main_node, aa.namespace) AS node_path_prefix,
-                    perm.permission,
-                    NOT COALESCE((role_entry->>'denied')::boolean, false) AS is_allow
-                FROM access aa
-                CROSS JOIN LATERAL jsonb_array_elements(aa.content->'roles') AS role_entry
-                CROSS JOIN LATERAL (
-                    SELECT COALESCE(
-                        (SELECT (role_node.content->>'permissions')::int
-                         FROM mesh_nodes role_node
-                         WHERE role_node.node_type = 'Role'
-                           AND role_node.id = role_entry->>'role'
-                         LIMIT 1),
-                        CASE role_entry->>'role'
-                            WHEN 'Admin' THEN 1535
-                            WHEN 'PlatformAdmin' THEN 1535
-                            WHEN 'Editor' THEN 1527
-                            WHEN 'Viewer' THEN 161
-                            WHEN 'Commenter' THEN 145
-                            ELSE 0
-                        END
-                    ) AS permissions
-                ) r
-                CROSS JOIN LATERAL (
-                    SELECT unnest(
-                        CASE WHEN (r.permissions & 1) > 0 THEN ARRAY['Read'] ELSE ARRAY[]::text[] END
-                        || CASE WHEN (r.permissions & 2) > 0 THEN ARRAY['Create'] ELSE ARRAY[]::text[] END
-                        || CASE WHEN (r.permissions & 4) > 0 THEN ARRAY['Update'] ELSE ARRAY[]::text[] END
-                        || CASE WHEN (r.permissions & 8) > 0 THEN ARRAY['Delete'] ELSE ARRAY[]::text[] END
-                        || CASE WHEN (r.permissions & 16) > 0 THEN ARRAY['Comment'] ELSE ARRAY[]::text[] END
-                        || CASE WHEN (r.permissions & 32) > 0 THEN ARRAY['Execute'] ELSE ARRAY[]::text[] END
-                        || CASE WHEN (r.permissions & 64) > 0 THEN ARRAY['Thread'] ELSE ARRAY[]::text[] END
-                        || CASE WHEN (r.permissions & 128) > 0 THEN ARRAY['Api'] ELSE ARRAY[]::text[] END
-                        || CASE WHEN (r.permissions & 256) > 0 THEN ARRAY['Export'] ELSE ARRAY[]::text[] END
-                        || CASE WHEN (r.permissions & 1024) > 0 THEN ARRAY['Compile'] ELSE ARRAY[]::text[] END
-                    ) AS permission
-                ) perm
-                WHERE aa.content->>'accessObject' IS NOT NULL
-                  AND aa.content->'roles' IS NOT NULL
-                ) AS dedup(user_id, node_path_prefix, permission, is_allow)
-                GROUP BY user_id, node_path_prefix, permission
-                ON CONFLICT (user_id, node_path_prefix, permission) DO UPDATE
-                    SET is_allow = CASE WHEN EXCLUDED.is_allow = false THEN false ELSE user_effective_permissions_shadow.is_allow END;
-
-                -- Group expansion: read GroupMembership MeshNodes
-                INSERT INTO user_effective_permissions_shadow (user_id, node_path_prefix, permission, is_allow)
-                SELECT user_id, node_path_prefix, permission, bool_and(is_allow) AS is_allow
-                FROM (
-                WITH RECURSIVE all_members AS (
-                    SELECT group_entry->>'group' AS group_path, gm.content->>'member' AS member_id
-                    FROM "auth".mesh_nodes gm
-                    CROSS JOIN LATERAL jsonb_array_elements(gm.content->'groups') AS group_entry
-                    WHERE gm.node_type = 'GroupMembership'
-                    UNION
-                    SELECT am.group_path, gm.content->>'member'
-                    FROM all_members am
-                    JOIN "auth".mesh_nodes gm ON gm.node_type = 'GroupMembership'
-                    WHERE EXISTS (
-                        SELECT 1 FROM jsonb_array_elements(gm.content->'groups') g
-                        WHERE g->>'group' = am.member_id
-                    )
-                ),
-                leaf_members AS (
-                    SELECT group_path, member_id FROM all_members
-                    WHERE NOT EXISTS (
-                        SELECT 1 FROM "auth".mesh_nodes gm2
-                        CROSS JOIN LATERAL jsonb_array_elements(gm2.content->'groups') AS g2
-                        WHERE gm2.node_type = 'GroupMembership'
-                          AND g2->>'group' = all_members.member_id
-                    )
-                )
-                SELECT lm.member_id, COALESCE(aa.main_node, aa.namespace), perm.permission,
-                       NOT COALESCE((role_entry->>'denied')::boolean, false) AS is_allow
-                FROM access aa
-                JOIN leaf_members lm ON aa.content->>'accessObject' = lm.group_path
-                CROSS JOIN LATERAL jsonb_array_elements(aa.content->'roles') AS role_entry
-                CROSS JOIN LATERAL (
-                    SELECT COALESCE(
-                        (SELECT (role_node.content->>'permissions')::int
-                         FROM mesh_nodes role_node
-                         WHERE role_node.node_type = 'Role'
-                           AND role_node.id = role_entry->>'role'
-                         LIMIT 1),
-                        CASE role_entry->>'role'
-                            WHEN 'Admin' THEN 1535
-                            WHEN 'PlatformAdmin' THEN 1535
-                            WHEN 'Editor' THEN 1527
-                            WHEN 'Viewer' THEN 161
-                            WHEN 'Commenter' THEN 145
-                            ELSE 0
-                        END
-                    ) AS permissions
-                ) r
-                CROSS JOIN LATERAL (
-                    SELECT unnest(
-                        CASE WHEN (r.permissions & 1) > 0 THEN ARRAY['Read'] ELSE ARRAY[]::text[] END
-                        || CASE WHEN (r.permissions & 2) > 0 THEN ARRAY['Create'] ELSE ARRAY[]::text[] END
-                        || CASE WHEN (r.permissions & 4) > 0 THEN ARRAY['Update'] ELSE ARRAY[]::text[] END
-                        || CASE WHEN (r.permissions & 8) > 0 THEN ARRAY['Delete'] ELSE ARRAY[]::text[] END
-                        || CASE WHEN (r.permissions & 16) > 0 THEN ARRAY['Comment'] ELSE ARRAY[]::text[] END
-                        || CASE WHEN (r.permissions & 32) > 0 THEN ARRAY['Execute'] ELSE ARRAY[]::text[] END
-                        || CASE WHEN (r.permissions & 64) > 0 THEN ARRAY['Thread'] ELSE ARRAY[]::text[] END
-                        || CASE WHEN (r.permissions & 128) > 0 THEN ARRAY['Api'] ELSE ARRAY[]::text[] END
-                        || CASE WHEN (r.permissions & 256) > 0 THEN ARRAY['Export'] ELSE ARRAY[]::text[] END
-                        || CASE WHEN (r.permissions & 1024) > 0 THEN ARRAY['Compile'] ELSE ARRAY[]::text[] END
-                    ) AS permission
-                ) perm
-                WHERE aa.content->'roles' IS NOT NULL
-                ) AS dedup(user_id, node_path_prefix, permission, is_allow)
-                GROUP BY user_id, node_path_prefix, permission
-                ON CONFLICT (user_id, node_path_prefix, permission) DO UPDATE
-                    SET is_allow = CASE WHEN EXCLUDED.is_allow = false THEN false ELSE user_effective_permissions_shadow.is_allow END;
-
-                -- Direct entries from access_control table (convenience methods)
-                INSERT INTO user_effective_permissions_shadow (user_id, node_path_prefix, permission, is_allow)
-                SELECT user_id, node_path_prefix, permission, bool_and(is_allow) AS is_allow
-                FROM (
-                SELECT subject, node_path, permission, is_allow
-                FROM access_control
-                ) AS dedup(user_id, node_path_prefix, permission, is_allow)
-                GROUP BY user_id, node_path_prefix, permission
-                ON CONFLICT (user_id, node_path_prefix, permission) DO UPDATE
-                    SET is_allow = CASE WHEN EXCLUDED.is_allow = false THEN false ELSE user_effective_permissions_shadow.is_allow END;
-
-                -- Group expansion from group_members + access_control
-                INSERT INTO user_effective_permissions_shadow (user_id, node_path_prefix, permission, is_allow)
-                SELECT user_id, node_path_prefix, permission, bool_and(is_allow) AS is_allow
-                FROM (
-                WITH RECURSIVE all_members AS (
-                    SELECT group_name, member_id FROM group_members
-                    UNION
-                    SELECT am.group_name, gm.member_id
-                    FROM all_members am
-                    JOIN group_members gm ON gm.group_name = am.member_id
-                ),
-                leaf_members AS (
-                    SELECT group_name, member_id FROM all_members
-                    WHERE member_id NOT IN (SELECT DISTINCT group_name FROM group_members)
-                )
-                SELECT lm.member_id, ac.node_path, ac.permission, ac.is_allow
-                FROM access_control ac
-                JOIN leaf_members lm ON lm.group_name = ac.subject
-                ) AS dedup(user_id, node_path_prefix, permission, is_allow)
-                GROUP BY user_id, node_path_prefix, permission
-                ON CONFLICT (user_id, node_path_prefix, permission) DO UPDATE
-                    SET is_allow = CASE WHEN EXCLUDED.is_allow = false THEN false ELSE user_effective_permissions_shadow.is_allow END;
-
-                -- Apply PartitionAccessPolicy caps
-                INSERT INTO user_effective_permissions_shadow (user_id, node_path_prefix, permission, is_allow)
-                SELECT DISTINCT
-                    uep.user_id,
-                    policy.namespace AS node_path_prefix,
-                    perm.permission,
-                    false
-                FROM mesh_nodes policy
-                CROSS JOIN (SELECT DISTINCT user_id FROM user_effective_permissions_shadow) uep
-                CROSS JOIN (
-                    SELECT unnest(ARRAY['Read','Create','Update','Delete','Comment']) AS permission,
-                           unnest(ARRAY['read','create','update','delete','comment']) AS field
-                ) perm
-                WHERE policy.node_type = 'PartitionAccessPolicy'
-                  AND policy.id = '_Policy'
-                  AND (policy.content->>perm.field)::boolean = false
-                ON CONFLICT (user_id, node_path_prefix, permission) DO UPDATE SET is_allow = false;
-
-                -- Atomic swap
-                ALTER TABLE user_effective_permissions RENAME TO user_effective_permissions_old;
-                ALTER TABLE user_effective_permissions_shadow RENAME TO user_effective_permissions;
-                ALTER TABLE user_effective_permissions_old RENAME TO user_effective_permissions_shadow;
-
-                -- Sync partition_access: upsert users with Read permission, remove revoked
-                BEGIN
-                    INSERT INTO public.partition_access (user_id, partition)
-                    SELECT DISTINCT user_id, '{{schemaName}}'
-                    FROM user_effective_permissions
-                    WHERE permission = 'Read' AND is_allow = true
-                    ON CONFLICT (user_id, partition) DO NOTHING;
-
-                    DELETE FROM public.partition_access
-                    WHERE partition = '{{schemaName}}'
-                      AND user_id NOT IN (
-                        SELECT user_id FROM user_effective_permissions
-                        WHERE permission = 'Read' AND is_allow = true
-                      );
-                EXCEPTION WHEN undefined_table THEN
-                    -- partition_access table may not exist yet (first migration)
-                    NULL;
-                END;
-            END;
-            -- jit off: the dedup aggregate's cost estimate (inflated by jsonb SRF default row
-            -- estimates) exceeds jit_above_cost, and LLVM then spends ~450ms compiling the
-            -- unnest expressions PER STATEMENT — in a trigger path that runs on every
-            -- _Access write and once per schema in the boot self-heal sweep.
-            $$ LANGUAGE plpgsql SET jit = off;
+            {{GetUepRebuildFunctionScript(schemaRef)}}
 
             -- Access satellite table (must exist before trigger creation)
             CREATE TABLE IF NOT EXISTS access (
@@ -1676,6 +1474,258 @@ public static class PostgreSqlSchemaInitializer
     internal const string PartitionNameSentinel = "__mw_partition__";
 
     /// <summary>
+    /// DDL for the schema-scoped <c>rebuild_user_effective_permissions()</c> function —
+    /// single-sourced because THREE installers ship it: <see cref="GetMeshSchemaScript"/>,
+    /// <see cref="GetVersionedPartitionDdl"/> (and through it the
+    /// <c>public.ensure_partition_schema</c> proc), and the V47 migration that re-applies
+    /// the current body to every EXISTING partition schema (the schema script only runs
+    /// for the boot schema + newly provisioned partitions, so a body change needs the
+    /// migration to reach already-provisioned schemas).
+    ///
+    /// <para><paramref name="schemaRef"/> is the SQL literal/expression for the owning
+    /// schema — same contract as <see cref="GetVersionedPartitionDdl"/> (a quoted literal
+    /// like <c>'rbuergi'</c>, or the quoted <see cref="PartitionNameSentinel"/> that the
+    /// provisioning proc <c>replace()</c>s at runtime).</para>
+    ///
+    /// <para>🚨 <b>The first body statement takes a GLOBAL transaction-scoped advisory
+    /// lock.</b> Every rebuild takes ACCESS EXCLUSIVE on its OWN schema's
+    /// <c>user_effective_permissions</c> (the atomic-swap <c>ALTER TABLE … RENAME</c>)
+    /// AND writes the SHARED <c>public.partition_access</c> rows. Two rebuilds running
+    /// concurrently from DIFFERENT partitions (e.g. two plugin hubs seeding their
+    /// <c>_Access</c> grants at warm-up — the trigger runs the rebuild inside the
+    /// originating write's transaction) interleave those locks in opposite orders →
+    /// <c>40P01 deadlock detected</c>; PG kills one transaction and the whole seeding
+    /// pass of that hub aborts (memex-cloud 2026-07-19,
+    /// <c>AgenticEngineering/Start/_Access/Public_Access</c>). The xact-scoped advisory
+    /// lock queues rebuilds one-at-a-time instead; it releases automatically at
+    /// commit/rollback, so an erroring rebuild can never leak it.</para>
+    /// </summary>
+    public static string GetUepRebuildFunctionScript(string schemaRef) => $$"""
+        -- Rebuild function: reads AccessAssignment from access satellite table, GroupMembership from mesh_nodes
+        -- AccessAssignment content: {"accessObject":"...","roles":[{"role":"...","denied":true},...]}
+        CREATE OR REPLACE FUNCTION rebuild_user_effective_permissions() RETURNS void AS $$
+        BEGIN
+            -- Serialize rebuilds GLOBALLY (one lock for ALL partition schemas): each rebuild
+            -- takes ACCESS EXCLUSIVE on its own schema's user_effective_permissions (the
+            -- atomic-swap RENAMEs below) AND writes the SHARED public.partition_access rows.
+            -- Concurrent rebuilds from different partitions interleave those locks in
+            -- opposite orders -> 40P01 deadlock detected, aborting the originating _Access
+            -- write (memex-cloud 2026-07-19). The xact-scoped advisory lock queues rebuilds
+            -- instead and releases automatically at commit/rollback.
+            PERFORM pg_advisory_xact_lock(hashtext('meshweaver_uep_rebuild'));
+
+            -- Set search_path so unqualified table names resolve to this schema
+            EXECUTE format('SET LOCAL search_path TO %I, public', {{schemaRef}});
+            TRUNCATE user_effective_permissions_shadow;
+
+            -- Direct entries from AccessAssignment nodes (access satellite table)
+            -- Unnest the roles[] array to get each role assignment
+            INSERT INTO user_effective_permissions_shadow (user_id, node_path_prefix, permission, is_allow)
+            SELECT user_id, node_path_prefix, permission, bool_and(is_allow) AS is_allow
+            FROM (
+            SELECT
+                aa.content->>'accessObject' AS user_id,
+                COALESCE(aa.main_node, aa.namespace) AS node_path_prefix,
+                perm.permission,
+                NOT COALESCE((role_entry->>'denied')::boolean, false) AS is_allow
+            FROM access aa
+            CROSS JOIN LATERAL jsonb_array_elements(aa.content->'roles') AS role_entry
+            CROSS JOIN LATERAL (
+                SELECT COALESCE(
+                    (SELECT (role_node.content->>'permissions')::int
+                     FROM mesh_nodes role_node
+                     WHERE role_node.node_type = 'Role'
+                       AND role_node.id = role_entry->>'role'
+                     LIMIT 1),
+                    -- Fallback: built-in role lookup
+                    CASE role_entry->>'role'
+                        WHEN 'Admin' THEN 1535
+                        WHEN 'PlatformAdmin' THEN 1535
+                        WHEN 'Editor' THEN 1527
+                        WHEN 'Viewer' THEN 161
+                        WHEN 'Commenter' THEN 145
+                        ELSE 0
+                    END
+                ) AS permissions
+            ) r
+            CROSS JOIN LATERAL (
+                SELECT unnest(
+                    CASE WHEN (r.permissions & 1) > 0 THEN ARRAY['Read'] ELSE ARRAY[]::text[] END
+                    || CASE WHEN (r.permissions & 2) > 0 THEN ARRAY['Create'] ELSE ARRAY[]::text[] END
+                    || CASE WHEN (r.permissions & 4) > 0 THEN ARRAY['Update'] ELSE ARRAY[]::text[] END
+                    || CASE WHEN (r.permissions & 8) > 0 THEN ARRAY['Delete'] ELSE ARRAY[]::text[] END
+                    || CASE WHEN (r.permissions & 16) > 0 THEN ARRAY['Comment'] ELSE ARRAY[]::text[] END
+                    || CASE WHEN (r.permissions & 32) > 0 THEN ARRAY['Execute'] ELSE ARRAY[]::text[] END
+                    || CASE WHEN (r.permissions & 64) > 0 THEN ARRAY['Thread'] ELSE ARRAY[]::text[] END
+                    || CASE WHEN (r.permissions & 128) > 0 THEN ARRAY['Api'] ELSE ARRAY[]::text[] END
+                    || CASE WHEN (r.permissions & 256) > 0 THEN ARRAY['Export'] ELSE ARRAY[]::text[] END
+                    || CASE WHEN (r.permissions & 1024) > 0 THEN ARRAY['Compile'] ELSE ARRAY[]::text[] END
+                ) AS permission
+            ) perm
+            WHERE aa.content->>'accessObject' IS NOT NULL
+              AND aa.content->'roles' IS NOT NULL
+            ) AS dedup(user_id, node_path_prefix, permission, is_allow)
+            GROUP BY user_id, node_path_prefix, permission
+            ON CONFLICT (user_id, node_path_prefix, permission) DO UPDATE
+                SET is_allow = CASE WHEN EXCLUDED.is_allow = false THEN false ELSE user_effective_permissions_shadow.is_allow END;
+
+            -- Group expansion: read GroupMembership MeshNodes
+            -- New model: content has "member" + "groups" array of {"group":"..."}
+            INSERT INTO user_effective_permissions_shadow (user_id, node_path_prefix, permission, is_allow)
+            SELECT user_id, node_path_prefix, permission, bool_and(is_allow) AS is_allow
+            FROM (
+            WITH RECURSIVE all_members AS (
+                SELECT group_entry->>'group' AS group_path, gm.content->>'member' AS member_id
+                FROM "auth".mesh_nodes gm
+                CROSS JOIN LATERAL jsonb_array_elements(gm.content->'groups') AS group_entry
+                WHERE gm.node_type = 'GroupMembership'
+                UNION
+                SELECT am.group_path, gm.content->>'member'
+                FROM all_members am
+                JOIN "auth".mesh_nodes gm ON gm.node_type = 'GroupMembership'
+                WHERE EXISTS (
+                    SELECT 1 FROM jsonb_array_elements(gm.content->'groups') g
+                    WHERE g->>'group' = am.member_id
+                )
+            ),
+            leaf_members AS (
+                SELECT group_path, member_id FROM all_members
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM "auth".mesh_nodes gm2
+                    CROSS JOIN LATERAL jsonb_array_elements(gm2.content->'groups') AS g2
+                    WHERE gm2.node_type = 'GroupMembership'
+                      AND g2->>'group' = all_members.member_id
+                )
+            )
+            SELECT lm.member_id, COALESCE(aa.main_node, aa.namespace), perm.permission,
+                   NOT COALESCE((role_entry->>'denied')::boolean, false) AS is_allow
+            FROM access aa
+            JOIN leaf_members lm ON aa.content->>'accessObject' = lm.group_path
+            CROSS JOIN LATERAL jsonb_array_elements(aa.content->'roles') AS role_entry
+            CROSS JOIN LATERAL (
+                SELECT COALESCE(
+                    (SELECT (role_node.content->>'permissions')::int
+                     FROM mesh_nodes role_node
+                     WHERE role_node.node_type = 'Role'
+                       AND role_node.id = role_entry->>'role'
+                     LIMIT 1),
+                    CASE role_entry->>'role'
+                        WHEN 'Admin' THEN 1535
+                        WHEN 'PlatformAdmin' THEN 1535
+                        WHEN 'Editor' THEN 1527
+                        WHEN 'Viewer' THEN 161
+                        WHEN 'Commenter' THEN 145
+                        ELSE 0
+                    END
+                ) AS permissions
+            ) r
+            CROSS JOIN LATERAL (
+                SELECT unnest(
+                    CASE WHEN (r.permissions & 1) > 0 THEN ARRAY['Read'] ELSE ARRAY[]::text[] END
+                    || CASE WHEN (r.permissions & 2) > 0 THEN ARRAY['Create'] ELSE ARRAY[]::text[] END
+                    || CASE WHEN (r.permissions & 4) > 0 THEN ARRAY['Update'] ELSE ARRAY[]::text[] END
+                    || CASE WHEN (r.permissions & 8) > 0 THEN ARRAY['Delete'] ELSE ARRAY[]::text[] END
+                    || CASE WHEN (r.permissions & 16) > 0 THEN ARRAY['Comment'] ELSE ARRAY[]::text[] END
+                    || CASE WHEN (r.permissions & 32) > 0 THEN ARRAY['Execute'] ELSE ARRAY[]::text[] END
+                    || CASE WHEN (r.permissions & 64) > 0 THEN ARRAY['Thread'] ELSE ARRAY[]::text[] END
+                    || CASE WHEN (r.permissions & 128) > 0 THEN ARRAY['Api'] ELSE ARRAY[]::text[] END
+                    || CASE WHEN (r.permissions & 256) > 0 THEN ARRAY['Export'] ELSE ARRAY[]::text[] END
+                    || CASE WHEN (r.permissions & 1024) > 0 THEN ARRAY['Compile'] ELSE ARRAY[]::text[] END
+                ) AS permission
+            ) perm
+            WHERE aa.content->'roles' IS NOT NULL
+            ) AS dedup(user_id, node_path_prefix, permission, is_allow)
+            GROUP BY user_id, node_path_prefix, permission
+            ON CONFLICT (user_id, node_path_prefix, permission) DO UPDATE
+                SET is_allow = CASE WHEN EXCLUDED.is_allow = false THEN false ELSE user_effective_permissions_shadow.is_allow END;
+
+            -- Direct entries from access_control table (convenience methods)
+            INSERT INTO user_effective_permissions_shadow (user_id, node_path_prefix, permission, is_allow)
+            SELECT user_id, node_path_prefix, permission, bool_and(is_allow) AS is_allow
+            FROM (
+            SELECT subject, node_path, permission, is_allow
+            FROM access_control
+            ) AS dedup(user_id, node_path_prefix, permission, is_allow)
+            GROUP BY user_id, node_path_prefix, permission
+            ON CONFLICT (user_id, node_path_prefix, permission) DO UPDATE
+                SET is_allow = CASE WHEN EXCLUDED.is_allow = false THEN false ELSE user_effective_permissions_shadow.is_allow END;
+
+            -- Group expansion from group_members + access_control
+            INSERT INTO user_effective_permissions_shadow (user_id, node_path_prefix, permission, is_allow)
+            SELECT user_id, node_path_prefix, permission, bool_and(is_allow) AS is_allow
+            FROM (
+            WITH RECURSIVE all_members AS (
+                SELECT group_name, member_id FROM group_members
+                UNION
+                SELECT am.group_name, gm.member_id
+                FROM all_members am
+                JOIN group_members gm ON gm.group_name = am.member_id
+            ),
+            leaf_members AS (
+                SELECT group_name, member_id FROM all_members
+                WHERE member_id NOT IN (SELECT DISTINCT group_name FROM group_members)
+            )
+            SELECT lm.member_id, ac.node_path, ac.permission, ac.is_allow
+            FROM access_control ac
+            JOIN leaf_members lm ON lm.group_name = ac.subject
+            ) AS dedup(user_id, node_path_prefix, permission, is_allow)
+            GROUP BY user_id, node_path_prefix, permission
+            ON CONFLICT (user_id, node_path_prefix, permission) DO UPDATE
+                SET is_allow = CASE WHEN EXCLUDED.is_allow = false THEN false ELSE user_effective_permissions_shadow.is_allow END;
+
+            -- Apply PartitionAccessPolicy caps: deny permissions set to false
+            -- For each policy, insert deny rows at the policy namespace for ALL users
+            -- for permissions that the policy explicitly denies (field value = false).
+            -- The most-specific-prefix-wins query logic then correctly denies those permissions.
+            INSERT INTO user_effective_permissions_shadow (user_id, node_path_prefix, permission, is_allow)
+            SELECT DISTINCT
+                uep.user_id,
+                policy.namespace AS node_path_prefix,
+                perm.permission,
+                false
+            FROM mesh_nodes policy
+            CROSS JOIN (SELECT DISTINCT user_id FROM user_effective_permissions_shadow) uep
+            CROSS JOIN (
+                SELECT unnest(ARRAY['Read','Create','Update','Delete','Comment']) AS permission,
+                       unnest(ARRAY['read','create','update','delete','comment']) AS field
+            ) perm
+            WHERE policy.node_type = 'PartitionAccessPolicy'
+              AND policy.id = '_Policy'
+              AND (policy.content->>perm.field)::boolean = false
+            ON CONFLICT (user_id, node_path_prefix, permission) DO UPDATE SET is_allow = false;
+
+            -- Atomic swap
+            ALTER TABLE user_effective_permissions RENAME TO user_effective_permissions_old;
+            ALTER TABLE user_effective_permissions_shadow RENAME TO user_effective_permissions;
+            ALTER TABLE user_effective_permissions_old RENAME TO user_effective_permissions_shadow;
+
+            -- Sync partition_access: upsert users with Read permission, remove revoked
+            BEGIN
+                INSERT INTO public.partition_access (user_id, partition)
+                SELECT DISTINCT user_id, {{schemaRef}}
+                FROM user_effective_permissions
+                WHERE permission = 'Read' AND is_allow = true
+                ON CONFLICT (user_id, partition) DO NOTHING;
+
+                DELETE FROM public.partition_access
+                WHERE partition = {{schemaRef}}
+                  AND user_id NOT IN (
+                    SELECT user_id FROM user_effective_permissions
+                    WHERE permission = 'Read' AND is_allow = true
+                  );
+            EXCEPTION WHEN undefined_table THEN
+                -- partition_access table may not exist yet (first migration)
+                NULL;
+            END;
+        END;
+        -- jit off: the dedup aggregate's cost estimate (inflated by jsonb SRF default row
+        -- estimates) exceeds jit_above_cost, and LLVM then spends ~450ms compiling the
+        -- unnest expressions PER STATEMENT — in a trigger path that runs on every
+        -- _Access write and once per schema in the boot self-heal sweep.
+        $$ LANGUAGE plpgsql SET jit = off;
+        """;
+
+    /// <summary>
     /// The full versioned-partition DDL (mesh_nodes + support tables + the access
     /// satellite + permission-rebuild functions + notify/mirror/history triggers).
     /// Unqualified — resolves against the connection's <c>search_path</c>.
@@ -1826,219 +1876,7 @@ public static class PostgreSqlSchemaInitializer
             -- Shadow table for atomic rebuild
             CREATE TABLE IF NOT EXISTS user_effective_permissions_shadow (LIKE user_effective_permissions INCLUDING ALL);
 
-            -- Rebuild function: reads AccessAssignment from access satellite table, GroupMembership from mesh_nodes
-            -- AccessAssignment content: {"accessObject":"...","roles":[{"role":"...","denied":true},...]}
-            CREATE OR REPLACE FUNCTION rebuild_user_effective_permissions() RETURNS void AS $$
-            BEGIN
-                -- Set search_path so unqualified table names resolve to this schema
-                EXECUTE format('SET LOCAL search_path TO %I, public', {{schemaRef}});
-                TRUNCATE user_effective_permissions_shadow;
-
-                -- Direct entries from AccessAssignment nodes (access satellite table)
-                -- Unnest the roles[] array to get each role assignment
-                INSERT INTO user_effective_permissions_shadow (user_id, node_path_prefix, permission, is_allow)
-                SELECT user_id, node_path_prefix, permission, bool_and(is_allow) AS is_allow
-                FROM (
-                SELECT
-                    aa.content->>'accessObject' AS user_id,
-                    COALESCE(aa.main_node, aa.namespace) AS node_path_prefix,
-                    perm.permission,
-                    NOT COALESCE((role_entry->>'denied')::boolean, false) AS is_allow
-                FROM access aa
-                CROSS JOIN LATERAL jsonb_array_elements(aa.content->'roles') AS role_entry
-                CROSS JOIN LATERAL (
-                    SELECT COALESCE(
-                        (SELECT (role_node.content->>'permissions')::int
-                         FROM mesh_nodes role_node
-                         WHERE role_node.node_type = 'Role'
-                           AND role_node.id = role_entry->>'role'
-                         LIMIT 1),
-                        -- Fallback: built-in role lookup
-                        CASE role_entry->>'role'
-                            WHEN 'Admin' THEN 1535
-                            WHEN 'PlatformAdmin' THEN 1535
-                            WHEN 'Editor' THEN 1527
-                            WHEN 'Viewer' THEN 161
-                            WHEN 'Commenter' THEN 145
-                            ELSE 0
-                        END
-                    ) AS permissions
-                ) r
-                CROSS JOIN LATERAL (
-                    SELECT unnest(
-                        CASE WHEN (r.permissions & 1) > 0 THEN ARRAY['Read'] ELSE ARRAY[]::text[] END
-                        || CASE WHEN (r.permissions & 2) > 0 THEN ARRAY['Create'] ELSE ARRAY[]::text[] END
-                        || CASE WHEN (r.permissions & 4) > 0 THEN ARRAY['Update'] ELSE ARRAY[]::text[] END
-                        || CASE WHEN (r.permissions & 8) > 0 THEN ARRAY['Delete'] ELSE ARRAY[]::text[] END
-                        || CASE WHEN (r.permissions & 16) > 0 THEN ARRAY['Comment'] ELSE ARRAY[]::text[] END
-                        || CASE WHEN (r.permissions & 32) > 0 THEN ARRAY['Execute'] ELSE ARRAY[]::text[] END
-                        || CASE WHEN (r.permissions & 64) > 0 THEN ARRAY['Thread'] ELSE ARRAY[]::text[] END
-                        || CASE WHEN (r.permissions & 128) > 0 THEN ARRAY['Api'] ELSE ARRAY[]::text[] END
-                        || CASE WHEN (r.permissions & 256) > 0 THEN ARRAY['Export'] ELSE ARRAY[]::text[] END
-                        || CASE WHEN (r.permissions & 1024) > 0 THEN ARRAY['Compile'] ELSE ARRAY[]::text[] END
-                    ) AS permission
-                ) perm
-                WHERE aa.content->>'accessObject' IS NOT NULL
-                  AND aa.content->'roles' IS NOT NULL
-                ) AS dedup(user_id, node_path_prefix, permission, is_allow)
-                GROUP BY user_id, node_path_prefix, permission
-                ON CONFLICT (user_id, node_path_prefix, permission) DO UPDATE
-                    SET is_allow = CASE WHEN EXCLUDED.is_allow = false THEN false ELSE user_effective_permissions_shadow.is_allow END;
-
-                -- Group expansion: read GroupMembership MeshNodes
-                -- New model: content has "member" + "groups" array of {"group":"..."}
-                INSERT INTO user_effective_permissions_shadow (user_id, node_path_prefix, permission, is_allow)
-                SELECT user_id, node_path_prefix, permission, bool_and(is_allow) AS is_allow
-                FROM (
-                WITH RECURSIVE all_members AS (
-                    SELECT group_entry->>'group' AS group_path, gm.content->>'member' AS member_id
-                    FROM "auth".mesh_nodes gm
-                    CROSS JOIN LATERAL jsonb_array_elements(gm.content->'groups') AS group_entry
-                    WHERE gm.node_type = 'GroupMembership'
-                    UNION
-                    SELECT am.group_path, gm.content->>'member'
-                    FROM all_members am
-                    JOIN "auth".mesh_nodes gm ON gm.node_type = 'GroupMembership'
-                    WHERE EXISTS (
-                        SELECT 1 FROM jsonb_array_elements(gm.content->'groups') g
-                        WHERE g->>'group' = am.member_id
-                    )
-                ),
-                leaf_members AS (
-                    SELECT group_path, member_id FROM all_members
-                    WHERE NOT EXISTS (
-                        SELECT 1 FROM "auth".mesh_nodes gm2
-                        CROSS JOIN LATERAL jsonb_array_elements(gm2.content->'groups') AS g2
-                        WHERE gm2.node_type = 'GroupMembership'
-                          AND g2->>'group' = all_members.member_id
-                    )
-                )
-                SELECT lm.member_id, COALESCE(aa.main_node, aa.namespace), perm.permission,
-                       NOT COALESCE((role_entry->>'denied')::boolean, false) AS is_allow
-                FROM access aa
-                JOIN leaf_members lm ON aa.content->>'accessObject' = lm.group_path
-                CROSS JOIN LATERAL jsonb_array_elements(aa.content->'roles') AS role_entry
-                CROSS JOIN LATERAL (
-                    SELECT COALESCE(
-                        (SELECT (role_node.content->>'permissions')::int
-                         FROM mesh_nodes role_node
-                         WHERE role_node.node_type = 'Role'
-                           AND role_node.id = role_entry->>'role'
-                         LIMIT 1),
-                        CASE role_entry->>'role'
-                            WHEN 'Admin' THEN 1535
-                            WHEN 'PlatformAdmin' THEN 1535
-                            WHEN 'Editor' THEN 1527
-                            WHEN 'Viewer' THEN 161
-                            WHEN 'Commenter' THEN 145
-                            ELSE 0
-                        END
-                    ) AS permissions
-                ) r
-                CROSS JOIN LATERAL (
-                    SELECT unnest(
-                        CASE WHEN (r.permissions & 1) > 0 THEN ARRAY['Read'] ELSE ARRAY[]::text[] END
-                        || CASE WHEN (r.permissions & 2) > 0 THEN ARRAY['Create'] ELSE ARRAY[]::text[] END
-                        || CASE WHEN (r.permissions & 4) > 0 THEN ARRAY['Update'] ELSE ARRAY[]::text[] END
-                        || CASE WHEN (r.permissions & 8) > 0 THEN ARRAY['Delete'] ELSE ARRAY[]::text[] END
-                        || CASE WHEN (r.permissions & 16) > 0 THEN ARRAY['Comment'] ELSE ARRAY[]::text[] END
-                        || CASE WHEN (r.permissions & 32) > 0 THEN ARRAY['Execute'] ELSE ARRAY[]::text[] END
-                        || CASE WHEN (r.permissions & 64) > 0 THEN ARRAY['Thread'] ELSE ARRAY[]::text[] END
-                        || CASE WHEN (r.permissions & 128) > 0 THEN ARRAY['Api'] ELSE ARRAY[]::text[] END
-                        || CASE WHEN (r.permissions & 256) > 0 THEN ARRAY['Export'] ELSE ARRAY[]::text[] END
-                        || CASE WHEN (r.permissions & 1024) > 0 THEN ARRAY['Compile'] ELSE ARRAY[]::text[] END
-                    ) AS permission
-                ) perm
-                WHERE aa.content->'roles' IS NOT NULL
-                ) AS dedup(user_id, node_path_prefix, permission, is_allow)
-                GROUP BY user_id, node_path_prefix, permission
-                ON CONFLICT (user_id, node_path_prefix, permission) DO UPDATE
-                    SET is_allow = CASE WHEN EXCLUDED.is_allow = false THEN false ELSE user_effective_permissions_shadow.is_allow END;
-
-                -- Direct entries from access_control table (convenience methods)
-                INSERT INTO user_effective_permissions_shadow (user_id, node_path_prefix, permission, is_allow)
-                SELECT user_id, node_path_prefix, permission, bool_and(is_allow) AS is_allow
-                FROM (
-                SELECT subject, node_path, permission, is_allow
-                FROM access_control
-                ) AS dedup(user_id, node_path_prefix, permission, is_allow)
-                GROUP BY user_id, node_path_prefix, permission
-                ON CONFLICT (user_id, node_path_prefix, permission) DO UPDATE
-                    SET is_allow = CASE WHEN EXCLUDED.is_allow = false THEN false ELSE user_effective_permissions_shadow.is_allow END;
-
-                -- Group expansion from group_members + access_control
-                INSERT INTO user_effective_permissions_shadow (user_id, node_path_prefix, permission, is_allow)
-                SELECT user_id, node_path_prefix, permission, bool_and(is_allow) AS is_allow
-                FROM (
-                WITH RECURSIVE all_members AS (
-                    SELECT group_name, member_id FROM group_members
-                    UNION
-                    SELECT am.group_name, gm.member_id
-                    FROM all_members am
-                    JOIN group_members gm ON gm.group_name = am.member_id
-                ),
-                leaf_members AS (
-                    SELECT group_name, member_id FROM all_members
-                    WHERE member_id NOT IN (SELECT DISTINCT group_name FROM group_members)
-                )
-                SELECT lm.member_id, ac.node_path, ac.permission, ac.is_allow
-                FROM access_control ac
-                JOIN leaf_members lm ON lm.group_name = ac.subject
-                ) AS dedup(user_id, node_path_prefix, permission, is_allow)
-                GROUP BY user_id, node_path_prefix, permission
-                ON CONFLICT (user_id, node_path_prefix, permission) DO UPDATE
-                    SET is_allow = CASE WHEN EXCLUDED.is_allow = false THEN false ELSE user_effective_permissions_shadow.is_allow END;
-
-                -- Apply PartitionAccessPolicy caps: deny permissions set to false
-                -- For each policy, insert deny rows at the policy namespace for ALL users
-                -- for permissions that the policy explicitly denies (field value = false).
-                -- The most-specific-prefix-wins query logic then correctly denies those permissions.
-                INSERT INTO user_effective_permissions_shadow (user_id, node_path_prefix, permission, is_allow)
-                SELECT DISTINCT
-                    uep.user_id,
-                    policy.namespace AS node_path_prefix,
-                    perm.permission,
-                    false
-                FROM mesh_nodes policy
-                CROSS JOIN (SELECT DISTINCT user_id FROM user_effective_permissions_shadow) uep
-                CROSS JOIN (
-                    SELECT unnest(ARRAY['Read','Create','Update','Delete','Comment']) AS permission,
-                           unnest(ARRAY['read','create','update','delete','comment']) AS field
-                ) perm
-                WHERE policy.node_type = 'PartitionAccessPolicy'
-                  AND policy.id = '_Policy'
-                  AND (policy.content->>perm.field)::boolean = false
-                ON CONFLICT (user_id, node_path_prefix, permission) DO UPDATE SET is_allow = false;
-
-                -- Atomic swap
-                ALTER TABLE user_effective_permissions RENAME TO user_effective_permissions_old;
-                ALTER TABLE user_effective_permissions_shadow RENAME TO user_effective_permissions;
-                ALTER TABLE user_effective_permissions_old RENAME TO user_effective_permissions_shadow;
-
-                -- Sync partition_access: upsert users with Read permission, remove revoked
-                BEGIN
-                    INSERT INTO public.partition_access (user_id, partition)
-                    SELECT DISTINCT user_id, {{schemaRef}}
-                    FROM user_effective_permissions
-                    WHERE permission = 'Read' AND is_allow = true
-                    ON CONFLICT (user_id, partition) DO NOTHING;
-
-                    DELETE FROM public.partition_access
-                    WHERE partition = {{schemaRef}}
-                      AND user_id NOT IN (
-                        SELECT user_id FROM user_effective_permissions
-                        WHERE permission = 'Read' AND is_allow = true
-                      );
-                EXCEPTION WHEN undefined_table THEN
-                    -- partition_access table may not exist yet (first migration)
-                    NULL;
-                END;
-            END;
-            -- jit off: the dedup aggregate's cost estimate (inflated by jsonb SRF default row
-            -- estimates) exceeds jit_above_cost, and LLVM then spends ~450ms compiling the
-            -- unnest expressions PER STATEMENT — in a trigger path that runs on every
-            -- _Access write and once per schema in the boot self-heal sweep.
-            $$ LANGUAGE plpgsql SET jit = off;
+            {{GetUepRebuildFunctionScript(schemaRef)}}
 
             -- Access satellite table (must exist before trigger creation)
             CREATE TABLE IF NOT EXISTS access (

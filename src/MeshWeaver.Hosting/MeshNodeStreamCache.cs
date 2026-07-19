@@ -91,6 +91,7 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         private int subscribers;
         private long lastActiveAt = Environment.TickCount64; // monotonic ms
         private bool evicted;
+        private bool faulted;
 
         public MeshNodeStreamHandle Handle { get; } = handle;
 
@@ -104,6 +105,17 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
 
         /// <summary>True while the entry is usable. Does NOT refresh the idle window.</summary>
         public bool IsLive { get { lock (gate) return !evicted; } }
+
+        /// <summary>Marks the entry's hydration as terminally errored — its replay
+        /// subject holds an OnError terminal, so every future subscriber would
+        /// replay the stale failure. Set by the storm-breaker bookkeeping observer;
+        /// consumed by the change-feed invalidation reset, which evicts ONLY
+        /// faulted entries (a healthy live entry must never be torn down by a
+        /// routine post-commit Updated broadcast).</summary>
+        public void MarkFaulted() { lock (gate) faulted = true; }
+
+        /// <summary>True when the entry's hydration terminated with an error.</summary>
+        public bool IsFaulted { get { lock (gate) return faulted; } }
 
         /// <summary>Refreshes the sliding idle window (read/write activity hit).</summary>
         public void Touch() { lock (gate) lastActiveAt = Environment.TickCount64; }
@@ -217,6 +229,23 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     private readonly TimeSpan readStreamSweepInterval;
     private readonly IDisposable idleSweep;
 
+    // 🚨 Invalidation signal: the SAME IMeshChangeFeed broadcast every write path
+    // already publishes — post-commit storage writes (Created/Updated/Deleted) AND
+    // the recycle operation (MeshOperations.RecycleCore publishes an Updated event
+    // before posting DisposeRequest; in Orleans the PathCacheInvalidatorGrain
+    // relays it cross-silo into each process's local feed). On each event the
+    // cache RESETS its failure state for that exact path: the storm-breaker
+    // negative entry (error, fail count, backoff window) is dropped and a
+    // terminally-FAULTED read entry is evicted, so the next natural read gets a
+    // completely fresh resolution attempt. Without this, a recycle after a
+    // compile-error era could never heal the path: the breaker's grown backoff
+    // window (up to StormMaxCooldown) kept fast-failing every read/write and the
+    // faulted entry replayed the stale error — only a pod restart cleared it
+    // (memex-cloud 2026-07-19, AgenticEngineering/Install). EVICTION/RESET ONLY —
+    // this never re-subscribes anything (2026-06-08 rule); re-probing is always
+    // the next natural read.
+    private readonly IDisposable? changeFeedReset;
+
     // Diagnostic/test seam: one event per released read entry (idle sweep,
     // Invalidate, storm-breaker stale removal). Subject.Synchronize because
     // releases fire from the sweep timer thread and hub threads concurrently.
@@ -250,7 +279,11 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     // after it elapses re-probes the owner exactly once. There is NO timer that
     // re-subscribes on its own (an auto-resubscribe watchdog is exactly what caused the
     // 2026-06-08 prod outage; this only ever evicts, never re-subscribes). A successful
-    // read clears the entry immediately. Consecutive failures grow the window
+    // read clears the entry immediately, and so does a change-feed invalidation for the
+    // path (recycle broadcast / post-commit write — see ResetFailureState: a real write
+    // on the path is authoritative proof the cached failure is stale, so the window
+    // closes and the counters reset instead of a healthy-again node fast-failing for
+    // the remainder of a grown backoff window). Consecutive failures grow the window
     // (StormBaseCooldown · 2^(n-1), capped at StormMaxCooldown); crossing
     // StormFailThreshold logs ONE "[STORM-BREAKER] suppressing" warning so the storm is
     // visible in Grafana/Loki without the per-failure log flood.
@@ -420,6 +453,96 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         // so no pass starts after teardown begins.
         idleSweep = Observable.Interval(readStreamSweepInterval)
             .Subscribe(_ => ReleaseIdleReadStreams());
+
+        // Failure-state reset on the EXISTING invalidation broadcast (see the
+        // changeFeedReset field doc). Optional service: minimal test fixtures
+        // without AddMeshCatalog's feed registration simply have no reset seam.
+        changeFeedReset = meshHub.ServiceProvider.GetService<IMeshChangeFeed>()
+            ?.Subscribe(OnMeshChange);
+    }
+
+    /// <summary>
+    /// Change-feed handler: a published change event for a path is authoritative
+    /// proof of a real write / recycle on that path, so any cached FAILURE state
+    /// for it is stale by definition — reset it (see <see cref="ResetFailureState"/>).
+    /// Runs synchronously on the publisher's thread; pure dictionary ops plus
+    /// disposing an already-terminated Rx subscription — no I/O, no hub post.
+    /// </summary>
+    private void OnMeshChange(MeshChangeEvent change)
+    {
+        if (System.Threading.Volatile.Read(ref _disposed) != 0)
+            return;
+        if (string.IsNullOrEmpty(change.Path))
+            return;
+        try
+        {
+            ResetFailureState(change.Path);
+        }
+        catch (Exception ex)
+        {
+            // The feed's Subject.OnNext runs handlers synchronously on the
+            // PUBLISHER's thread (a post-commit storage write / the recycle
+            // operation) and an unhandled throw here would fault that pipeline
+            // and starve the feed's remaining subscribers. The reset is state
+            // hygiene — surface the fault loudly, never break the writer.
+            logger.LogError(ex,
+                "MeshNodeStreamCache: failure-state reset faulted for {Path}", change.Path);
+        }
+    }
+
+    /// <summary>
+    /// Gives <paramref name="path"/> a completely fresh resolution attempt:
+    /// <list type="number">
+    ///   <item>Drops the storm-breaker negative entry — cached error, fail count
+    ///     AND backoff window (closed; counters back to zero).</item>
+    ///   <item>Evicts the read entry IFF its hydration terminated with an error
+    ///     (<see cref="Entry.IsFaulted"/>) — its Replay(1) would otherwise keep
+    ///     replaying the stale terminal error to every future subscriber even
+    ///     with the breaker cleared. A healthy live entry is left untouched: the
+    ///     owner's sync stream already delivers routine updates, and tearing the
+    ///     shared handle down on every post-commit broadcast would sever live
+    ///     GUI subscribers.</item>
+    /// </list>
+    /// Same discipline as the storm-breaker's own re-probe eviction (guard #2 in
+    /// <see cref="GetStreamRaw"/>): dispose ONLY the Rx hydration — a terminally
+    /// errored upstream has already torn down its own keep-alive, and posting
+    /// UnsubscribeRequest at a mid-recycle owner would race its re-activation.
+    /// </summary>
+    internal void ResetFailureState(string path)
+    {
+        if (_negative.TryRemove(path, out var cleared))
+        {
+            // One line when a genuinely-suppressed storm is lifted (mirrors the
+            // single "[STORM-BREAKER] suppressing" warning); routine clears stay at Debug.
+            if (cleared.FailCount >= StormFailThreshold)
+                logger.LogInformation(
+                    "[STORM-BREAKER] Cleared '{Path}' on change-feed invalidation after {FailCount} recorded failures "
+                    + "(window was open until {OpenUntil:O}) — next read re-probes fresh.",
+                    path, cleared.FailCount, cleared.OpenUntil);
+            else
+                logger.LogDebug(
+                    "MeshNodeStreamCache: cleared negative entry for {Path} on change-feed invalidation (failCount={FailCount})",
+                    path, cleared.FailCount);
+        }
+
+        if (_streams.TryGetValue(path, out var lazy) && lazy.IsValueCreated && lazy.Value.IsFaulted
+            && _streams.TryRemove(new KeyValuePair<string, Lazy<Entry>>(path, lazy)))
+        {
+            try
+            {
+                var stale = lazy.Value;
+                stale.MarkEvicted();
+                stale.HydrationSub.Dispose();
+                readStreamEvictions.OnNext(new ReadStreamEviction(path, false, "invalidate"));
+                logger.LogDebug(
+                    "MeshNodeStreamCache: evicted faulted read entry for {Path} on change-feed invalidation", path);
+            }
+            catch (Exception ex)
+            {
+                logger.LogDebug(ex,
+                    "MeshNodeStreamCache: error disposing faulted entry for {Path}", path);
+            }
+        }
     }
 
     /// <summary>
@@ -439,6 +562,11 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         catch (Exception ex)
         {
             logger.LogDebug(ex, "MeshNodeStreamCache: error disposing idle sweep");
+        }
+        try { changeFeedReset?.Dispose(); }
+        catch (Exception ex)
+        {
+            logger.LogDebug(ex, "MeshNodeStreamCache: error disposing change-feed reset subscription");
         }
         try { readStreamEvictions.OnCompleted(); }
         catch (Exception ex)
@@ -629,17 +757,29 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
             // transient classifier retries) but leave the cache clean so the very next read
             // re-probes the fresh activation. Symmetric with the write path (see the
             // [UpdateQueue] FAILED branch), which already guards RecordNegative the same way.
-            var bookkeeping = inner.AsObservable().Subscribe(
-                node => { if (node is not null) _negative.TryRemove(p, out _); },
-                ex => { if (IsMissingNodeFailure(ex)) RecordNegative(p, ex); });
-            var disposal = new System.Reactive.Disposables.CompositeDisposable(hydrationSub, bookkeeping);
             // Store the disposal on the Entry so the mesh hub's pre-Quiescing
             // disposal hook (registered in the ctor) can cancel it — and so the
             // idle sweep can close it when the path goes quiet. Without this,
             // every cache.GetStream(path) leaks a long-lived SubscribeRequest
             // into the mesh hub's responseSubjects and the test base's leak
-            // detection flags it at dispose.
-            return new Entry(handle, inner.AsObservable(), disposal);
+            // detection flags it at dispose. The bookkeeping observer is attached
+            // AFTER the Entry exists so a terminal error can flag the entry as
+            // FAULTED (its ReplaySubject then holds an OnError terminal that
+            // every later subscriber would replay) — the change-feed invalidation
+            // reset (ResetFailureState) evicts exactly those entries. ReplaySubject
+            // replays a terminal to late subscribers, so an error landing between
+            // the hydration subscribe above and this attach is still observed.
+            var disposal = new System.Reactive.Disposables.CompositeDisposable(hydrationSub);
+            var entry = new Entry(handle, inner.AsObservable(), disposal);
+            var bookkeeping = inner.AsObservable().Subscribe(
+                node => { if (node is not null) _negative.TryRemove(p, out _); },
+                ex =>
+                {
+                    entry.MarkFaulted();
+                    if (IsMissingNodeFailure(ex)) RecordNegative(p, ex);
+                });
+            disposal.Add(bookkeeping);
+            return entry;
         }
     }
 
@@ -796,8 +936,11 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     /// <see cref="StormMaxCooldown"/>). Crossing <see cref="StormFailThreshold"/>
     /// consecutive failures logs ONE warning. Never re-subscribes — purely records
     /// state that <see cref="GetStreamRaw"/> consults to fast-fail.
+    /// Internal as a test seam: the recycle-reset tests seed the grown failure
+    /// history (a compile-error era's worth of consecutive activation failures)
+    /// deterministically instead of waiting out real backoff windows.
     /// </summary>
-    private void RecordNegative(string path, Exception error)
+    internal void RecordNegative(string path, Exception error)
     {
         var priorFails = _negative.TryGetValue(path, out var existing) ? existing.FailCount : 0;
         var failCount = priorFails + 1;
@@ -1627,10 +1770,14 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     /// <c>HandleDeleteNodeRequest</c> after the persistence delete commits —
     /// the Replay(1) cache otherwise holds the pre-delete MeshNode forever
     /// (the upstream observable doesn't emit "deleted" — the per-node hub is
-    /// gone). Idempotent.
+    /// gone). Also drops the storm-breaker negative entry for the path — an
+    /// invalidation means "give this path a completely fresh resolution attempt",
+    /// so a stale failure window (error, fail count, backoff) must not outlive
+    /// it; if the path is genuinely absent, the next read re-records. Idempotent.
     /// </summary>
     public void Invalidate(string path)
     {
+        _negative.TryRemove(path, out _);
         if (_streams.TryRemove(path, out var lazyEntry))
         {
             // Dispose the upstream SubscribeRequest so it doesn't dangle in
