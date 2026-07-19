@@ -1,0 +1,28 @@
+@namespace Memex.Portal.Shared.Seo
+@using Microsoft.AspNetCore.Http
+
+@*
+    The page's actual content for crawlers that do not run JavaScript (Blazor Server pages carry
+    no body content in the initial response — everything hydrates over the circuit). Only what an
+    ANONYMOUS visitor may read is ever emitted: SeoHead resolves through the AnonymousGate and
+    stashes the result; no stash → nothing rendered. <noscript> keeps it invisible to browsers.
+*@
+
+@if (Body is not null)
+{
+    <noscript>
+        <article>
+            @((MarkupString)Body)
+        </article>
+    </noscript>
+}
+
+@code {
+    [CascadingParameter] public HttpContext? HttpContext { get; set; }
+
+    private string? Body =>
+        HttpContext?.Items.TryGetValue(SeoResolver.HttpContextItem, out var stashed) == true
+            && stashed is SeoPageData data
+            ? data.PreRenderedHtml
+            : null;
+}
