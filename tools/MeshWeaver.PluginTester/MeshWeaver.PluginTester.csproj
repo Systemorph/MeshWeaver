@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <!-- The CLI the plugins-repo CI invokes: `mw-plugin-test <checkout-root>`. -->
+    <AssemblyName>mw-plugin-test</AssemblyName>
+    <RootNamespace>MeshWeaver.PluginTester</RootNamespace>
+    <IsPackable>false</IsPackable>
+    <!-- Multi-arch container publish (same pair as memex-portal-ai / memex-migration);
+         Directory.Build.props' ProduceReferenceAssembly gate handles the RID-leg race. -->
+    <RuntimeIdentifiers>linux-x64;linux-arm64</RuntimeIdentifiers>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- GitHub Actions `container:` jobs run steps through `sh -c`, ignoring the image
+         ENTRYPOINT — `run: mw-plugin-test .` therefore needs the apphost on PATH. -->
+    <ContainerEnvironmentVariable Include="PATH"
+      Value="/app:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Monolith\MeshWeaver.Hosting.Monolith.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.Hosting\MeshWeaver.Hosting.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.AI\MeshWeaver.AI.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.Graph\MeshWeaver.Graph.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.PluginCatalog\MeshWeaver.PluginCatalog.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.GitSync\MeshWeaver.GitSync.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.ServiceProvider\MeshWeaver.ServiceProvider.csproj" />
+  </ItemGroup>
+</Project>
