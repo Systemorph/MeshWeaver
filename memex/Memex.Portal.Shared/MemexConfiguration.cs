@@ -1092,6 +1092,11 @@ public static class MemexConfiguration
         // (only curated packages, addressed by plugin id, are exposed; the registry's credential stays here).
         app.MapPluginRegistry();
 
+        // Crawler plumbing — a real /robots.txt + /sitemap.xml (the Blazor catch-all otherwise
+        // serves the SPA shell on both). The sitemap lists exactly the anonymous surface: every
+        // top-level node passing the AnonymousGate plus store plugins' public segments.
+        app.MapSeo();
+
         // Generic webhook inbox — POST /api/hooks/{target} stores the raw delivery as a
         // WebhookEvent node at {target}/_Inbox/{id} for allowlisted targets (WebhookInbox:Targets).
         // The consuming plugin verifies signatures itself; no integration-specific code here.

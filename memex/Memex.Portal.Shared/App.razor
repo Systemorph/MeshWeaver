@@ -1,5 +1,6 @@
 @using Microsoft.Extensions.Configuration
 @using MeshWeaver.Blazor.Components
+@using Memex.Portal.Shared.Seo
 
 @inject IConfiguration Configuration
 
@@ -65,7 +66,10 @@
     </script>
 
     <HeadOutlet @rendermode="RenderMode.InteractiveServer" />
-    <PageTitle>Memex Portal</PageTitle>
+    @* Static, per-request SEO head: crawler-facing <title>/description/canonical/OG/JSON-LD for
+       anonymous-readable node pages, the generic instance title otherwise. The interactive
+       circuit's PageTitle (ApplicationPage) takes over the tab title once hydrated. *@
+    <SeoHead />
     @if (hasInstance)
     {
         @* Force the tab title to the instance name, overriding per-node titles set
@@ -88,6 +92,10 @@
         <ThemeSync @bind-Mode="@Mode" @rendermode="RenderMode.InteractiveServer" />
         <Routes @rendermode="RenderMode.InteractiveServer" />
     </CascadingValue>
+
+    @* The page's real content for non-JS crawlers — only what SeoHead resolved as
+       anonymous-readable; invisible to browsers. *@
+    <SeoNoScriptBody />
 
     @*
         Custom Blazor Server reconnect UI. Blazor adds one of these classes to
