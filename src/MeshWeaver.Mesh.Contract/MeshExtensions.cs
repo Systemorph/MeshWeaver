@@ -699,6 +699,16 @@ public static class MeshExtensions
         if (string.IsNullOrEmpty(partition))
             return Observable.Return(System.Reactive.Unit.Default);
 
+        // Never bootstrap a system-managed MIRROR partition (User, Auth). These reject ALL
+        // interactive writes (PartitionWriteGuardValidator Rule 1), so a create attempt into e.g.
+        // `Auth/…` — which this method reaches BEFORE the validators run — would otherwise heal a
+        // bogus Space root + creator-Admin grant on `Auth` (the RLS CheckPermission below passes for
+        // a global admin), and THEN have the child write rejected by the structural guard, leaving
+        // the errant grant (and its "you've been given access to Auth" email) behind. The mirror is
+        // middleware-only; there is nothing to bootstrap.
+        if (WellKnownPartitions.IsMirror(partition))
+            return Observable.Return(System.Reactive.Unit.Default);
+
         var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
         var meshService = hub.ServiceProvider.GetService<IMeshService>();
         if (persistence is null || meshService is null)
