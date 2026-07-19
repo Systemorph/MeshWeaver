@@ -46,6 +46,25 @@ internal static class PgMeshNodeReader
     }
 
     /// <summary>
+    /// Reads a nullable <c>text[]</c> column by name, or null when the column is absent from
+    /// the result set or NULL/empty. Defensive like <see cref="ReadNullableString"/> — used for
+    /// <c>exclude_from_context</c> so SELECTs predating the column keep working.
+    /// </summary>
+    internal static string[]? ReadStringArray(NpgsqlDataReader reader, string column)
+    {
+        for (var i = 0; i < reader.FieldCount; i++)
+        {
+            if (!string.Equals(reader.GetName(i), column, StringComparison.Ordinal))
+                continue;
+            if (reader.IsDBNull(i))
+                return null;
+            var value = reader.GetFieldValue<string[]>(i);
+            return value.Length > 0 ? value : null;
+        }
+        return null;
+    }
+
+    /// <summary>
     /// Reads a nullable timestamptz column by name as a UTC <see cref="DateTimeOffset"/>, or
     /// null when absent/NULL. Used for <c>created_date</c>; mirrors how the adapter reads
     /// <c>last_modified</c> (<c>new DateTimeOffset(GetDateTime(), TimeSpan.Zero)</c>).

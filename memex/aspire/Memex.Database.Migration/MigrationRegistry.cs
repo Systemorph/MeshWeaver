@@ -54,6 +54,7 @@ public static class MigrationRegistry
         new V43_FixAccessTriggerSchemaResolutionAndBackfill(),
         new V44_FixMeshNodeHistoryTriggerPerSchema(),
         new V45_AddNodeAuthorshipColumns(),
+        new V46_AddExcludeFromContextColumn(),
     ];
 
     /// <summary>

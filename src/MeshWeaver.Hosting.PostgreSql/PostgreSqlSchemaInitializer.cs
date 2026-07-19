@@ -1004,6 +1004,9 @@ public static class PostgreSqlSchemaInitializer
                 -- 2=ExcludeThisAndChildren). Persists the "Not synced" decouple so an
                 -- admin-claimed node/partition survives restart + the next import.
                 sync_behavior   SMALLINT    NOT NULL DEFAULT 0,
+                -- instance-level context opt-outs ("header", "search", "create") --
+                -- MeshNode.ExcludeFromContext; NULL = visible everywhere.
+                exclude_from_context TEXT[],
                 content         JSONB,
                 desired_id      TEXT,
                 main_node       TEXT,
@@ -1336,6 +1339,9 @@ public static class PostgreSqlSchemaInitializer
                 -- 2=ExcludeThisAndChildren). Persists the "Not synced" decouple so an
                 -- admin-claimed node/partition survives restart + the next import.
                 sync_behavior   SMALLINT    NOT NULL DEFAULT 0,
+                -- instance-level context opt-outs ("header", "search", "create") --
+                -- MeshNode.ExcludeFromContext; NULL = visible everywhere.
+                exclude_from_context TEXT[],
                 content         JSONB,
                 desired_id      TEXT,
                 main_node       TEXT,
@@ -1721,6 +1727,9 @@ public static class PostgreSqlSchemaInitializer
                 -- 2=ExcludeThisAndChildren). Persists the "Not synced" decouple so an
                 -- admin-claimed node/partition survives restart + the next import.
                 sync_behavior   SMALLINT    NOT NULL DEFAULT 0,
+                -- instance-level context opt-outs ("header", "search", "create") --
+                -- MeshNode.ExcludeFromContext; NULL = visible everywhere.
+                exclude_from_context TEXT[],
                 content         JSONB,
                 desired_id      TEXT,
                 main_node       TEXT,
@@ -2059,6 +2068,9 @@ public static class PostgreSqlSchemaInitializer
                 -- 2=ExcludeThisAndChildren). Persists the "Not synced" decouple so an
                 -- admin-claimed node/partition survives restart + the next import.
                 sync_behavior   SMALLINT    NOT NULL DEFAULT 0,
+                -- instance-level context opt-outs ("header", "search", "create") --
+                -- MeshNode.ExcludeFromContext; NULL = visible everywhere.
+                exclude_from_context TEXT[],
                 content         JSONB,
                 desired_id      TEXT,
                 main_node       TEXT,
@@ -2441,6 +2453,9 @@ public static class PostgreSqlSchemaInitializer
                 -- 2=ExcludeThisAndChildren). Persists the "Not synced" decouple so an
                 -- admin-claimed node/partition survives restart + the next import.
                 sync_behavior   SMALLINT    NOT NULL DEFAULT 0,
+                -- instance-level context opt-outs ("header", "search", "create") --
+                -- MeshNode.ExcludeFromContext; NULL = visible everywhere.
+                exclude_from_context TEXT[],
                 content         JSONB,
                 desired_id      TEXT,
                 main_node       TEXT,
