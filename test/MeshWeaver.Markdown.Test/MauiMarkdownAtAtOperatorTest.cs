@@ -53,6 +53,42 @@ public class MauiMarkdownAtAtOperatorTest
     }
 
     [Fact]
+    public void AtAt_Embed_HidesHeaderByDefault_WithCleanRawPath()
+    {
+        // @@ embeds hide the embedded node's own header/comments/side menu by default. The flag rides
+        // as a SEPARATE data-show-header attribute; data-raw-path stays a clean node path (it feeds
+        // IMeshCatalog.ResolvePathAsync — a query there would double/break resolution).
+        var html = RenderLikeMaui("@@MyNamespace/MyArea");
+
+        html.Should().Contain($"data-{LayoutAreaMarkdownRenderer.RawPath}='MyNamespace/MyArea'",
+            "the raw path must stay clean (no ?showHeader query) so it resolves as a node path");
+        html.Should().Contain($"data-{LayoutAreaMarkdownRenderer.ShowHeader}='false'",
+            "an @@ embed hides the embedded node's header by default");
+    }
+
+    [Fact]
+    public void AtAt_Embed_AuthorOptsInToHeader_QueryStrippedFromRawPath()
+    {
+        var html = RenderLikeMaui("@@MyNamespace/MyArea?showHeader=true");
+
+        html.Should().Contain($"data-{LayoutAreaMarkdownRenderer.RawPath}='MyNamespace/MyArea'",
+            "the ?showHeader flag is parsed out and carried separately, keeping the raw path clean");
+        html.Should().Contain($"data-{LayoutAreaMarkdownRenderer.ShowHeader}='true'",
+            "@@node?showHeader=true opts the embedded node's header back in");
+        html.Should().NotContain("MyArea?showHeader",
+            "the query must not leak into the resolution raw path");
+    }
+
+    [Fact]
+    public void AtAt_Embed_ExplicitShowHeaderFalse_HidesAndCleansPath()
+    {
+        var html = RenderLikeMaui("@@MyNamespace/MyArea?showHeader=false");
+
+        html.Should().Contain($"data-{LayoutAreaMarkdownRenderer.RawPath}='MyNamespace/MyArea'");
+        html.Should().Contain($"data-{LayoutAreaMarkdownRenderer.ShowHeader}='false'");
+    }
+
+    [Fact]
     public void SingleAt_RendersHyperlink_NotInlineArea()
     {
         // Contrast: a single @ is a hyperlink (ucr-link), NOT an inline area embed — proving the pipeline
