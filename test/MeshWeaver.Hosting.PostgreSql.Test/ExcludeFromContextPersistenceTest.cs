@@ -116,4 +116,58 @@ public class ExcludeFromContextPersistenceTest(PostgreSqlFixture fixture, ITestO
             .Should().Within(30.Seconds()).Emit();
         cleared!.IsExcludedFromContext(MeshNodeVisibility.HeaderContext).Should().BeFalse();
     }
+
+    /// <summary>
+    /// 🚨 The GitSync re-import shape: CreateOrUpdateNode of an EXISTING node. The upsert's
+    /// UPDATE path merges field-by-field (UpdateAccordingToSourceNode) and silently DROPPED
+    /// Description / Order / ExcludeFromContext — a re-imported brochure could never gain its
+    /// <c>ExcludeFromContext: [header]</c> frontmatter (freshly-created nodes worked; live
+    /// memex-cloud nodes never did). Pins that the upsert-update path carries all three.
+    /// </summary>
+    [Fact(Timeout = 90000)]
+    public async Task CreateOrUpdate_OfExistingNode_CarriesExcludeFromContextDescriptionOrder()
+    {
+        var spaceId = $"pgupd_{Guid.NewGuid():N}".ToLowerInvariant()[..16];
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        var workspace = Mesh.GetWorkspace();
+
+        await meshService.CreateNode(new MeshNode(spaceId)
+        {
+            NodeType = SpaceNodeType.NodeType,
+            Name = spaceId,
+            State = MeshNodeState.Active,
+            Content = new Space(),
+        }).Should().Within(45.Seconds()).Emit();
+
+        // First import: the node exists WITHOUT the opt-out (pre-parser-fix state).
+        var childPath = $"{spaceId}/Overview";
+        await meshService.CreateNode(new MeshNode("Overview", spaceId)
+        {
+            NodeType = "Markdown",
+            Name = "Brochure v1",
+            State = MeshNodeState.Active,
+        }).Should().Within(30.Seconds()).Emit();
+
+        // Re-import: same path, now carrying the frontmatter-derived fields.
+        await meshService.CreateOrUpdateNode(new MeshNode("Overview", spaceId)
+        {
+            NodeType = "Markdown",
+            Name = "Brochure v2",
+            Description = "The glossy one-pager.",
+            Order = 7,
+            State = MeshNodeState.Active,
+            ExcludeFromContext = [MeshNodeVisibility.HeaderContext],
+        }).Should().Within(30.Seconds()).Emit();
+
+        var updated = await workspace.GetMeshNodeStream(childPath)
+            .Where(n => n is not null && n.Name == "Brochure v2").Take(1)
+            .Should().Within(30.Seconds()).Emit();
+        updated!.ExcludeFromContext.Should().NotBeNull(
+            "the upsert-update merge must carry the source node's ExcludeFromContext");
+        updated.IsExcludedFromContext(MeshNodeVisibility.HeaderContext).Should().BeTrue();
+        updated.Description.Should().Be("The glossy one-pager.",
+            "the upsert-update merge must carry the source node's Description");
+        updated.Order.Should().Be(7,
+            "the upsert-update merge must carry the source node's Order");
+    }
 }

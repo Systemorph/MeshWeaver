@@ -2068,6 +2068,14 @@ public static class MeshExtensions
             NodeType = sourceNode.NodeType ?? state.NodeType,
             Icon = sourceNode.Icon ?? state.Icon,
             Category = sourceNode.Category ?? state.Category,
+            // Description / Order / ExcludeFromContext were MISSING here: an upsert of an
+            // EXISTING node silently dropped them — a GitSync re-import could never land a
+            // frontmatter change to these fields (the chrome-less brochures kept their headers
+            // while freshly-created nodes worked). Same null-keeps-state convention as the
+            // rest: clearing a field is an explicit stream.Update, not an absent source value.
+            Description = sourceNode.Description ?? state.Description,
+            Order = sourceNode.Order ?? state.Order,
+            ExcludeFromContext = sourceNode.ExcludeFromContext ?? state.ExcludeFromContext,
             Content = sourceNode.Content ?? state.Content,
             State = sourceNode.State == default ? state.State : sourceNode.State,
             PreRenderedHtml = sourceNode.PreRenderedHtml ?? state.PreRenderedHtml,
