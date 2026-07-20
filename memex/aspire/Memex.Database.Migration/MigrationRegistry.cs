@@ -56,6 +56,7 @@ public static class MigrationRegistry
         new V45_AddNodeAuthorshipColumns(),
         new V46_AddExcludeFromContextColumn(),
         new V47_SerializeUepRebuildAdvisoryLock(),
+        new V48_RetypeBuiltinFeedbackToPlugin(),
     ];
 
     /// <summary>
