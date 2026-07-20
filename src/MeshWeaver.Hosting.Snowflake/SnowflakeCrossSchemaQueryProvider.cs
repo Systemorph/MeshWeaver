@@ -552,8 +552,13 @@ public class SnowflakeCrossSchemaQueryProvider : ICrossSchemaQueryProvider
         var aclSchemas = await GetAclSchemasOrEmptyAsync(schemas, userId, ct).ConfigureAwait(false);
 
         var generator = new SnowflakeSqlGenerator();
+        // source:accessed: join the CALLER's user_activities in every branch (the access log
+        // lives in the caller's partition schema) — mirrors PostgreSqlCrossSchemaQueryProvider.
+        var activityUserSchema = query.Source == QuerySource.Accessed && !string.IsNullOrEmpty(activityUserId)
+            ? activityUserId!.ToLowerInvariant()  // SnowflakeIdentifiers.Quote escapes when qualifying
+            : null;
         var (sql, parameters) = generator.GenerateCrossSchemaSelectQuery(
-            query, schemas, aclSchemas, userId, tableName, activityUserId, contentSchemas);
+            query, schemas, aclSchemas, userId, tableName, activityUserId, contentSchemas, activityUserSchema);
 
         _logger?.LogInformation(
             "[CrossSchema] Satellite query: table={Table}, schemas={Count}, contentSchemas={ContentCount}, userId={User}, source={Source}",

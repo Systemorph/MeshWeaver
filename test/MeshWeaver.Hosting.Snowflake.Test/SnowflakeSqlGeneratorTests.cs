@@ -451,12 +451,37 @@ public class SnowflakeSqlGeneratorTests
         var (sql, parameters) = gen.GenerateCrossSchemaSelectQuery(
             parsed, new[] { "systemorph" }, aclSchemas: [], userId: null, tableName: "code");
 
-        sql.Should().Contain(@"n.""path"" = :scopePath");
+        // `namespace:X scope:subtree` degrades to DESCENDANTS at parse time (namespace:X can
+        // never match the node at path X itself) — the pushed-down clause is the prefix LIKE.
         sql.Should().Contain(@"n.""path"" LIKE :scopePrefix");
+        sql.Should().NotContain(@"n.""path"" = :scopePath");
         // Satellite selects project the Include default so the UNION shape stays uniform.
         sql.Should().Contain(@"0::smallint AS ""sync_behavior""");
-        parameters["scopePath"].Should().Be("Systemorph/EventCalendar/Source");
         parameters["scopePrefix"].Should().Be("Systemorph/EventCalendar/Source/");
+    }
+
+    [Fact]
+    public void GenerateCrossSchemaSelectQuery_Accessed_JoinsCallersUserActivitiesInEveryBranch()
+    {
+        // Mirrors the PG generator: the caller's access log lives in the CALLER's partition
+        // schema, so every branch joins that ONE user_activities table (cross-partition
+        // "last accessed" would otherwise always be empty).
+        var parser = new QueryParser();
+        var parsed = parser.Parse("source:accessed is:main sort:LastModified-desc");
+        var gen = new SnowflakeSqlGenerator();
+
+        var (sql, parameters) = gen.GenerateCrossSchemaSelectQuery(
+            parsed, new[] { "acme", "northwind" }, aclSchemas: [], userId: null,
+            tableName: "mesh_nodes", activityUserId: "rbuergi", contentSchemas: null,
+            activityUserSchema: "rbuergi");
+
+        sql.Should().Contain(@"""acme"".""mesh_nodes""");
+        sql.Should().Contain(@"""northwind"".""mesh_nodes""");
+        sql.Should().Contain(@"""rbuergi"".""user_activities""",
+            "every branch joins the caller's access log");
+        sql.Should().NotContain(@"""acme"".""user_activities""");
+        sql.Should().NotContain(@"""northwind"".""user_activities""");
+        parameters["actUserNs"].Should().Be("rbuergi/_UserActivity");
     }
 
     [Fact]

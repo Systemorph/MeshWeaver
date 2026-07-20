@@ -385,7 +385,10 @@ public sealed class SnowflakePartitionedMeshQuery : IMeshQueryProvider
             // them in a satellite UNION raises "does not exist or not authorized".
             await _crossSchema.SyncSearchableSchemasAsync(ct).ConfigureAwait(false);
             schemas = (await _crossSchema.GetSchemasWithTableAsync(tableName, ct).ConfigureAwait(false)).ToList();
-            if (joinTable is not null)
+            // source:accessed joins the ONE user_activities table in the CALLER's schema (see
+            // SnowflakeCrossSchemaQueryProvider) — branch schemas only need mesh_nodes, so no
+            // join-table intersection (mirrors PostgreSqlPartitionedMeshQuery).
+            if (joinTable is not null && parsed.Source != QuerySource.Accessed)
             {
                 var withJoin = await _crossSchema.GetSchemasWithTableAsync(joinTable, ct).ConfigureAwait(false);
                 var joinSet = new HashSet<string>(withJoin, StringComparer.OrdinalIgnoreCase);

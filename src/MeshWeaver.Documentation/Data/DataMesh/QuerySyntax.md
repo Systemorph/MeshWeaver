@@ -160,6 +160,16 @@ Add `scope:descendants` to search recursively:
 namespace:Systemorph scope:descendants   # All items under Systemorph (recursive)
 ```
 
+> **`namespace:X` never returns the node at path `X` itself.** A node's namespace is its
+> *parent* path — the node at `X` has namespace `X`-minus-last-segment (a top-level node such
+> as a user root has namespace `""`), so it can never satisfy `namespace:X`, with **any**
+> scope. `scope:subtree` on a namespace therefore degrades to `descendants` at parse time
+> (self + descendants of a *namespace* is just its descendants). This is guaranteed by the
+> parser and pinned by tests (`Parse_NamespaceWithSubtreeScope_DegradesToDescendants`,
+> `NamespaceQuery_NeverReturnsTheNodeAtTheNamespacePath`) — a user's home or a space's item
+> list can never show the partition root itself. To include the base node, query
+> `path:X scope:subtree` instead.
+
 #### Multi-value `namespace:` — membership across namespaces
 
 `namespace:A|B|C` matches nodes living in **any** of the listed namespaces — a single `n.namespace IN (...)` lookup, not N queries. It is **exact membership**: just the listed namespaces, with no ancestor/descendant graph walk.
@@ -180,7 +190,7 @@ Controls the traversal direction relative to `namespace` or `path`:
 | `descendants` | All descendants recursively (excludes self) |
 | `ancestors` | Parent hierarchy upward (excludes self) |
 | `hierarchy` | Ancestors + self + descendants |
-| `subtree` | Self + all descendants |
+| `subtree` | Self + all descendants (with `path:`; on `namespace:` it degrades to `descendants` — see the note above) |
 | `ancestorsandself` | Self + all ancestors |
 | `nextLevel` | The **next populated level** below — the nearest real nodes, skipping empty intermediate namespace segments (alias: `populated`) |
 
@@ -272,21 +282,50 @@ limit:50    # At most 50 results
 
 ### `source`
 
-Switches the data source that backs the query. Currently, one special source is available:
+Switches the data source that backs the query:
 
 ```
-source:activity    # Results ordered by the current user's most recent access time
+source:activity    # Only main nodes that HAVE Activity satellites (a change/activity feed),
+                   # ordered by most recent activity first
 ```
 
 When `source:activity` is set:
-- Results are ordered by most recent access, newest first.
-- Items the user has never accessed appear after activity-tracked items.
-- All other filters (`nodeType:`, `namespace:`, text search, etc.) still apply.
+- Results are the **main content nodes** joined with their `_activity` satellites — a node with no
+  recorded activity does not appear.
+- Results are ordered by most recent activity, newest first.
+- All other filters (`nodeType:`, `namespace:`, text search, etc.) still apply — including the
+  `namespace:` guarantee above: `source:activity namespace:{user}` never returns the user node
+  itself, even though that node carries its own activity satellites.
 
 ```
-source:activity nodeType:Thread namespace:ACME scope:descendants   # Recently visited threads in ACME
-source:activity nodeType:Document limit:10                         # Last 10 accessed documents
+source:activity nodeType:Thread namespace:ACME scope:descendants   # Recently changed threads in ACME
+source:activity nodeType:Document limit:10                         # Last 10 changed documents
 ```
+
+There is a second source for the caller's own **access recency**:
+
+```
+source:accessed    # Only nodes the CALLER has opened, ordered by their last access time
+```
+
+`source:accessed` INNER-JOINs the caller's `UserActivity` satellites — the per-user access log.
+That log lives in the **caller's own partition** (`{user}/_UserActivity` routes by its first
+segment), so on the partitioned backends every branch of the cross-partition fan-out joins that
+ONE `user_activities` table; this is what makes "last accessed" work **across partitions**
+(opening `acme/doc` writes a row in *your* schema that matches `acme`'s `mesh_nodes` by
+path-encoded id). Guarantees, pinned by tests:
+
+- Every scope clause still applies — `namespace:` (empty) keeps its root-children push-down
+  (`namespace = ''`), so a first-level feed never degrades into the whole access history
+  (`RecentlyAccessed_CrossPartition_JoinsCallersAccessLog`,
+  `GenerateCrossSchemaSelectQuery_Accessed_JoinsCallersUserActivitiesInEveryBranch`).
+- The `namespace:X`-never-matches-node-X rule above holds here too — the user node never
+  appears in its own accessed feed.
+- A caller with no access log (no partition schema yet) gets an empty result, not an error.
+
+The home catalog's **Last accessed** sort is the canonical consumer
+(`namespace: is:main context:search -nodeType:User source:accessed sort:LastModified-desc` +
+the `namespace:{user}` home-children leg).
 
 ### `is`
 

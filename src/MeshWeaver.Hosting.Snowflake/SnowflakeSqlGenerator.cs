@@ -495,8 +495,12 @@ public class SnowflakeSqlGenerator
             QueryScope.Children => useMainNode
                 ? GenerateMainNodeSubtreeClause(normalizedPath, parameters)
                 : GenerateChildrenClause(normalizedPath, parameters),
+            // Descendants on a satellite table maps to main_node SUBTREE (mirrors
+            // PostgreSqlSqlGenerator): a satellite is always a strict path-descendant of its
+            // attachment point, so "satellite paths strictly under X" ⇔ "attached to X or any
+            // node under X"; main_node LIKE 'X/%' would drop satellites attached to X itself.
             QueryScope.Descendants => useMainNode
-                ? GenerateMainNodeDescendantsClause(normalizedPath, parameters)
+                ? GenerateMainNodeSubtreeClause(normalizedPath, parameters)
                 : GenerateDescendantsClause(normalizedPath, parameters),
             QueryScope.Subtree => useMainNode
                 ? GenerateMainNodeSubtreeClause(normalizedPath, parameters)
@@ -524,12 +528,6 @@ public class SnowflakeSqlGenerator
         return $"n.\"main_node\" = {Marker("scopeMain")}";
     }
 
-    private static string GenerateMainNodeDescendantsClause(string path, Dictionary<string, object> parameters)
-    {
-        parameters["scopeMainPrefix"] = $"{path}/";
-        return $"n.\"main_node\" LIKE {Marker("scopeMainPrefix")} || '%'";
-    }
-
     private static string GenerateMainNodeSubtreeClause(string path, Dictionary<string, object> parameters)
     {
         parameters["scopeMain"] = path;
@@ -551,10 +549,12 @@ public class SnowflakeSqlGenerator
     /// <para><paramref name="activityUserId"/> opts into the
     /// <c>source:activity</c> / <c>source:accessed</c> JOIN form: for activity,
     /// each schema's branch INNER JOINs <c>{schema}.activities</c> on
-    /// <c>main_node = n."path"</c>; for accessed, it JOINs
-    /// <c>{schema}.user_activities</c> by the user's namespace. <c>is:main</c>
+    /// <c>main_node = n."path"</c>; for accessed, EVERY branch JOINs the ONE
+    /// <c>{activityUserSchema}.user_activities</c> table — the caller's access log
+    /// lives in the CALLER's partition schema, so a per-branch join could never
+    /// match a cross-partition access (mirrors PostgreSqlSqlGenerator). <c>is:main</c>
     /// is implied (<c>n."main_node" = n."path"</c>) and the default sort becomes
-    /// the joined satellite's <c>last_modified</c> so activity-recency
+    /// the joined satellite's <c>last_modified</c> so access-recency
     /// ordering survives the UNION.</para>
     ///
     /// <para><paramref name="contentSchemas"/> folds indexed content into the SAME omnibox UNION: for a
@@ -571,6 +571,7 @@ public class SnowflakeSqlGenerator
     /// <param name="tableName">Per-schema table to select from (bare name; qualified per schema).</param>
     /// <param name="activityUserId">Optional user id enabling the <c>source:accessed</c> JOIN form.</param>
     /// <param name="contentSchemas">Schemas whose <c>content_chunks</c> join the free-text omnibox UNION.</param>
+    /// <param name="activityUserSchema">The CALLER's partition schema holding their <c>user_activities</c> access log; when set, every accessed branch joins this one table.</param>
     /// <returns>The SQL statement text and the bound parameter map (bare-name keys).</returns>
     public (string Sql, Dictionary<string, object> Parameters) GenerateCrossSchemaSelectQuery(
         ParsedQuery query,
@@ -579,7 +580,8 @@ public class SnowflakeSqlGenerator
         string? userId = null,
         string tableName = "mesh_nodes",
         string? activityUserId = null,
-        IReadOnlyList<string>? contentSchemas = null)
+        IReadOnlyList<string>? contentSchemas = null,
+        string? activityUserSchema = null)
     {
         var (whereClause, parameters) = GenerateWhereClause(query);
         var whereCore = whereClause.StartsWith("WHERE ", StringComparison.Ordinal)
@@ -621,15 +623,18 @@ public class SnowflakeSqlGenerator
                 : $"{pathEqClause} AND {whereCore}";
         }
         else if (query.Paths is null or { Count: <= 1 }
-                 && !string.IsNullOrEmpty(query.Path)
+                 && (!string.IsNullOrEmpty(query.Path)
+                     || (query.Path is not null && query.Scope == QueryScope.Children))
                  && query.Scope != QueryScope.Exact
-                 && !query.Path.Contains('*'))
+                 && !query.Path!.Contains('*'))
         {
             // Subtree / Children / Descendants / Hierarchy / AncestorsAndSelf —
             // same class of bug as the Exact branch above, just one level out.
             // Without this push-down the cross-schema UNION returns every row
             // in the satellite table (see the PG generator's EventCalendar/Source
             // prod repro); the scope clause MUST be pushed into every branch.
+            // The EMPTY-but-set path (`namespace:` → Path == "" + Children) pushes
+            // `n."namespace" = ''` — root-level rows only (mirrors PG).
             var (scopeClause, scopeParams) = GenerateScopeClause(query.Path, query.Scope);
             if (!string.IsNullOrEmpty(scopeClause))
             {
@@ -655,7 +660,9 @@ public class SnowflakeSqlGenerator
         {
             var qualifiedTable = SnowflakeIdentifiers.Qualify(schema, tableName);
             var activityTable = SnowflakeIdentifiers.Qualify(schema, "activities");
-            var userActivityTable = SnowflakeIdentifiers.Qualify(schema, "user_activities");
+            // Accessed joins the CALLER's user_activities (their partition schema), not the
+            // branch schema's — that's what makes cross-partition "last accessed" work.
+            var userActivityTable = SnowflakeIdentifiers.Qualify(activityUserSchema ?? schema, "user_activities");
             var uepTable = SnowflakeIdentifiers.Qualify(schema, "user_effective_permissions");
             var ntpTable = SnowflakeIdentifiers.Qualify(schema, "node_type_permissions");
 

@@ -1171,7 +1171,12 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
         var generator = new PostgreSqlSqlGenerator { SchemaName = _schemaName };
         var (sql, parameters) = generator.GenerateSelectQuery(query, userId, activityUserId, tableName,
             activityTable, userActivityTable, excludedNodeTypes, includeContent);
-        if (!string.IsNullOrEmpty(effectivePath) || (query.Paths is { Count: > 1 }))
+        // An EMPTY-but-set path (`namespace:` → Path == "" + Children) is the "root-level rows
+        // only" query (the home catalog's partition-roots leg) — it must still push down
+        // `n.namespace = ''` rather than silently dropping the scope and returning every depth.
+        if (!string.IsNullOrEmpty(effectivePath)
+            || (effectivePath is not null && query.Scope == QueryScope.Children)
+            || (query.Paths is { Count: > 1 }))
         {
             var (scopeClause, scopeParams) = query.Paths is { Count: > 1 }
                 ? generator.GenerateScopeClause(query.Paths, query.Scope, useMainNode: satelliteRedirect, qualifiedTable: tableName)

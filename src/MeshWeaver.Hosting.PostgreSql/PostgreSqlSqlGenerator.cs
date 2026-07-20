@@ -412,8 +412,13 @@ public class PostgreSqlSqlGenerator
             QueryScope.Children => useMainNode
                 ? GenerateMainNodeSubtreeClause(normalizedPath, parameters)
                 : GenerateChildrenClause(normalizedPath, parameters),
+            // Descendants on a satellite table maps to main_node SUBTREE, not main_node
+            // descendants: a satellite is always a strict path-descendant of its attachment
+            // point ({main}/_Sat/{id}), so "satellite paths strictly under X" ⇔ "attached to X
+            // or any node under X". main_node LIKE 'X/%' would silently drop every satellite
+            // attached to X itself (a thread ON a space root vanished from namespace:X queries).
             QueryScope.Descendants => useMainNode
-                ? GenerateMainNodeDescendantsClause(normalizedPath, parameters)
+                ? GenerateMainNodeSubtreeClause(normalizedPath, parameters)
                 : GenerateDescendantsClause(normalizedPath, parameters),
             QueryScope.Subtree => useMainNode
                 ? GenerateMainNodeSubtreeClause(normalizedPath, parameters)
@@ -438,12 +443,6 @@ public class PostgreSqlSqlGenerator
         return "n.main_node = @scopeMain";
     }
 
-    private static string GenerateMainNodeDescendantsClause(string path, Dictionary<string, object> parameters)
-    {
-        parameters["@scopeMainPrefix"] = $"{path}/";
-        return "n.main_node LIKE @scopeMainPrefix || '%'";
-    }
-
     private static string GenerateMainNodeSubtreeClause(string path, Dictionary<string, object> parameters)
     {
         parameters["@scopeMain"] = path;
@@ -458,11 +457,15 @@ public class PostgreSqlSqlGenerator
     /// <para><paramref name="activityUserId"/> opts into the
     /// <c>source:activity</c> / <c>source:accessed</c> JOIN form: for activity,
     /// each schema's branch INNER JOINs <c>{schema}.activities</c> on
-    /// <c>main_node = n.path</c>; for accessed, it JOINs
-    /// <c>{schema}.user_activities</c> by the user's namespace. <c>is:main</c>
-    /// is implied (<c>n.main_node = n.path</c>) and the default sort becomes
-    /// the joined satellite's <c>last_modified</c> so activity-recency
-    /// ordering survives the UNION.</para>
+    /// <c>main_node = n.path</c>; for accessed, EVERY branch JOINs the ONE
+    /// <c>{activityUserSchema}.user_activities</c> table — the caller's access
+    /// log lives in the CALLER's partition schema (<c>{user}/_UserActivity</c>
+    /// routes by first segment), so joining each branch's own table can never
+    /// match a cross-partition access (rbuergi opening <c>acme/doc</c> writes to
+    /// <c>rbuergi.user_activities</c>; the row matches <c>acme.mesh_nodes</c> via
+    /// the path-encoded id). <c>is:main</c> is implied (<c>n.main_node =
+    /// n.path</c>) and the default sort becomes the joined satellite's
+    /// <c>last_modified</c> so access-recency ordering survives the UNION.</para>
     ///
     /// <para><paramref name="contentSchemas"/> folds indexed content into the SAME omnibox UNION: for a
     /// FREE-TEXT query (a non-empty <see cref="ParsedQuery.TextSearch"/>) ONLY, each content schema adds
@@ -477,7 +480,8 @@ public class PostgreSqlSqlGenerator
         string? userId = null,
         string tableName = "mesh_nodes",
         string? activityUserId = null,
-        IReadOnlyList<string>? contentSchemas = null)
+        IReadOnlyList<string>? contentSchemas = null,
+        string? activityUserSchema = null)
     {
         var (whereClause, parameters) = GenerateWhereClause(query);
         var whereCore = whereClause.StartsWith("WHERE ", StringComparison.Ordinal)
@@ -523,9 +527,10 @@ public class PostgreSqlSqlGenerator
                 : $"{pathEqClause} AND {whereCore}";
         }
         else if (query.Paths is null or { Count: <= 1 }
-                 && !string.IsNullOrEmpty(query.Path)
+                 && (!string.IsNullOrEmpty(query.Path)
+                     || (query.Path is not null && query.Scope == QueryScope.Children))
                  && query.Scope != QueryScope.Exact
-                 && !query.Path.Contains('*'))
+                 && !query.Path!.Contains('*'))
         {
             // Subtree / Children / Descendants / Hierarchy / AncestorsAndSelf —
             // same class of bug as the Exact branch above, just one level out.
@@ -541,6 +546,11 @@ public class PostgreSqlSqlGenerator
             // partition (SocialMedia/, Post/, FutuRe/Pricing/, Event/, …)
             // instead of just the EventCalendar/Source subtree, breaking
             // NodeType compile of every page backed by EventCalendar.
+            //
+            // The EMPTY-BUT-SET path (`namespace:` → Path == "" + Children) is the home
+            // catalog's first-level "partition roots" leg: it must push `n.namespace = ''`
+            // (only root-level rows per schema). Dropping it (the old IsNullOrEmpty gate)
+            // turned the first-level home list into an every-depth dump on prod.
             var (scopeClause, scopeParams) = GenerateScopeClause(query.Path, query.Scope);
             if (!string.IsNullOrEmpty(scopeClause))
             {
@@ -563,7 +573,10 @@ public class PostgreSqlSqlGenerator
         {
             var qualifiedTable = $"\"{schema}\".\"{tableName}\"";
             var activityTable = $"\"{schema}\".\"activities\"";
-            var userActivityTable = $"\"{schema}\".\"user_activities\"";
+            // The accessed JOIN targets the CALLER's user_activities (their partition schema),
+            // not the branch schema's — that's what makes cross-partition "last accessed" work.
+            // Falls back to the branch schema when no user schema is supplied (legacy shape).
+            var userActivityTable = $"\"{activityUserSchema ?? schema}\".\"user_activities\"";
             var uepTable = $"\"{schema}\".\"user_effective_permissions\"";
             var ntpTable = $"\"{schema}\".\"node_type_permissions\"";
 

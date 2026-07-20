@@ -543,16 +543,14 @@ public class SqlGeneratorTests
         var (sql, parameters) = gen.GenerateCrossSchemaSelectQuery(
             parsed, new[] { "systemorph" }, userId: null, tableName: "code");
 
-        // Subtree must produce both an equality AND a prefix LIKE — anything less
-        // is either wrong (only equality misses descendants) or wrong (only prefix
-        // misses self).
-        sql.Should().Contain("n.path = @scopePath",
-            "the cross-schema SQL must restrict to the subtree the caller asked for "
-            + "(prior bug: any scope != Exact silently dropped the path filter, "
-            + "so the UNION returned every Code row in the schema)");
+        // `namespace:X scope:subtree` degrades to DESCENDANTS at parse time (a namespace can
+        // never name the node at path X itself — its own namespace is X's parent), so the
+        // pushed-down clause is the strict prefix LIKE. The old bug — any scope != Exact
+        // silently dropped the path filter, returning every Code row in the schema — stays
+        // covered: a filter IS pushed down.
         sql.Should().Contain("n.path LIKE @scopePrefix");
-        parameters.Should().ContainKey("@scopePath")
-            .WhoseValue.Should().Be("Systemorph/EventCalendar/Source");
+        sql.Should().NotContain("n.path = @scopePath",
+            "namespace:X never matches the node at path X itself");
         parameters.Should().ContainKey("@scopePrefix")
             .WhoseValue.Should().Be("Systemorph/EventCalendar/Source/");
     }
@@ -576,6 +574,63 @@ public class SqlGeneratorTests
             "cross-schema satellite UNION must carry the namespace filter through");
         parameters.Should().ContainKey("@scopeNs")
             .WhoseValue.Should().Be("partition/doc");
+    }
+
+    [Fact]
+    public void GenerateCrossSchemaSelectQuery_EmptyNamespace_PushesDownRootChildrenFilter()
+    {
+        // `namespace:` (empty value) = root-level rows only (namespace == '') — the home
+        // catalog's first-level "partition roots" leg. The old IsNullOrEmpty gate dropped the
+        // scope entirely, turning the first-level home list into an every-depth dump on prod.
+        var parser = new QueryParser();
+        var parsed = parser.Parse("namespace: is:main context:search sort:LastModified-desc");
+        var gen = new PostgreSqlSqlGenerator();
+
+        var (sql, parameters) = gen.GenerateCrossSchemaSelectQuery(
+            parsed, new[] { "rbuergi", "acme" }, userId: null, tableName: "mesh_nodes");
+
+        sql.Should().Contain("n.namespace = @scopeNs",
+            "an empty-but-set namespace must scope to root-level rows, not the whole schema");
+        parameters.Should().ContainKey("@scopeNs").WhoseValue.Should().Be("");
+    }
+
+    [Fact]
+    public void GenerateCrossSchemaSelectQuery_Accessed_JoinsCallersUserActivitiesInEveryBranch()
+    {
+        // The caller's access log lives in the CALLER's partition schema ({user}/_UserActivity
+        // routes by first segment). Every branch must join THAT one table — joining each branch's
+        // own user_activities can never match a cross-partition access, which made the home's
+        // "Last accessed" list empty outside the user's own partition.
+        var parser = new QueryParser();
+        var parsed = parser.Parse("source:accessed is:main sort:LastModified-desc");
+        var gen = new PostgreSqlSqlGenerator();
+
+        var (sql, parameters) = gen.GenerateCrossSchemaSelectQuery(
+            parsed, new[] { "acme", "northwind" }, userId: null, tableName: "mesh_nodes",
+            activityUserId: "rbuergi", contentSchemas: null, activityUserSchema: "rbuergi");
+
+        sql.Should().Contain("\"acme\".\"mesh_nodes\"");
+        sql.Should().Contain("\"northwind\".\"mesh_nodes\"");
+        sql.Should().Contain("\"rbuergi\".\"user_activities\"",
+            "every branch joins the caller's access log");
+        sql.Should().NotContain("\"acme\".\"user_activities\"");
+        sql.Should().NotContain("\"northwind\".\"user_activities\"");
+        parameters["@actUserNs"].Should().Be("rbuergi/_UserActivity");
+    }
+
+    [Fact]
+    public void GenerateScopeClause_DescendantsOnSatelliteTable_UsesMainNodeSubtree()
+    {
+        // A satellite is a strict path-descendant of its attachment point, so path-descendants
+        // of X ⇔ main_node in subtree(X). main_node LIKE 'X/%' would drop every satellite
+        // attached to X itself (e.g. a thread anchored on the space root).
+        var gen = new PostgreSqlSqlGenerator();
+        var (clause, parameters) = gen.GenerateScopeClause("OrgA", QueryScope.Descendants, useMainNode: true);
+
+        clause.Should().Contain("n.main_node = @scopeMain");
+        clause.Should().Contain("n.main_node LIKE @scopeMainPrefix");
+        parameters["@scopeMain"].Should().Be("OrgA");
+        parameters["@scopeMainPrefix"].Should().Be("OrgA/");
     }
 
     [Fact]

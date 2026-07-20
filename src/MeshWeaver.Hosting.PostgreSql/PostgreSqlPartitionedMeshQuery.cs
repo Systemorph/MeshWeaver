@@ -593,7 +593,11 @@ public sealed class PostgreSqlPartitionedMeshQuery : IMeshQueryProvider
             // them in a satellite UNION raises "relation does not exist".
             await _crossSchema.SyncSearchableSchemasAsync(ct).ConfigureAwait(false);
             schemas = (await _crossSchema.GetSchemasWithTableAsync(tableName, ct).ConfigureAwait(false)).ToList();
-            if (joinTable is not null)
+            // source:accessed joins the ONE user_activities table in the CALLER's schema (see
+            // PostgreSqlCrossSchemaQueryProvider) — branch schemas only need mesh_nodes, so no
+            // join-table intersection: filtering to schemas that own a user_activities table
+            // would drop every static/space partition from the cross-partition accessed feed.
+            if (joinTable is not null && parsed.Source != QuerySource.Accessed)
             {
                 var withJoin = await _crossSchema.GetSchemasWithTableAsync(joinTable, ct).ConfigureAwait(false);
                 var joinSet = new HashSet<string>(withJoin, StringComparer.OrdinalIgnoreCase);
