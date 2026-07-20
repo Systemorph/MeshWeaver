@@ -73,7 +73,8 @@ public static class PluginRegistryEndpoints
         config.GetSection(PluginRegistryTokens.SectionName).GetChildren()
             .Select(c => c.Value)
             .Where(v => !string.IsNullOrWhiteSpace(v))
-            .Select(v => v!)
+            // Trim: secrets get copy-pasted with stray whitespace, and Validate compares exact bytes.
+            .Select(v => v!.Trim())
             .ToList();
 
     /// <summary>One configured registry source: the git package source, the ref it serves, and a
