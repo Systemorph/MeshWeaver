@@ -610,6 +610,17 @@ public partial class QueryParser
             scope = QueryScope.Children;
         }
 
+        // `namespace:X` names a NAMESPACE, never the node AT path X — that node's own namespace is
+        // its PARENT path (a user root `rbuergi` has namespace ""), so it can never satisfy a
+        // namespace:X constraint. Subtree (= self + descendants) on the namespace-derived path
+        // would leak the self node into the results (the user node showed up in its own
+        // `source:activity namespace:{user} scope:subtree` activity feed), so for namespace-derived
+        // paths subtree degrades to descendants. `path:X scope:subtree` keeps self, as before.
+        if (namespaceUsed && scope == QueryScope.Subtree)
+        {
+            scope = QueryScope.Descendants;
+        }
+
         // Resolve a deferred `namespace:A|B|C` alternation into a `namespace IN (...)` membership
         // FILTER. With scope:selfAndAncestors each value expands to itself + every ancestor
         // namespace, so a node whose namespace is the value OR any ancestor matches (closest-wins
