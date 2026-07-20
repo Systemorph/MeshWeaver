@@ -255,6 +255,76 @@ public class EventSubscriptionRunnerTest(ITestOutputHelper output) : MonolithMes
         Assert.NotNull(membership);
     }
 
+    /// <summary>
+    /// The restart case behind the memex 2026-07-20 incident: the invitee's subscription AND their User
+    /// node BOTH already exist when the runner (re)starts, and the change feed is silent (a deploy restart
+    /// on a distributed portal — the User/Created event is long gone). The subscription must fire on
+    /// startup and land the membership. This exercises the startup reconcile: the runner cannot rely on the
+    /// live change feed (silent here) nor on a fresh User/Created event (the user pre-exists), only on
+    /// re-evaluating outstanding subscriptions against current state at boot. On prod the workspace-cached
+    /// GetQuery is empty during the Admin-partition cold-start and never re-emits on warmup, which is why
+    /// the startup reconcile now reads the pending set from an authoritative <c>IMeshService.Query</c>.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task PreExistingUserAndSubscription_FireOnRunnerStartup_WithoutTheChangeFeed()
+    {
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        var runnerLogger = Mesh.ServiceProvider
+            .GetService<Microsoft.Extensions.Logging.ILogger<EventSubscriptionRunner>>();
+
+        var groupPath = $"{Space}/Team3";
+        using (accessService.ImpersonateAsSystem())
+            await meshService.CreateNode(new MeshNode("Team3", Space)
+            {
+                NodeType = "Group",
+                Name = "Team3",
+                Content = new AccessObject { Description = "Test group" },
+            }).Should().Emit();
+
+        // BOTH the subscription AND the matching User already exist BEFORE the runner starts.
+        var subscription = new EventSubscription
+        {
+            TriggerType = EventTriggerType.NodeChange,
+            TriggerNodeType = "User",
+            TriggerKind = MeshChangeKind.Created,
+            MatchField = "email",
+            MatchValue = InviteeEmail,
+            ContinuationType = EventContinuationType.AddToGroup,
+            TargetPath = groupPath,
+        };
+        await EventSubscriptionOps.CreateSubscription(meshService, subscription).Should().Emit();
+        using (accessService.ImpersonateAsSystem())
+        {
+            await meshService.CreateNode(new MeshNode(InviteeId)
+            {
+                NodeType = "User",
+                Name = "Newcomer",
+                Content = new User { Email = InviteeEmail, FullName = "Newcomer" },
+            }).Should().Emit();
+        }
+
+        // Start the runner AFTER both exist, wired to a SILENT change feed — it can only fire via the
+        // startup reconcile (no live OnChange, no fresh User/Created event).
+        using var runner = new EventSubscriptionRunner(Mesh, new SilentChangeFeed(), meshService, accessService, runnerLogger);
+        await runner.StartAsync(default);
+
+        var final = await Mesh.GetWorkspace().GetMeshNodeStream(EventSubscriptionNodeType.Path(subscription.Id))
+            .Select(n => n?.Content as EventSubscription)
+            .Where(s => s is not null and not { Status: EventSubscriptionStatus.Pending })
+            .FirstAsync().Timeout(40.Seconds());
+        Assert.True(final!.Status == EventSubscriptionStatus.Fired,
+            $"subscription ended {final.Status}: {final.LastError}");
+
+        var membershipPath = $"{groupPath}/{InviteeId}_Membership";
+        var membership = await Mesh.GetWorkspace().GetMeshNodeStream(membershipPath)
+            .Where(n => n?.Content is GroupMembership gm
+                        && gm.Member == InviteeId
+                        && gm.Groups.Any(e => e.Group == groupPath))
+            .FirstAsync().Timeout(10.Seconds());
+        Assert.NotNull(membership);
+    }
+
     [Fact(Timeout = 60000)]
     public async Task LegacyScheduledAction_IsMigratedAndFires()
     {
