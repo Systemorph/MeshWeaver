@@ -594,15 +594,28 @@ public static class UserActivityLayoutAreas
             // there starts a proper thread via StartThread.
             .WithCreateHref($"/{nodeOwnerId}/{ChatArea}");
 
+    // The three user-selectable sort orders for the unified catalog (the view-options "Sort by"
+    // dropdown). LAST ACCESSED is the DEFAULT: source:accessed JOINs the user's UserActivity satellite
+    // and projects its timestamp into last_modified, so the list is the user's accessed working set,
+    // most-recently-opened first — the home dashboard default (it supersedes the old "Last Read" tab).
+    // LAST MODIFIED and ALPHABETICAL drop source:accessed, so they span the FULL readable set (every
+    // partition the viewer can see) ordered by edit-recency / name. Each is a complete hidden query
+    // because the option changes the result SET, not just the ordering; the FIRST is the default and
+    // MUST equal the control's HiddenQuery.
+    private const string CatalogSortLastAccessed = "source:accessed scope:subtree is:main context:search sort:LastModified-desc";
+    private const string CatalogSortLastModified = "is:main context:search sort:LastModified-desc";
+    private const string CatalogSortAlphabetical = "is:main context:search sort:Name-asc";
+
     /// <summary>
-    /// The catalog region — ONE unified, grouped "everything" view. A single reactive
-    /// <see cref="MeshSearchControl"/> over <c>is:main context:search</c> with NO namespace
-    /// restriction, so it spans every partition the viewer can read in one grouped-by-type list:
-    /// their own home items, the spaces they can see, and Store/Plugin courses+plugins all appear as
-    /// labelled, collapsible sections (Space, Store/Plugin, Markdown, Code, …). This REPLACES the
-    /// former Spaces / My Items / Last Read / Last Edited tab row AND the data-driven extension tabs —
-    /// an extension's content already shows up here in its type section, so a plugin no longer needs a
-    /// tab.
+    /// The catalog region — ONE unified, tab-less, grouped "everything" list. A single reactive
+    /// <see cref="MeshSearchControl"/> with NO namespace restriction, so it spans every partition the
+    /// viewer can read in one grouped-by-type list (Space, Store/Plugin, Markdown, Code, …): their own
+    /// home items, the spaces they can see, and Store/Plugin courses+plugins. It DEFAULTS to
+    /// <b>last-accessed</b> order (the user's recently-opened working set) and exposes a view-options
+    /// "Sort by" control so the user controls the order — <b>Last accessed</b> (default),
+    /// <b>Last modified</b>, and <b>Alphabetical</b> (by name); the last two span the full readable set.
+    /// This REPLACES the former Spaces / My Items / Last Read / Last Edited tab row AND the data-driven
+    /// extension tabs — an extension's content already shows up here in its type section.
     /// <para>The one thing a broad query can't reach is a module in ANOTHER partition the caller was
     /// specifically invited into (#385): those are resolved from the caller's own readable
     /// <c>AccessAssignment</c> grants (<paramref name="sharedTargets"/>) and appended as an additive
@@ -612,18 +625,21 @@ public static class UserActivityLayoutAreas
     /// </summary>
     internal static UiControl BuildCatalog(IReadOnlyList<string>? sharedTargets = null)
     {
-        // The unified, cross-partition "everything" search: no namespace clause → every partition the
-        // reader can see; grouped by type with counts + collapsible sections so it reads as sections.
-        // View-options let the user regroup/search across everything. The item limit is bounded (this
-        // query is cross-partition — never unbounded-scan), matching the former Spaces / My Items tabs.
-        // "+" opens the generic create page (a type picker), never a type-specific target.
+        // The unified, cross-partition "everything" search. Default order = last accessed; the "Sort by"
+        // dropdown (WithViewOptions + WithSortOptions) lets the user switch order — the query itself
+        // carries the sort/source, so no client-side WithSortBy (that would override the query order).
+        // Grouped by type with counts + collapsible sections. The item limit is bounded (this query is
+        // cross-partition — never unbounded-scan). "+" opens the generic create page (a type picker).
         var everything = Controls.MeshSearch
-            .WithHiddenQuery("is:main context:search sort:LastModified-desc")
+            .WithHiddenQuery(CatalogSortLastAccessed)
+            .WithSortOptions(
+                new MeshSearchSortOption("Last accessed", CatalogSortLastAccessed),
+                new MeshSearchSortOption("Last modified", CatalogSortLastModified),
+                new MeshSearchSortOption("Alphabetical", CatalogSortAlphabetical))
             .WithShowSearchBox(true)
             .WithViewOptions(true)
             .WithShowEmptyMessage(true)
             .WithRenderMode(MeshSearchRenderMode.Grouped)
-            .WithSortBy("LastModified", ascending: false)
             .WithSectionCounts(true)
             .WithCollapsibleSections(true)
             .WithItemLimit(50)

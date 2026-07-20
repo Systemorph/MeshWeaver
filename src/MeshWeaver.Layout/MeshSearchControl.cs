@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using MeshWeaver.Layout.Catalog;
 
 namespace MeshWeaver.Layout;
@@ -50,6 +51,18 @@ public enum MeshSearchRenderMode
     /// </summary>
     GraphNavigator
 }
+
+/// <summary>
+/// One user-selectable sort choice for the view-options "Sort by" dropdown: a display
+/// <paramref name="Label"/> and the full hidden <paramref name="Query"/> applied when the user picks
+/// it. Each option is a complete query so an option can change BOTH the ordering AND the result set
+/// (e.g. "Last accessed" uses <c>source:accessed</c> — the user's accessed working set, ordered by
+/// access recency — while "Last modified" / "Alphabetical" span the full readable set). The FIRST
+/// option is the default and should match the control's <see cref="MeshSearchControl.HiddenQuery"/>.
+/// </summary>
+/// <param name="Label">The label shown in the "Sort by" dropdown.</param>
+/// <param name="Query">The full hidden query applied when this option is selected.</param>
+public record MeshSearchSortOption(string Label, string Query);
 
 /// <summary>
 /// A control that provides a configurable search with results displayed in a LayoutGrid.
@@ -110,6 +123,14 @@ public record MeshSearchControl()
     /// the Flat and Grouped render modes.
     /// </summary>
     public object? ShowViewOptions { get; init; }
+
+    /// <summary>
+    /// Optional user-selectable sort choices for the view-options "Sort by" dropdown (only rendered
+    /// when <see cref="ShowViewOptions"/> is on). Each entry carries a full hidden query, so picking
+    /// one can change the ordering AND the result set. The FIRST entry is the default and should equal
+    /// <see cref="HiddenQuery"/>. Null/empty ⇒ no sort dropdown (unchanged behaviour).
+    /// </summary>
+    public IReadOnlyList<MeshSearchSortOption>? SortOptions { get; init; }
 
     /// <summary>
     /// Whether to exclude the base path node from results (default true).
@@ -297,6 +318,11 @@ public record MeshSearchControl()
     /// <param name="ascending"><c>true</c> for ascending; <c>false</c> for descending.</param>
     public MeshSearchControl WithThenBy(string property, bool ascending = true) =>
         this with { Sorting = (Sorting ?? new SortConfig()) with { ThenByProperty = property, ThenByAscending = ascending } };
+
+    /// <summary>Returns a copy with the view-options "Sort by" dropdown offering <paramref name="options"/>.</summary>
+    /// <param name="options">The user-selectable sort choices; the first is the default and should match <see cref="HiddenQuery"/>.</param>
+    public MeshSearchControl WithSortOptions(params MeshSearchSortOption[] options) =>
+        this with { SortOptions = options };
 
     // Grid fluent methods
     /// <summary>Returns a copy with responsive grid column widths set per breakpoint (MUI grid units, 1–12).</summary>
