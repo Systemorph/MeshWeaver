@@ -675,6 +675,22 @@ public class QueryParserTests
         comparison.Condition.Value.Should().Be("ACME/Project/Todo");
     }
 
+    [Theory]
+    [InlineData("nodeType:Edu/Exercise", "Edu/Exercise")]
+    [InlineData("nodeType:Store/Plugin", "Store/Plugin")]
+    [InlineData("nodeType:Store/Catalog", "Store/Catalog")]
+    public void Parse_SlashedNodeTypeValue_KeepsFullValue(string query, string expected)
+    {
+        var result = _parser.Parse(query);
+
+        result.Filter.Should().BeOfType<QueryComparison>();
+        var comparison = (QueryComparison)result.Filter!;
+        comparison.Condition.Selector.Should().Be("nodeType");
+        comparison.Condition.Operator.Should().Be(QueryOperator.Equal);
+        comparison.Condition.Value.Should().Be(expected);
+        result.TextSearch.Should().BeNull("the slashed value is a literal, not a free-text token");
+    }
+
     #endregion
 
     #region Namespace Parameter

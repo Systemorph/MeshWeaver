@@ -560,6 +560,80 @@ public class CrossPartitionSearchTests
             "the fan-out query must not be pinned to the first query's schema");
     }
 
+    /// <summary>
+    /// Repro for the live memex-cloud defect (2026-07-19): a fan-out query whose nodeType
+    /// VALUE contains a slash (`nodeType:Edu/Exercise`, `nodeType:Store/Plugin`) returned zero
+    /// rows even though the rows exist. Exercises the exact production cross-schema fan-out.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task CrossSchema_SlashedNodeType_FoundAcrossPartitions()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (_, partitions) = await SetupMultiOrgEnvironment(ct);
+
+        foreach (var (org, (_, adapter)) in partitions)
+        {
+            await adapter.WriteAsync(new MeshNode("Ex1", $"{org}/Course")
+            {
+                Name = $"{org} Exercise",
+                NodeType = "Edu/Exercise",
+                State = MeshNodeState.Active,
+            }, _options, ct);
+        }
+
+        var schemas = partitions.Keys.Select(k => k.ToLowerInvariant()).ToList();
+        var xsAdapter = new PostgreSqlStorageAdapter(_fixture.DataSource);
+        var query = new QueryParser().Parse("nodeType:Edu/Exercise");
+
+        var results = await xsAdapter.QueryNodesAcrossSchemasAsync(query, _options, schemas, ct: ct)
+            .Collect(ct).Should().Within(30.Seconds()).Emit();
+
+        results.Should().HaveCount(3, "each of the 3 partitions holds one Edu/Exercise node");
+        results.Select(n => n.NodeType).Distinct()
+            .Should().BeEquivalentTo(new[] { "Edu/Exercise" }, JsonSerializerOptions.Default);
+    }
+
+    /// <summary>
+    /// The full production fan-out orchestrator (PostgreSqlPartitionedMeshQuery) for the same
+    /// slashed-nodeType query — no path, no namespace → genuine cross-schema fan-out.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task PartitionedQuery_SlashedNodeTypeFanOut_ReturnsRows()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (_, partitions) = await SetupMultiOrgEnvironment(ct);
+
+        foreach (var (org, (_, adapter)) in partitions)
+        {
+            await adapter.WriteAsync(new MeshNode("Ex1", $"{org}/Course")
+            {
+                Name = $"{org} Exercise",
+                NodeType = "Edu/Exercise",
+                State = MeshNodeState.Active,
+            }, _options, ct);
+        }
+        await PopulateSearchableSchemas(
+            partitions.Keys.Select(k => k.ToLowerInvariant()), ct);
+
+        using var provider = CreatePartitionProvider();
+        var query = new PostgreSqlPartitionedMeshQuery(
+            new PostgreSqlCrossSchemaQueryProvider(_fixture.DataSource),
+            partitionProvider: provider);
+
+        var request = MeshQueryRequest.FromQuery("nodeType:Edu/Exercise", WellKnownUsers.System);
+
+        var initial = await query.Query<MeshNode>(request, _options)
+            .Where(c => c.ChangeType == QueryChangeType.Initial)
+            .FirstAsync()
+            .Timeout(TimeSpan.FromSeconds(30))
+            .ToTask(ct);
+
+        var paths = initial.Items.Select(n => n.Path).ToList();
+        paths.Should().Contain("ACME/Course/Ex1");
+        paths.Should().Contain("FutuRe/Course/Ex1");
+        paths.Should().Contain("Contoso/Course/Ex1");
+    }
+
     private PostgreSqlPartitionStorageProvider CreatePartitionProvider()
         => new(
             _fixture.DataSource,
