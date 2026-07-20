@@ -5,6 +5,7 @@ using Memex.Portal.Shared;
 using MeshWeaver.Hosting.Embeddings;
 using Microsoft.AspNetCore.DataProtection;
 using MeshWeaver.Graph.Configuration;
+using MeshWeaver.Hosting;
 using MeshWeaver.Hosting.Orleans;
 using MeshWeaver.Hosting.PostgreSql;
 using MeshWeaver.Messaging;
@@ -226,6 +227,12 @@ builder.Services.AddHostedService<Memex.Portal.Distributed.DbVersionGate>();
 // (e.g. someone manually rolled a partial migration via psql).
 builder.Services.AddHealthChecks()
     .AddCheck<Memex.Portal.Distributed.DbVersionHealthCheck>("db_version");
+
+// Front-load dynamic NodeType compiles at startup so a fresh pod (every image roll /
+// self-update spins one up) doesn't make the first visitor of each type wait out a cold
+// Roslyn compile. Best-effort, non-blocking, does NOT gate readiness — Part 2
+// (enrichment awaits the in-flight compile) handles anything still compiling on arrival.
+builder.Services.AddDynamicTypePreWarming();
 
 var app = builder.Build();
 

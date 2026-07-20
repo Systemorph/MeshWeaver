@@ -303,7 +303,7 @@ internal static class NodeTypeEnrichmentHelpers
                     "EnrichWithNodeType: self-heal Pending flip for {NodeType} faulted",
                     nodeType));
 
-        return typeStream
+        var settled = typeStream
             .Do(typeNode => logger?.LogInformation(
                 "[COMPILE-TRACE] Slow-path typeStream emission for {NodeType} (instance={InstancePath}): HubConfig={HasHub} Status={Status} Coll={Coll} Path={Path}",
                 nodeType, node.Path,
@@ -366,11 +366,79 @@ internal static class NodeTypeEnrichmentHelpers
                             && !string.IsNullOrEmpty(def.LatestAssemblyPath))
                         || def.CompilationStatus == CompilationStatus.Error))
                 || typeNode.Content is not NodeTypeDefinition)
-            .Take(1)
-            .Timeout(SlowPathTimeout)
+            .Take(1);
+
+        // 🚨 Fresh-pod wedge fix: DON'T cut short an in-flight compile with a fixed
+        // wall-clock. RunCompile ALWAYS writes a terminal Ok/Error, so once a compile
+        // is genuinely in flight the wait is bounded by the compile FINISHING — which
+        // on a cold pod compiling dozens of dynamic types (each queued on the Compile
+        // IoPool) legitimately runs past SlowPathTimeout. WaitForCompileSettled arms
+        // the wall-clock ONLY while nothing is compiling (the genuine "type is stuck /
+        // misconfigured, no compile coming" case → overlay, the graceful sink) and
+        // DISARMS it the moment a Pending/Compiling state is observed. Never a
+        // timeout-that-caches mid-compile (the wedge that a manual recycle had to heal).
+        return WaitForCompileSettled(
+                typeStream, settled, SlowPathTimeout,
+                () => new TimeoutException(
+                    $"NodeType '{nodeType}' has no compile in flight and did not settle " +
+                    $"within {SlowPathTimeout.TotalSeconds:0}s."))
             .Finally(healSub.Dispose)
             .SelectMany(typeNode => ApplyStreamResult(
                 typeNode, node, nodeType, meshConfiguration, compilationService, meshHub, logger));
+    }
+
+    /// <summary>
+    /// Wait for a NodeType's compile to reach a SETTLED terminal state (emitted by
+    /// <paramref name="settled"/>) WITHOUT cutting short a compile that is genuinely
+    /// in flight — the fresh-pod wedge fix.
+    ///
+    /// <para>Two-phase bound:
+    /// <list type="bullet">
+    ///   <item><b>Phase A — nothing compiling yet.</b> Bounded by
+    ///     <paramref name="noProgressBudget"/>: a terminal state ends the wait; if the
+    ///     budget elapses with NO compile ever going in flight the type is genuinely
+    ///     stuck/misconfigured → OnError, and the caller overlays the diagnostic (the
+    ///     graceful sink).</item>
+    ///   <item><b>Phase B — a compile IS in flight (Status Pending/Compiling).</b> The
+    ///     wall-clock is DISARMED; the wait is bounded by the compile FINISHING
+    ///     (<see cref="NodeTypeCompilationHelpers.RunCompile"/> always writes a terminal
+    ///     Ok/Error). A compile-in-progress is a WAIT, not a fault — so a cold pod
+    ///     compiling many dynamic types (each queued on the Compile IoPool far past
+    ///     <paramref name="noProgressBudget"/>) is never faulted-and-cached mid-compile
+    ///     (the wedge that previously required a manual recycle).</item>
+    /// </list></para>
+    ///
+    /// <para>Reactive-only: an <c>Observable.Timer</c> gated by <c>TakeUntil</c> on the
+    /// in-flight signal, merged with <paramref name="settled"/>. The timer never emits
+    /// OnNext, so <c>Merge</c> forwards only the settled node (or the timer's OnError
+    /// when Phase A elapses). <paramref name="scheduler"/> is for deterministic
+    /// virtual-time tests; production uses the default scheduler.</para>
+    /// </summary>
+    internal static IObservable<MeshNode> WaitForCompileSettled(
+        IObservable<MeshNode> typeStream,
+        IObservable<MeshNode> settled,
+        TimeSpan noProgressBudget,
+        Func<Exception> onNoProgress,
+        System.Reactive.Concurrency.IScheduler? scheduler = null)
+    {
+        // A compile is genuinely in flight for this NodeType — its terminal write is
+        // guaranteed by RunCompile, so the wait is bounded by the compile FINISHING,
+        // not a wall clock. Observing it DISARMS the no-progress deadline.
+        var compileInFlight = typeStream
+            .Where(t => t?.Content is NodeTypeDefinition d
+                && d.CompilationStatus is CompilationStatus.Pending
+                                       or CompilationStatus.Compiling)
+            .Take(1);
+
+        var noProgressDeadline = Observable
+            .Timer(noProgressBudget, scheduler ?? System.Reactive.Concurrency.Scheduler.Default)
+            .TakeUntil(compileInFlight)                 // disarm once a compile is running
+            .SelectMany(_ => Observable.Throw<MeshNode>(onNoProgress()));
+
+        // The timer never emits OnNext (only OnError, or it completes empty once
+        // disarmed), so the only value flowing through Merge is the settled node.
+        // Take(1) then unsubscribes the still-armed timer on the happy path.
+        return settled.Merge(noProgressDeadline).Take(1);
     }
 
     /// <summary>
@@ -713,7 +781,11 @@ internal static class NodeTypeEnrichmentHelpers
                     return curr;
                 }))
             .Take(1)
-            .SelectMany(_ => typeStream
+            // Same fresh-pod fix as BuildSlowPath: after the Ok→Pending flip above the
+            // recompile is in flight, so wait for it to FINISH — never fault-and-cache
+            // if the (possibly queue-delayed) compile outlasts the wall-clock. The
+            // wall-clock only bounds the case where no compile ever goes in flight.
+            .SelectMany(_ => WaitForCompileSettled(typeStream, typeStream
                 .Where(typeNode =>
                 {
                     if (typeNode.Content is not NodeTypeDefinition d)
@@ -769,8 +841,11 @@ internal static class NodeTypeEnrichmentHelpers
                             && !string.IsNullOrEmpty(d.LatestAssemblyCollection)
                             && !string.IsNullOrEmpty(d.LatestAssemblyPath));
                 })
-                .Take(1)
-                .Timeout(SlowPathTimeout)
+                .Take(1),
+                SlowPathTimeout,
+                () => new TimeoutException(
+                    $"NodeType '{nodeType}' recompile did not settle and no compile is " +
+                    $"in flight (within {SlowPathTimeout.TotalSeconds:0}s)."))
                 .SelectMany(newTypeNode => ApplyStreamResult(
                     newTypeNode, node, nodeType, meshConfiguration,
                     compilationService, meshHub, logger, recompileAttempts + 1)));
