@@ -9,7 +9,7 @@ namespace MeshWeaver.Application.Styles;
 public static class FluentIcons
 {
     /// <summary>The icon-provider key for the Fluent UI System Icons set.</summary>
-    public const string Provider = "fluent-ui";
+    public const string Provider = Icon.FluentProvider;
     /// <summary>The "Accessibility" Fluent UI icon.</summary>
     public static Icon Accessibility(IconSize size = IconSize.Size24, IconVariant variant = IconVariant.Regular) => new Icon(Provider, "Accessibility") { Size = size, Variant = variant };
 
