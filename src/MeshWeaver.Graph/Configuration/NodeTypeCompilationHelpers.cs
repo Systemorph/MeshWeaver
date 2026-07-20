@@ -1207,7 +1207,25 @@ internal static class NodeTypeCompilationHelpers
                         .Take(1)
                         .Select(result => new CompileOutcome(result, null, pendingNode, resolvedActivityPath))
                         .Catch<CompileOutcome, Exception>(ex =>
-                            Observable.Return(new CompileOutcome(null, ex, pendingNode, resolvedActivityPath))))
+                            Observable.Return(new CompileOutcome(null, ex, pendingNode, resolvedActivityPath)))
+                        // 🚨 TOTALITY guard — this subscription is the ONLY component that can
+                        // settle the Compiling status it just flipped, so its termination MUST
+                        // produce exactly one outcome. An EMPTY completion (an upstream stage
+                        // completed without emitting — the silent twin of the hung-snapshot
+                        // wedge) previously fell through Subscribe(onNext, onError) with NO
+                        // terminal write: the NodeType stayed Compiling forever and every later
+                        // trigger no-oped (memex-cloud 2026-07-20, Store/Plugin). Synthesize a
+                        // terminal error outcome so the state machine ALWAYS settles — the same
+                        // completion-guard contract MeshQuery.MergeProviderObservables enforces
+                        // for provider Initials ("every Query observable must emit exactly one
+                        // Initial" ⇒ "every dispatched compile reaches exactly one terminal
+                        // status").
+                        .DefaultIfEmpty(new CompileOutcome(null, new InvalidOperationException(
+                            $"Compile pipeline for '{hubPath}' completed without producing an outcome — "
+                            + "an upstream stage (source snapshot / include resolution / Roslyn bridge) "
+                            + "terminated empty. This is a framework defect surfaced as a terminal "
+                            + "compile failure so the NodeType cannot wedge at Compiling; retry via the "
+                            + "Compile button / a fresh RequestedReleaseAt."), pendingNode, resolvedActivityPath)))
                     .SubscribeOn(System.Reactive.Concurrency.TaskPoolScheduler.Default))
             .Subscribe(
                 outcome =>
@@ -1267,6 +1285,13 @@ internal static class NodeTypeCompilationHelpers
 
                     releasePathObservable
                         .Take(1)
+                        // 🚨 Same totality guard as the compile pipeline above: the terminal
+                        // Status write below runs in THIS OnNext — a release-create observable
+                        // that completed empty would silently skip it and wedge the NodeType at
+                        // Compiling. TryCreateReleaseNode is bounded (null on timeout/fault) by
+                        // contract; DefaultIfEmpty makes the write unconditional even if that
+                        // contract is ever violated.
+                        .DefaultIfEmpty()
                         .Subscribe(newReleasePath =>
                     {
                     // Terminal writes run under System — same rule as every other

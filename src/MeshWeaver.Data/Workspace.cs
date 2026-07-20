@@ -21,6 +21,11 @@ using Microsoft.Extensions.Logging;
 // (ReferenceEquals on Workspace._remoteStreamCache) legitimately open the raw
 // single-node reduce — they test the mechanism itself, not mesh-node access.
 [assembly: InternalsVisibleTo("MeshWeaver.Query.Test")]
+// Owner-side merge internals (ApplyMeshNodeMerge / RebaseMonotonicTriggers): the
+// monotonic-trigger merge semantics are pinned by deterministic unit tests
+// (MonotonicTriggerMergeTest) against the exact internal seam the
+// PatchDataRequest handler runs — not a re-implementation of the call sequence.
+[assembly: InternalsVisibleTo("MeshWeaver.Data.Test")]
 
 namespace MeshWeaver.Data;
 

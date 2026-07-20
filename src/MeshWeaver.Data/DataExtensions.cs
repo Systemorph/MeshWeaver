@@ -834,7 +834,7 @@ public static class DataExtensions
     /// Without base values (legacy / one-off senders) it falls back to the
     /// <see cref="DropStaleMonotonicTriggers"/> guard + plain <see cref="MergePatchRecursive"/>.
     /// </summary>
-    private static void ApplyMeshNodeMerge(
+    internal static void ApplyMeshNodeMerge(
         System.Text.Json.Nodes.JsonObject currentNode,
         System.Text.Json.Nodes.JsonObject patchNode,
         bool isMeshNode,
@@ -850,6 +850,14 @@ public static class DataExtensions
                 && System.Text.Json.Nodes.JsonNode.Parse(baseText)
                     is System.Text.Json.Nodes.JsonObject baseValues)
             {
+                // 🚨 Monotonic-trigger resolution BEFORE the three-way merge. The generic merge
+                // REFUSES every conflicting scalar (base ≠ live) — correct for non-monotonic
+                // fields, but for the strictly-increasing RequestedReleaseAt control trigger the
+                // conflict IS mergeable (newest instant wins). Without this, a FORWARD trigger
+                // written off a stale mirror base was silently refused and the user's compile
+                // request LOST (memex-cloud 2026-07-20 GitSync burst: every explicit Store/Plugin
+                // compile trigger was dropped while mirrors lagged the owner).
+                RebaseMonotonicTriggers(currentNode, patchNode, baseValues, jsonOpts, logger, hubPath);
                 Serialization.MeshNodePatchMerge.Apply(currentNode, patchNode, baseValues,
                     onRefuse: key => logger?.LogWarning(
                         "[MergeGuard] {HubPath}: refused stale/reordered cross-hub write to '{Key}' "
@@ -909,6 +917,71 @@ public static class DataExtensions
     /// intentional write — so dropping it is the correct merge, not a band-aid. Scoped to MeshNode by
     /// the caller; the field key is resolved through the same naming policy used elsewhere here.</para>
     /// </summary>
+    /// <summary>
+    /// 🚨 Monotonic-trigger resolution for the THREE-WAY merge path (base values carried).
+    /// <see cref="Serialization.MeshNodePatchMerge.Apply"/> refuses EVERY conflicting scalar
+    /// (live changed since the writer's base) — the right default for non-monotonic fields
+    /// (Status, IsDirty, …) where two concurrent writes are not mergeable. But for the ONE
+    /// strictly-increasing control trigger — <c>NodeTypeDefinition.RequestedReleaseAt</c>, which
+    /// every writer sets to <c>DateTimeOffset.UtcNow</c> and which contractually never moves
+    /// backward — the scalar conflict IS mergeable: the newest instant wins, regardless of what
+    /// base the writer diffed against. Refusing the FORWARD case silently swallows a legitimate
+    /// compile trigger whenever the writer's mirror lags the owner (guaranteed during a GitSync
+    /// burst) — the memex-cloud 2026-07-20 incident where every explicit Store/Plugin compile
+    /// trigger was dropped. Resolution, applied to the parsed patch/base before the merge:
+    /// <list type="bullet">
+    ///   <item>Patch BEHIND live → drop the key from the patch (the flap guard — identical
+    ///     outcome to the refusal, but with the precise monotonic log line).</item>
+    ///   <item>Patch AHEAD of live with a stale base → REBASE the writer's base value to the
+    ///     live value so the three-way merge sees "unchanged since base" and lands the newer
+    ///     trigger. This is the "make the flip a legal write — rebased on current state" fix,
+    ///     not a bypass: only this one contractually-monotonic field gets it.</item>
+    /// </list>
+    /// </summary>
+    internal static void RebaseMonotonicTriggers(
+        System.Text.Json.Nodes.JsonObject currentNode,
+        System.Text.Json.Nodes.JsonObject patchNode,
+        System.Text.Json.Nodes.JsonObject baseValues,
+        System.Text.Json.JsonSerializerOptions jsonOpts,
+        ILogger? logger,
+        string hubPath)
+    {
+        var contentKey = jsonOpts.PropertyNamingPolicy?.ConvertName("Content") ?? "Content";
+        if (patchNode[contentKey] is not System.Text.Json.Nodes.JsonObject patchContent
+            || currentNode[contentKey] is not System.Text.Json.Nodes.JsonObject liveContent)
+            return;
+
+        var triggerKey = jsonOpts.PropertyNamingPolicy?.ConvertName("RequestedReleaseAt")
+            ?? "RequestedReleaseAt";
+        if (!TryReadDateTimeOffset(patchContent, triggerKey, out var patchAt)
+            || !TryReadDateTimeOffset(liveContent, triggerKey, out var liveAt))
+            return;
+
+        if (patchAt < liveAt)
+        {
+            logger?.LogWarning(
+                "[MergeGuard] {HubPath}: dropping stale/reordered {Key} patch ({PatchAt:o} < live {LiveAt:o}) — "
+                + "a strictly-increasing release trigger must not move backward; keeping the live value.",
+                hubPath, triggerKey, patchAt, liveAt);
+            patchContent.Remove(triggerKey);
+            return;
+        }
+
+        if (patchAt > liveAt
+            && baseValues[contentKey] is System.Text.Json.Nodes.JsonObject baseContent
+            && baseContent.TryGetPropertyValue(triggerKey, out var baseVal)
+            && baseVal is not null
+            && !System.Text.Json.Nodes.JsonNode.DeepEquals(baseVal, liveContent[triggerKey]))
+        {
+            logger?.LogInformation(
+                "[MergeGuard] {HubPath}: rebasing monotonic trigger {Key} — patch ({PatchAt:o}) is AHEAD of "
+                + "live ({LiveAt:o}) but the writer's base is stale; a strictly-increasing trigger merges "
+                + "monotonically (newest wins) instead of being refused as a scalar conflict.",
+                hubPath, triggerKey, patchAt, liveAt);
+            baseContent[triggerKey] = liveContent[triggerKey]!.DeepClone();
+        }
+    }
+
     internal static void DropStaleMonotonicTriggers(
         System.Text.Json.Nodes.JsonObject currentNode,
         System.Text.Json.Nodes.JsonObject patchNode,
