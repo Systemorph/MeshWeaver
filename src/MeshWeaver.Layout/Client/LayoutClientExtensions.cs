@@ -9,6 +9,7 @@ using MeshWeaver.Data.Serialization;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Icon = MeshWeaver.Domain.Icon;
 
 namespace MeshWeaver.Layout.Client;
 
@@ -253,6 +254,13 @@ public static class LayoutClientExtensions
         conversion ??= null;
         if (conversion != null)
             return conversion.Invoke(value, defaultValue);
+        // A node's icon field legitimately holds a RAW STRING — a Fluent icon name ("Document"),
+        // an image URL ("/static/NodeTypeIcons/document.svg"), or inline <svg> markup. Binding
+        // such a string into an Icon-typed slot goes through the TOTAL Icon.Parse; the generic
+        // paths (Deserialize / ConvertString) both throw on the string form, which logged a
+        // `fail` line on EVERY NavLink render (prod error storm) while the icon rendered as nothing.
+        if (typeof(T) == typeof(Icon) && TryGetStringValue(value, out var iconString))
+            return (T?)(object?)Icon.Parse(iconString);
         return value switch
         {
             null => defaultValue,
@@ -396,6 +404,23 @@ public static class LayoutClientExtensions
                 : (T)(object)(ulong)Math.Truncate(value),
             _ => throw new InvalidOperationException($"Unsupported integer type: {targetType.Name}")
         };
+    }
+
+    /// <summary>
+    /// Extracts a plain string from the raw binding value regardless of how it arrived —
+    /// as a CLR string, a <see cref="JsonElement"/> string token, or a <see cref="JsonValue"/>
+    /// string node — so type-specific string parsing (e.g. <see cref="Icon.Parse"/>) sees ONE shape.
+    /// </summary>
+    private static bool TryGetStringValue(object? value, out string? s)
+    {
+        s = value switch
+        {
+            string str => str,
+            JsonElement { ValueKind: JsonValueKind.String } je => je.GetString(),
+            JsonValue jv when jv.TryGetValue<string>(out var nodeString) => nodeString,
+            _ => null
+        };
+        return s != null;
     }
 
     private static T ConvertString<T>(string s)

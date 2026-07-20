@@ -4,6 +4,7 @@ using MeshWeaver.Fixture;
 using MeshWeaver.Layout.Client;
 using MeshWeaver.Messaging;
 using Xunit;
+using Icon = MeshWeaver.Domain.Icon;
 
 namespace MeshWeaver.Layout.Test;
 
@@ -431,5 +432,114 @@ public class LayoutClientExtensionsTest(ITestOutputHelper output) : HubTestBase(
         var result = hub.ConvertSingle<double>(element, null);
 
         result.Should().Be(322.844);
+    }
+
+    // ---- NavLink icon binding: MeshNode.Icon is a raw STRING (Fluent name / URL / inline SVG) ------
+    // A layout area (e.g. MarkdownOverviewLayoutArea's sub-node nav) feeds MeshNodeImageHelper
+    // .ResolveNodeIcon(child) — a string — into NavLinkControl.Icon, which the Blazor NavItemView
+    // binds into a MeshWeaver.Domain.Icon-typed slot. Before the fix, ConvertString<Icon> threw
+    // InvalidOperationException ("Cannot convert /static/NodeTypeIcons/document.svg to
+    // MeshWeaver.Domain.Icon") on EVERY render — the memex-cloud prod error storm. The conversion
+    // must be TOTAL: all legitimate forms parse, garbage degrades, nothing throws.
+
+    private const string InlineSvg =
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\"><path d=\"M0 0h24v24H0z\"/></svg>";
+
+    [Fact]
+    public void ConvertSingle_IconUrlString_ParsesToUrlIcon()
+    {
+        var hub = GetHost();
+
+        var result = hub.ConvertSingle<Icon>("/static/NodeTypeIcons/document.svg", null);
+
+        result.Should().NotBeNull("a URL-form node icon must bind, not throw (prod error storm)");
+        result!.Provider.Should().Be(Icon.UrlProvider);
+        result.Id.Should().Be("/static/NodeTypeIcons/document.svg");
+    }
+
+    [Fact]
+    public void ConvertSingle_InlineSvgString_ParsesToInlineSvgIcon()
+    {
+        var hub = GetHost();
+
+        var result = hub.ConvertSingle<Icon>(InlineSvg, null);
+
+        result.Should().NotBeNull();
+        result!.Provider.Should().Be(Icon.InlineSvgProvider);
+        result.Id.Should().Be(InlineSvg, "the markup renders verbatim client-side");
+        result.Size.Should().Be(MeshWeaver.Domain.IconSize.Custom);
+    }
+
+    [Fact]
+    public void ConvertSingle_FluentIconNameString_ParsesToFluentIcon()
+    {
+        var hub = GetHost();
+
+        var result = hub.ConvertSingle<Icon>("Document", null);
+
+        result.Should().NotBeNull();
+        result!.Provider.Should().Be(Icon.FluentProvider);
+        result.Id.Should().Be("Document");
+    }
+
+    [Fact]
+    public void ConvertSingle_EmojiIconString_DegradesToTextGlyph()
+    {
+        var hub = GetHost();
+
+        var result = hub.ConvertSingle<Icon>("\U0001F680", null);
+
+        result.Should().NotBeNull();
+        result!.Provider.Should().Be(Icon.TextProvider);
+        result.Id.Should().Be("\U0001F680");
+    }
+
+    [Fact]
+    public void ConvertSingle_GarbageIconString_NeverThrows()
+    {
+        var hub = GetHost();
+
+        var result = hub.ConvertSingle<Icon>("??!! not-an-icon", null);
+
+        result.Should().NotBeNull("an unknown form must degrade gracefully, never throw");
+        result!.Provider.Should().Be(Icon.TextProvider);
+    }
+
+    [Fact]
+    public void ConvertSingle_WhitespaceIconString_ReturnsNull()
+    {
+        var hub = GetHost();
+
+        var result = hub.ConvertSingle<Icon>("  ", null);
+
+        result.Should().BeNull();
+    }
+
+    [Fact]
+    public void ConvertSingle_IconStringJsonElement_ParsesSameAsString()
+    {
+        // The same raw string arriving as a JSON string token (the data-bound pointer path) went
+        // through Deserialize<Icon>, threw JsonException, and logged an error per render — the
+        // JsonElement shape must route through the same total parse.
+        var hub = GetHost();
+        var element = JsonSerializer.SerializeToElement("/static/NodeTypeIcons/document.svg");
+
+        var result = hub.ConvertSingle<Icon>(element, null);
+
+        result.Should().NotBeNull();
+        result!.Provider.Should().Be(Icon.UrlProvider);
+        result.Id.Should().Be("/static/NodeTypeIcons/document.svg");
+    }
+
+    [Fact]
+    public void ConvertSingle_IconInstance_PassesThroughUnchanged()
+    {
+        // Regression: a properly-typed Icon (the existing wire/object form) must be untouched.
+        var hub = GetHost();
+        var icon = new Icon(Icon.FluentProvider, "Home");
+
+        var result = hub.ConvertSingle<Icon>(icon, null);
+
+        result.Should().BeSameAs(icon);
     }
 }
