@@ -33,4 +33,17 @@ public record AiSettings
     /// <c>{userPath}</c> tokens. Empty ⇒ <see cref="AgentPickerProjection.BuildModelQueries"/> defaults.
     /// </summary>
     public ImmutableArray<string> ModelQueries { get; init; } = ImmutableArray<string>.Empty;
+
+    /// <summary>
+    /// Skill discovery query TEMPLATES — the user's SKILL SOURCES, one query per row. Tokens:
+    /// <c>{currentPath}</c> (the current SPACE partition), <c>{nodeTypePath}</c> (the current node
+    /// type's partition) and <c>{userPath}</c> (the user's home); a template whose token has no value
+    /// in the current context is dropped (<see cref="AiSettingsNodeType.ResolveQueries"/>). Empty ⇒
+    /// the four defaults (<see cref="AiSettingsNodeType.DefaultSkillQueryTemplates"/>): global
+    /// <c>Skill</c> + <c>{space}/Skill</c> + <c>{typePartition}/Skill</c> + <c>{user}/Skill</c>.
+    /// Installing a SKILL PACKAGE appends its source here (e.g.
+    /// <c>namespace:Office/Skill nodeType:Skill</c>, <see cref="AiSettingsNodeType.MergeSkillSource"/>),
+    /// seeding the defaults first so adding a package never silently drops the standard sources.
+    /// </summary>
+    public ImmutableArray<string> SkillQueries { get; init; } = ImmutableArray<string>.Empty;
 }
